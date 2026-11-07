@@ -6,7 +6,8 @@ registry, an executable HTTP interface, a compatibility allowlist, or acceptance
 
 The code baseline is `334c01d5868ca12e40501b03d960e35a0151bedd`. The published sources were
 retrieved on 2026-11-07. Runtime availability has not been qualified by this inventory capture;
-every initial row therefore says `unknown` and has no verification references. The epic remains
+every row therefore still says `unknown` and has no verification references. The separate current
+implementation snapshot tracks constrained code coverage without claiming runtime qualification. The epic remains
 open until its workflow acceptance and operation-level completion conditions are proven.
 
 ## Source provenance and local originals
@@ -54,13 +55,15 @@ method plus templated path. Never merge rows by operation ID alone.
 
 [operations.json](operations.json) records every identity, root, family, primary cluster,
 cluster prerequisites, source releases and their operation IDs. `baselineCapabilityIds` resolves
-to the same file's `baselineCapabilities` records, which name current owners and precise
-constraints. An empty capability list means this capture found no corresponding exposed or
-auxiliary implementation; it is not an assertion that no future reuse exists.
+to the same file's historical `baselineCapabilities` records. Their owners and constraints remain
+unchanged from the baseline. `currentCapabilityIds` instead resolves to `currentCapabilities`,
+which documents the current native tool mapping, effect, permission policy, constraints and code/test
+owners. Empty baseline and current lists have separate meanings; neither invents an execution path.
 
 `implementationState` and `runtimeAvailability` answer different questions:
 
-- `not-implemented`: no complete public operation is implemented in the captured baseline.
+- `not-implemented`: no exposed implementation of this published operation has been recorded.
+  Historical auxiliary-only reuse can still exist.
 - `partial`: a constrained existing tool implements some operation behavior; this is not full
   published API coverage.
 - `implemented`: implementation is complete for the operation's recorded acceptance boundary;
@@ -109,13 +112,49 @@ constrained native operations, recorded as `partial`.
 Six additional native operations are recorded as `auxiliary-only`: connection server/identity
 verification, field metadata for reports/templates, attachment metadata, link-type metadata and
 link creation behind issue create/edit. They remain `not-implemented` for full public API
-coverage. No Agile operation is exposed by this baseline. There are 424 `not-implemented` rows
-and fifteen `partial` rows; this ledger does not relabel them as delivered functionality.
+coverage. No Agile operation is exposed by this baseline. At that baseline there were 424
+`not-implemented` rows and fifteen `partial` rows. Those historical capability descriptions remain
+intact; current implementation state is reconciled separately below.
 
 The baseline owners are the existing connector tools/mutations, template enforcement, connection
 verification and provider/Coding bindings. Ordinary issue links and parent fields must continue
 through their existing validated paths. Adding an operation to this JSON file cannot expose it
 to Chat or Coding, grant authority, or bypass those owners.
+
+## Current constrained implementation snapshot
+
+The current registry supplies **55 native identities: 35 reads and 20 writes**. Each is mapped to
+its exact published method/path identity and remains `partial`: the closed typed operation exposes
+only the documented supported fields and behavior, rather than the entire upstream API contract.
+The other **384 operations remain `not-implemented`**. No row is marked fully implemented,
+executable, owner-deferred or excluded by this reconciliation. All 439 source/version IDs, cluster
+assignments, dependencies and qualification fields are retained.
+
+This snapshot includes ordinary project setup; board/backlog/Epic and sprint operations; bounded
+filter reads; versions/components; existing issue workflows; and the C6 comment-update/link/worklog
+read increment. The three existing report/draft composites remain compositions, not extra native
+API identities. Remaining filter creation, ranking, worklog writes, destructive operations,
+administration and other inventory gaps stay open. A registered declaration is not evidence that
+Jira grants the current person permission or that a particular installation supports the operation.
+
+`currentRegistry` pins the existing server registry source file's SHA-256 and native declaration
+count. The reconciliation helper parses that file's literal `NATIVE` tuples with TypeScript's AST;
+it does not import the runtime, evaluate source expressions, compile schemas or dispatch HTTP.
+It rejects a registry identity absent from the pinned published inventory. Paths retain the exact
+published parameter names, so even a wire-equivalent renamed placeholder must be reconciled with
+the registry owner rather than silently changing provenance.
+
+`sourceFiles` and `testFiles` identify implementation and relevant verification owners; they are
+not claims that those tests ran on the current head. `verificationReferences` remains empty until
+actual operation-level qualification is recorded. The registry digest is source accounting, not a
+replacement for the runtime's immutable operation contract digest or one-use approval binding.
+
+Run `node scripts/reconcile-jira-api-inventory.mjs` after a reviewed registry change. A new native
+tool first needs explicit constraints and code/test references in `currentCapabilities`; missing or
+extra notes fail closed. The generator refreshes identities and row mappings and advances a
+recorded constrained tool only from `not-implemented` to `partial`. It preserves historical baseline
+facts, source provenance, dependencies, runtime availability and verification references. It never
+marks an operation complete or runtime-qualified. No source download or application build is needed.
 
 ## Source caveats that affect implementations
 
@@ -143,7 +182,9 @@ Cloud, Service Management, Assets, webhooks, plugins and private/UI-only APIs ar
 
 Run `node scripts/check-jira-api-inventory.mjs` for offline ledger integrity. It checks the pinned
 normalized identity/source-ID digest, historical union and per-release counts, family/cluster
-assignments, capability references, prerequisites and state claims. The digest is SHA-256 of
+assignments, historical capability references, prerequisites and state claims. It also reconciles
+every current capability and row mapping with the existing registry source, rejecting stale digests,
+missing declarations and unpublished identities. The provenance digest is SHA-256 of
 UTF-8 `JSON.stringify` over identity/source-ID tuples sorted by identity and release; the shared
 script helper owns that projection. Implementation state is excluded so delivery can advance
 without rewriting source provenance. This check reports `PASS ledger`; it does not assert that

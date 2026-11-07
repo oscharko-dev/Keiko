@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "parentEpic": 4287,
   "baselineRevision": "334c01d5868ca12e40501b03d960e35a0151bedd",
   "baselineCapabilities": {
@@ -154,6 +154,608 @@
       "constraints": "Auxiliary effect behind validated issue links, dispatched once with partial/no-replay reconciliation; not an independent full API operation."
     }
   },
+  "currentCapabilities": {
+    "jira.assign": {
+      "identity": "PUT /rest/api/2/issue/{issueIdOrKey}/assignee",
+      "effect": "write",
+      "permissionPolicy": "current-assignable-users",
+      "kind": "constrained-tool",
+      "constraints": "One exact active assignable user; no arbitrary user or privileged fallback.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-mutations.ts"],
+      "testFiles": [
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts"
+      ]
+    },
+    "jira.assignable-users": {
+      "identity": "GET /rest/api/2/user/assignable/search",
+      "effect": "read",
+      "permissionPolicy": "current-assignable-users",
+      "kind": "constrained-tool",
+      "constraints": "Exactly one project or issue scope; bounded name/displayName/active projection, not arbitrary account access.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-workflow-reads.ts"],
+      "testFiles": ["packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"]
+    },
+    "jira.attach": {
+      "identity": "POST /rest/api/2/issue/{issueIdOrKey}/attachments",
+      "effect": "write",
+      "permissionPolicy": "attachment-create-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "One governed connected-file upload and readback; absent from Coding because its file authority differs.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-attachments.ts"],
+      "testFiles": [
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts"
+      ]
+    },
+    "jira.backlog-move-issues": {
+      "identity": "POST /rest/agile/1.0/backlog/issue",
+      "effect": "write",
+      "permissionPolicy": "issue-membership-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "1..50 unique issue keys admitted through existing issue-template checks before one POST; each current sprint membership is independently read as null. Batch failures remain uncertain; no replay or ranking.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-agile-mutations.ts",
+        "packages/keiko-connectors/src/jira-agile-membership.ts",
+        "packages/keiko-connectors/src/jira-agile-confirmation.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-agile-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-agile-templates.test.ts"
+      ]
+    },
+    "jira.board": {
+      "identity": "GET /rest/agile/1.0/board/{boardId}",
+      "effect": "read",
+      "permissionPolicy": "visible-boards",
+      "kind": "constrained-tool",
+      "constraints": "Selected board, sprint or epic with typed bounded projection and explicit native pagination where present; malformed/oversized pages fail closed. No ranking, board configuration mutation or implicit completion from item count.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-agile-reads.ts",
+        "packages/keiko-connectors/src/jira-agile-projection.ts"
+      ],
+      "testFiles": ["packages/keiko-connectors/src/jira-agile-reads.test.ts"]
+    },
+    "jira.board-backlog": {
+      "identity": "GET /rest/agile/1.0/board/{boardId}/backlog",
+      "effect": "read",
+      "permissionPolicy": "visible-issues",
+      "kind": "constrained-tool",
+      "constraints": "Selected board, sprint or epic with typed bounded projection and explicit native pagination where present; malformed/oversized pages fail closed. No ranking, board configuration mutation or implicit completion from item count.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-agile-reads.ts",
+        "packages/keiko-connectors/src/jira-agile-projection.ts"
+      ],
+      "testFiles": ["packages/keiko-connectors/src/jira-agile-reads.test.ts"]
+    },
+    "jira.board-configuration": {
+      "identity": "GET /rest/agile/1.0/board/{boardId}/configuration",
+      "effect": "read",
+      "permissionPolicy": "visible-boards",
+      "kind": "constrained-tool",
+      "constraints": "Selected board, sprint or epic with typed bounded projection and explicit native pagination where present; malformed/oversized pages fail closed. No ranking, board configuration mutation or implicit completion from item count.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-agile-reads.ts",
+        "packages/keiko-connectors/src/jira-agile-projection.ts"
+      ],
+      "testFiles": ["packages/keiko-connectors/src/jira-agile-reads.test.ts"]
+    },
+    "jira.board-create": {
+      "identity": "POST /rest/agile/1.0/board",
+      "effect": "write",
+      "permissionPolicy": "board-create-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Closed name/type/filterId; selected filter must be readable before POST. Independent board configuration GET verifies identity and requested fields. No private-filter creation or ranking.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-agile-mutations.ts",
+        "packages/keiko-connectors/src/jira-agile-membership.ts",
+        "packages/keiko-connectors/src/jira-agile-confirmation.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-agile-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-agile-templates.test.ts"
+      ]
+    },
+    "jira.board-epics": {
+      "identity": "GET /rest/agile/1.0/board/{boardId}/epic",
+      "effect": "read",
+      "permissionPolicy": "visible-epics",
+      "kind": "constrained-tool",
+      "constraints": "Selected board, sprint or epic with typed bounded projection and explicit native pagination where present; malformed/oversized pages fail closed. No ranking, board configuration mutation or implicit completion from item count.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-agile-reads.ts",
+        "packages/keiko-connectors/src/jira-agile-projection.ts"
+      ],
+      "testFiles": ["packages/keiko-connectors/src/jira-agile-reads.test.ts"]
+    },
+    "jira.board-issues": {
+      "identity": "GET /rest/agile/1.0/board/{boardId}/issue",
+      "effect": "read",
+      "permissionPolicy": "visible-issues",
+      "kind": "constrained-tool",
+      "constraints": "Selected board, sprint or epic with typed bounded projection and explicit native pagination where present; malformed/oversized pages fail closed. No ranking, board configuration mutation or implicit completion from item count.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-agile-reads.ts",
+        "packages/keiko-connectors/src/jira-agile-projection.ts"
+      ],
+      "testFiles": ["packages/keiko-connectors/src/jira-agile-reads.test.ts"]
+    },
+    "jira.boards": {
+      "identity": "GET /rest/agile/1.0/board",
+      "effect": "read",
+      "permissionPolicy": "visible-boards",
+      "kind": "constrained-tool",
+      "constraints": "Selected board, sprint or epic with typed bounded projection and explicit native pagination where present; malformed/oversized pages fail closed. No ranking, board configuration mutation or implicit completion from item count.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-agile-reads.ts",
+        "packages/keiko-connectors/src/jira-agile-projection.ts"
+      ],
+      "testFiles": ["packages/keiko-connectors/src/jira-agile-reads.test.ts"]
+    },
+    "jira.comment": {
+      "identity": "POST /rest/api/2/issue/{issueIdOrKey}/comment",
+      "effect": "write",
+      "permissionPolicy": "comment-create-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "One bounded comment with receipt/readback; not comment mutation or property coverage.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-mutations.ts"],
+      "testFiles": [
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts"
+      ]
+    },
+    "jira.comments": {
+      "identity": "GET /rest/api/2/issue/{issueIdOrKey}/comment",
+      "effect": "read",
+      "permissionPolicy": "visible-issues",
+      "kind": "constrained-tool",
+      "constraints": "Paged projected comments; does not cover individual comment read/edit/delete or properties.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-tools.ts"],
+      "testFiles": ["packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"]
+    },
+    "jira.component": {
+      "identity": "GET /rest/api/2/component/{id}",
+      "effect": "read",
+      "permissionPolicy": "visible-components",
+      "kind": "constrained-tool",
+      "constraints": "One exact positive decimal int64 resource ID and bounded supported field projection; remote self URLs are not trusted links.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-components.ts"],
+      "testFiles": ["packages/keiko-connectors/src/jira-managed-components.test.ts"]
+    },
+    "jira.components": {
+      "identity": "GET /rest/api/2/project/{projectIdOrKey}/components",
+      "effect": "read",
+      "permissionPolicy": "visible-components",
+      "kind": "constrained-tool",
+      "constraints": "One bound project; complete bounded native array is validated before local startAt/maxResults pagination. Oversized source arrays fail closed; no silent truncation.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-components.ts"],
+      "testFiles": ["packages/keiko-connectors/src/jira-managed-components.test.ts"]
+    },
+    "jira.create": {
+      "identity": "POST /rest/api/2/issue",
+      "effect": "write",
+      "permissionPolicy": "current-create-metadata",
+      "kind": "constrained-tool",
+      "constraints": "One issue through metadata, formal-template/source and authority enforcement; draft composition reuses this operation.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-mutations.ts"],
+      "testFiles": [
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts"
+      ]
+    },
+    "jira.create-component": {
+      "identity": "POST /rest/api/2/component",
+      "effect": "write",
+      "permissionPolicy": "component-create-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Closed name/description/lead/assignee fields in the selected current project; precise string ID and independent identity/project/field GET confirmation. No archive/delete/project move.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-components.ts"],
+      "testFiles": ["packages/keiko-connectors/src/jira-managed-components.test.ts"]
+    },
+    "jira.create-fields": {
+      "identity": "GET /rest/api/2/issue/createmeta/{projectIdOrKey}/issuetypes/{issueTypeId}",
+      "effect": "read",
+      "permissionPolicy": "current-create-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Bounded typed create-field metadata for one project/type; not arbitrary field/schema access.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-tools.ts"],
+      "testFiles": ["packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"]
+    },
+    "jira.create-project": {
+      "identity": "POST /rest/api/2/project",
+      "effect": "write",
+      "permissionPolicy": "project-create-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Closed key/name/lead/type and supported optional create fields, including explicit native projectTemplateKey; exact numeric creation identity and independent readable-field GET confirmation. HTTP 409 may mean partial creation and never permits replay. Template/board/workflow identity is not claimed as independently verified.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-projects.ts"],
+      "testFiles": ["packages/keiko-connectors/src/jira-managed-projects.test.ts"]
+    },
+    "jira.create-version": {
+      "identity": "POST /rest/api/2/version",
+      "effect": "write",
+      "permissionPolicy": "version-create-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Closed name/description/calendar date/released/archived fields; project ID must serialize as an exact safe native number. Independent identity/project/readable-field GET confirmation. No delete/merge/replace.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-versions.ts"],
+      "testFiles": ["packages/keiko-connectors/src/jira-managed-versions.test.ts"]
+    },
+    "jira.edit": {
+      "identity": "PUT /rest/api/2/issue/{issueIdOrKey}",
+      "effect": "write",
+      "permissionPolicy": "current-edit-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Validated supported fields, labels and links; formal-template/source enforcement and readback remain mandatory.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-mutations.ts"],
+      "testFiles": [
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts"
+      ]
+    },
+    "jira.edit-fields": {
+      "identity": "GET /rest/api/2/issue/{issueIdOrKey}/editmeta",
+      "effect": "read",
+      "permissionPolicy": "current-edit-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Current editable metadata for one issue, projected into supported field kinds.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-tools.ts"],
+      "testFiles": ["packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"]
+    },
+    "jira.epic": {
+      "identity": "GET /rest/agile/1.0/epic/{epicIdOrKey}",
+      "effect": "read",
+      "permissionPolicy": "visible-epics",
+      "kind": "constrained-tool",
+      "constraints": "Selected board, sprint or epic with typed bounded projection and explicit native pagination where present; malformed/oversized pages fail closed. No ranking, board configuration mutation or implicit completion from item count.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-agile-reads.ts",
+        "packages/keiko-connectors/src/jira-agile-projection.ts"
+      ],
+      "testFiles": ["packages/keiko-connectors/src/jira-agile-reads.test.ts"]
+    },
+    "jira.epic-issues": {
+      "identity": "GET /rest/agile/1.0/epic/{epicIdOrKey}/issue",
+      "effect": "read",
+      "permissionPolicy": "visible-issues",
+      "kind": "constrained-tool",
+      "constraints": "Selected board, sprint or epic with typed bounded projection and explicit native pagination where present; malformed/oversized pages fail closed. No ranking, board configuration mutation or implicit completion from item count.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-agile-reads.ts",
+        "packages/keiko-connectors/src/jira-agile-projection.ts"
+      ],
+      "testFiles": ["packages/keiko-connectors/src/jira-agile-reads.test.ts"]
+    },
+    "jira.epic-move-issues": {
+      "identity": "POST /rest/agile/1.0/epic/{epicIdOrKey}/issue",
+      "effect": "write",
+      "permissionPolicy": "issue-membership-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "One bound epic and 1..50 unique issue keys; existing issue-template checks precede one POST and each issue epic membership is independently read. Batch failures remain uncertain; no replay or ranking.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-agile-mutations.ts",
+        "packages/keiko-connectors/src/jira-agile-membership.ts",
+        "packages/keiko-connectors/src/jira-agile-confirmation.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-agile-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-agile-templates.test.ts"
+      ]
+    },
+    "jira.epic-update": {
+      "identity": "POST /rest/agile/1.0/epic/{epicIdOrKey}",
+      "effect": "write",
+      "permissionPolicy": "epic-update-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Closed supported epic fields with existing issue-template admission; one bound ID/key and independent GET confirmation. No generic issue-field or workflow mutation.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-agile-mutations.ts",
+        "packages/keiko-connectors/src/jira-agile-membership.ts",
+        "packages/keiko-connectors/src/jira-agile-confirmation.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-agile-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-agile-templates.test.ts"
+      ]
+    },
+    "jira.favourite-filters": {
+      "identity": "GET /rest/api/2/filter/favourite",
+      "effect": "read",
+      "permissionPolicy": "visible-filters",
+      "kind": "constrained-tool",
+      "constraints": "Bounded favourite-filter array validated before local pagination; no filter creation or complete saved-view-family claim.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-filter-reads.ts"],
+      "testFiles": ["packages/keiko-connectors/src/jira-filter-reads.test.ts"]
+    },
+    "jira.filter": {
+      "identity": "GET /rest/api/2/filter/{id}",
+      "effect": "read",
+      "permissionPolicy": "visible-filters",
+      "kind": "constrained-tool",
+      "constraints": "One visible filter ID with bounded owner/JQL/sharing facts; no filter creation, sharing mutation or private-default inference.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-filter-reads.ts"],
+      "testFiles": ["packages/keiko-connectors/src/jira-filter-reads.test.ts"]
+    },
+    "jira.get-comment": {
+      "identity": "GET /rest/api/2/issue/{issueIdOrKey}/comment/{id}",
+      "effect": "read",
+      "permissionPolicy": "visible-comments",
+      "kind": "constrained-tool",
+      "constraints": "One issue/comment identity with bounded body, selected author/date metadata and explicit group/role visibility; unknown restrictions fail closed. No properties or comment deletion.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-comments.ts"],
+      "testFiles": ["packages/keiko-connectors/src/jira-managed-comments.test.ts"]
+    },
+    "jira.issue": {
+      "identity": "GET /rest/api/2/issue/{issueIdOrKey}",
+      "effect": "read",
+      "permissionPolicy": "visible-issues",
+      "kind": "constrained-tool",
+      "constraints": "One issue with standard and bounded additional typed fields; comments are separately paginated.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-tools.ts"],
+      "testFiles": ["packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"]
+    },
+    "jira.issue-link": {
+      "identity": "GET /rest/api/2/issueLink/{linkId}",
+      "effect": "read",
+      "permissionPolicy": "visible-issue-links",
+      "kind": "constrained-tool",
+      "constraints": "One existing link ID with bounded type and linked-issue identity projection; no arbitrary link creation, replacement or deletion.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-issue-details.ts"],
+      "testFiles": ["packages/keiko-connectors/src/jira-managed-issue-details.test.ts"]
+    },
+    "jira.issue-types": {
+      "identity": "GET /rest/api/2/issue/createmeta/{projectIdOrKey}/issuetypes",
+      "effect": "read",
+      "permissionPolicy": "current-create-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Create-metadata issue types for one selected project; does not expose global issue-type administration.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-tools.ts"],
+      "testFiles": ["packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"]
+    },
+    "jira.link-types": {
+      "identity": "GET /rest/api/2/issueLinkType",
+      "effect": "read",
+      "permissionPolicy": "visible-link-types",
+      "kind": "constrained-tool",
+      "constraints": "Bounded visible link-type metadata for existing issue-link workflows; no link-type creation or administration.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-issue-details.ts"],
+      "testFiles": ["packages/keiko-connectors/src/jira-managed-issue-details.test.ts"]
+    },
+    "jira.project": {
+      "identity": "GET /rest/api/2/project/{projectIdOrKey}",
+      "effect": "read",
+      "permissionPolicy": "current-project-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Bounded id/key/name and supported optional project fields for one selected project; no arbitrary project administration.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-projects.ts"],
+      "testFiles": ["packages/keiko-connectors/src/jira-managed-projects.test.ts"]
+    },
+    "jira.project-permissions": {
+      "identity": "GET /rest/api/2/mypermissions",
+      "effect": "read",
+      "permissionPolicy": "explicit-project-permissions",
+      "kind": "constrained-tool",
+      "constraints": "Global or selected-project permissions, at most 100 entries; unavailable permissions are not fabricated as false and oversized results are refused.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-projects.ts"],
+      "testFiles": ["packages/keiko-connectors/src/jira-managed-projects.test.ts"]
+    },
+    "jira.project-type": {
+      "identity": "GET /rest/api/2/project/type/{projectTypeKey}/accessible",
+      "effect": "read",
+      "permissionPolicy": "accessible-project-type",
+      "kind": "constrained-tool",
+      "constraints": "One native accessible project-type result; no template, board or workflow configuration discovery.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-projects.ts"],
+      "testFiles": ["packages/keiko-connectors/src/jira-managed-projects.test.ts"]
+    },
+    "jira.projects": {
+      "identity": "GET /rest/api/2/project",
+      "effect": "read",
+      "permissionPolicy": "visible-projects",
+      "kind": "constrained-tool",
+      "constraints": "Validated id/key/name projection only; locally paginated after a bounded unpaginated response; no project creation or settings.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-tools.ts"],
+      "testFiles": ["packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"]
+    },
+    "jira.search": {
+      "identity": "GET /rest/api/2/search",
+      "effect": "read",
+      "permissionPolicy": "visible-issues",
+      "kind": "constrained-tool",
+      "constraints": "Bounded opaque JQL with projected standard and selected typed fields; no POST search operation.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-tools.ts"],
+      "testFiles": ["packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"]
+    },
+    "jira.sprint": {
+      "identity": "GET /rest/agile/1.0/sprint/{sprintId}",
+      "effect": "read",
+      "permissionPolicy": "visible-sprints",
+      "kind": "constrained-tool",
+      "constraints": "Selected board, sprint or epic with typed bounded projection and explicit native pagination where present; malformed/oversized pages fail closed. No ranking, board configuration mutation or implicit completion from item count.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-agile-reads.ts",
+        "packages/keiko-connectors/src/jira-agile-projection.ts"
+      ],
+      "testFiles": ["packages/keiko-connectors/src/jira-agile-reads.test.ts"]
+    },
+    "jira.sprint-create": {
+      "identity": "POST /rest/agile/1.0/sprint",
+      "effect": "write",
+      "permissionPolicy": "sprint-create-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Closed name/originBoardId and supported date/goal fields; the selected board must be readable and scrum before POST. Independent GET verifies identity, readable fields and future state.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-agile-mutations.ts",
+        "packages/keiko-connectors/src/jira-agile-membership.ts",
+        "packages/keiko-connectors/src/jira-agile-confirmation.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-agile-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-agile-templates.test.ts"
+      ]
+    },
+    "jira.sprint-issues": {
+      "identity": "GET /rest/agile/1.0/sprint/{sprintId}/issue",
+      "effect": "read",
+      "permissionPolicy": "visible-issues",
+      "kind": "constrained-tool",
+      "constraints": "Selected board, sprint or epic with typed bounded projection and explicit native pagination where present; malformed/oversized pages fail closed. No ranking, board configuration mutation or implicit completion from item count.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-agile-reads.ts",
+        "packages/keiko-connectors/src/jira-agile-projection.ts"
+      ],
+      "testFiles": ["packages/keiko-connectors/src/jira-agile-reads.test.ts"]
+    },
+    "jira.sprint-move-issues": {
+      "identity": "POST /rest/agile/1.0/sprint/{sprintId}/issue",
+      "effect": "write",
+      "permissionPolicy": "issue-membership-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "One selected open sprint and 1..50 unique issue keys; every issue passes existing template/source checks before the single POST, then each membership is independently read. Batch failures remain uncertain; no replay or ranking.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-agile-mutations.ts",
+        "packages/keiko-connectors/src/jira-agile-membership.ts",
+        "packages/keiko-connectors/src/jira-agile-confirmation.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-agile-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-agile-templates.test.ts"
+      ]
+    },
+    "jira.sprint-update": {
+      "identity": "POST /rest/agile/1.0/sprint/{sprintId}",
+      "effect": "write",
+      "permissionPolicy": "sprint-update-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Native partial POST only; omitted fields are preserved. Typed dates, current sprint state and legal transitions are checked; independent GET confirms requested fields. No PUT replacement or reopening closed sprints.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-agile-mutations.ts",
+        "packages/keiko-connectors/src/jira-agile-membership.ts",
+        "packages/keiko-connectors/src/jira-agile-confirmation.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-agile-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-agile-templates.test.ts"
+      ]
+    },
+    "jira.sprints": {
+      "identity": "GET /rest/agile/1.0/board/{boardId}/sprint",
+      "effect": "read",
+      "permissionPolicy": "visible-sprints",
+      "kind": "constrained-tool",
+      "constraints": "Selected board, sprint or epic with typed bounded projection and explicit native pagination where present; malformed/oversized pages fail closed. No ranking, board configuration mutation or implicit completion from item count.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-agile-reads.ts",
+        "packages/keiko-connectors/src/jira-agile-projection.ts"
+      ],
+      "testFiles": ["packages/keiko-connectors/src/jira-agile-reads.test.ts"]
+    },
+    "jira.transition": {
+      "identity": "POST /rest/api/2/issue/{issueIdOrKey}/transitions",
+      "effect": "write",
+      "permissionPolicy": "current-transitions",
+      "kind": "constrained-tool",
+      "constraints": "One native available transition, validated fields and guarded readback; no workflow definition changes.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-mutations.ts"],
+      "testFiles": [
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts"
+      ]
+    },
+    "jira.transitions": {
+      "identity": "GET /rest/api/2/issue/{issueIdOrKey}/transitions",
+      "effect": "read",
+      "permissionPolicy": "current-transitions",
+      "kind": "constrained-tool",
+      "constraints": "Available transitions and required fields for one issue, without workflow administration.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-tools.ts"],
+      "testFiles": ["packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"]
+    },
+    "jira.update-comment": {
+      "identity": "PUT /rest/api/2/issue/{issueIdOrKey}/comment/{id}",
+      "effect": "write",
+      "permissionPolicy": "comment-update-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Body-only update of one existing issue/comment. Preserve the independently read group/role visibility, refuse unknown restrictions, and confirm body plus restriction through an independent GET. No visibility editing, deletion or automatic replay.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-comments.ts"],
+      "testFiles": ["packages/keiko-connectors/src/jira-managed-comments.test.ts"]
+    },
+    "jira.update-component": {
+      "identity": "PUT /rest/api/2/component/{id}",
+      "effect": "write",
+      "permissionPolicy": "component-update-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "At least one supported name/description/lead/assignee field on the existing component; project identity remains bound and independently read back. No archive/delete/project move.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-components.ts"],
+      "testFiles": ["packages/keiko-connectors/src/jira-managed-components.test.ts"]
+    },
+    "jira.update-project": {
+      "identity": "PUT /rest/api/2/project/{projectIdOrKey}",
+      "effect": "write",
+      "permissionPolicy": "project-update-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "One existing project with at least one supported name/lead/description/url/assignee field; key/type/scheme changes are not exposed. Current identity and requested readable fields require independent GET confirmation.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-projects.ts"],
+      "testFiles": ["packages/keiko-connectors/src/jira-managed-projects.test.ts"]
+    },
+    "jira.update-version": {
+      "identity": "PUT /rest/api/2/version/{id}",
+      "effect": "write",
+      "permissionPolicy": "version-update-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "At least one supported name/description/calendar date/released/archived field on an existing version; omitted values remain unchanged and its project cannot move. Independent GET confirmation; no delete/merge/replace.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-versions.ts"],
+      "testFiles": ["packages/keiko-connectors/src/jira-managed-versions.test.ts"]
+    },
+    "jira.validate-project-key": {
+      "identity": "GET /rest/api/2/projectvalidate/key",
+      "effect": "read",
+      "permissionPolicy": "native-project-key-validation",
+      "kind": "constrained-tool",
+      "constraints": "Native error collection is inspected; HTTP 200 alone does not establish validity. No locally invented organization-specific key policy.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-projects.ts"],
+      "testFiles": ["packages/keiko-connectors/src/jira-managed-projects.test.ts"]
+    },
+    "jira.version": {
+      "identity": "GET /rest/api/2/version/{id}",
+      "effect": "read",
+      "permissionPolicy": "visible-versions",
+      "kind": "constrained-tool",
+      "constraints": "One exact positive decimal int64 resource ID and bounded supported field projection; remote self URLs are not trusted links.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-versions.ts"],
+      "testFiles": ["packages/keiko-connectors/src/jira-managed-versions.test.ts"]
+    },
+    "jira.versions": {
+      "identity": "GET /rest/api/2/project/{projectIdOrKey}/versions",
+      "effect": "read",
+      "permissionPolicy": "visible-versions",
+      "kind": "constrained-tool",
+      "constraints": "One bound project; complete bounded native array is validated before local startAt/maxResults pagination. Oversized source arrays fail closed; no silent truncation.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-versions.ts"],
+      "testFiles": ["packages/keiko-connectors/src/jira-managed-versions.test.ts"]
+    },
+    "jira.worklog": {
+      "identity": "GET /rest/api/2/issue/{issueIdOrKey}/worklog/{id}",
+      "effect": "read",
+      "permissionPolicy": "visible-worklogs",
+      "kind": "constrained-tool",
+      "constraints": "One bound issue/worklog ID with bounded supported metadata; no worklog update/delete or permission inference from missing fields.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-issue-details.ts"],
+      "testFiles": ["packages/keiko-connectors/src/jira-managed-issue-details.test.ts"]
+    },
+    "jira.worklogs": {
+      "identity": "GET /rest/api/2/issue/{issueIdOrKey}/worklog",
+      "effect": "read",
+      "permissionPolicy": "visible-worklogs",
+      "kind": "constrained-tool",
+      "constraints": "One issue with bounded native pagination and projected worklog identity/time/author/comment metadata. No worklog writes, estimates mutation or complete issue-history claim.",
+      "sourceFiles": ["packages/keiko-connectors/src/jira-managed-issue-details.ts"],
+      "testFiles": ["packages/keiko-connectors/src/jira-managed-issue-details.test.ts"]
+    }
+  },
+  "currentRegistry": {
+    "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+    "sha256": "c473d63e857a435d8856dd8c6a0318cebc70370400d200482cf22082ea7043af",
+    "nativeOperationCount": 55
+  },
   "operations": [
     {
       "identity": "POST /rest/agile/1.0/backlog/issue",
@@ -182,9 +784,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.backlog-move-issues"]
     },
     {
       "identity": "GET /rest/agile/1.0/board",
@@ -213,9 +816,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.boards"]
     },
     {
       "identity": "POST /rest/agile/1.0/board",
@@ -244,9 +848,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.board-create"]
     },
     {
       "identity": "DELETE /rest/agile/1.0/board/{boardId}",
@@ -277,7 +882,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/agile/1.0/board/{boardId}",
@@ -306,9 +912,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.board"]
     },
     {
       "identity": "GET /rest/agile/1.0/board/{boardId}/backlog",
@@ -337,9 +944,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.board-backlog"]
     },
     {
       "identity": "GET /rest/agile/1.0/board/{boardId}/configuration",
@@ -368,9 +976,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.board-configuration"]
     },
     {
       "identity": "GET /rest/agile/1.0/board/{boardId}/epic",
@@ -399,9 +1008,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.board-epics"]
     },
     {
       "identity": "GET /rest/agile/1.0/board/{boardId}/epic/none/issue",
@@ -432,7 +1042,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/agile/1.0/board/{boardId}/epic/{epicId}/issue",
@@ -463,7 +1074,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/agile/1.0/board/{boardId}/issue",
@@ -492,9 +1104,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.board-issues"]
     },
     {
       "identity": "GET /rest/agile/1.0/board/{boardId}/project",
@@ -525,7 +1138,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/agile/1.0/board/{boardId}/properties",
@@ -556,7 +1170,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/agile/1.0/board/{boardId}/properties/{propertyKey}",
@@ -587,7 +1202,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/agile/1.0/board/{boardId}/properties/{propertyKey}",
@@ -618,7 +1234,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/agile/1.0/board/{boardId}/properties/{propertyKey}",
@@ -649,7 +1266,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/agile/1.0/board/{boardId}/settings/refined-velocity",
@@ -680,7 +1298,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/agile/1.0/board/{boardId}/settings/refined-velocity",
@@ -711,7 +1330,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/agile/1.0/board/{boardId}/sprint",
@@ -740,9 +1360,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.sprints"]
     },
     {
       "identity": "GET /rest/agile/1.0/board/{boardId}/sprint/{sprintId}/issue",
@@ -773,7 +1394,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/agile/1.0/board/{boardId}/version",
@@ -804,7 +1426,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/agile/1.0/epic/none/issue",
@@ -835,7 +1458,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/agile/1.0/epic/none/issue",
@@ -866,7 +1490,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/agile/1.0/epic/{epicIdOrKey}",
@@ -895,9 +1520,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.epic"]
     },
     {
       "identity": "POST /rest/agile/1.0/epic/{epicIdOrKey}",
@@ -926,9 +1552,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.epic-update"]
     },
     {
       "identity": "GET /rest/agile/1.0/epic/{epicIdOrKey}/issue",
@@ -957,9 +1584,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.epic-issues"]
     },
     {
       "identity": "POST /rest/agile/1.0/epic/{epicIdOrKey}/issue",
@@ -988,9 +1616,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.epic-move-issues"]
     },
     {
       "identity": "PUT /rest/agile/1.0/epic/{epicIdOrKey}/rank",
@@ -1021,7 +1650,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/agile/1.0/issue/rank",
@@ -1052,7 +1682,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/agile/1.0/issue/{issueIdOrKey}",
@@ -1083,7 +1714,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/agile/1.0/issue/{issueIdOrKey}/estimation",
@@ -1114,7 +1746,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/agile/1.0/issue/{issueIdOrKey}/estimation",
@@ -1145,7 +1778,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/agile/1.0/sprint",
@@ -1174,9 +1808,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.sprint-create"]
     },
     {
       "identity": "PUT /rest/agile/1.0/sprint/unmap",
@@ -1207,7 +1842,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/agile/1.0/sprint/unmap-all",
@@ -1238,7 +1874,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/agile/1.0/sprint/{sprintId}",
@@ -1269,7 +1906,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/agile/1.0/sprint/{sprintId}",
@@ -1298,9 +1936,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.sprint"]
     },
     {
       "identity": "POST /rest/agile/1.0/sprint/{sprintId}",
@@ -1329,9 +1968,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.sprint-update"]
     },
     {
       "identity": "PUT /rest/agile/1.0/sprint/{sprintId}",
@@ -1362,7 +2002,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/agile/1.0/sprint/{sprintId}/issue",
@@ -1391,9 +2032,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.sprint-issues"]
     },
     {
       "identity": "POST /rest/agile/1.0/sprint/{sprintId}/issue",
@@ -1422,9 +2064,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.sprint-move-issues"]
     },
     {
       "identity": "GET /rest/agile/1.0/sprint/{sprintId}/properties",
@@ -1455,7 +2098,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/agile/1.0/sprint/{sprintId}/properties/{propertyKey}",
@@ -1486,7 +2130,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/agile/1.0/sprint/{sprintId}/properties/{propertyKey}",
@@ -1517,7 +2162,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/agile/1.0/sprint/{sprintId}/properties/{propertyKey}",
@@ -1548,7 +2194,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/agile/1.0/sprint/{sprintId}/swap",
@@ -1579,7 +2226,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/application-properties",
@@ -1610,7 +2258,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/application-properties/advanced-settings",
@@ -1641,7 +2290,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/application-properties/{id}",
@@ -1672,7 +2322,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/applicationrole",
@@ -1703,7 +2354,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/applicationrole",
@@ -1734,7 +2386,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/applicationrole/{key}",
@@ -1765,7 +2418,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/applicationrole/{key}",
@@ -1796,7 +2450,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/attachment/meta",
@@ -1827,7 +2482,8 @@
       "baselineCapabilityIds": ["attachment-metadata"],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/attachment/{id}",
@@ -1858,7 +2514,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/attachment/{id}",
@@ -1889,7 +2546,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/attachment/{id}/expand/human",
@@ -1920,7 +2578,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/attachment/{id}/expand/raw",
@@ -1951,7 +2610,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/avatar/{type}/system",
@@ -1982,7 +2642,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/avatar/{type}/temporary",
@@ -2005,7 +2666,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/avatar/{type}/temporaryCrop",
@@ -2028,7 +2690,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/cluster/index-snapshot/{nodeId}",
@@ -2059,7 +2722,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/cluster/node/{nodeId}",
@@ -2090,7 +2754,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/cluster/node/{nodeId}/offline",
@@ -2121,7 +2786,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/cluster/nodes",
@@ -2152,7 +2818,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/cluster/zdu/approve",
@@ -2183,7 +2850,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/cluster/zdu/cancel",
@@ -2214,7 +2882,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/cluster/zdu/retryUpgrade",
@@ -2245,7 +2914,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/cluster/zdu/start",
@@ -2276,7 +2946,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/cluster/zdu/state",
@@ -2307,7 +2978,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/comment/{commentId}/properties",
@@ -2338,7 +3010,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/comment/{commentId}/properties/{propertyKey}",
@@ -2369,7 +3042,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/comment/{commentId}/properties/{propertyKey}",
@@ -2400,7 +3074,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/comment/{commentId}/properties/{propertyKey}",
@@ -2431,7 +3106,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/component",
@@ -2460,9 +3136,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.create-component"]
     },
     {
       "identity": "GET /rest/api/2/component/page",
@@ -2493,7 +3170,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/component/{id}",
@@ -2524,7 +3202,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/component/{id}",
@@ -2553,9 +3232,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.component"]
     },
     {
       "identity": "PUT /rest/api/2/component/{id}",
@@ -2584,9 +3264,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.update-component"]
     },
     {
       "identity": "GET /rest/api/2/component/{id}/relatedIssueCounts",
@@ -2617,7 +3298,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/configuration",
@@ -2648,7 +3330,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/customFieldOption/{id}",
@@ -2679,7 +3362,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/customFields",
@@ -2710,7 +3394,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/customFields",
@@ -2741,7 +3426,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/customFields/{customFieldId}/options",
@@ -2772,7 +3458,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/dashboard",
@@ -2803,7 +3490,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/dashboard/{dashboardId}/items/{itemId}/properties",
@@ -2834,7 +3522,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/dashboard/{dashboardId}/items/{itemId}/properties/{propertyKey}",
@@ -2865,7 +3554,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/dashboard/{dashboardId}/items/{itemId}/properties/{propertyKey}",
@@ -2896,7 +3586,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/dashboard/{dashboardId}/items/{itemId}/properties/{propertyKey}",
@@ -2927,7 +3618,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/dashboard/{id}",
@@ -2958,7 +3650,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/email-templates",
@@ -2989,7 +3682,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/email-templates",
@@ -3020,7 +3714,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/email-templates/apply",
@@ -3051,7 +3746,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/email-templates/revert",
@@ -3082,7 +3778,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/email-templates/types",
@@ -3113,7 +3810,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/field",
@@ -3144,7 +3842,8 @@
       "baselineCapabilityIds": ["field-metadata"],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/field",
@@ -3175,7 +3874,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/filter",
@@ -3206,7 +3906,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/filter/defaultShareScope",
@@ -3237,7 +3938,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/filter/defaultShareScope",
@@ -3268,7 +3970,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/filter/favourite",
@@ -3297,9 +4000,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.favourite-filters"]
     },
     {
       "identity": "DELETE /rest/api/2/filter/{id}",
@@ -3330,7 +4034,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/filter/{id}",
@@ -3359,9 +4064,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.filter"]
     },
     {
       "identity": "PUT /rest/api/2/filter/{id}",
@@ -3392,7 +4098,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/filter/{id}/columns",
@@ -3423,7 +4130,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/filter/{id}/columns",
@@ -3454,7 +4162,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/filter/{id}/columns",
@@ -3485,7 +4194,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/filter/{id}/permission",
@@ -3516,7 +4226,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/filter/{id}/permission",
@@ -3547,7 +4258,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/filter/{id}/permission/{permission-id}",
@@ -3578,7 +4290,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/filter/{id}/permission/{permissionId}",
@@ -3609,7 +4322,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/group",
@@ -3640,7 +4354,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/group",
@@ -3671,7 +4386,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/group/member",
@@ -3702,7 +4418,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/group/user",
@@ -3733,7 +4450,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/group/user",
@@ -3764,7 +4482,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/groups/picker",
@@ -3795,7 +4514,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/groupuserpicker",
@@ -3826,7 +4546,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/index-snapshot",
@@ -3857,7 +4578,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/index-snapshot",
@@ -3888,7 +4610,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/index-snapshot/isRunning",
@@ -3919,7 +4642,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/index/summary",
@@ -3950,7 +4674,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/issue",
@@ -3981,7 +4706,8 @@
       "baselineCapabilityIds": ["create"],
       "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.create"]
     },
     {
       "identity": "POST /rest/api/2/issue/archive",
@@ -4012,7 +4738,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/issue/bulk",
@@ -4043,7 +4770,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/issue/createmeta/{projectIdOrKey}/issuetypes",
@@ -4074,7 +4802,8 @@
       "baselineCapabilityIds": ["issue-types"],
       "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.issue-types"]
     },
     {
       "identity": "GET /rest/api/2/issue/createmeta/{projectIdOrKey}/issuetypes/{issueTypeId}",
@@ -4105,7 +4834,8 @@
       "baselineCapabilityIds": ["create-fields"],
       "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.create-fields"]
     },
     {
       "identity": "GET /rest/api/2/issue/picker",
@@ -4136,7 +4866,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/issue/remotelink/reciprocal",
@@ -4159,7 +4890,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/issue/{issueIdOrKey}",
@@ -4190,7 +4922,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}",
@@ -4221,7 +4954,8 @@
       "baselineCapabilityIds": ["issue"],
       "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.issue"]
     },
     {
       "identity": "PUT /rest/api/2/issue/{issueIdOrKey}",
@@ -4252,7 +4986,8 @@
       "baselineCapabilityIds": ["edit"],
       "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.edit"]
     },
     {
       "identity": "PUT /rest/api/2/issue/{issueIdOrKey}/archive",
@@ -4283,7 +5018,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/issue/{issueIdOrKey}/assignee",
@@ -4314,7 +5050,8 @@
       "baselineCapabilityIds": ["assign"],
       "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.assign"]
     },
     {
       "identity": "POST /rest/api/2/issue/{issueIdOrKey}/attachments",
@@ -4345,7 +5082,8 @@
       "baselineCapabilityIds": ["attach"],
       "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.attach"]
     },
     {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/comment",
@@ -4376,7 +5114,8 @@
       "baselineCapabilityIds": ["comments"],
       "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.comments"]
     },
     {
       "identity": "POST /rest/api/2/issue/{issueIdOrKey}/comment",
@@ -4407,7 +5146,8 @@
       "baselineCapabilityIds": ["comment"],
       "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.comment"]
     },
     {
       "identity": "DELETE /rest/api/2/issue/{issueIdOrKey}/comment/{id}",
@@ -4438,7 +5178,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/comment/{id}",
@@ -4467,9 +5208,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.get-comment"]
     },
     {
       "identity": "PUT /rest/api/2/issue/{issueIdOrKey}/comment/{id}",
@@ -4498,9 +5240,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.update-comment"]
     },
     {
       "identity": "PUT /rest/api/2/issue/{issueIdOrKey}/comment/{id}/pin",
@@ -4531,7 +5274,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/editmeta",
@@ -4562,7 +5306,8 @@
       "baselineCapabilityIds": ["edit-fields"],
       "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.edit-fields"]
     },
     {
       "identity": "POST /rest/api/2/issue/{issueIdOrKey}/notify",
@@ -4593,7 +5338,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/pinned-comments",
@@ -4624,7 +5370,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/properties",
@@ -4655,7 +5402,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/issue/{issueIdOrKey}/properties/{propertyKey}",
@@ -4686,7 +5434,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/properties/{propertyKey}",
@@ -4717,7 +5466,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/issue/{issueIdOrKey}/properties/{propertyKey}",
@@ -4748,7 +5498,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/issue/{issueIdOrKey}/remotelink",
@@ -4779,7 +5530,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/remotelink",
@@ -4810,7 +5562,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/issue/{issueIdOrKey}/remotelink",
@@ -4841,7 +5594,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/issue/{issueIdOrKey}/remotelink/{linkId}",
@@ -4872,7 +5626,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/remotelink/{linkId}",
@@ -4903,7 +5658,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/issue/{issueIdOrKey}/remotelink/{linkId}",
@@ -4934,7 +5690,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/issue/{issueIdOrKey}/restore",
@@ -4965,7 +5722,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/subtask",
@@ -4996,7 +5754,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/subtask/move",
@@ -5027,7 +5786,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/issue/{issueIdOrKey}/subtask/move",
@@ -5058,7 +5818,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/transitions",
@@ -5089,7 +5850,8 @@
       "baselineCapabilityIds": ["transitions"],
       "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.transitions"]
     },
     {
       "identity": "POST /rest/api/2/issue/{issueIdOrKey}/transitions",
@@ -5120,7 +5882,8 @@
       "baselineCapabilityIds": ["transition"],
       "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.transition"]
     },
     {
       "identity": "DELETE /rest/api/2/issue/{issueIdOrKey}/votes",
@@ -5151,7 +5914,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/votes",
@@ -5182,7 +5946,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/issue/{issueIdOrKey}/votes",
@@ -5213,7 +5978,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/issue/{issueIdOrKey}/watchers",
@@ -5244,7 +6010,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/watchers",
@@ -5275,7 +6042,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/issue/{issueIdOrKey}/watchers",
@@ -5306,7 +6074,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/worklog",
@@ -5335,9 +6104,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.worklogs"]
     },
     {
       "identity": "POST /rest/api/2/issue/{issueIdOrKey}/worklog",
@@ -5368,7 +6138,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/issue/{issueIdOrKey}/worklog/{id}",
@@ -5399,7 +6170,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/worklog/{id}",
@@ -5428,9 +6200,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.worklog"]
     },
     {
       "identity": "PUT /rest/api/2/issue/{issueIdOrKey}/worklog/{id}",
@@ -5461,7 +6234,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/issueLink",
@@ -5492,7 +6266,8 @@
       "baselineCapabilityIds": ["issue-link-effect"],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/issueLink/{linkId}",
@@ -5523,7 +6298,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/issueLink/{linkId}",
@@ -5552,9 +6328,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.issue-link"]
     },
     {
       "identity": "GET /rest/api/2/issueLinkType",
@@ -5583,9 +6360,10 @@
         }
       ],
       "baselineCapabilityIds": ["link-type-metadata"],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.link-types"]
     },
     {
       "identity": "POST /rest/api/2/issueLinkType",
@@ -5616,7 +6394,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/issueLinkType/order",
@@ -5643,7 +6422,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/issueLinkType/{issueLinkTypeId}",
@@ -5674,7 +6454,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/issueLinkType/{issueLinkTypeId}",
@@ -5705,7 +6486,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/issueLinkType/{issueLinkTypeId}",
@@ -5736,7 +6518,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/issueLinkType/{issueLinkTypeId}/order",
@@ -5763,7 +6546,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/issuesecurityschemes",
@@ -5794,7 +6578,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/issuesecurityschemes/{id}",
@@ -5825,7 +6610,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/issuetype",
@@ -5856,7 +6642,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/issuetype",
@@ -5887,7 +6674,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/issuetype/page",
@@ -5918,7 +6706,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/issuetype/{id}",
@@ -5949,7 +6738,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/issuetype/{id}",
@@ -5980,7 +6770,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/issuetype/{id}",
@@ -6011,7 +6802,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/issuetype/{id}/alternatives",
@@ -6042,7 +6834,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/issuetype/{id}/avatar",
@@ -6073,7 +6866,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/issuetype/{id}/avatar/temporary",
@@ -6104,7 +6898,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/issuetype/{issueTypeId}/properties",
@@ -6135,7 +6930,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/issuetype/{issueTypeId}/properties/{propertyKey}",
@@ -6166,7 +6962,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/issuetype/{issueTypeId}/properties/{propertyKey}",
@@ -6197,7 +6994,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/issuetype/{issueTypeId}/properties/{propertyKey}",
@@ -6228,7 +7026,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/issuetypescheme",
@@ -6259,7 +7058,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/issuetypescheme",
@@ -6290,7 +7090,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/issuetypescheme/{schemeId}",
@@ -6321,7 +7122,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/issuetypescheme/{schemeId}",
@@ -6352,7 +7154,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/issuetypescheme/{schemeId}",
@@ -6383,7 +7186,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/issuetypescheme/{schemeId}/associations",
@@ -6414,7 +7218,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/issuetypescheme/{schemeId}/associations",
@@ -6445,7 +7250,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/issuetypescheme/{schemeId}/associations",
@@ -6476,7 +7282,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/issuetypescheme/{schemeId}/associations",
@@ -6507,7 +7314,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/issuetypescheme/{schemeId}/associations/{projIdOrKey}",
@@ -6538,7 +7346,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/jql/autocompletedata",
@@ -6569,7 +7378,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/jql/autocompletedata/suggestions",
@@ -6600,7 +7410,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/licenseValidator",
@@ -6631,7 +7442,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/monitoring/app",
@@ -6662,7 +7474,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/monitoring/app",
@@ -6693,7 +7506,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/monitoring/ipd",
@@ -6724,7 +7538,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/monitoring/ipd",
@@ -6755,7 +7570,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/monitoring/jmx/areMetricsExposed",
@@ -6786,7 +7602,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/monitoring/jmx/getAvailableMetrics",
@@ -6817,7 +7634,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/monitoring/jmx/startExposing",
@@ -6848,7 +7666,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/monitoring/jmx/stopExposing",
@@ -6879,7 +7698,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/mypermissions",
@@ -6908,9 +7728,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.project-permissions"]
     },
     {
       "identity": "DELETE /rest/api/2/mypreferences",
@@ -6941,7 +7762,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/mypreferences",
@@ -6972,7 +7794,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/mypreferences",
@@ -7003,7 +7826,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/myself",
@@ -7034,7 +7858,8 @@
       "baselineCapabilityIds": ["verification-identity"],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/myself",
@@ -7065,7 +7890,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/myself/password",
@@ -7096,7 +7922,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/notificationscheme",
@@ -7127,7 +7954,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/notificationscheme/{id}",
@@ -7158,7 +7986,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/password/policy",
@@ -7189,7 +8018,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/password/policy/createUser",
@@ -7220,7 +8050,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/password/policy/updateUser",
@@ -7251,7 +8082,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/permissions",
@@ -7282,7 +8114,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/permissionscheme",
@@ -7313,7 +8146,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/permissionscheme",
@@ -7344,7 +8178,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/permissionscheme/{permissionSchemeId}/attribute/{attributeKey}",
@@ -7375,7 +8210,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/permissionscheme/{permissionSchemeId}/attribute/{key}",
@@ -7406,7 +8242,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/permissionscheme/{schemeId}",
@@ -7437,7 +8274,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/permissionscheme/{schemeId}",
@@ -7468,7 +8306,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/permissionscheme/{schemeId}",
@@ -7499,7 +8338,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/permissionscheme/{schemeId}/permission",
@@ -7530,7 +8370,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/permissionscheme/{schemeId}/permission",
@@ -7561,7 +8402,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/permissionscheme/{schemeId}/permission/{permissionId}",
@@ -7592,7 +8434,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/permissionscheme/{schemeId}/permission/{permissionId}",
@@ -7623,7 +8466,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/priority",
@@ -7654,7 +8498,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/priority/page",
@@ -7685,7 +8530,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/priority/{id}",
@@ -7716,7 +8562,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/priorityschemes",
@@ -7747,7 +8594,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/priorityschemes",
@@ -7778,7 +8626,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/priorityschemes/{schemeId}",
@@ -7809,7 +8658,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/priorityschemes/{schemeId}",
@@ -7840,7 +8690,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/priorityschemes/{schemeId}",
@@ -7871,7 +8722,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/project",
@@ -7902,7 +8754,8 @@
       "baselineCapabilityIds": ["projects"],
       "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.projects"]
     },
     {
       "identity": "POST /rest/api/2/project",
@@ -7931,9 +8784,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.create-project"]
     },
     {
       "identity": "GET /rest/api/2/project/type",
@@ -7964,7 +8818,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/project/type/{projectTypeKey}",
@@ -7995,7 +8850,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/project/type/{projectTypeKey}/accessible",
@@ -8024,9 +8880,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.project-type"]
     },
     {
       "identity": "DELETE /rest/api/2/project/{projectIdOrKey}",
@@ -8057,7 +8914,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/project/{projectIdOrKey}",
@@ -8086,9 +8944,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.project"]
     },
     {
       "identity": "PUT /rest/api/2/project/{projectIdOrKey}",
@@ -8117,9 +8976,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.update-project"]
     },
     {
       "identity": "PUT /rest/api/2/project/{projectIdOrKey}/archive",
@@ -8150,7 +9010,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/project/{projectIdOrKey}/avatar",
@@ -8181,7 +9042,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/project/{projectIdOrKey}/avatar",
@@ -8212,7 +9074,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/project/{projectIdOrKey}/avatar/temporary",
@@ -8243,7 +9106,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/project/{projectIdOrKey}/avatar/{id}",
@@ -8274,7 +9138,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/project/{projectIdOrKey}/avatars",
@@ -8305,7 +9170,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/project/{projectIdOrKey}/components",
@@ -8334,9 +9200,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.components"]
     },
     {
       "identity": "GET /rest/api/2/project/{projectIdOrKey}/properties",
@@ -8367,7 +9234,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/project/{projectIdOrKey}/properties/{propertyKey}",
@@ -8398,7 +9266,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/project/{projectIdOrKey}/properties/{propertyKey}",
@@ -8429,7 +9298,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/project/{projectIdOrKey}/properties/{propertyKey}",
@@ -8460,7 +9330,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/project/{projectIdOrKey}/restore",
@@ -8491,7 +9362,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/project/{projectIdOrKey}/role",
@@ -8522,7 +9394,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/project/{projectIdOrKey}/role/{id}",
@@ -8553,7 +9426,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/project/{projectIdOrKey}/role/{id}",
@@ -8584,7 +9458,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/project/{projectIdOrKey}/role/{id}",
@@ -8615,7 +9490,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/project/{projectIdOrKey}/role/{id}",
@@ -8646,7 +9522,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/project/{projectIdOrKey}/statuses",
@@ -8677,7 +9554,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/project/{projectIdOrKey}/type/{newProjectTypeKey}",
@@ -8708,7 +9586,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/project/{projectIdOrKey}/version",
@@ -8739,7 +9618,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/project/{projectIdOrKey}/versions",
@@ -8768,9 +9648,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.versions"]
     },
     {
       "identity": "GET /rest/api/2/project/{projectKeyOrId}/issuesecuritylevelscheme",
@@ -8801,7 +9682,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/project/{projectKeyOrId}/notificationscheme",
@@ -8832,7 +9714,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/project/{projectKeyOrId}/permissionscheme",
@@ -8863,7 +9746,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/project/{projectKeyOrId}/permissionscheme",
@@ -8894,7 +9778,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/project/{projectKeyOrId}/priorityscheme",
@@ -8925,7 +9810,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/project/{projectKeyOrId}/priorityscheme",
@@ -8956,7 +9842,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/project/{projectKeyOrId}/priorityscheme/{schemeId}",
@@ -8987,7 +9874,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/project/{projectKeyOrId}/securitylevel",
@@ -9018,7 +9906,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/project/{projectKeyOrId}/workflowscheme",
@@ -9049,7 +9938,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/projectCategory",
@@ -9080,7 +9970,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/projectCategory",
@@ -9111,7 +10002,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/projectCategory/{id}",
@@ -9142,7 +10034,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/projectCategory/{id}",
@@ -9173,7 +10066,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/projectCategory/{id}",
@@ -9204,7 +10098,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/projects/picker",
@@ -9235,7 +10130,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/projectvalidate/key",
@@ -9264,9 +10160,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.validate-project-key"]
     },
     {
       "identity": "GET /rest/api/2/readonly-mode",
@@ -9289,7 +10186,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/readonly-mode",
@@ -9312,7 +10210,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/reindex",
@@ -9343,7 +10242,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/reindex",
@@ -9374,7 +10274,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/reindex/issue",
@@ -9405,7 +10306,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/reindex/progress",
@@ -9436,7 +10338,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/reindex/request",
@@ -9467,7 +10370,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/reindex/request/bulk",
@@ -9498,7 +10402,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/reindex/request/{requestId}",
@@ -9529,7 +10434,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/resolution",
@@ -9560,7 +10466,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/resolution/page",
@@ -9591,7 +10498,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/resolution/{id}",
@@ -9622,7 +10530,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/role",
@@ -9653,7 +10562,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/role",
@@ -9684,7 +10594,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/role/{id}",
@@ -9715,7 +10626,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/role/{id}",
@@ -9746,7 +10658,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/role/{id}",
@@ -9777,7 +10690,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/role/{id}",
@@ -9808,7 +10722,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/role/{id}/actors",
@@ -9839,7 +10754,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/role/{id}/actors",
@@ -9870,7 +10786,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/role/{id}/actors",
@@ -9901,7 +10818,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/screens",
@@ -9932,7 +10850,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/screens/addToDefault/{fieldId}",
@@ -9963,7 +10882,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/screens/{screenId}/availableFields",
@@ -9994,7 +10914,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/screens/{screenId}/tabs",
@@ -10025,7 +10946,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/screens/{screenId}/tabs",
@@ -10056,7 +10978,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/screens/{screenId}/tabs/{tabId}",
@@ -10087,7 +11010,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/screens/{screenId}/tabs/{tabId}",
@@ -10118,7 +11042,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/screens/{screenId}/tabs/{tabId}/fields",
@@ -10149,7 +11074,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/screens/{screenId}/tabs/{tabId}/fields",
@@ -10180,7 +11106,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/screens/{screenId}/tabs/{tabId}/fields/{id}",
@@ -10211,7 +11138,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/screens/{screenId}/tabs/{tabId}/fields/{id}/move",
@@ -10242,7 +11170,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/screens/{screenId}/tabs/{tabId}/fields/{id}/updateShowWhenEmptyIndicator/{newValue}",
@@ -10273,7 +11202,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/screens/{screenId}/tabs/{tabId}/move/{pos}",
@@ -10304,7 +11234,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/search",
@@ -10335,7 +11266,8 @@
       "baselineCapabilityIds": ["search"],
       "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.search"]
     },
     {
       "identity": "POST /rest/api/2/search",
@@ -10366,7 +11298,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/search/error/lookup",
@@ -10389,7 +11322,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/searchLimits/maxAggregationBuckets",
@@ -10412,7 +11346,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/searchLimits/maxResultWindow",
@@ -10435,7 +11370,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/securitylevel/{id}",
@@ -10466,7 +11402,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/serverInfo",
@@ -10497,7 +11434,8 @@
       "baselineCapabilityIds": ["verification-server"],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/settings/baseUrl",
@@ -10528,7 +11466,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/settings/columns",
@@ -10559,7 +11498,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/settings/columns",
@@ -10590,7 +11530,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/status",
@@ -10621,7 +11562,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/status/page",
@@ -10652,7 +11594,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/status/{idOrName}",
@@ -10683,7 +11626,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/statuscategory",
@@ -10714,7 +11658,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/statuscategory/{idOrKey}",
@@ -10745,7 +11690,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/terminology/entries",
@@ -10776,7 +11722,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/terminology/entries",
@@ -10807,7 +11754,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/terminology/entries/{originalName}",
@@ -10838,7 +11786,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/universal_avatar/type/{type}/owner/{owningObjectId}",
@@ -10869,7 +11818,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/universal_avatar/type/{type}/owner/{owningObjectId}/avatar",
@@ -10900,7 +11850,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/universal_avatar/type/{type}/owner/{owningObjectId}/avatar/{id}",
@@ -10931,7 +11882,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/universal_avatar/type/{type}/owner/{owningObjectId}/temp",
@@ -10962,7 +11914,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/upgrade",
@@ -10993,7 +11946,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/upgrade",
@@ -11024,7 +11978,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/user",
@@ -11055,7 +12010,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/user",
@@ -11086,7 +12042,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/user",
@@ -11117,7 +12074,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/user",
@@ -11148,7 +12106,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/user/a11y/personal-settings",
@@ -11179,7 +12138,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/user/anonymization",
@@ -11210,7 +12170,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/user/anonymization",
@@ -11241,7 +12202,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/user/anonymization/progress",
@@ -11272,7 +12234,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/user/anonymization/rerun",
@@ -11303,7 +12266,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/user/anonymization/rerun",
@@ -11334,7 +12298,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/user/anonymization/unlock",
@@ -11365,7 +12330,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/user/application",
@@ -11396,7 +12362,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/user/application",
@@ -11427,7 +12394,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/user/assignable/multiProjectSearch",
@@ -11458,7 +12426,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/user/assignable/search",
@@ -11489,7 +12458,8 @@
       "baselineCapabilityIds": ["assignable-users"],
       "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.assignable-users"]
     },
     {
       "identity": "POST /rest/api/2/user/avatar",
@@ -11520,7 +12490,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/user/avatar",
@@ -11551,7 +12522,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/user/avatar/temporary",
@@ -11582,7 +12554,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/user/avatar/{id}",
@@ -11613,7 +12586,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/user/avatars",
@@ -11644,7 +12618,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/user/columns",
@@ -11675,7 +12650,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/user/columns",
@@ -11706,7 +12682,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/user/columns",
@@ -11737,7 +12714,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/user/duplicated/count",
@@ -11768,7 +12746,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/user/duplicated/list",
@@ -11799,7 +12778,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/user/list",
@@ -11826,7 +12806,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/user/password",
@@ -11857,7 +12838,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/user/permission/search",
@@ -11888,7 +12870,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/user/picker",
@@ -11919,7 +12902,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/user/properties",
@@ -11950,7 +12934,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/user/properties/{propertyKey}",
@@ -11981,7 +12966,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/user/properties/{propertyKey}",
@@ -12012,7 +12998,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/user/properties/{propertyKey}",
@@ -12043,7 +13030,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/user/search",
@@ -12074,7 +13062,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/user/session/{username}",
@@ -12105,7 +13094,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/user/viewissue/search",
@@ -12136,7 +13126,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/version",
@@ -12167,7 +13158,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/version",
@@ -12196,9 +13188,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.create-version"]
     },
     {
       "identity": "GET /rest/api/2/version/remotelink",
@@ -12229,7 +13222,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/version/{id}",
@@ -12258,9 +13252,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.version"]
     },
     {
       "identity": "PUT /rest/api/2/version/{id}",
@@ -12289,9 +13284,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": ["jira.update-version"]
     },
     {
       "identity": "PUT /rest/api/2/version/{id}/mergeto/{moveIssuesTo}",
@@ -12322,7 +13318,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/version/{id}/move",
@@ -12353,7 +13350,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/version/{id}/relatedIssueCounts",
@@ -12384,7 +13382,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/version/{id}/removeAndSwap",
@@ -12415,7 +13414,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/version/{id}/unresolvedIssueCount",
@@ -12446,7 +13446,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/version/{versionId}/remotelink",
@@ -12477,7 +13478,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/version/{versionId}/remotelink",
@@ -12508,7 +13510,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/version/{versionId}/remotelink",
@@ -12539,7 +13542,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/version/{versionId}/remotelink/{globalId}",
@@ -12570,7 +13574,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/version/{versionId}/remotelink/{globalId}",
@@ -12601,7 +13606,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/version/{versionId}/remotelink/{globalId}",
@@ -12632,7 +13638,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/workflow",
@@ -12663,7 +13670,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/workflowscheme",
@@ -12694,7 +13702,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/workflowscheme/{id}",
@@ -12725,7 +13734,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/workflowscheme/{id}",
@@ -12756,7 +13766,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/workflowscheme/{id}",
@@ -12787,7 +13798,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/workflowscheme/{id}/createdraft",
@@ -12818,7 +13830,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/workflowscheme/{id}/default",
@@ -12849,7 +13862,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/workflowscheme/{id}/default",
@@ -12880,7 +13894,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/workflowscheme/{id}/default",
@@ -12911,7 +13926,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/workflowscheme/{id}/draft",
@@ -12942,7 +13958,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/workflowscheme/{id}/draft",
@@ -12973,7 +13990,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/workflowscheme/{id}/draft",
@@ -13004,7 +14022,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/workflowscheme/{id}/draft/default",
@@ -13035,7 +14054,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/workflowscheme/{id}/draft/default",
@@ -13066,7 +14086,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/workflowscheme/{id}/draft/default",
@@ -13097,7 +14118,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/workflowscheme/{id}/draft/issuetype/{issueType}",
@@ -13128,7 +14150,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/workflowscheme/{id}/draft/issuetype/{issueType}",
@@ -13159,7 +14182,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/workflowscheme/{id}/draft/issuetype/{issueType}",
@@ -13190,7 +14214,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/workflowscheme/{id}/draft/workflow",
@@ -13221,7 +14246,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/workflowscheme/{id}/draft/workflow",
@@ -13252,7 +14278,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/workflowscheme/{id}/draft/workflow",
@@ -13283,7 +14310,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/workflowscheme/{id}/issuetype/{issueType}",
@@ -13314,7 +14342,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/workflowscheme/{id}/issuetype/{issueType}",
@@ -13345,7 +14374,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/workflowscheme/{id}/issuetype/{issueType}",
@@ -13376,7 +14406,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/api/2/workflowscheme/{id}/workflow",
@@ -13407,7 +14438,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/workflowscheme/{id}/workflow",
@@ -13438,7 +14470,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "PUT /rest/api/2/workflowscheme/{id}/workflow",
@@ -13469,7 +14502,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/worklog/deleted",
@@ -13500,7 +14534,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/api/2/worklog/list",
@@ -13531,7 +14566,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/api/2/worklog/updated",
@@ -13562,7 +14598,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/auth/1/session",
@@ -13593,7 +14630,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "GET /rest/auth/1/session",
@@ -13624,7 +14662,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "POST /rest/auth/1/session",
@@ -13655,7 +14694,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     },
     {
       "identity": "DELETE /rest/auth/1/websudo",
@@ -13686,7 +14726,8 @@
       "baselineCapabilityIds": [],
       "implementationState": "not-implemented",
       "runtimeAvailability": "unknown",
-      "verificationReferences": []
+      "verificationReferences": [],
+      "currentCapabilityIds": []
     }
   ]
 }

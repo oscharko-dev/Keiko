@@ -168,17 +168,21 @@ describe("Jira API inventory provenance and completeness", () => {
       checkJiraApiInventory(fixture.directory, {
         reconcileSources: true,
         cacheDirectory: fixture.cacheDirectory,
+        registryFile: fixture.registryFile,
       }),
     ).toMatchObject({ ok: true, verification: "sources", operations: 2, families: 2 });
   });
 
   it("fails explicit reconciliation when no originals have been provisioned", () => {
     const fixture = jiraInventoryFixture(copyInventory(), { cacheSources: false });
-    expect(checkJiraApiInventory(fixture.directory).ok).toBe(true);
+    expect(
+      checkJiraApiInventory(fixture.directory, { registryFile: fixture.registryFile }).ok,
+    ).toBe(true);
     expect(
       checkJiraApiInventory(fixture.directory, {
         reconcileSources: true,
         cacheDirectory: fixture.cacheDirectory,
+        registryFile: fixture.registryFile,
       }).ok,
     ).toBe(false);
   });
@@ -190,11 +194,14 @@ describe("Jira API inventory provenance and completeness", () => {
     fixture.provenance.manifest.sha256 = jiraApiManifestDigest(fixture.ledger.operations);
     writeFileSync(join(fixture.directory, "operations.json"), JSON.stringify(fixture.ledger));
     writeFileSync(join(fixture.directory, "provenance.json"), JSON.stringify(fixture.provenance));
-    expect(checkJiraApiInventory(fixture.directory).ok).toBe(true);
+    expect(
+      checkJiraApiInventory(fixture.directory, { registryFile: fixture.registryFile }).ok,
+    ).toBe(true);
     expect(
       checkJiraApiInventory(fixture.directory, {
         reconcileSources: true,
         cacheDirectory: fixture.cacheDirectory,
+        registryFile: fixture.registryFile,
       }).errors,
     ).toEqual(["operation-provenance"]);
   });
@@ -209,6 +216,7 @@ describe("Jira API inventory provenance and completeness", () => {
       checkJiraApiInventory(fixture.directory, {
         reconcileSources: true,
         cacheDirectory: fixture.cacheDirectory,
+        registryFile: fixture.registryFile,
       }).errors,
     ).toEqual(["source-digest"]);
   });

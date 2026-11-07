@@ -5,6 +5,11 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readJsonFile } from "./lib/json.mjs";
 import {
+  JIRA_REGISTRY_FILE,
+  readJiraNativeRegistry,
+  validateJiraImplementation,
+} from "./lib/jira-api-implementation.mjs";
+import {
   JiraApiInventoryError,
   jiraApiManifestDigest,
   readJiraApiSource,
@@ -198,7 +203,7 @@ function validateRow(row, union, capabilities) {
 }
 
 function validateLedger(ledger, union) {
-  requireValid(ledger.schemaVersion === 1, "ledger-schema");
+  requireValid(ledger.schemaVersion === 2, "ledger-schema");
   requireValid(/^[0-9a-f]{40}$/u.test(ledger.baselineRevision), "baseline-revision");
   requireValid(Array.isArray(ledger.operations), "ledger-operations");
   const identities = ledger.operations.map((row) => row.identity);
@@ -219,7 +224,11 @@ function validateLedger(ledger, union) {
 /** The default is offline ledger integrity; explicit source reconciliation reads verified cache bytes. */
 export function checkJiraApiInventory(
   directory = join(REPO_ROOT, INVENTORY_DIRECTORY),
-  { reconcileSources = false, cacheDirectory = join(REPO_ROOT, ".jira-api-sources") } = {},
+  {
+    reconcileSources = false,
+    cacheDirectory = join(REPO_ROOT, ".jira-api-sources"),
+    registryFile = JIRA_REGISTRY_FILE,
+  } = {},
 ) {
   try {
     const provenance = readJsonFile(join(directory, "provenance.json"));
@@ -229,6 +238,7 @@ export function checkJiraApiInventory(
     const union = reconcileSources ? sourceUnion(cacheDirectory, provenance) : normalized;
     validateLedger(ledger, union);
     validateManifest(ledger, provenance, union);
+    validateJiraImplementation(ledger, readJiraNativeRegistry(registryFile));
     return {
       ok: true,
       verification: reconcileSources ? "sources" : "ledger",

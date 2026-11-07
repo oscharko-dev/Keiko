@@ -52,6 +52,7 @@ describe("on-demand Jira source provisioning", () => {
       checkJiraApiInventory(input.directory, {
         reconcileSources: true,
         cacheDirectory: input.cacheDirectory,
+        registryFile: input.registryFile,
       }),
     ).toMatchObject({ ok: true, verification: "sources" });
   });
@@ -70,6 +71,7 @@ describe("on-demand Jira source provisioning", () => {
       checkJiraApiInventory(input.directory, {
         reconcileSources: true,
         cacheDirectory: input.cacheDirectory,
+        registryFile: input.registryFile,
       }).ok,
     ).toBe(true);
   });
@@ -106,6 +108,7 @@ describe("on-demand Jira source provisioning", () => {
       checkJiraApiInventory(input.directory, {
         reconcileSources: true,
         cacheDirectory: input.cacheDirectory,
+        registryFile: input.registryFile,
       }).ok,
     ).toBe(false);
   });

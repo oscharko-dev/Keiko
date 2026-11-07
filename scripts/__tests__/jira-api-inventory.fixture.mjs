@@ -4,6 +4,11 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { URL } from "node:url";
 import { sha256 } from "../lib/digest.mjs";
+import {
+  readJiraNativeRegistry,
+  reconcileJiraImplementation,
+  JIRA_REGISTRY_SOURCE,
+} from "../lib/jira-api-implementation.mjs";
 import { jiraApiManifestDigest, jiraApiSourcePath } from "../lib/jira-api-sources.mjs";
 
 const PROVENANCE = new URL(
@@ -33,10 +38,8 @@ function reference({ release }) {
   return { release, operationId: release === "10.3" ? "fixtureRead" : "fixtureReadRenamed" };
 }
 
-export function jiraInventoryFixture(directory, { cacheSources = true } = {}) {
-  const provenance = JSON.parse(readFileSync(PROVENANCE, "utf8"));
+function sourceFixtures(provenance, cacheDirectory, cacheSources) {
   const sourceBytes = new Map();
-  const cacheDirectory = join(directory, "cache");
   for (const source of provenance.sources) {
     const operationId = source.release === "10.3" ? "fixtureRead" : "fixtureReadRenamed";
     const spec = {
@@ -62,6 +65,13 @@ export function jiraInventoryFixture(directory, { cacheSources = true } = {}) {
       writeFileSync(jiraApiSourcePath(cacheDirectory, source), bytes);
     }
   }
+  return sourceBytes;
+}
+
+export function jiraInventoryFixture(directory, { cacheSources = true } = {}) {
+  const provenance = JSON.parse(readFileSync(PROVENANCE, "utf8"));
+  const cacheDirectory = join(directory, "cache");
+  const sourceBytes = sourceFixtures(provenance, cacheDirectory, cacheSources);
   const sources = provenance.sources.map(reference);
   const operations = [
     operation("/rest/api/2/project", "project", "C1", sources),
@@ -74,12 +84,31 @@ export function jiraInventoryFixture(directory, { cacheSources = true } = {}) {
     familyCount: 2,
   };
   const ledger = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     baselineRevision: "1".repeat(40),
     baselineCapabilities: {},
+    currentCapabilities: Object.fromEntries(
+      ["jira.projects", "jira.boards"].map((tool) => [
+        tool,
+        {
+          constraints: "Authored constrained fixture only; no runtime qualification.",
+          sourceFiles: [JIRA_REGISTRY_SOURCE],
+          testFiles: ["scripts/__tests__/check-jira-api-inventory.test.mjs"],
+        },
+      ]),
+    ),
     operations,
   };
+  const registryFile = join(directory, "registry.ts");
+  writeFileSync(
+    registryFile,
+    `const NATIVE = {
+    "jira.projects": ["GET", "read", "/project", "visible-projects"],
+    "jira.boards": ["GET", "read", "/board", "visible-boards", "/rest/agile/1.0"],
+  };`,
+  );
+  const reconciled = reconcileJiraImplementation(ledger, readJiraNativeRegistry(registryFile));
   writeFileSync(join(directory, "provenance.json"), JSON.stringify(provenance));
-  writeFileSync(join(directory, "operations.json"), JSON.stringify(ledger));
-  return { directory, provenance, ledger, cacheDirectory, sourceBytes };
+  writeFileSync(join(directory, "operations.json"), JSON.stringify(reconciled));
+  return { directory, provenance, ledger: reconciled, cacheDirectory, sourceBytes, registryFile };
 }
