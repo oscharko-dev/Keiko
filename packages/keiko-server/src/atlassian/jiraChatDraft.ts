@@ -12,8 +12,10 @@ import {
   type JiraDraft,
   type JiraDraftActivity,
   type JiraDraftItem,
+  type JiraDraftReadCounts,
   type JiraManagedConnection,
   type JiraTraceOutcome,
+  withJiraCreateMetadataMemo,
 } from "@oscharko-dev/keiko-connectors";
 import {
   JIRA_DRAFT_RESULT_ROWS_MAX,
@@ -98,6 +100,11 @@ export interface JiraChatDraftExecution {
   readonly retainProgress?: ((snapshot: () => CatalogJsonObject) => void) | undefined;
   /** Test seam: how long a run may create, and how long it may take in all. */
   readonly budget?: JiraDraftRunBudget | undefined;
+  /**
+   * Owned by the run: the Jira GETs its items sent and the metadata GETs answered once for all
+   * items of this invocation. Supplied by `runDraft`; callers leave it unset.
+   */
+  readonly createReads?: JiraDraftReadCounts | undefined;
 }
 
 /**
@@ -234,6 +241,22 @@ async function runItem(
   return data === undefined ? settled : { ...settled, trace: data };
 }
 
+/** The item's connection: batch-wide create metadata is read once per invocation, the rest live. */
+function createConnection(
+  input: JiraChatDraftExecution,
+  http: AtlassianHttpBodyPort,
+): JiraManagedConnection {
+  const connection = { ...input.connection, http };
+  return input.createReads === undefined
+    ? connection
+    : withJiraCreateMetadataMemo(
+        connection,
+        input.context,
+        input.httpPortFactory,
+        input.createReads,
+      );
+}
+
 async function runTracedItem(
   input: JiraChatDraftExecution,
   item: JiraDraftItem,
@@ -252,7 +275,7 @@ async function runTracedItem(
         item,
         keys,
         input.context,
-        { ...input.connection, http },
+        createConnection(input, http),
         trace,
       );
       return attempt;
@@ -366,6 +389,9 @@ function reportRun(
     settledCount: settledCount(results),
     // Before the end, every item not yet looked at counts as still to do.
     pendingCount: phase === "executed" ? pendingCount(results) : total - results.length,
+    ...(input.createReads === undefined
+      ? {}
+      : { readCount: input.createReads.made, readReusedCount: input.createReads.reused }),
     durationMs,
   });
 }
@@ -427,12 +453,14 @@ function acknowledgingInput(
   };
 }
 async function runDraft(
-  input: JiraChatDraftExecution,
+  callerInput: JiraChatDraftExecution,
   draft: JiraDraft,
   traces: ReadonlyMap<string, ItemTrace>,
   tally: TraceTally,
   excluded: ReadonlySet<string>,
 ): Promise<readonly DraftItemResult[]> {
+  // One invocation, one set of create metadata reads; a new run always starts empty.
+  const input: JiraChatDraftExecution = { ...callerInput, createReads: { made: 0, reused: 0 } };
   const now = input.now ?? Date.now;
   const clock = { now, startedAt: now(), budget: input.budget ?? JIRA_DRAFT_RUN_BUDGET };
   const run: RunState = {

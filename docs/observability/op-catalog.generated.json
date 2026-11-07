@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "62cad07eb3e1024fcbf80211b1fc9ba22f2be6d1a901d6a5e56adb03c9d809cb",
+    "catalogDigest": "a8c2de4af69b074257726856cae6e6a46554e3b3b286c93de5e77cf3f0eb94f4",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1291,7 +1291,7 @@
         "proofIds": ["atlassian.jira-draft.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/atlassian/jiraDraftActivity.ts:19",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraDraftActivity.ts:109"]
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraDraftActivity.ts:110"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -114856,7 +114856,7 @@
     {
       "op": "jira.mutation-execution-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatDraft.ts:300",
+      "site": "packages/keiko-server/src/atlassian/jiraChatDraft.ts:323",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

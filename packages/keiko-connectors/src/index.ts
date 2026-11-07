@@ -304,6 +304,7 @@ export {
   type JiraDraftResolution,
   type JiraDraftToolDeps,
 } from "./jira-draft-stage-tool.js";
+export { withJiraCreateMetadataMemo, type JiraDraftReadCounts } from "./jira-draft-read-memo.js";
 export { exportJiraReport, jiraReportCommentText } from "./jira-report-export.js";
 export type {
   JiraReportActivity,

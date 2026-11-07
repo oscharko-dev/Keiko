@@ -57,7 +57,8 @@ const JIRA_DRAFT_OPERATION = defineActivityLogOperation({
     violationCount: COUNT_FIELD,
     settledCount: { type: "integer", dataClass: "count", required: false },
     pendingCount: { type: "integer", dataClass: "count", required: false },
-    // A staging call only: Jira reads sent, and reads answered from the invocation's own memo.
+    // A staging call or a create run: Jira reads sent, and reads answered from the invocation's own
+    // memo (a create run shares only batch-identical create metadata; search and read-back stay live).
     readCount: { type: "integer", dataClass: "count", required: false },
     readReusedCount: { type: "integer", dataClass: "count", required: false },
     durationMs: { type: "integer", dataClass: "duration", required: true },

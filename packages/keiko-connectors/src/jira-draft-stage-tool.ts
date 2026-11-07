@@ -59,7 +59,7 @@ export interface JiraDraftActivity {
   /** A run only: items created, reconciled or deselected so far, and items not yet started. */
   readonly settledCount?: number;
   readonly pendingCount?: number;
-  /** A staging call only: Jira reads it sent, and reads answered from the invocation's own memo. */
+  /** A staging call or a create run: Jira reads it sent, and reads answered from the invocation's own memo. */
   readonly readCount?: number;
   readonly readReusedCount?: number;
 }

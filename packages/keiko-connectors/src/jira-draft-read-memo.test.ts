@@ -9,6 +9,7 @@ import {
   JIRA_DRAFT_READ_MEMO_BYTES_MAX,
   JIRA_DRAFT_READ_MEMO_ENTRIES_MAX,
   JIRA_DRAFT_READ_MEMO_TTL_MS,
+  withJiraCreateMetadataMemo,
   withJiraDraftReadMemo,
   type JiraDraftReadCounts,
 } from "./jira-draft-read-memo.js";
@@ -169,5 +170,58 @@ describe("withJiraDraftReadMemo", () => {
     await memoized.http(get("https://jira/fresh1"));
     await memoized.http(get("https://jira/fresh2"));
     expect(http.mock.calls.length).toBe(sent);
+  });
+});
+
+describe("withJiraCreateMetadataMemo", () => {
+  const API = "https://jira/rest/api/2/";
+  const METADATA = [
+    `${API}issue/createmeta/1/issuetypes/2?startAt=0&maxResults=100`,
+    `${API}project/1`,
+    `${API}issuetype/2`,
+    `${API}field`,
+  ];
+  const LIVE = [`${API}search?jql=labels%3D%22x%22`, `${API}issue/SYN-1?fields=summary`];
+
+  it("serves the metadata once for items on one scope but keeps search and read-back live", async () => {
+    const ctx = context();
+    const scope = {};
+    const tally = counts();
+    const { connection: target, http } = connection();
+    for (let item = 0; item < 5; item += 1) {
+      // Each item gets its own transport, as the lifecycle-wrapped port of the create run does.
+      const own = {
+        ...target,
+        http: (request: AtlassianHttpBodyRequest): Promise<AtlassianHttpBodyResult> =>
+          target.http(request),
+      };
+      const memoized = withJiraCreateMetadataMemo(own, ctx, scope, tally);
+      for (const url of [...METADATA, ...LIVE]) await memoized.http(get(url));
+    }
+    expect(http).toHaveBeenCalledTimes(METADATA.length + LIVE.length * 5);
+    expect(tally).toEqual({ made: METADATA.length + LIVE.length * 5, reused: METADATA.length * 4 });
+  });
+
+  it("never answers a write and starts a new invocation empty", async () => {
+    const scope = {};
+    const { connection: target, http } = connection();
+    const post = { method: "POST", url: `${API}issue`, timeoutMs: 1, maxBodyBytes: 10 } as const;
+    const first = withJiraCreateMetadataMemo(target, context(), scope, counts());
+    await first.http(post);
+    await first.http(post);
+    await first.http(get(METADATA[1] ?? ""));
+    const second = withJiraCreateMetadataMemo(target, context(), scope, counts());
+    await second.http(get(METADATA[1] ?? ""));
+    expect(http).toHaveBeenCalledTimes(4);
+  });
+
+  it("does not remember a non-200 metadata answer", async () => {
+    const ctx = context();
+    const scope = {};
+    const { connection: target, http } = connection(() => ok("{}", { status: 404 }));
+    const memoized = withJiraCreateMetadataMemo(target, ctx, scope, counts());
+    await memoized.http(get(METADATA[0] ?? ""));
+    await memoized.http(get(METADATA[0] ?? ""));
+    expect(http).toHaveBeenCalledTimes(2);
   });
 });
