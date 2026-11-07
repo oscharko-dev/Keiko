@@ -17,9 +17,6 @@ const modelBaseUrl = `http://127.0.0.1:${String(modelPort)}/v1`;
 // engine's memory database, UI data and workspace state. A journey that asserts an empty starting state
 // ("disabled capture stays empty") then reads the previous engine's leftovers and fails for a
 // reason that has nothing to do with the engine under test.
-// The evidence directory belongs to that state as well: without `KEIKO_EVIDENCE_DIR` the BFF writes
-// its memory audit, which holds the Journal's content-free "Refused" decisions, to `./.keiko/evidence`
-// in the checkout, shared by every engine and every suite (#4212).
 //
 // Derived from `--project` on the command line rather than a new env var each script must remember
 // to set: the flag is already how the lanes differ, so isolation cannot be forgotten. The config
@@ -197,7 +194,6 @@ export default defineConfig({
         KEIKO_DEV_MAX_RESTARTS: "0",
         KEIKO_DEV_NEXT_BUNDLER: "webpack",
         KEIKO_STATE_DIR: stateDir,
-        KEIKO_EVIDENCE_DIR: join(stateDir, "evidence"),
         KEIKO_UI_DATA_DIR: join(stateDir, "ui"),
         KEIKO_MEMORY_DIR: join(stateDir, "memory"),
         KEIKO_CONFIG_FILE: runtimeConfigPath,

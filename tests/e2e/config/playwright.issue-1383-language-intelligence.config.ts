@@ -52,7 +52,6 @@ export default defineConfig({
       KEIKO_DEV_MAX_RESTARTS: "0",
       KEIKO_DEV_NEXT_BUNDLER: "webpack",
       KEIKO_STATE_DIR: stateDir,
-      KEIKO_EVIDENCE_DIR: join(stateDir, "evidence"),
       KEIKO_UI_DATA_DIR: join(stateDir, "ui"),
       KEIKO_MEMORY_DIR: join(stateDir, "memory"),
       KEIKO_CONFIG_FILE: runtimeConfigPath,

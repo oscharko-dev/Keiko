@@ -85,7 +85,6 @@ export default defineConfig({
       KEIKO_DEV_TEST_SKIP_BFF_WATCH: "1",
       KEIKO_DEV_NEXT_BUNDLER: "webpack",
       KEIKO_STATE_DIR: stateDir,
-      KEIKO_EVIDENCE_DIR: join(stateDir, "evidence"),
       KEIKO_UI_DATA_DIR: join(stateDir, "ui"),
       KEIKO_MEMORY_DIR: join(stateDir, "memory"),
       KEIKO_INITIAL_PROJECT_PATH: corpusDataRoot,

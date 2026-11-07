@@ -14,10 +14,12 @@
 // the scripts still pass distinct projects, and the config still turns them into distinct state
 // directories. Either half alone is insufficient — the flags could diverge while the config ignores
 // them, or the config could split while a lane stops passing a project.
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildDevBffEnv, resolveDevBffStateDir } from "../lib/dev-bff-env.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CONFIG = "../../tests/e2e/config/playwright.config.ts";
@@ -42,25 +44,47 @@ function configStateDir(config) {
 }
 
 // The durable stores the BFF opens besides its state directory. Each falls back to a location
-// outside the run when its variable is absent; the evidence store's fallback is `./.keiko/evidence`
-// in the checkout, so a run without `KEIKO_EVIDENCE_DIR` shared its memory audit, and with it the
-// Journal's content-free Refused rows, with every engine and suite (#4212).
+// outside the run when nothing places it; the evidence store's fallback is `./.keiko/evidence` in
+// the checkout, so a dev-runner BFF without `KEIKO_EVIDENCE_DIR` shared its memory audit, and with it
+// the Journal's content-free Refused rows, with every engine and suite (#4212).
 const DURABLE_STORE_VARIABLES = ["KEIKO_UI_DATA_DIR", "KEIKO_MEMORY_DIR", "KEIKO_EVIDENCE_DIR"];
 
-// A config whose web server is not the product BFF launched from the environment hands its own
-// server the state, and that server must place the evidence store inside it: the built
-// `tests/e2e/servers/*-server` entries reach the shared coding-runtime server, which passes
-// `buildUiHandlerDeps` an explicit evidence directory under its state root, or pass `keiko ui` an
-// `--evidence-dir` inside their state, and a support server passes one of its own.
+// The effective environment of the dev BFF a config's web server starts, derived by the BFF's own
+// builder. The repository root is an empty directory, so a developer's `.env` cannot decide it.
+function bffEnvironmentOf(env) {
+  const repoRoot = mkdtempSync(join(tmpdir(), "keiko-lane-isolation-"));
+  try {
+    const stateDir = resolveDevBffStateDir({ repoRoot, processEnv: env });
+    return buildDevBffEnv({ repoRoot, processEnv: env, stateDir });
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+}
+
+// Every e2e web server that runs the product places its evidence store inside its state:
+// - `keiko ui` (`dist/cli/index.js ui`) and the dev BFF the dev runner starts derive it from the
+//   state directory when none is configured;
+// - the built `tests/e2e/servers/*-server` entries reach the shared coding-runtime server, which
+//   passes `buildUiHandlerDeps` an explicit evidence directory under its state root, or pass
+//   `keiko ui` an `--evidence-dir` inside their state;
+// - a support or fixture server passes one of its own or starts the dev runner.
 const SHARED_SERVER = "coding-runtime-server-shared";
 const SHARED_SERVER_EVIDENCE = 'evidenceDir: join(bffStateRoot, "evidence")';
-const BUILT_SERVER_ENTRY = /"([a-z0-9-]+-server)\.mjs"/u;
+const CLI_SOURCE = "packages/keiko-cli/src/ui.ts";
+const CLI_EVIDENCE_DEFAULT = 'next.KEIKO_EVIDENCE_DIR = join(stateDir, "evidence");';
+const CLI_ENTRY = "node dist/cli/index.js ui";
+const DEV_RUNNER_ENTRY = "scripts/dev-runner.mjs";
+// A built entry is named on its own ("x-server.mjs") or at the end of its dist path.
+const BUILT_SERVER_ENTRY = /\b([a-z0-9-]+-server)\.mjs"/gu;
 const CLI_EVIDENCE_ARGUMENT = /"--evidence-dir",\s*resolve\(stateDir, "evidence"\)/u;
-const SUPPORT_SERVER_ENTRY = /node (tests\/e2e\/support\/[a-z0-9-]+-server\.mjs)/u;
+const SUPPORT_SERVER_ENTRY =
+  /node (tests\/e2e\/(?:support|fixtures)\/[a-z0-9-]+(?:-server)?\.m?js)/u;
 const BASE_CONFIG_IMPORT = 'from "./playwright.config.js"';
 
+// Comments that start a line only: a `/*` inside a glob string such as "**/*.spec.ts" is no
+// comment.
 function withoutComments(source) {
-  return source.replaceAll(/\/\*[\s\S]*?\*\//gu, "").replaceAll(/^\s*\/\/.*$/gmu, "");
+  return source.replaceAll(/^\s*\/\*[\s\S]*?\*\//gmu, "").replaceAll(/^\s*\/\/.*$/gmu, "");
 }
 
 function sourceOf(path) {
@@ -80,19 +104,41 @@ function ownsEvidenceInState(name) {
   return name !== delivery && importsServer(source, delivery) && ownsEvidenceInState(delivery);
 }
 
+function supportServerOwnsEvidence(path) {
+  const source = sourceOf(path);
+  return /evidenceDir: join\(/u.test(source) || source.includes(`"${DEV_RUNNER_ENTRY}"`);
+}
+
+// A config's own web-server command that places the evidence store, in the order they are tried.
+const COMMAND_EVIDENCE_OWNERS = [
+  ["environment", (source) => source.includes("KEIKO_EVIDENCE_DIR:")],
+  ["base-config", (source) => source.includes(BASE_CONFIG_IMPORT)],
+  ["cli", (source) => source.includes(CLI_ENTRY)],
+  ["dev-runner", (source) => source.includes(`node ${DEV_RUNNER_ENTRY}`)],
+];
+
+// The built product servers a config names; a model mock or other helper is no product server.
+function builtServersOf(source) {
+  return [...source.matchAll(BUILT_SERVER_ENTRY)]
+    .map((match) => match[1])
+    .filter((name) => existsSync(resolve(repoRoot, "tests/e2e/servers", `${name}.mts`)));
+}
+
+function serverEvidenceOwner(source) {
+  const built = builtServersOf(source);
+  if (built.length > 0) {
+    return built.every((name) => ownsEvidenceInState(name)) ? "built-server" : "missing";
+  }
+  const support = SUPPORT_SERVER_ENTRY.exec(source)?.[1];
+  return support !== undefined && supportServerOwnsEvidence(support) ? "support-server" : "missing";
+}
+
 // Where the evidence store of a config's product server lives, or `missing`.
 function evidenceOwner(file) {
   const source = sourceOf(file);
   if (!source.includes("webServer")) return "no-server";
-  if (source.includes("KEIKO_EVIDENCE_DIR:")) return "environment";
-  if (source.includes(BASE_CONFIG_IMPORT)) return "base-config";
-  const built = BUILT_SERVER_ENTRY.exec(source)?.[1];
-  if (built !== undefined) return ownsEvidenceInState(built) ? "built-server" : "missing";
-  const support = SUPPORT_SERVER_ENTRY.exec(source)?.[1];
-  if (support !== undefined && /evidenceDir: join\(/u.test(sourceOf(support))) {
-    return "support-server";
-  }
-  return "missing";
+  const owner = COMMAND_EVIDENCE_OWNERS.find(([, places]) => places(source));
+  return owner === undefined ? serverEvidenceOwner(source) : owner[0];
 }
 
 function e2eConfigFiles() {
@@ -255,7 +301,7 @@ describe("every e2e BFF keeps its durable stores inside its own state", () => {
     const chromium = await serverEnvFor("chromium");
     const firefox = await serverEnvFor("firefox");
     const webkit = await serverEnvFor("webkit");
-    const environments = [chromium, firefox, webkit];
+    const environments = [chromium, firefox, webkit].map((env) => bffEnvironmentOf(env ?? {}));
     for (const variable of DURABLE_STORE_VARIABLES) {
       const directories = environments.map((env) => env?.[variable]);
       expect(
@@ -278,12 +324,13 @@ describe("every e2e BFF keeps its durable stores inside its own state", () => {
     const missing = owners.filter(([, owner]) => owner === "missing").map(([file]) => file);
     expect(missing).toEqual([]);
     const kinds = new Set(owners.map(([, owner]) => owner));
-    for (const kind of ["environment", "base-config", "built-server", "support-server"]) {
+    for (const kind of ["cli", "dev-runner", "base-config", "built-server", "support-server"]) {
       expect(kinds.has(kind), `no config exercises the ${kind} rule`).toBe(true);
     }
   });
 
-  it("keeps the explicit evidence directory of the coding-runtime server inside its state", () => {
+  it("keeps the explicit evidence directories of the CLI and the coding-runtime server", () => {
+    expect(sourceOf(CLI_SOURCE)).toContain(CLI_EVIDENCE_DEFAULT);
     expect(sourceOf(`tests/e2e/servers/${SHARED_SERVER}.mts`)).toContain(SHARED_SERVER_EVIDENCE);
   });
 });
