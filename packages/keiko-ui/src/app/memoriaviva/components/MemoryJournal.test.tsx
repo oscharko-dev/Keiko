@@ -106,12 +106,14 @@ describe("MemoryJournal loading and ordering", () => {
       within(rows[0]!).getByText("Capture refused by policy. No content was retained."),
     ).toBeInTheDocument();
     expect(within(rows[0]!).getByText("Refused")).toBeInTheDocument();
-    expect(within(rows[0]!).getByText(/capture reason denied-category/i)).toBeInTheDocument();
+    // #4206: the person reads why in plain words; the policy code stays a data attribute only.
+    expect(
+      within(rows[0]!).getByText("Why: It touched a protected topic, such as health."),
+    ).toHaveAttribute("data-reason", "denied-category");
+    expect(rows[0]).not.toHaveTextContent("denied-category");
     expect(within(rows[0]!).queryByRole("button")).not.toBeInTheDocument();
     expect(within(rows[1]!).getByText("Awaiting review")).toBeInTheDocument();
-    expect(
-      within(rows[1]!).getByText(/capture reason governance-auto-accepted/i),
-    ).toBeInTheDocument();
+    expect(within(rows[1]!).getByText("Why: Keiko keeps it for you.")).toBeInTheDocument();
   });
 
   it("degrades safely when the capture mode or body excerpt is absent", async () => {
@@ -127,10 +129,20 @@ describe("MemoryJournal loading and ordering", () => {
       reason: "captured-by-policy",
       memoryId: memoryId("legacy"),
     };
-    renderJournal([legacy]);
-    const row = await screen.findByTestId("memory-journal-row");
-    expect(within(row).getByText("Mode unavailable")).toBeInTheDocument();
-    expect(within(row).getByText("Memory content is unavailable")).toBeInTheDocument();
+    const legacyProposal: MemoryRecentCapture = {
+      ...legacy,
+      eventId: "event-legacy-proposal",
+      outcome: "proposed",
+      occurredAt: 50,
+      memoryId: memoryId("legacy-proposal"),
+    };
+    renderJournal([legacy, legacyProposal]);
+    const [kept, waiting] = await screen.findAllByTestId("memory-journal-row");
+    // #4206: the mode explains only a memory that still waits for review.
+    expect(within(kept!).queryByText("Mode unavailable")).not.toBeInTheDocument();
+    expect(within(kept!).getByText("Memory content is unavailable")).toBeInTheDocument();
+    expect(within(waiting!).getByText("Mode unavailable")).toBeInTheDocument();
+    expect(within(waiting!).getByText("Memory content is unavailable")).toBeInTheDocument();
   });
 
   it("identifies voice-originated captures in the Journal", async () => {
