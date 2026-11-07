@@ -83,7 +83,6 @@ const MATCH: JiraTemplateValidation = {
   findings: [],
   checked: { project: true, fields: true, linkTypes: true, transitions: true },
 };
-const MATCHES = "Synthetic: matches Jira.";
 
 let latest: JiraTemplates | undefined;
 const onOpen = vi.fn();
