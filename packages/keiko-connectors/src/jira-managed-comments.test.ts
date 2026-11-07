@@ -226,7 +226,7 @@ describe("bound native comment reads and updates", () => {
   it.each([
     `https://public.example.test/another-context/rest/api/2/${PATH}`,
     `http://internal.example.test:8080/rest/api/2/${PATH}`,
-    `https://public.example.test/rest/api/2/${PATH.replace(ISSUE.id, "%31%30%30%30%37")}`,
+    `https://public.example.test/rest/api/2/issue/%31%30%30%30%37/comment/${TARGET.commentId}`,
   ])("binds proxy self metadata without following or displaying its URL: %s", async (self) => {
     const read = fixture({ before: { ...COMMENT, self } });
     const result = await executeJiraCommentRead("jira.get-comment", TARGET, read, BASE_URL);
