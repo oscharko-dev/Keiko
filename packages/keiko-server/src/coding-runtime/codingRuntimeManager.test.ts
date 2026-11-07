@@ -952,6 +952,42 @@ describe("coding runtime manager", () => {
     expect(harness.captures[0]?.env).not.toHaveProperty("KEIKO_CODING_DEPLOYMENT_CEILING");
   });
 
+  it("keeps host proxy, CA, OpenSSL and credential settings out of a mapped launch (#4068 W11)", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {
+        PATH: "/usr/bin",
+        HTTPS_PROXY: "http://user:proxy-password@proxy.example.test:8080",
+        http_proxy: "http://proxy.example.test:8080",
+        ALL_PROXY: "socks5://proxy.example.test:1080",
+        NO_PROXY: "*",
+        SSL_CERT_FILE: "/host/ca.pem",
+        NODE_EXTRA_CA_CERTS: "/host/extra-ca.pem",
+        OPENSSL_CONF: "/host/openssl.cnf",
+        OPENSSL_MODULES: "/host/ossl-modules",
+        NODE_OPTIONS: "--force-fips",
+        OPENAI_API_KEY: "host-api-key-value",
+        AZURE_OPENAI_API_KEY: "host-azure-key-value",
+        GITHUB_TOKEN: "host-github-token-value",
+      },
+    });
+
+    await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+
+    const spawnedEnv = harness.captures[0]?.env ?? {};
+    expect(spawnedEnv.PATH).toBe("/usr/bin");
+    const names = Object.keys(spawnedEnv);
+    expect(names.filter((name) => !name.startsWith("KEIKO_") && name !== "PATH")).toEqual([]);
+    const values = JSON.stringify(spawnedEnv);
+    for (const hostValue of ["proxy-password", "proxy.example.test", "/host/", "host-api-key"]) {
+      expect(values).not.toContain(hostValue);
+    }
+  });
+
   it("refuses a child env value that equals a credential-named host value (#3897)", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
@@ -1783,6 +1819,55 @@ describe("coding runtime manager", () => {
       ).toEqual({ ok: false, failureCode: "signature-unverified", retryable: false });
       expect(harness.children).toHaveLength(0);
     });
+  });
+
+  // A run must not be able to write to its own runtime. A checkout selected as its own workspace does
+  // this, because the dev lane stages the runtime inside it. Only this cause of an unmanaged runtime
+  // has something the operator can do about it, so the two are told apart. The managed root is the
+  // verified payload's, never the request's, so these cases place the workspace around that payload.
+  it.each([
+    ["below the workspace", (resourceRoot: string): string => resourceRoot],
+    [
+      "at the workspace itself",
+      (resourceRoot: string, payloadRootPath: string): string =>
+        join(resourceRoot, payloadRootPath),
+    ],
+  ])("refuses a managed root %s before anything spawns", async (_label, workspaceOf) => {
+    const { resourceRoot, verification, executablePath } = createPortableRuntimeFixture();
+    const workspaceRoot = workspaceOf(resourceRoot, verification.payloadRootPath);
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: { PATH: "/usr/bin" },
+      portableRuntimeResolver: () => ({ verification, resourceRoot, target: "windows-x64" }),
+    });
+
+    expect(
+      await manager.start(launchRequest(workspaceRoot, resourceRoot, executablePath)),
+    ).toMatchObject({ ok: false, failureCode: "workspace-contains-runtime", retryable: false });
+    expect(harness.captures).toHaveLength(0);
+  });
+
+  it("keeps an executable outside its managed root a refusal of its own", async () => {
+    const { resourceRoot, verification, executablePath } = createPortableRuntimeFixture();
+    executable(join(resourceRoot, "runtime", "outside"));
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: { PATH: "/usr/bin" },
+      portableRuntimeResolver: () => ({
+        verification: { ...verification, executablePath: "runtime/outside/opencode-sidecar" },
+        resourceRoot,
+        target: "windows-x64",
+      }),
+    });
+
+    expect(
+      await manager.start(
+        launchRequest(tempDir("keiko-runtime-workspace-"), resourceRoot, executablePath),
+      ),
+    ).toMatchObject({ ok: false, failureCode: "sidecar-unmanaged", retryable: false });
+    expect(harness.captures).toHaveLength(0);
   });
 
   it("starts a managed sidecar with only allowlisted inherited env and runtime projection", async () => {

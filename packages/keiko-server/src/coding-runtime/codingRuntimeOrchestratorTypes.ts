@@ -8,6 +8,7 @@ import type {
   CodingWorkbenchModelRefusalReason,
   CodingWorkbenchContextUsage,
   CodingWorkbenchRuntimeFailureCode,
+  CodingWorkbenchRuntimeStartFailureCode,
   CodingWorkbenchRuntimeQuestionsResponse,
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeStartRequest,
@@ -192,6 +193,16 @@ export type CodingRuntimeOrchestratorResult =
       // the git preparation failure under the run id, and no join between them).
       readonly runId?: string | undefined;
     };
+
+/**
+ * What a start answers: a start refused before any run exists may also answer a start-only refusal
+ * (#4068), which no other operation and no run snapshot ever carries.
+ */
+export type CodingRuntimeStartResult =
+  | Extract<CodingRuntimeOrchestratorResult, { readonly ok: true }>
+  | (Omit<Extract<CodingRuntimeOrchestratorResult, { readonly ok: false }>, "failureCode"> & {
+      readonly failureCode: CodingWorkbenchRuntimeStartFailureCode;
+    });
 
 export type CodingRuntimeQuestionOperationResult =
   | {

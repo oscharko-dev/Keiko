@@ -1132,7 +1132,10 @@ windowed review (`diff-windowed` with the closed `surface` `changeset-review`, `
 never a path or diff text; #4108). An unpaired window names the missing pairing once, in the
 run status sentence, and holds its secondary notices until it is paired; each hold is recorded as
 `notice-held` with the closed `notice` (`task-session`, `skills`, `mcp`, `activity`, `questions`,
-`editor-bridge`; #3880). What a delivery card showed is `delivery-step-shown` with the closed
+`editor-bridge`; #3880). `run-identity-observed` records once per live run whether the server
+reported the run's model and agent (`modelReported`, `agentReported`) and its closed `toolProfile`
+(`native`, `mapped`, `unreported`); `coding-runtime.run.started` carries the started run's closed
+`primaryAgent` and `modelIdDigest`, never a model or custom agent name (#4068 W12). What a delivery card showed is `delivery-step-shown` with the closed
 `deliveryStep` (`delivery-review`, `stage-review`, `unstage-review`, `commit-review`,
 `commit-result`, `draft-delivery`, `ci-readiness`, `journey`) and only that step's closed
 `deliveryState` (a review's load state, a commit status, a delivery phase, a CI or journey state;

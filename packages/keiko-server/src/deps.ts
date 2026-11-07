@@ -565,6 +565,7 @@ export function productionOpenCodeToolProfile(
   return platform === "darwin" ? "native" : "direct";
 }
 import { resolveProductionOpenCodeActivation } from "./coding-runtime/productionOpenCodeActivation.js";
+import type { WindowsGatewayServiceProbe } from "./coding-runtime/windowsGatewayServiceProbe.js";
 import { createNativeWorktreeProvisionPort } from "./coding-runtime/opencodeNativeWorktree.js";
 import { readProductionWorkspaceHead } from "./coding-runtime/productionWorkspaceHeadReader.js";
 import type { GitHubCodeContextApiPort } from "./coding-context/githubCodeContextConnector.js";
@@ -995,6 +996,8 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   readonly codingRuntimeHostQualified?: boolean | undefined;
   /** Content-free reason naming the first failed activation prerequisite when unqualified. */
   readonly codingRuntimeUnavailableReason?: CodingWorkbenchRuntimeUnavailableReason | undefined;
+  /** Live broker state of a released Windows runtime; absent everywhere else (#4068). */
+  readonly codingRuntimeGatewayService?: WindowsGatewayServiceProbe | undefined;
   /**
    * Available-branch twin of the reason above: how strong the qualified runtime's evidence is.
    * Every default along this path resolves to the WEAK value, so an unthreaded path degrades to
@@ -5982,6 +5985,13 @@ async function disposeRuntimeServices(
     (): void => {
       codingAppSessionDenialWindows.reset();
     },
+    // #4068 (W9): the graph opens the memory vault's node:sqlite handle in `buildPeripherals`, so it
+    // closes it too. Left open, `keiko-memory.db` and its WAL siblings stayed locked after dispose,
+    // which on Windows keeps the state directory from being removed, and the WAL was never
+    // checkpointed on a graceful shutdown. A graph that started without memory has no vault to close.
+    (): void => {
+      services.peripherals.memoryVault?.close();
+    },
     (): void => {
       args.bundle.dispose?.();
     },
@@ -6152,6 +6162,7 @@ interface CodingRuntimeControlPlaneDeps {
   codingRuntimeHostQualified?: UiHandlerDeps["codingRuntimeHostQualified"];
   codingSafeActivityProjection?: UiHandlerDeps["codingSafeActivityProjection"];
   codingRuntimeUnavailableReason?: UiHandlerDeps["codingRuntimeUnavailableReason"];
+  codingRuntimeGatewayService?: UiHandlerDeps["codingRuntimeGatewayService"];
   codingRuntimeEvidenceClass?: UiHandlerDeps["codingRuntimeEvidenceClass"];
   codingRuntimeVersion?: UiHandlerDeps["codingRuntimeVersion"];
   codingSidecarGatewayCancellationRegistry?: UiHandlerDeps["codingSidecarGatewayCancellationRegistry"];
@@ -6203,11 +6214,11 @@ function buildCodingRuntimeControlPlaneDeps(
   controlPlane: ReturnType<typeof createCodingRuntimeControlPlane> | undefined,
   composition: Pick<
     ProductionRuntimeComposition,
-    "unavailableReason" | "evidenceClass" | "runtimeVersion"
+    "unavailableReason" | "evidenceClass" | "runtimeVersion" | "windowsGatewayService"
   >,
 ): CodingRuntimeControlPlaneDeps {
   if (controlPlane === undefined) return {};
-  const { unavailableReason, evidenceClass, runtimeVersion } = composition;
+  const { unavailableReason, evidenceClass, runtimeVersion, windowsGatewayService } = composition;
   return {
     codingRuntimeOrchestrator: controlPlane.orchestrator,
     codingRuntimeEventHub: controlPlane.eventHub,
@@ -6220,6 +6231,9 @@ function buildCodingRuntimeControlPlaneDeps(
       : {
           codingRuntimeEvidenceClass: evidenceClass ?? "functional-not-platform-qualified",
           ...(runtimeVersion === undefined ? {} : { codingRuntimeVersion: runtimeVersion }),
+          ...(windowsGatewayService === undefined
+            ? {}
+            : { codingRuntimeGatewayService: windowsGatewayService }),
         }),
     ...(controlPlane.cancellationRegistry !== undefined
       ? {
@@ -6294,6 +6308,7 @@ interface ProductionRuntimeComposition {
   readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason | undefined;
   readonly evidenceClass: CodingWorkbenchRuntimeEvidenceClass | undefined;
   readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
+  readonly windowsGatewayService?: WindowsGatewayServiceProbe | undefined;
   readonly runtimeMutationLease?: CodingRuntimeEditorMutationLeasePort | undefined;
   readonly materializedPatches?: MaterializedPatchRegistry | undefined;
   readonly dispose?: (() => void) | undefined;
@@ -6304,8 +6319,14 @@ interface ProductionRuntimePortResolution {
   readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason | undefined;
   readonly evidenceClass: CodingWorkbenchRuntimeEvidenceClass | undefined;
   readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
+  readonly windowsGatewayService?: WindowsGatewayServiceProbe | undefined;
   readonly activated: boolean;
 }
+
+type ActivatedRuntimeFacts = Pick<
+  ProductionRuntimeComposition,
+  "evidenceClass" | "runtimeVersion" | "windowsGatewayService"
+>;
 
 function unqualifiedComposition(
   unavailableReason: CodingWorkbenchRuntimeUnavailableReason,
@@ -6442,6 +6463,7 @@ function resolveProductionRuntimePorts(
     unavailableReason: activation.unavailableReason,
     evidenceClass: activation.evidenceClass,
     runtimeVersion: activation.runtimeVersion,
+    windowsGatewayService: activation.windowsGatewayService,
     activated: activation.ports !== undefined,
   };
 }
@@ -6581,13 +6603,12 @@ function productionRuntimeResolver(
   );
 }
 
-function activatedRuntimeFacts(
-  resolution: ProductionRuntimePortResolution,
-): Pick<ProductionRuntimeComposition, "evidenceClass" | "runtimeVersion"> {
+function activatedRuntimeFacts(resolution: ProductionRuntimePortResolution): ActivatedRuntimeFacts {
   return {
     // Fail-closed default: an unthreaded activation degrades to the weak class, never to verified.
     evidenceClass: resolution.evidenceClass ?? "functional-not-platform-qualified",
     runtimeVersion: resolution.runtimeVersion,
+    windowsGatewayService: resolution.windowsGatewayService,
   };
 }
 
@@ -6747,7 +6768,7 @@ function qualifiedProductionRuntimeComposition(
   resolver: ProductionCodingRuntimeResolver,
   readiness: OpenCodeGatewayReadinessRegistry,
   mutationPorts: RuntimeMutationPorts,
-  evidence: Pick<ProductionRuntimeComposition, "evidenceClass" | "runtimeVersion">,
+  evidence: ActivatedRuntimeFacts,
 ): ProductionRuntimeComposition {
   const { runtimeMutationLeaseBroker, materializedPatches } = mutationPorts;
   return {

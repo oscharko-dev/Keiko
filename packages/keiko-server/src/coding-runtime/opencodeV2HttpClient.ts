@@ -1,4 +1,5 @@
 import { parseRuntimeLoopbackServiceEndpoint } from "@oscharko-dev/keiko-sandbox";
+import { isLocalAbsolutePath } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 import {
   CODING_WORKBENCH_PROMPT_REFERENCES_MAX,
   isCodingWorkbenchAgent,
@@ -614,7 +615,7 @@ function commandDescription(value: unknown): string | undefined {
 }
 
 function locationQuery(directory: string): string {
-  if (!directory.startsWith("/")) throw new Error("opencode-v2-directory-invalid");
+  if (!isLocalAbsolutePath(directory)) throw new Error("opencode-v2-directory-invalid");
   return `location%5Bdirectory%5D=${encodeURIComponent(directory)}`;
 }
 
@@ -1428,7 +1429,7 @@ export function createOpenCodeV2HttpClient(
         options.eventIdleTimeoutMs ?? DEFAULT_EVENT_IDLE_TIMEOUT_MS,
       ),
     createSession: async (directory, signal): Promise<Readonly<Record<string, unknown>>> => {
-      if (!directory.startsWith("/")) throw new Error("opencode-v2-directory-invalid");
+      if (!isLocalAbsolutePath(directory)) throw new Error("opencode-v2-directory-invalid");
       return objectEnvelope(
         await request(
           "POST",

@@ -18,6 +18,35 @@ activation, not a platform qualification:
   terminates a fresh POSIX process group best-effort; a descendant that leaves the group survives
   unobserved, and tree exit is proven only for the direct child. Windows uses the native Job Object
   supervisor staged with the runtime. Neither development path claims a release qualification.
+- **A Windows checkout needs its own installed broker.** Every Windows launch carries the gateway
+  policy, and only the installed broker can enforce it (ADR-0043 D18/D19). A checkout installs that
+  broker once, pinned to the runtime supervisor it built:
+
+  ```bash
+  npm run build
+  node dist/cli/index.js gateway-service install --dev-lane
+  ```
+
+  Windows asks for approval through UAC, and the command needs Node 24. Until the broker is ready,
+  the lane activates and the rest of the dev UI works. Readiness then reports the broker's
+  `gateway-service-*` state, the Workbench offers no Start, and `dev:start` prints
+  `coding runs unavailable` with the command to run. After `npm run dev:coding-runtime:stage`
+  rebuilds the supervisor, run `repair --dev-lane`. Remove the broker with `uninstall --dev-lane`.
+  No unconfined fallback exists, and a checkout run never counts as platform qualification.
+
+  The confined tree reads only what it is granted (ADR-0043 D18):
+  - **Work location.** Only a new local worktree is confined. Readiness lists it alone, so the
+    Workbench preselects it and offers no other location. A start in your own checkout or an
+    ordinary folder is refused before spawn as `CODING_RUNTIME_WORKSPACE_LOCATION_UNSUPPORTED`.
+  - **Volume.** The runtime cannot resolve a path on a non-system volume. If the checkout is on
+    another volume than Windows, start the dev UI with its state on the system volume, for example
+    `KEIKO_STATE_DIR=C:\Users\<you>\.keiko-dev`. The task worktrees and run state then live there.
+    Without it, a start is refused before spawn as `CODING_RUNTIME_WORKSPACE_VOLUME_UNSUPPORTED`.
+  - **Delivery.** Keiko stages only exact bytes. Git for Windows converts line endings by default
+    (`core.autocrlf=true`), so a repository that should take commits opts out locally with
+    `git config core.autocrlf false`. Until then, every stage is blocked as
+    `unsupported-transformation`.
+
 - **Forgone: platform signature chains.** The OpenCode payload is verified byte-for-byte against
   the review-approved redistribution catalog (`portable-runtime-approvals.json`), and the
   secure-read helper is digest-pinned at build time and re-verified on every read — but no
@@ -80,17 +109,27 @@ required whenever `runtimeAvailable` is true.
 
 When readiness reports `false`, the `runtimeUnavailableReason` names the first failed prerequisite:
 
-| Reason                    | Meaning                                                                                                                               | Typical fix                                                 |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| `runtime-disabled`        | `KEIKO_CODING_SIDECAR_DISABLED` kill switch is set.                                                                                   | Unset the kill switch.                                      |
-| `platform-unqualified`    | No packaged qualification and the trusted dev launcher was not used.                                                                  | Use `npm run dev:start` or a qualified install.             |
-| `dev-lane-refused`        | Lane enabled, but the host is not a permitted dev checkout (packaged manifest present, no checkout markers, or unsupported platform). | Run from a supported repository checkout.                   |
-| `payload-missing`         | Staged payload or evidence files absent.                                                                                              | `npm run dev:coding-runtime:stage`                          |
-| `payload-unapproved`      | Approvals catalog missing, unparseable, or redistribution not approved.                                                               | Restore `portable-runtime-approvals.json`.                  |
-| `payload-tampered`        | Executable or license digest no longer matches the catalog.                                                                           | Re-stage; investigate the modification.                     |
-| `secure-read-unavailable` | Helper or its manifest missing, digest/size drifted, or helper source changed since the build.                                        | `npm run dev:coding-runtime:stage`                          |
-| `loopback-unavailable`    | `KEIKO_UI_PORT` unset or invalid in the server process.                                                                               | Use `npm run dev:start` (exports it) or export it manually. |
-| `runtime-unqualified`     | Generic composition fallback (for example, no task-workspace stack).                                                                  | Check server composition.                                   |
+| Reason                        | Meaning                                                                                                                               | Typical fix                                                 |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `runtime-disabled`            | `KEIKO_CODING_SIDECAR_DISABLED` kill switch is set.                                                                                   | Unset the kill switch.                                      |
+| `platform-unqualified`        | No packaged qualification and the trusted dev launcher was not used.                                                                  | Use `npm run dev:start` or a qualified install.             |
+| `dev-lane-refused`            | Lane enabled, but the host is not a permitted dev checkout (packaged manifest present, no checkout markers, or unsupported platform). | Run from a supported repository checkout.                   |
+| `payload-missing`             | Staged payload or evidence files absent.                                                                                              | `npm run dev:coding-runtime:stage`                          |
+| `payload-unapproved`          | Approvals catalog missing, unparseable, or redistribution not approved.                                                               | Restore `portable-runtime-approvals.json`.                  |
+| `payload-tampered`            | Executable or license digest no longer matches the catalog.                                                                           | Re-stage; investigate the modification.                     |
+| `secure-read-unavailable`     | Helper or its manifest missing, digest/size drifted, or helper source changed since the build.                                        | `npm run dev:coding-runtime:stage`                          |
+| `loopback-unavailable`        | `KEIKO_UI_PORT` unset or invalid in the server process.                                                                               | Use `npm run dev:start` (exports it) or export it manually. |
+| `runtime-unqualified`         | Generic composition fallback (for example, no task-workspace stack).                                                                  | Check server composition.                                   |
+| `gateway-service-unqualified` | A Windows runtime that yields no broker pin (an evaluation package, the npm runtime lane), so no broker may enforce its policy.       | Use a release-qualified package or a Windows checkout.      |
+| `gateway-service-absent`      | Windows checkout: the runtime gateway is not installed.                                                                               | `node dist/cli/index.js gateway-service install --dev-lane` |
+| `gateway-service-stale`       | Windows checkout: the installed broker is another supervisor build, for example after re-staging.                                     | `node dist/cli/index.js gateway-service repair --dev-lane`  |
+| `gateway-service-stopped`     | The installed broker is not running.                                                                                                  | `node dist/cli/index.js gateway-service repair --dev-lane`  |
+
+A start can also be refused after readiness. On a macOS checkout selected as its own workspace, the
+run fails with `workspace-unqualified` and a sentence asking for another repository, and the dev log
+shows `stage=start:reason=workspace-contains-runtime`. The checkout holds the staged runtime, and a
+run must not be able to write to its own runtime. `sidecar-unmanaged` is a different cause: the
+runtime's executable lies outside its own managed root, which points at a damaged payload.
 
 ## Deployment ceiling
 

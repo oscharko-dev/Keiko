@@ -42,6 +42,13 @@ one persisted line — the report's total and per-step durations and statuses, t
 duration, the isolation backend and egress policy that applied, and the bootstrap's outcome —
 without recording a command, argument, path or output (2026-10-06).
 
+1.8 — #4068 adds D19: an administrator installs the Windows broker once and ordinary launches never
+elevate (2026-11-02); and D20: governed repository verification on Windows stays container-backed
+(2026-11-03).
+
+1.9 — #4068 amends D18 with the confined Windows tree's filesystem grants and the host's inbound
+control connection into it, and D19 with the broker lookups a standard user can make (2026-11-06).
+
 ## Context
 
 The Keiko Editor epic's wave-2 surface (Issue #1202) generates unit tests and, before surfacing a
@@ -438,7 +445,10 @@ Windows refusal leaves the same evidence a support report can reconstruct. Produ
 and release-qualified native lanes. Process-tree qualification alone cannot authorize an unconfined
 network launch. Until a native backend can enforce the policy, starting that run refuses before
 spawning a Windows helper and records `runtime.confinement.failed`; omitting the policy to keep a
-launch working is a fail-open defect. The macOS app-sandbox, npm-runtime and explicit dev lanes
+launch working is a fail-open defect. Under D19 only a release-qualified package or a Windows dev
+checkout yields a pin for the broker that enforces it. A Windows evaluation package and the npm
+runtime lane yield none, so they refuse every start, and readiness reports
+`gateway-service-unqualified` instead of offering one. The macOS app-sandbox, npm-runtime and explicit dev lanes
 enforce the same policy through Seatbelt. A generic supervisor-prepared loopback wrapper never bypasses the exact gateway policy:
 both prepared and direct backend launches derive the final wrapper from the same server-owned
 policy. The sealed helper receives that exact wrapper in its existing launch packet.
@@ -781,3 +791,194 @@ and cursors, which declare no budget.
 D13 still holds: no D1–D10 denial is relaxed for any step that executes code. The bootstrap is a new,
 narrower kind of command — network I/O by a trusted host tool over declarations, with execution of
 the fetched code deferred to the confined steps — and it is admitted only under that shape.
+
+## Addendum — Windows gateway confinement lifts AppContainer loopback isolation per run (2026-11-01)
+
+### D18 — The SCM broker exempts the confined tree from loopback isolation, inside Keiko's filters
+
+Issue #4068 qualifies the Windows enforcement of D11/D12. The confined root runs in a per-tree
+AppContainer; the LocalSystem SCM broker (`native/runtime-supervisor/windows/gateway_service.c`)
+installs Keiko's WFP filters for that SID at `ALE_AUTH_CONNECT`: block every destination, permit
+only the attested gateway port on loopback, with a durable deny guard that outlives the broker.
+The installed transport proof showed that this alone cannot reach the gateway: Windows'
+application-isolation sublayer drops loopback traffic from an AppContainer at the listener
+(`ALE_AUTH_RECV_ACCEPT`) unless the AppContainer is loopback-exempt, and filters at the connect
+layer cannot lift that. Only a test fixture that installed a temporary exemption passed.
+
+Owner decision (2026-11-01): the broker adds the per-tree SID to the machine's loopback exemption
+list through the documented `NetworkIsolationSetAppContainerConfig` API
+(`gateway_loopback.c`), with these constraints:
+
+- **Order.** The exemption is added only after the guarded filters are installed and read back,
+  while the child is still suspended (the broker's acknowledgement is what lets it resume), and it
+  is revoked before the filters are closed. Exemption failure refuses the run.
+- **Scope.** The exemption lifts only the OS isolation. Keiko's connect-layer filters remain the
+  confinement, so every destination other than the attested gateway port stays denied for the
+  tree; the hostile-port denial of the transport proof is unchanged.
+- **Shared list.** The list is machine-wide and replaced as a whole. The broker reads, modifies and
+  writes it under one process-wide lock, adds its SID at most once, removes only its SID, and
+  carries every other entry over unchanged. Another tool editing the list concurrently can still
+  race with that write; the broker never removes entries it did not add.
+- **Crash.** A broker crash can leave an entry for a per-tree SID. That SID is derived from a
+  per-run nonce no later process can obtain, and the durable deny guard keeps blocking it, so a
+  stale entry grants nothing. At broker start, before serving,
+  the broker revokes the exemption of every SID that still carries a persistent durable deny
+  guard; the guards themselves stay, and their recovery remains open work.
+
+Filesystem grants (amended 2026-11-06, #4068, pending owner approval in review). A fresh per-tree
+SID can open nothing it was not granted. On 2026-11-06 the first confined run on a standard user's
+machine could not load its own runtime. The host now sends the tree's grants to the supervisor as
+one closed `KGG1` frame, after the launch packet and before the broker open
+(`native/runtime-supervisor/windows/gateway_grants.c`):
+
+- **What.** The per-tree SID gets read on the runtime root and modify on the run's private state
+  directory. It also gets read on the verified ripgrep directory when that directory lies outside
+  the runtime root, as a checkout's `.ripgrep` does: that directory is the only entry on the
+  runtime's `PATH`. A managed task worktree gets read through the capability
+  `keiko.workspace.<32 hex>`, derived from the worktree's canonical path. The mapped tool profile
+  changes files through Keiko's facade, so the confined runtime never writes the worktree itself.
+  No other path is granted. The state directory is owner-private with inheritable entries, and a
+  resumed run's database copy is handed back to that inherited DACL (ADR-0182), so the tree's grant
+  reaches every file there.
+- **When.** The supervisor applies the grants once the broker has named the SID, before it creates
+  the runtime. If any grant fails, it revokes those already applied and refuses the run.
+- **Lifetime.** Tree grants are revoked when the tree is reaped. A crash can leave such an entry, but
+  its SID comes from a per-run nonce, so it grants nothing to a later process. The worktree
+  capability is set once, inheritable, and kept, so no per-run change touches the worktree's ACL. It
+  admits only AppContainer tokens that carry the capability, and the ordinary access check still
+  applies, so it grants nothing the user does not already hold.
+- **Refusals.** The frame is limited to eight grants, all on absolute paths. Write access through a
+  capability, an unknown capability name, a missing directory and a reparse point are refused. The
+  supervisor's refusal names the closed step that failed (`supervisor-grants-frame`,
+  `supervisor-grants-directory`, `supervisor-grants-acl`, `supervisor-grants-capability`,
+  `supervisor-gateway-connect`, `supervisor-gateway-admit`), and the runtime's exit diagnostic
+  records it.
+- **Evidence.** `runtime.confinement.spawned` records `backend: windows-wfp`,
+  `childExecutablePolicy: appcontainer-inherited`, the number of tree grants and whether a worktree
+  capability applied. It never records a path or a capability name.
+- **Volumes.** On 2026-11-06 a granted worktree on a non-system volume (`D:`) could be opened from
+  the tree, but `GetFinalPathNameByHandleW` with `VOLUME_NAME_DOS` was denied, so OpenCode's
+  `realpath` of its workspace failed. The same probe on the system volume succeeded. A release keeps
+  its task worktrees and runtime state under the user profile, on the system volume. A checkout on
+  another volume sets `KEIKO_STATE_DIR` to a directory on the system volume. A user's own checkout
+  is not granted at all.
+- **Work location.** Because only a managed worktree on the system volume can be confined, the host
+  refuses every other start before anything spawns, rather than letting the runtime fail with an
+  opaque handshake error. A start in the operator's own checkout or folder is refused as
+  `workspace-location-unsupported` (reason `local-checkout`), and a managed worktree on another
+  volume as `workspace-volume-unsupported` (reason `non-system-volume`). Both are HTTP 409 with a
+  sentence that names what to change. Readiness behind the broker lists
+  `executionLocations: ["worktree"]`, so the Workbench preselects a new worktree and offers no
+  other location. Other hosts omit the field and keep both locations.
+
+Inbound control (amended 2026-11-06, #4068, pending owner approval in review). The host drives
+OpenCode through the server the runtime opens on `127.0.0.1` inside the tree. Windows drops that
+inbound loopback connection twice, silently: its application isolation blocks loopback into any
+AppContainer, and Windows Firewall blocks inbound to a package without a rule. The D18 exemption
+lifts only the outbound direction. The broker now admits exactly this connection after the
+exemption and before its acknowledgement:
+
+- **Capability.** The tree's profile and token carry `privateNetworkClientServer`, which Windows
+  requires before an AppContainer may accept a connection. Keiko's per-tree connect filters still
+  deny every destination but the attested gateway, so the capability widens no egress.
+- **Isolation.** A soft permit at the explicit maximum weight inside the application-isolation
+  sublayer, at `ALE_AUTH_RECV_ACCEPT_V4`, matches only this package, TCP, the loopback flag and the
+  local address `127.0.0.1` (`gateway_inbound.c`). It stays soft, so a block in any other sublayer
+  still wins. It lives in the broker's dynamic session and goes when that session closes.
+- **Firewall.** A Windows Firewall rule admits inbound TCP from `127.0.0.1` to `127.0.0.1` for this
+  package, its owner and the tree root's own program (`gateway_firewall.c`). NetSecurity is the
+  documented interface that accepts a package principal, so the broker runs the system PowerShell
+  with a fixed script, values passed only through the environment, output discarded and a 60 s
+  bound. The rule is removed at teardown, and the broker removes every leftover Keiko tree rule at
+  start.
+- **Order and refusal.** The acknowledgement waits for both, up to 90 s. A failure refuses the run
+  as `supervisor-gateway-admit`.
+
+These are the same three admissions that passed the disposable-runner composition on 2026-10-29.
+The port is not pinned: OpenCode chooses it inside the tree, and the per-run server password stays
+its authentication.
+
+D13 still holds: no D1–D10 denial is relaxed, and no endpoint beyond D11's attested gateway becomes
+reachable. The installed Windows transport proof (`test-windows-gateway-scm.ps1 -VerifyTransport`)
+is the qualification evidence for this decision. It passed on 2026-11-01 (head `9b851924a`, Windows Server 2025): the confined root connected to
+the permitted gateway port and the hostile port stayed refused (10013), where the same probe had
+timed out (10060) before the exemption.
+
+### D19 — An administrator installs the Windows broker once; ordinary launches never elevate
+
+Issue #4068 needs the D18 broker on a customer machine. `keiko gateway-service
+<status|install|repair|uninstall>` owns that lifecycle (owner decisions, 2026-11-02):
+
+- **Elevation.** Windows asks through UAC. Only the native supervisor runs elevated
+  (`native/runtime-supervisor/windows/gateway_install.c`); Node and package scripts do not. The
+  helper refuses unless its own bytes match the pin, so install accepts exactly what a launch would
+  accept. Until releases carry a verified Authenticode signature, UAC names an unknown publisher.
+- **Pins.** A release-qualified Windows package yields its attested helper's digest. A Windows dev
+  checkout yields the digest of the runtime supervisor it built, as its dev-lane manifest records
+  and discovery re-verifies against the source tree (amended 2026-11-06, #4068, pending owner
+  approval in review). The checkout path needs the explicit `--dev-lane` flag, so an administrator
+  installs a locally built broker only by choosing it. Its runs take the same broker, filters and
+  loopback exemption as a release's. Their evidence stays `functional-not-platform-qualified`, so
+  no checkout run counts as platform qualification. A release launch reads a broker with a checkout
+  pin as stale, and `repair` replaces it. A Windows evaluation package and the npm runtime lane
+  yield no pin.
+- **Placement.** The image goes to `%ProgramFiles%\KeikoRuntimeGateway`, which is owned by
+  Administrators and closed to inherited or user write access. The copy is verified again there,
+  before the running service is stopped, so a failed copy leaves the old broker serving.
+- **Start.** The service is `SERVICE_AUTO_START` with delayed start, depends on BFE and runs as
+  LocalSystem with its default service permissions. It restarts after a failed stop, because a
+  standard user cannot start it and a launch must not prompt.
+- **Updates.** A helper that changes between releases leaves the installed digest stale, and the
+  launch refuses until `repair` runs, at one UAC prompt per change. There is no self-update: that
+  would need a verified signature chain the Windows releases do not have yet.
+- **Removal.** Uninstall refuses while a durable deny guard remains, because such a guard may still
+  protect a live tree and removing it could widen that tree's access. Clearing a guard whose tree
+  is known to be gone remains the open recovery work D18 names, so uninstall stays refused until
+  that exists.
+
+- **Visibility.** A Windows runtime with a pin reports the broker state on each readiness read,
+  because the broker starts delayed after boot and can be installed while Keiko runs. A broker that
+  is not ready makes the runtime unavailable with a closed `gateway-service-*` reason, and the
+  Workbench names the command to run. The launch stays fail-closed regardless of the last reading.
+  `keiko uninstall` names the service when its folder exists; it does not remove it, because removal
+  needs an administrator.
+- **Standard users.** Status and launch read the running broker's image path from the service
+  configuration. The default service DACL lets an interactive user read it, while the LocalSystem
+  process itself denies that user `PROCESS_QUERY_LIMITED_INFORMATION`. On 2026-11-06 (#4068) a
+  standard user's status read of a running, correctly pinned broker reported `state-unknown` with
+  `ERROR_ACCESS_DENIED`, and the launch path used the same lookup. The hosted runner had run every
+  proof elevated, so it could not see this. Only the
+  exact command line install writes is accepted. A configuration that names another image than the
+  one running still fails closed at the pipe's image-identity authentication. The launch's own pipe
+  authentication had the same defect: it opened the broker process, which a standard user cannot do,
+  so every confined launch was refused as a protocol error. The supervisor now accepts the pipe only
+  when its server process id is the one the service manager reports for the running service, and
+  checks that again before it confirms the tree.
+
+Every action records body-free lifecycle evidence as `cli.gateway-service.*`, with its closed `lane`
+(`release-qualified` or `dev-checkout`), and a change of broker state records
+`coding-runtime.windows-gateway-service`. The lifecycle is
+qualified on the disposable runner by `test-windows-gateway-scm.ps1`, which installs through the
+product path instead of `New-Service`.
+
+## Addendum — Windows governed verification stays container-backed (2026-11-03)
+
+### D20 — No Windows-native execution-root boundary for repository verification
+
+Decided on 2026-11-03 by the #4068 assignee, @HendrikD2005; integration into `dev` remains the
+repository owner's approval. Repository verification always requests the execution-root boundary (D9).
+Windows has no native unprivileged backend for it, so the verifier keeps its present behaviour there:
+its steps run in a container when a runtime is available and are refused when none is. Keiko does not
+build a Windows-native execution-root boundary for verification, and it does not run these steps
+unconfined on the host.
+
+- **Evidence stays separate.** A container run qualifies the container-backed path. It does not
+  certify the native Windows kernel, and it satisfies no acceptance item that requires native
+  execution. The native proof in `windows-verification-loop.real.test.ts` qualifies the Windows shell
+  path below the boundary and does not certify governed verification.
+- **Refusal stays truthful.** A Windows host without a container runtime cannot run governed
+  verification. Such a run is denied and reports no pass.
+- **Scope.** This decides repository verification only. It does not decide the Windows tool profile
+  or the runtime confinement of D11 and D18, and D13 still holds.
+- **Open.** The container-backed loop from a Windows checkout, with dependencies installed for the
+  container's target, is not yet qualified (#4068 W8).

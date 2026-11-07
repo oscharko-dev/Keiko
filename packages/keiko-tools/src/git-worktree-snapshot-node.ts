@@ -612,12 +612,12 @@ export async function readGitWorktreeSnapshot(
 ): Promise<GitWorktreeSnapshot> {
   const ctx = machineReadContext(deps);
   const metadataCtx = metadataReadContext(deps);
-  const [statusOut, branchOut, remoteOut, indexOut] = await Promise.all([
-    runRead(ctx, ["status", "--porcelain=v2", "--branch"]),
-    runRead(ctx, ["branch", "--list", "--format=%(refname:short)"]),
-    runRead(ctx, ["remote"]),
-    runRead(metadataCtx, ["ls-files", "--stage", "-z"]),
-  ]);
+  // Sequential on purpose: Windows admits at most MAX_CONCURRENT_WINDOWS_COMMANDS (3) children per
+  // process before spawn, so four parallel reads refused every snapshot there (#4068 W8).
+  const statusOut = await runRead(ctx, ["status", "--porcelain=v2", "--branch"]);
+  const branchOut = await runRead(ctx, ["branch", "--list", "--format=%(refname:short)"]);
+  const remoteOut = await runRead(ctx, ["remote"]);
+  const indexOut = await runRead(metadataCtx, ["ls-files", "--stage", "-z"]);
   const c = parsePorcelain(statusOut);
   return {
     ...(statusOut.includes("# branch.oid (initial)")

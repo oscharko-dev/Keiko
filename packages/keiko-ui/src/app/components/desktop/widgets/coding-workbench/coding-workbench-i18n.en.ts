@@ -283,6 +283,9 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.info.runState": "Run state",
   "codingWorkbench.info.model": "Model",
   "codingWorkbench.info.agent": "Agent",
+  "codingWorkbench.info.toolProfile": "Tool profile",
+  "codingWorkbench.info.toolProfile.native": "OpenCode native tools",
+  "codingWorkbench.info.toolProfile.mapped": "Keiko mapped tools, not full native parity",
   "codingWorkbench.info.modelReadiness": "Model readiness",
   "codingWorkbench.info.runtime": "Runtime verification",
   "codingWorkbench.info.runtimeVersion": "OpenCode runtime",
@@ -511,6 +514,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "This folder's Git status could not be read, so it may not be a Git repository. Open Git to check it.",
   "codingWorkbench.repository.folderModeHint":
     "Not a Git repository: the agent edits, runs and verifies here, without commits or pushes.",
+  "codingWorkbench.repository.folderModeUnsupported":
+    "On Windows, Keiko runs a coding task only in a new worktree of a Git repository, so it cannot work in this folder. Choose a Git repository.",
   "codingWorkbench.repository.deniedHelp":
     "Keiko may not read this folder: its location is excluded from the read surface for safety, for example because it lies inside a tool's own state directory, or access to it was denied. This is a policy decision, not a missing Git repository. Choose a repository outside that location, or open Git to see the refusal.",
   "codingWorkbench.repository.loadError":
@@ -567,6 +572,16 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.setup.repairFailed":
     "The repair did not complete. Refresh the task workspaces, then try again.",
   "codingWorkbench.setup.findingUnknown": "its state could not be re-verified",
+  "codingWorkbench.gatewayService.absent":
+    "Coding runs need the Windows runtime gateway, which is not installed. In a terminal, run: keiko gateway-service install. Windows asks for approval once.",
+  "codingWorkbench.gatewayService.stopped":
+    "The Windows runtime gateway is stopped. It starts shortly after Windows starts. If this stays, in a terminal, run: keiko gateway-service repair",
+  "codingWorkbench.gatewayService.stale":
+    "The Windows runtime gateway does not match this Keiko version. In a terminal, run: keiko gateway-service repair. Windows asks for approval once.",
+  "codingWorkbench.gatewayService.unknown":
+    "Keiko could not read the state of the Windows runtime gateway. In a terminal, run: keiko gateway-service status",
+  "codingWorkbench.gatewayService.unqualified":
+    "This Keiko build cannot start coding runs on Windows. They need the Windows runtime gateway, which only a release-qualified Keiko package can use. Selecting another repository does not change this.",
   "codingWorkbench.setup.repairAndBind": "Repair and bind",
   "codingWorkbench.setup.repairing": "Repairing…",
   "codingWorkbench.setup.runtimeUnavailable":
@@ -1227,6 +1242,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The coding run ended with an internal error after the actions shown above. Start the task again; if it recurs, check the Activity Log.",
   "codingWorkbench.event.failure.invalid-intent":
     "Keiko refused the task before it ran, for example because a file you referenced with @ is missing, outside the workspace or protected, or because the slash command is not available. Check the referenced files and the command, then start the task again.",
+  "codingWorkbench.event.failure.workspace-unqualified":
+    "Keiko refused this repository because its own coding runtime is stored inside it, as in a Keiko checkout. A run must not be able to change the runtime it runs on. Select another repository and start the task there.",
   "codingWorkbench.event.failure.generic":
     "This step could not be completed. Check the Activity Log and try again.",
   "codingWorkbench.event.failure.prompt-allowance-exhausted":
@@ -1363,6 +1380,10 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The selected model's context window is too small for a coding run (minimum 32,000 tokens; {code}). Keiko could not confirm 32,000 tokens for it. Choose a larger model, or have the gateway declare this model's max_input_tokens, then start again.",
   "codingWorkbench.alert.startRefusedModelVerificationPending":
     "Keiko is still verifying the selected model's context window with the gateway ({code}). On a busy gateway this can take a few minutes; start again once the check has settled.",
+  "codingWorkbench.alert.startRefusedWorkspaceLocation":
+    "On Windows, Keiko runs a coding task only in a new worktree, not in your own checkout or folder ({code}). Choose New local worktree as the work location of a Git repository, then start again.",
+  "codingWorkbench.alert.startRefusedWorkspaceVolume":
+    "Keiko keeps its worktrees on another drive than Windows, where the Windows sandbox cannot run a coding task ({code}). An operator must set KEIKO_STATE_DIR to a folder on the Windows drive, usually C:, and restart Keiko.",
   "codingWorkbench.alert.startRefusedWorkspaceUnqualified":
     "The bound repository could not be qualified for a coding run ({code}). Choose the repository again with Browse… so its real path is bound, then start again.",
   "codingWorkbench.alert.actionFailedSupportId": "Support id: {correlationId}.",

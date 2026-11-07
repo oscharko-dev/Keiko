@@ -565,6 +565,7 @@ function composedNativeSettings(): readonly string[] {
     servers: [LOCAL_SERVER, REMOTE_SERVER, oauthServer, credentialedServer],
     mode: "autonomous-delivery",
     home: "/state/home",
+    platform: "linux",
     relays: new Map([
       [
         "wiki",

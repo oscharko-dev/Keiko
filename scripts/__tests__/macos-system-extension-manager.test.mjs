@@ -119,16 +119,21 @@ describe("macOS system-extension activation manager", () => {
   // KEIKO-0278: the pin above covered only the macOS `qualify`. The two Windows harness functions
   // had no finally at all — `assertControlEofFailsClosed` had no watchdog whatsoever — so a
   // supervisor that hangs on control EOF hung the entire native-quality lane instead of failing
-  // with a named stage. Both are now pinned to the same three tokens.
+  // with a named stage. Both delegate to one owner, which retains the guarded lifecycle.
   describe.each([["qualifyWindows"], ["assertControlEofFailsClosed"]])(
     "%s carries the harness lifecycle guard",
     (name) => {
       it("clears its deadline, SIGKILLs on an incomplete run, and awaits the exit", () => {
         const body = functionBody(windowsProtocolHarness, `async function ${name}(`);
-        expect(body).toContain("finally {");
-        expect(body).toContain("clearTimeout(deadline)");
-        expect(body).toContain('child.kill("SIGKILL")');
-        expect(body).toContain("await exited.catch");
+        expect(body).toContain("await withWindowsFixture(");
+        const lifecycle = functionBody(
+          windowsProtocolHarness,
+          "async function withWindowsFixture(",
+        );
+        expect(lifecycle).toContain("finally {");
+        expect(lifecycle).toContain("clearTimeout(deadline)");
+        expect(lifecycle).toContain('child.kill("SIGKILL")');
+        expect(lifecycle).toContain("await exited.catch");
       });
     },
   );

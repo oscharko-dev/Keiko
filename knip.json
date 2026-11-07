@@ -1,12 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "ignoreDependencies": [
-    "axe-core",
-    "@oscharko-dev/keiko-memory-consolidation",
-    "@oscharko-dev/keiko-sandbox",
-    "fallow",
-    "ws"
-  ],
+  "ignoreDependencies": ["axe-core", "@oscharko-dev/keiko-memory-consolidation", "fallow", "ws"],
   "ignoreBinaries": ["pwsh", "mkfifo", "ldd", "sqlite3", "pgrep", "ssh-keygen"],
   "workspaces": {
     ".": {
@@ -22,6 +16,9 @@
         "scripts/testing/chat-skills-lab/run.mjs",
         "scripts/testing/chat-skills-lab/serve.mjs",
         "scripts/testing/chat-skills-lab/verify-tests.mjs",
+        "scripts/testing/test-secure-read-windows-paths.mjs",
+        "scripts/testing/test-windows-gateway-service.mjs",
+        "scripts/testing/test-windows-workbench-adapter.mjs",
         "tests/e2e/**/*.spec.ts!",
         "tests/e2e/**/*.mts!",
         "tests/e2e/config/**/*.ts!",

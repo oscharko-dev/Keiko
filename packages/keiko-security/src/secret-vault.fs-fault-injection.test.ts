@@ -7,7 +7,7 @@ import { mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { ACTIVITY_LOG_UNKNOWN_CORRELATION_ID } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type TestContext } from "vitest";
 import type { SecurityLogEvent } from "./log-port.js";
 import {
   createLocalSecretVault,
@@ -95,8 +95,18 @@ function tempDir(prefix: string): string {
   return created;
 }
 
+// fsyncDirectory returns before opening anything on win32 (a POSIX directory fsync is meaningless
+// there — pinned by "fsyncDirectory skips the directory fsync on win32" in secret-vault.test.ts),
+// so on a Windows host the open-for-fsync branch these proofs inject a fault into does not exist.
+function requireDirectoryFsyncHost(context: TestContext): void {
+  if (process.platform === "win32") {
+    context.skip("secret-vault performs no directory fsync on win32; no open-for-fsync to fail");
+  }
+}
+
 describe("fsyncDirectory — the directory itself cannot be opened for fsync", () => {
-  it("single-file layout: set() still commits and returns the secret when the post-rename directory fsync fails to open", () => {
+  it("single-file layout: set() still commits and returns the secret when the post-rename directory fsync fails to open", (context) => {
+    requireDirectoryFsyncHost(context);
     const dir = tempDir("secret-vault-fsync-open-");
     blockedOpenDir = dir;
 
@@ -111,7 +121,8 @@ describe("fsyncDirectory — the directory itself cannot be opened for fsync", (
     expect(blockedOpenSyncHits).toBeGreaterThan(0);
   });
 
-  it("sharded layout: set() still commits and returns the secret when the post-rename directory fsync fails to open", () => {
+  it("sharded layout: set() still commits and returns the secret when the post-rename directory fsync fails to open", (context) => {
+    requireDirectoryFsyncHost(context);
     const dir = tempDir("secret-vault-fsync-open-shard-");
     const storeDir = join(dir, "sharded");
     blockedOpenDir = storeDir;

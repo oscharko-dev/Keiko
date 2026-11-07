@@ -47,26 +47,64 @@ const VALIDATED = {
 
 describe("the MCP servers a native run admits (#3903)", () => {
   it("starts a local server from an empty environment with only its literal variables", () => {
-    const { config } = openCodeNativeMcpAdmission({
-      servers: [LOCAL],
-      mode: "supervised-coding",
-      home: HOME,
-    });
-    expect(config).toEqual({
-      servers: {
-        docs: {
-          type: "local",
-          command: [
-            "/usr/bin/env",
-            "-i",
-            `PATH=${OPENCODE_NATIVE_MCP_PATH}`,
-            `HOME=${HOME}`,
-            "DOCS_INDEX=/srv/docs",
-            "/opt/tools/docs-mcp",
-            "--stdio",
-          ],
+    for (const platform of ["darwin", "linux"] as const) {
+      const { config, refusedLocalServerCount } = openCodeNativeMcpAdmission({
+        servers: [LOCAL],
+        mode: "supervised-coding",
+        home: HOME,
+        platform,
+      });
+      expect(refusedLocalServerCount).toBe(0);
+      expect(config).toEqual({
+        servers: {
+          docs: {
+            type: "local",
+            command: [
+              "/usr/bin/env",
+              "-i",
+              `PATH=${OPENCODE_NATIVE_MCP_PATH}`,
+              `HOME=${HOME}`,
+              "DOCS_INDEX=/srv/docs",
+              "/opt/tools/docs-mcp",
+              "--stdio",
+            ],
+          },
         },
-      },
+      });
+    }
+  });
+
+  // #4068 W10: only a POSIX host has an env-scrubbing launcher. Without one a local server would
+  // inherit Keiko's gateway capability and service password, so it is left out with its tools.
+  it.each(["win32", "aix", "freebsd"] as const)(
+    "refuses a local server, its tools and its grants on %s",
+    (platform) => {
+      const admission = openCodeNativeMcpAdmission({
+        servers: [LOCAL, { ...LOCAL, name: "off", enabled: false }, REMOTE],
+        mode: "autonomous-delivery",
+        home: HOME,
+        platform,
+      });
+      expect(Object.keys(admission.config.servers)).toEqual(["tracker"]);
+      expect(JSON.stringify(admission.config)).not.toContain("/usr/bin/env");
+      expect(admission.refusedLocalServerCount).toBe(1);
+      expect([...admission.grants.servers.keys()]).toEqual(["tracker"]);
+      expect([...admission.grants.actions.keys()]).toEqual(["tracker_find"]);
+    },
+  );
+
+  it("refuses nothing when no local server is registered on a platform without a launcher", () => {
+    const admission = openCodeNativeMcpAdmission({
+      servers: [REMOTE],
+      mode: "autonomous-delivery",
+      home: HOME,
+      platform: "win32",
+    });
+    expect(admission.refusedLocalServerCount).toBe(0);
+    expect(admission.config.servers.tracker).toEqual({
+      type: "remote",
+      url: "https://tracker.example.test/mcp",
+      oauth: false,
     });
   });
 

@@ -8,7 +8,11 @@ import {
 import { isAbsolute } from "node:path";
 import { correlationIdOrUnknown } from "../correlation.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
-import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
+import {
+  causeChain,
+  contentFreeErrorClass,
+  keikoStackFrames,
+} from "@oscharko-dev/keiko-activity-log";
 import {
   describeError,
   emitServerDiagnostic,
@@ -34,6 +38,7 @@ import {
 } from "./opencodeNativeLaunchSecrets.js";
 import { createGeneratedOpenCodeNativePolicyPlugin } from "./opencodeNativePolicyPlugin.js";
 import { isApprovedOpenCodeRuntimeVersion } from "./opencodeRuntimeVersions.js";
+import { OpenCodeV2HttpStatusError } from "./opencodeV2HttpClient.js";
 import {
   DEFAULT_RUNTIME_MAX_DURATION_MINUTES,
   runtimeMaxDurationMs,
@@ -152,6 +157,27 @@ const OPEN_CODE_READINESS_CAUSE_CHAIN_FIELD = {
   maxItems: 5,
 } as const;
 
+// The socket condition under a failed readiness request, as Node and undici name it (#4068). A
+// confined runtime that announced its server but cannot be reached leaves no Keiko-code frame,
+// so this code is what tells a refused connection from a reset, a timeout or a denied socket.
+const OPEN_CODE_READINESS_TRANSPORT_CODES = [
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ECONNABORTED",
+  "ETIMEDOUT",
+  "EACCES",
+  "EPERM",
+  "EADDRNOTAVAIL",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "EPIPE",
+  "UND_ERR_SOCKET",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+  "other",
+] as const;
+
 const CODING_RUNTIME_READINESS_FAILED_OPERATION = defineActivityLogOperation({
   ...CODING_RUNTIME_OPERATION_BASE,
   op: "coding-runtime.readiness.failed",
@@ -160,6 +186,14 @@ const CODING_RUNTIME_READINESS_FAILED_OPERATION = defineActivityLogOperation({
     phase: OPEN_CODE_READINESS_PHASE_FIELD,
     frames: OPEN_CODE_READINESS_FRAMES_FIELD,
     causeChain: OPEN_CODE_READINESS_CAUSE_CHAIN_FIELD,
+    errorClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 128 },
+    transportCode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: OPEN_CODE_READINESS_TRANSPORT_CODES,
+    },
+    httpStatus: { type: "integer", dataClass: "count", required: false },
   },
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
@@ -945,11 +979,49 @@ async function startAdapter(
           correlationId: correlationIdOrUnknown(ports.correlationId),
           errorKind: "internal",
         },
-        { phase: tracker.phase, frames: keikoStackFrames(error), causeChain: causeChain(error) },
+        {
+          phase: tracker.phase,
+          frames: keikoStackFrames(error),
+          causeChain: causeChain(error),
+          ...readinessFailureFacts(error),
+        },
       ),
     );
     return fail(tracker.phase);
   }
+}
+
+/** What a thrown readiness failure was, in closed words: its class, socket code and HTTP status. */
+export function readinessFailureFacts(error: unknown): {
+  readonly errorClass: string;
+  readonly transportCode?: (typeof OPEN_CODE_READINESS_TRANSPORT_CODES)[number];
+  readonly httpStatus?: number;
+} {
+  const transportCode = readinessTransportCode(error);
+  const httpStatus = error instanceof OpenCodeV2HttpStatusError ? error.status : undefined;
+  return {
+    errorClass: contentFreeErrorClass(error),
+    ...(transportCode === undefined ? {} : { transportCode }),
+    ...(httpStatus === undefined ? {} : { httpStatus }),
+  };
+}
+
+const TRANSPORT_CODES: ReadonlySet<string> = new Set(OPEN_CODE_READINESS_TRANSPORT_CODES);
+
+// The first `code` on the error or its causes; undici puts the socket's code on `cause`.
+function readinessTransportCode(
+  error: unknown,
+): (typeof OPEN_CODE_READINESS_TRANSPORT_CODES)[number] | undefined {
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && typeof current === "object" && current !== null; depth += 1) {
+    const code: unknown = Reflect.get(current, "code");
+    if (typeof code === "string")
+      return TRANSPORT_CODES.has(code)
+        ? (code as (typeof OPEN_CODE_READINESS_TRANSPORT_CODES)[number])
+        : "other";
+    current = Reflect.get(current, "cause");
+  }
+  return undefined;
 }
 
 /**

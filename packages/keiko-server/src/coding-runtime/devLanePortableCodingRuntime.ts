@@ -382,6 +382,41 @@ export function devLaneCheckoutRoot(
 }
 
 /**
+ * The broker pin of a Windows dev checkout (ADR-0043 D19, #4068): the digest of the runtime
+ * supervisor this checkout built, which its dev-lane manifest records and discovery re-verified
+ * against the source tree. A checkout may install the D18 broker with it, so its runs are confined
+ * like a release's. Its evidence stays `functional-not-platform-qualified`, and the npm runtime lane
+ * yields no pin.
+ */
+export function devCheckoutWindowsGatewayHelperPin(
+  runtime: Pick<DevLanePortableOpenCodeRuntime, "lane" | "target" | "nativeHelperSha256">,
+): string | undefined {
+  return runtime.lane === "dev-checkout" && runtime.target === "windows-x64"
+    ? runtime.nativeHelperSha256
+    : undefined;
+}
+
+/**
+ * The helper `keiko gateway-service --dev-lane` hands to Windows: this checkout's verified runtime
+ * supervisor. The flag is the human's opt-in, so the dev lane is enabled for this one discovery; a
+ * checkout that does not verify yields nothing.
+ */
+export function discoverDevCheckoutWindowsGatewayHelper(
+  input: Pick<DevLaneOpenCodeDiscoveryInput, "env" | "platform" | "arch">,
+): { readonly helperPath: string; readonly helperSha256: string } | undefined {
+  const discovery = discoverDevLaneOpenCode({
+    ...input,
+    env: { ...input.env, [KEIKO_CODING_RUNTIME_DEV_LANE_ENV]: "1" },
+  });
+  if (discovery.outcome !== "activated") return undefined;
+  const helperSha256 = devCheckoutWindowsGatewayHelperPin(discovery.runtime);
+  const helperPath = discovery.runtime.nativeHelperPath;
+  return helperSha256 === undefined || helperPath === undefined
+    ? undefined
+    : { helperPath, helperSha256 };
+}
+
+/**
  * The installed npm runtime package a runtime was activated from, or `undefined` for any other lane.
  * Derived from the one place that composes `installRoot` (`discoverNpmLaneOpenCode`:
  * `<package>/runtime/opencode-compatible`), so the layout stays with its owner. The pinned ripgrep

@@ -20,6 +20,20 @@ struct keiko_gateway_filters {
   int guard_installed;
 };
 
+/* These keys contain no handles. The broker must durably persist them together with its
+ * authenticated tree/job/SID binding BEFORE open_prepared can change WFP state. */
+struct keiko_gateway_guard_keys {
+  GUID sublayer;
+  GUID deny[2];
+};
+
+/* Generates fresh keys without opening the filtering engine or changing network policy. */
+DWORD keiko_gateway_guard_prepare(struct keiko_gateway_guard_keys *keys);
+int keiko_gateway_guard_keys_valid(const struct keiko_gateway_guard_keys *keys);
+DWORD keiko_gateway_filters_open_prepared(PSID package_sid, UINT16 family, UINT16 port,
+                                         HANDLE job, const struct keiko_gateway_guard_keys *keys,
+                                         struct keiko_gateway_filters *filters);
+
 /* family is AF_INET or AF_INET6; the only accepted destination is that family's loopback.
  * No caller-controlled address, filter action, executable identity or filter layer is accepted. */
 DWORD keiko_gateway_filters_open(PSID package_sid, UINT16 family, UINT16 port,
@@ -38,5 +52,10 @@ DWORD keiko_gateway_filters_open_guarded(PSID package_sid, UINT16 family, UINT16
  * job. The broker is responsible for authenticating its durable recovery record. */
 DWORD keiko_gateway_filters_recover_guard(PSID package_sid, HANDLE job, const GUID *sublayer,
                                          const GUID keys[2], struct keiko_gateway_filters *filters);
+
+/* Lists the distinct AppContainer package SIDs that still have a persistent Keiko durable deny
+ * guard (left by a broker that could not verify termination or did not survive). Writes at most
+ * capacity SIDs; the caller HeapFree()s the first *count entries whatever the result. */
+DWORD keiko_gateway_filters_guarded_packages(PSID *packages, DWORD capacity, DWORD *count);
 
 #endif

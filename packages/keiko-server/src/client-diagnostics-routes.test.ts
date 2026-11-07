@@ -1642,6 +1642,19 @@ describe("POST /api/diagnostics/client", () => {
     { interaction: "notice-held", notice: "activity" },
     { interaction: "notice-held", notice: "questions" },
     { interaction: "notice-held", notice: "editor-bridge" },
+    // #4068 W12: a window first showed a live run's identity.
+    {
+      interaction: "run-identity-observed",
+      modelReported: true,
+      agentReported: true,
+      toolProfile: "mapped",
+    },
+    {
+      interaction: "run-identity-observed",
+      modelReported: false,
+      agentReported: false,
+      toolProfile: "unreported",
+    },
     // #4271: what a delivery card showed was a warn/unknown sentence; it is a closed step and state.
     { interaction: "delivery-step-shown", deliveryStep: "delivery-review", deliveryState: "ready" },
     { interaction: "delivery-step-shown", deliveryStep: "stage-review", deliveryState: "loading" },
@@ -1703,6 +1716,19 @@ describe("POST /api/diagnostics/client", () => {
     { interaction: "notice-held" },
     { interaction: "notice-held", notice: "Activity not connected." },
     { interaction: "notice-held", notice: "skills", fileCount: 1 },
+    { interaction: "run-identity-observed", modelReported: true, agentReported: true },
+    {
+      interaction: "run-identity-observed",
+      modelReported: "private-model-name",
+      agentReported: true,
+      toolProfile: "mapped",
+    },
+    {
+      interaction: "run-identity-observed",
+      modelReported: true,
+      agentReported: true,
+      toolProfile: "direct",
+    },
     { interaction: "delivery-step-shown" },
     { interaction: "delivery-step-shown", deliveryStep: "journey" },
     { interaction: "delivery-step-shown", deliveryStep: "journey", deliveryState: "ready" },

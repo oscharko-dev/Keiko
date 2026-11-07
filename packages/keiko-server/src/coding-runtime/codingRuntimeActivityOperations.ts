@@ -246,7 +246,7 @@ export const RUNTIME_CONFINEMENT_SPAWNED_OPERATION = defineActivityLogOperation(
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["bubblewrap", "unshare", "seatbelt"],
+      values: ["bubblewrap", "unshare", "seatbelt", "windows-wfp"],
     },
     policyDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     authorityDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
@@ -268,7 +268,12 @@ export const RUNTIME_CONFINEMENT_SPAWNED_OPERATION = defineActivityLogOperation(
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["namespace-inherited", "runtime-and-attested-git-only", "toolchain-inherited"],
+      values: [
+        "namespace-inherited",
+        "runtime-and-attested-git-only",
+        "toolchain-inherited",
+        "appcontainer-inherited",
+      ],
     },
     egressDisposition: {
       type: "string",
@@ -311,6 +316,15 @@ export const RUNTIME_CONFINEMENT_SPAWNED_OPERATION = defineActivityLogOperation(
       dataClass: "closed-enum",
       required: false,
       values: ["read-write"],
+    },
+    // #4068: the directories granted to a confined Windows tree's own SID (runtime, private
+    // state), and whether a managed worktree was readable through its capability. Counts only.
+    windowsTreeGrantCount: { type: "integer", dataClass: "count", required: false },
+    windowsWorktreeAccess: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["capability-read", "none"],
     },
   },
   causal: "correlation",

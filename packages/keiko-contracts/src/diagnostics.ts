@@ -2207,6 +2207,9 @@ export const CLIENT_CODING_WORKBENCH_INTERACTIONS = [
   // missing pairing once instead of every surface reporting its own failure. Closed notice only
   // (#3880).
   "notice-held",
+  // The window first showed a live run's identity: whether the server reported its model and agent,
+  // and the reported tool profile. Reported flags and the closed profile only (#4068 W12).
+  "run-identity-observed",
   // A delivery card showed a step's state: a review's load state, a verified commit's result, a
   // draft delivery's phase, the CI readiness or the journey outcome. These were warn/unknown
   // `client.diagnostic` sentences before (#4271). The step and its closed state only.
@@ -2243,6 +2246,11 @@ export type ClientCodingWorkbenchProgressState =
 /** A built-in agent by name; every custom primary agent is `custom`, never its name. */
 export const CLIENT_CODING_WORKBENCH_AGENT_KINDS = ["build", "plan", "custom"] as const;
 export type ClientCodingWorkbenchAgentKind = (typeof CLIENT_CODING_WORKBENCH_AGENT_KINDS)[number];
+
+/** The tool profile a window was told about; `unreported` when readiness named none. */
+export const CLIENT_CODING_WORKBENCH_TOOL_PROFILES = ["native", "mapped", "unreported"] as const;
+export type ClientCodingWorkbenchToolProfile =
+  (typeof CLIENT_CODING_WORKBENCH_TOOL_PROFILES)[number];
 
 /** Why the editor bridge registration was refused: the root boundary, or a lease held elsewhere. */
 export const CLIENT_CODING_WORKBENCH_BRIDGE_REFUSALS = ["root-boundary", "lease"] as const;
@@ -2406,6 +2414,12 @@ export type ClientDiagnosticCodingWorkbenchInteraction =
     }
   | { readonly interaction: "notice-held"; readonly notice: ClientCodingWorkbenchHeldNotice }
   | {
+      readonly interaction: "run-identity-observed";
+      readonly modelReported: boolean;
+      readonly agentReported: boolean;
+      readonly toolProfile: ClientCodingWorkbenchToolProfile;
+    }
+  | {
       readonly interaction: "delivery-step-shown";
       readonly deliveryStep: ClientCodingWorkbenchDeliveryStep;
       readonly deliveryState: ClientCodingWorkbenchDeliveryState;
@@ -2422,6 +2436,9 @@ const CODING_WORKBENCH_PROGRESS_STATE_SET: ReadonlySet<string> = new Set(
 );
 const CODING_WORKBENCH_AGENT_KIND_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_AGENT_KINDS,
+);
+const CODING_WORKBENCH_TOOL_PROFILE_SET: ReadonlySet<string> = new Set(
+  CLIENT_CODING_WORKBENCH_TOOL_PROFILES,
 );
 const CODING_WORKBENCH_BRIDGE_REFUSAL_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_BRIDGE_REFUSALS,
@@ -2480,6 +2497,11 @@ const CODING_WORKBENCH_INTERACTION_FIELDS: Readonly<
       isBoundedNonNegativeInteger(value, CLIENT_CODING_WORKBENCH_DIFF_BYTE_COUNT_MAX),
   },
   "notice-held": { notice: (value) => isSetMember(value, CODING_WORKBENCH_HELD_NOTICE_SET) },
+  "run-identity-observed": {
+    modelReported: (value) => typeof value === "boolean",
+    agentReported: (value) => typeof value === "boolean",
+    toolProfile: (value) => isSetMember(value, CODING_WORKBENCH_TOOL_PROFILE_SET),
+  },
   "delivery-step-shown": {
     deliveryStep: (value) =>
       typeof value === "string" && Object.hasOwn(DELIVERY_STEP_STATES, value),

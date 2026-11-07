@@ -19,7 +19,9 @@ import {
   DEV_LANE_MANIFEST_FILE,
   DEV_LANE_RUNTIME_SUPERVISOR_RELATIVE_PATH,
   DEV_LANE_STAGED_PAYLOADS_DIR,
+  devCheckoutWindowsGatewayHelperPin,
   devLaneCheckoutRoot,
+  discoverDevCheckoutWindowsGatewayHelper,
   discoverDevLaneOpenCode,
   devLaneEnvEnabled,
   KEIKO_CODING_RUNTIME_DEV_LANE_ENV,
@@ -322,6 +324,57 @@ describe("dev-lane OpenCode discovery", () => {
     });
     expect(discovery.runtime.nativeHelperPath).toContain("keiko-runtime-supervisor.exe");
     expect(discovery.runtime.nativeHelperSha256).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  // #4068 (ADR-0043 D19): the broker pin of a checkout is its own verified supervisor's digest.
+  describe("the Windows dev-checkout broker pin", () => {
+    it("is the verified supervisor digest of a Windows dev checkout, and nothing else's", () => {
+      const discovery = discover(fixture("windows-x64"), { platform: "win32", arch: "x64" });
+      if (discovery.outcome !== "activated") throw new Error("expected-windows-dev-lane");
+      const { runtime } = discovery;
+      expect(devCheckoutWindowsGatewayHelperPin(runtime)).toBe(runtime.nativeHelperSha256);
+      expect(
+        devCheckoutWindowsGatewayHelperPin({ ...runtime, lane: "npm-runtime-package" }),
+      ).toBeUndefined();
+      expect(
+        devCheckoutWindowsGatewayHelperPin({ ...runtime, target: "macos-arm64" }),
+      ).toBeUndefined();
+    });
+
+    it("hands `--dev-lane` the checkout's supervisor even without the dev-lane variable", () => {
+      const staged = fixture("windows-x64");
+      const { [KEIKO_CODING_RUNTIME_DEV_LANE_ENV]: _enabled, ...env } = staged.env;
+      const helper = discoverDevCheckoutWindowsGatewayHelper({
+        env,
+        platform: "win32",
+        arch: "x64",
+      });
+      const discovery = discover(staged, { platform: "win32", arch: "x64" });
+      if (discovery.outcome !== "activated") throw new Error("expected-windows-dev-lane");
+      expect(helper).toEqual({
+        helperPath: discovery.runtime.nativeHelperPath,
+        helperSha256: discovery.runtime.nativeHelperSha256,
+      });
+    });
+
+    it("yields no helper for a checkout that does not verify, or on another platform", () => {
+      const tampered = fixture("windows-x64");
+      writeFileSync(join(tampered.paths.stagedTargetRoot, "native", "plantable.dll"), "malicious");
+      expect(
+        discoverDevCheckoutWindowsGatewayHelper({
+          env: tampered.env,
+          platform: "win32",
+          arch: "x64",
+        }),
+      ).toBeUndefined();
+      expect(
+        discoverDevCheckoutWindowsGatewayHelper({
+          env: fixture("macos-arm64").env,
+          platform: "darwin",
+          arch: "arm64",
+        }),
+      ).toBeUndefined();
+    });
   });
 
   it("refuses an unexpected DLL beside a staged Windows helper", () => {

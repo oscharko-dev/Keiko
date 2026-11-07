@@ -13,6 +13,8 @@ import {
   yarnPackageManagerFromLocator,
 } from "./lib/pinned-yarn.mjs";
 import {
+  assertPackagedLifecycleCommands,
+  assertPackagedUi,
   isSmokeGateFailure,
   privateYarnHome,
   provisionPinnedYarnForSetup,
@@ -222,6 +224,11 @@ async function assertInstalledRuntime(projectDir, timeoutMs) {
   run(process.execPath, [bin, "--help"], timeoutMs, { cwd: projectDir });
   assertVendoredPayload(projectDir);
   await assertRootImport(projectDir);
+  if (process.argv.includes("--qualify-ui")) {
+    await assertPackagedUi(projectDir);
+    await assertPackagedLifecycleCommands(projectDir, { packageStart: true });
+    console.log("Published UI, package.json start, status, restart and stop passed");
+  }
 }
 
 async function npmSmoke(timeoutMs) {
@@ -229,7 +236,11 @@ async function npmSmoke(timeoutMs) {
   try {
     writeFileSync(
       join(projectDir, "package.json"),
-      JSON.stringify({ private: true, type: "module" }, null, 2) + "\n",
+      JSON.stringify(
+        { private: true, type: "module", scripts: { start: "keiko start" } },
+        null,
+        2,
+      ) + "\n",
     );
     writeFileSync(
       join(projectDir, ".npmrc"),
@@ -261,6 +272,7 @@ function writeYarnSmokeManifest(projectDir, yarnLocator) {
     JSON.stringify(
       {
         private: true,
+        scripts: { start: "keiko start" },
         packageManager,
         devDependencies: {
           [rootManifest.name]: rootManifest.version,

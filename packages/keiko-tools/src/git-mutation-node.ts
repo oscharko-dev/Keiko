@@ -276,13 +276,24 @@ async function configuredStageNormalizationSupported(ctx: RunContext): Promise<b
   );
   if (result.truncated) return false;
   if (result.exitCode === 1 && result.stdout.length === 0) return true;
-  return (
-    result.exitCode === 0 &&
-    result.stdout
-      .trim()
-      .split("\n")
-      .every((line) => /^core\.(?:autocrlf|safecrlf) false$/iu.test(line))
-  );
+  return result.exitCode === 0 && effectiveNormalizationDisabled(result.stdout);
+}
+
+// `--get-regexp` lists every scope that sets a key, in Git's own precedence order (system, global,
+// local, worktree, command line), and Git resolves a single-valued key to its LAST value. Only the
+// effective value decides whether `git add` would convert line endings: judging every scope refused
+// every repository on a stock Git for Windows host, whose SYSTEM scope sets `core.autocrlf=true`,
+// even after the repository opts out locally. A value Git would read as anything but `false` —
+// `true`, `input`, `warn`, or a bare key (true) — still fails closed, as does any unparsable line.
+function effectiveNormalizationDisabled(stdout: string): boolean {
+  const effective = new Map<string, string>();
+  for (const line of stdout.trim().split(/\r?\n/u)) {
+    const match = /^(core\.(?:autocrlf|safecrlf))(?: (.*))?$/iu.exec(line);
+    const key = match?.[1];
+    if (key === undefined) return false;
+    effective.set(key.toLowerCase(), match?.[2] ?? "");
+  }
+  return [...effective.values()].every((value) => value.toLowerCase() === "false");
 }
 
 async function execStage(

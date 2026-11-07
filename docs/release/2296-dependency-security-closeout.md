@@ -35,6 +35,46 @@ read it back. Evidence that no gate evaluates decays into a sentence that merely
 
 ## Security posture
 
+### 2026-10-31 follow-up (#4090)
+
+The CI-identical OSV Scanner 2.7.0 scan reproduced three affected package instances:
+`glob@13.0.6`, modern `minimatch@10.2.6` and dev-only legacy `minimatch@3.1.5`.
+The root overrides now resolve `glob@14.0.3` and modern `minimatch@11.0.3`, including
+the shipped `@tufjs/models` dependency. The legacy brace-expansion pin stays in place;
+the modern matcher requires the already patched `brace-expansion@^5.0.12` itself.
+
+The remaining legacy instance uses the callable CommonJS API required by the latest
+`eslint-plugin-import@2.32.0`, `eslint-plugin-react@7.37.5` and
+`eslint-plugin-jsx-a11y@6.10.2`. Replacing it with 11.0.3's object export would break
+their rules. The 3.1.5 source lacks the `optimizationLevel` and `firstPhasePreProcess`
+amplification described in [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249),
+although the advisory's version range matches it. The applicability triage in
+`osv-scanner.toml` expires on 2026-11-07. `check:osv-waiver-scope` now additionally
+requires that exact dev-only legacy path/version and patched 11.0.3 everywhere else,
+and requires removing the triage when the legacy copy disappears. The existing
+independent npm/OSV check still refuses any suppression affecting shipped packages.
+
+The complete OSV scan reports zero unwaived findings after this change; it filters
+one explicitly recorded legacy finding. This is not a claim that the upstream
+advisory has been corrected. No package-wide override or indefinite suppression is
+introduced. The earlier security snapshots below remain historical evidence.
+
+The first customer-shape CI run exposed a delivery mismatch: the version-qualified
+modern override initially installed 11.0.1 locally but was not handled by the existing exact-flat-pin
+runtime staging planner. The real installed-closure test reproduced `missing: ["minimatch"]`.
+Using the supported exact `minimatch: "11.0.3"` pin fixes that staging mismatch; changing the override key alone leaves the
+lockfile and installed versions unchanged; the earlier version-qualified legacy brace-expansion exception
+still retains 3.1.5 for the lint plugins. Staging now delivers the three affected TUF ancestors
+with exact sibling/leaf peers, preserving their upstream source and license bytes. The package
+test asserts both the bounded archive inventory and the actual staged 11.0.3 dependency.
+
+The patch versions are aligned with PR #4168 (minimatch 11.0.3 and glob 14.0.3).
+The exact-flat runtime override and the earlier legacy exception are retained because
+the staging projector does not support #4168's major-qualified modern override.
+The narrower 2026-11-07 legacy triage expiry and exact inventory guard are retained.
+Each branch must regenerate its own source-bound design and catalog evidence; evidence
+from #4168 cannot be copied across differing package manifests.
+
 | Source                     | Result                                                                                                |
 | -------------------------- | ----------------------------------------------------------------------------------------------------- |
 | `npm audit --json`         | Rechecked 2026-10-06: 6 dev-only nodes for 2 recorded advisories; production audit: 0 vulnerabilities |

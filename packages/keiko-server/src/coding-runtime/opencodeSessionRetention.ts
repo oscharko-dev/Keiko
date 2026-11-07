@@ -16,6 +16,7 @@ import {
   rmSync,
   statSync,
   writeFileSync,
+  type Stats,
 } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -25,6 +26,12 @@ import {
   compareCodingWorkbenchModeAuthority,
   isCodingWorkbenchMode,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+
+import {
+  inspectWindowsOwnerPrivateFiles,
+  protectWindowsOwnerPrivateFile,
+  windowsOwnerPrivateVerdict,
+} from "@oscharko-dev/keiko-security/windows-owner-private";
 
 import {
   OPENCODE_PERSISTENCE_SCHEMAS,
@@ -166,6 +173,8 @@ export type RetainResult =
       readonly messageCount: number;
       readonly entryCount: number;
       readonly prunedCount: number;
+      /** Entries a pruning wanted gone but a process holds open; the next pruning retries them. */
+      readonly blockedCount: number;
     }
   | {
       readonly ok: false;
@@ -202,6 +211,8 @@ export interface PruneResult {
   readonly orphaned: number;
   readonly invalid: number;
   readonly quota: number;
+  /** Entries left in place because a process holds them open; the next pruning retries them. */
+  readonly blocked: number;
   readonly entryCount: number;
 }
 
@@ -268,6 +279,8 @@ export interface RetainedSessionStoreOptions {
    * entry of a task that does not.
    */
   readonly isLiveTask?: ((taskId: string) => boolean) | undefined;
+  /** Makes one retained path private to this account. Throwing refuses the retain or checkout. */
+  readonly protectPrivatePath?: ((path: string) => void) | undefined;
 }
 
 export function retainedSessionKey(taskId: string): string {
@@ -310,11 +323,13 @@ class Store {
   private readonly now: () => number;
   private readonly limits: RetainedSessionLimits;
   private readonly isLiveTask: ((taskId: string) => boolean) | undefined;
+  private readonly protectPrivatePath: (path: string) => void;
 
   public constructor(options: RetainedSessionStoreOptions) {
     this.root = options.root;
     this.now = options.now ?? Date.now;
     this.isLiveTask = options.isLiveTask;
+    this.protectPrivatePath = options.protectPrivatePath ?? protectPrivatePathOnWindows;
     this.limits = { ...RETAINED_SESSION_LIMITS, ...options.limits };
   }
 
@@ -336,6 +351,7 @@ class Store {
         messageCount: staged.messageCount,
         entryCount: pruned.entryCount,
         prunedCount: pruned.expired + pruned.orphaned + pruned.invalid + pruned.quota,
+        blockedCount: pruned.blocked,
       };
     } finally {
       // A refusal is a result; a filesystem or database failure propagates to the caller, which owns
@@ -345,6 +361,9 @@ class Store {
   }
 
   public checkout(input: Parameters<RetainedSessionStore["checkout"]>[0]): CheckoutResult {
+    if (this.existingRoot() === undefined) {
+      return { ok: false, reason: "no-retained-state", removed: false };
+    }
     const entry = join(this.root, retainedSessionKey(input.binding.taskId));
     if (!existsSync(entry)) return { ok: false, reason: "no-retained-state", removed: false };
     const manifest = this.readManifest(entry);
@@ -365,6 +384,7 @@ class Store {
   }
 
   public remove(taskId: string): void {
+    if (this.existingRoot() === undefined) return;
     rmSync(join(this.root, retainedSessionKey(taskId)), { recursive: true, force: true });
   }
 
@@ -466,12 +486,12 @@ class Store {
   public prune(
     isLiveTask: ((taskId: string) => boolean) | undefined = this.isLiveTask,
   ): PruneResult {
-    const counts = { expired: 0, orphaned: 0, invalid: 0, quota: 0 };
-    if (!existsSync(this.root)) return { ...counts, entryCount: 0 };
+    const counts = { expired: 0, orphaned: 0, invalid: 0, quota: 0, blocked: 0 };
+    if (this.existingRoot() === undefined) return { ...counts, entryCount: 0 };
     const entries: PrunableEntry[] = [];
     for (const name of readdirSync(this.root)) {
       if (INTERRUPTED_ENTRY.test(name)) {
-        rmSync(join(this.root, name), { recursive: true, force: true });
+        if (!removeUnlessHeld(join(this.root, name))) counts.blocked += 1;
         continue;
       }
       // A name Keiko did not write is not Keiko's to delete.
@@ -480,7 +500,7 @@ class Store {
       if (kept !== undefined) entries.push(kept);
     }
     const remaining = this.evictOverQuota(entries, counts);
-    return { ...counts, entryCount: remaining };
+    return { ...counts, entryCount: remaining + counts.blocked };
   }
 
   // The steps of a retain, in the order that makes a refusal cost nothing: the compacted copy is
@@ -494,10 +514,12 @@ class Store {
     if (size === undefined) return { ok: false, reason: "database-missing" };
     if (size > this.limits.maxDatabaseBytes) return { ok: false, reason: "database-oversized" };
     mkdirSync(staging, { mode: 0o700 });
+    this.protectPrivatePath(staging);
     const database = join(staging, DATABASE_FILE);
     if (compactCopy(input.sourceDatabase, database) === "unreadable") {
       return { ok: false, reason: "schema-unknown", check: "copy-unreadable" };
     }
+    this.protectPrivatePath(database);
     dropSchedulerLease(database);
     const audit = auditDatabase(database, {
       sessionId: input.sessionId,
@@ -524,6 +546,7 @@ class Store {
       ...(scheduleModes === undefined ? {} : { scheduleModes }),
     };
     writeFileSync(join(staging, MANIFEST_FILE), JSON.stringify(manifest), { mode: 0o600 });
+    this.protectPrivatePath(join(staging, MANIFEST_FILE));
     return { ok: true, databaseBytes: hashed.bytes, messageCount: audit.messageCount };
   }
 
@@ -537,7 +560,8 @@ class Store {
       renameSync(entry, aside);
     }
     renameSync(staging, entry);
-    if (aside !== undefined) rmSync(aside, { recursive: true, force: true });
+    // The new entry is published; a replaced one a process still holds is an interrupted leftover.
+    if (aside !== undefined) removeUnlessHeld(aside);
   }
 
   private copyOut(
@@ -546,7 +570,7 @@ class Store {
     input: Parameters<RetainedSessionStore["checkout"]>[0],
   ): CheckoutResult {
     const source = join(entry, DATABASE_FILE);
-    if (fileSize(source) !== manifest.databaseBytes) {
+    if (fileSize(source, "retained") !== manifest.databaseBytes) {
       return this.refuse(input.binding.taskId, "integrity-failed");
     }
     // Exclusive: a file that is already there is not Keiko's to overwrite, and not to delete either.
@@ -565,6 +589,7 @@ class Store {
     input: Parameters<RetainedSessionStore["checkout"]>[0],
   ): CheckoutResult {
     chmodSync(input.destinationDatabase, 0o600);
+    this.protectPrivatePath(input.destinationDatabase);
     const verdict = copyVerdict(manifest, input);
     if (typeof verdict === "string") {
       rmSync(input.destinationDatabase, { force: true });
@@ -582,10 +607,12 @@ class Store {
   }
 
   // A refusal that cannot become valid removes the entry; one that depends on the asking run only
-  // (a smaller window) leaves it for a run that can take it.
+  // (a smaller window, another model route) leaves it for a run that can take it.
   private refuse(taskId: string, reason: RetentionRefusal): CheckoutResult {
-    const removed = reason !== "window-shrunk" && reason !== "model-route-changed";
-    if (removed) this.remove(taskId);
+    const removed =
+      reason !== "window-shrunk" &&
+      reason !== "model-route-changed" &&
+      removeUnlessHeld(join(this.root, retainedSessionKey(taskId)));
     return { ok: false, reason, removed };
   }
 
@@ -610,20 +637,36 @@ class Store {
 
   private ensureRoot(): void {
     mkdirSync(this.root, { recursive: true, mode: 0o700 });
-    const stat = lstatSync(this.root);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("retained-root-invalid");
+    const stat = this.existingRoot();
+    if (stat === undefined) throw new Error("retained-root-invalid");
     if ((stat.mode & 0o077) !== 0) chmodSync(this.root, 0o700);
+  }
+
+  // Recheck at every public entry: a root accepted during retain may have been redirected since.
+  // This rejects an existing link/junction; it is not descriptor-relative protection from races.
+  private existingRoot(): Stats | undefined {
+    let stat: Stats;
+    try {
+      stat = lstatSync(this.root);
+    } catch (error) {
+      if (isAbsentPath(error)) return undefined;
+      throw error;
+    }
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("retained-root-invalid");
+    return stat;
   }
 
   private readManifest(entry: string): RetainedSessionManifest | undefined {
     const path = join(entry, MANIFEST_FILE);
-    const size = fileSize(path);
-    if (size === undefined || size > this.limits.maxManifestBytes) return undefined;
     try {
+      const directory = lstatSync(entry);
+      if (!directory.isDirectory() || directory.isSymbolicLink()) return undefined;
+      const size = fileSize(path, "retained");
+      if (size === undefined || size > this.limits.maxManifestBytes) return undefined;
       return parseManifest(JSON.parse(readFileSync(path, "utf8")) as unknown);
     } catch (error) {
       // Text that is not JSON is a manifest that cannot be trusted; an unreadable file is a failure.
-      if (error instanceof SyntaxError) return undefined;
+      if (error instanceof SyntaxError || isAbsentPath(error)) return undefined;
       throw error;
     }
   }
@@ -631,7 +674,7 @@ class Store {
   private pruneEntry(
     name: string,
     isLiveTask: ((taskId: string) => boolean) | undefined,
-    counts: { expired: number; orphaned: number; invalid: number },
+    counts: { expired: number; orphaned: number; invalid: number; blocked: number },
   ): PrunableEntry | undefined {
     const path = join(this.root, name);
     const manifest = this.readManifest(path);
@@ -639,8 +682,8 @@ class Store {
     if (verdict === "kept" && manifest !== undefined) {
       return { path, bytes: manifest.databaseBytes, retainedAtMs: manifest.retainedAtMs };
     }
-    rmSync(path, { recursive: true, force: true });
-    if (verdict !== "kept") counts[verdict] += 1;
+    if (!removeUnlessHeld(path)) counts.blocked += 1;
+    else if (verdict !== "kept") counts[verdict] += 1;
     return undefined;
   }
 
@@ -654,7 +697,10 @@ class Store {
     return isLiveTask !== undefined && !isLiveTask(manifest.taskId) ? "orphaned" : "kept";
   }
 
-  private evictOverQuota(entries: PrunableEntry[], counts: { quota: number }): number {
+  private evictOverQuota(
+    entries: PrunableEntry[],
+    counts: { quota: number; blocked: number },
+  ): number {
     entries.sort((a, b) => a.retainedAtMs - b.retainedAtMs);
     let total = entries.reduce((sum, entry) => sum + entry.bytes, 0);
     while (
@@ -663,9 +709,9 @@ class Store {
     ) {
       const oldest = entries.shift();
       if (oldest === undefined) break;
-      rmSync(oldest.path, { recursive: true, force: true });
       total -= oldest.bytes;
-      counts.quota += 1;
+      if (removeUnlessHeld(oldest.path)) counts.quota += 1;
+      else counts.blocked += 1;
     }
     return entries.length;
   }
@@ -781,15 +827,50 @@ function validManifestEvidence(manifest: RetainedSessionManifest): boolean {
   );
 }
 
-function fileSize(path: string): number | undefined {
+function fileSize(path: string, kind: "source" | "retained" = "source"): number | undefined {
   try {
-    const stat = statSync(path);
-    return stat.isFile() ? stat.size : undefined;
+    // Stored entries are private copies: never read through a final link or a second file name.
+    // The runtime-owned source retains its existing read-only input semantics.
+    const stat = kind === "retained" ? lstatSync(path) : statSync(path);
+    return stat.isFile() && (kind !== "retained" || stat.nlink === 1) ? stat.size : undefined;
   } catch (error) {
     // Only an absent path is "no file"; a path that cannot be examined is a failure.
     if (isAbsentPath(error)) return undefined;
     throw error;
   }
+}
+
+/**
+ * On Windows a file a process holds open cannot be removed, nor can a directory above it. That is a
+ * state to retry, counted by the caller and written to the Activity Log; any other failure, and any
+ * failure on a host whose removal does not depend on open handles, keeps its own cause.
+ */
+function removeUnlessHeld(path: string): boolean {
+  try {
+    rmSync(path, { recursive: true, force: true });
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    const held = code === "EPERM" || code === "EBUSY" || code === "EACCES" || code === "ENOTEMPTY";
+    if (process.platform === "win32" && held) return false;
+    throw error;
+  }
+}
+
+/**
+ * Windows reports synthesized mode bits, so `chmod` keeps nobody out and a retained conversation
+ * would inherit whatever its parent directory grants. The DACL is replaced, and a file is read back
+ * through the shared owner-private verdict. A failure propagates and refuses the operation.
+ */
+function protectPrivatePathOnWindows(path: string): void {
+  if (process.platform !== "win32") return;
+  protectWindowsOwnerPrivateFile(path);
+  const opened = statSync(path, { bigint: true });
+  if (!opened.isFile()) return;
+  const inspection = inspectWindowsOwnerPrivateFiles([path]);
+  const facts = inspection.files[0] ?? { kind: "unavailable" as const };
+  const verdict = windowsOwnerPrivateVerdict(facts, inspection.principal, opened);
+  if (verdict.kind !== "owner-private") throw new Error("retained-session-not-owner-private");
 }
 
 function isAbsentPath(error: unknown): boolean {
@@ -1136,13 +1217,22 @@ function sameMembers(actual: readonly string[], expected: readonly string[] | un
   return new Set(actual).size === actual.length && actual.every((name) => known.has(name));
 }
 
+/**
+ * The spelling the runtime's database keeps a directory in. Its API answers `C:\work`, and its
+ * `session_v2` row holds `C:/work`. A backslash is an ordinary file name character on POSIX, so only
+ * a drive path is respelled.
+ */
+function persistedDirectory(directory: string): string {
+  return /^[A-Za-z]:[\\/]/u.test(directory) ? directory.replaceAll("\\", "/") : directory;
+}
+
 function sessionRefusal(
   session: SessionRow,
   expected: AuditExpectation,
 ): RetentionRefusal | undefined {
   if (
     session.id !== expected.sessionId ||
-    session.directory !== expected.directory ||
+    session.directory !== persistedDirectory(expected.directory) ||
     session.version !== expected.version ||
     session.parent_id !== null ||
     session.workspace_id !== null ||

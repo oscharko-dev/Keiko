@@ -56,7 +56,7 @@ import {
 } from "./coding-workbench-i18n";
 import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
 import { PanelTitle } from "./CodingWorkbenchPanelTitle";
-import { cx } from "./codingWorkbenchLabels";
+import { cx, gatewayServiceMessageKey } from "./codingWorkbenchLabels";
 import styles from "./CodingWorkbenchWindow.module.css";
 // The opaque single-operator actor identity, mirroring useActiveWorkspaceState. The server treats
 // it as an opaque id only — never a credential.
@@ -112,6 +112,7 @@ export interface CodingWorkbenchSetupProps {
   // during the initial load. The bootstrap section is the FIRST screen a fresh evaluation install
   // shows, so a clean form here would imply a verified runtime (ADR-0163 D9).
   readonly runtimePosture: CodingWorkbenchSetupRuntimePosture;
+  readonly runtimeUnavailableReason?: string | undefined;
 }
 
 // "pending" is a real state, not a stand-in for "verified": before the first readiness read
@@ -563,8 +564,10 @@ function SetupNotices({
   runtimePosture,
   status,
   t,
+  runtimeUnavailableReason,
 }: {
   readonly runtimePosture: CodingWorkbenchSetupRuntimePosture;
+  readonly runtimeUnavailableReason?: string | undefined;
   readonly status: SetupStatus;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
@@ -573,7 +576,10 @@ function SetupNotices({
     <>
       {runtimePosture === "unavailable" ? (
         <p className={styles.boundaryNote} data-testid="coding-workbench-setup-runtime-note">
-          {t("codingWorkbench.setup.runtimeUnavailable")}
+          {t(
+            gatewayServiceMessageKey(runtimeUnavailableReason) ??
+              "codingWorkbench.setup.runtimeUnavailable",
+          )}
         </p>
       ) : null}
       {runtimePosture === "evaluation" ? (
@@ -652,6 +658,7 @@ export function CodingWorkbenchSetup({
   refreshWorkspace,
   onBoundRepository,
   runtimePosture,
+  runtimeUnavailableReason,
 }: CodingWorkbenchSetupProps): ReactNode {
   const repositoryPath = selectedRoot ?? "";
   const branches = useRepositoryBranchState(repositoryPath.trim() || null);
@@ -679,6 +686,7 @@ export function CodingWorkbenchSetup({
       folderMode={folderMode}
       pending={pending}
       runtimePosture={runtimePosture}
+      runtimeUnavailableReason={runtimeUnavailableReason}
       status={status}
       actions={actions}
     />
@@ -693,6 +701,7 @@ interface SetupCardProps {
   readonly folderMode: boolean;
   readonly pending: boolean;
   readonly runtimePosture: CodingWorkbenchSetupRuntimePosture;
+  readonly runtimeUnavailableReason?: string | undefined;
   readonly status: SetupStatus;
   readonly actions: SetupActions;
 }
@@ -704,7 +713,12 @@ function SetupCard(props: SetupCardProps): ReactNode {
       <PanelTitle eyebrow={t("codingWorkbench.setup.eyebrow")} id="coding-workbench-setup-title">
         {t("codingWorkbench.setup.title")}
       </PanelTitle>
-      <SetupNotices runtimePosture={props.runtimePosture} status={props.status} t={t} />
+      <SetupNotices
+        runtimePosture={props.runtimePosture}
+        runtimeUnavailableReason={props.runtimeUnavailableReason}
+        status={props.status}
+        t={t}
+      />
       <form onSubmit={props.actions.onSubmit}>
         {props.repositoryControls}
         <p id="coding-workbench-setup-help" className={styles.helpText}>

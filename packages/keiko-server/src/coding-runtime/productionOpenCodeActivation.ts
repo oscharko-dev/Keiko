@@ -61,7 +61,10 @@ import {
 } from "./devLanePortableCodingRuntime.js";
 import { createDevLaneSecureWorkspaceTextReadPort } from "./devLaneSecureWorkspaceTextRead.js";
 import { SECURE_WORKSPACE_TEXT_READ_MAX_BYTES } from "./secureWorkspaceTextReadProtocol.js";
-import { createProductionOpenCodeBackend } from "./productionOpenCodeBackend.js";
+import {
+  createProductionOpenCodeBackend,
+  windowsGatewayHelperPin,
+} from "./productionOpenCodeBackend.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import type {
   ProductionOpenCodeBackendInput,
@@ -69,7 +72,14 @@ import type {
 } from "./productionOpenCodeBackend.js";
 import { createPackagedSecureWorkspaceTextReadPort } from "./packagedSecureWorkspaceTextRead.js";
 import type { ProductionCodingRuntimeResolverInput } from "./productionCodingRuntimeResolver.js";
-import { discoverQualifiedPortableOpenCode } from "./productionPortableCodingRuntime.js";
+import {
+  discoverQualifiedPortableOpenCode,
+  readWindowsGatewayServiceStatus,
+} from "./productionPortableCodingRuntime.js";
+import {
+  createWindowsGatewayServiceProbe,
+  type WindowsGatewayServiceProbe,
+} from "./windowsGatewayServiceProbe.js";
 import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 
 type ProductionOpenCodePorts = Pick<
@@ -214,12 +224,15 @@ export type ProductionOpenCodeActivationResult =
       readonly evidenceClass: CodingWorkbenchRuntimeEvidenceClass;
       /** What the activated runtime is, from its verified release metadata (#3904 AC4). */
       readonly runtimeVersion: CodingWorkbenchRuntimeVersion;
+      /** Present only for a Windows runtime, whose every launch needs the broker (#4068). */
+      readonly windowsGatewayService?: WindowsGatewayServiceProbe;
       readonly unavailableReason?: undefined;
     }
   | {
       readonly ports?: undefined;
       readonly evidenceClass?: undefined;
       readonly runtimeVersion?: undefined;
+      readonly windowsGatewayService?: undefined;
       readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason;
     };
 
@@ -413,8 +426,41 @@ export function resolveProductionOpenCodeActivation(
   return {
     evidenceClass: runtimeEvidenceClass(runtime.portable),
     runtimeVersion: runtimeVersionFacts(runtime.portable),
+    ...windowsGatewayServiceFacts(input, runtime.portable),
     ports: activatedPorts(input, runtime.portable, endpoints, secureWorkspaceTextRead),
   };
+}
+
+/**
+ * Every Windows launch carries the gateway policy, and only the installed broker can enforce it. A
+ * Windows runtime that yields no broker pin therefore refuses every start (ADR-0043), so readiness
+ * must not offer one. No host state changes this, hence a constant rather than a probe.
+ */
+const UNQUALIFIED_WINDOWS_RUNTIME: {
+  readonly windowsGatewayService: WindowsGatewayServiceProbe;
+} = {
+  windowsGatewayService: { unavailableReason: () => "gateway-service-unqualified" },
+};
+
+export function windowsGatewayServiceFacts(
+  input: Pick<ProductionOpenCodeActivationInput, "activityLog">,
+  portable: ResolvedPortableOpenCodeRuntime,
+): { readonly windowsGatewayService?: WindowsGatewayServiceProbe } {
+  if (portable.target !== "windows-x64") return {};
+  // A release-qualified package and a Windows dev checkout carry a broker pin (ADR-0043 D19); both
+  // then report the installed broker's state, so a checkout without one is told to install it.
+  const helperSha256 = windowsGatewayHelperPin(portable);
+  const helperPath = portable.nativeHelperPath;
+  return helperSha256 === undefined || helperPath === undefined
+    ? UNQUALIFIED_WINDOWS_RUNTIME
+    : {
+        windowsGatewayService: createWindowsGatewayServiceProbe({
+          helperPath,
+          helperSha256,
+          activityLog: input.activityLog ?? processServerLogSink(),
+          runStatus: readWindowsGatewayServiceStatus,
+        }),
+      };
 }
 
 /**

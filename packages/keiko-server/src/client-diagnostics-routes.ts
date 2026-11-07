@@ -77,6 +77,7 @@ import {
   CLIENT_CODING_WORKBENCH_DETAIL_SECTIONS,
   CLIENT_CODING_WORKBENCH_DIFF_SURFACES,
   CLIENT_CODING_WORKBENCH_HELD_NOTICES,
+  CLIENT_CODING_WORKBENCH_TOOL_PROFILES,
   CLIENT_CODING_WORKBENCH_INTERACTIONS,
   CLIENT_CODING_WORKBENCH_DELIVERY_STEPS,
   CLIENT_CODING_WORKBENCH_DELIVERY_STATES,
@@ -1450,6 +1451,14 @@ const CLIENT_CODING_WORKBENCH_INTERACTION_OPERATION = defineActivityLogOperation
       dataClass: "closed-enum",
       required: false,
       values: CLIENT_CODING_WORKBENCH_HELD_NOTICES,
+    },
+    modelReported: { type: "boolean", dataClass: "closed-enum", required: false },
+    agentReported: { type: "boolean", dataClass: "closed-enum", required: false },
+    toolProfile: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: CLIENT_CODING_WORKBENCH_TOOL_PROFILES,
     },
     deliveryStep: {
       type: "string",

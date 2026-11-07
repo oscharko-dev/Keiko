@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 392,
-  "completeClassCount": 392,
+  "supportedClassCount": 395,
+  "completeClassCount": 395,
   "completeness": "complete",
   "classes": [
     {
@@ -4443,6 +4443,166 @@
       "completeness": "complete"
     },
     {
+      "failureClass": "cli-gateway-service",
+      "requirementContract": "cli-gateway-service",
+      "productSurfaces": ["keiko-cli"],
+      "lifecycleTransitions": ["end", "failure", "start"],
+      "lifecycleOperations": {
+        "start": ["cli.gateway-service.started"],
+        "state": [],
+        "end": ["cli.gateway-service.completed"],
+        "failure": ["cli.gateway-service.failed"],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "cli.gateway-service.completed",
+          "mode": "correlation"
+        },
+        {
+          "op": "cli.gateway-service.failed",
+          "mode": "correlation"
+        },
+        {
+          "op": "cli.gateway-service.started",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["cli.gateway-service.completed", "cli.gateway-service.started"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "cli.gateway-service.completed",
+          "owner": "keiko-cli",
+          "category": "diagnostic",
+          "lifecycle": "end",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "action",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "durationMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": true
+            },
+            {
+              "name": "lane",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "state",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "duration", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["cli.gateway-service.completed.real-sink-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "cli.gateway-service.failed",
+          "owner": "keiko-cli",
+          "category": "diagnostic",
+          "lifecycle": "failure",
+          "causal": "correlation",
+          "analyzerProjection": "failure-cluster",
+          "safeContextFields": [
+            {
+              "name": "action",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "durationMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": true
+            },
+            {
+              "name": "failureKind",
+              "type": "string",
+              "dataClass": "error-kind",
+              "required": true
+            },
+            {
+              "name": "lane",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "duration",
+            "error-kind",
+            "loss-state"
+          ],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["cli.gateway-service.failed.real-sink-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "cli.gateway-service.started",
+          "owner": "keiko-cli",
+          "category": "diagnostic",
+          "lifecycle": "start",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "action",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "lane",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["cli.gateway-service.started.real-sink-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
       "failureClass": "cli-install-layout-normalization",
       "requirementContract": "cli-install-layout-normalization",
       "productSurfaces": ["keiko-cli"],
@@ -5667,6 +5827,12 @@
               "required": false
             },
             {
+              "name": "agentReported",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "deliveryState",
               "type": "string",
               "dataClass": "closed-enum",
@@ -5695,6 +5861,12 @@
               "type": "string",
               "dataClass": "closed-enum",
               "required": true
+            },
+            {
+              "name": "modelReported",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": false
             },
             {
               "name": "notice",
@@ -5728,6 +5900,12 @@
             },
             {
               "name": "surface",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "toolProfile",
               "type": "string",
               "dataClass": "closed-enum",
               "required": false
@@ -8005,7 +8183,11 @@
       "lifecycleTransitions": ["end", "failure", "state"],
       "lifecycleOperations": {
         "start": [],
-        "state": ["coding-runtime.editor-review.decided", "editor.agent.changeset-provenance"],
+        "state": [
+          "coding-runtime.editor-review.decided",
+          "editor.agent.changeset-byte-order-mark",
+          "editor.agent.changeset-provenance"
+        ],
         "end": ["coding-runtime.editor-mutation.settled"],
         "failure": ["coding-runtime.edit.refused"],
         "loss": []
@@ -8024,6 +8206,10 @@
           "mode": "correlation"
         },
         {
+          "op": "editor.agent.changeset-byte-order-mark",
+          "mode": "correlation"
+        },
+        {
           "op": "editor.agent.changeset-provenance",
           "mode": "correlation"
         }
@@ -8032,6 +8218,7 @@
       "resourceSignals": [
         "coding-runtime.editor-mutation.settled",
         "coding-runtime.editor-review.decided",
+        "editor.agent.changeset-byte-order-mark",
         "editor.agent.changeset-provenance"
       ],
       "replayReferences": [],
@@ -8189,6 +8376,48 @@
             "causeChain": false
           },
           "proofIds": ["coding-runtime.editor-review.decided.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "editor.agent.changeset-byte-order-mark",
+          "owner": "keiko-server",
+          "category": "security",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "capability",
+          "safeContextFields": [
+            {
+              "name": "diffTextFileCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "fileCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "signatureFileCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "stage",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["editor.agent.changeset-byte-order-mark.emitted-line"],
           "replayReferences": [],
           "missingObligations": []
         },
@@ -11573,6 +11802,7 @@
           "coding-runtime.native-build-settings.admitted",
           "coding-runtime.native-external-roots.resolved",
           "coding-runtime.native-formatter.bound",
+          "coding-runtime.native-mcp-local.refused",
           "coding-runtime.native-narrowing.refused",
           "coding-runtime.native-policy.decided",
           "coding-runtime.native-step.changed",
@@ -11593,6 +11823,10 @@
         },
         {
           "op": "coding-runtime.native-formatter.bound",
+          "mode": "correlation"
+        },
+        {
+          "op": "coding-runtime.native-mcp-local.refused",
           "mode": "correlation"
         },
         {
@@ -11617,6 +11851,7 @@
         "coding-runtime.native-build-settings.admitted",
         "coding-runtime.native-external-roots.resolved",
         "coding-runtime.native-formatter.bound",
+        "coding-runtime.native-mcp-local.refused",
         "coding-runtime.native-narrowing.refused",
         "coding-runtime.native-policy.decided",
         "coding-runtime.native-step.changed",
@@ -11801,6 +12036,48 @@
             "causeChain": false
           },
           "proofIds": ["coding-runtime.native-formatter.bound.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "coding-runtime.native-mcp-local.refused",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "refusedServerCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "runId",
+              "type": "string",
+              "dataClass": "opaque-id",
+              "required": true
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "loss-state",
+            "opaque-id"
+          ],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["coding-runtime.native-mcp-local.refused.emitted-line"],
           "replayReferences": [],
           "missingObligations": []
         },
@@ -13101,9 +13378,21 @@
               "required": false
             },
             {
+              "name": "errorClass",
+              "type": "string",
+              "dataClass": "error-kind",
+              "required": false
+            },
+            {
               "name": "frames",
               "type": "string-array",
               "dataClass": "opaque-id",
+              "required": false
+            },
+            {
+              "name": "httpStatus",
+              "type": "integer",
+              "dataClass": "count",
               "required": false
             },
             {
@@ -13111,11 +13400,18 @@
               "type": "string",
               "dataClass": "closed-enum",
               "required": true
+            },
+            {
+              "name": "transportCode",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             }
           ],
           "evidenceClasses": [
             "closed-enum",
             "completeness-state",
+            "count",
             "error-kind",
             "loss-state",
             "opaque-id"
@@ -14583,6 +14879,12 @@
               "required": true
             },
             {
+              "name": "modelIdDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": false
+            },
+            {
               "name": "modelSource",
               "type": "string",
               "dataClass": "closed-enum",
@@ -14599,6 +14901,12 @@
               "type": "string",
               "dataClass": "closed-enum",
               "required": true
+            },
+            {
+              "name": "primaryAgent",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             },
             {
               "name": "requestedMode",
@@ -15164,6 +15472,12 @@
               "name": "auditCheck",
               "type": "string",
               "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "blockedCount",
+              "type": "integer",
+              "dataClass": "count",
               "required": false
             },
             {
@@ -41922,6 +42236,18 @@
               "required": true
             },
             {
+              "name": "windowsTreeGrantCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "windowsWorktreeAccess",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "workspaceAccess",
               "type": "string",
               "dataClass": "closed-enum",
@@ -41931,6 +42257,7 @@
           "evidenceClasses": [
             "closed-enum",
             "completeness-state",
+            "count",
             "digest",
             "loss-state",
             "opaque-id"
@@ -49618,6 +49945,56 @@
       "completeness": "complete"
     },
     {
+      "failureClass": "windows-gateway-service",
+      "requirementContract": "windows-gateway-service",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["coding-runtime.windows-gateway-service"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "coding-runtime.windows-gateway-service",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["coding-runtime.windows-gateway-service"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "coding-runtime.windows-gateway-service",
+          "owner": "keiko-server",
+          "category": "diagnostic",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "state",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["coding-runtime.windows-gateway-service.real-sink-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
       "failureClass": "windows-local-volume",
       "requirementContract": "windows-local-volume",
       "productSurfaces": ["keiko-security"],
@@ -49666,6 +50043,62 @@
             "causeChain": false
           },
           "proofIds": ["security.windows-local-volume.refused.phase"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "windows-owner-private",
+      "requirementContract": "windows-owner-private",
+      "productSurfaces": ["keiko-security"],
+      "lifecycleTransitions": ["failure"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": [],
+        "end": [],
+        "failure": ["security.windows-owner-private.refused"],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "security.windows-owner-private.refused",
+          "mode": "none"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": [],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "security.windows-owner-private.refused",
+          "owner": "keiko-security",
+          "category": "security",
+          "lifecycle": "failure",
+          "causal": "none",
+          "analyzerProjection": "failure-cluster",
+          "safeContextFields": [
+            {
+              "name": "failureKind",
+              "type": "string",
+              "dataClass": "error-kind",
+              "required": true
+            },
+            {
+              "name": "phase",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "error-kind", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["security.windows-owner-private.refused.phase"],
           "replayReferences": [],
           "missingObligations": []
         }
