@@ -126,7 +126,9 @@ The ledger started empty at `7bbca2e34`; #4145 adds no entry.
 - The ratchet does not run the epic's responsibility qualifications. A green ratchet means "no new
   findings", not "this code is qualified" or "this rule is enforced".
 - The baseline on the `dev` snapshot `7bbca2e34` was 46,618 findings. Epic workstreams prune the
-  register; #3991 removes it at zero and activates full enforcement.
+  register. #3991 activates each rule in the scopes where it has no finding, and the register stays
+  for the remaining findings (owner decision 3, 2026-11-06 on #3991). The other activations follow
+  the deferred migration children and #4278.
 
 ## Responsibility qualification
 

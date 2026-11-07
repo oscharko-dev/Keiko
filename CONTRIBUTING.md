@@ -30,7 +30,8 @@ npm run provision:usearch  # ONCE per checkout — see AGENTS.md §2
 npm run provision:ripgrep  # coding-runtime search tool; needed by customer-shape, the nightly real-binary journey, portable staging + npm runtime package build — AGENTS.md §2
 npm run build              # compile TypeScript outputs
 npm run typecheck          # strict type-checking for src + tests
-npm run lint               # ESLint, zero-warning policy
+npm run lint               # build:packages, the code-quality policy qualification, then lint:typed
+npm run lint:typed         # ESLint, zero-warning policy, per package + root, and the keiko-ui lint
 npm run format:check       # Prettier check
 npm test                   # run the unit test suite
 npm run arch:check         # dependency-cruiser + import-policy + contract-boundaries
