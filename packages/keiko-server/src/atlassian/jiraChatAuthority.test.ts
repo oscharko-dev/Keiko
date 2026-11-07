@@ -1194,7 +1194,7 @@ describe("ordinary Chat catalog read admission", () => {
         maxRuntimeMs: 7_200_000,
         maxToolCalls: 20,
         maxPromptTokens: 10_000,
-        maxPatchBytes: 0,
+        maxPatchBytes: 0 as const,
       },
     };
     deadlineSpan = 3_000_000;
