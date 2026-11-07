@@ -1,0 +1,266 @@
+// #4206: a routine private fact is in use at once, in every mode, with nobody asked to approve it.
+// Hard denials stay first, confidential content and personal identifiers are refused, an explicit
+// operator restriction still holds facts for review, and every decision reaches the Journal and
+// the Activity Log body-free. Real vault, real evidence ledger, scripted model.
+
+import { afterEach, describe, expect, it } from "vitest";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { CodingWorkbenchMode, NormalizedResponse } from "@oscharko-dev/keiko-contracts";
+import type {
+  ConversationId,
+  MemoryRecord,
+  ProjectId,
+  UserId,
+  WorkspaceId,
+} from "@oscharko-dev/keiko-contracts/memory";
+import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import { captureSalientFromTurn } from "./memory-salience.js";
+import {
+  conversationMemoryScopes,
+  type ConversationMemoryRuntimeContext,
+} from "./memory-conversation-context.js";
+import {
+  projectMemoryCaptureDecisions,
+  replayMemoryCaptureAuditLedger,
+  type MemoryCaptureDecision,
+} from "./memory-capture-projection.js";
+import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
+import { createInMemoryUiStore } from "./store/index.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+
+const MODES: readonly CodingWorkbenchMode[] = [
+  "governed-assist",
+  "supervised-coding",
+  "autonomous-delivery",
+];
+
+const temporaryDirectories: string[] = [];
+const vaults: MemoryVaultStore[] = [];
+
+afterEach(() => {
+  resetServerLogger();
+  for (const vault of vaults.splice(0)) vault.close();
+  for (const directory of temporaryDirectories.splice(0)) {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+function directory(prefix: string): string {
+  const path = mkdtempSync(join(realpathSync(tmpdir()), prefix));
+  temporaryDirectories.push(path);
+  return path;
+}
+
+// The scripted model proposes the person's own sentence as a fact, so the product decides.
+function proposing(sentence: string): ModelPort {
+  return {
+    call(request): Promise<NormalizedResponse> {
+      return Promise.resolve({
+        modelId: request.modelId,
+        content: JSON.stringify([
+          { about: "self", body: sentence, evidence: sentence, type: "fact" },
+        ]),
+        finishReason: "stop",
+        toolCalls: [],
+        structuredOutput: null,
+        usage: {
+          requestId: "approval-free",
+          promptTokens: 7,
+          completionTokens: 3,
+          latencyMs: 1,
+          costClass: "high",
+        },
+      });
+    },
+  };
+}
+
+interface Fixture {
+  readonly deps: UiHandlerDeps;
+  readonly vault: MemoryVaultStore;
+  readonly context: ConversationMemoryRuntimeContext;
+}
+
+function fixture(sentence: string, overrides: Partial<UiHandlerDeps> = {}): Fixture {
+  const vault = createMemoryVault({
+    memoryDir: directory("keiko-approval-free-"),
+    redactString: (value) => value,
+  });
+  vaults.push(vault);
+  const project = directory("keiko-approval-free-project-");
+  const deps: UiHandlerDeps = {
+    config: undefined,
+    configPresent: false,
+    evidenceStore: createInMemoryEvidenceStore(),
+    env: {},
+    redactor: buildRedactor({}),
+    registry: createRunRegistry(),
+    modelPortFactory: () => proposing(sentence),
+    store: createInMemoryUiStore(),
+    memoryVault: vault,
+    ...overrides,
+  };
+  return {
+    deps,
+    vault,
+    context: {
+      userId: "local-operator" as UserId,
+      workspaceId: project as WorkspaceId,
+      projectId: project as ProjectId,
+      conversationId: "chat-approval-free" as ConversationId,
+    },
+  };
+}
+
+async function learn(
+  { deps, context }: Fixture,
+  sentence: string,
+  mode: CodingWorkbenchMode,
+): Promise<void> {
+  await captureSalientFromTurn(
+    deps,
+    { content: sentence, memory: { enabled: true, mode } },
+    context,
+    "gpt-test",
+    "Noted.",
+  );
+}
+
+function stored({ vault, context }: Fixture): readonly MemoryRecord[] {
+  return conversationMemoryScopes(context).flatMap((scope) => vault.listMemoriesByScope(scope));
+}
+
+function journal({ deps, vault, context }: Fixture): readonly MemoryCaptureDecision[] {
+  const scopes = conversationMemoryScopes(context);
+  return projectMemoryCaptureDecisions(replayMemoryCaptureAuditLedger(deps.evidenceStore, 0), {
+    since: 0,
+    order: "desc",
+    authorizedScopes: scopes,
+    liveRecords: scopes.flatMap((scope) => vault.listMemoriesByScope(scope)),
+  });
+}
+
+describe("a routine fact needs no approval (#4206)", () => {
+  it.each(MODES)("is accepted at once in %s and shown as accepted in the Journal", async (mode) => {
+    const sentence = "I keep my release notes in the team wiki.";
+    const learner = fixture(sentence);
+    await learn(learner, sentence, mode);
+    const [record] = stored(learner);
+    expect(record?.status).toBe("accepted");
+    expect(journal(learner)).toEqual([
+      expect.objectContaining({
+        outcome: "auto-accepted",
+        mode,
+        reason: "governance-auto-accepted",
+        memoryId: String(record?.id),
+        currentStatus: "accepted",
+      }),
+    ]);
+  });
+
+  it.each([
+    ["an explicit governed-assist ceiling", { memoryDeploymentCeiling: "governed-assist" }],
+    [
+      "a configured production ceiling",
+      { memoryDeploymentCeiling: "governed-assist", memoryDeploymentCeilingConfigured: true },
+    ],
+  ] as const)("is held for review under %s, whatever the mode", async (_label, ceiling) => {
+    for (const mode of MODES) {
+      const sentence = "I keep my release notes in the team wiki.";
+      const learner = fixture(sentence, ceiling);
+      await learn(learner, sentence, mode);
+      expect(stored(learner).map(({ status }) => status)).toEqual(["proposed"]);
+      expect(journal(learner)).toEqual([
+        expect.objectContaining({ outcome: "proposed", reason: "operator-requires-approval" }),
+      ]);
+    }
+  });
+
+  it("is accepted under the production default, which names no configured ceiling", async () => {
+    const sentence = "I keep my release notes in the team wiki.";
+    const learner = fixture(sentence, {
+      memoryDeploymentCeiling: "governed-assist",
+      memoryDeploymentCeilingConfigured: false,
+    });
+    await learn(learner, sentence, "governed-assist");
+    expect(stored(learner).map(({ status }) => status)).toEqual(["accepted"]);
+  });
+});
+
+describe("refusals are mode-independent and visible (#4206)", () => {
+  const refusals = [
+    [
+      "confidential content",
+      "I am reachable at m1.fixture@example.com.",
+      "sensitive-memory-requires-approval",
+    ],
+    ["an IBAN", "I pay from DE89 3704 0044 0532 0130 00.", "personal-identifier"],
+    ["a phone number", "I am reachable on +49 30 1234 5678.", "personal-identifier"],
+    ["a customer number", "I am customer Kundennummer 4711-0815.", "personal-identifier"],
+    ["a customer name", "My customer prefers fixture tables.", "third-party"],
+    ["a protected topic", "I take my fixture medication every day.", "denied-content"],
+  ] as const;
+
+  it.each(refusals)(
+    "refuses %s in every mode and records why, body-free",
+    async (_label, sentence, reason) => {
+      for (const mode of MODES) {
+        const sink = createBufferedServerLogSink();
+        setServerLogger(createServerLogger({ sink, level: "info" }));
+        const learner = fixture(sentence);
+        await learn(learner, sentence, mode);
+        expect(stored(learner)).toEqual([]);
+        const entries = journal(learner);
+        expect(entries).toEqual([expect.objectContaining({ outcome: "rejected", mode, reason })]);
+        expect(entries[0]).not.toHaveProperty("memoryId");
+        const ledger = JSON.stringify(
+          replayMemoryCaptureAuditLedger(learner.deps.evidenceStore, 0),
+        );
+        const lines = JSON.stringify(sink.events);
+        for (const evidence of [ledger, lines]) {
+          expect(evidence).not.toContain(sentence);
+          expect(evidence).not.toMatch(/example\.com|DE89|4711|1234 5678|medication/u);
+        }
+        const learnedLines = sink.events.filter(({ op }) => op.startsWith("memory.learn."));
+        expect(learnedLines.length).toBeGreaterThan(0);
+      }
+    },
+  );
+});
+
+describe("existing proposals stay as they are (#4206)", () => {
+  it("does not accept a record proposed before this change when a new fact is learned", async () => {
+    const sentence = "I keep my release notes in the team wiki.";
+    const learner = fixture(sentence);
+    const [scope] = conversationMemoryScopes(learner.context);
+    if (scope === undefined) throw new Error("expected a conversation scope");
+    const now = Date.now();
+    const earlier = learner.vault.insertMemory({
+      id: "proposed-before-4206" as MemoryRecord["id"],
+      schemaVersion: "1",
+      scope,
+      type: "semantic-fact",
+      body: "I review pull requests every morning.",
+      provenance: {
+        sourceKind: "system-default",
+        capturedAt: now,
+        confidence: 0.9,
+        sensitivity: "public",
+      },
+      validity: { validFrom: now },
+      status: "proposed",
+      pinned: false,
+      tags: [],
+      createdAt: now,
+      updatedAt: now,
+    });
+    await learn(learner, sentence, "autonomous-delivery");
+    expect(learner.vault.getMemory(earlier.id)?.status).toBe("proposed");
+  });
+});

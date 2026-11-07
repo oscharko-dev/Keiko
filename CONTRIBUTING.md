@@ -883,7 +883,8 @@ The owner decision of 2026-09-27 exposes all three Coding Workbench modes on a n
 without extra configuration (ADR-0124 D2, ADR-0163 D7). The default selected mode remains Ask for
 approval. Explicit narrower deployment ceilings and every mode-independent denial remain enforced.
 Do not propagate Coding's availability default to Memory: its absent-configuration ceiling stays
-`governed-assist` for capture, policy projection and maintenance. Regression coverage must exercise
+`governed-assist` for policy projection and standing maintenance; since #4206 it holds routine
+facts for review only when an operator configured it explicitly (ADR-0146 D2). Regression coverage must exercise
 both production composition and these consumers when changing this wiring.
 
 ## Support reports

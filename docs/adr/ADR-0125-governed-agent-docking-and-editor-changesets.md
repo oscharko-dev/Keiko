@@ -119,8 +119,9 @@ missing mode values still fall back to `governed-assist`, and the effective mode
 the deployment ceiling. ADR-0124 D2's owner amendment (2026-09-27) makes all three Coding
 modes available by default without additional configuration. This is a surface availability
 ceiling, not a selected run mode: the human still chooses the mode, the default selection remains
-Ask for approval, and explicit narrower configuration still applies. Memory keeps its previous
-approval baseline when no ceiling is configured.
+Ask for approval, and explicit narrower configuration still applies. Memory keeps its
+`governed-assist` baseline for its modes and standing maintenance when no ceiling is configured;
+routine facts need no approval unless an operator configured that ceiling (ADR-0146 D2, #4206).
 
 ### D2 - Dock onto the existing editor-agent control plane
 

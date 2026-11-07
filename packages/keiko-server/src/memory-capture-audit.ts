@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 import type { ConversationMemoryCaptureSurfaceWire } from "@oscharko-dev/keiko-contracts/bff-wire";
-import type { MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
+import type { MemoryRecord, MemoryScope } from "@oscharko-dev/keiko-contracts/memory";
+import type { RejectionReason } from "@oscharko-dev/keiko-memory-capture";
 import { currentAuditRedactString, type UiHandlerDeps } from "./deps.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
 import { buildMemoryCaptureDecisionAuditEvent } from "./memory-capture-projection.js";
@@ -34,6 +35,42 @@ export function recordAutoAcceptedMemoryCaptureDecision(
       sourceKind: memory.provenance.sourceKind,
       reason: "governance-auto-accepted",
       memoryId: memory.id,
+    }),
+  );
+}
+
+// The private scope a person's own statement belongs to, where the Journal shows what Keiko refused
+// to keep from it. A statement names no team, so a project scope would hide the refusal.
+function statementScope(scopes: readonly MemoryScope[]): MemoryScope | undefined {
+  return scopes.find((scope) => scope.kind === "user") ?? scopes[0];
+}
+
+// A person's own "Merke dir" that Keiko refused (a credential, confidential content) is a decision
+// the Journal shows, body-free (#4206). Without a scope to show it in there is nothing to record.
+export function recordRefusedStatementCaptureDecision(
+  deps: UiHandlerDeps,
+  mode: CodingWorkbenchMode,
+  surface: ConversationMemoryCaptureSurfaceWire,
+  scopes: readonly MemoryScope[],
+  reason: RejectionReason,
+): void {
+  const scope = statementScope(scopes);
+  if (scope === undefined) return;
+  recordMemoryAudit(
+    {
+      evidenceStore: deps.evidenceStore,
+      redactString: currentAuditRedactString(deps),
+      ...(deps.diagnostics === undefined ? {} : { diagnostics: deps.diagnostics }),
+    },
+    buildMemoryCaptureDecisionAuditEvent({
+      eventId: randomUUID(),
+      occurredAt: Date.now(),
+      outcome: "rejected",
+      scope,
+      mode,
+      initiatorSurface: auditSurface(surface),
+      sourceKind: "explicit-user-instruction",
+      reason,
     }),
   );
 }

@@ -216,7 +216,7 @@ async function captureAndOpenJournal(
   await expect(row).toHaveAttribute("data-memory-id", memoryId ?? "");
   await expect(row.getByText("Ask for approval")).toBeVisible();
   await expect(row.getByText("Awaiting review")).toBeVisible();
-  await expect(row.getByText(/^Capture reason /)).toBeVisible();
+  await expect(row.getByText(/^Why: /)).toBeVisible();
   // Newest first: this journey's refusal is the first refused row.
   const refusedRows = rows.filter({ hasNotText: "Awaiting review" });
   await expect.poll(async () => rowCountSince(refusedRows, context.since)).toBe(1);

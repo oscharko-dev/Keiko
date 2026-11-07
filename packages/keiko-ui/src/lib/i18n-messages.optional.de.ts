@@ -2422,11 +2422,26 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "memoria.journal.contentUnavailable": "Erinnerungsinhalt ist nicht verfügbar",
   "memoria.journal.refusedBody":
     "Erfassung durch Richtlinie abgelehnt. Es wurde kein Inhalt gespeichert.",
+  "memoria.journal.forgottenBody":
+    "Du hast Keiko gebeten, eine Erinnerung zu vergessen. Sie wurde gelöscht.",
   "memoria.journal.surface": "Oberfläche {surface}",
   "memoria.journal.surface.conversationCenter": "Unterhaltung",
   "memoria.journal.surface.voice": "Sprache",
   "memoria.journal.source": "Quelle {source}",
-  "memoria.journal.reason": "Erfassungsgrund {reason}",
+  "memoria.journal.reason": "Warum: {reason}",
+  "memoria.journal.why.credential": "Es sah nach einem Passwort, Schlüssel oder Zugangsdaten aus.",
+  "memoria.journal.why.identifier":
+    "Es enthielt eine persönliche Kennung, etwa eine IBAN, eine Telefonnummer oder eine Kundennummer.",
+  "memoria.journal.why.confidential": "Es enthielt vertrauliche Angaben, etwa eine E-Mail-Adresse.",
+  "memoria.journal.why.thirdParty": "Es ging um eine andere Person.",
+  "memoria.journal.why.protectedTopic": "Es betraf ein geschütztes Thema, etwa Gesundheit.",
+  "memoria.journal.why.instruction": "Es wollte ändern, wie Keiko arbeitet.",
+  "memoria.journal.why.forgottenBefore": "Du hattest Keiko schon gebeten, das zu vergessen.",
+  "memoria.journal.why.forgotten": "Du hast Keiko gebeten, es zu vergessen.",
+  "memoria.journal.why.kept": "Keiko merkt es sich für dich.",
+  "memoria.journal.why.review": "Es wartet auf deine Prüfung.",
+  "memoria.journal.why.unsure": "Keiko war sich noch nicht sicher genug, es zu behalten.",
+  "memoria.journal.why.rules": "Die Regeln von Keikos Gedächtnis haben das entschieden.",
   "memoria.journal.capturedAt": "Erfasst {time}",
   "memoria.journal.mode.governedAssist": "Um Freigabe bitten",
   "memoria.journal.mode.supervisedCoding": "Überwachter Workspace",
@@ -2436,6 +2451,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "memoria.journal.indicator.auto": "Automatisch erfasst",
   "memoria.journal.indicator.kept": "Behalten",
   "memoria.journal.indicator.refused": "Abgelehnt",
+  "memoria.journal.indicator.forgotten": "Vergessen",
   "memoria.journal.keep": "Behalten",
   "memoria.journal.keeping": "Wird behalten…",
   "memoria.journal.forget": "Vergessen",
@@ -2481,17 +2497,18 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "memoria.settings.budgetHelp":
     "Begrenzt den MemoriaViva-Erinnerungskontext für die nächste Chat-Anfrage.",
   "memoria.settings.mode.label": "Erinnerungsautonomie",
-  "memoria.settings.mode.help": "Lege fest, wie Keiko neue Erinnerungen erfasst.",
+  "memoria.settings.mode.help":
+    "Neue Routine-Erinnerungen nutzt Keiko sofort, in jedem Modus. Der Modus gilt nur für Erinnerungen, die noch auf Prüfung warten.",
   "memoria.settings.mode.group": "Erinnerungsautonomiemodus",
   "memoria.settings.mode.governedAssist.label": "Um Freigabe bitten",
   "memoria.settings.mode.governedAssist.description":
-    "Neue Erfassungen bleiben Vorschläge, bis du sie freigibst.",
+    "Wartende Erinnerungen bleiben Vorschläge, bis du sie freigibst.",
   "memoria.settings.mode.supervisedCoding.label": "Überwachter Workspace",
   "memoria.settings.mode.supervisedCoding.description":
-    "Öffentliche Routineerfassungen werden automatisch akzeptiert; sensible Erfassungen bleiben prüfpflichtig.",
+    "Keiko darf wartende Routine-Erinnerungen übernehmen.",
   "memoria.settings.mode.autonomousDelivery.label": "Vollzugriff",
   "memoria.settings.mode.autonomousDelivery.description":
-    "Öffentliche Routineerfassungen werden innerhalb der Deployment-Grenze automatisch akzeptiert.",
+    "Keiko darf wartende Routine-Erinnerungen innerhalb der Deployment-Grenze übernehmen.",
   "memoria.settings.mode.clamped":
     "Die Deployment-Grenze erzwingt aktuell {effectiveMode} für Erfassungen.",
   "memoria.consolidation.title": "MemoriaViva-Konsolidierung",

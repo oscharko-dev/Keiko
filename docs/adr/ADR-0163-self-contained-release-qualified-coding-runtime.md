@@ -380,7 +380,10 @@ invalid explicit configuration fails closed to **Ask for approval**.
 This owner decision (2026-09-27) intentionally honors an existing human Coding mode selection when
 it becomes available. It does not widen Memory: production composition retains the previously
 configured Memory ceiling or `governed-assist` when absent. Legacy capture calls, the policy
-projection and standing maintenance all consume that Memory ceiling.
+projection and standing maintenance all consume that Memory ceiling, which still bounds Memory's
+mode and standing maintenance. Since #4206 it no longer decides whether a routine fact waits for
+review: only an explicitly configured `governed-assist` ceiling holds routine facts for review
+(ADR-0146 D2).
 
 The three existing modes and their monotonic stricter-wins policy remain the only authority model.
 

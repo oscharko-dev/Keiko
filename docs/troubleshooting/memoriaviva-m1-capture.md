@@ -34,10 +34,11 @@ unexpired, memory must be enabled for the request (`memory-salience.ts`'s
 the candidate must clear the secret scanner (`scanForSecrets`), and it must clear the category
 denylist (default categories: health data, identifiable-third-party statements) before the mode
 decision ever runs. A candidate refused by a secret, category, or authority hard denial is
-**never** captured or proposed, in any mode — this is by design, not a bug. Separately, in **Ask
-for approval** a routine fact is captured as a `proposed` row (visible in the Journal, but not yet
-applied) rather than silently dropped — if you expected silent learning, you are likely in a
-stricter mode than intended.
+**never** captured or proposed, in any mode — this is by design, not a bug. Content classified
+confidential (an email address, a phone-shaped number) and personal identifiers (an IBAN, a customer
+number) are refused as well. A routine fact needs no approval in any mode (#4206): it is in use as
+soon as the learning pass has run. Only an operator who configured the deployment ceiling to
+`governed-assist` keeps routine facts for review.
 
 **Diagnostic Steps**
 
@@ -45,11 +46,11 @@ stricter mode than intended.
    if it is off, capture does not run at all for that turn.
 2. Open the **Journal** and check for a content-free **Refused** row for the turn in question. A
    Refused row (with no body) confirms a hard denial fired — this is expected behavior, not a
-   defect; no memory body or denied input is shown, but a redacted reason code (e.g.
-   `denied-category`) may be visible.
-3. Confirm the active autonomy mode in **MemoriaViva → Request settings**. In **Ask for approval**
-   a routine fact is captured as a `proposed` row, not a silently-applied one; check the Journal
-   for a row with the "Awaiting review" indicator rather than assuming nothing happened.
+   defect; no memory body or denied input is shown, only a plain-language reason (for example
+   "It was about another person."). A **Forgotten** row records a memory the person forgot.
+3. If a row shows "Awaiting review", the operator restricted Memory by configuring the deployment
+   ceiling to `governed-assist` (or configured an invalid value, which fails closed to it). The
+   selected mode does not hold routine facts.
 4. Learning runs later, in a pass: by default 15 seconds after the last Chat work, when you open
    another Chat, or at the next start (see
    [MemoriaViva learning passes](../memory/memoria-viva-learning-passes.md)). A new entry does not
@@ -65,9 +66,9 @@ stricter mode than intended.
 2. If a Refused row is present, a fail-closed hard-denial gate (authority, secret, or category)
    rejected the request; this is the boundary working as intended — do not attempt to relax it to
    force a capture through, in any mode.
-3. If the row is `proposed` rather than auto-accepted, either select a more permissive mode
-   (**Supervised workspace** or **Full access**) in Request settings, or use the Journal's **Keep**
-   action to promote the individual proposal.
+3. If the row is `proposed` rather than accepted, the operator restriction holds it; use the
+   Journal's **Keep** action to accept the individual proposal, or ask the operator to lift the
+   restriction.
 4. If no row and no Refused marker appear at all, confirm the turn's model response actually
    contains an extractable fact (Keiko does not force-capture every turn — the salience filter is
    intentionally low, not zero).

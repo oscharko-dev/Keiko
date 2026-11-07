@@ -19,6 +19,12 @@ const CANDIDATE_MARKERS = [
   "M1_REPEAT_CORRECTION",
   "M1_FIRST_CORRECTION",
   "M1_DISABLED_CAPTURE",
+  // #4206: proposed as facts so that the product, not the model, refuses them.
+  "M1_DENIED_HEALTH",
+  "M1_DENIED_THIRD_PARTY",
+  "M1_DENIED_CONFIDENTIAL",
+  "M1_DENIED_IBAN",
+  "M1_DENIED_CUSTOMER",
 ];
 
 function chunkFrame(delta, finishReason) {

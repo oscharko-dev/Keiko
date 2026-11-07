@@ -2333,11 +2333,26 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "memoria.journal.list": "Recent memory captures",
   "memoria.journal.contentUnavailable": "Memory content is unavailable",
   "memoria.journal.refusedBody": "Capture refused by policy. No content was retained.",
+  "memoria.journal.forgottenBody": "You asked Keiko to forget a memory. It was deleted.",
   "memoria.journal.surface": "Surface {surface}",
   "memoria.journal.surface.conversationCenter": "Conversation",
   "memoria.journal.surface.voice": "Voice",
   "memoria.journal.source": "Source {source}",
-  "memoria.journal.reason": "Capture reason {reason}",
+  "memoria.journal.reason": "Why: {reason}",
+  "memoria.journal.why.credential": "It looked like a password, key or access data.",
+  "memoria.journal.why.identifier":
+    "It contained a personal identifier, such as an IBAN, a phone number or a customer number.",
+  "memoria.journal.why.confidential":
+    "It contained confidential details, such as an email address.",
+  "memoria.journal.why.thirdParty": "It was about another person.",
+  "memoria.journal.why.protectedTopic": "It touched a protected topic, such as health.",
+  "memoria.journal.why.instruction": "It tried to change how Keiko works.",
+  "memoria.journal.why.forgottenBefore": "You had asked Keiko to forget this before.",
+  "memoria.journal.why.forgotten": "You asked Keiko to forget it.",
+  "memoria.journal.why.kept": "Keiko keeps it for you.",
+  "memoria.journal.why.review": "It waits for your review.",
+  "memoria.journal.why.unsure": "Keiko was not sure enough to keep it yet.",
+  "memoria.journal.why.rules": "Keiko's memory rules decided this.",
   "memoria.journal.capturedAt": "Captured {time}",
   "memoria.journal.mode.governedAssist": "Ask for approval",
   "memoria.journal.mode.supervisedCoding": "Supervised workspace",
@@ -2347,6 +2362,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "memoria.journal.indicator.auto": "Auto-captured",
   "memoria.journal.indicator.kept": "Kept",
   "memoria.journal.indicator.refused": "Refused",
+  "memoria.journal.indicator.forgotten": "Forgotten",
   "memoria.journal.keep": "Keep",
   "memoria.journal.keeping": "Keeping…",
   "memoria.journal.forget": "Forget",
@@ -2390,17 +2406,18 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "memoria.settings.budgetHelp":
     "Limits the MemoriaViva memory context attached to the next chat request.",
   "memoria.settings.mode.label": "Memory autonomy",
-  "memoria.settings.mode.help": "Choose how Keiko handles new memory captures.",
+  "memoria.settings.mode.help":
+    "Keiko uses new routine memories right away, in every mode. The mode only applies to memories that still wait for review.",
   "memoria.settings.mode.group": "Memory autonomy mode",
   "memoria.settings.mode.governedAssist.label": "Ask for approval",
   "memoria.settings.mode.governedAssist.description":
-    "New captures remain proposals until you approve them.",
+    "Waiting memories stay proposals until you approve them.",
   "memoria.settings.mode.supervisedCoding.label": "Supervised workspace",
   "memoria.settings.mode.supervisedCoding.description":
-    "Routine public captures are accepted automatically; sensitive captures still require review.",
+    "Keiko may accept waiting routine memories.",
   "memoria.settings.mode.autonomousDelivery.label": "Full access",
   "memoria.settings.mode.autonomousDelivery.description":
-    "Routine public captures are accepted automatically within the deployment ceiling.",
+    "Keiko may accept waiting routine memories within the deployment ceiling.",
   "memoria.settings.mode.clamped":
     "The deployment ceiling currently enforces {effectiveMode} for captures.",
   "memoria.consolidation.title": "MemoriaViva Consolidation",

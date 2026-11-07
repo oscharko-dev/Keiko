@@ -220,7 +220,10 @@ import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
 import { persistCapturedMemory } from "./memory-capture-persistence.js";
 import { embedAndStoreMemory } from "./memory-embedding.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
-import { recordAutoAcceptedMemoryCaptureDecision } from "./memory-capture-audit.js";
+import {
+  recordAutoAcceptedMemoryCaptureDecision,
+  recordRefusedStatementCaptureDecision,
+} from "./memory-capture-audit.js";
 import { memoryLearningRuntime } from "./memory-learning.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
@@ -1567,12 +1570,12 @@ function capturedMemoryBody(
   return memory.body;
 }
 
-function captureCandidateForMode(
+function acceptedCaptureCandidate(
   record: MemoryRecord,
-  mode: CodingWorkbenchMode,
+  deps: UiHandlerDeps,
   outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
 ): MemoryRecord {
-  return memoryCaptureAutoAcceptEligible(mode, outcome) || memoryExplicitStatementEligible(outcome)
+  return memoryCaptureAutoAcceptEligible(deps, outcome) || memoryExplicitStatementEligible(outcome)
     ? promoteEligibleMemoryRecord(record)
     : record;
 }
@@ -1599,6 +1602,27 @@ function explicitStatementMark(explicit: boolean): { readonly explicitStatement?
   return explicit ? { explicitStatement: true } : {};
 }
 
+interface SensitiveCandidateRefusal {
+  readonly mode: CodingWorkbenchMode;
+  readonly surface: ConversationMemoryCaptureSurfaceWire;
+  readonly scope: MemoryScope;
+  readonly explicit: boolean;
+  readonly correlationId: string;
+}
+
+// Content that is not a routine fact is refused; a person's own statement shows that in the Journal.
+function refusedSensitiveCandidate(
+  deps: UiHandlerDeps,
+  refusal: SensitiveCandidateRefusal,
+): ConversationMemoryActionWire {
+  const { mode, surface, scope, explicit, correlationId } = refusal;
+  if (explicit) {
+    const reason = SENSITIVE_MEMORY_REJECTION_REASON;
+    recordRefusedStatementCaptureDecision(deps, mode, surface, [scope], reason);
+  }
+  return refusedCandidateAction(SENSITIVE_MEMORY_REJECTION_REASON, explicit, correlationId);
+}
+
 async function candidateActionFromOutcome(
   outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
   deps: UiHandlerDeps,
@@ -1608,16 +1632,17 @@ async function candidateActionFromOutcome(
   correlationId: string,
 ): Promise<ConversationMemoryActionWire | null> {
   if (deps.memoryVault === undefined) return null;
-  const explicit = outcome.proposal.provenance.sourceKind === "explicit-user-instruction";
+  const { scope, provenance } = outcome.proposal;
+  const explicit = provenance.sourceKind === "explicit-user-instruction";
   if (!isPersistableMemoryCandidate(outcome)) {
-    return refusedCandidateAction(SENSITIVE_MEMORY_REJECTION_REASON, explicit, correlationId);
+    return refusedSensitiveCandidate(deps, { mode, surface, scope, explicit, correlationId });
   }
   const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
   const record = buildMemoryRecordFromProposal(proposalId, outcome);
   if (isSuppressedByForgetTombstone(deps.memoryVault, record)) {
     return refusedCandidateAction(FORGOTTEN_MEMORY_SUPPRESSION_REASON, explicit, correlationId);
   }
-  const candidate = captureCandidateForMode(record, mode, outcome);
+  const candidate = acceptedCaptureCandidate(record, deps, outcome);
   const result = await persistCandidateRecord(
     outcome,
     deps,
@@ -1676,6 +1701,15 @@ async function captureActionFromOutcome(
     case "forget":
       return forgetActionFromOutcome(outcome, deps, statement.correlationId);
     case "rejected":
+      if (outcome.statement === "remember") {
+        recordRefusedStatementCaptureDecision(
+          deps,
+          mode,
+          surface,
+          statement.scopes,
+          outcome.reason,
+        );
+      }
       return rejectedActionFromOutcome(outcome, deps, statement);
     case "supersession":
       return null;

@@ -3,6 +3,7 @@
 import {
   useOptionalWidgetTranslate as useTranslate,
   type OptionalWidgetTranslate as I18nTranslate,
+  type WidgetMessageKey,
 } from "@/lib/optional-widget-i18n";
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -19,13 +20,20 @@ import { MemoryListState, MemoryRowScaffold, StatusBadge } from "./MemoryList";
 import { formatError } from "./format-error";
 import styles from "./MemoryJournal.module.css";
 
+// A refusal and a forget name no record: nothing was kept, or it is gone.
+type RecordFreeOutcome = "rejected" | "forgotten";
+
 interface PersistedJournalCapture extends MemoryRecentCapture {
-  readonly outcome: Exclude<MemoryRecentCapture["outcome"], "rejected">;
+  readonly outcome: Exclude<MemoryRecentCapture["outcome"], RecordFreeOutcome>;
   readonly memoryId: MemoryId;
 }
 
-type RefusedJournalCapture = MemoryRecentCapture & { readonly outcome: "rejected" };
-type JournalCapture = PersistedJournalCapture | RefusedJournalCapture;
+type RecordFreeJournalCapture = MemoryRecentCapture & { readonly outcome: RecordFreeOutcome };
+type JournalCapture = PersistedJournalCapture | RecordFreeJournalCapture;
+
+function isRecordFree(capture: JournalCapture): capture is RecordFreeJournalCapture {
+  return capture.outcome === "rejected" || capture.outcome === "forgotten";
+}
 
 interface JournalRowState {
   readonly capture: JournalCapture;
@@ -51,7 +59,11 @@ interface MemoryJournalProps {
 }
 
 function isJournalCapture(capture: MemoryRecentCapture): capture is JournalCapture {
-  return capture.outcome === "rejected" || capture.memoryId !== undefined;
+  return (
+    capture.outcome === "rejected" ||
+    capture.outcome === "forgotten" ||
+    capture.memoryId !== undefined
+  );
 }
 
 // Non-rejected rows key by memoryId, matching JournalRow's own registerRow/key usage below.
@@ -85,6 +97,35 @@ function modeLabel(capture: JournalCapture, t: I18nTranslate): string {
   }
 }
 
+// A person reads why Keiko kept, refused or forgot something, not a policy code (#4206). Unknown
+// codes, such as one a newer server adds, read as Keiko's rules.
+const REASON_KEYS: Readonly<Record<string, WidgetMessageKey>> = {
+  "credential-shape": "memoria.journal.why.credential",
+  "private-credential-path": "memoria.journal.why.credential",
+  "provider-base-url": "memoria.journal.why.credential",
+  "customer-identifier": "memoria.journal.why.identifier",
+  "personal-identifier": "memoria.journal.why.identifier",
+  "sensitive-memory-requires-approval": "memoria.journal.why.confidential",
+  "restricted-sensitivity": "memoria.journal.why.confidential",
+  "third-party": "memoria.journal.why.thirdParty",
+  "denied-category": "memoria.journal.why.protectedTopic",
+  "denied-content": "memoria.journal.why.protectedTopic",
+  "instruction-override": "memoria.journal.why.instruction",
+  "suppressed-by-forget": "memoria.journal.why.forgottenBefore",
+  "suppressed-by-rejection": "memoria.journal.why.forgottenBefore",
+  "forgotten-by-person": "memoria.journal.why.forgotten",
+  "governance-auto-accepted": "memoria.journal.why.kept",
+  "captured-by-policy": "memoria.journal.why.kept",
+  "operator-requires-approval": "memoria.journal.why.review",
+  "mode-requires-approval": "memoria.journal.why.review",
+  "sensitivity-requires-approval": "memoria.journal.why.review",
+  "governance-promotion-deferred": "memoria.journal.why.unsure",
+};
+
+function reasonLabel(capture: JournalCapture, t: I18nTranslate): string {
+  return t(REASON_KEYS[capture.reason] ?? "memoria.journal.why.rules");
+}
+
 function surfaceLabel(capture: JournalCapture, t: I18nTranslate): string {
   return capture.provenance.initiatorSurface === "voice"
     ? t("memoria.journal.surface.voice")
@@ -113,10 +154,14 @@ function JournalMetadata({
 }): ReactNode {
   return (
     <>
-      <span className={styles.mvJournalMetaBadge}>{modeLabel(capture, t)}</span>
+      {capture.mode === undefined && capture.outcome === "forgotten" ? null : (
+        <span className={styles.mvJournalMetaBadge}>{modeLabel(capture, t)}</span>
+      )}
       <span>{t("memoria.journal.surface", { surface: surfaceLabel(capture, t) })}</span>
       <span>{t("memoria.journal.source", { source: capture.provenance.sourceKind })}</span>
-      <span>{t("memoria.journal.reason", { reason: capture.reason })}</span>
+      <span data-reason={capture.reason}>
+        {t("memoria.journal.reason", { reason: reasonLabel(capture, t) })}
+      </span>
       <time dateTime={captureTime(capture.occurredAt)}>
         {t("memoria.journal.capturedAt", { time: captureTime(capture.occurredAt) })}
       </time>
@@ -185,30 +230,35 @@ interface JournalRowProps extends JournalActionsProps {
   readonly registerRow: (id: string, node: HTMLLIElement | null) => void;
 }
 
-interface RefusedJournalRowProps {
-  readonly capture: RefusedJournalCapture;
+interface RecordFreeJournalRowProps {
+  readonly capture: RecordFreeJournalCapture;
   readonly registerRow: (id: string, node: HTMLLIElement | null) => void;
   readonly t: I18nTranslate;
 }
 
-function RefusedJournalRow({ capture, registerRow, t }: RefusedJournalRowProps): ReactNode {
+function RecordFreeJournalRow({ capture, registerRow, t }: RecordFreeJournalRowProps): ReactNode {
   const key = journalCaptureKey(capture);
+  const forgotten = capture.outcome === "forgotten";
   return (
     <li
       ref={(node) => registerRow(key, node)}
       className={`mc-row ${styles.mvJournalRow}`}
       data-testid="memory-journal-row"
-      data-outcome="rejected"
+      data-outcome={capture.outcome}
       data-created-at={String(capture.occurredAt)}
       tabIndex={-1}
     >
       <MemoryRowScaffold
-        body={t("memoria.journal.refusedBody")}
+        body={t(forgotten ? "memoria.journal.forgottenBody" : "memoria.journal.refusedBody")}
         metadata={<JournalMetadata capture={capture} t={t} />}
         trailing={
           <div className={styles.mvJournalTrailing}>
             <span className={styles.mvJournalIndicator}>
-              {t("memoria.journal.indicator.refused")}
+              {t(
+                forgotten
+                  ? "memoria.journal.indicator.forgotten"
+                  : "memoria.journal.indicator.refused",
+              )}
             </span>
           </div>
         }
@@ -314,8 +364,8 @@ function JournalRows({
   return (
     <ul className={styles.mvJournalList} aria-label={t("memoria.journal.list")}>
       {state.rows.map((row) =>
-        row.capture.outcome === "rejected" ? (
-          <RefusedJournalRow
+        isRecordFree(row.capture) ? (
+          <RecordFreeJournalRow
             key={journalCaptureKey(row.capture)}
             capture={row.capture}
             registerRow={registerRow}
@@ -415,7 +465,7 @@ interface ActionHookOptions {
 // claim a transition that did not happen.
 function acknowledgeJournalRow(row: JournalRowState, memoryId: string): JournalRowState {
   const capture = row.capture;
-  if (capture.outcome === "rejected" || capture.memoryId !== memoryId) return row;
+  if (isRecordFree(capture) || capture.memoryId !== memoryId) return row;
   if (statusForCapture(capture) !== "proposed") return { capture, acknowledged: true };
   return {
     capture: { ...capture, currentStatus: "accepted" },

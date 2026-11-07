@@ -1006,9 +1006,12 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   // Server-owned deployment ceiling for coding-runtime authority. Undefined fails closed to
   // governed-assist; the readiness projection reports the same ceiling the mint clamp enforces.
   readonly codingRuntimeDeploymentCeiling?: CodingWorkbenchMode | undefined;
-  // Memory retains its explicitly configured ceiling or the approval baseline. Coding's all-mode
-  // availability is not permission to auto-accept memories or widen standing maintenance.
+  // Memory retains its explicitly configured ceiling or the `governed-assist` baseline for its
+  // modes and standing maintenance. Coding's all-mode availability does not widen either.
   readonly memoryDeploymentCeiling?: CodingWorkbenchMode | undefined;
+  // Whether an operator configured that ceiling. Only a configured `governed-assist` ceiling keeps
+  // routine facts for review; the absent baseline accepts them in every mode (#4206).
+  readonly memoryDeploymentCeilingConfigured?: boolean | undefined;
   // KEIKO-0565: DI-scoped Atlassian connector approval and sync registries. Optional so
   // pre-existing fixture-heavy test wiring stays byte-for-byte compatible; production wiring in
   // buildUiHandlerDeps constructs one instance per composed deps graph so two independently-built
@@ -5683,6 +5686,7 @@ type RuntimeUiHandlerDeps = ReturnType<typeof codingSidecarGatewayModelSourceFie
     | "codingRuntimeEvidenceAggregator"
     | "codingRuntimeDeploymentCeiling"
     | "memoryDeploymentCeiling"
+    | "memoryDeploymentCeilingConfigured"
     | "codingSidecarGatewayEvidenceAggregator"
   >;
 
@@ -5703,7 +5707,7 @@ function buildRuntimeUiHandlerDeps(
     codingWorkbenchEvidenceStore: args.codingWorkbenchEvidenceStore,
     codingRuntimeEvidenceAggregator: services.codingRuntimeEvidenceAggregator,
     codingRuntimeDeploymentCeiling: services.codingRuntimeCeiling,
-    memoryDeploymentCeiling: resolveConfiguredDeploymentCeiling(args.options) ?? "governed-assist",
+    ...memoryDeploymentCeilingFields(resolveConfiguredDeploymentCeiling(args.options)),
     ...buildRuntimeMutationLeaseDependency(args.options, services.runtimeComposition),
     ...codingRuntimeControlPlaneDeps,
     codingSidecarGatewayEvidenceAggregator: codingSidecarGatewayEvidenceRecorder(
@@ -6272,6 +6276,15 @@ function resolveCodingRuntimeDeploymentCeiling(
     ceiling,
     isCodingWorkbenchMode(legacy) ? legacy : "governed-assist",
   );
+}
+
+function memoryDeploymentCeilingFields(
+  configured: CodingWorkbenchMode | undefined,
+): Pick<UiHandlerDeps, "memoryDeploymentCeiling" | "memoryDeploymentCeilingConfigured"> {
+  return {
+    memoryDeploymentCeiling: configured ?? "governed-assist",
+    memoryDeploymentCeilingConfigured: configured !== undefined,
+  };
 }
 
 function resolveConfiguredDeploymentCeiling(

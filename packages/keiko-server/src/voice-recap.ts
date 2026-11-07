@@ -314,7 +314,7 @@ async function persistRecapOutcome(
   const record = buildMemoryRecordFromProposal(proposalId, outcome);
   if (exactCaptureSuppressionReason(vault, record) !== null) return null;
   const candidate =
-    autoAcceptEligible && memoryCaptureAutoAcceptEligible(mode, outcome)
+    autoAcceptEligible && memoryCaptureAutoAcceptEligible(deps, outcome)
       ? promoteEligibleMemoryRecord(record)
       : record;
   const result = persistCapturedMemory(vault, candidate, true);

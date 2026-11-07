@@ -466,7 +466,7 @@ function persistCandidateOutcome(
   if (isSuppressedByForgetTombstone(vault, record)) {
     return { kind: "rejected", reason: FORGOTTEN_MEMORY_SUPPRESSION_REASON };
   }
-  const candidate = memoryCaptureAutoAcceptEligible(mode, outcome)
+  const candidate = memoryCaptureAutoAcceptEligible(deps, outcome)
     ? promoteEligibleMemoryRecord(record)
     : record;
   const persisted = persistCapturedMemory(vault, candidate, true);

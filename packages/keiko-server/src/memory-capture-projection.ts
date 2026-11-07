@@ -15,7 +15,7 @@ import {
   validateMemoryScope,
 } from "@oscharko-dev/keiko-contracts/runtime/memory";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
-import type { RejectionReason } from "@oscharko-dev/keiko-memory-capture";
+import type { RejectionReason, SalienceDropReason } from "@oscharko-dev/keiko-memory-capture";
 import { auditRunIdFor, RUNID_PREFIX, verifyMemoryAuditHashChain } from "./memory-audit-handler.js";
 import { memoryScopeKey, sanitizeMemoryScope } from "./memory-scope-sanitizer.js";
 
@@ -61,17 +61,34 @@ const CAPTURE_REJECTION_REASONS = [
 
 const CAPTURE_SETTLEMENT_REASONS = [
   "captured-by-policy",
+  // Historical: before #4206 the selected mode held a routine fact. Replayed, never written again.
   "mode-requires-approval",
+  // An operator explicitly restricted Memory to review (#4206).
+  "operator-requires-approval",
   "sensitivity-requires-approval",
   "governance-promotion-deferred",
   "governance-auto-accepted",
+  // Projected only, from the vault's own forget event; never written as a capture decision.
+  "forgotten-by-person",
 ] as const;
 
+// What the learner refused to keep from a conversation because of its content: a fact about
+// someone else, a personal identifier, or denied content (#4206). A non-fact (a question, a request)
+// is no decision about the person's data and stays on the Activity Log only.
+export const LEARNED_REFUSAL_REASONS = [
+  "third-party",
+  "personal-identifier",
+  "denied-content",
+] as const satisfies readonly SalienceDropReason[];
+
+export type LearnedRefusalReason = (typeof LEARNED_REFUSAL_REASONS)[number];
+
 export type MemoryCaptureDecisionReason =
-  RejectionReason | (typeof CAPTURE_SETTLEMENT_REASONS)[number];
+  RejectionReason | LearnedRefusalReason | (typeof CAPTURE_SETTLEMENT_REASONS)[number];
 
 const CAPTURE_DECISION_REASONS: readonly MemoryCaptureDecisionReason[] = [
   ...CAPTURE_REJECTION_REASONS,
+  ...LEARNED_REFUSAL_REASONS,
   ...CAPTURE_SETTLEMENT_REASONS,
 ];
 
@@ -80,11 +97,16 @@ export interface MemoryCaptureDecisionProvenance {
   readonly sourceKind: MemorySourceKind;
 }
 
+// What the Journal shows: every capture decision, and every memory the person forgot (#4206). A
+// forget is projected from the vault's own `memory:forgotten` event, so it needs no second writer.
+export type MemoryJournalOutcome = MemoryCaptureDecisionOutcome | "forgotten";
+
 export interface MemoryCaptureDecision {
   readonly eventId: string;
-  readonly outcome: MemoryCaptureDecisionOutcome;
+  readonly outcome: MemoryJournalOutcome;
   readonly scope: MemoryScope;
-  readonly mode: CodingWorkbenchMode;
+  // Absent for a forget: forgetting acts in every mode, so no mode decided it.
+  readonly mode?: CodingWorkbenchMode;
   readonly provenance: MemoryCaptureDecisionProvenance;
   readonly occurredAt: number;
   readonly reason: MemoryCaptureDecisionReason;
@@ -271,6 +293,30 @@ function buildProjectedDecision(
   };
 }
 
+// A forget that left a tombstone is the person's decision; a deletion without one (a replaced or
+// expired record) is housekeeping and stays out. The record is gone, so the entry names none.
+function projectForgetEvent(
+  event: Extract<MemoryAuditEvent, { readonly kind: "memory:forgotten" }>,
+  ledgerOrder: number,
+  allowedScopeKeys: ReadonlySet<string>,
+): IndexedDecision | null {
+  if (!event.tombstoned || !allowedScopeKeys.has(auditScopeKey(event.scope))) return null;
+  return {
+    decision: {
+      eventId: event.eventId,
+      outcome: "forgotten",
+      scope: sanitizeMemoryScope(event.scope, (value) => value),
+      provenance: {
+        initiatorSurface: event.initiatorSurface,
+        sourceKind: "explicit-user-instruction",
+      },
+      occurredAt: event.occurredAt,
+      reason: "forgotten-by-person",
+    },
+    ledgerOrder,
+  };
+}
+
 function projectEvent(
   event: MemoryAuditEvent,
   ledgerOrder: number,
@@ -279,13 +325,22 @@ function projectEvent(
   liveById: ReadonlyMap<MemoryId, MemoryRecord>,
   forgotten: ReadonlySet<MemoryId>,
 ): IndexedDecision | null {
-  if (
-    event.occurredAt < options.since ||
-    !TURN_CAPTURE_INITIATOR_SURFACES.has(event.initiatorSurface)
-  ) {
-    return null;
+  if (event.occurredAt < options.since) return null;
+  if (event.kind === "memory:forgotten") {
+    return projectForgetEvent(event, ledgerOrder, allowedScopeKeys);
   }
+  if (!TURN_CAPTURE_INITIATOR_SURFACES.has(event.initiatorSurface)) return null;
   if (!isCaptureAuditEvent(event)) return null;
+  return projectCaptureEvent(event, ledgerOrder, allowedScopeKeys, liveById, forgotten);
+}
+
+function projectCaptureEvent(
+  event: CaptureAuditEvent,
+  ledgerOrder: number,
+  allowedScopeKeys: ReadonlySet<string>,
+  liveById: ReadonlyMap<MemoryId, MemoryRecord>,
+  forgotten: ReadonlySet<MemoryId>,
+): IndexedDecision | null {
   const parsed = parseCaptureDecisionSummary(event.summary);
   if (parsed === null || !eventMatchesOutcome(event, parsed.outcome)) return null;
   if (!allowedScopeKeys.has(auditScopeKey(event.scope))) return null;

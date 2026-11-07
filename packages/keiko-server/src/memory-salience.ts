@@ -62,6 +62,8 @@ import {
 } from "./diagnostics-log.js";
 import {
   buildMemoryCaptureDecisionAuditEvent,
+  LEARNED_REFUSAL_REASONS,
+  type LearnedRefusalReason,
   type MemoryCaptureDecisionOutcome,
   type MemoryCaptureDecisionReason,
 } from "./memory-capture-projection.js";
@@ -69,6 +71,7 @@ import {
   isPersistableMemoryCandidate,
   memoryCaptureAutoAcceptEligible,
   memoryCapturePolicyForDeps,
+  memoryOperatorRestrictsAcceptance,
   promoteEligibleMemoryRecord,
   resolveMemoryCaptureAutonomyMode,
   SENSITIVE_MEMORY_ACTION_BODY,
@@ -390,19 +393,18 @@ function recordCaptureDecision(
   );
 }
 
-function proposedDecisionReason(
-  mode: CodingWorkbenchMode,
-  outcome: LearnedCandidate,
-): MemoryCaptureDecisionReason {
-  if (outcome.requiresApproval) return "sensitivity-requires-approval";
-  return mode === "governed-assist" ? "mode-requires-approval" : "governance-promotion-deferred";
+// Why a persisted fact waits. A sensitive body never reaches this point (it is refused), so the
+// fact is held either by an explicit operator restriction or by the governance promotion strength.
+function proposedDecisionReason(deps: UiHandlerDeps): MemoryCaptureDecisionReason {
+  return memoryOperatorRestrictsAcceptance(deps)
+    ? "operator-requires-approval"
+    : "governance-promotion-deferred";
 }
 
 function recordPersistedCandidateDecision(
   deps: UiHandlerDeps,
   mode: CodingWorkbenchMode,
   surface: SalienceCaptureSurface,
-  outcome: LearnedCandidate,
   inserted: MemoryRecord,
 ): void {
   const accepted = inserted.status === "accepted";
@@ -410,7 +412,7 @@ function recordPersistedCandidateDecision(
     outcome: accepted ? "auto-accepted" : "proposed",
     scope: inserted.scope,
     sourceKind: inserted.provenance.sourceKind,
-    reason: accepted ? "governance-auto-accepted" : proposedDecisionReason(mode, outcome),
+    reason: accepted ? "governance-auto-accepted" : proposedDecisionReason(deps),
     occurredAt: inserted.createdAt,
     memoryId: inserted.id,
   });
@@ -641,7 +643,7 @@ async function persistCandidate(
   const record = buildMemoryRecordFromProposal(proposalId, outcome);
   const settledBeforeInsert = settleBeforeInsert(vault, record, outcome, trace, refuse);
   if (settledBeforeInsert !== null) return settledBeforeInsert;
-  const candidate = memoryCaptureAutoAcceptEligible(mode, outcome)
+  const candidate = memoryCaptureAutoAcceptEligible(deps, outcome)
     ? promoteEligibleMemoryRecord(record)
     : record;
   let decision: LearnedRelationDecision = "new";
@@ -671,7 +673,7 @@ async function persistCandidate(
   }
   const inserted = outcomeOfInsert.record;
   recordRelation(outcome, decision, trace);
-  recordPersistedCandidateDecision(deps, mode, surface, outcome, inserted);
+  recordPersistedCandidateDecision(deps, mode, surface, inserted);
   return {
     action: candidateWireAction(outcome, inserted),
     disposition: inserted.status === "accepted" ? "accepted" : "proposed",
@@ -740,6 +742,8 @@ type TurnSalienceExtraction =
       readonly kind: "outcomes";
       readonly outcomes: readonly SalienceOutcome[];
       readonly seen: ReadonlyMap<MemoryId, SeenFact>;
+      // Each content reason the learner refused an item for, once per turn (#4206).
+      readonly refusals: ReadonlySet<LearnedRefusalReason>;
     };
 
 // The per-turn scalars `extractTurnSalienceOutcomes` and `runSalienceCapture` both thread through
@@ -795,6 +799,7 @@ async function extractTurnSalienceOutcomes(
   const sourceMessageCount = request.sourceMessageId === undefined ? 0 : 1;
   const previous = previousUserText(deps, request, context, policy);
   const known = gatherKnownFacts(vault, context);
+  const refusals = new Set<LearnedRefusalReason>();
   const outcomes = await extractSalientMemories(
     {
       userText: request.content,
@@ -819,10 +824,11 @@ async function extractTurnSalienceOutcomes(
       newProposalId: captureContext.newProposalId,
       onDiagnostic: (diagnostic) => {
         logSalienceDiagnostic(diagnostic, deps, salienceModelId, correlationId, sourceMessageCount);
+        noteLearnedRefusal(diagnostic, refusals);
       },
     },
   );
-  return { kind: "outcomes", outcomes, seen: known.seen };
+  return { kind: "outcomes", outcomes, seen: known.seen, refusals };
 }
 
 interface SalienceCaptureSummary {
@@ -909,7 +915,7 @@ function recordTurnCaptureRefusal(
   surface: SalienceCaptureSurface,
   context: ConversationMemoryRuntimeContext,
   occurredAt: number,
-  reason: RejectionReason,
+  reason: RejectionReason | LearnedRefusalReason,
 ): void {
   recordCaptureDecision(deps, mode, surface, {
     outcome: "rejected",
@@ -918,6 +924,21 @@ function recordTurnCaptureRefusal(
     reason,
     occurredAt,
   });
+}
+
+const LEARNED_REFUSALS: ReadonlySet<string> = new Set(LEARNED_REFUSAL_REASONS);
+
+function isLearnedRefusal(reason: string): reason is LearnedRefusalReason {
+  return LEARNED_REFUSALS.has(reason);
+}
+
+function noteLearnedRefusal(
+  diagnostic: SalienceDiagnostic,
+  refusals: Set<LearnedRefusalReason>,
+): void {
+  if (diagnostic.kind === "dropped-model-items" && isLearnedRefusal(diagnostic.reason)) {
+    refusals.add(diagnostic.reason);
+  }
 }
 
 function activeSalienceVault(
@@ -961,7 +982,10 @@ async function runSalienceCapture(
     recordTurnCaptureRefusal(deps, mode, surface, context, captureContext.nowMs, extraction.reason);
     return { kind: "captured", actions: [] };
   }
-  const { outcomes, seen } = extraction;
+  const { outcomes, seen, refusals } = extraction;
+  for (const reason of refusals) {
+    recordTurnCaptureRefusal(deps, mode, surface, context, captureContext.nowMs, reason);
+  }
   const { actions, summary } = await persistSalienceActions(deps, vault, outcomes, {
     surface,
     mode,

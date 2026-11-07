@@ -33,6 +33,15 @@ import { createBufferedServerLogSink } from "../../../tests/support/buffered-ser
 
 const USER_SAID = "User said:\n";
 
+// A plain Chat message: no workflow run is attached to it.
+const NO_RUN = {
+  runId: undefined,
+  workflowId: undefined,
+  workflowStatus: undefined,
+  shortResult: undefined,
+  taskType: undefined,
+} as const;
+
 function salienceAnswer(content: string): string {
   const start = content.lastIndexOf(USER_SAID);
   const said = start === -1 ? "" : content.slice(start + USER_SAID.length);
@@ -160,12 +169,14 @@ function writeTurn(
 ): { readonly userId: string; readonly assistantId: string } {
   clock += 1_000;
   const user = deps.store.createMessage({
+    ...NO_RUN,
     chatId: chat.chatId,
     role: "user",
     content: text,
     timestamp: clock,
   });
   const assistant = deps.store.createMessage({
+    ...NO_RUN,
     chatId: chat.chatId,
     role: "assistant",
     content: "Noted.",
@@ -423,6 +434,7 @@ describe("memory learning passes", () => {
     const chat = makeChat(deps);
     clock += 1_000;
     const user = deps.store.createMessage({
+      ...NO_RUN,
       chatId: chat.chatId,
       role: "user",
       content: "I write Atlas in Rust.",
@@ -440,6 +452,7 @@ describe("memory learning passes", () => {
       ],
     });
     const assistant = deps.store.createMessage({
+      ...NO_RUN,
       chatId: chat.chatId,
       role: "assistant",
       content: "Noted.",
@@ -475,12 +488,14 @@ describe("memory learning passes", () => {
     const chat = makeChat(deps);
     clock += 1_000;
     const user = deps.store.createMessage({
+      ...NO_RUN,
       chatId: chat.chatId,
       role: "user",
       content: "I write Atlas in Rust.",
       timestamp: clock,
     });
     const assistant = deps.store.createMessage({
+      ...NO_RUN,
       chatId: chat.chatId,
       role: "assistant",
       content: answer,
@@ -560,6 +575,7 @@ describe("memory learning passes", () => {
     const chat = makeChat(deps);
     clock += 1_000;
     const user = deps.store.createMessage({
+      ...NO_RUN,
       chatId: chat.chatId,
       role: "user",
       content: "I write Atlas in Rust.",
@@ -600,6 +616,7 @@ describe("memory learning passes", () => {
         assistantText: "Noted.",
         surface: "desktop",
         correlationId: turn.assistantId,
+        parentCorrelationId: turn.assistantId,
       },
       new AbortController().signal,
     );

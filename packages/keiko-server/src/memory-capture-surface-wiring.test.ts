@@ -51,6 +51,15 @@ interface RecentCaptureWire {
 }
 
 const temporaryDirectories: string[] = [];
+
+// A plain Chat message: no workflow run is attached to it.
+const NO_RUN = {
+  runId: undefined,
+  workflowId: undefined,
+  workflowStatus: undefined,
+  shortResult: undefined,
+  taskType: undefined,
+} as const;
 const activeVaults: MemoryVaultStore[] = [];
 
 afterEach(() => {
@@ -203,8 +212,15 @@ function storeTurn(deps: UiHandlerDeps, content: string): StoredTurn {
   deps.store.createProject(projectPath);
   const chat = deps.store.createChat(projectPath, "Surface", "gpt-test");
   const now = Date.now();
-  const user = deps.store.createMessage({ chatId: chat.id, role: "user", content, timestamp: now });
+  const user = deps.store.createMessage({
+    ...NO_RUN,
+    chatId: chat.id,
+    role: "user",
+    content,
+    timestamp: now,
+  });
   deps.store.createMessage({
+    ...NO_RUN,
     chatId: chat.id,
     role: "assistant",
     content: "Noted.",
@@ -328,6 +344,7 @@ describe("post-commit capture-surface attribution", () => {
     const turn = storeTurn(deps, "I ship on Fridays.");
     // A repeated sentence has many rows; the committed id the caller passes names the source.
     const repeated = deps.store.createMessage({
+      ...NO_RUN,
       chatId: turn.chatId,
       role: "user",
       content: "I ship on Fridays.",

@@ -69,7 +69,9 @@ function captureEvent(
   });
 }
 
-function forgottenEvent(id: string, occurredAt: number): MemoryAuditEvent {
+type ForgottenAuditEvent = Extract<MemoryAuditEvent, { readonly kind: "memory:forgotten" }>;
+
+function forgottenEvent(id: string, occurredAt: number): ForgottenAuditEvent {
   return {
     schemaVersion: "1",
     kind: "memory:forgotten",
@@ -145,8 +147,45 @@ describe("memory capture projection", () => {
         authorizedScopes: [OWN_SCOPE],
         liveRecords,
       });
-      expect(projected.map((decision) => decision.memoryId)).toEqual(["kept"]);
+      // The forgotten record is never named again: its capture decision is gone, and the forget
+      // itself is a record-free Journal entry (#4206).
+      const captures = projected.filter((decision) => decision.outcome !== "forgotten");
+      expect(captures.map((decision) => decision.memoryId)).toEqual(["kept"]);
+      const forgets = projected.filter((decision) => decision.outcome === "forgotten");
+      expect(forgets).toHaveLength(1);
+      expect(forgets[0]).not.toHaveProperty("memoryId");
     }
+  });
+
+  it("shows a person's forget as a content-free Journal entry and leaves housekeeping out", () => {
+    const deletedWithoutTombstone: ForgottenAuditEvent = {
+      ...forgottenEvent("replaced", 260),
+      tombstoned: false,
+    };
+    const otherScope: MemoryScope = { kind: "user", userId: userId("operator-b") };
+    const elsewhere: ForgottenAuditEvent = {
+      ...forgottenEvent("elsewhere", 270),
+      scope: otherScope,
+    };
+    const projected = projectMemoryCaptureDecisions(
+      [
+        forgottenEvent("forgotten", 250),
+        deletedWithoutTombstone,
+        elsewhere,
+        { ...forgottenEvent("early", 10) },
+      ],
+      { since: 100, order: "desc", authorizedScopes: [OWN_SCOPE], liveRecords: [] },
+    );
+    expect(projected).toEqual([
+      {
+        eventId: "forgot-forgotten-250",
+        outcome: "forgotten",
+        scope: OWN_SCOPE,
+        provenance: { initiatorSurface: "memory-center", sourceKind: "explicit-user-instruction" },
+        occurredAt: 250,
+        reason: "forgotten-by-person",
+      },
+    ]);
   });
 
   it("drops absent persisted records but keeps record-free rejections content-free", () => {
