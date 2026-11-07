@@ -3872,7 +3872,7 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
   );
 
   // #4271 A2: the human may take minutes; a link swapped in meanwhile must not ride the approval.
-  it("re-checks the paths after the human approved, so a link swapped in while waiting is refused", async () => {
+  it("re-checks the paths after the human approved, so a link swapped in while waiting is refused", async (testContext) => {
     const runtimeEvents: CodingWorkbenchRuntimeEvent[] = [];
     const activityLog = createBufferedServerLogSink();
     const admit = admitWith(CHARGED);
@@ -3900,7 +3900,11 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
       )?.permissionRequest;
       if (permission === undefined || Array.isArray(permission)) throw new Error("expected ask");
       writeFileSync(join(outside, "target.md"), "outside\n");
-      symlinkSync(join(outside, "target.md"), join(workspaceRoot, "swapped.md"));
+      plantSymlinkOrSkip(
+        testContext,
+        join(outside, "target.md"),
+        join(workspaceRoot, "swapped.md"),
+      );
       await expect(
         fixture.runtime.runPort.replyPermission(FIXTURE_RUN_ID, permission.requestId, "once"),
       ).resolves.toBe(true);

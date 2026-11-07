@@ -207,7 +207,8 @@ describe("keychain secret memo", () => {
     return { executable, count };
   }
 
-  it("answers a repeated read of the same item without spawning the keychain again", () => {
+  it("answers a repeated read of the same item without spawning the keychain again", (context) => {
+    requirePosixShellStandIn(context);
     const security = countingSecurity();
     const options = {
       executable: security.executable,
@@ -228,7 +229,8 @@ describe("keychain secret memo", () => {
     expect(security.count()).toBe(2);
   });
 
-  it("asks the keychain again after a write instead of serving the replaced value", () => {
+  it("asks the keychain again after a write instead of serving the replaced value", (context) => {
+    requirePosixShellStandIn(context);
     const security = countingSecurity();
     const options = {
       executable: security.executable,
@@ -242,14 +244,16 @@ describe("keychain secret memo", () => {
     expect(security.count()).toBe(3);
   });
 
-  it("never remembers a keychain that did not answer", () => {
+  it("never remembers a keychain that did not answer", (context) => {
+    requirePosixShellStandIn(context);
     const memo = createKeychainSecretMemo();
     const options = { executable: DENIES, platform: "darwin" as const, timeoutMs: 30_000, memo };
     expect(readMacosKeychainSecret("svc", "acct", options)).toEqual({ kind: "unavailable" });
     expect(memo.get("svc", "acct")).toBeUndefined();
   });
 
-  it("keeps a fake executable without a memo of its own uncached", () => {
+  it("keeps a fake executable without a memo of its own uncached", (context) => {
+    requirePosixShellStandIn(context);
     const security = countingSecurity();
     const options = { executable: security.executable, platform: "darwin" as const };
     readMacosKeychainSecret("svc", "acct", options);
