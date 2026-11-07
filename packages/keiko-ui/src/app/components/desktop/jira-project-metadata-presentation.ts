@@ -7,12 +7,14 @@ import {
   type JiraPresentationSource as Source,
 } from "./jira-presentation-values";
 const VERSIONS = new Set([
+  "jira_global_version_page",
   "jira_versions",
   "jira_version",
   "jira_create_version",
   "jira_update_version",
 ]);
 const COMPONENTS = new Set([
+  "jira_component_page",
   "jira_components",
   "jira_component",
   "jira_create_component",
@@ -48,7 +50,7 @@ function componentLabels(source: Source): WidgetMessageKey[] {
   const assignee =
     typeof source.assigneeType === "string" ? ASSIGNEES[source.assigneeType] : undefined;
   const labels: WidgetMessageKey[] = assignee === undefined ? [] : [assignee];
-  if (source.deleted === true) labels.push("chat.jira.metadata.deleted");
+  labels.push(state(source.deleted, "chat.jira.metadata.deleted", "chat.jira.metadata.notDeleted", "chat.jira.metadata.deletionUnknown"));
   return labels;
 }
 /** Entity identity comes from its closed tool family, never from a project context or issue key. */

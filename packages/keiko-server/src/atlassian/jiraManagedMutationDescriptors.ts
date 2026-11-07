@@ -525,7 +525,7 @@ const DEFINITIONS: Readonly<
       " items inline. For a saved draft, pass only its draftId and draftDigest from jira.draft-stage. jira.draft-stage saves drafts of any supported size in Keiko without Jira writes. Never split one backlog into several approvals. Items left pending continue with the same draftId and draftDigest, nothing created twice.",
     // The existing explicit JSON Schema dialect expresses the handler's two closed forms;
     // optional sibling properties would also advertise empty, partial and mixed arguments.
-    input: compileExternalCatalogSchema({
+    input: {
       type: "object",
       oneOf: [
         object(
@@ -547,7 +547,7 @@ const DEFINITIONS: Readonly<
           ["draftId", "draftDigest"],
         ),
       ],
-    }),
+    },
     result: DRAFT_RESULT_SCHEMA,
     // Up to one result row per item, within the catalog's result ceilings; a larger result is
     // reported by counts and key ranges, never cut (#4178).
@@ -561,7 +561,7 @@ const DEFINITIONS: Readonly<
 function isCoreMutationTool(name: JiraMutationOperation): name is CoreMutationToolName {
   return Object.hasOwn(DEFINITIONS, name);
 }
-function declaration(name: JiraMutationOperation): ManagedMcpToolDeclaration {
+export function jiraMutationDeclaration(name: JiraMutationOperation): ManagedMcpToolDeclaration {
   const agile = jiraAgileDeclarationForTool(name);
   if (agile !== undefined) return agile;
   const structure = jiraProjectStructureDeclarationForTool(name);
@@ -583,7 +583,7 @@ function coreDeclaration(name: CoreMutationToolName): ManagedMcpToolDeclaration 
     descriptor: createToolDescriptor({
       toolRef: createToolRef(jiraMutationToolId(name), 3),
       description: definition.description,
-      inputSchema: definition.input,
+      inputSchema: name === "jira.draft" ? compileExternalCatalogSchema(definition.input) : definition.input,
       resultSchema: definition.result ?? RESULT_SCHEMA,
       effects: ["connector-access"],
       actionMapping: [{ action: name, effects: ["connector-access"] }],
@@ -600,4 +600,7 @@ function coreDeclaration(name: CoreMutationToolName): ManagedMcpToolDeclaration 
     }),
   });
 }
-export const JIRA_MUTATION_DECLARATIONS = Object.freeze(JIRA_MUTATION_OPERATIONS.map(declaration));
+/** Explicit complete mutation inventory; module import itself compiles no declarations. */
+export function jiraMutationDeclarations(): readonly ManagedMcpToolDeclaration[] {
+  return Object.freeze(JIRA_MUTATION_OPERATIONS.map(jiraMutationDeclaration));
+}

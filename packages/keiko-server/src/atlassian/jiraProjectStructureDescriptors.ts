@@ -40,16 +40,14 @@ const COMPONENT_FIELDS = {
     enum: ["PROJECT_DEFAULT", "COMPONENT_LEAD", "PROJECT_LEAD", "UNASSIGNED"],
   },
 };
-const COMPONENT = object(
-  {
+const COMPONENT_FIELDS_WITH_IDENTITY = {
     ...COMPONENT_FIELDS,
     id: ID,
     project: PROJECT,
     archived: { type: "boolean" },
     deleted: { type: "boolean" },
-  },
-  ["id", "name", "project"],
-);
+};
+const COMPONENT = object(COMPONENT_FIELDS_WITH_IDENTITY, ["id", "name", "project"]);
 const VERSION_FIELDS = {
   name: NAME,
   description: DESCRIPTION,
@@ -241,6 +239,7 @@ export {
   PROJECT as jiraNativeProjectSchema,
   PAGING as jiraNativePagingSchema,
   VERSION_FIELDS as jiraNativeVersionFields,
+  COMPONENT_FIELDS_WITH_IDENTITY as jiraNativeComponentFields,
   readResult as jiraNativeReadResult,
   collection as jiraNativeCollectionResult,
   writeResult as jiraNativeWriteResult,

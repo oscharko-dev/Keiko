@@ -155,6 +155,25 @@
     }
   },
   "currentCapabilities": {
+    "jira.accessibility-settings": {
+      "identity": "GET /rest/api/2/user/a11y/personal-settings",
+      "effect": "read",
+      "permissionPolicy": "authenticated-user-preferences",
+      "kind": "constrained-tool",
+      "constraints": "Bounded native accessibility-setting array for the connected actor, with unique keys and optional observed enabled booleans. Official REST list schema and 11.3 manager List return type corroborate the collection shape despite the pinned singular reference. Local pagination only; missing/null enabled remains unknown and false remains false. No named-user selector, image/HTML projection or preference changes.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-resource-lookups.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceViewDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-resource-lookups.test.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceViewDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.agile-issue": {
       "identity": "GET /rest/agile/1.0/issue/{issueIdOrKey}",
       "effect": "read",
@@ -651,6 +670,27 @@
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-components.ts"],
       "testFiles": ["packages/keiko-connectors/src/jira-managed-components.test.ts"]
     },
+    "jira.component-page": {
+      "identity": "GET /rest/api/2/component/page",
+      "effect": "read",
+      "permissionPolicy": "visible-components",
+      "kind": "constrained-tool",
+      "constraints": "Native visible active-component values page with bounded offset/page-size/name query and repeated exact projectIds. Official 11.3 ComponentResource List<Long> clarifies the misleading scalar Swagger parameter. Reuses the existing component projector with required observed component/project identity and bounded optional fields. Optional project IDs are observed, not echoed from filters; no remote links, component changes or inferred completeness outside the native page.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-resource-lookups.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-connectors/src/jira-managed-components.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceViewDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-resource-lookups.test.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceViewDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-connectors/src/jira-managed-components.test.ts"
+      ]
+    },
     "jira.component-related-issue-counts": {
       "identity": "GET /rest/api/2/component/{id}/relatedIssueCounts",
       "effect": "read",
@@ -1038,6 +1078,28 @@
       "sourceFiles": ["packages/keiko-connectors/src/jira-filter-reads.ts"],
       "testFiles": ["packages/keiko-connectors/src/jira-filter-reads.test.ts"]
     },
+    "jira.filter-columns": {
+      "identity": "GET /rest/api/2/filter/{id}/columns",
+      "effect": "read",
+      "permissionPolicy": "observed-column-layout",
+      "kind": "constrained-tool",
+      "constraints": "One selected filter layout read uses an explicit bounded object-or-array response expectation in the existing HTTP owner, supporting the primary-documented native layout object and historical option array without speculative extra requests. Ordered/repeated fields and observed column configuration remain intact; absent layout items are unavailable, not an invented empty list. No remote URI following, layout changes or permission inference.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-column-reads.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceViewDescriptors.ts",
+        "packages/keiko-connectors/src/atlassian-write-http.ts",
+        "packages/keiko-connectors/src/atlassian-sync-classify.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-column-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceViewDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-connectors/src/atlassian-write-http.test.ts"
+      ]
+    },
     "jira.filter-permission": {
       "identity": "GET /rest/api/2/filter/{id}/permission/{permissionId}",
       "effect": "read",
@@ -1117,6 +1179,27 @@
         "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.global-version-page": {
+      "identity": "GET /rest/api/2/version",
+      "effect": "read",
+      "permissionPolicy": "visible-versions",
+      "kind": "constrained-tool",
+      "constraints": "Native global version values page with bounded offset/page-size/name query and unique exact projectIds serialized as repeated query keys, as declared by the official resource Set<Long> signature. Reuses the existing version metadata summary; only observed optional project IDs enter results. Native isLast/total semantics remain authoritative; absent totals stay unknown. No remote nextPage following, version mutation or inferred project membership.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-resource-lookups.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-connectors/src/jira-managed-versions.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceViewDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-resource-lookups.test.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceViewDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-connectors/src/jira-managed-versions.test.ts"
       ]
     },
     "jira.group-members": {
@@ -1499,6 +1582,27 @@
         "packages/keiko-server/src/atlassian/jiraJqlDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.link-type": {
+      "identity": "GET /rest/api/2/issueLinkType/{issueLinkTypeId}",
+      "effect": "read",
+      "permissionPolicy": "visible-link-types",
+      "kind": "constrained-tool",
+      "constraints": "One native link-type read requires the observed exact ID to match the selected ID and reuses the existing id/name/inward/outward projector. No self URL following, issue-link mutation or type administration.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-resource-lookups.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-details.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceViewDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-resource-lookups.test.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceViewDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-details.test.ts"
       ]
     },
     "jira.link-types": {
@@ -2688,6 +2792,25 @@
         "packages/keiko-server/src/atlassian/jiraAssetDescriptors.test.ts"
       ]
     },
+    "jira.system-columns": {
+      "identity": "GET /rest/api/2/settings/columns",
+      "effect": "read",
+      "permissionPolicy": "observed-column-layout",
+      "kind": "constrained-tool",
+      "constraints": "Observed ordered system column options with bounded local pagination, explicit system scope and optional labels. Repeated fields retain native order; no remote pagination, effective-permission claim or layout change.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-column-reads.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceViewDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-column-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceViewDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.terminology": {
       "identity": "GET /rest/api/2/terminology/entries",
       "effect": "read",
@@ -2872,6 +2995,25 @@
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-avatar-reads.test.ts",
         "packages/keiko-server/src/atlassian/jiraAssetDescriptors.test.ts"
+      ]
+    },
+    "jira.user-columns": {
+      "identity": "GET /rest/api/2/user/columns",
+      "effect": "read",
+      "permissionPolicy": "observed-column-layout",
+      "kind": "constrained-tool",
+      "constraints": "Observed ordered column options for the connected or explicitly named user. The selected scope and username context are explicit; local pagination preserves repeated fields and unknown optional labels. Native permission refusal remains authoritative; no preference changes or inference of readable issue fields.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-column-reads.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceViewDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-column-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceViewDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
     "jira.user-directory": {
@@ -3245,8 +3387,8 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "13d71c74141362a79fe576ac3cc1b89c6cd620e2e115e81fe648984b83283c6a",
-    "nativeOperationCount": 183
+    "sha256": "f337a9b216b0172f685b9fecb57587a639e19b889c23492bcf8470402c722ac3",
+    "nativeOperationCount": 190
   },
   "operations": [
     {
@@ -5660,10 +5802,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.component-page"]
     },
     {
       "identity": "DELETE /rest/api/2/component/{id}",
@@ -6652,10 +6794,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.filter-columns"]
     },
     {
       "identity": "PUT /rest/api/2/filter/{id}/columns",
@@ -8976,10 +9118,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.link-type"]
     },
     {
       "identity": "PUT /rest/api/2/issueLinkType/{issueLinkTypeId}",
@@ -13988,10 +14130,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.system-columns"]
     },
     {
       "identity": "PUT /rest/api/2/settings/columns",
@@ -14628,10 +14770,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.accessibility-settings"]
     },
     {
       "identity": "GET /rest/api/2/user/anonymization",
@@ -15172,10 +15314,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.user-columns"]
     },
     {
       "identity": "PUT /rest/api/2/user/columns",
@@ -15648,10 +15790,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.global-version-page"]
     },
     {
       "identity": "POST /rest/api/2/version",

@@ -32,7 +32,7 @@ import {
   type AtlassianHttpUpload,
 } from "./atlassian-http-port.js";
 import { ATLASSIAN_SYNC_RETRY_MAX_ATTEMPTS, retryDelayMs } from "./atlassian-sync-lane.js";
-import { asRecord, parseJsonArray, parseJsonRecord, parseJsonScalar } from "./atlassian-sync-classify.js";
+import { asRecord, parseJsonArray, parseJsonObjectOrArray, parseJsonRecord, parseJsonScalar } from "./atlassian-sync-classify.js";
 
 // ADR-0128 D3: interactive write/read actions (issue and page CRUD, transitions, comments).
 export const ATLASSIAN_WRITE_ACTION_TIMEOUT_MS = 30_000;
@@ -59,7 +59,7 @@ export interface AtlassianWriteHttpRequest {
   // One governed multipart upload (POST only, #4176); never combined with `bodyJson`.
   readonly upload?: AtlassianHttpUpload | undefined;
   // Closed JSON response shapes, or status only; every JSON mode shares the same byte cap.
-  readonly expect: "json" | "json-array" | "json-scalar" | "none";
+  readonly expect: "json" | "json-array" | "json-object-or-array" | "json-scalar" | "none";
 }
 
 export interface AtlassianWriteHttpDeps {
@@ -154,32 +154,39 @@ function classifyFailure(
   };
 }
 
+type JsonResponsePayload = Pick<
+  Extract<AtlassianWriteHttpOutcome, { readonly ok: true }>, "body" | "items" | "scalar"
+>;
+function jsonResponsePayload(
+  bodyText: string,
+  expect: Exclude<AtlassianWriteHttpRequest["expect"], "none">,
+): JsonResponsePayload | undefined {
+  switch (expect) {
+    case "json-array": {
+      const items = parseJsonArray(bodyText);
+      return items === undefined ? undefined : { body: undefined, items };
+    }
+    case "json-scalar": {
+      const scalar = parseJsonScalar(bodyText);
+      return scalar === undefined ? undefined : { body: undefined, scalar };
+    }
+    case "json-object-or-array": return parseJsonObjectOrArray(bodyText);
+    case "json": {
+      const body = parseJsonRecord(bodyText);
+      return body === undefined ? undefined : { body };
+    }
+  }
+}
 function classifyResponse(
   result: Extract<AtlassianHttpBodyResult, { kind: "response" }>,
   expect: AtlassianWriteHttpRequest["expect"],
 ): AtlassianWriteHttpOutcome {
   if (result.status < 200 || result.status >= 300) return classifyFailure(result);
   if (expect === "none") return { ok: true, status: result.status, body: undefined };
-  if (result.truncated) {
-    return { ok: false, reason: "malformed-payload", httpStatus: result.status };
-  }
-  if (expect === "json-array") {
-    const items = parseJsonArray(result.bodyText);
-    return items === undefined
-      ? { ok: false, reason: "malformed-payload", httpStatus: result.status }
-      : { ok: true, status: result.status, body: undefined, items };
-  }
-  if (expect === "json-scalar") {
-    const scalar = parseJsonScalar(result.bodyText);
-    return scalar === undefined
-      ? { ok: false, reason: "malformed-payload", httpStatus: result.status }
-      : { ok: true, status: result.status, body: undefined, scalar };
-  }
-  const body = parseJsonRecord(result.bodyText);
-  if (body === undefined) {
-    return { ok: false, reason: "malformed-payload", httpStatus: result.status };
-  }
-  return { ok: true, status: result.status, body };
+  const parsed = result.truncated ? undefined : jsonResponsePayload(result.bodyText, expect);
+  return parsed === undefined
+    ? { ok: false, reason: "malformed-payload", httpStatus: result.status }
+    : { ok: true, status: result.status, ...parsed };
 }
 
 async function issueOnce(

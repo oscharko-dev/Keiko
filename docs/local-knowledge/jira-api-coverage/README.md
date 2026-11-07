@@ -123,10 +123,10 @@ to Chat or Coding, grant authority, or bypass those owners.
 
 ## Current constrained implementation snapshot
 
-The current registry supplies **183 native identities: 154 reads and 29 writes**. Each is mapped to
+The current registry supplies **190 native identities: 161 reads and 29 writes**. Each is mapped to
 its exact published method/path identity and remains `partial`: the closed typed operation exposes
 only the documented supported fields and behavior, rather than the entire upstream API contract.
-The other **256 operations remain `not-implemented`**. No row is marked fully implemented,
+The other **249 operations remain `not-implemented`**. No row is marked fully implemented,
 executable, owner-deferred or excluded by this snapshot. All 439 source/version IDs, cluster
 assignments, dependencies and qualification fields are retained.
 
@@ -136,7 +136,7 @@ the C6 comment-update/link/worklog read increment; bounded C8 attachment/archive
 worklog create/update with connected-user watching/voting; fourteen C9 workflow-/issue-type-scheme
 and screen reads; three reviewed comment/attachment/worklog deletions; and eight C10 user, group and
 application-role reads; ten permission/security/notification configuration reads; and five additional
-project scheme/accessible-security associations; twenty core issue/project metadata reads; four instance/current-actor observations; seven role/priority-scheme reads; four release-count/project-version-page reads; seven scoped directory/field reads; two JQL metadata/suggestion reads; nine additional Agile context reads; seven configuration metadata reads; three scalar runtime-setting observations; and four maintenance-status observations. The three existing
+project scheme/accessible-security associations; twenty core issue/project metadata reads; four instance/current-actor observations; seven role/priority-scheme reads; four release-count/project-version-page reads; seven scoped directory/field reads; two JQL metadata/suggestion reads; nine additional Agile context reads; seven configuration metadata reads; three scalar runtime-setting observations; four maintenance-status observations; and seven resource-page/link-type/accessibility/column-layout reads. The three existing
 report/draft composites remain compositions, not extra native API identities. Remaining filter
 creation, ranking, other estimate-adjustment modes and destructive operations, administration and
 other inventory gaps stay open. A registered declaration is not evidence that
@@ -261,6 +261,15 @@ Index and queue counters are independent native facts, never derived health or c
 Replication and external replay retain distinct timestamp fields. The published upgrade-state enum
 and example disagree, so bounded observed state text is retained without inventing compatibility or
 state transitions. These operations never start a job, follow a remote node or change maintenance state.
+
+Seven resource/layout reads add native global version/component pages, an exact link type, connected-user
+accessibility settings and system/user/filter columns. Official 11.3 resource signatures establish repeated
+`projectIds` keys for the two native pages; no CSV/JSON encoding is guessed. Existing metadata projectors
+and native page bounds remain authoritative. The accessibility array is corroborated by the official REST
+list schema and 11.3 manager return type despite the pinned singular reference; only keys and observed
+enabled preferences are projected. Column reads preserve native order and repeated fields. Filter layouts
+use an explicit bounded object-or-array expectation in the existing HTTP owner; other codecs stay strict.
+Missing preferences/layouts remain unknown, and no read changes configuration or follows remote links.
 
 `currentRegistry` pins the existing server registry source file's SHA-256 and native declaration
 count. The reconciliation helper parses that file's literal `NATIVE` declarations and verified closed

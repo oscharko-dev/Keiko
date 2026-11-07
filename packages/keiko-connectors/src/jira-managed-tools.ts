@@ -17,6 +17,8 @@ import { executeJiraInstanceRead, isJiraInstanceRead } from "./jira-managed-inst
 import { executeJiraConfigurationRead, isJiraConfigurationRead } from "./jira-managed-configuration-reads.js";
 import { executeJiraRuntimeSettingsRead, isJiraRuntimeSettingsRead } from "./jira-managed-runtime-settings.js";
 import { executeJiraMaintenanceRead, isJiraMaintenanceRead } from "./jira-managed-maintenance-reads.js";
+import { executeJiraResourceLookupRead, isJiraResourceLookupRead } from "./jira-managed-resource-lookups.js";
+import { executeJiraColumnRead, isJiraColumnRead } from "./jira-managed-column-reads.js";
 import { executeJiraRoleRead, isJiraRoleRead } from "./jira-managed-role-reads.js";
 import { executeJiraPrioritySchemeRead, isJiraPrioritySchemeRead } from "./jira-managed-priority-schemes.js";
 import { executeJiraReleaseRead, isJiraReleaseRead } from "./jira-managed-release-reads.js";
@@ -348,6 +350,8 @@ async function read<Context extends ManagedMcpInvocationContext>(
 }
 
 type NativeDetailRead =
+  | Parameters<typeof executeJiraResourceLookupRead>[0]
+  | Parameters<typeof executeJiraColumnRead>[0]
   | Parameters<typeof executeJiraMaintenanceRead>[0]
   | Parameters<typeof executeJiraRuntimeSettingsRead>[0]
   | Parameters<typeof executeJiraConfigurationRead>[0]
@@ -375,6 +379,8 @@ type NativeDetailRead =
   | Parameters<typeof executeJiraJqlMetadataRead>[0];
 function isNativeDetailRead(name: string): name is NativeDetailRead {
   return [
+    isJiraResourceLookupRead,
+    isJiraColumnRead,
     isJiraMaintenanceRead,
     isJiraRuntimeSettingsRead,
     isJiraConfigurationRead,
@@ -411,6 +417,8 @@ function administrationRead(
   if (isJiraConfigurationRead(name)) return executeJiraConfigurationRead(name, args, request);
   if (isJiraRuntimeSettingsRead(name)) return executeJiraRuntimeSettingsRead(name, args, request);
   if (isJiraMaintenanceRead(name)) return executeJiraMaintenanceRead(name, args, request);
+  if (isJiraResourceLookupRead(name)) return executeJiraResourceLookupRead(name, args, request);
+  if (isJiraColumnRead(name)) return executeJiraColumnRead(name, args, request);
   if (isJiraWorkflowSchemeRead(name)) return executeJiraWorkflowSchemeRead(name, args, request);
   if (isJiraScreenRead(name)) return executeJiraScreenRead(name, args, request);
   if (isJiraAccessSchemeRead(name)) return executeJiraAccessSchemeRead(name, args, request);

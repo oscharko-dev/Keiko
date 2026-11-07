@@ -19,7 +19,7 @@ import {
   chatToolExchangeReservation,
 } from "./chatToolTranscript.js";
 import { processServerLogSink } from "../process-log-sink.js";
-import { JIRA_MUTATION_DECLARATIONS } from "../atlassian/jiraManagedMutationDescriptors.js";
+import { jiraMutationDeclarations } from "../atlassian/jiraManagedMutationDescriptors.js";
 import { CHAT_TOOL_TURN_BUDGET } from "../chat-tool-turn-budget.js";
 import { runMigrations } from "./schema.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
@@ -32,6 +32,8 @@ import type {
   ToolDescriptor,
   ToolResultEnvelope,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+
+const JIRA_MUTATION_DECLARATIONS = jiraMutationDeclarations();
 
 const disposals: (() => void)[] = [];
 afterEach(() => {

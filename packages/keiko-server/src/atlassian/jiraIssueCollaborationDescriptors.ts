@@ -41,6 +41,7 @@ const COMMENT = object(
   ["id", "issueKey", "body"],
 );
 const LINK_TYPE = { id: ID, name: text(255), inward: text(255), outward: text(255) };
+export { LINK_TYPE as jiraNativeLinkTypeFields };
 const WORKLOG = object(
   {
     id: ID,

@@ -32,6 +32,15 @@ const CREATE = {
 };
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
+  { tool: "jira.global-version-page", args: { startAt: 0, maxResults: 1, query: "Next & later", projectIds: ["10000"] },
+    query: { startAt: "0", maxResults: "1", query: "Next & later", projectIds: "10000" } },
+  { tool: "jira.component-page", args: { startAt: 0, maxResults: 1, query: "", projectIds: ["10000"] },
+    query: { startAt: "0", maxResults: "1", query: "", projectIds: "10000" } },
+  { tool: "jira.link-type", args: { linkTypeId: "31" }, parameters: { issueLinkTypeId: "31" } },
+  { tool: "jira.accessibility-settings", args: { startAt: 0, maxResults: 1 } },
+  { tool: "jira.system-columns", args: { startAt: 0, maxResults: 1 } },
+  { tool: "jira.user-columns", args: { username: "Review + QA", startAt: 0, maxResults: 1 }, query: { username: "Review + QA" } },
+  { tool: "jira.filter-columns", args: { filterId: "42", startAt: 0, maxResults: 1 }, parameters: { id: "42" } },
   { tool: "jira.cluster-nodes", args: { startAt: 0, maxResults: 1 } },
   { tool: "jira.cluster-upgrade-state", args: {} },
   { tool: "jira.index-snapshot-status", args: {} },
@@ -806,7 +815,7 @@ function administrationRead(
   path: string,
   absoluteUrl: string,
 ): AtlassianHttpBodyResult | undefined {
-  const directory = directoryRead(path) ?? accessRead(path) ?? coreMetadataRead(path) ?? instanceRead(path) ?? roleRead(path) ?? configurationRead(path, absoluteUrl);
+  const directory = directoryRead(path) ?? accessRead(path) ?? coreMetadataRead(path) ?? instanceRead(path) ?? roleRead(path) ?? configurationRead(path, absoluteUrl) ?? viewConfigurationRead(path);
   if (directory !== undefined) return directory;
   const type = { id: "1", name: "Task", subtask: false };
   const scheme = { id: "37", name: "Delivery", issueTypes: [type], defaultIssueType: type };
@@ -851,6 +860,21 @@ function configurationRead(path: string, absoluteUrl: string): AtlassianHttpBody
     "terminology/entries": [terminology, { originalName: "Sprint", isDefault: true }],
     "terminology/entries/epic": terminology,
     "readonly-mode": { enabled: false, message: "", endTime: "07/Nov/26 21:30", timeZone: "Europe/Berlin" },
+  };
+  return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
+}
+function viewConfigurationRead(path: string): AtlassianHttpBodyResult | undefined {
+  const columns = [{ value: "summary", label: "Summary" }, { value: "status", label: "Status" }];
+  const bodies: Readonly<Record<string, unknown>> = {
+    version: { startAt: 0, maxResults: 1, isLast: false, values: [{ id: "81", name: "Next release", projectId: 10000, released: false }] },
+    "component/page": { startAt: 0, maxResults: 1, isLast: false, values: [{ id: "71", name: "Delivery module", project: "SYN", projectId: 10000, deleted: false }] },
+    "issueLinkType/31": { id: "31", name: "Blocks", inward: "is blocked by", outward: "blocks" },
+    "user/a11y/personal-settings": [{ key: "underline-links", enabled: false }, { key: "keyboard-settings" }],
+    "settings/columns": columns,
+    "user/columns": columns,
+    "filter/42/columns": { columnConfig: "EXPLICIT", columnLayoutItems: [
+      { id: "summary", position: -1, columnHeadingKey: "native.summary" }, { id: "summary", position: 1 },
+    ] },
   };
   return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
 }
@@ -1162,7 +1186,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(156);
+    expect(native).toHaveLength(163);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),
@@ -1229,6 +1253,30 @@ describe("native Jira registry and real connector transport agreement", () => {
     });
     expect(summary.result.data.issueIndex).not.toHaveProperty("countInArchive");
     expect(summary.result.data.issueIndex).not.toHaveProperty("lastUpdatedInIndex");
+  });
+  it.each(["jira.global-version-page", "jira.component-page"] as const)(
+    "keeps %s project filters lossless and an omitted total unknown", async (tool) => {
+      const observed = await observe({ tool, args: { startAt: 0, maxResults: 1, projectIds: ["10000", "9223372036854775807"] } });
+      const request = observed.requests[0];
+      if (request === undefined) throw new TypeError("Missing native metadata page request");
+      expect(new URL(request.url).searchParams.getAll("projectIds")).toEqual(["10000", "9223372036854775807"]);
+      expect(observed.result.data).not.toHaveProperty("total");
+      expect(observed.result.data).toMatchObject({ nextStartAt: 1 });
+    },
+  );
+  it.each([
+    [[{ value: "summary", label: "Summary" }], { columnsAvailable: true, items: [{ value: "summary", label: "Summary" }], total: 1 }],
+    [{ columnConfig: "NONE" }, { columnsAvailable: false, columnConfig: "NONE" }],
+  ] as const)("accepts the published filter layout form without retry or fabricated columns", async (native, expected) => {
+    const observed = await observeNativeJiraOperation({ tool: "jira.filter-columns", args: { filterId: "42" } }, connection(
+      () => Promise.resolve(response(native)),
+    ));
+    expect(observed.result.data).toMatchObject({ layoutScope: "filter", selectedFilterId: "42", ...expected });
+    if (!expected.columnsAvailable) {
+      expect(observed.result.data).not.toHaveProperty("items");
+      expect(observed.result.data).not.toHaveProperty("total");
+    }
+    expect(observed.requests).toHaveLength(1);
   });
   it.each(["jira.create", "jira.edit"] as const)(
     "keeps %s's approved link continuation on POST issueLink",

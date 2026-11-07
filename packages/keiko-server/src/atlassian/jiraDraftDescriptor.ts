@@ -25,7 +25,8 @@ const DESCRIPTION =
   "A page that breaks an issue template is refused whole with the violations to correct. The result returns draftId and draftDigest for review. " +
   "Only when the user requests creation in Jira and unresolvedRefCount is 0, call jira.draft with only draftId and the last draftDigest; that tool performs Jira writes under the current write authority and required human approval.";
 
-export const JIRA_DRAFT_STAGE_DECLARATION: ManagedMcpToolDeclaration = Object.freeze({
+export function jiraDraftStageDeclaration(): ManagedMcpToolDeclaration {
+  return Object.freeze({
   name: "jira.draft-stage",
   risk: "read",
   descriptor: createToolDescriptor({
@@ -80,4 +81,5 @@ export const JIRA_DRAFT_STAGE_DECLARATION: ManagedMcpToolDeclaration = Object.fr
     idempotency: "server-key-required",
     cancellation: "before-effect",
   }),
-});
+  });
+}

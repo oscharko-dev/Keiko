@@ -21,9 +21,11 @@ import {
 import type { ToolDefinition } from "@oscharko-dev/keiko-contracts";
 import { buildUiHandlerDeps } from "../deps.js";
 import { createJiraChatCatalogRuntime } from "./jiraChatCatalogRuntime.js";
-import { JIRA_MUTATION_DECLARATIONS } from "./jiraManagedMutationDescriptors.js";
+import { jiraMutationDeclarations } from "./jiraManagedMutationDescriptors.js";
 import { jiraOperationContracts } from "./jiraManagedProvider.js";
 import { KNOWLEDGE_DOCUMENTS_TOOL, KNOWLEDGE_REVIEW_TOOL } from "../requirementsToolName.js";
+
+const JIRA_MUTATION_DECLARATIONS = jiraMutationDeclarations();
 
 // Explicitly selecting these operations preserves their typed schemas alongside local discovery.
 const ORIGINAL_TOOL_ALIASES = [

@@ -51,6 +51,7 @@ import { JIRA_AGILE_CONTEXT_TOOLS, JIRA_AGILE_CONTEXT_METADATA_TOOLS, jiraAgileC
 import { JIRA_ADMIN_METADATA_TOOLS, jiraAdminMetadataDetails } from "./jira-admin-metadata-presentation";
 import { JIRA_RUNTIME_SETTINGS_TOOLS, jiraRuntimeSettingsDetails } from "./jira-runtime-settings-presentation";
 import { JIRA_MAINTENANCE_TOOLS, jiraMaintenanceDetails } from "./jira-maintenance-presentation";
+import { JIRA_VIEW_SETTINGS_TOOLS, jiraViewSettingsDetails } from "./jira-view-settings-presentation";
 
 export interface JiraOutcomeItem {
   readonly key?: string;
@@ -116,6 +117,7 @@ const STANDALONE_TOOLS = new Set([
   ...JIRA_ADMIN_METADATA_TOOLS,
   ...JIRA_RUNTIME_SETTINGS_TOOLS,
   ...JIRA_MAINTENANCE_TOOLS,
+  ...JIRA_VIEW_SETTINGS_TOOLS,
 ]);
 const BOARD_READ_TOOLS = new Set(["jira_board", "jira_boards", "jira_board_configuration"]);
 type UnknownRecord = Readonly<Record<string, unknown>>;
@@ -248,21 +250,24 @@ function boardContextLink(tool: string, source: UnknownRecord): string | undefin
     ? boardLink(source.boardBrowseUrl, source.originBoardId)
     : undefined;
 }
+type ConfigurationPresenter = (tool: string, source: UnknownRecord) => readonly JiraAgileDetails[];
+const CONFIGURATION_PRESENTERS: readonly (readonly [ReadonlySet<string>, ConfigurationPresenter])[] = [
+  [JIRA_VIEW_SETTINGS_TOOLS, jiraViewSettingsDetails],
+  [JIRA_MAINTENANCE_TOOLS, jiraMaintenanceDetails],
+  [JIRA_RUNTIME_SETTINGS_TOOLS, jiraRuntimeSettingsDetails],
+  [JIRA_ADMIN_METADATA_TOOLS, jiraAdminMetadataDetails],
+  [JIRA_AGILE_CONTEXT_METADATA_TOOLS, jiraAgileContextDetails],
+  [JIRA_ACCESS_TOOLS, jiraAccessDetails],
+  [JIRA_CORE_METADATA_TOOLS, jiraCoreMetadataDetails],
+  [JIRA_INSTANCE_TOOLS, jiraInstanceDetails],
+  [JIRA_ROLE_TOOLS, jiraRoleDetails],
+  [JIRA_RELEASE_TOOLS, jiraReleaseDetails],
+  [JIRA_LOOKUP_TOOLS, jiraLookupDetails],
+  [JIRA_JQL_TOOLS, jiraJqlDetails],
+  [JIRA_PROJECT_ASSOCIATION_TOOLS, jiraProjectAssociationDetails],
+];
 function configurationDetails(tool: string, source: UnknownRecord): readonly JiraAgileDetails[] | undefined {
-  if (JIRA_MAINTENANCE_TOOLS.has(tool)) return jiraMaintenanceDetails(tool, source);
-  if (JIRA_RUNTIME_SETTINGS_TOOLS.has(tool)) return jiraRuntimeSettingsDetails(tool, source);
-  if (JIRA_ADMIN_METADATA_TOOLS.has(tool)) return jiraAdminMetadataDetails(tool, source);
-  if (JIRA_AGILE_CONTEXT_METADATA_TOOLS.has(tool)) return jiraAgileContextDetails(tool, source);
-  if (JIRA_ACCESS_TOOLS.has(tool)) return jiraAccessDetails(tool, source);
-  if (JIRA_CORE_METADATA_TOOLS.has(tool)) return jiraCoreMetadataDetails(tool, source);
-  if (JIRA_INSTANCE_TOOLS.has(tool)) return jiraInstanceDetails(tool, source);
-  if (JIRA_ROLE_TOOLS.has(tool)) return jiraRoleDetails(tool, source);
-  if (JIRA_RELEASE_TOOLS.has(tool)) return jiraReleaseDetails(tool, source);
-  if (JIRA_LOOKUP_TOOLS.has(tool)) return jiraLookupDetails(tool, source);
-  if (JIRA_JQL_TOOLS.has(tool)) return jiraJqlDetails(tool, source);
-  return JIRA_PROJECT_ASSOCIATION_TOOLS.has(tool)
-    ? jiraProjectAssociationDetails(tool, source)
-    : undefined;
+  return CONFIGURATION_PRESENTERS.find(([tools]) => tools.has(tool))?.[1](tool, source);
 }
 function metadataDetails(tool: string, source: UnknownRecord): JiraAgileDetails | undefined {
   const configuration = configurationDetails(tool, source);

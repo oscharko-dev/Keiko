@@ -14,7 +14,7 @@ const WORKLOGS = new Set([
   "jira_delete_worklog",
 ]);
 const ATTACHMENTS = new Set(["jira_delete_attachment"]);
-const LINKS = new Set(["jira_link_types", "jira_issue_link"]);
+const LINKS = new Set(["jira_link_types", "jira_link_type", "jira_issue_link"]);
 export const JIRA_COLLABORATION_TOOLS: ReadonlySet<string> = new Set([
   ...COMMENTS,
   ...WORKLOGS,
@@ -40,7 +40,7 @@ function identityLabel(tool: string): WidgetMessageKey {
   if (COMMENTS.has(tool)) return "chat.jira.fact.commentId";
   if (WORKLOGS.has(tool)) return "chat.jira.fact.worklogId";
   if (ATTACHMENTS.has(tool)) return "chat.jira.fact.attachmentId";
-  return tool === "jira_link_types" ? "chat.jira.fact.linkTypeId" : "chat.jira.fact.linkId";
+  return tool === "jira_link_types" || tool === "jira_link_type" ? "chat.jira.fact.linkTypeId" : "chat.jira.fact.linkId";
 }
 function identity(tool: string, source: Source): JiraOutcomeFact[] {
   const value = text(identityValue(tool, source));

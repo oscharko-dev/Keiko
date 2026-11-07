@@ -516,6 +516,29 @@ it("keeps scalar protocol decoding from replaying a mutation", async () => {
   expect(fixture.requests).toHaveLength(1);
 });
 
+it.each([
+  { bodyText: '{"columnConfig":"SYSTEM","columnLayoutItems":[]}', parsed: { body: { columnConfig: "SYSTEM", columnLayoutItems: [] } } },
+  { bodyText: '[{"value":"summary","label":"Summary"}]', parsed: { body: undefined, items: [{ value: "summary", label: "Summary" }] } },
+])("admits only the explicitly selected versioned object/array format: $bodyText", async ({ bodyText, parsed }) => {
+  const fixture = scriptedPort([response(200, bodyText)]);
+  expect(await executeAtlassianWriteRequest(
+    { http: fixture.port }, { method: "GET", url: URL, expect: "json-object-or-array" },
+  )).toEqual({ ok: true, status: 200, ...parsed });
+  expect(fixture.requests).toHaveLength(1);
+});
+it.each(["false", "0", "null", '"text"', "", "["])("rejects scalar or malformed JSON in object/array mode: %s", async (bodyText) => {
+  const fixture = scriptedPort([response(200, bodyText)]);
+  expect(await executeAtlassianWriteRequest(
+    { http: fixture.port }, { method: "GET", url: URL, expect: "json-object-or-array" },
+  )).toEqual({ ok: false, reason: "malformed-payload", httpStatus: 200 });
+});
+it("rejects a truncated but otherwise valid object/array response", async () => {
+  const fixture = scriptedPort([response(200, "[]", { truncated: true })]);
+  expect(await executeAtlassianWriteRequest(
+    { http: fixture.port }, { method: "GET", url: URL, expect: "json-object-or-array" },
+  )).toEqual({ ok: false, reason: "malformed-payload", httpStatus: 200 });
+});
+
 describe("governed uploads (#4176)", () => {
   const upload = {
     contentType: "multipart/form-data; boundary=keiko-test",

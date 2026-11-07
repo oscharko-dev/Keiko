@@ -1,4 +1,8 @@
 import {
+  jiraResourceViewDeclarationForTool,
+  type JIRA_RESOURCE_VIEW_READ_DEFINITIONS,
+} from "./jiraResourceViewDescriptors.js";
+import {
   jiraMaintenanceDeclarationForTool,
   type JIRA_MAINTENANCE_READ_DEFINITIONS,
 } from "./jiraMaintenanceDescriptors.js";
@@ -67,6 +71,7 @@ import {
   JIRA_FIELD_READ_MAX,
   JIRA_FIELD_ID_PATTERN,
   JIRA_MANAGED_READ_TOOLS,
+  JIRA_MUTATION_OPERATIONS,
   type JiraManagedReadToolName,
   type JiraMutationOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -85,10 +90,10 @@ import { text, object } from "./jiraManagedSchemas.js";
 import {
   JIRA_FAILURE_FIELD_ERRORS_SCHEMA,
   JIRA_FAILURE_MESSAGES_SCHEMA,
-  JIRA_MUTATION_DECLARATIONS,
+  jiraMutationDeclaration,
 } from "./jiraManagedMutationDescriptors.js";
-import { JIRA_DRAFT_STAGE_DECLARATION } from "./jiraDraftDescriptor.js";
-import { JIRA_REPORT_DECLARATION } from "./jiraReportDescriptor.js";
+import { jiraDraftStageDeclaration } from "./jiraDraftDescriptor.js";
+import { jiraReportDeclaration } from "./jiraReportDescriptor.js";
 import { JIRA_APPLICABLE_TEMPLATES_SCHEMA } from "./jiraTemplateMetadataSchema.js";
 import {
   jiraAgileDeclarationForTool,
@@ -112,7 +117,7 @@ import {
   type JIRA_PROJECT_STRUCTURE_READ_DEFINITIONS,
 } from "./jiraProjectStructureDescriptors.js";
 import {
-  createJiraOperationContracts,
+  createJiraOperationContract,
   matchesJiraOperationBinding,
   type JiraOperationBinding,
   type JiraOperationContract,
@@ -211,6 +216,7 @@ type CoreReadToolName = Exclude<
       | keyof typeof JIRA_CONFIGURATION_READ_DEFINITIONS
       | keyof typeof JIRA_RUNTIME_SETTINGS_READ_DEFINITIONS
       | keyof typeof JIRA_MAINTENANCE_READ_DEFINITIONS
+      | keyof typeof JIRA_RESOURCE_VIEW_READ_DEFINITIONS
       | keyof typeof JIRA_AGILE_CONTEXT_READ_DEFINITIONS
       | keyof typeof JIRA_FILTER_READ_DEFINITIONS
       | keyof typeof JIRA_PROJECT_STRUCTURE_READ_DEFINITIONS
@@ -397,6 +403,7 @@ function isCoreReadTool(name: JiraManagedReadToolName): name is CoreReadToolName
 }
 function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
   for (const producer of [
+    jiraResourceViewDeclarationForTool,
     jiraMaintenanceDeclarationForTool,
     jiraRuntimeSettingsDeclarationForTool,
     jiraConfigurationDeclarationForTool,
@@ -420,8 +427,8 @@ function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
     const selected = producer(name);
     if (selected !== undefined) return selected;
   }
-  if (name === "jira.report") return JIRA_REPORT_DECLARATION;
-  if (name === "jira.draft-stage") return JIRA_DRAFT_STAGE_DECLARATION;
+  if (name === "jira.report") return jiraReportDeclaration();
+  if (name === "jira.draft-stage") return jiraDraftStageDeclaration();
   if (!isCoreReadTool(name)) throw new TypeError("Unsupported Jira read tool");
   return coreDeclaration(name);
 }
@@ -473,17 +480,46 @@ function coreDeclaration(name: CoreReadToolName): ManagedMcpToolDeclaration {
   });
   return Object.freeze({ name, risk: "read", descriptor });
 }
-const OPERATION_CONTRACTS = createJiraOperationContracts([
-  ...JIRA_MANAGED_READ_TOOLS.map(declaration),
-  ...JIRA_MUTATION_DECLARATIONS,
-]);
+const OPERATION_CONTRACTS = new Map<string, JiraOperationContract>();
+const BUILDING_OPERATION_CONTRACTS = new Set<string>();
+let completeOperationContracts: readonly JiraOperationContract[] | undefined;
 
-/** Pure lookups let a consumer compile only its demanded subset of the existing provider. */
-export function jiraOperationContracts(): readonly JiraOperationContract[] {
-  return OPERATION_CONTRACTS;
+function rawDeclarationForTool(tool: string): ManagedMcpToolDeclaration | undefined {
+  const read = JIRA_MANAGED_READ_TOOLS.find((name) => name === tool);
+  if (read !== undefined) return declaration(read);
+  const mutation = JIRA_MUTATION_OPERATIONS.find((name) => name === tool);
+  return mutation === undefined ? undefined : jiraMutationDeclaration(mutation);
 }
+
+/** An explicit full inventory request still compiles and validates every declaration in order. */
+export function jiraOperationContracts(): readonly JiraOperationContract[] {
+  if (completeOperationContracts !== undefined) return completeOperationContracts;
+  const names = [...JIRA_MANAGED_READ_TOOLS, ...JIRA_MUTATION_OPERATIONS];
+  if (new Set(names).size !== names.length) throw new TypeError("Duplicate Jira operation declaration");
+  const contracts = names.map((name) => {
+    const contract = jiraOperationForTool(name);
+    if (contract === undefined) throw new TypeError("Missing Jira operation contract");
+    return contract;
+  });
+  completeOperationContracts = Object.freeze(contracts);
+  return completeOperationContracts;
+}
+/** Bind a requested raw declaration once, recursively retaining the same composite member digests. */
 export function jiraOperationForTool(tool: string): JiraOperationContract | undefined {
-  return OPERATION_CONTRACTS.find((entry) => entry.definition.tool === tool);
+  const cached = OPERATION_CONTRACTS.get(tool);
+  if (cached !== undefined) return cached;
+  if (BUILDING_OPERATION_CONTRACTS.has(tool)) throw new TypeError("Cyclic Jira operation contract");
+  BUILDING_OPERATION_CONTRACTS.add(tool);
+  try {
+    const raw = rawDeclarationForTool(tool);
+    if (raw === undefined) return undefined;
+    if (raw.name !== tool) throw new TypeError("Mismatched Jira operation declaration");
+    const contract = createJiraOperationContract(raw, jiraOperationForTool);
+    OPERATION_CONTRACTS.set(tool, contract);
+    return contract;
+  } finally {
+    BUILDING_OPERATION_CONTRACTS.delete(tool);
+  }
 }
 export function jiraDeclarationForTool(tool: string): ManagedMcpToolDeclaration | undefined {
   return jiraOperationForTool(tool)?.declaration;

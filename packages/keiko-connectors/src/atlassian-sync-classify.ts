@@ -47,6 +47,18 @@ export function parseJsonScalar(bodyText: string): string | number | boolean | n
     (typeof value === "number" && Number.isFinite(value)) ? value : undefined;
 }
 
+/** Some native versioned resources document both a wrapper object and an older bare collection. */
+export function parseJsonObjectOrArray(bodyText: string): {
+  readonly body: Record<string, unknown> | undefined;
+  readonly items?: readonly unknown[];
+} | undefined {
+  const value = parseAtlassianJsonValue(bodyText);
+  const items = asArray(value);
+  if (items !== undefined) return { body: undefined, items };
+  const body = asRecord(value);
+  return body === undefined ? undefined : { body };
+}
+
 // ─── Single-host, API-root-scoped URL construction (ADR-0128 D3) ──────────────
 export interface AtlassianApiEndpoints {
   readonly base: URL;

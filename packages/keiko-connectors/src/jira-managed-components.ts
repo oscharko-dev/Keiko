@@ -109,7 +109,8 @@ function optionalFields(raw: Record<string, unknown>): CatalogJsonObject | undef
   const lead = leadFields(raw);
   return lead === undefined ? undefined : { ...result, ...lead };
 }
-function componentView(value: unknown): ComponentView | undefined {
+/** Shared native component metadata; project identity remains required for every existing caller. */
+export function jiraComponentSummary(value: unknown): ComponentView | undefined {
   const raw = asRecord(value);
   if (
     raw === undefined ||
@@ -142,7 +143,7 @@ async function readComponent(
 ): Promise<ComponentReadback> {
   const result = await request(`component/${target}`);
   if (!result.ok) return dispatchFailure(result);
-  const component = result.status === 200 ? componentView(result.body) : undefined;
+  const component = result.status === 200 ? jiraComponentSummary(result.body) : undefined;
   if (component === undefined) return MALFORMED;
   return component.id === target ? { ok: true, component } : { ok: false, reason: "conflict" };
 }
@@ -201,7 +202,7 @@ async function components(
     result.items,
     TOOL_CATALOG_LIMITS.maxArrayItems,
     (value) => {
-      const component = componentView(value);
+      const component = jiraComponentSummary(value);
       return component?.project === current.project.projectKey ? component : undefined;
     },
     "id",

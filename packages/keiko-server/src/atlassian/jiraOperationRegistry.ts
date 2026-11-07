@@ -19,6 +19,7 @@ type CompositeTool = "jira.report" | "jira.draft-stage" | "jira.draft";
 type NativeTool = Exclude<JiraOperationTool, CompositeTool>;
 type JiraOperationEffect = "remote-read" | "remote-write" | "local-report" | "local-draft";
 type JiraPermissionPolicy =
+  | "observed-column-layout"
   | "observed-maintenance-status"
   | "admin-workflow-configuration"
   | "visible-custom-field-configuration"
@@ -160,6 +161,11 @@ function writes<const K extends NativeTool>(
   return result as NativeGroup<K>;
 }
 const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
+  ...reads("observed-column-layout", {
+    "jira.system-columns": "/settings/columns",
+    "jira.user-columns": "/user/columns",
+    "jira.filter-columns": "/filter/{id}/columns",
+  }),
   ...reads("observed-maintenance-status", {
     "jira.cluster-nodes": "/cluster/nodes",
     "jira.cluster-upgrade-state": "/cluster/zdu/state",
@@ -296,24 +302,32 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
     "jira.avatars": "/universal_avatar/type/{type}/owner/{owningObjectId}",
   }),
   ...reads("visible-dashboards", { "jira.dashboards": "/dashboard", "jira.dashboard": "/dashboard/{id}" }),
-  ...reads("authenticated-user-preferences", { "jira.filter-share-scope": "/filter/defaultShareScope" }),
+  ...reads("authenticated-user-preferences", {
+    "jira.filter-share-scope": "/filter/defaultShareScope",
+    "jira.accessibility-settings": "/user/a11y/personal-settings",
+  }),
   ...reads("visible-filter-permissions", {
     "jira.filter-permissions": "/filter/{id}/permission",
     "jira.filter-permission": "/filter/{id}/permission/{permissionId}",
   }),
   ...reads("visible-comments", { "jira.get-comment": "/issue/{issueIdOrKey}/comment/{id}" }),
-  ...reads("visible-link-types", { "jira.link-types": "/issueLinkType" }),
+  ...reads("visible-link-types", {
+    "jira.link-types": "/issueLinkType",
+    "jira.link-type": "/issueLinkType/{issueLinkTypeId}",
+  }),
   ...reads("visible-issue-links", { "jira.issue-link": "/issueLink/{linkId}" }),
   ...reads("visible-worklogs", {
     "jira.worklogs": "/issue/{issueIdOrKey}/worklog",
     "jira.worklog": "/issue/{issueIdOrKey}/worklog/{id}",
   }),
   ...reads("visible-components", {
+    "jira.component-page": "/component/page",
     "jira.components": "/project/{projectIdOrKey}/components",
     "jira.component": "/component/{id}",
     "jira.component-related-issue-counts": "/component/{id}/relatedIssueCounts",
   }),
   ...reads("visible-versions", {
+    "jira.global-version-page": "/version",
     "jira.versions": "/project/{projectIdOrKey}/versions",
     "jira.version": "/version/{id}",
     "jira.version-related-issue-counts": "/version/{id}/relatedIssueCounts",

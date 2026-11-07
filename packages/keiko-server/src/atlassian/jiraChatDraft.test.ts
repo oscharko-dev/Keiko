@@ -22,7 +22,7 @@ import {
 } from "../../../../tests/support/jira-synthetic-draft-remote.js";
 import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
 import { createGatewayAtlassianHttpBodyPort } from "./httpPort.js";
-import { JIRA_MUTATION_DECLARATIONS } from "./jiraManagedMutationDescriptors.js";
+import { jiraMutationDeclarations } from "./jiraManagedMutationDescriptors.js";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { chatToolTurnPartialAnswer } from "../chat-tool-turn-ending.js";
 import { jiraMutationToolId } from "./jiraMutationToolId.js";
@@ -46,6 +46,8 @@ import {
   observedJiraDraftOutcome,
   type JiraChatDraftExecution,
 } from "./jiraChatDraft.js";
+
+const JIRA_MUTATION_DECLARATIONS = jiraMutationDeclarations();
 
 const BASE_URL = SYNTHETIC_JIRA_BASE_URL;
 const cleanup: (() => void)[] = [];

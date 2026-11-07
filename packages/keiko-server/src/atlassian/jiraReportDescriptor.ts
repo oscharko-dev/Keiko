@@ -47,7 +47,8 @@ const DESCRIPTION =
   "For a Jira comment, get section comment and post its text verbatim. issuesWithoutTemplate: no template judged them. " +
   "A refusal names invalidArguments or a message.";
 
-export const JIRA_REPORT_DECLARATION: ManagedMcpToolDeclaration = Object.freeze({
+export function jiraReportDeclaration(): ManagedMcpToolDeclaration {
+  return Object.freeze({
   name: "jira.report",
   risk: "read",
   descriptor: createToolDescriptor({
@@ -85,4 +86,5 @@ export const JIRA_REPORT_DECLARATION: ManagedMcpToolDeclaration = Object.freeze(
     idempotency: "server-key-required",
     cancellation: "before-effect",
   }),
-});
+  });
+}

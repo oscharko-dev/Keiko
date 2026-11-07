@@ -4,7 +4,7 @@ import {
   jiraOperationContracts,
   jiraOperationForTool,
 } from "./jiraManagedProvider.js";
-import { JIRA_MUTATION_DECLARATIONS } from "./jiraManagedMutationDescriptors.js";
+import { jiraMutationDeclarations } from "./jiraManagedMutationDescriptors.js";
 import {
   createJiraOperationContract,
   createJiraOperationContracts,
@@ -12,6 +12,8 @@ import {
   isJiraOperationBinding,
 } from "./jiraOperationRegistry.js";
 import { createToolDescriptor } from "@oscharko-dev/keiko-tool-catalog";
+
+const JIRA_MUTATION_DECLARATIONS = jiraMutationDeclarations();
 
 describe("server-owned Jira operation contracts", () => {
   it("reads a closed historical binding without granting current execution authority", () => {
@@ -38,7 +40,7 @@ describe("server-owned Jira operation contracts", () => {
   });
   it("keeps executable native operations distinct from local compositions", () => {
     const entries = jiraOperationContracts();
-    expect(entries.filter((entry) => entry.definition.kind === "native")).toHaveLength(183);
+    expect(entries.filter((entry) => entry.definition.kind === "native")).toHaveLength(190);
     expect(entries.filter((entry) => entry.definition.kind === "composite")).toHaveLength(3);
     expect(jiraOperationForTool("jira.discover")).toBeUndefined();
     expect(jiraOperationForTool("DELETE /rest/api/2/project")).toBeUndefined();

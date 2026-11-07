@@ -61,7 +61,8 @@ function detailTarget(
     ? { target: args.issueKey, worklogId: args.worklogId }
     : undefined;
 }
-function linkType(value: unknown): CatalogJsonObject | undefined {
+/** Native link-type identity and relation labels; remote self URLs never enter the projection. */
+export function jiraIssueLinkTypeProjection(value: unknown): CatalogJsonObject | undefined {
   const raw = asRecord(value);
   if (
     !raw ||
@@ -76,7 +77,7 @@ function linkType(value: unknown): CatalogJsonObject | undefined {
 function issueLink(value: unknown, id: string): CatalogJsonObject | undefined {
   const raw = asRecord(value);
   if (raw?.id !== id) return undefined;
-  const type = linkType(raw.type);
+  const type = jiraIssueLinkTypeProjection(raw.type);
   const inward = asRecord(raw.inwardIssue)?.key;
   const outward = asRecord(raw.outwardIssue)?.key;
   if (
@@ -145,7 +146,7 @@ async function readLink(
   if (name === "jira.issue-link") return single(issueLink(response.body, selected.target ?? ""));
   const raw = response.body?.issueLinkTypes;
   if (!Array.isArray(raw)) return jiraReadFailure("malformed-payload");
-  const items = projectJiraCollection(raw, TOOL_CATALOG_LIMITS.maxArrayItems, linkType, "id");
+  const items = projectJiraCollection(raw, TOOL_CATALOG_LIMITS.maxArrayItems, jiraIssueLinkTypeProjection, "id");
   return items === undefined
     ? jiraReadFailure("malformed-payload")
     : boundJiraReadResult(localJiraPage(items, selected.startAt, selected.maxResults));
