@@ -2015,6 +2015,7 @@ function WorkbenchColumns({
         <CodingWorkbenchInboxPanel
           runId={runId}
           running={state.run.value?.state === "running"}
+          offered={offeredCodingWorkbenchPromptInputs(state).delivery}
           revision={state.run.value?.revision}
           deliveredSignal={deliveredMessageSignal(activity.feed)}
           busy={state.mutation.status === "pending"}

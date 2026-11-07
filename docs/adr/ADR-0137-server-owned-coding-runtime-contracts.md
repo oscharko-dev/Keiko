@@ -1895,7 +1895,10 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   stopped or undone turn cannot hand them to the next prompt; a failed withdrawal is logged and does
   not fail the stop. The Workbench lists the messages above the composer with Cancel and, for a queued
   one, Send now, and refreshes on the run's revision and on the conversation gaining a message (no
-  polling); a failed read is a retryable error, never an empty list.
+  polling); a failed read is a retryable error, never an empty list. It reads the list only while
+  readiness offers delivery (`promptInputs.delivery`): under a profile that takes no delivery, such as
+  the mapped Windows profile, the server refuses every read as `unsupported`, and the Workbench left
+  one warn line per refresh until it stopped asking (#4068, 2026-11-07).
 - **A turn may run as one of the runtime's slash commands (C02).** The pinned producer lists its
   commands (`GET /api/command`, `command.list`: `init`, guided AGENTS.md setup, and `review`, review
   of the changes, defaulting to the uncommitted ones) and runs one as a turn (`POST

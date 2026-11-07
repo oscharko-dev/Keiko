@@ -6175,8 +6175,10 @@ describe("messages waiting for the running turn (S07)", () => {
 
   function runningState(
     state: CodingWorkbenchRuntimeStateName = "running",
+    delivery = true,
   ): CodingWorkbenchRuntimeState {
     return liveState({
+      promptInputs: { delivery, references: false },
       run: {
         status: "ready",
         value: snapshot({ state, runId: "run-1", revision: 4 }),
@@ -6195,10 +6197,20 @@ describe("messages waiting for the running turn (S07)", () => {
     expect(inboxHookMock).toHaveBeenCalledWith({
       runId: "run-1",
       live: true,
+      offered: true,
       revision: 4,
       deliveredSignal: null,
     });
     expect(screen.queryByRole("region", { name: "Messages waiting for this task" })).toBeNull();
+  });
+
+  // #4068: the mapped profile (Windows) takes no message while a turn runs, so its inbox is never read.
+  it("tells the hook the runtime's profile takes no waiting message when readiness offers no delivery", () => {
+    renderWorkbench(runningState("running", false));
+
+    expect(inboxHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "run-1", live: true, offered: false }),
+    );
   });
 
   it("counts the messages of the conversation the feed holds as the delivered signal", () => {
