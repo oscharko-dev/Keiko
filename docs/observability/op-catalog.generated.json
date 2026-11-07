@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "338c7e8ef3d1c71f2a45acb01381778059a61f9be7b02c41faebdde743d02a2e",
+    "catalogDigest": "0a658d73ce084a59df53f1f37e7f867507590f74472b92a5174bb92265994f71",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -20748,8 +20748,8 @@
         "analyzerProjection": "failure-cluster",
         "failureClasses": ["memory-embedding-request"],
         "proofIds": ["embedding.memory.failed.line"],
-        "registrationSite": "packages/keiko-server/src/memory-embedding.ts:94",
-        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:345"]
+        "registrationSite": "packages/keiko-server/src/memory-embedding.ts:95",
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:346"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -20799,8 +20799,8 @@
         "analyzerProjection": "timeline",
         "failureClasses": ["memory-embedding-request"],
         "proofIds": ["embedding.memory.succeeded.line"],
-        "registrationSite": "packages/keiko-server/src/memory-embedding.ts:138",
-        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:387"]
+        "registrationSite": "packages/keiko-server/src/memory-embedding.ts:139",
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:388"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -20838,8 +20838,8 @@
         "analyzerProjection": "capability",
         "failureClasses": ["memory-embedding-unavailable"],
         "proofIds": ["embedding.memory.unavailable.line"],
-        "registrationSite": "packages/keiko-server/src/memory-embedding.ts:74",
-        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:325"]
+        "registrationSite": "packages/keiko-server/src/memory-embedding.ts:75",
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:326"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -34002,7 +34002,7 @@
         "proofIds": ["memory-vault.store.encryption-checkpoint-degraded.state"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-memory-vault/src/schema.ts:69",
-        "emitterSites": ["packages/keiko-memory-vault/src/schema.ts:413"]
+        "emitterSites": ["packages/keiko-memory-vault/src/schema.ts:450"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -34080,8 +34080,8 @@
         "failureClasses": ["memory-vault-open"],
         "proofIds": ["memory-vault.store.opened.key-source"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-memory-vault/src/vault.ts:123",
-        "emitterSites": ["packages/keiko-memory-vault/src/vault.ts:475"]
+        "registrationSite": "packages/keiko-memory-vault/src/vault.ts:126",
+        "emitterSites": ["packages/keiko-memory-vault/src/vault.ts:478"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -34213,8 +34213,8 @@
         "analyzerProjection": "timeline",
         "failureClasses": ["memory-capture-novelty"],
         "proofIds": ["memory.capture.novelty-gate.line"],
-        "registrationSite": "packages/keiko-server/src/memory-embedding.ts:179",
-        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:850"]
+        "registrationSite": "packages/keiko-server/src/memory-embedding.ts:180",
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:904"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -34247,8 +34247,8 @@
         "analyzerProjection": "timeline",
         "failureClasses": ["memory-embedding-invalidation"],
         "proofIds": ["memory.embedding.invalidated.line"],
-        "registrationSite": "packages/keiko-server/src/memory-embedding.ts:160",
-        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:522"]
+        "registrationSite": "packages/keiko-server/src/memory-embedding.ts:161",
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:523"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -34281,8 +34281,8 @@
         "analyzerProjection": "failure-cluster",
         "failureClasses": ["memory-embedding-invalidation"],
         "proofIds": ["memory.embedding.invalidation-failed.line"],
-        "registrationSite": "packages/keiko-server/src/memory-embedding.ts:124",
-        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:376"]
+        "registrationSite": "packages/keiko-server/src/memory-embedding.ts:125",
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:377"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -34315,8 +34315,8 @@
         "analyzerProjection": "failure-cluster",
         "failureClasses": ["memory-embedding-storage"],
         "proofIds": ["memory.embedding.store-rejected.line"],
-        "registrationSite": "packages/keiko-server/src/memory-embedding.ts:110",
-        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:371"]
+        "registrationSite": "packages/keiko-server/src/memory-embedding.ts:111",
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:372"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -34345,12 +34345,12 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["forgotten", "ambiguous", "refused", "failed"]
+            "values": ["forgotten", "ambiguous", "refused", "failed", "not-stored"]
           }
         },
         "proofIds": ["memory.explicit.forget.line"],
-        "registrationSite": "packages/keiko-server/src/memory-explicit-statement-log.ts:27",
-        "emitterSites": ["packages/keiko-server/src/memory-explicit-statement-log.ts:47"]
+        "registrationSite": "packages/keiko-server/src/memory-explicit-statement-log.ts:35",
+        "emitterSites": ["packages/keiko-server/src/memory-explicit-statement-log.ts:55"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -34383,8 +34383,188 @@
           }
         },
         "proofIds": ["memory.explicit.remember.line"],
-        "registrationSite": "packages/keiko-server/src/memory-explicit-statement-log.ts:61",
-        "emitterSites": ["packages/keiko-server/src/memory-explicit-statement-log.ts:81"]
+        "registrationSite": "packages/keiko-server/src/memory-explicit-statement-log.ts:69",
+        "emitterSites": ["packages/keiko-server/src/memory-explicit-statement-log.ts:89"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "owner": "keiko-server",
+        "causal": "none",
+        "releaseImpact": "patch",
+        "category": "memory",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["memory-learned-facts"],
+        "op": "memory.learn.dropped",
+        "emitter": "memory-learned-facts-log.logLearnedDrop",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "no-evidence",
+              "evidence-not-verbatim",
+              "evidence-too-long",
+              "not-clause-boundary",
+              "question",
+              "request",
+              "past-statement",
+              "quoted",
+              "hypothetical",
+              "ironic",
+              "negated-context",
+              "uncertain",
+              "not-self",
+              "we-statement",
+              "no-first-person",
+              "third-party",
+              "not-entailed",
+              "polarity-changed",
+              "personal-identifier",
+              "unknown-type",
+              "denied-content"
+            ]
+          },
+          "count": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "sourceMessageCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "proofIds": ["memory.learn.dropped.line"],
+        "registrationSite": "packages/keiko-server/src/memory-learned-facts-log.ts:81",
+        "emitterSites": ["packages/keiko-server/src/memory-learned-facts-log.ts:105"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "owner": "keiko-server",
+        "causal": "none",
+        "releaseImpact": "patch",
+        "category": "memory",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["memory-learned-facts"],
+        "op": "memory.learn.extraction",
+        "emitter": "memory-learned-facts-log.logLearnedExtraction",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "rawItemCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "admittedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "knownFactCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "sourceMessageCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "proofIds": ["memory.learn.extraction.line"],
+        "registrationSite": "packages/keiko-server/src/memory-learned-facts-log.ts:28",
+        "emitterSites": ["packages/keiko-server/src/memory-learned-facts-log.ts:51"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "owner": "keiko-server",
+        "causal": "none",
+        "releaseImpact": "patch",
+        "category": "memory",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["memory-learned-facts"],
+        "op": "memory.learn.relation",
+        "emitter": "memory-learned-facts-log.logLearnedRelation",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "label": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["new", "same", "update", "contradiction"]
+          },
+          "decision": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "new",
+              "confirmed",
+              "merged",
+              "superseded",
+              "supersession-proposed",
+              "unconfirmed-dropped",
+              "refused"
+            ]
+          },
+          "basis": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "reversed",
+              "number-changed",
+              "polarity-changed",
+              "slot-changed",
+              "stated-change",
+              "validity-changed"
+            ]
+          },
+          "sourceMessageCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "proofIds": ["memory.learn.relation.line"],
+        "registrationSite": "packages/keiko-server/src/memory-learned-facts-log.ts:141",
+        "emitterSites": ["packages/keiko-server/src/memory-learned-facts-log.ts:179"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39301,6 +39481,180 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-security/src/fs-atomic-rename.ts:21",
         "emitterSites": ["packages/keiko-security/src/fs-atomic-rename.ts:143"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "category": "security",
+        "owner": "keiko-security",
+        "causal": "none",
+        "failureClasses": ["security-java-parse-bound"],
+        "releaseImpact": "patch",
+        "op": "security.java-parser.unavailable",
+        "emitter": "redaction-java-parser.emitParserUnavailable",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "workerOrdinal": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["starting", "start-refused"]
+          }
+        },
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "proofIds": ["security.java-parser.unavailable.line"],
+        "registrationSite": "packages/keiko-security/src/redaction-java-parser.ts:165",
+        "emitterSites": ["packages/keiko-security/src/redaction-java-parser.ts:447"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "category": "security",
+        "owner": "keiko-security",
+        "causal": "none",
+        "failureClasses": ["security-java-parse-bound"],
+        "releaseImpact": "patch",
+        "op": "security.java-parser.worker-recycled",
+        "emitter": "redaction-java-parser.emitWorkerRecycled",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "workerOrdinal": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "parseCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "workerAgeMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": true
+          },
+          "heapMiB": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "lifecycle": "end",
+        "analyzerProjection": "timeline",
+        "proofIds": ["security.java-parser.worker-recycled.line"],
+        "registrationSite": "packages/keiko-security/src/redaction-java-parser.ts:130",
+        "emitterSites": ["packages/keiko-security/src/redaction-java-parser.ts:324"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "category": "security",
+        "owner": "keiko-security",
+        "causal": "none",
+        "failureClasses": ["security-java-parse-bound"],
+        "releaseImpact": "patch",
+        "op": "security.java-parser.worker-retired",
+        "emitter": "redaction-java-parser.emitWorkerRetired",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "workerOrdinal": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["deadline", "exited", "transfer", "desync", "start-failed", "start-deadline"]
+          },
+          "parseCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "workerAgeMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": true
+          }
+        },
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "proofIds": ["security.java-parser.worker-retired.line"],
+        "registrationSite": "packages/keiko-security/src/redaction-java-parser.ts:145",
+        "emitterSites": ["packages/keiko-security/src/redaction-java-parser.ts:340"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "category": "security",
+        "owner": "keiko-security",
+        "causal": "none",
+        "failureClasses": ["security-java-parse-bound"],
+        "releaseImpact": "patch",
+        "op": "security.java-parser.worker-started",
+        "emitter": "redaction-java-parser.emitWorkerStarted",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "workerOrdinal": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "startupMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": true
+          }
+        },
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "proofIds": ["security.java-parser.worker-started.line"],
+        "registrationSite": "packages/keiko-security/src/redaction-java-parser.ts:117",
+        "emitterSites": ["packages/keiko-security/src/redaction-java-parser.ts:313"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -54307,6 +54661,35 @@
       {
         "contractKind": "activity-log-failure-class",
         "schemaVersion": 1,
+        "failureClass": "memory-learned-facts",
+        "requiredProductSurfaces": ["keiko-server"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": ["memory.learn.dropped", "memory.learn.extraction", "memory.learn.relation"],
+          "end": [],
+          "failure": [],
+          "loss": []
+        },
+        "requiredCausalOperations": [],
+        "requiredLossOperations": [],
+        "requiredProofOperations": [
+          "memory.learn.dropped",
+          "memory.learn.extraction",
+          "memory.learn.relation"
+        ],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": [
+          "memory.learn.dropped",
+          "memory.learn.extraction",
+          "memory.learn.relation"
+        ],
+        "requiredEvidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
         "failureClass": "memory-embedding-invalidation",
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
@@ -55438,6 +55821,42 @@
         "requiredReplayProofIds": [],
         "requiredResourceOperations": ["security.fs.atomic-rename-retried"],
         "requiredEvidenceClasses": ["completeness-state", "count", "error-kind", "loss-state"],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
+        "failureClass": "security-java-parse-bound",
+        "requiredProductSurfaces": ["keiko-security"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": ["security.java-parser.unavailable", "security.java-parser.worker-started"],
+          "end": ["security.java-parser.worker-recycled"],
+          "failure": ["security.java-parser.worker-retired"],
+          "loss": []
+        },
+        "requiredCausalOperations": [],
+        "requiredLossOperations": [],
+        "requiredProofOperations": [
+          "security.java-parser.unavailable",
+          "security.java-parser.worker-recycled",
+          "security.java-parser.worker-retired",
+          "security.java-parser.worker-started"
+        ],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": [
+          "security.java-parser.unavailable",
+          "security.java-parser.worker-recycled",
+          "security.java-parser.worker-started"
+        ],
+        "requiredEvidenceClasses": [
+          "closed-enum",
+          "completeness-state",
+          "count",
+          "duration",
+          "loss-state"
+        ],
         "requiredFrameOperations": [],
         "requiredCauseOperations": []
       },
@@ -57324,8 +57743,8 @@
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 390,
-      "completeClassCount": 390,
+      "supportedClassCount": 392,
+      "completeClassCount": 392,
       "completeness": "complete",
       "classes": [
         {
@@ -96002,6 +96421,164 @@
           "completeness": "complete"
         },
         {
+          "failureClass": "memory-learned-facts",
+          "requirementContract": "memory-learned-facts",
+          "productSurfaces": ["keiko-server"],
+          "lifecycleTransitions": ["state"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": ["memory.learn.dropped", "memory.learn.extraction", "memory.learn.relation"],
+            "end": [],
+            "failure": [],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "memory.learn.dropped",
+              "mode": "none"
+            },
+            {
+              "op": "memory.learn.extraction",
+              "mode": "none"
+            },
+            {
+              "op": "memory.learn.relation",
+              "mode": "none"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": [
+            "memory.learn.dropped",
+            "memory.learn.extraction",
+            "memory.learn.relation"
+          ],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "memory.learn.dropped",
+              "owner": "keiko-server",
+              "category": "memory",
+              "lifecycle": "state",
+              "causal": "none",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "count",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "reason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "sourceMessageCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["memory.learn.dropped.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "memory.learn.extraction",
+              "owner": "keiko-server",
+              "category": "memory",
+              "lifecycle": "state",
+              "causal": "none",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "admittedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "knownFactCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "rawItemCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "sourceMessageCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["memory.learn.extraction.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "memory.learn.relation",
+              "owner": "keiko-server",
+              "category": "memory",
+              "lifecycle": "state",
+              "causal": "none",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "basis",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "decision",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "label",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "sourceMessageCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["memory.learn.relation.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
           "failureClass": "memory-pressure",
           "requirementContract": "memory-pressure",
           "productSurfaces": ["keiko-cli"],
@@ -99895,6 +100472,198 @@
                 "causeChain": false
               },
               "proofIds": ["security.fs.atomic-rename-retried.attempts"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
+          "failureClass": "security-java-parse-bound",
+          "requirementContract": "security-java-parse-bound",
+          "productSurfaces": ["keiko-security"],
+          "lifecycleTransitions": ["end", "failure", "state"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": ["security.java-parser.unavailable", "security.java-parser.worker-started"],
+            "end": ["security.java-parser.worker-recycled"],
+            "failure": ["security.java-parser.worker-retired"],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "security.java-parser.unavailable",
+              "mode": "none"
+            },
+            {
+              "op": "security.java-parser.worker-recycled",
+              "mode": "none"
+            },
+            {
+              "op": "security.java-parser.worker-retired",
+              "mode": "none"
+            },
+            {
+              "op": "security.java-parser.worker-started",
+              "mode": "none"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": [
+            "security.java-parser.unavailable",
+            "security.java-parser.worker-recycled",
+            "security.java-parser.worker-started"
+          ],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "security.java-parser.unavailable",
+              "owner": "keiko-security",
+              "category": "security",
+              "lifecycle": "state",
+              "causal": "none",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "reason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "workerOrdinal",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["security.java-parser.unavailable.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "security.java-parser.worker-recycled",
+              "owner": "keiko-security",
+              "category": "security",
+              "lifecycle": "end",
+              "causal": "none",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "heapMiB",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "parseCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "workerAgeMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": true
+                },
+                {
+                  "name": "workerOrdinal",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["completeness-state", "count", "duration", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["security.java-parser.worker-recycled.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "security.java-parser.worker-retired",
+              "owner": "keiko-security",
+              "category": "security",
+              "lifecycle": "failure",
+              "causal": "none",
+              "analyzerProjection": "failure-cluster",
+              "safeContextFields": [
+                {
+                  "name": "parseCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "reason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "workerAgeMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": true
+                },
+                {
+                  "name": "workerOrdinal",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "duration",
+                "loss-state"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["security.java-parser.worker-retired.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "security.java-parser.worker-started",
+              "owner": "keiko-security",
+              "category": "security",
+              "lifecycle": "state",
+              "causal": "none",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "startupMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": true
+                },
+                {
+                  "name": "workerOrdinal",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["completeness-state", "count", "duration", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["security.java-parser.worker-started.line"],
               "replayReferences": [],
               "missingObligations": []
             }
@@ -109406,7 +110175,7 @@
     {
       "op": "memory-vault.store.opened",
       "category": "memory",
-      "site": "packages/keiko-memory-vault/src/vault.ts:126",
+      "site": "packages/keiko-memory-vault/src/vault.ts:129",
       "package": "keiko-memory-vault"
     },
     {
@@ -109902,6 +110671,30 @@
       "package": "keiko-security"
     },
     {
+      "op": "security.java-parser.unavailable",
+      "category": "security",
+      "site": "packages/keiko-security/src/redaction-java-parser.ts:167",
+      "package": "keiko-security"
+    },
+    {
+      "op": "security.java-parser.worker-recycled",
+      "category": "security",
+      "site": "packages/keiko-security/src/redaction-java-parser.ts:132",
+      "package": "keiko-security"
+    },
+    {
+      "op": "security.java-parser.worker-retired",
+      "category": "security",
+      "site": "packages/keiko-security/src/redaction-java-parser.ts:147",
+      "package": "keiko-security"
+    },
+    {
+      "op": "security.java-parser.worker-started",
+      "category": "security",
+      "site": "packages/keiko-security/src/redaction-java-parser.ts:119",
+      "package": "keiko-security"
+    },
+    {
       "op": "security.keychain.fallback",
       "category": "security",
       "site": "packages/keiko-security/src/macos-keychain.ts:38",
@@ -110035,7 +110828,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1778",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1782",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -110215,7 +111008,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:3348",
+      "site": "packages/keiko-server/src/grounded-qa.ts:3361",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -110271,7 +111064,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-salience.ts:294",
+      "site": "packages/keiko-server/src/memory-salience.ts:327",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -110632,7 +111425,7 @@
     {
       "op": "chat.compaction.summary.scheduled",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:2144",
+      "site": "packages/keiko-server/src/chat-handlers.ts:2148",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -110724,7 +111517,7 @@
     {
       "op": "chat.memory.auto-maintenance",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1398",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1399",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -112437,19 +113230,19 @@
     {
       "op": "embedding.memory.failed",
       "category": "embedding",
-      "site": "packages/keiko-server/src/memory-embedding.ts:96",
+      "site": "packages/keiko-server/src/memory-embedding.ts:97",
       "package": "keiko-server"
     },
     {
       "op": "embedding.memory.succeeded",
       "category": "embedding",
-      "site": "packages/keiko-server/src/memory-embedding.ts:140",
+      "site": "packages/keiko-server/src/memory-embedding.ts:141",
       "package": "keiko-server"
     },
     {
       "op": "embedding.memory.unavailable",
       "category": "embedding",
-      "site": "packages/keiko-server/src/memory-embedding.ts:76",
+      "site": "packages/keiko-server/src/memory-embedding.ts:77",
       "package": "keiko-server"
     },
     {
@@ -112548,7 +113341,7 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:1680",
+      "site": "packages/keiko-server/src/deps.ts:1681",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -113208,7 +114001,7 @@
     {
       "op": "grounded.memory",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:3748",
+      "site": "packages/keiko-server/src/grounded-qa.ts:3761",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -113287,7 +114080,7 @@
     {
       "op": "invalidation-failed",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-embedding.ts:531",
+      "site": "packages/keiko-server/src/memory-embedding.ts:532",
       "package": "keiko-server"
     },
     {
@@ -113454,7 +114247,7 @@
     {
       "op": "managed-lsp.trust.restrict",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:2450",
+      "site": "packages/keiko-server/src/deps.ts:2451",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -113554,7 +114347,7 @@
     {
       "op": "memory.capture.novelty-gate",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-embedding.ts:181",
+      "site": "packages/keiko-server/src/memory-embedding.ts:182",
       "package": "keiko-server"
     },
     {
@@ -113588,31 +114381,49 @@
     {
       "op": "memory.embedding.invalidated",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-embedding.ts:162",
+      "site": "packages/keiko-server/src/memory-embedding.ts:163",
       "package": "keiko-server"
     },
     {
       "op": "memory.embedding.invalidation-failed",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-embedding.ts:126",
+      "site": "packages/keiko-server/src/memory-embedding.ts:127",
       "package": "keiko-server"
     },
     {
       "op": "memory.embedding.store-rejected",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-embedding.ts:112",
+      "site": "packages/keiko-server/src/memory-embedding.ts:113",
       "package": "keiko-server"
     },
     {
       "op": "memory.explicit.forget",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-explicit-statement-log.ts:29",
+      "site": "packages/keiko-server/src/memory-explicit-statement-log.ts:37",
       "package": "keiko-server"
     },
     {
       "op": "memory.explicit.remember",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-explicit-statement-log.ts:63",
+      "site": "packages/keiko-server/src/memory-explicit-statement-log.ts:71",
+      "package": "keiko-server"
+    },
+    {
+      "op": "memory.learn.dropped",
+      "category": "memory",
+      "site": "packages/keiko-server/src/memory-learned-facts-log.ts:83",
+      "package": "keiko-server"
+    },
+    {
+      "op": "memory.learn.extraction",
+      "category": "memory",
+      "site": "packages/keiko-server/src/memory-learned-facts-log.ts:30",
+      "package": "keiko-server"
+    },
+    {
+      "op": "memory.learn.relation",
+      "category": "memory",
+      "site": "packages/keiko-server/src/memory-learned-facts-log.ts:143",
       "package": "keiko-server"
     },
     {
@@ -113646,7 +114457,7 @@
     {
       "op": "memory.salience",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-salience.ts:249",
+      "site": "packages/keiko-server/src/memory-salience.ts:266",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -113983,7 +114794,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:4751",
+      "site": "packages/keiko-server/src/deps.ts:4752",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -114052,19 +114863,19 @@
     {
       "op": "store-rejected",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-embedding.ts:492",
+      "site": "packages/keiko-server/src/memory-embedding.ts:1013",
       "package": "keiko-server"
     },
     {
       "op": "store-rejected",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-embedding.ts:515",
+      "site": "packages/keiko-server/src/memory-embedding.ts:493",
       "package": "keiko-server"
     },
     {
       "op": "store-rejected",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-embedding.ts:900",
+      "site": "packages/keiko-server/src/memory-embedding.ts:516",
       "package": "keiko-server"
     },
     {
@@ -114149,7 +114960,7 @@
     {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:3336",
+      "site": "packages/keiko-server/src/deps.ts:3337",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -115221,6 +116032,9 @@
     "memory.embedding.store-rejected",
     "memory.explicit.forget",
     "memory.explicit.remember",
+    "memory.learn.dropped",
+    "memory.learn.extraction",
+    "memory.learn.relation",
     "memory.maintenance.autonomy-mode",
     "memory.maintenance.retention-policy",
     "memory.retrieval.semantic-disabled",
@@ -115290,6 +116104,10 @@
     "search.symbol-line.unavailable",
     "security.fs.atomic-rename-failed",
     "security.fs.atomic-rename-retried",
+    "security.java-parser.unavailable",
+    "security.java-parser.worker-recycled",
+    "security.java-parser.worker-retired",
+    "security.java-parser.worker-started",
     "security.keychain.fallback",
     "security.keychain.withheld",
     "security.log.sink-failed",

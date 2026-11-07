@@ -10,15 +10,18 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { SALIENCE_SYSTEM_PROMPT } from "../packages/keiko-memory-capture/dist/salience.js";
+
 const NPM_INSTALL_TIMEOUT_MS = 90_000;
 const HEALTH_TIMEOUT_MS = 30_000;
 const HEALTH_POLL_INTERVAL_MS = 250;
 const UI_START_TIMEOUT_MS = 30_000;
 const USER_ID = "memory-smoke-user";
 const MODEL_ID = "example-chat-model";
-// Salience capture (Epic #204) appends a SECOND model call per turn whose system prompt contains
-// this marker; the chat completion never does. Skip salience calls when inspecting model prompts.
-const SALIENCE_PROMPT_MARKER = "extract durable memories from a chat turn";
+// Salience capture (Epic #204) appends a SECOND model call per turn whose system prompt is the
+// production salience prompt; the chat completion never carries it. Skip salience calls when
+// inspecting model prompts. Derived from the producer, so a reworded prompt cannot hide the call.
+const SALIENCE_PROMPT_MARKER = JSON.stringify(SALIENCE_SYSTEM_PROMPT).slice(1, -1);
 const latestChatRequestOf = (entries) =>
   [...entries].reverse().find((entry) => !JSON.stringify(entry).includes(SALIENCE_PROMPT_MARKER));
 

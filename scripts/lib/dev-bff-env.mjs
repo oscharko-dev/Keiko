@@ -67,14 +67,25 @@ export function resolveDevBffStateDir({ repoRoot, processEnv }) {
  * (normally `process.env`) plus repo-local `.env` `KEIKO_*` keys folded in, `KEIKO_STATE_DIR`
  * pinned to `stateDir` (never the generic default `resolveDevBffStateDir` would fall back to on a
  * bare `processEnv` read), and the `KEIKO_UI_DATA_DIR`/`KEIKO_MEMORY_DIR` defaults derived from it.
+ *
+ * The evidence directory is derived from `stateDir` too, as `keiko ui` does, when neither
+ * `processEnv` nor the repo-local `.env` configures one (an empty value configures nothing, as in the
+ * CLI). Without it the BFF fell back to `./.keiko/evidence` in the checkout, so every dev BFF
+ * shared one memory audit, and with it the Journal's content-free Refused rows, whatever state
+ * directory it was given (#4212).
  */
 export function buildDevBffEnv({ repoRoot, processEnv, stateDir }) {
-  return loadLocalKeikoEnv(repoRoot, {
+  const env = loadLocalKeikoEnv(repoRoot, {
     ...processEnv,
     KEIKO_STATE_DIR: stateDir,
     KEIKO_UI_DATA_DIR: processEnv.KEIKO_UI_DATA_DIR ?? join(stateDir, "ui"),
     KEIKO_MEMORY_DIR: processEnv.KEIKO_MEMORY_DIR ?? join(stateDir, "memory"),
   });
+  const evidenceDir = env.KEIKO_EVIDENCE_DIR ?? "";
+  return {
+    ...env,
+    KEIKO_EVIDENCE_DIR: evidenceDir === "" ? join(stateDir, "evidence") : evidenceDir,
+  };
 }
 
 /**

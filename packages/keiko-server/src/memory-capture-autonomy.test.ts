@@ -50,43 +50,35 @@ import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics
 // A single durable public fact. Body carries no regex-capture trigger (no remember/forget/update/
 // correction/identity phrasing) so the deterministic regex path stays empty and the salience path
 // is the ONLY writer — this is what the "persisted exactly once" counts depend on.
-function publicFact(confidence: number): string {
-  return JSON.stringify([
-    {
-      source: "user",
-      body: "The platform team ships releases on a fortnightly cadence.",
-      type: "fact",
-      confidence,
-      scope: "project",
-      tags: ["release"],
-    },
-  ]);
-}
-
-const CONFIDENTIAL_FACT = JSON.stringify([
+const PUBLIC_FACT = JSON.stringify([
   {
-    source: "user",
-    body: "The escalation contact address is oncall@example.com.",
+    about: "self",
+    body: "I ship releases on a fortnightly cadence.",
+    evidence: "I ship releases on a fortnightly cadence.",
     type: "fact",
-    confidence: 0.7,
-    scope: "user",
-    tags: ["contact"],
   },
 ]);
 
-const SECRET_BODY = "The staging login uses password=FAKE-TEST-PLACEHOLDER-VALUE.";
+const CONFIDENTIAL_FACT = JSON.stringify([
+  {
+    about: "self",
+    body: "My escalation contact address is oncall@example.com.",
+    evidence: "My escalation contact address is oncall@example.com.",
+    type: "fact",
+  },
+]);
+
+const SECRET_BODY = "My staging login uses password=FAKE-TEST-PLACEHOLDER-VALUE.";
 const SECRET_TOKEN = "FAKE-TEST-PLACEHOLDER-VALUE";
 
 // A single credential-shaped item. The secret net drops it inside candidateBody before any mode
 // logic, so nothing is persisted in any mode.
 const SECRET_ONLY = JSON.stringify([
   {
-    source: "user",
+    about: "self",
     body: SECRET_BODY,
+    evidence: SECRET_BODY,
     type: "fact",
-    confidence: 0.8,
-    scope: "project",
-    tags: ["ops"],
   },
 ]);
 
@@ -94,8 +86,8 @@ const SECRET_ONLY = JSON.stringify([
 // trigger (deterministic path stays empty). Each accepted model body is an exact complete line from
 // this user turn, preserving the user-provenance boundary in the real salience extractor.
 const USER_TEXT = [
-  "The platform team ships releases on a fortnightly cadence.",
-  "The escalation contact address is oncall@example.com.",
+  "I ship releases on a fortnightly cadence.",
+  "My escalation contact address is oncall@example.com.",
 ].join("\n");
 
 const ALL_MODES: readonly CodingWorkbenchMode[] = [
@@ -412,7 +404,7 @@ describe("mode-aware memory capture journey", () => {
 
   it("keeps a routine public fact proposed under governed-assist (legacy default deps)", async () => {
     const vault = makeVault();
-    const deps = makeDeps({ vault, model: publicFact(0.7) });
+    const deps = makeDeps({ vault, model: PUBLIC_FACT });
     const ctx = context();
     await runTurn(deps, ctx, USER_TEXT);
     await waitForCount(vault, ctx, 1);
@@ -429,7 +421,7 @@ describe("mode-aware memory capture journey", () => {
 
   it("auto-accepts a routine public fact under supervised-coding (confidence >= promote floor)", async () => {
     const vault = makeVault();
-    const deps = makeDeps({ vault, model: publicFact(0.7), mode: "supervised-coding" });
+    const deps = makeDeps({ vault, model: PUBLIC_FACT, mode: "supervised-coding" });
     const ctx = context();
     const actions = await runTurn(deps, ctx, USER_TEXT);
     await waitForCount(vault, ctx, 1);
@@ -447,7 +439,7 @@ describe("mode-aware memory capture journey", () => {
 
   it("auto-accepts a routine public fact under autonomous-delivery", async () => {
     const vault = makeVault();
-    const deps = makeDeps({ vault, model: publicFact(0.7), mode: "autonomous-delivery" });
+    const deps = makeDeps({ vault, model: PUBLIC_FACT, mode: "autonomous-delivery" });
     const ctx = context();
     await runTurn(deps, ctx, USER_TEXT);
     await waitForCount(vault, ctx, 1);
@@ -461,7 +453,7 @@ describe("mode-aware memory capture journey", () => {
     const allowedVault = makeVault();
     const allowedDeps = makeDeps({
       vault: allowedVault,
-      model: publicFact(0.7),
+      model: PUBLIC_FACT,
       mode: "autonomous-delivery",
     });
     const allowedContext = context();
@@ -475,7 +467,7 @@ describe("mode-aware memory capture journey", () => {
     expect(readMemories(allowedVault, allowedContext)[0]?.status).toBe("accepted");
 
     const cappedVault = makeVault();
-    const cappedDeps = makeDeps({ vault: cappedVault, model: publicFact(0.7) });
+    const cappedDeps = makeDeps({ vault: cappedVault, model: PUBLIC_FACT });
     const cappedContext = context();
     await captureSalientFromTurn(
       cappedDeps,
@@ -487,16 +479,18 @@ describe("mode-aware memory capture journey", () => {
     expect(readMemories(cappedVault, cappedContext)[0]?.status).toBe("proposed");
   });
 
-  it("keeps a low-confidence public fact proposed under supervised-coding (shouldPromote gate holds)", async () => {
+  it("derives confidence from the person's words, never from what the model claims (#4212)", async () => {
     const vault = makeVault();
-    const deps = makeDeps({ vault, model: publicFact(0.3), mode: "supervised-coding" });
+    const claimed = JSON.stringify([
+      { ...(JSON.parse(PUBLIC_FACT) as object[])[0], confidence: 0.01 },
+    ]);
+    const deps = makeDeps({ vault, model: claimed, mode: "supervised-coding" });
     const ctx = context();
     await runTurn(deps, ctx, USER_TEXT);
     await waitForCount(vault, ctx, 1);
     const [record] = readMemories(vault, ctx);
-    expect(record?.status).toBe("proposed");
-    expect(readByStatus(vault, ctx, "proposed")).toHaveLength(1);
-    expect(readByStatus(vault, ctx, "accepted")).toHaveLength(0);
+    expect(record?.provenance.confidence).toBe(0.85);
+    expect(record?.status).toBe("accepted");
   });
 
   it.each(ALL_MODES)("keeps a confidential fact proposed under %s", async (mode) => {
@@ -541,7 +535,7 @@ describe("mode-aware memory capture journey", () => {
 
   it("holds a proposed fact out of retrieval AND does not re-propose it on the next turn", async () => {
     const vault = makeVault();
-    const deps = makeDeps({ vault, model: publicFact(0.7) }); // governed-assist (no ceiling)
+    const deps = makeDeps({ vault, model: PUBLIC_FACT }); // governed-assist (no ceiling)
     const ctx = context();
     const first = await captureSalientFromTurn(deps, salienceRequest(), ctx, "gpt-test", "ok");
     expect(first).toHaveLength(1);
@@ -561,7 +555,7 @@ describe("mode-aware memory capture journey", () => {
   it("does not re-propose a fact the operator rejected, and audits the refusal", async () => {
     const vault = makeVault();
     const evidence = capturingEvidenceStore();
-    const deps = makeDeps({ vault, model: publicFact(0.7), evidenceStore: evidence.store });
+    const deps = makeDeps({ vault, model: PUBLIC_FACT, evidenceStore: evidence.store });
     const ctx = context();
     await captureSalientFromTurn(deps, salienceRequest(), ctx, "gpt-test", "ok");
     const proposal = readMemories(vault, ctx)[0];
@@ -588,7 +582,7 @@ describe("mode-aware memory capture journey", () => {
 
   it("surfaces a supervised-accepted fact in the next turn's retrieval snapshot", async () => {
     const vault = makeVault();
-    const deps = makeDeps({ vault, model: publicFact(0.7), mode: "supervised-coding" });
+    const deps = makeDeps({ vault, model: PUBLIC_FACT, mode: "supervised-coding" });
     const ctx = context();
     const first = await captureSalientFromTurn(deps, salienceRequest(), ctx, "gpt-test", "ok");
     expect(first).toHaveLength(1);
@@ -607,7 +601,7 @@ describe("mode-aware memory capture journey", () => {
         return Promise.reject(new Error("model exploded"));
       },
     };
-    const deps = makeDeps({ vault, model: publicFact(0.7), mode: "autonomous-delivery" });
+    const deps = makeDeps({ vault, model: PUBLIC_FACT, mode: "autonomous-delivery" });
     const ctx = context();
     // collectMemoryActions returns synchronously well-formed (regex path is empty).
     const actions = await runTurn(
@@ -695,7 +689,7 @@ describe("explicit remember statement in chat", () => {
       const vault = makeVault();
       const ctx = context();
       const model = JSON.stringify([
-        { source: "user", body: content, type: "fact", confidence: 0.95, scope: "user" },
+        { about: "self", body: content, evidence: content, type: "fact", scope: "user" },
       ]);
       const deps = makeDeps({ vault, model, mode: "autonomous-delivery" });
       const request = { ...salienceRequest("autonomous-delivery"), content };
@@ -906,19 +900,26 @@ describe("explicit forget statement in chat", () => {
     ctx: ConversationMemoryRuntimeContext,
     mode: CodingWorkbenchMode,
     scope: "user" | "project",
+    // The turn the fact came from, as the chat handlers pass it: "m1" is the last statement.
+    sourceMessageId?: string,
   ): Promise<UiHandlerDeps> {
     const content = JSON.stringify([
       {
-        source: "user",
-        body: "The platform team ships releases on a fortnightly cadence.",
+        about: "self",
+        body: "I ship releases on a fortnightly cadence.",
+        evidence: "I ship releases on a fortnightly cadence.",
         type: "fact",
-        confidence: 0.95,
         scope,
-        tags: ["release"],
       },
     ]);
     const deps = makeDeps({ vault, model: content, mode });
-    await captureSalientFromTurn(deps, salienceRequest(mode), ctx, "fake-model", "ok");
+    await captureSalientFromTurn(
+      deps,
+      { ...salienceRequest(mode), ...(sourceMessageId === undefined ? {} : { sourceMessageId }) },
+      ctx,
+      "fake-model",
+      "ok",
+    );
     return deps;
   }
 
@@ -928,7 +929,7 @@ describe("explicit forget statement in chat", () => {
       const ctx = context();
       const statement = "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.";
       const content = JSON.stringify([
-        { source: "user", body: statement, type: "preference", confidence: 0.95, scope: "user" },
+        { about: "self", body: statement, evidence: statement, type: "preference", scope: "user" },
       ]);
       const deps = withPreviousStatement(makeDeps({ vault, model: content, mode }), statement);
       const sink = captureActivityLog();
@@ -952,6 +953,95 @@ describe("explicit forget statement in chat", () => {
     }
   });
 
+  // A thing named with an article, then a request for the answer (#4212): the real resolver looks
+  // the memory up by its name alone, and a name nothing stored matches is an ordinary request whose
+  // turn forgot nothing, recorded as `not-stored` without a question.
+  it("forgets what an answer-asking forget names, and records one that names nothing", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const deps = makeDeps({ vault, model: "[]", mode: "governed-assist" });
+    await collectMemoryActions(deps, turnRequest("Remember that my editor is Vim"), ctx);
+    expect(readMemories(vault, ctx)).toHaveLength(1);
+    const sink = captureActivityLog();
+
+    const unrelated = await collectMemoryActions(
+      deps,
+      turnRequest("Forget the formatting, just give me the answer"),
+      ctx,
+      "request-1",
+    );
+
+    expect(unrelated).toEqual([]);
+    const notStored = sink.events.find((event) => event.op === "memory.explicit.forget");
+    expect(notStored?.correlationId).toBe("request-1");
+    expect(
+      expectActivityLogProof(
+        "memory.explicit.forget.line",
+        formatActivityLogProofLine(notStored ?? {}),
+      ),
+    ).toMatchObject({ outcome: "not-stored" });
+    expect(readMemories(vault, ctx)).toHaveLength(1);
+
+    const named = await collectMemoryActions(
+      deps,
+      turnRequest("Forget the editor, then tell me what you have"),
+      ctx,
+    );
+
+    expect(named).toEqual([expect.objectContaining({ kind: "forget", forgotten: true })]);
+    expect(readMemories(vault, ctx)).toHaveLength(0);
+    // Only the unmatched one is `not-stored`; the forget that matched records `forgotten`.
+    expect(
+      sink.events
+        .filter((event) => event.op === "memory.explicit.forget")
+        .map((event) => event.extra?.outcome),
+    ).toEqual(["not-stored", "forgotten"]);
+  });
+
+  // The person's own fact, then a request for the answer (#4212): the real resolver finds it by its
+  // name alone, where the whole clause ("… and tell me when it is gone") matched no memory and the
+  // person was asked which one they meant.
+  it.each([
+    ["Remember that my editor is Vim", "Forget my editor and tell me when it is gone"],
+    [
+      "Merke dir, dass meine Adresse Hauptstraße 5 ist",
+      "Vergiss meine Adresse und sag mir Bescheid",
+    ],
+    [
+      "Merke dir, dass meine Telefonnummer 0301234 ist",
+      "Vergiss einfach meine Telefonnummer; sag mir Bescheid, wenn sie weg ist",
+    ],
+  ])("forgets the person's own fact after %j when %j goes on", async (stated, forget) => {
+    const vault = makeVault();
+    const ctx = context();
+    const deps = makeDeps({ vault, model: "[]", mode: "governed-assist" });
+    await collectMemoryActions(deps, turnRequest(stated), ctx);
+    expect(readMemories(vault, ctx)).toHaveLength(1);
+
+    const actions = await collectMemoryActions(deps, turnRequest(forget), ctx);
+
+    expect(actions).toEqual([expect.objectContaining({ kind: "forget", forgotten: true })]);
+    expect(readMemories(vault, ctx)).toHaveLength(0);
+  });
+
+  it.each([
+    "Vergiss den alten API-Pfad, nimm den neuen",
+    "Was ist das Wetter morgen?",
+    "Forget my phone number and tell me when it is gone",
+  ])("records no not-stored line for %j", async (content) => {
+    const vault = makeVault();
+    const ctx = context();
+    const deps = makeDeps({ vault, model: "[]", mode: "governed-assist" });
+    const sink = captureActivityLog();
+
+    await collectMemoryActions(deps, turnRequest(content), ctx);
+
+    const outcomes = sink.events
+      .filter((event) => event.op === "memory.explicit.forget")
+      .map((event) => event.extra?.outcome);
+    expect(outcomes).not.toContain("not-stored");
+  });
+
   it('does not take an older memory for the statement before "Vergiss das"', async () => {
     const vault = makeVault();
     const ctx = context();
@@ -971,7 +1061,7 @@ describe("explicit forget statement in chat", () => {
     const asked = Date.now() + 60_000;
     const [record] = readMemories(vault, ctx);
     if (record === undefined) throw new Error("expected a memory");
-    vault.recordAccess([record.id], asked + 1);
+    vault.recordUse([record.id], asked + 1, ctx.conversationId);
     const deps = withPreviousStatement(learned, "Ich mag Kaffee.", asked);
 
     await collectMemoryActions(deps, turnRequest("Vergiss das."), ctx);
@@ -986,7 +1076,7 @@ describe("explicit forget statement in chat", () => {
     const asked = Date.now() + 60_000;
     const [record] = readMemories(vault, ctx);
     if (record === undefined) throw new Error("expected a memory");
-    vault.recordAccess([record.id], asked + 1);
+    vault.recordUse([record.id], asked + 1, ctx.conversationId);
     const said = { role: "user", content: "Vergiss das." } as ChatMessage;
     const deps = {
       ...learned,
@@ -1016,7 +1106,7 @@ describe("explicit forget statement in chat", () => {
       const turnStartedAt = Date.now() + 60_000;
       const [record] = readMemories(vault, ctx);
       if (record === undefined) throw new Error("expected a memory");
-      vault.recordAccess([record.id], turnStartedAt + 1);
+      vault.recordUse([record.id], turnStartedAt + 1, ctx.conversationId);
       const deps = withPreviousStatement(learned, statement, turnStartedAt);
 
       const actions = await collectMemoryActions(deps, turnRequest("Vergiss das."), ctx);
@@ -1025,6 +1115,30 @@ describe("explicit forget statement in chat", () => {
       expect(readMemories(vault, ctx)).toHaveLength(0);
     },
   );
+
+  // Review of #4285: a confirmation in another chat once overwrote this chat's touch, so "Vergiss
+  // das" answered forgotten while the memory stayed.
+  it("forgets what this chat confirmed although another chat touched it later", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const learned = await learnedFact(vault, ctx, "autonomous-delivery", "user");
+    const turnStartedAt = Date.now() + 60_000;
+    const [record] = readMemories(vault, ctx);
+    if (record === undefined) throw new Error("expected a memory");
+    vault.recordAccess([record.id], turnStartedAt + 1, ctx.conversationId);
+    vault.recordAccess([record.id], turnStartedAt + 2, "chat-other");
+    vault.recordUse([record.id], turnStartedAt + 3, "chat-other");
+    const deps = withPreviousStatement(
+      learned,
+      "Merke dir, dass ich Tabellen bevorzuge",
+      turnStartedAt,
+    );
+
+    const actions = await collectMemoryActions(deps, turnRequest("Vergiss das."), ctx);
+
+    expect(actions).toEqual([expect.objectContaining({ kind: "forget", forgotten: true })]);
+    expect(readMemories(vault, ctx)).toHaveLength(0);
+  });
 
   it.each(["Wie spät ist es?", "x".repeat(4097)])(
     "asks instead of leaving a tombstone for %.20j",
@@ -1059,7 +1173,7 @@ describe("explicit forget statement in chat", () => {
   it.each(ALL_MODES)("forgets the conversation's memory in %s", async (mode) => {
     const vault = makeVault();
     const ctx = context();
-    const learned = await learnedFact(vault, ctx, mode, "user");
+    const learned = await learnedFact(vault, ctx, mode, "user", "m1");
     const deps = withPreviousStatement(learned, USER_TEXT, Date.now() - 60_000);
     expect(readMemories(vault, ctx)).toHaveLength(1);
 
@@ -1162,7 +1276,7 @@ describe("explicit forget statement in chat", () => {
   it("forgets what the last turn left behind on a bare reference in a grounded turn", async () => {
     const vault = makeVault();
     const ctx = context();
-    const learned = await learnedFact(vault, ctx, "autonomous-delivery", "project");
+    const learned = await learnedFact(vault, ctx, "autonomous-delivery", "project", "m1");
     const deps = withPreviousStatement(learned, USER_TEXT, Date.now() - 60_000);
 
     await groundedForget(deps, ctx);
@@ -1178,12 +1292,97 @@ describe("explicit forget statement in chat", () => {
     const [record] = readMemories(vault, ctx);
     if (record === undefined) throw new Error("expected a memory");
     const said = Date.now() + 60_000;
-    vault.recordAccess([record.id], said + 1);
+    vault.recordAccess([record.id], said + 1, ctx.conversationId);
     const deps = withPreviousStatement(learned, statement, said);
 
     await collectMemoryActions(deps, turnRequest("Vergiss das."), ctx);
 
     expect(readMemories(vault, ctx)).toHaveLength(0);
+  });
+
+  it("forgets the memory a paraphrase confirmed, without the same wording", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const learned = await learnedFact(vault, ctx, "autonomous-delivery", "user");
+    const [record] = readMemories(vault, ctx);
+    if (record === undefined) throw new Error("expected a memory");
+    const said = Date.now() + 60_000;
+    vault.recordAccess([record.id], said + 1, ctx.conversationId);
+    const deps = withPreviousStatement(learned, "Das machen wir alle zwei Wochen so.", said);
+
+    await collectMemoryActions(deps, turnRequest("Vergiss das."), ctx);
+
+    expect(readMemories(vault, ctx)).toHaveLength(0);
+  });
+
+  it.each([
+    ["confirmed", "recordAccess"],
+    ["drew on", "recordUse"],
+  ] as const)("does not take a memory another chat %s for this chat's 'das'", async (_, touch) => {
+    const vault = makeVault();
+    const ctx = context();
+    const learned = await learnedFact(vault, ctx, "autonomous-delivery", "user");
+    const [record] = readMemories(vault, ctx);
+    if (record === undefined) throw new Error("expected a memory");
+    const asked = Date.now() + 60_000;
+    vault[touch]([record.id], asked + 1, "another-conversation");
+    const deps = withPreviousStatement(learned, "Wie arbeiten wir?", asked);
+
+    await collectMemoryActions(deps, turnRequest("Vergiss das."), ctx);
+
+    expect(readMemories(vault, ctx)).toHaveLength(1);
+  });
+
+  it.each([
+    ["an earlier turn stays", "turn-before", 1],
+    ["the last turn goes", "m1", 0],
+    ["an unknown turn stays", undefined, 1],
+  ] as const)(
+    "binds a late learned fact to the turn it came from: %s",
+    async (_, sourceMessageId, left) => {
+      const vault = makeVault();
+      const ctx = context();
+      const lastTurnStartedAt = Date.now() - 1;
+      const fact = "I ship releases on a fortnightly cadence.";
+      const content = JSON.stringify([
+        { about: "self", body: fact, evidence: fact, type: "fact", scope: "user" },
+      ]);
+      const deps = makeDeps({ vault, model: content, mode: "autonomous-delivery" });
+      await captureSalientFromTurn(
+        deps,
+        {
+          ...salienceRequest("autonomous-delivery"),
+          ...(sourceMessageId === undefined ? {} : { sourceMessageId }),
+        },
+        ctx,
+        "fake-model",
+        "ok",
+      );
+      expect(readMemories(vault, ctx)).toHaveLength(1);
+
+      await collectMemoryActions(
+        withPreviousStatement(deps, "Ich mag Kaffee.", lastTurnStartedAt),
+        turnRequest("Vergiss das."),
+        ctx,
+      );
+
+      expect(readMemories(vault, ctx)).toHaveLength(left);
+    },
+  );
+
+  it("does not take a touch without a known chat for this chat's 'das'", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const learned = await learnedFact(vault, ctx, "autonomous-delivery", "user");
+    const [record] = readMemories(vault, ctx);
+    if (record === undefined) throw new Error("expected a memory");
+    const asked = Date.now() + 60_000;
+    vault.recordAccess([record.id], asked + 1);
+    const deps = withPreviousStatement(learned, "Wie arbeiten wir?", asked);
+
+    await collectMemoryActions(deps, turnRequest("Vergiss das."), ctx);
+
+    expect(readMemories(vault, ctx)).toHaveLength(1);
   });
 
   it("skips this turn's own stored row when it reads the last turn of a grounded request", async () => {
@@ -1208,7 +1407,7 @@ describe("explicit forget statement in chat", () => {
   it("does not relearn the fact it forgot", async () => {
     const vault = makeVault();
     const ctx = context();
-    const learned = await learnedFact(vault, ctx, "autonomous-delivery", "project");
+    const learned = await learnedFact(vault, ctx, "autonomous-delivery", "project", "m1");
     const deps = withPreviousStatement(learned, USER_TEXT, Date.now() - 60_000);
     await collectMemoryActions(deps, turnRequest("Vergiss das."), ctx);
 
@@ -1222,7 +1421,11 @@ describe("explicit forget statement in chat", () => {
     const ctx = context();
     const deps = await learnedFact(vault, ctx, "autonomous-delivery", "project");
 
-    await collectMemoryActions(deps, turnRequest("Vergiss, dass das Team fortnightly ships."), ctx);
+    await collectMemoryActions(
+      deps,
+      turnRequest("Vergiss, dass ich releases fortnightly ship."),
+      ctx,
+    );
 
     expect(readMemories(vault, ctx)).toHaveLength(0);
   });

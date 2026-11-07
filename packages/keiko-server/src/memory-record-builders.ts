@@ -1,9 +1,9 @@
 import type { CaptureOutcome } from "@oscharko-dev/keiko-memory-capture";
-import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
+import type { MemoryId, MemoryProposal, MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
 
 export function buildMemoryRecordFromProposal(
   proposalId: MemoryId,
-  outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
+  outcome: { readonly kind: "candidate"; readonly proposal: MemoryProposal },
 ): MemoryRecord;
 export function buildMemoryRecordFromProposal(
   proposalId: MemoryId,
@@ -11,7 +11,7 @@ export function buildMemoryRecordFromProposal(
 ): MemoryRecord | null;
 export function buildMemoryRecordFromProposal(
   proposalId: MemoryId,
-  outcome: CaptureOutcome,
+  outcome: CaptureOutcome | { readonly kind: "candidate"; readonly proposal: MemoryProposal },
 ): MemoryRecord | null {
   if (outcome.kind !== "candidate") return null;
   const { proposal } = outcome;
@@ -21,6 +21,7 @@ export function buildMemoryRecordFromProposal(
     scope: proposal.scope,
     type: proposal.type,
     body: proposal.body,
+    ...(proposal.payload === undefined ? {} : { payload: proposal.payload }),
     tags: proposal.tags,
     provenance: proposal.provenance,
     validity: proposal.validity,

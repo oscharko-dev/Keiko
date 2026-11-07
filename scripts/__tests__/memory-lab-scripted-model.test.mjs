@@ -68,11 +68,11 @@ describe("memory lab scripted model", () => {
     expect(items).toEqual([
       {
         body: "Ich mag Tabellen.",
+        evidence: "Ich mag Tabellen.",
+        about: "self",
         type: "preference",
-        confidence: 0.8,
-        scope: "user",
-        source: "user",
-        tags: [],
+        relation: "new",
+        related: null,
       },
     ]);
     const second = await complete(fixture, { model: LEARNER_MODEL_ID, messages: [] });

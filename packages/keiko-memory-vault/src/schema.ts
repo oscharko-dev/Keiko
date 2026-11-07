@@ -62,7 +62,7 @@ import {
 // v11 = stable keyset traversal for the sealed tombstone vector ledger. The partial composite index
 // keeps each exact semantic-suppression page and each authorized audit page bounded without dropping
 // older refusals or exposing a plaintext vector sidecar.
-export const MEMORY_VAULT_SCHEMA_VERSION = 11;
+export const MEMORY_VAULT_SCHEMA_VERSION = 13;
 
 const ENCRYPTION_VERSION = 2;
 
@@ -241,6 +241,41 @@ CREATE INDEX IF NOT EXISTS idx_tombstones_scope_forgotten
   ON memory_tombstones(scope_kind, scope_coordinate, forgotten_at DESC, id ASC);
 `;
 
+// v12 = learned facts (#4212). A learned memory keeps the person's exact words it rests on and the
+// turns they came from; evidence_span is content and sealed like the body. memory_access gains
+// last_used_at: what an answer drew on is remembered for "Vergiss das" without counting as a
+// reinforcement, so a memory cannot strengthen itself by being repeated back. The two conversation
+// columns named the chat of the latest confirmation and use; v13 replaces them.
+const V12_SQL = `
+ALTER TABLE memories ADD COLUMN evidence_span TEXT;
+ALTER TABLE memories ADD COLUMN source_message_ids_json TEXT;
+ALTER TABLE memory_access ADD COLUMN last_used_at INTEGER;
+ALTER TABLE memory_access ADD COLUMN last_used_conversation_id TEXT;
+ALTER TABLE memory_access ADD COLUMN last_accessed_conversation_id TEXT;
+`;
+
+// v13 = each chat's own touch (#4212). One latest confirmation and use per memory let a touch in
+// another chat erase what this chat's last turn touched, so "Vergiss das" missed it. Each chat now
+// keeps its own row; the latest touches already recorded carry over, then the shared columns go.
+const V13_SQL = `
+CREATE TABLE memory_conversation_touches (
+  memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+  conversation_id TEXT NOT NULL,
+  confirmed_at INTEGER,
+  used_at INTEGER,
+  PRIMARY KEY (memory_id, conversation_id)
+) STRICT;
+INSERT INTO memory_conversation_touches (memory_id, conversation_id, confirmed_at)
+  SELECT memory_id, last_accessed_conversation_id, last_accessed_at FROM memory_access
+  WHERE last_accessed_conversation_id IS NOT NULL;
+INSERT INTO memory_conversation_touches (memory_id, conversation_id, used_at)
+  SELECT memory_id, last_used_conversation_id, last_used_at FROM memory_access
+  WHERE last_used_conversation_id IS NOT NULL AND last_used_at IS NOT NULL
+  ON CONFLICT(memory_id, conversation_id) DO UPDATE SET used_at = excluded.used_at;
+ALTER TABLE memory_access DROP COLUMN last_used_conversation_id;
+ALTER TABLE memory_access DROP COLUMN last_accessed_conversation_id;
+`;
+
 // KEIKO-0573: exported so a co-located test can assert strict ascending version order across the
 // array. Not re-exported through the package's public entry point, so no packaged surface change.
 export const MIGRATIONS: readonly Migration[] = [
@@ -254,6 +289,8 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 9, sql: V9_SQL },
   { version: 10, sql: V10_SQL },
   { version: 11, sql: V11_SQL },
+  { version: 12, sql: V12_SQL },
+  { version: 13, sql: V13_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

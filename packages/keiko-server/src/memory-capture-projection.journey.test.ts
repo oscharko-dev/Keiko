@@ -83,12 +83,10 @@ function fakeModel(content: string): ModelPort {
 function modelFact(body: string): string {
   return JSON.stringify([
     {
-      source: "user",
+      about: "self",
       body,
+      evidence: body,
       type: "fact",
-      confidence: 0.8,
-      scope: "project",
-      tags: ["journal"],
     },
   ]);
 }
@@ -162,7 +160,10 @@ function depsFor(
     memoryVault: vault,
     memoryAuthorization: {
       reviewerId: "local-operator" as MemoryReviewerId,
-      authorizedScopes: () => [{ kind: "project", projectId: ctx.projectId }],
+      authorizedScopes: () => [
+        { kind: "project", projectId: ctx.projectId },
+        { kind: "user", userId: ctx.userId },
+      ],
     },
     codingRuntimeDeploymentCeiling: mode,
   };
@@ -187,7 +188,7 @@ describe("recent memory capture journey", () => {
       vault,
       evidenceStore,
       "governed-assist",
-      modelFact("The release train follows a two-week cadence."),
+      modelFact("I follow a two-week release cadence."),
     );
     const supervised = depsFor(
       vault,
@@ -199,19 +200,19 @@ describe("recent memory capture journey", () => {
       vault,
       evidenceStore,
       "autonomous-delivery",
-      modelFact("The platform team uses deterministic deployment windows."),
+      modelFact("I use deterministic deployment windows."),
     );
 
     await captureSalientFromTurn(
       governed,
-      makeRequest("The release train follows a two-week cadence."),
+      makeRequest("I follow a two-week release cadence."),
       ctx,
       "gpt-test",
       "ok",
     );
     await captureSalientFromTurn(
       autonomous,
-      makeRequest("The platform team uses deterministic deployment windows."),
+      makeRequest("I use deterministic deployment windows."),
       ctx,
       "gpt-test",
       "ok",
@@ -224,7 +225,7 @@ describe("recent memory capture journey", () => {
       ["auto-accepted", "autonomous-delivery"],
       ["proposed", "governed-assist"],
     ]);
-    expect(initial.every((capture) => capture.scope.kind === "project")).toBe(true);
+    expect(initial.map((capture) => capture.scope.kind)).toEqual(["user", "user", "user"]);
     expect(
       initial.every(
         (capture) =>
@@ -267,12 +268,12 @@ describe("recent memory capture journey", () => {
       vault,
       evidenceStore,
       "governed-assist",
-      modelFact("The user reviews release notes every Friday."),
+      modelFact("I review release notes every Friday."),
     );
 
     await captureSalientFromTurn(
       governed,
-      makeRequest("The user reviews release notes every Friday."),
+      makeRequest("I review release notes every Friday."),
       ctx,
       "gpt-test",
       "ok",
@@ -312,7 +313,7 @@ describe("voice-passive-capture journey", () => {
       vault,
       evidenceStore,
       "governed-assist",
-      modelFact("The user prefers stand-ups at 9am."),
+      modelFact("I prefer stand-ups at 9am."),
     );
     const supervised = depsFor(
       vault,
@@ -324,12 +325,12 @@ describe("voice-passive-capture journey", () => {
       vault,
       evidenceStore,
       "autonomous-delivery",
-      modelFact("The user's timezone is UTC+1."),
+      modelFact("My timezone is UTC+1."),
     );
 
     await captureSalientFromTurn(
       governed,
-      makeRequest("The user prefers stand-ups at 9am."),
+      makeRequest("I prefer stand-ups at 9am."),
       ctx,
       "gpt-test",
       "ok",
@@ -337,7 +338,7 @@ describe("voice-passive-capture journey", () => {
     );
     await captureSalientFromTurn(
       autonomous,
-      makeRequest("The user's timezone is UTC+1."),
+      makeRequest("My timezone is UTC+1."),
       ctx,
       "gpt-test",
       "ok",
@@ -367,7 +368,7 @@ describe("voice-passive-capture journey", () => {
     // autonomous-delivery fact does not double.
     await captureSalientFromTurn(
       autonomous,
-      makeRequest("The user's timezone is UTC+1."),
+      makeRequest("My timezone is UTC+1."),
       ctx,
       "gpt-test",
       "ok",
@@ -383,11 +384,11 @@ describe("voice-passive-capture journey", () => {
       vault,
       evidenceStore,
       "autonomous-delivery",
-      modelFact("The desktop client shows a status bar."),
+      modelFact("I want a status bar in the desktop client."),
     );
     await captureSalientFromTurn(
       autonomousDesktop,
-      makeRequest("The desktop client shows a status bar."),
+      makeRequest("I want a status bar in the desktop client."),
       ctx,
       "gpt-test",
       "ok",
@@ -397,5 +398,40 @@ describe("voice-passive-capture journey", () => {
       (capture) => capture.provenance.initiatorSurface === "conversation-center",
     );
     expect(desktopDecision).toBeDefined();
+  });
+});
+
+describe("refused turn in the Journal", () => {
+  it("shows a refused turn beside private memories under the default authorization", async () => {
+    const evidenceStore = createInMemoryEvidenceStore();
+    const vault = makeVault(evidenceStore);
+    const { memoryAuthorization: _authorization, ...unscoped } = depsFor(
+      vault,
+      evidenceStore,
+      "autonomous-delivery",
+      modelFact("I use deterministic deployment windows."),
+    );
+    const deps: UiHandlerDeps = unscoped;
+    const ctx = context();
+    const since = Date.now() - 1_000;
+
+    await captureSalientFromTurn(
+      deps,
+      makeRequest("I use deterministic deployment windows."),
+      ctx,
+      "gpt-test",
+      "ok",
+    );
+    await captureSalientFromTurn(deps, makeRequest(SECRET_TURN), ctx, "gpt-test", "ok");
+
+    // Only the person's private scope holds memory, so only that scope is listed by default.
+    expect(vault.listMemoryScopes().map((scope) => scope.kind)).toEqual(["user"]);
+    const captures = recentCaptures(deps, since);
+    expect(captures.map(({ outcome, scope }) => [outcome, scope.kind])).toEqual([
+      ["rejected", "user"],
+      ["auto-accepted", "user"],
+    ]);
+    expect(captures[0]).not.toHaveProperty("bodyExcerpt");
+    expect(JSON.stringify(captures)).not.toContain(SECRET_MARKER);
   });
 });

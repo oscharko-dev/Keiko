@@ -302,7 +302,7 @@ async function persistStreamedTurn(
   );
   runPostCommitConversationMemorySideEffects(
     deps,
-    request,
+    { ...request, sourceMessageId: userMessage.id },
     memoryContext,
     modelId,
     memory,

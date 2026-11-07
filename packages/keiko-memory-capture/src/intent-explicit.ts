@@ -19,6 +19,7 @@ import { buildForget, buildProposal, buildUpdate } from "./_envelopes.js";
 import { applyPolicy } from "./policy.js";
 import { inferScopeFromContext } from "./scope-inference.js";
 import { memoryTextCaptureRejectionReason } from "./capture-safety.js";
+import { foldWordCase, withoutTrailingNonLetters } from "./fact-text.js";
 import type {
   CaptureContext,
   CaptureMemoryResolver,
@@ -168,16 +169,241 @@ export function isMemoryForgetReference(target: string): boolean {
   return FORGET_REFERENCE_WORDS.has(target.trim().toLowerCase());
 }
 
-function forgetTargetOf(text: string): string | null {
-  for (const [pattern, target] of FORGET_REFERENCE_STATEMENTS) {
-    if (pattern.test(text)) return target;
+// "Vergiss den alten API-Pfad, nimm den neuen" asks for work, not to forget a memory: a named thing
+// whose sentence goes on with a task verb ("nimm", "use") is an instruction for the task at hand.
+// Any other continuation ("und meine Telefonnummer", ", danke", ", ich bin umgezogen") still names
+// what to forget.
+const NAMING_WORDS = new Set(
+  "den die das der dem des ein eine einen einem einer eines the a an".split(" "),
+);
+const WORD_RE = /\p{L}+/gu;
+
+// How the target names its thing: "the formatting" is part of the conversation, "my phone number"
+// is the person's own fact.
+type NamedThing = "article" | "possessive" | null;
+const POSSESSIVE_WORDS = new Set(["my", "your", "our"]);
+const POSSESSIVE_STEMS = ["mein", "dein", "unser"];
+// Every form of a possessive, so that "die Meinung" still names something.
+const POSSESSIVE_FORMS = new Set([
+  ...POSSESSIVE_WORDS,
+  ...POSSESSIVE_STEMS.flatMap((stem) =>
+    ["", "e", "en", "em", "er", "es"].map((ending) => `${stem}${ending}`),
+  ),
+]);
+
+// "that" names what was just said only when the sentence goes on right after it; "Forget that I use
+// Python, just answer" names the person's own fact.
+function referenceNamedOf(target: string): NamedThing {
+  const word = REFERENCE_THEN_CONTINUATION_RE.exec(withoutLeadingFillers(target))?.[1];
+  return word !== undefined && isMemoryForgetReference(word) ? "article" : null;
+}
+
+function namedThingOf(target: string): NamedThing {
+  const first = firstNamingWord(target);
+  if (first === undefined) return null;
+  if (isPossessiveWord(first)) return "possessive";
+  return NAMING_WORDS.has(first) ? "article" : null;
+}
+
+// The word that names the thing, after any softening word: "einfach meine Telefonnummer" names the
+// person's own fact. Reading stops at the first other word.
+function firstNamingWord(target: string): string | undefined {
+  for (const [word] of target.matchAll(WORD_RE)) {
+    const folded = foldWordCase(word);
+    if (!FILLER_WORDS.has(folded)) return folded;
   }
+  return undefined;
+}
+// A clause goes on after a comma or semicolon (also in their full-width forms), a dash, or a joining
+// word. A hyphen joins a clause only between spaces; inside a word ("e-mail") it does not. A colon
+// introduces what is forgotten ("Forget the address: Take Street 5"), never a request after it.
+const CONTINUATION_SEPARATORS = String.raw`[,;，；–—]|\s-\s|\s(?:und|and|dann|then)(?!\p{L})`;
+const CONTINUATION_RE = new RegExp(CONTINUATION_SEPARATORS, "gu");
+// "Forget that, tell me the rest": a word that refers to what was just said, directly followed by
+// the clause that goes on.
+const REFERENCE_THEN_CONTINUATION_RE = new RegExp(
+  String.raw`^(\p{L}+)\s*(?:${CONTINUATION_SEPARATORS})`,
+  "u",
+);
+const CONJUNCTIONS = new Set(["und", "and", "dann", "then"]);
+const TASK_VERBS = new Set(
+  (
+    "nimm nehmt nutze nutz benutze benutz verwende verwend schreib schreibe mach mache ersetze " +
+    "ersetz ändere änder probier probiere wechsle wechsel use take write make replace change try " +
+    "switch pick nehmen schau schaue arbeite"
+  ).split(" "),
+);
+// Asking for the answer itself: "Forget the formatting, just give me the answer" may drop a manner
+// of answering or a stored fact ("Forget the address I gave you, show me what else you have"). Such
+// a forget acts only on a memory it names; nothing stored makes it an ordinary request, never a
+// question about which memory was meant. After the person's own fact ("Forget my phone number and
+// tell me when it is gone") the forget stands as said: it is looked up by that fact's name, and one
+// nothing matches is asked about.
+const ANSWER_VERBS = new Set(
+  (
+    "gib gebt sag sage zeig zeige antworte antwort fasse erklär erkläre liste nenn nenne schick " +
+    "schicke give tell say show answer summarize summarise explain list send"
+  ).split(" "),
+);
+// Words that soften the next clause without changing what it asks for.
+const FILLER_WORDS = new Set(
+  "just only simply please now nur einfach bitte jetzt mal doch".split(" "),
+);
+
+// A word is read at most this far, because reading the rest of a long glued run after every comma
+// in it is quadratic. A longer word counts as neither a conjunction nor a task verb; only a verb
+// with dozens of marks glued after it ("nimm,,,,…") would have been one.
+const WORD_READ_MAX = 64;
+const WORD_AFTER_RE = new RegExp(String.raw`\s*(\S{1,${String(WORD_READ_MAX)}})(\S?)`, "uy");
+// Stands for a word longer than WORD_READ_MAX: neither a conjunction nor a task verb.
+const LONG_WORD = "\u0000";
+
+// The first four words from `from`, each read only up to WORD_READ_MAX.
+function wordsAfter(target: string, from: number): readonly string[] {
+  const words: string[] = [];
+  WORD_AFTER_RE.lastIndex = from;
+  while (words.length < 4) {
+    const match = WORD_AFTER_RE.exec(target);
+    if (match === null) break;
+    if (match[2] !== "") return [...words, LONG_WORD];
+    words.push(match[1] ?? "");
+  }
+  return words;
+}
+
+// How the sentence goes on after the named thing: with work for the task, with a request for the
+// answer, or with neither.
+type ContinuationKind = "task" | "answer";
+interface Continuation {
+  readonly kind: ContinuationKind;
+  // Where the clause that goes on starts, so a request for the answer can be cut off the name.
+  readonly at: number;
+  readonly named: NamedThing;
+}
+
+function continuationOf(target: string): Continuation | null {
+  const named = namedThingOf(target) ?? referenceNamedOf(target);
+  if (named === null) return null;
+  let found: Continuation | null = null;
+  for (const match of target.matchAll(CONTINUATION_RE)) {
+    const words = wordsAfter(target, match.index + match[0].length);
+    const at = words.findIndex((word) => !isLeadingWord(word));
+    const kind = continuationVerb(words[at] ?? "", words[at + 1] ?? "");
+    if (kind === "task") return { kind, at: match.index, named };
+    if (kind !== null) found ??= { kind, at: match.index, named };
+  }
+  return found;
+}
+
+function isLeadingWord(word: string): boolean {
+  const folded = withoutTrailingNonLetters(foldWordCase(word));
+  return CONJUNCTIONS.has(folded) || FILLER_WORDS.has(folded);
+}
+
+// "look" asks for work only as "look at": "look, I moved" corrects the thing to forget.
+function continuationVerb(word: string, next: string): ContinuationKind | null {
+  const verb = withoutTrailingNonLetters(foldWordCase(word));
+  if (TASK_VERBS.has(verb) || (verb === "look" && next.toLowerCase() === "at")) return "task";
+  return ANSWER_VERBS.has(verb) ? "answer" : null;
+}
+
+// What a forget names, what it is looked up by, and whether it acts only on a memory it matches. A
+// forget that goes on by asking for the answer is looked up by its name alone: "the address" or "my
+// phone number", not "the address, then tell me what you have", whose every word a memory would
+// have to hold. Only a thing named with an article acts only on a memory it matches; the person's
+// own fact ("Forget my phone number and tell me when it is gone") is still asked about.
+interface ForgetRequest {
+  readonly target: string;
+  readonly lookup: string;
+  readonly onlyIfStored: boolean;
+}
+
+// The thing a "Vergiss …" / "Forget …" sentence names, before reading how it goes on.
+function statedForgetTarget(text: string): string | null {
   const prefixMatch = forgetPrefixMatch(text);
   if (prefixMatch === null) return null;
   const body = bodyAfterPrefix(prefixMatch, text);
   if (body === null || firstSentence(body).endsWith("?")) return null;
   const target = trimForgetTarget(firstSentence(body));
   return target === "" || NEVER_MIND_TARGETS.has(target.toLowerCase()) ? null : target;
+}
+
+function forgetRequestOf(text: string): ForgetRequest | null {
+  for (const [pattern, target] of FORGET_REFERENCE_STATEMENTS) {
+    if (pattern.test(text)) return { target, lookup: target, onlyIfStored: false };
+  }
+  const target = statedForgetTarget(text);
+  if (target === null) return null;
+  const continuation = continuationOf(target);
+  if (continuation === null) return statedForget(target, target);
+  if (continuation.kind === "task") return null;
+  return answeredForget(target, continuation);
+}
+
+// A forget that stands as said: one nothing matches is asked about. "Vergiss einfach das" refers to
+// what was just said, like "Vergiss das".
+function statedForget(target: string, name: string): ForgetRequest {
+  const lookup = withoutLeadingFillers(name);
+  if (isMemoryForgetReference(lookup)) return { target: lookup, lookup, onlyIfStored: false };
+  return { target, lookup, onlyIfStored: false };
+}
+
+// A forget that goes on by asking for the answer.
+function answeredForget(target: string, continuation: Continuation): ForgetRequest | null {
+  const named = withoutLeadingFillers(trimForgetTarget(target.slice(0, continuation.at)));
+  // "Vergiss das, sag mir Bescheid" takes back what was just said, like "Vergiss das".
+  if (isMemoryForgetReference(named)) return { target: named, lookup: named, onlyIfStored: false };
+  const names = namesAnything(named);
+  // "Forget my, tell me" names no fact of its own; the sentence is looked up as said.
+  if (continuation.named === "possessive") return statedForget(target, names ? named : target);
+  return names ? { target, lookup: named, onlyIfStored: true } : null;
+}
+
+// "einfach meine Telefonnummer" is looked up as "meine Telefonnummer": a softening word is no part
+// of what a memory holds.
+// Read in place, so that a long run of softening words costs one pass.
+const LEADING_WORD_RE = /(\p{L}+)\s+/uy;
+function withoutLeadingFillers(name: string): string {
+  let at = 0;
+  for (;;) {
+    LEADING_WORD_RE.lastIndex = at;
+    const match = LEADING_WORD_RE.exec(name);
+    if (match === null || !FILLER_WORDS.has(foldWordCase(match[1] ?? ""))) return name.slice(at);
+    at = LEADING_WORD_RE.lastIndex;
+  }
+}
+
+// "Forget the, tell me" and "Forget my own, tell me" name nothing: articles, possessives, "own" and
+// softening words alone match no memory.
+const OWN_WORDS = new Set("own eigen eigene eigenen eigenem eigener eigenes".split(" "));
+function namesAnything(named: string): boolean {
+  for (const [word] of named.matchAll(WORD_RE)) {
+    if (!namesNothing(foldWordCase(word))) return true;
+  }
+  return false;
+}
+
+function namesNothing(folded: string): boolean {
+  return (
+    NAMING_WORDS.has(folded) ||
+    FILLER_WORDS.has(folded) ||
+    POSSESSIVE_FORMS.has(folded) ||
+    OWN_WORDS.has(folded)
+  );
+}
+
+function isPossessiveWord(folded: string): boolean {
+  return POSSESSIVE_WORDS.has(folded) || POSSESSIVE_STEMS.some((stem) => folded.startsWith(stem));
+}
+
+// A forget that acts only on a memory it names. When nothing matched, the caller records that the
+// turn forgot nothing, without asking which memory was meant.
+export function forgetsOnlyIfStored(text: string): boolean {
+  return forgetRequestOf(text)?.onlyIfStored === true;
+}
+
+function forgetTargetOf(text: string): string | null {
+  return forgetRequestOf(text)?.target ?? null;
 }
 
 // Any of the four ECMAScript line-terminator code points. `.` (used by the single-regex-capture
@@ -204,17 +430,52 @@ const ENDS_IN_NUMBER_RE = /\p{N}$/u;
 const SINGLE_LETTER_RE = /^\p{L}$/u;
 const SHORT_FORM_PART_CHARS = 2;
 const ABBREVIATIONS = new Set("bzw ca dr etc evtl ggf inkl nr prof sog usw vgl vs zzgl".split(" "));
+// Lower casing never shortens a word, so a longer one is no abbreviation.
+const LONGEST_ABBREVIATION = Math.max(...[...ABBREVIATIONS].map((word) => word.length));
 
 // Only a period can belong to its word. "z. B.", "e.g." and "bzw." are abbreviations, and a number
 // stays with what follows, because "am 3. Mai" reads the same as "Ich bin 42." and cutting a date
 // loses the fact. A longer word with a period inside is a name such as "Node.js".
-function periodBelongsToWord(line: string, index: number): boolean {
-  const word = line.slice(line.lastIndexOf(" ", index - 1) + 1, index);
-  if (ENDS_IN_NUMBER_RE.test(word) || ABBREVIATIONS.has(word.toLowerCase())) return true;
-  const parts = word.split(".");
-  return parts.length > 1
-    ? parts.every((part) => part.length <= SHORT_FORM_PART_CHARS)
-    : SINGLE_LETTER_RE.test(word);
+function periodBelongsToWord(line: string, word: WordBeforePeriod): boolean {
+  const { start, end } = word;
+  // The number test reads only the last character, a surrogate pair included.
+  if (ENDS_IN_NUMBER_RE.test(line.slice(Math.max(start, end - 2), end))) return true;
+  const text = (): string => line.slice(start, end);
+  if (end - start <= LONGEST_ABBREVIATION && ABBREVIATIONS.has(text().toLowerCase())) return true;
+  return word.hasPeriod ? word.longestPart <= SHORT_FORM_PART_CHARS : SINGLE_LETTER_RE.test(text());
+}
+
+// The word before a period: where it starts, whether a period stands inside it, and its longest
+// part between periods. "z.B" has the parts "z" and "B".
+interface WordBeforePeriod {
+  readonly start: number;
+  readonly end: number;
+  readonly hasPeriod: boolean;
+  readonly longestPart: number;
+}
+
+// Reads each word once, however many periods it holds, for periods asked about in order. Reading
+// "x.x.x.…" again from its start at every period is quadratic.
+function wordsBeforePeriods(line: string): (index: number) => WordBeforePeriod {
+  let nextSpace = line.indexOf(" ");
+  let start = 0;
+  let scanned = 0;
+  let partStart = 0;
+  let longest = 0;
+  return (index) => {
+    while (nextSpace !== -1 && nextSpace < index) {
+      start = nextSpace + 1;
+      nextSpace = line.indexOf(" ", start);
+    }
+    if (scanned < start) [scanned, partStart, longest] = [start, start, 0];
+    for (; scanned < index; scanned += 1) {
+      if (line[scanned] !== ".") continue;
+      longest = Math.max(longest, scanned - partStart);
+      partStart = scanned + 1;
+    }
+    const hasPeriod = partStart > start;
+    return { start, end: index, hasPeriod, longestPart: Math.max(longest, index - partStart) };
+  };
 }
 
 function nextSentenceStartsAt(line: string, index: number): boolean {
@@ -224,9 +485,10 @@ function nextSentenceStartsAt(line: string, index: number): boolean {
 }
 
 function firstSentence(line: string): string {
+  const wordBefore = wordsBeforePeriods(line);
   for (const match of line.matchAll(SENTENCE_MARKS_RE)) {
     const end = match.index + match[0].length;
-    const abbreviated = match[0] === "." && periodBelongsToWord(line, match.index);
+    const abbreviated = match[0] === "." && periodBelongsToWord(line, wordBefore(match.index));
     if (!abbreviated && nextSentenceStartsAt(line, end)) return line.slice(0, end);
   }
   return line;
@@ -469,31 +731,38 @@ export function explicitStatementKind(text: string): "forget" | "remember" | nul
   return remembered === null ? null : "remember";
 }
 
+// A forget whose name matched no memory. "Forget the formatting, just give me the answer" is then an
+// ordinary request. Any other clear request to forget is never ignored: a bare "Vergiss das" falls
+// back to the last statement, and a named fact nothing matches is asked about, or the fact would
+// stay unnoticed.
+function unmatchedForget(request: ForgetRequest): CaptureOutcome | null {
+  if (request.onlyIfStored) return null;
+  return {
+    kind: "rejected",
+    reason: isMemoryForgetReference(request.target)
+      ? "forget-reference-unresolved"
+      : "ambiguous-forget",
+  };
+}
+
 // ─── tryExtractForget ────────────────────────────────────────────────────────
 export function tryExtractForget(
   text: string,
   context: CaptureContext,
   policy: CapturePolicyOptions = {},
 ): CaptureOutcome | null {
-  const target = forgetTargetOf(text);
-  if (target === null) {
+  const request = forgetRequestOf(text);
+  if (request === null) {
     return null;
   }
   const scopeResolution = scopeOrReject(context, policy);
   if (!scopeResolution.ok) {
     return scopeResolution.outcome;
   }
-  const resolved = resolveTarget(
-    policy.forgetResolver ?? policy.resolver,
-    target,
-    scopeResolution.scope,
-  );
-  if (resolved.kind === "none") {
-    // A bare "Vergiss das" is a clear request about something unnamed: never ignore it.
-    return isMemoryForgetReference(target)
-      ? { kind: "rejected", reason: "forget-reference-unresolved" }
-      : null;
-  }
+  const resolver = policy.forgetResolver ?? policy.resolver;
+  if (resolver === undefined) return null;
+  const resolved = resolveTarget(resolver, request.lookup, scopeResolution.scope);
+  if (resolved.kind === "none") return unmatchedForget(request);
   if (resolved.kind === "ambiguous") {
     return { kind: "rejected", reason: "ambiguous-forget" };
   }

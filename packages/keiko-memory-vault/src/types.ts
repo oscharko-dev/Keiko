@@ -17,9 +17,9 @@ import type {
   MemoryValidityInterval,
 } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryContentCipher } from "./cipher.js";
-import type { MemoryAccessStat } from "./access.js";
+import type { MemoryAccessStat, MemoryConversationTouch } from "./access.js";
 
-export type { MemoryAccessStat } from "./access.js";
+export type { MemoryAccessStat, MemoryConversationTouch } from "./access.js";
 export type { MemoryUpdatePreImage } from "@oscharko-dev/keiko-contracts/memory";
 
 export type MemoryEmbeddingMetric = "cosine" | "euclidean" | "dot";
@@ -128,6 +128,8 @@ export interface MemoryBatchUpdate {
 
 export interface MemoryGraphMutation {
   readonly preconditions?: readonly MemoryGraphPrecondition[];
+  // Records that join the graph in the same transaction, before its updates and edges.
+  readonly inserts?: readonly MemoryRecord[];
   readonly updates: readonly MemoryBatchUpdate[];
   readonly edges: readonly MemoryEdge[];
 }
@@ -139,6 +141,7 @@ export interface MemoryGraphPrecondition {
 }
 
 export interface MemoryGraphMutationResult {
+  readonly inserted: readonly MemoryRecord[];
   readonly memories: readonly MemoryRecord[];
   readonly edges: readonly MemoryEdge[];
 }
@@ -307,7 +310,9 @@ export interface MemoryVaultStore {
   // Access tracking (#204). `recordAccess` upserts an insert-or-increment counter for each id
   // (a recall reflex from the retrieval surface); `getAccessStats` reads the counters back for the
   // maintenance planner. Both operate on the cleartext `memory_access` table — no content.
-  readonly recordAccess: (ids: readonly MemoryId[], nowMs: number) => void;
+  readonly recordAccess: (ids: readonly MemoryId[], nowMs: number, conversationId?: string) => void;
+  // An answer drew on these memories. Remembered for "Vergiss das"; it does not strengthen them.
+  readonly recordUse: (ids: readonly MemoryId[], nowMs: number, conversationId: string) => void;
   // Outcome tracking (#204, O-V1). `recordOutcome` appends a governed retention judgement (utility
   // in [0,1]) for each id — a proposal accepted (1) / rejected (0), a conflict won (1) / lost (0),
   // an accepted correction superseding its origin (0). It never advances the access counter or
@@ -315,6 +320,10 @@ export interface MemoryVaultStore {
   // proven-useful memory resists disuse-forgetting and a proven-bad one fades sooner.
   readonly recordOutcome: (ids: readonly MemoryId[], utility: number, nowMs: number) => void;
   readonly getAccessStats: (ids?: readonly MemoryId[]) => ReadonlyMap<MemoryId, MemoryAccessStat>;
+  // What one chat itself last confirmed and drew on. Another chat's touches are not in it (#4212).
+  readonly getConversationTouches: (
+    conversationId: string,
+  ) => ReadonlyMap<MemoryId, MemoryConversationTouch>;
   readonly close: () => void;
 }
 

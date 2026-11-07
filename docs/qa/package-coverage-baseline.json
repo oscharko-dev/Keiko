@@ -138,7 +138,7 @@
       }
     },
     "keiko-memory-capture": {
-      "files": 16,
+      "files": 21,
       "uncoveredFiles": 0,
       "uncoveredLines": 23,
       "totalLines": 592,
@@ -246,7 +246,7 @@
       }
     },
     "keiko-security": {
-      "files": 47,
+      "files": 48,
       "uncoveredFiles": 0,
       "uncoveredLines": 18,
       "totalLines": 887,
@@ -258,7 +258,7 @@
       }
     },
     "keiko-server": {
-      "files": 1062,
+      "files": 1064,
       "uncoveredFiles": 0,
       "uncoveredLines": 5038,
       "totalLines": 67638,
