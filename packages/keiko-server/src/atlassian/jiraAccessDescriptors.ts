@@ -25,7 +25,7 @@ const GRANT_FIELDS = {
   holder: object({ type: { ...text(128), minLength: 1 }, parameter: text(255) }, ["type"]),
 };
 const GRANT = object(GRANT_FIELDS, ["id", "permission", "holder"]);
-function array(item: CatalogJsonObject, maxItems = MAX): CatalogJsonObject {
+function array(item: CatalogJsonObject, maxItems: number = MAX): CatalogJsonObject {
   return { type: "array", maxItems, items: item };
 }
 const PERMISSION_FIELDS = { ...NAMED_FIELDS, permissions: array(GRANT) };
@@ -47,15 +47,11 @@ function read(
   return { description, input, result: jiraNativeReadResult(result), risk: "read", maxResultCount };
 }
 
-const EXPANDED_IDENTITY_FIELDS = {
-  name: text(255), description: text(32768), displayName: text(255), key: text(255),
-};
-// Deep recipient metadata uses bounded projected strings; the native producer separately verifies
-// canonical positive IDs and safe field identifiers before this result can reach the catalog.
-const EXPANDED_ROLE_ID = { ...text(19), minLength: 1, pattern: "^[0-9]{1,19}$" };
-const EXPANDED_FIELD_ID = {
+// The same safe identifier conjunction as KEY, without an extra allOf level inside events.
+const RECIPIENT_ID = {
   ...text(128),
-  pattern: "^[A-Za-z0-9._~-]{1,128}$",
+  pattern: "^[A-Za-z0-9~]",
+  not: { pattern: "[^A-Za-z0-9._~-]" },
 };
 const RECIPIENT = object({
   id: ID,
@@ -65,10 +61,13 @@ const RECIPIENT = object({
   ] },
   parameter: text(1024),
   emailAddress: text(320),
-  user: object({ ...EXPANDED_IDENTITY_FIELDS, active: BOOL }),
-  group: object({ ...EXPANDED_IDENTITY_FIELDS, name: NAME }, ["name"]),
-  projectRole: object({ ...EXPANDED_IDENTITY_FIELDS, id: EXPANDED_ROLE_ID }, ["id"]),
-  field: object({ ...EXPANDED_IDENTITY_FIELDS, id: EXPANDED_FIELD_ID }, ["id"]),
+  recipientKind: { type: "string", enum: ["user", "group", "projectRole", "field"] },
+  recipientId: RECIPIENT_ID,
+  recipientKey: text(255),
+  recipientName: text(255),
+  recipientDisplayName: text(255),
+  recipientDescription: text(32768),
+  recipientActive: BOOL,
 }, ["id", "notificationType"]);
 const EVENT_FIELDS = { id: ID, name: text(255), description: text(32768) };
 const EVENT = object({

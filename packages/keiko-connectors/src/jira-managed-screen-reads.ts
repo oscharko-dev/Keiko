@@ -8,6 +8,7 @@ import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import { boundJiraReadResult } from "./jira-managed-issue-reads.js";
 import { jiraReadFailure, localJiraPage, projectJiraCollection } from "./jira-managed-metadata.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
+import { executeJiraSelectedRead, selectJiraReadPage, type JiraReadResponse } from "./jira-managed-read-request.js";
 import { jiraNativeId, jiraNativeText } from "./jira-native-values.js";
 
 export const JIRA_SCREEN_READS = [
@@ -22,20 +23,6 @@ interface Selection {
   readonly context: CatalogJsonObject;
   readonly startAt: number;
   readonly maxResults: number;
-}
-function pageNumber(
-  value: unknown,
-  fallback: number,
-  min: number,
-  max: number,
-): number | undefined {
-  const selected = value === undefined ? fallback : value;
-  return typeof selected === "number" &&
-    Number.isSafeInteger(selected) &&
-    selected >= min &&
-    selected <= max
-    ? selected
-    : undefined;
 }
 function nativeSelection(
   name: ScreenRead,
@@ -67,13 +54,10 @@ function selection(name: ScreenRead, args: CatalogJsonObject): Selection | undef
   const allowed = new Set(["screenId", "startAt", "maxResults"]);
   if (name !== "jira.screen-available-fields") allowed.add("projectKey");
   if (name === "jira.screen-tab-fields") allowed.add("tabId");
-  if (Object.keys(args).some((key) => !allowed.has(key))) return undefined;
+  const page = selectJiraReadPage(args, allowed);
+  if (page === undefined) return undefined;
   const native = nativeSelection(name, args);
-  const startAt = pageNumber(args.startAt, 0, 0, 1_000_000);
-  const maxResults = pageNumber(args.maxResults, 25, 1, 100);
-  return native === undefined || startAt === undefined || maxResults === undefined
-    ? undefined
-    : { ...native, startAt, maxResults };
+  return native === undefined ? undefined : { ...native, ...page };
 }
 function tab(value: unknown): CatalogJsonObject | undefined {
   const raw = asRecord(value);
@@ -104,18 +88,13 @@ function field(value: unknown): CatalogJsonObject | undefined {
 export function isJiraScreenRead(name: string): name is ScreenRead {
   return READS.has(name);
 }
-/** Native screen membership only; showWhenEmpty is never evidence that a field is required or editable. */
-export async function executeJiraScreenRead(
+function projectResponse(
   name: ScreenRead,
-  args: CatalogJsonObject,
-  request: JiraMutationRequest,
-): Promise<ManagedMcpToolResult> {
-  const selected = selection(name, args);
-  if (selected === undefined) return jiraReadFailure("invalid-input");
-  const response = await request(selected.path, "GET", undefined, "json-array");
-  if (!response.ok) return jiraReadFailure(response.reason, response.remote);
+  response: JiraReadResponse,
+  selected: Selection,
+): ManagedMcpToolResult {
   const values = asArray(response.items);
-  if (response.status !== 200 || values === undefined) return jiraReadFailure("malformed-payload");
+  if (values === undefined) return jiraReadFailure("malformed-payload");
   if (values.length > TOOL_CATALOG_LIMITS.maxArrayItems) return jiraReadFailure("bounds-exceeded");
   const items = projectJiraCollection(
     values,
@@ -126,4 +105,13 @@ export async function executeJiraScreenRead(
   if (items === undefined) return jiraReadFailure("malformed-payload");
   const page = localJiraPage(items, selected.startAt, selected.maxResults);
   return boundJiraReadResult({ data: { ...page.data, ...selected.context } });
+}
+/** Native screen membership only; showWhenEmpty is never evidence that a field is required or editable. */
+export function executeJiraScreenRead(
+  name: ScreenRead,
+  args: CatalogJsonObject,
+  request: JiraMutationRequest,
+): Promise<ManagedMcpToolResult> {
+  return executeJiraSelectedRead(selection(name, args), request, "json-array",
+    (response, selected) => projectResponse(name, response, selected));
 }

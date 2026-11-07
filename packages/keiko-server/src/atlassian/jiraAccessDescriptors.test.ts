@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
+import { isBoundedExternalJsonSchema } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
-import { jiraAccessDeclarationForTool } from "./jiraAccessDescriptors.js";
+import { JIRA_ACCESS_READ_DEFINITIONS, jiraAccessDeclarationForTool } from "./jiraAccessDescriptors.js";
 import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
 
 const GRANT = { id: "19", permission: "BROWSE_PROJECTS", holder: { type: "group", parameter: "Engineering" } };
@@ -9,6 +10,15 @@ const LEVEL = { id: "31", name: "Synthetic level", description: "" };
 const SECURITY = { id: "24", name: "Synthetic security", levels: [LEVEL], defaultSecurityLevelId: "31" };
 const NOTIFICATION = { id: "44", name: "Synthetic notification", eventsAvailable: false };
 const PROJECT = { projectId: "7", projectKey: "SYN" };
+it("admits all fifteen closed access declarations through the unchanged schema boundary", () => {
+  const definitions = Object.entries(JIRA_ACCESS_READ_DEFINITIONS);
+  expect(definitions).toHaveLength(15);
+  for (const [name, definition] of definitions) {
+    expect(isBoundedExternalJsonSchema(definition.input), `${name} input`).toBe(true);
+    expect(isBoundedExternalJsonSchema(definition.result), `${name} result`).toBe(true);
+    expect(jiraAccessDeclarationForTool(name)?.name).toBe(name);
+  }
+});
 it.each([
   ["jira.project-permission-scheme", { projectIdOrKey: "SYN" }, { ...PROJECT, ...PERMISSION }],
   ["jira.project-issue-security-scheme", { projectIdOrKey: "7" }, { ...PROJECT, ...SECURITY }],
@@ -63,10 +73,10 @@ it("keeps deep native event provenance within the existing closed schema budget"
   const event = {
     id: "50", templateEvents: templates,
     notifications: [
-      { id: "81", notificationType: "User", user: { key: "synthetic", name: "Synthetic User", active: false } },
-      { id: "82", notificationType: "Group", group: { name: "Engineering" } },
-      { id: "83", notificationType: "ProjectRole", projectRole: { id: "4", description: "" } },
-      { id: "84", notificationType: "UserCustomField", field: { id: "customfield_101", name: "Reviewer" } },
+      { id: "81", notificationType: "User", recipientKind: "user", recipientKey: "synthetic", recipientName: "Synthetic User", recipientActive: false },
+      { id: "82", notificationType: "Group", recipientKind: "group", recipientName: "Engineering" },
+      { id: "83", notificationType: "ProjectRole", recipientKind: "projectRole", recipientId: "4", recipientDescription: "" },
+      { id: "84", notificationType: "UserCustomField", recipientKind: "field", recipientId: "customfield_101", recipientName: "Reviewer" },
       { id: "85", notificationType: "EmailAddress", emailAddress: "synthetic@example.invalid" },
     ],
   };
@@ -83,6 +93,8 @@ it.each([
   ["jira.issue-security-scheme", { ...SECURITY, self: "https://synthetic.invalid/security" }],
   ["jira.notification-scheme", { eventsRequested: true, items: [{ ...NOTIFICATION, eventsAvailable: true, events: [{ id: "50", notifications: [{ id: "81", notificationType: "UnreviewedPluginType" }] }] }] }],
   ["jira.notification-scheme", { eventsRequested: true, items: [{ ...NOTIFICATION, eventsAvailable: true, events: [{ id: "50", templateEvent: { id: "51" } }] }] }],
+  ["jira.notification-scheme", { eventsRequested: true, items: [{ ...NOTIFICATION, eventsAvailable: true, events: [{ id: "50", notifications: [{ id: "81", notificationType: "User", user: { key: "synthetic" } }] }] }] }],
+  ["jira.notification-scheme", { eventsRequested: true, items: [{ ...NOTIFICATION, eventsAvailable: true, events: [{ id: "50", notifications: [{ id: "81", notificationType: "UserCustomField", recipientKind: "field", recipientId: "../other" }] }] }] }],
 ] as const)("rejects unprojected %s result fields", (name, result) => {
   const declaration = jiraAccessDeclarationForTool(name);
   if (declaration === undefined) throw new TypeError("Missing access declaration");

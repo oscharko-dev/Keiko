@@ -145,7 +145,7 @@ describe.each(["en", "de"] as const)("saved Jira access configuration in %s", (l
       events: [{
         id: "1", name: "Issue updated", templateEvents: [{ id: "2", name: "Template event name" }],
         notifications: [
-          { id: "61", notificationType: "User", user: { key: "U1", name: "Configured person", emailAddress: "hidden@example.invalid", self: "https://untrusted.invalid/user" } },
+          { id: "61", notificationType: "User", recipientKind: "user", recipientKey: "U1", recipientName: "Configured person", recipientActive: false, user: { emailAddress: "hidden@example.invalid", self: "https://untrusted.invalid/user" } },
           { id: "62", notificationType: "EmailAddress", emailAddress: "configured@example.invalid" },
         ],
       }],

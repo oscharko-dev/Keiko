@@ -108,11 +108,21 @@ function schemeChildren(
       : grant(child, source.id)),
   ];
 }
+function recipientDetails(source: Source, kind: "user" | "group" | "projectRole" | "field"): Source | undefined {
+  if (source.recipientKind === undefined) return record(source[kind]);
+  if (source.recipientKind !== kind) return undefined;
+  return {
+    id: source.recipientId, key: source.recipientKey, name: source.recipientName,
+    displayName: source.recipientDisplayName,
+    description: kind === "field" ? undefined : source.recipientDescription,
+    active: source.recipientActive,
+  };
+}
 function recipientIdentity(source: Source, type: string): JiraOutcomeFact[] {
   if (type === "EmailAddress") return fact("chat.jira.access.recipientEmail", source.emailAddress);
-  if (type === "Group") return fact("chat.jira.fact.groupName", record(source.group)?.name);
+  if (type === "Group") return fact("chat.jira.fact.groupName", recipientDetails(source, "group")?.name);
   if (type === "User") {
-    const user = record(source.user);
+    const user = recipientDetails(source, "user");
     return [
       ...fact("chat.jira.fact.userKey", user?.key),
       ...fact("chat.jira.fact.userName", user?.name),
@@ -121,7 +131,7 @@ function recipientIdentity(source: Source, type: string): JiraOutcomeFact[] {
   }
   if (type !== "ProjectRole" && type !== "UserCustomField" && type !== "GroupCustomField")
     return [];
-  const identity = record(type === "ProjectRole" ? source.projectRole : source.field);
+  const identity = recipientDetails(source, type === "ProjectRole" ? "projectRole" : "field");
   return [
     ...fact(type === "ProjectRole" ? "chat.jira.fact.roleId" : "chat.jira.access.fieldId", identity?.id),
     ...fact(type === "ProjectRole" ? "chat.jira.fact.roleName" : "chat.jira.access.fieldName", identity?.name),
@@ -131,11 +141,11 @@ function recipient(source: Source, eventId: unknown, schemeId: unknown): JiraAgi
   const type = text(source.notificationType) ?? "";
   const label = Object.hasOwn(RECIPIENT_LABELS, type) ? RECIPIENT_LABELS[type] : undefined;
   const labels: WidgetMessageKey[] = [label ?? "chat.jira.access.recipientUnknown"];
-  const user = type === "User" ? record(source.user) : undefined;
+  const user = type === "User" ? recipientDetails(source, "user") : undefined;
   if (typeof user?.active === "boolean")
     labels.push(user.active ? "chat.jira.outcome.active" : "chat.jira.outcome.inactive");
-  const expanded = type === "ProjectRole" ? record(source.projectRole)
-    : type === "UserCustomField" || type === "GroupCustomField" ? record(source.field) : undefined;
+  const expanded = type === "ProjectRole" ? recipientDetails(source, "projectRole")
+    : type === "UserCustomField" || type === "GroupCustomField" ? recipientDetails(source, "field") : undefined;
   const body = text(expanded?.description);
   return {
     ...(body === undefined ? {} : { body }),

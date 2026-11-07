@@ -5,7 +5,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { asRecord } from "./atlassian-sync-classify.js";
-import type { AtlassianWriteHttpOutcome } from "./atlassian-write-http.js";
+import { executeJiraSelectedRead, selectJiraReadPage, type JiraReadResponse } from "./jira-managed-read-request.js";
 import { jiraNativeId, jiraNativeText } from "./jira-native-values.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { boundJiraReadResult } from "./jira-managed-issue-reads.js";
@@ -74,13 +74,15 @@ function route(
   }
 }
 function selection(name: SavedViewRead, args: CatalogJsonObject): Selection | undefined {
-  const allowed = new Set(FIELDS[name]);
-  if (Object.keys(args).some((key) => !allowed.has(key))) return undefined;
-  const startAt = args.startAt === undefined ? 0 : args.startAt;
-  const maxResults = args.maxResults === undefined ? 25 : args.maxResults;
-  if (!boundedNumber(startAt, 0, 1_000_000) || !boundedNumber(maxResults, 1, 100)) return undefined;
+  const page = selectJiraReadPage(args, new Set(FIELDS[name]));
+  if (page === undefined) return undefined;
+  const { startAt, maxResults } = page;
   const target = route(name, args);
-  return target === undefined ? undefined : { ...target, startAt, maxResults };
+  if (target === undefined) return undefined;
+  const path = name === "jira.dashboards"
+    ? `${target.path}?startAt=${String(startAt)}&maxResults=${String(maxResults)}`
+    : target.path;
+  return { ...target, path, startAt, maxResults };
 }
 function dashboard(value: unknown): CatalogJsonObject | undefined {
   const raw = asRecord(value);
@@ -188,7 +190,7 @@ function permissionsPage(
 }
 function savedViewResult(
   name: SavedViewRead,
-  response: Extract<AtlassianWriteHttpOutcome, { readonly ok: true }>,
+  response: JiraReadResponse,
   selected: Selection,
 ): ManagedMcpToolResult {
   if (name === "jira.dashboards") return dashboardPage(response.body, selected);
@@ -205,24 +207,12 @@ function savedViewResult(
   );
 }
 /** Closed native GETs only. Custody, authority and body-free operation evidence stay with the caller. */
-export async function executeJiraSavedViewRead(
+export function executeJiraSavedViewRead(
   name: SavedViewRead,
   args: CatalogJsonObject,
   request: JiraMutationRequest,
 ): Promise<ManagedMcpToolResult> {
-  const selected = selection(name, args);
-  if (selected === undefined) return jiraReadFailure("invalid-input");
-  const path =
-    name === "jira.dashboards"
-      ? `${selected.path}?startAt=${String(selected.startAt)}&maxResults=${String(selected.maxResults)}`
-      : selected.path;
-  const response = await request(
-    path,
-    "GET",
-    undefined,
+  return executeJiraSelectedRead(selection(name, args), request,
     name === "jira.filter-permissions" ? "json-array" : "json",
-  );
-  if (!response.ok) return jiraReadFailure(response.reason, response.remote);
-  if (response.status !== 200) return jiraReadFailure("malformed-payload");
-  return savedViewResult(name, response, selected);
+    (response, selected) => savedViewResult(name, response, selected));
 }

@@ -8,6 +8,7 @@ import { jiraProjectionTextFits } from "./jira-managed-field-reads.js";
 import { boundJiraReadResult } from "./jira-managed-issue-reads.js";
 import { jiraReadFailure, localJiraPage, projectJiraCollection } from "./jira-managed-metadata.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
+import { executeJiraSelectedRead, selectJiraReadPage, type JiraReadResponse } from "./jira-managed-read-request.js";
 import { jiraNativeId, jiraNativeNumericId, jiraNativeText } from "./jira-native-values.js";
 
 export const JIRA_ACCESS_SCHEME_READS = [
@@ -37,9 +38,6 @@ interface Selection {
   readonly schemeId?: string;
   readonly targetId?: string;
 }
-function integer(value: unknown, min: number, max: number): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max;
-}
 function route(
   name: AccessRead,
   args: CatalogJsonObject,
@@ -63,15 +61,12 @@ function route(
     : undefined;
 }
 function selection(name: AccessRead, args: CatalogJsonObject): Selection | undefined {
-  const fields = new Set(FIELDS[name]);
-  if (Object.keys(args).some((key) => !fields.has(key))) return undefined;
+  const page = selectJiraReadPage(args, new Set(FIELDS[name]));
+  if (page === undefined) return undefined;
   if (args.includePermissions !== undefined && typeof args.includePermissions !== "boolean")
     return undefined;
-  const startAt = args.startAt === undefined ? 0 : args.startAt;
-  const maxResults = args.maxResults === undefined ? 25 : args.maxResults;
-  if (!integer(startAt, 0, 1_000_000) || !integer(maxResults, 1, 100)) return undefined;
   const selected = route(name, args);
-  return selected === undefined ? undefined : { ...selected, startAt, maxResults };
+  return selected === undefined ? undefined : { ...selected, ...page };
 }
 function namedResource(value: unknown): CatalogJsonObject | undefined {
   const raw = asRecord(value);
@@ -178,18 +173,12 @@ export {
 export function isJiraAccessSchemeRead(name: string): name is AccessRead {
   return READS.has(name);
 }
-/** Scheme/grant facts are configuration observations, never effective permission or authority grants. */
-export async function executeJiraAccessSchemeRead(
+function projectResponse(
   name: AccessRead,
-  args: CatalogJsonObject,
-  request: JiraMutationRequest,
-): Promise<ManagedMcpToolResult> {
-  const selected = selection(name, args);
-  if (selected === undefined) return jiraReadFailure("invalid-input");
-  const response = await request(selected.path, "GET", undefined, "json");
-  if (!response.ok) return jiraReadFailure(response.reason, response.remote);
-  if (response.status !== 200 || response.body === undefined)
-    return jiraReadFailure("malformed-payload");
+  response: JiraReadResponse,
+  selected: Selection,
+): ManagedMcpToolResult {
+  if (response.body === undefined) return jiraReadFailure("malformed-payload");
   const project = projector(name);
   const context = selected.schemeId === undefined ? {} : { schemeId: selected.schemeId };
   const key = collectionKey(name);
@@ -208,4 +197,13 @@ export async function executeJiraAccessSchemeRead(
   if (items === undefined) return jiraReadFailure("malformed-payload");
   const page = localJiraPage(items, selected.startAt, selected.maxResults);
   return boundJiraReadResult({ data: { ...page.data, ...context } });
+}
+/** Scheme/grant facts are configuration observations, never effective permission or authority grants. */
+export function executeJiraAccessSchemeRead(
+  name: AccessRead,
+  args: CatalogJsonObject,
+  request: JiraMutationRequest,
+): Promise<ManagedMcpToolResult> {
+  return executeJiraSelectedRead(selection(name, args), request, "json",
+    (response, selected) => projectResponse(name, response, selected));
 }

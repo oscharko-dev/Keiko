@@ -520,11 +520,13 @@
       "constraints": "One exact string int64 dashboard identity with bounded id/name projection; remote self/navigation URLs are omitted. No gadgets, properties or dashboard administration.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-saved-views.ts",
-        "packages/keiko-server/src/atlassian/jiraSavedViewDescriptors.ts"
+        "packages/keiko-server/src/atlassian/jiraSavedViewDescriptors.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts"
       ],
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-saved-views.test.ts",
-        "packages/keiko-server/src/atlassian/jiraSavedViewDescriptors.test.ts"
+        "packages/keiko-server/src/atlassian/jiraSavedViewDescriptors.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts"
       ]
     },
     "jira.dashboards": {
@@ -535,11 +537,13 @@
       "constraints": "Visible dashboard id/name projection only; bounded native startAt/maxResults pagination with validated totals. Remote continuation URLs are never followed; no gadget/layout or write support.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-saved-views.ts",
-        "packages/keiko-server/src/atlassian/jiraSavedViewDescriptors.ts"
+        "packages/keiko-server/src/atlassian/jiraSavedViewDescriptors.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts"
       ],
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-saved-views.test.ts",
-        "packages/keiko-server/src/atlassian/jiraSavedViewDescriptors.test.ts"
+        "packages/keiko-server/src/atlassian/jiraSavedViewDescriptors.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts"
       ]
     },
     "jira.delete-attachment": {
@@ -701,11 +705,13 @@
       "constraints": "One exact filter/permission identity with bounded selected sharing target and explicit view/edit facts. Unknown values are not inferred; no permission mutation or authorization widening.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-saved-views.ts",
-        "packages/keiko-server/src/atlassian/jiraSavedViewDescriptors.ts"
+        "packages/keiko-server/src/atlassian/jiraSavedViewDescriptors.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts"
       ],
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-saved-views.test.ts",
-        "packages/keiko-server/src/atlassian/jiraSavedViewDescriptors.test.ts"
+        "packages/keiko-server/src/atlassian/jiraSavedViewDescriptors.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts"
       ]
     },
     "jira.filter-permissions": {
@@ -716,11 +722,13 @@
       "constraints": "One exact filter ID; validate the complete bounded native permission array before local startAt/maxResults pagination. Only selected typed sharing targets and explicit view/edit flags are projected; no permission mutation.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-saved-views.ts",
-        "packages/keiko-server/src/atlassian/jiraSavedViewDescriptors.ts"
+        "packages/keiko-server/src/atlassian/jiraSavedViewDescriptors.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts"
       ],
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-saved-views.test.ts",
-        "packages/keiko-server/src/atlassian/jiraSavedViewDescriptors.test.ts"
+        "packages/keiko-server/src/atlassian/jiraSavedViewDescriptors.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts"
       ]
     },
     "jira.filter-share-scope": {
@@ -731,11 +739,13 @@
       "constraints": "No-argument read of the current GLOBAL/AUTHENTICATED/PRIVATE default filter-sharing scope only. A read does not change defaults, grant sharing authority or qualify private filter creation.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-saved-views.ts",
-        "packages/keiko-server/src/atlassian/jiraSavedViewDescriptors.ts"
+        "packages/keiko-server/src/atlassian/jiraSavedViewDescriptors.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts"
       ],
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-saved-views.test.ts",
-        "packages/keiko-server/src/atlassian/jiraSavedViewDescriptors.test.ts"
+        "packages/keiko-server/src/atlassian/jiraSavedViewDescriptors.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts"
       ]
     },
     "jira.get-comment": {
@@ -808,6 +818,25 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.instance-configuration": {
+      "identity": "GET /rest/api/2/configuration",
+      "effect": "read",
+      "permissionPolicy": "observed-instance-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Observed configuration feature booleans and documented time-tracking units/formats only. Missing values remain unknown, not false; no configuration, capability or authority changes.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-instance-reads.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-server/src/atlassian/jiraInstanceDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-instance-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraInstanceDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.issue": {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}",
       "effect": "read",
@@ -834,13 +863,15 @@
       "constraints": "One exact native issue-security scheme; precise IDs, name/description and optional unique levels/default-level ID. Description character/byte and nested-array bounds fail closed. No role/user expansion, remote URLs, security assignment or effective-access calculation.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
-        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.ts"
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts"
       ],
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-access-schemes.test.ts",
         "packages/keiko-server/src/atlassian/jiraAccessDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
-        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts"
       ]
     },
     "jira.issue-security-schemes": {
@@ -851,13 +882,15 @@
       "constraints": "Bounded complete issueSecuritySchemes wrapper with local pagination. Scheme IDs and optional default-level/level facts are validated, with native admin visibility authoritative. Missing levels/defaults remain unknown, explicit empty lists remain observed, and no membership or configured-access claim is inferred.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
-        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.ts"
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts"
       ],
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-access-schemes.test.ts",
         "packages/keiko-server/src/atlassian/jiraAccessDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
-        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts"
       ]
     },
     "jira.issue-type": {
@@ -992,6 +1025,26 @@
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-issue-details.ts"],
       "testFiles": ["packages/keiko-connectors/src/jira-managed-issue-details.test.ts"]
     },
+    "jira.myself": {
+      "identity": "GET /rest/api/2/myself",
+      "effect": "read",
+      "permissionPolicy": "current-actor-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Existing bounded directory-user projection for the connected actor. Email, avatar, remote URLs and credentials are omitted; no verification/custody update or account/session mutation.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-instance-reads.ts",
+        "packages/keiko-connectors/src/jira-directory-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-server/src/atlassian/jiraInstanceDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-instance-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraInstanceDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.notification-scheme": {
       "identity": "GET /rest/api/2/notificationscheme/{id}",
       "effect": "read",
@@ -1028,6 +1081,25 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.permission-definitions": {
+      "identity": "GET /rest/api/2/permissions",
+      "effect": "read",
+      "permissionPolicy": "permission-definitions",
+      "kind": "constrained-tool",
+      "constraints": "Bounded complete native permission dictionary with local pagination and permissionsScope=definitions. Dictionary key and optional nativeKey remain distinct; GLOBAL/PROJECT types are closed. No havePermission, inferred effective access or permission grant.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-instance-reads.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-server/src/atlassian/jiraInstanceDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-instance-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraInstanceDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.permission-grant": {
       "identity": "GET /rest/api/2/permissionscheme/{schemeId}/permission/{permissionId}",
       "effect": "read",
@@ -1036,13 +1108,15 @@
       "constraints": "One exact grant within the selected scheme. Validate its precise native ID and bounded permission/holder fields; optional holder parameter stays absent when unknown. No permission grant/revoke, broad endpoint selection or inference of current-user access.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
-        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.ts"
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts"
       ],
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-access-schemes.test.ts",
         "packages/keiko-server/src/atlassian/jiraAccessDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
-        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts"
       ]
     },
     "jira.permission-grants": {
@@ -1053,13 +1127,15 @@
       "constraints": "One selected scheme with complete bounded native permissions wrapper and local pagination. Each unique grant retains id, permission and holder type/optional parameter; expanded users/groups/roles/fields and remote URLs are omitted. Configuration is not effective-current-user permission.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
-        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.ts"
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts"
       ],
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-access-schemes.test.ts",
         "packages/keiko-server/src/atlassian/jiraAccessDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
-        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts"
       ]
     },
     "jira.permission-scheme": {
@@ -1070,13 +1146,15 @@
       "constraints": "One exact native permission-scheme identity, bounded description and optional observed grants. Fixed includePermissions expansion only; precise numeric/string IDs, omitted/null nested permissions remain unknown and explicit empty lists remain empty. No arbitrary expansion, URL following or authority inference.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
-        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.ts"
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts"
       ],
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-access-schemes.test.ts",
         "packages/keiko-server/src/atlassian/jiraAccessDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
-        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts"
       ]
     },
     "jira.permission-schemes": {
@@ -1087,13 +1165,15 @@
       "constraints": "Bounded complete native permissionSchemes wrapper with local pagination; optional includePermissions emits only expand=permissions. Names, descriptions and observed grant/holder facts only; missing permissions stay unknown, not empty. No effective-user permission inference, expanded people, URLs or configuration writes.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
-        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.ts"
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts"
       ],
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-access-schemes.test.ts",
         "packages/keiko-server/src/atlassian/jiraAccessDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
-        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts"
       ]
     },
     "jira.priorities": {
@@ -1502,13 +1582,15 @@
       "constraints": "Exact screen available-fields GET with bounded local pagination and native field ID/name only. Availability metadata is not write authority; no arbitrary expansion or remote URL following.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-screen-reads.ts",
-        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.ts"
+        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts"
       ],
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-screen-reads.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.test.ts",
-        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts"
       ]
     },
     "jira.screen-tab-fields": {
@@ -1519,13 +1601,15 @@
       "constraints": "Exact screen/tab fields GET with optional published projectKey. Bounded locally paged native field IDs/names; no editability/permission assertion or field mutation.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-screen-reads.ts",
-        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.ts"
+        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts"
       ],
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-screen-reads.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.test.ts",
-        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts"
       ]
     },
     "jira.screen-tabs": {
@@ -1536,13 +1620,15 @@
       "constraints": "Exact screen tabs GET with published optional projectKey, bounded local pagination and native tab identity/name. No screen changes, remote page query or privileged fallback.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-screen-reads.ts",
-        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.ts"
+        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts"
       ],
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-screen-reads.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.test.ts",
-        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts"
       ]
     },
     "jira.search": {
@@ -1562,11 +1648,32 @@
       "constraints": "One exact native security-level ID with bounded name/description. Native administrator visibility remains authoritative. No project assignment, membership inference, remote self URL or security change.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
-        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.ts"
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts"
       ],
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-access-schemes.test.ts",
         "packages/keiko-server/src/atlassian/jiraAccessDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts"
+      ]
+    },
+    "jira.server-info": {
+      "identity": "GET /rest/api/2/serverInfo",
+      "effect": "read",
+      "permissionPolicy": "observed-instance-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Bounded observed version, exact build identifiers and optional native deployment/release facts. Remote base URLs, clock values, health-check bodies and SCM details are omitted. Reading never updates supported releases, custody, compatibility or operation availability.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-instance-reads.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-server/src/atlassian/jiraInstanceDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-instance-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraInstanceDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
@@ -2229,8 +2336,8 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "cebb0741f0de813c6ae5574cbc79a219aa8161fa700d3e29febb1c328694406f",
-    "nativeOperationCount": 136
+    "sha256": "70e560edb962d6738c95b8a66492eb029a62e6014c45b1c4a6ab2d7d404f9e19",
+    "nativeOperationCount": 140
   },
   "operations": [
     {
@@ -4804,10 +4911,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.instance-configuration"]
     },
     {
       "identity": "GET /rest/api/2/customFieldOption/{id}",
@@ -9332,10 +9439,10 @@
         }
       ],
       "baselineCapabilityIds": ["verification-identity"],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.myself"]
     },
     {
       "identity": "PUT /rest/api/2/myself",
@@ -9588,10 +9695,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.permission-definitions"]
     },
     {
       "identity": "GET /rest/api/2/permissionscheme",
@@ -12908,10 +13015,10 @@
         }
       ],
       "baselineCapabilityIds": ["verification-server"],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.server-info"]
     },
     {
       "identity": "PUT /rest/api/2/settings/baseUrl",

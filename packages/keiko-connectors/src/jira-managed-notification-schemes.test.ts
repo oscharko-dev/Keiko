@@ -96,13 +96,47 @@ it("whitelists recipient identity details without remote URLs, HTML or user-emai
     ],
   }] }, true);
   expect(result).toMatchObject({ events: [{ notifications: [
-    { id: "1", user: { key: "user-key", active: false } },
-    { id: "2", projectRole: { id: "7", name: "Developers" } },
-    { id: "3", group: { name: "delivery" } },
+    { id: "1", recipientKind: "user", recipientKey: "user-key", recipientActive: false },
+    { id: "2", recipientKind: "projectRole", recipientId: "7", recipientName: "Developers" },
+    { id: "3", recipientKind: "group", recipientName: "delivery" },
     { id: "4", emailAddress: "recipient@example.invalid" },
-    { id: "5", field: { id: "customfield_10000" } },
+    { id: "5", recipientKind: "field", recipientId: "customfield_10000" },
   ] }] });
   expect(JSON.stringify(result)).not.toMatch(/remote\.invalid|private-user@|unrequested actor|<script>/u);
+});
+
+it("flattens only each documented recipient DTO and cannot copy unrelated identities", () => {
+  const result = jiraNotificationScheme({ ...SCHEME, notificationSchemeEvents: [{
+    event: EVENT,
+    notifications: [
+      { id: 1, notificationType: "User", user: {
+        key: "user-key", name: "member", displayName: "Member", active: true,
+        description: "unpublished user data", id: "19",
+      }, group: { name: "unrelated group" }, recipientKind: "projectRole" },
+      { id: 2, notificationType: "Group", group: {
+        name: "delivery", description: "unpublished group data", key: "unpublished group key",
+      } },
+      { id: 3, notificationType: "ProjectRole", projectRole: {
+        id: "9223372036854775807", name: "Reviewers", description: "A native role description",
+      } },
+      { id: 4, notificationType: "GroupCustomField", field: {
+        id: "customfield_10000", name: "Teams", description: "unpublished field data",
+      } },
+      { id: 5, notificationType: "CurrentUser", user: { key: "unrelated actor" } },
+    ],
+  }] }, true);
+  expect(result).toMatchObject({ events: [{ notifications: [
+    { id: "1", notificationType: "User", recipientKind: "user", recipientKey: "user-key",
+      recipientName: "member", recipientDisplayName: "Member", recipientActive: true },
+    { id: "2", notificationType: "Group", recipientKind: "group", recipientName: "delivery" },
+    { id: "3", notificationType: "ProjectRole", recipientKind: "projectRole",
+      recipientId: "9223372036854775807", recipientName: "Reviewers",
+      recipientDescription: "A native role description" },
+    { id: "4", notificationType: "GroupCustomField", recipientKind: "field",
+      recipientId: "customfield_10000", recipientName: "Teams" },
+    { id: "5", notificationType: "CurrentUser" },
+  ] }] });
+  expect(JSON.stringify(result)).not.toMatch(/unpublished|unrelated/u);
 });
 
 it("reads native pages independently without following remote continuation URLs", async () => {

@@ -4,6 +4,7 @@ import {
 import {
   TOOL_CATALOG_LIMITS,
   type CatalogJsonObject,
+  type CatalogJsonValue,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { asRecord } from "./atlassian-sync-classify.js";
 import { projectJiraCollection } from "./jira-managed-metadata.js";
@@ -39,6 +40,20 @@ const EXPANDED_FIELDS: Readonly<Record<string, IdentityKind>> = {
   UserCustomField: "field",
   GroupCustomField: "field",
 };
+const DETAIL_FIELDS: Readonly<Record<IdentityKind, Readonly<Record<string, number>>>> = {
+  user: { name: 255, displayName: 255, key: 255 },
+  group: { name: 255 },
+  projectRole: { name: 255, description: 32768 },
+  field: { name: 255 },
+};
+const FLAT_FIELDS = {
+  id: "recipientId",
+  key: "recipientKey",
+  name: "recipientName",
+  displayName: "recipientDisplayName",
+  description: "recipientDescription",
+  active: "recipientActive",
+} as const;
 function identity(raw: Record<string, unknown>, kind: IdentityKind): CatalogJsonObject | undefined {
   switch (kind) {
     case "user":
@@ -60,7 +75,7 @@ function userActive(raw: Record<string, unknown>): CatalogJsonObject | undefined
 function identityDetails(value: unknown, kind: IdentityKind): CatalogJsonObject | undefined {
   const raw = asRecord(value);
   if (raw === undefined) return undefined;
-  const text = optionalText(raw, { name: 255, description: 32768, displayName: 255, key: 255 });
+  const text = optionalText(raw, DETAIL_FIELDS[kind]);
   const id = identity(raw, kind);
   const flags = kind === "user" ? userActive(raw) : {};
   return text === undefined || id === undefined || flags === undefined
@@ -74,7 +89,13 @@ function expandedRecipient(
   const field = Object.hasOwn(EXPANDED_FIELDS, kind) ? EXPANDED_FIELDS[kind] : undefined;
   if (field === undefined || raw[field] === undefined || raw[field] === null) return {};
   const details = identityDetails(raw[field], field);
-  return details === undefined ? undefined : { [field]: details };
+  if (details === undefined) return undefined;
+  const projected: Record<string, CatalogJsonValue> = { recipientKind: field };
+  for (const [key, destination] of Object.entries(FLAT_FIELDS)) {
+    const value = details[key];
+    if (value !== undefined) projected[destination] = value;
+  }
+  return projected;
 }
 
 function notification(value: unknown): CatalogJsonObject | undefined {

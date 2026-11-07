@@ -13,6 +13,7 @@ import { executeJiraAccessSchemeRead, isJiraAccessSchemeRead } from "./jira-mana
 import { executeJiraNotificationSchemeRead, isJiraNotificationSchemeRead } from "./jira-managed-notification-schemes.js";
 import { executeJiraProjectAssociationRead, isJiraProjectAssociationRead } from "./jira-managed-project-associations.js";
 import { executeJiraCoreMetadataRead, isJiraCoreMetadataRead } from "./jira-managed-core-metadata.js";
+import { executeJiraInstanceRead, isJiraInstanceRead } from "./jira-managed-instance-reads.js";
 import {
   executeJiraParticipationRead,
   isJiraParticipationRead,
@@ -349,7 +350,8 @@ type NativeDetailRead =
   | Parameters<typeof executeJiraAccessSchemeRead>[0]
   | Parameters<typeof executeJiraNotificationSchemeRead>[0]
   | Parameters<typeof executeJiraProjectAssociationRead>[0]
-  | Parameters<typeof executeJiraCoreMetadataRead>[0];
+  | Parameters<typeof executeJiraCoreMetadataRead>[0]
+  | Parameters<typeof executeJiraInstanceRead>[0];
 function isNativeDetailRead(name: string): name is NativeDetailRead {
   return [
     isJiraIssueDetailRead,
@@ -367,6 +369,7 @@ function isNativeDetailRead(name: string): name is NativeDetailRead {
     isJiraNotificationSchemeRead,
     isJiraProjectAssociationRead,
     isJiraCoreMetadataRead,
+    isJiraInstanceRead,
   ].some((accepts) => accepts(name));
 }
 function administrationRead(
@@ -377,12 +380,20 @@ function administrationRead(
   if (isJiraIssueTypeSchemeRead(name)) return executeJiraIssueTypeSchemeRead(name, args, request);
   if (isJiraWorkflowSchemeRead(name)) return executeJiraWorkflowSchemeRead(name, args, request);
   if (isJiraScreenRead(name)) return executeJiraScreenRead(name, args, request);
-  if (isJiraUserRead(name)) return executeJiraUserRead(name, args, request);
-  if (isJiraDirectoryRead(name)) return executeJiraDirectoryRead(name, args, request);
   if (isJiraAccessSchemeRead(name)) return executeJiraAccessSchemeRead(name, args, request);
   if (isJiraNotificationSchemeRead(name)) return executeJiraNotificationSchemeRead(name, args, request);
   if (isJiraProjectAssociationRead(name)) return executeJiraProjectAssociationRead(name, args, request);
+  return identityAndMetadataRead(name, args, request);
+}
+function identityAndMetadataRead(
+  name: NativeDetailRead,
+  args: CatalogJsonObject,
+  request: ReturnType<typeof requestFor>,
+): Promise<ManagedMcpToolResult> | undefined {
+  if (isJiraUserRead(name)) return executeJiraUserRead(name, args, request);
+  if (isJiraDirectoryRead(name)) return executeJiraDirectoryRead(name, args, request);
   if (isJiraCoreMetadataRead(name)) return executeJiraCoreMetadataRead(name, args, request);
+  if (isJiraInstanceRead(name)) return executeJiraInstanceRead(name, args, request);
   return undefined;
 }
 function linkedIssueDetailRead(

@@ -32,6 +32,10 @@ const CREATE = {
 };
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
+  { tool: "jira.server-info", args: {} },
+  { tool: "jira.instance-configuration", args: {} },
+  { tool: "jira.permission-definitions", args: { startAt: 0, maxResults: 1 } },
+  { tool: "jira.myself", args: {} },
   { tool: "jira.global-issue-types", args: { startAt: 0, maxResults: 1 } },
   { tool: "jira.issue-type", args: { issueTypeId: "10001" }, parameters: { id: "10001" } },
   {
@@ -713,7 +717,7 @@ function administrationRead(
   path: string,
   absoluteUrl: string,
 ): AtlassianHttpBodyResult | undefined {
-  const directory = directoryRead(path) ?? accessRead(path) ?? coreMetadataRead(path);
+  const directory = directoryRead(path) ?? accessRead(path) ?? coreMetadataRead(path) ?? instanceRead(path);
   if (directory !== undefined) return directory;
   const type = { id: "1", name: "Task", subtask: false };
   const scheme = { id: "37", name: "Delivery", issueTypes: [type], defaultIssueType: type };
@@ -781,6 +785,23 @@ function directoryRead(path: string): AtlassianHttpBodyResult | undefined {
     "groups/picker": { groups: [{ name: "R&D team", html: "<b>ignored</b>" }], total: 2 },
     applicationrole: [role],
     "applicationrole/jira-software": role,
+  };
+  return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
+}
+function instanceRead(path: string): AtlassianHttpBodyResult | undefined {
+  const bodies: Readonly<Record<string, unknown>> = {
+    serverInfo: {
+      version: "11.3.13", versionNumbers: [11, 3, 13], deploymentType: "Data Center",
+      serverTitle: "Synthetic Jira", buildNumber: 11030013, databaseBuildNumber: "9007199254740993",
+    },
+    configuration: {
+      attachmentsEnabled: true, watchingEnabled: false, votingEnabled: true,
+      timeTrackingConfiguration: { workingHoursPerDay: 0, workingDaysPerWeek: 4.5, defaultUnit: "hour" },
+    },
+    permissions: { permissions: {
+      EDIT_ISSUE: { id: "12", key: "EDIT_ISSUES", name: "Edit issues", type: "PROJECT", havePermission: true },
+    } },
+    myself: { key: "U1", name: "Synthetic", displayName: "Synthetic User", active: true },
   };
   return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
 }
@@ -994,7 +1015,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(118);
+    expect(native).toHaveLength(122);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),

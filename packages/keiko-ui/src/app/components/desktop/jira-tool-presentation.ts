@@ -18,6 +18,7 @@ import { JIRA_DIRECTORY_TOOLS, jiraDirectoryNotice } from "./jira-directory-pres
 import { JIRA_ACCESS_TOOLS } from "./jira-access-presentation";
 import { JIRA_PROJECT_ASSOCIATION_TOOLS } from "./jira-project-association-presentation";
 import { JIRA_CORE_METADATA_TOOLS } from "./jira-core-metadata-presentation";
+import { JIRA_INSTANCE_TOOLS } from "./jira-instance-presentation";
 const LOCALLY_PAGED_TOOLS = new Set([
   ...JIRA_PROJECT_METADATA_TOOLS,
   ...JIRA_COLLABORATION_TOOLS,
@@ -29,6 +30,7 @@ const LOCALLY_PAGED_TOOLS = new Set([
   ...JIRA_ACCESS_TOOLS,
   ...JIRA_PROJECT_ASSOCIATION_TOOLS,
   ...JIRA_CORE_METADATA_TOOLS,
+  ...JIRA_INSTANCE_TOOLS,
 ]);
 
 const OUTCOME_KEYS: Readonly<Record<JiraMutationResultState, WidgetMessageKey>> = {

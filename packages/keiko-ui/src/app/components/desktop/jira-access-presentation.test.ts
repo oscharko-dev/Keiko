@@ -93,4 +93,34 @@ describe("readable Jira access configuration projections", () => {
     expect(cards[1]?.facts.some((fact) => fact.label === "chat.jira.access.recipientCount")).toBe(false);
     expect(cards[2]?.facts).toContainEqual({ label: "chat.jira.access.recipientCount", value: "0" });
   });
+  it("reads flat recipient metadata while preserving saved nested recipient cards", () => {
+    const context = { eventsRequested: true, items: [{ id: "37", name: "Notifications", eventsAvailable: true,
+      events: [{ id: "81", notifications: [
+        { id: "91", notificationType: "User", recipientKind: "user", recipientKey: "U1", recipientName: "Current", recipientDisplayName: "Current person", recipientActive: false, user: { name: "Obsolete nested person" } },
+        { id: "92", notificationType: "Group", recipientKind: "group", recipientName: "Engineers" },
+        { id: "93", notificationType: "ProjectRole", recipientKind: "projectRole", recipientId: "10002", recipientName: "Reviewers", recipientDescription: "Configured reviewers" },
+        { id: "94", notificationType: "UserCustomField", recipientKind: "field", recipientId: "customfield_10001", recipientName: "Review contact", recipientDescription: "Unsupported field description" },
+        { id: "95", notificationType: "User", user: { key: "U2", name: "Legacy person", active: true } },
+      ] }],
+    }] };
+    const cards = jiraAccessDetails("jira_notification_scheme", context);
+    expect(cards[2]?.facts).toContainEqual({ label: "chat.jira.fact.userName", value: "Current" });
+    expect(cards[2]?.labels).toContain("chat.jira.outcome.inactive");
+    expect(cards[3]?.facts).toContainEqual({ label: "chat.jira.fact.groupName", value: "Engineers" });
+    expect(cards[4]).toMatchObject({ body: "Configured reviewers" });
+    expect(cards[4]?.facts).toContainEqual({ label: "chat.jira.fact.roleId", value: "10002" });
+    expect(cards[5]?.facts).toContainEqual({ label: "chat.jira.access.fieldId", value: "customfield_10001" });
+    expect(cards[6]?.facts).toContainEqual({ label: "chat.jira.fact.userName", value: "Legacy person" });
+    expect(JSON.stringify(cards)).not.toContain("Obsolete nested person");
+    expect(JSON.stringify(cards)).not.toContain("Unsupported field description");
+  });
+  it("does not reinterpret a mismatched flat recipient kind through legacy fallback", () => {
+    const cards = jiraAccessDetails("jira_notification_scheme", {
+      eventsRequested: true, items: [{ id: "37", name: "Notifications", eventsAvailable: true,
+        events: [{ id: "81", notifications: [{ id: "91", notificationType: "User", recipientKind: "group", recipientName: "Wrong group", user: { name: "Wrong fallback" } }] }],
+      }],
+    });
+    expect(cards[2]?.facts.some(({ label }) => label === "chat.jira.fact.userName")).toBe(false);
+    expect(JSON.stringify(cards)).not.toMatch(/Wrong group|Wrong fallback/u);
+  });
 });
