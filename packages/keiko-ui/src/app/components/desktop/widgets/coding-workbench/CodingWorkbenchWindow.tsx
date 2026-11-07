@@ -595,6 +595,13 @@ function workbenchFolderMode(
   );
 }
 
+/** The work locations the runtime can confine (#4068); undefined offers every location. */
+function offeredExecutionLocations(
+  state: Pick<CodingWorkbenchRuntimeState, "runtime">,
+): readonly WorkbenchExecutionLocation[] | undefined {
+  return state.runtime.value?.executionLocations;
+}
+
 // A folder is always Local: there is no repository to put a worktree in. A repository takes the
 // locations the runtime can confine (#4068).
 function workbenchExecutionLocation(
@@ -979,7 +986,7 @@ export function CodingWorkbenchWindow({
       activeWorkspace,
       selectedRoot,
       selectedLocation,
-      runtimeState.runtime.value?.executionLocations,
+      offeredExecutionLocations(runtimeState),
     ),
     selection: historySelection,
     onSelectionHandled: onHistorySelectionHandled,
@@ -1033,7 +1040,7 @@ export function CodingWorkbenchWindow({
     activeWorkspace,
     repositoryRoot,
     selectedLocation,
-    state.runtime.value?.executionLocations,
+    offeredExecutionLocations(state),
   );
   const refreshCheckout = useCheckoutRefresh(branchInventory.refresh, activeWorkspace.refresh);
   const locationState = useWorkbenchExecutionLocation({
@@ -1806,7 +1813,7 @@ function WorkbenchColumns({
       onSelectRepository={onSelectRepository}
       onSelectBranch={onSelectBranch}
       location={location}
-      offeredLocations={state.runtime.value?.executionLocations}
+      offeredLocations={offeredExecutionLocations(state)}
       onSelectLocation={onSelectLocation}
       onOpenGit={onOpenGit}
     />
@@ -1829,7 +1836,7 @@ function WorkbenchColumns({
               onSelectRepository={onSelectRepository}
               onSelectBranch={onSelectBranch}
               location={location}
-              offeredLocations={state.runtime.value?.executionLocations}
+              offeredLocations={offeredExecutionLocations(state)}
               onSelectLocation={onSelectLocation}
               onOpenGit={onOpenGit}
               placement="setup"

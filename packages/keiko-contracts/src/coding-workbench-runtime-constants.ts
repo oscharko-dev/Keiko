@@ -127,14 +127,22 @@ export type CodingWorkbenchRuntimeFailureCode =
   // edit that does not apply, a stale base), alone or mixed with those. The settlement line names
   // the latest refusal's closed reason.
   | "edits-blocked"
-  | "edit-retries-exhausted"
-  // #4068: a confined Windows run reads only what it is granted, and Keiko grants a workspace only
-  // as a Keiko-managed worktree (ADR-0043 D18). A start in the operator's own checkout or folder is
-  // refused before anything spawns with `workspace-location-unsupported`; one whose worktree lies on
-  // another volume than Windows, where the AppContainer cannot resolve its path, with
-  // `workspace-volume-unsupported`.
-  | "workspace-location-unsupported"
-  | "workspace-volume-unsupported";
+  | "edit-retries-exhausted";
+
+/**
+ * #4068: refusals of a start the Windows broker cannot confine. A confined Windows run reads only
+ * what it is granted, and Keiko grants a workspace only as a Keiko-managed worktree (ADR-0043 D18).
+ * A start in the operator's own checkout or folder is refused before anything spawns with
+ * `workspace-location-unsupported`; one whose worktree lies on another volume than Windows, where
+ * the AppContainer cannot resolve its path, with `workspace-volume-unsupported`. No run exists when
+ * they are answered, so no run snapshot ever carries one: they are not run failure codes.
+ */
+export type CodingWorkbenchRuntimeStartRefusalCode =
+  "workspace-location-unsupported" | "workspace-volume-unsupported";
+
+/** What a refused start answers with: a run failure code, or a start-only refusal (#4068). */
+export type CodingWorkbenchRuntimeStartFailureCode =
+  CodingWorkbenchRuntimeFailureCode | CodingWorkbenchRuntimeStartRefusalCode;
 
 /**
  * Redacted facts about the model gateway under a coding turn (#3873 review). `model-gateway-retrying`:
@@ -209,6 +217,4 @@ export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRun
     "model-turn-failed",
     "edits-blocked",
     "edit-retries-exhausted",
-    "workspace-location-unsupported",
-    "workspace-volume-unsupported",
   ] as const);

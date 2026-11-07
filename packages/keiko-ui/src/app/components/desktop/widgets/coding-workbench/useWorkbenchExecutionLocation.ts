@@ -50,7 +50,7 @@ function preferredExecutionLocation(
  * runtime confines only a Keiko-managed worktree, so a saved or default `local` becomes `worktree`
  * rather than binding a checkout the server would refuse. Absent, every location is offered.
  */
-export function offeredExecutionLocation(
+function offeredExecutionLocation(
   location: WorkbenchExecutionLocation,
   offered: readonly WorkbenchExecutionLocation[] | undefined,
 ): WorkbenchExecutionLocation {

@@ -686,11 +686,13 @@ describe("production OpenCode backend composition", () => {
     try {
       const portable = windowsDevLaneRuntime(root);
       const run = runInput(root);
-      const access = (kind: "ordinary" | "managed-task") => (): WorkspaceRootAccess =>
-        ({ kind }) as unknown as WorkspaceRootAccess;
-      const at = (workspaceRoot: string, kind: "ordinary" | "managed-task") => ({
+      const at = (
+        workspaceRoot: string,
+        kind: "ordinary" | "managed-task",
+      ): Pick<ProductionRuntimeBackendInput, "context" | "resolveWorkspaceRootAccess"> => ({
         context: { ...run.context, workspaceRoot },
-        resolveWorkspaceRootAccess: access(kind),
+        resolveWorkspaceRootAccess: (): WorkspaceRootAccess =>
+          ({ kind }) as unknown as WorkspaceRootAccess,
       });
       const refusal = (attempt: () => void): ReturnType<typeof refusedLaunch> => {
         try {
@@ -704,28 +706,31 @@ describe("production OpenCode backend composition", () => {
       const env = { SystemDrive: "C:" };
       const windows = { portable, processEnv: env };
 
-      expect(
-        refusal(() => assertWindowsWorkspaceLocation(windows, at("C:\\repos\\keiko", "ordinary"))),
-      ).toEqual({ ok: false, failureCode: "workspace-location-unsupported" });
-      expect(
-        refusal(() =>
-          assertWindowsWorkspaceLocation(
-            windows,
-            at("D:\\state\\task-workspaces\\t1", "managed-task"),
-          ),
-        ),
-      ).toEqual({ ok: false, failureCode: "workspace-volume-unsupported" });
+      const start = (
+        input: Parameters<typeof assertWindowsWorkspaceLocation>[0],
+        workspaceRoot: string,
+        kind: "ordinary" | "managed-task",
+      ): (() => void) => {
+        return (): void => {
+          assertWindowsWorkspaceLocation(input, at(workspaceRoot, kind));
+        };
+      };
+
+      expect(refusal(start(windows, "C:\\repos\\keiko", "ordinary"))).toEqual({
+        ok: false,
+        failureCode: "workspace-location-unsupported",
+      });
+      expect(refusal(start(windows, "D:\\state\\task-workspaces\\t1", "managed-task"))).toEqual({
+        ok: false,
+        failureCode: "workspace-volume-unsupported",
+      });
       // The managed worktree on the system volume starts, and so does any run without the broker.
-      expect(() =>
-        assertWindowsWorkspaceLocation(
-          windows,
-          at("c:\\state\\task-workspaces\\t1", "managed-task"),
-        ),
-      ).not.toThrow();
-      expect(() =>
-        assertWindowsWorkspaceLocation(
+      expect(start(windows, "c:\\state\\task-workspaces\\t1", "managed-task")).not.toThrow();
+      expect(
+        start(
           { portable: releaseQualifiedNativeRuntime(root), processEnv: env },
-          at("D:\\repos\\keiko", "ordinary"),
+          "D:\\repos\\keiko",
+          "ordinary",
         ),
       ).not.toThrow();
     } finally {

@@ -7,7 +7,7 @@ import type {
   CodingWorkbenchMode,
   CodingWorkbenchModelRefusalReason,
   CodingWorkbenchRuntimeApprovalReviewChannelPayload,
-  CodingWorkbenchRuntimeFailureCode,
+  CodingWorkbenchRuntimeStartFailureCode,
   CodingWorkbenchRuntimeMcpChannelPayload,
   CodingWorkbenchRuntimeQuestionsChannelPayload,
   CodingWorkbenchRuntimeReadiness,
@@ -56,7 +56,7 @@ import { writeSseFrame } from "../sse-write.js";
 import type { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";
 import type {
   CodingRuntimeOrchestrator,
-  CodingRuntimeOrchestratorResult,
+  CodingRuntimeStartResult,
 } from "./codingRuntimeOrchestrator.js";
 import { openCodeSelectableAgents } from "./opencodeAgents.js";
 import { openCodePromptInputs } from "./opencodePromptInputs.js";
@@ -64,7 +64,7 @@ import { openCodePromptInputs } from "./opencodePromptInputs.js";
 const MAX_BODY_BYTES = 64 * 1024;
 
 type RuntimeMutationRefusalReason =
-  CodingWorkbenchRuntimeFailureCode | "payload-too-large" | "start-abandoned";
+  CodingWorkbenchRuntimeStartFailureCode | "payload-too-large" | "start-abandoned";
 
 // Every state-changing coding-runtime route the `mutation()` funnel below serves. Named after the
 // route it backs so a log line names exactly which mutation was refused.
@@ -260,7 +260,7 @@ function runChannelRead(
   return { orchestrator: required.orchestrator, runId };
 }
 
-function failureStatus(failureCode: CodingWorkbenchRuntimeFailureCode): number {
+function failureStatus(failureCode: CodingWorkbenchRuntimeStartFailureCode): number {
   if (failureCode === "active-run-conflict" || failureCode === "recovery-required") return 409;
   if (failureCode === "authority-resolution-failed") return 403;
   if (
@@ -274,7 +274,7 @@ function failureStatus(failureCode: CodingWorkbenchRuntimeFailureCode): number {
 }
 
 function failureResult(
-  failureCode: CodingWorkbenchRuntimeFailureCode,
+  failureCode: CodingWorkbenchRuntimeStartFailureCode,
   correlationId?: string,
   issueBindingFailure?: CodingWorkbenchIssueBindingFailure,
   modelRefusalReason?: CodingWorkbenchModelRefusalReason,
@@ -302,7 +302,7 @@ function notFound(correlationId?: string): RouteResult {
 }
 
 function refusalReason(
-  result: Extract<CodingRuntimeOrchestratorResult, { readonly ok: false }>,
+  result: Extract<CodingRuntimeStartResult, { readonly ok: false }>,
 ): RuntimeMutationRefusalReason {
   return result.startAbandoned === true ? "start-abandoned" : result.failureCode;
 }

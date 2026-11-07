@@ -16,6 +16,7 @@ import type {
   CodingWorkbenchRuntimeApprovalDecisionRequest,
   CodingWorkbenchRuntimeEvent,
   CodingWorkbenchRuntimeFailureCode,
+  CodingWorkbenchRuntimeStartFailureCode,
   CodingWorkbenchRuntimePendingApprovalReview,
   CodingWorkbenchRuntimePendingPermission,
   CodingWorkbenchRuntimePendingResearch,
@@ -116,6 +117,7 @@ import type {
   CodingRuntimeOrchestratorDeps,
   CodingRuntimeOrchestratorResult,
   CodingRuntimeQuestionOperationResult,
+  CodingRuntimeStartResult,
 } from "./codingRuntimeOrchestratorTypes.js";
 import { launchRejectionDiagnosticReason, refusedLaunch } from "./launchFailure.js";
 import type {
@@ -249,8 +251,6 @@ const CODING_RUNTIME_FAILURE_CODE_FIELD = {
     "model-turn-failed",
     "edits-blocked",
     "edit-retries-exhausted",
-    "workspace-location-unsupported",
-    "workspace-volume-unsupported",
   ],
 } as const;
 
@@ -1881,6 +1881,7 @@ export type {
   CodingRuntimeOrchestratorDeps,
   CodingRuntimeOrchestratorResult,
   CodingRuntimeQuestionOperationResult,
+  CodingRuntimeStartResult,
 } from "./codingRuntimeOrchestratorTypes.js";
 
 interface ApprovalChallenge {
@@ -2148,7 +2149,7 @@ export class CodingRuntimeOrchestrator {
     input: unknown,
     correlationId?: string,
     abandoned?: AbortSignal,
-  ): Promise<CodingRuntimeOrchestratorResult> {
+  ): Promise<CodingRuntimeStartResult> {
     return this.serial(async () => {
       if (abandoned?.aborted === true) return ABANDONED_START;
       // The next run ends the previous run's undo window: its runtime holds the slot until then.
@@ -2203,7 +2204,7 @@ export class CodingRuntimeOrchestrator {
     input: unknown,
     predecessorRunId: string | undefined,
     correlationId?: string,
-  ): Promise<CodingRuntimeOrchestratorResult> {
+  ): Promise<CodingRuntimeStartResult> {
     if (predecessorRunId === undefined) return this.startFresh(input, undefined, correlationId);
     this.activeRunId = undefined;
     this.activeEffectiveMode = undefined;
@@ -2214,11 +2215,7 @@ export class CodingRuntimeOrchestrator {
     }
   }
 
-  retry(
-    runId: string,
-    input: unknown,
-    correlationId?: string,
-  ): Promise<CodingRuntimeOrchestratorResult> {
+  retry(runId: string, input: unknown, correlationId?: string): Promise<CodingRuntimeStartResult> {
     return this.serial(async () => {
       if (!parseCodingWorkbenchRuntimeStartRequest(input).ok) return this.fail("invalid-intent");
       const prior = this.deps.snapshots.get(runId);
@@ -3985,7 +3982,7 @@ export class CodingRuntimeOrchestrator {
     input: unknown,
     predecessorRunId?: string,
     correlationId?: string,
-  ): Promise<CodingRuntimeOrchestratorResult> {
+  ): Promise<CodingRuntimeStartResult> {
     const parsed = parseCodingWorkbenchRuntimeStartRequest(input);
     if (!parsed.ok || this.activeRunId)
       return this.fail(parsed.ok ? "active-run-conflict" : "invalid-intent");
@@ -4477,7 +4474,7 @@ export class CodingRuntimeOrchestrator {
     | { readonly ok: true; readonly launch: ReturnType<CodingRuntimeLaunchResolver["resolve"]> }
     | {
         readonly ok: false;
-        readonly failureCode: CodingWorkbenchRuntimeFailureCode;
+        readonly failureCode: CodingWorkbenchRuntimeStartFailureCode;
         readonly modelRefusalReason?: CodingWorkbenchModelRefusalReason;
         readonly startAbandoned?: true;
       }

@@ -374,6 +374,15 @@ function requiredRunGeometry(
   return geometry;
 }
 
+/** The run's context geometry, once the run may start in its workspace at all. */
+function admittedRunGeometry(
+  input: ProductionOpenCodeBackendInput,
+  run: ProductionRuntimeBackendInput,
+): OpenCodeRuntimeCompositionInput["contextGeometry"] {
+  assertWindowsWorkspaceLocation(input, run);
+  return requiredRunGeometry(input, run);
+}
+
 function createOpenCodeRun(
   input: ProductionOpenCodeBackendInput,
   run: ProductionRuntimeBackendInput,
@@ -381,8 +390,7 @@ function createOpenCodeRun(
   toolProfile: OpenCodeToolProfile,
 ): QualifiedProductionRuntimeRun {
   assertOpenCodeRun(run);
-  assertWindowsWorkspaceLocation(input, run);
-  const contextGeometry = requiredRunGeometry(input, run);
+  const contextGeometry = admittedRunGeometry(input, run);
   const safeActivity = safeActivityController(
     run.minted.authorityRef.runId,
     safeActivityProjection,

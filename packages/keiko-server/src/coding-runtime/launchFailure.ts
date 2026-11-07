@@ -15,7 +15,7 @@
 import type {
   CodingWorkbenchAgent,
   CodingWorkbenchModelRefusalReason,
-  CodingWorkbenchRuntimeFailureCode,
+  CodingWorkbenchRuntimeStartFailureCode,
 } from "@oscharko-dev/keiko-contracts";
 import type { CodingJiraPodRefusal } from "./codingJiraPodBinding.js";
 import type { CodingRuntimeFailureCode } from "./codingRuntimeManager.js";
@@ -138,7 +138,7 @@ export function launchRejectionDiagnosticReason(error: unknown): string | undefi
 // can explain.
 const LAUNCH_FAILURE_CODES: ReadonlyMap<
   CodingRuntimeFailureCode,
-  CodingWorkbenchRuntimeFailureCode
+  CodingWorkbenchRuntimeStartFailureCode
 > = new Map([
   ["adapter-profile-mismatch", "source-drift"],
   ["host-unavailable", "runtime-unavailable"],
@@ -170,7 +170,7 @@ export function launchModelRefusalReason(
  * recognize keeps the historical `authority-resolution-failed`: an unrecognized throw must not be
  * reported as a specific, wrong cause, and must never be reported as success.
  */
-export function classifyLaunchRejection(error: unknown): CodingWorkbenchRuntimeFailureCode {
+export function classifyLaunchRejection(error: unknown): CodingWorkbenchRuntimeStartFailureCode {
   // A request the runtime cannot honour is an invalid intent, not a missing authority.
   if (error instanceof CodingRuntimeAgentUnsupportedError) return "invalid-intent";
   if (error instanceof CodingRuntimeInputsUnsupportedError) return "invalid-intent";
@@ -182,7 +182,7 @@ export function classifyLaunchRejection(error: unknown): CodingWorkbenchRuntimeF
 /** The refused start a thrown launch rejection becomes: its wire code and any named model reason. */
 export function refusedLaunch(error: unknown): {
   readonly ok: false;
-  readonly failureCode: CodingWorkbenchRuntimeFailureCode;
+  readonly failureCode: CodingWorkbenchRuntimeStartFailureCode;
   readonly modelRefusalReason?: CodingWorkbenchModelRefusalReason;
 } {
   const modelRefusalReason = launchModelRefusalReason(error);

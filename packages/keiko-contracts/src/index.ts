@@ -1385,6 +1385,8 @@ export type {
   CodingWorkbenchRuntimeExecutionBinding,
   CodingWorkbenchRuntimeFailureCode,
   CodingWorkbenchRuntimeIntent,
+  CodingWorkbenchRuntimeStartFailureCode,
+  CodingWorkbenchRuntimeStartRefusalCode,
   CodingWorkbenchRuntimeMintConfirmation,
   CodingWorkbenchRuntimeState,
   CodingWorkbenchRuntimeStateName,

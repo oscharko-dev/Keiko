@@ -35,7 +35,7 @@ import {
   MAX_QUEUED_APPROVALS_PER_RUN,
   type CodingRuntimeDescriptionSupport,
   type CodingRuntimeIssueIntake,
-  type CodingRuntimeOrchestratorResult,
+  type CodingRuntimeStartResult,
   type CodingRuntimeLaunchResolver,
   type WorkbenchDescriptionDispatchOutcome,
   type WorkbenchDescriptionDispatcher,
@@ -119,7 +119,7 @@ type OptionalOrchestratorDeps = Pick<
 type ProjectMemoryRequest = Parameters<CodingRuntimeProjectMemoryPort["getContextForRun"]>[0];
 type TaskDispatchRequest = Parameters<CodingRuntimeTaskDispatcher["dispatch"]>[0];
 
-function successfulSnapshot(result: CodingRuntimeOrchestratorResult) {
+function successfulSnapshot(result: CodingRuntimeStartResult) {
   if (!result.ok) throw new Error(`expected success, received ${result.failureCode}`);
   return result.snapshot;
 }
@@ -1000,7 +1000,7 @@ function issueIntake(
   };
 }
 
-function refusedStart(result: CodingRuntimeOrchestratorResult) {
+function refusedStart(result: CodingRuntimeStartResult) {
   if (result.ok) throw new Error("expected a refused start");
   return result;
 }

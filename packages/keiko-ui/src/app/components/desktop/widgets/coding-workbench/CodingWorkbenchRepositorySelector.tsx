@@ -425,29 +425,36 @@ function SelectorNotice({
       />
     );
   }
-  if (folderUnsupported) {
-    return (
-      <p
-        className={styles.cmpRepositorySelectorNotice}
-        role="alert"
-        data-testid="coding-workbench-folder-unsupported"
-      >
-        {t("codingWorkbench.repository.folderModeUnsupported")}
-      </p>
-    );
-  }
-  if (folderMode) {
-    return (
-      <p className={styles.cmpRepositorySelectorNotice} data-testid="coding-workbench-folder-hint">
-        {t("codingWorkbench.repository.folderModeHint")}
-      </p>
-    );
-  }
+  if (folderMode) return <FolderNotice unsupported={folderUnsupported} t={t} />;
   const key = selectorNoticeKey(unavailable, branchUnavailable, branchDenied);
   if (key === undefined) return null;
   return (
     <p className={styles.cmpRepositorySelectorNotice} role="alert">
       {t(key)}
+    </p>
+  );
+}
+
+// An ordinary folder works in place; #4068: where the runtime confines no work in place, it says
+// that the folder cannot run here instead.
+function FolderNotice({
+  unsupported,
+  t,
+}: {
+  readonly unsupported: boolean;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  return unsupported ? (
+    <p
+      className={styles.cmpRepositorySelectorNotice}
+      role="alert"
+      data-testid="coding-workbench-folder-unsupported"
+    >
+      {t("codingWorkbench.repository.folderModeUnsupported")}
+    </p>
+  ) : (
+    <p className={styles.cmpRepositorySelectorNotice} data-testid="coding-workbench-folder-hint">
+      {t("codingWorkbench.repository.folderModeHint")}
     </p>
   );
 }
@@ -512,12 +519,18 @@ interface RepositorySelectorState {
   readonly branchDenied: boolean;
   // The root is an ordinary folder: no branch, no Git features, but fully usable.
   readonly folderMode: boolean;
+  // #4068: ...unless the runtime confines no work in place.
+  readonly folderUnsupported: boolean;
 }
 
 // Extracted so the exported component stays under the lint bar's max-lines-per-function: the
 // catalog and branch reads, and the derived "cannot proceed with Git" flags (#B, #D, #3873 F1),
 // belong together as one unit of state the component's JSX only renders.
-function useRepositorySelectorState(root: string | null, locked: boolean): RepositorySelectorState {
+function useRepositorySelectorState(
+  root: string | null,
+  locked: boolean,
+  offered: readonly WorkbenchExecutionLocation[] | undefined,
+): RepositorySelectorState {
   const catalog = useGitRepositoryCatalog();
   const unavailable = repositoryUnavailable(root, catalog);
   const branchLocked = locked || unavailable;
@@ -525,6 +538,7 @@ function useRepositorySelectorState(root: string | null, locked: boolean): Repos
   const branchUnavailable = repositoryBranchUnavailable(root, unavailable, catalog, branchState);
   const branchDenied = branchUnavailable && branchState.denied;
   const folderMode = repositoryFolderMode(root, unavailable, catalog, branchState);
+  const folderUnsupported = folderMode && offered !== undefined && !offered.includes("local");
   return {
     catalog,
     unavailable,
@@ -533,6 +547,7 @@ function useRepositorySelectorState(root: string | null, locked: boolean): Repos
     branchUnavailable,
     branchDenied,
     folderMode,
+    folderUnsupported,
   };
 }
 
@@ -614,14 +629,12 @@ function BranchSelectorField({
 function SelectorRecoveryForState({
   root,
   state,
-  offered,
   placement,
   onOpenGit,
   t,
 }: {
   readonly root: string | null;
   readonly state: RepositorySelectorState;
-  readonly offered: readonly WorkbenchExecutionLocation[] | undefined;
   readonly placement: SelectorPlacement;
   readonly onOpenGit: () => void;
   readonly t: CodingWorkbenchTranslate;
@@ -634,7 +647,7 @@ function SelectorRecoveryForState({
       branchUnavailable={state.branchUnavailable}
       branchDenied={state.branchDenied}
       folderMode={state.folderMode}
-      folderUnsupported={state.folderMode && offered !== undefined && !offered.includes("local")}
+      folderUnsupported={state.folderUnsupported}
       catalogError={state.catalog.error}
       onOpenGit={onOpenGit}
       onRetryCatalog={state.catalog.reload}
@@ -678,14 +691,12 @@ export function CodingWorkbenchRepositorySelector({
   locked,
   onSelect,
   onSelectBranch,
-  location,
-  offeredLocations,
-  onSelectLocation,
   onOpenGit,
   placement = "composer",
+  ...work
 }: CodingWorkbenchRepositorySelectorProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
-  const state = useRepositorySelectorState(root, locked);
+  const state = useRepositorySelectorState(root, locked, work.offeredLocations);
   return (
     <div className={placement === "setup" ? styles.cmpSetupSelector : styles.cmpRepositorySelector}>
       <RepositorySelectorField
@@ -697,10 +708,10 @@ export function CodingWorkbenchRepositorySelector({
         placement={placement}
       />
       <LocationSelectorField
-        location={state.folderMode ? "local" : location}
-        offered={offeredLocations}
+        location={state.folderMode ? "local" : work.location}
+        offered={work.offeredLocations}
         locked={locked || root === null || state.folderMode}
-        onSelect={onSelectLocation}
+        onSelect={work.onSelectLocation}
         t={t}
         placement={placement}
       />
@@ -717,7 +728,6 @@ export function CodingWorkbenchRepositorySelector({
         placement={placement}
         root={root}
         state={state}
-        offered={offeredLocations}
         onOpenGit={onOpenGit}
         t={t}
       />
