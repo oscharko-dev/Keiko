@@ -45,6 +45,8 @@ const CREATE = {
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
   { tool: "jira.projects", args: {} },
+  { tool: "jira.filter", args: { filterId: "37" }, parameters: { filterId: "37" } },
+  { tool: "jira.favourite-filters", args: { startAt: 0, maxResults: 25 } },
   { tool: "jira.project", args: { projectIdOrKey: "SYN" }, parameters: { projectIdOrKey: "SYN" } },
   { tool: "jira.validate-project-key", args: { key: "SYN" }, query: { key: "SYN" } },
   {
@@ -155,6 +157,18 @@ function projectRead(path: string, state: RemoteState): AtlassianHttpBodyResult 
     return response({ key: "software", formattedKey: "Software" });
   return undefined;
 }
+function filterRead(path: string): AtlassianHttpBodyResult | undefined {
+  const filter = {
+    id: "37",
+    name: "Scoped",
+    jql: "project=SYN",
+    owner: { name: "synthetic-user" },
+    sharePermissions: [],
+  };
+  if (path === "filter/37") return response(filter);
+  if (path === "filter/favourite") return response([filter]);
+  return undefined;
+}
 function issueMetadata(path: string): AtlassianHttpBodyResult | undefined {
   if (path.endsWith("/issuetypes"))
     return response({
@@ -227,7 +241,10 @@ function remote(): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> {
     const path = absolute.replace("/context/rest/api/2/", "");
     if (request.method === "GET")
       return Promise.resolve(
-        projectRead(path, state) ?? issueMetadata(path) ?? fixtureRead(absolute, state),
+        projectRead(path, state) ??
+          filterRead(path) ??
+          issueMetadata(path) ??
+          fixtureRead(absolute, state),
       );
     return Promise.resolve(
       path === "project" || path === "project/10000"
@@ -321,7 +338,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(21);
+    expect(native).toHaveLength(23);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),

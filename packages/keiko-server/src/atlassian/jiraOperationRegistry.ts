@@ -26,6 +26,15 @@ type JiraPermissionPolicy =
   | "accessible-project-type"
   | "project-create-and-readback"
   | "project-update-and-readback"
+  | "visible-boards"
+  | "visible-sprints"
+  | "visible-epics"
+  | "visible-filters"
+  | "board-create-and-readback"
+  | "sprint-create-and-readback"
+  | "sprint-update-and-readback"
+  | "issue-membership-and-readback"
+  | "epic-update-and-readback"
   | "current-create-metadata"
   | "current-edit-metadata"
   | "visible-issues"
@@ -50,7 +59,7 @@ export type JiraOperationDefinition = OperationDefinitionBase &
     | {
         readonly kind: "native";
         readonly method: "GET" | "POST" | "PUT";
-        readonly apiRoot: "/rest/api/2";
+        readonly apiRoot: "/rest/api/2" | "/rest/agile/1.0";
         readonly pathTemplate: string;
         /** Create/edit may add the already-approved bounded issue links through their owner. */
         readonly continuationPolicy: "none" | "approved-issue-links";
@@ -70,9 +79,101 @@ export interface JiraOperationContract {
 const NATIVE: Readonly<
   Record<
     NativeTool,
-    readonly ["GET" | "POST" | "PUT", "read" | "write", string, JiraPermissionPolicy]
+    readonly [
+      "GET" | "POST" | "PUT",
+      "read" | "write",
+      string,
+      JiraPermissionPolicy,
+      ("/rest/api/2" | "/rest/agile/1.0")?,
+    ]
   >
 > = {
+  "jira.boards": ["GET", "read", "/board", "visible-boards", "/rest/agile/1.0"],
+  "jira.board": ["GET", "read", "/board/{boardId}", "visible-boards", "/rest/agile/1.0"],
+  "jira.board-configuration": [
+    "GET",
+    "read",
+    "/board/{boardId}/configuration",
+    "visible-boards",
+    "/rest/agile/1.0",
+  ],
+  "jira.board-backlog": [
+    "GET",
+    "read",
+    "/board/{boardId}/backlog",
+    "visible-issues",
+    "/rest/agile/1.0",
+  ],
+  "jira.board-issues": [
+    "GET",
+    "read",
+    "/board/{boardId}/issue",
+    "visible-issues",
+    "/rest/agile/1.0",
+  ],
+  "jira.board-epics": ["GET", "read", "/board/{boardId}/epic", "visible-epics", "/rest/agile/1.0"],
+  "jira.epic": ["GET", "read", "/epic/{epicIdOrKey}", "visible-epics", "/rest/agile/1.0"],
+  "jira.epic-issues": [
+    "GET",
+    "read",
+    "/epic/{epicIdOrKey}/issue",
+    "visible-issues",
+    "/rest/agile/1.0",
+  ],
+  "jira.sprints": ["GET", "read", "/board/{boardId}/sprint", "visible-sprints", "/rest/agile/1.0"],
+  "jira.sprint": ["GET", "read", "/sprint/{sprintId}", "visible-sprints", "/rest/agile/1.0"],
+  "jira.sprint-issues": [
+    "GET",
+    "read",
+    "/sprint/{sprintId}/issue",
+    "visible-issues",
+    "/rest/agile/1.0",
+  ],
+  "jira.filter": ["GET", "read", "/filter/{filterId}", "visible-filters"],
+  "jira.favourite-filters": ["GET", "read", "/filter/favourite", "visible-filters"],
+  "jira.board-create": ["POST", "write", "/board", "board-create-and-readback", "/rest/agile/1.0"],
+  "jira.sprint-create": [
+    "POST",
+    "write",
+    "/sprint",
+    "sprint-create-and-readback",
+    "/rest/agile/1.0",
+  ],
+  "jira.sprint-update": [
+    "POST",
+    "write",
+    "/sprint/{sprintId}",
+    "sprint-update-and-readback",
+    "/rest/agile/1.0",
+  ],
+  "jira.sprint-move-issues": [
+    "POST",
+    "write",
+    "/sprint/{sprintId}/issue",
+    "issue-membership-and-readback",
+    "/rest/agile/1.0",
+  ],
+  "jira.backlog-move-issues": [
+    "POST",
+    "write",
+    "/backlog/issue",
+    "issue-membership-and-readback",
+    "/rest/agile/1.0",
+  ],
+  "jira.epic-update": [
+    "POST",
+    "write",
+    "/epic/{epicIdOrKey}",
+    "epic-update-and-readback",
+    "/rest/agile/1.0",
+  ],
+  "jira.epic-move-issues": [
+    "POST",
+    "write",
+    "/epic/{epicIdOrKey}/issue",
+    "issue-membership-and-readback",
+    "/rest/agile/1.0",
+  ],
   "jira.projects": ["GET", "read", "/project", "visible-projects"],
   "jira.project": ["GET", "read", "/project/{projectIdOrKey}", "current-project-metadata"],
   "jira.validate-project-key": [
@@ -142,14 +243,14 @@ const COMPOSITES: Readonly<
 function definitionFor(tool: string): JiraOperationDefinition {
   if (Object.hasOwn(NATIVE, tool)) {
     const name = tool as NativeTool;
-    const [method, effect, pathTemplate, permissionPolicy] = NATIVE[name];
+    const [method, effect, pathTemplate, permissionPolicy, apiRoot = "/rest/api/2"] = NATIVE[name];
     return {
       tool: name,
       kind: "native",
       deployment: "data-center",
-      identity: `${method} /rest/api/2${pathTemplate}`,
+      identity: `${method} ${apiRoot}${pathTemplate}`,
       method,
-      apiRoot: "/rest/api/2",
+      apiRoot,
       pathTemplate,
       effects: effect === "read" ? ["remote-read"] : ["remote-read", "remote-write"],
       authorityAction: JIRA_MANAGED_ACTION_TYPES[name],

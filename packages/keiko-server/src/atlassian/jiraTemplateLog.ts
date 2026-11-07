@@ -99,7 +99,19 @@ const TEMPLATE_ADMISSION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["jira.create", "jira.edit", "jira.transition", "jira.assign"],
+      values: [
+        "jira.create",
+        "jira.edit",
+        "jira.transition",
+        "jira.assign",
+        "jira.board-create",
+        "jira.sprint-create",
+        "jira.sprint-update",
+        "jira.sprint-move-issues",
+        "jira.backlog-move-issues",
+        "jira.epic-update",
+        "jira.epic-move-issues",
+      ],
     },
     // `pre-approval` is the dry run before a human is asked; `dispatch` is the gate in front of
     // the Jira request, which holds in every autonomy mode.
@@ -154,7 +166,20 @@ const FIELD_ADMISSION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["jira.create", "jira.edit", "jira.transition", "jira.assign", "jira.draft"],
+      values: [
+        "jira.create",
+        "jira.edit",
+        "jira.transition",
+        "jira.assign",
+        "jira.draft",
+        "jira.board-create",
+        "jira.sprint-create",
+        "jira.sprint-update",
+        "jira.sprint-move-issues",
+        "jira.backlog-move-issues",
+        "jira.epic-update",
+        "jira.epic-move-issues",
+      ],
     },
     refusedCount: { type: "integer", dataClass: "count", required: true },
     validations: {
@@ -182,15 +207,23 @@ const FIELD_ADMISSION = defineActivityLogOperation({
   releaseImpact: "minor",
 });
 
-export type JiraTemplateOperation = "jira.create" | "jira.edit" | "jira.transition" | "jira.assign";
+const TEMPLATE_OPERATIONS = [
+  "jira.create",
+  "jira.edit",
+  "jira.transition",
+  "jira.assign",
+  "jira.board-create",
+  "jira.sprint-create",
+  "jira.sprint-update",
+  "jira.sprint-move-issues",
+  "jira.backlog-move-issues",
+  "jira.epic-update",
+  "jira.epic-move-issues",
+] as const;
+export type JiraTemplateOperation = (typeof TEMPLATE_OPERATIONS)[number];
 
 function templateOperation(value: string): JiraTemplateOperation | undefined {
-  return value === "jira.create" ||
-    value === "jira.edit" ||
-    value === "jira.transition" ||
-    value === "jira.assign"
-    ? value
-    : undefined;
+  return TEMPLATE_OPERATIONS.find((operation) => operation === value);
 }
 
 /** Counts and closed rule ids only: neither a field name, a section title nor a value. */

@@ -6,6 +6,11 @@ import {
   type JiraTemplateRuleId,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
+import {
+  JIRA_AGILE_TOOLS,
+  jiraAgileDetails,
+  type JiraOutcomeFact,
+} from "./jira-agile-presentation";
 
 export interface JiraOutcomeItem {
   readonly key?: string;
@@ -15,6 +20,7 @@ export interface JiraOutcomeItem {
   readonly href?: string;
   readonly status?: string;
   readonly labels: readonly WidgetMessageKey[];
+  readonly facts: readonly JiraOutcomeFact[];
 }
 export interface JiraOutcomeProblem {
   readonly field?: string;
@@ -133,14 +139,22 @@ function projectLabels(source: UnknownRecord): WidgetMessageKey[] {
     );
   return labels;
 }
-function outcomeItem(value: unknown, comments: boolean): JiraOutcomeItem | undefined {
+function outcomeItem(value: unknown, tool: string): JiraOutcomeItem | undefined {
   const source = record(value);
   if (source === undefined) return undefined;
+  const agile = jiraAgileDetails(tool, source);
   const projectKey = text(source.projectKey);
-  const key = firstText([projectKey, source.issueKey, source.key, source.projectTypeKey]);
+  const key = firstText([
+    projectKey,
+    source.issueKey,
+    agile.key,
+    source.key,
+    source.projectTypeKey,
+  ]);
   const author = record(source.author) ?? {};
   const name = firstText([
     source.projectName,
+    agile.name,
     source.summary,
     source.displayName,
     source.name,
@@ -148,8 +162,8 @@ function outcomeItem(value: unknown, comments: boolean): JiraOutcomeItem | undef
     author.displayName,
     author.name,
   ]);
-  const body = text(comments ? source.body : source.description);
-  if (key === undefined && name === undefined && body === undefined) return undefined;
+  const body = firstText([agile.body, tool === "jira_comments" ? source.body : source.description]);
+  if (![key, name, body, ...agile.facts].some((entry) => entry !== undefined)) return undefined;
   const status = firstText([record(source.status)?.name, record(source.to)?.name]);
   const href =
     projectKey === undefined
@@ -158,22 +172,34 @@ function outcomeItem(value: unknown, comments: boolean): JiraOutcomeItem | undef
   const projectId = text(source.projectId);
   return {
     ...textMembers({ key, name, body, status, href, projectId }),
-    labels: itemLabels(source),
+    labels: [...itemLabels(source), ...agile.labels],
+    facts: agile.facts,
   };
+}
+function returnedEntries(
+  data: UnknownRecord | undefined,
+  tool: string,
+): readonly unknown[] | undefined {
+  const entries = tool === "jira_project_permissions" ? data?.permissions : data?.items;
+  if (Array.isArray(entries)) return entries;
+  return JIRA_AGILE_TOOLS.has(tool) && Array.isArray(data?.issueKeys)
+    ? data.issueKeys.map((issueKey) => ({ issueKey }))
+    : undefined;
 }
 function outcomeItems(
   exchange: ChatToolExchange,
   data: UnknownRecord | undefined,
 ): JiraOutcomeItem[] {
-  const candidates =
-    exchange.call.name === "jira_project_permissions" ? data?.permissions : data?.items;
-  const items = Array.isArray(candidates) ? candidates : [];
+  const items = returnedEntries(data, exchange.call.name) ?? [];
   const progress = Array.isArray(exchange.draftProgress?.items) ? exchange.draftProgress.items : [];
-  const single = data?.issueKey !== undefined || JIRA_PROJECT_TOOLS.has(exchange.call.name);
+  const single =
+    data?.issueKey !== undefined ||
+    JIRA_PROJECT_TOOLS.has(exchange.call.name) ||
+    JIRA_AGILE_TOOLS.has(exchange.call.name);
   const source = single ? [data, ...items, ...progress] : [...items, ...progress];
   const seen = new Set<string>();
   return source.flatMap((entry) => {
-    const item = outcomeItem(entry, exchange.call.name === "jira_comments");
+    const item = outcomeItem(entry, exchange.call.name);
     if (item === undefined) return [];
     // A journal fallback and a final receipt can describe the same draft item.
     const identity = item.key;
@@ -248,18 +274,17 @@ function failureMessage(
 
 function pageCounts(
   data: UnknownRecord,
-  comments: boolean,
-  permissions: boolean,
+  tool: string,
 ): Pick<JiraToolOutcomeView, "returnedCount" | "total" | "unreadableCount"> {
-  const items = permissions ? data.permissions : data.items;
-  if (!Array.isArray(items))
+  const items = returnedEntries(data, tool);
+  if (items === undefined)
     return { returnedCount: undefined, total: undefined, unreadableCount: 0 };
   const total = count(data.total);
   const covered = (count(data.startAt) ?? 0) + items.length;
   return {
     returnedCount: items.length,
     total: total !== undefined && total >= covered ? total : undefined,
-    unreadableCount: items.filter((item) => outcomeItem(item, comments) === undefined).length,
+    unreadableCount: items.filter((item) => outcomeItem(item, tool) === undefined).length,
   };
 }
 
@@ -268,11 +293,7 @@ export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcome
   const data = record(exchange.result?.data) ?? {};
   return {
     items: outcomeItems(exchange, data),
-    ...pageCounts(
-      data,
-      exchange.call.name === "jira_comments",
-      exchange.call.name === "jira_project_permissions",
-    ),
+    ...pageCounts(data, exchange.call.name),
     stagedCount: count(data.itemCount),
     unresolvedCount: count(data.unresolvedRefCount),
     problems: problemsOf(data),

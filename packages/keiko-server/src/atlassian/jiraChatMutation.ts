@@ -128,10 +128,29 @@ function jiraRejectedWithoutEffect(
   record: ChatToolMutationRecord,
   attempt: JiraMutationAttempt,
 ): boolean {
-  if (attempt.ok || !definitiveRejectionStatus(record.httpStatus)) return false;
+  // Only reviewed single-resource error contracts establish no effect. Bulk/Agile errors may
+  // follow a partial effect, even with a structured Jira error document, and remain uncertain.
+  return (
+    ATOMIC_ERROR_OPERATIONS.has(record.operation) &&
+    definitiveRejectionStatus(record.httpStatus) &&
+    jiraErrorDocument(attempt)
+  );
+}
+function jiraErrorDocument(attempt: JiraMutationAttempt): boolean {
+  if (attempt.ok) return false;
   const detail = attempt.detail;
   return (detail?.fieldErrors?.length ?? 0) > 0 || (detail?.messages?.length ?? 0) > 0;
 }
+const ATOMIC_ERROR_OPERATIONS: ReadonlySet<string> = new Set([
+  "jira.create",
+  "jira.edit",
+  "jira.assign",
+  "jira.comment",
+  "jira.transition",
+  "jira.attach",
+  "jira.create-project",
+  "jira.update-project",
+]);
 /** The outcome to settle, and whether it rests on Jira's own error document. */
 function settlement(
   current: ChatToolMutationRecord | undefined,

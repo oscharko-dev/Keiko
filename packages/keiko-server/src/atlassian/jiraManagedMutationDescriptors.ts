@@ -32,6 +32,10 @@ import {
 } from "@oscharko-dev/keiko-connectors";
 import { KEY_RANGE_ENTRY_CHARS } from "./jiraDraftKeyRanges.js";
 import { jiraMutationToolId } from "./jiraMutationToolId.js";
+import {
+  jiraAgileDeclarationForTool,
+  type JIRA_AGILE_WRITE_DEFINITIONS,
+} from "./jiraAgileDescriptors.js";
 
 /** Conjunction preserves the native lowercase UUID grammar within the safe schema dialect. */
 export const JIRA_DRAFT_ID_SCHEMA = { ...text(36), format: "uuid", pattern: "^[0-9a-f-]{36}$" };
@@ -361,9 +365,13 @@ const TRACED_RESULT_SCHEMA = object(
   },
   ["outcome"],
 );
+type CoreMutationToolName = Exclude<
+  JiraMutationOperation,
+  Extract<JiraMutationOperation, keyof typeof JIRA_AGILE_WRITE_DEFINITIONS>
+>;
 const DEFINITIONS: Readonly<
   Record<
-    JiraMutationOperation,
+    CoreMutationToolName,
     {
       readonly description: string;
       readonly input: CatalogJsonObject;
@@ -523,7 +531,13 @@ const DEFINITIONS: Readonly<
     },
   },
 };
+function isCoreMutationTool(name: JiraMutationOperation): name is CoreMutationToolName {
+  return Object.hasOwn(DEFINITIONS, name);
+}
 function declaration(name: JiraMutationOperation): ManagedMcpToolDeclaration {
+  const agile = jiraAgileDeclarationForTool(name);
+  if (agile !== undefined) return agile;
+  if (!isCoreMutationTool(name)) throw new TypeError("Unsupported Jira mutation tool");
   const definition = DEFINITIONS[name];
   return Object.freeze({
     name,

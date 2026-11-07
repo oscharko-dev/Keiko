@@ -1,4 +1,6 @@
 import { jiraBrowseUrl } from "./jira-browse-url.js";
+import { JIRA_AGILE_READ_OPERATIONS, executeJiraAgileRead } from "./jira-agile-reads.js";
+import { JIRA_FILTER_READ_OPERATIONS, executeJiraFilterRead } from "./jira-filter-reads.js";
 import { jiraProjectBrowseUrl } from "./jira-project-browse-url.js";
 import {
   executeJiraProjectRead,
@@ -280,12 +282,21 @@ function arrayResult(
     ? projectPage(values, startAt, maxResults)
     : jiraAssignableUsersResult(values, startAt, maxResults);
 }
-function read<Context extends ManagedMcpInvocationContext>(
+async function read<Context extends ManagedMcpInvocationContext>(
   name: JiraManagedReadToolName,
   args: CatalogJsonObject,
   context: Context,
   connection: JiraManagedProviderDeps<Context>["connection"],
 ): Promise<ManagedMcpToolResult> {
+  const agile = JIRA_AGILE_READ_OPERATIONS.find((operation) => operation === name);
+  const filter = JIRA_FILTER_READ_OPERATIONS.find((operation) => operation === name);
+  if (agile !== undefined || filter !== undefined) {
+    const connected = await connection(context);
+    if (connected.deployment !== "data-center") return failure("unsupported-deployment");
+    return agile !== undefined
+      ? executeJiraAgileRead(agile, args, context, connected)
+      : executeJiraFilterRead(name, args, context, connected);
+  }
   return isJiraProjectRead(name)
     ? projectRead(name, args, context, connection)
     : readIssueOrMetadata(name, args, context, connection);

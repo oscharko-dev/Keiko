@@ -30,6 +30,7 @@ import { jiraReportView } from "./jira-report-view";
 import { ChatProcessingPipeline } from "./ChatProcessingPipeline";
 import { chatProcessingSteps } from "./chat-processing-pipeline";
 import { useJiraResultEvidence } from "./jira-result-evidence";
+import { JIRA_AGILE_TOOLS } from "./jira-agile-presentation";
 import {
   jiraToolOutcomeView,
   JIRA_OUTCOME_ITEMS_SHOWN,
@@ -120,6 +121,11 @@ function JiraResultItems({ items }: { readonly items: readonly JiraOutcomeItem[]
             {item.projectId === undefined ? null : (
               <p>{t("chat.jira.outcome.projectId", { id: item.projectId })}</p>
             )}
+            {item.facts.map((fact) => (
+              <p key={fact.label} className={styles.cmpResultText}>
+                {t(fact.label)}: {fact.value}
+              </p>
+            ))}
             {item.status === undefined ? null : <p>{item.status}</p>}
             {item.labels.map((label) => (
               <p key={label}>{t(label)}</p>
@@ -245,7 +251,7 @@ function resultCardSemantics(exchange: ChatToolExchange): {
   readonly role: "group" | undefined;
   readonly label: ReturnType<typeof jiraToolLabel>;
 } {
-  return JIRA_PROJECT_TOOLS.has(exchange.call.name)
+  return JIRA_PROJECT_TOOLS.has(exchange.call.name) || JIRA_AGILE_TOOLS.has(exchange.call.name)
     ? { tag: "div", role: "group", label: jiraToolLabel(exchange) }
     : { tag: "section", role: undefined, label: jiraToolRegionLabel(exchange) };
 }

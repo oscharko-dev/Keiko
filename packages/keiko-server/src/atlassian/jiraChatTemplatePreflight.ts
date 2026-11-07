@@ -4,6 +4,8 @@ import {
   jiraDraftFieldRefusals,
   jiraTemplateViolationGuidance,
   parseJiraDraft,
+  isJiraAgileMutation,
+  type JiraAgileMutation,
   type JiraDraftFieldRefusal,
   type JiraDraftTemplateRefusal,
   type JiraManagedConnection,
@@ -35,8 +37,10 @@ import {
 } from "./jiraTemplateLog.js";
 
 /** The writes that change issue fields, which is what an issue template describes. */
-type JiraFieldOperation = "jira.create" | "jira.edit" | "jira.transition" | "jira.assign";
+type JiraFieldOperation =
+  "jira.create" | "jira.edit" | "jira.transition" | "jira.assign" | JiraAgileMutation;
 function fieldOperation(tool: string): JiraFieldOperation | undefined {
+  if (isJiraAgileMutation(tool)) return tool;
   return tool === "jira.create" ||
     tool === "jira.edit" ||
     tool === "jira.transition" ||

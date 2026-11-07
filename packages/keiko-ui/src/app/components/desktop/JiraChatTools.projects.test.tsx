@@ -1,8 +1,9 @@
 import { render, screen } from "@testing-library/react";
 import { axe } from "jest-axe";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChatToolExchange, ChatToolTranscript } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { JIRA_MUTATION_OPERATIONS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
 import { JiraChatTools } from "./JiraChatTools";
@@ -27,7 +28,9 @@ function projectExchange(
       invocationId: "project-invocation",
       toolRef: null,
       projectionDigest: null,
-      effectStarted: operation === "jira_create_project" || operation === "jira_update_project",
+      effectStarted: JIRA_MUTATION_OPERATIONS.some(
+        (name) => name.replace(/[.-]/gu, "_") === operation,
+      ),
       metrics: { inputBytes: 10, outputBytes: 10, resultCount: 1, durationMs: 20 },
       status: "completed",
       reason: "none",
@@ -49,6 +52,175 @@ function show(exchange: ChatToolExchange): ReturnType<typeof render> {
 }
 
 afterEach(() => localStorage.removeItem(I18N_STORAGE_KEY));
+
+describe.each(["en", "de"] as const)("saved Agile results in %s (AC6)", (locale) => {
+  beforeEach(async () => {
+    await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+    localStorage.setItem(I18N_STORAGE_KEY, locale);
+  });
+  it("keeps a saved filter readable without assuming unknown sharing is private", async () => {
+    const { container } = show(
+      projectExchange(
+        {
+          outcome: "succeeded",
+          items: [
+            {
+              id: "7",
+              name: "Delivery filter",
+              jql: "project = SYN ORDER BY Rank",
+              shareScope: "unknown",
+            },
+          ],
+          startAt: 0,
+          total: 1,
+        },
+        "jira_favourite_filters",
+      ),
+    );
+    expect(screen.getByText("Delivery filter", { exact: true })).toBeVisible();
+    expect(
+      screen.getByText(locale === "en" ? "Saved filter ID: 7" : "Gespeicherte Filter-ID: 7"),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        locale === "en"
+          ? "Filter query: project = SYN ORDER BY Rank"
+          : "Filterabfrage: project = SYN ORDER BY Rank",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        locale === "en"
+          ? "Filter sharing status unavailable"
+          : "Freigabestatus des Filters nicht verfügbar",
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText(locale === "en" ? "Private filter" : "Privater Filter")).toBeNull();
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(container.querySelector("pre")).toBeNull();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+  it("restores board and sprint identity, state and goal as readable facts", async () => {
+    await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+    localStorage.setItem(I18N_STORAGE_KEY, locale);
+    const exchanges = [
+      projectExchange(
+        { outcome: "succeeded", items: [{ id: "7", name: "Delivery board", type: "scrum" }] },
+        "jira_boards",
+      ),
+      projectExchange(
+        {
+          outcome: "succeeded",
+          items: [
+            {
+              id: "9",
+              name: "Delivery sprint",
+              state: "active",
+              originBoardId: "7",
+              goal: "Deliver the reviewed scope",
+            },
+          ],
+        },
+        "jira_sprint",
+      ),
+    ].map((entry, index) => ({ ...entry, call: { ...entry.call, id: `agile-${String(index)}` } }));
+    const restored = JSON.parse(
+      JSON.stringify({ schemaVersion: 1, exchanges }),
+    ) as ChatToolTranscript;
+    const { container } = render(
+      <I18nProvider>
+        <JiraChatTools transcript={restored} turnState="completed" />
+      </I18nProvider>,
+    );
+    for (const value of ["Delivery board", "Delivery sprint", "Deliver the reviewed scope"])
+      expect(screen.getByText(value, { exact: true })).toBeVisible();
+    expect(screen.getByText(locale === "en" ? "Sprint ID: 9" : "Sprint-ID: 9")).toBeVisible();
+    expect(screen.getAllByText(locale === "en" ? "Board ID: 7" : "Board-ID: 7")).toHaveLength(2);
+    expect(screen.getByText(locale === "en" ? "Active sprint" : "Aktiver Sprint")).toBeVisible();
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(container.querySelector("pre")).toBeNull();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it.each([
+    ["jira_board_create", { boardId: "7" }, "Board ID: 7", "Board-ID: 7"],
+    ["jira_sprint_create", { sprintId: "9" }, "Sprint ID: 9", "Sprint-ID: 9"],
+    ["jira_sprint_update", { sprintId: "9" }, "Sprint ID: 9", "Sprint-ID: 9"],
+    [
+      "jira_sprint_move_issues",
+      { sprintId: "9", issueKeys: ["SYN-1", "SYN-2"] },
+      "Sprint ID: 9",
+      "Sprint-ID: 9",
+    ],
+    ["jira_backlog_move_issues", { issueKeys: ["SYN-1", "SYN-2"] }, "SYN-1", "SYN-1"],
+    ["jira_epic_update", { epicKey: "SYN-10" }, "SYN-10", "SYN-10"],
+    [
+      "jira_epic_move_issues",
+      { epicKey: "SYN-10", issueKeys: ["SYN-1", "SYN-2"] },
+      "SYN-10",
+      "SYN-10",
+    ],
+  ] as const)(
+    "keeps %s acknowledgement identity visible without claiming confirmation",
+    (operation, receipt, en, de) => {
+      const entry = projectExchange({ outcome: "succeeded-unconfirmed", ...receipt }, operation);
+      const { container } = show({ ...entry, mutationOutcome: "succeeded-unconfirmed" });
+      expect(
+        screen.getByText(
+          locale === "en"
+            ? "Jira accepted the change; confirmation incomplete"
+            : "Jira hat die Änderung angenommen; Bestätigung unvollständig",
+        ),
+      ).toBeVisible();
+      expect(screen.getByText(locale === "en" ? en : de, { exact: true })).toBeVisible();
+      if ("issueKeys" in receipt)
+        for (const key of receipt.issueKeys)
+          expect(screen.getByText(key, { exact: true })).toBeVisible();
+      expect(
+        screen.queryByText(locale === "en" ? "Jira change confirmed" : "Jira-Änderung bestätigt"),
+      ).toBeNull();
+      expect(screen.queryByRole("button", { name: /retry|erneut/iu })).toBeNull();
+      expect(container.querySelector("pre")).toBeNull();
+    },
+  );
+});
+
+it("uses an Epic's stored issue link but never treats Board or Sprint URLs as qualified links", () => {
+  const entries = [
+    projectExchange(
+      {
+        outcome: "succeeded",
+        epicKey: "SYN-10",
+        browseUrl: "https://jira.example.test/context/browse/SYN-10",
+      },
+      "jira_epic_update",
+    ),
+    projectExchange(
+      {
+        outcome: "succeeded",
+        boardId: "7",
+        browseUrl: "https://jira.example.test/secure/RapidBoard.jspa?rapidView=7",
+      },
+      "jira_board_create",
+    ),
+    projectExchange(
+      {
+        outcome: "succeeded",
+        sprintId: "9",
+        browseUrl: "https://jira.example.test/secure/RapidBoard.jspa?sprint=9",
+      },
+      "jira_sprint_create",
+    ),
+  ].map((entry, index) => ({ ...entry, call: { ...entry.call, id: `link-${String(index)}` } }));
+  render(
+    <JiraChatTools transcript={{ schemaVersion: 1, exchanges: entries }} turnState="completed" />,
+  );
+  expect(screen.getAllByRole("link")).toHaveLength(1);
+  expect(screen.getByRole("link", { name: /SYN-10/u })).toHaveAttribute(
+    "href",
+    "https://jira.example.test/context/browse/SYN-10",
+  );
+});
 
 describe.each(["en", "de"] as const)("saved project results in %s (#4293)", (locale) => {
   it("keeps a denied project write actionable without a success claim or automatic retry", async () => {

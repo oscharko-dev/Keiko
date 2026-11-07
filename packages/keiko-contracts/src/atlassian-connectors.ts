@@ -588,6 +588,13 @@ export type AtlassianConnectorActionType =
   | JiraManagedReadToolName
   | "create-project"
   | "update-project"
+  | "create-board"
+  | "create-sprint"
+  | "update-sprint"
+  | "move-issues-to-sprint"
+  | "move-issues-to-backlog"
+  | "update-epic"
+  | "move-issues-to-epic"
   | "assign-issue"
   | "sync-space"
   | "sync-project"
@@ -616,6 +623,13 @@ export const ATLASSIAN_CONNECTOR_ACTION_TYPES: readonly AtlassianConnectorAction
     "assign-issue",
     "create-project",
     "update-project",
+    "create-board",
+    "create-sprint",
+    "update-sprint",
+    "move-issues-to-sprint",
+    "move-issues-to-backlog",
+    "update-epic",
+    "move-issues-to-epic",
   ] as const satisfies readonly AtlassianConnectorActionType[]);
 
 /** One mapping from canonical tools to the existing connector policy vocabulary. */
@@ -632,6 +646,13 @@ export const JIRA_MANAGED_ACTION_TYPES: Readonly<
   "jira.create": "create-issue",
   "jira.create-project": "create-project",
   "jira.update-project": "update-project",
+  "jira.board-create": "create-board",
+  "jira.sprint-create": "create-sprint",
+  "jira.sprint-update": "update-sprint",
+  "jira.sprint-move-issues": "move-issues-to-sprint",
+  "jira.backlog-move-issues": "move-issues-to-backlog",
+  "jira.epic-update": "update-epic",
+  "jira.epic-move-issues": "move-issues-to-epic",
   "jira.edit": "update-issue-fields",
   "jira.assign": "assign-issue",
   "jira.comment": "add-issue-comment",
@@ -669,6 +690,13 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
   ...jiraReadActionValues("connector-access"),
   "create-project": "connector-write",
   "update-project": "connector-write",
+  "create-board": "connector-write",
+  "create-sprint": "connector-write",
+  "update-sprint": "connector-write",
+  "move-issues-to-sprint": "connector-write",
+  "move-issues-to-backlog": "connector-write",
+  "update-epic": "connector-write",
+  "move-issues-to-epic": "connector-write",
   "assign-issue": "connector-write",
   "sync-space": "connector-access",
   "sync-project": "connector-access",
@@ -688,6 +716,13 @@ export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
   ...jiraReadActionValues("jira"),
   "create-project": "jira",
   "update-project": "jira",
+  "create-board": "jira",
+  "create-sprint": "jira",
+  "update-sprint": "jira",
+  "move-issues-to-sprint": "jira",
+  "move-issues-to-backlog": "jira",
+  "update-epic": "jira",
+  "move-issues-to-epic": "jira",
   "assign-issue": "jira",
   "sync-space": "confluence",
   "sync-project": "jira",
@@ -707,6 +742,13 @@ export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
   ...jiraReadActionValues("issue-tracker.read"),
   "create-project": "issue-tracker.write",
   "update-project": "issue-tracker.write",
+  "create-board": "issue-tracker.write",
+  "create-sprint": "issue-tracker.write",
+  "update-sprint": "issue-tracker.write",
+  "move-issues-to-sprint": "issue-tracker.write",
+  "move-issues-to-backlog": "issue-tracker.write",
+  "update-epic": "issue-tracker.write",
+  "move-issues-to-epic": "issue-tracker.write",
   "assign-issue": "issue-tracker.write",
   "sync-space": "knowledge-base.read",
   "sync-project": "issue-tracker.read",
@@ -729,6 +771,13 @@ export const ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK: Readonly<
   ...jiraReadActionValues("low"),
   "create-project": "high",
   "update-project": "medium",
+  "create-board": "high",
+  "create-sprint": "high",
+  "update-sprint": "high",
+  "move-issues-to-sprint": "high",
+  "move-issues-to-backlog": "high",
+  "update-epic": "high",
+  "move-issues-to-epic": "high",
   "assign-issue": "medium",
   "sync-space": "low",
   "sync-project": "low",

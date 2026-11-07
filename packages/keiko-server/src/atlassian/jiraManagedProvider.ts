@@ -35,6 +35,11 @@ import { JIRA_DRAFT_STAGE_DECLARATION } from "./jiraDraftDescriptor.js";
 import { JIRA_REPORT_DECLARATION } from "./jiraReportDescriptor.js";
 import { JIRA_APPLICABLE_TEMPLATES_SCHEMA } from "./jiraTemplateMetadataSchema.js";
 import {
+  jiraAgileDeclarationForTool,
+  type JIRA_AGILE_READ_DEFINITIONS,
+  type JIRA_FILTER_READ_DEFINITIONS,
+} from "./jiraAgileDescriptors.js";
+import {
   createJiraOperationContracts,
   matchesJiraOperationBinding,
   type JiraOperationBinding,
@@ -124,9 +129,16 @@ interface ReadDefinition {
   readonly paged?: boolean;
   readonly rootResult?: CatalogJsonObject;
 }
-const DEFINITIONS: Readonly<
-  Record<Exclude<JiraManagedReadToolName, "jira.report" | "jira.draft-stage">, ReadDefinition>
-> = {
+type CoreReadToolName = Exclude<
+  JiraManagedReadToolName,
+  | "jira.report"
+  | "jira.draft-stage"
+  | Extract<
+      JiraManagedReadToolName,
+      keyof typeof JIRA_AGILE_READ_DEFINITIONS | keyof typeof JIRA_FILTER_READ_DEFINITIONS
+    >
+>;
+const DEFINITIONS: Readonly<Record<CoreReadToolName, ReadDefinition>> = {
   "jira.project": {
     description:
       "Inspect one visible Jira project by its current id or key, including ordinary metadata and a trusted Jira link.",
@@ -288,9 +300,18 @@ function readToolRef(name: JiraManagedReadToolName): ReturnType<typeof createToo
     name === "jira.issue" || name === "jira.search" || name === "jira.create-fields" ? 3 : 2,
   );
 }
+function isCoreReadTool(name: JiraManagedReadToolName): name is CoreReadToolName {
+  return Object.hasOwn(DEFINITIONS, name);
+}
 function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
+  const agile = jiraAgileDeclarationForTool(name);
+  if (agile !== undefined) return agile;
   if (name === "jira.report") return JIRA_REPORT_DECLARATION;
   if (name === "jira.draft-stage") return JIRA_DRAFT_STAGE_DECLARATION;
+  if (!isCoreReadTool(name)) throw new TypeError("Unsupported Jira read tool");
+  return coreDeclaration(name);
+}
+function coreDeclaration(name: CoreReadToolName): ManagedMcpToolDeclaration {
   const definition = DEFINITIONS[name];
   const descriptor = createToolDescriptor({
     toolRef: readToolRef(name),

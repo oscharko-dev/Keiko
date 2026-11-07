@@ -31,9 +31,20 @@ const RECEIPT_KEYS: ReadonlySet<string> = new Set([
   "transitionId",
   "attachmentId",
 ]);
+const AGILE_RECEIPTS = {
+  "jira.board-create": ["boardId"],
+  "jira.sprint-create": ["sprintId"],
+  "jira.sprint-update": ["sprintId"],
+  "jira.sprint-move-issues": ["sprintId", "issueKeys"],
+  "jira.backlog-move-issues": ["issueKeys"],
+  "jira.epic-update": ["epicKey"],
+  "jira.epic-move-issues": ["epicKey", "issueKeys"],
+} as const;
+type AgileOperation = keyof typeof AGILE_RECEIPTS;
 const REQUIRED_RECEIPTS: Readonly<
   Record<JiraMutationOperation, readonly (keyof JiraMutationReceipt)[]>
 > = {
+  ...AGILE_RECEIPTS,
   "jira.create-project": ["projectId", "projectKey"],
   "jira.update-project": ["projectId", "projectKey"],
   "jira.create": ["issueKey", "issueId"],
@@ -53,6 +64,35 @@ function confirmed(value: unknown): boolean {
 const PROJECT_RECEIPT_KEYS = new Set(["projectId", "projectKey", "projectName", "browseUrl"]);
 function projectOperation(operation: JiraMutationOperation): boolean {
   return operation === "jira.create-project" || operation === "jira.update-project";
+}
+function agileOperation(operation: JiraMutationOperation): operation is AgileOperation {
+  return Object.hasOwn(AGILE_RECEIPTS, operation);
+}
+function issueKey(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Z][A-Z0-9_]{0,31}-[1-9][0-9]{0,15}$/u.test(value);
+}
+function agileReceiptValue(key: string, value: unknown): boolean {
+  if (key === "issueKeys")
+    return (
+      Array.isArray(value) &&
+      value.length > 0 &&
+      value.length <= 50 &&
+      Array.from(value).every(issueKey) &&
+      new Set(value).size === value.length
+    );
+  if (key === "epicKey") return issueKey(value);
+  return (
+    typeof value === "string" &&
+    /^[1-9][0-9]{0,15}$/u.test(value) &&
+    Number.isSafeInteger(Number(value))
+  );
+}
+function validAgileReceipt(receipt: JiraMutationReceipt, operation: AgileOperation): boolean {
+  const keys: ReadonlySet<string> = new Set(AGILE_RECEIPTS[operation]);
+  return (
+    keys.size === Object.keys(receipt).length &&
+    Object.entries(receipt).every(([key, value]) => keys.has(key) && agileReceiptValue(key, value))
+  );
 }
 function projectLink(value: unknown, key: string | undefined): boolean {
   if (typeof value !== "string" || value.length > 4096 || key === undefined) return false;
@@ -92,6 +132,7 @@ function validProjectReceipt(receipt: JiraMutationReceipt): boolean {
 }
 function validIdentities(receipt: JiraMutationReceipt, operation: JiraMutationOperation): boolean {
   if (projectOperation(operation)) return validProjectReceipt(receipt);
+  if (agileOperation(operation)) return validAgileReceipt(receipt, operation);
   return Object.entries(receipt).every(
     ([key, id]) => RECEIPT_KEYS.has(key) && isSafeAtlassianIdentifier(id),
   );
@@ -102,10 +143,20 @@ function partialReceipt(
   operation: JiraMutationOperation,
 ): JiraMutationReceipt | undefined {
   return receipt !== undefined &&
-    (projectOperation(operation) || isSafeAtlassianIdentifier(receipt.issueKey)) &&
+    (projectOperation(operation) ||
+      agileOperation(operation) ||
+      isSafeAtlassianIdentifier(receipt.issueKey)) &&
     validIdentities(receipt, operation)
-    ? Object.freeze({ ...receipt })
+    ? snapshotReceipt(receipt)
     : undefined;
+}
+function snapshotReceipt(receipt: JiraMutationReceipt): JiraMutationReceipt {
+  return Object.freeze({
+    ...receipt,
+    ...(receipt.issueKeys === undefined
+      ? {}
+      : { issueKeys: Object.freeze([...receipt.issueKeys]) }),
+  });
 }
 
 /**
@@ -187,7 +238,7 @@ export function validJiraMutationAttempt(
   const links = sanitizeJiraMutationLinkAccount(value.links);
   return {
     ok: true,
-    receipt,
+    receipt: snapshotReceipt(receipt),
     ...(links === undefined ? {} : { links }),
     ...descriptionFormattingFacts(value),
   };

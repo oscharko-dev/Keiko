@@ -12,6 +12,7 @@ import {
   type JiraDraftValue,
 } from "./jiraDraftTree";
 import { jiraNamed, jiraNameOf, NO_JIRA_NAMES, restatesTarget, type JiraNames } from "./jiraNames";
+import { jiraAgileArgumentLabel } from "./jira-agile-presentation";
 
 type Raw = Readonly<Record<string, unknown>>;
 type Fact = JiraDraftField;
@@ -152,7 +153,7 @@ export function jiraActionFacts(
   const project = operation === "jira.create-project" || operation === "jira.update-project";
   return Object.entries(raw).flatMap(([key, value]) => {
     if (!managed) return [{ id: key, value: jiraDraftValueOf(value) }];
-    const label = project ? PROJECT_ARGUMENT_LABELS[key] : undefined;
+    const label = project ? PROJECT_ARGUMENT_LABELS[key] : jiraAgileArgumentLabel(operation, key);
     return label === undefined
       ? managedFacts(key, value, raw, t, names)
       : [{ id: t(label), value: jiraDraftValueOf(value) }];

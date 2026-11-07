@@ -31,25 +31,36 @@ const JSON_SHAPE = /[{}[\]]|"[^"\s]+"\s*:/u;
 async function reviewed(
   operation: Operation,
   args: Record<string, unknown>,
+  locale: "en" | "de" = "en",
 ): Promise<{
   readonly text: string;
   readonly region: HTMLElement;
   readonly container: HTMLElement;
 }> {
+  await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+  localStorage.setItem(I18N_STORAGE_KEY, locale);
   const view = approvalFor(operation);
   const { container } = render(
-    <JiraWriteApproval
-      approval={view}
-      call={{ id: "call", name: operation.replace(".", "_"), arguments: args }}
-      turnState="pending"
-      observe={vi.fn().mockResolvedValue(view)}
-      decide={vi.fn()}
-    />,
+    <I18nProvider>
+      <JiraWriteApproval
+        approval={view}
+        call={{ id: "call", name: operation.replace(/[.-]/gu, "_"), arguments: args }}
+        turnState="pending"
+        observe={vi.fn().mockResolvedValue(view)}
+        decide={vi.fn()}
+      />
+    </I18nProvider>,
   );
   await waitFor(() =>
-    expect(screen.getByRole("button", { name: "Approve this action" })).toBeEnabled(),
+    expect(
+      screen.getByRole("button", {
+        name: locale === "en" ? "Approve this action" : "Diese Aktion genehmigen",
+      }),
+    ).toBeEnabled(),
   );
-  const region = screen.getByRole("region", { name: "Review Jira action" });
+  const region = screen.getByRole("region", {
+    name: locale === "en" ? "Review Jira action" : "Jira-Aktion prüfen",
+  });
   return { text: region.textContent ?? "", region, container };
 }
 function expectNoJson(review: { readonly region: HTMLElement }): void {
@@ -66,9 +77,6 @@ describe.each(["en", "de"] as const)("readable project approvals in %s (#4293)",
   it.each(["jira.create-project", "jira.update-project"] as const)(
     "shows every %s argument with project-specific labels and keeps the website as a value",
     async (operation) => {
-      await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
-      localStorage.setItem(I18N_STORAGE_KEY, locale);
-      const view = approvalFor(operation);
       const args =
         operation === "jira.create-project"
           ? {
@@ -89,22 +97,7 @@ describe.each(["en", "de"] as const)("readable project approvals in %s (#4293)",
               url: "https://updated.example.test",
               assigneeType: "UNASSIGNED",
             };
-      const { container } = render(
-        <I18nProvider>
-          <JiraWriteApproval
-            approval={view}
-            call={{ id: "project-write", name: operation.replace(/[.-]/gu, "_"), arguments: args }}
-            turnState="pending"
-            observe={vi.fn().mockResolvedValue(view)}
-            decide={vi.fn()}
-          />
-        </I18nProvider>,
-      );
-      const allow = locale === "en" ? "Approve this action" : "Diese Aktion genehmigen";
-      await waitFor(() => expect(screen.getByRole("button", { name: allow })).toBeEnabled());
-      const region = screen.getByRole("region", {
-        name: locale === "en" ? "Review Jira action" : "Jira-Aktion prüfen",
-      });
+      const { container, region } = await reviewed(operation, args, locale);
       const labels =
         locale === "en"
           ? [
@@ -131,6 +124,67 @@ describe.each(["en", "de"] as const)("readable project approvals in %s (#4293)",
       expect(region.querySelector("a")).toBeNull();
       expectNoJson({ region });
       expect(await axe(container)).toHaveNoViolations();
+    },
+  );
+});
+
+describe.each(["en", "de"] as const)("readable Agile approvals in %s (AC6)", (locale) => {
+  it.each([
+    [
+      "jira.board-create",
+      { name: "Delivery board", type: "scrum", filterId: "7" },
+      "Board name",
+      "Board-Name",
+    ],
+    [
+      "jira.sprint-create",
+      {
+        name: "Delivery sprint",
+        originBoardId: "7",
+        startDate: "2026-11-07T09:00:00Z",
+        endDate: "2026-11-21T17:00:00Z",
+        goal: "Reviewed delivery scope",
+      },
+      "Sprint goal",
+      "Sprint-Ziel",
+    ],
+    ["jira.sprint-update", { sprintId: "9", state: "closed" }, "Sprint state", "Sprint-Status"],
+    [
+      "jira.sprint-move-issues",
+      { sprintId: "9", issues: ["SYN-1", "SYN-2"] },
+      "Issue keys",
+      "Vorgangsschlüssel",
+    ],
+    ["jira.backlog-move-issues", { issues: ["SYN-1", "SYN-2"] }, "Issue keys", "Vorgangsschlüssel"],
+    [
+      "jira.epic-update",
+      {
+        epicIdOrKey: "SYN-10",
+        name: "Delivery Epic",
+        summary: "Reviewed requirement",
+        done: true,
+        color: "color_4",
+      },
+      "Epic name",
+      "Epic-Name",
+    ],
+    [
+      "jira.epic-move-issues",
+      { epicIdOrKey: "SYN-10", issues: ["SYN-1", "SYN-2"] },
+      "Epic ID or key",
+      "Epic-ID oder Schlüssel",
+    ],
+  ] as const)(
+    "shows the exact %s request with named facts before approval",
+    async (operation, args, en, de) => {
+      const before = JSON.stringify(args);
+      const review = await reviewed(operation, args, locale);
+      expect(review.text).toContain(locale === "en" ? en : de);
+      for (const value of Object.values(args).flat()) expect(review.text).toContain(String(value));
+      expect(review.text).not.toContain(locale === "en" ? "File name" : "Dateiname");
+      expect(JSON.stringify(args)).toBe(before);
+      expectNoJson(review);
+      expect(await axe(review.container)).toHaveNoViolations();
     },
   );
 });

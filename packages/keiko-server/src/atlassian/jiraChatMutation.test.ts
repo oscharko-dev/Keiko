@@ -124,6 +124,101 @@ it("commits before sending, records acknowledgement, and never repeats a complet
   ]);
   expect(f.logs.lines().join()).not.toMatch(/synthetic-test-pat|jira\.example|SYN-1/u);
 });
+it.each([
+  {
+    operation: "jira.create-project",
+    path: "api/2/project",
+    method: "POST",
+    status: 201,
+    receipt: { projectId: "10000", projectKey: "SYN" },
+  },
+  {
+    operation: "jira.update-project",
+    path: "api/2/project/SYN",
+    method: "PUT",
+    status: 200,
+    receipt: { projectId: "10000", projectKey: "SYN" },
+  },
+  {
+    operation: "jira.board-create",
+    path: "agile/1.0/board",
+    method: "POST",
+    status: 201,
+    receipt: { boardId: "37" },
+  },
+  {
+    operation: "jira.sprint-create",
+    path: "agile/1.0/sprint",
+    method: "POST",
+    status: 201,
+    receipt: { sprintId: "37" },
+  },
+  {
+    operation: "jira.sprint-update",
+    path: "agile/1.0/sprint/37",
+    method: "POST",
+    status: 200,
+    receipt: { sprintId: "37" },
+  },
+  {
+    operation: "jira.sprint-move-issues",
+    path: "agile/1.0/sprint/37/issue",
+    method: "POST",
+    status: 204,
+    receipt: { sprintId: "37", issueKeys: ["SYN-1"] },
+  },
+  {
+    operation: "jira.backlog-move-issues",
+    path: "agile/1.0/backlog/issue",
+    method: "POST",
+    status: 204,
+    receipt: { issueKeys: ["SYN-1"] },
+  },
+  {
+    operation: "jira.epic-update",
+    path: "agile/1.0/epic/SYN-1",
+    method: "POST",
+    status: 200,
+    receipt: { epicKey: "SYN-1" },
+  },
+  {
+    operation: "jira.epic-move-issues",
+    path: "agile/1.0/epic/SYN-1/issue",
+    method: "POST",
+    status: 204,
+    receipt: { epicKey: "SYN-1", issueKeys: ["SYN-2"] },
+  },
+] as const)(
+  "journals $operation and replays its result without another HTTP effect",
+  async ({ operation, path, method, status, receipt }) => {
+    const f = fixture();
+    f.effects.mockImplementation(() =>
+      Promise.resolve(new Response(status === 204 ? null : "{}", { status })),
+    );
+    const input: JiraChatMutationExecution = {
+      ...f.input,
+      intent: { ...f.input.intent, operation },
+      execute: async (http) => {
+        const response = await http({
+          method,
+          url: `https://jira.example.invalid/rest/${path}`,
+          bodyJson: "{}",
+          maxBodyBytes: 1000,
+          timeoutMs: 1000,
+        });
+        expect(response).toMatchObject({ kind: "response", status });
+        return { ok: true, receipt };
+      },
+    };
+    expect(await executeJiraChatMutation(input)).toMatchObject({
+      data: { outcome: "succeeded", ...receipt },
+    });
+    expect(await executeJiraChatMutation(input)).toMatchObject({
+      data: { outcome: "succeeded", replayed: true },
+    });
+    expect(f.effects).toHaveBeenCalledOnce();
+  },
+);
 it("uses the injected custody transport factory with journal-owned lifecycle hooks", async () => {
   const f = fixture();
   const httpPortFactory = vi.fn(f.input.httpPortFactory);
@@ -375,6 +470,42 @@ it.each([400, 401, 403, 429, 500, 503])(
     expect(f.effects).toHaveBeenCalledOnce();
   },
 );
+it("preserves a possible Agile bulk effect despite a structured 400 and never replays it", async () => {
+  const f = fixture();
+  f.effects.mockImplementation(() =>
+    Promise.resolve(
+      new Response(JSON.stringify({ errorMessages: ["One member failed"], errors: {} }), {
+        status: 400,
+      }),
+    ),
+  );
+  const input: JiraChatMutationExecution = {
+    ...f.input,
+    intent: { ...f.input.intent, operation: "jira.sprint-move-issues" },
+    execute: async (http) => {
+      await http({
+        method: "POST",
+        url: "https://jira.example.invalid/rest/agile/1.0/sprint/37/issue",
+        bodyJson: '{"issues":["SYN-1"]}',
+        maxBodyBytes: 1000,
+        timeoutMs: 1000,
+      });
+      return {
+        ok: false,
+        reason: "field-validation",
+        detail: { messages: ["One member failed"] },
+        receipt: { sprintId: "37", issueKeys: ["SYN-1"] },
+      };
+    },
+  };
+  expect(await executeJiraChatMutation(input)).toMatchObject({
+    data: { outcome: "unknown", sprintId: "37", issueKeys: ["SYN-1"] },
+  });
+  expect(await executeJiraChatMutation(input)).toMatchObject({
+    data: { outcome: "unknown", replayed: true },
+  });
+  expect(f.effects).toHaveBeenCalledOnce();
+});
 it("retains an acknowledged malformed response as succeeded-unconfirmed", async () => {
   const f = fixture();
   f.effects.mockImplementation(() => Promise.resolve(new Response("not-json", { status: 201 })));

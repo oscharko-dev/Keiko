@@ -194,6 +194,24 @@ export {
   type JiraManagedProviderDeps,
   type JiraManagedMutationExecutor,
 } from "./jira-managed-tools.js";
+export {
+  executeJiraAgileRead,
+  JIRA_AGILE_READ_OPERATIONS,
+  type JiraAgileReadOperation,
+} from "./jira-agile-reads.js";
+export {
+  executeJiraAgileMutation,
+  checkJiraAgileMutation,
+  checkJiraAgileMutationTemplates,
+} from "./jira-agile-mutations.js";
+export {
+  JIRA_AGILE_MUTATIONS,
+  parseAgileMutation,
+  isJiraAgileMutation,
+  type JiraAgileMutation,
+  type AgileMutationInput,
+} from "./jira-agile-inputs.js";
+export { executeJiraFilterRead, JIRA_FILTER_READ_OPERATIONS } from "./jira-filter-reads.js";
 export { JIRA_METADATA_MAX_UPDATES } from "./jira-field-metadata.js";
 export {
   JIRA_ISSUE_LINKS_MAX,

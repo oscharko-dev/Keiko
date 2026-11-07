@@ -708,6 +708,26 @@ restoring execution authority from history. The discovery tools described there 
 under current accepted Chat authority, without Jira HTTP or a Jira read-grant lookup. Selecting
 schemas does not approve a remote operation; remote calls retain their existing authority checks.
 
+Native project setup and Software planning extend the same provider and policy vocabulary.
+Project creation and Board/Sprint/Epic planning writes carry high risk; ordinary project metadata
+updates carry medium risk. All retain `connector-write`, the existing `issue-tracker.write` scope,
+the mode-derived disposition and native Jira permissions. Software operations use the fixed
+`/rest/agile/1.0` root within the verified instance/context path; verification of the core REST
+identity does not establish Software availability or operation permission. Backlog rows and the
+Epic collection are distinct reads. Filter inspection preserves explicit sharing facts; no filter
+creation or default-sharing change is inferred from board creation.
+
+Planning changes to issue fields reuse the existing edit-template gate before approval and
+again before effects. Native partial Sprint updates preserve omitted fields, and state transitions
+are checked against the current Sprint. Every effect uses independent readback; unavailable
+confirmation remains uncertain. Structured errors from newly added bulk/Agile operations do not
+establish a no-effect outcome and never authorize replay.
+
+Forward UI-store migration V62 extends the mutation journal's closed native operation constraint
+for project and Software writes. It preserves the existing columns, rows, indexes and foreign keys;
+unknown operations and the non-dispatched draft composite remain refused. Reverting to older
+readers requires a compatible forward repair or the pre-update database backup.
+
 **Attachments (#4176, 2026-10-31).** `jira.attach` maps to `update-issue-fields` (medium): it
 changes an existing issue exactly as an edit does and is governed, approved, journaled and
 confirmed as one. The file never comes from a host path the model names: the model gives a

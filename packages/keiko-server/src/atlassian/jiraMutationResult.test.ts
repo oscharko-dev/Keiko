@@ -20,6 +20,57 @@ const PARTIAL: JiraMutationAttempt = {
   links: LINKS,
 };
 
+describe("Agile entity and membership receipts", () => {
+  it.each([
+    { operation: "jira.board-create", receipt: { boardId: "37" } },
+    { operation: "jira.sprint-create", receipt: { sprintId: "37" } },
+    { operation: "jira.sprint-update", receipt: { sprintId: "37" } },
+    { operation: "jira.sprint-move-issues", receipt: { sprintId: "37", issueKeys: ["SYN-1"] } },
+    { operation: "jira.backlog-move-issues", receipt: { issueKeys: ["SYN-1"] } },
+    { operation: "jira.epic-update", receipt: { epicKey: "SYN-1" } },
+    { operation: "jira.epic-move-issues", receipt: { epicKey: "SYN-1", issueKeys: ["SYN-2"] } },
+  ] as const)(
+    "preserves the exact $operation receipt on success and uncertainty",
+    ({ operation, receipt }) => {
+      expect(validJiraMutationAttempt({ ok: true, receipt }, operation)).toEqual({
+        ok: true,
+        receipt,
+      });
+      const partial = validJiraMutationAttempt(
+        { ok: false, reason: "unavailable", receipt },
+        operation,
+      );
+      expect(jiraAttemptToolResult("succeeded-unconfirmed", partial).data).toMatchObject({
+        ...receipt,
+        outcome: "succeeded-unconfirmed",
+      });
+    },
+  );
+  it("copies membership evidence before a producer can mutate its array", () => {
+    const issueKeys = ["SYN-1"];
+    const result = validJiraMutationAttempt(
+      { ok: true, receipt: { sprintId: "37", issueKeys } },
+      "jira.sprint-move-issues",
+    );
+    issueKeys.push("SYN-2");
+    expect(result).toMatchObject({ receipt: { sprintId: "37", issueKeys: ["SYN-1"] } });
+    expect(Object.isFrozen(result.receipt?.issueKeys)).toBe(true);
+  });
+  it.each([
+    { sprintId: "37", issueKeys: ["SYN-1", "SYN-1"] },
+    { sprintId: "37", issueKeys: [] },
+    { sprintId: "37", issueKeys: ["not-an-issue"] },
+    { sprintId: "9007199254740992", issueKeys: ["SYN-1"] },
+    { sprintId: "37", issueKeys: ["SYN-1"], issueKey: "SYN-1" },
+    { sprintId: "37", issueKeys: ["SYN-1"], boardId: "37" },
+  ])("refuses mixed, ambiguous or imprecise membership evidence %#", (receipt) => {
+    expect(validJiraMutationAttempt({ ok: true, receipt }, "jira.sprint-move-issues")).toEqual({
+      ok: false,
+      reason: "malformed-payload",
+    });
+  });
+});
+
 describe("project mutation receipts", () => {
   const receipt = {
     projectId: "9223372036854775807",
