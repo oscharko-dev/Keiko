@@ -7,6 +7,8 @@ import {
   isJiraWorkflowSchemeRead,
 } from "./jira-managed-workflow-schemes.js";
 import { executeJiraScreenRead, isJiraScreenRead } from "./jira-managed-screen-reads.js";
+import { executeJiraUserRead, isJiraUserRead } from "./jira-managed-user-reads.js";
+import { executeJiraDirectoryRead, isJiraDirectoryRead } from "./jira-managed-directory-reads.js";
 import {
   executeJiraParticipationRead,
   isJiraParticipationRead,
@@ -337,19 +339,45 @@ type NativeDetailRead =
   | Parameters<typeof executeJiraParticipationRead>[0]
   | Parameters<typeof executeJiraIssueTypeSchemeRead>[0]
   | Parameters<typeof executeJiraWorkflowSchemeRead>[0]
-  | Parameters<typeof executeJiraScreenRead>[0];
+  | Parameters<typeof executeJiraScreenRead>[0]
+  | Parameters<typeof executeJiraUserRead>[0]
+  | Parameters<typeof executeJiraDirectoryRead>[0];
 function isNativeDetailRead(name: string): name is NativeDetailRead {
-  return (
-    isJiraIssueDetailRead(name) ||
-    isJiraCommentRead(name) ||
-    isJiraSavedViewRead(name) ||
-    isJiraAttachmentRead(name) ||
-    isJiraAvatarRead(name) ||
-    isJiraParticipationRead(name) ||
-    isJiraIssueTypeSchemeRead(name) ||
-    isJiraWorkflowSchemeRead(name) ||
-    isJiraScreenRead(name)
-  );
+  return [
+    isJiraIssueDetailRead,
+    isJiraCommentRead,
+    isJiraSavedViewRead,
+    isJiraAttachmentRead,
+    isJiraAvatarRead,
+    isJiraParticipationRead,
+    isJiraIssueTypeSchemeRead,
+    isJiraWorkflowSchemeRead,
+    isJiraScreenRead,
+    isJiraUserRead,
+    isJiraDirectoryRead,
+  ].some((accepts) => accepts(name));
+}
+function administrationRead(
+  name: NativeDetailRead,
+  args: CatalogJsonObject,
+  request: ReturnType<typeof requestFor>,
+): Promise<ManagedMcpToolResult> | undefined {
+  if (isJiraIssueTypeSchemeRead(name)) return executeJiraIssueTypeSchemeRead(name, args, request);
+  if (isJiraWorkflowSchemeRead(name)) return executeJiraWorkflowSchemeRead(name, args, request);
+  if (isJiraScreenRead(name)) return executeJiraScreenRead(name, args, request);
+  if (isJiraUserRead(name)) return executeJiraUserRead(name, args, request);
+  if (isJiraDirectoryRead(name)) return executeJiraDirectoryRead(name, args, request);
+  return undefined;
+}
+function linkedIssueDetailRead(
+  name: NativeDetailRead,
+  args: CatalogJsonObject,
+  request: ReturnType<typeof requestFor>,
+  baseUrl: string,
+): Promise<ManagedMcpToolResult> {
+  if (isJiraCommentRead(name)) return executeJiraCommentRead(name, args, request, baseUrl);
+  if (isJiraIssueDetailRead(name)) return executeJiraIssueDetailRead(name, args, request);
+  throw new TypeError("Unsupported Jira detail read");
 }
 async function nativeDetailRead<Context extends ManagedMcpInvocationContext>(
   name: NativeDetailRead,
@@ -360,17 +388,14 @@ async function nativeDetailRead<Context extends ManagedMcpInvocationContext>(
   const connected = await connection(context);
   if (connected.deployment !== "data-center") return failure("unsupported-deployment");
   const request = requestFor(connected, context);
+  const administration = administrationRead(name, args, request);
+  if (administration !== undefined) return administration;
   if (isJiraParticipationRead(name))
     return executeJiraParticipationRead(name, args, request, connected.baseUrl);
-  if (isJiraIssueTypeSchemeRead(name)) return executeJiraIssueTypeSchemeRead(name, args, request);
-  if (isJiraWorkflowSchemeRead(name)) return executeJiraWorkflowSchemeRead(name, args, request);
-  if (isJiraScreenRead(name)) return executeJiraScreenRead(name, args, request);
   if (isJiraSavedViewRead(name)) return executeJiraSavedViewRead(name, args, request);
   if (isJiraAttachmentRead(name)) return executeJiraAttachmentRead(name, args, request);
   if (isJiraAvatarRead(name)) return executeJiraAvatarRead(name, args, request);
-  const result = isJiraCommentRead(name)
-    ? await executeJiraCommentRead(name, args, request, connected.baseUrl)
-    : await executeJiraIssueDetailRead(name, args, request);
+  const result = await linkedIssueDetailRead(name, args, request, connected.baseUrl);
   return boundJiraReadResult(withIssueLink(result, connected.baseUrl, args.issueKey));
 }
 

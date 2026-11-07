@@ -123,10 +123,10 @@ to Chat or Coding, grant authority, or bypass those owners.
 
 ## Current constrained implementation snapshot
 
-The current registry supplies **93 native identities: 64 reads and 29 writes**. Each is mapped to
+The current registry supplies **101 native identities: 72 reads and 29 writes**. Each is mapped to
 its exact published method/path identity and remains `partial`: the closed typed operation exposes
 only the documented supported fields and behavior, rather than the entire upstream API contract.
-The other **346 operations remain `not-implemented`**. No row is marked fully implemented,
+The other **338 operations remain `not-implemented`**. No row is marked fully implemented,
 executable, owner-deferred or excluded by this snapshot. All 439 source/version IDs, cluster
 assignments, dependencies and qualification fields are retained.
 
@@ -134,7 +134,8 @@ This snapshot includes ordinary project setup; board/backlog/Epic and sprint ope
 filter reads; versions/components; existing issue workflows; the C7 dashboard/filter-sharing reads;
 the C6 comment-update/link/worklog read increment; bounded C8 attachment/archive and avatar metadata;
 worklog create/update with connected-user watching/voting; fourteen C9 workflow-/issue-type-scheme
-and screen reads; and three reviewed comment/attachment/worklog deletions. The three existing
+and screen reads; three reviewed comment/attachment/worklog deletions; and eight C10 user, group and
+application-role reads. The three existing
 report/draft composites remain compositions, not extra native API identities. Remaining filter
 creation, ranking, other estimate-adjustment modes and destructive operations, administration and
 other inventory gaps stay open. A registered declaration is not evidence that
@@ -160,8 +161,15 @@ responses use their documented native DTOs; named workflow selection returns an 
 unfiltered endpoint returns an array. Bounded local pagination never adds unsupported remote query
 parameters. Administrative visibility and websudo failures remain native refusals, with no escalation.
 
+C10 adds four user reads and four group/application-role reads. Native first100 search windows,
+transient cursor pages without totals, unpageable pickers, group/subgroup membership pages and
+locally paged complete role lists retain their separate scopes. Email, HTML, avatar and remote-link
+fields are omitted. Signed native role metrics remain signed; missing booleans/counts remain unknown,
+and neither negative seat values nor configuration membership grant Keiko authority.
+
 `currentRegistry` pins the existing server registry source file's SHA-256 and native declaration
-count. The reconciliation helper parses that file's literal `NATIVE` declarations and verified closed `read`, `write` and `issueRead` builders with TypeScript's AST;
+count. The reconciliation helper parses that file's literal `NATIVE` declarations and verified closed
+`reads`/`writes` group builders with TypeScript's AST;
 it does not import the runtime, evaluate source expressions, compile schemas or dispatch HTTP.
 It rejects a registry identity absent from the pinned published inventory. Paths retain the exact
 published parameter names, so even a wire-equivalent renamed placeholder must be reconciled with
@@ -172,7 +180,8 @@ not claims that those tests ran on the current head. `verificationReferences` re
 actual operation-level qualification is recorded. The registry digest is source accounting, not a
 replacement for the runtime's immutable operation contract digest or one-use approval binding.
 
-The current three-delete metadata delta was edited directly during the explicit code-only period.
+The current deletion and C10 metadata deltas were edited directly during the explicit code-only
+period.
 Its registry digest is source-file bookkeeping, not a validation result. Inventory reconciliation,
 checks and final current-head verification remain pending until the permitted final verification
 phase tomorrow morning; no runtime qualification was added.

@@ -34,6 +34,7 @@ import { JIRA_AGILE_TOOLS } from "./jira-agile-presentation";
 import { JIRA_PROJECT_METADATA_TOOLS } from "./jira-project-metadata-presentation";
 import { JIRA_COLLABORATION_TOOLS } from "./jira-collaboration-presentation";
 import { JIRA_ADMINISTRATION_TOOLS } from "./jira-administration-presentation";
+import { JIRA_DIRECTORY_TOOLS } from "./jira-directory-presentation";
 import { JIRA_PARTICIPATION_TOOLS } from "./jira-participation-presentation";
 import { JIRA_FILE_METADATA_TOOLS } from "./jira-file-metadata-presentation";
 import { JIRA_SAVED_VIEW_TOOLS } from "./jira-saved-view-presentation";
@@ -267,14 +268,17 @@ function resultCardSemantics(exchange: ChatToolExchange): {
   readonly role: "group" | undefined;
   readonly label: ReturnType<typeof jiraToolLabel>;
 } {
-  return JIRA_PROJECT_TOOLS.has(exchange.call.name) ||
-    JIRA_AGILE_TOOLS.has(exchange.call.name) ||
-    JIRA_PROJECT_METADATA_TOOLS.has(exchange.call.name) ||
-    JIRA_COLLABORATION_TOOLS.has(exchange.call.name) ||
-    JIRA_SAVED_VIEW_TOOLS.has(exchange.call.name) ||
-    JIRA_FILE_METADATA_TOOLS.has(exchange.call.name) ||
-    JIRA_PARTICIPATION_TOOLS.has(exchange.call.name) ||
-    JIRA_ADMINISTRATION_TOOLS.has(exchange.call.name)
+  return [
+    JIRA_PROJECT_TOOLS,
+    JIRA_AGILE_TOOLS,
+    JIRA_PROJECT_METADATA_TOOLS,
+    JIRA_COLLABORATION_TOOLS,
+    JIRA_SAVED_VIEW_TOOLS,
+    JIRA_FILE_METADATA_TOOLS,
+    JIRA_PARTICIPATION_TOOLS,
+    JIRA_ADMINISTRATION_TOOLS,
+    JIRA_DIRECTORY_TOOLS,
+  ].some((tools) => tools.has(exchange.call.name))
     ? { tag: "div", role: "group", label: jiraToolLabel(exchange) }
     : { tag: "section", role: undefined, label: jiraToolRegionLabel(exchange) };
 }

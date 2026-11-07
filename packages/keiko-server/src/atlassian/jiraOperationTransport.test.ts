@@ -33,6 +33,54 @@ const CREATE = {
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
   {
+    tool: "jira.user",
+    args: { userKey: "JIRAUSER10100", includeDeleted: true },
+    query: { key: "JIRAUSER10100", includeDeleted: "true" },
+  },
+  {
+    tool: "jira.users",
+    args: {
+      query: "Synthetic + QA",
+      startAt: 0,
+      maxResults: 2,
+      includeActive: true,
+      includeInactive: false,
+    },
+    query: {
+      username: "Synthetic + QA",
+      startAt: "0",
+      maxResults: "2",
+      includeActive: "true",
+      includeInactive: "false",
+    },
+  },
+  {
+    tool: "jira.user-directory",
+    args: { cursor: "-9223372036854775808", maxResults: 2 },
+    query: { cursor: "-9223372036854775808", maxResults: "2" },
+  },
+  {
+    tool: "jira.user-picker",
+    args: { query: "Synthetic + QA", maxResults: 2 },
+    query: { query: "Synthetic + QA", maxResults: "2", showAvatar: "false" },
+  },
+  {
+    tool: "jira.group-members",
+    args: { groupName: "R&D team", startAt: 0, maxResults: 2, includeInactiveUsers: true },
+    query: { groupname: "R&D team", startAt: "0", maxResults: "2", includeInactiveUsers: "true" },
+  },
+  {
+    tool: "jira.groups",
+    args: { query: "R&D", maxResults: 2 },
+    query: { query: "R&D", maxResults: "2" },
+  },
+  { tool: "jira.application-roles", args: { startAt: 0, maxResults: 2 } },
+  {
+    tool: "jira.application-role",
+    args: { applicationRoleKey: "jira-software" },
+    parameters: { key: "jira-software" },
+  },
+  {
     tool: "jira.workflow-scheme",
     args: { schemeId: "37", returnDraftIfExists: true },
     parameters: { id: "37" },
@@ -550,6 +598,8 @@ function administrationRead(
   path: string,
   absoluteUrl: string,
 ): AtlassianHttpBodyResult | undefined {
+  const directory = directoryRead(path);
+  if (directory !== undefined) return directory;
   const type = { id: "1", name: "Task", subtask: false };
   const scheme = { id: "37", name: "Delivery", issueTypes: [type], defaultIssueType: type };
   const workflowScheme = {
@@ -579,6 +629,43 @@ function administrationRead(
     "screens/71/tabs": [{ id: 81, name: "Details" }],
     "screens/71/tabs/81/fields": [{ id: "summary", name: "Summary", showWhenEmpty: false }],
     "screens/71/availableFields": [{ id: "description", name: "Description" }],
+  };
+  return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
+}
+function directoryRead(path: string): AtlassianHttpBodyResult | undefined {
+  const user = {
+    key: "JIRAUSER10100",
+    name: "Synthetic-User",
+    displayName: "Synthetic User",
+    active: false,
+    deleted: false,
+    emailAddress: "private@example.invalid",
+    self: "https://untrusted.invalid/user",
+  };
+  const role = {
+    key: "jira-software",
+    name: "Jira Software",
+    groups: ["R&D team"],
+    defaultGroups: [],
+    hasUnlimitedSeats: true,
+    numberOfSeats: -1,
+    remainingSeats: -7,
+    userCount: 12,
+  };
+  const bodies: Readonly<Record<string, unknown>> = {
+    user,
+    "user/search": [user],
+    "user/list": {
+      values: [user],
+      maxResults: 2,
+      isLast: false,
+      nextCursor: "9223372036854775807",
+    },
+    "user/picker": { users: [user], total: 3, header: "Untrusted header", html: "<b>ignored</b>" },
+    "group/member": { values: [user], startAt: 0, maxResults: 2, total: 1, isLast: true },
+    "groups/picker": { groups: [{ name: "R&D team", html: "<b>ignored</b>" }], total: 2 },
+    applicationrole: [role],
+    "applicationrole/jira-software": role,
   };
   return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
 }
@@ -731,7 +818,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(75);
+    expect(native).toHaveLength(83);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),

@@ -3,6 +3,10 @@ import {
   type JIRA_ADMINISTRATION_READ_DEFINITIONS,
 } from "./jiraAdministrationDescriptors.js";
 import {
+  jiraDirectoryDeclarationForTool,
+  type JIRA_DIRECTORY_READ_DEFINITIONS,
+} from "./jiraDirectoryDescriptors.js";
+import {
   jiraParticipationDeclarationForTool,
   type JIRA_PARTICIPATION_READ_DEFINITIONS,
 } from "./jiraParticipationDescriptors.js";
@@ -165,6 +169,7 @@ type CoreReadToolName = Exclude<
       | keyof typeof JIRA_ISSUE_COLLABORATION_READ_DEFINITIONS
       | keyof typeof JIRA_PARTICIPATION_READ_DEFINITIONS
       | keyof typeof JIRA_ADMINISTRATION_READ_DEFINITIONS
+      | keyof typeof JIRA_DIRECTORY_READ_DEFINITIONS
       | keyof typeof JIRA_SAVED_VIEW_READ_DEFINITIONS
       | keyof typeof JIRA_ASSET_READ_DEFINITIONS
     >
@@ -340,6 +345,7 @@ function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
     jiraAgileDeclarationForTool,
     jiraProjectStructureDeclarationForTool,
     jiraAdministrationDeclarationForTool,
+    jiraDirectoryDeclarationForTool,
     jiraParticipationDeclarationForTool,
     jiraIssueCollaborationDeclarationForTool,
     jiraSavedViewDeclarationForTool,

@@ -53,6 +53,117 @@ function show(exchange: ChatToolExchange): ReturnType<typeof render> {
 
 afterEach(() => localStorage.removeItem(I18N_STORAGE_KEY));
 
+describe.each(["en", "de"] as const)("private Jira directory results in %s", (locale) => {
+  beforeEach(async () => {
+    await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+    localStorage.setItem(I18N_STORAGE_KEY, locale);
+  });
+  it("restores all eight scoped directory reads with readable identities and no remote links", async () => {
+    const user = {
+      key: "JIRAUSER10100",
+      name: "Synthetic-User",
+      displayName: "Synthetic User",
+      active: false,
+      deleted: false,
+      emailAddress: "private@example.invalid",
+      self: "https://untrusted.invalid/user",
+      avatarUrls: { small: "https://untrusted.invalid/image" },
+    };
+    const role = {
+      key: "jira-software",
+      name: "Jira Software",
+      groups: ["Developers"],
+      defaultGroups: [],
+      defined: true,
+      hasUnlimitedSeats: true,
+      platform: false,
+      selectedByDefault: false,
+      numberOfSeats: -1,
+      remainingSeats: -7,
+      userCount: 12,
+    };
+    const cases: readonly [string, CatalogJsonObject, string, string][] = [
+      ["jira_user", user, "Read Jira user", "Jira-Benutzer lesen"],
+      ["jira_users", { items: [user], startAt: 0, searchLimit: 100 }, "Search Jira users", "Jira-Benutzer suchen"],
+      ["jira_user_directory", { items: [user], isLast: false, nextCursor: "9223372036854775807" }, "Read a Jira user directory page", "Eine Jira-Benutzerverzeichnisseite lesen"],
+      ["jira_user_picker", { items: [user], total: 4 }, "Suggest Jira users", "Jira-Benutzer vorschlagen"],
+      ["jira_group_members", { groupName: "R&D team", items: [user], startAt: 0, total: 1 }, "Read Jira group members", "Jira-Gruppenmitglieder lesen"],
+      ["jira_groups", { items: [{ name: "Developers", html: "<b>Untrusted HTML</b>" }] }, "Suggest Jira groups", "Jira-Gruppen vorschlagen"],
+      ["jira_application_roles", { items: [role], startAt: 0, total: 1 }, "Read Jira application roles", "Jira-Anwendungsrollen lesen"],
+      ["jira_application_role", role, "Read Jira application role", "Jira-Anwendungsrolle lesen"],
+    ];
+    const restored = JSON.parse(JSON.stringify({
+      schemaVersion: 1,
+      exchanges: cases.map(([operation, data], index) => ({
+        ...projectExchange({ outcome: "succeeded", ...data }, operation),
+        call: { id: `directory-${String(index)}`, name: operation, arguments: {} },
+      })),
+    })) as ChatToolTranscript;
+    const renderReceipt = (): ReturnType<typeof render> => render(
+      <I18nProvider>
+        <JiraChatTools transcript={restored} turnState="completed" />
+      </I18nProvider>,
+    );
+    const first = renderReceipt();
+    const before = first.container.textContent;
+    first.unmount();
+    const { container } = renderReceipt();
+    expect(container.textContent).toBe(before);
+    for (const [, , en, de] of cases)
+      expect(screen.getByRole("group", { name: locale === "en" ? en : de })).toBeVisible();
+    for (const value of ["JIRAUSER10100", "Synthetic-User", "Synthetic User", "Developers", "R&D team"])
+      expect(container.textContent).toContain(value);
+    for (const value of ["private@example.invalid", "untrusted.invalid", "Untrusted HTML", "9223372036854775807"])
+      expect(container.textContent).not.toContain(value);
+    const roleCard = screen.getByRole("group", {
+      name: locale === "en" ? "Read Jira application role" : "Jira-Anwendungsrolle lesen",
+    });
+    for (const value of [": -1", ": -7", ": 12", ": 0"])
+      expect(roleCard).toHaveTextContent(value);
+    expect(roleCard).toHaveTextContent(locale === "en" ? "Unlimited seats" : "Unbegrenzte Plätze");
+    expect(roleCard).toHaveTextContent(locale === "en"
+      ? "Not selected by default for new users"
+      : "Für neue Benutzer nicht standardmäßig ausgewählt");
+    expect(container.querySelector("pre, img, a")).toBeNull();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+  it("keeps a bounded user search distinct from the complete user directory", () => {
+    const { container } = show(projectExchange({
+      outcome: "succeeded",
+      items: [{ key: "U1", name: "Unknown status" }],
+      startAt: 99,
+      searchLimit: 100,
+    }, "jira_users"));
+    expect(container.textContent).toContain(locale === "en"
+      ? "This search covers at most the first 100 matching users. It is not a complete user directory."
+      : "Diese Suche umfasst höchstens die ersten 100 passenden Benutzer. Sie ist kein vollständiges Benutzerverzeichnis.");
+    expect(container.textContent).toContain(locale === "en" ? "Account activity was not provided" : "Kontoaktivität wurde nicht angegeben");
+    expect(container.textContent).toContain(locale === "en" ? "Account deletion state was not provided" : "Löschstatus des Kontos wurde nicht angegeben");
+  });
+  it.each([true, false, undefined])("keeps the directory page state %s without displaying a cursor as an identity", (isLast) => {
+    const { container } = show(projectExchange({
+      outcome: "succeeded", items: [], ...(isLast === undefined ? {} : { isLast }),
+      nextCursor: "-9223372036854775808",
+    }, "jira_user_directory"));
+    const labels = locale === "en"
+      ? ["This is the last page of this directory read.", "More directory pages are available.", "Jira did not confirm whether more directory pages exist."]
+      : ["Dies ist die letzte Seite dieser Verzeichnisabfrage.", "Weitere Verzeichnisseiten sind verfügbar.", "Jira hat nicht bestätigt, ob weitere Verzeichnisseiten existieren."];
+    expect(container.textContent).toContain(labels[isLast === true ? 0 : isLast === false ? 1 : 2]);
+    expect(container.textContent).not.toContain("-9223372036854775808");
+    expect(container.querySelector("a")).toBeNull();
+  });
+  it("does not infer unlimited seats or missing group counts from negative metrics", () => {
+    const { container } = show(projectExchange({
+      outcome: "succeeded", key: "jira-core", numberOfSeats: -1,
+    }, "jira_application_role"));
+    expect(container.textContent).toContain(": -1");
+    for (const value of locale === "en"
+      ? ["Unlimited seats", "Limited seats", "Group count:", "Default group count:"]
+      : ["Unbegrenzte Plätze", "Begrenzte Plätze", "Gruppenanzahl:", "Anzahl der Standardgruppen:"])
+      expect(container.textContent).not.toContain(value);
+  });
+});
+
 describe.each(["en", "de"] as const)("persistent Jira deletion receipts in %s", (locale) => {
   beforeEach(async () => {
     await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);

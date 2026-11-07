@@ -35,6 +35,7 @@ import {
   jiraAdministrationDetails,
 } from "./jira-administration-presentation";
 import { jiraMutationUnchanged } from "./jira-tool-presentation";
+import { JIRA_DIRECTORY_TOOLS, jiraDirectoryDetails } from "./jira-directory-presentation";
 
 export interface JiraOutcomeItem {
   readonly key?: string;
@@ -87,6 +88,7 @@ const STANDALONE_TOOLS = new Set([
   ...JIRA_FILE_METADATA_TOOLS,
   ...JIRA_PARTICIPATION_TOOLS,
   ...JIRA_ADMINISTRATION_TOOLS,
+  ...JIRA_DIRECTORY_TOOLS,
 ]);
 const BOARD_READ_TOOLS = new Set(["jira_board", "jira_boards", "jira_board_configuration"]);
 type UnknownRecord = Readonly<Record<string, unknown>>;
@@ -220,6 +222,7 @@ function boardContextLink(tool: string, source: UnknownRecord): string | undefin
     : undefined;
 }
 function metadataDetails(tool: string, source: UnknownRecord): JiraAgileDetails | undefined {
+  if (JIRA_DIRECTORY_TOOLS.has(tool)) return jiraDirectoryDetails(tool, source);
   if (JIRA_SAVED_VIEW_TOOLS.has(tool)) return jiraSavedViewDetails(tool, source);
   if (JIRA_FILE_METADATA_TOOLS.has(tool)) return jiraFileMetadataDetails(tool, source);
   return JIRA_ADMINISTRATION_TOOLS.has(tool) ? jiraAdministrationDetails(tool, source) : undefined;

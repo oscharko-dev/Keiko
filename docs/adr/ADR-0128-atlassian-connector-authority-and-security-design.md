@@ -749,8 +749,9 @@ structured and never authorize replay. Post-effect readback has its own bounded,
 bounded concurrent member reads preserve the original authority and cancellation. Unexpected
 confirmation errors reach the existing diagnostic owner with their cause and retained receipt.
 
-Forward UI-store migrations V62–V64 extend the mutation journal's closed native operation constraint
-for project, Software, component/version and comment writes. They preserve the existing columns, rows, indexes and foreign keys;
+Forward UI-store migrations V62–V66 extend the mutation journal's closed native operation constraint
+for project, Software, component/version, comment, worklog, current-user participation and guarded
+resource deletion writes. They preserve the existing columns, rows, indexes and foreign keys;
 unknown operations and the non-dispatched draft composite remain refused. Reverting to older
 readers requires a compatible forward repair or the pre-update database backup.
 

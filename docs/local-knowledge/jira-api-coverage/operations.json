@@ -155,6 +155,42 @@
     }
   },
   "currentCapabilities": {
+    "jira.application-role": {
+      "identity": "GET /rest/api/2/applicationrole/{key}",
+      "effect": "read",
+      "permissionPolicy": "admin-application-roles",
+      "kind": "constrained-tool",
+      "constraints": "One exact bounded native application-role key. Optional role/group/default and signed metric facts remain unknown when absent; hasUnlimitedSeats is separate observed metadata, selectedByDefault concerns user creation. No current-user role grant, account changes, inferred capacity or remote links.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-directory-reads.ts",
+        "packages/keiko-connectors/src/jira-directory-values.ts",
+        "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-directory-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.application-roles": {
+      "identity": "GET /rest/api/2/applicationrole",
+      "effect": "read",
+      "permissionPolicy": "admin-application-roles",
+      "kind": "constrained-tool",
+      "constraints": "Validate bounded complete native role array before local pagination. Preserve optional groups/defaultGroups, native booleans and signed int32 metrics; negative metrics are not converted to zero or independently interpreted as unlimited. No role assignment, license/capacity inference or remote links.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-directory-reads.ts",
+        "packages/keiko-connectors/src/jira-directory-values.ts",
+        "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-directory-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.assign": {
       "identity": "PUT /rest/api/2/issue/{issueIdOrKey}/assignee",
       "effect": "write",
@@ -707,6 +743,42 @@
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-comments.ts"],
       "testFiles": ["packages/keiko-connectors/src/jira-managed-comments.test.ts"]
     },
+    "jira.group-members": {
+      "identity": "GET /rest/api/2/group/member",
+      "effect": "read",
+      "permissionPolicy": "visible-groups",
+      "kind": "constrained-tool",
+      "constraints": "Exact group-name selector, native startAt/maxResults up to50 and optional inactive users. Native scope includes the group and subgroups; it is not direct-only membership. Preserve validated native envelope and optional total, project bounded user identities, never follow nextPage or change membership.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-directory-reads.ts",
+        "packages/keiko-connectors/src/jira-directory-values.ts",
+        "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-directory-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.groups": {
+      "identity": "GET /rest/api/2/groups/picker",
+      "effect": "read",
+      "permissionPolicy": "visible-groups",
+      "kind": "constrained-tool",
+      "constraints": "Bounded native group query/maxResults picker; project group names and optional observed int32 total. No offset exists, so no invented continuation or silent result truncation. HTML/header/labels and undeclared exclusion/context selectors are omitted.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-directory-reads.ts",
+        "packages/keiko-connectors/src/jira-directory-values.ts",
+        "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-directory-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.issue": {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}",
       "effect": "read",
@@ -1113,6 +1185,24 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.user": {
+      "identity": "GET /rest/api/2/user",
+      "effect": "read",
+      "permissionPolicy": "visible-users",
+      "kind": "constrained-tool",
+      "constraints": "One native user selected by exactly one username or exact key, with optional includeDeleted. Native key/name are validated, username comparison preserves returned spelling, optional display/active/deleted fields stay unknown when absent. No email, avatar, group expansion, HTML or remote URL projection.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-user-reads.ts",
+        "packages/keiko-connectors/src/jira-directory-values.ts",
+        "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-user-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.user-avatars": {
       "identity": "GET /rest/api/2/user/avatars",
       "effect": "read",
@@ -1126,6 +1216,60 @@
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-avatar-reads.test.ts",
         "packages/keiko-server/src/atlassian/jiraAssetDescriptors.test.ts"
+      ]
+    },
+    "jira.user-directory": {
+      "identity": "GET /rest/api/2/user/list",
+      "effect": "read",
+      "permissionPolicy": "visible-users",
+      "kind": "constrained-tool",
+      "constraints": "One native streaming user page using an exact transient signed int64 cursor and bounded page size. Preserve native isLast/nextCursor; no total, numeric offset, stable cursor identity or remote nextPage following. A cursor page is returned whole or refused, never silently shortened.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-user-reads.ts",
+        "packages/keiko-connectors/src/jira-directory-values.ts",
+        "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-user-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.user-picker": {
+      "identity": "GET /rest/api/2/user/picker",
+      "effect": "read",
+      "permissionPolicy": "visible-users",
+      "kind": "constrained-tool",
+      "constraints": "Bounded native query/maxResults picker with fixed showAvatar=false; documented user identity fields and optional native int32 total only. No invented offset/continuation, header/HTML/avatar/email projection or undeclared exclude selector.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-user-reads.ts",
+        "packages/keiko-connectors/src/jira-directory-values.ts",
+        "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-user-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.users": {
+      "identity": "GET /rest/api/2/user/search",
+      "effect": "read",
+      "permissionPolicy": "visible-users",
+      "kind": "constrained-tool",
+      "constraints": "Native username/name search with declared active/inactive switches and offset window strictly within first100. Project bounded key/name/display/flags; no fabricated total or complete-directory claim. Existing offset result budgeting resumes at the first unreturned item.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-user-reads.ts",
+        "packages/keiko-connectors/src/jira-directory-values.ts",
+        "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-user-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
     "jira.validate-project-key": {
@@ -1378,8 +1522,8 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "4c9b4f582bd5dfc24459bffc774b06882ac2c2982d4fa2708d5590a7c5be8c8b",
-    "nativeOperationCount": 93
+    "sha256": "a82859fa6312075eeed50bde53ef5a9e9e02936c3ed0b609f663f97db863dce7",
+    "nativeOperationCount": 101
   },
   "operations": [
     {
@@ -2977,10 +3121,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.application-roles"]
     },
     {
       "identity": "PUT /rest/api/2/applicationrole",
@@ -3041,10 +3185,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.application-role"]
     },
     {
       "identity": "PUT /rest/api/2/applicationrole/{key}",
@@ -5041,10 +5185,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.group-members"]
     },
     {
       "identity": "DELETE /rest/api/2/group/user",
@@ -5137,10 +5281,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.groups"]
     },
     {
       "identity": "GET /rest/api/2/groupuserpicker",
@@ -12665,10 +12809,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.user"]
     },
     {
       "identity": "POST /rest/api/2/user",
@@ -13429,10 +13573,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.user-directory"]
     },
     {
       "identity": "PUT /rest/api/2/user/password",
@@ -13525,10 +13669,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.user-picker"]
     },
     {
       "identity": "GET /rest/api/2/user/properties",
@@ -13685,10 +13829,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.users"]
     },
     {
       "identity": "DELETE /rest/api/2/user/session/{username}",
