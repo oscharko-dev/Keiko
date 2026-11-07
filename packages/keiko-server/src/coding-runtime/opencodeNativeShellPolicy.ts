@@ -254,21 +254,21 @@ interface ToolSpec {
 const set = (...values: readonly string[]): ReadonlySet<string> => new Set(values);
 const NO_OPTIONS: ReadonlySet<string> = set();
 // A long option table written as one whitespace-separated list, each short spelling beside its
-// long one: `words("-q --quiet")` is `set("-q", "--quiet")`.
-const words = (list: string): ReadonlySet<string> =>
+// long one: `optionSet("-q --quiet")` is `set("-q", "--quiet")`.
+const optionSet = (list: string): ReadonlySet<string> =>
   set(...list.split(/\s+/u).filter((word) => word.length > 0));
 
 const MAVEN: ToolSpec = {
-  valueOptions: words(`
+  valueOptions: optionSet(`
     -pl --projects  -f --file  -T --threads  -P --activate-profiles  -s --settings
     -gs --global-settings  -t --toolchains  -rf --resume-from  -b --builder  -l --log-file
     -D --define
   `),
-  pathOptions: words(`
+  pathOptions: optionSet(`
     -f --file  -s --settings  -gs --global-settings  -t --toolchains  -l --log-file
   `),
   denied: NO_OPTIONS,
-  flags: words(`
+  flags: optionSet(`
     -am --also-make  -amd --also-make-dependents  -o --offline  -B --batch-mode  -q --quiet
     -e --errors  -X --debug  -U --update-snapshots  -N --non-recursive  -ff --fail-fast
     -fae --fail-at-end  -fn --fail-never  -nsu --no-snapshot-updates
@@ -281,17 +281,17 @@ const MAVEN: ToolSpec = {
 };
 
 const GRADLE: ToolSpec = {
-  valueOptions: words(`
+  valueOptions: optionSet(`
     -p --project-dir  -b --build-file  -c --settings-file  -x --exclude-task  --tests
     -g --gradle-user-home  --include-build  --project-cache-dir  --max-workers  --console
     --warning-mode  -D  -P
   `),
-  pathOptions: words(`
+  pathOptions: optionSet(`
     -p --project-dir  -b --build-file  -c --settings-file  -g --gradle-user-home
     --include-build  --project-cache-dir
   `),
   denied: NO_OPTIONS,
-  flags: words(`
+  flags: optionSet(`
     --offline  --info -i  --debug -d  --quiet -q  --warn -w  --stacktrace -s
     --full-stacktrace -S  --no-daemon  --daemon  --parallel  --no-parallel  --continue
     --rerun-tasks  --refresh-dependencies  --build-cache  --no-build-cache

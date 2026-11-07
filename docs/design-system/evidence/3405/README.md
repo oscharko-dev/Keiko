@@ -91,6 +91,15 @@ again. The complete original nine-case producer ran on 2026-11-01 (UTC) on macOS
 captures and the three records rebind every declared digest. No updater behavior, baseline or
 numerical ceiling changed. This remains updater fixture evidence.
 
+PR #4279 (#4271) shares identical mount reads in `packages/keiko-ui/src/lib/api.ts`, which made the
+freshness gate reject that source's old digest. On 2026-11-07 (UTC) the complete original nine-case
+producer ran in the Linux gates container, with `--init` and Node 24.18.0. It passed in 1.6 minutes,
+including the real BFF stop and restart. The three records rebind only the `api.ts` digest.
+That host's Chromium renderer drew all 14 captures with fallback fonts. No visible updater state
+changed. No record binds capture bytes, so the existing macOS captures are kept, which keeps one
+renderer across the set. No updater behavior, baseline or numerical ceiling changed. This remains
+updater fixture evidence.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:

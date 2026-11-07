@@ -329,16 +329,25 @@ describe("credential redaction properties (#4271)", () => {
     return parts.join(random.pick([" ", "\n", "="])) + random.string(NEIGHBOURS, 0, 10);
   }
 
-  it.each(["floor", "strict"] as const)("redaction is idempotent, %s", (policy) => {
-    checkProperty(
-      mixed,
-      (text) => {
-        const once = apply(policy, text);
-        expect(apply(policy, once)).toBe(once);
-      },
-      { runs: 400, shrink: shrinkString },
-    );
-  });
+  // 400 runs of two strict projections take about 2.5 s locally and more than the 15 s default under
+  // CI coverage instrumentation; these runs found the idempotence defect, so the bound grows, not
+  // the run count shrinks.
+  const IDEMPOTENCE_TIMEOUT_MS = 60_000;
+
+  it.each(["floor", "strict"] as const)(
+    "redaction is idempotent, %s",
+    (policy) => {
+      checkProperty(
+        mixed,
+        (text) => {
+          const once = apply(policy, text);
+          expect(apply(policy, once)).toBe(once);
+        },
+        { runs: 400, shrink: shrinkString },
+      );
+    },
+    IDEMPOTENCE_TIMEOUT_MS,
+  );
 
   const HOSTILE = characters("ab c\n\r\t\0\u0001\u007f=:\"'[]{}-_/\\.@").concat([
     "\ud800",
