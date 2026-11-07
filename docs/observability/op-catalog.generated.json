@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "aaf5bad3c6a1eed8ab2a1dffa6955eba4a14b5f313d31fc6283e4bb101a11cab",
+    "catalogDigest": "f0010ee9f5c657fcaf06931cbb38015cf9dcebf25201d1c3c576b244457c4b7c",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1011,6 +1011,24 @@
             "dataClass": "closed-enum",
             "required": false,
             "values": ["applied", "stale"]
+          },
+          "jiraCompatibility": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["verified", "unverified"]
+          },
+          "restApi": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["v2"]
+          },
+          "agileApi": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["unverified"]
           }
         },
         "causal": "correlation",
@@ -1019,11 +1037,12 @@
         "failureClasses": ["atlassian-credential-custody"],
         "proofIds": [
           "atlassian.connection.checked.line",
-          "atlassian.connection.checked.observed-authentication"
+          "atlassian.connection.checked.observed-authentication",
+          "atlassian.connection.checked.compatibility"
         ],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/atlassian/credentialActivity.ts:86",
-        "emitterSites": ["packages/keiko-server/src/atlassian/credentialActivity.ts:147"]
+        "emitterSites": ["packages/keiko-server/src/atlassian/credentialActivity.ts:167"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -1063,7 +1082,7 @@
         "proofIds": ["atlassian.credential.created.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/atlassian/credentialActivity.ts:55",
-        "emitterSites": ["packages/keiko-server/src/atlassian/credentialActivity.ts:178"]
+        "emitterSites": ["packages/keiko-server/src/atlassian/credentialActivity.ts:200"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -1177,8 +1196,8 @@
         "failureClasses": ["atlassian-credential-custody"],
         "proofIds": ["atlassian.credential.updated.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/atlassian/credentialActivity.ts:202",
-        "emitterSites": ["packages/keiko-server/src/atlassian/credentialActivity.ts:236"]
+        "registrationSite": "packages/keiko-server/src/atlassian/credentialActivity.ts:224",
+        "emitterSites": ["packages/keiko-server/src/atlassian/credentialActivity.ts:258"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -59745,10 +59764,28 @@
                   "required": true
                 },
                 {
+                  "name": "agileApi",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "jiraCompatibility",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "outcome",
                   "type": "string",
                   "dataClass": "closed-enum",
                   "required": true
+                },
+                {
+                  "name": "restApi",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
                 },
                 {
                   "name": "verificationState",
@@ -59764,7 +59801,8 @@
               },
               "proofIds": [
                 "atlassian.connection.checked.line",
-                "atlassian.connection.checked.observed-authentication"
+                "atlassian.connection.checked.observed-authentication",
+                "atlassian.connection.checked.compatibility"
               ],
               "replayReferences": [],
               "missingObligations": []
@@ -111172,7 +111210,7 @@
     {
       "op": "atlassian.connection.checked",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:163",
+      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:185",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -111185,7 +111223,7 @@
     {
       "op": "atlassian.credential.created",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:194",
+      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:216",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -111224,13 +111262,13 @@
     {
       "op": "atlassian.credential.updated",
       "category": "setup",
-      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:205",
+      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:227",
       "package": "keiko-server"
     },
     {
       "op": "atlassian.credential.updated",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:246",
+      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:268",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

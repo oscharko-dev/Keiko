@@ -24,7 +24,7 @@ the three user-facing modes are **Ask for approval**, **Supervised workspace**, 
 ## What the connector does
 
 The Atlassian connector connects Keiko to Atlassian Cloud (Confluence and Jira) with an
-email/API-token pair, or to Jira Data Center 10.3.26 with a personal access token (PAT).
+email/API-token pair, or to compatible Jira Data Center instances with a personal access token (PAT).
 Credentials belong to the local user and stay in the existing encrypted vault. It supports these
 families of operation:
 
@@ -57,7 +57,11 @@ In the Knowledge Pods hub, select **Create Jira Pod**, enter a name, the HTTPS J
 (including any context path), and a PAT, then select **Create Jira Pod** once. Keiko saves the
 connection and verifies it automatically before closing the form. Verification checks
 bounded REST-v2 `serverInfo` and `myself` responses and the active identity. A successful check is
-required before Chat can use the Pod. The saved Data Center URL supplies the exact target;
+required before Chat can use the Pod. The reported numeric release must be internally consistent;
+verification does not require one exact patch version. It privately retains the observed REST-v2
+identity compatibility and leaves Agile capability unverified. It does not grant Jira permissions
+or establish that every API operation is available. Reverify existing Pods to obtain these facts;
+older records do not invent them. The saved Data Center URL supplies the exact target;
 verification automatically determines and privately retains its address class. No separate
 `privateTargets` configuration or global private-network switch is needed. A private certificate
 authority still needs the normal runtime trust configuration, such as `egress.caBundlePath`;
@@ -394,9 +398,11 @@ encryption at rest as described above.
 The current platform and operation boundaries below follow ADR-0128 D7. The epic evidence matrix
 separately records incomplete qualification; a passing focused test is not full production acceptance.
 
-- **Bounded Data Center support.** Jira Data Center 10.3.26 is the verified version accepted by
-  the REST-v2/PAT connection path. Other versions, Data Center sync and Confluence Data Center are
-  unsupported. Cloud connectors and their existing records remain compatible; a Cloud connector
+- **Bounded Data Center support.** The REST-v2/PAT connection path checks coherent release and
+  active-identity responses rather than an exact version allow-list. Connection verification does
+  not certify all operations or replace live qualification of each Data Center baseline. Agile
+  capability stays unverified until its own operations are qualified. Data Center sync and
+  Confluence Data Center remain unsupported. Cloud connectors and their existing records remain compatible; a Cloud connector
   is not automatically converted into a Data Center Live Pod.
 - **Bounded Live Chat operations.** Unsupported plugin fields, issue/page/comment deletion,
   attachments, worklogs, bulk writes and arbitrary Jira REST requests are unavailable. A live

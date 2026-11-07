@@ -557,6 +557,12 @@ No Pod identity or verification status confers Chat authority. Verification comp
 and checks the current credential generation and latest probe revision against the retained record;
 it cannot recreate deleted metadata. Failed verification advances the authorization generation.
 Starting a new check retains previously observed readiness until that check has a result.
+It clears the previous private compatibility observation. A successful current ticket may retain
+validated release numbers, the declared Server/Data Center deployment and the observed REST-v2
+identity capability. These facts belong to that credential record and verification revision;
+failed or aborted checks, observed authentication failure, token rotation and deletion clear them.
+Legacy records have no inferred compatibility observation. These facts are neither a permission
+grant nor evidence of Agile support.
 
 Authenticated credential creation obtains the existing local operator identity from the server;
 the request cannot select an owner. List, verify and delete enforce that owner for Live Pods.
@@ -671,8 +677,9 @@ uniformly: reads name the `CodingWorkbenchActionClass`, writes name the
 The shared action vocabulary and registered outcome event include all twenty-two rows. The managed
 tools map to this same table: `jira.create` → `create-issue`, `jira.edit` → `update-issue-fields`,
 `jira.assign` → `assign-issue`, `jira.comment` → `add-issue-comment`, and `jira.transition` →
-`transition-issue`, and `jira.attach` → `update-issue-fields`. The eleven read tools retain their
-names. Assignment has the same medium risk
+`transition-issue`, and `jira.attach` → `update-issue-fields`. Every read tool in
+[`JIRA_MANAGED_READ_TOOLS`](../../packages/keiko-contracts/src/jira-tool-fields.ts) retains its
+name. Assignment has the same medium risk
 as a bounded field edit; no separate policy subsystem or broader connector scope is introduced.
 
 **Attachments (#4176, 2026-10-31).** `jira.attach` maps to `update-issue-fields` (medium): it
@@ -1715,13 +1722,21 @@ describes is not redacted at the workspace layer.
 
 ### D7 — Qualified platforms and named follow-ups
 
-Cloud REST behavior remains supported. Epic #4081 adds a bounded Jira Data Center 10.3.26
-REST-v2/PAT connection path. Version and active identity are verified with bounded `serverInfo`
-and `myself` JSON reads under one deadline; HTML, redirects, authentication, permission, version,
-TLS and network failures have closed outcomes. Context paths are preserved. This implementation
-is not a qualification claim: real lab and model acceptance is recorded in
-[the epic evidence matrix](../qa/jira-chat-pods-4081.md). Other Data Center versions and
-Confluence Data Center remain unsupported. The existing sync lane remains Cloud-only.
+Cloud REST behavior remains supported. Epic #4081 added the bounded Jira Data Center REST-v2/PAT
+connection path, initially pinned to 10.3.26. Under #4287, connection admission uses coherent numeric
+release/deployment facts and an active REST-v2 identity rather than an exact version allow-list.
+Bounded `serverInfo` and `myself` JSON reads share one deadline; HTML, redirects, authentication,
+permission, malformed or inconsistent version evidence, TLS and network failures have closed
+outcomes. Context paths are preserved. Compatibility facts record REST-v2 identity verification
+and leave Agile unverified; they do not claim that every operation exists or that the actor has
+permission to execute it. Task-required metadata and actual operation responses remain authoritative.
+There are no continuous probes or write-based discovery calls.
+
+Connection compatibility is not live qualification: real lab and model acceptance is recorded
+separately from deterministic protocol tests, including
+[the existing epic evidence matrix](../qa/jira-chat-pods-4081.md). Qualify the 10.3, 10.4, 11.2 and 11.3
+baselines where an environment exists; unavailable environments remain explicit limitations.
+Confluence Data Center remains unsupported. The existing sync lane remains Cloud-only.
 
 The following capabilities remain deferred:
 - **OAuth 2.0 (3LO).** API-token Basic auth is sufficient for a single local user's own credential

@@ -963,6 +963,24 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         values: ["applied", "stale"],
       },
+      jiraCompatibility: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["verified", "unverified"],
+      },
+      restApi: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["v2"],
+      },
+      agileApi: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["unverified"],
+      },
     },
     causal: "correlation",
     lifecycle: "end",
@@ -971,6 +989,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     proofIds: [
       "atlassian.connection.checked.line",
       "atlassian.connection.checked.observed-authentication",
+      "atlassian.connection.checked.compatibility",
     ],
     releaseImpact: "patch",
   },

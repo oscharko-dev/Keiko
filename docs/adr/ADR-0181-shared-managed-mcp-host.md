@@ -227,8 +227,9 @@ citations and conversation budgets remain owned by their existing paths.
 **A Jira Pod for a Coding run (owner decision 2026-10-30, #3907).** A Coding run can reach Jira
 through the same managed provider, host and relay, with no second host, policy layer or connector.
 The human picks one Pod explicitly in the Workbench composer (`jiraPodId` on the start request;
-none keeps today's behaviour). The pick is the run's Jira read grant: the eleven read tools are
-allowed in all three modes. The five write tools (`create`, `edit`, `assign`, `comment`,
+none keeps today's behaviour). The pick is the run's Jira read grant: every read tool in
+[`JIRA_MANAGED_READ_TOOLS`](../../packages/keiko-contracts/src/jira-tool-fields.ts) is allowed in all
+three modes. The five write tools (`create`, `edit`, `assign`, `comment`,
 `transition`) keep following the mode: Ask for approval and Supervised workspace ask through the
 existing approval channel, Full access is allowed inside the validated Authority Envelope. Hard
 denials stay mode-independent and fail closed with zero HTTP.

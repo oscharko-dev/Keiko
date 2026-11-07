@@ -2064,10 +2064,28 @@
               "required": true
             },
             {
+              "name": "agileApi",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "jiraCompatibility",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "outcome",
               "type": "string",
               "dataClass": "closed-enum",
               "required": true
+            },
+            {
+              "name": "restApi",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             },
             {
               "name": "verificationState",
@@ -2083,7 +2101,8 @@
           },
           "proofIds": [
             "atlassian.connection.checked.line",
-            "atlassian.connection.checked.observed-authentication"
+            "atlassian.connection.checked.observed-authentication",
+            "atlassian.connection.checked.compatibility"
           ],
           "replayReferences": [],
           "missingObligations": []
