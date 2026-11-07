@@ -83,8 +83,10 @@ describe("lint partitions", () => {
   it("runs every partition and names each one that failed", () => {
     const seen = [];
     const failed = runPartitions(lintPartitions(["a", "b"], []), (args) => {
-      seen.push(args[0]);
-      return args[0] === "packages/a" ? 1 : 0;
+      // The spawn callback receives the complete argument list, zero-warning flag first.
+      expect(args[0]).toBe("--max-warnings=0");
+      seen.push(args[1]);
+      return args[1] === "packages/a" ? 1 : 0;
     });
 
     expect(seen).toStrictEqual(["packages/a", "packages/b", "."]);

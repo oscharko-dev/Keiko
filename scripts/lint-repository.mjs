@@ -61,7 +61,7 @@ export function eslintArguments(partitionArgs) {
 export function runPartitions(partitions, run) {
   const failed = partitions.filter((partition) => {
     console.log(`lint-repository: ${partition.label}`);
-    return run(partition.args) !== 0;
+    return run(eslintArguments(partition.args)) !== 0;
   });
   return failed.map((partition) => partition.label);
 }
@@ -71,11 +71,10 @@ async function main() {
   const { default: config } = await import(pathToFileURL(join(root, "eslint.config.js")).href);
   const partitions = lintPartitions(workspacePackages(root), globalIgnores(config));
   const failed = runPartitions(partitions, (args) => {
-    const result = spawnSync(
-      process.execPath,
-      [...process.execArgv, ESLINT_BIN, ...eslintArguments(args)],
-      { cwd: root, stdio: "inherit" },
-    );
+    const result = spawnSync(process.execPath, [...process.execArgv, ESLINT_BIN, ...args], {
+      cwd: root,
+      stdio: "inherit",
+    });
     return result.status ?? 1;
   });
   if (failed.length > 0) {
