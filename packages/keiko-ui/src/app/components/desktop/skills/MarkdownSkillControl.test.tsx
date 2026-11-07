@@ -107,7 +107,7 @@ async function openSkill(dialog: HTMLElement, name = DOCUMENT.name): Promise<voi
 
 describe("Chat Markdown skill controls", () => {
   // #4173: a business user could not tell chat skills from the project lead's Jira templates.
-  it("lists Jira templates only in their own section, without a chat selection", async () => {
+  it("lists Jira templates in their own section and lets each row put one into the chat", async () => {
     const template = { ...DOCUMENT, id: "epic-template", name: "Epic template" };
     vi.mocked(api.fetchMarkdownSkills).mockResolvedValue([DOCUMENT, template]);
     vi.mocked(api.readMarkdownSkill).mockResolvedValue(template);
@@ -123,14 +123,31 @@ describe("Chat Markdown skill controls", () => {
     );
     expect(within(chat).getByRole("button", { name: /Boundary review/u })).toBeInTheDocument();
     expect(within(jira).getByRole("button", { name: /Epic template/u })).toBeInTheDocument();
-    // A template governs every Jira write on its own: opening it offers no chat selection.
+    // Opening a template edits it; it is not put into the chat by opening it.
     fireEvent.click(within(jira).getByRole("button", { name: /Epic template/u }));
     await waitFor(() =>
       expect(within(dialog).getByRole("button", { name: "Save" })).toBeInTheDocument(),
     );
     expect(within(dialog).getByText("Jira template")).toBeInTheDocument();
-    expect(within(dialog).queryByRole("button", { name: "Use in this chat" })).toBeNull();
     expect(api.changeMarkdownSkillSelection).not.toHaveBeenCalled();
+    // Every row carries its own visible switch: the template's selects the template's revision.
+    expect(within(chat).getByRole("button", { name: "Use in this chat" })).toBeVisible();
+    vi.mocked(api.changeMarkdownSkillSelection).mockResolvedValue({
+      ...SELECTED,
+      name: template.name,
+      selection: {
+        revision: 1,
+        skill: { id: template.id, revision: template.revision, digest: template.digest },
+      },
+    });
+    fireEvent.click(within(jira).getByRole("button", { name: "Use in this chat" }));
+    await within(jira).findByRole("button", { name: "Active in this chat" });
+    expect(api.changeMarkdownSkillSelection).toHaveBeenCalledWith(
+      "chat-a",
+      { id: template.id, revision: template.revision, digest: template.digest },
+      0,
+    );
+    expect(within(chat).getByRole("button", { name: "Use in this chat" })).toBeVisible();
   });
 
   it("keeps the picker unavailable from first paint until the initial library read completes", async () => {
@@ -164,6 +181,8 @@ describe("Chat Markdown skill controls", () => {
     fireEvent.change(within(dialog).getByLabelText("Import"), {
       target: { files: [new File([DOCUMENT.body], "method.md")] },
     });
+    // The imported file opens in the editor; it is not put into the chat by importing it.
+    await within(dialog).findByRole("button", { name: "Save" });
     await within(dialog).findByRole("button", { name: "Use in this chat" });
     expect(api.saveMarkdownSkill).toHaveBeenCalledOnce();
     expect(api.changeMarkdownSkillSelection).not.toHaveBeenCalled();
@@ -197,7 +216,14 @@ describe("Chat Markdown skill controls", () => {
     render(<Harness />);
     fireEvent.click(await screen.findByRole("button", { name: /Boundary review\s*· v1/ }));
     const dialog = await screen.findByRole("dialog");
-    expect(await within(dialog).findByText(/v1 · Active in this chat/)).toBeInTheDocument();
+    const row = (await within(dialog).findByRole("button", { name: /Boundary review/u })).closest(
+      "li",
+    );
+    if (row === null) throw new TypeError("The skill has no list row.");
+    expect(await within(row).findByRole("button", { name: "Active in this chat" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
   });
 
   it("keeps keyboard focus on the library entry while its read is pending", async () => {
@@ -319,7 +345,7 @@ describe("Chat Markdown skill controls", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete skill" }));
     await screen.findByText(/No chat skills yet/);
     expect(api.deleteMarkdownSkill).toHaveBeenCalledWith(revised);
-    expect(within(dialog).queryByRole("button", { name: "Save" })).toBeNull();
+    await waitFor(() => expect(within(dialog).queryByRole("button", { name: "Save" })).toBeNull());
     expect(
       screen.getByRole("button", { name: /Selected skill unavailable/, hidden: true }),
     ).toBeInTheDocument();

@@ -231,11 +231,14 @@ export function JiraTemplateList({
   library,
   openId,
   onOpen,
+  rowAction,
 }: {
   readonly jira: JiraTemplates;
   readonly library: MarkdownSkillLibrary;
   readonly openId: string | undefined;
   readonly onOpen: (skill: MarkdownSkillMetadata) => void;
+  /** An action shown beside a stored template, such as choosing it for the chat. */
+  readonly rowAction?: (skill: MarkdownSkillMetadata) => ReactNode;
 }): ReactNode {
   const t = useTranslate();
   const { tools } = jira;
@@ -254,7 +257,7 @@ export function JiraTemplateList({
       {tools.templates.map((entry) => {
         const item = library.skills.find((skill) => skill.id === entry.id);
         return (
-          <li key={entry.id}>
+          <li key={entry.id} className={styles.cmpRow}>
             <button
               type="button"
               className={styles.cmpItem}
@@ -267,6 +270,7 @@ export function JiraTemplateList({
               <span className={styles.cmpItemName}>{entry.name}</span>
               <TemplateStatus entry={entry} check={tools.checks.get(templateKey(entry))} />
             </button>
+            {item === undefined ? null : rowAction?.(item)}
           </li>
         );
       })}

@@ -258,6 +258,24 @@
   padding: 0;
   list-style: none;
 }
+/* A list row: the file to open, and beside it the switch that puts it into the chat. */
+.cmpRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.cmpRow > .cmpItem {
+  flex: 1;
+  min-width: 0;
+}
+.cmpDialog .cmpToggle {
+  flex: none;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
 .cmpDialog .cmpItem {
   position: relative;
   display: flex;

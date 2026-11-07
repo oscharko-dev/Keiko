@@ -93,7 +93,13 @@ export function MarkdownSkillDialog({ skill, disabled, onClose, modelId }: Dialo
       >
         <DialogHeader titleId={titleId} onClose={close} />
         <div className={styles.cmpManager}>
-          <SkillLibraryPane library={library} skill={skill} jira={jira} workspace={workspace} />
+          <SkillLibraryPane
+            library={library}
+            skill={skill}
+            jira={jira}
+            workspace={workspace}
+            disabled={disabled}
+          />
           <SkillWorkspacePane
             library={library}
             skill={skill}

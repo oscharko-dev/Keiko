@@ -197,9 +197,6 @@ function DocumentHeader(
         <DocumentMeta document={document} template={props.template} dirty={workspace.dirty} />
       </div>
       <div className={styles.cmpInline}>
-        {props.template || document.stored === undefined ? null : (
-          <UseInChat {...props} stored={document.stored} />
-        )}
         <DocumentFileActions {...props} />
         <button
           type="button"
@@ -212,38 +209,6 @@ function DocumentHeader(
         </button>
       </div>
     </div>
-  );
-}
-
-function chatSelectionBlocked(props: PaneProps): boolean {
-  return props.disabled || props.skill.busy || props.library.busy || props.workspace.dirty;
-}
-
-/** Chooses this skill for the current chat; a selection binds a saved revision. */
-function UseInChat(props: PaneProps & { readonly stored: MarkdownSkillMetadata }): ReactNode {
-  const t = useTranslate();
-  const { stored, skill, workspace } = props;
-  const selected = skill.view?.selection.skill;
-  const active = selected?.id === stored.id && selected.revision === stored.revision;
-  // Clearing the selection belongs to the chat's skill chip. aria-disabled, not disabled: a
-  // keyboard user keeps focus while the selection runs, so Escape still reaches the dialog.
-  const blocked = active || chatSelectionBlocked(props);
-  return (
-    <button
-      type="button"
-      className={active ? styles.cmpActive : undefined}
-      aria-pressed={active}
-      aria-disabled={blocked}
-      title={workspace.dirty ? t("chat.skills.saveFirst") : undefined}
-      onClick={() => {
-        if (blocked) return;
-        void skill
-          .select({ id: stored.id, revision: stored.revision, digest: stored.digest })
-          .catch(() => undefined);
-      }}
-    >
-      {t(active ? "chat.skills.selected" : "chat.skills.useInChat")}
-    </button>
   );
 }
 

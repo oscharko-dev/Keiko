@@ -467,7 +467,6 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.kind.template": "Jira-Vorlage",
   "chat.skills.notSaved": "Noch nicht gespeichert",
   "chat.skills.save": "Speichern",
-  "chat.skills.saveFirst": "Speichere die Änderungen, bevor du den Skill im Chat verwendest.",
   "chat.skills.useInChat": "In diesem Chat verwenden",
   "chat.skills.jira.proposeDescription":
     "Keiko liest aktuelle Vorgänge eines Projekts und schlägt je Vorgangstyp eine Vorlage vor. Jede öffnet sich zur Prüfung im Editor, bevor du sie speicherst.",

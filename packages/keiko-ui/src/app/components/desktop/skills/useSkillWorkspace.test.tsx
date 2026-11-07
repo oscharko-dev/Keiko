@@ -358,40 +358,39 @@ describe("unsaved text is never lost silently", () => {
 });
 
 describe("Use in this chat", () => {
-  it("is blocked while the text is unsaved and selects the saved revision afterwards", async () => {
+  it("is a switch in the skill's own row and selects its saved revision", async () => {
     seedStore([REVIEW]);
     const selected: MarkdownSkillSelectionView = {
       availability: "available",
       name: "Boundary review",
       selection: {
         revision: 1,
-        skill: { id: REVIEW.id, revision: 2, digest: "2".repeat(64) },
+        skill: { id: REVIEW.id, revision: 1, digest: "a".repeat(64) },
       },
     };
     vi.mocked(api.changeMarkdownSkillSelection).mockResolvedValue(selected);
     const dialog = await openDialog();
-    fireEvent.click(await within(dialog).findByRole("button", { name: /Boundary review/u }));
-    await waitForVersion(dialog, "v1");
-    const useIt = within(dialog).getByRole("button", { name: "Use in this chat" });
+    const row = (await within(dialog).findByRole("button", { name: /Boundary review/u })).closest(
+      "li",
+    );
+    if (row === null) throw new TypeError("The skill has no list row.");
+    // Selecting needs no open document and no detour through the editor.
+    const useIt = within(row).getByRole("button", { name: "Use in this chat" });
     expect(useIt).toHaveAttribute("aria-disabled", "false");
-    writeMarkdown(dialog, `${REVIEW.body}Edited.\n`);
-    expect(useIt).toHaveAttribute("aria-disabled", "true");
+    expect(within(dialog).queryByRole("button", { name: "Save" })).toBeNull();
     fireEvent.click(useIt);
-    expect(api.changeMarkdownSkillSelection).not.toHaveBeenCalled();
-    expect(useIt).toHaveAttribute("title", "Save the changes before using this skill in the chat.");
-    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
-    await waitForVersion(dialog, "v2");
-    await waitFor(() => expect(useIt).toHaveAttribute("aria-disabled", "false"));
-    fireEvent.click(useIt);
-    await within(dialog).findByRole("button", { name: "Active in this chat" });
+    await within(row).findByRole("button", { name: "Active in this chat" });
     expect(api.changeMarkdownSkillSelection).toHaveBeenCalledWith(
       "chat-a",
-      { id: REVIEW.id, revision: 2, digest: "2".repeat(64) },
+      { id: REVIEW.id, revision: 1, digest: "a".repeat(64) },
       0,
     );
+    // The active row is a state, not a second request.
+    fireEvent.click(within(row).getByRole("button", { name: "Active in this chat" }));
+    expect(api.changeMarkdownSkillSelection).toHaveBeenCalledOnce();
   });
 
-  it("is offered only for a saved chat skill, not for a new draft", async () => {
+  it("is offered only for a saved file, not for a new draft", async () => {
     seedStore([]);
     const dialog = await openDialog();
     newSkill(dialog);
@@ -402,9 +401,7 @@ describe("Use in this chat", () => {
     seedStore([REVIEW]);
     render(<DisabledHarness />);
     const dialog = await screen.findByRole("dialog");
-    fireEvent.click(await within(dialog).findByRole("button", { name: /Boundary review/u }));
-    await waitForVersion(dialog, "v1");
-    const useIt = within(dialog).getByRole("button", { name: "Use in this chat" });
+    const useIt = await within(dialog).findByRole("button", { name: "Use in this chat" });
     expect(useIt).toHaveAttribute("aria-disabled", "true");
     fireEvent.click(useIt);
     expect(api.changeMarkdownSkillSelection).not.toHaveBeenCalled();

@@ -447,7 +447,6 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.skills.kind.template": "Jira template",
   "chat.skills.notSaved": "Not saved yet",
   "chat.skills.save": "Save",
-  "chat.skills.saveFirst": "Save the changes before using this skill in the chat.",
   "chat.skills.useInChat": "Use in this chat",
   "chat.skills.jira.proposeDescription":
     "Keiko reads recent issues of a project and proposes one template per issue type. Each opens in the editor for review before you save it.",

@@ -6,6 +6,7 @@ import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widge
 import type { ChatMarkdownSkill } from "../hooks/useChatMarkdownSkill";
 import { Icons } from "../Icons";
 import { JiraTemplateList, PodSelect, type JiraTemplates } from "./JiraTemplateTools";
+import { SkillChatToggle } from "./SkillChatToggle";
 import type { MarkdownSkillLibrary } from "./useMarkdownSkillLibrary";
 import type { SkillWorkspace } from "./useSkillWorkspace";
 import styles from "./MarkdownSkillControl.module.css";
@@ -19,6 +20,8 @@ interface PaneProps {
   readonly skill: ChatMarkdownSkill;
   readonly jira: JiraTemplates;
   readonly workspace: SkillWorkspace;
+  /** The chat does not accept a skill change now. */
+  readonly disabled: boolean;
 }
 
 function openSkillId(workspace: SkillWorkspace): string | undefined {
@@ -26,7 +29,8 @@ function openSkillId(workspace: SkillWorkspace): string | undefined {
 }
 
 /** The left third: everything stored, and the ways to start a new file. */
-export function SkillLibraryPane({ library, skill, jira, workspace }: PaneProps): ReactNode {
+export function SkillLibraryPane(props: PaneProps): ReactNode {
+  const { library, skill, jira, workspace } = props;
   const t = useTranslate();
   const templateIds = jira.templateIds;
   // Until the template list is read every skill shows as a chat skill; templates then move.
@@ -46,18 +50,28 @@ export function SkillLibraryPane({ library, skill, jira, workspace }: PaneProps)
           ) : (
             <ul className={styles.cmpItems}>
               {chatSkills.map((item) => (
-                <ChatSkillItem
-                  key={item.id}
-                  item={item}
-                  skill={skill}
-                  open={openId === item.id}
-                  onOpen={() => workspace.guard(() => workspace.open(item))}
-                />
+                <li key={item.id} className={styles.cmpRow}>
+                  <button
+                    type="button"
+                    className={styles.cmpItem}
+                    aria-current={openId === item.id ? "true" : undefined}
+                    onClick={() => workspace.guard(() => workspace.open(item))}
+                  >
+                    <span className={styles.cmpItemName}>{item.name}</span>
+                    <span className={styles.cmpStatus}>v{item.revision}</span>
+                  </button>
+                  <SkillChatToggle
+                    item={item}
+                    skill={skill}
+                    library={library}
+                    disabled={props.disabled}
+                  />
+                </li>
               ))}
             </ul>
           )}
         </LibraryGroup>
-        <TemplateGroup library={library} jira={jira} workspace={workspace} openId={openId} />
+        <TemplateGroup {...props} openId={openId} />
       </div>
       <p className={styles.cmpFootnote}>{t("chat.skills.protected")}</p>
     </aside>
@@ -66,10 +80,12 @@ export function SkillLibraryPane({ library, skill, jira, workspace }: PaneProps)
 
 function TemplateGroup({
   library,
+  skill,
   jira,
   workspace,
+  disabled,
   openId,
-}: Omit<PaneProps, "skill"> & { readonly openId: string | undefined }): ReactNode {
+}: PaneProps & { readonly openId: string | undefined }): ReactNode {
   const t = useTranslate();
   return (
     <LibraryGroup
@@ -83,6 +99,9 @@ function TemplateGroup({
         library={library}
         openId={openId}
         onOpen={(item) => workspace.guard(() => workspace.open(item))}
+        rowAction={(item) => (
+          <SkillChatToggle item={item} skill={skill} library={library} disabled={disabled} />
+        )}
       />
       <button
         type="button"
@@ -168,41 +187,6 @@ function LibraryGroup({
       {extra}
       {children}
     </section>
-  );
-}
-
-function ChatSkillItem({
-  item,
-  skill,
-  open,
-  onOpen,
-}: {
-  readonly item: MarkdownSkillMetadata;
-  readonly skill: ChatMarkdownSkill;
-  readonly open: boolean;
-  readonly onOpen: () => void;
-}): ReactNode {
-  const t = useTranslate();
-  const selected = skill.view?.selection.skill;
-  const active = selected?.id === item.id && selected.revision === item.revision;
-  return (
-    <li>
-      <button
-        type="button"
-        className={styles.cmpItem}
-        aria-current={open ? "true" : undefined}
-        onClick={onOpen}
-      >
-        <span className={styles.cmpItemName}>{item.name}</span>
-        <span className={styles.cmpStatus} data-state={active ? "ok" : "idle"}>
-          {active ? <span className={styles.cmpDot} aria-hidden="true" /> : null}
-          <span>
-            v{item.revision}
-            {active ? ` · ${t("chat.skills.selected")}` : ""}
-          </span>
-        </span>
-      </button>
-    </li>
   );
 }
 
