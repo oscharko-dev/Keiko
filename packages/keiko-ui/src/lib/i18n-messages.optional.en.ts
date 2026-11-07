@@ -452,7 +452,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.skills.jira.proposing": "Reading project…",
   "chat.skills.jira.proposalNone": "No template could be derived from this project.",
   "chat.skills.jira.proposalTitle": "Proposed for {issueType} ({count} issues sampled)",
-  "chat.skills.jira.save": "Save as skill",
+  "chat.skills.jira.save": "Save Jira template",
   "chat.skills.jira.error":
     "Jira or the template library could not be read. Check the Pod and try again.",
   "chat.skills.title": "Skills",

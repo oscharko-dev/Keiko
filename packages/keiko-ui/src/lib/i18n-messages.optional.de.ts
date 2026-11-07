@@ -470,7 +470,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.jira.proposing": "Projekt wird gelesen…",
   "chat.skills.jira.proposalNone": "Aus diesem Projekt ließ sich keine Vorlage ableiten.",
   "chat.skills.jira.proposalTitle": "Vorschlag für {issueType} ({count} Vorgänge geprüft)",
-  "chat.skills.jira.save": "Als Skill speichern",
+  "chat.skills.jira.save": "Als Jira-Vorlage speichern",
   "chat.skills.jira.error":
     "Jira oder die Vorlagenbibliothek konnte nicht gelesen werden, die Einhaltung wurde nicht geprüft. Prüfe den Pod und versuche es erneut.",
   "chat.skills.title": "Skills",

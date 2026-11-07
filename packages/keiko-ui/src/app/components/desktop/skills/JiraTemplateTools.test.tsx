@@ -8,6 +8,8 @@ import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import type { JiraTemplateValidation } from "@/lib/jira-templates-api";
 import { JiraTemplateTools } from "./JiraTemplateTools";
 import type { MarkdownSkillLibrary } from "./useMarkdownSkillLibrary";
+import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
+import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
 
 vi.mock("@/lib/jira-templates-api", () => ({
   fetchJiraTemplates: vi.fn(),
@@ -445,6 +447,95 @@ describe("Jira issue template tools", () => {
     expect(screen.queryByText("The template matches the Jira instance.")).not.toBeInTheDocument();
   });
 
+  it("withdraws a completed proposal across Pod A to B to A and logs its original request once", async () => {
+    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue([
+      { issueType: "Story", markdown: "PRIVATE_DRAFT", sampledIssueCount: 3 },
+    ]);
+    const user = await openPanel();
+    await user.type(screen.getByLabelText("Project key"), "PRIVATE");
+    await user.click(screen.getByRole("button", { name: "Propose from project" }));
+    expect(await screen.findByRole("textbox", { name: "Story" })).toHaveValue("PRIVATE_DRAFT");
+    const correlationId = vi.mocked(templates.proposeJiraTemplates).mock.calls[0]?.[2];
+    expect(correlationId).toEqual(expect.any(String));
+    const pod = screen.getByRole("combobox", { name: "Jira Pod" });
+    await user.selectOptions(pod, "pod-2");
+    expect(screen.queryByRole("textbox", { name: "Story" })).not.toBeInTheDocument();
+    await user.selectOptions(pod, "pod-1");
+    expect(screen.queryByRole("textbox", { name: "Story" })).not.toBeInTheDocument();
+    const discarded = vi
+      .mocked(reportClientDiagnostic)
+      .mock.calls.filter(([message]) => message === "Jira template proposal superseded.");
+    expect(discarded).toEqual([
+      ["Jira template proposal superseded.", { correlationId, errorKind: "conflict" }],
+    ]);
+    expect(JSON.stringify(discarded)).not.toMatch(/PRIVATE|pod-1|pod-2|Story/u);
+    expect(upload).not.toHaveBeenCalled();
+    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue([
+      { issueType: "Story", markdown: "CURRENT_DRAFT", sampledIssueCount: 4 },
+    ]);
+    await user.click(screen.getByRole("button", { name: "Propose from project" }));
+    expect(await screen.findByRole("textbox", { name: "Story" })).toHaveValue("CURRENT_DRAFT");
+  });
+
+  it("withdraws a completed proposal when a same-count stored library revision changes", async () => {
+    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue([
+      { issueType: "Story", markdown: "STALE_DRAFT", sampledIssueCount: 3 },
+    ]);
+    const user = userEvent.setup();
+    const view = render(<JiraTemplateTools library={libraryOf([DOCUMENT])} />);
+    await user.click(screen.getByRole("button", { name: "Jira issue templates" }));
+    await screen.findByText(ENTRY.name);
+    await user.type(screen.getByLabelText("Project key"), "SYN");
+    await user.click(screen.getByRole("button", { name: "Propose from project" }));
+    expect(await screen.findByRole("textbox", { name: "Story" })).toHaveValue("STALE_DRAFT");
+    view.rerender(<JiraTemplateTools library={libraryOf([{ ...DOCUMENT, revision: 3 }])} />);
+    await waitFor(() => expect(templates.fetchJiraTemplates).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("textbox", { name: "Story" })).not.toBeInTheDocument();
+    expect(upload).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["en", "Jira issue templates", "Project key", "Propose from project", "Save Jira template"],
+    [
+      "de",
+      "Jira-Vorlagen",
+      "Projektschlüssel",
+      "Aus Projekt vorschlagen",
+      "Als Jira-Vorlage speichern",
+    ],
+  ] as const)(
+    "names the saved formal Jira template explicitly and accessibly in %s",
+    async (locale, title, project, propose, save) => {
+      localStorage.setItem(I18N_STORAGE_KEY, locale);
+      await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+      vi.mocked(templates.proposeJiraTemplates).mockResolvedValue([
+        {
+          issueType: "Story",
+          markdown: "---\nkeiko: jira-issue-template\n---\n",
+          sampledIssueCount: 3,
+        },
+      ]);
+      try {
+        const user = userEvent.setup();
+        const view = render(
+          <I18nProvider>
+            <main>
+              <JiraTemplateTools library={library} />
+            </main>
+          </I18nProvider>,
+        );
+        await user.click(screen.getByRole("button", { name: title }));
+        await screen.findByText(ENTRY.name);
+        await user.type(screen.getByLabelText(project), "SYN");
+        await user.click(screen.getByRole("button", { name: propose }));
+        expect(await screen.findByRole("button", { name: save })).toBeEnabled();
+        expect(await axe(view.container)).toHaveNoViolations();
+      } finally {
+        localStorage.removeItem(I18N_STORAGE_KEY);
+      }
+    },
+  );
+
   it("starts each proposal from its own Markdown, not the previous project's edits", async () => {
     vi.mocked(templates.proposeJiraTemplates).mockImplementation((_pod, projectKey) =>
       Promise.resolve([
@@ -470,12 +561,12 @@ describe("Jira issue template tools", () => {
     await user.click(propose);
     await screen.findByText("Proposed for Story (5 issues sampled)");
     expect(screen.getByRole("textbox", { name: "Story" })).toHaveValue("---\nproject: NEW\n---\n");
-    await user.click(screen.getByRole("button", { name: "Save as skill" }));
+    await user.click(screen.getByRole("button", { name: "Save Jira template" }));
     const [file] = upload.mock.calls[0] as unknown as [File];
     expect(await file.text()).toBe("---\nproject: NEW\n---\n");
   });
 
-  it("proposes templates from a project and saves an edited one as a skill", async () => {
+  it("proposes templates from a project and saves an edited Jira template", async () => {
     vi.mocked(templates.proposeJiraTemplates).mockResolvedValue([
       {
         issueType: "Story",
@@ -491,7 +582,7 @@ describe("Jira issue template tools", () => {
     await user.click(propose);
     expect(templates.proposeJiraTemplates).toHaveBeenCalledWith("pod-1", "SYN", expect.any(String));
     await screen.findByText("Proposed for Story (3 issues sampled)");
-    await user.click(screen.getByRole("button", { name: "Save as skill" }));
+    await user.click(screen.getByRole("button", { name: "Save Jira template" }));
     expect(upload).toHaveBeenCalledOnce();
     const [file] = upload.mock.calls[0] as unknown as [File];
     expect(file.name).toBe("Story-template.md");
