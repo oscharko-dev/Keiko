@@ -2,6 +2,8 @@ import type {
   JiraMutationAttempt,
   JiraMutationReceipt,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { DEFAULT_ATLASSIAN_SYNC_BOUNDS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { mapWithConcurrency } from "@oscharko-dev/keiko-contracts/runtime/bounded-concurrency";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { asRecord } from "./atlassian-sync-classify.js";
 import type { AgileMutationInput } from "./jira-agile-inputs.js";
@@ -110,9 +112,26 @@ export async function mutateAgileMembership(
   if (!response.ok) return dispatchFailure(response);
   const receipt = membership.receipt;
   if (response.status !== 204) return { ...AGILE_MALFORMED, receipt };
-  for (const key of input.issues ?? []) {
-    const failure = await confirmMember(request, key, membership);
-    if (failure !== undefined) return { ...failure, receipt };
+  return confirmMembership(requests, input, membership);
+}
+async function confirmMembership(
+  requests: JiraAgileRequests,
+  input: AgileMutationInput,
+  membership: Membership,
+): Promise<JiraMutationAttempt> {
+  const receipt = membership.receipt;
+  const readback = requests.readback();
+  try {
+    const failures = await mapWithConcurrency(
+      input.issues ?? [],
+      DEFAULT_ATLASSIAN_SYNC_BOUNDS.maxConcurrency,
+      (key) => confirmMember(readback.agile, key, membership),
+      readback.signal,
+    );
+    const failure = failures.find((value) => value !== undefined);
+    return failure === undefined ? { ok: true, receipt } : { ...failure, receipt };
+  } catch {
+    // The acknowledged native batch cannot be replayed even when its evidence phase is cancelled.
+    return { ok: false, reason: readback.signal.aborted ? "timeout" : "unavailable", receipt };
   }
-  return { ok: true, receipt };
 }

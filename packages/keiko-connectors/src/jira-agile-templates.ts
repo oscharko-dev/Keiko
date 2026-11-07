@@ -1,4 +1,6 @@
 import type { JiraFieldMetadata } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { DEFAULT_ATLASSIAN_SYNC_BOUNDS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { mapWithConcurrency } from "@oscharko-dev/keiko-contracts/runtime/bounded-concurrency";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import {
@@ -183,9 +185,11 @@ export async function gateJiraAgileIssueChange(
       ? { metadata: [], byNative: new Map<string, string>() }
       : await resolveFields(requests, nativeKeys(input));
   if (resolved === undefined) return UNRESOLVED;
-  for (const issueKey of keys) {
-    const gate = await gateIssue(requests, set, input, target, issueKey, resolved);
-    if (!gate.ok) return gate;
-  }
-  return OK;
+  const gates = await mapWithConcurrency(
+    keys,
+    DEFAULT_ATLASSIAN_SYNC_BOUNDS.maxConcurrency,
+    (issueKey) => gateIssue(requests, set, input, target, issueKey, resolved),
+    requests.signal,
+  );
+  return gates.find((gate) => !gate.ok) ?? OK;
 }

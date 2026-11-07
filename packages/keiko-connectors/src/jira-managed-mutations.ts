@@ -1435,6 +1435,14 @@ export async function checkJiraManagedMutation(
   if (attempt.ok) return { ok: true };
   if (attempt.violations !== undefined)
     return { ok: false, reason: attempt.reason, violations: attempt.violations };
+  // Agile admission already resolved its concrete board/filter/issue prerequisites using GETs.
+  // A known refusal must not be turned into an approval for a write that cannot proceed.
+  if (isJiraAgileMutation(operation))
+    return {
+      ok: false,
+      reason: attempt.reason,
+      ...(attempt.detail === undefined ? {} : { detail: attempt.detail }),
+    };
   return attempt.reason === "field-validation" && attempt.detail?.validation !== undefined
     ? { ok: false, reason: attempt.reason, detail: attempt.detail }
     : { ok: true };

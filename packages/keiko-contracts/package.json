@@ -886,6 +886,10 @@
     "./runtime/managed-mcp": {
       "types": "./dist/managed-mcp.d.ts",
       "import": "./dist/managed-mcp.js"
+    },
+    "./runtime/bounded-concurrency": {
+      "types": "./dist/bounded-concurrency.d.ts",
+      "import": "./dist/bounded-concurrency.js"
     }
   },
   "scripts": {

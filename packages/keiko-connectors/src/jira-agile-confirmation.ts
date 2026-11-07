@@ -45,11 +45,17 @@ export async function readAgileEntity(
     return AGILE_MALFORMED;
   return { ok: true, item: { ...item, id: item.id } };
 }
+function expectedGoal(expected: CatalogJsonValue, observed: CatalogJsonValue | undefined): boolean {
+  return expected === ""
+    ? observed === undefined || observed === null || observed === ""
+    : expected === observed;
+}
 function expectedField(
   key: string,
   expected: CatalogJsonValue,
   observed: CatalogJsonValue | undefined,
 ): boolean {
+  if (key === "goal") return expectedGoal(expected, observed);
   if (key === "originBoardId" || key === "filterId") return agileId(expected) === observed;
   if (key === "color") return asRecord(expected)?.key === observed;
   if (key === "startDate" || key === "endDate")

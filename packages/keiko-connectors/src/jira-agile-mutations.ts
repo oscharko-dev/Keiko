@@ -5,13 +5,13 @@ import type {
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type { JiraManagedConnection } from "./jira-managed-connection.js";
-import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import {
   agileDateRange,
   parseAgileMutation,
   type AgileMutationInput,
 } from "./jira-agile-inputs.js";
 import {
+  agileBoard,
   agileBoardConfiguration,
   agileEpic,
   agileId,
@@ -35,24 +35,69 @@ import {
 import { mutateAgileMembership } from "./jira-agile-membership.js";
 
 async function create(
-  request: JiraMutationRequest,
+  requests: JiraAgileRequests,
   input: AgileMutationInput,
+  checkOnly: boolean,
 ): Promise<JiraMutationAttempt> {
   const board = input.operation === "jira.board-create";
   const root = board ? "board" : "sprint";
-  const response = await request(root, "POST", input.body);
+  const prerequisite = await createPrerequisite(requests, input);
+  if (!prerequisite.ok) return prerequisite;
+  if (checkOnly) return { ok: true, receipt: {} };
+  const response = await requests.agile(root, "POST", input.body);
   if (!response.ok) return dispatchFailure(response);
   const id = agileId(response.body?.id);
-  if (response.status !== 201 || id === undefined) return AGILE_MALFORMED;
+  if (id === undefined) return AGILE_MALFORMED;
   const receipt: JiraMutationReceipt = board ? { boardId: id } : { sprintId: id };
+  if (response.status !== 201) return { ...AGILE_MALFORMED, receipt };
+  return confirmCreated(requests, input, id, receipt);
+}
+function confirmCreated(
+  requests: JiraAgileRequests,
+  input: AgileMutationInput,
+  id: string,
+  receipt: JiraMutationReceipt,
+): Promise<JiraMutationAttempt> {
+  const board = input.operation === "jira.board-create";
   return confirmAgileEntity(
-    request,
-    `${root}/${id}${board ? "/configuration" : ""}`,
+    requests.readback().agile,
+    board ? `board/${id}/configuration` : `sprint/${id}`,
     board ? agileBoardConfiguration : agileSprint,
     id,
     { ...input.body, ...(board ? {} : { state: "future" }) },
     receipt,
   );
+}
+async function createPrerequisite(
+  requests: JiraAgileRequests,
+  input: AgileMutationInput,
+): Promise<JiraMutationAttempt> {
+  if (input.operation === "jira.board-create") {
+    const id = agileId(input.body.filterId);
+    if (id === undefined) return AGILE_MALFORMED;
+    const result = await requests.issue(`filter/${id}`);
+    if (!result.ok) return dispatchFailure(result);
+    return result.status === 200 && agileId(result.body?.id) === id
+      ? { ok: true, receipt: {} }
+      : AGILE_MALFORMED;
+  }
+  const id = agileId(input.body.originBoardId);
+  if (id === undefined) return AGILE_MALFORMED;
+  const result = await readAgileEntity(requests.agile, `board/${id}`, agileBoard, id);
+  if (!result.ok) return result;
+  return result.item.type === "scrum"
+    ? { ok: true, receipt: {} }
+    : {
+        ok: false,
+        reason: "field-validation",
+        detail: {
+          validation: "invalid-field",
+          fieldId: "originBoardId",
+          messages: [
+            "Sprints require an accessible Scrum board. Choose a Scrum board before creating this sprint.",
+          ],
+        },
+      };
 }
 function canStartSprint(current: CatalogJsonObject, start: unknown, end: unknown): boolean {
   return current.state === "future" && typeof start === "string" && typeof end === "string";
@@ -90,17 +135,17 @@ function updateAdmission(
     : gateJiraAgileIssueChange(requests, source, input, item);
 }
 async function sendUpdate(
-  request: JiraMutationRequest,
+  requests: JiraAgileRequests,
   input: AgileMutationInput,
   selected: UpdateSelection,
 ): Promise<JiraMutationAttempt> {
-  const response = await request(selected.path, "POST", input.body);
+  const response = await requests.agile(selected.path, "POST", input.body);
   if (!response.ok) return dispatchFailure(response);
   if (response.status !== 200 || agileId(response.body?.id) !== selected.id)
     return { ...AGILE_MALFORMED, receipt: selected.receipt };
   if (input.target === undefined) return { ...AGILE_MALFORMED, receipt: selected.receipt };
   return confirmAgileEntity(
-    request,
+    requests.readback().agile,
     selected.path,
     selected.project,
     input.target,
@@ -127,7 +172,7 @@ async function update(
   const receipt = agileEntityReceipt(current.item, sprint);
   return receipt === undefined
     ? AGILE_MALFORMED
-    : sendUpdate(request, input, { path, project, id: current.item.id, receipt });
+    : sendUpdate(requests, input, { path, project, id: current.item.id, receipt });
 }
 /** Existing governed dispatch owns admission/journaling; this adapter supplies fixed native effects. */
 export async function executeJiraAgileMutation(
@@ -187,8 +232,6 @@ async function dispatchAgileMutation(
   if (input.issues !== undefined)
     return mutateAgileMembership(requests, input, connection.issueTemplates, checkOnly);
   return input.operation === "jira.board-create" || input.operation === "jira.sprint-create"
-    ? checkOnly
-      ? { ok: true, receipt: {} }
-      : create(requests.agile, input)
+    ? create(requests, input, checkOnly)
     : update(requests, input, connection.issueTemplates, checkOnly);
 }

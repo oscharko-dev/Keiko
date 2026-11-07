@@ -201,3 +201,29 @@ describe("Agile issue changes retain the existing issue-template gate", () => {
     expect(f.http.mock.calls.filter(([request]) => request.method === "POST")).toHaveLength(0);
   });
 });
+
+it("bounds parallel issue-template reads and finishes every admission before the batch effect", async () => {
+  const f = fixture("Approved issue");
+  const original = f.http.getMockImplementation();
+  if (original === undefined) throw new TypeError("Missing fixture transport");
+  let active = 0;
+  let peakBeforeEffect = 0;
+  let written = false;
+  f.http.mockImplementation(async (request) => {
+    if (request.method === "POST") {
+      expect(active).toBe(0);
+      written = true;
+    }
+    if (request.method !== "GET" || !request.url.includes("/issue/")) return original(request);
+    active += 1;
+    if (!written) peakBeforeEffect = Math.max(peakBeforeEffect, active);
+    await Promise.resolve();
+    const result = await original(request);
+    active -= 1;
+    return result;
+  });
+  const issues = Array.from({ length: 9 }, (_, index) => `APP-${String(index + 1)}`);
+  expect(await f.run("jira.backlog-move-issues", { issues })).toMatchObject({ ok: true });
+  expect(peakBeforeEffect).toBe(4);
+  expect(f.http.mock.calls.filter(([request]) => request.method === "POST")).toHaveLength(1);
+});
