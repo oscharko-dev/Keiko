@@ -19,6 +19,9 @@ type CompositeTool = "jira.report" | "jira.draft-stage" | "jira.draft";
 type NativeTool = Exclude<JiraOperationTool, CompositeTool>;
 type JiraOperationEffect = "remote-read" | "remote-write" | "local-report" | "local-draft";
 type JiraPermissionPolicy =
+  | "visible-permission-configuration"
+  | "visible-security-configuration"
+  | "visible-notification-configuration"
   | "visible-users"
   | "visible-groups"
   | "admin-application-roles"
@@ -136,6 +139,22 @@ function writes<const T extends Readonly<Record<string, readonly ["POST" | "PUT"
   ) as NativeGroup<T>;
 }
 const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
+  ...reads("visible-permission-configuration", {
+    "jira.permission-schemes": "/permissionscheme",
+    "jira.permission-scheme": "/permissionscheme/{schemeId}",
+    "jira.permission-grants": "/permissionscheme/{schemeId}/permission",
+    "jira.permission-grant": "/permissionscheme/{schemeId}/permission/{permissionId}",
+  }),
+  ...reads("visible-security-configuration", {
+    "jira.issue-security-schemes": "/issuesecurityschemes",
+    "jira.issue-security-scheme": "/issuesecurityschemes/{id}",
+    "jira.security-level": "/securitylevel/{id}",
+  }),
+  ...reads("visible-notification-configuration", {
+    "jira.notification-schemes": "/notificationscheme",
+    "jira.notification-scheme": "/notificationscheme/{id}",
+    "jira.project-notification-scheme": "/project/{projectKeyOrId}/notificationscheme",
+  }),
   ...reads("visible-users", {
     "jira.user": "/user",
     "jira.users": "/user/search",

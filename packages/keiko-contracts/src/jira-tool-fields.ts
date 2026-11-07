@@ -22,6 +22,16 @@ export const JIRA_FIELD_KINDS = [
 ] as const;
 export type JiraFieldKind = (typeof JIRA_FIELD_KINDS)[number];
 export const JIRA_MANAGED_READ_TOOLS = [
+  "jira.permission-schemes",
+  "jira.permission-scheme",
+  "jira.permission-grants",
+  "jira.permission-grant",
+  "jira.issue-security-schemes",
+  "jira.issue-security-scheme",
+  "jira.security-level",
+  "jira.notification-schemes",
+  "jira.notification-scheme",
+  "jira.project-notification-scheme",
   "jira.user",
   "jira.users",
   "jira.user-directory",

@@ -9,6 +9,8 @@ import {
 import { executeJiraScreenRead, isJiraScreenRead } from "./jira-managed-screen-reads.js";
 import { executeJiraUserRead, isJiraUserRead } from "./jira-managed-user-reads.js";
 import { executeJiraDirectoryRead, isJiraDirectoryRead } from "./jira-managed-directory-reads.js";
+import { executeJiraAccessSchemeRead, isJiraAccessSchemeRead } from "./jira-managed-access-schemes.js";
+import { executeJiraNotificationSchemeRead, isJiraNotificationSchemeRead } from "./jira-managed-notification-schemes.js";
 import {
   executeJiraParticipationRead,
   isJiraParticipationRead,
@@ -341,7 +343,9 @@ type NativeDetailRead =
   | Parameters<typeof executeJiraWorkflowSchemeRead>[0]
   | Parameters<typeof executeJiraScreenRead>[0]
   | Parameters<typeof executeJiraUserRead>[0]
-  | Parameters<typeof executeJiraDirectoryRead>[0];
+  | Parameters<typeof executeJiraDirectoryRead>[0]
+  | Parameters<typeof executeJiraAccessSchemeRead>[0]
+  | Parameters<typeof executeJiraNotificationSchemeRead>[0];
 function isNativeDetailRead(name: string): name is NativeDetailRead {
   return [
     isJiraIssueDetailRead,
@@ -355,6 +359,8 @@ function isNativeDetailRead(name: string): name is NativeDetailRead {
     isJiraScreenRead,
     isJiraUserRead,
     isJiraDirectoryRead,
+    isJiraAccessSchemeRead,
+    isJiraNotificationSchemeRead,
   ].some((accepts) => accepts(name));
 }
 function administrationRead(
@@ -367,6 +373,8 @@ function administrationRead(
   if (isJiraScreenRead(name)) return executeJiraScreenRead(name, args, request);
   if (isJiraUserRead(name)) return executeJiraUserRead(name, args, request);
   if (isJiraDirectoryRead(name)) return executeJiraDirectoryRead(name, args, request);
+  if (isJiraAccessSchemeRead(name)) return executeJiraAccessSchemeRead(name, args, request);
+  if (isJiraNotificationSchemeRead(name)) return executeJiraNotificationSchemeRead(name, args, request);
   return undefined;
 }
 function linkedIssueDetailRead(

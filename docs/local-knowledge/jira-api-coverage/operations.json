@@ -797,6 +797,40 @@
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-issue-details.ts"],
       "testFiles": ["packages/keiko-connectors/src/jira-managed-issue-details.test.ts"]
     },
+    "jira.issue-security-scheme": {
+      "identity": "GET /rest/api/2/issuesecurityschemes/{id}",
+      "effect": "read",
+      "permissionPolicy": "visible-security-configuration",
+      "kind": "constrained-tool",
+      "constraints": "One exact native issue-security scheme; precise IDs, name/description and optional unique levels/default-level ID. Description character/byte and nested-array bounds fail closed. No role/user expansion, remote URLs, security assignment or effective-access calculation.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-access-schemes.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.issue-security-schemes": {
+      "identity": "GET /rest/api/2/issuesecurityschemes",
+      "effect": "read",
+      "permissionPolicy": "visible-security-configuration",
+      "kind": "constrained-tool",
+      "constraints": "Bounded complete issueSecuritySchemes wrapper with local pagination. Scheme IDs and optional default-level/level facts are validated, with native admin visibility authoritative. Missing levels/defaults remain unknown, explicit empty lists remain observed, and no membership or configured-access claim is inferred.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-access-schemes.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.issue-type-scheme": {
       "identity": "GET /rest/api/2/issuetypescheme/{schemeId}",
       "effect": "read",
@@ -866,6 +900,110 @@
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-issue-details.ts"],
       "testFiles": ["packages/keiko-connectors/src/jira-managed-issue-details.test.ts"]
     },
+    "jira.notification-scheme": {
+      "identity": "GET /rest/api/2/notificationscheme/{id}",
+      "effect": "read",
+      "permissionPolicy": "visible-notification-configuration",
+      "kind": "constrained-tool",
+      "constraints": "One exact native notification scheme. Optional includeEvents exposes bounded documented events/recipient projections and an explicit availability marker; omitted event/recipient data is not fabricated as empty. Configured EmailAddress recipients may be projected under existing content policy; user email/self/avatar/HTML are omitted. No notifications sent or subscriptions changed.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-notification-schemes.ts",
+        "packages/keiko-connectors/src/jira-notification-scheme-values.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-notification-schemes.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.notification-schemes": {
+      "identity": "GET /rest/api/2/notificationscheme",
+      "effect": "read",
+      "permissionPolicy": "visible-notification-configuration",
+      "kind": "constrained-tool",
+      "constraints": "Native notification page with max50 and verified start/max/isLast/optional-total envelope. Explicit includeEvents selects only fixed documented expansions; bounded event/template and twelve recipient kinds retain observed missing/empty distinctions. Configured recipient values remain user-facing local content, never audit bodies; no URL following, sending or inferred delivery.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-notification-schemes.ts",
+        "packages/keiko-connectors/src/jira-notification-scheme-values.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-notification-schemes.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.permission-grant": {
+      "identity": "GET /rest/api/2/permissionscheme/{schemeId}/permission/{permissionId}",
+      "effect": "read",
+      "permissionPolicy": "visible-permission-configuration",
+      "kind": "constrained-tool",
+      "constraints": "One exact grant within the selected scheme. Validate its precise native ID and bounded permission/holder fields; optional holder parameter stays absent when unknown. No permission grant/revoke, broad endpoint selection or inference of current-user access.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-access-schemes.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.permission-grants": {
+      "identity": "GET /rest/api/2/permissionscheme/{schemeId}/permission",
+      "effect": "read",
+      "permissionPolicy": "visible-permission-configuration",
+      "kind": "constrained-tool",
+      "constraints": "One selected scheme with complete bounded native permissions wrapper and local pagination. Each unique grant retains id, permission and holder type/optional parameter; expanded users/groups/roles/fields and remote URLs are omitted. Configuration is not effective-current-user permission.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-access-schemes.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.permission-scheme": {
+      "identity": "GET /rest/api/2/permissionscheme/{schemeId}",
+      "effect": "read",
+      "permissionPolicy": "visible-permission-configuration",
+      "kind": "constrained-tool",
+      "constraints": "One exact native permission-scheme identity, bounded description and optional observed grants. Fixed includePermissions expansion only; precise numeric/string IDs, omitted/null nested permissions remain unknown and explicit empty lists remain empty. No arbitrary expansion, URL following or authority inference.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-access-schemes.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.permission-schemes": {
+      "identity": "GET /rest/api/2/permissionscheme",
+      "effect": "read",
+      "permissionPolicy": "visible-permission-configuration",
+      "kind": "constrained-tool",
+      "constraints": "Bounded complete native permissionSchemes wrapper with local pagination; optional includePermissions emits only expand=permissions. Names, descriptions and observed grant/holder facts only; missing permissions stay unknown, not empty. No effective-user permission inference, expanded people, URLs or configuration writes.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-access-schemes.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.project": {
       "identity": "GET /rest/api/2/project/{projectIdOrKey}",
       "effect": "read",
@@ -888,6 +1026,25 @@
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-avatar-reads.test.ts",
         "packages/keiko-server/src/atlassian/jiraAssetDescriptors.test.ts"
+      ]
+    },
+    "jira.project-notification-scheme": {
+      "identity": "GET /rest/api/2/project/{projectKeyOrId}/notificationscheme",
+      "effect": "read",
+      "permissionPolicy": "visible-notification-configuration",
+      "kind": "constrained-tool",
+      "constraints": "Read the selected canonical project before requesting its notification association through the observed numeric project ID. Reuse the same bounded scheme/event/recipient projection and fixed includeEvents switch; preserve native project-admin visibility and project context. No guessed association identity, URL following, configuration write or delivery claim.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-notification-schemes.ts",
+        "packages/keiko-connectors/src/jira-notification-scheme-values.ts",
+        "packages/keiko-connectors/src/jira-managed-projects.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-notification-schemes.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
     "jira.project-permissions": {
@@ -976,6 +1133,23 @@
       "constraints": "Bounded opaque JQL with projected standard and selected typed fields; no POST search operation.",
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-tools.ts"],
       "testFiles": ["packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"]
+    },
+    "jira.security-level": {
+      "identity": "GET /rest/api/2/securitylevel/{id}",
+      "effect": "read",
+      "permissionPolicy": "visible-security-configuration",
+      "kind": "constrained-tool",
+      "constraints": "One exact native security-level ID with bounded name/description. Native administrator visibility remains authoritative. No project assignment, membership inference, remote self URL or security change.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-access-schemes.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
     },
     "jira.sprint": {
       "identity": "GET /rest/agile/1.0/sprint/{sprintId}",
@@ -1522,8 +1696,8 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "a82859fa6312075eeed50bde53ef5a9e9e02936c3ed0b609f663f97db863dce7",
-    "nativeOperationCount": 101
+    "sha256": "0c81c75c6d0f823f0ef6b255f2f991f05d2e3d979d57dceb1243a52bd48407b4",
+    "nativeOperationCount": 111
   },
   "operations": [
     {
@@ -7345,10 +7519,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.issue-security-schemes"]
     },
     {
       "identity": "GET /rest/api/2/issuesecurityschemes/{id}",
@@ -7377,10 +7551,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.issue-security-scheme"]
     },
     {
       "identity": "GET /rest/api/2/issuetype",
@@ -8721,10 +8895,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.notification-schemes"]
     },
     {
       "identity": "GET /rest/api/2/notificationscheme/{id}",
@@ -8753,10 +8927,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.notification-scheme"]
     },
     {
       "identity": "GET /rest/api/2/password/policy",
@@ -8913,10 +9087,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.permission-schemes"]
     },
     {
       "identity": "POST /rest/api/2/permissionscheme",
@@ -9073,10 +9247,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.permission-scheme"]
     },
     {
       "identity": "PUT /rest/api/2/permissionscheme/{schemeId}",
@@ -9137,10 +9311,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.permission-grants"]
     },
     {
       "identity": "POST /rest/api/2/permissionscheme/{schemeId}/permission",
@@ -9233,10 +9407,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.permission-grant"]
     },
     {
       "identity": "GET /rest/api/2/priority",
@@ -10481,10 +10655,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.project-notification-scheme"]
     },
     {
       "identity": "GET /rest/api/2/project/{projectKeyOrId}/permissionscheme",
@@ -12169,10 +12343,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.security-level"]
     },
     {
       "identity": "GET /rest/api/2/serverInfo",

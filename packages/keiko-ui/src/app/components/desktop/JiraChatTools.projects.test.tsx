@@ -53,6 +53,78 @@ function show(exchange: ChatToolExchange): ReturnType<typeof render> {
 
 afterEach(() => localStorage.removeItem(I18N_STORAGE_KEY));
 
+describe.each(["en", "de"] as const)("saved Jira access configuration in %s", (locale) => {
+  beforeEach(async () => {
+    await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+    localStorage.setItem(I18N_STORAGE_KEY, locale);
+  });
+  it("restores ten named configuration reads with explicit unknown and empty details", async () => {
+    const grant = { id: "81", permission: "BROWSE_PROJECTS", holder: { type: "group", parameter: "Developers" } };
+    const scheme = { id: "37", name: "Engineering access" };
+    const security = { id: "38", name: "Engineering security" };
+    const notification = {
+      id: "47", name: "Notifications", eventsAvailable: true,
+      events: [{
+        id: "1", name: "Issue updated", templateEvents: [{ id: "2", name: "Template event name" }],
+        notifications: [
+          { id: "61", notificationType: "User", user: { key: "U1", name: "Configured person", emailAddress: "hidden@example.invalid", self: "https://untrusted.invalid/user" } },
+          { id: "62", notificationType: "EmailAddress", emailAddress: "configured@example.invalid" },
+        ],
+      }],
+    };
+    const cases: readonly [string, CatalogJsonObject, string, string][] = [
+      ["jira_permission_schemes", { items: [{ ...scheme, permissions: [] }], startAt: 0, total: 1 }, "Read Jira permission schemes", "Jira-Berechtigungsschemata lesen"],
+      ["jira_permission_scheme", { ...scheme, permissions: [grant] }, "Read Jira permission scheme", "Jira-Berechtigungsschema lesen"],
+      ["jira_permission_grants", { schemeId: "37", items: [grant], startAt: 0, total: 1 }, "Read Jira permission grants", "Jira-Berechtigungszuweisungen lesen"],
+      ["jira_permission_grant", { schemeId: "37", ...grant }, "Read Jira permission grant", "Jira-Berechtigungszuweisung lesen"],
+      ["jira_issue_security_schemes", { items: [security], startAt: 0, total: 1 }, "Read Jira issue security schemes", "Sicherheitsschemata für Jira-Vorgänge lesen"],
+      ["jira_issue_security_scheme", { ...security, levels: [] }, "Read Jira issue security scheme", "Sicherheitsschema für Jira-Vorgänge lesen"],
+      ["jira_security_level", { id: "91", name: "Restricted", description: "Configured level" }, "Read Jira security level", "Jira-Sicherheitsstufe lesen"],
+      ["jira_notification_schemes", { items: [{ id: "47", name: "Unavailable events", eventsAvailable: false }], eventsRequested: true, startAt: 0, isLast: false, nextStartAt: 1 }, "Read Jira notification schemes", "Jira-Benachrichtigungsschemata lesen"],
+      ["jira_notification_scheme", { items: [notification], eventsRequested: true }, "Read Jira notification scheme", "Jira-Benachrichtigungsschema lesen"],
+      ["jira_project_notification_scheme", { projectId: "10000", projectKey: "SYN", eventsRequested: false, items: [{ id: "47", name: "Project notifications" }] }, "Read Jira project notification scheme", "Benachrichtigungsschema eines Jira-Projekts lesen"],
+    ];
+    const restored = JSON.parse(JSON.stringify({
+      schemaVersion: 1,
+      exchanges: cases.map(([operation, data], index) => ({
+        ...projectExchange({ outcome: "succeeded", ...data }, operation),
+        call: { id: `access-${String(index)}`, name: operation, arguments: {} },
+      })),
+    })) as ChatToolTranscript;
+    const renderReceipt = (): ReturnType<typeof render> => render(
+      <I18nProvider><JiraChatTools transcript={restored} turnState="completed" /></I18nProvider>,
+    );
+    const first = renderReceipt();
+    const before = first.container.textContent;
+    first.unmount();
+    const { container } = renderReceipt();
+    expect(container.textContent).toBe(before);
+    for (const [, , en, de] of cases)
+      expect(screen.getByRole("group", { name: locale === "en" ? en : de })).toBeVisible();
+    for (const value of ["BROWSE_PROJECTS", "Developers", "Configured person", "Template event name", "configured@example.invalid", "SYN"])
+      expect(container.textContent).toContain(value);
+    expect(container.textContent).not.toContain("hidden@example.invalid");
+    expect(container.textContent).not.toContain("untrusted.invalid");
+    expect(container.textContent).toContain(locale === "en"
+      ? "Configured permission grants: 0" : "Konfigurierte Berechtigungszuweisungen: 0");
+    expect(container.textContent).toContain(locale === "en"
+      ? "Security level details were not provided." : "Details der Sicherheitsstufen wurden nicht bereitgestellt.");
+    expect(container.textContent).toContain(locale === "en"
+      ? "Configured security levels: 0" : "Konfigurierte Sicherheitsstufen: 0");
+    expect(container.textContent).toContain(locale === "en"
+      ? "Requested notification event details are unavailable."
+      : "Angeforderte Details der Benachrichtigungsereignisse sind nicht verfügbar.");
+    expect(container.textContent).toContain(locale === "en"
+      ? "Notification event details were not requested."
+      : "Details der Benachrichtigungsereignisse wurden nicht angefordert.");
+    expect(container.textContent).toContain(locale === "en"
+      ? "Effective permissions for the current user have not been determined."
+      : "Wirksame Berechtigungen des aktuellen Benutzers wurden nicht ermittelt.");
+    expect(container.querySelector("pre, img, a")).toBeNull();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
 describe.each(["en", "de"] as const)("private Jira directory results in %s", (locale) => {
   beforeEach(async () => {
     await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);

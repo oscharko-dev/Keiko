@@ -23,6 +23,12 @@ export function jiraNativeId(value: unknown): value is string {
   );
 }
 
+/** Native JSON numbers are admitted only while exact; string int64 identities remain lossless. */
+export function jiraNativeNumericId(value: unknown): string | undefined {
+  const exact = typeof value === "number" && Number.isSafeInteger(value) ? String(value) : value;
+  return jiraNativeId(exact) ? exact : undefined;
+}
+
 /** Names are sent exactly as reviewed; refuse input Jira would trim rather than guessing readback. */
 export function jiraNativeName(value: unknown, max: number): value is string {
   return jiraNativeText(value, max) && value === value.trim();

@@ -33,6 +33,47 @@ const CREATE = {
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
   {
+    tool: "jira.permission-schemes",
+    args: { startAt: 0, maxResults: 1, includePermissions: true },
+    query: { expand: "permissions" },
+  },
+  {
+    tool: "jira.permission-scheme",
+    args: { schemeId: "37", includePermissions: true },
+    parameters: { schemeId: "37" },
+    query: { expand: "permissions" },
+  },
+  {
+    tool: "jira.permission-grants",
+    args: { schemeId: "37", startAt: 0, maxResults: 1 },
+    parameters: { schemeId: "37" },
+  },
+  {
+    tool: "jira.permission-grant",
+    args: { schemeId: "37", permissionId: "81" },
+    parameters: { schemeId: "37", permissionId: "81" },
+  },
+  { tool: "jira.issue-security-schemes", args: { startAt: 0, maxResults: 1 } },
+  { tool: "jira.issue-security-scheme", args: { schemeId: "38" }, parameters: { id: "38" } },
+  { tool: "jira.security-level", args: { levelId: "91" }, parameters: { id: "91" } },
+  {
+    tool: "jira.notification-schemes",
+    args: { startAt: 0, maxResults: 1, includeEvents: true },
+    query: { startAt: "0", maxResults: "1", expand: "notificationSchemeEvents,user,group,projectRole,field" },
+  },
+  {
+    tool: "jira.notification-scheme",
+    args: { schemeId: "47", includeEvents: true },
+    parameters: { id: "47" },
+    query: { expand: "notificationSchemeEvents,user,group,projectRole,field" },
+  },
+  {
+    tool: "jira.project-notification-scheme",
+    args: { projectIdOrKey: "SYN", includeEvents: false },
+    parameters: { projectKeyOrId: "10000" },
+    primaryMethodIndex: 1,
+  },
+  {
     tool: "jira.user",
     args: { userKey: "JIRAUSER10100", includeDeleted: true },
     query: { key: "JIRAUSER10100", includeDeleted: "true" },
@@ -598,7 +639,7 @@ function administrationRead(
   path: string,
   absoluteUrl: string,
 ): AtlassianHttpBodyResult | undefined {
-  const directory = directoryRead(path);
+  const directory = directoryRead(path) ?? accessRead(path);
   if (directory !== undefined) return directory;
   const type = { id: "1", name: "Task", subtask: false };
   const scheme = { id: "37", name: "Delivery", issueTypes: [type], defaultIssueType: type };
@@ -666,6 +707,31 @@ function directoryRead(path: string): AtlassianHttpBodyResult | undefined {
     "groups/picker": { groups: [{ name: "R&D team", html: "<b>ignored</b>" }], total: 2 },
     applicationrole: [role],
     "applicationrole/jira-software": role,
+  };
+  return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
+}
+function accessRead(path: string): AtlassianHttpBodyResult | undefined {
+  const grant = { id: 81, permission: "BROWSE_PROJECTS", holder: { type: "group", parameter: "Developers" } };
+  const permissionScheme = { id: 37, name: "Engineering access", permissions: [grant] };
+  const level = { id: 91, name: "Restricted", description: "Configured level" };
+  const securityScheme = { id: 38, name: "Engineering security", defaultSecurityLevelId: 91, levels: [level] };
+  const notificationScheme = {
+    id: 47, name: "Notifications", notificationSchemeEvents: [{
+      event: { id: 1, name: "Issue updated", templateEvent: { id: 2, name: "Template" } },
+      notifications: [{ id: 61, notificationType: "CurrentAssignee" }],
+    }],
+  };
+  const bodies: Readonly<Record<string, unknown>> = {
+    permissionscheme: { permissionSchemes: [permissionScheme] },
+    "permissionscheme/37": permissionScheme,
+    "permissionscheme/37/permission": { permissions: [grant] },
+    "permissionscheme/37/permission/81": grant,
+    issuesecurityschemes: { issueSecuritySchemes: [securityScheme] },
+    "issuesecurityschemes/38": securityScheme,
+    "securitylevel/91": level,
+    notificationscheme: { startAt: 0, maxResults: 1, total: 2, isLast: false, values: [notificationScheme] },
+    "notificationscheme/47": notificationScheme,
+    "project/10000/notificationscheme": notificationScheme,
   };
   return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
 }
@@ -818,7 +884,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(83);
+    expect(native).toHaveLength(93);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),

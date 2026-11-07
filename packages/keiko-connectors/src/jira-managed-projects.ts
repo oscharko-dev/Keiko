@@ -130,7 +130,7 @@ function receipt(project: ProjectView): ProjectReceipt {
     projectName: project.projectName,
   };
 }
-async function readProject(request: JiraMutationRequest, target: string): Promise<ProjectReadback> {
+export async function readJiraBoundProject(request: JiraMutationRequest, target: string): Promise<ProjectReadback> {
   const result = await request(`project/${encodeURIComponent(target)}`);
   if (!result.ok) return dispatchFailure(result);
   const project = result.status === 200 ? projectView(result.body) : undefined;
@@ -221,7 +221,7 @@ async function projectResult(
   request: JiraMutationRequest,
   target: string,
 ): Promise<ManagedMcpToolResult> {
-  const result = await readProject(request, target);
+  const result = await readJiraBoundProject(request, target);
   if (!result.ok) return jiraReadFailure(result.reason, result.detail);
   const { invalidMetadataFields, ...project } = result.project;
   return {
@@ -358,7 +358,7 @@ async function confirmProject(
   identity: ProjectReceipt,
   fields: Readonly<Record<string, unknown>>,
 ): Promise<JiraMutationAttempt> {
-  const current = await readProject(request, identity.projectId);
+  const current = await readJiraBoundProject(request, identity.projectId);
   if (!current.ok) return { ...current, receipt: identity };
   if (current.project.projectKey !== identity.projectKey || !holds(current.project, fields))
     return { ok: false, reason: "conflict", receipt: receipt(current.project) };
@@ -369,7 +369,7 @@ async function withUnconfirmedProjectReadback(
   key: string,
   failure: Failure,
 ): Promise<JiraMutationAttempt> {
-  const current = await readProject(request, key);
+  const current = await readJiraBoundProject(request, key);
   return current.ok ? { ...failure, receipt: receipt(current.project) } : failure;
 }
 async function failedProjectWrite(
@@ -440,7 +440,7 @@ async function updateProject(
   const input = updateInput(args);
   if (input === undefined) return INVALID;
   const { fields } = input;
-  const prior = await readProject(request, input.target);
+  const prior = await readJiraBoundProject(request, input.target);
   if (!prior.ok) return prior;
   if (holds(prior.project, fields))
     return {
