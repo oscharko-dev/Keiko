@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -93,7 +94,8 @@ it.each([...JIRA_MANAGED_READ_TOOLS, "assign-issue"] as const)(
     if (event === undefined) throw new Error("Missing activity event");
     const line = formatActivityLogProofLine(event);
     expect(expectActivityLogProof("atlassian.action.outcome.line", line)).toMatchObject({
-      actionType,
+      actionType: actionType === "assign-issue" ? "jira-write" : "jira-read",
+      actionTypeDigest: createHash("sha256").update(actionType).digest("hex"),
       provider: "jira",
       outcome: "pending-review",
       failureReason: "none",

@@ -53,6 +53,263 @@ function show(exchange: ChatToolExchange): ReturnType<typeof render> {
 
 afterEach(() => localStorage.removeItem(I18N_STORAGE_KEY));
 
+describe.each(["en", "de"] as const)("changed source requirements in %s", (locale) => {
+  beforeEach(async () => {
+    await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+    localStorage.setItem(I18N_STORAGE_KEY, locale);
+  });
+  it("restores actionable source-change guidance from the real pre-approval refusal shape", () => {
+    const data = {
+      outcome: "rejected",
+      reason: "field-validation",
+      requirementRefusal: "source-changed",
+    };
+    const receipt = projectExchange(data, "jira_draft");
+    if (receipt.result?.status !== "completed") throw new Error("Missing source-refusal fixture");
+    const rejected: ChatToolExchange = {
+      ...receipt,
+      result: {
+        ...receipt.result,
+        effectStarted: false,
+        status: "failed",
+        reason: "provider-reported-error",
+        page: null,
+        data,
+      },
+    };
+    const restored = JSON.parse(JSON.stringify(rejected)) as ChatToolExchange;
+    const { container } = show(restored);
+    expect(
+      screen.getByText(
+        locale === "en"
+          ? "The source requirements changed. Read them again and prepare the draft again. No change was made in Jira."
+          : "Die Quellanforderungen haben sich geändert. Lies sie erneut und bereite den Entwurf neu vor. In Jira wurde nichts geändert.",
+      ),
+    ).toBeVisible();
+    expect(screen.queryByRole("button", { name: /retry|wiederholen/iu })).toBeNull();
+    expect(container.querySelector("pre")).toBeNull();
+  });
+});
+
+describe.each(["en", "de"] as const)("explicit unchanged receipts in %s", (locale) => {
+  beforeEach(async () => {
+    await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+    localStorage.setItem(I18N_STORAGE_KEY, locale);
+  });
+  it("restores an explicit no-change observation without presenting rejection or inventing success", () => {
+    const data = {
+      outcome: "rejected",
+      reason: "conflict",
+      unchanged: true,
+      issueKey: "SYN-7",
+      commentId: "91",
+    };
+    const receipt = projectExchange(data, "jira_update_comment");
+    if (receipt.result?.status !== "completed") throw new Error("Missing unchanged fixture result");
+    const rejected: ChatToolExchange = {
+      ...receipt,
+      mutationOutcome: "rejected",
+      result: {
+        ...receipt.result,
+        effectStarted: false,
+        status: "failed",
+        reason: "provider-reported-error",
+        page: null,
+        data,
+      },
+    };
+    const stored = JSON.parse(JSON.stringify(rejected)) as ChatToolExchange;
+    show(stored);
+    expect(
+      screen.getByText(locale === "en" ? "Already up to date" : "Bereits aktuell"),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        locale === "en"
+          ? "The requested values already match Jira. No change was made."
+          : "Die gewünschten Werte stimmen bereits mit Jira überein. Es wurde nichts geändert.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.queryByText(locale === "en" ? "Jira action rejected" : "Jira-Aktion abgelehnt"),
+    ).toBeNull();
+    expect(screen.queryByText(/The Jira state changed|Der Jira-Stand hat sich/u)).toBeNull();
+    expect(stored.result?.data).toMatchObject({ outcome: "rejected" });
+  });
+  it.each([
+    { outcome: "rejected", reason: "conflict" },
+    { outcome: "rejected", reason: "permission-denied", unchanged: true },
+    { outcome: "unknown", reason: "conflict", unchanged: true },
+  ])("keeps other conflicts, refusals and unknown outcomes actionable", (data) => {
+    show(projectExchange(data, "jira_update_comment"));
+    expect(
+      screen.queryByText(locale === "en" ? "Already up to date" : "Bereits aktuell"),
+    ).toBeNull();
+  });
+  it("keeps an unknown journal outcome authoritative over a contradictory unchanged payload", () => {
+    show({
+      ...projectExchange(
+        { outcome: "rejected", reason: "conflict", unchanged: true },
+        "jira_update_comment",
+      ),
+      mutationOutcome: "unknown",
+    });
+    expect(
+      screen.queryByText(locale === "en" ? "Already up to date" : "Bereits aktuell"),
+    ).toBeNull();
+    expect(
+      screen.getByText(
+        locale === "en" ? "Jira outcome unknown" : "Ausgang der Jira-Aktion unbekannt",
+      ),
+    ).toBeVisible();
+  });
+});
+
+describe.each(["en", "de"] as const)(
+  "saved views and sharing observations in %s (C7)",
+  (locale) => {
+    beforeEach(async () => {
+      await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+      localStorage.setItem(I18N_STORAGE_KEY, locale);
+    });
+    it("restores dashboard identities and configured share facts accessibly without remote links or JSON", async () => {
+      const exchanges = [
+        projectExchange(
+          {
+            outcome: "succeeded",
+            startAt: 0,
+            total: 1,
+            items: [
+              {
+                id: "9007199254740993",
+                name: "Delivery dashboard",
+                view: "https://untrusted.invalid/dashboard",
+                browseUrl: "https://untrusted.invalid/browse/SYN-7",
+                issueKey: "SYN-7",
+              },
+            ],
+          },
+          "jira_dashboards",
+        ),
+        projectExchange(
+          {
+            outcome: "succeeded",
+            filterId: "700",
+            items: [
+              { id: "91", type: "group", groupName: "Delivery group", edit: false, view: true },
+              { id: "92", type: "future-share", roleId: "5", roleName: "Developers" },
+            ],
+          },
+          "jira_filter_permissions",
+        ),
+        projectExchange({ outcome: "succeeded", scope: "PRIVATE" }, "jira_filter_share_scope"),
+      ].map((exchange, index) => ({
+        ...exchange,
+        call: { ...exchange.call, id: `saved-view-${String(index)}` },
+      }));
+      const transcript = { schemaVersion: 1 as const, exchanges };
+      const initial = render(
+        <I18nProvider>
+          <JiraChatTools transcript={transcript} turnState="completed" />
+        </I18nProvider>,
+      );
+      expect(screen.getByText("Delivery dashboard")).toBeVisible();
+      initial.unmount();
+      const restored = JSON.parse(JSON.stringify(transcript)) as ChatToolTranscript;
+      const { container } = render(
+        <I18nProvider>
+          <JiraChatTools transcript={restored} turnState="completed" />
+        </I18nProvider>,
+      );
+      for (const value of locale === "en"
+        ? [
+            "Dashboard ID: 9007199254740993",
+            "Group: Delivery group",
+            "Role: Developers",
+            "Share type: future-share",
+            "Entry does not grant editing",
+            "Entry grants viewing",
+            "Default sharing: private",
+          ]
+        : [
+            "Dashboard-ID: 9007199254740993",
+            "Gruppe: Delivery group",
+            "Rolle: Developers",
+            "Freigabetyp: future-share",
+            "Eintrag erlaubt kein Bearbeiten",
+            "Eintrag erlaubt Anzeigen",
+            "Standardfreigabe: privat",
+          ])
+        expect(screen.getByText(value, { exact: true })).toBeVisible();
+      expect(
+        screen.getAllByText(
+          locale === "en" ? "Saved filter ID: 700" : "Gespeicherte Filter-ID: 700",
+        ),
+      ).toHaveLength(2);
+      expect(
+        screen.getByText(
+          locale === "en"
+            ? "This is the default for future filters, not the sharing state of an existing filter."
+            : "Dies ist die Voreinstellung für künftige Filter, nicht der Freigabestatus eines vorhandenen Filters.",
+        ),
+      ).toBeVisible();
+      expect(screen.queryByRole("link")).toBeNull();
+      expect(container.querySelector("pre, details")).toBeNull();
+      expect(
+        screen.getByRole("group", {
+          name: locale === "en" ? "Read Jira dashboards" : "Jira-Dashboards lesen",
+        }),
+      ).toBeVisible();
+      expect(
+        screen.getByRole("group", {
+          name:
+            locale === "en"
+              ? "Read Jira filter share entries"
+              : "Jira-Filter-Freigabeeinträge lesen",
+        }),
+      ).toBeVisible();
+      expect(await axe(container)).toHaveNoViolations();
+    });
+    it("does not infer missing permission flags or private sharing from an empty list", () => {
+      show(
+        projectExchange(
+          { outcome: "succeeded", filterId: "700", items: [], startAt: 0, total: 0 },
+          "jira_filter_permissions",
+        ),
+      );
+      expect(
+        screen.getByText(locale === "en" ? "Saved filter ID: 700" : "Gespeicherte Filter-ID: 700"),
+      ).toBeVisible();
+      expect(
+        screen.queryByText(
+          /Entry grants|Entry does not grant|Default sharing|Eintrag erlaubt|Standardfreigabe/u,
+        ),
+      ).toBeNull();
+    });
+    it("keeps numeric native continuation visible as a partial dashboard result", () => {
+      show(
+        projectExchange(
+          {
+            outcome: "succeeded",
+            items: [{ id: "17", name: "Next dashboard" }],
+            startAt: 1,
+            total: 3,
+            nextStartAt: 2,
+          },
+          "jira_dashboards",
+        ),
+      );
+      expect(
+        screen.getByText(
+          locale === "en"
+            ? "Partial Jira result. Some available data is not included."
+            : "Jira-Teilergebnis. Nicht alle verfügbaren Daten sind enthalten.",
+        ),
+      ).toBeVisible();
+    });
+  },
+);
+
 describe.each(["en", "de"] as const)("saved collaboration facts in %s (#4298)", (locale) => {
   beforeEach(async () => {
     await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
@@ -244,6 +501,7 @@ describe("server-minted board read links", () => {
     expect(screen.queryByRole("link")).toBeNull();
   });
   it.each([
+    "not a URL",
     "https://jira.example.test/context/secure/RapidBoard.jspa?rapidView=18",
     "https://jira.example.test/context/secure/RapidBoard.jspa?rapidView=17&rapidView=17",
     "https://jira.example.test/context/secure/RapidBoard.jspa?rapidView=17&other=1",

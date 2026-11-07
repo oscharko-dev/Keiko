@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi, type Mock } from "vitest";
 import type { JiraMutationAttempt } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { JiraAcknowledgedMutationError } from "@oscharko-dev/keiko-connectors";
+import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
 import { buildUiStoreOverDatabase, createNodeUiStore } from "../store/index.js";
 import { runMigrations } from "../store/schema.js";
 import { createChatToolMutationStore } from "../store/chatToolMutations.js";
@@ -611,6 +613,49 @@ it("retains an acknowledged malformed response as succeeded-unconfirmed", async 
     data: { outcome: "succeeded-unconfirmed", replayed: true },
   });
   expect(f.effects).toHaveBeenCalledOnce();
+});
+it("diagnoses an unexpected post-acknowledgement failure while retaining membership evidence", async () => {
+  const f = fixture();
+  const diagnostic = vi.spyOn(defaultServerDiagnosticSink, "record");
+  try {
+    f.effects.mockImplementation(() => Promise.resolve(new Response(null, { status: 204 })));
+    const input: JiraChatMutationExecution = {
+      ...f.input,
+      intent: { ...f.input.intent, operation: "jira.sprint-move-issues" },
+      execute: async (http) => {
+        await http({
+          method: "POST",
+          url: "https://jira.example.invalid/rest/agile/1.0/sprint/37/issue",
+          bodyJson: '{"issues":["SYN-1"]}',
+          maxBodyBytes: 1000,
+          timeoutMs: 1000,
+        });
+        throw new JiraAcknowledgedMutationError(new TypeError("Synthetic private member content"), {
+          sprintId: "37",
+          issueKeys: ["SYN-1"],
+        });
+      },
+    };
+    expect(await executeJiraChatMutation(input)).toMatchObject({
+      data: { outcome: "succeeded-unconfirmed", sprintId: "37", issueKeys: ["SYN-1"] },
+    });
+    const record = diagnostic.mock.calls[0]?.[0];
+    expect(record).toMatchObject({
+      operation: "jira.mutation-execution-failed",
+      errorClass: "JiraAcknowledgedMutationError",
+    });
+    expect(record?.causeChain).toContain("TypeError");
+    expect(record?.frames?.length ?? 0).toBeGreaterThan(0);
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toMatch(
+      /Synthetic private|SYN-1|jira\.example/u,
+    );
+    expect(await executeJiraChatMutation(input)).toMatchObject({
+      data: { outcome: "succeeded-unconfirmed", replayed: true },
+    });
+    expect(f.effects).toHaveBeenCalledOnce();
+  } finally {
+    diagnostic.mockRestore();
+  }
 });
 it("retains a truncated 201 acknowledgement and replays the canonical action without another effect", async () => {
   const f = fixture();

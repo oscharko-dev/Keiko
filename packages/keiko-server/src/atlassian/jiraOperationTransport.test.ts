@@ -32,6 +32,19 @@ const CREATE = {
 };
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
+  { tool: "jira.dashboards", args: { startAt: 0, maxResults: 25 }, query: PAGING },
+  { tool: "jira.dashboard", args: { dashboardId: "71" }, parameters: { id: "71" } },
+  { tool: "jira.filter-share-scope", args: {} },
+  {
+    tool: "jira.filter-permissions",
+    args: { filterId: "37", startAt: 0, maxResults: 25 },
+    parameters: { id: "37" },
+  },
+  {
+    tool: "jira.filter-permission",
+    args: { filterId: "37", permissionId: "81" },
+    parameters: { id: "37", permissionId: "81" },
+  },
   {
     tool: "jira.get-comment",
     args: { issueKey: "SYN-1", commentId: "10002" },
@@ -260,6 +273,18 @@ function filterRead(path: string): AtlassianHttpBodyResult | undefined {
   if (path === "filter/favourite") return response([filter]);
   return undefined;
 }
+function savedViewRead(path: string): AtlassianHttpBodyResult | undefined {
+  const dashboard = { id: "71", name: "Delivery" };
+  const permission = { id: 81, type: "group", group: { name: "delivery" }, view: true };
+  const bodies: Readonly<Record<string, unknown>> = {
+    dashboard: { startAt: 0, maxResults: 25, total: 1, dashboards: [dashboard] },
+    "dashboard/71": dashboard,
+    "filter/defaultShareScope": { scope: "PRIVATE" },
+    "filter/37/permission": [permission],
+    "filter/37/permission/81": permission,
+  };
+  return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
+}
 function issueMetadata(path: string): AtlassianHttpBodyResult | undefined {
   if (path.endsWith("/issuetypes"))
     return response({
@@ -314,6 +339,7 @@ function remoteRead(path: string, absolute: string, state: RemoteState): Atlassi
     structureRead(path, state) ??
     collaborationRead(path) ??
     filterRead(path) ??
+    savedViewRead(path) ??
     issueMetadata(path) ??
     fixtureRead(absolute, state)
   );
@@ -379,7 +405,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(37);
+    expect(native).toHaveLength(42);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),

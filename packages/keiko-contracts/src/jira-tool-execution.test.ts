@@ -15,6 +15,11 @@ function messageBytes(text: string): number {
 }
 
 describe("sanitizeJiraMutationFailureDetail byte bound (#4176)", () => {
+  it("keeps only the literal true acknowledgement of an unchanged state", () => {
+    expect(sanitizeJiraMutationFailureDetail({ unchanged: true })).toEqual({ unchanged: true });
+    for (const unchanged of [false, "true", 1, {}, null])
+      expect(sanitizeJiraMutationFailureDetail({ unchanged })).toBeUndefined();
+  });
   it.each([
     ["quotes", '"'.repeat(400)],
     ["backslashes", "\\".repeat(400)],

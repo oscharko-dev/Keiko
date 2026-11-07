@@ -19,6 +19,8 @@ import {
   JIRA_COLLABORATION_TOOLS,
   jiraCollaborationDetails,
 } from "./jira-collaboration-presentation";
+import { JIRA_SAVED_VIEW_TOOLS, jiraSavedViewDetails } from "./jira-saved-view-presentation";
+import { jiraMutationUnchanged } from "./jira-tool-presentation";
 
 export interface JiraOutcomeItem {
   readonly key?: string;
@@ -66,6 +68,7 @@ const STANDALONE_TOOLS = new Set([
   ...JIRA_PROJECT_TOOLS,
   ...JIRA_AGILE_TOOLS,
   ...JIRA_PROJECT_METADATA_TOOLS,
+  ...JIRA_SAVED_VIEW_TOOLS,
 ]);
 const BOARD_READ_TOOLS = new Set(["jira_board", "jira_boards", "jira_board_configuration"]);
 type UnknownRecord = Readonly<Record<string, unknown>>;
@@ -96,18 +99,14 @@ function textMembers<Key extends string>(
 
 /** Retain the saved instance/context path; never manufacture a link from a current connector. */
 function savedUrl(value: unknown, queryAllowed = false): URL | undefined {
-  if (typeof value !== "string") return undefined;
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" &&
-      [url.username, url.password, queryAllowed ? "" : url.search, url.hash].every(
-        (part) => part === "",
-      )
-      ? url
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  if (typeof value !== "string" || !URL.canParse(value)) return undefined;
+  const url = new URL(value);
+  return url.protocol === "https:" &&
+    [url.username, url.password, queryAllowed ? "" : url.search, url.hash].every(
+      (part) => part === "",
+    )
+    ? url
+    : undefined;
 }
 function boardLink(value: unknown, tool: string, source: UnknownRecord): string | undefined {
   if (!BOARD_READ_TOOLS.has(tool)) return undefined;
@@ -175,10 +174,28 @@ function metadataOutcomeItem(source: UnknownRecord, tool: string): JiraOutcomeIt
   if (![name, body, projectId, ...facts].some((entry) => entry !== undefined)) return undefined;
   return { ...textMembers({ name, body, projectId }), facts, labels };
 }
+function savedViewOutcomeItem(source: UnknownRecord, tool: string): JiraOutcomeItem | undefined {
+  const { name, facts, labels } = jiraSavedViewDetails(tool, source);
+  return name === undefined && facts.length === 0 && labels.length === 0
+    ? undefined
+    : { ...textMembers({ name }), facts, labels };
+}
+function outcomeHref(
+  tool: string,
+  source: UnknownRecord,
+  key: string | undefined,
+  projectKey: string | undefined,
+): string | undefined {
+  if (BOARD_READ_TOOLS.has(tool)) return boardLink(source.browseUrl, tool, source);
+  return projectKey === undefined
+    ? issueLink(source.browseUrl, key)
+    : projectLink(source.browseUrl, projectKey);
+}
 function outcomeItem(value: unknown, tool: string): JiraOutcomeItem | undefined {
   const source = record(value);
   if (source === undefined) return undefined;
   if (JIRA_PROJECT_METADATA_TOOLS.has(tool)) return metadataOutcomeItem(source, tool);
+  if (JIRA_SAVED_VIEW_TOOLS.has(tool)) return savedViewOutcomeItem(source, tool);
   const agile = jiraAgileDetails(tool, source);
   const collaboration = jiraCollaborationDetails(tool, source);
   const projectKey = text(source.projectKey);
@@ -209,11 +226,7 @@ function outcomeItem(value: unknown, tool: string): JiraOutcomeItem | undefined 
   const facts = [...agile.facts, ...collaboration.facts];
   if (![key, name, body, ...facts].some((entry) => entry !== undefined)) return undefined;
   const status = firstText([record(source.status)?.name, record(source.to)?.name]);
-  const href = BOARD_READ_TOOLS.has(tool)
-    ? boardLink(source.browseUrl, tool, source)
-    : projectKey === undefined
-      ? issueLink(source.browseUrl, key)
-      : projectLink(source.browseUrl, projectKey);
+  const href = outcomeHref(tool, source, key, projectKey);
   const projectId = text(source.projectId);
   return {
     ...textMembers({ key, name, body, status, href, projectId }),
@@ -239,11 +252,19 @@ function outcomeItems(
   const progress = Array.isArray(exchange.draftProgress?.items) ? exchange.draftProgress.items : [];
   const single = data?.issueKey !== undefined || STANDALONE_TOOLS.has(exchange.call.name);
   const source = single ? [data, ...items, ...progress] : [...items, ...progress];
-  if (JIRA_COLLABORATION_TOOLS.has(exchange.call.name) && items.length > 0)
+  if (
+    (JIRA_COLLABORATION_TOOLS.has(exchange.call.name) ||
+      JIRA_SAVED_VIEW_TOOLS.has(exchange.call.name)) &&
+    items.length > 0
+  )
     return items.flatMap((entry) => {
       const raw = record(entry);
       const item = outcomeItem(
-        { ...raw, browseUrl: raw?.browseUrl ?? data?.browseUrl },
+        {
+          ...raw,
+          browseUrl: raw?.browseUrl ?? data?.browseUrl,
+          filterId: raw?.filterId ?? data?.filterId,
+        },
         exchange.call.name,
       );
       return item === undefined ? [] : [item];
@@ -295,6 +316,7 @@ function rulesOf(data: UnknownRecord | undefined): JiraOutcomeRule[] {
   });
 }
 const FAILURE_MESSAGES: Readonly<Record<string, WidgetMessageKey>> = {
+  "source-changed": "chat.jira.outcome.failure.sourceChanged",
   "auth-failed": "chat.jira.outcome.failure.auth",
   "permission-denied": "chat.jira.outcome.failure.permission",
   forbidden: "chat.jira.outcome.failure.permission",
@@ -308,11 +330,17 @@ const FAILURE_MESSAGES: Readonly<Record<string, WidgetMessageKey>> = {
   timeout: "chat.jira.outcome.failure.unavailable",
   unavailable: "chat.jira.outcome.failure.unavailable",
 };
+function failureReason(data: UnknownRecord | undefined): string | undefined {
+  return data?.outcome === "rejected" && data.requirementRefusal === "source-changed"
+    ? "source-changed"
+    : text(data?.reason);
+}
 function failureMessage(
   exchange: ChatToolExchange,
   data: UnknownRecord | undefined,
 ): WidgetMessageKey | undefined {
-  const reason = text(data?.reason);
+  if (jiraMutationUnchanged(exchange)) return undefined;
+  const reason = failureReason(data);
   if (reason !== undefined && Object.hasOwn(FAILURE_MESSAGES, reason))
     return FAILURE_MESSAGES[reason];
   if (

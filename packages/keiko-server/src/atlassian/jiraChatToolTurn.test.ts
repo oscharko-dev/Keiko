@@ -1,4 +1,5 @@
-import { jiraOperationContracts } from "./jiraManagedProvider.js";
+import { jiraOperationContracts, jiraDeclarationForTool } from "./jiraManagedProvider.js";
+import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
 import { invalidateJiraPodChats } from "./jiraPodLifecycle.js";
 import {
   createBufferedServerLogSink,
@@ -2788,7 +2789,10 @@ describe("four-item Epic and Task template fullchain", () => {
       session.close();
     }
   }
-  function journeyModel(f: ReturnType<typeof fixture>): () => void {
+  function journeyModel(
+    f: ReturnType<typeof fixture>,
+    beforeTool?: (tool: string) => void,
+  ): () => void {
     const original = f.model.call;
     let round = 0;
     let repeated = false;
@@ -2815,6 +2819,7 @@ describe("four-item Epic and Task template fullchain", () => {
           finishReason: "stop",
           content: "The reviewed backlog is verified.",
         };
+      beforeTool?.(step.tool);
       const tool = request.toolCatalog.projection.tools.find(
         (entry) => entry.toolRef.canonicalId === `keiko.${step.tool.replaceAll("-", ".")}`,
       );
@@ -3062,6 +3067,43 @@ describe("four-item Epic and Task template fullchain", () => {
     });
   });
 
+  function changeJourneySource(f: ReturnType<typeof fixture>): void {
+    const session = openKnowledgeStoreForDeps(f.deps);
+    try {
+      session.store._internal.db
+        .prepare("UPDATE documents SET safe_display_name = ?")
+        .run("Changed source.md");
+      session.store._internal.db
+        .prepare("UPDATE capsules SET updated_at = updated_at + 1000")
+        .run();
+    } finally {
+      session.close();
+    }
+  }
+  it("delivers a declared source-changed refusal through the write stage before approval", async () => {
+    const f = fixture(true, undefined, true, false, true);
+    await journeyPod(f);
+    saveTemplates(f);
+    typedJira(f);
+    journeyModel(f, (tool) => {
+      if (tool === "jira.draft") changeJourneySource(f);
+    });
+    expect((await sendBatch(f, "source-before-write-stage")).status).toBe(200);
+    expect(f.writes()).toBe(0);
+    const exchange = latestExchange(f);
+    expect(exchange?.approval).toBeUndefined();
+    expect(exchange?.result).toMatchObject({
+      status: "failed",
+      data: { outcome: "rejected", requirementRefusal: "source-changed" },
+    });
+    const declaration = jiraDeclarationForTool("jira.draft");
+    if (declaration === undefined) throw new TypeError("Missing draft declaration");
+    const data = exchange?.result?.data;
+    if (data === undefined) throw new TypeError("Missing declared source refusal");
+    expect(
+      describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, data),
+    ).toBeUndefined();
+  });
   it("refuses a source revision changed after the staged preview was approved", async () => {
     const f = fixture(true, undefined, true, false, true);
     await journeyPod(f);
@@ -3079,17 +3121,7 @@ describe("four-item Epic and Task template fullchain", () => {
         String((item.fields as Record<string, unknown>).description).includes("Keiko traceability"),
       ),
     ).toBe(true);
-    const session = openKnowledgeStoreForDeps(f.deps);
-    try {
-      session.store._internal.db
-        .prepare("UPDATE documents SET safe_display_name = ?")
-        .run("Changed source.md");
-      session.store._internal.db
-        .prepare("UPDATE capsules SET updated_at = updated_at + 1000")
-        .run();
-    } finally {
-      session.close();
-    }
+    changeJourneySource(f);
     expect(await postWriteDecision(f, approval, "approve")).toBe(200);
     expect((await pending).status).toBe(200);
     expect(f.writes()).toBe(0);

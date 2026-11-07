@@ -527,6 +527,8 @@ describe("native Jira project writes", () => {
   });
   it.each([
     ["jira.create-project", { ...CREATE, workflowSchemeId: 7 }],
+    ["jira.create-project", { ...CREATE, name: " Project " }],
+    ["jira.update-project", { projectIdOrKey: CREATE.key, name: " Project " }],
     ["jira.create-project", { ...CREATE, key: "../escape" }],
     ["jira.create-project", { ...CREATE, url: "https://user:secret@example.invalid" }],
     ["jira.update-project", { projectIdOrKey: CREATE.key }],

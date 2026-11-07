@@ -9,6 +9,9 @@ import { asRecord } from "./atlassian-sync-classify.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { jiraReadFailure, localJiraPage } from "./jira-managed-metadata.js";
 import { boundJiraReadResult } from "./jira-managed-issue-reads.js";
+import { jiraCreationAcknowledgement } from "./jira-creation-acknowledgement.js";
+import { jiraReadbackValueMatches } from "./jira-readback-values.js";
+import { jiraNativeText, jiraNativeName } from "./jira-native-values.js";
 import { dispatchFailure } from "./jira-mutation-failure.js";
 
 type VersionRead = "jira.versions" | "jira.version";
@@ -33,7 +36,7 @@ const INVALID: Failure = {
   detail: {
     validation: "invalid-field",
     messages: [
-      "Create requires projectId and name. Update requires versionId and a supported metadata change. Use ISO calendar dates and explicit boolean release or archive states.",
+      "Create requires projectId and name. Update requires versionId and a supported metadata change. Use names without surrounding whitespace (1 to 255 characters), descriptions of at most 32768 characters, ISO calendar dates and explicit boolean release or archive states.",
     ],
   },
 };
@@ -71,20 +74,21 @@ function validField(field: string, value: unknown): boolean {
   return validText(value, field === "description");
 }
 function validText(value: unknown, description: boolean): value is string {
-  return (
-    typeof value === "string" &&
-    value.length <= (description ? 32768 : 255) &&
-    (description || value.trim().length > 0) &&
-    // eslint-disable-next-line no-control-regex -- metadata permits ordinary tabs and line breaks.
-    !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(value)
-  );
+  return jiraNativeText(value, description ? 32768 : 255, description);
+}
+function validInputField(field: string, value: unknown): boolean {
+  return field === "name" ? jiraNativeName(value, 255) : validField(field, value);
 }
 function versionMetadata(raw: Record<string, unknown>): CatalogJsonObject | undefined {
   const values: Record<string, string | boolean> = {};
   for (const field of VERSION_FIELDS) {
     const selected = raw[field];
     if (selected === undefined) continue;
-    if (selected === null && (field === "startDate" || field === "releaseDate")) continue;
+    if (
+      selected === null &&
+      (field === "description" || field === "startDate" || field === "releaseDate")
+    )
+      continue;
     if (!validField(field, selected)) return undefined;
     values[field] = selected as string | boolean;
   }
@@ -232,14 +236,20 @@ function mutationInput(
   const fields = Object.entries(args).filter(([key]) => key !== selector);
   if (
     fields.length === 0 ||
-    !fields.every(([key, value]) => validField(key, value)) ||
-    (create && !validField("name", args.name))
+    !fields.every(([key, value]) => validInputField(key, value)) ||
+    (create && !validInputField("name", args.name))
   )
     return undefined;
   return { target, fields: Object.fromEntries(fields) };
 }
 function matches(version: VersionView, fields: CatalogJsonObject): boolean {
-  return Object.entries(fields).every(([field, expected]) => version[field] === expected);
+  return Object.entries(fields).every(([field, expected]) =>
+    jiraReadbackValueMatches(
+      field === "description" ? "clearable-text" : "exact",
+      version[field],
+      expected,
+    ),
+  );
 }
 async function confirmVersion(
   request: JiraMutationRequest,
@@ -265,10 +275,17 @@ async function createVersion(
     ...input.fields,
     projectId: projectNumber(project.projectId),
   });
-  if (!response.ok) return dispatchFailure(response);
-  const id = response.body?.id;
-  if (response.status !== 201 || !versionId(id)) return MALFORMED;
-  return confirmVersion(request, { versionId: id, projectId: project.projectId }, input.fields);
+  const acknowledged = jiraCreationAcknowledgement(
+    response,
+    (value) => (versionId(value) ? value : undefined),
+    { projectId: project.projectId },
+  );
+  if (!acknowledged.ok) return acknowledged;
+  return confirmVersion(
+    request,
+    { versionId: acknowledged.id, projectId: project.projectId },
+    input.fields,
+  );
 }
 async function updateVersion(
   request: JiraMutationRequest,
@@ -283,7 +300,10 @@ async function updateVersion(
       ok: false,
       reason: "conflict",
       receipt,
-      detail: { messages: ["The version already holds these values. Nothing was written."] },
+      detail: {
+        unchanged: true,
+        messages: ["The version already holds these values. Nothing was written."],
+      },
     };
   if (check) return { ok: true, receipt: {} };
   // PUT's native response is status-only; the following GET supplies the independent evidence.
@@ -299,6 +319,22 @@ export function executeJiraVersionMutation(
   request: JiraMutationRequest,
   check = false,
 ): Promise<JiraVersionMutationAttempt> {
+  if (
+    operation === "jira.create-version" &&
+    versionId(args.projectId) &&
+    projectNumber(args.projectId) === undefined
+  )
+    return Promise.resolve({
+      ok: false,
+      reason: "field-validation",
+      detail: {
+        validation: "invalid-field",
+        fieldId: "projectId",
+        messages: [
+          "The native numeric projectId must be a positive integer no greater than 9007199254740991. Select a project whose identifier can be serialized exactly. Nothing was changed.",
+        ],
+      },
+    });
   const input = mutationInput(operation, args);
   if (input === undefined) return Promise.resolve(INVALID);
   return operation === "jira.create-version"

@@ -379,6 +379,36 @@
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-versions.ts"],
       "testFiles": ["packages/keiko-connectors/src/jira-managed-versions.test.ts"]
     },
+    "jira.dashboard": {
+      "identity": "GET /rest/api/2/dashboard/{id}",
+      "effect": "read",
+      "permissionPolicy": "visible-dashboards",
+      "kind": "constrained-tool",
+      "constraints": "One exact string int64 dashboard identity with bounded id/name projection; remote self/navigation URLs are omitted. No gadgets, properties or dashboard administration.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-saved-views.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedViewDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-saved-views.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedViewDescriptors.test.ts"
+      ]
+    },
+    "jira.dashboards": {
+      "identity": "GET /rest/api/2/dashboard",
+      "effect": "read",
+      "permissionPolicy": "visible-dashboards",
+      "kind": "constrained-tool",
+      "constraints": "Visible dashboard id/name projection only; bounded native startAt/maxResults pagination with validated totals. Remote continuation URLs are never followed; no gadget/layout or write support.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-saved-views.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedViewDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-saved-views.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedViewDescriptors.test.ts"
+      ]
+    },
     "jira.edit": {
       "identity": "PUT /rest/api/2/issue/{issueIdOrKey}",
       "effect": "write",
@@ -473,6 +503,51 @@
       "constraints": "One visible filter ID with bounded owner/JQL/sharing facts; no filter creation, sharing mutation or private-default inference.",
       "sourceFiles": ["packages/keiko-connectors/src/jira-filter-reads.ts"],
       "testFiles": ["packages/keiko-connectors/src/jira-filter-reads.test.ts"]
+    },
+    "jira.filter-permission": {
+      "identity": "GET /rest/api/2/filter/{id}/permission/{permissionId}",
+      "effect": "read",
+      "permissionPolicy": "visible-filter-permissions",
+      "kind": "constrained-tool",
+      "constraints": "One exact filter/permission identity with bounded selected sharing target and explicit view/edit facts. Unknown values are not inferred; no permission mutation or authorization widening.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-saved-views.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedViewDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-saved-views.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedViewDescriptors.test.ts"
+      ]
+    },
+    "jira.filter-permissions": {
+      "identity": "GET /rest/api/2/filter/{id}/permission",
+      "effect": "read",
+      "permissionPolicy": "visible-filter-permissions",
+      "kind": "constrained-tool",
+      "constraints": "One exact filter ID; validate the complete bounded native permission array before local startAt/maxResults pagination. Only selected typed sharing targets and explicit view/edit flags are projected; no permission mutation.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-saved-views.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedViewDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-saved-views.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedViewDescriptors.test.ts"
+      ]
+    },
+    "jira.filter-share-scope": {
+      "identity": "GET /rest/api/2/filter/defaultShareScope",
+      "effect": "read",
+      "permissionPolicy": "authenticated-user-preferences",
+      "kind": "constrained-tool",
+      "constraints": "No-argument read of the current GLOBAL/AUTHENTICATED/PRIVATE default filter-sharing scope only. A read does not change defaults, grant sharing authority or qualify private filter creation.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-saved-views.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedViewDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-saved-views.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedViewDescriptors.test.ts"
+      ]
     },
     "jira.get-comment": {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/comment/{id}",
@@ -753,8 +828,8 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "c473d63e857a435d8856dd8c6a0318cebc70370400d200482cf22082ea7043af",
-    "nativeOperationCount": 55
+    "sha256": "d19e1e3847b84927adeee6db3d6c5ea10c2b89cfe9400d4185c3c99d9b23012c",
+    "nativeOperationCount": 60
   },
   "operations": [
     {
@@ -3488,10 +3563,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.dashboards"]
     },
     {
       "identity": "GET /rest/api/2/dashboard/{dashboardId}/items/{itemId}/properties",
@@ -3648,10 +3723,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.dashboard"]
     },
     {
       "identity": "GET /rest/api/2/email-templates",
@@ -3936,10 +4011,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.filter-share-scope"]
     },
     {
       "identity": "PUT /rest/api/2/filter/defaultShareScope",
@@ -4224,10 +4299,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.filter-permissions"]
     },
     {
       "identity": "POST /rest/api/2/filter/{id}/permission",
@@ -4320,10 +4395,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.filter-permission"]
     },
     {
       "identity": "DELETE /rest/api/2/group",

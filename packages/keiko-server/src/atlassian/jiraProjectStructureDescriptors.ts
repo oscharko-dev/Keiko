@@ -110,6 +110,7 @@ function writeResult(receipt: CatalogJsonObject): CatalogJsonObject {
       ...FAILURE_FIELDS,
       outcome: { type: "string", enum: JIRA_MUTATION_RESULT_STATES },
       replayed: { type: "boolean" },
+      unchanged: { type: "boolean" },
       guidance: text(512),
       browseUrl: text(4096),
       fieldId: text(64),

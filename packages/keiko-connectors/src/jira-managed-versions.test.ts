@@ -280,8 +280,10 @@ describe("native Jira version create and metadata update", () => {
       const result = await executeJiraVersionMutation(operation, args, request);
       expect(result).toMatchObject({ ok: false, reason: "timeout" });
       expect(request.mock.calls).toHaveLength(2);
-      if (operation === "jira.create-version") expect(result).not.toHaveProperty("receipt");
-      else expect(result).toHaveProperty("receipt.versionId", "12000");
+      if (operation === "jira.create-version") {
+        expect(result).toHaveProperty("receipt.projectId", "10000");
+        expect(result).not.toHaveProperty("receipt.versionId");
+      } else expect(result).toHaveProperty("receipt.versionId", "12000");
     },
   );
 
@@ -292,6 +294,7 @@ describe("native Jira version create and metadata update", () => {
     expect(await executeJiraVersionMutation("jira.create-version", CREATE, request)).toEqual({
       ok: false,
       reason: "malformed-payload",
+      receipt: { projectId: "10000" },
     });
     expect(request.mock.calls).toHaveLength(2);
   });
@@ -343,7 +346,12 @@ describe("native Jira version create and metadata update", () => {
         { versionId: "12000", released: true },
         request,
       ),
-    ).toMatchObject({ ok: false, reason: "conflict", receipt: { versionId: "12000" } });
+    ).toMatchObject({
+      ok: false,
+      reason: "conflict",
+      detail: { unchanged: true },
+      receipt: { versionId: "12000" },
+    });
     expect(request.mock.calls).toHaveLength(1);
   });
 });
@@ -388,5 +396,107 @@ describe("version arguments remain closed and lossless", () => {
     expect(isJiraVersionMutation("jira.update-version")).toBe(true);
     expect(isJiraVersionMutation("jira.delete-version")).toBe(false);
     expect(isJiraVersionRead("jira.version-remotelink")).toBe(false);
+  });
+});
+
+describe("version native normalization and retained acknowledgements", () => {
+  it.each(["jira.version", "jira.versions"] as const)(
+    "treats a native null description as absent in %s",
+    async (operation) => {
+      const request = fixture(({ path }) => fixtureRead(path, { ...VERSION, description: null }));
+      const result = await executeJiraVersionRead(
+        operation,
+        operation === "jira.version" ? { versionId: "12000" } : { projectIdOrKey: "REP" },
+        request,
+      );
+      expect(result.data.outcome).toBe("succeeded");
+      expect(JSON.stringify(result.data)).not.toContain('"description"');
+    },
+  );
+  it.each([null, undefined])(
+    "confirms an explicit description clear returned as %s",
+    async (description) => {
+      const request = fixture(({ written, method }) =>
+        written && method === "GET" ? answer({ ...VERSION, description }) : undefined,
+      );
+      expect(
+        await executeJiraVersionMutation(
+          "jira.update-version",
+          { versionId: "12000", description: "" },
+          request,
+        ),
+      ).toMatchObject({ ok: true });
+      expect(request.mock.calls.filter(([, method]) => method === "PUT")).toHaveLength(1);
+    },
+  );
+  it("refuses surrounding name whitespace before transport", async () => {
+    const request = fixture();
+    expect(
+      await executeJiraVersionMutation(
+        "jira.create-version",
+        { ...CREATE, name: " Release " },
+        request,
+      ),
+    ).toMatchObject({ ok: false, reason: "field-validation" });
+    expect(request).not.toHaveBeenCalled();
+  });
+  it.each([200, 202])(
+    "retains a readable creation id and confirms an unexpected successful status %s",
+    async (status) => {
+      const request = fixture(({ path, method }) =>
+        method === "POST"
+          ? answer({ id: "12000" }, status)
+          : path === "version/12000"
+            ? answer({ ...VERSION, name: CREATE.name })
+            : undefined,
+      );
+      expect(
+        await executeJiraVersionMutation("jira.create-version", CREATE, request),
+      ).toMatchObject({ ok: true, receipt: { versionId: "12000" } });
+      expect(request.mock.calls.at(-1)?.[0]).toBe("version/12000");
+      expect(request.mock.calls.filter(([, method]) => method === "POST")).toHaveLength(1);
+    },
+  );
+  it("retains the id when unusual acknowledgement readback is denied", async () => {
+    const request = fixture(({ path, method }) =>
+      method === "POST"
+        ? answer({ id: "12000" }, 202)
+        : path === "version/12000"
+          ? { ok: false, reason: "permission-denied" }
+          : undefined,
+    );
+    expect(await executeJiraVersionMutation("jira.create-version", CREATE, request)).toMatchObject({
+      ok: false,
+      receipt: { versionId: "12000" },
+    });
+    expect(request.mock.calls.at(-1)?.[0]).toBe("version/12000");
+    expect(request.mock.calls.filter(([, method]) => method === "POST")).toHaveLength(1);
+  });
+  it("names the description character ceiling before any I/O", async () => {
+    const request = fixture();
+    const result = await executeJiraVersionMutation(
+      "jira.update-version",
+      { versionId: "12000", description: "a".repeat(32769) },
+      request,
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "field-validation",
+      detail: { messages: [expect.stringContaining("descriptions of at most 32768 characters")] },
+    });
+    expect(request).not.toHaveBeenCalled();
+  });
+  it("names the safe native project-number ceiling before dispatch", async () => {
+    const request = fixture();
+    const result = await executeJiraVersionMutation(
+      "jira.create-version",
+      { ...CREATE, projectId: "9007199254740992" },
+      request,
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      detail: { fieldId: "projectId", messages: [expect.stringContaining("9007199254740991")] },
+    });
+    expect(request).not.toHaveBeenCalled();
   });
 });

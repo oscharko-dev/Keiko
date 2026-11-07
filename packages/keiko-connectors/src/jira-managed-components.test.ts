@@ -134,7 +134,6 @@ describe("closed native component reads", () => {
     { ...COMPONENT, id: "9223372036854775808" },
     { ...COMPONENT, assigneeType: "UNKNOWN" },
     { ...COMPONENT, leadUserName: "different-owner" },
-    { ...COMPONENT, leadUserName: null },
   ])("refuses malformed component metadata", async (component) => {
     const { request } = fixture(() => response(component));
     expect(
@@ -250,7 +249,7 @@ describe("one governed component write with independent readback", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("enforces the published body byte bound for multibyte descriptions", async () => {
+  it("names the local serialized UTF-8 byte bound for multibyte descriptions", async () => {
     const { request } = fixture();
     expect(
       await executeJiraComponentMutation(
@@ -258,7 +257,10 @@ describe("one governed component write with independent readback", () => {
         { projectIdOrKey: "SYN", name: "New", description: "界".repeat(12000) },
         request,
       ),
-    ).toMatchObject({ ok: false });
+    ).toMatchObject({
+      ok: false,
+      detail: { validation: "invalid-field", messages: [expect.stringMatching(/32768.*UTF-8/u)] },
+    });
     expect(writes(request)).toEqual([]);
   });
 
@@ -396,7 +398,7 @@ describe("one governed component write with independent readback", () => {
         { componentId: COMPONENT.id, name: COMPONENT.name },
         request,
       ),
-    ).toMatchObject({ ok: false, reason: "conflict" });
+    ).toMatchObject({ ok: false, reason: "conflict", detail: { unchanged: true } });
     expect(writes(request)).toEqual([]);
   });
 
@@ -407,5 +409,106 @@ describe("one governed component write with independent readback", () => {
     expect(isJiraComponentMutation("jira.update-component")).toBe(true);
     expect(isJiraComponentRead("jira.proxy")).toBe(false);
     expect(isJiraComponentMutation("jira.delete-component")).toBe(false);
+  });
+});
+
+describe("component native normalization and retained acknowledgements", () => {
+  it.each(["jira.component", "jira.components"] as const)(
+    "treats native null description and lead as absent in %s",
+    async (operation) => {
+      const empty = { ...COMPONENT, description: null, lead: null, leadUserName: null };
+      const { request } = fixture(({ path }) => readResponse(path, empty));
+      const result = await executeJiraComponentRead(
+        operation,
+        operation === "jira.component" ? { componentId: COMPONENT.id } : { projectIdOrKey: "SYN" },
+        request,
+      );
+      expect(result.data.outcome).toBe("succeeded");
+      expect(result.data).toHaveProperty("items.0");
+      expect(result.data).not.toHaveProperty("items.0.description");
+      expect(JSON.stringify(result.data)).not.toContain("leadUserName");
+    },
+  );
+  it.each([null, undefined])(
+    "confirms an explicit description clear returned as %s",
+    async (description) => {
+      const { request } = fixture(({ written, method }) =>
+        written && method === "GET" ? response({ ...COMPONENT, description }) : undefined,
+      );
+      expect(
+        await executeJiraComponentMutation(
+          "jira.update-component",
+          { componentId: COMPONENT.id, description: "" },
+          request,
+        ),
+      ).toMatchObject({ ok: true });
+      expect(writes(request)).toHaveLength(1);
+    },
+  );
+  it("confirms a lead username normalized only by case", async () => {
+    const { request } = fixture(({ written, method }) =>
+      written && method === "GET"
+        ? response({ ...COMPONENT, lead: { name: "NEXT" }, leadUserName: "NEXT" })
+        : undefined,
+    );
+    expect(
+      await executeJiraComponentMutation(
+        "jira.update-component",
+        { componentId: COMPONENT.id, leadUserName: "next" },
+        request,
+      ),
+    ).toMatchObject({ ok: true });
+    expect(writes(request)).toHaveLength(1);
+  });
+  it("refuses surrounding name whitespace before transport", async () => {
+    const { request } = fixture();
+    expect(
+      await executeJiraComponentMutation(
+        "jira.create-component",
+        { projectIdOrKey: "SYN", name: " Core " },
+        request,
+      ),
+    ).toMatchObject({ ok: false, reason: "field-validation" });
+    expect(request).not.toHaveBeenCalled();
+  });
+  it.each([200, 202])(
+    "retains a readable creation id and confirms an unexpected successful status %s",
+    async (status) => {
+      const stored = { ...COMPONENT, name: "New" };
+      const { request } = fixture(({ path, method }) =>
+        method === "POST"
+          ? response({ id: COMPONENT.id }, status)
+          : path.startsWith("component/")
+            ? response(stored)
+            : undefined,
+      );
+      expect(
+        await executeJiraComponentMutation(
+          "jira.create-component",
+          { projectIdOrKey: "SYN", name: "New" },
+          request,
+        ),
+      ).toMatchObject({ ok: true, receipt: { componentId: COMPONENT.id, projectId: PROJECT.id } });
+      expect(request.mock.calls.at(-1)?.[0]).toBe(`component/${COMPONENT.id}`);
+      expect(writes(request)).toHaveLength(1);
+    },
+  );
+  it("retains the id when unusual acknowledgement readback is denied", async () => {
+    const { request } = fixture(({ path, method }) =>
+      method === "POST"
+        ? response({ id: COMPONENT.id }, 202)
+        : path.startsWith("component/")
+          ? { ok: false, reason: "permission-denied" }
+          : undefined,
+    );
+    expect(
+      await executeJiraComponentMutation(
+        "jira.create-component",
+        { projectIdOrKey: "SYN", name: "New" },
+        request,
+      ),
+    ).toMatchObject({ ok: false, receipt: { componentId: COMPONENT.id, projectId: PROJECT.id } });
+    expect(request.mock.calls.at(-1)?.[0]).toBe(`component/${COMPONENT.id}`);
+    expect(writes(request)).toHaveLength(1);
   });
 });

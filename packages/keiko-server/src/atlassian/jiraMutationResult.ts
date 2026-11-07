@@ -134,19 +134,16 @@ function validAgileReceipt(receipt: JiraMutationReceipt, operation: AgileOperati
 }
 function projectLink(value: unknown, key: string | undefined): boolean {
   if (typeof value !== "string" || value.length > 4096 || key === undefined) return false;
-  try {
-    const url = new URL(value);
-    return (
-      url.protocol === "https:" &&
-      url.username === "" &&
-      url.password === "" &&
-      url.search === "" &&
-      url.hash === "" &&
-      url.pathname.endsWith(`/projects/${encodeURIComponent(key)}/summary`)
-    );
-  } catch {
-    return false;
-  }
+  if (!URL.canParse(value)) return false;
+  const url = new URL(value);
+  return (
+    url.protocol === "https:" &&
+    url.username === "" &&
+    url.password === "" &&
+    url.search === "" &&
+    url.hash === "" &&
+    url.pathname.endsWith(`/projects/${encodeURIComponent(key)}/summary`)
+  );
 }
 function validProjectReceipt(receipt: JiraMutationReceipt): boolean {
   if (
@@ -346,15 +343,10 @@ export function jiraResultGuidance(
   outcome: JiraMutationResultState,
   reason: AtlassianConnectorWriteFailureReason | undefined,
   detail: JiraMutationFailureDetail | undefined,
-  receipt: JiraMutationReceipt = {},
 ): string | undefined {
   if (uncertainOutcome(outcome, reason)) return JIRA_UNCERTAIN_GUIDANCE;
-  // Refused before any write: a Keiko draft already made that issue (S19), or the issue holds this.
-  if (
-    outcome === "rejected" &&
-    reason === "conflict" &&
-    (receipt.issueKey !== undefined || receipt.projectKey !== undefined)
-  )
+  // An adapter independently observed the requested state before attempting any effect.
+  if (outcome === "rejected" && reason === "conflict" && detail?.unchanged === true)
     return JIRA_EXISTING_GUIDANCE;
   return outcome === "rejected" && jiraExplained(detail) ? JIRA_REJECTED_GUIDANCE : undefined;
 }
@@ -375,6 +367,7 @@ export function jiraFailureDetailData(
 ): Record<string, unknown> {
   if (detail === undefined) return {};
   return {
+    ...(detail.unchanged === true ? { unchanged: true } : {}),
     ...(detail.fieldId === undefined ? {} : { fieldId: detail.fieldId }),
     ...(detail.validation === undefined ? {} : { validation: detail.validation }),
     ...(detail.fieldErrors === undefined
@@ -386,12 +379,11 @@ export function jiraFailureDetailData(
 function toolResultGuidance(
   outcome: JiraMutationResultState,
   reason: AtlassianConnectorWriteFailureReason | undefined,
-  receipt: JiraMutationReceipt,
   replayed: boolean,
   detail: JiraMutationFailureDetail | undefined,
   violations: readonly JiraTemplateViolation[] | undefined,
 ): string | undefined {
-  const guidance = jiraResultGuidance(outcome, reason, detail, receipt);
+  const guidance = jiraResultGuidance(outcome, reason, detail);
   if (!replayed) return guidance ?? jiraTemplateViolationGuidance(violations ?? []);
   return outcome === "rejected" ? JIRA_ALREADY_REFUSED_GUIDANCE : guidance;
 }
@@ -404,7 +396,7 @@ export function jiraMutationToolResult(
   links?: JiraMutationLinkAccount,
   violations?: readonly JiraTemplateViolation[],
 ): ManagedMcpToolResult {
-  const guidance = toolResultGuidance(outcome, reason, receipt, replayed, detail, violations);
+  const guidance = toolResultGuidance(outcome, reason, replayed, detail, violations);
   return {
     data: {
       ...receipt,

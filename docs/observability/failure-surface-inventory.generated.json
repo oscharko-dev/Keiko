@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "4b9b02c8c33576b149ee266bd55ffc7ce3d81dd703307ecb5c156142df202e64"
+    "catalogDigest": "84e39253aa2774b3cc6d7eea70ccaae7e8a37c869568d4bd3fbc12dc786775e6"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -1388,7 +1388,8 @@
       "packages/keiko-server/src/editor/agentAuthorityRegistry.test.ts"
     ],
     "chat.tool-authority.operation.read-grant": [
-      "packages/keiko-server/src/atlassian/actionApprovals.test.ts"
+      "packages/keiko-server/src/atlassian/actionApprovals.test.ts",
+      "packages/keiko-server/src/editor/chatAuthorityActivity.test.ts"
     ],
     "chat.tool-authority.operation.read-grant-admission": [
       "packages/keiko-server/src/atlassian/jiraChatAuthority.test.ts",
@@ -1722,6 +1723,7 @@
       "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.test.ts"
     ],
     "coding-runtime.jira-pod.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/codingJiraPodBinding.test.ts",
       "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.test.ts"
     ],
     "coding-runtime.linked-files.resolved.emitted-line": [

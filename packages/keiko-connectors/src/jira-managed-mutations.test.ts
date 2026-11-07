@@ -21,7 +21,7 @@ const ALREADY_HELD = {
   ok: false,
   reason: "conflict",
   receipt: { issueKey: "SYN-1" },
-  detail: { messages: ["SYN-1 already holds this. Nothing was written."] },
+  detail: { unchanged: true, messages: ["SYN-1 already holds this. Nothing was written."] },
 };
 function fixture(attachmentSource?: JiraAttachmentSource): {
   controller: AbortController;
@@ -1620,6 +1620,7 @@ it("refuses a create a Keiko draft already made, naming the existing key (S19 of
     reason: "conflict",
     receipt: { issueKey: "SYN-4", issueId: "10004" },
     detail: {
+      unchanged: true,
       messages: [
         "SYN-4 already exists as this issue: a Keiko draft created it in this project with this type and summary. Nothing was created. Report SYN-4 as the result; do not create it again.",
       ],

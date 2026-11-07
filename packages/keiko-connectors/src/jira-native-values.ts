@@ -22,3 +22,8 @@ export function jiraNativeId(value: unknown): value is string {
     BigInt(value) <= 9223372036854775807n
   );
 }
+
+/** Names are sent exactly as reviewed; refuse input Jira would trim rather than guessing readback. */
+export function jiraNativeName(value: unknown, max: number): value is string {
+  return jiraNativeText(value, max) && value === value.trim();
+}

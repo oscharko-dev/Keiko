@@ -33,6 +33,7 @@ import { useJiraResultEvidence } from "./jira-result-evidence";
 import { JIRA_AGILE_TOOLS } from "./jira-agile-presentation";
 import { JIRA_PROJECT_METADATA_TOOLS } from "./jira-project-metadata-presentation";
 import { JIRA_COLLABORATION_TOOLS } from "./jira-collaboration-presentation";
+import { JIRA_SAVED_VIEW_TOOLS } from "./jira-saved-view-presentation";
 import {
   jiraToolOutcomeView,
   JIRA_OUTCOME_ITEMS_SHOWN,
@@ -256,7 +257,8 @@ function resultCardSemantics(exchange: ChatToolExchange): {
   return JIRA_PROJECT_TOOLS.has(exchange.call.name) ||
     JIRA_AGILE_TOOLS.has(exchange.call.name) ||
     JIRA_PROJECT_METADATA_TOOLS.has(exchange.call.name) ||
-    JIRA_COLLABORATION_TOOLS.has(exchange.call.name)
+    JIRA_COLLABORATION_TOOLS.has(exchange.call.name) ||
+    JIRA_SAVED_VIEW_TOOLS.has(exchange.call.name)
     ? { tag: "div", role: "group", label: jiraToolLabel(exchange) }
     : { tag: "section", role: undefined, label: jiraToolRegionLabel(exchange) };
 }

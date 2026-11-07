@@ -151,6 +151,7 @@ const DETAIL_KEYS = [
   "validation",
   "fieldErrors",
   "messages",
+  "unchanged",
   "violations",
   "replayed",
   // A created item whose further links did not all land (#4176): which are missing.

@@ -36,6 +36,9 @@ type JiraPermissionPolicy =
   | "issue-membership-and-readback"
   | "epic-update-and-readback"
   | "visible-components"
+  | "visible-dashboards"
+  | "visible-filter-permissions"
+  | "authenticated-user-preferences"
   | "visible-comments"
   | "visible-link-types"
   | "visible-issue-links"
@@ -99,6 +102,26 @@ const NATIVE: Readonly<
     ]
   >
 > = {
+  "jira.dashboards": ["GET", "read", "/dashboard", "visible-dashboards"],
+  "jira.dashboard": ["GET", "read", "/dashboard/{id}", "visible-dashboards"],
+  "jira.filter-share-scope": [
+    "GET",
+    "read",
+    "/filter/defaultShareScope",
+    "authenticated-user-preferences",
+  ],
+  "jira.filter-permissions": [
+    "GET",
+    "read",
+    "/filter/{id}/permission",
+    "visible-filter-permissions",
+  ],
+  "jira.filter-permission": [
+    "GET",
+    "read",
+    "/filter/{id}/permission/{permissionId}",
+    "visible-filter-permissions",
+  ],
   "jira.get-comment": ["GET", "read", "/issue/{issueIdOrKey}/comment/{id}", "visible-comments"],
   "jira.update-comment": [
     "PUT",

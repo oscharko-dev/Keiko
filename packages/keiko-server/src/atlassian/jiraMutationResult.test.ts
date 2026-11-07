@@ -454,12 +454,38 @@ describe("what the model is told to do next (#4176)", () => {
 // S19 of epic #4173: a create a Keiko draft already made is refused before any request. The model
 // must report the existing key, not "correct the fields" into a second issue.
 describe("a create refused because a draft already made the issue", () => {
+  it("uses explicit unchanged evidence for a version rather than guessing from resource keys", () => {
+    const result = jiraAttemptToolResult("rejected", {
+      ok: false,
+      reason: "conflict",
+      receipt: { versionId: "81" },
+      detail: {
+        unchanged: true,
+        messages: ["The version already holds these values. Nothing was written."],
+      },
+    });
+    expect(result.data).toMatchObject({
+      versionId: "81",
+      unchanged: true,
+      guidance: JIRA_EXISTING_GUIDANCE,
+    });
+    const conflict = jiraAttemptToolResult("rejected", {
+      ok: false,
+      reason: "conflict",
+      receipt: { issueKey: "SYN-1" },
+      detail: { messages: ["The requested change conflicts with the current state."] },
+    });
+    expect(conflict.data.guidance).toBe(JIRA_REJECTED_GUIDANCE);
+  });
   it("reports an unchanged project as the existing result without suggesting another write", () => {
     const result = jiraAttemptToolResult("rejected", {
       ok: false,
       reason: "conflict",
       receipt: { projectId: "10000", projectKey: "SYN" },
-      detail: { messages: ["The project already holds these values. Nothing was written."] },
+      detail: {
+        unchanged: true,
+        messages: ["The project already holds these values. Nothing was written."],
+      },
     });
     expect(result.data.guidance).toBe(JIRA_EXISTING_GUIDANCE);
     expect(result.data.guidance).not.toMatch(/issueKey|the issue|correct the fields/iu);
@@ -472,7 +498,7 @@ describe("a create refused because a draft already made the issue", () => {
       ok: false,
       reason: "conflict",
       receipt: { issueKey: "SYN-4", issueId: "10004" },
-      detail: { messages: [message] },
+      detail: { unchanged: true, messages: [message] },
     });
 
     expect(result).toEqual({
@@ -482,6 +508,7 @@ describe("a create refused because a draft already made the issue", () => {
         reason: "conflict",
         issueKey: "SYN-4",
         issueId: "10004",
+        unchanged: true,
         messages: [message],
         guidance: JIRA_EXISTING_GUIDANCE,
       },

@@ -10,7 +10,12 @@ import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
 import { actionTypeLabelKey } from "./widgets/connectors/connector-labels";
 import { JIRA_PROJECT_METADATA_TOOLS } from "./jira-project-metadata-presentation";
 import { JIRA_COLLABORATION_TOOLS } from "./jira-collaboration-presentation";
-const LOCALLY_PAGED_TOOLS = new Set([...JIRA_PROJECT_METADATA_TOOLS, ...JIRA_COLLABORATION_TOOLS]);
+import { JIRA_SAVED_VIEW_TOOLS } from "./jira-saved-view-presentation";
+const LOCALLY_PAGED_TOOLS = new Set([
+  ...JIRA_PROJECT_METADATA_TOOLS,
+  ...JIRA_COLLABORATION_TOOLS,
+  ...JIRA_SAVED_VIEW_TOOLS,
+]);
 
 const OUTCOME_KEYS: Readonly<Record<JiraMutationResultState, WidgetMessageKey>> = {
   "not-dispatched": "chat.jira.write.notDispatched",
@@ -148,25 +153,43 @@ function isMutation(exchange: ChatToolExchange): boolean {
     (name) => name.replace(/[.-]/gu, "_") === exchange.call.name,
   );
 }
+/** Only an explicit, rejected no-change receipt can soften a conflict; journal state wins. */
+export function jiraMutationUnchanged(exchange: ChatToolExchange): boolean {
+  const data = plainRecord(exchange.result?.data);
+  return (
+    isMutation(exchange) &&
+    mutationOutcome(exchange) === "rejected" &&
+    data?.outcome === "rejected" &&
+    data.reason === "conflict" &&
+    data.unchanged === true
+  );
+}
+function managedMutationState(
+  exchange: ChatToolExchange,
+  turnState: ChatTurnState | undefined,
+): WidgetMessageKey {
+  const outcome = mutationOutcome(exchange);
+  if (outcome !== undefined)
+    return jiraMutationUnchanged(exchange) ? "chat.jira.write.unchanged" : OUTCOME_KEYS[outcome];
+  return exchange.result === undefined && turnState === "pending"
+    ? OUTCOME_KEYS.pending
+    : OUTCOME_KEYS.unknown;
+}
 export function jiraToolState(
   exchange: ChatToolExchange,
   turnState: ChatTurnState | undefined,
 ): WidgetMessageKey {
   if (exchange.call.name.startsWith("mcp_") && exchange.mutationOutcome !== undefined)
     return MCP_OUTCOME_KEYS[exchange.mutationOutcome];
-  if (isMutation(exchange)) {
-    const outcome = mutationOutcome(exchange);
-    if (outcome !== undefined) return OUTCOME_KEYS[outcome];
-    return exchange.result === undefined && turnState === "pending"
-      ? OUTCOME_KEYS.pending
-      : OUTCOME_KEYS.unknown;
-  }
+  if (isMutation(exchange)) return managedMutationState(exchange, turnState);
   if (exchange.result === undefined)
     return turnState === "pending" ? "chat.jira.running" : "chat.jira.resultUnavailable";
   return exchange.result.status === "completed" ? "chat.jira.complete" : "chat.jira.unavailable";
 }
 export function jiraToolOutcomeHelp(state: WidgetMessageKey): WidgetMessageKey | undefined {
   switch (state) {
+    case "chat.jira.write.unchanged":
+      return "chat.jira.write.unchangedHelp";
     case "chat.mcp.write.unconfirmed":
       return "chat.mcp.write.unconfirmedHelp";
     case "chat.mcp.write.unknown":

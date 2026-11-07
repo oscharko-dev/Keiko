@@ -2,6 +2,7 @@ import {
   isJiraIssueLinkWrite,
   JIRA_ISSUE_LINKS_MAX,
   JIRA_ISSUE_LINKS_PER_REQUEST_MAX,
+  JiraAcknowledgedMutationError,
   type AtlassianHttpBodyPort,
   type AtlassianHttpBodyRequest,
   type AtlassianHttpRequest,
@@ -117,7 +118,9 @@ async function attempt(
     return result;
   } catch (error) {
     emitServerDiagnostic(undefined, mutationDiagnostic(input.intent, error));
-    return FAILED;
+    return error instanceof JiraAcknowledgedMutationError
+      ? validJiraMutationAttempt({ ...FAILED, receipt: error.receipt }, input.intent.operation)
+      : FAILED;
   }
 }
 /**

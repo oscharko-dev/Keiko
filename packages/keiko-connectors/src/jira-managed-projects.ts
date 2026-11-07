@@ -13,10 +13,12 @@ import { jiraReadFailure } from "./jira-managed-metadata.js";
 import { dispatchFailure, type JiraHttpFailure } from "./jira-mutation-failure.js";
 import {
   jiraNativeId as projectId,
+  jiraNativeName,
   jiraNativeText as boundedText,
   JIRA_PROJECT_LEAD_MAX_CHARS,
   JIRA_PROJECT_URL_MAX_CHARS,
 } from "./jira-native-values.js";
+import { jiraReadbackValueMatches } from "./jira-readback-values.js";
 
 type ProjectRead =
   "jira.project" | "jira.validate-project-key" | "jira.project-permissions" | "jira.project-type";
@@ -54,28 +56,25 @@ const INVALID: Failure = {
   detail: {
     validation: "invalid-field",
     messages: [
-      "Use only the typed project arguments. Create requires key, name, lead and projectTypeKey; update requires at least one supported metadata change.",
+      "Use only the typed project arguments. Create requires key, name, lead and projectTypeKey; update requires at least one supported metadata change. Names must contain 1–255 characters without surrounding whitespace.",
     ],
   },
 };
 function projectUrl(value: unknown): value is string {
   if (!boundedText(value, JIRA_PROJECT_URL_MAX_CHARS, true)) return false;
   if (value === "") return true;
-  try {
-    const url = new URL(value);
-    return (
-      (url.protocol === "https:" || url.protocol === "http:") &&
-      url.username === "" &&
-      url.password === ""
-    );
-  } catch {
-    return false;
-  }
+  if (!URL.canParse(value)) return false;
+  const url = new URL(value);
+  return (
+    (url.protocol === "https:" || url.protocol === "http:") &&
+    url.username === "" &&
+    url.password === ""
+  );
 }
 function validField(key: string, value: unknown): boolean {
   switch (key) {
     case "name":
-      return boundedText(value, 255);
+      return jiraNativeName(value, 255);
     case "lead":
       return boundedText(value, JIRA_PROJECT_LEAD_MAX_CHARS);
     case "description":
@@ -313,7 +312,7 @@ function createInput(args: CatalogJsonObject): args is ProjectCreateArguments {
   const { key, name, lead, projectTypeKey } = args;
   return (
     isSafeAtlassianIdentifier(key) &&
-    boundedText(name, 255) &&
+    jiraNativeName(name, 255) &&
     boundedText(lead, 128) &&
     isSafeAtlassianIdentifier(projectTypeKey) &&
     Object.entries(args).every(
@@ -345,15 +344,14 @@ function holds(project: ProjectView, fields: Readonly<Record<string, unknown>>):
         : field === "name"
           ? project.projectName
           : Reflect.get(project, field);
-    return nativeFieldMatches(field, actual, expected);
+    const kind =
+      field === "lead"
+        ? "user-name"
+        : field === "description" || field === "url"
+          ? "clearable-text"
+          : "exact";
+    return jiraReadbackValueMatches(kind, actual, expected);
   });
-}
-function nativeFieldMatches(field: string, actual: unknown, expected: unknown): boolean {
-  if (field === "lead" && typeof actual === "string" && typeof expected === "string")
-    return actual.toLowerCase() === expected.toLowerCase();
-  if ((field === "description" || field === "url") && expected === "" && actual === undefined)
-    return true;
-  return actual === expected;
 }
 async function confirmProject(
   request: JiraMutationRequest,
@@ -449,7 +447,10 @@ async function updateProject(
       ok: false,
       reason: "conflict",
       receipt: receipt(prior.project),
-      detail: { messages: ["The project already holds these values. Nothing was written."] },
+      detail: {
+        unchanged: true,
+        messages: ["The project already holds these values. Nothing was written."],
+      },
     };
   if (check) return { ok: true, receipt: {} };
   const result = await request(

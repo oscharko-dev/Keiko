@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
+import { JIRA_MUTATION_OPERATIONS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { MIGRATIONS, runMigrations, SCHEMA_VERSION } from "./schema.js";
 
 const databases: DatabaseSync[] = [];
@@ -234,4 +235,24 @@ it("V64 admits only native comment updates while retaining V63 metadata journals
       insertMutation(db, invalid, invalid);
     }).toThrow(/CHECK/u);
   }
+});
+
+it("keeps the migrated native Jira vocabulary exactly aligned with every current write operation", () => {
+  const db = priorDatabase(63);
+  runMigrations(db);
+  const expected = JIRA_MUTATION_OPERATIONS.filter((operation) => operation !== "jira.draft");
+  for (const operation of expected) insertMutation(db, operation, operation);
+  const sql = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'chat_tool_mutations'")
+    .get()?.sql;
+  if (typeof sql !== "string") throw new TypeError("Missing migrated journal definition");
+  const admitted = [
+    ...new Set(
+      [...sql.matchAll(/'(?<operation>jira\.[a-z-]+)'/gu)].map((match) => match.groups?.operation),
+    ),
+  ];
+  expect(admitted.sort()).toEqual([...expected].sort());
+  expect(() => {
+    insertMutation(db, "jira.draft", "composite");
+  }).toThrow(/CHECK/u);
 });

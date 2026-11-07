@@ -123,15 +123,15 @@ to Chat or Coding, grant authority, or bypass those owners.
 
 ## Current constrained implementation snapshot
 
-The current registry supplies **55 native identities: 35 reads and 20 writes**. Each is mapped to
+The current registry supplies **60 native identities: 40 reads and 20 writes**. Each is mapped to
 its exact published method/path identity and remains `partial`: the closed typed operation exposes
 only the documented supported fields and behavior, rather than the entire upstream API contract.
-The other **384 operations remain `not-implemented`**. No row is marked fully implemented,
+The other **379 operations remain `not-implemented`**. No row is marked fully implemented,
 executable, owner-deferred or excluded by this reconciliation. All 439 source/version IDs, cluster
 assignments, dependencies and qualification fields are retained.
 
 This snapshot includes ordinary project setup; board/backlog/Epic and sprint operations; bounded
-filter reads; versions/components; existing issue workflows; and the C6 comment-update/link/worklog
+filter reads; versions/components; existing issue workflows; the C7 dashboard/filter-sharing reads; and the C6 comment-update/link/worklog
 read increment. The three existing report/draft composites remain compositions, not extra native
 API identities. Remaining filter creation, ranking, worklog writes, destructive operations,
 administration and other inventory gaps stay open. A registered declaration is not evidence that

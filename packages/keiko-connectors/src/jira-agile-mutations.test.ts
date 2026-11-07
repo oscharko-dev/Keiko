@@ -248,13 +248,41 @@ describe("Agile create prerequisites and confirmed identities", () => {
   ] as const)(
     "retains a valid identity from an unexpected create status for %s",
     async (operation, args, prerequisite, created, receipt) => {
-      const f = fixture([response(200, prerequisite), response(202, created)]);
+      const f = fixture([response(200, prerequisite), response(202, created), response(403, {})]);
       expect(await f.run(operation, args)).toEqual({
         ok: false,
-        reason: "malformed-payload",
+        reason: "permission-denied",
         receipt,
       });
+      expect(f.http.mock.calls.at(-1)?.[0].method).toBe("GET");
       expect(f.http.mock.calls.filter(([request]) => request.method === "POST")).toHaveLength(1);
+    },
+  );
+  it.each([
+    [
+      "jira.board-create",
+      { name: "Team", type: "scrum", filterId: "42" },
+      { id: "42" },
+      { ...BOARD, filter: { id: "42" }, columnConfig: { columns: [] } },
+      { boardId: "7" },
+    ],
+    [
+      "jira.sprint-create",
+      { name: "Sprint one", originBoardId: "7" },
+      BOARD,
+      SPRINT,
+      { sprintId: "9" },
+    ],
+  ] as const)(
+    "independently confirms a readable 200 creation for %s",
+    async (operation, args, prerequisite, observed, receipt) => {
+      const f = fixture([
+        response(200, prerequisite),
+        response(200, { id: observed.id }),
+        response(200, observed),
+      ]);
+      expect(await f.run(operation, args)).toEqual({ ok: true, receipt });
+      expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET", "POST", "GET"]);
     },
   );
   it("keeps a sprint without independent originBoardId evidence unconfirmed", async () => {

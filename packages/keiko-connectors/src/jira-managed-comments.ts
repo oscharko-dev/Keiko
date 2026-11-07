@@ -115,7 +115,15 @@ export async function executeJiraCommentMutation(
     return { ok: false, reason: "field-validation", detail: { validation: "invalid-field" } };
   const prior = await readComment(request, input);
   if (!prior.ok) return prior;
-  if (prior.comment.body === args.body) return { ...CONFLICT, receipt: input };
+  if (prior.comment.body === args.body)
+    return {
+      ...CONFLICT,
+      receipt: input,
+      detail: {
+        unchanged: true,
+        messages: ["The comment already holds the requested text. Nothing was written."],
+      },
+    };
   if (check) return { ok: true, receipt: {} };
   const visibility = prior.comment.visibility;
   const response = await request(path(input), "PUT", {

@@ -186,6 +186,25 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.fact.transition": "Statusübergang",
   "chat.jira.fact.comment": "Kommentar",
   "chat.jira.fact.commentId": "Kommentar-ID",
+  "chat.jira.fact.dashboardId": "Dashboard-ID",
+  "chat.jira.fact.sharePermissionId": "Freigabeeintrag-ID",
+  "chat.jira.fact.shareType": "Freigabetyp",
+  "chat.jira.fact.groupName": "Gruppe",
+  "chat.jira.fact.roleId": "Rollen-ID",
+  "chat.jira.fact.roleName": "Rolle",
+  "chat.jira.fact.userName": "Benutzername",
+  "chat.jira.fact.userDisplayName": "Anzeigename",
+  "chat.jira.savedView.scopeGlobal": "Standardfreigabe: global",
+  "chat.jira.savedView.scopeAuthenticated": "Standardfreigabe: angemeldete Benutzer",
+  "chat.jira.savedView.scopePrivate": "Standardfreigabe: privat",
+  "chat.jira.savedView.defaultScopeHelp":
+    "Dies ist die Voreinstellung für künftige Filter, nicht der Freigabestatus eines vorhandenen Filters.",
+  "chat.jira.savedView.permissionHelp":
+    "Dieser konfigurierte Freigabeeintrag weist deine wirksamen Berechtigungen nicht nach.",
+  "chat.jira.savedView.editGranted": "Eintrag erlaubt Bearbeiten",
+  "chat.jira.savedView.editNotGranted": "Eintrag erlaubt kein Bearbeiten",
+  "chat.jira.savedView.viewGranted": "Eintrag erlaubt Anzeigen",
+  "chat.jira.savedView.viewNotGranted": "Eintrag erlaubt kein Anzeigen",
   "chat.jira.fact.worklogId": "Arbeitsprotokoll-ID",
   "chat.jira.fact.linkId": "Verknüpfungs-ID",
   "chat.jira.fact.linkTypeId": "Verknüpfungstyp-ID",
@@ -272,6 +291,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Prüfe, ob der angeforderte Jira-Vorgang oder das Projekt existiert und für dieses Konto sichtbar ist.",
   "chat.jira.outcome.failure.rateLimited":
     "Jira hat Anfragen begrenzt. Warte vor einer weiteren Anfrage.",
+  "chat.jira.outcome.failure.sourceChanged":
+    "Die Quellanforderungen haben sich geändert. Lies sie erneut und bereite den Entwurf neu vor. In Jira wurde nichts geändert.",
   "chat.jira.outcome.failure.conflict":
     "Der Jira-Stand hat sich geändert. Lies den aktuellen Vorgang, bevor du eine weitere Änderung anforderst.",
   "chat.jira.outcome.failure.transition":
@@ -341,6 +362,9 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.processing.changeQueries": "Anforderungsänderungen suchen",
   "chat.jira.write.notDispatched": "Nicht an Jira gesendet",
   "chat.jira.write.rejected": "Jira-Aktion abgelehnt",
+  "chat.jira.write.unchanged": "Bereits aktuell",
+  "chat.jira.write.unchangedHelp":
+    "Die gewünschten Werte stimmen bereits mit Jira überein. Es wurde nichts geändert.",
   "chat.jira.write.succeeded": "Jira-Änderung bestätigt",
   "chat.jira.write.unconfirmed": "Jira hat die Änderung angenommen; Bestätigung unvollständig",
   "chat.jira.write.unknown": "Ausgang der Jira-Aktion unbekannt",
@@ -3292,6 +3316,11 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.action.jira.components": "Jira-Projektkomponenten lesen",
   "atlassianConnectors.action.jira.component": "Jira-Komponente lesen",
   "atlassianConnectors.action.jira.get-comment": "Jira-Kommentar lesen",
+  "atlassianConnectors.action.jira.dashboards": "Jira-Dashboards lesen",
+  "atlassianConnectors.action.jira.dashboard": "Jira-Dashboard lesen",
+  "atlassianConnectors.action.jira.filter-share-scope": "Jira-Filter-Standardfreigabe lesen",
+  "atlassianConnectors.action.jira.filter-permissions": "Jira-Filter-Freigabeeinträge lesen",
+  "atlassianConnectors.action.jira.filter-permission": "Jira-Filter-Freigabeeintrag lesen",
   "atlassianConnectors.action.jira.link-types": "Jira-Verknüpfungstypen lesen",
   "atlassianConnectors.action.jira.issue-link": "Jira-Vorgangsverknüpfung lesen",
   "atlassianConnectors.action.jira.worklogs": "Jira-Arbeitsprotokolle lesen",

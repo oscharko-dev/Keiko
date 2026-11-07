@@ -719,14 +719,26 @@ creation or default-sharing change is inferred from board creation.
 
 Planning changes to issue fields reuse the existing edit-template gate before approval and
 again before effects. Native partial Sprint updates preserve omitted fields, and state transitions
-are checked against the current Sprint. Every effect uses independent readback; unavailable
-confirmation remains uncertain. Structured errors from newly added bulk/Agile operations do not
-establish a no-effect outcome and never authorize replay.
+are checked against the current Sprint. Success requires independent readback; unavailable
+confirmation remains uncertain. Reviewed single-resource Board/Sprint/Epic writes can establish
+no effect from Jira's structured rejection. Bulk membership errors remain uncertain even when
+structured and never authorize replay. Post-effect readback has its own bounded, read-only phase;
+bounded concurrent member reads preserve the original authority and cancellation. Unexpected
+confirmation errors reach the existing diagnostic owner with their cause and retained receipt.
 
-Forward UI-store migration V62 extends the mutation journal's closed native operation constraint
-for project and Software writes. It preserves the existing columns, rows, indexes and foreign keys;
+Forward UI-store migrations V62–V64 extend the mutation journal's closed native operation constraint
+for project, Software, component/version and comment writes. They preserve the existing columns, rows, indexes and foreign keys;
 unknown operations and the non-dispatched draft composite remain refused. Reverting to older
 readers requires a compatible forward repair or the pre-update database backup.
+
+Native component/version confirmations reuse field-kind comparisons for clearable text and user
+names. Names with surrounding whitespace are refused before effects. A readable identity from an
+unexpected successful create response is retained and independently checked. An adapter that
+observes the requested state before effects explicitly marks `detail.unchanged=true`; only that
+closed evidence selects unchanged-result guidance, never the presence of a resource identifier.
+Comment updates preserve the current role/group visibility and independently confirm its body,
+identity and visibility. Saved-view reads expose observed dashboard and filter-sharing facts without
+claiming effective actor permission, changing sharing defaults or following upstream URLs.
 
 **Attachments (#4176, 2026-10-31).** `jira.attach` maps to `update-issue-fields` (medium): it
 changes an existing issue exactly as an edit does and is governed, approved, journaled and
@@ -1757,10 +1769,15 @@ are covered through the real routes and the existing log reader. Managed Jira to
 `mcp.managed.lifecycle` producer; HTTP/provider failures are refused through that owner. No response
 body, URL, credential reference or token is copied into these registered projections.
 
-Every connector action attempt — allowed, review-required, denied, and failed — produces exactly
-one content-free audit record: action type, connector id, provider, target key/id (an issue key or
-page id — an identifier, not a body), disposition, reason code, correlation id, duration, and
-result status. A sync run additionally records the D5 counts, the outcome enum, and the run's
+Connector attempts retain the existing local activity ring for ordinary UI target identities.
+The global Activity Log instead records closed action classes, provider, disposition, reason,
+correlation, duration and outcome; it carries no connector or target key, remote URL or content.
+Managed Jira reads and writes use the bounded `jira-read` / `jira-write` classes. The exact original
+policy action type remains joinable through `actionTypeDigest`; Coding records the corresponding
+`toolClass` and `toolDigest` of the exact tool name. These SHA-256 digests cover server-owned
+operation names, not arguments. The real policy and execution types remain unchanged. This keeps
+the existing closed-enum bound as the operation inventory grows; it introduces no arbitrary log
+labels or wider authority. A sync run additionally records the D5 counts, the outcome enum, and the run's
 fingerprint-set digest. Rejected content in every audit and evidence record: issue/page bodies,
 comment text, ADF/storage-format payloads, field values, raw JQL, tokens, and any token-bearing
 URL — the same rejected-content list ADR-0124 D7 already fixes for coding evidence, applied here

@@ -349,3 +349,4 @@ export type {
   JiraReportDeviation,
   JiraReportIssueFacts,
 } from "./jira-report-types.js";
+export { JiraAcknowledgedMutationError } from "./jira-mutation-failure.js";

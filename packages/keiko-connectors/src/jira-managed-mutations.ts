@@ -416,6 +416,7 @@ function existingTwinRefusal(
     reason: "conflict",
     receipt,
     detail: {
+      unchanged: true,
       messages: [
         `${issueKey} already exists as this issue: a Keiko draft created it in this project with this type and summary. Nothing was created. Report ${issueKey} as the result; do not create it again.`,
       ],

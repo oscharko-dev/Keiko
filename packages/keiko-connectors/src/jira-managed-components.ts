@@ -13,7 +13,13 @@ import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { jiraReadFailure, localJiraPage, projectJiraCollection } from "./jira-managed-metadata.js";
 import { boundJiraReadResult } from "./jira-managed-issue-reads.js";
 import { dispatchFailure } from "./jira-mutation-failure.js";
-import { jiraNativeId as id, jiraNativeText as text } from "./jira-native-values.js";
+import { jiraCreationAcknowledgement } from "./jira-creation-acknowledgement.js";
+import { jiraReadbackValueMatches } from "./jira-readback-values.js";
+import {
+  jiraNativeId as id,
+  jiraNativeText as text,
+  jiraNativeName,
+} from "./jira-native-values.js";
 
 type ComponentRead = "jira.components" | "jira.component";
 type ComponentWrite = "jira.create-component" | "jira.update-component";
@@ -47,11 +53,27 @@ const MALFORMED: Failure = { ok: false, reason: "malformed-payload" };
 const INVALID: Failure = {
   ok: false,
   reason: "field-validation",
-  detail: { validation: "invalid-field" },
+  detail: {
+    validation: "invalid-field",
+    messages: [
+      "Use a name without surrounding whitespace (1 to 255 characters), a description of at most 32768 characters, and supported lead or assignee fields. Nothing was changed.",
+    ],
+  },
+};
+const BODY_LIMIT: Failure = {
+  ok: false,
+  reason: "field-validation",
+  detail: {
+    validation: "invalid-field",
+    messages: [
+      "The serialized component request must fit within 32768 UTF-8 bytes. Shorten the description or other text fields. Nothing was changed.",
+    ],
+  },
 };
 function validField(key: string, value: unknown): boolean {
   switch (key) {
     case "name":
+      return jiraNativeName(value, 255);
     case "leadUserName":
       return text(value, 255);
     case "description":
@@ -64,9 +86,10 @@ function validField(key: string, value: unknown): boolean {
 }
 function leadFields(raw: Record<string, unknown>): CatalogJsonObject | undefined {
   const lead = asRecord(raw.lead)?.name;
-  const username = raw.leadUserName === undefined ? lead : raw.leadUserName;
+  const username = raw.leadUserName ?? lead;
   if (username === undefined) return {};
-  return !text(username, 255) || (lead !== undefined && lead !== username)
+  return !text(username, 255) ||
+    (lead !== undefined && !jiraReadbackValueMatches("user-name", lead, username))
     ? undefined
     : { leadUserName: username };
 }
@@ -79,7 +102,7 @@ function optionalFields(raw: Record<string, unknown>): CatalogJsonObject | undef
   const result: Record<string, string | boolean> = {};
   for (const key of ["description", "assigneeType", "archived", "deleted"]) {
     const value = raw[key];
-    if (value === undefined) continue;
+    if (value === undefined || (key === "description" && value === null)) continue;
     if (!validOptionalField(key, value)) return undefined;
     result[key] = value;
   }
@@ -214,26 +237,32 @@ interface MutationInput {
 function mutationInput(
   operation: ComponentWrite,
   args: CatalogJsonObject,
-): MutationInput | undefined {
+): MutationInput | Failure {
   const create = operation === "jira.create-component";
   const key = create ? "projectIdOrKey" : "componentId";
   const target = args[key];
   if (typeof target !== "string" || !(create ? isSafeAtlassianIdentifier(target) : id(target)))
-    return undefined;
+    return INVALID;
   const entries = Object.entries(args).filter(([name]) => name !== key);
   if (
     entries.length === 0 ||
     (create && !validField("name", args.name)) ||
     !entries.every(([name, value]) => validField(name, value))
   )
-    return undefined;
+    return INVALID;
   const fields = Object.fromEntries(entries);
   return new TextEncoder().encode(JSON.stringify(fields)).byteLength > COMPONENT_BODY_MAX_BYTES
-    ? undefined
+    ? BODY_LIMIT
     : { target, fields };
 }
 function holds(component: ComponentView, fields: Readonly<Record<string, unknown>>): boolean {
-  return Object.entries(fields).every(([key, value]) => component[key] === value);
+  return Object.entries(fields).every(([key, value]) =>
+    jiraReadbackValueMatches(
+      key === "description" ? "clearable-text" : key === "leadUserName" ? "user-name" : "exact",
+      component[key],
+      value,
+    ),
+  );
 }
 async function confirm(
   request: JiraMutationRequest,
@@ -257,13 +286,16 @@ async function createComponent(
   if (!current.ok) return current;
   const body = { ...input.fields, project: current.project.projectKey };
   if (new TextEncoder().encode(JSON.stringify(body)).byteLength > COMPONENT_BODY_MAX_BYTES)
-    return { ok: false, reason: "bounds-exceeded" };
+    return BODY_LIMIT;
   if (check) return { ok: true, receipt: {} };
   const result = await request("component", "POST", body);
-  if (!result.ok) return { ...dispatchFailure(result), receipt: current.project };
-  if (result.status !== 201 || !id(result.body?.id))
-    return { ...MALFORMED, receipt: current.project };
-  return confirm(request, { ...current.project, componentId: result.body.id }, input.fields);
+  const acknowledged = jiraCreationAcknowledgement(
+    result,
+    (value) => (id(value) ? value : undefined),
+    current.project,
+  );
+  if (!acknowledged.ok) return acknowledged;
+  return confirm(request, { ...current.project, componentId: acknowledged.id }, input.fields);
 }
 async function updateComponent(
   input: MutationInput,
@@ -276,7 +308,15 @@ async function updateComponent(
   if (!current.ok) return current;
   const identity = { ...current.project, componentId: prior.component.id };
   if (holds(prior.component, input.fields))
-    return { ok: false, reason: "conflict", receipt: identity };
+    return {
+      ok: false,
+      reason: "conflict",
+      receipt: identity,
+      detail: {
+        unchanged: true,
+        messages: ["The component already holds these values. Nothing was written."],
+      },
+    };
   if (check) return { ok: true, receipt: {} };
   const result = await request(`component/${prior.component.id}`, "PUT", input.fields);
   const failure = !result.ok
@@ -294,7 +334,7 @@ export function executeJiraComponentMutation(
   check = false,
 ): Promise<ComponentAttempt> {
   const input = mutationInput(operation, args);
-  if (input === undefined) return Promise.resolve(INVALID);
+  if ("ok" in input) return Promise.resolve(input);
   return operation === "jira.create-component"
     ? createComponent(input, request, check)
     : updateComponent(input, request, check);

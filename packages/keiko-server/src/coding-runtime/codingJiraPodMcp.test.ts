@@ -416,7 +416,8 @@ describe("serving the bound Pod through the relay", () => {
         correlationId: "run-jira-1",
         action: "call",
         outcome: "completed",
-        tool: "jira.issue",
+        toolClass: "jira-read",
+        toolDigest: createHash("sha256").update("jira.issue").digest("hex"),
         risk: "read",
       }),
     ]);
@@ -458,7 +459,12 @@ describe("serving the bound Pod through the relay", () => {
     expect(h.state.comment).toBe("Implemented in the draft pull request");
     expect(h.recover).not.toHaveBeenCalled();
     expect(proofLines(h)).toEqual([
-      expect.objectContaining({ tool: "jira.comment", risk: "write", outcome: "completed" }),
+      expect.objectContaining({
+        toolClass: "jira-write",
+        toolDigest: createHash("sha256").update("jira.comment").digest("hex"),
+        risk: "write",
+        outcome: "completed",
+      }),
     ]);
   });
 
@@ -480,7 +486,8 @@ describe("serving the bound Pod through the relay", () => {
     expect(writes).toEqual(["issue/SYN-1", "issueLink", "issueLink"]);
     expect(proofLines(h)).toEqual([
       expect.objectContaining({
-        tool: "jira.edit",
+        toolClass: "jira-write",
+        toolDigest: createHash("sha256").update("jira.edit").digest("hex"),
         outcome: "completed",
         linkRequestedCount: 3,
         linkCreatedCount: 3,
@@ -601,7 +608,7 @@ describe("the customer's issue templates bind a Coding run's Jira writes (#4177)
       structuredContent: { outcome: "succeeded", issueKey: "SYN-1" },
     });
     expect(writes(h)).toBe(1);
-    expect(h.state.fields.description).toBe("h2. Goal\nKept content.");
+    expect(h.state.fields.description).toBe("h2. Goal\n\nKept content.");
     expect(h.recover).not.toHaveBeenCalled();
     expect(
       h.records.filter((event) => event.extra?.action === "serialize-description"),

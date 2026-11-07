@@ -7,6 +7,7 @@ import type {
   CatalogJsonValue,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
+import { jiraReadbackValueMatches } from "./jira-readback-values.js";
 import { asRecord } from "./atlassian-sync-classify.js";
 import { dispatchFailure } from "./jira-mutation-failure.js";
 import { agileDate, agileId, agileIssueKey } from "./jira-agile-projection.js";
@@ -45,17 +46,12 @@ export async function readAgileEntity(
     return AGILE_MALFORMED;
   return { ok: true, item: { ...item, id: item.id } };
 }
-function expectedGoal(expected: CatalogJsonValue, observed: CatalogJsonValue | undefined): boolean {
-  return expected === ""
-    ? observed === undefined || observed === null || observed === ""
-    : expected === observed;
-}
 function expectedField(
   key: string,
   expected: CatalogJsonValue,
   observed: CatalogJsonValue | undefined,
 ): boolean {
-  if (key === "goal") return expectedGoal(expected, observed);
+  if (key === "goal") return jiraReadbackValueMatches("clearable-text", observed, expected);
   if (key === "originBoardId" || key === "filterId") return agileId(expected) === observed;
   if (key === "color") return asRecord(expected)?.key === observed;
   if (key === "startDate" || key === "endDate")

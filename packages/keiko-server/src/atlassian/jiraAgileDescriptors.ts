@@ -367,6 +367,7 @@ function writeResult(definition: WriteDefinition): CatalogJsonObject {
       outcome: { type: "string", enum: JIRA_MUTATION_RESULT_STATES },
       reason: { type: "string", enum: ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS },
       replayed: { type: "boolean" },
+      unchanged: { type: "boolean" },
       guidance: text(512),
       fieldId: text(64),
       validation: { type: "string", enum: JIRA_FIELD_VALIDATION_FAILURES },

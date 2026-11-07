@@ -150,7 +150,11 @@ describe("bound native comment reads and updates", () => {
   });
   it("does not treat a wrong mutation acknowledgement as success", async () => {
     const request = fixture({ write: response({ ...COMMENT, id: "99" }) });
-    expect(await update(request)).toEqual({ ok: false, reason: "conflict", receipt: TARGET });
+    expect(await update(request)).toEqual({
+      ok: false,
+      reason: "conflict",
+      receipt: TARGET,
+    });
   });
   it("validates a preflight without issuing a mutation or fabricating a receipt", async () => {
     const request = fixture();
@@ -159,7 +163,15 @@ describe("bound native comment reads and updates", () => {
   });
   it("reports an unchanged body without performing a PUT", async () => {
     const request = fixture({ before: { ...COMMENT, body: "**Native** comment body" } });
-    expect(await update(request)).toEqual({ ok: false, reason: "conflict", receipt: TARGET });
+    expect(await update(request)).toEqual({
+      ok: false,
+      reason: "conflict",
+      receipt: TARGET,
+      detail: {
+        unchanged: true,
+        messages: ["The comment already holds the requested text. Nothing was written."],
+      },
+    });
     expect(request).toHaveBeenCalledTimes(1);
   });
   it.each(["", " ", "x".repeat(32769), "bad\u0000body"])(

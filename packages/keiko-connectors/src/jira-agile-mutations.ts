@@ -23,6 +23,7 @@ import type {
   JiraTemplateGateResult,
 } from "./jira-managed-template-gate.js";
 import { gateJiraAgileIssueChange } from "./jira-agile-templates.js";
+import { jiraCreationAcknowledgement } from "./jira-creation-acknowledgement.js";
 import { dispatchFailure } from "./jira-mutation-failure.js";
 import {
   AGILE_MALFORMED,
@@ -45,12 +46,12 @@ async function create(
   if (!prerequisite.ok) return prerequisite;
   if (checkOnly) return { ok: true, receipt: {} };
   const response = await requests.agile(root, "POST", input.body);
-  if (!response.ok) return dispatchFailure(response);
-  const id = agileId(response.body?.id);
-  if (id === undefined) return AGILE_MALFORMED;
-  const receipt: JiraMutationReceipt = board ? { boardId: id } : { sprintId: id };
-  if (response.status !== 201) return { ...AGILE_MALFORMED, receipt };
-  return confirmCreated(requests, input, id, receipt);
+  const acknowledged = jiraCreationAcknowledgement(response, agileId);
+  if (!acknowledged.ok) return acknowledged;
+  const receipt: JiraMutationReceipt = board
+    ? { boardId: acknowledged.id }
+    : { sprintId: acknowledged.id };
+  return confirmCreated(requests, input, acknowledged.id, receipt);
 }
 function confirmCreated(
   requests: JiraAgileRequests,

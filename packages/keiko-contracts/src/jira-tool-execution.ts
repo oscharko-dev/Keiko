@@ -186,6 +186,8 @@ export interface JiraMutationFieldError {
  * Jira's own bounded field errors and messages. Returned to the model only, never logged (#4176).
  */
 export interface JiraMutationFailureDetail {
+  /** The adapter independently observed the requested state before any effect. */
+  readonly unchanged?: true;
   readonly fieldId?: string;
   readonly validation?: JiraFieldValidationFailure;
   readonly fieldErrors?: readonly JiraMutationFieldError[];
@@ -296,6 +298,7 @@ export function sanitizeJiraMutationFailureDetail(
   const fieldErrors = detailFieldErrors(Reflect.get(value, "fieldErrors"));
   const messages = detailMessages(Reflect.get(value, "messages"));
   const detail: JiraMutationFailureDetail = {
+    ...(Reflect.get(value, "unchanged") === true ? { unchanged: true } : {}),
     ...(detailFieldId(fieldId) ? { fieldId } : {}),
     ...(VALIDATION_FAILURES.has(validation)
       ? { validation: validation as JiraFieldValidationFailure }

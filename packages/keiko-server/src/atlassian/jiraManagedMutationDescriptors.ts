@@ -79,7 +79,7 @@ export const REQUIREMENT_PROBLEMS = {
 };
 export const REQUIREMENT_REFUSAL = {
   type: "string",
-  enum: ["no-knowledge-pod", "unavailable", "references", "untraced"],
+  enum: ["no-knowledge-pod", "unavailable", "references", "untraced", "source-changed"],
 };
 const NUMERIC_ID = { ...text(32), pattern: "^[0-9]{1,32}$" };
 const PROJECT_ID = { ...NUMERIC_ID, description: "Numeric id from the project read." };
@@ -306,6 +306,7 @@ const DRAFT_RESULT_SCHEMA = object(
           validation: { type: "string", enum: JIRA_FIELD_VALIDATION_FAILURES },
           fieldErrors: JIRA_FAILURE_FIELD_ERRORS_SCHEMA,
           messages: JIRA_FAILURE_MESSAGES_SCHEMA,
+          unchanged: { type: "boolean" },
           ...LINK_RESULT,
           violations: JIRA_VIOLATIONS_SCHEMA,
           replayed: { type: "boolean" },
@@ -344,6 +345,7 @@ const DRAFT_RESULT_SCHEMA = object(
   ["outcome"],
 );
 const RESULT_FIELDS = {
+  unchanged: { type: "boolean" },
   outcome: { type: "string", enum: JIRA_MUTATION_RESULT_STATES },
   reason: { type: "string", enum: ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS },
   replayed: { type: "boolean" },

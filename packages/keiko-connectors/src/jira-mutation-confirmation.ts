@@ -238,7 +238,7 @@ export function jiraAlreadyHeldRefusal(issueKey: string): Failure {
     ok: false,
     reason: "conflict",
     receipt: { issueKey },
-    detail: { messages: [`${issueKey} already holds this. Nothing was written.`] },
+    detail: { unchanged: true, messages: [`${issueKey} already holds this. Nothing was written.`] },
   };
 }
 export async function confirmJiraMutationFields(

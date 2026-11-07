@@ -11,7 +11,7 @@ import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import type { JiraIssueTemplateSource } from "./jira-managed-template-gate.js";
 import type { JiraAgileRequests } from "./jira-agile-request.js";
 import { gateJiraAgileIssueChange } from "./jira-agile-templates.js";
-import { dispatchFailure } from "./jira-mutation-failure.js";
+import { dispatchFailure, JiraAcknowledgedMutationError } from "./jira-mutation-failure.js";
 import { agileEpic, agileId, agileSprint } from "./jira-agile-projection.js";
 import {
   AGILE_CONFLICT,
@@ -130,8 +130,10 @@ async function confirmMembership(
     );
     const failure = failures.find((value) => value !== undefined);
     return failure === undefined ? { ok: true, receipt } : { ...failure, receipt };
-  } catch {
+  } catch (error) {
     // The acknowledged native batch cannot be replayed even when its evidence phase is cancelled.
-    return { ok: false, reason: readback.signal.aborted ? "timeout" : "unavailable", receipt };
+    if (readback.signal.aborted && error === readback.signal.reason)
+      return { ok: false, reason: "timeout", receipt };
+    throw new JiraAcknowledgedMutationError(error, receipt);
   }
 }

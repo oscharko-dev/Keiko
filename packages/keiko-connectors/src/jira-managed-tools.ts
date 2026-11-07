@@ -6,6 +6,7 @@ import { executeJiraComponentRead, isJiraComponentRead } from "./jira-managed-co
 import { executeJiraVersionRead, isJiraVersionRead } from "./jira-managed-versions.js";
 import { executeJiraIssueDetailRead, isJiraIssueDetailRead } from "./jira-managed-issue-details.js";
 import { executeJiraCommentRead, isJiraCommentRead } from "./jira-managed-comments.js";
+import { executeJiraSavedViewRead, isJiraSavedViewRead } from "./jira-managed-saved-views.js";
 import {
   executeJiraProjectRead,
   isJiraProjectRead,
@@ -303,15 +304,21 @@ async function read<Context extends ManagedMcpInvocationContext>(
   }
   if (isJiraComponentRead(name) || isJiraVersionRead(name))
     return projectMetadataRead(name, args, context, connection);
-  if (isJiraIssueDetailRead(name) || isJiraCommentRead(name))
-    return collaborationRead(name, args, context, connection);
+  if (isIssueOrSavedViewRead(name)) return collaborationRead(name, args, context, connection);
   return isJiraProjectRead(name)
     ? projectRead(name, args, context, connection)
     : readIssueOrMetadata(name, args, context, connection);
 }
 
+type IssueOrSavedViewRead =
+  | Parameters<typeof executeJiraIssueDetailRead>[0]
+  | "jira.get-comment"
+  | Parameters<typeof executeJiraSavedViewRead>[0];
+function isIssueOrSavedViewRead(name: string): name is IssueOrSavedViewRead {
+  return isJiraIssueDetailRead(name) || isJiraCommentRead(name) || isJiraSavedViewRead(name);
+}
 async function collaborationRead<Context extends ManagedMcpInvocationContext>(
-  name: Parameters<typeof executeJiraIssueDetailRead>[0] | "jira.get-comment",
+  name: IssueOrSavedViewRead,
   args: CatalogJsonObject,
   context: Context,
   connection: JiraManagedProviderDeps<Context>["connection"],
@@ -319,6 +326,7 @@ async function collaborationRead<Context extends ManagedMcpInvocationContext>(
   const connected = await connection(context);
   if (connected.deployment !== "data-center") return failure("unsupported-deployment");
   const request = requestFor(connected, context);
+  if (isJiraSavedViewRead(name)) return executeJiraSavedViewRead(name, args, request);
   const result = isJiraCommentRead(name)
     ? await executeJiraCommentRead(name, args, request)
     : await executeJiraIssueDetailRead(name, args, request);
