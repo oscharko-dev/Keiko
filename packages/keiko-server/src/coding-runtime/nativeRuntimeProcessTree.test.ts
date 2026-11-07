@@ -251,6 +251,7 @@ describe("NativeRuntimeTree supervisor refusals", () => {
     [7, "supervisor-grants-directory"],
     [10, "supervisor-gateway-connect"],
     [11, "supervisor-gateway-admit"],
+    [12, "supervisor-environment-guard"],
     [99, "supervisor-unknown"],
   ])("names refusal code %i as %s and ends the tree", (code, reason) => {
     const h = harness();

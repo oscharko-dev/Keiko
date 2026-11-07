@@ -851,7 +851,8 @@ packet and before the broker open (`native/runtime-supervisor/windows/gateway_gr
   capability, an unknown capability name, a missing directory and a reparse point are refused. The
   supervisor's refusal names the closed step that failed (`supervisor-grants-frame`,
   `supervisor-grants-directory`, `supervisor-grants-acl`, `supervisor-grants-capability`,
-  `supervisor-gateway-connect`, `supervisor-gateway-admit`), and the runtime's exit diagnostic
+  `supervisor-gateway-connect`, `supervisor-gateway-admit`, `supervisor-environment-guard`), and
+  the runtime's exit diagnostic
   records it.
 - **Evidence.** `runtime.confinement.spawned` records `backend: windows-wfp`,
   `childExecutablePolicy: appcontainer-inherited`, the number of tree grants and whether a worktree
@@ -897,6 +898,32 @@ exactly this connection after the exemption and before its acknowledgement:
 These are the same three admissions that passed the disposable-runner composition on 2026-10-29.
 The port is not pinned: OpenCode chooses it inside the tree, and the per-run server password stays
 its authentication.
+
+User environment key (amended 2026-11-07, #4068; decided 2026-11-07 by the Windows owner under the
+owner's scope transfer of 2026-10-24). An AppContainer root reads `HKCU\Environment` through the
+key's own read entries for `ALL APPLICATION PACKAGES` and the `registryRead` capability, so a value
+stored with `setx` was readable beside the launch environment allowlist. On Windows 11 a deny entry
+for the tree's SID, a Less Privileged AppContainer and a medium no-read-up label each failed to
+stop it. The supervisor therefore removes those read entries, and any for
+`ALL RESTRICTED APPLICATION PACKAGES`, before the suspended root exists, and the last confined run
+of the user to end puts them back (`native/runtime-supervisor/windows/gateway_environment.c`):
+
+- **Holders.** A record under `HKCU\Software\Keiko\RuntimeSupervisor\EnvironmentGuard` names each
+  live supervisor by process id and creation time, and the removed entries by access mask and
+  flags. It never holds a value of the key. A per-session mutex serializes every change. A holder
+  whose process is gone is pruned by the next close or reopen, so a crashed run's closure ends with
+  the next run.
+- **Fail closed.** The record is durable before the key changes. A close that cannot record, edit
+  or verify the key refuses the launch as `supervisor-environment-guard`. Only explicit read entries
+  are edited: an inherited entry, a wider mask or an unreadable record refuses the close and leaves
+  the key as it is. A restore puts back only read entries of those three principals; a record that
+  names anything wider is refused, and the key stays closed.
+- **Scope.** While any confined run lives, every AppContainer app of this user is denied the key,
+  not only Keiko's tree. A process environment is built by its creator, not read from this key, so
+  this affects only an app that reads the key directly. A restore that fails keeps the key closed;
+  the supervisor writes a body-free line to its standard error, and the next run's close or reopen
+  retries it. The reap protocol carries no refusal after the tree's proof, so that failure is not on
+  the Activity Log.
 
 D13 still holds: no D1–D10 denial is relaxed, and no endpoint beyond D11's attested gateway becomes
 reachable. The installed Windows transport proof (`test-windows-gateway-scm.ps1 -VerifyTransport`)

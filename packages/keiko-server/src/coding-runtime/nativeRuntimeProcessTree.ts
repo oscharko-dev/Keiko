@@ -36,6 +36,8 @@ const SUPERVISOR_REFUSALS: Readonly<Record<number, string>> = {
   9: "supervisor-grants-capability",
   10: "supervisor-gateway-connect",
   11: "supervisor-gateway-admit",
+  // #4068 W1: the user environment key could not be closed to the tree.
+  12: "supervisor-environment-guard",
 };
 
 export class NativeRuntimeTree implements RuntimeProcessTree {

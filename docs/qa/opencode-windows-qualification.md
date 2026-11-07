@@ -1513,6 +1513,31 @@ A hands-on session on the same host, reconstructed from the Activity Log, found 
   `executionLocations: ["worktree"]` behind the broker, and the start refusals above name what to
   change.
 
+## The user environment key closes while a confined run lives (W1, 2026-11-07)
+
+Proposal C is decided (C4) and implemented. Before the suspended root exists, the supervisor
+removes `HKCU\Environment`'s read entries for `ALL APPLICATION PACKAGES`,
+`ALL RESTRICTED APPLICATION PACKAGES` and `registryRead`; the last confined run of the user to end
+puts them back. ADR-0043 D18 states the rules, including the crash recovery and every refusal.
+
+| Evidence on this host (Windows 11 Home 26200, MSVC 2022 `/W4 /WX /analyze /MT`)   | Result |
+| --------------------------------------------------------------------------------- | ------ |
+| `gateway_environment.test.c`, on fixture keys with the real key's DACL shape      | PASS   |
+| One run: closed, recorded, restored entry for entry, record deleted               | PASS   |
+| Two live runs: the first to end leaves the key closed, the last one restores it   | PASS   |
+| A run that died holding the key: the next run's close and reopen restore it       | PASS   |
+| A record that names more than read: restore and close refused, the key stays shut | PASS   |
+| An inherited entry: the close is refused and the key is left untouched            | PASS   |
+| A profile without the key: nothing to close, no record left                       | PASS   |
+| Supervisor and boundary test build; supervisor process-tree protocol test         | PASS   |
+
+Not run yet: the boundary test (`node scripts/testing/test-windows-runtime-boundary.mjs`, also part
+of `npm run check:native:windows`) now runs its confined probe under the production guard
+on the user's real key and expects `registry-user-environment` to be denied and the key's entries
+restored exactly. It changes the real key's access list for the probe's lifetime, so it was left to
+the Windows owner to run on this host; CI runs it on the hosted Windows runner. The W1 blocker stays
+open until that run passes on Windows 11 hardware.
+
 ## Update impact
 
 Release-impacting supervisor reliability fix: retain inherited-handle storage through Windows

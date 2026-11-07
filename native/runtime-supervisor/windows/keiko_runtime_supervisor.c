@@ -1,4 +1,5 @@
 /* KRP1/KRC1/KRS1 no-shell Windows Job Object runtime supervisor. */
+#include "gateway_environment.h"
 #include "gateway_grants.h"
 #include "gateway_install.h"
 #include "gateway_service.h"
@@ -37,7 +38,9 @@ enum error_code {
   ERROR_GATEWAY_CONNECT = 10,
   /* The broker did not acknowledge the suspended tree: its filters, exemption or inbound
    * admission failed, or it answered too late. */
-  ERROR_GATEWAY_ADMIT = 11
+  ERROR_GATEWAY_ADMIT = 11,
+  /* #4068 W1: the user environment key could not be closed to the tree (gateway_environment.h). */
+  ERROR_ENVIRONMENT_GUARD = 12
 };
 
 struct launch_request {
@@ -625,6 +628,8 @@ cleanup:
 int wmain(int argc, wchar_t **argv) {
   struct keiko_gateway_connection gateway = {0};
   struct keiko_gateway_grants grants = {0};
+  struct keiko_environment_holder holder;
+  int environment_closed = 0;
   int confined = argc == 2 && wcscmp(argv[1], L"--gateway-supervised") == 0;
   struct launch_request request;
   PROCESS_INFORMATION process;
@@ -681,6 +686,13 @@ int wmain(int argc, wchar_t **argv) {
                                                               : ERROR_GRANTS_ACL);
       goto cleanup;
     }
+    /* Before the suspended root exists: a value stored with setx stays out of the tree. */
+    if (!keiko_environment_holder_self(&holder) ||
+        keiko_environment_close(&KEIKO_ENVIRONMENT_USER, &holder) != ERROR_SUCCESS) {
+      send_error(ERROR_ENVIRONMENT_GUARD);
+      goto cleanup;
+    }
+    environment_closed = 1;
   }
   job = configured_job(request.recovery_handle, &completion_port);
   if (job == NULL) {
@@ -710,6 +722,10 @@ cleanup:
   if (job != NULL) CloseHandle(job);
   /* The tree is reaped or never started; its own grants go before its profile does. */
   if (gateway.sid != NULL) keiko_gateway_grants_revoke(&grants, gateway.sid);
+  /* The last run to end restores the key; a failure keeps it closed and the next run retries. */
+  if (environment_closed &&
+      keiko_environment_reopen(&KEIKO_ENVIRONMENT_USER, &holder) != ERROR_SUCCESS)
+    fputs("gateway environment reopen failed\n", stderr);
   keiko_gateway_grants_clear(&grants);
   keiko_gateway_disconnect(&gateway);
   clear_request(&request);

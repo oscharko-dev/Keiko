@@ -1,8 +1,8 @@
 # Proposal: a runnable Coding Workbench on Windows
 
-Issue [#4068](https://github.com/oscharko-dev/Keiko/issues/4068). Status: **A, B, D and E decided**
-on 2026-11-07 by the #4068 Windows owner under the owner's scope transfer of 2026-10-24. A1, B1 and
-D1 are implemented; C is not implemented, and its variant is still to be chosen (see C). The first
+Issue [#4068](https://github.com/oscharko-dev/Keiko/issues/4068). Status: **A to E decided** on
+2026-11-07 by the #4068 Windows owner under the owner's scope transfer of 2026-10-24. A1, B1, C4 and
+D1 are implemented; C4's proof against the real key has not run on Windows 11 hardware yet. The first
 confined Workbench run on Windows succeeded on 2026-11-06, with the run's state on the system volume
 ([record](../qa/opencode-windows-qualification.md)).
 
@@ -14,13 +14,13 @@ reports `gateway-service-unqualified`.
 
 ## Decisions
 
-| #   | Question                                                    | Decision (2026-11-07)                                             |
-| --- | ----------------------------------------------------------- | ----------------------------------------------------------------- |
-| A   | May a checkout install and use the D18 broker?              | Yes: a dev-lane pin on the same broker (A1)                       |
-| B   | How does the confined tree reach its workspace?             | Grant on Keiko-managed worktrees and support roots only (B1)      |
-| C   | How is `HKCU\Environment` closed to the confined tree?      | Open: only the key's access list works; C1, C2 and a label failed |
-| D   | How does the host reach OpenCode's server in the tree?      | One brokered inbound loopback port per run (D1)                   |
-| E   | Which model and gateway may the first model-backed run use? | The Windows owner selects them per run, recorded body-free        |
+| #   | Question                                                    | Decision (2026-11-07)                                        |
+| --- | ----------------------------------------------------------- | ------------------------------------------------------------ |
+| A   | May a checkout install and use the D18 broker?              | Yes: a dev-lane pin on the same broker (A1)                  |
+| B   | How does the confined tree reach its workspace?             | Grant on Keiko-managed worktrees and support roots only (B1) |
+| C   | How is `HKCU\Environment` closed to the confined tree?      | Its read entries are removed while a confined run lives (C4) |
+| D   | How does the host reach OpenCode's server in the tree?      | One brokered inbound loopback port per run (D1)              |
+| E   | Which model and gateway may the first model-backed run use? | The Windows owner selects them per run, recorded body-free   |
 
 ## Where it stops today
 
@@ -87,6 +87,13 @@ reports `gateway-service-unqualified`.
   instruction reads would fail, so this is a large protocol change.
 
 ## C. Persisted user environment
+
+- **Decided (2026-11-07): C4, only while a confined run lives.** The supervisor removes the key's
+  read entries for `ALL APPLICATION PACKAGES`, `ALL RESTRICTED APPLICATION PACKAGES` and
+  `registryRead` before the suspended root exists, and the last confined run of the user to end
+  puts them back. A record of live holders and removed entries prunes a crashed run at the next
+  close or reopen. Implemented in `gateway_environment.c`; ADR-0043 D18 states the rules. C1–C3
+  below are the options as they were weighed.
 
 - **C1 (recommended): Less Privileged AppContainer.** Spawn with
   `PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY = PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT`.

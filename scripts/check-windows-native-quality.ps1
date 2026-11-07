@@ -377,7 +377,7 @@ process.exit(41);
 
   $supervisor = Join-Path $root "native/runtime-supervisor/windows/keiko_runtime_supervisor.c"
   $supervisorOut = Join-Path $scratch "keiko-runtime-supervisor.exe"
-  $gatewaySources = @("gateway_firewall", "gateway_grants", "gateway_inbound", "gateway_install", "gateway_installed", "gateway_service", "gateway_loopback", "gateway_peer", "gateway_request", "gateway_wfp") | ForEach-Object { Join-Path (Split-Path $supervisor) "$_.c" }
+  $gatewaySources = @("gateway_environment", "gateway_firewall", "gateway_grants", "gateway_inbound", "gateway_install", "gateway_installed", "gateway_service", "gateway_loopback", "gateway_peer", "gateway_request", "gateway_wfp") | ForEach-Object { Join-Path (Split-Path $supervisor) "$_.c" }
   & cl.exe @c11Flags $productionMTFlag "/Fo:$scratch\" "/Fe:$supervisorOut" $supervisor @gatewaySources /link @productionLinkFlags advapi32.lib userenv.lib fwpuclnt.lib rpcrt4.lib ws2_32.lib
   if ($LASTEXITCODE -ne 0) { throw "MSVC runtime-supervisor quality analysis failed" }
 
@@ -404,6 +404,17 @@ process.exit(41);
   & $grantsTestOut
   if ($LASTEXITCODE -ne 0) { throw "Windows gateway grants rules failed" }
 
+  # #4068 W1 (proposal C): the user environment key is closed while a confined run lives and
+  # restored by the last one, on fixture keys this test owns. Needs no administrator rights.
+  $environmentTest = Join-Path (Split-Path $supervisor) "gateway_environment.test.c"
+  $environmentTestOut = Join-Path $scratch "gateway-environment-test.exe"
+  $environmentScratch = Join-Path $scratch "environment-test"
+  New-Item -ItemType Directory -Force -Path $environmentScratch | Out-Null
+  & cl.exe @c11Flags $productionMTFlag "/Fo:$environmentScratch\" "/Fe:$environmentTestOut" (Join-Path (Split-Path $supervisor) "gateway_environment.c") $environmentTest /link advapi32.lib
+  if ($LASTEXITCODE -ne 0) { throw "MSVC gateway environment test analysis failed" }
+  & $environmentTestOut
+  if ($LASTEXITCODE -ne 0) { throw "Windows gateway environment rules failed" }
+
   # #4068 W1/W11: the loopback-exemption list rules (keep foreign entries, never duplicate, remove
   # only the run's SID, no rewrite of an unchanged list) against an in-memory configuration list.
   $loopbackTest = Join-Path (Split-Path $supervisor) "gateway_loopback.test.c"
@@ -420,8 +431,9 @@ process.exit(41);
   $boundaryTestOut = Join-Path $scratch "runtime-boundary-test.exe"
   $boundaryScratch = Join-Path $scratch "boundary-test"
   New-Item -ItemType Directory -Force -Path $boundaryScratch | Out-Null
-  # The B1 section applies the production grants from a real `KGG1` frame, so it links the module.
-  & cl.exe @c11Flags $productionMTFlag "/Fo:$boundaryScratch\" "/Fe:$boundaryTestOut" (Join-Path (Split-Path $supervisor) "gateway_grants.c") $boundaryTest
+  # The B1 section applies the production grants from a real `KGG1` frame, and the confined probe
+  # runs with the production environment guard, so it links both modules.
+  & cl.exe @c11Flags $productionMTFlag "/Fo:$boundaryScratch\" "/Fe:$boundaryTestOut" (Join-Path (Split-Path $supervisor) "gateway_environment.c") (Join-Path (Split-Path $supervisor) "gateway_grants.c") $boundaryTest
   if ($LASTEXITCODE -ne 0) { throw "MSVC runtime boundary test analysis failed" }
   & $boundaryTestOut
   if ($LASTEXITCODE -ne 0) { throw "Windows runtime boundary proof failed" }

@@ -1,6 +1,9 @@
 /* #4068 W1: real OS boundaries of a per-tree AppContainer root, without administrator rights and
  * without WFP. The same probe runs unconfined first: a denial only counts when the identical
- * operation succeeds outside the container. Output is body-free: probe names and Win32 codes. */
+ * operation succeeds outside the container. Output is body-free: probe names and Win32 codes.
+ * The confined probe runs under the production environment guard, as a supervised tree does: it
+ * removes the application-package read entries of the user's real HKCU\Environment for the probe's
+ * lifetime, and the test fails unless the key's entries are restored exactly afterwards. */
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
 #include <windows.h>
@@ -12,7 +15,9 @@
 #include <string.h>
 #include <wchar.h>
 
+#include "gateway_environment.h"
 #include "gateway_grants.h"
+#include <sddl.h>
 
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "ole32.lib")
@@ -323,7 +328,7 @@ static const char *const DENIED_ACCESS[] = {
     "open-foreign-terminate", "open-foreign-vm-read",     "open-foreign-query",
     "open-foreign-duplicate", "open-peer-terminate",      "read-env-file",
     "read-key-file",          "read-workspace-ungranted", "list-user-profile",
-    "list-credential-store",  "write-ungranted",
+    "list-credential-store",  "write-ungranted",          "registry-user-environment",
 };
 /* The same operation must work outside the container, or its denial says nothing. */
 static const char *const CONTROL_ALLOWED[] = {
@@ -356,9 +361,6 @@ static int verify_confined(const char *text) {
       ++failures;
     }
   }
-  /* Open W1 blocker, never a pass: values stored with setx stay readable beside the env allowlist. */
-  if (observed_code(text, "registry-user-environment") == 0)
-    printf("OPEN W1 blocker: the confined root reads HKCU\\Environment\n");
   code = observed_code(text, "read-granted");
   if (code != 0) {
     printf("FAIL confined read-granted=%ld (expected 0)\n", code);
@@ -623,6 +625,42 @@ done:
   return failures;
 }
 
+/* The user's environment key's entries as SDDL, from the first entry on; empty when unreadable. */
+static void environment_entries(wchar_t *out, size_t chars) {
+  PSECURITY_DESCRIPTOR descriptor = NULL;
+  wchar_t *text = NULL, *entries;
+  out[0] = L'\0';
+  if (GetNamedSecurityInfoW(KEIKO_ENVIRONMENT_USER.key, SE_REGISTRY_KEY, DACL_SECURITY_INFORMATION,
+                            NULL, NULL, NULL, NULL, &descriptor) == ERROR_SUCCESS &&
+      ConvertSecurityDescriptorToStringSecurityDescriptorW(
+          descriptor, SDDL_REVISION_1, DACL_SECURITY_INFORMATION, &text, NULL) &&
+      (entries = wcschr(text, L'(')) != NULL)
+    (void)wcsncpy_s(out, chars, entries, _TRUNCATE);
+  if (text != NULL) LocalFree(text);
+  if (descriptor != NULL) LocalFree(descriptor);
+}
+
+/* The confined probe under the production guard: closed before the root starts, reopened after. */
+static int run_guarded(struct fixture *f, const wchar_t *arguments, struct probe_output *confined) {
+  struct keiko_environment_holder holder;
+  wchar_t before[2048], after[2048];
+  DWORD closed, reopened;
+  environment_entries(before, ARRAYSIZE(before));
+  if (!keiko_environment_holder_self(&holder)) {
+    printf("FAIL environment guard holder\n");
+    return 1;
+  }
+  closed = keiko_environment_close(&KEIKO_ENVIRONMENT_USER, &holder);
+  if (closed == ERROR_SUCCESS)
+    run_and_capture(f->sid, NO_CAPABILITIES, f->image, arguments, NULL, confined);
+  reopened = keiko_environment_reopen(&KEIKO_ENVIRONMENT_USER, &holder);
+  environment_entries(after, ARRAYSIZE(after));
+  printf("environment guard close=%lu reopen=%lu restored=%d\n", closed, reopened,
+         before[0] != L'\0' && wcscmp(before, after) == 0);
+  return closed != ERROR_SUCCESS || reopened != ERROR_SUCCESS || before[0] == L'\0' ||
+         wcscmp(before, after) != 0;
+}
+
 static int run_boundary(struct fixture *f) {
   struct sockaddr_in local = {0};
   int local_size = sizeof(local), failures = 0;
@@ -677,7 +715,7 @@ static int run_boundary(struct fixture *f) {
     goto done;
   }
   run_and_capture(NULL, NO_CAPABILITIES, f->image, arguments, NULL, control);
-  run_and_capture(f->sid, NO_CAPABILITIES, f->image, arguments, NULL, confined);
+  failures += run_guarded(f, arguments, confined);
   if (_snwprintf_s(socket_arguments, 64, _TRUNCATE, L"--socket-probe %u", (unsigned)ntohs(local.sin_port)) < 0) {
     failures = 1;
     goto done;

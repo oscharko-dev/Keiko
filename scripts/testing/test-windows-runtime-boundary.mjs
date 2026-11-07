@@ -1,6 +1,9 @@
 // #4068 W1: real OS boundaries of a per-tree AppContainer root. Needs no administrator rights and
-// changes no WFP or service state. A host enforcing Smart App Control refuses the freshly built,
-// unsigned test before it runs; that is reported as unavailable, never as a pass.
+// changes no WFP or service state. The confined probe runs under the production environment
+// guard, which removes the application-package read entries of the user's HKCU\Environment for
+// the probe's lifetime; the test fails unless they are restored exactly. A host enforcing Smart App
+// Control refuses the freshly built, unsigned test before it runs; that is reported as unavailable,
+// never as a pass.
 import { spawnSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -25,7 +28,9 @@ function build(root, scratch, executable) {
     "/D_CRT_SECURE_NO_WARNINGS",
     `/Fe:${executable}`,
     `/Fo:${scratch}${sep}`,
-    // The B1 section applies the production grants from a real `KGG1` frame (#4068).
+    // The B1 section applies the production grants from a real `KGG1` frame, and the confined
+    // probe runs with the production environment guard (#4068).
+    join(root, "native/runtime-supervisor/windows/gateway_environment.c"),
     join(root, "native/runtime-supervisor/windows/gateway_grants.c"),
     join(root, "native/runtime-supervisor/windows/runtime_boundary.test.c"),
   ];

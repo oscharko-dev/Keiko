@@ -306,6 +306,26 @@
       ]
     },
     {
+      "path": "native/runtime-supervisor/windows/gateway_environment.c",
+      "language": "c",
+      "platforms": ["windows"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "gateway-user-environment-boundary"
+      ]
+    },
+    {
+      "path": "native/runtime-supervisor/windows/gateway_environment.h",
+      "language": "c",
+      "platforms": ["windows"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "gateway-user-environment-boundary"
+      ]
+    },
+    {
       "path": "native/runtime-supervisor/windows/gateway_grants.c",
       "language": "c",
       "platforms": ["windows"],
