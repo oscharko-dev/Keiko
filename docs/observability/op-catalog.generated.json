@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "314f9a7afe479f93586871ad9a2460ed971ac060d168daf02ce9666fbc07c4fe",
+    "catalogDigest": "b54e9fe689381efa15f76465b642c14dac2356daa50f7319c9d68543e353b321",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -33777,12 +33777,12 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["forgotten", "ambiguous", "refused", "failed"]
+            "values": ["forgotten", "ambiguous", "refused", "failed", "not-stored"]
           }
         },
         "proofIds": ["memory.explicit.forget.line"],
-        "registrationSite": "packages/keiko-server/src/memory-explicit-statement-log.ts:27",
-        "emitterSites": ["packages/keiko-server/src/memory-explicit-statement-log.ts:47"]
+        "registrationSite": "packages/keiko-server/src/memory-explicit-statement-log.ts:35",
+        "emitterSites": ["packages/keiko-server/src/memory-explicit-statement-log.ts:55"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -33815,8 +33815,8 @@
           }
         },
         "proofIds": ["memory.explicit.remember.line"],
-        "registrationSite": "packages/keiko-server/src/memory-explicit-statement-log.ts:61",
-        "emitterSites": ["packages/keiko-server/src/memory-explicit-statement-log.ts:81"]
+        "registrationSite": "packages/keiko-server/src/memory-explicit-statement-log.ts:69",
+        "emitterSites": ["packages/keiko-server/src/memory-explicit-statement-log.ts:89"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -38948,7 +38948,7 @@
         "analyzerProjection": "timeline",
         "proofIds": ["security.java-parser.unavailable.line"],
         "registrationSite": "packages/keiko-security/src/redaction-java-parser.ts:165",
-        "emitterSites": ["packages/keiko-security/src/redaction-java-parser.ts:432"]
+        "emitterSites": ["packages/keiko-security/src/redaction-java-parser.ts:447"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -38996,7 +38996,7 @@
         "analyzerProjection": "timeline",
         "proofIds": ["security.java-parser.worker-recycled.line"],
         "registrationSite": "packages/keiko-security/src/redaction-java-parser.ts:130",
-        "emitterSites": ["packages/keiko-security/src/redaction-java-parser.ts:318"]
+        "emitterSites": ["packages/keiko-security/src/redaction-java-parser.ts:324"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39045,7 +39045,7 @@
         "analyzerProjection": "failure-cluster",
         "proofIds": ["security.java-parser.worker-retired.line"],
         "registrationSite": "packages/keiko-security/src/redaction-java-parser.ts:145",
-        "emitterSites": ["packages/keiko-security/src/redaction-java-parser.ts:334"]
+        "emitterSites": ["packages/keiko-security/src/redaction-java-parser.ts:340"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39083,7 +39083,7 @@
         "analyzerProjection": "timeline",
         "proofIds": ["security.java-parser.worker-started.line"],
         "registrationSite": "packages/keiko-security/src/redaction-java-parser.ts:117",
-        "emitterSites": ["packages/keiko-security/src/redaction-java-parser.ts:307"]
+        "emitterSites": ["packages/keiko-security/src/redaction-java-parser.ts:313"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -109620,7 +109620,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1780",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1782",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -110217,7 +110217,7 @@
     {
       "op": "chat.compaction.summary.scheduled",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:2146",
+      "site": "packages/keiko-server/src/chat-handlers.ts:2148",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -110309,7 +110309,7 @@
     {
       "op": "chat.memory.auto-maintenance",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1398",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1399",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -113098,13 +113098,13 @@
     {
       "op": "memory.explicit.forget",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-explicit-statement-log.ts:29",
+      "site": "packages/keiko-server/src/memory-explicit-statement-log.ts:37",
       "package": "keiko-server"
     },
     {
       "op": "memory.explicit.remember",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-explicit-statement-log.ts:63",
+      "site": "packages/keiko-server/src/memory-explicit-statement-log.ts:71",
       "package": "keiko-server"
     },
     {

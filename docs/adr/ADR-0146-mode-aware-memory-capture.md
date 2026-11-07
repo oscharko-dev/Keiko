@@ -184,19 +184,26 @@ Such a statement lands in the private user scope unless it names a project or wo
 learner does not read its turn, so it cannot store the statement itself.
 
 Only a clear statement acts this way, because it changes memory with no question. "Merke dir" and
-"Remember" count, "Speichere" and "Notiere" only with "dass" or a colon, and "Lösche" only with
-"die Erinnerung an". "Speichere die Datei" and "Lösche den Cache" are tasks and never reach a memory.
-A negation ("Merke dir nicht", "Vergiss den Bericht nicht"), a question, and the idioms "Vergiss es"
-and "Forget it" state nothing to store or forget. A named thing whose sentence goes on with a task verb
-("Vergiss den alten API-Pfad, nimm den neuen") is an instruction for the task and forgets nothing.
-A thing named with an article whose sentence goes on by asking for the answer ("Forget the
+"Remember" count, "Speichere" and "Notiere" only with "dass" or a colon, and "Lösche" only with "die
+Erinnerung an". "Speichere die Datei" and "Lösche den Cache" are tasks and never reach a memory. A
+negation ("Merke dir nicht", "Vergiss den Bericht nicht"), a question, and the idioms "Vergiss es"
+and "Forget it" state nothing to store or forget. A named thing whose sentence goes on with a task
+verb ("Vergiss den alten API-Pfad, nimm den neuen") is an instruction for the task and forgets
+nothing. A thing named with an article whose sentence goes on by asking for the answer ("Forget the
 formatting, just give me the answer", "Forget the address I gave you, show me what else you have")
-forgets the memory it names and, when nothing stored matches, is an ordinary request: no question
-about which memory was meant (2026-11-07, #4212). The person's own fact ("Forget my phone number and
-tell me when it is gone") keeps the question, and any other continuation ("und meine
-Telefonnummer", ", danke") still names what to forget. A
-named forget reaches a memory only through the same word or an inflection of it, so "Java" does not
-reach "JavaScript".
+forgets the memory its name alone matches ("the address", not the clause that follows) and, when
+nothing stored matches, is an ordinary request: no question about which memory was meant, and
+`memory.explicit.forget` records `not-stored` (2026-11-07, #4212); several matches are still asked
+about. The clause goes on after a comma or semicolon (also full width), a dash, or "und", "and",
+"dann", "then"; a colon introduces what is forgotten ("Forget the address: Take Street 5"). "Vergiss
+das, sag mir Bescheid", "Vergiss einfach das" and "Forget that, tell me the rest" take back what was
+just said, like "Vergiss das", and a name of articles, possessives, "own" or softening words alone
+names nothing. The person's own fact ("Forget my phone number and tell me when it is gone") is
+looked up by its name alone and keeps the question when nothing matches. Any other continuation
+("und meine Telefonnummer", ", danke") still names what to forget, and a leading softening word
+("einfach meine Telefonnummer") is no part of the name a memory is looked up by. A named forget
+reaches a memory only through the same word or an inflection of it, so "Java" does not reach
+"JavaScript".
 
 Saying a statement again confirms the existing memory through `recordAccess`, naming the chat,
 instead of storing a second record: in the same words without an embedder, and as a paraphrase through the existing

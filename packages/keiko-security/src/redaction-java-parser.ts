@@ -279,6 +279,12 @@ let current: ParserWorker | undefined;
 let workerCount = 0;
 let nextJobId = 1;
 let startRefusedUntil = 0;
+// Workers in a row that exited before any parse was sent to them. One that loads and then dies every
+// time is a failing start, so its successors are refused for the cooldown instead of restarted per
+// call. A worker that dies during a parse is not counted: the text may have caused it, and counting
+// it would let three hostile messages switch the parser off for everyone.
+let exitsBeforeFirstParse = 0;
+const EXITS_BEFORE_FIRST_PARSE_MAX = 3;
 // The start a refusal of starts follows, so its unavailable answers join that start's lifetime.
 let refusedStart: WorkerRecord | undefined;
 // The start or cooldown whose first unavailable answer is already on the Activity Log.
@@ -400,8 +406,17 @@ function discard(parser: ParserWorker): boolean {
 function recordRetirement(parser: ParserWorker, reason: RetirementReason): void {
   if (!discard(parser)) return;
   emitWorkerRetired(parser, reason);
-  if (reason === "start-failed" || reason === "start-deadline") refuseStarts(parser);
-  else startInBackground();
+  if (reason === "exited" && parser.parses === 0) exitsBeforeFirstParse += 1;
+  const failingStart =
+    reason === "start-failed" ||
+    reason === "start-deadline" ||
+    exitsBeforeFirstParse >= EXITS_BEFORE_FIRST_PARSE_MAX;
+  if (!failingStart) {
+    startInBackground();
+    return;
+  }
+  exitsBeforeFirstParse = 0;
+  refuseStarts(parser);
 }
 
 // Routine: a worker that answered but holds more heap than it may keep is replaced, not failed.
@@ -555,6 +570,7 @@ function settle(parser: ParserWorker, received: Received): JavaParseOutcome {
     // A tree too large to read back is a property of the text, like a stack overflow.
     return received.failure === "transfer" ? DEPTH : BUDGET;
   }
+  exitsBeforeFirstParse = 0;
   const heapBytes = received.answer.heapBytes ?? 0;
   if (!isRunning(parser)) recordRetirement(parser, "exited");
   else if (heapBytes > heapRecycleBytes) recycle(parser, heapBytes);
@@ -622,6 +638,7 @@ export function resetJavaParserWorker(
   startRefusedUntil = 0;
   refusedStart = undefined;
   unavailableReported = undefined;
+  exitsBeforeFirstParse = 0;
   lastText = undefined;
   lastOutcome = undefined;
   lastRefusedAt = 0;

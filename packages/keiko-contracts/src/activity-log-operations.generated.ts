@@ -32380,7 +32380,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["forgotten", "ambiguous", "refused", "failed"],
+        values: ["forgotten", "ambiguous", "refused", "failed", "not-stored"],
       },
     },
     causal: "none",

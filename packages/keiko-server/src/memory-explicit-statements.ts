@@ -6,6 +6,7 @@ import type { ConversationMemoryActionWire } from "@oscharko-dev/keiko-contracts
 import type { MemoryId, MemoryRecord, MemoryScope } from "@oscharko-dev/keiko-contracts/memory";
 import {
   factReplacedByStatement,
+  forgetsOnlyIfStored,
   isForgettableStatement,
   type CaptureOutcome,
 } from "@oscharko-dev/keiko-memory-capture";
@@ -79,6 +80,18 @@ export function forgetActionFromOutcome(
   return result === "forgotten"
     ? forgotAction(String(memoryId))
     : statementRefused("forget-not-applied");
+}
+
+// A forget that acts only on a memory it names leaves no outcome when nothing matched; the turn is
+// an ordinary request, and the line keeps it reconstructable that the person asked to forget.
+export function recordForgetNotStored(
+  content: string,
+  outcomes: readonly CaptureOutcome[],
+  correlationId: string,
+): void {
+  if (outcomes.length === 0 && forgetsOnlyIfStored(content)) {
+    logExplicitMemoryForget("not-stored", correlationId);
+  }
 }
 
 // "Vergiss das" with no memory it could mean: the statement before it, which nothing was stored from.

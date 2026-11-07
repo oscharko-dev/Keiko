@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -389,44 +389,55 @@ describe("the bounded Java parser worker", () => {
     }
   }, 30_000);
 
-  it("replaces a worker that loaded and then exited before any parse, without a cooldown", async () => {
+  // A grammar that loads and then ends its worker 50 ms later. Each worker appends to `loaded` when
+  // it has loaded and to `exited` as it ends, so the test waits for what happened, not for a time.
+  it("replaces a worker that exited before any parse, and refuses starts once that repeats", async () => {
     const directory = mkdtempSync(join(tmpdir(), "keiko-java-exited-"));
     try {
       const parserPath = join(directory, "parser.cjs");
       const loaded = join(directory, "loaded");
+      const exited = join(directory, "exited");
       const realParser = createRequire(import.meta.url).resolve("java-parser");
       writeFileSync(
         parserPath,
         [
+          'const fs = require("node:fs");',
           `module.exports = require(${JSON.stringify(realParser)});`,
-          `require("node:fs").writeFileSync(${JSON.stringify(loaded)}, "");`,
+          `fs.appendFileSync(${JSON.stringify(loaded)}, "x");`,
+          `process.on("exit", () => fs.appendFileSync(${JSON.stringify(exited)}, "x"));`,
           "setTimeout(() => process.exit(0), 50);",
         ].join("\n"),
       );
+      const count = (file: string): number =>
+        existsSync(file) ? readFileSync(file, "utf8").length : 0;
       resetJavaParserWorker({ parserPath });
       prewarmJavaParserWorker();
-      await vi.waitFor(
-        () => {
-          expect(existsSync(loaded)).toBe(true);
-        },
-        { timeout: 15_000, interval: 50 },
-      );
-      // Its exit reaches this thread between calls.
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      expect(parseJavaBounded(valid)).toEqual({ kind: "unavailable" });
-      expect(ops().slice(0, 2)).toEqual([
-        "security.java-parser.worker-started",
-        "security.java-parser.worker-retired",
-      ]);
-      expect(eventAt(1).extra?.reason).toBe("exited");
-      // Replaced, not refused: its successor is already starting.
-      expect(ops()).toContain("security.java-parser.unavailable");
-      expect(events.at(-1)?.extra?.reason).toBe("starting");
+      const reasons: unknown[] = [];
+      for (let round = 1; round <= 3; round += 1) {
+        await vi.waitFor(
+          () => {
+            expect(count(exited)).toBe(round);
+          },
+          { timeout: 15_000, interval: 50 },
+        );
+        // The worker's exit event reaches this thread just after its exit handler ran.
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        expect(parseJavaBounded(valid)).toEqual({ kind: "unavailable" });
+        reasons.push(events.at(-1)?.extra?.reason);
+      }
+      const retired = events.filter((event) => event.op === "security.java-parser.worker-retired");
+      // Each had started: its ready answer is read before it is retired, never a failed start.
+      expect(retired.map((event) => event.extra?.reason)).toEqual(["exited", "exited", "exited"]);
+      expect(ops().filter((op) => op.endsWith("worker-started"))).toHaveLength(3);
+      // Twice replaced at once; the third in a row refuses starts for the cooldown.
+      expect(reasons).toEqual(["starting", "starting", "start-refused"]);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(count(loaded)).toBe(3);
     } finally {
       resetJavaParserWorker();
       rmSync(directory, { recursive: true, force: true });
     }
-  }, 30_000);
+  }, 60_000);
 
   it("parses 300 KiB of ordinary Java within its deadline", () => {
     const methods = Array.from(

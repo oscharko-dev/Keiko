@@ -222,8 +222,16 @@ describe("measureScaling", () => {
     expect(scalingRatio(scaling)).toBeLessThan(LINEAR_RATIO_MAX);
   });
 
+  // The floor stands for timer noise; no machine reaches a minute here, so the verdict does not
+  // depend on how fast the runner is, coverage instrumentation included.
   it("reports a rule too fast to time as not measurable instead of guessing", () => {
-    const scaling = measureScaling({ build: () => "", run: () => 0, size: 1, maximumSize: 4 });
+    const scaling = measureScaling({
+      build: () => "",
+      run: () => 0,
+      size: 1,
+      maximumSize: 4,
+      minimumMs: 60_000,
+    });
     expect(scaling.measurable).toBe(false);
     expect(scaling.size).toBe(4);
     expect(scaling.repetitions).toBe(1 << 20);

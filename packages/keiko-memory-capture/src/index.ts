@@ -24,6 +24,7 @@ export type {
 export { extractCandidatesFromUserText, extractCandidatesFromWorkflowOutcome } from "./capture.js";
 export {
   explicitStatementKind,
+  forgetsOnlyIfStored,
   isExplicitMemoryStatement,
   isForgettableStatement,
   isMemoryForgetReference,

@@ -189,6 +189,7 @@ import {
   persistExplicitStatement,
   previousUserMessage,
   refusedCandidateAction,
+  recordForgetNotStored,
   rejectedActionFromOutcome,
   type ExplicitStatementContext,
   type ExplicitStatementPersistence,
@@ -1743,6 +1744,7 @@ function captureMemoryActions(
       }),
     },
   );
+  recordForgetNotStored(request.content, outcomes, correlationId);
   const mode = resolveMemoryCaptureAutonomyMode(deps, request.memory.mode);
   const surface = request.memory.surface ?? "desktop";
   return captureActionsFromOutcomes(
@@ -4133,6 +4135,7 @@ function canonicalMessageMemoryActions(
       }),
     }),
   );
+  recordForgetNotStored(message.content, outcomes, correlationId);
   return captureActionsFromOutcomes(
     outcomes,
     deps,

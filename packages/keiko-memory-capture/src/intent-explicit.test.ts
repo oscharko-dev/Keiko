@@ -10,6 +10,7 @@ import type {
 
 import {
   explicitStatementKind,
+  forgetsOnlyIfStored,
   isExplicitMemoryStatement,
   isForgettableStatement,
   isMemoryForgetReference,
@@ -630,6 +631,11 @@ describe("a forget of how to answer, followed by what to answer", () => {
     "Forget the address, then tell me what you remember",
     "Forget the old address and tell me the new one",
     "Forget the fact that I use Python, just answer the question",
+    "Forget the formatting; give me the answer",
+    "Forget the formatting - give me the answer",
+    "Vergiss die Einleitung – gib mir das Ergebnis",
+    "Vergiss die Einleitung—sag es direkt",
+    "Forget the formatting，just give me the answer",
   ];
 
   it.each(answerRequests)("asks nothing when %j names nothing stored", (text) => {
@@ -639,6 +645,24 @@ describe("a forget of how to answer, followed by what to answer", () => {
 
   it.each(answerRequests)("forgets the memory %j names", (text) => {
     expect(tryExtractForget(text, ctx(), { resolver: stored })?.kind).toBe("forget");
+  });
+
+  it.each([
+    ["Forget the formatting, just give me the answer", "the formatting"],
+    ["Forget the address I gave you, show me what else you have stored", "the address I gave you"],
+    ["Vergiss die Höflichkeit und sag mir die Antwort", "die Höflichkeit"],
+    ["Forget the old address and tell me the new one", "the old address"],
+    ["Forget the address, the phone, and tell me what you have", "the address, the phone"],
+    ["Forget the address and phone, then tell me", "the address and phone"],
+    ["Vergiss die Notiz, dann gib mir die andere", "die Notiz"],
+  ])("looks up %j by its name alone", (text, named) => {
+    const looked: string[] = [];
+    const resolver = (target: string): MemoryId[] => {
+      looked.push(target);
+      return [];
+    };
+    tryExtractForget(text, ctx(), { resolver });
+    expect(looked).toEqual([named]);
   });
 
   it.each(answerRequests)("asks which memory when %j names several", (text) => {
@@ -663,6 +687,133 @@ describe("a forget of how to answer, followed by what to answer", () => {
     });
   });
 
+  it.each([
+    ["Forget my phone number and tell me when it is gone", "my phone number"],
+    ["Vergiss meine Adresse und sag mir Bescheid", "meine Adresse"],
+    [
+      "Vergiss einfach meine Telefonnummer und sag mir Bescheid, wenn sie weg ist",
+      "meine Telefonnummer",
+    ],
+    ["Vergiss meine Adresse; zeig mir den Rest", "meine Adresse"],
+    ["Vergiss einfach meine Telefonnummer", "meine Telefonnummer"],
+    ["Vergiss nur die Formatierung, gib mir das Ergebnis", "die Formatierung"],
+    ["Vergiss die Meinung, sag mir die Fakten", "die Meinung"],
+    // A possessive alone names no fact of its own, so the sentence is looked up as said.
+    ["Forget my, tell me", "my, tell me"],
+  ])("looks up %j by %j", (text, lookup) => {
+    const looked: string[] = [];
+    const resolver = (target: string): MemoryId[] => {
+      looked.push(target);
+      return [];
+    };
+    tryExtractForget(text, ctx(), { resolver });
+    expect(looked).toEqual([lookup]);
+  });
+
+  it.each([
+    "Vergiss einfach das",
+    "Forget just that",
+    "Vergiss einfach das, sag mir Bescheid",
+    "Forget that, tell me the rest",
+    "Forget just this; give me the answer",
+  ])("takes back what was just said in %j", (text) => {
+    const looked: string[] = [];
+    const resolver = (target: string): MemoryId[] => {
+      looked.push(target);
+      return [];
+    };
+    expect(forgetsOnlyIfStored(text)).toBe(false);
+    expect(tryExtractForget(text, ctx(), { resolver })).toMatchObject({
+      kind: "rejected",
+      reason: "forget-reference-unresolved",
+    });
+    expect(looked).toHaveLength(1);
+    expect(isMemoryForgetReference(looked[0] ?? "")).toBe(true);
+  });
+
+  it.each([
+    ["Forget that I use Python, just answer the question", "I use Python"],
+    ["Forget the address: Take Street 5", "the address: Take Street 5"],
+    ["Vergiss meine Adresse: Schickgasse 5", "meine Adresse: Schickgasse 5"],
+  ])("keeps %j a forget of what it states", (text, lookup) => {
+    const looked: string[] = [];
+    const resolver = (target: string): MemoryId[] => {
+      looked.push(target);
+      return [];
+    };
+    expect(forgetsOnlyIfStored(text)).toBe(false);
+    expect(tryExtractForget(text, ctx(), { resolver })).toMatchObject({
+      kind: "rejected",
+      reason: "ambiguous-forget",
+    });
+    expect(looked.map((target) => target.startsWith(lookup))).toEqual([true]);
+  });
+
+  it.each(["Forget my own, tell me", "Vergiss meine eigene, sag mir"])(
+    "looks up %j as said, since its name names nothing",
+    (text) => {
+      const looked: string[] = [];
+      const resolver = (target: string): MemoryId[] => {
+        looked.push(target);
+        return [];
+      };
+      tryExtractForget(text, ctx(), { resolver });
+      expect(looked).toEqual([text.replace(/^(?:Forget|Vergiss) /u, "")]);
+    },
+  );
+
+  it("strips a long run of softening words in one pass", () => {
+    const looked: string[] = [];
+    const text = `Vergiss ${"einfach ".repeat(50_000)}meine Adresse`;
+    const started = performance.now();
+    tryExtractForget(text, ctx(), {
+      resolver: (target) => {
+        looked.push(target);
+        return [];
+      },
+    });
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(looked).toEqual(["meine Adresse"]);
+  });
+
+  it.each(["Forget the, tell me", "Vergiss die, sag mir"])(
+    "reads %j, which names nothing, as no forget",
+    (text) => {
+      const looked: string[] = [];
+      const resolver = (target: string): MemoryId[] => {
+        looked.push(target);
+        return ["m-stored" as MemoryId];
+      };
+      expect(explicitStatementKind(text)).toBeNull();
+      expect(tryExtractForget(text, ctx(), { resolver })).toBeNull();
+      expect(looked).toEqual([]);
+    },
+  );
+
+  it.each(["Vergiss das, sag mir wie es weitergeht", "Vergiss das und sag mir Bescheid"])(
+    "takes back what was just said in %j, like a bare reference",
+    (text) => {
+      expect(forgetsOnlyIfStored(text)).toBe(false);
+      expect(tryExtractForget(text, ctx(), { resolver: nothingStored })).toMatchObject({
+        kind: "rejected",
+        reason: "forget-reference-unresolved",
+      });
+    },
+  );
+
+  it("says which forgets act only on a memory they name", () => {
+    for (const text of answerRequests) expect(forgetsOnlyIfStored(text)).toBe(true);
+    for (const text of [
+      "Forget my phone number and tell me when it is gone",
+      "Vergiss den Bericht, nimm den Entwurf",
+      "Vergiss das",
+      "Forget the address",
+      "What is the weather?",
+    ]) {
+      expect(forgetsOnlyIfStored(text)).toBe(false);
+    }
+  });
+
   it("still falls back to the last statement for a bare reference", () => {
     expect(tryExtractForget("Vergiss das", ctx(), { resolver: nothingStored })).toMatchObject({
       kind: "rejected",
@@ -673,6 +824,22 @@ describe("a forget of how to answer, followed by what to answer", () => {
   it("still reads a task verb after the person's own fact", () => {
     expect(explicitStatementKind("Vergiss meinen Entwurf, nimm den Bericht")).toBeNull();
     expect(explicitStatementKind("Vergiss einfach den Bericht, nimm den Entwurf")).toBeNull();
+    expect(explicitStatementKind("Vergiss meinen Entwurf; nimm den Bericht")).toBeNull();
+    expect(explicitStatementKind("Vergiss den Entwurf – nimm den Bericht")).toBeNull();
+  });
+
+  it("reads a hyphen inside a word as part of the name", () => {
+    const looked: string[] = [];
+    const resolver = (target: string): MemoryId[] => {
+      looked.push(target);
+      return [];
+    };
+    expect(explicitStatementKind("Forget the e-mail address")).toBe("forget");
+    expect(forgetsOnlyIfStored("Forget the e-mail address")).toBe(false);
+    expect(
+      tryExtractForget("Forget the e-mail - tell me the rest", ctx(), { resolver }),
+    ).toBeNull();
+    expect(looked).toEqual(["the e-mail"]);
   });
 });
 

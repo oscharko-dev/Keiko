@@ -953,6 +953,95 @@ describe("explicit forget statement in chat", () => {
     }
   });
 
+  // A thing named with an article, then a request for the answer (#4212): the real resolver looks
+  // the memory up by its name alone, and a name nothing stored matches is an ordinary request whose
+  // turn forgot nothing, recorded as `not-stored` without a question.
+  it("forgets what an answer-asking forget names, and records one that names nothing", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const deps = makeDeps({ vault, model: "[]", mode: "governed-assist" });
+    await collectMemoryActions(deps, turnRequest("Remember that my editor is Vim"), ctx);
+    expect(readMemories(vault, ctx)).toHaveLength(1);
+    const sink = captureActivityLog();
+
+    const unrelated = await collectMemoryActions(
+      deps,
+      turnRequest("Forget the formatting, just give me the answer"),
+      ctx,
+      "request-1",
+    );
+
+    expect(unrelated).toEqual([]);
+    const notStored = sink.events.find((event) => event.op === "memory.explicit.forget");
+    expect(notStored?.correlationId).toBe("request-1");
+    expect(
+      expectActivityLogProof(
+        "memory.explicit.forget.line",
+        formatActivityLogProofLine(notStored ?? {}),
+      ),
+    ).toMatchObject({ outcome: "not-stored" });
+    expect(readMemories(vault, ctx)).toHaveLength(1);
+
+    const named = await collectMemoryActions(
+      deps,
+      turnRequest("Forget the editor, then tell me what you have"),
+      ctx,
+    );
+
+    expect(named).toEqual([expect.objectContaining({ kind: "forget", forgotten: true })]);
+    expect(readMemories(vault, ctx)).toHaveLength(0);
+    // Only the unmatched one is `not-stored`; the forget that matched records `forgotten`.
+    expect(
+      sink.events
+        .filter((event) => event.op === "memory.explicit.forget")
+        .map((event) => event.extra?.outcome),
+    ).toEqual(["not-stored", "forgotten"]);
+  });
+
+  // The person's own fact, then a request for the answer (#4212): the real resolver finds it by its
+  // name alone, where the whole clause ("… and tell me when it is gone") matched no memory and the
+  // person was asked which one they meant.
+  it.each([
+    ["Remember that my editor is Vim", "Forget my editor and tell me when it is gone"],
+    [
+      "Merke dir, dass meine Adresse Hauptstraße 5 ist",
+      "Vergiss meine Adresse und sag mir Bescheid",
+    ],
+    [
+      "Merke dir, dass meine Telefonnummer 0301234 ist",
+      "Vergiss einfach meine Telefonnummer; sag mir Bescheid, wenn sie weg ist",
+    ],
+  ])("forgets the person's own fact after %j when %j goes on", async (stated, forget) => {
+    const vault = makeVault();
+    const ctx = context();
+    const deps = makeDeps({ vault, model: "[]", mode: "governed-assist" });
+    await collectMemoryActions(deps, turnRequest(stated), ctx);
+    expect(readMemories(vault, ctx)).toHaveLength(1);
+
+    const actions = await collectMemoryActions(deps, turnRequest(forget), ctx);
+
+    expect(actions).toEqual([expect.objectContaining({ kind: "forget", forgotten: true })]);
+    expect(readMemories(vault, ctx)).toHaveLength(0);
+  });
+
+  it.each([
+    "Vergiss den alten API-Pfad, nimm den neuen",
+    "Was ist das Wetter morgen?",
+    "Forget my phone number and tell me when it is gone",
+  ])("records no not-stored line for %j", async (content) => {
+    const vault = makeVault();
+    const ctx = context();
+    const deps = makeDeps({ vault, model: "[]", mode: "governed-assist" });
+    const sink = captureActivityLog();
+
+    await collectMemoryActions(deps, turnRequest(content), ctx);
+
+    const outcomes = sink.events
+      .filter((event) => event.op === "memory.explicit.forget")
+      .map((event) => event.extra?.outcome);
+    expect(outcomes).not.toContain("not-stored");
+  });
+
   it('does not take an older memory for the statement before "Vergiss das"', async () => {
     const vault = makeVault();
     const ctx = context();
