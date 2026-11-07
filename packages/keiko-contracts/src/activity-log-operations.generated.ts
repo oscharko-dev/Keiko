@@ -1285,6 +1285,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "budget-unavailable",
           "template-unavailable",
           "draft-unavailable",
+          "project-not-found",
+          "issue-type-not-found",
         ],
       },
       stopReason: {

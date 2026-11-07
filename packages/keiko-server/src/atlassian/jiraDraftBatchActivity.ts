@@ -51,6 +51,8 @@ export const JIRA_DRAFT_BATCH_REFUSALS = [
   "budget-unavailable",
   "template-unavailable",
   "draft-unavailable",
+  "project-not-found",
+  "issue-type-not-found",
 ] as const;
 export type JiraDraftBatchRefusal = (typeof JIRA_DRAFT_BATCH_REFUSALS)[number];
 
@@ -161,6 +163,8 @@ const REFUSAL_KIND: Readonly<Record<JiraDraftBatchRefusal, ActivityLogErrorKind>
   "budget-unavailable": "unavailable",
   "template-unavailable": "unavailable",
   "draft-unavailable": "conflict",
+  "project-not-found": "invalid-request",
+  "issue-type-not-found": "invalid-request",
 };
 
 const STOP_KIND: Readonly<Record<JiraDraftBatchStopReason, ActivityLogErrorKind>> = {

@@ -7,10 +7,8 @@ import {
 } from "@oscharko-dev/keiko-tool-catalog";
 import { object, text } from "./jiraManagedSchemas.js";
 import {
-  ISSUE_TYPE_ID,
   JIRA_DRAFT_ID_SCHEMA,
   JIRA_DRAFT_PARENT_SCHEMA,
-  PROJECT_ID,
   REQUIREMENT_PROBLEMS,
   REQUIREMENT_REFUSAL,
 } from "./jiraManagedMutationDescriptors.js";
@@ -25,9 +23,20 @@ export const JIRA_DRAFT_BATCH_DURATION_MS_MAX = 2_700_000;
 
 const DESCRIPTION =
   "Draft Jira issues from this Chat's Knowledge requirements in ONE call; Keiko pages them itself. " +
+  "Call it directly: no need to read requirements, list issue types or search Jira first; issueTypeId may be omitted. " +
   "per-requirement: one issue each; grouped: issues per group named by grouping. requirements only narrows to a subset. " +
   "create true only if the user asked to create now; Keiko then asks for approval, so skip jira.draft. " +
   "If failedCount is above 0, report failedRequirementRefs and offer a retry with requirements.ids and the same draftId.";
+
+const PROJECT_REFERENCE = {
+  ...text(32),
+  pattern: "^[A-Za-z0-9_]{1,32}$",
+  description: "Project key (e.g. KER) or numeric id.",
+};
+const ISSUE_TYPE_REFERENCE = {
+  ...text(120),
+  description: "Issue type name or numeric id; omit for the project's default (Story, else Task).",
+};
 
 const REQUIREMENTS_SCHEMA = object({
   documents: { type: "array", maxItems: 20, items: REQUIREMENT_DOCUMENT_SCOPE_SCHEMA },
@@ -52,8 +61,8 @@ export const JIRA_DRAFT_BATCH_DECLARATION: ManagedMcpToolDeclaration = Object.fr
     inputSchema: compileExternalCatalogSchema(
       object(
         {
-          projectId: PROJECT_ID,
-          issueTypeId: ISSUE_TYPE_ID,
+          projectId: PROJECT_REFERENCE,
+          issueTypeId: ISSUE_TYPE_REFERENCE,
           granularity: { type: "string", enum: ["per-requirement", "grouped"] },
           grouping: text(JIRA_DRAFT_BATCH_GROUPING_CHARS_MAX),
           guidance: text(JIRA_DRAFT_BATCH_GUIDANCE_CHARS_MAX),
@@ -62,7 +71,7 @@ export const JIRA_DRAFT_BATCH_DECLARATION: ManagedMcpToolDeclaration = Object.fr
           draftId: JIRA_DRAFT_ID_SCHEMA,
           create: { type: "boolean" },
         },
-        ["projectId", "issueTypeId", "granularity", "create"],
+        ["projectId", "granularity", "create"],
       ),
     ),
     resultSchema: object(
@@ -90,6 +99,9 @@ export const JIRA_DRAFT_BATCH_DECLARATION: ManagedMcpToolDeclaration = Object.fr
         },
         createRequested: { type: "boolean" },
         guidance: text(1024),
+        availableIssueTypes: { type: "array", maxItems: 20, items: text(120) },
+        availableRequirementCount: COUNT,
+        availableDocuments: { type: "array", maxItems: 20, items: text(512) },
       },
       ["outcome"],
     ),

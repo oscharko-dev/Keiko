@@ -291,6 +291,11 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.complete": "Abgeschlossen",
   "chat.jira.running": "Wird ausgeführt",
   "chat.jira.unavailable": "Konnte nicht abgeschlossen werden",
+  "chat.jira.batch.refused.noRequirements": "Keine Anforderung passte zur Auswahl",
+  "chat.jira.batch.refused.noKnowledgePod":
+    "An diesen Chat ist kein Knowledge Pod mit Anforderungen angehängt",
+  "chat.jira.batch.refused.projectNotFound": "Projekt nicht gefunden",
+  "chat.jira.batch.refused.issueTypeNotFound": "Vorgangstyp in diesem Projekt nicht verfügbar",
   "browserApproval.title": "Diesen Browser verbinden",
   "browserApproval.close": "Schließen",
   "browserApproval.notice":

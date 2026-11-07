@@ -2,7 +2,9 @@ import { randomBytes } from "node:crypto";
 import {
   executeJiraDraftStageTool,
   readJiraCreateTemplateRules,
+  resolveJiraDraftPlacement,
   type JiraCreateTemplateRules,
+  type JiraDraftPlacement,
   type JiraDraftBatchExecutor,
   type JiraDraftToolDeps,
   type JiraManagedConnection,
@@ -52,26 +54,35 @@ const RULES_CHARS_MAX = 3000;
 const REJECTION_CHARS_MAX = 2000;
 const REF_PREFIX_HEAD = "b";
 
-function refused(refusal: JiraDraftBatchRefusal, guidance?: string): ManagedMcpToolResult {
+function refused(
+  refusal: JiraDraftBatchRefusal,
+  guidance?: string,
+  facts: CatalogJsonObject = {},
+): ManagedMcpToolResult {
   return {
     isError: true,
     data: {
       outcome: refusal === "invalid-input" ? "rejected" : "failed",
       reason: refusal,
       ...(guidance === undefined ? {} : { guidance }),
+      ...facts,
     },
   };
 }
 
 const REFUSAL_GUIDANCE: Partial<Record<JiraDraftBatchRefusal, string>> = {
   "invalid-input":
-    "Send projectId and issueTypeId (numeric ids from the project and issue-type reads), granularity, and create.",
+    "Send projectId (project key such as KER, or numeric id), granularity, and create; issueTypeId (name or id) is optional.",
+  "project-not-found":
+    "Jira has no project with that key or id that this connection can read. Ask the user for the project key and call again.",
+  "issue-type-not-found":
+    "The project has no such issue type. Call again with one of availableIssueTypes, or omit issueTypeId.",
   "no-knowledge-pod":
     "This Chat has no Knowledge Pod with requirements. Ask the user to attach the Pod with the requirement document.",
   "requirements-cut":
     "The Knowledge Pods hold more requirements than Keiko can list at once. Narrow the batch with requirements.documents, ids, priorities or query.",
   "no-requirements":
-    "No requirement matches. Check requirements.documents, ids, priorities and query against the Pod, or omit them.",
+    "No requirement matches the requirements filter. Call again and omit requirements to draft all of them.",
 };
 
 function clip(value: string, max: number): string {
@@ -86,9 +97,67 @@ type Collected =
       /** References that more than one requirement carried; only the first was kept. */
       readonly duplicateRefs: readonly string[];
     }
-  | { readonly ok: false; readonly refusal: JiraDraftBatchRefusal };
+  | {
+      readonly ok: false;
+      readonly refusal: JiraDraftBatchRefusal;
+      /** Model-facing facts that let one retry succeed; counts and scope ids only. */
+      readonly facts?: CatalogJsonObject;
+    };
+
+/** Document scopes a refusal names to the model. */
+const SCOPES_NAMED_MAX = 20;
+
+/** What the Pod holds without the model's filter, so a filter that matched nothing can be fixed. */
+function unfilteredFacts(
+  units: Parameters<typeof selectUnits>[0],
+  guidance: string,
+): CatalogJsonObject {
+  const scopes = [...new Set(units.map(({ entry }) => entry.documentScope))];
+  return {
+    availableRequirementCount: units.length,
+    availableDocuments: scopes.slice(0, SCOPES_NAMED_MAX),
+    guidance,
+  };
+}
 
 /** The selected requirements as the model reads them, redacted under the Chat content policy. */
+function selectedRequirements(
+  units: Parameters<typeof selectUnits>[0],
+  args: JiraDraftBatchArguments,
+  redact: (value: string) => string,
+): { readonly requirements: readonly DraftBatchRequirement[]; readonly duplicateRefs: string[] } {
+  const byRef = new Map<string, DraftBatchRequirement>();
+  const duplicateRefs = new Set<string>();
+  for (const { entry } of selectUnits(units, args.filter, redact)) {
+    const ref = requirementReference(entry);
+    if (byRef.has(ref)) {
+      duplicateRefs.add(ref);
+      continue;
+    }
+    const criteria = entry.acceptanceCriteria.map((item) => `- ${item.id}: ${item.text}`);
+    byRef.set(ref, {
+      ref,
+      title: clip(redact(entry.title), TITLE_CHARS_MAX),
+      section: clip(entry.sectionPath.map(redact).join(" > "), SECTION_CHARS_MAX),
+      text: clip(redact([entry.statement, ...criteria].join("\n")), REQUIREMENT_TEXT_CHARS_MAX),
+      criteria: entry.acceptanceCriteria.map((item) => redact(item.text)),
+    });
+  }
+  return { requirements: [...byRef.values()], duplicateRefs: [...duplicateRefs] };
+}
+
+function noRequirements(
+  count: number,
+  units: Parameters<typeof selectUnits>[0],
+  args: JiraDraftBatchArguments,
+): Collected {
+  const guidance =
+    args.filtered && count > 0
+      ? `No requirement matched the requirements filter. Omit requirements to draft all ${String(count)}.`
+      : (REFUSAL_GUIDANCE["no-requirements"] ?? "");
+  return { ok: false, refusal: "no-requirements", facts: unfilteredFacts(units, guidance) };
+}
+
 function collectRequirements(
   deps: UiHandlerDeps,
   context: JiraDraftBatchContext,
@@ -104,27 +173,9 @@ function collectRequirements(
       return { ok: false, refusal: "scope-unavailable" };
     const cut = collection.cutReasons.length > 0 || collection.unitsOmitted > 0;
     if (cut && !args.filtered) return { ok: false, refusal: "requirements-cut" };
-    const redact = contentRedact(deps);
-    const byRef = new Map<string, DraftBatchRequirement>();
-    const duplicateRefs = new Set<string>();
-    for (const { entry } of selectUnits(collection.units, args.filter, redact)) {
-      const ref = requirementReference(entry);
-      if (byRef.has(ref)) {
-        duplicateRefs.add(ref);
-        continue;
-      }
-      const criteria = entry.acceptanceCriteria.map((item) => `- ${item.id}: ${item.text}`);
-      byRef.set(ref, {
-        ref,
-        title: clip(redact(entry.title), TITLE_CHARS_MAX),
-        section: clip(entry.sectionPath.map(redact).join(" > "), SECTION_CHARS_MAX),
-        text: clip(redact([entry.statement, ...criteria].join("\n")), REQUIREMENT_TEXT_CHARS_MAX),
-        criteria: entry.acceptanceCriteria.map((item) => redact(item.text)),
-      });
-    }
-    return byRef.size === 0
-      ? { ok: false, refusal: "no-requirements" }
-      : { ok: true, requirements: [...byRef.values()], cut, duplicateRefs: [...duplicateRefs] };
+    const selected = selectedRequirements(collection.units, args, contentRedact(deps));
+    if (selected.requirements.length > 0) return { ok: true, cut, ...selected };
+    return noRequirements(collection.units.length, collection.units, args);
   } finally {
     session.close();
   }
@@ -366,19 +417,47 @@ function completionActivity(
   };
 }
 
-function refusalResult(run: BatchRun, refusal: JiraDraftBatchRefusal): ManagedMcpToolResult {
+function refusalResult(
+  run: BatchRun,
+  refusal: JiraDraftBatchRefusal,
+  facts: CatalogJsonObject = {},
+): ManagedMcpToolResult {
+  const available = facts.availableRequirementCount;
   record(run, {
     phase: "refused",
     refusal,
     granularity: run.args.granularity,
+    ...(typeof available === "number" ? { requirementCount: available } : {}),
     createRequested: run.args.create,
     durationMs: Date.now() - run.startedAt,
   });
-  return refused(refusal, REFUSAL_GUIDANCE[refusal]);
+  return refused(refusal, REFUSAL_GUIDANCE[refusal], facts);
+}
+
+/** The project and issue type as numeric ids, or the refusal that tells the model how to retry. */
+async function resolvePlacement(
+  run: BatchRun,
+  connection: JiraManagedConnection,
+): Promise<JiraDraftPlacement | ManagedMcpToolResult> {
+  const { args, context } = run;
+  const placement = await resolveJiraDraftPlacement(
+    context,
+    connection,
+    args.projectId,
+    args.issueTypeId,
+  );
+  if (placement.ok) return placement;
+  if (placement.reason === "project-not-found") return refusalResult(run, "project-not-found");
+  if (placement.reason === "issue-type-not-found")
+    return refusalResult(run, "issue-type-not-found", {
+      availableIssueTypes: [...(placement.issueTypeNames ?? [])],
+    });
+  return refusalResult(run, "template-unavailable");
 }
 
 function batchInput(
   args: JiraDraftBatchArguments,
+  placement: JiraDraftPlacement,
   requirements: readonly DraftBatchRequirement[],
   rules: JiraCreateTemplateRules,
   model: BatchModel,
@@ -394,8 +473,8 @@ function batchInput(
       requiredFields: rules.requiredFields,
     },
     placement: {
-      projectId: args.projectId,
-      issueTypeId: args.issueTypeId,
+      projectId: placement.projectId,
+      issueTypeId: placement.issueTypeId,
       requiredLabels: rules.requiredLabels,
       parent: args.parent,
     },
@@ -413,15 +492,17 @@ async function runBatch(
 ): Promise<ManagedMcpToolResult> {
   const { deps, context, args } = run;
   const collected = collectRequirements(deps, context, args);
-  if (!collected.ok) return refusalResult(run, collected.refusal);
+  if (!collected.ok) return refusalResult(run, collected.refusal, collected.facts);
   run.duplicateRefs = collected.duplicateRefs;
+  const placement = await resolvePlacement(run, connection);
+  if ("data" in placement) return placement;
   const model = createBatchModel(deps, context);
   if (typeof model === "string") return refusalResult(run, model);
   const rules = await readJiraCreateTemplateRules(
     context,
     connection,
-    args.projectId,
-    args.issueTypeId,
+    placement.projectId,
+    placement.issueTypeId,
   );
   if (!rules.ok) return refusalResult(run, "template-unavailable");
   record(run, {
@@ -443,7 +524,7 @@ async function runBatch(
     remainingCalls: context.remainingModelCalls,
   };
   const result = await runJiraDraftBatch(
-    batchInput(args, collected.requirements, rules, model),
+    batchInput(args, placement, collected.requirements, rules, model),
     ports,
   );
   const data = resultData(run, result);

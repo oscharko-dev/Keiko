@@ -1,3 +1,4 @@
+import { isJiraIssueTypeReference, isJiraProjectReference } from "@oscharko-dev/keiko-connectors";
 import { JIRA_DRAFT_ID_PATTERN } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { RequirementFilter } from "../requirement-inventory.js";
@@ -7,8 +8,10 @@ import {
 } from "./jiraDraftBatchDescriptor.js";
 
 export interface JiraDraftBatchArguments {
+  /** A numeric project id or a project key; Keiko resolves it before any model work. */
   readonly projectId: string;
-  readonly issueTypeId: string;
+  /** A numeric issue type id or a name; omitted, Keiko chooses the project's default type. */
+  readonly issueTypeId?: string | undefined;
   readonly granularity: "per-requirement" | "grouped";
   readonly grouping?: string | undefined;
   readonly guidance?: string | undefined;
@@ -20,7 +23,6 @@ export interface JiraDraftBatchArguments {
   readonly create: boolean;
 }
 
-const NUMERIC_ID = /^[0-9]{1,32}$/u;
 const DRAFT_ID = new RegExp(JIRA_DRAFT_ID_PATTERN, "u");
 
 /** An empty list names nothing to filter by, so it reads like an omitted one. */
@@ -52,8 +54,12 @@ function requirementFilter(value: unknown): RequirementFilter {
   };
 }
 
-function isNumericId(value: unknown): value is string {
-  return typeof value === "string" && NUMERIC_ID.test(value);
+function isOptionalIssueType(value: unknown): value is string | undefined {
+  return value === undefined || isJiraIssueTypeReference(value);
+}
+
+function isOptionalParent(value: unknown): value is CatalogJsonObject | undefined {
+  return value === undefined || isRecord(value);
 }
 
 function isGranularity(value: unknown): value is JiraDraftBatchArguments["granularity"] {
@@ -71,15 +77,16 @@ export function parseJiraDraftBatchArguments(
   const { projectId, issueTypeId, granularity, create, draftId, parent } = args;
   const grouping = optionalText(args.grouping, JIRA_DRAFT_BATCH_GROUPING_CHARS_MAX);
   const guidance = optionalText(args.guidance, JIRA_DRAFT_BATCH_GUIDANCE_CHARS_MAX);
-  if (!isNumericId(projectId) || !isNumericId(issueTypeId)) return undefined;
+  if (!isJiraProjectReference(projectId)) return undefined;
+  if (!isOptionalIssueType(issueTypeId)) return undefined;
   if (typeof create !== "boolean") return undefined;
   if (!isGranularity(granularity)) return undefined;
   if (grouping === null || guidance === null) return undefined;
-  if (!isOptionalDraftId(draftId) || !(parent === undefined || isRecord(parent))) return undefined;
+  if (!isOptionalDraftId(draftId) || !isOptionalParent(parent)) return undefined;
   const filter = requirementFilter(args.requirements);
   return {
     projectId,
-    issueTypeId,
+    issueTypeId: typeof issueTypeId === "string" ? issueTypeId.trim() : undefined,
     granularity,
     grouping,
     guidance,

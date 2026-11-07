@@ -83,7 +83,18 @@ function templateFor(section: string, ...frontMatter: readonly string[]): JiraIs
 function connection(templates: JiraIssueTemplateSet | undefined): JiraManagedConnection {
   const http: AtlassianHttpBodyPort = (request) => {
     const path = new URL(request.url).pathname;
-    if (path.endsWith("/project/10000")) return Promise.resolve(response({ key: "SYN" }));
+    if (path.endsWith("/project/10000") || path.endsWith("/project/SYN"))
+      return Promise.resolve(
+        response({
+          id: "10000",
+          key: "SYN",
+          issueTypes: [
+            { id: "10003", name: "Epic", subtask: false },
+            { id: "10002", name: "Sub-task", subtask: true },
+            { id: "10001", name: "Story", subtask: false },
+          ],
+        }),
+      );
     if (path.endsWith("/issuetype/10001"))
       return Promise.resolve(response({ id: "10001", name: "Story" }));
     if (path.includes("createmeta"))
@@ -529,6 +540,49 @@ describe("jira.draft-batch (#4173)", () => {
     expect(h.requests).toHaveLength(0);
   });
 
+  it("resolves a project key and an omitted issue type before drafting", async () => {
+    const h = await harness(
+      (request) => page(keysOf(request)),
+      [{ capsuleId: "cap-a", text: specification(2).text }],
+    );
+
+    const result = await h.run({ projectId: "SYN", granularity: "per-requirement", create: false });
+
+    expect(result.data).toMatchObject({ outcome: "succeeded", draftedCount: 2 });
+    const items = stagedItems(h);
+    expect(items.every((item) => item.projectId === "10000" && item.issueTypeId === "10001")).toBe(
+      true,
+    );
+  });
+
+  it("names the available issue types when the type is not in the project", async () => {
+    const h = await harness(
+      (request) => page(keysOf(request)),
+      [{ capsuleId: "cap-a", text: specification(2).text }],
+    );
+
+    const result = await h.run({ ...ARGS, issueTypeId: "Saga" });
+
+    expect(result.data.availableIssueTypes).toEqual(["Epic", "Story"]);
+    expect(result.data.guidance).toContain("availableIssueTypes");
+  });
+
+  it("tells a model whose filter matched nothing how many requirements it can draft", async () => {
+    const h = await harness(
+      (request) => page(keysOf(request)),
+      [{ capsuleId: "cap-a", text: specification(3).text }],
+    );
+
+    const result = await h.run({ ...ARGS, requirements: { ids: ["NOPE-1"] } });
+
+    expect(result.data).toMatchObject({ reason: "no-requirements", availableRequirementCount: 3 });
+    expect(result.data.guidance).toContain("Omit requirements to draft all 3.");
+    expect(result.data.availableDocuments).toHaveLength(1);
+    expect(proofLines(h)).toEqual([
+      expect.objectContaining({ refusal: "no-requirements", requirementCount: 3 }),
+    ]);
+  });
+
   it("limits the batch to the requirements the filter names", async () => {
     const h = await harness(
       (request) => page(keysOf(request)),
@@ -591,7 +645,9 @@ describe("jira.draft-batch (#4173)", () => {
       { ...ARGS, requirements: { ids: ["NOPE-1"] } },
       "no-requirements",
     ],
-    ["malformed arguments", {}, { ...ARGS, projectId: "abc" }, "invalid-input"],
+    ["malformed arguments", {}, { ...ARGS, projectId: "not a key!" }, "invalid-input"],
+    ["unknown project", {}, { ...ARGS, projectId: "NOPE" }, "project-not-found"],
+    ["unknown issue type", {}, { ...ARGS, issueTypeId: "Saga" }, "issue-type-not-found"],
   ] as const)(
     "refuses %s with a closed reason and no model call",
     async (_name, options, args, reason) => {

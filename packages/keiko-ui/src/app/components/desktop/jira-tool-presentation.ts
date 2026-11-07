@@ -124,22 +124,41 @@ function isMutation(exchange: ChatToolExchange): boolean {
     (name) => name.replace(/[.-]/gu, "_") === exchange.call.name,
   );
 }
+/** Why a draft batch was refused, in words a business user reads; any other reason stays generic. */
+const BATCH_REFUSAL_KEYS: Readonly<Record<string, WidgetMessageKey>> = {
+  "no-requirements": "chat.jira.batch.refused.noRequirements",
+  "no-knowledge-pod": "chat.jira.batch.refused.noKnowledgePod",
+  "project-not-found": "chat.jira.batch.refused.projectNotFound",
+  "issue-type-not-found": "chat.jira.batch.refused.issueTypeNotFound",
+};
+function batchRefusalState(exchange: ChatToolExchange): WidgetMessageKey | undefined {
+  const { result } = exchange;
+  if (exchange.call.name !== CHAT_TOOL_BATCH_TOOL_NAME || result?.status !== "failed")
+    return undefined;
+  const reason = plainRecord(result.data)?.reason;
+  return typeof reason === "string" ? BATCH_REFUSAL_KEYS[reason] : undefined;
+}
+function mutationState(
+  exchange: ChatToolExchange,
+  turnState: ChatTurnState | undefined,
+): WidgetMessageKey {
+  const outcome = mutationOutcome(exchange);
+  if (outcome !== undefined) return OUTCOME_KEYS[outcome];
+  return exchange.result === undefined && turnState === "pending"
+    ? OUTCOME_KEYS.pending
+    : OUTCOME_KEYS.unknown;
+}
 export function jiraToolState(
   exchange: ChatToolExchange,
   turnState: ChatTurnState | undefined,
 ): WidgetMessageKey {
   if (exchange.call.name.startsWith("mcp_") && exchange.mutationOutcome !== undefined)
     return MCP_OUTCOME_KEYS[exchange.mutationOutcome];
-  if (isMutation(exchange)) {
-    const outcome = mutationOutcome(exchange);
-    if (outcome !== undefined) return OUTCOME_KEYS[outcome];
-    return exchange.result === undefined && turnState === "pending"
-      ? OUTCOME_KEYS.pending
-      : OUTCOME_KEYS.unknown;
-  }
+  if (isMutation(exchange)) return mutationState(exchange, turnState);
   if (exchange.result === undefined)
     return turnState === "pending" ? "chat.jira.running" : "chat.jira.resultUnavailable";
-  return exchange.result.status === "completed" ? "chat.jira.complete" : "chat.jira.unavailable";
+  if (exchange.result.status === "completed") return "chat.jira.complete";
+  return batchRefusalState(exchange) ?? "chat.jira.unavailable";
 }
 export function jiraToolOutcomeHelp(state: WidgetMessageKey): WidgetMessageKey | undefined {
   switch (state) {
