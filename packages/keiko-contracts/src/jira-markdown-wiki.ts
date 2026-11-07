@@ -8,14 +8,16 @@
  * unterminated fence leaves the whole text as the heading pass produced it.
  */
 
-// The info string's first word names the language; any attributes after it are ignored.
-const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})[ \t]*([\w+#.-]*)[^`\n]*$/u;
+// Every pattern below is linear: no two adjacent parts can match the same character, and a label
+// or target never spans a further `[`, so hostile input cannot force polynomial backtracking.
+const FENCE_INDENT = /^ {0,3}/u;
+const FENCE_LANGUAGE = /^[ \t]*([\w+#.-]*)/u;
 const MACRO_FENCE = /^\s*\{(code|noformat)(?::[^}]*)?\}\s*$/u;
-const BULLET = /^([ \t]*)[-*+][ \t]+(.*)$/u;
-const ORDERED = /^([ \t]*)\d{1,9}[.)][ \t]+(.*)$/u;
+const BULLET = /^([ \t]*)[-*+][ \t]+([^ \t].*)?$/u;
+const ORDERED = /^([ \t]*)\d{1,9}[.)][ \t]+([^ \t].*)?$/u;
 const RULE = /^ {0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$/u;
 const TABLE_ROW = /^\s*\|.*\|\s*$/u;
-const TABLE_RULE = /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?\s*$/u;
+const TABLE_RULE_CELL = /^:?-{3,}:?$/u;
 const WIKI_HEADING = /^h[1-6]\.\s/u;
 const QUOTED = /^ {0,3}>/u;
 const STRONG_OPEN = "";
@@ -40,8 +42,8 @@ function inlineParts(line: string): readonly { readonly code: boolean; readonly 
 }
 
 const LINK_TARGET = String.raw`((?:[^()\s]|\([^()\s]*\))+)`;
-const IMAGE = new RegExp(String.raw`!\[([^\]\n]*)\]\(` + LINK_TARGET + String.raw`\)`, "gu");
-const LINK = new RegExp(String.raw`\[([^\]\n]+)\]\(` + LINK_TARGET + String.raw`\)`, "gu");
+const IMAGE = new RegExp(String.raw`!\[([^[\]\n]*)\]\(` + LINK_TARGET + String.raw`\)`, "gu");
+const LINK = new RegExp(String.raw`\[([^[\]\n]+)\]\(` + LINK_TARGET + String.raw`\)`, "gu");
 const PROTECTED = /\uE002(\d+)\uE003/gu;
 
 /** Links and images first, kept out of the emphasis pass so a URL's `__` or `*` stays intact. */
@@ -116,6 +118,20 @@ interface Converter {
   header: boolean;
 }
 
+/** An opening fence: up to three spaces, three or more backticks or tildes, an info string. */
+function fenceOpen(
+  line: string,
+): { readonly marker: string; readonly language: string } | undefined {
+  const body = line.slice(FENCE_INDENT.exec(line)?.[0].length ?? 0);
+  const character = body[0];
+  if (character !== "`" && character !== "~") return undefined;
+  let length = 0;
+  while (body[length] === character) length += 1;
+  const info = body.slice(length);
+  if (length < 3 || info.includes("`")) return undefined;
+  return { marker: body.slice(0, length), language: FENCE_LANGUAGE.exec(info)?.[1] ?? "" };
+}
+
 function fenceLine(state: Converter, line: string): boolean {
   if (state.fence !== undefined) {
     const closing = line.trim();
@@ -125,11 +141,10 @@ function fenceLine(state: Converter, line: string): boolean {
     } else state.out.push(line);
     return true;
   }
-  const open = FENCE_OPEN.exec(line);
-  if (open === null) return false;
-  state.fence = { marker: open[1] ?? "```" };
-  const language = open[2] ?? "";
-  state.out.push(language.length === 0 ? "{code}" : `{code:${language}}`);
+  const open = fenceOpen(line);
+  if (open === undefined) return false;
+  state.fence = { marker: open.marker };
+  state.out.push(open.language.length === 0 ? "{code}" : `{code:${open.language}}`);
   return true;
 }
 
@@ -148,7 +163,9 @@ function macroLine(state: Converter, line: string): boolean {
 
 // A table's rule row has a pipe; a bare `---` after a row is a horizontal rule.
 function isTableRule(line: string | undefined): boolean {
-  return line !== undefined && line.includes("|") && TABLE_RULE.test(line);
+  if (!line?.includes("|")) return false;
+  const inner = line.trim().replace(/^\|/u, "").replace(/\|$/u, "");
+  return inner.split("|").every((cell) => TABLE_RULE_CELL.test(cell.trim()));
 }
 
 function tableLine(state: Converter, line: string, next: string | undefined): boolean {
@@ -198,13 +215,13 @@ export function markdownBlocksToJiraWiki(text: string): string | undefined {
 export function readsAsMarkdownOnly(text: string): boolean {
   const markdown =
     /\*\*(?=\S)[^*\n]*?\S\*\*/u.test(text) ||
-    /\[[^\]\n]+\]\((?:https?:\/\/|mailto:|\/|#)[^)\s]*\)/u.test(text) ||
+    /\[[^[\]\n]+\]\((?:https?:\/\/|mailto:|\/|#)[^()[\s]*\)/u.test(text) ||
     /^ {0,3}(?:`{3,}|~{3,})/mu.test(text);
   const wiki =
     /^h[1-6]\.\s/mu.test(text) ||
     /\{(?:code|noformat|panel|quote|color)[:}]/u.test(text) ||
     /^\s*\|\|/mu.test(text) ||
-    /\[[^\]|\n]+\|[^\]\n]+\]/u.test(text) ||
+    /\[[^[\]|\n]+\|[^[\]\n]+\]/u.test(text) ||
     // Consecutive `# ` lines are a wiki numbered list; Markdown has one title per text.
     /^#[ \t].*\r?\n#[ \t]/mu.test(text);
   return markdown && !wiki;

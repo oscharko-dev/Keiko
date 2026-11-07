@@ -147,3 +147,45 @@ describe("a plain string is Markdown only when it uses what wiki markup never wr
     }
   });
 });
+
+// CodeQL alerts 106-111: each input made one pattern backtrack quadratically; at this size the old
+// patterns took seconds per input, the linear ones take milliseconds.
+describe("hostile input converts in linear time", () => {
+  const repeats = 60_000;
+  const hostile: readonly (readonly [string, string])[] = [
+    ["bullet", `*\t${"\t\t".repeat(repeats)}`],
+    ["ordered item", `1.\t${"\t\t".repeat(repeats)}`],
+    ["fence", `\`\`\`${"\t".repeat(repeats * 2)}\``],
+    ["table rule", `|---${"\t".repeat(repeats * 2)}x\n|a|`],
+    ["Markdown link target", `[\\](/${"[!](#".repeat(repeats)}`],
+    ["link label", "[".repeat(repeats * 2)],
+    ["wiki link", "[\\|".repeat(repeats)],
+  ];
+
+  for (const [name, text] of hostile) {
+    it(`finishes a hostile ${name} quickly`, { timeout: 2_000 }, () => {
+      const started = performance.now();
+      markdownBlocksToJiraWiki(text);
+      readsAsMarkdownOnly(text);
+      expect(performance.now() - started).toBeLessThan(1_000);
+    });
+  }
+
+  it("keeps the meaning of the rewritten patterns", () => {
+    expect(markdownBlocksToJiraWiki("-\t\titem\n1.  first\n- ")).toBe("* item\n# first\n* ");
+    expect(markdownBlocksToJiraWiki("~~~ ts {x}\nconst a = 1;\n~~~")).toBe(
+      "{code:ts}\nconst a = 1;\n{code}",
+    );
+    // A backtick in the info string makes it no fence: the line stays prose with a code span.
+    expect(markdownBlocksToJiraWiki("``` a`b\ntext")).toBe("``{{ a}}b\ntext");
+    expect(markdownBlocksToJiraWiki("| A | B |\n| :--- | ---: |\n| 1 | 2 |")).toBe(
+      "||A||B||\n|1|2|",
+    );
+    expect(markdownBlocksToJiraWiki("| A |\n||---|")).toBe("|A|\n||---|");
+    expect(markdownInlineToJiraWiki("[Docs](https://example.test/a_(b))")).toBe(
+      "[Docs|https://example.test/a_(b)]",
+    );
+    expect(readsAsMarkdownOnly("See [Docs](https://example.test/x).")).toBe(true);
+    expect(readsAsMarkdownOnly("See [Docs|https://example.test/x] and **this**.")).toBe(false);
+  });
+});
