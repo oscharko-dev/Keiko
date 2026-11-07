@@ -73,6 +73,7 @@
   "client.binding.resolved": "client-diagnostics",
   "client.binding.target-missing": "client-diagnostics",
   "client.citation.activated": "client-diagnostics",
+  "client.citation.highlighted": "client-diagnostics",
   "client.coding-run.restored": "client-diagnostics",
   "client.coding-workbench.interaction": "client-diagnostics",
   "client.coding-workbench.request-timed-out": "client-diagnostics",

@@ -18,6 +18,7 @@ import type {
 import {
   createSqliteAuditSink,
   lookupCitationPreviewSnapshotForStoredCitation,
+  readCitationExcerpt,
   type CitationPreviewSnapshotLookup,
 } from "@oscharko-dev/keiko-local-knowledge";
 
@@ -270,6 +271,47 @@ function evaluateStoredCitation(
     return reject(source.reason, display);
   }
   return { kind: "available", display, authority };
+}
+
+// The cited passage an authorized open hands the viewer to frame on its page: bounded, and shown as
+// the person reads it (the live redactor follows the content policy).
+const PDF_PREVIEW_PASSAGE_MAX_CHARS = 4000;
+
+function citedPassage(
+  store: ReturnType<typeof openStoreForDeps>["store"],
+  authority: PdfCitationPreviewAuthority,
+): string | undefined {
+  const current = authority.current;
+  if (current?.characterStart === undefined || current.characterEnd === undefined) {
+    return undefined;
+  }
+  const excerpt = readCitationExcerpt(
+    store,
+    current.lineage.capsuleId,
+    {
+      capsuleId: current.lineage.capsuleId,
+      sourceId: current.lineage.sourceId,
+      documentId: current.lineage.documentId,
+      chunkId: current.lineage.chunkId,
+      characterStart: current.characterStart,
+      characterEnd: current.characterEnd,
+      safeDisplayName: current.documentLabel,
+    },
+    PDF_PREVIEW_PASSAGE_MAX_CHARS,
+  );
+  return excerpt.length === 0 ? undefined : excerpt;
+}
+
+function withCitedPassage(
+  deps: UiHandlerDeps,
+  store: ReturnType<typeof openStoreForDeps>["store"],
+  authority: PdfCitationPreviewAuthority,
+  display: PdfCitationPreviewDisplay,
+): PdfCitationPreviewDisplay {
+  const passage = citedPassage(store, authority);
+  if (passage === undefined) return display;
+  const shown = deps.redactor(passage);
+  return typeof shown === "string" && shown.length > 0 ? { ...display, passage: shown } : display;
 }
 
 function sameCitationAuthority(
@@ -528,7 +570,11 @@ export function authorizePdfCitationPreview(
     const outcome = evaluateStoredCitation(session.store, citation);
     emitPreviewAudit(session.store, [citation], outcome);
     return outcome.kind === "available"
-      ? { outcome: "authorized", display: outcome.display, authority: outcome.authority }
+      ? {
+          outcome: "authorized",
+          display: withCitedPassage(deps, session.store, outcome.authority, outcome.display),
+          authority: outcome.authority,
+        }
       : outcome;
   } finally {
     session.close();

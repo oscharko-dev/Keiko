@@ -30,8 +30,14 @@ import {
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { bffRequestErrorKind } from "@/lib/http";
+import { newClientCorrelationId } from "@/lib/bff-correlation";
 
 import { Icons } from "../../Icons";
+import {
+  PdfCitationHighlight,
+  type CitationHighlightSettled,
+  type HighlightedPage,
+} from "./PdfCitationHighlight";
 import type { AppWindow } from "../../windows/types";
 import {
   getPdfCitationPreviewSession,
@@ -60,6 +66,8 @@ const PAGE_SCROLL_GAP_PX = 18;
 const PAGE_WINDOW_RADIUS = 3;
 const RENDER_RADIUS = 1;
 const SLOW_LOAD_MS = 900;
+// Room above a framed citation when it is scrolled into view.
+const CITATION_FRAME_MARGIN_PX = 48;
 const ZOOM_STEP = 0.1;
 const PDF_LOAD_DEADLINE_MS = 30_000;
 const PDF_FULL_BUFFER_MAX_BYTES = 4 * 1024 * 1024;
@@ -398,6 +406,12 @@ function restoredShellFailure(
   };
 }
 
+/** The cited page's passage and the receiver of its highlight outcome. */
+interface CitedPage {
+  readonly passage: string | undefined;
+  readonly onSettled: CitationHighlightSettled;
+}
+
 /** A loaded document and the load that produced it. */
 interface LoadedDocument {
   readonly load: object;
@@ -414,6 +428,7 @@ function isRenderingCancelled(error: unknown): boolean {
 
 function PdfCanvasPage({
   active,
+  citation,
   onError,
   onMeasured,
   pageNumber,
@@ -422,6 +437,8 @@ function PdfCanvasPage({
   scale,
 }: {
   readonly active: boolean;
+  /** Present on the cited page: the passage to frame there and where the outcome goes. */
+  readonly citation: CitedPage | undefined;
   readonly onError: (page: number, error: unknown) => void;
   readonly onMeasured: (page: number, size: PageSize) => void;
   readonly pageNumber: number;
@@ -431,6 +448,7 @@ function PdfCanvasPage({
 }): ReactNode {
   const t = useTranslate();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [rendered, setRendered] = useState<HighlightedPage | null>(null);
 
   useEffect(() => {
     if (!active) return;
@@ -468,6 +486,7 @@ function PdfCanvasPage({
           renderTask.cancel();
         };
         await renderTask.promise;
+        if (!disposed) setRendered({ page, viewport });
       })
       .catch((error) => {
         if (disposed || isRenderingCancelled(error)) return;
@@ -481,12 +500,46 @@ function PdfCanvasPage({
   }, [active, onError, onMeasured, pageNumber, pdf, rotation, scale]);
 
   return (
-    <canvas
-      ref={canvasRef}
-      className="pdfv-page-canvas"
-      aria-label={t("pdfCitationPreviewWindow.page", { pageNumber })}
-    />
+    <div className="pdfv-page-layer">
+      <canvas
+        ref={canvasRef}
+        className="pdfv-page-canvas"
+        aria-label={t("pdfCitationPreviewWindow.page", { pageNumber })}
+      />
+      {citation !== undefined && rendered !== null ? (
+        <PdfCitationHighlight
+          rendered={rendered}
+          passage={citation.passage}
+          onSettled={citation.onSettled}
+        />
+      ) : null}
+    </div>
   );
+}
+
+// The cited page's highlight: reports its outcome once per document load, and a framed passage
+// re-renders the window so the held page scrolls to the frame.
+function useCitedPage(
+  load: object,
+  sessionEntry: ReturnType<typeof getPdfCitationPreviewSession>,
+): CitedPage {
+  const passage = sessionEntry?.display.passage;
+  const reportedFor = useRef<object | null>(null);
+  const [, setFramedCount] = useState(0);
+  const onSettled = useCallback<CitationHighlightSettled>(
+    (highlight) => {
+      if (reportedFor.current === load) return;
+      reportedFor.current = load;
+      // i18n-exempt: body-free diagnostic message for the activity log, never rendered
+      reportClientDiagnostic("PDF citation highlight settled", {
+        correlationId: newClientCorrelationId(),
+        citationHighlight: highlight,
+      });
+      if (highlight.outcome === "framed") setFramedCount((count) => count + 1);
+    },
+    [load],
+  );
+  return useMemo((): CitedPage => ({ passage, onSettled }), [onSettled, passage]);
 }
 
 // The label for the failure panel's single action button, matching the failure's action kind.
@@ -589,6 +642,7 @@ export function PdfCitationPreviewWindow({
     [failureOverride, reopenAttemptKey, retryToken, sessionEntry, t],
   );
   const doc = documentOfLoad(loaded, load);
+  const citedPage = useCitedPage(load, sessionEntry);
   const scalarIntentControlsEnabled = doc !== null;
   const currentPageSize = measuredSizes[currentPage] ?? defaultPageSize;
   const effectiveScale = useMemo((): number => {
@@ -649,14 +703,18 @@ export function PdfCitationPreviewWindow({
       const scroller = scrollRef.current;
       if (scroller === null) return;
       const element = pageRefs.current.get(pageNumber);
+      // A framed citation is the place to show; otherwise the top of its page.
+      const frame = element?.querySelector("[data-citation-box]");
+      const target = frame ?? element;
       // Scroll only the page region: scrollIntoView would also move the workspace around it.
       const top =
-        element === undefined
+        target === undefined
           ? estimatedPageOffset(pageNumber)
-          : element.getBoundingClientRect().top -
+          : target.getBoundingClientRect().top -
             scroller.getBoundingClientRect().top +
-            scroller.scrollTop;
-      scroller.scrollTo({ top });
+            scroller.scrollTop -
+            (frame === null || frame === undefined ? 0 : CITATION_FRAME_MARGIN_PX);
+      scroller.scrollTo({ top: Math.max(0, top) });
     },
     [estimatedPageOffset],
   );
@@ -983,6 +1041,7 @@ export function PdfCitationPreviewWindow({
     const renderedPage = shouldRender ? (
       <PdfCanvasPage
         active
+        citation={pageNumber === display.pageNumber ? citedPage : undefined}
         onError={handlePageRenderError}
         onMeasured={handlePageMeasured}
         pageNumber={pageNumber}

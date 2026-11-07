@@ -13,6 +13,7 @@ import {
   openPdfCitationPreviewSession,
 } from "@/lib/api";
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import {
   clearPdfCitationPreviewWindowRegistryForTests,
   getPdfCitationPreviewSession,
@@ -26,10 +27,34 @@ const renderTask = {
   cancel: vi.fn(),
 };
 
-const page = {
-  getViewport: vi.fn(({ scale }: { scale: number }) => ({
+function viewportAt(scale: number): {
+  width: number;
+  height: number;
+  convertToViewportPoint: (x: number, y: number) => number[];
+} {
+  return {
     width: 612 * scale,
     height: 792 * scale,
+    convertToViewportPoint: (x: number, y: number): number[] => [x * scale, (792 - y) * scale],
+  };
+}
+
+/** One text line of the page's text layer at the given baseline. */
+function textLine(str: string, baseline: number): Record<string, unknown> {
+  return { str, transform: [10, 0, 0, 10, 72, baseline], width: 400, height: 10 };
+}
+
+const CITED_PASSAGE =
+  "Die Bestandsaufnahme hat gezeigt, dass im Altsystem erhebliche Altlasten liegen.";
+
+const page = {
+  getViewport: vi.fn(({ scale }: { scale: number }) => viewportAt(scale)),
+  getTextContent: vi.fn(async () => ({
+    items: [
+      textLine("Kapitel 1", 740),
+      textLine("Die Bestandsaufnahme hat gezeigt, dass im", 700),
+      textLine("Altsystem erhebliche Altlasten liegen.", 686),
+    ],
   })),
   render: vi.fn(() => renderTask),
 };
@@ -65,6 +90,11 @@ vi.mock("@/lib/api", () => ({
   ),
 }));
 
+vi.mock("@/lib/client-diagnostics", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/client-diagnostics")>()),
+  reportClientDiagnostic: vi.fn(),
+}));
+
 vi.mock("pdfjs-dist/legacy/build/pdf.mjs", () => ({
   GlobalWorkerOptions: { workerSrc: "" },
   getDocument: vi.fn(() => loadingTask),
@@ -92,10 +122,7 @@ describe("PdfCitationPreviewWindow", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     pdfDocument.numPages = 3;
-    page.getViewport.mockImplementation(({ scale }: { scale: number }) => ({
-      width: 612 * scale,
-      height: 792 * scale,
-    }));
+    page.getViewport.mockImplementation(({ scale }: { scale: number }) => viewportAt(scale));
     page.render.mockReturnValue(renderTask);
     pdfDocument.getPage.mockResolvedValue(page);
     vi.mocked(fetchPdfCitationPreviewDocument).mockResolvedValue(new Uint8Array([37, 80, 68, 70]));
@@ -558,6 +585,82 @@ describe("PdfCitationPreviewWindow", () => {
     expect(screen.queryByText("Preview failed")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /retry page/i })).not.toBeInTheDocument();
     await waitFor(() => expect(incomingDocument.getPage).toHaveBeenCalledWith(20));
+  });
+
+  it("frames the cited passage on its page and reports the outcome without the passage", async () => {
+    const add = vi.fn<Parameters<typeof openPdfCitationPreviewWindow>[0]>(() => "pdf-preview-1");
+    const windowId =
+      openPdfCitationPreviewWindow(add, {
+        ...PREVIEW,
+        display: { ...PREVIEW.display, passage: CITED_PASSAGE },
+      }) ?? "missing";
+    const cfg = add.mock.calls[0]?.[1] as Record<string, unknown>;
+    // The passage stays in memory with the session; the persisted window cfg never carries it.
+    expect(JSON.stringify(cfg)).not.toContain("Altlasten");
+
+    const { container } = render(
+      <PdfCitationPreviewWindow cfg={cfg} updateCfg={vi.fn()} windowId={windowId} />,
+    );
+
+    await waitFor(() => expect(container.querySelectorAll("[data-citation-box]")).toHaveLength(1));
+    const box = container.querySelector<HTMLElement>("[data-citation-box]");
+    expect(box?.closest(".pdfv-page")?.textContent).toContain("Page 2");
+    expect(box?.getAttribute("aria-hidden")).toBe("true");
+    expect(Number.parseFloat(box?.style.top ?? "")).toBeGreaterThan(0);
+    expect(reportClientDiagnostic).toHaveBeenCalledWith(
+      "PDF citation highlight settled",
+      expect.objectContaining({ citationHighlight: { outcome: "framed", boxCount: 1 } }),
+    );
+    const reports = JSON.stringify(vi.mocked(reportClientDiagnostic).mock.calls);
+    expect(reports).not.toContain("Altlasten");
+  });
+
+  it("draws no frame when the open carried no passage, and says so once", async () => {
+    const add = vi.fn<Parameters<typeof openPdfCitationPreviewWindow>[0]>(() => "pdf-preview-1");
+    const windowId = openPdfCitationPreviewWindow(add, PREVIEW) ?? "missing";
+    const cfg = add.mock.calls[0]?.[1] as Record<string, unknown>;
+
+    const { container } = render(
+      <PdfCitationPreviewWindow cfg={cfg} updateCfg={vi.fn()} windowId={windowId} />,
+    );
+
+    await waitFor(() =>
+      expect(reportClientDiagnostic).toHaveBeenCalledWith(
+        "PDF citation highlight settled",
+        expect.objectContaining({ citationHighlight: { outcome: "no-passage", boxCount: 0 } }),
+      ),
+    );
+    expect(container.querySelector("[data-citation-box]")).toBeNull();
+    expect(page.getTextContent).not.toHaveBeenCalled();
+    const settled = vi
+      .mocked(reportClientDiagnostic)
+      .mock.calls.filter(([message]) => message === "PDF citation highlight settled");
+    expect(settled).toHaveLength(1);
+  });
+
+  it("draws no frame when the passage is not on the cited page", async () => {
+    const add = vi.fn<Parameters<typeof openPdfCitationPreviewWindow>[0]>(() => "pdf-preview-1");
+    const windowId =
+      openPdfCitationPreviewWindow(add, {
+        ...PREVIEW,
+        display: {
+          ...PREVIEW.display,
+          passage: "Ein ganz anderer Absatz über den Zahlungsverkehr und die Depots der Kunden.",
+        },
+      }) ?? "missing";
+    const cfg = add.mock.calls[0]?.[1] as Record<string, unknown>;
+
+    const { container } = render(
+      <PdfCitationPreviewWindow cfg={cfg} updateCfg={vi.fn()} windowId={windowId} />,
+    );
+
+    await waitFor(() =>
+      expect(reportClientDiagnostic).toHaveBeenCalledWith(
+        "PDF citation highlight settled",
+        expect.objectContaining({ citationHighlight: { outcome: "not-found", boxCount: 0 } }),
+      ),
+    );
+    expect(container.querySelector("[data-citation-box]")).toBeNull();
   });
 
   it("shows only the document with page and zoom controls, and stays axe-clean", async () => {

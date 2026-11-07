@@ -201,3 +201,25 @@
     padding: 10px;
   }
 }
+
+/* The cited passage, framed on its page (#4173): the layer matches the canvas, and each box is
+   positioned in fractions of the page so it follows zoom and the shown width. */
+.lazyWidgetScope :global(.pdfv-page-layer) {
+  position: relative;
+  max-width: 100%;
+}
+
+.lazyWidgetScope :global(.pdfv-citation-box) {
+  position: absolute;
+  border: 2px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklch, var(--accent) 10%, transparent);
+  pointer-events: none;
+}
+
+@media (forced-colors: active) {
+  .lazyWidgetScope :global(.pdfv-citation-box) {
+    border-color: Highlight;
+    background: transparent;
+  }
+}
