@@ -101,6 +101,12 @@ import {
 import { ConversationModelNotReadyError } from "./conversation-readiness-error.js";
 import { logConversationAdmission } from "./conversation-readiness-log.js";
 import type { AcceptedJiraChatTurn } from "./atlassian/jiraChatAuthority.js";
+import {
+  isJiraTextWrite,
+  latestCitationLabels,
+  recordJiraCitationMarkers,
+  resolveJiraCitationMarkers,
+} from "./atlassian/jiraCitationMarkers.js";
 
 const TOOL_TURN_RULES =
   "When the user requests an operation supported by an offered tool, invoke the matching tool. If the Chat's mode requires an action approval, Keiko presents the approval control and waits for the decision before the effect; asking for permission in prose does not replace it. Invoke modifying tools only when the user has actually requested that change. Server authority, mode, approval and budget checks remain binding.";
@@ -166,7 +172,10 @@ export function mintAndBoundChatTurn<
 }
 type ModelAttempt = NonNullable<GatewayCallRequest["attemptAdmission"]>;
 export interface ChatToolTurnOptions<Context extends ToolConsumerContext> {
-  readonly deps: Pick<UiHandlerDeps, "store" | "gatewayConfig" | "atlassianActionApprovalRegistry">;
+  readonly deps: Pick<
+    UiHandlerDeps,
+    "store" | "gatewayConfig" | "atlassianActionApprovalRegistry" | "activityLog"
+  >;
   readonly message: ChatMessage;
   readonly context: Context;
   readonly managed: Pick<ManagedProviderCatalog<CatalogConsumer>, "catalog" | "projection">;
@@ -198,6 +207,12 @@ export function chatModelSupportsTools(
       nowMs: Date.now(),
     })
   );
+}
+
+function boundArguments(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 function publicToolCall(call: NormalizedResponse["toolCalls"][number]): ChatToolExchange["call"] {
@@ -260,6 +275,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   /** One active serial dispatch, retired before any later turn can reuse its private snapshot. */
   private activeDraftProgress: ActiveDraftProgress | undefined;
   private readonly callIds = new Set<string>();
+  private citationLabels: ReadonlyMap<number, string> | undefined;
   private notify: ((message: ChatMessage) => void | Promise<void>) | undefined;
   private uncertainBudget = false;
   /** The turn's own envelope refused a model attempt; the caller's caps are not this turn's. */
@@ -906,6 +922,22 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     );
   }
 
+  /**
+   * True once this turn sent a change to the provider (a Jira create, edit, comment), whatever its
+   * outcome. The answer then reports that action; a citation repair would regenerate it for nothing.
+   */
+  public get dispatchedChange(): boolean {
+    const { deps, message } = this.options;
+    return (
+      deps.store
+        .findMessageById(message.id)
+        ?.toolTranscript?.exchanges.some(
+          (exchange) =>
+            exchange.mutationOutcome !== undefined && exchange.mutationOutcome !== "not-dispatched",
+        ) ?? false
+    );
+  }
+
   /** True once the turn answered from its transcript; callers must deliver, not cancel, it. */
   public get endedEarly(): boolean {
     return this.endedAnswer !== undefined;
@@ -1060,12 +1092,55 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
         "denied",
         "budget-exhausted",
       );
-      this.retainToolResponse(request.modelId, response);
-      for (const call of response.toolCalls) await this.dispatch(call); // NOSONAR typescript:S9382 -- dispatches share authority/budgets; receipts, mutation journals and transcripts must settle before the next admission
+      const prepared = this.withCitationSources(response);
+      this.retainToolResponse(request.modelId, prepared);
+      for (const call of prepared.toolCalls) await this.dispatch(call); // NOSONAR typescript:S9382 -- dispatches share authority/budgets; receipts, mutation journals and transcripts must settle before the next admission
       this.currentToolResponse = undefined;
       this.correctedSinceProgress = false;
     }
     requireDispatch(false, "denied", "budget-exhausted");
+  }
+
+  /**
+   * Jira text written from a grounded answer names its sources instead of copying the answer's
+   * `[n]` markers (#4173 AC2). The rewrite happens before the call is recorded, reviewed or bound
+   * to an approval, so the human approves exactly the text Jira receives.
+   */
+  private withCitationSources(response: NormalizedResponse): NormalizedResponse {
+    const writes = response.toolCalls.filter((call) =>
+      isJiraTextWrite(call.invocation?.toolRef.canonicalId),
+    );
+    if (writes.length === 0) return response;
+    const { deps, message, correlationId } = this.options;
+    this.citationLabels ??= latestCitationLabels(
+      deps.store.listMessages(message.chatId),
+      message.id,
+    );
+    const labels = this.citationLabels;
+    const counts = {
+      callCount: writes.length,
+      labelCount: labels.size,
+      resolvedCount: 0,
+      unresolvedCount: 0,
+      markdownDescriptionCount: 0,
+    };
+    const toolCalls = response.toolCalls.map((call) => {
+      if (call.invocation === undefined || !writes.includes(call)) return call;
+      const rewrite = resolveJiraCitationMarkers(call.arguments, labels);
+      counts.resolvedCount += rewrite.resolvedCount;
+      counts.unresolvedCount += rewrite.unresolvedCount;
+      counts.markdownDescriptionCount += rewrite.markdownDescriptionCount;
+      const bound = boundArguments(call.invocation.arguments);
+      // The shown and the dispatched arguments change together or not at all.
+      if (rewrite.arguments === call.arguments || bound === undefined) return call;
+      const invocation = {
+        ...call.invocation,
+        arguments: resolveJiraCitationMarkers(bound, labels).arguments as CatalogJsonObject,
+      };
+      return { ...call, arguments: rewrite.arguments, invocation };
+    });
+    recordJiraCitationMarkers(deps.activityLog, correlationId, counts);
+    return { ...response, toolCalls };
   }
 
   private retainToolResponse(modelId: string, response: NormalizedResponse): void {
@@ -1252,6 +1327,7 @@ export type ChatToolTurnPort = Pick<
   | "answersAtDeadline"
   | "answersAfterScopeChange"
   | "endedEarly"
+  | "dispatchedChange"
   | "settleRetryFailure"
 >;
 

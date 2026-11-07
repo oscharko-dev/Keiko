@@ -95,6 +95,16 @@ vi.mock("../chat-tool-turn-ending.js", async (importOriginal) => {
   };
 });
 
+// The chat's latest grounded answer, as the citation rewrite reads it (#4173 AC2).
+const citationSources = vi.hoisted(() => ({ labels: new Map<number, string>() }));
+vi.mock("./jiraCitationMarkers.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./jiraCitationMarkers.js")>();
+  return {
+    ...actual,
+    latestCitationLabels: (): ReadonlyMap<number, string> => citationSources.labels,
+  };
+});
+
 vi.mock("../chat-tool-knowledge-coverage.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../chat-tool-knowledge-coverage.js")>();
   return { ...actual, logKnowledgeCoverage: vi.fn(actual.logKnowledgeCoverage) };
@@ -107,6 +117,7 @@ const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
   draftToSend = DRAFT_ARGUMENTS;
   commentKeysByRound = [];
+  citationSources.labels = new Map();
   for (const cleanup of cleanups.splice(0)) await cleanup();
   vi.restoreAllMocks();
 });
@@ -1763,6 +1774,39 @@ it("executes only the selected backlog items and persists the deselection throug
   expect(exchange.result?.status).toBe("completed");
   expect(exchange.mutationOutcome).toBe("succeeded");
   expect(JSON.stringify(exchange.result?.data)).toContain('"excludedCount":2');
+});
+
+// #4173 AC2: a draft written from a grounded answer carries `[n]` markers. The human approves the
+// readable sources, and Jira receives exactly what was approved; code keeps its brackets.
+it("approves and sends the draft with its citation markers replaced by their sources", async () => {
+  citationSources.labels = new Map([[1, "Lastenheft.pdf · page 4"]]);
+  draftToSend = {
+    items: [
+      {
+        ref: "epic",
+        projectId: "10000",
+        issueTypeId: "10001",
+        fields: { summary: "Kick-off [1]", description: "Ziel [1].\n{code}ids = [1]{code}" },
+      },
+    ],
+  };
+  const f = fixture(true, undefined, true, false, true);
+  const pending = handleSendDesktopChat(sendContext(f, "cited-draft"), f.deps);
+  void pending.catch(() => undefined);
+  await awaitReadGrantedForWrite(f);
+  const approval = await pendingWriteApproval(f);
+  const shown = JSON.stringify(firstToolExchange(f).call.arguments);
+  expect(shown).toContain("Ziel (Lastenheft.pdf · page 4).");
+  expect(shown).not.toContain("Ziel [1]");
+  expect(await postWriteDecision(f, approval, "approve")).toBe(200);
+  expect((await pending).status).toBe(200);
+  expect(f.jira.posts().map((post) => post.fields)).toMatchObject([
+    {
+      summary: "Kick-off",
+      description: "Ziel (Lastenheft.pdf · page 4).\n{code}ids = [1]{code}",
+    },
+  ]);
+  expect(firstToolExchange(f).approval?.state).toBe("claimed");
 });
 
 // #4178 / Epic #4173 AC "A draft of any size is approved once": a backlog written in pages is staged

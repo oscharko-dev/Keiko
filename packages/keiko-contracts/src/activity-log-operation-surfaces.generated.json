@@ -448,6 +448,7 @@
   "indexing.start.accepted": "memory-knowledge",
   "indexing.start.refused": "memory-knowledge",
   "jira.attachment.source": "bff",
+  "jira.citation.markers": "bff",
   "jira.field.admission": "bff",
   "jira.template.admission": "bff",
   "jira.template.metadata": "bff",

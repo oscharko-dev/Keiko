@@ -1,0 +1,325 @@
+/* The shared Markdown editor. Frame, view switch and rendered type follow design-system
+   "Editor · Markdown views" (editor-markdown.html): toolbar with the segmented view switch at the
+   trailing edge, the document, and a quiet status bar. */
+.mdeRoot {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-surface);
+  background: var(--surface);
+  overflow: hidden;
+}
+.mdeRoot:focus-within {
+  border-color: var(--accent-line);
+}
+
+.mdeBar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: 6px 8px 6px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-secondary);
+}
+.mdeGrow {
+  flex: 1;
+}
+.mdeTools {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+.mdeDivider {
+  width: 1px;
+  height: 18px;
+  margin: 0 6px;
+  background: var(--border-subtle);
+}
+.mdeRoot .mdeTool {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.mdeRoot .mdeTool:hover:enabled {
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+}
+.mdeRoot .mdeTool[aria-pressed="true"] {
+  background: var(--surface-accent-subtle);
+  border-color: var(--border-accent);
+  color: var(--accent-text);
+}
+.mdeRoot .mdeTool:disabled {
+  opacity: var(--opacity-disabled);
+  cursor: default;
+}
+.mdeBlock {
+  height: 28px;
+  min-width: 128px;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--input-surface);
+  color: var(--text-primary);
+  font: var(--weight-medium) 12.5px var(--font-ui);
+}
+
+/* View switch — the segmented grammar of the design system (.vsw). */
+.mdeViews {
+  display: inline-flex;
+  flex: none;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-inset);
+}
+.mdeViews button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font: var(--weight-medium) 12px var(--font-ui);
+  cursor: pointer;
+}
+.mdeViews button:hover:enabled {
+  color: var(--text-primary);
+}
+.mdeViews button[aria-pressed="true"] {
+  background: var(--surface-elevated);
+  color: var(--accent-text);
+  box-shadow: 0 1px 0 0 rgb(0 0 0 / 18%);
+}
+.mdeViews button:disabled {
+  opacity: var(--opacity-disabled);
+  cursor: not-allowed;
+}
+
+.mdeRoot .mdeTool:focus-visible,
+.mdeBlock:focus-visible,
+.mdeViews button:focus-visible,
+.mdeMeta summary:focus-visible,
+.mdePreview:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* Front matter: machine metadata above the document, folded by default. */
+.mdeMeta {
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-inset);
+}
+.mdeMeta summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 8px 14px;
+  color: var(--text-secondary);
+  font: var(--weight-medium) 12px var(--font-ui);
+  cursor: pointer;
+}
+.mdeMetaCount {
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.mdeMeta textarea {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 10px 16px 14px;
+  border: 0;
+  border-top: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-primary);
+  font: 400 12.5px/1.6 var(--font-mono);
+  resize: vertical;
+  outline: none;
+}
+
+.mdeBody {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.mdePage {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+/* Formatted document: the design system's rendered-Markdown type scale (.mdr). */
+.mdeDocument {
+  box-sizing: border-box;
+  max-width: 78ch;
+  min-height: 100%;
+  margin: 0 auto;
+  padding: 26px 32px 48px;
+  outline: none;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 400 14px/1.62 var(--font-ui);
+  color: var(--text-primary);
+  cursor: text;
+}
+.mdeDocument > :first-child {
+  margin-top: 0;
+}
+.mdeDocument h1 {
+  margin: 4px 0 16px;
+  font-size: 25px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+.mdeDocument h2 {
+  margin: 26px 0 11px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 18px;
+  font-weight: 650;
+}
+.mdeDocument h3 {
+  margin: 20px 0 8px;
+  font-size: 15px;
+  font-weight: 650;
+}
+.mdeDocument p {
+  margin: 11px 0;
+}
+.mdeDocument ul,
+.mdeDocument ol {
+  margin: 11px 0;
+  padding-left: 22px;
+}
+.mdeDocument li {
+  margin: 5px 0;
+}
+.mdeDocument li > p {
+  margin: 0;
+}
+.mdeDocument strong {
+  font-weight: 650;
+}
+.mdeDocument code {
+  padding: 1px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  background: var(--surface-inset);
+  color: var(--accent-text);
+  font: 500 12.5px var(--font-mono);
+}
+.mdeDocument blockquote {
+  margin: 14px 0;
+  padding: 3px 16px;
+  border-left: 3px solid var(--accent-line);
+  color: var(--text-secondary);
+}
+.mdeDocument hr {
+  margin: 22px 0;
+  border: 0;
+  border-top: 1px solid var(--border-default);
+}
+.mdeDocument [data-markdown-link] {
+  color: var(--accent-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.mdeDocument [data-markdown-image] {
+  color: var(--text-tertiary);
+}
+.mdeDocument [data-placeholder]::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  color: var(--text-tertiary);
+  pointer-events: none;
+}
+
+/* Markdown source, alone or beside its live preview. */
+.mdeSource {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 22px 26px;
+  border: 0;
+  background: var(--surface);
+  color: var(--text-primary);
+  font: 400 13px/1.65 var(--font-mono);
+  tab-size: 2;
+  resize: none;
+  outline: none;
+}
+.mdeRoot[data-view="split"] .mdeSource {
+  border-right: 1px solid var(--border-default);
+}
+.mdePreview {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: 22px 28px;
+  background: var(--surface);
+  font: 400 14px/1.62 var(--font-ui);
+}
+
+.mdeStatus {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  min-height: 28px;
+  padding: 4px 12px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--surface-secondary);
+  color: var(--text-tertiary);
+  font: 400 11.5px var(--font-ui);
+}
+.mdeNotice {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-secondary);
+}
+
+@media (max-width: 720px) {
+  .mdeViews span {
+    display: none;
+  }
+  .mdeDocument {
+    padding: 18px 16px 32px;
+  }
+  .mdeRoot[data-view="split"] .mdeBody {
+    flex-direction: column;
+  }
+  .mdeRoot[data-view="split"] .mdeSource {
+    border-right: 0;
+    border-bottom: 1px solid var(--border-default);
+  }
+}
+@media (forced-colors: active) {
+  .mdeRoot,
+  .mdeViews {
+    border-color: ButtonText;
+  }
+  .mdeRoot .mdeTool[aria-pressed="true"],
+  .mdeViews button[aria-pressed="true"] {
+    outline: 1px solid Highlight;
+  }
+}

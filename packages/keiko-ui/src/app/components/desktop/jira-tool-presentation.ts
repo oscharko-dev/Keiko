@@ -28,21 +28,10 @@ const MCP_OUTCOME_KEYS: Readonly<Record<JiraMutationResultState, WidgetMessageKe
 const MANAGED_TOOLS = [...JIRA_MANAGED_READ_TOOLS, ...JIRA_MUTATION_OPERATIONS];
 /** The Chat alias of the local `knowledge.requirements` read (#4179). */
 const REQUIREMENTS_TOOL_ALIAS = "knowledge_requirements";
-const KNOWLEDGE_TOOLS: Readonly<
-  Record<string, { readonly label: WidgetMessageKey; readonly details: WidgetMessageKey }>
-> = {
-  knowledge_requirements: {
-    label: "chat.requirements.tool",
-    details: "chat.requirements.details",
-  },
-  knowledge_documents: {
-    label: "chat.documents.tool",
-    details: "chat.documents.details",
-  },
-  knowledge_review: {
-    label: "chat.review.tool",
-    details: "chat.review.details",
-  },
+const KNOWLEDGE_TOOLS: Readonly<Record<string, { readonly label: WidgetMessageKey }>> = {
+  knowledge_requirements: { label: "chat.requirements.tool" },
+  knowledge_documents: { label: "chat.documents.tool" },
+  knowledge_review: { label: "chat.review.tool" },
 };
 const REQUIREMENTS_CUT_COUNTS = ["unitsOmitted", "documentsOmitted", "documentsNotExtracted"];
 
@@ -85,11 +74,6 @@ export function jiraToolRegionLabel(exchange: ChatToolExchange): WidgetMessageKe
   const knowledge = KNOWLEDGE_TOOLS[exchange.call.name];
   if (knowledge !== undefined) return knowledge.label;
   return exchange.call.name.startsWith("mcp_") ? "chat.mcp.tool" : "chat.jira.tool";
-}
-export function jiraToolDetailsLabel(exchange: ChatToolExchange): WidgetMessageKey {
-  const knowledge = KNOWLEDGE_TOOLS[exchange.call.name];
-  if (knowledge !== undefined) return knowledge.details;
-  return exchange.call.name.startsWith("mcp_") ? "chat.mcp.details" : "chat.jira.details";
 }
 function plainRecord(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)

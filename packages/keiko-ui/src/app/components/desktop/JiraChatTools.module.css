@@ -45,12 +45,21 @@
   gap: 8px;
   flex-wrap: wrap;
 }
-.cmpResult {
-  max-height: 18rem;
-  overflow: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-size: inherit;
+/* A tool's outcome in a person's terms (#4173): the issues it touched and Jira's own reasons. */
+.cmpIssues,
+.cmpProblems {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.cmpMoreIssues {
+  color: var(--text-secondary);
+}
+.cmpProblems li {
+  padding-inline-start: 10px;
+  border-inline-start: 2px solid var(--feedback-warning);
 }
 
 .cmpPreview {

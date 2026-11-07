@@ -904,14 +904,11 @@
     }
   },
   "src/app/components/desktop/widgets/cards/PdfCitationPreviewWindow.tsx": {
-    "@typescript-eslint/explicit-function-return-type": {
-      "count": 5
-    },
     "complexity": {
-      "count": 5
+      "count": 3
     },
     "max-lines-per-function": {
-      "count": 7
+      "count": 5
     }
   },
   "src/app/components/desktop/widgets/cards/ReviewWidget.tsx": {

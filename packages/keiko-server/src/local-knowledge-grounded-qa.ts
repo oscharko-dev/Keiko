@@ -941,6 +941,11 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
    * An optional citation repair needs a free synthesis attempt slot (#4179), a turn that has not
    * ended, and the grant its prompt costs: refused at admission it would fail the finished turn.
    */
+  /** An answer after a sent tool change reports that change and needs no document citation. */
+  public reportsToolAction(): boolean {
+    return this.context.deps.chatToolTurn?.dispatchedChange === true;
+  }
+
   public repairAvailable(): boolean {
     if (this.synthesis.remaining() <= 0) return false;
     const toolTurn = this.context.deps.chatToolTurn;

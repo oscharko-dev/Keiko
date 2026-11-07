@@ -16,7 +16,6 @@ import {
   type KnowledgeCoverageIssue,
 } from "@oscharko-dev/keiko-contracts/runtime/knowledge-turn-coverage";
 import {
-  jiraToolDetailsLabel,
   jiraToolLabel,
   jiraToolRegionLabel,
   jiraToolState,
@@ -28,6 +27,11 @@ import styles from "./JiraChatTools.module.css";
 import { JiraReportCard } from "./JiraReportCard";
 import { jiraReportView } from "./jira-report-view";
 import { ChatProcessingPipeline } from "./ChatProcessingPipeline";
+import {
+  jiraToolOutcomeView,
+  type JiraOutcomeIssue,
+  type JiraOutcomeRule,
+} from "./jira-tool-outcome";
 import { chatProcessingSteps } from "./chat-processing-pipeline";
 const COVERAGE_ISSUE_MESSAGES = {
   "pending-reads": "chat.knowledgeCoverage.pendingReads",
@@ -74,15 +78,95 @@ function KnowledgeCoverageNotice({
 function jiraReportOf(exchange: ChatToolExchange): ReturnType<typeof jiraReportView> {
   return exchange.call.name === "jira_report" ? jiraReportView(exchange.result?.data) : undefined;
 }
-function JiraToolResultDetails({ exchange }: { readonly exchange: ChatToolExchange }): ReactNode {
+function JiraIssueName({ issue }: { readonly issue: JiraOutcomeIssue }): ReactNode {
   const t = useTranslate();
-  const data = exchange.result?.data ?? exchange.draftProgress;
-  if (data == null) return null;
+  const label = (
+    <>
+      <strong>{issue.key}</strong>
+      {issue.summary === undefined ? null : <span> {issue.summary}</span>}
+    </>
+  );
+  if (issue.href === undefined) return label;
   return (
-    <details>
-      <summary>{t(jiraToolDetailsLabel(exchange))}</summary>
-      <pre className={styles.cmpResult}>{JSON.stringify(data, null, 2)}</pre>
-    </details>
+    <a className="sm-link" href={issue.href} target="_blank" rel="noopener noreferrer">
+      {label}
+      <span className="sr-only">{t("chat.jira.outcome.newTab")}</span>
+    </a>
+  );
+}
+const RULE_MESSAGES = {
+  "summary-too-short": "chat.jira.outcome.rule.summary-too-short",
+  "summary-too-long": "chat.jira.outcome.rule.summary-too-long",
+  "summary-pattern": "chat.jira.outcome.rule.summary-pattern",
+  "section-missing": "chat.jira.outcome.rule.section-missing",
+  "section-empty": "chat.jira.outcome.rule.section-empty",
+  "field-missing": "chat.jira.outcome.rule.field-missing",
+  "field-unavailable": "chat.jira.outcome.rule.field-unavailable",
+  "label-missing": "chat.jira.outcome.rule.label-missing",
+  "label-pattern": "chat.jira.outcome.rule.label-pattern",
+  "label-count": "chat.jira.outcome.rule.label-count",
+  "parent-missing": "chat.jira.outcome.rule.parent-missing",
+  "template-unreadable": "chat.jira.outcome.rule.template-unreadable",
+} as const satisfies Readonly<Record<JiraOutcomeRule["ruleId"], string>>;
+const VALIDATION_MESSAGES = {
+  "required-field": "chat.jira.outcome.validation.required-field",
+  "unsupported-field": "chat.jira.outcome.validation.unsupported-field",
+  "invalid-field": "chat.jira.outcome.validation.invalid-field",
+  "invalid-operation": "chat.jira.outcome.validation.invalid-operation",
+  "bounds-exceeded": "chat.jira.outcome.validation.bounds-exceeded",
+} as const satisfies Readonly<
+  Record<NonNullable<ReturnType<typeof jiraToolOutcomeView>["validation"]>, string>
+>;
+/** The project lead's rules a refused change broke, as sentences rather than rule ids. */
+function JiraTemplateRules({ rules }: { readonly rules: readonly JiraOutcomeRule[] }): ReactNode {
+  const t = useTranslate();
+  if (rules.length === 0) return null;
+  return (
+    <ul className={styles.cmpProblems} aria-label={t("chat.jira.outcome.rules")}>
+      {rules.map((rule) => (
+        <li key={`${rule.ruleId}:${rule.subject}`}>
+          {t(RULE_MESSAGES[rule.ruleId], { subject: rule.subject })}
+        </li>
+      ))}
+    </ul>
+  );
+}
+/** What happened, in a person's terms: the issues touched and why Jira refused, never raw data. */
+function JiraToolOutcome({
+  view,
+}: {
+  readonly view: ReturnType<typeof jiraToolOutcomeView>;
+}): ReactNode {
+  const t = useTranslate();
+  return (
+    <>
+      {view.issues.length === 0 ? null : (
+        <ul className={styles.cmpIssues} aria-label={t("chat.jira.outcome.issues")}>
+          {view.issues.map((issue) => (
+            <li key={issue.key}>
+              <JiraIssueName issue={issue} />
+            </li>
+          ))}
+          {view.hiddenIssueCount === 0 ? null : (
+            <li className={styles.cmpMoreIssues}>
+              {t("chat.jira.outcome.more", { count: view.hiddenIssueCount })}
+            </li>
+          )}
+        </ul>
+      )}
+      {view.problems.length === 0 ? null : (
+        <ul className={styles.cmpProblems} aria-label={t("chat.jira.outcome.problems")}>
+          {view.problems.map((problem, index) => (
+            <li key={`${problem.field ?? ""}:${String(index)}`}>
+              {problem.field === undefined ? null : <strong>{problem.field}: </strong>}
+              {problem.message}
+            </li>
+          ))}
+        </ul>
+      )}
+      {view.validation === undefined ? null : <p>{t(VALIDATION_MESSAGES[view.validation])}</p>}
+      <JiraTemplateRules rules={view.rules} />
+    </>
   );
 }
 function JiraToolExchange({
@@ -110,7 +194,7 @@ function JiraToolExchange({
       {help === undefined ? null : <p>{t(help)}</p>}
       {report === undefined ? null : <JiraReportCard view={report} chatId={chatId} />}
       {report === undefined && partial !== undefined ? <p>{t(partial)}</p> : null}
-      <JiraToolResultDetails exchange={exchange} />
+      {report === undefined ? <JiraToolOutcome view={jiraToolOutcomeView(exchange)} /> : null}
     </section>
   );
 }

@@ -2072,6 +2072,7 @@ function runDefaultGroundedExploration(
     ...groundedExplorationPolicies(deps),
     reliableCitationBehaviour: citationBehaviourFor(deps, modelId),
     observeCitationBehaviour: citationBehaviourObserverFor(deps, modelId, runnerCtx.correlationId),
+    toolTurn: deps.chatToolTurn,
     answerer: createGatewayAnswerer(
       deps,
       model,

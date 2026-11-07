@@ -13,11 +13,8 @@ import {
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 import {
   clearPdfCitationPreviewWindowRegistryForTests,
-  getPdfCitationPreviewBackToChatAvailability,
   getPdfCitationPreviewSession,
   openPdfCitationPreviewWindow,
-  registerPdfCitationPreviewMessageTarget,
-  syncPdfCitationPreviewWindowRegistry,
 } from "./pdf-citation-preview-session";
 import { PdfCitationPreviewWindow } from "./PdfCitationPreviewWindow";
 
@@ -110,6 +107,8 @@ describe("PdfCitationPreviewWindow", () => {
       {} as CanvasRenderingContext2D,
     );
     vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => undefined);
+    Element.prototype.scrollTo ??= (): void => undefined;
+    vi.spyOn(Element.prototype, "scrollTo").mockImplementation(() => undefined);
   });
 
   afterEach(() => {
@@ -121,8 +120,6 @@ describe("PdfCitationPreviewWindow", () => {
     render(
       <PdfCitationPreviewWindow
         cfg={{ documentLabel: "Policy wording.pdf" }}
-        focusWindow={vi.fn()}
-        restoreWindow={vi.fn()}
         updateCfg={vi.fn()}
         windowId="missing-preview-window"
       />,
@@ -164,8 +161,6 @@ describe("PdfCitationPreviewWindow", () => {
     render(
       <PdfCitationPreviewWindow
         cfg={firstCall[1] as Record<string, unknown>}
-        focusWindow={vi.fn()}
-        restoreWindow={vi.fn()}
         updateCfg={vi.fn()}
         windowId={windowId ?? "missing"}
       />,
@@ -197,8 +192,6 @@ describe("PdfCitationPreviewWindow", () => {
           zoomValue: 1.2,
           rotation: 90,
         }}
-        focusWindow={vi.fn()}
-        restoreWindow={vi.fn()}
         updateCfg={updateCfg}
         windowId="restored-preview-window"
       />,
@@ -221,13 +214,7 @@ describe("PdfCitationPreviewWindow", () => {
     const cfg = firstCall[1] as Record<string, unknown>;
 
     render(
-      <PdfCitationPreviewWindow
-        cfg={cfg}
-        focusWindow={vi.fn()}
-        restoreWindow={vi.fn()}
-        updateCfg={vi.fn()}
-        windowId={windowId ?? "missing"}
-      />,
+      <PdfCitationPreviewWindow cfg={cfg} updateCfg={vi.fn()} windowId={windowId ?? "missing"} />,
     );
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
@@ -239,7 +226,7 @@ describe("PdfCitationPreviewWindow", () => {
       expect(fetchPdfCitationPreviewDocument).toHaveBeenCalledTimes(2);
     });
     expect(getDocument).toHaveBeenCalledTimes(1);
-    expect(await screen.findByText("Near cited passage")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /next/i })).toBeInTheDocument();
   });
 
   it.each([
@@ -264,8 +251,6 @@ describe("PdfCitationPreviewWindow", () => {
       render(
         <PdfCitationPreviewWindow
           cfg={firstCall[1] as Record<string, unknown>}
-          focusWindow={vi.fn()}
-          restoreWindow={vi.fn()}
           updateCfg={vi.fn()}
           windowId={windowId ?? "missing"}
         />,
@@ -312,8 +297,6 @@ describe("PdfCitationPreviewWindow", () => {
     render(
       <PdfCitationPreviewWindow
         cfg={firstCall[1] as Record<string, unknown>}
-        focusWindow={vi.fn()}
-        restoreWindow={vi.fn()}
         updateCfg={vi.fn()}
         windowId={windowId ?? "missing"}
       />,
@@ -355,8 +338,6 @@ describe("PdfCitationPreviewWindow", () => {
       render(
         <PdfCitationPreviewWindow
           cfg={firstCall[1] as Record<string, unknown>}
-          focusWindow={vi.fn()}
-          restoreWindow={vi.fn()}
           updateCfg={vi.fn()}
           windowId={windowId ?? "missing"}
         />,
@@ -391,8 +372,6 @@ describe("PdfCitationPreviewWindow", () => {
     render(
       <PdfCitationPreviewWindow
         cfg={firstCall[1] as Record<string, unknown>}
-        focusWindow={vi.fn()}
-        restoreWindow={vi.fn()}
         updateCfg={vi.fn()}
         windowId={windowId ?? "missing"}
       />,
@@ -409,7 +388,7 @@ describe("PdfCitationPreviewWindow", () => {
         }),
       );
     });
-    expect(await screen.findByText("Near cited passage")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /next/i })).toBeInTheDocument();
   });
 
   it("windows mounted page sections for large PDF previews", async () => {
@@ -430,8 +409,6 @@ describe("PdfCitationPreviewWindow", () => {
     const { container } = render(
       <PdfCitationPreviewWindow
         cfg={firstCall[1] as Record<string, unknown>}
-        focusWindow={vi.fn()}
-        restoreWindow={vi.fn()}
         updateCfg={vi.fn()}
         windowId={windowId ?? "missing"}
       />,
@@ -460,8 +437,6 @@ describe("PdfCitationPreviewWindow", () => {
     render(
       <PdfCitationPreviewWindow
         cfg={firstCall[1] as Record<string, unknown>}
-        focusWindow={vi.fn()}
-        restoreWindow={vi.fn()}
         updateCfg={vi.fn()}
         windowId={windowId ?? "missing"}
       />,
@@ -488,16 +463,10 @@ describe("PdfCitationPreviewWindow", () => {
     const updateCfg = vi.fn();
 
     const rendered = render(
-      <PdfCitationPreviewWindow
-        cfg={cfg}
-        focusWindow={vi.fn()}
-        restoreWindow={vi.fn()}
-        updateCfg={updateCfg}
-        windowId={windowId ?? "missing"}
-      />,
+      <PdfCitationPreviewWindow cfg={cfg} updateCfg={updateCfg} windowId={windowId ?? "missing"} />,
     );
 
-    expect(await screen.findByText("Near cited passage")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /next/i })).toBeInTheDocument();
     page.render.mockReturnValueOnce({
       promise: Promise.reject(new Error("canvas render failed")),
       cancel: vi.fn(),
@@ -505,8 +474,6 @@ describe("PdfCitationPreviewWindow", () => {
     rendered.rerender(
       <PdfCitationPreviewWindow
         cfg={{ ...cfg, rotation: 90 }}
-        focusWindow={vi.fn()}
-        restoreWindow={vi.fn()}
         updateCfg={updateCfg}
         windowId={windowId ?? "missing"}
       />,
@@ -518,99 +485,16 @@ describe("PdfCitationPreviewWindow", () => {
     expect(screen.queryByRole("button", { name: /retry preview/i })).not.toBeInTheDocument();
   });
 
-  it("loads the verified PDF bytes, renders controls, supports page and zoom actions, and stays axe-clean", async () => {
-    const originalConsoleError = console.error;
-    const consoleError = vi.spyOn(console, "error").mockImplementation((...args) => {
-      if (
-        args.some((part) => String(part).includes("Encountered two children with the same key"))
-      ) {
-        return;
-      }
-      originalConsoleError(...args);
-    });
+  it("shows only the document with page and zoom controls, and stays axe-clean", async () => {
     const add = vi.fn<Parameters<typeof openPdfCitationPreviewWindow>[0]>(() => "pdf-preview-1");
-    const windowId = openPdfCitationPreviewWindow(add, PREVIEW, {
-      context: {
-        activeStableId: "stable-1",
-        citations: [
-          {
-            citation: { stableId: "stable-1", marker: "[1]", label: "Policy wording.pdf" },
-            display: PREVIEW.display,
-          },
-          {
-            citation: { stableId: "stable-2", marker: "[2]", label: "Policy wording.pdf" },
-            display: {
-              ...PREVIEW.display,
-              pageNumber: 3,
-              pageLabel: "Page 3",
-              anchorQuality: "page-only",
-            },
-          },
-          {
-            citation: { stableId: "stable-2", marker: "[2]", label: "Policy wording.pdf" },
-            display: {
-              ...PREVIEW.display,
-              pageNumber: 3,
-              pageLabel: "Page 3",
-              anchorQuality: "page-only",
-            },
-          },
-        ],
-        origin: {
-          assistantMessageId: "msg-a",
-          chatId: "chat-1",
-          chatWindowId: "chat-window-1",
-          marker: "[1]",
-          representation: "inline-marker",
-        },
-      },
-    });
-    syncPdfCitationPreviewWindowRegistry([
-      {
-        id: windowId ?? "pdf-preview-1",
-        type: "pdfCitationPreview",
-        x: 0,
-        y: 0,
-        w: 640,
-        h: 520,
-        z: 2,
-        cfg: {},
-        max: false,
-      },
-      {
-        id: "chat-window-1",
-        type: "chat",
-        x: 0,
-        y: 0,
-        w: 420,
-        h: 360,
-        z: 1,
-        cfg: { chatId: "chat-1" },
-        max: false,
-      },
-    ]);
+    const windowId = openPdfCitationPreviewWindow(add, PREVIEW);
     const firstCall = add.mock.calls[0];
     if (firstCall === undefined) throw new Error("expected preview window to open");
     const cfg = firstCall[1] as Record<string, unknown>;
     const updateCfg = vi.fn();
-    const focusWindow = vi.fn();
-    const restoreWindow = vi.fn();
-    const sourceMessage = document.createElement("article");
-    const unregisterSourceMessage = registerPdfCitationPreviewMessageTarget({
-      assistantMessageId: "msg-a",
-      chatId: "chat-1",
-      chatWindowId: "chat-window-1",
-      element: sourceMessage,
-    });
 
     const { container } = render(
-      <PdfCitationPreviewWindow
-        cfg={cfg}
-        focusWindow={focusWindow}
-        restoreWindow={restoreWindow}
-        updateCfg={updateCfg}
-        windowId={windowId ?? "missing"}
-      />,
+      <PdfCitationPreviewWindow cfg={cfg} updateCfg={updateCfg} windowId={windowId ?? "missing"} />,
     );
 
     await waitFor(() => {
@@ -622,28 +506,14 @@ describe("PdfCitationPreviewWindow", () => {
         data: new Uint8Array([37, 80, 68, 70]),
       });
     });
-    expect(await screen.findByText("Near cited passage")).toBeInTheDocument();
-    expect(screen.getByText("Active citation")).toBeInTheDocument();
-    expect(screen.getByText("Same answer citations")).toBeInTheDocument();
-    expect(container.querySelectorAll(".pdfv-context-citation")).toHaveLength(2);
-    expect(screen.getByRole("button", { name: /previous/i })).not.toHaveAttribute("disabled");
-    expect(screen.getByDisplayValue("2")).toBeInTheDocument();
+    expect(await screen.findByDisplayValue("2")).toBeInTheDocument();
     expect(screen.getByText("/ 3")).toBeInTheDocument();
-
-    await userEvent.click(screen.getByText("Same answer citations"));
-    await userEvent.click(screen.getByRole("button", { name: /\[2\] Policy wording\.pdf/i }));
-    expect(updateCfg).toHaveBeenCalledWith({
-      currentPage: 3,
-      documentLabel: "Policy wording.pdf",
-      pageLabel: "Page 3",
-      pageNumber: 3,
-      sourceLabel: "Local capsule",
-    });
-
-    await userEvent.click(screen.getByRole("button", { name: /back to chat/i }));
-    expect(restoreWindow).toHaveBeenCalledWith("chat-window-1");
-    expect(focusWindow).toHaveBeenCalledWith("chat-window-1");
-    unregisterSourceMessage();
+    // No verification chrome between the reader and the document (#4173).
+    expect(screen.queryByText("Near cited passage")).toBeNull();
+    expect(screen.queryByText("Active citation")).toBeNull();
+    expect(screen.queryByText("Same answer citations")).toBeNull();
+    expect(screen.queryByRole("button", { name: /rotate/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /back to chat/i })).toBeNull();
 
     await userEvent.click(screen.getByRole("button", { name: /next/i }));
     expect(updateCfg).toHaveBeenCalledWith({ currentPage: 3 });
@@ -651,11 +521,8 @@ describe("PdfCitationPreviewWindow", () => {
     await userEvent.click(screen.getByRole("button", { name: /zoom in/i }));
     expect(updateCfg).toHaveBeenCalledWith({ zoomMode: "manual", zoomValue: 1.1 });
 
-    await userEvent.click(screen.getByRole("button", { name: /fit page/i }));
-    expect(updateCfg).toHaveBeenCalledWith({ zoomMode: "fit-page" });
-
-    await userEvent.click(screen.getByRole("button", { name: /rotate right/i }));
-    expect(updateCfg).toHaveBeenCalledWith({ rotation: 90 });
+    await userEvent.click(screen.getByRole("button", { name: /fit width/i }));
+    expect(updateCfg).toHaveBeenCalledWith({ zoomMode: "fit-width" });
 
     const pageInput = screen.getByDisplayValue("2");
     await act(async () => {
@@ -665,54 +532,43 @@ describe("PdfCitationPreviewWindow", () => {
     expect(updateCfg).toHaveBeenCalledWith({ currentPage: 1 });
 
     expect(await axe(container)).toHaveNoViolations();
-    expect(
-      consoleError.mock.calls.some((call) =>
-        call.some((part) => String(part).includes("Encountered two children with the same key")),
-      ),
-    ).toBe(false);
   });
 
-  it("renders Back to chat as an explained disabled action when the source chat is unavailable", async () => {
+  // #4173: a citation for page 53 opened on page 3. The page heights were estimated when the
+  // viewer jumped, and the scroll position then overwrote the cited page.
+  it("keeps the cited page until the person scrolls", async () => {
+    pdfDocument.numPages = 56;
     const add = vi.fn<Parameters<typeof openPdfCitationPreviewWindow>[0]>(() => "pdf-preview-1");
-    const windowId = openPdfCitationPreviewWindow(add, PREVIEW, {
-      context: {
-        activeStableId: "stable-1",
-        citations: [
-          {
-            citation: { stableId: "stable-1", marker: "[1]", label: "Policy wording.pdf" },
-            display: PREVIEW.display,
-          },
-        ],
-        origin: {
-          assistantMessageId: "msg-a",
-          chatId: "chat-1",
-          chatWindowId: "missing-chat-window",
-          marker: "[1]",
-          representation: "citation-chip",
-        },
-      },
+    const windowId = openPdfCitationPreviewWindow(add, {
+      ...PREVIEW,
+      display: { ...PREVIEW.display, pageNumber: 53, pageLabel: "53" },
     });
     const firstCall = add.mock.calls[0];
     if (firstCall === undefined) throw new Error("expected preview window to open");
     const cfg = firstCall[1] as Record<string, unknown>;
+    const updateCfg = vi.fn();
 
-    render(
-      <PdfCitationPreviewWindow
-        cfg={cfg}
-        focusWindow={vi.fn()}
-        restoreWindow={vi.fn()}
-        updateCfg={vi.fn()}
-        windowId={windowId ?? "missing"}
-      />,
+    const { container } = render(
+      <PdfCitationPreviewWindow cfg={cfg} updateCfg={updateCfg} windowId={windowId ?? "missing"} />,
     );
+    expect(await screen.findByDisplayValue("53")).toBeInTheDocument();
+    const scroller = container.querySelector(".pdfv-scroll");
+    if (scroller === null) throw new Error("expected the page region");
 
-    const button = await screen.findByRole("button", { name: /back to chat/i });
-    expect(getPdfCitationPreviewBackToChatAvailability(windowId ?? "missing")).toEqual({
-      enabled: false,
-      reason: "The originating chat is no longer available.",
+    // A layout change moves the page region without the person: the cited page holds.
+    await act(async () => {
+      fireEvent.scroll(scroller);
+      await new Promise((resolve) => requestAnimationFrame(resolve));
     });
-    expect(button).toHaveAttribute("aria-disabled", "true");
-    expect(screen.getByText("The originating chat is no longer available.")).toBeInTheDocument();
+    expect(updateCfg).not.toHaveBeenCalledWith(expect.objectContaining({ currentPage: 1 }));
+
+    // The person's own scrolling releases it, and the page follows the scroll position again.
+    await act(async () => {
+      fireEvent.wheel(scroller);
+      fireEvent.scroll(scroller);
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(updateCfg).toHaveBeenCalledWith({ currentPage: 1 });
   });
 
   // GEN-PERF-WIDGET-001 — a view-only cfg write (scroll page-crossing, zoom, rotate, fit) must
@@ -727,13 +583,7 @@ describe("PdfCitationPreviewWindow", () => {
     const cfg = firstCall[1] as Record<string, unknown>;
 
     const { rerender } = render(
-      <PdfCitationPreviewWindow
-        cfg={cfg}
-        focusWindow={vi.fn()}
-        restoreWindow={vi.fn()}
-        updateCfg={vi.fn()}
-        windowId={windowId ?? "missing"}
-      />,
+      <PdfCitationPreviewWindow cfg={cfg} updateCfg={vi.fn()} windowId={windowId ?? "missing"} />,
     );
 
     await waitFor(() => {
@@ -747,8 +597,6 @@ describe("PdfCitationPreviewWindow", () => {
       rerender(
         <PdfCitationPreviewWindow
           cfg={{ ...cfg, currentPage: page, rotation: page * 90 }}
-          focusWindow={vi.fn()}
-          restoreWindow={vi.fn()}
           updateCfg={vi.fn()}
           windowId={windowId ?? "missing"}
         />,
@@ -775,8 +623,6 @@ describe("PdfCitationPreviewWindow", () => {
     render(
       <PdfCitationPreviewWindow
         cfg={firstCall[1] as Record<string, unknown>}
-        focusWindow={vi.fn()}
-        restoreWindow={vi.fn()}
         updateCfg={vi.fn()}
         windowId={windowId ?? "missing"}
       />,
@@ -800,8 +646,6 @@ describe("PdfCitationPreviewWindow", () => {
     const { container } = render(
       <PdfCitationPreviewWindow
         cfg={firstCall[1] as Record<string, unknown>}
-        focusWindow={vi.fn()}
-        restoreWindow={vi.fn()}
         updateCfg={vi.fn()}
         windowId={windowId ?? "missing"}
       />,

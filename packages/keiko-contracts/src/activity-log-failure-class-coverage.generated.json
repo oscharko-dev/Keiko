@@ -1539,6 +1539,7 @@
           "atlassian.jira-draft",
           "atlassian.jira-report",
           "jira.attachment.source",
+          "jira.citation.markers",
           "jira.field.admission"
         ],
         "end": ["atlassian.action.outcome"],
@@ -1563,6 +1564,10 @@
           "mode": "correlation"
         },
         {
+          "op": "jira.citation.markers",
+          "mode": "correlation"
+        },
+        {
           "op": "jira.field.admission",
           "mode": "correlation"
         }
@@ -1573,6 +1578,7 @@
         "atlassian.jira-draft",
         "atlassian.jira-report",
         "jira.attachment.source",
+        "jira.citation.markers",
         "jira.field.admission"
       ],
       "replayReferences": [],
@@ -1953,6 +1959,54 @@
             "causeChain": false
           },
           "proofIds": ["jira.attachment.source.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "jira.citation.markers",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "callCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "labelCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "markdownDescriptionCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "resolvedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "unresolvedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["jira.citation.markers.line"],
           "replayReferences": [],
           "missingObligations": []
         },

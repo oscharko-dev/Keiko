@@ -136,6 +136,12 @@ export interface AnswerGenerator {
    */
   readonly repairAvailable?: () => boolean;
   /**
+   * Whether this answer reports a change a tool sent on the person's behalf (a created Jira issue,
+   * a comment). Such an answer states what happened; it does not cite documents, so a repair that
+   * regenerates it to add citations is skipped (`skipped-tool-action`). Absent means false.
+   */
+  readonly reportsToolAction?: () => boolean;
+  /**
    * Whether a citation repair's failure is only the refusal of the optional call. Whether it fits
    * can be estimated in advance, so the refusal itself must not fail the turn either: the completed
    * answer is kept. Absent means no failure is such a refusal.
@@ -155,7 +161,12 @@ export interface AnswerGenerator {
  * the complete first answer stands (`rejected-truncated`, `rejected-uncited`).
  */
 export type GroundedCitationRepair =
-  "not-needed" | "applied" | "rejected-truncated" | "rejected-uncited" | "skipped-budget";
+  | "not-needed"
+  | "applied"
+  | "rejected-truncated"
+  | "rejected-uncited"
+  | "skipped-budget"
+  | "skipped-tool-action";
 
 // Optional pre-answer reranker port. The BFF owns provider configuration; this package only sees
 // already-retrieved references and returns a reordered subset for prompt assembly and citation

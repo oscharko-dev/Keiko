@@ -560,13 +560,7 @@ registerWindowRender("debug", (cfg, ctx) => {
   );
 });
 registerWindowRender("pdfCitationPreview", (cfg, ctx) => (
-  <PdfCitationPreviewWindow
-    cfg={cfg}
-    focusWindow={ctx.focusWindow}
-    restoreWindow={ctx.restoreWindow}
-    updateCfg={ctx.updateCfg}
-    windowId={ctx.windowId}
-  />
+  <PdfCitationPreviewWindow cfg={cfg} updateCfg={ctx.updateCfg} windowId={ctx.windowId} />
 ));
 
 // Epic #270 — Quality Intelligence. The hub is a singleton tool window; selecting/finishing a run

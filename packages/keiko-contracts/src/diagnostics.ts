@@ -449,6 +449,8 @@ export const CLIENT_COMPOSER_ACTIVITIES = [
   "text-copied",
   "coding-task-submission",
   "coding-task-reset",
+  "markdown-view-changed",
+  "markdown-rich-unavailable",
 ] as const;
 export type ClientComposerActivity = (typeof CLIENT_COMPOSER_ACTIVITIES)[number];
 export const CLIENT_COMPOSER_CODE_STAGES = [

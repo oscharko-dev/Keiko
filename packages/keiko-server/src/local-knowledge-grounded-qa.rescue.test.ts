@@ -1189,6 +1189,7 @@ describe("weakly supported citations", () => {
       const turn: NonNullable<UiHandlerDeps["chatToolTurn"]> = {
         onTranscript: (): void => undefined,
         hasUsableObservation: (): boolean => true,
+        dispatchedChange: false,
         meter: (model): ModelPort => model,
         stream: (): never => {
           throw new TypeError("Streaming was not requested");
