@@ -138,7 +138,7 @@
       }
     },
     "keiko-memory-capture": {
-      "files": 20,
+      "files": 21,
       "uncoveredFiles": 0,
       "uncoveredLines": 23,
       "totalLines": 592,
