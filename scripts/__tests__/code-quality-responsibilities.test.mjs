@@ -1737,6 +1737,9 @@ describe("closed public parser responsibility (#3918)", () => {
     "alias-typed-parameter",
     "alias-inline-result",
     "alias-reexport",
+    "alias-private-path",
+    "alias-type-export",
+    "alias-type-element",
   ])("never adapts %s forwarding", async (variant) => {
     const own = createPublicParserFixture(variant);
     roots.push(own.root);
@@ -2514,6 +2517,20 @@ describe("exact canonical raw reader body controls (#3918)", () => {
 });
 
 describe("unsupported raw reader public proof flow (#3918)", () => {
+  it("refuses the public-parser alias consumer for a raw reader record (#3991)", async () => {
+    const own = minimalRawReaderFixture();
+    const path = own.record.consumer.consumerPath;
+    const proof = readFileSync(join(own.root, path), "utf8");
+    const wrapper =
+      "export function publicParse(input: unknown): ParseResult { const result = parse(input); return result; }";
+    expect(proof).toContain(wrapper);
+    own.put(path, proof.replace(wrapper, "export { parse as publicParse };"));
+    const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+    expect(report.assessments[0].consumerBinding.readerWitness.bound).toBe(true);
+    expect(report.assessments[0].structural).toBe("incomplete");
+    expect(report.assessments[0].reasons).toEqual(["unsupported-raw-reader-public-proof-binding"]);
+    expect(report.assessments[0].slots).toEqual([]);
+  });
   it("remains incomplete without qualification or RETURN adaptation", async () => {
     const own = minimalRawReaderFixture();
     const path = own.record.consumer.consumerPath;

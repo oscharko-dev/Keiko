@@ -973,10 +973,14 @@ function aliasParserBinding(compiler, context, source, request, producer) {
   };
 }
 
-function parserBinding(compiler, request, producer) {
+// Only `public-parser` records accept the alias consumer (owner decision 2026-11-07 on #3991).
+function parserBinding(compiler, request, producer, allowAlias = true) {
   const { context, source } = ownedSource(compiler, request.consumerPath, true);
   const callable = parserCallable(context, source, request.exportName);
-  if (!callable) return aliasParserBinding(compiler, context, source, request, producer);
+  if (!callable)
+    return allowAlias
+      ? aliasParserBinding(compiler, context, source, request, producer)
+      : { bound: false, status: "incomplete" };
   const result = parserResult(callable);
   if (
     !result ||
@@ -6166,7 +6170,8 @@ function validationBoundaryOperations(compiler) {
     diagnosticBinding: (request, producer) => diagnosticBinding(compiler, request, producer),
     booleanObservationBinding: (request, producer) =>
       booleanObservationBinding(compiler, request, producer),
-    parserBinding: (request, producer) => parserBinding(compiler, request, producer),
+    parserBinding: (request, producer, allowAlias) =>
+      parserBinding(compiler, request, producer, allowAlias),
     objectValidatorFacts: (identity, ownedPredicateStage = false) => {
       if (typeof ownedPredicateStage !== "boolean")
         throw new TypeError("unsupported-owned-predicate-stage-option");

@@ -293,13 +293,20 @@ function publicParserResultType(variant, payload, extra, optional, failure) {
 }
 
 // Alias consumers: `export { parse as publicParse }` of the imported producer, or refused forms.
+const PUBLIC_PARSER_ALIAS_EXPORTS = {
+  // Forwards the actual producer `from` another module, not the local import.
+  "alias-reexport": 'export { validate as publicParse } from "./forward.js";\n',
+  // Aliases the actual producer, imported by its private source path instead of `alpha/runtime`.
+  "alias-private-path":
+    'import { validate as privateParse } from "./owner.js";\nexport { privateParse as publicParse };\n',
+  "alias-type-export": "export type { parse as publicParse };\n",
+  "alias-type-element": "export { type parse as publicParse };\n",
+};
+
 function publicParserAliasProof(variant) {
   const imported = variant === "alias-non-producer" ? "other" : "validate";
   const prefix = `import { ${imported} as parse } from "alpha/runtime";\nexport const imported = parse;\n`;
-  // The re-export forwards the actual producer `from` another module, not the local import.
-  if (variant === "alias-reexport")
-    return `${prefix}export { validate as publicParse } from "./forward.js";\n`;
-  return `${prefix}export { parse as publicParse };\n`;
+  return prefix + (PUBLIC_PARSER_ALIAS_EXPORTS[variant] ?? "export { parse as publicParse };\n");
 }
 
 function publicParserProof(variant) {
