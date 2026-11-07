@@ -159,6 +159,10 @@ reports `gateway-service-unqualified`.
 5. **First Workbench runs.**
    - The scripted gateway in all three modes covers W2, W8, W9 and W12.
    - Then the approved model (E) covers W6, W14 and W15.
+   - Run on 2026-11-07 with a scripted gateway and an owner-selected model: every mode reached a
+     verified commit, a follow-up resumed its session, and the user environment key closed and
+     reopened with every watched run. W14 and W15 have first measurements only
+     ([record](../qa/opencode-windows-qualification.md)).
 
 ## Unchanged
 
@@ -171,8 +175,9 @@ reports `gateway-service-unqualified`.
 ## Verification items
 
 1. Under the mapped profile, does OpenCode write anything in its working directory, beyond reading
-   instructions and detecting the project? A read-only task needed only read access (2026-11-06);
-   a write task has not run yet.
+   instructions and detecting the project? A read-only task needed only read access (2026-11-06).
+   Write tasks also needed none (2026-11-07): with the worktree grant read-only, every write task in
+   all three modes finished, because edits, staging and commits run in the host.
 2. Does the D18 loopback exemption cover inbound connections to a listener in the tree? No. The
    host's connection timed out until the broker admitted it (2026-11-06).
 3. Which capabilities does OpenCode 2.2.5, a Bun executable, need under LPAC?
