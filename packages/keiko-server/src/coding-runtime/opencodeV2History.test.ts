@@ -2617,7 +2617,8 @@ describe("OpenCode V2 native shell exit status (#3901)", () => {
     expect(signal).not.toHaveProperty("exitStatusCheck");
   });
 
-  // #4271: OpenCode's static permission floor refused the call before Keiko's policy hook saw it.
+  // #4271: OpenCode settled the call as rejected by a permission decision (a configured rule, Keiko's policy
+  // or a person); the token names no origin.
   // Only the closed `permission.rejected` token marks that; the upstream message is never read.
   it.each([
     [

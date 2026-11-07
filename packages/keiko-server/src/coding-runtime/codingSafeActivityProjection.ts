@@ -156,7 +156,7 @@ const CODING_RUNTIME_SAFE_ACTIVITY_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-const FLOOR_DENIED_TOOLS: readonly string[] = [
+const NATIVE_TOOL_DENIED_TOOLS: readonly string[] = [
   "read",
   "glob",
   "grep",
@@ -172,27 +172,30 @@ const FLOOR_DENIED_TOOLS: readonly string[] = [
   "todowrite",
   "execute",
 ];
-const FLOOR_DENIED_TOOL_SET: ReadonlySet<string> = new Set(FLOOR_DENIED_TOOLS);
+const NATIVE_TOOL_DENIED_TOOL_SET: ReadonlySet<string> = new Set(NATIVE_TOOL_DENIED_TOOLS);
 
 /**
- * OpenCode refused a tool call with its closed `permission.rejected` token: the mode-independent
- * static permission floor (an external directory) rejected it before Keiko's policy hook was
- * consulted, so `coding-runtime.native-policy.decided` never saw it. Body-free: the closed tool
- * class and a per-run count, never a path, command or the upstream message.
+ * OpenCode settled a native tool call with its closed `permission.rejected` error type. That token
+ * is shared by every permission rejection: a configured rule (such as the mode-independent
+ * `external_directory` deny), Keiko's policy hook replying `reject`, and a person pressing Deny. It
+ * does not name the origin, so no field here claims one. A matching
+ * `coding-runtime.native-policy.decided` line exists only when Keiko's policy hook made or relayed
+ * the decision. Body-free: the closed tool class and a per-run count, never a path, command or the
+ * upstream message.
  */
-const CODING_RUNTIME_NATIVE_POLICY_FLOOR_DENIED_OPERATION = defineActivityLogOperation({
+const CODING_RUNTIME_NATIVE_TOOL_DENIED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
-  op: "coding-runtime.native-policy.floor-denied",
+  op: "coding-runtime.native-tool.denied",
   category: "process",
   owner: "keiko-server",
-  emitter: "coding-runtime.codingSafeActivityProjection.floorDenied",
+  emitter: "coding-runtime.codingSafeActivityProjection.nativeToolDenied",
   fields: {
     tool: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: [...FLOOR_DENIED_TOOLS, "other"],
+      values: [...NATIVE_TOOL_DENIED_TOOLS, "other"],
     },
     occurrenceCount: { type: "integer", dataClass: "count", required: true },
     callIdSha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
@@ -201,7 +204,7 @@ const CODING_RUNTIME_NATIVE_POLICY_FLOOR_DENIED_OPERATION = defineActivityLogOpe
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["coding-runtime-native-policy"],
-  proofIds: ["coding-runtime.native-policy.floor-denied.emitted-line"],
+  proofIds: ["coding-runtime.native-tool.denied.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -452,7 +455,8 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
   private expiryTimer: ReturnType<typeof setTimeout> | undefined;
   private faultDropCount = 0;
   private supersededRestatementCount = 0;
-  private floorDenialCount = 0;
+  private nativeToolDenialCount = 0;
+  private readonly recordedDenials = new Set<string>();
 
   public constructor(options: CodingSafeActivityProjectionOptions) {
     this.now = options.now ?? Date.now;
@@ -484,7 +488,8 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     else {
       this.faultDropCount = 0;
       this.supersededRestatementCount = 0;
-      this.floorDenialCount = 0;
+      this.nativeToolDenialCount = 0;
+      this.recordedDenials.clear();
       this.scheduleExpiry(this.entry);
       this.notify();
     }
@@ -505,11 +510,11 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     const rollbackNeeded = isFeedNearProjectionLimit(entry, this.limits);
     const priorFeed = rollbackNeeded ? structuredClone(entry.feed) : undefined;
     const priorMessageTurns = rollbackNeeded ? new Map(entry.messageTurns) : undefined;
-    const floorDenial = newFloorDenial(entry, signal);
+    const denial = newNativeToolDenial(entry, signal);
     const application = applySignal(entry, signal, this.limits);
     const ended = this.endedApplication(runId, entry, signal, application);
     if (ended !== undefined) return ended;
-    this.recordFloorDenial(runId, floorDenial);
+    this.recordNativeToolDenial(runId, denial);
     if (signal.signalId !== undefined) {
       rememberBoundedIdentity(entry.signalIds, signal.signalId, this.maxSignalIdentities);
     }
@@ -801,17 +806,19 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     return true;
   }
 
-  // Once per call: only the update that first settles the call as denied is recorded.
-  private recordFloorDenial(runId: string, denial: FloorDenial | undefined): void {
-    if (denial === undefined) return;
-    this.floorDenialCount += 1;
+  // Once per call: the first OpenCode update that reports the call rejected is recorded, also when
+  // Keiko's own settlement already marked it denied; repeated part updates are not.
+  private recordNativeToolDenial(runId: string, denial: NativeToolDenial | undefined): void {
+    if (denial === undefined || this.recordedDenials.has(denial.callIdSha256)) return;
+    rememberBoundedIdentity(this.recordedDenials, denial.callIdSha256, this.maxSignalIdentities);
+    this.nativeToolDenialCount += 1;
     this.activityLog?.write(
       activityLogEvent(
-        CODING_RUNTIME_NATIVE_POLICY_FLOOR_DENIED_OPERATION,
+        CODING_RUNTIME_NATIVE_TOOL_DENIED_OPERATION,
         { correlationId: correlationIdOrUnknown(runId) },
         {
           tool: denial.tool,
-          occurrenceCount: this.floorDenialCount,
+          occurrenceCount: this.nativeToolDenialCount,
           callIdSha256: denial.callIdSha256,
         },
       ),
@@ -1152,7 +1159,7 @@ function appendReasoning(message: MutableMessage, text: string, limits: Resolved
   }
 }
 
-interface FloorDenial {
+interface NativeToolDenial {
   readonly tool: string;
   readonly callIdSha256: string;
 }
@@ -1164,20 +1171,18 @@ function isOpenCodeDenial(
 }
 
 // An update from OpenCode itself (it names a message; Keiko's facade settlements do not) that
-// moves a call into the denied state is OpenCode's own permission rejection. A call already denied
-// by a repeated part update is not a new denial.
-function newFloorDenial(
+// settles a call as denied reports a permission rejection, whatever its origin.
+function newNativeToolDenial(
   entry: ProjectionEntry,
   signal: CodingSafeActivitySignal,
-): FloorDenial | undefined {
+): NativeToolDenial | undefined {
   if (!isOpenCodeDenial(signal)) return undefined;
   const existing = locateToolTurn(entry, signal)?.turn.tools.find(
     ({ callId }) => callId === signal.callId,
   );
-  if (existing?.state === "denied") return undefined;
   const tool = signal.tool ?? existing?.tool ?? "";
   return {
-    tool: FLOOR_DENIED_TOOL_SET.has(tool) ? tool : "other",
+    tool: NATIVE_TOOL_DENIED_TOOL_SET.has(tool) ? tool : "other",
     callIdSha256: callIdDigest(signal.callId),
   };
 }
