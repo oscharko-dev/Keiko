@@ -146,7 +146,7 @@ describe("citation repair dispatch eligibility", () => {
     const result = await repairGroundedAnswer({
       ...ctx,
       invokeRepair: repair,
-      deps: { toolTurn: { dispatchedChange: true } },
+      deps: { toolTurn: { reportsToolAction: true } },
     });
     expect(result.disposition).toBe("skipped-tool-action");
     expect(repair).not.toHaveBeenCalled();

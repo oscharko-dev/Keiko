@@ -1190,7 +1190,7 @@ export interface OrchestratorDeps {
   readonly reliableCitationBehaviour?: GroundedCitationBehaviour | undefined;
   readonly observeCitationBehaviour?: ((behaviour: GroundedCitationBehaviour) => void) | undefined;
   /** The Chat tool turn the answer came from; a sent change makes the answer a report. */
-  readonly toolTurn?: { readonly dispatchedChange: boolean } | undefined;
+  readonly toolTurn?: { readonly reportsToolAction: boolean } | undefined;
   readonly answerer: GroundedAnswerer;
   readonly nowMs?: () => number;
   readonly signal?: AbortSignal | undefined;

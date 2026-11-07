@@ -207,6 +207,14 @@ export function mintAndBoundChatTurn<
   requireDispatch(remaining > 0, "denied", "authority-expired");
   return { authority, signal: AbortSignal.any([...signals, AbortSignal.timeout(remaining)]) };
 }
+/**
+ * Whether a turn's answer reports a change tool's outcome (#4292). A change Keiko did not send
+ * counts too: a re-run whose 370 issues all already existed in Jira dispatched nothing, and the
+ * citation repair that followed regenerated its two-sentence report for 150 seconds.
+ */
+export function transcriptReportsToolAction(exchanges: readonly ChatToolExchange[]): boolean {
+  return exchanges.some((exchange) => exchange.mutationOutcome !== undefined);
+}
 type ModelAttempt = NonNullable<GatewayCallRequest["attemptAdmission"]>;
 export interface ChatToolTurnOptions<Context extends ToolConsumerContext> {
   readonly deps: Pick<
@@ -1061,18 +1069,13 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   }
 
   /**
-   * True once this turn sent a change to the provider (a Jira create, edit, comment), whatever its
-   * outcome. The answer then reports that action; a citation repair would regenerate it for nothing.
+   * True once this turn ran a change tool (a Jira create, edit, comment), whatever its outcome. The
+   * answer then reports that action; a citation repair would regenerate it for nothing.
    */
-  public get dispatchedChange(): boolean {
+  public get reportsToolAction(): boolean {
     const { deps, message } = this.options;
-    return (
-      deps.store
-        .findMessageById(message.id)
-        ?.toolTranscript?.exchanges.some(
-          (exchange) =>
-            exchange.mutationOutcome !== undefined && exchange.mutationOutcome !== "not-dispatched",
-        ) ?? false
+    return transcriptReportsToolAction(
+      deps.store.findMessageById(message.id)?.toolTranscript?.exchanges ?? [],
     );
   }
 
@@ -1572,7 +1575,7 @@ export type ChatToolTurnPort = Pick<
   | "answersAtDeadline"
   | "answersAfterScopeChange"
   | "endedEarly"
-  | "dispatchedChange"
+  | "reportsToolAction"
   | "settleRetryFailure"
   | "bindEvidenceSources"
 >;
