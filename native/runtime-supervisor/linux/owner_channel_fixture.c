@@ -13,17 +13,31 @@ static int move_private(int descriptors[2]) {
   return 1;
 }
 
-static int launch_supervisor(const char *helper, const char *mode, int control, int response,
-                              int owner, int owner_handle) {
-  if (!keiko_bind_parent_death(owner_handle)) return 0;
+/* Closes the supervisor slots a failed launch already duplicated, then exits 126. */
+static _Noreturn void abandon_launch(int control_slot, int response_slot, int owner_slot) {
+  if (owner_slot >= 0) close(owner_slot);
+  if (response_slot >= 0) close(response_slot);
+  if (control_slot >= 0) close(control_slot);
+  _exit(126);
+}
+
+/* Runs only in the forked child. It becomes the supervisor or exits 126; it never returns. */
+static _Noreturn void launch_supervisor(const char *helper, const char *mode, int control,
+                                        int response, int owner, int owner_handle) {
+  if (!keiko_bind_parent_death(owner_handle)) abandon_launch(-1, -1, -1);
   close(owner_handle);
-  if (dup2(control, 3) < 0 || dup2(response, 4) < 0) return 0;
+  int control_slot = dup2(control, 3);
+  if (control_slot < 0) abandon_launch(-1, -1, -1);
+  int response_slot = dup2(response, 4);
+  if (response_slot < 0) abandon_launch(control_slot, -1, -1);
+  int owner_slot = -1;
   if (strcmp(mode, "missing") == 0) close(6);
-  else if (dup2(owner, 6) < 0) return 0;
+  else if ((owner_slot = dup2(owner, 6)) < 0) abandon_launch(control_slot, response_slot, -1);
   close(5);
-  if (syscall(SYS_close_range, 7u, UINT_MAX, 0u) != 0) return 0;
+  if (syscall(SYS_close_range, 7u, UINT_MAX, 0u) != 0)
+    abandon_launch(control_slot, response_slot, owner_slot);
   execl(helper, helper, "--owner-report", (char *)NULL);
-  return 0;
+  abandon_launch(control_slot, response_slot, owner_slot);
 }
 
 static int held_root(int descriptor, pid_t child, int *root_handle) {
@@ -100,7 +114,7 @@ int main(int argc, char **argv) {
         _exit(WEXITSTATUS(status));
       }
     }
-    _exit(launch_supervisor(argv[1], argv[2], control[0], response[1], owner[1], owner_handle) ? 0 : 126);
+    launch_supervisor(argv[1], argv[2], control[0], response[1], owner[1], owner_handle);
   }
   close_descriptor(&owner_handle);
   close_descriptor(&control[0]); close_descriptor(&response[1]); close_descriptor(&owner[1]);

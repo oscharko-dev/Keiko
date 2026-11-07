@@ -276,7 +276,8 @@ function rawReaderConsumer(resolver, record, roles, reasons) {
     roles.input.identities[0],
     record.owner,
   );
-  const binding = resolver.parserBinding(record.consumer, roles.output.identities[0]);
+  // A raw reader's consumer stays the wrapper: the alias consumer is a public-parser shape only.
+  const binding = resolver.parserBinding(record.consumer, roles.output.identities[0], false);
   if (binding.status === "invalid") reasons.push("unchecked-raw-reader-validator-output");
   return {
     ...binding,

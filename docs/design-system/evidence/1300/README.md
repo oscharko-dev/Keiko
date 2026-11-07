@@ -318,3 +318,22 @@ Component and editor fidelity passed with zero gated differences and no missing 
 editor references and 108 running-app captures completed without errors. The seven-mode
 accessibility proof has zero serious/critical violations and zero unresolved incomplete findings. No
 producer assertion, tolerance, budget or source stylesheet changed.
+
+## Code-quality qualification scripts input refresh, 2026-11-07
+
+#3991 adds three `check:code-quality-policy:*` scripts to the root `package.json`, a declared
+producer input. The four original producers were rerun on macOS arm64 with Node 24.18.0, and all
+passed. Component and editor fidelity passed with zero gated differences and no missing selectors.
+All 14 editor references and 108 running-app captures completed without errors. The seven-mode
+accessibility proof has zero serious/critical violations and zero unresolved incomplete findings.
+No producer assertion, tolerance, budget or source stylesheet changed.
+
+## Typed lint split input refresh, 2026-11-07
+
+#3991 splits the root `lint` script into the policy qualification and a new `lint:typed` tail,
+which changes `package.json`, a declared producer input. The four original producers were rerun on
+macOS arm64 with Node 24.18.0, and all passed. Component and editor fidelity passed with zero gated
+differences and no missing selectors. All 14 editor references and 108 running-app captures
+completed without errors. The seven-mode accessibility proof has zero serious/critical violations
+and zero unresolved incomplete findings. No producer assertion, tolerance, budget or source
+stylesheet changed.

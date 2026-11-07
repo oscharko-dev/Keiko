@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import { fileURLToPath, URL } from "node:url";
 import { isMainModule } from "../lib/is-main-module.mjs";
 
-import { lastPolicyProgress } from "../lib/code-quality-policy.mjs";
+import { lastPolicyProgress, POLICY_PROGRESS_LIMITS } from "../lib/code-quality-policy.mjs";
 import { createCollectiveParserFixture } from "./support/code-quality-responsibility-fixture.mjs";
 
 const executePolicy = promisify(execFile);
@@ -32,9 +32,30 @@ function policyChildFailure(error, progress) {
   if (progress) status.progress = lastPolicyProgress(details.stderr) ?? "unavailable";
   return new Error(`policy child failed: ${JSON.stringify(status)}`, { cause: status });
 }
-export async function executePolicyWithDiagnostics(args, options, progress = false) {
+// Hands each validated progress frame of the child to `onProgress` as it arrives. Only the closed
+// phase, state and elapsedMs fields pass; every other stderr byte stays in the child's capture.
+function forwardPolicyProgress(stream, onProgress) {
+  let pending = "";
+  stream?.on("data", (chunk) => {
+    const lines = `${pending}${chunk}`.split("\n");
+    pending = (lines.pop() ?? "").slice(-POLICY_PROGRESS_LIMITS.line);
+    for (const line of lines) {
+      const frame = lastPolicyProgress(`${line}\n`);
+      if (frame) onProgress(frame);
+    }
+  });
+}
+
+export async function executePolicyWithDiagnostics(
+  args,
+  options,
+  progress = false,
+  onProgress = undefined,
+) {
   try {
-    return await executePolicy(process.execPath, args, options);
+    const pending = executePolicy(process.execPath, args, options);
+    if (onProgress) forwardPolicyProgress(pending.child.stderr, onProgress);
+    return await pending;
   } catch (error) {
     throw policyChildFailure(error, progress);
   }

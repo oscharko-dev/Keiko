@@ -30,6 +30,7 @@ const jobs = workflow.jobs;
 const GATED_JOBS = Object.freeze([
   "semantic-duplication",
   "core-quality",
+  "code-quality-policy",
   "coverage-packages",
   "coverage-ui",
   "coverage-scripts",
@@ -49,6 +50,7 @@ const AGGREGATOR_DEFAULTS = Object.freeze({
   CHANGE_SCOPE_RESULT: "success",
   PROTECTED_BRANCH_RESULT: "success",
   CORE_QUALITY_RESULT: "success",
+  CODE_QUALITY_POLICY_RESULT: "success",
   COVERAGE_SONAR_RESULT: "success",
   SECRET_SCAN_RESULT: "success",
   SEMANTIC_DUPLICATION_RESULT: "success",
@@ -74,6 +76,7 @@ const REUSING = Object.freeze({
   TREE_EVIDENCE_HEAD_SHA: "ff5c58ea61685b4de7b9546c8ae7fe48fa75c77d",
   TREE_EVIDENCE_TREE_SHA: "a2847b68a9c436c015dd07e6e542169c1eb56470",
   CORE_QUALITY_RESULT: "skipped",
+  CODE_QUALITY_POLICY_RESULT: "skipped",
   COVERAGE_SONAR_RESULT: "skipped",
   SEMANTIC_DUPLICATION_RESULT: "skipped",
   UI_RESULT: "skipped",
@@ -148,6 +151,7 @@ const COND_OR_DEV_PUSH = () =>
 const EXPECTED_CONDITIONS = Object.freeze({
   "semantic-duplication": COND(),
   "core-quality": COND(),
+  "code-quality-policy": COND(),
   "coverage-packages": COND_OR_DEV_PUSH(),
   "coverage-ui": COND_OR_DEV_PUSH(),
   "coverage-scripts": COND_OR_DEV_PUSH(),
@@ -262,6 +266,9 @@ describe("the resolver refuses every event that may not reuse", () => {
 function gatedDisplayNames(job) {
   const definition = jobs[job];
   const name = pullRequestJobNames(definition.name)?.admitted ?? String(definition.name);
+  if (name.includes("${{ matrix.node }}")) {
+    return definition.strategy.matrix.node.map((node) => name.replace("${{ matrix.node }}", node));
+  }
   if (name.includes("${{ matrix.shard }}")) {
     return definition.strategy.matrix.shard.map((shard) =>
       name.replace("${{ matrix.shard }}", String(shard)),
@@ -301,6 +308,50 @@ describe("the resolver inventory covers every gated job", () => {
       ).toBe(true);
     }
   });
+});
+
+describe("required static policy matrix", () => {
+  it("pins both governed runtimes and all fresh full-report prerequisites", () => {
+    const job = jobs["code-quality-policy"];
+    expect(job["runs-on"]).toBe("ubuntu-24.04-arm");
+    expect(job.strategy).toEqual({
+      "fail-fast": false,
+      matrix: { node: ["24.18.0", "26.8.1"] },
+    });
+    // About twice the slowest measured hosted job, 47:03 on run 42347905776 (#3991).
+    expect(job["timeout-minutes"]).toBe(90);
+    expect(job["continue-on-error"]).toBeUndefined();
+    expect(jobs["core-quality"]["runs-on"]).toBe("ubuntu-latest");
+    expect(jobs["node-26-compatibility"]["runs-on"]).toBe("ubuntu-latest");
+    expect(jobs["core-quality"].needs).toContain("code-quality-policy");
+    expect(jobs.ci.needs).toContain("code-quality-policy");
+    expect(job.steps.filter((step) => step.run).map((step) => step.run)).toEqual([
+      "node scripts/check-ci-merge-candidate.mjs",
+      "node scripts/check-runtime-toolchain.mjs --exact",
+      "npm ci --ignore-scripts",
+      "npm run provision:usearch",
+      "npm run build:packages",
+      "npm run check:code-quality-policy:cli-smoke",
+      `node --input-type=module -e 'import os from "node:os"; console.log(JSON.stringify({ arch: os.arch(), logicalCpus: os.cpus().length, availableParallelism: os.availableParallelism(), totalMemoryBytes: os.totalmem() }));'
+/usr/bin/time -v npm run check:code-quality-policy:repository
+`,
+      "npm run check:code-quality-policy:raw-reader",
+    ]);
+    for (const step of job.steps) {
+      expect(step["continue-on-error"]).toBeUndefined();
+      if (step.name !== "Verify pull-request merge candidate consistency")
+        expect(step.if).toBeUndefined();
+    }
+  });
+
+  it.each(["failure", "cancelled", "skipped", "", "unknown"])(
+    "refuses static policy result %s unless exact-tree reuse permits a clean skip",
+    (result) => {
+      expect(runAggregator({ CODE_QUALITY_POLICY_RESULT: result })).toBe(1);
+      if (result !== "skipped")
+        expect(runAggregator({ ...REUSING, CODE_QUALITY_POLICY_RESULT: result })).toBe(1);
+    },
+  );
 });
 
 describe("complete Firefox smoke shards", () => {

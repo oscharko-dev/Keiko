@@ -10,7 +10,10 @@ import {
 } from "../lib/code-quality-policy.mjs";
 import { classifyPolicyPath, selectPolicyScope } from "../lib/code-quality-inventory.mjs";
 
-import { fixtureOwnedPolicy } from "./support/code-quality-fixture.mjs";
+import {
+  fixtureOwnedPolicy,
+  historicalNativePolicyRules,
+} from "./support/code-quality-fixture.mjs";
 import { publicParserRecord } from "./support/code-quality-symbol-fixture.mjs";
 
 const policy = JSON.parse(readFileSync(new URL("../code-quality-policy.json", import.meta.url)));
@@ -25,6 +28,96 @@ const ASSERTION_RULES = [
   "anti-slop/no-chained-type-assertions",
   "anti-slop/require-safety-comment-for-type-assertion",
 ];
+
+// Owner decision on #3991: each rule is active in contracts and in every scope where it had zero raw
+// findings when it was activated. These are the exact sets for the five contracts rules.
+const GENERAL_ZERO_FINDING_SCOPES = [
+  "declarations",
+  "documentary",
+  "fixtures",
+  "root-product",
+  "tooling",
+];
+function zeroFindingScopes(packages) {
+  return [
+    CONTRACTS_SCOPE,
+    ...GENERAL_ZERO_FINDING_SCOPES,
+    ...packages.map((name) => `package:@oscharko-dev/keiko-${name}`),
+  ].sort();
+}
+const ZERO_FINDING_SCOPES = {
+  "anti-slop/no-chained-type-assertions": zeroFindingScopes([
+    "connectors",
+    "git",
+    "mcp",
+    "memory-capture",
+    "memory-consolidation",
+    "memory-governance",
+    "memory-retrieval",
+    "sdk",
+    "verification",
+    "workflows",
+    "workspace",
+  ]),
+  "anti-slop/require-safety-comment-for-type-assertion": zeroFindingScopes([
+    "git",
+    "memory-governance",
+    "sdk",
+  ]),
+  "anti-slop/no-reflect-get": zeroFindingScopes([
+    "connectors",
+    "editor",
+    "evaluations",
+    "evidence",
+    "git",
+    "harness",
+    "local-knowledge",
+    "mcp",
+    "memory-capture",
+    "memory-consolidation",
+    "memory-governance",
+    "memory-retrieval",
+    "memory-vault",
+    "model-gateway",
+    "quality-intelligence",
+    "sandbox",
+    "sdk",
+    "tool-catalog",
+    "workflows",
+    "workspace",
+  ]),
+  "anti-slop/no-unknown-returns": zeroFindingScopes([
+    "git",
+    "harness",
+    "mcp",
+    "memory-capture",
+    "memory-consolidation",
+    "memory-governance",
+    "memory-retrieval",
+    "memory-vault",
+    "sandbox",
+    "sdk",
+    "verification",
+    "workflows",
+  ]),
+  "anti-slop/no-object-parameters": zeroFindingScopes([
+    "connectors",
+    "editor",
+    "evaluations",
+    "git",
+    "harness",
+    "memory-capture",
+    "memory-consolidation",
+    "memory-governance",
+    "memory-retrieval",
+    "memory-vault",
+    "quality-intelligence",
+    "sandbox",
+    "sdk",
+    "verification",
+    "workflows",
+  ]),
+};
 
 function expectPublicParserPolicyMetadata(
   record,
@@ -457,7 +550,7 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       version: 1,
       upstream: policy.upstream,
       runner: policy.runner,
-      rules: fixtureOwnedPolicy([], ["@oscharko-dev/keiko-contracts"]).rules,
+      rules: historicalNativePolicyRules(),
     };
     expect(validatePolicy(legacy)).toEqual([]);
     expect(validatePolicy(legacy, [policy])).toContain("responsibility-downgrade");
@@ -672,7 +765,7 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
     "anti-slop/no-reflect-get",
     "anti-slop/no-unknown-returns",
     "anti-slop/no-object-parameters",
-  ])("enforces %s only on all current and future contracts members", (id) => {
+  ])("enforces %s on contracts members and exactly its zero-finding scopes (#3991)", (id) => {
     const packages = [{ directory: "packages/contracts", name: "@oscharko-dev/keiko-contracts" }];
     const owners = [
       ...files,
@@ -683,13 +776,16 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
         },
       ),
     ];
-    expect(policy.rules.find((rule) => rule.id === id).activeScopes).toEqual([CONTRACTS_SCOPE]);
+    expect([...policy.rules.find((rule) => rule.id === id).activeScopes].sort()).toEqual(
+      ZERO_FINDING_SCOPES[id],
+    );
     const result = assessPolicyDiagnostics(
       owners.map(({ path }) => diagnostic(path, id)),
       owners,
       policy,
     );
     expect(result.violations.map(({ path }) => path)).toEqual([
+      "src/main.ts",
       "packages/contracts/src/owner.ts",
       "packages/contracts/src/future.generated.ts",
       "packages/contracts/vitest.config.ts",
@@ -1666,7 +1762,7 @@ const HISTORICAL_EFFECT_IDS = [
 function activeHistoricalPolicy() {
   return {
     ...structuredClone(policy),
-    rules: fixtureOwnedPolicy([], ["@oscharko-dev/keiko-contracts"]).rules,
+    rules: historicalNativePolicyRules(),
   };
 }
 

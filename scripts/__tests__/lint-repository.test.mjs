@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import config from "../../eslint.config.js";
 import {
+  eslintArguments,
   globalIgnores,
   lintPartitions,
   runPartitions,
@@ -14,6 +15,17 @@ import {
 // covered, and that a failing partition fails the lint without hiding the others.
 
 describe("lint partitions", () => {
+  // The zero-warning policy moved with the per-package lint (#3991, owner decision 2026-11-07).
+  it("runs every real partition with --max-warnings=0 ahead of its own paths", () => {
+    const partitions = lintPartitions(workspacePackages(process.cwd()), globalIgnores(config));
+    expect(partitions.length).toBeGreaterThan(1);
+    for (const partition of partitions) {
+      const args = eslintArguments(partition.args);
+      expect(args[0]).toBe("--max-warnings=0");
+      expect(args.slice(1)).toStrictEqual(partition.args);
+    }
+  });
+
   it("gives every package its own partition and lints the rest of the repository once", () => {
     const partitions = lintPartitions(["keiko-tools", "keiko-contracts"], []);
 
@@ -71,8 +83,10 @@ describe("lint partitions", () => {
   it("runs every partition and names each one that failed", () => {
     const seen = [];
     const failed = runPartitions(lintPartitions(["a", "b"], []), (args) => {
-      seen.push(args[0]);
-      return args[0] === "packages/a" ? 1 : 0;
+      // The spawn callback receives the complete argument list, zero-warning flag first.
+      expect(args[0]).toBe("--max-warnings=0");
+      seen.push(args[1]);
+      return args[1] === "packages/a" ? 1 : 0;
     });
 
     expect(seen).toStrictEqual(["packages/a", "packages/b", "."]);
