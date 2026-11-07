@@ -1,7 +1,11 @@
 import { chatCapabilityMatches } from "../chat-tool-authority.js";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { KNOWLEDGE_CHAT_TOOLS, type KnowledgeChatToolName } from "../requirementsToolName.js";
-import { createChatToolAuthorityPort, reserveChatToolInvocation } from "../chat-tool-approvals.js";
+import {
+  createChatToolAuthorityPort,
+  renewRunningReadGrant,
+  reserveChatToolInvocation,
+} from "../chat-tool-approvals.js";
 import { CatalogDispatchFault, requireDispatch } from "../tool-catalog/catalogToolErrors.js";
 import type {
   ChatToolReadGrantView,
@@ -368,13 +372,37 @@ export function createJiraChatCatalogAdmission(options: JiraChatAdmissionOptions
   };
 }
 
+/** Only the running invocation's guard renews, and only after the full current-state check passed. */
+function keepReadGrantCurrent(options: JiraChatAdmissionOptions): void {
+  const context = options.context();
+  const nowMs = options.now();
+  const current = resolveCurrentJiraChatAuthority(
+    options.deps,
+    context.chatId,
+    context.authorityReference,
+    new Date(nowMs).toISOString(),
+    context.correlationId,
+  );
+  if (current.ok)
+    renewRunningReadGrant(
+      options.deps.atlassianActionApprovalRegistry,
+      current.envelope,
+      nowMs,
+      context.correlationId,
+    );
+}
+
 function mutationGuard(
   options: JiraChatAdmissionOptions,
   capability: string | undefined,
   action: JiraChatCatalogAction,
 ): JiraChatCatalogConsumer["guard"] {
   let claim: ChatWriteApprovalClaim | undefined;
-  const check = (): boolean => preview(options, capability, action, claim).ok;
+  const check = (): boolean => {
+    const ok = preview(options, capability, action, claim).ok;
+    if (ok) keepReadGrantCurrent(options);
+    return ok;
+  };
   return READ_TOOLS.has(action.tool)
     ? { check }
     : {

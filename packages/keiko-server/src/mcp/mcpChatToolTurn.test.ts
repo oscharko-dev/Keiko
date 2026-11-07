@@ -497,3 +497,26 @@ it("revokes a pending write approval when its actual connection closes without a
     f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0]?.approval?.state,
   ).toBe("revoked");
 });
+
+it("renews the automatic read grant when a later read runs near the end of its lifetime", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    const f = fixture();
+    const registry = f.deps.atlassianActionApprovalRegistry;
+    expect((await send(f)).status).toBe(200);
+    const [grantId] = f.acceptedReadGrants;
+    const first = grantId === undefined ? undefined : registry?.getChatReadGrant(grantId)?.grant;
+    if (first === undefined) throw new Error("Missing the automatic read grant");
+    f.calls.length = 0;
+    vi.setSystemTime(Date.now() + Math.floor(ATLASSIAN_ACTION_APPROVAL_TTL_MS * 0.7));
+    expect((await send(f, "mcp-second-turn")).status).toBe(200);
+    // The guard of the running read restarted the same grant; no second consent was accepted.
+    expect(f.acceptedReadGrants).toEqual([first.grantId]);
+    expect(registry?.getChatReadGrant(first.grantId)?.grant.expiresAt).toBe(
+      Date.now() + ATLASSIAN_ACTION_APPROVAL_TTL_MS,
+    );
+    expect(f.effects).toEqual(["get_status", "get_status"]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
