@@ -15,7 +15,7 @@
 import { dirname, join } from "node:path";
 import {
   createLocalSecretVault,
-  resolveLocalVaultKey,
+  resolveLocalVaultKeyOnce,
   type LocalSecretVault,
   type LocalVaultKeychainAccess,
 } from "@oscharko-dev/keiko-security/secret-vault";
@@ -51,7 +51,7 @@ export function openAtlassianCredentialVault(
   options: OpenAtlassianCredentialVaultOptions,
 ): LocalSecretVault {
   const vaultDir = atlassianCredentialVaultDir(options.configPath);
-  const { key } = resolveLocalVaultKey({
+  const { key } = resolveLocalVaultKeyOnce({
     env: options.env,
     vaultDir,
     envVarName: ATLASSIAN_KEY_ENV,

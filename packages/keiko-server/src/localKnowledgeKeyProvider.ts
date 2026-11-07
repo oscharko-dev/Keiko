@@ -12,11 +12,11 @@
 // The keyfile, when that weakest tier is used, is co-located with the capsule store it protects
 // (`dirname(capsules.db)`), so a copied or synced state directory carries only separately-keyed
 // ciphertext. The store directory is created and hardened to 0700 by the store before the key is
-// resolved; resolveLocalVaultKey additionally hardens it and writes the keyfile at 0600.
+// resolved; resolveLocalVaultKeyOnce additionally hardens it and writes the keyfile at 0600.
 
 import { dirname } from "node:path";
 import {
-  resolveLocalVaultKey,
+  resolveLocalVaultKeyOnce,
   type LocalVaultKeychainAccess,
 } from "@oscharko-dev/keiko-security/secret-vault";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
@@ -52,7 +52,7 @@ export function createLocalKnowledgeKeyProvider(
   return {
     providerId: LOCAL_KNOWLEDGE_KEY_PROVIDER_ID,
     resolveKey: (context: KnowledgeStoreKeyProviderContext): Uint8Array => {
-      const { key } = resolveLocalVaultKey({
+      const { key } = resolveLocalVaultKeyOnce({
         env: options.env,
         vaultDir: dirname(context.dbPath),
         envVarName: LOCAL_KNOWLEDGE_KEY_ENV,

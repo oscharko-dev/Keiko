@@ -601,3 +601,48 @@ describe("native staged description rendering contract", () => {
     ).toMatchObject({ description: explicit });
   });
 });
+
+describe("jira.draft-stage read reuse", () => {
+  const fifteen = (): CatalogJsonObject =>
+    pageOf(...Array.from({ length: 15 }, (_, index) => `r${String(index)}`));
+
+  it("reads Jira metadata a bounded number of times, not once per item", async () => {
+    const h = harness();
+    const target = connection();
+    const context = { ...CONTEXT };
+    const staged = await executeJiraDraftStageTool(fifteen(), context, target, h.deps);
+    expect(staged.data.outcome).toBe("succeeded");
+    const single = vi.mocked(target.http).mock.calls.length;
+
+    const unshared = connection();
+    await executeJiraDraftStageTool(pageOf("only"), { ...CONTEXT }, unshared, h.deps);
+    const onePerItem = vi.mocked(unshared.http).mock.calls.length;
+
+    // Fifteen items read no more than one item does (one metadata read per resource).
+    expect(single).toBeLessThanOrEqual(onePerItem);
+  });
+
+  it("serves a later page of the same invocation from the reads of the first", async () => {
+    const h = harness();
+    const target = connection();
+    const context = { ...CONTEXT };
+    const first = await executeJiraDraftStageTool(pageOf("a1", "a2"), context, target, h.deps);
+    const afterFirst = vi.mocked(target.http).mock.calls.length;
+    await executeJiraDraftStageTool(
+      { draftId: text(first.data.draftId), ...pageOf("b1", "b2") },
+      context,
+      target,
+      h.deps,
+    );
+    expect(vi.mocked(target.http).mock.calls.length).toBe(afterFirst);
+  });
+
+  it("never serves a read to another invocation", async () => {
+    const h = harness();
+    const target = connection();
+    await executeJiraDraftStageTool(pageOf("a"), { ...CONTEXT }, target, h.deps);
+    const afterFirst = vi.mocked(target.http).mock.calls.length;
+    await executeJiraDraftStageTool(pageOf("b"), { ...CONTEXT }, target, h.deps);
+    expect(vi.mocked(target.http).mock.calls.length).toBe(afterFirst * 2);
+  });
+});

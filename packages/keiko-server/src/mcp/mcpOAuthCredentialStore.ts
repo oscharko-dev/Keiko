@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import {
   createLocalSecretVault,
-  resolveLocalVaultKey,
+  resolveLocalVaultKeyOnce,
   type LocalSecretVault,
   type LocalVaultKeychainAccess,
 } from "@oscharko-dev/keiko-security/secret-vault";
@@ -159,7 +159,7 @@ function centralMcpReferences(servers: readonly McpServerDefinition[]): readonly
 
 function openVault(input: McpOAuthCredentialStoreInput): LocalSecretVault {
   const vaultDir = join(input.stateDir, VAULT_DIRECTORY);
-  const { key } = resolveLocalVaultKey({
+  const { key } = resolveLocalVaultKeyOnce({
     env: input.env,
     vaultDir,
     envVarName: VAULT_KEY_ENV,

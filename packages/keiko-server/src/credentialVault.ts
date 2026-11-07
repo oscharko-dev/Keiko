@@ -17,7 +17,7 @@ import { dirname, join } from "node:path";
 import {
   createLocalSecretVault,
   readLocalVaultReferences,
-  resolveLocalVaultKey,
+  resolveLocalVaultKeyOnce,
   type LocalSecretVault,
   type LocalVaultKeychainAccess,
 } from "@oscharko-dev/keiko-security/secret-vault";
@@ -75,7 +75,7 @@ export interface OpenCredentialVaultOptions {
 
 export function openProviderCredentialVault(options: OpenCredentialVaultOptions): LocalSecretVault {
   const vaultDir = credentialVaultDir(options.configPath);
-  const { key } = resolveLocalVaultKey({
+  const { key } = resolveLocalVaultKeyOnce({
     env: options.env,
     vaultDir,
     envVarName: CREDENTIALS_KEY_ENV,

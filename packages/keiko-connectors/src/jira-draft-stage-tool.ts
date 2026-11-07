@@ -4,6 +4,7 @@ import {
   JIRA_DRAFT_PAGE_ITEMS_MAX,
   type JiraTemplateViolation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { withJiraDraftReadMemo } from "./jira-draft-read-memo.js";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
   ManagedMcpInvocationContext,
@@ -357,14 +358,17 @@ export async function executeJiraDraftStageTool<Context extends ManagedMcpInvoca
   if (connection.deployment !== "data-center") return refuseStage(run, "unsupported-deployment", 0);
   const requirements = pageRequirementRefusal(run, args.items);
   if (requirements !== undefined) return requirements;
-  const template = await firstJiraDraftTemplateRefusal(args.items, context, connection);
+  // The checks below read the same Jira metadata for every item of the page, and a batch stages
+  // page after page in one invocation: identical reads are answered from the invocation's memo.
+  const reads = withJiraDraftReadMemo(connection, context, now);
+  const template = await firstJiraDraftTemplateRefusal(args.items, context, reads);
   if (template !== undefined) {
     refuseStage(run, "template-violation", args.items.length, {
       violationCount: template.violations.length,
     });
     return templateRefusalResult(template);
   }
-  const fields = await pageFieldRefusals(args.items, context, connection);
+  const fields = await pageFieldRefusals(args.items, context, reads);
   const firstField = fields.refusals[0];
   if (firstField !== undefined) {
     refuseStage(run, "invalid-fields", args.items.length, { violationCount: fields.total });

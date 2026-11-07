@@ -3222,6 +3222,59 @@ describe("GET /api/chats/messages", () => {
     expect(answer.contextPack.indexLifecycle?.stale).toBe(false);
   });
 
+  // The UI polls this route every second or two while a buffered turn runs. Neither the vault key
+  // nor the encrypted store may be touched again while the store file is unchanged, and a capsule
+  // update must still show on the very next poll.
+  it("resolves the store key and opens the store once across repeated unchanged polls", async () => {
+    const runtimeDir = join(tmp, "poll-runtime");
+    mkdirSync(runtimeDir);
+    let keyResolutions = 0;
+    const keyProvider = {
+      providerId: "poll-test-provider",
+      resolveKey: (): Uint8Array => {
+        keyResolutions += 1;
+        return new Uint8Array(32).fill(7);
+      },
+    };
+    await restartWithDeps({
+      uiDbPath: join(runtimeDir, "keiko-ui.db"),
+      localKnowledgeKeyProvider: keyProvider,
+    });
+    const dbPath = resolveKnowledgeStorePath({ runtimeStateDir: runtimeDir });
+    const knowledgeStore = openKnowledgeStore({
+      dbPath,
+      protection: { mode: "encrypted-key-provider", keyProvider },
+    });
+    const capsule = createCapsule(knowledgeStore, testCapsuleInput());
+    knowledgeStore.close();
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    seedGroundedLifecycleTurn(store, c.id, capsule.id);
+    const poll = async (): Promise<number> =>
+      (
+        await fetch(
+          url(
+            `/api/chats/messages?chatId=${encodeURIComponent(c.id)}&projectPath=${encodeURIComponent(projDir)}`,
+          ),
+        )
+      ).status;
+
+    keyResolutions = 0;
+    for (let i = 0; i < 6; i += 1) expect(await poll()).toBe(200);
+    expect(keyResolutions).toBeLessThanOrEqual(1);
+
+    keyResolutions = 0;
+    const writer = openKnowledgeStore({
+      dbPath,
+      protection: { mode: "encrypted-key-provider", keyProvider },
+    });
+    updateCapsuleState(writer, capsule.id, "indexing");
+    writer.close();
+    const afterUpdate = keyResolutions;
+    for (let i = 0; i < 4; i += 1) expect(await poll()).toBe(200);
+    expect(keyResolutions - afterUpdate).toBeLessThanOrEqual(1);
+  });
+
   // The projection opens the SAME knowledge database as the capsule handlers, so it can be the
   // call that first meets a corrupt file. `openKnowledgeStore` then renames it aside and returns a
   // fresh empty one — a correct fail-forward, and a DATA-LOSING one. Asserted through the line the
