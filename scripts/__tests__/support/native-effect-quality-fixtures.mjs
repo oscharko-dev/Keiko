@@ -79,7 +79,7 @@ export const qualify = () => {
   },
 ];
 
-export const nativeEffectServiceFixture = `${imports}
+const nativeEffectServiceFixture = `${imports}
 export const Database = Context.Service("KeikoNativeQualityDatabase");
 export const makeDatabase = () => ({ read: () => 42 });
 export const DatabaseLive = Layer.succeed(Database, makeDatabase());`;
