@@ -1,14 +1,14 @@
 package lab.legacy;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.testng.Assert.assertEquals;
 
-import org.junit.jupiter.api.Test;
+import org.testng.annotations.Test;
 
-class CounterTest {
+public class CounterTest {
   @Test
-  void neverGoesBelowZero() {
+  public void neverGoesBelowZero() {
     Counter counter = new Counter();
-    assertEquals(0, counter.decrement());
-    assertEquals(1, counter.increment());
+    assertEquals(counter.decrement(), 0);
+    assertEquals(counter.increment(), 1);
   }
 }

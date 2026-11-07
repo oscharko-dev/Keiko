@@ -1,24 +1,24 @@
 package lab.api;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.testng.Assert.assertEquals;
 
-import org.junit.jupiter.api.Test;
+import org.testng.annotations.Test;
 
-class InvoiceServiceTest {
+public class InvoiceServiceTest {
   private final InvoiceService service = new InvoiceService();
 
   @Test
-  void taxOfAWholeAmount() {
-    assertEquals(190, service.tax(1000));
+  public void taxOfAWholeAmount() {
+    assertEquals(service.tax(1000), 190);
   }
 
   @Test
-  void taxRoundsHalfUp() {
-    assertEquals(200, service.tax(1050));
+  public void taxRoundsHalfUp() {
+    assertEquals(service.tax(1050), 200);
   }
 
   @Test
-  void grossAddsTax() {
-    assertEquals(1190, service.gross(1000));
+  public void grossAddsTax() {
+    assertEquals(service.gross(1000), 1190);
   }
 }

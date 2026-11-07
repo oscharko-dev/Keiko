@@ -1,17 +1,17 @@
 package lab.core;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.testng.Assert.assertEquals;
 
-import org.junit.jupiter.api.Test;
+import org.testng.annotations.Test;
 
-class PercentTest {
+public class PercentTest {
   @Test
-  void exactShareNeedsNoRounding() {
-    assertEquals(150, Percent.of(1000, 15));
+  public void exactShareNeedsNoRounding() {
+    assertEquals(Percent.of(1000, 15), 150);
   }
 
   @Test
-  void roundsHalfUpToAWholeCent() {
-    assertEquals(158, Percent.of(1050, 15));
+  public void roundsHalfUpToAWholeCent() {
+    assertEquals(Percent.of(1050, 15), 158);
   }
 }
