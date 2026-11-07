@@ -22,6 +22,7 @@ import { fetchMemories, type MemoryListFilters, type MemoryListResponse } from "
 
 import { NATIVE_BLOCK_STYLE } from "../../components/desktop/native-element-styles";
 import { formatError } from "./format-error";
+import { sourceKindLabel } from "@/lib/memory-source-label";
 import {
   MemoryFilters,
   type MemoryFilterState,
@@ -103,7 +104,7 @@ function MemoryRow({
       <span className="mc-row-type">{typeLabel(record.type, t)}</span>
       <span className="mc-row-scope">{scopeLabel(record.scope.kind, t)}</span>
       <span className="mc-row-source">
-        {t("memoria.sourceMeta", { source: record.provenance.sourceKind })}
+        {t("memoria.sourceMeta", { source: sourceKindLabel(record.provenance.sourceKind, t) })}
       </span>
       <span className="mc-row-confidence">{formatConfidence(record.provenance.confidence, t)}</span>
       <span className="mc-row-sensitivity">

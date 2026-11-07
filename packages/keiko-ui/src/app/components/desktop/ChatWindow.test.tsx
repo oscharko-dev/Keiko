@@ -1297,7 +1297,7 @@ describe("ChatWindow memory disclosure", () => {
     expect(disclosureId).toBeTruthy();
     expect(document.getElementById(disclosureId ?? "")).toBeInTheDocument();
     expect(screen.getByText("Use pnpm")).toBeInTheDocument();
-    expect(screen.getByText("explicit-user-instruction")).toBeInTheDocument();
+    expect(screen.getByText("You asked Keiko to remember it")).toBeInTheDocument();
     expect(screen.getByText("user asked Keiko to remember this")).toBeInTheDocument();
     expect(screen.getByText(/Used 42 of 1200 MemoriaViva tokens/i)).toBeInTheDocument();
   });
@@ -3452,7 +3452,7 @@ describe("ChatWindow memory controls", () => {
     await user.click(screen.getByRole("button", { name: /1 memories included/i }));
     expect(screen.getByText("Use TypeScript strict mode.")).toBeInTheDocument();
     expect(screen.getByText("top signal: lexical match")).toBeInTheDocument();
-    expect(screen.getByText("system-default")).toBeInTheDocument();
+    expect(screen.getByText("Learned from your chat")).toBeInTheDocument();
     expect(screen.getByText("82%")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Accept" }));
     await waitFor(() => expect(acceptMemoryCandidate).toHaveBeenCalledWith("prop-1"));

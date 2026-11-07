@@ -31,6 +31,7 @@ import {
 
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { formatError } from "./format-error";
+import { sourceKindLabel } from "@/lib/memory-source-label";
 
 type ReviewAction = "accept" | "reject" | "archive";
 
@@ -563,7 +564,7 @@ function ReviewRow({
               {t("memoria.sensitivity")}: {sensitivityLabel(record.provenance.sensitivity, t)}
             </span>
             <span>
-              {t("memoria.sourceKind")}: {record.provenance.sourceKind}
+              {t("memoria.sourceKind")}: {sourceKindLabel(record.provenance.sourceKind, t)}
             </span>
             <CaptureRationale record={record} t={t} />
             <StaleIndicator record={record} t={t} />

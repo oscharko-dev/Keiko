@@ -189,7 +189,7 @@ describe("MemoryListContent — populated state", () => {
     });
     renderDefaultList(fetchWith([record]));
     await waitFor(() => {
-      expect(screen.getByText("Source explicit-user-instruction")).toBeInTheDocument();
+      expect(screen.getByText("Source You asked Keiko to remember it")).toBeInTheDocument();
       expect(screen.getByText("87% confidence")).toBeInTheDocument();
       expect(screen.getByText("Sensitivity Confidential")).toBeInTheDocument();
     });

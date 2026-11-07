@@ -31,9 +31,13 @@ const EMAIL_RE = /@(?<=\b[A-Za-z0-9._%+-]+@)[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/;
 const PHONE_RE = /(?:\+\d[\d\s.-]{6,14}\d|\b\d[\d .-]*[ .-]\d[\d .-]{4,12}\d\b)/;
 // A calendar date is not a telephone number. "bis 31.12.2027" has the digit-and-separator shape the
 // local-number pattern looks for, so a fact with an end date read as confidential and was refused
-// (#4206 audit). Dates are blanked before the telephone check; the other checks see the full text.
-// Each alternative is a fixed-width token, so the replacement reads the text once.
-const CALENDAR_DATE_RE = /\b(?:\d{1,2}[./]\d{1,2}[./](?:\d{4}|\d{2})|\d{4}-\d{1,2}-\d{1,2})\b/g;
+// (#4206 audit). A standalone date, with a valid day and month and no further digit group on either
+// side, is blanked before the telephone check; a dotted number such as "01.23.45.67.89" or
+// "030.12.05.2020" is not a date and keeps every digit. The other checks see the full text. Each
+// alternative is a bounded token, so the replacement reads the text once.
+// Day 1-31 and month 1-12, as "31.12.2027", "1/2/26" or "2026-11-07".
+const CALENDAR_DATE_RE =
+  /(?<![\d./-])(?:(?:0?[1-9]|[12]\d|3[01])([./])(?:0?[1-9]|1[0-2])\1(?:\d{4}|\d{2})|\d{4}-(?:0?[1-9]|1[0-2])-(?:0?[1-9]|[12]\d|3[01]))(?![./-]?\d)/g;
 
 function looksLikeTelephoneNumber(body: string): boolean {
   return PHONE_RE.test(body.replace(CALENDAR_DATE_RE, " "));

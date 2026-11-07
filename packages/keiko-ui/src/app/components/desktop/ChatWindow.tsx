@@ -191,6 +191,7 @@ import {
   useOptionalWidgetTranslate as useTranslate,
   type OptionalWidgetTranslate as I18nTranslate,
 } from "@/lib/optional-widget-i18n";
+import { sourceKindLabel } from "@/lib/memory-source-label";
 import { formatUserError } from "./format-error";
 import type {
   CapsuleListEntry,
@@ -5306,7 +5307,7 @@ function MemoryPanelImpl({
             >
               <div>
                 <dt>{t("chat.memory.source")}</dt>
-                <dd>{memory.sourceKind}</dd>
+                <dd>{sourceKindLabel(memory.sourceKind, t)}</dd>
               </div>
               <div>
                 <dt>{t("chat.memory.sensitivity")}</dt>

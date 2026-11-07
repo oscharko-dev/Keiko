@@ -50,9 +50,9 @@ function statementScope(scopes: readonly MemoryScope[]): MemoryScope | undefined
 }
 
 // What a person reads in the Journal when Keiko refused to keep something they said: a credential,
-// confidential content, a protected topic or an instruction (#4206). Bookkeeping refusals, such as
-// an empty or over-long text or an ambiguous target, decide nothing about the person's privacy and
-// would bury the refusals that do.
+// confidential content, a protected topic, an instruction, or something they forgot or rejected
+// before (#4206). Bookkeeping refusals, such as an empty or over-long text, an ambiguous target or
+// an unresolvable scope, decide nothing about what Keiko keeps and would bury the refusals that do.
 const JOURNALED_REFUSAL_REASONS: ReadonlySet<RejectionReason> = new Set<RejectionReason>([
   "credential-shape",
   "private-credential-path",
@@ -63,9 +63,11 @@ const JOURNALED_REFUSAL_REASONS: ReadonlySet<RejectionReason> = new Set<Rejectio
   "instruction-override",
   "restricted-sensitivity",
   "sensitive-memory-requires-approval",
+  "suppressed-by-forget",
+  "suppressed-by-rejection",
 ]);
 
-export function isJournaledRefusalReason(reason: RejectionReason): boolean {
+function isJournaledRefusalReason(reason: RejectionReason): boolean {
   return JOURNALED_REFUSAL_REASONS.has(reason);
 }
 
@@ -83,6 +85,7 @@ export function recordRefusedCaptureDecision(
   deps: UiHandlerDeps,
   refusal: RefusedCaptureDecision,
 ): void {
+  if (!isJournaledRefusalReason(refusal.reason)) return;
   const scope = statementScope(refusal.scopes);
   if (scope === undefined) return;
   recordMemoryAudit(

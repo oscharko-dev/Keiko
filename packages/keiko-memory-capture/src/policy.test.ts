@@ -84,6 +84,13 @@ describe("classifySensitivity", () => {
     );
   });
 
+  // A dotted telephone number has date-shaped groups; only a standalone date may be blanked.
+  it("keeps a dotted telephone number confidential", () => {
+    expect(classifySensitivity("Meine Nummer ist 01.23.45.67.89")).toBe("confidential");
+    expect(classifySensitivity("Durchwahl 030.12.05.2020")).toBe("confidential");
+    expect(classifySensitivity("call 12.34.5678")).toBe("confidential");
+  });
+
   it("keeps false-positive-near German number examples public", () => {
     expect(classifySensitivity("Wir haben 12345678901 Testfälle im synthetischen Benchmark")).toBe(
       "public",

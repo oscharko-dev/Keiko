@@ -18,6 +18,7 @@ import {
 
 import { MemoryListState, MemoryRowScaffold, StatusBadge } from "./MemoryList";
 import { formatError } from "./format-error";
+import { sourceKindLabel } from "@/lib/memory-source-label";
 import styles from "./MemoryJournal.module.css";
 
 // A refusal and a forget name no record: nothing was kept, or it is gone.
@@ -164,7 +165,9 @@ function JournalMetadata({
         <span className={styles.mvJournalMetaBadge}>{modeLabel(capture, t)}</span>
       ) : null}
       <span>{t("memoria.journal.surface", { surface: surfaceLabel(capture, t) })}</span>
-      <span>{t("memoria.journal.source", { source: capture.provenance.sourceKind })}</span>
+      <span>
+        {t("memoria.journal.source", { source: sourceKindLabel(capture.provenance.sourceKind, t) })}
+      </span>
       <span data-reason={capture.reason}>
         {t("memoria.journal.reason", { reason: reasonLabel(capture, t) })}
       </span>

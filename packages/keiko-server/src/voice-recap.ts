@@ -78,7 +78,6 @@ import { exactCaptureSuppressionReason } from "./memory-suppression.js";
 import { embedAndStoreMemory } from "./memory-embedding.js";
 import { recordMemoryAudits } from "./memory-audit-handler.js";
 import {
-  isJournaledRefusalReason,
   recordAutoAcceptedMemoryCaptureDecision,
   recordRefusedCaptureDecision,
 } from "./memory-capture-audit.js";
@@ -346,7 +345,6 @@ function recapRefusal(
   outcome: CaptureOutcome,
 ): { readonly reason: RejectionReason; readonly sourceKind: MemorySourceKind } | null {
   if (outcome.kind === "rejected") {
-    if (!isJournaledRefusalReason(outcome.reason)) return null;
     const sourceKind =
       outcome.statement === "remember" ? "explicit-user-instruction" : "system-default";
     return { reason: outcome.reason, sourceKind };

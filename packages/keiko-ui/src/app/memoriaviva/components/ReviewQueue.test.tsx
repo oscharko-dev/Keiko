@@ -138,7 +138,7 @@ describe("ReviewQueue — populated state", () => {
     });
     expect(screen.getByText("Confidence: 83%")).toBeInTheDocument();
     expect(screen.getByText("Sensitivity: Confidential")).toBeInTheDocument();
-    expect(screen.getByText("Source kind: system-default")).toBeInTheDocument();
+    expect(screen.getByText("Source kind: Learned from your chat")).toBeInTheDocument();
     expect(
       screen.getByText("Rationale: User stated this during a voice turn."),
     ).toBeInTheDocument();
