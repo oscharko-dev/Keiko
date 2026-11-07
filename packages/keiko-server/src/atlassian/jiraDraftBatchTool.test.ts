@@ -732,6 +732,26 @@ describe("jira.draft-batch (#4173)", () => {
     });
   });
 
+  it("keeps a documents filter that names one of two documents partial", async () => {
+    const h = await harness(
+      (request) => page(keysOf(request)),
+      [
+        { capsuleId: "cap-a", text: specification(2).text },
+        { capsuleId: "cap-b", text: specification(3).text },
+      ],
+    );
+    const probe = await h.run({ ...ARGS, requirements: { documents: ["no-such-document"] } });
+    const scopes = probe.data.availableDocuments as readonly string[];
+    expect(scopes).toHaveLength(2);
+    const [first] = scopes;
+    if (first === undefined) throw new Error("Expected a document scope");
+
+    const result = await h.run({ ...ARGS, requirements: { documents: [first] } });
+
+    expect(result.data).toMatchObject({ outcome: "succeeded", wholeCollection: false });
+    expect(result.data.requirementCount).toBeLessThan(5);
+  });
+
   it("scopes the remaining ids to their documents and says when more remain than listed", async () => {
     let now = 0;
     const h = await harness(
