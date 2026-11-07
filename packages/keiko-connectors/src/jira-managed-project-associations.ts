@@ -60,7 +60,7 @@ function selection(name: AssociationRead, args: CatalogJsonObject): Selection | 
     ? { project: args.projectIdOrKey, startAt, maxResults }
     : undefined;
 }
-function priorityScheme(body: Record<string, unknown>): CatalogJsonObject | undefined {
+export function jiraPrioritySchemeProjection(body: Record<string, unknown>): CatalogJsonObject | undefined {
   const named = jiraSecurityLevelProjection(body);
   if (named === undefined) return undefined;
   const optional: Record<string, CatalogJsonValue> = {};
@@ -126,7 +126,7 @@ function association(
       ? jiraPermissionSchemeProjection(body)
       : name === "jira.project-issue-security-scheme"
         ? jiraSecuritySchemeProjection(body)
-        : priorityScheme(body);
+        : jiraPrioritySchemeProjection(body);
   return item === undefined
     ? jiraReadFailure("malformed-payload")
     : { data: { outcome: "succeeded", ...item } };

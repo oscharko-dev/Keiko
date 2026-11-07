@@ -32,6 +32,19 @@ const CREATE = {
 };
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
+  { tool: "jira.roles", args: { startAt: 0, maxResults: 1 } },
+  { tool: "jira.role", args: { roleId: "37" }, parameters: { id: "37" } },
+  { tool: "jira.role-default-actors", args: { roleId: "37", startAt: 0, maxResults: 1 }, parameters: { id: "37" } },
+  {
+    tool: "jira.project-roles", args: { projectIdOrKey: "SYN", startAt: 0, maxResults: 1 },
+    parameters: { projectIdOrKey: "10000" }, primaryMethodIndex: 1,
+  },
+  {
+    tool: "jira.project-role", args: { projectIdOrKey: "SYN", roleId: "37" },
+    parameters: { projectIdOrKey: "10000", id: "37" }, primaryMethodIndex: 1,
+  },
+  { tool: "jira.priority-schemes", args: { startAt: 0, maxResults: 1 }, query: { startAt: "0", maxResults: "1" } },
+  { tool: "jira.priority-scheme", args: { schemeId: "49" }, parameters: { schemeId: "49" } },
   { tool: "jira.server-info", args: {} },
   { tool: "jira.instance-configuration", args: {} },
   { tool: "jira.permission-definitions", args: { startAt: 0, maxResults: 1 } },
@@ -717,7 +730,7 @@ function administrationRead(
   path: string,
   absoluteUrl: string,
 ): AtlassianHttpBodyResult | undefined {
-  const directory = directoryRead(path) ?? accessRead(path) ?? coreMetadataRead(path) ?? instanceRead(path);
+  const directory = directoryRead(path) ?? accessRead(path) ?? coreMetadataRead(path) ?? instanceRead(path) ?? roleRead(path);
   if (directory !== undefined) return directory;
   const type = { id: "1", name: "Task", subtask: false };
   const scheme = { id: "37", name: "Delivery", issueTypes: [type], defaultIssueType: type };
@@ -785,6 +798,19 @@ function directoryRead(path: string): AtlassianHttpBodyResult | undefined {
     "groups/picker": { groups: [{ name: "R&D team", html: "<b>ignored</b>" }], total: 2 },
     applicationrole: [role],
     "applicationrole/jira-software": role,
+  };
+  return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
+}
+function roleRead(path: string): AtlassianHttpBodyResult | undefined {
+  const actor = { id: 71, name: "review-team", displayName: "Review team", type: "atlassian-group-role-actor" };
+  const role = { id: 37, name: "Reviewers", description: "Configured reviewers", actors: [actor] };
+  const scheme = { id: 49, name: "Priorities", defaultScheme: false, defaultOptionId: "3", optionIds: ["1", "3"] };
+  const bodies: Readonly<Record<string, unknown>> = {
+    role: [role], "role/37": role, "role/37/actors": { actors: [actor] },
+    "project/10000/role": { Reviewers: "https://untrusted.invalid/project/10000/role/37" },
+    "project/10000/role/37": role,
+    priorityschemes: { schemes: [scheme], startAt: 0, maxResults: 1, total: 2 },
+    "priorityschemes/49": scheme,
   };
   return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
 }
@@ -1015,7 +1041,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(122);
+    expect(native).toHaveLength(129);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),

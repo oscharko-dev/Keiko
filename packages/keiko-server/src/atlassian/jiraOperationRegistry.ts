@@ -19,6 +19,8 @@ type CompositeTool = "jira.report" | "jira.draft-stage" | "jira.draft";
 type NativeTool = Exclude<JiraOperationTool, CompositeTool>;
 type JiraOperationEffect = "remote-read" | "remote-write" | "local-report" | "local-draft";
 type JiraPermissionPolicy =
+  | "visible-role-configuration"
+  | "visible-priority-configuration"
   | "observed-instance-metadata"
   | "permission-definitions"
   | "current-actor-metadata"
@@ -150,6 +152,17 @@ function writes<const K extends NativeTool>(
   return result as NativeGroup<K>;
 }
 const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
+  ...reads("visible-role-configuration", {
+    "jira.roles": "/role",
+    "jira.role": "/role/{id}",
+    "jira.role-default-actors": "/role/{id}/actors",
+    "jira.project-roles": "/project/{projectIdOrKey}/role",
+    "jira.project-role": "/project/{projectIdOrKey}/role/{id}",
+  }),
+  ...reads("visible-priority-configuration", {
+    "jira.priority-schemes": "/priorityschemes",
+    "jira.priority-scheme": "/priorityschemes/{schemeId}",
+  }),
   ...reads("observed-instance-metadata", {
     "jira.server-info": "/serverInfo",
     "jira.instance-configuration": "/configuration",

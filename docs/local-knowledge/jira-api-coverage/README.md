@@ -123,10 +123,10 @@ to Chat or Coding, grant authority, or bypass those owners.
 
 ## Current constrained implementation snapshot
 
-The current registry supplies **140 native identities: 111 reads and 29 writes**. Each is mapped to
+The current registry supplies **147 native identities: 118 reads and 29 writes**. Each is mapped to
 its exact published method/path identity and remains `partial`: the closed typed operation exposes
 only the documented supported fields and behavior, rather than the entire upstream API contract.
-The other **299 operations remain `not-implemented`**. No row is marked fully implemented,
+The other **292 operations remain `not-implemented`**. No row is marked fully implemented,
 executable, owner-deferred or excluded by this snapshot. All 439 source/version IDs, cluster
 assignments, dependencies and qualification fields are retained.
 
@@ -136,7 +136,7 @@ the C6 comment-update/link/worklog read increment; bounded C8 attachment/archive
 worklog create/update with connected-user watching/voting; fourteen C9 workflow-/issue-type-scheme
 and screen reads; three reviewed comment/attachment/worklog deletions; and eight C10 user, group and
 application-role reads; ten permission/security/notification configuration reads; and five additional
-project scheme/accessible-security associations; twenty core issue/project metadata reads; and four instance/current-actor observations. The three existing
+project scheme/accessible-security associations; twenty core issue/project metadata reads; four instance/current-actor observations; and seven role/priority-scheme reads. The three existing
 report/draft composites remain compositions, not extra native API identities. Remaining filter
 creation, ranking, other estimate-adjustment modes and destructive operations, administration and
 other inventory gaps stay open. A registered declaration is not evidence that
@@ -195,6 +195,13 @@ permission definitions and the connected actor. The permission dictionary is exp
 `permissionsScope=definitions`, distinct from effective actor rights. Missing configuration remains
 unknown. Server version/build observations never update compatibility, verification, custody or
 operation availability. Existing directory-user projection omits email, avatar and remote links.
+
+Seven role/priority reads distinguish global role configuration, default actors and canonical-project
+membership without inferring effective permissions. Optional actor IDs/types/display names remain
+unknown when omitted; matching names do not collapse distinct user/group actors. Native project role
+URI maps expose names only, never URL-derived IDs or destinations. Priority schemes reuse the existing
+project association projector and preserve the native total/page envelope without expanding or changing
+project associations.
 
 `currentRegistry` pins the existing server registry source file's SHA-256 and native declaration
 count. The reconciliation helper parses that file's literal `NATIVE` declarations and verified closed

@@ -14,6 +14,8 @@ import { executeJiraNotificationSchemeRead, isJiraNotificationSchemeRead } from 
 import { executeJiraProjectAssociationRead, isJiraProjectAssociationRead } from "./jira-managed-project-associations.js";
 import { executeJiraCoreMetadataRead, isJiraCoreMetadataRead } from "./jira-managed-core-metadata.js";
 import { executeJiraInstanceRead, isJiraInstanceRead } from "./jira-managed-instance-reads.js";
+import { executeJiraRoleRead, isJiraRoleRead } from "./jira-managed-role-reads.js";
+import { executeJiraPrioritySchemeRead, isJiraPrioritySchemeRead } from "./jira-managed-priority-schemes.js";
 import {
   executeJiraParticipationRead,
   isJiraParticipationRead,
@@ -351,7 +353,9 @@ type NativeDetailRead =
   | Parameters<typeof executeJiraNotificationSchemeRead>[0]
   | Parameters<typeof executeJiraProjectAssociationRead>[0]
   | Parameters<typeof executeJiraCoreMetadataRead>[0]
-  | Parameters<typeof executeJiraInstanceRead>[0];
+  | Parameters<typeof executeJiraInstanceRead>[0]
+  | Parameters<typeof executeJiraRoleRead>[0]
+  | Parameters<typeof executeJiraPrioritySchemeRead>[0];
 function isNativeDetailRead(name: string): name is NativeDetailRead {
   return [
     isJiraIssueDetailRead,
@@ -370,6 +374,8 @@ function isNativeDetailRead(name: string): name is NativeDetailRead {
     isJiraProjectAssociationRead,
     isJiraCoreMetadataRead,
     isJiraInstanceRead,
+    isJiraRoleRead,
+    isJiraPrioritySchemeRead,
   ].some((accepts) => accepts(name));
 }
 function administrationRead(
@@ -383,6 +389,8 @@ function administrationRead(
   if (isJiraAccessSchemeRead(name)) return executeJiraAccessSchemeRead(name, args, request);
   if (isJiraNotificationSchemeRead(name)) return executeJiraNotificationSchemeRead(name, args, request);
   if (isJiraProjectAssociationRead(name)) return executeJiraProjectAssociationRead(name, args, request);
+  if (isJiraRoleRead(name)) return executeJiraRoleRead(name, args, request);
+  if (isJiraPrioritySchemeRead(name)) return executeJiraPrioritySchemeRead(name, args, request);
   return identityAndMetadataRead(name, args, request);
 }
 function identityAndMetadataRead(

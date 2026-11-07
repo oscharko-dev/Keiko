@@ -43,6 +43,7 @@ import {
 } from "./jira-project-association-presentation";
 import { JIRA_CORE_METADATA_TOOLS, jiraCoreMetadataDetails } from "./jira-core-metadata-presentation";
 import { JIRA_INSTANCE_TOOLS, jiraInstanceDetails } from "./jira-instance-presentation";
+import { JIRA_ROLE_TOOLS, jiraRoleDetails } from "./jira-role-presentation";
 
 export interface JiraOutcomeItem {
   readonly key?: string;
@@ -100,6 +101,7 @@ const STANDALONE_TOOLS = new Set([
   ...JIRA_PROJECT_ASSOCIATION_TOOLS,
   ...JIRA_CORE_METADATA_TOOLS,
   ...JIRA_INSTANCE_TOOLS,
+  ...JIRA_ROLE_TOOLS,
 ]);
 const BOARD_READ_TOOLS = new Set(["jira_board", "jira_boards", "jira_board_configuration"]);
 type UnknownRecord = Readonly<Record<string, unknown>>;
@@ -236,6 +238,7 @@ function configurationDetails(tool: string, source: UnknownRecord): readonly Jir
   if (JIRA_ACCESS_TOOLS.has(tool)) return jiraAccessDetails(tool, source);
   if (JIRA_CORE_METADATA_TOOLS.has(tool)) return jiraCoreMetadataDetails(tool, source);
   if (JIRA_INSTANCE_TOOLS.has(tool)) return jiraInstanceDetails(tool, source);
+  if (JIRA_ROLE_TOOLS.has(tool)) return jiraRoleDetails(tool, source);
   return JIRA_PROJECT_ASSOCIATION_TOOLS.has(tool)
     ? jiraProjectAssociationDetails(tool, source)
     : undefined;

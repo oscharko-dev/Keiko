@@ -30,6 +30,12 @@ function array(item: CatalogJsonObject, maxItems: number = MAX): CatalogJsonObje
 }
 const PERMISSION_FIELDS = { ...NAMED_FIELDS, permissions: array(GRANT) };
 const SECURITY_FIELDS = { ...NAMED_FIELDS, defaultSecurityLevelId: ID, levels: array(LEVEL) };
+export const JIRA_PRIORITY_SCHEME_RESULT_FIELDS = {
+  ...NAMED_FIELDS,
+  defaultScheme: BOOL,
+  defaultOptionId: ID,
+  optionIds: array(ID),
+};
 function localPage(item: CatalogJsonObject): CatalogJsonObject {
   return {
     items: array(item, 100),
@@ -112,7 +118,7 @@ export const JIRA_ACCESS_READ_DEFINITIONS = {
   "jira.project-priority-scheme": read(
     "Resolve an existing project's canonical identity and inspect its associated native priority scheme. Preserve only supplied default-scheme state, default priority ID and priority membership IDs. Missing optional metadata is unknown; no priorities or project associations change.",
     object({ projectIdOrKey: KEY }, ["projectIdOrKey"]),
-    { ...PROJECT_CONTEXT, ...NAMED_FIELDS, defaultScheme: BOOL, defaultOptionId: ID, optionIds: array(ID) },
+    { ...PROJECT_CONTEXT, ...JIRA_PRIORITY_SCHEME_RESULT_FIELDS },
     1,
   ),
   "jira.permission-schemes": read(

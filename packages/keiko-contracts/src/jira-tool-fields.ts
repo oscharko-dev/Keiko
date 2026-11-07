@@ -22,6 +22,13 @@ export const JIRA_FIELD_KINDS = [
 ] as const;
 export type JiraFieldKind = (typeof JIRA_FIELD_KINDS)[number];
 export const JIRA_MANAGED_READ_TOOLS = [
+  "jira.roles",
+  "jira.role",
+  "jira.role-default-actors",
+  "jira.project-roles",
+  "jira.project-role",
+  "jira.priority-schemes",
+  "jira.priority-scheme",
   "jira.server-info",
   "jira.instance-configuration",
   "jira.permission-definitions",

@@ -1239,6 +1239,48 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.priority-scheme": {
+      "identity": "GET /rest/api/2/priorityschemes/{schemeId}",
+      "effect": "read",
+      "permissionPolicy": "visible-priority-configuration",
+      "kind": "constrained-tool",
+      "constraints": "One exact native scheme identity through the existing shared scheme projector. Optional native defaults/options remain unknown when omitted, never inferred issue defaults. Project associations, expansion and remote URLs are omitted.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-priority-schemes.ts",
+        "packages/keiko-connectors/src/jira-managed-project-associations.ts",
+        "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-server/src/atlassian/jiraRoleDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-priority-schemes.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraRoleDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.priority-schemes": {
+      "identity": "GET /rest/api/2/priorityschemes",
+      "effect": "read",
+      "permissionPolicy": "visible-priority-configuration",
+      "kind": "constrained-tool",
+      "constraints": "Bounded native schemes/startAt/maxResults/total envelope with observed total and existing page validation. Reuses existing project-associated scheme projection, retaining optional default/option facts. No remote links or project expansion/association changes.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-priority-schemes.ts",
+        "packages/keiko-connectors/src/jira-managed-project-associations.ts",
+        "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-server/src/atlassian/jiraRoleDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-priority-schemes.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraRoleDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.project": {
       "identity": "GET /rest/api/2/project/{projectIdOrKey}",
       "effect": "read",
@@ -1386,6 +1428,48 @@
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-project-associations.test.ts",
         "packages/keiko-server/src/atlassian/jiraAccessDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.project-role": {
+      "identity": "GET /rest/api/2/project/{projectIdOrKey}/role/{id}",
+      "effect": "read",
+      "permissionPolicy": "visible-role-configuration",
+      "kind": "constrained-tool",
+      "constraints": "Independent canonical project binding and exact observed role ID precede a bounded project membership projection. actorsScope=project-membership is distinct from default/global role configuration and never grants effective rights.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-role-reads.ts",
+        "packages/keiko-connectors/src/jira-managed-projects.ts",
+        "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-server/src/atlassian/jiraRoleDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-role-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraRoleDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.project-roles": {
+      "identity": "GET /rest/api/2/project/{projectIdOrKey}/role",
+      "effect": "read",
+      "permissionPolicy": "visible-role-configuration",
+      "kind": "constrained-tool",
+      "constraints": "Canonical project identity is independently read before the project role name-to-URI map. Only bounded role names are projected and locally paginated; no role IDs are derived from URLs and no links are followed.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-role-reads.ts",
+        "packages/keiko-connectors/src/jira-managed-projects.ts",
+        "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-server/src/atlassian/jiraRoleDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-role-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraRoleDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
@@ -1570,6 +1654,66 @@
         "packages/keiko-connectors/src/jira-managed-core-metadata.test.ts",
         "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
         "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.role": {
+      "identity": "GET /rest/api/2/role/{id}",
+      "effect": "read",
+      "permissionPolicy": "visible-role-configuration",
+      "kind": "constrained-tool",
+      "constraints": "One exact native role ID with bounded name/description and optional observed actors. Actor names are not unique identities; optional native actor IDs/types/display names remain unknown when omitted. No email/avatar expansion or inferred rights.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-role-reads.ts",
+        "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-server/src/atlassian/jiraRoleDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-role-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraRoleDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.role-default-actors": {
+      "identity": "GET /rest/api/2/role/{id}/actors",
+      "effect": "read",
+      "permissionPolicy": "visible-role-configuration",
+      "kind": "constrained-tool",
+      "constraints": "Default actors for one exact role, explicitly actorsScope=role-defaults. Native omitted actors remain unknown without invented totals; explicit empty arrays are retained. Existing bounded local pagination applies only to an observed complete actor list.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-role-reads.ts",
+        "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-server/src/atlassian/jiraRoleDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-role-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraRoleDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.roles": {
+      "identity": "GET /rest/api/2/role",
+      "effect": "read",
+      "permissionPolicy": "visible-role-configuration",
+      "kind": "constrained-tool",
+      "constraints": "Bounded complete global role definitions with local pagination and actorsScope=role-configuration. Missing actors remain unknown; role configuration never implies current-user membership or effective permission.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-role-reads.ts",
+        "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-server/src/atlassian/jiraRoleDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-role-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraRoleDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
@@ -2336,8 +2480,8 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "70e560edb962d6738c95b8a66492eb029a62e6014c45b1c4a6ab2d7d404f9e19",
-    "nativeOperationCount": 140
+    "sha256": "70ac5c490bd87f55904c643b7d5b9915c2a1f749086a78d4b4d367f99edd0c88",
+    "nativeOperationCount": 147
   },
   "operations": [
     {
@@ -10175,10 +10319,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.priority-schemes"]
     },
     {
       "identity": "POST /rest/api/2/priorityschemes",
@@ -10271,10 +10415,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.priority-scheme"]
     },
     {
       "identity": "PUT /rest/api/2/priorityschemes/{schemeId}",
@@ -10975,10 +11119,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.project-roles"]
     },
     {
       "identity": "DELETE /rest/api/2/project/{projectIdOrKey}/role/{id}",
@@ -11039,10 +11183,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.project-role"]
     },
     {
       "identity": "POST /rest/api/2/project/{projectIdOrKey}/role/{id}",
@@ -12143,10 +12287,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.roles"]
     },
     {
       "identity": "POST /rest/api/2/role",
@@ -12239,10 +12383,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.role"]
     },
     {
       "identity": "POST /rest/api/2/role/{id}",
@@ -12367,10 +12511,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.role-default-actors"]
     },
     {
       "identity": "POST /rest/api/2/role/{id}/actors",
