@@ -701,6 +701,39 @@ Memory retains its separate explicit-or-`governed-assist` default. This availabi
 itself grant a Chat read grant, mutation approval, connector scope or authority envelope.
 
 
+**Explicit instance administration (#4287, review 4503902861).** The nine implemented global
+administration writes—application/IPD monitoring, JMX exposure start/stop, screen-tab
+create/rename/delete and issue-type property set/delete—use the separate connector class
+`connector-admin` and require `issue-tracker.admin`. Ordinary `issue-tracker.write` never admits
+these operations, including in Full access. They retain high risk and the same Workbench
+`connector-access` class, `internet` resource scope, supervised `connector-write` kind and existing
+approval/journal owners. The other entity-property writes retain ordinary write scope. Native
+permissions are checked independently; possessing a local scope never asserts Jira permissions.
+Issue-type property writes require the native issue-type edit permission
+([resource](https://docs.atlassian.com/software/jira/docs/api/11.3.0/com/atlassian/jira/rest/v2/issue/IssueTypePropertyResource.html));
+its [permission helper](https://docs.atlassian.com/software/jira/docs/api/11.3.0/com/atlassian/jira/bc/issuetype/property/IssueTypePropertyHelper.html)
+uses the global issue-type permission service. The retained 11.3 issue-type update contract
+requires Jira administration. Keiko classifies those two writes as administration accordingly.
+
+The human selects administration explicitly in the existing connector menu, separately from the
+mode. `Chat.jiraAdministrationEnabled` is false when absent, is stored in the existing Chat Jira
+state and can be enabled only for the unchanged currently verified Pod. HTTP updates require the
+existing scope-identity compare-and-swap. Changing the selection advances the binding generation,
+interrupts the current turn and revokes prior authority and approvals through the existing owners.
+Pod replacement, disconnection or credential invalidation clears the selection. Accepted-turn mint
+adds the admin scope only from that stored true selection; a mode change, legacy row or ready Pod
+alone cannot grant it. The existing body-free scope-update event records only the boolean and
+binding generation alongside its existing counts and digests.
+
+Coding sends the explicit opt-in through its existing connector scope vocabulary on the start
+request. The one-use start confirmation binds the resolved scopes and Pod. The run's registered
+Authority Envelope remains the sole scope authority: discovery filters actual admitted tools and
+every native effect rechecks the current required scope. Mode narrowing may preserve an already
+accepted admin scope but cannot manufacture it. No new mode, approval store or authority registry
+is introduced. Each affected operation now has an explicit `instance-admin-*` permission tag in
+its existing contract digest; an older ordinary-write approval cannot execute under the changed
+contract. Historical receipts remain readable with their captured contract snapshots.
+
 This is the normative mapping for every v1 governed connector operation. Rows are derived from
 `CODING_WORKBENCH_MODE_POLICIES`'s `internet` resource-scope row (all connector actions reach an
 external system over HTTPS) composed with `decideCodingWorkbenchActionForMode`'s scope gate
@@ -714,8 +747,9 @@ supervised-action path) for write operations — one connector scope, and one
 `CodingWorkbenchApprovalRisk`, and the disposition columns are the corresponding tri-state effect
 (`allowed | review-required | denied`) **assuming the required connector scope is present in the
 Authority Envelope.** The `Action class / kind` column below records both identifiers
-uniformly: reads name the `CodingWorkbenchActionClass`, writes name the
-`CodingWorkbenchSupervisedActionKind`.
+uniformly for the original rows: reads name the `CodingWorkbenchActionClass`, writes name the
+`CodingWorkbenchSupervisedActionKind`. The administration extension above adds a distinct
+connector policy class without adding a Workbench action kind.
 
 | # | Action | Provider | Action class / kind | Connector scope | Approval risk | Ask for approval | Supervised workspace | Full access |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |

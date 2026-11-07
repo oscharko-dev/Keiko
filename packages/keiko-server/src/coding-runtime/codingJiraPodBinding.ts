@@ -193,6 +193,7 @@ const JIRA_POD_REASONS = [
   "pod-changed",
   "unsupported-runtime",
   "tool-failed",
+  "scope-missing",
   "internal",
 ] as const;
 

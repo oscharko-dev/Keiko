@@ -84,7 +84,7 @@ interface D4Row {
   readonly dispositions: Readonly<Record<CodingWorkbenchMode, AtlassianConnectorActionDisposition>>;
 }
 
-const D4_TABLE: readonly D4Row[] = [
+const LEGACY_D4_TABLE: readonly D4Row[] = [
   {
     action: "sync-space",
     provider: "confluence",
@@ -351,6 +351,46 @@ const D4_TABLE: readonly D4Row[] = [
   },
 ];
 
+// Explicit expectations for the added native writes; no production policy table supplies values.
+const ADMIN_ACTIONS = [
+  "create-screen-tab", "rename-screen-tab", "delete-screen-tab",
+  "set-app-monitoring", "set-ipd-monitoring", "start-jmx-metrics", "stop-jmx-metrics",
+  "set-issue-type-property", "delete-issue-type-property",
+] as const satisfies readonly AtlassianConnectorActionType[];
+const HIGH_WRITES = [
+  "create-project", "create-component", "create-version", "update-version",
+  "create-board", "create-sprint", "update-sprint", "move-issues-to-sprint",
+  "move-issues-to-backlog", "update-epic", "move-issues-to-epic",
+  "delete-issue-comment", "delete-attachment", "delete-worklog",
+  "set-board-property", "delete-board-property", "set-sprint-property", "delete-sprint-property",
+  "set-comment-property", "delete-comment-property", "set-dashboard-item-property", "delete-dashboard-item-property",
+  "set-issue-property", "delete-issue-property", "set-project-property", "delete-project-property",
+  "set-user-property", "delete-user-property",
+] as const satisfies readonly AtlassianConnectorActionType[];
+const MEDIUM_WRITES = [
+  "update-project", "update-component", "update-issue-comment", "create-worklog", "update-worklog",
+  "watch-issue", "unwatch-issue", "vote-issue", "unvote-issue",
+] as const satisfies readonly AtlassianConnectorActionType[];
+const MANAGED_DISPOSITIONS = {
+  "governed-assist": "review-required", "supervised-coding": "review-required", "autonomous-delivery": "allowed",
+} as const;
+function expectedJiraRows(
+  actions: readonly AtlassianConnectorActionType[],
+  actionClass: AtlassianConnectorActionClass,
+  scope: CodingWorkbenchConnectorScope,
+  risk: CodingWorkbenchApprovalRisk,
+): D4Row[] {
+  return actions.map((action) => ({ action, provider: "jira", actionClass, scope, risk, dispositions: MANAGED_DISPOSITIONS }));
+}
+const legacyActions = new Set(LEGACY_D4_TABLE.map(({ action }) => action));
+const D4_TABLE: readonly D4Row[] = [
+  ...LEGACY_D4_TABLE,
+  ...expectedJiraRows(JIRA_MANAGED_READ_TOOLS.filter((action) => !legacyActions.has(action)), "connector-access", "issue-tracker.read", "low"),
+  ...expectedJiraRows(HIGH_WRITES, "connector-write", "issue-tracker.write", "high"),
+  ...expectedJiraRows(MEDIUM_WRITES, "connector-write", "issue-tracker.write", "medium"),
+  ...expectedJiraRows(ADMIN_ACTIONS, "connector-admin", "issue-tracker.admin", "high"),
+];
+
 const ALL_SCOPES: readonly CodingWorkbenchConnectorScope[] = CODING_WORKBENCH_CONNECTOR_SCOPES;
 
 function scopesWithout(
@@ -366,6 +406,7 @@ describe("CodingWorkbenchConnectorScope extension (ADR-0128 D4)", () => {
       "source-control.write",
       "issue-tracker.read",
       "issue-tracker.write",
+      "issue-tracker.admin",
       "knowledge-base.read",
       "knowledge-base.write",
     ]);
@@ -387,7 +428,8 @@ describe("CodingWorkbenchConnectorScope extension (ADR-0128 D4)", () => {
 
 describe("D4 effect-class mapping table (ADR-0128)", () => {
   it("covers every D4 action row including managed Jira capabilities", () => {
-    expect(ATLASSIAN_CONNECTOR_ACTION_TYPES).toEqual(D4_TABLE.map((row) => row.action));
+    expect(new Set(ATLASSIAN_CONNECTOR_ACTION_TYPES)).toEqual(new Set(D4_TABLE.map((row) => row.action)));
+    expect(D4_TABLE).toHaveLength(ATLASSIAN_CONNECTOR_ACTION_TYPES.length);
   });
 
   it("reproduces the D4 action-class column verbatim", () => {
@@ -414,22 +456,26 @@ describe("D4 effect-class mapping table (ADR-0128)", () => {
     }
   });
 
-  it("maps both connector classes onto the shared Workbench vocabulary without new members", () => {
+  it("maps connector classes onto the shared Workbench vocabulary without new members", () => {
     expect(ATLASSIAN_CONNECTOR_WORKBENCH_ACTION_CLASS).toEqual({
       "connector-access": "connector-access",
       "connector-write": "connector-access",
+      "connector-admin": "connector-access",
     });
     expect(ATLASSIAN_CONNECTOR_SUPERVISED_ACTION_KIND).toEqual({
       "connector-access": null,
       "connector-write": "connector-write",
+      "connector-admin": "connector-write",
     });
     expect(ATLASSIAN_CONNECTOR_WORKBENCH_RESOURCE_SCOPE).toEqual({
       "connector-access": "internet",
       "connector-write": "internet",
+      "connector-admin": "internet",
     });
     expect(ATLASSIAN_CONNECTOR_SCOPE_DENY_REASON).toEqual({
       "connector-access": "connector-access-denied",
       "connector-write": "connector-write-denied",
+      "connector-admin": "connector-write-denied",
     });
   });
 });

@@ -133,6 +133,19 @@ describe("starting a task", () => {
     expect(vi.mocked(all.actions.start).mock.calls[0]?.[1]).not.toHaveProperty("mcpServers");
   });
 
+  it("passes the explicit Jira administration scope through the existing start options only when selected", async () => {
+    const jiraPodId = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
+    const opted = setup({ jiraPodId, connectorScopes: ["issue-tracker.admin"] });
+    const ordinary = setup({ jiraPodId });
+    act(() => opted.result.current.composer.onStart("inspect instance settings"));
+    act(() => ordinary.result.current.composer.onStart("inspect the ticket"));
+    await waitFor(() => expect(opted.actions.start).toHaveBeenCalledOnce());
+    await waitFor(() => expect(ordinary.actions.start).toHaveBeenCalledOnce());
+    expect(vi.mocked(opted.actions.start).mock.calls[0]?.[1]).toMatchObject({ jiraPodId, connectorScopes: ["issue-tracker.admin"] });
+    expect(vi.mocked(ordinary.actions.start).mock.calls[0]?.[1]).not.toHaveProperty("connectorScopes");
+    expect(vi.mocked(opted.actions.start).mock.calls[0]?.[1]).not.toHaveProperty("jiraAdministrationEnabled");
+  });
+
   it("sends the first prompt's referenced files with the start", async () => {
     const { result, actions } = setup();
 

@@ -1265,6 +1265,7 @@ function patchTouchesGroundingScope(patch: UpdateChatPatch): boolean {
     patch.localKnowledgeScope !== undefined ||
     patch.gitChangeScopes !== undefined ||
     patch.jiraPodId !== undefined ||
+    patch.jiraAdministrationEnabled !== undefined ||
     patch.toolMode !== undefined ||
     patch.mcpServers !== undefined
   );

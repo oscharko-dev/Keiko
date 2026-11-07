@@ -183,6 +183,32 @@ describe("accepted ordinary Chat turn authority", () => {
     });
   }
 
+  it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+    "mints administration only from the stored explicit selection in %s", (mode) => {
+      store.updateChat(chat.id, { toolMode: mode });
+      const ordinary = mint(acceptedMessage());
+      if (!ordinary.ok) throw new Error("Expected ordinary authority");
+      expect(ordinary.envelope.connectorScopes).toEqual(["issue-tracker.read", "issue-tracker.write"]);
+      expect(decideGovernedJiraChatAction("set-app-monitoring", deps, chat.id,
+        ordinary.reference, CHAT_AUTHORITY_TEST_NOW, "admin-default-denied").kind).toBe("policy-denied");
+      store.updateChat(chat.id, { jiraAdministrationEnabled: true },
+        { verifiedJiraPod: { podId: POD, authenticationGeneration: 1 } });
+      const enabled = mint(acceptedMessage());
+      if (!enabled.ok) throw new Error("Expected explicit administration authority");
+      expect(enabled.envelope.connectorScopes).toEqual([
+        "issue-tracker.read", "issue-tracker.write", "issue-tracker.admin",
+      ]);
+      expect(decideGovernedJiraChatAction("set-app-monitoring", deps, chat.id,
+        enabled.reference, CHAT_AUTHORITY_TEST_NOW, "admin-explicit").kind)
+        .toBe(mode === "autonomous-delivery" ? "allowed" : "review-required");
+      store.updateChat(chat.id, { jiraAdministrationEnabled: false });
+      expect(resolveCurrentJiraChatAuthority(deps, chat.id, enabled.reference,
+        CHAT_AUTHORITY_TEST_NOW, "admin-withdrawn").ok).toBe(false);
+      expect(decideGovernedJiraChatAction("set-app-monitoring", deps, chat.id,
+        enabled.reference, CHAT_AUTHORITY_TEST_NOW, "admin-withdrawn").kind).toBe("authority-denied");
+    },
+  );
+
   it("mints from the stored human turn and current binding with one exact deadline", () => {
     const result = mint(acceptedMessage());
     expect(result.ok).toBe(true);
@@ -553,6 +579,14 @@ describe("ordinary Chat composes the existing Atlassian policy", () => {
     },
   );
 
+  it("refuses an administration scope injected without the stored human selection", () => {
+    registerCurrentAuthority({ connectorScopes: [
+      "issue-tracker.read", "issue-tracker.write", "issue-tracker.admin",
+    ] });
+    expect(resolve().ok).toBe(false);
+    expect(decide("set-app-monitoring").kind).toBe("authority-denied");
+  });
+
   it("never widens read-only authority in Full access", () => {
     store.updateChat(chat.id, { toolMode: "autonomous-delivery" });
     registerCurrentAuthority({ connectorScopes: ["issue-tracker.read"] });
@@ -825,6 +859,7 @@ describe("ordinary Chat catalog read admission", () => {
     maxToolCalls = 3,
     primary: import("@oscharko-dev/keiko-activity-log").ServerLogSink = createBufferedServerLogSink(),
     withKnowledge = false,
+    adminTool = false,
   ): Promise<{
     binder: ReturnType<typeof createCatalogToolBinder>;
     budget: ReturnType<typeof createHarnessCatalogBudget>;
@@ -874,6 +909,7 @@ describe("ordinary Chat catalog read admission", () => {
           },
         };
       },
+      adminTool ? ["jira.set-app-monitoring"] : undefined,
     );
     const managed = await createManagedProviderCatalog<JiraChatCatalogConsumer>({
       providers: withKnowledge
@@ -885,7 +921,7 @@ describe("ordinary Chat catalog read admission", () => {
       now: () => now,
       routes: withKnowledge
         ? jiraChatCatalogRoutes([...JIRA_MANAGED_READ_TOOLS, ...KNOWLEDGE_CHAT_TOOLS])
-        : jiraChatReadCatalogRoutes(),
+        : adminTool ? jiraChatCatalogRoutes(["jira.set-app-monitoring"]) : jiraChatReadCatalogRoutes(),
     });
     hosts.push(managed);
     const admission = createJiraChatCatalogAdmission({
@@ -947,6 +983,20 @@ describe("ordinary Chat catalog read admission", () => {
     if (result.kind === "settled") f.budget.acceptReceipt(result.receipt, descriptor);
     return result;
   }
+
+  it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+    "does not offer or execute administration with ordinary write scope in %s", async (mode) => {
+      store.updateChat(chat.id, { toolMode: mode });
+      registerCurrentAuthority();
+      const f = await catalogFixture(3, createBufferedServerLogSink(), false, true);
+      expect(f.binder.offer().toolRefs).toEqual([]);
+      expect(await dispatch(f, "admin-denied", { expectedEnabled: false, enabled: true },
+        "keiko.jira.set.app.monitoring")).not.toMatchObject({ result: { status: "completed" } });
+      expect(requests).toBe(0);
+      expect(notifications).toBe(0);
+      expect(f.handlers.every((handler) => handler.execute.mock.calls.length === 0)).toBe(true);
+    },
+  );
 
   it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
     "reads through the SDK only after consent in %s",
@@ -1286,6 +1336,31 @@ describe("ordinary Chat exact-action write approval admission", () => {
       expect(request().kind).toBe(mode === "autonomous-delivery" ? "allowed" : "review-required");
     },
   );
+
+  it("refuses admin approval without opt-in and invalidates it on scope withdrawal", () => {
+    grantRead();
+    const adminAction = { ...action, operation: "jira.create-screen-tab" as const };
+    const requestAdmin = (): ReturnType<typeof requestJiraChatWriteApproval> =>
+      requestJiraChatWriteApproval({ ...deps, atlassianActionApprovalRegistry: approvals },
+        chat.id, reference, adminAction, CHAT_AUTHORITY_TEST_NOW, "admin-approval");
+    expect(requestAdmin()).toEqual({ kind: "denied", reason: "authority-denied" });
+    store.updateChat(chat.id, { jiraAdministrationEnabled: true },
+      { verifiedJiraPod: { podId: POD, authenticationGeneration: 1 } });
+    registerCurrentAuthority({ runId: "admin-approval-turn", connectorScopes: [
+      "issue-tracker.read", "issue-tracker.write", "issue-tracker.admin",
+    ] });
+    grantRead();
+    const requested = requestAdmin();
+    if (requested.kind !== "review-required") throw new Error("Expected admin review");
+    const entry = approvals.getChatWriteApproval(requested.approval.approvalId);
+    if (entry === undefined) throw new Error("Expected stored admin approval");
+    expect(approvals.acceptChatWriteApproval(entry.approval.approvalId, entry.subject,
+      entry.authority, adminAction, "c".repeat(64)).ok).toBe(true);
+    store.updateChat(chat.id, { jiraAdministrationEnabled: false });
+    expect(isCurrentJiraChatWriteApproval({ ...deps, atlassianActionApprovalRegistry: approvals },
+      entry, CHAT_AUTHORITY_TEST_NOW, "admin-withdrawn")).toBe(false);
+    expect(requestAdmin()).toEqual({ kind: "denied", reason: "authority-denied" });
+  });
 
   it("reuses the exact pending, approved and claimed action without authorizing changed arguments", () => {
     grantRead();

@@ -33,6 +33,7 @@ import {
   codingRuntimeBudgetDigest,
   codingRuntimeCommandPolicyForMode,
   codingRuntimeConnectorScopesForMode,
+  codingRuntimeConnectorScopesForSelection,
   codingRuntimeFactDigest,
   codingRuntimeNetworkPolicyForMode,
   type CodingRuntimeTrustedContext,
@@ -228,6 +229,9 @@ function contextFromActive(
     request.requestedMode,
     input.deploymentCeiling,
   );
+  const connectorScopes = codingRuntimeConnectorScopesForSelection(
+    effectiveMode, request.jiraPodId !== undefined || request.jiraPod !== undefined, request.connectorScopes,
+  );
   return {
     runId: request.runId,
     operatorId: request.serverPrincipal,
@@ -249,7 +253,7 @@ function contextFromActive(
     deploymentCeiling: input.deploymentCeiling,
     runtimeSource: runtimeProfile.runtimeSource,
     actionClasses: codingRuntimeActionClassesForMode(effectiveMode, input.researchEgressEnabled),
-    connectorScopes: codingRuntimeConnectorScopesForMode(effectiveMode),
+    connectorScopes,
     modelProfile: {
       profileId: runtimeProfile.profileId,
       source: runtimeProfile.modelSource,
@@ -260,7 +264,7 @@ function contextFromActive(
         : { reasoningEffort: runtimeProfile.reasoningEffort }),
     },
     commandPolicy: codingRuntimeCommandPolicyForMode(effectiveMode),
-    networkPolicy: codingRuntimeNetworkPolicyForMode(effectiveMode, input.researchEgressEnabled),
+    networkPolicy: codingRuntimeNetworkPolicyForMode(effectiveMode, input.researchEgressEnabled, connectorScopes),
     gates: ["human-approval"],
     budget: {
       maxRuntimeMs,

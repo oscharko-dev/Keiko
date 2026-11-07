@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef } from "react";
-import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
+import type { CodingWorkbenchConnectorScope, CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 
 import type { CodingWorkbenchFollowUpInputs } from "@/lib/coding-workbench-runtime-mutations";
 import type { CodingWorkbenchStartOptions } from "@/lib/coding-workbench-runtime-actions";
@@ -23,6 +23,7 @@ export interface TaskActionsInput {
   readonly projectMemoryEnabled: boolean;
   /** The Jira Pod picked in the composer for the next start; absent starts without Jira. */
   readonly jiraPodId?: string | undefined;
+  readonly connectorScopes?: readonly CodingWorkbenchConnectorScope[] | undefined;
   /** The MCP servers selected in the composer for the next start; absent offers every one. */
   readonly mcpServers?: readonly string[] | undefined;
   readonly conversationId: string | undefined;
@@ -91,6 +92,7 @@ function beginStart(
       issue,
       ...startPromptInputs(inputs),
       ...(input.jiraPodId === undefined ? {} : { jiraPodId: input.jiraPodId }),
+      ...(input.connectorScopes === undefined ? {} : { connectorScopes: input.connectorScopes }),
       ...(input.mcpServers === undefined ? {} : { mcpServers: input.mcpServers }),
     });
   });

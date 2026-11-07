@@ -30,6 +30,7 @@ const LIFECYCLE = defineActivityLogOperation({
       values: [
         "none",
         "not-admitted",
+        "connector-scope-missing",
         "invalid-arguments",
         "descriptor-drift",
         "protocol-error",

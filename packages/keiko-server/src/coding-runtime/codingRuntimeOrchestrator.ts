@@ -4579,6 +4579,7 @@ export class CodingRuntimeOrchestrator {
       ...agentField(request.agent),
       ...promptInputFields(request),
       ...jiraPodField(request.jiraPodId),
+      ...(request.connectorScopes === undefined ? {} : { connectorScopes: [...request.connectorScopes] }),
       ...mcpServersField(request.mcpServers),
       workspaceId: active.instance.workspaceId,
       workspaceRoot: active.binding.activeRoot,

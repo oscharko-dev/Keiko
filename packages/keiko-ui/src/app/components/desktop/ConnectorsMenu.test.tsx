@@ -1,7 +1,9 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
+import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
 import {
   ConnectorsMenu,
   activeConnectorCount,
@@ -20,6 +22,7 @@ const PODS: readonly PodChoice[] = [
   { id: "pod-one", name: "Lab Jira", ready: true },
   { id: "pod-two", name: "Staging Jira", ready: false },
 ];
+afterEach(() => localStorage.removeItem(I18N_STORAGE_KEY));
 
 function props(overrides: Partial<ConnectorsMenuProps> = {}): ConnectorsMenuProps {
   return {
@@ -99,6 +102,41 @@ describe("activeConnectorCount", () => {
 });
 
 describe("ConnectorsMenu", () => {
+  it.each(["en", "de"] as const)("separates instance administration from Full access in %s", async (locale) => {
+    await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+    localStorage.setItem(I18N_STORAGE_KEY, locale);
+    const user = userEvent.setup();
+    const onJiraAdministrationChange = vi.fn();
+    const onMode = vi.fn();
+    render(<I18nProvider><ConnectorsMenu {...props({ boundPodId: "pod-one", onJiraAdministrationChange,
+      mode: { value: "autonomous-delivery", ceiling: "autonomous-delivery", onChange: onMode } })} /></I18nProvider>);
+    await user.click(screen.getByRole("button", { name: locale === "en" ? "Connectors: 4 active" : "Konnektoren: 4 aktiv" }));
+    const toggle = screen.getByRole("switch", { name: locale === "en" ? "Administer the Jira instance" : "Jira-Instanz administrieren" });
+    expect(toggle).not.toBeChecked();
+    expect(toggle).toHaveAccessibleDescription(locale === "en"
+      ? "Separately allow changes to shared Jira configuration, such as screens and monitoring, for this selected Pod. Ordinary Jira writes continue to follow the chosen mode. Full access does not enable instance administration; Jira's own permissions still apply."
+      : "Änderungen an gemeinsamer Jira-Konfiguration, etwa Masken und Monitoring, für diesen ausgewählten Pod gesondert erlauben. Gewöhnliche Jira-Schreibaktionen folgen weiterhin dem gewählten Modus. Vollzugriff aktiviert die Instanzverwaltung nicht; Jiras eigene Berechtigungen gelten weiterhin.");
+    await user.click(toggle);
+    expect(onJiraAdministrationChange).toHaveBeenCalledExactlyOnceWith(true);
+    expect(onMode).not.toHaveBeenCalled();
+    expect(toggle).not.toBeChecked();
+    expect(await axe(screen.getByRole("region", { name: locale === "en" ? "Connectors" : "Konnektoren" }))).toHaveNoViolations();
+  });
+
+  it("does not offer administration without a selected Pod and blocks an unready selection", async () => {
+    const user = userEvent.setup();
+    const onJiraAdministrationChange = vi.fn();
+    const { rerender } = render(<ConnectorsMenu {...props({ onJiraAdministrationChange })} />);
+    await openMenu(user);
+    expect(screen.queryByRole("switch", { name: "Administer the Jira instance" })).toBeNull();
+    rerender(<ConnectorsMenu {...props({ boundPodId: "pod-two", jiraAdministrationEnabled: true, onJiraAdministrationChange })} />);
+    const toggle = screen.getByRole("switch", { name: "Administer the Jira instance" });
+    expect(toggle).not.toBeChecked();
+    expect(toggle).toBeDisabled();
+    await user.click(toggle);
+    expect(onJiraAdministrationChange).not.toHaveBeenCalled();
+  });
+
   it("labels the trigger with the active count and plain when none is active", () => {
     const { rerender } = render(<ConnectorsMenu {...props()} />);
     expect(screen.getByRole("button", { name: "Connectors: 3 active" })).toHaveTextContent("3");

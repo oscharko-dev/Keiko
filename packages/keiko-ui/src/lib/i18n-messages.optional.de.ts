@@ -1175,6 +1175,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.connectors.active": "Konnektoren: {count} aktiv",
   "chat.connectors.mcp": "MCP-Server",
   "chat.connectors.jira": "Jira-Pods",
+  "chat.connectors.jiraAdministration": "Jira-Instanz administrieren",
+  "chat.connectors.jiraAdministrationHelp": "Änderungen an gemeinsamer Jira-Konfiguration, etwa Masken und Monitoring, für diesen ausgewählten Pod gesondert erlauben. Gewöhnliche Jira-Schreibaktionen folgen weiterhin dem gewählten Modus. Vollzugriff aktiviert die Instanzverwaltung nicht; Jiras eigene Berechtigungen gelten weiterhin.",
   "chat.connectors.manage": "Verwalten",
   "chat.connectors.noServers": "Keine MCP-Server eingerichtet",
   "chat.connectors.noPods": "Noch keine Jira-Pods",

@@ -1162,6 +1162,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.connectors.active": "Connectors: {count} active",
   "chat.connectors.mcp": "MCP servers",
   "chat.connectors.jira": "Jira Pods",
+  "chat.connectors.jiraAdministration": "Administer the Jira instance",
+  "chat.connectors.jiraAdministrationHelp": "Separately allow changes to shared Jira configuration, such as screens and monitoring, for this selected Pod. Ordinary Jira writes continue to follow the chosen mode. Full access does not enable instance administration; Jira's own permissions still apply.",
   "chat.connectors.manage": "Manage",
   "chat.connectors.noServers": "No MCP servers set up",
   "chat.connectors.noPods": "No Jira Pods yet",

@@ -59,6 +59,7 @@ const ALL_SCOPES: readonly CodingWorkbenchConnectorScope[] = [
   "knowledge-base.write",
   "issue-tracker.read",
   "issue-tracker.write",
+  "issue-tracker.admin",
 ];
 const MODES: readonly CodingWorkbenchMode[] = [
   "governed-assist",
@@ -1654,6 +1655,21 @@ describe("route-level policy regression — missing scope denies in every mode (
     expect(admission.disposition).toBe("denied");
     expect(admission.reasonCode).toBe(MISSING_SCOPE_REASON[actionType]);
   });
+});
+
+describe("admin actions require the explicit grant independently of normal Jira writes", () => {
+  const adminActions = [
+    "create-screen-tab", "rename-screen-tab", "delete-screen-tab",
+    "set-app-monitoring", "set-ipd-monitoring", "start-jmx-metrics", "stop-jmx-metrics",
+    "set-issue-type-property", "delete-issue-type-property",
+  ] as const;
+  it.each(MODES.flatMap((mode) => adminActions.map((actionType) => ({ mode, actionType }))))(
+    "$mode / $actionType refuses ordinary Jira scopes",
+    async ({ mode, actionType }) => {
+      const authority = registerConnectorEnvelope(mode, ["issue-tracker.read", "issue-tracker.write"]);
+      expect(await admit(actionType, authority, withMode(harness.deps, mode))).toEqual({ disposition: "denied", reasonCode: "connector-write-denied" });
+    },
+  );
 });
 
 // ─── Envelope authority failures (mode-independent) per route family ───────────

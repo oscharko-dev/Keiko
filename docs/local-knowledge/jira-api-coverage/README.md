@@ -142,6 +142,18 @@ creation, ranking, other estimate-adjustment modes and destructive operations, a
 other inventory gaps stay open. A registered declaration is not evidence that
 Jira grants the current person permission or that a particular installation supports the operation.
 
+Nine instance-administration writes (four monitoring changes, three screen-tab changes and two
+global issue-type property mutations) require the explicit `issue-tracker.admin` grant. Ordinary
+Jira write access, a selected credential and Full access mode do not supply that grant. Coding binds
+the human's selected scope into its start confirmation and real Authority Envelope, and rechecks the
+current exact action scope before native dispatch. Metadata reads retain `issue-tracker.read`.
+This authority repair changes no native identity or qualification status; its source regressions,
+ledger reconciliation and generated log contracts remain pending the deferred final validation.
+The separate AC9 gap remains open: the generic managed MCP relay converts a mutation's structured
+error result into a closed failure and does not yet preserve the validated Jira receipt/error payload
+for Coding presentation. This checkpoint adds specific missing-scope guidance and keeps post-dispatch
+uncertainty/no-replay; it does not claim that broader payload-preservation behavior is repaired.
+
 Worklog writes depend on the existing issue-template admission owner. The post-state uses observed
 `timespent`/`timetracking` and safe create/update deltas; absent or inconsistent aggregates never
 become zero. Relevant unresolved template requirements fail closed. Create and update fix

@@ -1204,6 +1204,25 @@ describe("production coding runtime resolver", () => {
       return { host, createRun, pods, confirmations, fixture, request };
     }
 
+    it("binds admin opt-in to the confirmation and exposes live scopes only through the run envelope", () => {
+      const { host, createRun, confirmations, fixture, request } = jiraHost();
+      confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, {
+        ...request, jiraPod: BOUND, connectorScopes: ["issue-tracker.admin"],
+      }));
+      host.launchResolver.resolve({ ...request, jiraPodId: POD, connectorScopes: ["issue-tracker.admin"] });
+      const launched = createRun.mock.calls[0]?.[0];
+      expect(launched?.context.connectorScopes).toContain("issue-tracker.admin");
+      expect(launched?.jiraAuthority?.currentScopes("discovery")).toContain("issue-tracker.admin");
+      expect(launched?.jiraAuthority?.currentScopes("effect")).toBeUndefined();
+    });
+
+    it("refuses an administrative launch under a confirmation that approved ordinary Jira access", () => {
+      const { host, createRun, confirmations, fixture, request } = jiraHost();
+      confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, { ...request, jiraPod: BOUND }));
+      expect(() => host.launchResolver.resolve({ ...request, jiraPodId: POD, connectorScopes: ["issue-tracker.admin"] })).toThrow("runtime-start-unconfirmed");
+      expect(createRun).not.toHaveBeenCalled();
+    });
+
     it("binds the chosen Pod's identity into the confirmation claim and hands it to the backend", () => {
       const { host, createRun, pods, confirmations, fixture, request } = jiraHost();
       confirmations.issue(
@@ -1216,7 +1235,7 @@ describe("production coding runtime resolver", () => {
       host.launchResolver.resolve({ ...request, jiraPodId: POD });
 
       expect(pods.resolve).toHaveBeenCalledWith(POD);
-      expect(pods.recordBind).toHaveBeenCalledWith("run-1", { outcome: "bound" });
+      expect(pods.recordBind).toHaveBeenCalledWith("run-1", { outcome: "bound" }, expect.arrayContaining(["issue-tracker.read", "issue-tracker.write"]));
       expect(createRun.mock.calls[0]?.[0].request.jiraPod).toEqual(BOUND);
     });
 
@@ -1275,7 +1294,7 @@ describe("production coding runtime resolver", () => {
         expect(() => host.launchResolver.resolve({ ...request, jiraPodId: POD })).toThrow(
           CodingRuntimeJiraPodRefusedError,
         );
-        expect(pods.recordBind).toHaveBeenCalledWith("run-1", { outcome: "refused", reason });
+        expect(pods.recordBind).toHaveBeenCalledWith("run-1", { outcome: "refused", reason }, expect.arrayContaining(["issue-tracker.read", "issue-tracker.write"]));
         expect(createRun).not.toHaveBeenCalled();
         // The one-use confirmation survived: the same start without the Pod proceeds.
         host.launchResolver.resolve(request);

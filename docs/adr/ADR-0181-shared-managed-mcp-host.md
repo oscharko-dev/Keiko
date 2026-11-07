@@ -165,7 +165,10 @@ factory, never a raw token resolver. Every metadata and confirmation read rechec
 authority and the Chat read grant. The exact action approval is claimed atomically inside
 the durable journal's dispatch boundary, immediately before the first mutating HTTP request;
 metadata reads and duplicate deliveries cannot consume or reapply that claim. Full access
-uses the same boundary with its currently validated allowed disposition.
+uses the same boundary with its currently validated allowed disposition. The nine global
+administration writes additionally require the explicitly selected `issue-tracker.admin` scope
+defined in ADR-0128 D4. A Chat scope change advances the existing binding generation and revokes
+earlier approvals; neither schema selection nor Full access supplies administration authority.
 
 HTTP acknowledgement is recorded before parsing a response or evaluating late cancellation.
 A cancelled or denied catalog result retains its original closed envelope and null data;
@@ -246,10 +249,12 @@ through the same managed provider, host and relay, with no second host, policy l
 The human picks one Pod explicitly in the Workbench composer (`jiraPodId` on the start request;
 none keeps today's behaviour). The pick is the run's Jira read grant: every read tool in
 [`JIRA_MANAGED_READ_TOOLS`](../../packages/keiko-contracts/src/jira-tool-fields.ts) is allowed in all
-three modes. The five write tools (`create`, `edit`, `assign`, `comment`,
-`transition`) keep following the mode: Ask for approval and Supervised workspace ask through the
+three modes. Ordinary admitted write tools keep following the mode: Ask for approval and Supervised workspace ask through the
 existing approval channel, Full access is allowed inside the validated Authority Envelope. Hard
-denials stay mode-independent and fail closed with zero HTTP.
+denials stay mode-independent and fail closed with zero HTTP. Administration is a separate
+explicit composer opt-in, transmitted as `connectorScopes: ["issue-tracker.admin"]` and bound by
+the existing start confirmation. Absent opt-in grants no administration in any mode; legacy
+requests and selecting a Pod alone preserve that absence.
 
 The start resolves the Pod before the one-use start confirmation is consumed: it must be the
 caller's own (server principal) and ready, on a native `keiko-sidecar` run with the managed relay;
@@ -262,9 +267,10 @@ configuration digest. A registry server named `jira` is not admitted into such a
 definition is never written to the operator registry and carries no credential.
 
 `ConfiguredMcpConnections` is wrapped per run: every other server is served by the shared
-connections, `jira` by one managed host per Pod credential identity (descriptor drift, result
+connections, `jira` by a run-bound managed host under its current scope authority (descriptor drift, result
 validation, deadlines and `mcp.managed.lifecycle` are the host's), reached through
-`createMcpRelayEndpoint`. Every request and every effect re-checks that the Pod is still exactly
+`createMcpRelayEndpoint`. Discovery and every effect use the registered run envelope and the canonical tool-to-scope
+mapping. Every request also re-checks that the Pod is still exactly
 the credential the human chose; a replaced token, re-verification, deletion, unfinished custody
 work or another owner ends the binding (the relay capability is revoked, later calls perform no
 request). Writes pass the relay's existing durable mutation permit before dispatch; a write that

@@ -860,6 +860,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.connectorScope.source-control.write": "Source control (write)",
   "codingWorkbench.approval.connectorScope.issue-tracker.read": "Issue tracker (read)",
   "codingWorkbench.approval.connectorScope.issue-tracker.write": "Issue tracker (write)",
+  "codingWorkbench.approval.connectorScope.issue-tracker.admin": "Jira instance administration",
   "codingWorkbench.approval.connectorScope.knowledge-base.read": "Knowledge base (read)",
   "codingWorkbench.approval.connectorScope.knowledge-base.write": "Knowledge base (write)",
   "codingWorkbench.approval.research.title": "Research destination",

@@ -354,6 +354,8 @@ export interface Chat {
   // single-source legacy field: this scope kind was never overloaded onto an earlier shape.
   readonly gitChangeScopes?: readonly ChatGitChangeScope[];
   readonly jiraPodBinding?: ChatJiraPodBinding | undefined;
+  /** Explicit administration selection for this Pod binding; absent means false. */
+  readonly jiraAdministrationEnabled?: boolean;
   /** Retained after disconnect so a later connection cannot reuse an earlier generation. */
   readonly jiraBindingGeneration?: number;
   /** Absent selections mean `CHAT_TOOL_DEFAULT_MODE` (Full access). */
@@ -601,6 +603,8 @@ export interface UpdateProjectPatch {
 export interface UpdateChatPatch {
   /** Selection intent only; the server resolves and validates the current Pod generation. */
   readonly jiraPodId?: string | null;
+  /** Explicit opt-in; requires the current ready Pod and scope identity. */
+  readonly jiraAdministrationEnabled?: boolean;
   readonly toolMode?: CodingWorkbenchMode;
   /** Selection intent: server names, or null to offer every enabled server again. */
   readonly mcpServers?: readonly string[] | null;

@@ -71,6 +71,8 @@ function beginMutation(
 }
 /** Fixed, model-readable words per closed reason; no server text, name or path. */
 const FAILURE_TEXT: Readonly<Partial<Record<ManagedMcpFailure, string>>> = {
+  "connector-scope-missing":
+    "This task does not grant the connector access required for this operation. Review the access selection and start a new task with the required access. Full access mode alone does not grant Jira administration. Do not retry automatically.",
   "result-too-large":
     "The tool result exceeded the size limit and was not delivered. Ask for less data: narrow the query, use filters or pagination.",
   "deadline-exceeded": "The tool did not answer in time.",

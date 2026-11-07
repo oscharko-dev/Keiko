@@ -90,6 +90,7 @@ export interface ManagedMcpLogPort {
 
 export type ManagedMcpFailure =
   | "not-admitted"
+  | "connector-scope-missing"
   | "invalid-arguments"
   | "descriptor-drift"
   | "protocol-error"

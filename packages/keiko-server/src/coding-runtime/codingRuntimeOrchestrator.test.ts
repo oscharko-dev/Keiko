@@ -2882,9 +2882,9 @@ describe("CodingRuntimeOrchestrator", () => {
       const jiraPodId = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
       const f = fixture();
 
-      await f.orchestrator.start({ ...start, jiraPodId });
+      await f.orchestrator.start({ ...start, jiraPodId, connectorScopes: ["issue-tracker.admin"] });
 
-      expect(f.launchResolver.resolve).toHaveBeenCalledWith(expect.objectContaining({ jiraPodId }));
+      expect(f.launchResolver.resolve).toHaveBeenCalledWith(expect.objectContaining({ jiraPodId, connectorScopes: ["issue-tracker.admin"] }));
       const bare = fixture();
       await bare.orchestrator.start(start);
       expect(bare.launchResolver.resolve.mock.calls[0]?.[0]).not.toHaveProperty("jiraPodId");

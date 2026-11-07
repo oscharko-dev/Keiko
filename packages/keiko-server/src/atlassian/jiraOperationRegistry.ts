@@ -20,10 +20,11 @@ type NativeTool = Exclude<JiraOperationTool, CompositeTool>;
 type JiraOperationEffect = "remote-read" | "remote-write" | "local-report" | "local-draft";
 type JiraPermissionPolicy =
   | "entity-property-and-readback"
-  | "monitoring-state-and-readback"
-  | "screen-tab-create-and-readback"
-  | "screen-tab-rename-and-readback"
-  | "screen-tab-delete-and-absence"
+  | "instance-admin-entity-property-and-readback"
+  | "instance-admin-monitoring-state-and-readback"
+  | "instance-admin-screen-tab-create-and-readback"
+  | "instance-admin-screen-tab-rename-and-readback"
+  | "instance-admin-screen-tab-delete-and-absence"
   | "observed-column-layout"
   | "observed-maintenance-status"
   | "admin-workflow-configuration"
@@ -179,22 +180,24 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
     "jira.delete-dashboard-item-property": ["DELETE", "/dashboard/{dashboardId}/items/{itemId}/properties/{propertyKey}"],
     "jira.set-issue-property": ["PUT", "/issue/{issueIdOrKey}/properties/{propertyKey}"],
     "jira.delete-issue-property": ["DELETE", "/issue/{issueIdOrKey}/properties/{propertyKey}"],
-    "jira.set-issue-type-property": ["PUT", "/issuetype/{issueTypeId}/properties/{propertyKey}"],
-    "jira.delete-issue-type-property": ["DELETE", "/issuetype/{issueTypeId}/properties/{propertyKey}"],
     "jira.set-project-property": ["PUT", "/project/{projectIdOrKey}/properties/{propertyKey}"],
     "jira.delete-project-property": ["DELETE", "/project/{projectIdOrKey}/properties/{propertyKey}"],
     "jira.set-user-property": ["PUT", "/user/properties/{propertyKey}"],
     "jira.delete-user-property": ["DELETE", "/user/properties/{propertyKey}"],
   }),
-  ...writes("monitoring-state-and-readback", {
+  ...writes("instance-admin-entity-property-and-readback", {
+    "jira.set-issue-type-property": ["PUT", "/issuetype/{issueTypeId}/properties/{propertyKey}"],
+    "jira.delete-issue-type-property": ["DELETE", "/issuetype/{issueTypeId}/properties/{propertyKey}"],
+  }),
+  ...writes("instance-admin-monitoring-state-and-readback", {
     "jira.set-app-monitoring": ["POST", "/monitoring/app"],
     "jira.set-ipd-monitoring": ["POST", "/monitoring/ipd"],
     "jira.start-jmx-metrics": ["POST", "/monitoring/jmx/startExposing"],
     "jira.stop-jmx-metrics": ["POST", "/monitoring/jmx/stopExposing"],
   }),
-  ...writes("screen-tab-create-and-readback", { "jira.create-screen-tab": ["POST", "/screens/{screenId}/tabs"] }),
-  ...writes("screen-tab-rename-and-readback", { "jira.rename-screen-tab": ["PUT", "/screens/{screenId}/tabs/{tabId}"] }),
-  ...writes("screen-tab-delete-and-absence", { "jira.delete-screen-tab": ["DELETE", "/screens/{screenId}/tabs/{tabId}"] }),
+  ...writes("instance-admin-screen-tab-create-and-readback", { "jira.create-screen-tab": ["POST", "/screens/{screenId}/tabs"] }),
+  ...writes("instance-admin-screen-tab-rename-and-readback", { "jira.rename-screen-tab": ["PUT", "/screens/{screenId}/tabs/{tabId}"] }),
+  ...writes("instance-admin-screen-tab-delete-and-absence", { "jira.delete-screen-tab": ["DELETE", "/screens/{screenId}/tabs/{tabId}"] }),
   ...reads("observed-column-layout", {
     "jira.system-columns": "/settings/columns",
     "jira.user-columns": "/user/columns",

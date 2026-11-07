@@ -175,7 +175,7 @@ describe("ChatConnectorsControl", () => {
     let panel = await open(user);
     await user.click(within(panel).getByRole("switch", { name: /Lab Jira/ }));
     await waitFor(() => expect(persist).toHaveBeenCalledOnce());
-    expect(persist).toHaveBeenLastCalledWith(CHAT, { jiraPodId: "pod-one" }, expect.any(Function));
+    expect(persist).toHaveBeenLastCalledWith(CHAT, { jiraPodId: "pod-one", jiraAdministrationEnabled: false }, expect.any(Function));
     await waitFor(() =>
       expect(
         within(screen.getByRole("region", { name: "Connectors" })).getAllByRole("switch")[0],
@@ -189,7 +189,47 @@ describe("ChatConnectorsControl", () => {
     panel = screen.getByRole("region", { name: "Connectors" });
     await user.click(within(panel).getByRole("switch", { name: /Lab Jira/ }));
     await waitFor(() => expect(persist).toHaveBeenCalledTimes(2));
-    expect(persist).toHaveBeenLastCalledWith(bound, { jiraPodId: null }, expect.any(Function));
+    expect(persist).toHaveBeenLastCalledWith(bound, { jiraPodId: null, jiraAdministrationEnabled: false }, expect.any(Function));
+  });
+
+  it("requires a separate administration selection and displays only the confirmed Chat state", async () => {
+    const user = userEvent.setup();
+    const { persist, finish } = deferredPersist();
+    const changed = vi.fn();
+    const bound = { ...CHAT, toolMode: "autonomous-delivery" as const, jiraPodBinding: binding("pod-one") };
+    const { rerender } = render(<ChatConnectorsControl chat={bound} onChatChanged={changed} list={list} persist={persist} />);
+    const panel = await open(user);
+    const toggle = within(panel).getByRole("switch", { name: "Administer the Jira instance" });
+    expect(toggle).not.toBeChecked();
+    await user.click(toggle);
+    expect(persist).toHaveBeenCalledExactlyOnceWith(bound, { jiraAdministrationEnabled: true }, expect.any(Function));
+    expect(toggle).not.toBeChecked();
+    expect(toggle).toBeDisabled();
+    const confirmed = { ...bound, jiraAdministrationEnabled: true, updatedAt: 3 };
+    await act(async () => finish(confirmed));
+    expect(changed).toHaveBeenCalledWith(confirmed);
+    rerender(<ChatConnectorsControl chat={confirmed} onChatChanged={changed} list={list} persist={persist} />);
+    expect(toggle).toBeChecked();
+    await user.click(toggle);
+    expect(persist).toHaveBeenLastCalledWith(confirmed, { jiraAdministrationEnabled: false }, expect.any(Function));
+  });
+
+  it("does not present a saved administration selection as available for an unready Pod", async () => {
+    const user = userEvent.setup();
+    const livePod = POD.livePod;
+    if (livePod === undefined) throw new TypeError("Missing synthetic Jira Pod");
+    const unready = async (): Promise<AtlassianConnectorMetadata[]> => [{ ...POD, livePod: {
+      ...livePod, verificationStatus: "unverified",
+    } }];
+    const persist = vi.fn<typeof updateGroundingScopes>();
+    render(<ChatConnectorsControl chat={{ ...CHAT, jiraPodBinding: binding("pod-one"), jiraAdministrationEnabled: true }}
+      onChatChanged={vi.fn()} list={unready} persist={persist} />);
+    const panel = await open(user);
+    const toggle = within(panel).getByRole("switch", { name: "Administer the Jira instance" });
+    expect(toggle).not.toBeChecked();
+    expect(toggle).toBeDisabled();
+    await user.click(toggle);
+    expect(persist).not.toHaveBeenCalled();
   });
 
   it("PATCHes the chosen access mode, defaulting the shown mode to Full access", async () => {

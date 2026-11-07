@@ -38,6 +38,19 @@ function conflict(): ApiError {
 afterEach(() => vi.clearAllMocks());
 
 describe("grounding source mutation conflicts", () => {
+  it("binds an administration opt-in to the shown scope and never retries it after a conflict", async () => {
+    const refusal = conflict();
+    const canonical = { ...chat, jiraAdministrationEnabled: false, groundingScopeIdentity: "gsi-v1:" + "b".repeat(64) };
+    vi.mocked(updateChat).mockRejectedValue(refusal);
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [canonical] });
+    const changed = vi.fn();
+    await expect(updateGroundingScopes(chat, { jiraAdministrationEnabled: true }, changed)).rejects.toBe(refusal);
+    expect(updateChat).toHaveBeenCalledExactlyOnceWith(chat.id, {
+      jiraAdministrationEnabled: true, expectedGroundingScopeIdentity: chat.groundingScopeIdentity,
+    });
+    expect(changed).toHaveBeenCalledExactlyOnceWith(canonical);
+  });
+
   it("preserves the update refusal while adopting only the fresh canonical sources", async () => {
     const refusal = conflict();
     const canonical = { ...chat, groundingScopeIdentity: "gsi-v1:" + "b".repeat(64) };

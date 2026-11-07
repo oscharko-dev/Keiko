@@ -413,3 +413,30 @@ it("bounds the description the relay forwards to a model", async () => {
   expect(Buffer.byteLength(description, "utf8")).toBeLessThanOrEqual(2048);
   expect(description.length).toBeGreaterThan(0);
 });
+
+
+it("explains a missing connector scope without claiming a changed Pod or reconnect", async () => {
+  const f = fixture("write");
+  const permit = permitFixture(f);
+  f.call.mockRejectedValue(new ManagedMcpError("connector-scope-missing", undefined, "none"));
+  const text = await writeText(f, permit.context);
+  expect(text).toContain("connector access");
+  expect(text).toContain("Full access mode alone does not grant Jira administration");
+  expect(text).toContain("Nothing was changed");
+  expect(text).not.toMatch(/reconnect|credential|Pod changed/iu);
+  expect(permit.release).toHaveBeenCalledOnce();
+  expect(f.recover).not.toHaveBeenCalled();
+});
+
+it("keeps missing-scope guidance uncertain after a possible effect", async () => {
+  const f = fixture("write");
+  const permit = permitFixture(f);
+  f.call.mockRejectedValue(new ManagedMcpError("connector-scope-missing", undefined, "possible"));
+  const text = await writeText(f, permit.context);
+  expect(text).toContain("connector access");
+  expect(text).toContain("may or may not have been applied");
+  expect(text).not.toContain("Nothing was changed");
+  expect(permit.release).not.toHaveBeenCalled();
+  expect(permit.fail).toHaveBeenCalledOnce();
+  expect(f.recover).toHaveBeenCalledOnce();
+});

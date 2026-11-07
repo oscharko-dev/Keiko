@@ -4,7 +4,7 @@ import {
   CodingRuntimeJiraPodRefusedError,
   CodingRuntimeLaunchRejectedError,
 } from "./launchFailure.js";
-import type { CodingJiraPods } from "./codingJiraPodMcp.js";
+import type { CodingJiraPods, CodingJiraRunAuthority } from "./codingJiraPodMcp.js";
 import { isAgentAdmitted, openCodeSelectableAgents } from "./opencodeAgents.js";
 import { openCodePromptInputs } from "./opencodePromptInputs.js";
 import { openCodeVisibleToolNames, type OpenCodeToolProfile } from "./opencodeToolSchemas.js";
@@ -190,6 +190,7 @@ export interface ProductionRuntimeBackendInput {
   >;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
   readonly workspaceIsCurrent: () => boolean;
+  readonly jiraAuthority?: CodingJiraRunAuthority | undefined;
   readonly canSpawnRuntime?: CodingRuntimeManagerDeps["canSpawnRuntime"];
   readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
   readonly contextUsage?: CodingRuntimeContextUsageRegistry | undefined;
@@ -827,6 +828,7 @@ function withBoundJiraPod(
   input.jiraPods?.recordBind(
     request.runId,
     resolution.ok ? { outcome: "bound" } : { outcome: "refused", reason: resolution.reason },
+    context.connectorScopes,
   );
   if (!resolution.ok) throw new CodingRuntimeJiraPodRefusedError(resolution.reason);
   return { ...request, jiraPod: resolution.binding };
@@ -877,6 +879,7 @@ function confirmationFacts(
       ? {}
       : { issueBindingDigest: context.issueBinding.bindingDigest }),
     ...(request.jiraPod === undefined ? {} : { jiraPod: request.jiraPod }),
+    connectorScopes: context.connectorScopes,
   };
 }
 
@@ -1453,6 +1456,10 @@ function createBackendRun({
       resolveWorkspaceRootAccess,
     }),
     workspaceIsCurrent: runtimeWorkspaceIsCurrent(input, context),
+    jiraAuthority: {
+      runId: request.runId,
+      currentScopes: (phase) => runtimeJiraScopes(input, context, minted, authority, phase),
+    },
     resolveWorkspaceRootAccess,
     contextUsage,
   });
@@ -1916,6 +1923,28 @@ function pendingSpawnGuard({
       throw error;
     }
   };
+}
+
+/** Reuses the live capability/envelope boundary; a stale captured scope list is never authority. */
+function runtimeJiraScopes(
+  input: ProductionCodingRuntimeResolverInput,
+  context: CodingRuntimeTrustedContext,
+  minted: MintedRuntime,
+  authority: CodingRuntimeAuthorityService,
+  phase: "discovery" | "effect",
+): ReturnType<CodingJiraRunAuthority["currentScopes"]> {
+  const request = {
+    capability: minted.toolFacadeCapability,
+    adapterKind: adapterKind(context),
+    liveFacts: productionRuntimeAuthorityFacts(input.workspaceAuthority, context),
+    workspaceRoot: context.workspaceRoot,
+    deploymentCeiling: context.deploymentCeiling,
+    nowIso: runtimeNow(input).toISOString(),
+  };
+  const resolved = phase === "discovery" && authority.state().state === "starting"
+    ? authority.revalidateCapabilityForPendingSpawn(request)
+    : authority.revalidateCapabilityForMutation(request);
+  return resolved.ok ? resolved.envelope.authority.connectorScopes : undefined;
 }
 
 function runtimeMutationLive(

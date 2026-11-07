@@ -21,6 +21,9 @@ export interface ConnectorsMenuProps {
   readonly selectedServers: readonly string[] | undefined;
   readonly pods: readonly PodChoice[];
   readonly boundPodId: string | undefined;
+  /** Explicit selection for the currently bound Jira Pod; absent never grants administration. */
+  readonly jiraAdministrationEnabled?: boolean | undefined;
+  readonly onJiraAdministrationChange?: ((enabled: boolean) => void) | undefined;
   readonly loading: boolean;
   readonly busy: boolean;
   readonly failed: boolean;
@@ -83,6 +86,7 @@ function SwitchRow({
   disabled,
   hint,
   tone,
+  describedBy,
   onToggle,
 }: {
   readonly label: string;
@@ -90,6 +94,7 @@ function SwitchRow({
   readonly disabled: boolean;
   readonly hint?: string | undefined;
   readonly tone?: McpServerChoice["state"] | undefined;
+  readonly describedBy?: string | undefined;
   readonly onToggle: (next: boolean) => void;
 }): ReactNode {
   return (
@@ -97,6 +102,7 @@ function SwitchRow({
       type="button"
       role="switch"
       aria-checked={checked}
+      aria-describedby={describedBy}
       className={styles.cmpRow}
       disabled={disabled}
       onClick={() => onToggle(!checked)}
@@ -142,7 +148,7 @@ type ServerSectionProps = Pick<
 
 type PodSectionProps = Pick<
   ConnectorsMenuProps,
-  "pods" | "boundPodId" | "loading" | "busy" | "onPodChange" | "onManagePods"
+  "pods" | "boundPodId" | "loading" | "busy" | "failed" | "onPodChange" | "onManagePods" | "jiraAdministrationEnabled" | "onJiraAdministrationChange"
 >;
 
 type ConnectorsPanelBodyProps = Omit<ConnectorsMenuProps, "onOpen">;
@@ -216,7 +222,27 @@ function PodSection(props: PodSectionProps): ReactNode {
           />
         );
       })}
+      <JiraAdministrationControl {...props} />
     </section>
+  );
+}
+
+function JiraAdministrationControl(props: PodSectionProps): ReactNode {
+  const t = useTranslate();
+  const helpId = useId();
+  if (props.boundPodId === undefined || props.onJiraAdministrationChange === undefined) return null;
+  const ready = props.pods.some((pod) => pod.id === props.boundPodId && pod.ready);
+  return (
+    <>
+      <SwitchRow
+        label={t("chat.connectors.jiraAdministration")}
+        checked={ready && props.jiraAdministrationEnabled === true}
+        disabled={props.busy || props.loading || props.failed || !ready}
+        describedBy={helpId}
+        onToggle={props.onJiraAdministrationChange}
+      />
+      <p id={helpId} className={styles.cmpEmpty}>{t("chat.connectors.jiraAdministrationHelp")}</p>
+    </>
   );
 }
 
@@ -257,6 +283,8 @@ function ConnectorsPanelBody({
   selectedServers,
   pods,
   boundPodId,
+  jiraAdministrationEnabled,
+  onJiraAdministrationChange,
   loading,
   busy,
   failed,
@@ -280,8 +308,11 @@ function ConnectorsPanelBody({
       <PodSection
         pods={pods}
         boundPodId={boundPodId}
+        jiraAdministrationEnabled={jiraAdministrationEnabled}
+        onJiraAdministrationChange={onJiraAdministrationChange}
         loading={loading}
         busy={busy}
+        failed={failed}
         onPodChange={onPodChange}
         onManagePods={onManagePods}
       />

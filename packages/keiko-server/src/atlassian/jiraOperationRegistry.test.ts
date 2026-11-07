@@ -12,10 +12,23 @@ import {
   isJiraOperationBinding,
 } from "./jiraOperationRegistry.js";
 import { createToolDescriptor } from "@oscharko-dev/keiko-tool-catalog";
+import { jiraRequiredConnectorScope } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 
 const JIRA_MUTATION_DECLARATIONS = jiraMutationDeclarations();
 
 describe("server-owned Jira operation contracts", () => {
+  it("binds every administration write to an explicit instance-admin permission contract", () => {
+    const admin = jiraOperationContracts().filter((entry) =>
+      jiraRequiredConnectorScope(entry.definition.tool) === "issue-tracker.admin");
+    expect(admin).toHaveLength(9);
+    for (const contract of admin) {
+      expect(contract.definition.permissionPolicy).toMatch(/^instance-admin-/);
+      expect(contract.definition.effects).toContain("remote-write");
+      expect(isJiraOperationBinding(contract.binding)).toBe(true);
+    }
+    expect(jiraOperationForTool("jira.set-issue-property")?.definition.permissionPolicy)
+      .toBe("entity-property-and-readback");
+  });
   it("reads a closed historical binding without granting current execution authority", () => {
     const contract = jiraOperationForTool("jira.comment");
     if (contract === undefined) throw new TypeError("Missing comment contract");

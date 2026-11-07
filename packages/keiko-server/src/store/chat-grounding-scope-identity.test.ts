@@ -85,6 +85,17 @@ function localScope(
 }
 
 describe("deriveChatGroundingScopeIdentity", () => {
+  it("binds explicit administration while preserving false legacy identities", () => {
+    const bound = chat({ jiraBindingGeneration: 1, jiraPodBinding: {
+      podId: "d5f5681e-ce98-4c3c-b27e-51d707c9d018", bindingGeneration: 1,
+      authenticationGeneration: 1, connectedAtMs: 0,
+    } });
+    expect(deriveChatGroundingScopeIdentity({ ...bound, jiraAdministrationEnabled: false }))
+      .toBe(deriveChatGroundingScopeIdentity(bound));
+    expect(deriveChatGroundingScopeIdentity({ ...bound, jiraAdministrationEnabled: true }))
+      .not.toBe(deriveChatGroundingScopeIdentity(bound));
+  });
+
   it("is stable across non-scope updates", () => {
     const original = deriveChatGroundingScopeIdentity(chat());
     const updated = deriveChatGroundingScopeIdentity(

@@ -109,6 +109,7 @@ function canonicalJiraScope(chat: Chat): { readonly jira?: Record<string, unknow
       authenticationGeneration: chat.jiraPodBinding?.authenticationGeneration ?? null,
       bindingGeneration: chat.jiraBindingGeneration ?? 0,
       mode: chat.toolMode ?? CHAT_TOOL_DEFAULT_MODE,
+      ...(chat.jiraAdministrationEnabled === true ? { jiraAdministrationEnabled: true } : {}),
     },
   };
 }

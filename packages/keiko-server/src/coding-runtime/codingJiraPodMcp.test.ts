@@ -9,6 +9,7 @@ import type {
   AtlassianHttpBodyRequest,
   AtlassianHttpBodyResult,
 } from "@oscharko-dev/keiko-connectors";
+import type { CodingWorkbenchConnectorScope } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { ManagedMcpError } from "@oscharko-dev/keiko-mcp";
 
@@ -26,6 +27,7 @@ import {
 import {
   createCodingJiraPods,
   type CodingJiraConnections,
+  type CodingJiraRunAuthority,
   type CodingJiraPodDeps,
   type CodingJiraPods,
 } from "./codingJiraPodMcp.js";
@@ -95,6 +97,8 @@ interface Harness {
   readonly context: ManagedMcpInvocationContext;
   readonly recover: ReturnType<typeof vi.fn<() => void>>;
   readonly begun: string[];
+  readonly dispatched: ReturnType<typeof vi.fn<() => boolean>>;
+  readonly released: ReturnType<typeof vi.fn<() => void>>;
   readonly state: SyntheticJira;
   readonly tokenHeaderSeen: string[];
 }
@@ -195,6 +199,8 @@ function harness(
   };
   if (options.attach !== false) pods.attach(deps);
   const begun: string[] = [];
+  const dispatched = vi.fn(() => true);
+  const released = vi.fn<() => void>();
   const recover = vi.fn<() => void>();
   const context: ManagedMcpInvocationContext = {
     invocationId: "invocation-1",
@@ -206,13 +212,22 @@ function harness(
       begun.push(toolName);
       return {
         invocationId: "durable-native-call",
+        dispatch: dispatched,
+        release: released,
         acknowledge: () => undefined,
         fail: () => undefined,
       };
     },
   };
   cleanup.push(() => pods.close());
-  return { pods, pod, http, records, context, recover, begun, state, tokenHeaderSeen };
+  return { pods, pod, http, records, context, recover, begun, dispatched, released, state, tokenHeaderSeen };
+}
+
+function runAuthority(h: Harness): CodingJiraRunAuthority {
+  return {
+    runId: h.context.correlationId,
+    currentScopes: () => ["issue-tracker.read", "issue-tracker.write", "issue-tracker.admin"],
+  };
 }
 
 function bound(h: Harness): CodingJiraPodBinding {
@@ -319,7 +334,7 @@ describe("resolving the Pod the human chose", () => {
 
   it("logs the binding decision with closed values and no Pod identity", () => {
     const h = harness();
-    h.pods.recordBind("run-jira-1", { outcome: "bound" });
+    h.pods.recordBind("run-jira-1", { outcome: "bound" }, runAuthority(h).currentScopes("discovery"));
     h.pods.recordBind("run-jira-2", { outcome: "refused", reason: "pod-not-ready" });
     const [bound_, refused] = proofLines(h);
     expect(bound_).toMatchObject({
@@ -347,7 +362,7 @@ describe("serving the bound Pod through the relay", () => {
       generation: vi.fn(() => new AbortController().signal),
       serve: vi.fn(() => Promise.resolve(new Response("ok"))),
     };
-    const connections = h.pods.connections(base, bound(h));
+    const connections = h.pods.connections(base, bound(h), runAuthority(h));
     const other = { name: "wiki", enabled: true } as never;
     connections.generation(other, "run-jira-1");
     await connections.serve("wiki", new Request("https://x.invalid/mcp"), h.context);
@@ -358,7 +373,7 @@ describe("serving the bound Pod through the relay", () => {
 
   it("fails closed for another server when the run has no managed connections", async () => {
     const h = harness();
-    const connections = h.pods.connections(undefined, bound(h));
+    const connections = h.pods.connections(undefined, bound(h), runAuthority(h));
     await expect(
       connections.serve("wiki", new Request("https://x.invalid/mcp"), h.context),
     ).rejects.toBeInstanceOf(ManagedMcpError);
@@ -368,7 +383,7 @@ describe("serving the bound Pod through the relay", () => {
   // instructions, instead of in each tool description of the list it receives on every round.
   it("gives the shared Jira rules once as server instructions, not in each tool", async () => {
     const h = harness();
-    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
     expect((await client.initialize()).instructions).toBe(JIRA_TOOL_GUIDANCE);
     const descriptions = await client.descriptions();
     expect(descriptions).toHaveLength(Object.keys(CODING_JIRA_TOOL_RISKS).length);
@@ -378,7 +393,7 @@ describe("serving the bound Pod through the relay", () => {
 
   it("offers exactly the Jira tools, reads and writes, with their declared risks", async () => {
     const h = harness();
-    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
     expect([...(await client.list())].sort()).toEqual(Object.keys(CODING_JIRA_TOOL_RISKS).sort());
     expect(h.http).not.toHaveBeenCalled();
   });
@@ -387,7 +402,7 @@ describe("serving the bound Pod through the relay", () => {
   // the tool is neither offered nor defaulted to a risk; a call to it never reaches Jira.
   it("neither offers nor accepts jira.attach and never touches Jira for it", async () => {
     const h = harness();
-    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
     expect(await client.list()).not.toContain("jira.attach");
     expect(CODING_JIRA_TOOL_RISKS).not.toHaveProperty("jira.attach");
     await expect(
@@ -402,7 +417,7 @@ describe("serving the bound Pod through the relay", () => {
 
   it("reads an issue as untrusted data through the Pod's own transport and logs the call", async () => {
     const h = harness();
-    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
     const result = await client.call("jira.issue", { issueKey: "SYN-1" });
     expect(result).toMatchObject({ structuredContent: { outcome: "succeeded" } });
     expect(JSON.stringify(result)).toContain("SYN-1");
@@ -426,7 +441,7 @@ describe("serving the bound Pod through the relay", () => {
 
   it("binds a report to the Pod and logs it on the run's correlation (jira.report)", async () => {
     const h = harness();
-    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
     const first = await client.call("jira.report", { jql: "project = SYN" });
     const id = first.structuredContent?.reportId;
     expect(typeof id).toBe("string");
@@ -446,7 +461,7 @@ describe("serving the bound Pod through the relay", () => {
 
   it("comments on the ticket after the relay's durable mutation permit, and reports the receipt", async () => {
     const h = harness();
-    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
     const result = await client.call("jira.comment", {
       issueKey: "SYN-1",
       body: "Implemented in the draft pull request",
@@ -475,7 +490,7 @@ describe("serving the bound Pod through the relay", () => {
   }));
   it("links several issues through separate calls and counts them on its one line (#4176)", async () => {
     const h = harness();
-    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
     const result = await client.call("jira.edit", { issueKey: "SYN-1", links: THREE_LINKS });
     expect(result).toMatchObject({
       structuredContent: { outcome: "succeeded", issueKey: "SYN-1", linksRequested: 3 },
@@ -504,7 +519,7 @@ describe("serving the bound Pod through the relay", () => {
         ? Promise.resolve(response({ errorMessages: ["No permission"], errors: {} }, 403))
         : (dispatch?.(request) ?? Promise.resolve(response({}, 404))),
     );
-    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
     const result = await client.call("jira.edit", { issueKey: "SYN-1", links: THREE_LINKS });
     // A failed write is not delivered as data in a Coding run: the relay marks the permit failed
     // and hands the run to the existing uncertain-mutation recovery.
@@ -530,7 +545,7 @@ describe("serving the bound Pod through the relay", () => {
 
   it("transitions the ticket", async () => {
     const h = harness();
-    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
     const result = await client.call("jira.transition", {
       issueKey: "SYN-1",
       transitionId: "31",
@@ -544,7 +559,7 @@ describe("serving the bound Pod through the relay", () => {
   it("hands the model a failed read as data, not as a broken run", async () => {
     const h = harness();
     h.http.mockResolvedValue(response({}, 403));
-    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
     const result = await client.call("jira.issue", { issueKey: "SYN-1" });
     expect(result).toMatchObject({ isError: true, structuredContent: { outcome: "failed" } });
     expect(proofLines(h)).toEqual([
@@ -577,7 +592,7 @@ describe("the customer's issue templates bind a Coding run's Jira writes (#4177)
     const h = harness();
     h.state.fields.description = null;
     descriptionTransport(h);
-    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
     const result = await client.call("jira.edit", {
       issueKey: "SYN-1",
       fields: { description: { format: "markdown", text: "**Exact body**" } },
@@ -599,7 +614,7 @@ describe("the customer's issue templates bind a Coding run's Jira writes (#4177)
     // Jira includes an unset selected description as null, allowing before/after confirmation.
     h.state.fields.description = null;
     descriptionTransport(h);
-    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
     const result = await client.call("jira.edit", {
       issueKey: "SYN-1",
       fields: { description: { format: "markdown", text: "## Goal\nKept content." } },
@@ -618,7 +633,7 @@ describe("the customer's issue templates bind a Coding run's Jira writes (#4177)
   it("does not log a refused formatted write as completed", async () => {
     const h = harness();
     descriptionTransport(h, true);
-    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
     const result = await client.call("jira.edit", {
       issueKey: "SYN-1",
       fields: { description: { format: "markdown", text: "## Goal\nKept content." } },
@@ -634,7 +649,7 @@ describe("the customer's issue templates bind a Coding run's Jira writes (#4177)
 
   it("refuses an edit that leaves the issue violating its template, before any PUT", async () => {
     const h = harness({ template: EDIT_TEMPLATE });
-    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
     const result = await client.call("jira.edit", {
       issueKey: "SYN-1",
       fields: { summary: "Too short" },
@@ -647,14 +662,14 @@ describe("the customer's issue templates bind a Coding run's Jira writes (#4177)
 
   it("lets the same edit through when no template governs it", async () => {
     const h = harness();
-    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
     await client.call("jira.edit", { issueKey: "SYN-1", fields: { summary: "Too short" } });
     expect(writes(h)).toBe(1);
   });
 
   it("refuses requirement references a Coding run cannot trace, and still writes without them", async () => {
     const h = harness();
-    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
     const refused = await client.call("jira.edit", {
       issueKey: "SYN-1",
       fields: { summary: "Traced" },
@@ -689,7 +704,7 @@ describe("a Pod that is no longer the one the human chose", () => {
 
   it.each(CHANGES)("refuses reads after %s with zero HTTP", async (_name, change) => {
     const h = harness();
-    const connections = h.pods.connections(undefined, bound(h));
+    const connections = h.pods.connections(undefined, bound(h), runAuthority(h));
     const client = connect(h, connections);
     await client.call("jira.issue", { issueKey: "SYN-1" });
     h.http.mockClear();
@@ -709,7 +724,7 @@ describe("a Pod that is no longer the one the human chose", () => {
 
   it.each(CHANGES)("refuses writes after %s without any request", async (_name, change) => {
     const h = harness();
-    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
     change(h.pod);
 
     await expect(
@@ -730,7 +745,7 @@ describe("a Pod that is no longer the one the human chose", () => {
       if (request.method === "GET" && ++reads === 1) h.pod.generation += 1;
       return result;
     });
-    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
 
     const result = await client.call("jira.transition", {
       issueKey: "SYN-1",
@@ -748,7 +763,7 @@ describe("a Pod that is no longer the one the human chose", () => {
   it("revokes the relay's generation signal and binds no new relay for the old identity", async () => {
     const h = harness();
     const old = bound(h);
-    const connections = h.pods.connections(undefined, old);
+    const connections = h.pods.connections(undefined, old, runAuthority(h));
     const server = { name: "jira", enabled: true } as never;
     const signal = connections.generation(server, "run-jira-1");
     expect(signal.aborted).toBe(false);
@@ -758,14 +773,14 @@ describe("a Pod that is no longer the one the human chose", () => {
     expect(signal.aborted).toBe(true);
     expect(connections.generation(server, "run-jira-1").aborted).toBe(true);
     // A new run binds the new identity and works again.
-    expect(h.pods.connections(undefined, bound(h)).generation(server, "run-jira-2").aborted).toBe(
+    expect(h.pods.connections(undefined, bound(h), { ...runAuthority(h), runId: "run-jira-2" }).generation(server, "run-jira-2").aborted).toBe(
       false,
     );
   });
 
   it("refuses to serve once the application graph is closed", async () => {
     const h = harness();
-    const connections = h.pods.connections(undefined, bound(h));
+    const connections = h.pods.connections(undefined, bound(h), runAuthority(h));
     await h.pods.close();
     await expect(
       connections.serve("jira", new Request("https://x.invalid/mcp"), h.context),
@@ -783,10 +798,120 @@ describe("a write that does not complete", () => {
           : response({}, 400),
       ),
     );
-    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
     const result = await client.call("jira.comment", { issueKey: "SYN-1", body: "Rejected" });
     expect(result.isError).toBe(true);
     expect(h.http.mock.calls.filter(([request]) => request.method !== "GET")).toHaveLength(1);
     expect(h.recover).toHaveBeenCalledOnce();
+  });
+});
+
+
+describe("Coding Jira's live, explicitly selected scopes", () => {
+  it("never treats a Pod credential as connector authority", async () => {
+    const h = harness();
+    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    await expect(client.list()).rejects.toBeInstanceOf(ManagedMcpError);
+    expect(h.http).not.toHaveBeenCalled();
+  });
+
+  it("omits administration from discovery and refuses a guessed admin call without HTTP", async () => {
+    const h = harness();
+    const authority: CodingJiraRunAuthority = {
+      runId: h.context.correlationId,
+      currentScopes: () => ["issue-tracker.read", "issue-tracker.write"],
+    };
+    const client = connect(h, h.pods.connections(undefined, bound(h), authority));
+    expect(await client.list()).toContain("jira.projects");
+    expect(await client.list()).not.toContain("jira.set-app-monitoring");
+    expect(await client.call("jira.set-app-monitoring", { enabled: true, expectedEnabled: false })).toMatchObject({ isError: true });
+    expect(h.http).not.toHaveBeenCalled();
+  });
+
+  it("does not share an admin host with another run using the same Pod", async () => {
+    const h = harness();
+    const admin = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
+    expect(await admin.list()).toContain("jira.set-app-monitoring");
+    const ordinary = connect(h, h.pods.connections(undefined, bound(h), {
+      runId: h.context.correlationId,
+      currentScopes: () => ["issue-tracker.read", "issue-tracker.write"],
+    }));
+    expect(await ordinary.list()).not.toContain("jira.set-app-monitoring");
+    expect(h.http).not.toHaveBeenCalled();
+  });
+
+  it("executes one explicitly admitted admin change with independent state readback", async () => {
+    const h = harness();
+    let enabled = false;
+    h.http.mockImplementation(async (request) => {
+      if (request.method === "POST") {
+        enabled = true;
+        return response(undefined, 204);
+      }
+      return response({ enabled });
+    });
+    const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
+    const result = await client.call("jira.set-app-monitoring", { enabled: true, expectedEnabled: false });
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({ outcome: "succeeded", monitoringEnabled: true });
+    expect(h.http.mock.calls.map(([request]) => request.method)).toEqual(["GET", "POST", "GET"]);
+    expect(h.dispatched).toHaveBeenCalledOnce();
+  });
+
+  it("does not repeat an acknowledged change when admin access ends before readback", async () => {
+    const h = harness();
+    let scopes: readonly CodingWorkbenchConnectorScope[] = ["issue-tracker.read", "issue-tracker.write", "issue-tracker.admin"];
+    h.http.mockImplementation(async (request) => {
+      if (request.method === "POST") {
+        scopes = ["issue-tracker.read", "issue-tracker.write"];
+        return response(undefined, 204);
+      }
+      return response({ enabled: false });
+    });
+    const client = connect(h, h.pods.connections(undefined, bound(h), {
+      runId: h.context.correlationId, currentScopes: () => scopes,
+    }));
+    const result = await client.call("jira.set-app-monitoring", { enabled: true, expectedEnabled: false });
+    expect(h.http.mock.calls.map(([request]) => request.method)).toEqual(["GET", "POST"]);
+    expect(h.recover).toHaveBeenCalledOnce();
+    expect(h.dispatched).toHaveBeenCalledOnce();
+    expect(h.released).not.toHaveBeenCalled();
+    expect(JSON.stringify(result)).toContain("connector access");
+    expect(JSON.stringify(result)).toContain("may or may not have been applied");
+  });
+
+  it("rechecks exact scope after discovery and before the native effect", async () => {
+    const h = harness();
+    let scopes: readonly CodingWorkbenchConnectorScope[] = ["issue-tracker.read", "issue-tracker.write", "issue-tracker.admin"];
+    const authority: CodingJiraRunAuthority = { runId: h.context.correlationId, currentScopes: () => scopes };
+    const client = connect(h, h.pods.connections(undefined, bound(h), authority));
+    expect(await client.list()).toContain("jira.set-app-monitoring");
+    h.http.mockImplementation(async () => {
+      scopes = ["issue-tracker.read", "issue-tracker.write"];
+      return response({ enabled: false });
+    });
+    const result = await client.call("jira.set-app-monitoring", { enabled: true, expectedEnabled: false });
+    expect(h.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
+    expect(h.http).toHaveBeenCalledTimes(1);
+    expect(h.dispatched).not.toHaveBeenCalled();
+    expect(h.released).toHaveBeenCalledOnce();
+    expect(h.recover).not.toHaveBeenCalled();
+    expect(JSON.stringify(result)).toContain("connector access");
+    expect(JSON.stringify(result)).toContain("Nothing was changed");
+    expect(JSON.stringify(result)).not.toMatch(/reconnect|Pod changed/iu);
+    expect(await client.list()).not.toContain("jira.set-app-monitoring");
+  });
+
+  it("refuses discovery once the live envelope is revoked", async () => {
+    const h = harness();
+    let revoked = false;
+    const client = connect(h, h.pods.connections(undefined, bound(h), {
+      runId: h.context.correlationId,
+      currentScopes: () => revoked ? undefined : ["issue-tracker.read"],
+    }));
+    expect(await client.list()).toContain("jira.projects");
+    revoked = true;
+    await expect(client.list()).rejects.toBeInstanceOf(ManagedMcpError);
+    expect(h.http).not.toHaveBeenCalled();
   });
 });

@@ -280,6 +280,21 @@ describe("createStartMutation", () => {
     expect(all?.[0]).not.toHaveProperty("mcpServers");
   });
 
+  it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+    "does not infer instance administration from the %s mode", async (requestedMode) => {
+      const jiraPodId = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
+      const state = stateWithRun(null, { canStart: true, requestedMode });
+      await createStartMutation("inspect Jira", state, { projectMemoryEnabled: true, jiraPodId }).run(SIGNAL);
+      await createStartMutation("inspect Jira", state, { projectMemoryEnabled: true, jiraPodId,
+        connectorScopes: ["issue-tracker.admin"],
+      }).run(SIGNAL);
+      const [ordinary, explicit] = apiMocks.startCodingWorkbenchRuntime.mock.calls.slice(-2);
+      expect(ordinary?.[0]).not.toHaveProperty("connectorScopes");
+      expect(explicit?.[0]).toMatchObject({ jiraPodId, requestedMode, connectorScopes: ["issue-tracker.admin"] });
+      expect(explicit?.[0]).not.toHaveProperty("jiraAdministrationEnabled");
+    },
+  );
+
   it("sends the selected model settings for the managed gateway", async () => {
     const state = stateWithRun(null, {
       canStart: true,

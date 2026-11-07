@@ -1,5 +1,6 @@
 import {
   CODING_WORKBENCH_MODEL_SOURCES,
+  type CodingWorkbenchConnectorScope,
   CODING_WORKBENCH_MODES,
   CODING_WORKBENCH_OPERATOR_DECISIONS,
   CODING_WORKBENCH_RUNTIME_SOURCES,
@@ -755,6 +756,12 @@ export interface CodingWorkbenchRuntimeStartRequest {
    */
   readonly jiraPodId?: string | undefined;
   /**
+   * Additional human-selected connector grants for this start. Currently only
+   * issue-tracker.admin is accepted, and only with jiraPodId. Absent or [] adds nothing;
+   * the server still derives ordinary scopes from the selected mode and verified Pod.
+   */
+  readonly connectorScopes?: readonly CodingWorkbenchConnectorScope[] | undefined;
+  /**
    * The centrally configured MCP servers the human selected for this run (owner decision
    * 2026-11-02). Absent offers every enabled server; an empty list offers none. The selection only
    * narrows the operator's registry, never widens it; an unknown or disabled name offers nothing.
@@ -1374,6 +1381,7 @@ export function parseCodingWorkbenchRuntimeStartRequest(
   validateProjectMemoryRequest(value.projectMemory, errors);
   validateStartAgent(value.agent, errors);
   validateJiraPodId(value.jiraPodId, errors);
+  validateStartConnectorScopes(value.connectorScopes, value.jiraPodId, errors);
   validateMcpServerSelection(value.mcpServers, errors);
   validateStartPromptInputs(value, errors);
   if (
@@ -1405,6 +1413,7 @@ const START_REQUEST_KEYS: readonly string[] = [
   "mentions",
   "fork",
   "jiraPodId",
+  "connectorScopes",
   "mcpServers",
 ];
 
@@ -1412,6 +1421,22 @@ const START_REQUEST_KEYS: readonly string[] = [
 // server against the caller's own, ready Pods, never by this shape.
 function validateJiraPodId(value: unknown, errors: string[]): void {
   if (value !== undefined && !isChatJiraPodId(value)) errors.push("jiraPodId is invalid");
+}
+
+/** Start selections cannot invent scopes; Jira grants require an explicit Pod selection. */
+function validateStartConnectorScopes(value: unknown, podId: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  if (
+    !Array.isArray(value) ||
+    value.length > 1 ||
+    !value.every((scope) => scope === "issue-tracker.admin") ||
+    new Set(value).size !== value.length
+  ) {
+    errors.push("connectorScopes is invalid");
+    return;
+  }
+  if (value.length > 0 && !isChatJiraPodId(podId))
+    errors.push("Jira connectorScopes require jiraPodId");
 }
 
 // Names only; which of them a run may use is decided by the server against its registry.

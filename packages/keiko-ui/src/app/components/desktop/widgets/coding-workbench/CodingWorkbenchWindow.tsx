@@ -1723,6 +1723,7 @@ function WorkbenchColumns({
     taskIntent,
     projectMemoryEnabled,
     jiraPodId: connectors.jiraPodId,
+    connectorScopes: connectors.connectorScopes,
     mcpServers: connectors.mcpServers,
     conversationId: history.conversationId,
     fork: history.fork,
@@ -2886,6 +2887,7 @@ const CONNECTOR_SCOPE_MESSAGE_KEYS: Record<
   "source-control.write": "codingWorkbench.approval.connectorScope.source-control.write",
   "issue-tracker.read": "codingWorkbench.approval.connectorScope.issue-tracker.read",
   "issue-tracker.write": "codingWorkbench.approval.connectorScope.issue-tracker.write",
+  "issue-tracker.admin": "codingWorkbench.approval.connectorScope.issue-tracker.admin",
   "knowledge-base.read": "codingWorkbench.approval.connectorScope.knowledge-base.read",
   "knowledge-base.write": "codingWorkbench.approval.connectorScope.knowledge-base.write",
 };

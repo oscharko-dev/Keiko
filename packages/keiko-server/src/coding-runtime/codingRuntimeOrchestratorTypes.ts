@@ -75,6 +75,7 @@ export interface CodingRuntimeLaunchResolver {
      * `CodingRuntimeJiraPodRefusedError` before any run is minted or confirmation consumed.
      */
     readonly jiraPodId?: string | undefined;
+    readonly connectorScopes?: CodingWorkbenchRuntimeStartRequest["connectorScopes"];
     /** The Pod identity the resolver bound the run to; the resolver sets it, the orchestrator never. */
     readonly jiraPod?: CodingJiraPodBinding | undefined;
     /** The MCP servers the human selected for the run; absent offers every enabled server. */

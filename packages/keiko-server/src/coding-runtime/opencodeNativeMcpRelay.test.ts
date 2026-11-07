@@ -172,6 +172,10 @@ it("routes local and token-backed servers through the shared manager and revokes
   };
   await bound?.target.upstream?.(bound.target.url, request);
   expect(serve).toHaveBeenCalledOnce();
+  expect(serve).toHaveBeenCalledWith("local", expect.any(Request), expect.objectContaining({
+    correlationId: "shared-run",
+    invocationId: expect.any(String),
+  }));
   generation.abort();
   expect(bound?.signal.aborted).toBe(true);
   expect(relay.authenticate(relayId, endpoint.capability)).toBeUndefined();

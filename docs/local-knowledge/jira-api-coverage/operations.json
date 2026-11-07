@@ -870,10 +870,13 @@
     "jira.create-screen-tab": {
       "identity": "POST /rest/api/2/screens/{screenId}/tabs",
       "effect": "write",
-      "permissionPolicy": "screen-tab-create-and-readback",
+      "permissionPolicy": "instance-admin-screen-tab-create-and-readback",
       "kind": "constrained-tool",
-      "constraints": "Exact screen ID and reviewed screen name are independently bound through bounded native screen pages; complete tab collections retain identity and same-parent scope. Existing high-risk authority, immutable operation binding, one-use approval when required and durable no-replay journal remain authoritative. One typed name; duplicate names and collection bounds refuse before POST. A readable acknowledged new native tab ID is required and cannot reuse an existing tab identity. Fresh same-screen tab readback must match that ID and requested name; lost acknowledgement never infers identity from a name or retries.",
+      "constraints": "Exact screen ID and reviewed screen name are independently bound through bounded native screen pages; complete tab collections retain identity and same-parent scope. Existing high-risk authority, immutable operation binding, one-use approval when required and durable no-replay journal remain authoritative. One typed name; duplicate names and collection bounds refuse before POST. A readable acknowledged new native tab ID is required and cannot reuse an existing tab identity. Fresh same-screen tab readback must match that ID and requested name; lost acknowledgement never infers identity from a name or retries. Explicit issue-tracker.admin is required in addition to the current bound Pod; Full access and ordinary issue-tracker.write never mint it. Chat and Coding recheck the current exact action scope before native dispatch; metadata reads retain their read scope.",
       "sourceFiles": [
+        "packages/keiko-contracts/src/atlassian-connectors.ts",
+        "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.ts",
+        "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts",
         "packages/keiko-connectors/src/jira-managed-screen-tab-mutations.ts",
         "packages/keiko-connectors/src/jira-screen-tab-admission.ts",
         "packages/keiko-connectors/src/jira-managed-screen-reads.ts",
@@ -882,6 +885,8 @@
         "packages/keiko-server/src/store/schema.ts"
       ],
       "testFiles": [
+        "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.test.ts",
+        "packages/keiko-server/src/coding-runtime/codingRuntimeStartConfirmation.test.ts",
         "packages/keiko-connectors/src/jira-managed-screen-tab-mutations.test.ts",
         "packages/keiko-server/src/atlassian/jiraScreenTabDescriptors.test.ts",
         "packages/keiko-server/src/store/jiraScreenTabMigration.test.ts",
@@ -1205,10 +1210,13 @@
     "jira.delete-issue-type-property": {
       "identity": "DELETE /rest/api/2/issuetype/{issueTypeId}/properties/{propertyKey}",
       "effect": "write",
-      "permissionPolicy": "entity-property-and-readback",
+      "permissionPolicy": "instance-admin-entity-property-and-readback",
       "kind": "constrained-tool",
-      "constraints": "The exact issue type is independently read and rebound before and after the fixed native property effect. Delete requires complete reviewed expectedValueNodes; explicit JSON null and empty values remain present data. Typed nodes reconstruct only one complete bounded JSON value with canonical pointers, exact fields and child counts, safe own properties and the existing Unicode/number/32768-byte limits. Complete unique key lists and the exact value or native 404 must agree before effect; a bare 404 never proves absence. Changed or unreadable reviewed state refuses, and an equal desired state reports an explicit no-op. Existing high-risk authority, one-use approval and durable journal govern at most one fixed DELETE. After acknowledgement, canonical entity rebinding and fresh complete key/value readback must establish the desired state. Unknown/unconfirmed receipts retain requested propertyPresent only; no replay, remote URL following, generic routing or authority inference.",
+      "constraints": "The exact issue type is independently read and rebound before and after the fixed native property effect. Delete requires complete reviewed expectedValueNodes; explicit JSON null and empty values remain present data. Typed nodes reconstruct only one complete bounded JSON value with canonical pointers, exact fields and child counts, safe own properties and the existing Unicode/number/32768-byte limits. Complete unique key lists and the exact value or native 404 must agree before effect; a bare 404 never proves absence. Changed or unreadable reviewed state refuses, and an equal desired state reports an explicit no-op. Existing high-risk authority, one-use approval and durable journal govern at most one fixed DELETE. After acknowledgement, canonical entity rebinding and fresh complete key/value readback must establish the desired state. Unknown/unconfirmed receipts retain requested propertyPresent only; no replay, remote URL following, generic routing or authority inference. Explicit issue-tracker.admin is required in addition to the current bound Pod; Full access and ordinary issue-tracker.write never mint it. Chat and Coding recheck the current exact action scope before native dispatch; metadata reads retain their read scope.",
       "sourceFiles": [
+        "packages/keiko-contracts/src/atlassian-connectors.ts",
+        "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.ts",
+        "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts",
         "packages/keiko-connectors/src/jira-managed-entity-property-mutations.ts",
         "packages/keiko-connectors/src/jira-entity-property-write-admission.ts",
         "packages/keiko-connectors/src/jira-entity-property-input.ts",
@@ -1220,6 +1228,8 @@
         "packages/keiko-server/src/store/schema.ts"
       ],
       "testFiles": [
+        "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.test.ts",
+        "packages/keiko-server/src/coding-runtime/codingRuntimeStartConfirmation.test.ts",
         "packages/keiko-connectors/src/jira-managed-entity-property-mutations.test.ts",
         "packages/keiko-connectors/src/jira-entity-property-input.test.ts",
         "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
@@ -1259,10 +1269,13 @@
     "jira.delete-screen-tab": {
       "identity": "DELETE /rest/api/2/screens/{screenId}/tabs/{tabId}",
       "effect": "write",
-      "permissionPolicy": "screen-tab-delete-and-absence",
+      "permissionPolicy": "instance-admin-screen-tab-delete-and-absence",
       "kind": "constrained-tool",
-      "constraints": "Exact screen ID and reviewed screen name are independently bound through bounded native screen pages; complete tab collections retain identity and same-parent scope. Existing high-risk authority, immutable operation binding, one-use approval when required and durable no-replay journal remain authoritative. Exact reviewed tab ID/name and complete ordered field-ID snapshot; changed fields, duplicate IDs and last-tab deletion refuse before one DELETE. Acknowledgement is confirmed only by exact absence in the complete list of the same still-readable screen with another tab remaining; bare404, permission loss or incomplete readback is not deletion proof.",
+      "constraints": "Exact screen ID and reviewed screen name are independently bound through bounded native screen pages; complete tab collections retain identity and same-parent scope. Existing high-risk authority, immutable operation binding, one-use approval when required and durable no-replay journal remain authoritative. Exact reviewed tab ID/name and complete ordered field-ID snapshot; changed fields, duplicate IDs and last-tab deletion refuse before one DELETE. Acknowledgement is confirmed only by exact absence in the complete list of the same still-readable screen with another tab remaining; bare404, permission loss or incomplete readback is not deletion proof. Explicit issue-tracker.admin is required in addition to the current bound Pod; Full access and ordinary issue-tracker.write never mint it. Chat and Coding recheck the current exact action scope before native dispatch; metadata reads retain their read scope.",
       "sourceFiles": [
+        "packages/keiko-contracts/src/atlassian-connectors.ts",
+        "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.ts",
+        "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts",
         "packages/keiko-connectors/src/jira-managed-screen-tab-mutations.ts",
         "packages/keiko-connectors/src/jira-screen-tab-admission.ts",
         "packages/keiko-connectors/src/jira-managed-screen-reads.ts",
@@ -1271,6 +1284,8 @@
         "packages/keiko-server/src/store/schema.ts"
       ],
       "testFiles": [
+        "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.test.ts",
+        "packages/keiko-server/src/coding-runtime/codingRuntimeStartConfirmation.test.ts",
         "packages/keiko-connectors/src/jira-managed-screen-tab-mutations.test.ts",
         "packages/keiko-server/src/atlassian/jiraScreenTabDescriptors.test.ts",
         "packages/keiko-server/src/store/jiraScreenTabMigration.test.ts",
@@ -3075,10 +3090,13 @@
     "jira.rename-screen-tab": {
       "identity": "PUT /rest/api/2/screens/{screenId}/tabs/{tabId}",
       "effect": "write",
-      "permissionPolicy": "screen-tab-rename-and-readback",
+      "permissionPolicy": "instance-admin-screen-tab-rename-and-readback",
       "kind": "constrained-tool",
-      "constraints": "Exact screen ID and reviewed screen name are independently bound through bounded native screen pages; complete tab collections retain identity and same-parent scope. Existing high-risk authority, immutable operation binding, one-use approval when required and durable no-replay journal remain authoritative. Exact reviewed tab ID/name; changed snapshots or duplicate new names refuse before one PUT, and unchanged names report an explicit no-op. The bound target survives a status-only 2xx acknowledgement and is independently read in the fresh complete same-screen tab list; no acknowledgement field retargets the request.",
+      "constraints": "Exact screen ID and reviewed screen name are independently bound through bounded native screen pages; complete tab collections retain identity and same-parent scope. Existing high-risk authority, immutable operation binding, one-use approval when required and durable no-replay journal remain authoritative. Exact reviewed tab ID/name; changed snapshots or duplicate new names refuse before one PUT, and unchanged names report an explicit no-op. The bound target survives a status-only 2xx acknowledgement and is independently read in the fresh complete same-screen tab list; no acknowledgement field retargets the request. Explicit issue-tracker.admin is required in addition to the current bound Pod; Full access and ordinary issue-tracker.write never mint it. Chat and Coding recheck the current exact action scope before native dispatch; metadata reads retain their read scope.",
       "sourceFiles": [
+        "packages/keiko-contracts/src/atlassian-connectors.ts",
+        "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.ts",
+        "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts",
         "packages/keiko-connectors/src/jira-managed-screen-tab-mutations.ts",
         "packages/keiko-connectors/src/jira-screen-tab-admission.ts",
         "packages/keiko-connectors/src/jira-managed-screen-reads.ts",
@@ -3087,6 +3105,8 @@
         "packages/keiko-server/src/store/schema.ts"
       ],
       "testFiles": [
+        "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.test.ts",
+        "packages/keiko-server/src/coding-runtime/codingRuntimeStartConfirmation.test.ts",
         "packages/keiko-connectors/src/jira-managed-screen-tab-mutations.test.ts",
         "packages/keiko-server/src/atlassian/jiraScreenTabDescriptors.test.ts",
         "packages/keiko-server/src/store/jiraScreenTabMigration.test.ts",
@@ -3392,16 +3412,21 @@
     "jira.set-app-monitoring": {
       "identity": "POST /rest/api/2/monitoring/app",
       "effect": "write",
-      "permissionPolicy": "monitoring-state-and-readback",
+      "permissionPolicy": "instance-admin-monitoring-state-and-readback",
       "kind": "constrained-tool",
-      "constraints": "App monitoring uses the documented object boolean read and typed enabled body. The observed prior boolean must match reviewed expectedEnabled before one POST; missing state is not false, changed snapshots refuse and already-equal states report unchanged without dispatch. Existing high-risk authority, exact approval and durable no-replay journal govern the effect. Fresh independent native state readback is required after acknowledgement. Failed/unconfirmed receipts retain the requested target, not an observed-state claim; no retry, setting inference or expansion of auth/atomic-error policy.",
+      "constraints": "App monitoring uses the documented object boolean read and typed enabled body. The observed prior boolean must match reviewed expectedEnabled before one POST; missing state is not false, changed snapshots refuse and already-equal states report unchanged without dispatch. Existing high-risk authority, exact approval and durable no-replay journal govern the effect. Fresh independent native state readback is required after acknowledgement. Failed/unconfirmed receipts retain the requested target, not an observed-state claim; no retry, setting inference or expansion of auth/atomic-error policy. Explicit issue-tracker.admin is required in addition to the current bound Pod; Full access and ordinary issue-tracker.write never mint it. Chat and Coding recheck the current exact action scope before native dispatch; metadata reads retain their read scope.",
       "sourceFiles": [
+        "packages/keiko-contracts/src/atlassian-connectors.ts",
+        "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.ts",
+        "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts",
         "packages/keiko-connectors/src/jira-managed-monitoring-mutations.ts",
         "packages/keiko-connectors/src/jira-mutation-failure.ts",
         "packages/keiko-server/src/atlassian/jiraMonitoringDescriptors.ts",
         "packages/keiko-server/src/store/schema.ts"
       ],
       "testFiles": [
+        "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.test.ts",
+        "packages/keiko-server/src/coding-runtime/codingRuntimeStartConfirmation.test.ts",
         "packages/keiko-connectors/src/jira-managed-monitoring-mutations.test.ts",
         "packages/keiko-server/src/atlassian/jiraMonitoringDescriptors.test.ts",
         "packages/keiko-server/src/store/jiraMonitoringMigration.test.ts",
@@ -3494,16 +3519,21 @@
     "jira.set-ipd-monitoring": {
       "identity": "POST /rest/api/2/monitoring/ipd",
       "effect": "write",
-      "permissionPolicy": "monitoring-state-and-readback",
+      "permissionPolicy": "instance-admin-monitoring-state-and-readback",
       "kind": "constrained-tool",
-      "constraints": "IPD monitoring uses the documented object boolean read and typed enabled body. The observed prior boolean must match reviewed expectedEnabled before one POST; missing state is not false, changed snapshots refuse and already-equal states report unchanged without dispatch. Existing high-risk authority, exact approval and durable no-replay journal govern the effect. Fresh independent native state readback is required after acknowledgement. Failed/unconfirmed receipts retain the requested target, not an observed-state claim; no retry, setting inference or expansion of auth/atomic-error policy.",
+      "constraints": "IPD monitoring uses the documented object boolean read and typed enabled body. The observed prior boolean must match reviewed expectedEnabled before one POST; missing state is not false, changed snapshots refuse and already-equal states report unchanged without dispatch. Existing high-risk authority, exact approval and durable no-replay journal govern the effect. Fresh independent native state readback is required after acknowledgement. Failed/unconfirmed receipts retain the requested target, not an observed-state claim; no retry, setting inference or expansion of auth/atomic-error policy. Explicit issue-tracker.admin is required in addition to the current bound Pod; Full access and ordinary issue-tracker.write never mint it. Chat and Coding recheck the current exact action scope before native dispatch; metadata reads retain their read scope.",
       "sourceFiles": [
+        "packages/keiko-contracts/src/atlassian-connectors.ts",
+        "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.ts",
+        "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts",
         "packages/keiko-connectors/src/jira-managed-monitoring-mutations.ts",
         "packages/keiko-connectors/src/jira-mutation-failure.ts",
         "packages/keiko-server/src/atlassian/jiraMonitoringDescriptors.ts",
         "packages/keiko-server/src/store/schema.ts"
       ],
       "testFiles": [
+        "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.test.ts",
+        "packages/keiko-server/src/coding-runtime/codingRuntimeStartConfirmation.test.ts",
         "packages/keiko-connectors/src/jira-managed-monitoring-mutations.test.ts",
         "packages/keiko-server/src/atlassian/jiraMonitoringDescriptors.test.ts",
         "packages/keiko-server/src/store/jiraMonitoringMigration.test.ts",
@@ -3542,10 +3572,13 @@
     "jira.set-issue-type-property": {
       "identity": "PUT /rest/api/2/issuetype/{issueTypeId}/properties/{propertyKey}",
       "effect": "write",
-      "permissionPolicy": "entity-property-and-readback",
+      "permissionPolicy": "instance-admin-entity-property-and-readback",
       "kind": "constrained-tool",
-      "constraints": "The exact issue type is independently read and rebound before and after the fixed native property effect. Set requires complete reviewed expectedValueNodes or independently proven expectAbsent=true, plus complete desired valueNodes. Typed nodes reconstruct only one complete bounded JSON value with canonical pointers, exact fields and child counts, safe own properties and the existing Unicode/number/32768-byte limits. Complete unique key lists and the exact value or native 404 must agree before effect; a bare 404 never proves absence. Changed or unreadable reviewed state refuses, and an equal desired state reports an explicit no-op. Existing high-risk authority, one-use approval and durable journal govern at most one fixed PUT. After acknowledgement, canonical entity rebinding and fresh complete key/value readback must establish the desired state. Unknown/unconfirmed receipts retain requested propertyPresent only; no replay, remote URL following, generic routing or authority inference.",
+      "constraints": "The exact issue type is independently read and rebound before and after the fixed native property effect. Set requires complete reviewed expectedValueNodes or independently proven expectAbsent=true, plus complete desired valueNodes. Typed nodes reconstruct only one complete bounded JSON value with canonical pointers, exact fields and child counts, safe own properties and the existing Unicode/number/32768-byte limits. Complete unique key lists and the exact value or native 404 must agree before effect; a bare 404 never proves absence. Changed or unreadable reviewed state refuses, and an equal desired state reports an explicit no-op. Existing high-risk authority, one-use approval and durable journal govern at most one fixed PUT. After acknowledgement, canonical entity rebinding and fresh complete key/value readback must establish the desired state. Unknown/unconfirmed receipts retain requested propertyPresent only; no replay, remote URL following, generic routing or authority inference. Explicit issue-tracker.admin is required in addition to the current bound Pod; Full access and ordinary issue-tracker.write never mint it. Chat and Coding recheck the current exact action scope before native dispatch; metadata reads retain their read scope.",
       "sourceFiles": [
+        "packages/keiko-contracts/src/atlassian-connectors.ts",
+        "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.ts",
+        "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts",
         "packages/keiko-connectors/src/jira-managed-entity-property-mutations.ts",
         "packages/keiko-connectors/src/jira-entity-property-write-admission.ts",
         "packages/keiko-connectors/src/jira-entity-property-input.ts",
@@ -3557,6 +3590,8 @@
         "packages/keiko-server/src/store/schema.ts"
       ],
       "testFiles": [
+        "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.test.ts",
+        "packages/keiko-server/src/coding-runtime/codingRuntimeStartConfirmation.test.ts",
         "packages/keiko-connectors/src/jira-managed-entity-property-mutations.test.ts",
         "packages/keiko-connectors/src/jira-entity-property-input.test.ts",
         "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
@@ -3778,16 +3813,21 @@
     "jira.start-jmx-metrics": {
       "identity": "POST /rest/api/2/monitoring/jmx/startExposing",
       "effect": "write",
-      "permissionPolicy": "monitoring-state-and-readback",
+      "permissionPolicy": "instance-admin-monitoring-state-and-readback",
       "kind": "constrained-tool",
-      "constraints": "JMX exposure is read through the existing scalar boolean owner; this fixed operation targets true and sends no body. The observed prior boolean must match reviewed expectedEnabled before one POST; missing state is not false, changed snapshots refuse and already-equal states report unchanged without dispatch. Existing high-risk authority, exact approval and durable no-replay journal govern the effect. Fresh independent native state readback is required after acknowledgement. Failed/unconfirmed receipts retain the requested target, not an observed-state claim; no retry, setting inference or expansion of auth/atomic-error policy.",
+      "constraints": "JMX exposure is read through the existing scalar boolean owner; this fixed operation targets true and sends no body. The observed prior boolean must match reviewed expectedEnabled before one POST; missing state is not false, changed snapshots refuse and already-equal states report unchanged without dispatch. Existing high-risk authority, exact approval and durable no-replay journal govern the effect. Fresh independent native state readback is required after acknowledgement. Failed/unconfirmed receipts retain the requested target, not an observed-state claim; no retry, setting inference or expansion of auth/atomic-error policy. Explicit issue-tracker.admin is required in addition to the current bound Pod; Full access and ordinary issue-tracker.write never mint it. Chat and Coding recheck the current exact action scope before native dispatch; metadata reads retain their read scope.",
       "sourceFiles": [
+        "packages/keiko-contracts/src/atlassian-connectors.ts",
+        "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.ts",
+        "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts",
         "packages/keiko-connectors/src/jira-managed-monitoring-mutations.ts",
         "packages/keiko-connectors/src/jira-mutation-failure.ts",
         "packages/keiko-server/src/atlassian/jiraMonitoringDescriptors.ts",
         "packages/keiko-server/src/store/schema.ts"
       ],
       "testFiles": [
+        "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.test.ts",
+        "packages/keiko-server/src/coding-runtime/codingRuntimeStartConfirmation.test.ts",
         "packages/keiko-connectors/src/jira-managed-monitoring-mutations.test.ts",
         "packages/keiko-server/src/atlassian/jiraMonitoringDescriptors.test.ts",
         "packages/keiko-server/src/store/jiraMonitoringMigration.test.ts",
@@ -3904,16 +3944,21 @@
     "jira.stop-jmx-metrics": {
       "identity": "POST /rest/api/2/monitoring/jmx/stopExposing",
       "effect": "write",
-      "permissionPolicy": "monitoring-state-and-readback",
+      "permissionPolicy": "instance-admin-monitoring-state-and-readback",
       "kind": "constrained-tool",
-      "constraints": "JMX exposure is read through the existing scalar boolean owner; this fixed operation targets false and sends no body. The observed prior boolean must match reviewed expectedEnabled before one POST; missing state is not false, changed snapshots refuse and already-equal states report unchanged without dispatch. Existing high-risk authority, exact approval and durable no-replay journal govern the effect. Fresh independent native state readback is required after acknowledgement. Failed/unconfirmed receipts retain the requested target, not an observed-state claim; no retry, setting inference or expansion of auth/atomic-error policy.",
+      "constraints": "JMX exposure is read through the existing scalar boolean owner; this fixed operation targets false and sends no body. The observed prior boolean must match reviewed expectedEnabled before one POST; missing state is not false, changed snapshots refuse and already-equal states report unchanged without dispatch. Existing high-risk authority, exact approval and durable no-replay journal govern the effect. Fresh independent native state readback is required after acknowledgement. Failed/unconfirmed receipts retain the requested target, not an observed-state claim; no retry, setting inference or expansion of auth/atomic-error policy. Explicit issue-tracker.admin is required in addition to the current bound Pod; Full access and ordinary issue-tracker.write never mint it. Chat and Coding recheck the current exact action scope before native dispatch; metadata reads retain their read scope.",
       "sourceFiles": [
+        "packages/keiko-contracts/src/atlassian-connectors.ts",
+        "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.ts",
+        "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts",
         "packages/keiko-connectors/src/jira-managed-monitoring-mutations.ts",
         "packages/keiko-connectors/src/jira-mutation-failure.ts",
         "packages/keiko-server/src/atlassian/jiraMonitoringDescriptors.ts",
         "packages/keiko-server/src/store/schema.ts"
       ],
       "testFiles": [
+        "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.test.ts",
+        "packages/keiko-server/src/coding-runtime/codingRuntimeStartConfirmation.test.ts",
         "packages/keiko-connectors/src/jira-managed-monitoring-mutations.test.ts",
         "packages/keiko-server/src/atlassian/jiraMonitoringDescriptors.test.ts",
         "packages/keiko-server/src/store/jiraMonitoringMigration.test.ts",
@@ -4642,7 +4687,7 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "5c8e9001262300d9a3a792a6bd5a4c0a7dd6b2afe2b5464d2b27f025411572f8",
+    "sha256": "a39c0267ed9b1f1e6c44a4909af62168c4a5c08ac0f9058b3b1330c332400a75",
     "nativeOperationCount": 244
   },
   "operations": [

@@ -772,6 +772,15 @@ describe("supervised coding action authority", () => {
     });
   });
 
+  it("accepts explicit administration as a write-capable supervised connector scope", () => {
+    const request: CodingWorkbenchPermissionRequest = {
+      ...validPermissionRequest(), kind: "connector-access", actionClass: "connector-access",
+      actionKind: "connector-write", connectorScopes: ["issue-tracker.admin"],
+      scopeLabel: "issue-tracker.admin", risk: "high", policyReason: "approval-required",
+    };
+    expect(validateCodingWorkbenchPermissionRequest(request)).toEqual({ ok: true, value: request });
+  });
+
   it("requires write-capable connector scopes for supervised connector mutations", () => {
     const request: CodingWorkbenchPermissionRequest = {
       ...validPermissionRequest(),
@@ -819,6 +828,7 @@ describe("isCodingWorkbenchEvidenceSafeText", () => {
       "knowledge-base.read",
       "knowledge-base.write",
       "issue-tracker.write",
+      "issue-tracker.admin",
     ]) {
       expect(isCodingWorkbenchEvidenceSafeText(scopeLabel)).toBe(true);
     }
@@ -939,6 +949,18 @@ describe("validateCodingWorkbenchAuthorityEnvelope", () => {
       ok: true,
       value: envelope,
     });
+  });
+
+  it("requires the human-approval gate for administration even without other elevated classes", () => {
+    const parsed = validateCodingWorkbenchAuthorityEnvelope({
+      ...baseAuthorityEnvelope(), actionClasses: ["connector-access"],
+      connectorScopes: ["issue-tracker.admin"], gates: ["verification-green"],
+      commandPolicy: { mode: "deny", allow: [], deny: [] },
+    });
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) expect(parsed.errors).toContain(
+      "authorityEnvelope.gates must include human-approval when authorityEnvelope.actionClasses or connector scopes grant elevated authority",
+    );
   });
 
   it("rejects write and command-capable authority without a human-approval gate", () => {

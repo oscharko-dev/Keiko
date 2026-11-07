@@ -754,14 +754,16 @@ function jiraActionValues<Action extends AtlassianConnectorActionType, Value ext
 // The D4 "Action class" column, verbatim. `connector-access` is the shared
 // `CodingWorkbenchActionClass` that admits connector operations into the Authority Envelope;
 // `connector-write` is the shared `CodingWorkbenchSupervisedActionKind` that marks the write
-// subset (there is deliberately no second Workbench action class for connector writes —
-// ADR-0128 D4 scope-extension note).
-export type AtlassianConnectorActionClass = "connector-access" | "connector-write";
+// subset. Instance administration has its own connector class and explicit admin scope; all
+// writes still share the existing Workbench class and supervised kind (ADR-0128 D4).
+export type AtlassianConnectorActionClass =
+  "connector-access" | "connector-write" | "connector-admin";
 
 export const ATLASSIAN_CONNECTOR_ACTION_CLASSES: readonly AtlassianConnectorActionClass[] =
   Object.freeze([
     "connector-access",
     "connector-write",
+    "connector-admin",
   ] as const satisfies readonly AtlassianConnectorActionClass[]);
 
 export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
@@ -769,13 +771,15 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
 > = Object.freeze({
   ...jiraActionValues(JIRA_MANAGED_READ_TOOLS, "connector-access"),
   ...jiraActionValues(JIRA_PROPERTY_ACTIONS, "connector-write"),
-  "set-app-monitoring": "connector-write",
-  "set-ipd-monitoring": "connector-write",
-  "start-jmx-metrics": "connector-write",
-  "stop-jmx-metrics": "connector-write",
-  "create-screen-tab": "connector-write",
-  "rename-screen-tab": "connector-write",
-  "delete-screen-tab": "connector-write",
+  "set-issue-type-property": "connector-admin",
+  "delete-issue-type-property": "connector-admin",
+  "set-app-monitoring": "connector-admin",
+  "set-ipd-monitoring": "connector-admin",
+  "start-jmx-metrics": "connector-admin",
+  "stop-jmx-metrics": "connector-admin",
+  "create-screen-tab": "connector-admin",
+  "rename-screen-tab": "connector-admin",
+  "delete-screen-tab": "connector-admin",
   "create-project": "connector-write",
   "update-project": "connector-write",
   "create-component": "connector-write",
@@ -865,13 +869,15 @@ export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
 > = Object.freeze({
   ...jiraActionValues(JIRA_MANAGED_READ_TOOLS, "issue-tracker.read"),
   ...jiraActionValues(JIRA_PROPERTY_ACTIONS, "issue-tracker.write"),
-  "set-app-monitoring": "issue-tracker.write",
-  "set-ipd-monitoring": "issue-tracker.write",
-  "start-jmx-metrics": "issue-tracker.write",
-  "stop-jmx-metrics": "issue-tracker.write",
-  "create-screen-tab": "issue-tracker.write",
-  "rename-screen-tab": "issue-tracker.write",
-  "delete-screen-tab": "issue-tracker.write",
+  "set-issue-type-property": "issue-tracker.admin",
+  "delete-issue-type-property": "issue-tracker.admin",
+  "set-app-monitoring": "issue-tracker.admin",
+  "set-ipd-monitoring": "issue-tracker.admin",
+  "start-jmx-metrics": "issue-tracker.admin",
+  "stop-jmx-metrics": "issue-tracker.admin",
+  "create-screen-tab": "issue-tracker.admin",
+  "rename-screen-tab": "issue-tracker.admin",
+  "delete-screen-tab": "issue-tracker.admin",
   "create-project": "issue-tracker.write",
   "update-project": "issue-tracker.write",
   "create-component": "issue-tracker.write",
@@ -907,6 +913,13 @@ export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
   "update-page": "knowledge-base.write",
   "add-page-comment": "knowledge-base.write",
 } as const satisfies Readonly<Record<AtlassianConnectorActionType, CodingWorkbenchConnectorScope>>);
+
+/** Required capability only; the current envelope, mode and effect owner still admit execution. */
+export function jiraRequiredConnectorScope(
+  toolName: JiraManagedReadToolName | JiraMutationOperation,
+): CodingWorkbenchConnectorScope {
+  return ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE[JIRA_MANAGED_ACTION_TYPES[toolName]];
+}
 
 // Risk tiers fixed by ADR-0128 D4: reads are `low`; additive comments are `low`; bounded field
 // edits are `medium`; creating a durable external artifact or triggering workflow side effects
@@ -959,7 +972,7 @@ export const ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK: Readonly<
   "add-page-comment": "low",
 } as const satisfies Readonly<Record<AtlassianConnectorActionType, CodingWorkbenchApprovalRisk>>);
 
-// Both connector action classes admit through the shared `connector-access` Workbench class; the
+// All connector action classes admit through the shared `connector-access` Workbench class; the
 // write subset is additionally identified by the `connector-write` supervised action kind
 // (mirroring `permissionKindForSupervisedCodingAction`). No new Workbench policy vocabulary.
 export const ATLASSIAN_CONNECTOR_WORKBENCH_ACTION_CLASS: Readonly<
@@ -967,6 +980,7 @@ export const ATLASSIAN_CONNECTOR_WORKBENCH_ACTION_CLASS: Readonly<
 > = Object.freeze({
   "connector-access": "connector-access",
   "connector-write": "connector-access",
+  "connector-admin": "connector-access",
 } as const satisfies Readonly<Record<AtlassianConnectorActionClass, CodingWorkbenchActionClass>>);
 
 // KEIKO-0701 follow-up note: this table is intentionally NOT an input to
@@ -999,11 +1013,12 @@ export const ATLASSIAN_CONNECTOR_SUPERVISED_ACTION_KIND: Readonly<
 > = Object.freeze({
   "connector-access": null,
   "connector-write": "connector-write",
+  "connector-admin": "connector-write",
 } as const satisfies Readonly<
   Record<AtlassianConnectorActionClass, CodingWorkbenchSupervisedActionKind | null>
 >);
 
-// Every connector action reaches an external system over HTTPS, so both classes compose through
+// Every connector action reaches an external system over HTTPS, so all classes compose through
 // the shared `internet` resource-scope row (ADR-0128 D4); `delivery` stays reserved for
 // source-control/release actions.
 export const ATLASSIAN_CONNECTOR_WORKBENCH_RESOURCE_SCOPE: Readonly<
@@ -1011,6 +1026,7 @@ export const ATLASSIAN_CONNECTOR_WORKBENCH_RESOURCE_SCOPE: Readonly<
 > = Object.freeze({
   "connector-access": "internet",
   "connector-write": "internet",
+  "connector-admin": "internet",
 } as const satisfies Readonly<
   Record<AtlassianConnectorActionClass, CodingWorkbenchPolicyResourceScope>
 >);
@@ -1022,6 +1038,7 @@ export const ATLASSIAN_CONNECTOR_SCOPE_DENY_REASON: Readonly<
 > = Object.freeze({
   "connector-access": "connector-access-denied",
   "connector-write": "connector-write-denied",
+  "connector-admin": "connector-write-denied",
 } as const satisfies Readonly<
   Record<AtlassianConnectorActionClass, CodingWorkbenchPolicyDenialReason>
 >);

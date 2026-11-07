@@ -107,6 +107,8 @@ export function ChatConnectorsControl({
       selectedServers={chat.mcpServers}
       pods={pods.pods}
       boundPodId={chat.jiraPodBinding?.podId}
+      jiraAdministrationEnabled={!pods.failed && chat.jiraAdministrationEnabled === true}
+      onJiraAdministrationChange={(jiraAdministrationEnabled) => patch.submit({ jiraAdministrationEnabled })}
       loading={servers.loading || pods.loading}
       busy={patch.busy}
       failed={patch.failed || servers.failed || pods.failed}
@@ -116,7 +118,7 @@ export function ChatConnectorsControl({
         onChange: (toolMode) => patch.submit({ toolMode }),
       }}
       onServersChange={(mcpServers) => patch.submit({ mcpServers })}
-      onPodChange={(jiraPodId) => patch.submit({ jiraPodId })}
+      onPodChange={(jiraPodId) => patch.submit({ jiraPodId, jiraAdministrationEnabled: false })}
       onOpen={() => {
         servers.reload();
         pods.reload();
