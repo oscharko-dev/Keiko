@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
+import { useState, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
@@ -15,6 +17,7 @@ import {
   clearPdfCitationPreviewWindowRegistryForTests,
   getPdfCitationPreviewSession,
   openPdfCitationPreviewWindow,
+  replacePdfCitationPreviewWindowSession,
 } from "./pdf-citation-preview-session";
 import { PdfCitationPreviewWindow } from "./PdfCitationPreviewWindow";
 
@@ -483,6 +486,78 @@ describe("PdfCitationPreviewWindow", () => {
     expect(screen.getByRole("group", { name: /pdf preview controls/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /retry page/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /retry preview/i })).not.toBeInTheDocument();
+  });
+
+  // A second citation click replaces the document and moves to another page in one commit. The
+  // outgoing document is destroyed in that commit; pdf.js then rejects every page request of it
+  // with "Transport destroyed". No page of the outgoing document may start drawing at the new page,
+  // or its rejection is shown as a failure of the new document (recorded in the app: pages 3-5
+  // failed after a click from page 1 to page 4).
+  it("draws no page of the replaced document on a second citation click", async () => {
+    const add = vi.fn<Parameters<typeof openPdfCitationPreviewWindow>[0]>(() => "pdf-preview-1");
+    const windowId = openPdfCitationPreviewWindow(add, PREVIEW) ?? "missing";
+    const firstCall = add.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected preview window to open");
+    const firstCfg = firstCall[1] as Record<string, unknown>;
+
+    pdfDocument.numPages = 30;
+    let outgoingDestroyed = false;
+    pdfDocument.getPage.mockImplementation(async () => {
+      await Promise.resolve();
+      if (outgoingDestroyed) throw new Error("Transport destroyed");
+      return page;
+    });
+    const outgoingTask = {
+      promise: Promise.resolve(pdfDocument),
+      destroy: vi.fn(async () => {
+        outgoingDestroyed = true;
+      }),
+    };
+    const incomingDocument = { ...pdfDocument, getPage: vi.fn(async () => page) };
+    vi.mocked(getDocument)
+      .mockReturnValueOnce(outgoingTask as unknown as ReturnType<typeof getDocument>)
+      .mockReturnValueOnce({
+        promise: Promise.resolve(incomingDocument),
+        destroy: vi.fn(async () => {}),
+      } as unknown as ReturnType<typeof getDocument>);
+
+    let showCfg: (cfg: Record<string, unknown>) => void = () => undefined;
+    function Host(): ReactNode {
+      const [cfg, setCfg] = useState(firstCfg);
+      showCfg = setCfg;
+      return <PdfCitationPreviewWindow cfg={cfg} updateCfg={vi.fn()} windowId={windowId} />;
+    }
+    render(<Host />);
+    expect(await screen.findByDisplayValue("2")).toBeInTheDocument();
+
+    // As in the browser, not inside act(): the click commits the new session and page at once, and
+    // the document reset follows in a later task.
+    const actEnvironment = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    actEnvironment.IS_REACT_ACT_ENVIRONMENT = false;
+    try {
+      flushSync(() => {
+        const nextCfg = replacePdfCitationPreviewWindowSession(
+          windowId,
+          {
+            ...PREVIEW,
+            display: { ...PREVIEW.display, pageNumber: 20, pageLabel: "Page 20" },
+            session: { ...PREVIEW.session, handle: "preview-session-3" },
+          },
+          { currentPage: 20 },
+        );
+        showCfg(nextCfg as Record<string, unknown>);
+      });
+      await waitFor(() => expect(incomingDocument.getPage).toHaveBeenCalledWith(1));
+      expect(await screen.findByRole("button", { name: /next/i })).toBeInTheDocument();
+    } finally {
+      actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
+    }
+
+    expect(outgoingTask.destroy).toHaveBeenCalled();
+    expect(pdfDocument.getPage).not.toHaveBeenCalledWith(20);
+    expect(screen.queryByText("Preview failed")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /retry page/i })).not.toBeInTheDocument();
+    await waitFor(() => expect(incomingDocument.getPage).toHaveBeenCalledWith(20));
   });
 
   it("shows only the document with page and zoom controls, and stays axe-clean", async () => {

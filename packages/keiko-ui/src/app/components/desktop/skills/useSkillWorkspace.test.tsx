@@ -137,7 +137,7 @@ const PANE_HEADINGS = new Set(["Chat skills", "Jira templates", "Open a skill or
 function documentHeading(dialog: HTMLElement): HTMLElement | undefined {
   return within(dialog)
     .queryAllByRole("heading", { level: 3 })
-    .find((heading) => !PANE_HEADINGS.has(heading.textContent));
+    .find((heading) => !PANE_HEADINGS.has(heading.textContent ?? ""));
 }
 
 function documentTitle(dialog: HTMLElement): string | null {

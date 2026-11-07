@@ -27,6 +27,9 @@ import {
   openPdfCitationPreviewSession,
   pdfCitationPreviewDocumentUrl,
 } from "@/lib/api";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
+import { bffRequestErrorKind } from "@/lib/http";
 
 import { Icons } from "../../Icons";
 import type { AppWindow } from "../../windows/types";
@@ -395,6 +398,16 @@ function restoredShellFailure(
   };
 }
 
+/** A loaded document and the load that produced it. */
+interface LoadedDocument {
+  readonly load: object;
+  readonly pdf: PdfDocumentProxy;
+}
+
+function documentOfLoad(loaded: LoadedDocument | null, load: object): PdfDocumentProxy | null {
+  return loaded?.load === load ? loaded.pdf : null;
+}
+
 function isRenderingCancelled(error: unknown): boolean {
   return error instanceof Error && error.name === "RenderingCancelledException";
 }
@@ -505,7 +518,7 @@ export function PdfCitationPreviewWindow({
   );
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [defaultPageSize, setDefaultPageSize] = useState<PageSize | null>(null);
-  const [doc, setDoc] = useState<PdfDocumentProxy | null>(null);
+  const [loaded, setLoaded] = useState<LoadedDocument | null>(null);
   const [failure, setFailure] = useState<PreviewFailure | null>(null);
   const [measuredSizes, setMeasuredSizes] = useState<Record<number, PageSize>>({});
   const [numPages, setNumPages] = useState(0);
@@ -568,6 +581,14 @@ export function PdfCitationPreviewWindow({
       retryable: readOptionalBoolean(cfg.failureRetryable) ?? false,
     };
   }, [cfg.failureMessage, cfg.failureRetryable, cfg.failureTitle]);
+  // Every change that reloads the document starts a new load. A document is shown only for the
+  // load that produced it: a second citation click moves to another page and destroys the
+  // outgoing document in the same commit, so no page of that document may start drawing then.
+  const load = useMemo(
+    (): object => ({ failureOverride, reopenAttemptKey, retryToken, sessionEntry, t }),
+    [failureOverride, reopenAttemptKey, retryToken, sessionEntry, t],
+  );
+  const doc = documentOfLoad(loaded, load);
   const scalarIntentControlsEnabled = doc !== null;
   const currentPageSize = measuredSizes[currentPage] ?? defaultPageSize;
   const effectiveScale = useMemo((): number => {
@@ -724,7 +745,7 @@ export function PdfCitationPreviewWindow({
     if (sessionHandle === undefined) {
       setFailure(null);
       setDefaultPageSize(null);
-      setDoc(null);
+      setLoaded(null);
       setNumPages(0);
       setPageRenderFailures({});
       return;
@@ -740,7 +761,7 @@ export function PdfCitationPreviewWindow({
     setMeasuredSizes({});
     setPageRenderFailures({});
     setDefaultPageSize(null);
-    setDoc(null);
+    setLoaded(null);
     setNumPages(0);
     // A new citation's page is held from the start: the outgoing pages still scroll once.
     anchorPageRef.current = currentPageRef.current;
@@ -788,7 +809,7 @@ export function PdfCitationPreviewWindow({
         const firstPage = await pdf.getPage(1);
         const viewport = firstPage.getViewport({ scale: 1 });
         setDefaultPageSize({ width: viewport.width, height: viewport.height });
-        setDoc(pdf);
+        setLoaded({ load, pdf });
         setNumPages(pdf.numPages);
         setShowSlowLoad(false);
       })
@@ -828,13 +849,13 @@ export function PdfCitationPreviewWindow({
     // GEN-PERF-WIDGET-001 — reopenPreview is intentionally read through a ref (above) rather
     // than listed here, so view-only cfg writes that churn its identity no longer re-run this
     // document-load effect. The document reloads only on a genuine session/retry change.
-  }, [failureOverride, reopenAttemptKey, retryToken, sessionEntry, t]);
+  }, [failureOverride, load, reopenAttemptKey, retryToken, sessionEntry, t]);
 
   useEffect(() => {
     return (): void => {
-      void doc?.destroy?.();
+      void loaded?.pdf.destroy?.();
     };
-  }, [doc]);
+  }, [loaded]);
 
   // A loaded document opens on the cited page, and a zoom or rotation keeps the page in view.
   useEffect(() => {
@@ -920,6 +941,11 @@ export function PdfCitationPreviewWindow({
   const failureActionButtonLabel = failureActionLabel(shownFailure, t);
   const handlePageRenderError = useCallback(
     (page: number, error: unknown): void => {
+      // i18n-exempt: body-free diagnostic message for the activity log, never rendered
+      reportClientDiagnostic("PDF citation preview page render failed", {
+        errorKind: bffRequestErrorKind(error),
+        errorEvidence: clientErrorEvidence(error),
+      });
       setPageRenderFailures((previous) => ({
         ...previous,
         [page]: previewFailure(error, t),
