@@ -110924,14 +110924,14 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:325",
+      "site": "packages/keiko-server/src/grounded-qa.ts:326",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:3360",
+      "site": "packages/keiko-server/src/grounded-qa.ts:3361",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -111044,6 +111044,13 @@
       "op": "<dynamic>",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/workspace-manifest-routes.ts:154",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "POST /api/chats/messages/grounded",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/grounded-qa.ts:3628",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -113924,7 +113931,7 @@
     {
       "op": "grounded.memory",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:3760",
+      "site": "packages/keiko-server/src/grounded-qa.ts:3798",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -115376,6 +115383,7 @@
     }
   ],
   "operations": [
+    "POST /api/chats/messages/grounded",
     "POST /api/coding-sidecar/gateway/chat/completions",
     "POST /api/gateway/setup",
     "POST /api/git-delivery/pr/mark-ready/execute",

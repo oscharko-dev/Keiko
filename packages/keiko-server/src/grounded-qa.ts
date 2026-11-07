@@ -19,6 +19,7 @@ import {
   scopeChatToolTurn,
 } from "./chat-tool-runtime.js";
 import { CatalogDispatchFault } from "./tool-catalog/catalogToolErrors.js";
+import { findOwnedJiraPod } from "./atlassian/jiraPodAccess.js";
 import {
   assertCitationRepairTurnActive,
   callGroundedSynthesisModel,
@@ -3557,6 +3558,7 @@ async function executeGroundedAsk(
   multiSource?: MultiSourceSeam,
   hybrid?: HybridSeam,
 ): Promise<RouteResult> {
+  const requestSignal = prepared.signal;
   const generation = new AbortController();
   prepared = { ...prepared, signal: AbortSignal.any([prepared.signal, generation.signal]) };
   const result = await runSerializedChatTurn(
@@ -3593,7 +3595,43 @@ async function executeGroundedAsk(
     },
     generation,
   );
-  return result === CHAT_TURN_WAIT_CANCELLED ? groundedCancelledResult() : result;
+  return result === CHAT_TURN_WAIT_CANCELLED
+    ? groundedInterruptedResult(prepared, deps, requestSignal)
+    : result;
+}
+
+function groundedInterruptedResult(
+  prepared: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+  requestSignal: AbortSignal,
+): RouteResult {
+  // A revoked Jira binding stops work immediately; its authentication failure must still reach
+  // the human. An explicit disconnect or an unrelated source change remains a cancellation.
+  const binding = prepared.chat.jiraPodBinding;
+  const currentBinding = deps.store.findChatById(prepared.chat.id)?.jiraPodBinding;
+  if (requestSignal.aborted || binding === undefined || currentBinding?.podId !== binding.podId)
+    return groundedCancelledResult();
+  const credential = findOwnedJiraPod(deps, binding.podId);
+  if (
+    credential?.livePod.verificationStatus !== "auth-failed" ||
+    credential.generation <= binding.authenticationGeneration ||
+    currentBinding.authenticationGeneration !== credential.generation
+  )
+    return groundedCancelledResult();
+  const code = "JIRA_AUTHENTICATION_FAILED";
+  const message =
+    "Jira authentication failed. Check the connection in Settings and verify it again.";
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId: correlationIdOrUnknown(prepared.correlationId),
+      operation: "POST /api/chats/messages/grounded",
+      source: "grounded.qa.jira-authentication",
+      error: Object.assign(new Error(message), { code }),
+      redact: () => message,
+    }),
+  );
+  return { status: 409, body: errorBody(code, message, prepared.correlationId) };
 }
 
 function groundedCancelledResult(): RouteResult {

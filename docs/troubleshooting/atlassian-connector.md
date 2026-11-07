@@ -35,6 +35,14 @@ when a lifecycle request's response is uncertain. Removing the Pod deletes its c
 bindings. See the [Live Pod guide](../local-knowledge/atlassian-connector-guide.md#jira-live-pods-in-chat)
 for the first-read disclosure, per-action write approvals and current platform limits.
 
+When an authenticated Jira read returns `401` or identifies the caller as anonymous, custody
+revokes the current generation and stops the Chat turn. A grounded Chat reports
+`JIRA_AUTHENTICATION_FAILED` so the person can repair and reverify the connection; it does not
+retry the request or conceal this failure as ordinary cancellation. Closing the request,
+removing the Pod or changing the Chat's mode still cancels the turn normally. Start with the
+body-free `atlassian.connection.checked` authentication outcome and the correlated structured
+grounded-request diagnostic when investigating this distinction.
+
 Data Center verification additionally reports `unsupported-version` for a deployment other than
 Server or Data Center, a release below 10.3.0, or inconsistent numeric release information from
 REST-v2 `serverInfo`. Later coherent releases can pass the REST-v2 and identity probes; this does
