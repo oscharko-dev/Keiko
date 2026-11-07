@@ -132,6 +132,71 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
 
   "chat.jira.resultUnavailable": "Result unavailable",
   "chat.jira.partial": "Partial Jira result. Some available data is not included.",
+  "chat.jira.outcome.results": "Jira results",
+  "chat.jira.outcome.problems": "What Jira said",
+  "chat.jira.outcome.more": "Show {count} more results",
+  "chat.jira.outcome.newTab": "(opens Jira in a new tab)",
+  "chat.jira.outcome.returned": "Returned results: {count}.",
+  "chat.jira.outcome.returnedTotal": "{count} of {total} results returned.",
+  "chat.jira.outcome.staged": "Issues in the saved draft: {count}.",
+  "chat.jira.outcome.unresolved": "Draft references still unresolved: {count}.",
+  "chat.jira.outcome.unreadable": "Saved results without readable details: {count}.",
+  "chat.jira.outcome.required": "Required",
+  "chat.jira.outcome.optional": "Optional",
+  "chat.jira.outcome.active": "Active",
+  "chat.jira.outcome.inactive": "Inactive",
+  "chat.jira.outcome.state.pending": "Pending",
+  "chat.jira.outcome.state.created": "Created",
+  "chat.jira.outcome.state.existing": "Already exists",
+  "chat.jira.outcome.state.failed": "Failed",
+  "chat.jira.outcome.state.uncertain": "Uncertain",
+  "chat.jira.outcome.state.skipped": "Skipped",
+  "chat.jira.outcome.state.excluded": "Excluded",
+  "chat.jira.outcome.validation.required-field":
+    "A required Jira field was missing, so nothing was sent. Fill it in before requesting the change again.",
+  "chat.jira.outcome.validation.unsupported-field":
+    "A required Jira field cannot be filled from Keiko. Review that field in Jira before requesting the change again.",
+  "chat.jira.outcome.validation.invalid-field":
+    "A Jira field has an invalid value. Correct it before requesting the change again.",
+  "chat.jira.outcome.validation.invalid-operation":
+    "The requested field change is not available. Review the permitted changes in Jira.",
+  "chat.jira.outcome.validation.bounds-exceeded":
+    "The change was too large to send. Reduce its scope before requesting it again.",
+  "chat.jira.outcome.rules": "Template rules not met",
+  "chat.jira.outcome.rule.summary-too-short": "The summary is too short.",
+  "chat.jira.outcome.rule.summary-too-long": "The summary is too long.",
+  "chat.jira.outcome.rule.summary-pattern": "The summary does not follow the required pattern.",
+  "chat.jira.outcome.rule.section-missing": "The description lacks the section “{subject}”.",
+  "chat.jira.outcome.rule.section-empty": "The section “{subject}” is empty.",
+  "chat.jira.outcome.rule.field-missing": "The field “{subject}” is required.",
+  "chat.jira.outcome.rule.field-unavailable":
+    "The field “{subject}” is unavailable in this Jira project.",
+  "chat.jira.outcome.rule.label-missing": "The label “{subject}” is required.",
+  "chat.jira.outcome.rule.label-pattern": "A label does not follow the required pattern.",
+  "chat.jira.outcome.rule.label-count": "The number of labels does not meet the template rule.",
+  "chat.jira.outcome.rule.parent-missing": "The issue needs a parent ({subject}).",
+  "chat.jira.outcome.rule.template-unreadable":
+    "The template could not be read. Check it before requesting the change again.",
+  "chat.jira.outcome.failure.auth":
+    "Verify the Jira Pod connection and its credentials before trying again.",
+  "chat.jira.outcome.failure.permission":
+    "Check the Jira account's permission for the requested project and action.",
+  "chat.jira.outcome.failure.notFound":
+    "Check that the requested Jira issue or project exists and is visible to this account.",
+  "chat.jira.outcome.failure.rateLimited":
+    "Jira limited requests. Wait before making another request.",
+  "chat.jira.outcome.failure.conflict":
+    "The Jira state changed. Read the current issue before requesting another change.",
+  "chat.jira.outcome.failure.transition":
+    "This status transition is unavailable. Read the issue's current transitions.",
+  "chat.jira.outcome.failure.bounds":
+    "The requested result exceeded a limit. Narrow the request or request a smaller page.",
+  "chat.jira.outcome.failure.response":
+    "Jira returned an unreadable response. Check the Jira connection and requested operation.",
+  "chat.jira.outcome.failure.fields":
+    "Review the required Jira fields and template rules before requesting the change again.",
+  "chat.jira.outcome.failure.unavailable":
+    "The Jira result is unavailable. Check the connection and the remote state before making another request.",
   "chat.requirements.tool": "Requirements",
   "chat.requirements.details": "View requirements",
   "chat.requirements.partial": "Partial list. Some requirements are not included.",

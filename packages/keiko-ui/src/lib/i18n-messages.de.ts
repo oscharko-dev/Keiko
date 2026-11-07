@@ -533,6 +533,11 @@ export const DE_MESSAGES = {
     "Die verbundenen Quellen haben sich zwischenzeitlich geändert. Die Anfrage wurde nicht mit einer veralteten Quellenliste ausgeführt.",
   "chat.error.scopeChanged.remediation":
     "Prüfe die aktuellen Quellen des Chats und sende deine Anfrage anschließend erneut.",
+  "chat.error.jiraAuthentication.title": "Jira-Anmeldung fehlgeschlagen",
+  "chat.error.jiraAuthentication.message":
+    "Die Jira-Verbindung konnte nicht authentifiziert werden.",
+  "chat.error.jiraAuthentication.remediation":
+    "Prüfe die Jira-Verbindung erneut im Knowledge Pods Hub. Prüfe vor einer weiteren Änderung den Stand in Jira.",
   "chat.error.gatewayTimeout.title": "Das Modell-Gateway hat nicht rechtzeitig geantwortet",
   "chat.error.gatewayTimeout.message":
     "Das Modell-Gateway hat die Anfrage nicht innerhalb von Keikos Wartezeit abgeschlossen. Keiko wartet bei einem langsamen Gateway minutenlang; das bedeutet in der Regel, dass das Gateway oder das Modell hängt – nicht, dass die Anfrage zu groß war.",

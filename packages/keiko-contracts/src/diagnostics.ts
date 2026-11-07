@@ -1063,6 +1063,7 @@ export const CLIENT_STAGE_IDS = [
   "model selection availability",
   "markdown copy feedback",
   "transcript navigation",
+  "jira result presentation",
   "browser approval",
   "knowledge pod selection",
 ] as const;

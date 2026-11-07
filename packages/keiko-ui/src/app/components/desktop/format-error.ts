@@ -141,6 +141,11 @@ interface GatewayErrorKeys {
 }
 
 const GATEWAY_ERROR_KEYS: Readonly<Record<string, GatewayErrorKeys>> = {
+  JIRA_AUTHENTICATION_FAILED: {
+    title: "chat.error.jiraAuthentication.title",
+    message: "chat.error.jiraAuthentication.message",
+    remediation: "chat.error.jiraAuthentication.remediation",
+  },
   CONVERSATION_MODEL_NOT_READY: {
     title: "chat.error.modelNotReady.title",
     message: "chat.error.modelNotReady.message",

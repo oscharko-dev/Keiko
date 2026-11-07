@@ -303,8 +303,16 @@ async function expectDeadlineReceipt(page: Page, region: Locator, key: string): 
   });
   await expect(region.getByText("Jira change confirmed", { exact: true })).toHaveCount(0);
   await expect(region.locator('[data-role="assistant"] .chat-msg-content')).toContainText(key);
-  await region.getByText("View Jira result", { exact: true }).last().click();
-  await expect(region.locator("pre").last()).toContainText(key);
+  const receipt = region
+    .getByRole("region", { name: "Jira action", exact: true })
+    .filter({
+      hasText: "Jira accepted the change; confirmation incomplete",
+    })
+    .last();
+  const results = receipt.getByRole("list", { name: "Jira results", exact: true });
+  await expect(results).toContainText(key);
+  await expect(results.getByText("Uncertain", { exact: true })).toBeVisible();
+  await expect(receipt.locator("pre")).toHaveCount(0);
 }
 
 async function reconcileDeadlineDraft(page: Page, region: Locator, writes: number): Promise<void> {
