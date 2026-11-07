@@ -339,3 +339,16 @@ freshness gate passes. The original Editor evidence producer and its freshness g
 against the same Linux production export; its committed record remains byte-identical. This
 qualifies updater presentation and the declared BFF recovery fixture, not real Jira compatibility
 or native update installation.
+
+## Jira result and template guidance — 2026-11-07 (#4290, #4291)
+
+The readable Jira results, authentication guidance and explicit template save labels changed all
+four English/German message catalogs. The original producer ran from signed head `3d0551c3f`
+after a fresh production package/UI build in the Linux arm64 gates container, with an init
+process, Node 24.18.0, npm 11.16.0, Playwright 1.64.1, Chromium build 1248 and Liberation fonts.
+All nine canonical cases passed in 1.6 minutes, including the real-BFF outage case. The unchanged
+freshness gate passes. The three generated records rebind the four catalog digests; all other
+declared source and harness hashes are unchanged. Only the progress and mocked reconnect PNGs
+changed bytes and were visually inspected; the remaining twelve captures are byte-identical.
+No updater behavior, threshold or baseline changed. This remains updater fixture evidence,
+not Jira workflow acceptance or native update installation.
