@@ -41,6 +41,7 @@ import {
   JIRA_PROJECT_ASSOCIATION_TOOLS,
   jiraProjectAssociationDetails,
 } from "./jira-project-association-presentation";
+import { JIRA_CORE_METADATA_TOOLS, jiraCoreMetadataDetails } from "./jira-core-metadata-presentation";
 
 export interface JiraOutcomeItem {
   readonly key?: string;
@@ -96,6 +97,7 @@ const STANDALONE_TOOLS = new Set([
   ...JIRA_DIRECTORY_TOOLS,
   ...JIRA_ACCESS_TOOLS,
   ...JIRA_PROJECT_ASSOCIATION_TOOLS,
+  ...JIRA_CORE_METADATA_TOOLS,
 ]);
 const BOARD_READ_TOOLS = new Set(["jira_board", "jira_boards", "jira_board_configuration"]);
 type UnknownRecord = Readonly<Record<string, unknown>>;
@@ -230,6 +232,7 @@ function boardContextLink(tool: string, source: UnknownRecord): string | undefin
 }
 function configurationDetails(tool: string, source: UnknownRecord): readonly JiraAgileDetails[] | undefined {
   if (JIRA_ACCESS_TOOLS.has(tool)) return jiraAccessDetails(tool, source);
+  if (JIRA_CORE_METADATA_TOOLS.has(tool)) return jiraCoreMetadataDetails(tool, source);
   return JIRA_PROJECT_ASSOCIATION_TOOLS.has(tool)
     ? jiraProjectAssociationDetails(tool, source)
     : undefined;

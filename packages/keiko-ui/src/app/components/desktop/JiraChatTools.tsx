@@ -37,6 +37,7 @@ import { JIRA_ADMINISTRATION_TOOLS } from "./jira-administration-presentation";
 import { JIRA_DIRECTORY_TOOLS } from "./jira-directory-presentation";
 import { JIRA_ACCESS_TOOLS } from "./jira-access-presentation";
 import { JIRA_PROJECT_ASSOCIATION_TOOLS } from "./jira-project-association-presentation";
+import { JIRA_CORE_METADATA_TOOLS } from "./jira-core-metadata-presentation";
 import { JIRA_PARTICIPATION_TOOLS } from "./jira-participation-presentation";
 import { JIRA_FILE_METADATA_TOOLS } from "./jira-file-metadata-presentation";
 import { JIRA_SAVED_VIEW_TOOLS } from "./jira-saved-view-presentation";
@@ -282,6 +283,7 @@ function resultCardSemantics(exchange: ChatToolExchange): {
     JIRA_DIRECTORY_TOOLS,
     JIRA_ACCESS_TOOLS,
     JIRA_PROJECT_ASSOCIATION_TOOLS,
+    JIRA_CORE_METADATA_TOOLS,
   ].some((tools) => tools.has(exchange.call.name))
     ? { tag: "div", role: "group", label: jiraToolLabel(exchange) }
     : { tag: "section", role: undefined, label: jiraToolRegionLabel(exchange) };

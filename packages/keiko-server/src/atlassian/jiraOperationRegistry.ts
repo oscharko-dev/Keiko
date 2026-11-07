@@ -19,6 +19,7 @@ type CompositeTool = "jira.report" | "jira.draft-stage" | "jira.draft";
 type NativeTool = Exclude<JiraOperationTool, CompositeTool>;
 type JiraOperationEffect = "remote-read" | "remote-write" | "local-report" | "local-draft";
 type JiraPermissionPolicy =
+  | "visible-issue-metadata"
   | "visible-permission-configuration"
   | "visible-security-configuration"
   | "visible-notification-configuration"
@@ -146,6 +147,23 @@ function writes<const K extends NativeTool>(
   return result as NativeGroup<K>;
 }
 const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
+  ...reads("visible-issue-metadata", {
+    "jira.global-issue-types": "/issuetype",
+    "jira.issue-type": "/issuetype/{id}",
+    "jira.issue-type-page": "/issuetype/page",
+    "jira.issue-type-alternatives": "/issuetype/{id}/alternatives",
+    "jira.priorities": "/priority",
+    "jira.priority": "/priority/{id}",
+    "jira.priority-page": "/priority/page",
+    "jira.resolutions": "/resolution",
+    "jira.resolution": "/resolution/{id}",
+    "jira.resolution-page": "/resolution/page",
+    "jira.statuses": "/status",
+    "jira.status": "/status/{idOrName}",
+    "jira.status-page": "/status/page",
+    "jira.status-categories": "/statuscategory",
+    "jira.status-category": "/statuscategory/{idOrKey}",
+  }),
   ...reads("visible-permission-configuration", {
     "jira.project-permission-scheme": "/project/{projectKeyOrId}/permissionscheme",
     "jira.permission-schemes": "/permissionscheme",
@@ -256,6 +274,11 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
   ...reads("visible-filters", { "jira.filter": "/filter/{id}", "jira.favourite-filters": "/filter/favourite" }),
   ...reads("visible-projects", { "jira.projects": "/project" }),
   ...reads("current-project-metadata", {
+    "jira.project-categories": "/projectCategory",
+    "jira.project-category": "/projectCategory/{id}",
+    "jira.project-statuses": "/project/{projectIdOrKey}/statuses",
+    "jira.project-types": "/project/type",
+    "jira.project-type-definition": "/project/type/{projectTypeKey}",
     "jira.project": "/project/{projectIdOrKey}",
     "jira.project-workflow-scheme": "/project/{projectKeyOrId}/workflowscheme",
     "jira.project-priority-scheme": "/project/{projectKeyOrId}/priorityscheme",

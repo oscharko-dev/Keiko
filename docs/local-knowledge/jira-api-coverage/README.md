@@ -123,10 +123,10 @@ to Chat or Coding, grant authority, or bypass those owners.
 
 ## Current constrained implementation snapshot
 
-The current registry supplies **116 native identities: 87 reads and 29 writes**. Each is mapped to
+The current registry supplies **136 native identities: 107 reads and 29 writes**. Each is mapped to
 its exact published method/path identity and remains `partial`: the closed typed operation exposes
 only the documented supported fields and behavior, rather than the entire upstream API contract.
-The other **323 operations remain `not-implemented`**. No row is marked fully implemented,
+The other **303 operations remain `not-implemented`**. No row is marked fully implemented,
 executable, owner-deferred or excluded by this snapshot. All 439 source/version IDs, cluster
 assignments, dependencies and qualification fields are retained.
 
@@ -136,7 +136,7 @@ the C6 comment-update/link/worklog read increment; bounded C8 attachment/archive
 worklog create/update with connected-user watching/voting; fourteen C9 workflow-/issue-type-scheme
 and screen reads; three reviewed comment/attachment/worklog deletions; and eight C10 user, group and
 application-role reads; ten permission/security/notification configuration reads; and five additional
-project scheme/accessible-security associations. The three existing
+project scheme/accessible-security associations; and twenty core issue/project metadata reads. The three existing
 report/draft composites remain compositions, not extra native API identities. Remaining filter
 creation, ranking, other estimate-adjustment modes and destructive operations, administration and
 other inventory gaps stay open. A registered declaration is not evidence that
@@ -181,6 +181,15 @@ They reuse existing DTO/mapping projections. Accessible security-level totals de
 current user's visible result; an empty list may reflect missing Set Issue Security permission and
 never proves that no security levels are configured. No association is changed.
 
+Twenty core metadata reads expose global issue types and compatible alternatives, priorities,
+resolutions, statuses/categories, project categories/types and grouped project statuses. Native
+paged endpoints retain their observed envelope and optional totals; unpaged native lists use the
+existing local pagination owner. Optional classifications, category names and grouped statuses
+remain unknown when omitted. Resolution IDs are not fabricated from URLs when the documented
+representation omits them. Project statuses require an independently read canonical project.
+Icons, SVG and remote links are omitted; observed metadata grants no administration or migration
+authority and does not prove project-type license availability.
+
 `currentRegistry` pins the existing server registry source file's SHA-256 and native declaration
 count. The reconciliation helper parses that file's literal `NATIVE` declarations and verified closed
 `reads`/`writes` group builders with TypeScript's AST;
@@ -194,7 +203,7 @@ not claims that those tests ran on the current head. `verificationReferences` re
 actual operation-level qualification is recorded. The registry digest is source accounting, not a
 replacement for the runtime's immutable operation contract digest or one-use approval binding.
 
-The current deletion, directory and configuration metadata deltas were edited directly during the explicit code-only
+The current deletion, directory, configuration and core metadata deltas were edited directly during the explicit code-only
 period.
 Its registry digest is source-file bookkeeping, not a validation result. Inventory reconciliation,
 checks and final current-head verification remain pending until the permitted final verification

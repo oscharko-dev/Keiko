@@ -32,6 +32,50 @@ const CREATE = {
 };
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
+  { tool: "jira.global-issue-types", args: { startAt: 0, maxResults: 1 } },
+  { tool: "jira.issue-type", args: { issueTypeId: "10001" }, parameters: { id: "10001" } },
+  {
+    tool: "jira.issue-type-page",
+    args: { startAt: 0, maxResults: 1, query: "Story + QA", projectIds: ["9223372036854775807"] },
+    query: { startAt: "0", maxResults: "1", query: "Story + QA", projectIds: "9223372036854775807" },
+  },
+  {
+    tool: "jira.issue-type-alternatives", args: { issueTypeId: "10001", startAt: 0, maxResults: 1 },
+    parameters: { id: "10001" },
+  },
+  { tool: "jira.priorities", args: { startAt: 0, maxResults: 1 } },
+  { tool: "jira.priority", args: { priorityId: "3" }, parameters: { id: "3" } },
+  {
+    tool: "jira.priority-page",
+    args: { startAt: 0, maxResults: 1, query: "Normal", projectIds: ["10000"] },
+    query: { startAt: "0", maxResults: "1", query: "Normal", projectIds: "10000" },
+  },
+  { tool: "jira.resolutions", args: { startAt: 0, maxResults: 1 } },
+  { tool: "jira.resolution", args: { resolutionId: "41" }, parameters: { id: "41" } },
+  {
+    tool: "jira.resolution-page", args: { startAt: 0, maxResults: 1, query: "Fixed" },
+    query: { startAt: "0", maxResults: "1", query: "Fixed" },
+  },
+  { tool: "jira.statuses", args: { startAt: 0, maxResults: 1 } },
+  {
+    tool: "jira.status", args: { statusIdOrName: "In Progress + QA" },
+    parameters: { idOrName: "In Progress + QA" },
+  },
+  {
+    tool: "jira.status-page",
+    args: { startAt: 0, maxResults: 1, query: "In Progress", projectIds: ["10000"], issueTypeIds: ["10001"] },
+    query: { startAt: "0", maxResults: "1", query: "In Progress", projectIds: "10000", issueTypeIds: "10001" },
+  },
+  { tool: "jira.status-categories", args: { startAt: 0, maxResults: 1 } },
+  { tool: "jira.status-category", args: { statusCategoryIdOrKey: "indeterminate" }, parameters: { idOrKey: "indeterminate" } },
+  { tool: "jira.project-categories", args: { startAt: 0, maxResults: 1 } },
+  { tool: "jira.project-category", args: { projectCategoryId: "51" }, parameters: { id: "51" } },
+  {
+    tool: "jira.project-statuses", args: { projectIdOrKey: "SYN", startAt: 0, maxResults: 1 },
+    parameters: { projectIdOrKey: "10000" }, primaryMethodIndex: 1,
+  },
+  { tool: "jira.project-types", args: { startAt: 0, maxResults: 1 } },
+  { tool: "jira.project-type-definition", args: { projectTypeKey: "software" }, parameters: { projectTypeKey: "software" } },
   {
     tool: "jira.project-permission-scheme",
     args: { projectIdOrKey: "SYN" },
@@ -669,7 +713,7 @@ function administrationRead(
   path: string,
   absoluteUrl: string,
 ): AtlassianHttpBodyResult | undefined {
-  const directory = directoryRead(path) ?? accessRead(path);
+  const directory = directoryRead(path) ?? accessRead(path) ?? coreMetadataRead(path);
   if (directory !== undefined) return directory;
   const type = { id: "1", name: "Task", subtask: false };
   const scheme = { id: "37", name: "Delivery", issueTypes: [type], defaultIssueType: type };
@@ -737,6 +781,30 @@ function directoryRead(path: string): AtlassianHttpBodyResult | undefined {
     "groups/picker": { groups: [{ name: "R&D team", html: "<b>ignored</b>" }], total: 2 },
     applicationrole: [role],
     "applicationrole/jira-software": role,
+  };
+  return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
+}
+function coreMetadataRead(path: string): AtlassianHttpBodyResult | undefined {
+  const type = { id: "10001", name: "Story", description: "Story metadata", subtask: false, avatarId: 71 };
+  const priority = { id: "3", name: "Normal", statusColor: "#123456" };
+  const resolution = { name: "Fixed", description: "Resolution metadata" };
+  const category = { id: 4, key: "indeterminate", name: "In progress", colorName: "yellow" };
+  const status = { id: "5", name: "In Progress + QA", statusCategory: category };
+  const projectCategory = { id: "51", name: "Engineering" };
+  const projectType = { key: "software", formattedKey: "Software", descriptionI18nKey: "project.type.software.description" };
+  const page = (item: unknown): Record<string, unknown> => ({
+    values: [item], startAt: 0, maxResults: 1, isLast: false,
+  });
+  const bodies: Readonly<Record<string, unknown>> = {
+    issuetype: [type], "issuetype/10001": type, "issuetype/page": page(type),
+    "issuetype/10001/alternatives": [{ id: "10002", name: "Task", subtask: false }],
+    priority: [priority], "priority/3": priority, "priority/page": page(priority),
+    resolution: [resolution], "resolution/41": resolution, "resolution/page": page(resolution),
+    status: [status], "status/In%20Progress%20%2B%20QA": status, "status/page": page(status),
+    statuscategory: [category], "statuscategory/indeterminate": category,
+    projectCategory: [projectCategory], "projectCategory/51": projectCategory,
+    "project/10000/statuses": [{ id: "10001", name: "Story", subtask: false, statuses: [status] }],
+    "project/type": [projectType], "project/type/software": projectType,
   };
   return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
 }
@@ -926,7 +994,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(98);
+    expect(native).toHaveLength(118);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),
@@ -937,6 +1005,19 @@ describe("native Jira registry and real connector transport agreement", () => {
     assertPrimary(observed, scenario);
     const writes = observed.requests.filter((request) => request.method !== "GET");
     expect(writes).toHaveLength(observed.definition.method === "GET" ? 0 : 1);
+  });
+  it("keeps repeated metadata filters lossless on the native status page", async () => {
+    const observed = await observe({
+      tool: "jira.status-page",
+      args: { startAt: 0, maxResults: 1, projectIds: ["10000", "9223372036854775807"], issueTypeIds: ["10001", "9007199254740993"] },
+    });
+    const request = observed.requests[0];
+    if (request === undefined) throw new TypeError("Missing metadata page request");
+    const url = new URL(request.url);
+    expect(url.pathname).toBe("/context/rest/api/2/status/page");
+    expect(url.searchParams.getAll("projectIds")).toEqual(["10000", "9223372036854775807"]);
+    expect(url.searchParams.getAll("issueTypeIds")).toEqual(["10001", "9007199254740993"]);
+    expect(observed.requests).toHaveLength(1);
   });
   it.each(["jira.create", "jira.edit"] as const)(
     "keeps %s's approved link continuation on POST issueLink",

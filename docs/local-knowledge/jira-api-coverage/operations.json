@@ -747,6 +747,27 @@
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-comments.ts"],
       "testFiles": ["packages/keiko-connectors/src/jira-managed-comments.test.ts"]
     },
+    "jira.global-issue-types": {
+      "identity": "GET /rest/api/2/issuetype",
+      "effect": "read",
+      "permissionPolicy": "visible-issue-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. Bounded complete native arrays are locally paginated; no unpublished remote paging parameters.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.ts",
+        "packages/keiko-connectors/src/jira-core-metadata-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.group-members": {
       "identity": "GET /rest/api/2/group/member",
       "effect": "read",
@@ -835,6 +856,69 @@
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-access-schemes.test.ts",
         "packages/keiko-server/src/atlassian/jiraAccessDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.issue-type": {
+      "identity": "GET /rest/api/2/issuetype/{id}",
+      "effect": "read",
+      "permissionPolicy": "visible-issue-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. The selected identity is matched to observed native identity when supplied; no path or header selector.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.ts",
+        "packages/keiko-connectors/src/jira-core-metadata-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.issue-type-alternatives": {
+      "identity": "GET /rest/api/2/issuetype/{id}/alternatives",
+      "effect": "read",
+      "permissionPolicy": "visible-issue-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. Bounded complete native arrays are locally paginated; no unpublished remote paging parameters. Compatible alternative issue types are observed metadata, not migration authority.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.ts",
+        "packages/keiko-connectors/src/jira-core-metadata-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.issue-type-page": {
+      "identity": "GET /rest/api/2/issuetype/page",
+      "effect": "read",
+      "permissionPolicy": "visible-issue-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. Native startAt/maxResults/isLast envelope with optional total and only published typed query filters; exact repeated ID strings are never rounded.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.ts",
+        "packages/keiko-connectors/src/jira-core-metadata-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
@@ -1012,6 +1096,69 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.priorities": {
+      "identity": "GET /rest/api/2/priority",
+      "effect": "read",
+      "permissionPolicy": "visible-issue-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. Bounded complete native arrays are locally paginated; no unpublished remote paging parameters.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.ts",
+        "packages/keiko-connectors/src/jira-core-metadata-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.priority": {
+      "identity": "GET /rest/api/2/priority/{id}",
+      "effect": "read",
+      "permissionPolicy": "visible-issue-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. The selected identity is matched to observed native identity when supplied; no path or header selector.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.ts",
+        "packages/keiko-connectors/src/jira-core-metadata-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.priority-page": {
+      "identity": "GET /rest/api/2/priority/page",
+      "effect": "read",
+      "permissionPolicy": "visible-issue-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. Native startAt/maxResults/isLast envelope with optional total and only published typed query filters; exact repeated ID strings are never rounded.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.ts",
+        "packages/keiko-connectors/src/jira-core-metadata-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.project": {
       "identity": "GET /rest/api/2/project/{projectIdOrKey}",
       "effect": "read",
@@ -1034,6 +1181,48 @@
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-avatar-reads.test.ts",
         "packages/keiko-server/src/atlassian/jiraAssetDescriptors.test.ts"
+      ]
+    },
+    "jira.project-categories": {
+      "identity": "GET /rest/api/2/projectCategory",
+      "effect": "read",
+      "permissionPolicy": "current-project-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. Bounded complete native arrays are locally paginated; no unpublished remote paging parameters.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.ts",
+        "packages/keiko-connectors/src/jira-core-metadata-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.project-category": {
+      "identity": "GET /rest/api/2/projectCategory/{id}",
+      "effect": "read",
+      "permissionPolicy": "current-project-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. The selected identity is matched to observed native identity when supplied; no path or header selector.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.ts",
+        "packages/keiko-connectors/src/jira-core-metadata-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
     "jira.project-issue-security-scheme": {
@@ -1140,6 +1329,28 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.project-statuses": {
+      "identity": "GET /rest/api/2/project/{projectIdOrKey}/statuses",
+      "effect": "read",
+      "permissionPolicy": "current-project-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. The selected identity is matched to observed native identity when supplied; no path or header selector. Independent project read binds canonical ID/key before the native grouped status read; absent nested statuses are unknown and explicit empty lists remain empty.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.ts",
+        "packages/keiko-connectors/src/jira-core-metadata-values.ts",
+        "packages/keiko-connectors/src/jira-managed-projects.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.project-type": {
       "identity": "GET /rest/api/2/project/type/{projectTypeKey}/accessible",
       "effect": "read",
@@ -1148,6 +1359,48 @@
       "constraints": "One native accessible project-type result; no template, board or workflow configuration discovery.",
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-projects.ts"],
       "testFiles": ["packages/keiko-connectors/src/jira-managed-projects.test.ts"]
+    },
+    "jira.project-type-definition": {
+      "identity": "GET /rest/api/2/project/type/{projectTypeKey}",
+      "effect": "read",
+      "permissionPolicy": "current-project-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. The selected identity is matched to observed native identity when supplied; no path or header selector. Project-type color and descriptionI18nKey are plain native facts; embedded SVG is omitted and license availability is not inferred.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.ts",
+        "packages/keiko-connectors/src/jira-core-metadata-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.project-types": {
+      "identity": "GET /rest/api/2/project/type",
+      "effect": "read",
+      "permissionPolicy": "current-project-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. Bounded complete native arrays are locally paginated; no unpublished remote paging parameters. Project-type color and descriptionI18nKey are plain native facts; embedded SVG is omitted and license availability is not inferred.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.ts",
+        "packages/keiko-connectors/src/jira-core-metadata-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
     },
     "jira.project-workflow-scheme": {
       "identity": "GET /rest/api/2/project/{projectKeyOrId}/workflowscheme",
@@ -1177,6 +1430,69 @@
       "constraints": "Validated id/key/name projection only; locally paginated after a bounded unpaginated response; no project creation or settings.",
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-tools.ts"],
       "testFiles": ["packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"]
+    },
+    "jira.resolution": {
+      "identity": "GET /rest/api/2/resolution/{id}",
+      "effect": "read",
+      "permissionPolicy": "visible-issue-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. The selected identity is matched to observed native identity when supplied; no path or header selector. Resolution IDs can be omitted by the documented native DTO and are never inferred from self URLs; requested single resolutionId is separate context.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.ts",
+        "packages/keiko-connectors/src/jira-core-metadata-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.resolution-page": {
+      "identity": "GET /rest/api/2/resolution/page",
+      "effect": "read",
+      "permissionPolicy": "visible-issue-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. Native startAt/maxResults/isLast envelope with optional total and only published typed query filters; exact repeated ID strings are never rounded. Resolution IDs can be omitted by the documented native DTO and are never inferred from self URLs; requested single resolutionId is separate context.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.ts",
+        "packages/keiko-connectors/src/jira-core-metadata-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.resolutions": {
+      "identity": "GET /rest/api/2/resolution",
+      "effect": "read",
+      "permissionPolicy": "visible-issue-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. Bounded complete native arrays are locally paginated; no unpublished remote paging parameters. Resolution IDs can be omitted by the documented native DTO and are never inferred from self URLs; requested single resolutionId is separate context.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.ts",
+        "packages/keiko-connectors/src/jira-core-metadata-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
     },
     "jira.screen-available-fields": {
       "identity": "GET /rest/api/2/screens/{screenId}/availableFields",
@@ -1338,6 +1654,111 @@
         "packages/keiko-connectors/src/jira-agile-projection.ts"
       ],
       "testFiles": ["packages/keiko-connectors/src/jira-agile-reads.test.ts"]
+    },
+    "jira.status": {
+      "identity": "GET /rest/api/2/status/{idOrName}",
+      "effect": "read",
+      "permissionPolicy": "visible-issue-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. The selected identity is matched to observed native identity when supplied; no path or header selector.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.ts",
+        "packages/keiko-connectors/src/jira-core-metadata-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.status-categories": {
+      "identity": "GET /rest/api/2/statuscategory",
+      "effect": "read",
+      "permissionPolicy": "visible-issue-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. Bounded complete native arrays are locally paginated; no unpublished remote paging parameters.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.ts",
+        "packages/keiko-connectors/src/jira-core-metadata-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.status-category": {
+      "identity": "GET /rest/api/2/statuscategory/{idOrKey}",
+      "effect": "read",
+      "permissionPolicy": "visible-issue-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. The selected identity is matched to observed native identity when supplied; no path or header selector.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.ts",
+        "packages/keiko-connectors/src/jira-core-metadata-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.status-page": {
+      "identity": "GET /rest/api/2/status/page",
+      "effect": "read",
+      "permissionPolicy": "visible-issue-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. Native startAt/maxResults/isLast envelope with optional total and only published typed query filters; exact repeated ID strings are never rounded.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.ts",
+        "packages/keiko-connectors/src/jira-core-metadata-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.statuses": {
+      "identity": "GET /rest/api/2/status",
+      "effect": "read",
+      "permissionPolicy": "visible-issue-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. Bounded complete native arrays are locally paginated; no unpublished remote paging parameters.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.ts",
+        "packages/keiko-connectors/src/jira-core-metadata-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-core-metadata.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
     },
     "jira.system-avatars": {
       "identity": "GET /rest/api/2/avatar/{type}/system",
@@ -1808,8 +2229,8 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "bc0aa1fa92331fde3a3d0e534559f562af7918deccd42dd6be2e8dcbc7fc4c1b",
-    "nativeOperationCount": 116
+    "sha256": "cebb0741f0de813c6ae5574cbc79a219aa8161fa700d3e29febb1c328694406f",
+    "nativeOperationCount": 136
   },
   "operations": [
     {
@@ -7695,10 +8116,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.global-issue-types"]
     },
     {
       "identity": "POST /rest/api/2/issuetype",
@@ -7759,10 +8180,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.issue-type-page"]
     },
     {
       "identity": "DELETE /rest/api/2/issuetype/{id}",
@@ -7823,10 +8244,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.issue-type"]
     },
     {
       "identity": "PUT /rest/api/2/issuetype/{id}",
@@ -7887,10 +8308,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.issue-type-alternatives"]
     },
     {
       "identity": "POST /rest/api/2/issuetype/{id}/avatar",
@@ -9551,10 +9972,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.priorities"]
     },
     {
       "identity": "GET /rest/api/2/priority/page",
@@ -9583,10 +10004,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.priority-page"]
     },
     {
       "identity": "GET /rest/api/2/priority/{id}",
@@ -9615,10 +10036,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.priority"]
     },
     {
       "identity": "GET /rest/api/2/priorityschemes",
@@ -9871,10 +10292,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.project-types"]
     },
     {
       "identity": "GET /rest/api/2/project/type/{projectTypeKey}",
@@ -9903,10 +10324,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.project-type-definition"]
     },
     {
       "identity": "GET /rest/api/2/project/type/{projectTypeKey}/accessible",
@@ -10607,10 +11028,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.project-statuses"]
     },
     {
       "identity": "PUT /rest/api/2/project/{projectIdOrKey}/type/{newProjectTypeKey}",
@@ -11023,10 +11444,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.project-categories"]
     },
     {
       "identity": "POST /rest/api/2/projectCategory",
@@ -11119,10 +11540,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.project-category"]
     },
     {
       "identity": "PUT /rest/api/2/projectCategory/{id}",
@@ -11519,10 +11940,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.resolutions"]
     },
     {
       "identity": "GET /rest/api/2/resolution/page",
@@ -11551,10 +11972,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.resolution-page"]
     },
     {
       "identity": "GET /rest/api/2/resolution/{id}",
@@ -11583,10 +12004,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.resolution"]
     },
     {
       "identity": "GET /rest/api/2/role",
@@ -12615,10 +13036,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.statuses"]
     },
     {
       "identity": "GET /rest/api/2/status/page",
@@ -12647,10 +13068,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.status-page"]
     },
     {
       "identity": "GET /rest/api/2/status/{idOrName}",
@@ -12679,10 +13100,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.status"]
     },
     {
       "identity": "GET /rest/api/2/statuscategory",
@@ -12711,10 +13132,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.status-categories"]
     },
     {
       "identity": "GET /rest/api/2/statuscategory/{idOrKey}",
@@ -12743,10 +13164,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.status-category"]
     },
     {
       "identity": "GET /rest/api/2/terminology/entries",

@@ -156,7 +156,7 @@ export function projectJiraCollection(
   values: readonly unknown[],
   max: number,
   project: (value: unknown) => CatalogJsonObject | undefined,
-  identity: "id" | "name",
+  identity: "id" | "name" | "key",
 ): readonly CatalogJsonObject[] | undefined {
   if (values.length > max) return undefined;
   const projected = values.map(project);
