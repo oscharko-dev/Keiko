@@ -68,7 +68,7 @@ export function rejectsReasoningEffortParameter(payload: unknown): boolean {
   if (!isRecord(error)) return false;
   const message = typeof error.message === "string" ? error.message.toLowerCase() : "";
   const code = typeof error.code === "string" ? error.code.toLowerCase() : "";
-  const names = error.param === "reasoning_effort" || message.includes("reasoning_effort");
+  const names = error.param === "reasoning_effort" || /reasoning[ _]effort/.test(message);
   return (
     names &&
     /unsupported|not supported|does not support|unrecognized|unknown|extra inputs|not permitted|invalid/.test(

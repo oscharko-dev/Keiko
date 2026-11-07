@@ -5,6 +5,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { gatewayCatalogAdvertisement } from "./__fixtures__/toolCatalog.js";
 import { OpenAiAdapter, resetChatCompatibilityMemoForTests } from "./openai-adapter.js";
+import { CallerAttemptAdmissionError } from "./gateway-attempt-admission.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
 import type { GatewayRequest, ModelProviderConfig, NormalizedResponse } from "./types.js";
 import {
@@ -66,7 +67,7 @@ interface Harness {
   readonly adapter: OpenAiAdapter;
 }
 
-function harness(respond: (body: Record<string, unknown>) => Response): Harness {
+function harness(respond: (body: Record<string, unknown>) => Response | Error): Harness {
   const bodies: Record<string, unknown>[] = [];
   const events: ModelGatewayLogEvent[] = [];
   const adapter = new OpenAiAdapter({
@@ -75,7 +76,8 @@ function harness(respond: (body: Record<string, unknown>) => Response): Harness 
     fetchImpl: (_url, init): Promise<Response> => {
       const body = bodyOf(init);
       bodies.push(body);
-      return Promise.resolve(respond(body));
+      const result = respond(body);
+      return result instanceof Error ? Promise.reject(result) : Promise.resolve(result);
     },
     log: {
       write: (event): void => {
@@ -185,5 +187,116 @@ describe("OpenAiAdapter reasoningPreference", () => {
     await expect(ask(h)).rejects.toThrow();
     await ask(h);
     expect(h.bodies.map((body) => "reasoning_effort" in body)).toEqual([true, false, true, false]);
+  });
+
+  it("retries every concurrent request that was rejected, not only the first", async () => {
+    const h = harness((body) =>
+      "reasoning_effort" in body ? rejection("Unknown parameter", "reasoning_effort") : answer(),
+    );
+    const results = await Promise.all([ask(h), ask(h)]);
+    expect(results.map((r) => r.content)).toEqual(["ok", "ok"]);
+    expect(h.bodies.filter((body) => "reasoning_effort" in body)).toHaveLength(2);
+    expect(h.bodies.filter((body) => !("reasoning_effort" in body))).toHaveLength(2);
+  });
+
+  it("keeps the omission through later compatibility retries of the same call", async () => {
+    const h = harness((body) => {
+      if ("reasoning_effort" in body) return rejection("Unknown parameter", "reasoning_effort");
+      if ("stream_options" in body) {
+        return Response.json(
+          { error: { param: "stream_options", code: "unsupported_parameter" } },
+          { status: 400 },
+        );
+      }
+      return answer(body.stream === true);
+    });
+    const chunks: unknown[] = [];
+    for await (const chunk of h.adapter.callStream(REQUEST, CONFIG)) chunks.push(chunk);
+    expect(chunks.at(-1)).toMatchObject({ type: "done", response: { content: "ok" } });
+    expect(h.bodies.map((body) => "reasoning_effort" in body)).toEqual([true, false, false]);
+    expect(h.bodies.map((body) => "stream_options" in body)).toEqual([true, true, false]);
+  });
+
+  it("does not remember an omission whose retry threw, and still retries later", async () => {
+    let calls = 0;
+    const h = harness((body) => {
+      calls += 1;
+      if (calls === 2) return new TypeError("transport down");
+      return "reasoning_effort" in body
+        ? rejection("Unknown parameter", "reasoning_effort")
+        : answer();
+    });
+    await expect(ask(h)).rejects.toThrow();
+    await expect(ask(h)).resolves.toMatchObject({ content: "ok" });
+    expect(h.bodies.map((body) => "reasoning_effort" in body)).toEqual([true, false, true, false]);
+  });
+
+  it("scopes the memory to the model id of a shared endpoint", async () => {
+    const h = harness((body) =>
+      "reasoning_effort" in body ? rejection("Unknown parameter", "reasoning_effort") : answer(),
+    );
+    await ask(h);
+    await h.adapter.call(
+      { ...REQUEST, modelId: "other-model" },
+      { ...CONFIG, modelId: "other-model" },
+    );
+    expect(h.bodies.map((body) => "reasoning_effort" in body)).toEqual([true, false, true, false]);
+  });
+
+  it("does not treat a context overflow that echoes the parameter as a reasoning rejection", async () => {
+    const h = harness(() =>
+      Response.json(
+        {
+          error: {
+            message: "context length exceeded; request had reasoning_effort none",
+            code: "context_length_exceeded",
+          },
+        },
+        { status: 400 },
+      ),
+    );
+    await expect(ask(h)).rejects.toThrow();
+    expect(h.bodies).toHaveLength(1);
+  });
+
+  describe("caller attempt cap", () => {
+    function capped(cap: number): { posts: () => number; request: GatewayRequest } {
+      let admitted = 0;
+      return {
+        posts: (): number => admitted,
+        request: {
+          ...REQUEST,
+          maxOutputTokens: 64,
+          attemptAdmission: () => {
+            admitted += 1;
+            if (admitted > cap) throw new CallerAttemptAdmissionError("cap reached");
+            return { settle: (): void => undefined };
+          },
+        } as GatewayRequest,
+      };
+    }
+    // Rejects max_tokens first (output-token fallback), then reasoning_effort (reasoning retry).
+    const strict = (body: Record<string, unknown>): Response =>
+      "max_tokens" in body
+        ? rejection("Unsupported parameter: 'max_tokens'", "max_tokens")
+        : "reasoning_effort" in body
+          ? rejection("Unknown parameter", "reasoning_effort")
+          : answer();
+
+    it("bounds the POSTs when the reasoning retry wraps the output-token fallback", async () => {
+      const h = harness(strict);
+      const { request, posts } = capped(2);
+      await expect(ask(h, request)).rejects.toThrow();
+      expect(h.bodies).toHaveLength(2);
+      expect(posts()).toBe(3);
+    });
+
+    it("admits each actual POST once when the cap allows all of them", async () => {
+      const h = harness(strict);
+      const { request, posts } = capped(3);
+      await expect(ask(h, request)).resolves.toMatchObject({ content: "ok" });
+      expect(h.bodies).toHaveLength(3);
+      expect(posts()).toBe(3);
+    });
   });
 });
