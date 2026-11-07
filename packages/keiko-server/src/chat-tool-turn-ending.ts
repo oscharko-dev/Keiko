@@ -289,8 +289,8 @@ const RESULT_CONDENSED = defineActivityLogOperation({
 });
 
 /**
- * Recorded when the model read a long Jira draft result as key ranges: how many rows the stored
- * result holds and how many still reached the model one by one (#4292).
+ * Recorded when the model read a Jira draft result condensed, as key ranges and groups of alike
+ * rows: how many rows the stored result holds and how many entries the model read (#4292).
  */
 export function recordChatToolTurnResultCondensed(
   log: ServerLogSink,

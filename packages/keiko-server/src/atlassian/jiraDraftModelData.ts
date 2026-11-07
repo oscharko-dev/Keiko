@@ -7,12 +7,16 @@ import { jiraMutationToolId } from "./jiraMutationToolId.js";
 // the person's view; the model only reports the outcome, so a long draft reaches it as the counts,
 // the exact key ranges and the rows that need attention. Sending every row of 370 created issues
 // cost about 26,000 prompt tokens and almost four minutes of prefill for a two-sentence answer.
+// Rows that share their state and every detail but the reference (370 issues Jira refused for one
+// expired license, say) reach the model as one group with its count and the first references.
 
 const DRAFT_TOOL_ID = jiraMutationToolId("jira.draft");
 /** Up to this many rows the model reads the result item by item, as stored. */
 export const JIRA_DRAFT_MODEL_ROWS_MAX = 10;
 /** The byte budget of the model's key lists; the stored result's own bound is far larger. */
 const MODEL_KEY_LIST_BYTES = 8 * 1024;
+/** How many references a group of identical rows names; its count says how many there are. */
+export const JIRA_DRAFT_MODEL_GROUP_REFS_MAX = 10;
 
 type JsonRecord = Readonly<Record<string, unknown>>;
 
@@ -50,7 +54,45 @@ function joinedGuidance(own: unknown, unlisted: boolean): string | undefined {
   return parts.length === 0 ? undefined : parts.join(" ");
 }
 
-function compactRows(body: JsonRecord, rows: readonly unknown[]): JsonRecord {
+/** A row without its reference: rows alike in this read the same to the model. */
+function groupKey(row: unknown): string | undefined {
+  const item = record(row);
+  if (item === undefined || typeof item.ref !== "string") return undefined;
+  const { ref: _ref, ...rest } = item;
+  return JSON.stringify(rest);
+}
+
+/** Two or more rows alike but for their reference, as one entry with their count. */
+function groupedRow(rows: readonly JsonRecord[]): JsonRecord {
+  const { ref: _ref, ...rest } = rows[0] ?? {};
+  const refs = rows.slice(0, JIRA_DRAFT_MODEL_GROUP_REFS_MAX).map((row) => row.ref);
+  const more = rows.length - refs.length;
+  return { ...rest, itemCount: rows.length, refs, ...(more === 0 ? {} : { moreRefCount: more }) };
+}
+
+/** Rows alike but for their reference become one entry, in the order they first appear. */
+function groupRows(rows: readonly unknown[]): unknown[] {
+  const slots: unknown[][] = [];
+  const byKey = new Map<string, unknown[]>();
+  for (const row of rows) {
+    const key = groupKey(row);
+    const slot = key === undefined ? undefined : byKey.get(key);
+    if (slot !== undefined) {
+      slot.push(row);
+      continue;
+    }
+    const fresh = [row];
+    slots.push(fresh);
+    if (key !== undefined) byKey.set(key, fresh);
+  }
+  // Only records carry a key, so every slot of two or more rows holds records.
+  return slots.map((slot) => (slot.length === 1 ? slot[0] : groupedRow(slot as JsonRecord[])));
+}
+
+function compactRows(
+  body: JsonRecord,
+  rows: readonly unknown[],
+): JsonRecord & { readonly items: unknown[] } {
   const listed = listIssueKeys(
     { created: keysOf(rows, "created"), existing: keysOf(rows, "existing") },
     MODEL_KEY_LIST_BYTES,
@@ -60,7 +102,7 @@ function compactRows(body: JsonRecord, rows: readonly unknown[]): JsonRecord {
   return {
     ...body,
     ...(guidance === undefined ? {} : { guidance }),
-    items: rows.filter(needsAttention),
+    items: groupRows(rows.filter(needsAttention)),
     compact: true,
     createdRanges: listed.created.map((entry) => entry.text),
     existingRanges: listed.existing.map((entry) => entry.text),
@@ -68,34 +110,45 @@ function compactRows(body: JsonRecord, rows: readonly unknown[]): JsonRecord {
   };
 }
 
-/** A stored row-by-row draft body with more rows than the model reads one by one. */
-function longRows(
+/**
+ * The model's view of a draft body, or none when it reads the body as stored: a short row-by-row
+ * body stays, a long one becomes compact, and an already compact body only has its alike rows
+ * grouped.
+ */
+function modelView(
   data: unknown,
-): { readonly body: JsonRecord; readonly rows: readonly unknown[] } | undefined {
+): { readonly rowCount: number; readonly view: JsonRecord & { items: unknown[] } } | undefined {
   const body = record(data);
   const rows: unknown = body?.items;
-  if (body === undefined || body.compact === true || !Array.isArray(rows)) return undefined;
-  return rows.length > JIRA_DRAFT_MODEL_ROWS_MAX ? { body, rows } : undefined;
+  if (body === undefined || !Array.isArray(rows)) return undefined;
+  if (body.compact === true) {
+    const items = groupRows(rows);
+    return items.length < rows.length
+      ? { rowCount: rows.length, view: { ...body, items } }
+      : undefined;
+  }
+  if (rows.length <= JIRA_DRAFT_MODEL_ROWS_MAX) return undefined;
+  return { rowCount: rows.length, view: compactRows(body, rows) };
 }
 
 /**
  * A draft's rows as the model reads them: as stored up to {@link JIRA_DRAFT_MODEL_ROWS_MAX} rows,
- * otherwise compact. An already compact body and anything not shaped as rows stay as they are.
+ * otherwise compact; rows alike but for their reference are grouped. Anything not shaped as rows
+ * stays as it is.
  */
 export function jiraDraftRowsForModel<T>(data: T): T | JsonRecord {
-  const long = longRows(data);
-  return long === undefined ? data : compactRows(long.body, long.rows);
+  return modelView(data)?.view ?? data;
 }
 
-/** How many stored rows a `jira.draft` result has and how many the model reads; none if unchanged. */
+/** How many rows a `jira.draft` result stores and how many entries the model reads; none if equal. */
 export function jiraDraftCondensedRows(
   canonicalId: string | undefined,
   data: unknown,
 ): { readonly rowCount: number; readonly keptRowCount: number } | undefined {
-  const long = canonicalId === DRAFT_TOOL_ID ? longRows(data) : undefined;
-  return long === undefined
+  const condensed = canonicalId === DRAFT_TOOL_ID ? modelView(data) : undefined;
+  return condensed === undefined
     ? undefined
-    : { rowCount: long.rows.length, keptRowCount: long.rows.filter(needsAttention).length };
+    : { rowCount: condensed.rowCount, keptRowCount: condensed.view.items.length };
 }
 
 /** The data the model reads of one tool result: only a `jira.draft` result can change. */

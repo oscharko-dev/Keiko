@@ -5,6 +5,7 @@ import { gatewayMessagesForToolExchange } from "../conversation-gateway.js";
 import { draftResult } from "./jiraChatDraft.js";
 import { JIRA_DRAFT_UNLISTED_GUIDANCE } from "./jiraDraftKeyRanges.js";
 import {
+  JIRA_DRAFT_MODEL_GROUP_REFS_MAX,
   JIRA_DRAFT_MODEL_ROWS_MAX,
   jiraDraftCondensedRows,
   jiraDraftModelData,
@@ -157,6 +158,74 @@ describe("the model's view of a long draft result", () => {
     const own = data.guidance;
     if (typeof own !== "string") throw new TypeError("The producer gave no guidance");
     expect(model.guidance).toBe(`${own} ${JIRA_DRAFT_UNLISTED_GUIDANCE}`);
+  });
+
+  it("reads 370 issues Jira refused for one reason as one entry with its count", () => {
+    const refused = Array.from({ length: 370 }, (_, index) => ({
+      ref: `item-${String(index)}`,
+      state: "failed",
+      detail: { status: 403, messages: ["license expired"] },
+    })) as unknown as Item[];
+    const data = stored(refused);
+
+    const model = jiraDraftModelData("keiko.jira.draft", data) as Record<string, unknown>;
+
+    expect(model.items).toEqual([
+      {
+        state: "failed",
+        status: 403,
+        messages: ["license expired"],
+        itemCount: 370,
+        refs: Array.from(
+          { length: JIRA_DRAFT_MODEL_GROUP_REFS_MAX },
+          (_, i) => `item-${String(i)}`,
+        ),
+        moreRefCount: 370 - JIRA_DRAFT_MODEL_GROUP_REFS_MAX,
+      },
+    ]);
+    expect(model.failedCount).toBe(370);
+    expect(JSON.stringify(model).length).toBeLessThan(JSON.stringify(data).length / 20);
+    expect(jiraDraftCondensedRows("keiko.jira.draft", data)).toEqual({
+      rowCount: 370,
+      keptRowCount: 1,
+    });
+  });
+
+  it("keeps different failures apart and a single one as its own row", () => {
+    const failed = (ref: string, message: string): Item =>
+      ({ ref, state: "failed", detail: { messages: [message] } }) as unknown as Item;
+    const data = stored([
+      ...created(12),
+      failed("a", "summary required"),
+      failed("b", "license expired"),
+      failed("c", "summary required"),
+      failed("d", "priority unknown"),
+    ]);
+
+    const model = jiraDraftModelData("keiko.jira.draft", data) as Record<string, unknown>;
+
+    expect(model.items).toEqual([
+      { state: "failed", messages: ["summary required"], itemCount: 2, refs: ["a", "c"] },
+      expect.objectContaining({ ref: "b", messages: ["license expired"] }),
+      expect.objectContaining({ ref: "d", messages: ["priority unknown"] }),
+    ]);
+  });
+
+  it("groups alike rows of a result the producer already stored compact", () => {
+    const body: CatalogJsonObject = {
+      ...stored(created(40)),
+      compact: true,
+      items: ["x", "y", "z"].map((ref) => ({ ref, state: "pending" })),
+    };
+
+    expect(jiraDraftRowsForModel(body)).toMatchObject({
+      compact: true,
+      items: [{ state: "pending", itemCount: 3, refs: ["x", "y", "z"] }],
+    });
+    expect(jiraDraftCondensedRows("keiko.jira.draft", body)).toEqual({
+      rowCount: 3,
+      keptRowCount: 1,
+    });
   });
 
   it("names no condensed rows for a short draft or another tool", () => {
