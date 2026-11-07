@@ -119,8 +119,10 @@ const approvedScopeValueDigests = new Map([
   // target repository, fixture data with deliberately planted defects, excluded from test analysis
   // as it is from the root tsconfig, ESLint and Prettier. Re-pinned for PR #4150: the Python lab
   // fixture `inventory-py/**` is data of the same kind; analysing it made the scanner warn about an
-  // unset Python version, which the analysis-log gate rejects. SHA-256 of the raw value after `=`.
-  ["sonar.test.exclusions", "c421fc74639972f7a1fbe743c60dbf47aa5f07fc344e0eddd777b382738966e3"],
+  // unset Python version, which the analysis-log gate rejects. Re-pinned for #4271: the nested
+  // monorepo lab fixture `polyglot-mono/**` is data of the same kind, already outside ESLint, and
+  // its `node:test` files are lab targets, not Keiko tests. SHA-256 of the raw value after `=`.
+  ["sonar.test.exclusions", "7c07b88350948795dad9a103e2a0ee2a2e65940d74508f2d0d6186c9a64d90ab"],
   [
     "sonar.typescript.tsconfigPaths",
     "016c8b1bfc0b97a73ee1b5680a7b1f46ccb5c24206229367ea88a266fe20c0d5",

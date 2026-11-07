@@ -93,6 +93,9 @@ function fakeStore(
       if (results.remove !== undefined) throw results.remove;
     },
     prune: () => ({ expired: 0, orphaned: 0, invalid: 0, quota: 0, entryCount: 0 }),
+    readEntry: () => undefined,
+    editEntry: () => ({ ok: false, reason: "no-retained-state" }),
+    listTaskIds: () => [],
   };
   return { store, calls };
 }

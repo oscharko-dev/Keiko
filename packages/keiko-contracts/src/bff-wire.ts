@@ -1523,6 +1523,17 @@ export interface ChatDraftUpdate {
   readonly text: string;
   readonly expectedRevision: number;
 }
+
+/**
+ * The Coding Workbench window id that keys its private composer draft (ADR-0114 D1). The desktop
+ * shell's `coding` window type is a singleton, so its window id is the type itself; the key is a
+ * closed token, never a path or free text.
+ */
+export const CODING_WORKBENCH_DRAFT_WINDOW_ID = "coding";
+
+export function isCodingWorkbenchDraftWindowId(value: string): boolean {
+  return value === CODING_WORKBENCH_DRAFT_WINDOW_ID;
+}
 export const MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS = 256;
 export const GROUNDING_SCOPE_IDENTITY_PATTERN = /^gsi-v1:[0-9a-f]{64}$/u;
 

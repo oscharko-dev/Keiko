@@ -33,6 +33,8 @@ import {
   runMain,
   selectLabCheckout,
   stopUnfinishedRun,
+  watchOrStop,
+  UsageError,
 } from "./lab-common.mjs";
 
 const USAGE = [
@@ -40,6 +42,7 @@ const USAGE = [
   "                      (--repo <path> | KEIKO_LAB_REPO) [--mode <label|id>] [--model <id>]",
   "                      [--timeout-min 40] [--branch main] [--base-url <origin>] [--shots <dir>]",
   "                      [--text-out <file>] [--jira-pod <name>] [--headed] [--list-tasks]",
+  "                      [--await-wake <minutes>] [--schedule-control pause-delete]",
   "",
   "  --approve    required, no default: all approves every permission ask once, applies the change",
   "               reviews of Ask for approval and allows package scripts; none denies the asks and",
@@ -51,6 +54,10 @@ const USAGE = [
   "  --shots      directory for one screenshot per run state change",
   "  --text-out   file for the final Workbench text (the answer, so it stays outside the repo)",
   "  --jira-pod   the name of a ready Jira Pod the run may use; default: Jira: none",
+  "  --await-wake after the run, wait up to this many minutes for Keiko to start the task's",
+  "               scheduled continuation run, follow it to its end and report its schedules",
+  "  --schedule-control pause-delete: after the run, pause the task's first schedule in the",
+  "               Workbench, check that no wake starts for two minutes, then delete it",
   "",
   "Environment: KEIKO_LAB_REPO (the repository, unless --repo), KEIKO_LAB_BASE_URL (default",
   "http://127.0.0.1:1983), KEIKO_CODING_APP_SESSION_LAUNCHER_SECRET (required). A Chromium build",
@@ -73,6 +80,8 @@ const OPTIONS = {
   "jira-pod": { type: "string" },
   headed: { type: "boolean" },
   "list-tasks": { type: "boolean" },
+  "await-wake": { type: "string" },
+  "schedule-control": { type: "string" },
 };
 const WORKBENCH = 'section[aria-label="Coding Workbench"][data-state]';
 const VIEWPORT = { width: 1600, height: 1300 };
@@ -351,25 +360,130 @@ async function reportRun(page, workbench, runId, snapshot, { shots, textOut, app
  * ends and report it. A refused checkout throws before the Workbench is touched, so no run starts.
  */
 export async function operateRun(page, options) {
-  const { repo, branch, shots, textOut, approve, timeoutMs, task } = options;
+  const { repo, branch, shots, textOut, approve, timeoutMs, task, schedules } = options;
   log(approvalPolicyLine("wb-ui", approve));
   await selectCheckout(page, repo, branch);
   const workbench = await reopenWorkbench(page);
   const runId = await startRun(page, workbench, task);
-  const snapshot = await watchRun(page, runId, {
-    approve,
-    deadline: Date.now() + timeoutMs,
-    shots,
+  const post = async (path, data) => ({
+    status: (await page.request.post(path, { headers: CSRF_HEADERS, data })).status(),
   });
-  await stopUnfinishedRun(
-    async (path, data) => ({
-      status: (await page.request.post(path, { headers: CSRF_HEADERS, data })).status(),
-    }),
+  const snapshot = await watchOrStop(
+    () => watchRun(page, runId, { approve, deadline: Date.now() + timeoutMs, shots }),
+    post,
     runId,
-    snapshot,
   );
+  await stopUnfinishedRun(post, runId, snapshot);
   await reportRun(page, workbench, runId, snapshot, { shots, textOut, approve });
-  return exitCodeForState(snapshot.state);
+  const code = exitCodeForState(snapshot.state);
+  if (code !== 0 || schedules === undefined) return code;
+  return followSchedules(page, workbench, snapshot, { ...schedules, approve, shots });
+}
+
+/** The task's schedules as the Workbench's own route lists them (never their prompt). */
+export async function readSchedules(page, taskId) {
+  const response = await page.request.get(
+    `/api/coding-workbench/runtime/schedules?taskId=${encodeURIComponent(taskId)}`,
+  );
+  const body = (await response.json().catch(() => ({}))) ?? {};
+  if (response.status() !== 200) throw new Error(`schedules: HTTP ${String(response.status())}`);
+  return Array.isArray(body.schedules) ? body.schedules : [];
+}
+
+/** One line per schedule: status, cadence, run count and wait, the way the lab report reads it. */
+export function describeSchedules(schedules) {
+  if (schedules.length === 0) return "schedules: none";
+  return `schedules: ${schedules
+    .map((s) =>
+      [s.status, s.cadence, `runs=${String(s.runCount)}`, s.wait].filter(Boolean).join(" "),
+    )
+    .join("; ")}`;
+}
+
+const WAKE_POLL_MS = 5000;
+const PAUSED_WATCH_MS = 150_000;
+
+/** Waits for the run Keiko starts for the task, other than `previousRunId`; null at the deadline. */
+async function nextRunOfTask(page, taskId, previousRunId, deadline) {
+  while (Date.now() < deadline) {
+    const response = await page.request.get("/api/coding-workbench/runtime/status");
+    const status = (await response.json().catch(() => ({}))) ?? {};
+    if (status.runId && status.runId !== previousRunId && status.conversationId === taskId)
+      return status.runId;
+    await sleep(WAKE_POLL_MS);
+  }
+  return null;
+}
+
+/**
+ * After a run that scheduled a continuation (T33 to T36): reads the task's schedules, and either
+ * waits for Keiko's scheduled wake run and follows it, or pauses the schedule in the Workbench,
+ * checks that nothing wakes, and deletes it.
+ */
+async function followSchedules(page, workbench, snapshot, options) {
+  const taskId = snapshot.conversationId;
+  if (!taskId) throw new Error("the run carries no task id; its schedules cannot be read");
+  const schedules = await readSchedules(page, taskId);
+  log(describeSchedules(schedules));
+  if (schedules.length === 0) return 1;
+  if (options.control === "pause-delete") return pauseAndDelete(page, workbench, snapshot, taskId);
+  const wakeRunId = await nextRunOfTask(
+    page,
+    taskId,
+    snapshot.runId,
+    Date.now() + options.awaitWakeMs,
+  );
+  if (wakeRunId === null) {
+    log(
+      "no scheduled continuation run started in time;",
+      describeSchedules(await readSchedules(page, taskId)),
+    );
+    return 3;
+  }
+  log("scheduled continuation run", wakeRunId);
+  const wake = await watchRun(page, wakeRunId, {
+    approve: options.approve,
+    deadline: Date.now() + options.awaitWakeMs,
+    shots: options.shots,
+  });
+  log("wake", describeSnapshot(wake), "mode", wake.effectiveMode ?? wake.requestedMode);
+  log(describeSchedules(await readSchedules(page, taskId)));
+  const text = await workbench.innerText({ timeout: TEXT_TIMEOUT_MS }).catch(() => "");
+  log("history marks the scheduled continuation:", text.includes("Scheduled continuation"));
+  return exitCodeForState(wake.state);
+}
+
+async function scheduleButton(workbench, name) {
+  const region = workbench.getByRole("region", { name: "Scheduled continuations" });
+  const button = region.getByRole("button", { name, exact: true }).first();
+  await button.waitFor({ state: "visible", timeout: UI_TIMEOUT_MS });
+  return button;
+}
+
+async function pauseAndDelete(page, workbench, snapshot, taskId) {
+  await (await scheduleButton(workbench, "Pause")).click();
+  await sleep(SETTLE_MS);
+  log("after Pause:", describeSchedules(await readSchedules(page, taskId)));
+  const woke = await nextRunOfTask(page, taskId, snapshot.runId, Date.now() + PAUSED_WATCH_MS);
+  log("a paused schedule woke the task:", woke !== null);
+  await (await scheduleButton(workbench, "Delete")).click();
+  await sleep(SETTLE_MS);
+  const left = await readSchedules(page, taskId);
+  log("after Delete:", describeSchedules(left));
+  return woke === null && left.length === 0 ? 0 : 1;
+}
+
+/** `--await-wake` and `--schedule-control` as the run options take them; absent when neither. */
+export function scheduleOptions(values) {
+  const control = values["schedule-control"];
+  if (control !== undefined && control !== "pause-delete")
+    throw new UsageError("--schedule-control takes pause-delete");
+  const awaitWake = values["await-wake"];
+  if (awaitWake === undefined && control === undefined) return undefined;
+  return {
+    awaitWakeMs: minutesToMs(awaitWake ?? "10"),
+    ...(control === undefined ? {} : { control }),
+  };
 }
 
 async function driveRun(browser, options) {
@@ -401,6 +515,7 @@ async function main() {
     approve,
     timeoutMs: minutesToMs(cli.values["timeout-min"]),
     task: { text, mode, model: cli.values.model, jiraPod: cli.values["jira-pod"] },
+    schedules: scheduleOptions(cli.values),
   };
   if (options.shots) mkdirSync(options.shots, { recursive: true });
   const browser = await chromium.launch({ headless: cli.values.headed !== true });

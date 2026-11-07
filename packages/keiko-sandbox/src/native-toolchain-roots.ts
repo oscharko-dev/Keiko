@@ -278,3 +278,171 @@ export function nativeOpenSslReadRoots(
     compareStrings,
   );
 }
+
+// ---------------------------------------------------------------------------------------------
+// Build-tool environment and install roots (#4271). A JDK reached through JAVA_HOME (SDKMAN,
+// asdf, /Library/Java/JavaVirtualMachines) or a Maven/Gradle distribution named by its home
+// variable is not necessarily on PATH, so the PATH-derived roots above never opened it and a
+// kernel "Operation not permitted" replaced the build. The names below reach the native child as a
+// standalone shell would see them, under the same rule as a PATH root: never the user's home or
+// above it, a system prefix or a credential store.
+// ---------------------------------------------------------------------------------------------
+
+const BUILD_TOOL_HOME_ENV: readonly string[] = Object.freeze([
+  "JAVA_HOME",
+  "MAVEN_HOME",
+  "M2_HOME",
+  "GRADLE_HOME",
+]);
+const BUILD_PROXY_ENV: readonly string[] = Object.freeze([
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "no_proxy",
+]);
+const BUILD_CERTIFICATE_ENV: readonly string[] = Object.freeze([
+  "NODE_EXTRA_CA_CERTS",
+  "SSL_CERT_FILE",
+]);
+const BUILD_OPTION_ENV: readonly string[] = Object.freeze([
+  "MAVEN_OPTS",
+  "MAVEN_ARGS",
+  "GRADLE_OPTS",
+]);
+const BUILD_REGISTRY_ENV: readonly string[] = Object.freeze([
+  "npm_config_registry",
+  "NPM_CONFIG_REGISTRY",
+]);
+/** Every name `nativeBuildInheritedEnvNames` may return; none matches a credential name. */
+export const NATIVE_BUILD_ENV_NAMES: readonly string[] = Object.freeze([
+  ...BUILD_TOOL_HOME_ENV,
+  ...BUILD_PROXY_ENV,
+  ...BUILD_CERTIFICATE_ENV,
+  ...BUILD_OPTION_ENV,
+  ...BUILD_REGISTRY_ENV,
+]);
+const SYSTEM_CONFIGURATION = /(^|\/)(etc|private)(\/|$)/u;
+const BUILD_OPTION_SECRET = /(password|passwd|secret|token|api[-_]?key|credential|\bauth)/iu;
+
+function urlCarriesCredentials(value: string): boolean {
+  // A proxy value may lack a scheme; only a parseable URL can carry user-info, and a value that
+  // does not parse fails closed (it does not reach the child).
+  const candidate = /^[a-z][a-z0-9+.-]*:\/\//iu.test(value) ? value : `http://${value}`;
+  if (!URL.canParse(candidate)) return true;
+  const url = new URL(candidate);
+  return url.username !== "" || url.password !== "";
+}
+
+function safeBuildValue(name: string, value: string): boolean {
+  if (value === "" || /[\0\r\n]/u.test(value)) return false;
+  if (BUILD_OPTION_ENV.includes(name)) return !BUILD_OPTION_SECRET.test(value);
+  if (name === "NO_PROXY" || name === "no_proxy") return true;
+  if (BUILD_PROXY_ENV.includes(name) || BUILD_REGISTRY_ENV.includes(name))
+    return !urlCarriesCredentials(value);
+  return true;
+}
+
+/**
+ * The build-tool environment names present in `env` whose value is safe to hand the native child
+ * (#4271): JAVA_HOME, MAVEN_*, GRADLE_*, the proxy family, the certificate bundle and the npm
+ * registry. A value that carries a URL credential, or a Maven/Gradle option that names a password
+ * or token, is withheld, so the existing launch refusal for secret-named variables never has to
+ * fire and a credential never rides along inside an allowed name.
+ */
+export function nativeBuildInheritedEnvNames(
+  env: Readonly<Record<string, string | undefined>>,
+): readonly string[] {
+  return NATIVE_BUILD_ENV_NAMES.filter((name) => {
+    const value = env[name];
+    return value !== undefined && safeBuildValue(name, value);
+  });
+}
+
+function toolHome(directory: string, probes: readonly string[]): string | undefined {
+  const real = resolvedPath(directory);
+  if (real === undefined) return undefined;
+  return probes.some((probe) => tolerated(() => realpathSync(join(real, probe))) !== undefined)
+    ? real
+    : undefined;
+}
+
+function javaOnPathHome(pathValue: string | undefined): string | undefined {
+  for (const entry of (pathValue ?? "").split(delimiter)) {
+    if (entry === "") continue;
+    const java = resolvedPath(join(entry, "java"));
+    if (java !== undefined) return toolHome(dirname(dirname(java)), ["bin/java"]);
+  }
+  return undefined;
+}
+
+/**
+ * The install roots of the build tools the environment names: JAVA_HOME, MAVEN_HOME/M2_HOME,
+ * GRADLE_HOME and the JDK the first `java` on PATH resolves to. A directory qualifies only when it
+ * looks like the tool (its `bin/java`, `bin/mvn` or `bin/gradle` exists) and passes the same
+ * admission as a PATH root. Deterministic, bounded, empty when nothing qualifies.
+ */
+export function nativeBuildToolReadRoots(
+  env: Readonly<Record<string, string | undefined>>,
+  home: string,
+): readonly string[] {
+  const resolvedHome = resolvedPath(home) ?? home;
+  const probes: Readonly<Record<string, readonly string[]>> = {
+    JAVA_HOME: ["bin/java"],
+    MAVEN_HOME: ["bin/mvn"],
+    M2_HOME: ["bin/mvn"],
+    GRADLE_HOME: ["bin/gradle"],
+  };
+  const pathJava = javaOnPathHome(env.PATH);
+  const candidates = [
+    ...BUILD_TOOL_HOME_ENV.flatMap((name) => {
+      const value = env[name];
+      const found =
+        value === undefined || !isAbsolute(value) ? undefined : toolHome(value, probes[name] ?? []);
+      return found === undefined ? [] : [found];
+    }),
+    ...(pathJava === undefined ? [] : [pathJava]),
+    ...BUILD_CERTIFICATE_ENV.flatMap((name) => {
+      const value = env[name];
+      const file = value === undefined ? undefined : resolvedPath(value);
+      // A system certificate directory (`/etc/ssl`) holds `private/`: only a custom directory opens.
+      return file === undefined || SYSTEM_CONFIGURATION.test(dirname(file)) ? [] : [dirname(file)];
+    }),
+  ];
+  return [...new Set(candidates.filter((root) => admissible(root, resolvedHome)))]
+    .sort(compareStrings)
+    .slice(0, ROOTS_MAX);
+}
+
+/**
+ * The user's Maven repository cache, as one READ-ONLY root, when it exists and passes the same
+ * admission as a toolchain root (#4271). A warm `~/.m2/repository` lets an offline build resolve its
+ * dependencies without a network; it is never writable from the run, so a run cannot poison the
+ * user's cache. The run's own writable cache lives in its private state.
+ */
+export function nativeBuildCacheReadRoots(home: string): readonly string[] {
+  const resolvedHome = resolvedPath(home) ?? home;
+  const repository = resolvedPath(join(resolvedHome, ".m2", "repository"));
+  return repository !== undefined &&
+    insideOrEqual(join(resolvedHome, ".m2"), repository) &&
+    isInstallPrefix(repository, resolvedHome)
+    ? [repository]
+    : [];
+}
+
+/**
+ * The Maven wrapper's downloaded distributions (`~/.m2/wrapper/dists`), as one READ-ONLY root beside
+ * the cache (#4271). Without it `./mvnw` in a run without network tries to download the
+ * distribution a standalone shell already finds. The Gradle wrapper is not admitted: it takes a lock
+ * file inside its distribution even when that is installed, which a read-only root refuses.
+ */
+export function nativeBuildWrapperReadRoots(home: string): readonly string[] {
+  const resolvedHome = resolvedPath(home) ?? home;
+  const dists = resolvedPath(join(resolvedHome, ".m2", "wrapper", "dists"));
+  return dists !== undefined &&
+    insideOrEqual(join(resolvedHome, ".m2"), dists) &&
+    isInstallPrefix(dists, resolvedHome)
+    ? [dists]
+    : [];
+}

@@ -8,7 +8,7 @@ import {
   type McpServerDefinition,
   type McpSettingsUpdate,
 } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
-import type { ExternalMcpClientOptions } from "@oscharko-dev/keiko-mcp";
+import { ManagedMcpError, type ExternalMcpClientOptions } from "@oscharko-dev/keiko-mcp";
 import {
   createConfiguredMcpConnections,
   type ConfiguredMcpConnections,
@@ -24,6 +24,7 @@ afterEach(async () => {
 function fixture(
   transport: unknown = { kind: "remote", url: "https://synthetic.example.test/mcp" },
   secrets: McpSettingsUpdate["secrets"] = {},
+  manual = false,
 ): { root: string; store: ReturnType<typeof createMcpSettingsStore>; server: McpServerDefinition } {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-configured-mcp-")));
   roots.push(root);
@@ -34,7 +35,11 @@ function fixture(
   });
   const parsed = parseMcpServerRegistry({
     schemaVersion: 1,
-    servers: [{ name: "notes", discovery: "automatic", transport, tools: {} }],
+    servers: [
+      manual
+        ? { name: "notes", transport, tools: { probe: "read" } }
+        : { name: "notes", discovery: "automatic", transport, tools: {} },
+    ],
   });
   if (!parsed.ok || parsed.servers[0] === undefined) throw new Error("Invalid fixture");
   const server = parsed.servers[0];
@@ -397,4 +402,160 @@ it("keeps a failed connection observable and retries only on explicit connection
   expect(connect).toHaveBeenCalledTimes(1);
   await expect(manager.connect("notes", "test")).rejects.toThrow();
   expect(connect).toHaveBeenCalledTimes(2);
+});
+
+describe("a hung or crashing server (finding 4)", () => {
+  function managerFor(
+    f: ReturnType<typeof fixture>,
+    connect: NonNullable<Parameters<typeof createConfiguredMcpConnections>[0]["connect"]>,
+    now: () => number = Date.now,
+  ): ConfiguredMcpConnections {
+    const manager = createConfiguredMcpConnections({
+      settings: f.store,
+      stateDir: f.root,
+      log: { write: () => undefined },
+      egress: () => undefined,
+      connect,
+      now,
+    });
+    managers.push(manager);
+    return manager;
+  }
+  function mortal(call: () => Promise<{ content: [] }>): {
+    readonly lifetime: AbortController;
+    readonly connection: Awaited<
+      ReturnType<NonNullable<Parameters<typeof createConfiguredMcpConnections>[0]["connect"]>>
+    >;
+    readonly closed: () => number;
+  } {
+    const lifetime = new AbortController();
+    let closes = 0;
+    return {
+      lifetime,
+      closed: () => closes,
+      connection: {
+        signal: lifetime.signal,
+        tools,
+        call,
+        close: (): Promise<void> => {
+          closes++;
+          lifetime.abort();
+          return Promise.resolve();
+        },
+      },
+    };
+  }
+
+  it("recycles a connected but hung server after three timeouts in a row", async () => {
+    const f = fixture();
+    const hung = mortal(() => Promise.reject(new ManagedMcpError("deadline-exceeded")));
+    const fresh = mortal(() => Promise.resolve({ content: [] }));
+    const connect = vi.fn(() =>
+      Promise.resolve([hung, fresh][connect.mock.calls.length - 1]?.connection ?? fresh.connection),
+    );
+    const manager = managerFor(f, connect);
+    const first = await manager.connect("notes", "test");
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(first.call("probe", {}, context())).rejects.toMatchObject({
+        reason: "deadline-exceeded",
+      });
+      expect(hung.closed()).toBe(0);
+    }
+    await expect(first.call("probe", {}, context())).rejects.toMatchObject({
+      reason: "deadline-exceeded",
+    });
+    expect(hung.closed()).toBe(1);
+    const second = await manager.connect("notes", "test");
+    expect(second).not.toBe(first);
+    expect(connect).toHaveBeenCalledTimes(2);
+    await expect(second.call("probe", {}, context())).resolves.toEqual({ content: [] });
+  });
+
+  it("does not recycle when a success separates the timeouts", async () => {
+    const f = fixture();
+    const outcomes = [false, false, true, false, false];
+    const flaky = mortal(() =>
+      outcomes.shift() === true
+        ? Promise.resolve({ content: [] })
+        : Promise.reject(new ManagedMcpError("deadline-exceeded")),
+    );
+    const manager = managerFor(f, () => Promise.resolve(flaky.connection));
+    const connection = await manager.connect("notes", "test");
+    for (let attempt = 0; attempt < 5; attempt++)
+      await connection.call("probe", {}, context()).catch(() => undefined);
+    expect(flaky.closed()).toBe(0);
+  });
+
+  it("fails fast with the closed backoff code after a second crash, then reconnects once the wait has passed", async () => {
+    const f = fixture();
+    let clock = 1_000_000;
+    const lives: ReturnType<typeof mortal>[] = [];
+    const connect = vi.fn(() => {
+      const life = mortal(() => Promise.resolve({ content: [] }));
+      lives.push(life);
+      return Promise.resolve(life.connection);
+    });
+    const manager = managerFor(f, connect, () => clock);
+    await manager.connect("notes", "test");
+    lives[0]?.lifetime.abort(); // first crash: reconnect is free
+    await manager.connect("notes", "test");
+    expect(connect).toHaveBeenCalledTimes(2);
+    lives[1]?.lifetime.abort(); // second crash in a row: back off
+    await expect(manager.connect("notes", "test")).rejects.toMatchObject({ reason: "backoff" });
+    expect(connect).toHaveBeenCalledTimes(2);
+    clock += 4_999;
+    await expect(manager.connect("notes", "test")).rejects.toMatchObject({ reason: "backoff" });
+    clock += 2;
+    await manager.connect("notes", "test");
+    expect(connect).toHaveBeenCalledTimes(3);
+  });
+
+  it("doubles the wait per consecutive failure up to 60 seconds, and a success resets it", async () => {
+    const f = fixture();
+    let clock = 5_000_000;
+    const lives: ReturnType<typeof mortal>[] = [];
+    const connect = vi.fn(() => {
+      const life = mortal(() => Promise.resolve({ content: [] }));
+      lives.push(life);
+      return Promise.resolve(life.connection);
+    });
+    const manager = managerFor(f, connect, () => clock);
+    const waits: number[] = [];
+    let current = await manager.connect("notes", "test");
+    for (let crash = 0; crash < 8; crash++) {
+      lives.at(-1)?.lifetime.abort();
+      const before = clock;
+      let attempts = 0;
+      for (;;) {
+        try {
+          current = await manager.connect("notes", "test");
+          break;
+        } catch (error) {
+          expect(error).toMatchObject({ reason: "backoff" });
+          clock += 1_000;
+          attempts++;
+          if (attempts > 70) throw error;
+        }
+      }
+      waits.push(clock - before);
+    }
+    expect(waits.slice(0, 7)).toEqual([0, 5_000, 10_000, 20_000, 40_000, 60_000, 60_000]);
+    await current.call("probe", {}, context());
+    lives.at(-1)?.lifetime.abort();
+    const reconnected = await manager.connect("notes", "test");
+    expect(reconnected).not.toBe(current);
+  });
+
+  it("asks a manually discovered server only for its registry tools, an automatic one for all", async () => {
+    const seen: (readonly string[] | undefined)[] = [];
+    const capture = (input: ExternalMcpClientOptions): Promise<never> => {
+      seen.push(input.allowedTools);
+      return Promise.reject(new Error("synthetic stop"));
+    };
+    const manual = fixture(undefined, {}, true);
+    await expect(managerFor(manual, capture).connect("notes", "test")).rejects.toThrow();
+    const automatic = fixture();
+    await expect(managerFor(automatic, capture).connect("notes", "test")).rejects.toThrow();
+    expect(seen).toEqual([["probe"], undefined]);
+  });
 });

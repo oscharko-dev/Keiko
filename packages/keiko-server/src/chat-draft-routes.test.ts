@@ -173,7 +173,7 @@ describe("private chat draft routes", () => {
 });
 
 describe("private Coding Workbench draft routes", () => {
-  const WINDOW_ID = "coding-workbench-mabc12";
+  const WINDOW_ID = "coding";
 
   it("mounts authenticated reads and writes and restores the composer text after a reload", async () => {
     const { deps, cookie } = fixture();
@@ -225,6 +225,9 @@ describe("private Coding Workbench draft routes", () => {
     for (const event of events)
       expectActivityLogProof("chat.draft.operation.lifecycle", formatActivityLogProofLine(event));
     expect(JSON.stringify(events)).not.toContain(TEXT);
-    expect(JSON.stringify(events)).not.toContain(WINDOW_ID);
+    // The singleton window id is also a word of the closed surface name: blank that one value and
+    // the id must appear nowhere else in any field, message or op of the lifecycle.
+    const withoutSurface = JSON.stringify(events).replaceAll('"coding-workbench"', '""');
+    expect(withoutSurface).not.toContain(WINDOW_ID);
   });
 });

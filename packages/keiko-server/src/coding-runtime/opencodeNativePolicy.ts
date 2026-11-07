@@ -28,12 +28,24 @@ import type { SidecarPermissionEvent } from "./codingSidecarEventParser.js";
 import type { CodingToolNativeCharge } from "./codingToolFacadePorts.js";
 import { OPENCODE_NATIVE_DELIVERY_REFUSAL_MESSAGE } from "./opencodeNativeDeliveryTools.js";
 import {
+  OPENCODE_CODE_MODE_SCHEDULE,
+  OPENCODE_CODE_MODE_SCHEDULE_OPERATIONS,
   OPENCODE_CODE_MODE_SESSION_MOVE,
   OPENCODE_CODE_MODE_WORKTREE_CREATE,
   OPENCODE_NATIVE_POLICY_ACTION,
   OPENCODE_NATIVE_POLICY_MAX_RESOURCES,
   OPENCODE_NATIVE_POLICY_MAX_RESOURCE_CHARS,
 } from "./opencodeNativePolicyPlugin.js";
+import { physicalWorkspacePath, workspaceRelative } from "./opencodeNativePaths.js";
+import {
+  commandTokens,
+  invocationTokens,
+  isVettedCommandSegment,
+  pathOptionLeavesWorkspace,
+  shellSegments,
+  shellWords,
+  subcommandOf,
+} from "./opencodeNativeShellPolicy.js";
 import { OPENCODE_NATIVE_PERMISSION_ACTIONS } from "./opencodeNativeTools.js";
 import type { NativeWorktreeDisposition } from "./opencodeNativeWorktree.js";
 import { projectOpenCodePermissionRequestId } from "./opencodeProtocol.js";
@@ -80,6 +92,8 @@ export type OpenCodeNativePolicyDenyReason =
   | "sensitive-path"
   | "linked-file"
   | "delivery-reserved"
+  | "path-unresolvable"
+  | "nothing-to-review"
   | "mode-denied";
 
 export type OpenCodeNativePolicyDecision =
@@ -112,7 +126,8 @@ type NativeActionLabel =
   | "native-shell"
   | "native-egress"
   | "native-execute"
-  | "native-mcp";
+  | "native-mcp"
+  | "native-schedule";
 
 const SEARCH_ACTIONS = new Set(["glob", "grep"]);
 /** A new managed task workspace's name: the task id the managed owner derives its branch from. */
@@ -160,6 +175,7 @@ const PERMISSION_LOG_VALUES = [
   "doom_loop",
   "opencode_session_move",
   "opencode_worktree_create",
+  "opencode_schedule",
 ] as const;
 type PermissionLogValue = (typeof PERMISSION_LOG_VALUES)[number] | "other";
 // An MCP tool is logged by its class alone: its server and tool names are the operator's words.
@@ -220,199 +236,9 @@ const RESERVED_GIT_SUBCOMMANDS = new Set([
   "send-pack",
   "http-push",
 ]);
-/**
- * Commands a Supervised workspace runs without a decision (ADR-0138: "vetted commands and
- * verification"): the project's own package scripts, test runners, type checkers, linters,
- * formatters and build tools, and read-only Git and file inspection. Anything else is a
- * high-risk command that asks. Token based, so classification stays linear in the command.
- */
+/** The package managers whose `test`, `run` and script shorthands are project checks. */
 const VETTED_PACKAGE_MANAGERS = new Set(["npm", "pnpm", "yarn", "bun"]);
-const VETTED_PACKAGE_SUBCOMMANDS = new Set([
-  "run",
-  "test",
-  "t",
-  "run-script",
-  "ci",
-  "install",
-  "i",
-  "exec",
-  "x",
-]);
-const VETTED_NPX_TOOLS = new Set([
-  "vitest",
-  "jest",
-  "mocha",
-  "tsc",
-  "eslint",
-  "prettier",
-  "playwright",
-  "tsx",
-  "ts-node",
-  "next",
-  "vite",
-  "turbo",
-  "nx",
-]);
-const VETTED_BUILD_TOOLS: Readonly<Record<string, ReadonlySet<string>>> = {
-  mvn: new Set(["test", "verify", "compile", "package", "install", "clean"]),
-  mvnw: new Set(["test", "verify", "compile", "package", "install", "clean"]),
-  "./mvnw": new Set(["test", "verify", "compile", "package", "install", "clean"]),
-  gradle: new Set(["test", "check", "build", "compileJava", "assemble", "clean"]),
-  gradlew: new Set(["test", "check", "build", "compileJava", "assemble", "clean"]),
-  "./gradlew": new Set(["test", "check", "build", "compileJava", "assemble", "clean"]),
-  cargo: new Set(["test", "build", "check", "clippy", "fmt"]),
-  go: new Set(["test", "build", "vet", "fmt"]),
-  make: new Set(["test", "check", "build", "lint"]),
-  git: new Set([
-    "status",
-    "diff",
-    "log",
-    "show",
-    "blame",
-    "ls-files",
-    "rev-parse",
-    "describe",
-    "grep",
-    "shortlog",
-    // Reserved subcommands whose read-only forms stay available (READ_ONLY_GIT_FORMS). The reserved
-    // check runs before vetting, so only those forms reach this set; their writes stay refused.
-    "branch",
-    "stash",
-    "remote",
-    "tag",
-    "worktree",
-    "submodule",
-    "config",
-    "symbolic-ref",
-    "reflog",
-    "notes",
-  ]),
-};
-const VETTED_INSPECTION_TOOLS = new Set([
-  "pytest",
-  "ls",
-  "cat",
-  "head",
-  "tail",
-  "wc",
-  "find",
-  "grep",
-  "rg",
-  "pwd",
-  "echo",
-  "tree",
-  "which",
-  "env",
-  "printenv",
-  "date",
-  "sort",
-  "uniq",
-  "diff",
-  "stat",
-  "du",
-  "file",
-]);
 const RESERVED_GH_SUBCOMMANDS = new Set(["pr", "repo", "release", "api"]);
-
-/** Splits a command line at its shell list operators; no regex backtracking is involved. */
-function commandSegments(command: string): readonly string[] {
-  return command
-    .split(/&&|\|\||[;|]/u)
-    .map((segment) => segment.trim())
-    .filter((segment) => segment.length > 0);
-}
-
-/**
- * Whitespace tokens of one segment, reduced to the effective invocation: leading `NAME=value`
- * assignments and transparent wrappers (`env`, `command`, `exec`, `nice`, `nohup`, `time`) are
- * dropped with their own options, and a program given by path is read by its basename, so
- * `env git push`, `/usr/bin/git push` and `exec git push` all read as `git push`. Quoting is not
- * interpreted, so a token is at most a hint (#3897 review).
- */
-function commandTokens(segment: string): readonly string[] {
-  let tokens: readonly string[] = segment.split(/\s+/u).filter((token) => token.length > 0);
-  for (let guard = 0; guard < 8; guard += 1) {
-    const stripped = stripInvocationPrefix(tokens);
-    if (stripped === tokens) break;
-    tokens = stripped;
-  }
-  const [program, ...rest] = tokens;
-  return program === undefined ? [] : [program.slice(program.lastIndexOf("/") + 1), ...rest];
-}
-
-const WRAPPER_PROGRAMS = new Set(["env", "command", "exec", "nice", "nohup", "time"]);
-/** Wrapper options that take a separate argument (`env -u NAME`, `nice -n 10`). */
-const WRAPPER_OPTIONS_WITH_VALUE = new Set([
-  "-u",
-  "--unset",
-  "-n",
-  "--adjustment",
-  "-C",
-  "--chdir",
-]);
-
-function stripInvocationPrefix(tokens: readonly string[]): readonly string[] {
-  const [first] = tokens;
-  if (first === undefined) return tokens;
-  if (/^[A-Za-z_]\w*=/u.test(first)) return tokens.slice(1);
-  const program = first.slice(first.lastIndexOf("/") + 1);
-  if (!WRAPPER_PROGRAMS.has(program)) return tokens;
-  let index = 1;
-  while (index < tokens.length && tokens[index]?.startsWith("-") === true) {
-    const option = tokens[index] ?? "";
-    index += WRAPPER_OPTIONS_WITH_VALUE.has(option) ? 2 : 1;
-    if (option === "--") break;
-  }
-  return tokens.slice(index);
-}
-
-/** Git global options that consume the next token (`git -C <path> push`, `git -c k=v push`). */
-const GIT_OPTIONS_WITH_VALUE = new Set([
-  "-C",
-  "-c",
-  "--git-dir",
-  "--work-tree",
-  "--namespace",
-  "--exec-path",
-  "--super-prefix",
-  "--config-env",
-]);
-
-/** The first non-option token after `program`, as `git <subcommand>` would read it. */
-function subcommandOf(tokens: readonly string[]): string | undefined {
-  let index = 1;
-  while (index < tokens.length) {
-    const token = tokens[index] ?? "";
-    if (!token.startsWith("-")) return token;
-    index += tokens[0] === "git" && GIT_OPTIONS_WITH_VALUE.has(token) ? 2 : 1;
-  }
-  return undefined;
-}
-
-function isVettedSegment(segment: string): boolean {
-  const tokens = commandTokens(segment);
-  const [program] = tokens;
-  if (program === undefined) return false;
-  const subcommand = subcommandOf(tokens);
-  const vettedSubcommands = vettedSubcommandsOf(program);
-  if (vettedSubcommands !== undefined)
-    return subcommand !== undefined && vettedSubcommands.has(subcommand);
-  if (program === "node") return isVettedNodeInvocation(subcommand);
-  if (program === "python" || program === "python3")
-    return tokens[1] === "-m" && (tokens[2] === "pytest" || tokens[2] === "unittest");
-  return VETTED_INSPECTION_TOOLS.has(program);
-}
-
-function vettedSubcommandsOf(program: string): ReadonlySet<string> | undefined {
-  if (VETTED_PACKAGE_MANAGERS.has(program)) return VETTED_PACKAGE_SUBCOMMANDS;
-  if (program === "npx") return VETTED_NPX_TOOLS;
-  // Own entries only: `constructor` or `__proto__` as a program must not reach the prototype.
-  return Object.hasOwn(VETTED_BUILD_TOOLS, program) ? VETTED_BUILD_TOOLS[program] : undefined;
-}
-
-function isVettedNodeInvocation(subcommand: string | undefined): boolean {
-  return subcommand === "--test" || /\.(?:m?js|c?js|ts)$/u.test(subcommand ?? "");
-}
 
 /**
  * The project check a native shell line runs (#3897 review, #3901). The runtime reports one exit
@@ -696,7 +522,8 @@ function nonExecutingCheck(tokens: readonly string[]): boolean {
 
 function segmentVerificationKind(tokens: readonly string[]): VerificationKind | undefined {
   const [program] = tokens;
-  if (program === undefined || nonExecutingCheck(tokens)) return undefined;
+  if (program === undefined || nonExecutingCheck(tokens) || pathOptionLeavesWorkspace(tokens))
+    return undefined;
   const subcommand = subcommandOf(tokens);
   if (VETTED_PACKAGE_MANAGERS.has(program)) return packageCheckKind(tokens, subcommand);
   const check = PROGRAM_CHECKS.get(program);
@@ -918,8 +745,7 @@ export function decideOpenCodeNativePolicy(
   const { request } = input;
   if (!isCodingWorkbenchMode(input.mode))
     return deny("mode-denied", "Keiko refused this action: the run's autonomy mode is unknown.");
-  const classification =
-    classifyMcpAction(request, input.mcp) ?? classifyNativeAction(request, admittedRootsOf(input));
+  const classification = classifiedOrUnresolvable(input);
   if ("reason" in classification) return deny(classification.reason, classification.message);
   // Reads and planning are allowed in every mode (ADR-0124 D1); only effects consult the matrix.
   if (alwaysAllowedRead(classification, request, input.mcp))
@@ -946,6 +772,27 @@ export function decideOpenCodeNativePolicy(
       message: `Keiko refused this action: ${classification.label} is not permitted in the current autonomy mode.`,
       classification,
     };
+  return reviewableAsk(input, classification);
+}
+
+/**
+ * The ask a person decides, or an immediate refusal when the request names nothing to decide on.
+ * A Code Mode program sent without its `code` reached the Workbench as an ask with no command, path,
+ * program or address, which no one can approve: the run then waited for a Deny (lab T37, #4271).
+ * Refusing at once tells the model what is missing while the turn is still running.
+ */
+function reviewableAsk(
+  input: OpenCodeNativePolicyInput,
+  classification: OpenCodeNativeActionClassification,
+): OpenCodeNativePolicyDecision {
+  const { request } = input;
+  if (!request.resources.some((resource) => resource.trim().length > 0))
+    return {
+      effect: "deny",
+      reason: "nothing-to-review",
+      message: NOTHING_TO_REVIEW_MESSAGE,
+      classification,
+    };
   return {
     effect: "ask",
     classification,
@@ -953,6 +800,26 @@ export function decideOpenCodeNativePolicy(
     actionId:
       request.source === undefined ? undefined : `${request.sessionID}:${request.source.id}`,
   };
+}
+
+const NOTHING_TO_REVIEW_MESSAGE =
+  "Keiko refused this action: it names no command, path, program or address, so nobody can review it. Repeat it with its complete input (a Code Mode program goes in `code`), or use the shell, read or edit tool.";
+
+/**
+ * The classification, or the closed `path-unresolvable` refusal when the filesystem cannot answer
+ * for a path (a link loop, a name that is too long, no permission). A throw here used to reject
+ * the hook's request with nothing on the log; now the decision line records the refusal.
+ */
+function classifiedOrUnresolvable(input: OpenCodeNativePolicyInput): Classified {
+  try {
+    return (
+      classifyMcpAction(input.request, input.mcp) ??
+      classifyNativeAction(input.request, admittedRootsOf(input))
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === undefined) throw error;
+    return PATH_UNRESOLVABLE;
+  }
 }
 
 /** A read tool of a managed server the human chose for this run; a write never qualifies. */
@@ -1023,6 +890,7 @@ function classifyNativeAction(
   if (permission === OPENCODE_CODE_MODE_SESSION_MOVE)
     return classifySessionMove(request, roots.workspaceRoot);
   if (permission === OPENCODE_CODE_MODE_WORKTREE_CREATE) return classifyWorktreeCreate(request);
+  if (permission === OPENCODE_CODE_MODE_SCHEDULE) return classifySchedule(request);
   if (permission === "websearch") return roots.webSearch === true ? EGRESS : WEBSEARCH_UNCONFIGURED;
   if (!KNOWN_ACTIONS.has(permission))
     return {
@@ -1032,7 +900,7 @@ function classifyNativeAction(
   const pathAction = classifyPathAction(request, roots);
   if (pathAction !== undefined) return pathAction;
   if (EGRESS_ACTIONS.has(permission)) return EGRESS;
-  if (permission === "shell") return classifyShell(resources);
+  if (permission === "shell") return classifyShell(resources, roots.workspaceRoot);
   return EXECUTE;
 }
 
@@ -1083,6 +951,33 @@ const NATIVE_WORKTREE: OpenCodeNativeActionClassification = Object.freeze({
   risk: "high",
   label: "native-edit",
 });
+
+/**
+ * A native schedule (#4271): creating, pausing, resuming or deleting a time at which Keiko continues
+ * this task on its own, in the mode the human chose for it. That starts later work nobody watches,
+ * so it is risky contained work: Ask for approval and Supervised workspace ask, Full access allows
+ * (`NATIVE_SCHEDULE`). A schedule gated by an
+ * `if`/`until` check is refused in every mode: a shell check runs with the runtime server's whole
+ * environment outside the shell scrub, and a Code Mode check would boot a runtime for every poll.
+ */
+const SCHEDULE_CONDITION_REFUSED = Object.freeze({
+  reason: "unsupported-action" as const,
+  message:
+    "Keiko refused this schedule: Keiko continues a task at a time, in, every or cron, but not on an if or until check. Schedule it by time instead.",
+});
+
+const SCHEDULE_OPERATIONS: ReadonlySet<string> = new Set(OPENCODE_CODE_MODE_SCHEDULE_OPERATIONS);
+
+function classifySchedule(request: OpenCodeNativePolicyRequest): Classified {
+  const [operation, ...rest] = request.resources;
+  if (operation === undefined || !SCHEDULE_OPERATIONS.has(operation))
+    return {
+      reason: "unsupported-action",
+      message: "Keiko refused this action: it is not a schedule change Keiko knows.",
+    };
+  if (rest.some((resource) => resource.startsWith("condition:"))) return SCHEDULE_CONDITION_REFUSED;
+  return NATIVE_SCHEDULE;
+}
 
 function classifyWorktreeCreate(request: OpenCodeNativePolicyRequest): Classified {
   const [name, ...rest] = request.resources;
@@ -1185,6 +1080,12 @@ const EDIT: OpenCodeNativeActionClassification = Object.freeze({
   risk: "medium",
   label: "native-edit",
 });
+/** A native schedule change (`classifySchedule`): risky contained work, never routine. */
+const NATIVE_SCHEDULE: OpenCodeNativeActionClassification = Object.freeze({
+  ...EDIT,
+  risk: "high",
+  label: "native-schedule",
+});
 const EGRESS: OpenCodeNativeActionClassification = Object.freeze({
   actionClass: "network-egress",
   kind: "network-egress",
@@ -1223,25 +1124,74 @@ function guardedPaths(
   loadsInstructions = false,
 ): Classified {
   for (const resource of resources) {
-    const contained = admittedRelative(resource, roots);
-    if (contained === undefined)
-      return {
-        reason: "workspace-escape",
-        message: "Keiko refused this action: the path is outside the task workspace.",
-      };
-    if (contained.length > 0 && isDenied(contained))
-      return {
-        reason: "sensitive-path",
-        message: "Keiko refused this action: the path is a protected sensitive file.",
-      };
-    if (linkedInWorkspace(resource, roots.workspaceRoot, loadsInstructions))
-      return {
-        reason: "linked-file",
-        message:
-          "Keiko refused this action: the file, or an AGENTS.md instruction file the read would load, is a hard link that can name a file outside the task workspace.",
-      };
+    const refusal = refusedPath(resource, roots, loadsInstructions);
+    if (refusal !== undefined) return refusal;
   }
   return classification;
+}
+
+interface PathRefusal {
+  readonly reason: OpenCodeNativePolicyDenyReason;
+  readonly message: string;
+}
+
+const PATH_ESCAPE: PathRefusal = Object.freeze({
+  reason: "workspace-escape",
+  message: "Keiko refused this action: the path is outside the task workspace.",
+});
+const PATH_SENSITIVE: PathRefusal = Object.freeze({
+  reason: "sensitive-path",
+  message: "Keiko refused this action: the path is a protected sensitive file.",
+});
+const PATH_LINK_ESCAPE: PathRefusal = Object.freeze({
+  reason: "workspace-escape",
+  message:
+    "Keiko refused this action: the path leads outside the task workspace through a symbolic link.",
+});
+const PATH_LINK_SENSITIVE: PathRefusal = Object.freeze({
+  reason: "sensitive-path",
+  message:
+    "Keiko refused this action: the path leads to a protected sensitive file through a symbolic link.",
+});
+const PATH_HARD_LINK: PathRefusal = Object.freeze({
+  reason: "linked-file",
+  message:
+    "Keiko refused this action: the file, or an AGENTS.md instruction file the read would load, is a hard link that can name a file outside the task workspace.",
+});
+const PATH_UNRESOLVABLE: PathRefusal = Object.freeze({
+  reason: "path-unresolvable",
+  message:
+    "Keiko refused this action: the path cannot be resolved (too many links, a name that is too long, or no permission). Use a plain path inside the task workspace.",
+});
+
+function refusedPath(
+  resource: string,
+  roots: AdmittedRoots,
+  loadsInstructions: boolean,
+): PathRefusal | undefined {
+  const contained = admittedRelative(resource, roots);
+  if (contained === undefined) return PATH_ESCAPE;
+  if (contained.length > 0 && isDenied(contained)) return PATH_SENSITIVE;
+  const physical = physicalRefusal(resource, roots.workspaceRoot);
+  if (physical !== undefined) return physical;
+  return linkedInWorkspace(resource, roots.workspaceRoot, loadsInstructions)
+    ? PATH_HARD_LINK
+    : undefined;
+}
+
+/**
+ * The lexical checks read a pathname; a symbolic link inside the workspace can make it name
+ * `~/.ssh/id_rsa`, `.env` or `.git/hooks/pre-commit`. The same containment and sensitive-path rules
+ * therefore run again on where the path physically resolves (#4271). A plan-directory path is not
+ * a workspace path and keeps its own link-free rule.
+ */
+function physicalRefusal(resource: string, workspaceRoot: string): PathRefusal | undefined {
+  if (workspaceRelative(resource, workspaceRoot) === undefined) return undefined;
+  const physical = physicalWorkspacePath(resource, workspaceRoot);
+  if (physical.kind === "escape") return PATH_LINK_ESCAPE;
+  return physical.relative.length > 0 && isDenied(physical.relative)
+    ? PATH_LINK_SENSITIVE
+    : undefined;
 }
 
 /** The instruction file the producer's read tool loads from every directory it passes. */
@@ -1269,11 +1219,21 @@ function linkedInWorkspace(
   if (!instructions) return false;
   let directory = stat?.isDirectory() === true ? target : dirname(target);
   while (!relative(root, directory).startsWith("..")) {
-    if (multiplyLinked(lstatIfPresent(join(directory, READ_INSTRUCTION_FILE)))) return true;
+    if (instructionFileAliased(join(directory, READ_INSTRUCTION_FILE), root)) return true;
     if (directory === root) return false;
     directory = dirname(directory);
   }
   return false;
+}
+
+/**
+ * An `AGENTS.md` the producer's read tool would load that is a hard link, or a symbolic link whose
+ * target leaves the workspace or is a protected file (the link is followed when it is loaded).
+ */
+function instructionFileAliased(file: string, root: string): boolean {
+  const stat = lstatIfPresent(file);
+  if (multiplyLinked(stat)) return true;
+  return stat?.isSymbolicLink() === true && physicalRefusal(file, root) !== undefined;
 }
 
 function multiplyLinked(stat: Stats | undefined): boolean {
@@ -1390,11 +1350,9 @@ function externalRead(paths: readonly string[], roots: AdmittedRoots): Classifie
   if (root === undefined) return undefined;
   for (const path of paths) {
     const contained = workspaceRelative(path, root) ?? "";
-    if (contained.length > 0 && isDenied(contained))
-      return {
-        reason: "sensitive-path",
-        message: "Keiko refused this action: the path is a protected sensitive file.",
-      };
+    if (contained.length > 0 && isDenied(contained)) return PATH_SENSITIVE;
+    const physical = physicalRefusal(path, root);
+    if (physical !== undefined) return physical;
     if (linkedInWorkspace(path, root, false))
       return {
         reason: "linked-file",
@@ -1405,7 +1363,6 @@ function externalRead(paths: readonly string[], roots: AdmittedRoots): Classifie
   return EXTERNAL_READ;
 }
 
-/** Workspace-relative POSIX path, or undefined when the resource points outside the workspace. */
 /**
  * The workspace files an admitted native `edit` check names, workspace-relative as the runtime's
  * own diff names them; plan notes and anything outside the workspace are not workspace files.
@@ -1421,18 +1378,7 @@ export function openCodeNativeEditFiles(
   });
 }
 
-export function workspaceRelative(resource: string, workspaceRoot: string): string | undefined {
-  const candidate = resource.trim();
-  if (candidate.includes("\0")) return undefined;
-  const rel = isAbsolute(candidate) ? relative(workspaceRoot, candidate) : candidate;
-  const posix = rel.split(sep).join("/");
-  if (posix === "" || posix === ".") return "";
-  if (isAbsolute(posix) || posix === ".." || posix.startsWith("../") || posix.startsWith("/"))
-    return undefined;
-  const segments = posix.split("/");
-  if (segments.includes("..")) return undefined;
-  return posix;
-}
+export { workspaceRelative };
 
 /**
  * A reserved Git or gh invocation at a command position anywhere in the text: the start, after a
@@ -1449,7 +1395,7 @@ function reservedInvocationInText(command: string): boolean {
     if (index < command.length && !COMMAND_DELIMITERS.has(char)) continue;
     const fragment = command.slice(start, index);
     if (executedFragment(opener, command.slice(0, Math.max(0, start - 1))))
-      if (reservedTokens(commandTokens(fragment))) return true;
+      if (reservedInvocation(commandTokens(fragment))) return true;
     opener = char;
     start = index + 1;
   }
@@ -1458,7 +1404,7 @@ function reservedInvocationInText(command: string): boolean {
 
 const COMMAND_DELIMITERS = new Set([";", "&", "|", "(", "`", "'", '"']);
 const QUOTES = new Set(["'", '"']);
-const EXECUTING_PREFIX = /(?:(?:^|\s)-[A-Za-z]*[ce]|\(|(?:^|\s)(?:eval|exec|xargs))\s*$/u;
+const EXECUTING_PREFIX = /(?:(?:^|\s)-[A-Za-z]*[ceS]|\(|(?:^|\s)(?:eval|exec|xargs))\s*$/u;
 
 function executedFragment(opener: string, before: string): boolean {
   return !QUOTES.has(opener) || EXECUTING_PREFIX.test(before);
@@ -1537,11 +1483,69 @@ function reservedTokens(tokens: readonly string[]): boolean {
 }
 
 /**
+ * Programs that run another command given in their own arguments (`find -exec git push \;`,
+ * `xargs git push`, `timeout 5 git push`, `npx git push`). The inner command is classified exactly
+ * like a plain segment, so wrapping a delivery command in one never evades its reservation.
+ */
+const RUNNER_PROGRAMS = new Set([
+  "find",
+  "xargs",
+  "timeout",
+  "watch",
+  "parallel",
+  "setsid",
+  "stdbuf",
+  "ionice",
+  "chrt",
+  "taskset",
+  "flock",
+  "strace",
+  "sudo",
+  "doas",
+  "npx",
+  "bunx",
+  "pnpx",
+]);
+/** `npm exec`, `pnpm exec`/`dlx`, `yarn exec`/`dlx` and `bun x` run a binary the same way. */
+const PACKAGE_RUNNER_SUBCOMMANDS = new Set(["exec", "x", "dlx"]);
+
+function runsAnotherCommand(tokens: readonly string[]): boolean {
+  const [program] = tokens;
+  if (program === undefined) return false;
+  if (RUNNER_PROGRAMS.has(program)) return true;
+  return VETTED_PACKAGE_MANAGERS.has(program) && PACKAGE_RUNNER_SUBCOMMANDS.has(tokens[1] ?? "");
+}
+
+/** A reserved Git or gh command at any argument position of a runner. */
+function reservedInRunner(tokens: readonly string[]): boolean {
+  if (!runsAnotherCommand(tokens)) return false;
+  for (let index = 1; index < tokens.length; index += 1) {
+    if (reservedTokens(invocationTokens(tokens.slice(index)))) return true;
+  }
+  return false;
+}
+
+function reservedInvocation(tokens: readonly string[]): boolean {
+  return reservedTokens(tokens) || reservedInRunner(tokens);
+}
+
+/**
+ * A segment is reserved when either reading of it is: the whitespace tokens (quotes uninterpreted,
+ * the conservative view) or the words a shell reads (`git 'push'` is `git push`).
+ */
+function reservedSegment(segment: string): boolean {
+  if (reservedInvocation(commandTokens(segment))) return true;
+  const words = shellWords(segment);
+  return words !== undefined && reservedInvocation(invocationTokens(words));
+}
+
+/**
  * OpenCode reports one resource per simple command of a shell line (`npm test && git push` arrives
  * as two), so every resource is classified on its own: any reserved delivery command refuses the
- * whole line, and the line is vetted only when every command in it is (#3897 audit).
+ * whole line, and the line is vetted only when every command in it is (#3897 audit). `root` is the
+ * workspace the path-valued options (`mvn -f`, `npm --prefix`) and `cd` targets must stay inside.
  */
-function classifyShell(resources: readonly string[]): Classified {
+function classifyShell(resources: readonly string[], root: string): Classified {
   const commands = resources.map((resource) => resource.trim()).filter((r) => r.length > 0);
   if (commands.length === 0) return SHELL_UNVETTED;
   if (commands.some((command) => isReservedCommand(command) || reservedInvocationInText(command)))
@@ -1549,13 +1553,15 @@ function classifyShell(resources: readonly string[]): Classified {
       reason: "delivery-reserved",
       message: OPENCODE_NATIVE_DELIVERY_REFUSAL_MESSAGE,
     };
-  return commands.every((command) => commandSegments(command).every(isVettedSegment))
+  return commands.every((command) =>
+    shellSegments(command).every((segment) => isVettedCommandSegment(segment, root)),
+  )
     ? SHELL_VETTED
     : SHELL_UNVETTED;
 }
 
 function isReservedCommand(command: string): boolean {
-  return commandSegments(command).some((segment) => reservedTokens(commandTokens(segment)));
+  return shellSegments(command).some(reservedSegment);
 }
 
 function askEvent(
@@ -1635,6 +1641,7 @@ export const CODING_RUNTIME_NATIVE_POLICY_DECIDED_OPERATION = defineActivityLogO
         "doom_loop",
         "opencode_session_move",
         "opencode_worktree_create",
+        "opencode_schedule",
         "mcp",
         "other",
       ],
@@ -1657,6 +1664,8 @@ export const CODING_RUNTIME_NATIVE_POLICY_DECIDED_OPERATION = defineActivityLogO
         "sensitive-path",
         "linked-file",
         "delivery-reserved",
+        "path-unresolvable",
+        "nothing-to-review",
         "approved",
         "denied",
         "expired",
@@ -1770,6 +1779,28 @@ export function nativeAuthorityReasonLogValue(reason: string): NativeAuthorityRe
     default:
       return reason.endsWith("-drift") ? "drift" : "other";
   }
+}
+
+const AUTHORITY_REFUSAL_PREFIX = "Keiko refused this action:";
+const AUTHORITY_REFUSAL_MESSAGES: Readonly<Record<NativeAuthorityReasonLog, string>> = {
+  "patch-too-large": `${AUTHORITY_REFUSAL_PREFIX} this edit is larger than the run's patch limit. Split it into several smaller edits and try again.`,
+  "authority-budget-exceeded": `${AUTHORITY_REFUSAL_PREFIX} the run's budget (tool calls or changed bytes) is exhausted. Finish with what is already done and report it.`,
+  "authority-expired": `${AUTHORITY_REFUSAL_PREFIX} the run's authority has expired. Stop and report what is done.`,
+  revoked: `${AUTHORITY_REFUSAL_PREFIX} the run's authority was revoked. Stop and report what is done.`,
+  "action-not-authorized": `${AUTHORITY_REFUSAL_PREFIX} this kind of action is outside the run's Authority Envelope. Continue with actions the run is authorized for.`,
+  drift: `${AUTHORITY_REFUSAL_PREFIX} the workspace or run changed after its authority was granted. Stop and report what is done.`,
+  "authority-resolution-failed": `${AUTHORITY_REFUSAL_PREFIX} the run's authority could not be resolved. Stop and report what is done.`,
+  unavailable: `${AUTHORITY_REFUSAL_PREFIX} the run's authority is not available right now.`,
+  other: `${AUTHORITY_REFUSAL_PREFIX} the run's authority is no longer valid or its budget is exhausted.`,
+};
+
+/**
+ * The model-facing message of an authority refusal: each admission reason names what the model can
+ * do next (split the edit, stop, continue with authorized actions) instead of one catch-all. A
+ * reason this build does not know reads as the generic `other` message.
+ */
+export function nativeAuthorityRefusalMessage(reason: string | undefined): string {
+  return AUTHORITY_REFUSAL_MESSAGES[nativeAuthorityReasonLogValue(reason ?? "other")];
 }
 
 function authorityEvidenceFields(authority: OpenCodeNativeAuthorityEvidence | undefined): {

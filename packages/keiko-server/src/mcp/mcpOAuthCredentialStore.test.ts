@@ -65,6 +65,23 @@ describe("keeping an MCP server's OAuth credential between runs (#3903 AC3)", ()
     expect(sealed.join("")).not.toContain("issues.example.test");
   });
 
+  it("keeps the credential with the later expiry when an older one is saved over it", () => {
+    const stateDir = realpathSync(mkdtempSync(join(tmpdir(), "keiko-mcp-vault-")));
+    roots.push(stateDir);
+    const credentials = store(stateDir);
+    const fresher = { ...CREDENTIAL, value: { ...CREDENTIAL.value, expires: 9_000 } };
+    const older = { ...CREDENTIAL, value: { ...CREDENTIAL.value, expires: 5_000 } };
+    credentials.save(BINDING, fresher);
+    credentials.save(BINDING, older);
+    expect(credentials.load(BINDING)).toEqual(fresher);
+    const newest = { ...CREDENTIAL, value: { ...CREDENTIAL.value, expires: 12_000 } };
+    credentials.save(BINDING, newest);
+    expect(credentials.load(BINDING)).toEqual(newest);
+    // A credential without a stamp proves nothing about age, so it is stored as before.
+    credentials.save(BINDING, CREDENTIAL);
+    expect(credentials.load(BINDING)).toEqual(CREDENTIAL);
+  });
+
   it("names a binding by a digest, never by its URL or issuer", () => {
     const reference = mcpOAuthCredentialReference(BINDING);
     expect(reference).toMatch(/^mcp-oauth:[0-9a-f]{64}$/u);

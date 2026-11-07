@@ -3,6 +3,7 @@ import type {
   ExternalMcpConnection,
   ManagedMcpInvocationContext,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
+import { ManagedMcpError, noEffectError } from "./definitions.js";
 import { connectExternalMcp } from "./external-client.js";
 import { createMcpRelayEndpoint } from "./relay-endpoint.js";
 
@@ -23,7 +24,11 @@ interface Fixture {
   readonly revoke: () => void;
   readonly recover: Mock<() => void>;
 }
-function fixture(risk: "read" | "write" = "read", instructions?: string): Fixture {
+function fixture(
+  risk: "read" | "write" = "read",
+  instructions?: string,
+  dispatchGate = true,
+): Fixture {
   let allowed = true;
   const recover = vi.fn(() => {
     allowed = false;
@@ -48,6 +53,7 @@ function fixture(risk: "read" | "write" = "read", instructions?: string): Fixtur
   const connection: ExternalMcpConnection = {
     signal: new AbortController().signal,
     ...(instructions === undefined ? {} : { instructions }),
+    ...(dispatchGate ? { dispatchGate: true } : {}),
     tools: [
       { name: "echo", inputSchema },
       { name: "unadmitted", inputSchema },
@@ -272,4 +278,138 @@ it("binds the real legacy MCP session metadata and preserves the durable invocat
     { text: "synthetic legacy mutation" },
     expect.objectContaining({ invocationId: "durable-legacy-call" }),
   );
+});
+
+function permitFixture(f: Fixture): {
+  readonly dispatch: Mock<() => boolean>;
+  readonly release: Mock<() => void>;
+  readonly fail: Mock<() => void>;
+  readonly context: ManagedMcpInvocationContext;
+} {
+  const dispatch = vi.fn(() => true);
+  const release = vi.fn();
+  const fail = vi.fn();
+  return {
+    dispatch,
+    release,
+    fail,
+    context: {
+      ...f.context,
+      beginMutation: () => ({
+        invocationId: "durable-native-call",
+        dispatch,
+        release,
+        acknowledge: () => undefined,
+        fail,
+      }),
+    },
+  };
+}
+async function writeText(f: Fixture, context: ManagedMcpInvocationContext): Promise<string> {
+  const result = await legacy(
+    f,
+    "tools/call",
+    {
+      name: "echo",
+      arguments: { text: "synthetic note" },
+      _meta: { "ai.opencode/sessionID": "s" },
+    },
+    context,
+  );
+  expect(result.result?.isError).toBe(true);
+  return result.result?.content?.[0]?.text ?? "";
+}
+
+it("treats a write that failed before its frame left as effect-free: no run revocation, record released", async () => {
+  const f = fixture("write");
+  const permit = permitFixture(f);
+  f.call.mockRejectedValue(noEffectError("deadline-exceeded"));
+  const text = await writeText(f, permit.context);
+  expect(permit.release).toHaveBeenCalledOnce();
+  expect(permit.fail).not.toHaveBeenCalled();
+  expect(f.recover).not.toHaveBeenCalled();
+  expect(text).toContain("did not answer in time");
+  expect(text).toContain("Nothing was changed");
+  // The durable record is dispatched at the transport gate, never earlier.
+  expect(permit.dispatch).not.toHaveBeenCalled();
+  expect(f.call.mock.calls[0]?.[2].beforeDispatch?.()).toBe(true);
+  expect(permit.dispatch).toHaveBeenCalledOnce();
+});
+it("dispatches the record before calling a connection that has no transport gate", async () => {
+  // A connection without its own gate could reach the server without consulting one: the record
+  // must be dispatched before the call starts, or an effect could exist with no record behind it.
+  const f = fixture("write", undefined, false);
+  const permit = permitFixture(f);
+  f.call.mockImplementation((_name, _args, context) => {
+    expect(permit.dispatch).toHaveBeenCalledOnce();
+    expect(context.beforeDispatch).toBeUndefined();
+    return Promise.reject(new ManagedMcpError("closed", undefined, "possible"));
+  });
+  await writeText(f, permit.context);
+  expect(f.call).toHaveBeenCalledOnce();
+  expect(permit.fail).toHaveBeenCalledOnce();
+  expect(permit.release).not.toHaveBeenCalled();
+});
+it("never calls a connection without a transport gate when the record refuses dispatch", async () => {
+  const f = fixture("write", undefined, false);
+  const permit = permitFixture(f);
+  permit.dispatch.mockReturnValue(false);
+  const text = await writeText(f, permit.context);
+  expect(f.call).not.toHaveBeenCalled();
+  expect(permit.release).toHaveBeenCalledOnce();
+  expect(permit.fail).not.toHaveBeenCalled();
+  expect(f.recover).not.toHaveBeenCalled();
+  expect(text).toContain("Nothing was changed");
+});
+it("still revokes the run when the frame may have left", async () => {
+  const f = fixture("write");
+  const permit = permitFixture(f);
+  f.call.mockRejectedValue(new ManagedMcpError("closed", undefined, "possible"));
+  const text = await writeText(f, permit.context);
+  expect(permit.fail).toHaveBeenCalledOnce();
+  expect(permit.release).not.toHaveBeenCalled();
+  expect(f.recover).toHaveBeenCalledOnce();
+  expect(text).toContain("connection to the tool server closed");
+  expect(text).toContain("may or may not have been applied");
+});
+it("never trusts an effect-free claim from a permit that dispatched at admission", async () => {
+  const f = fixture("write");
+  f.call.mockRejectedValue(noEffectError("not-admitted"));
+  await writeText(f, f.context);
+  expect(f.recover).toHaveBeenCalledOnce();
+});
+it("tells the model in fixed words why an oversized result was refused", async () => {
+  const f = fixture();
+  f.call.mockRejectedValue(new ManagedMcpError("result-too-large"));
+  const result = await legacy(f, "tools/call", { name: "echo", arguments: { text: "q" } });
+  expect(result.result?.isError).toBe(true);
+  expect(result.result?.content?.[0]?.text).toContain("exceeded the size limit");
+  expect(f.recover).not.toHaveBeenCalled();
+});
+it("bounds the description the relay forwards to a model", async () => {
+  const f = fixture();
+  const long: ExternalMcpConnection = {
+    signal: new AbortController().signal,
+    tools: [{ name: "echo", description: "\u00e9".repeat(5000), inputSchema }],
+    call: f.call,
+    close: () => Promise.resolve(),
+  };
+  const endpoint = createMcpRelayEndpoint(long, { echo: "read" });
+  cleanup.push(endpoint.close);
+  const response = await endpoint.fetch(
+    new Request("https://relay.example.test/mcp", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        "mcp-protocol-version": "2025-03-26",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
+    }),
+    f.context,
+  );
+  const text = await response.text();
+  const description = (/"description":"([^"]*)"/u.exec(text) ?? [])[1] ?? "";
+  expect(Buffer.byteLength(description, "utf8")).toBeLessThanOrEqual(2048);
+  expect(description.length).toBeGreaterThan(0);
 });

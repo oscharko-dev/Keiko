@@ -16,6 +16,7 @@ import { join } from "node:path";
 import type { TaskWorkspaceLifecycleState } from "@oscharko-dev/keiko-contracts";
 import {
   FOLDER_WORKSPACE_BRANCH,
+  FOLDER_WORKSPACE_ID_PREFIX,
   TASK_WORKSPACE_SCHEMA_VERSION,
   folderWorkspaceHead,
   type WorkspaceInstance,
@@ -36,7 +37,7 @@ import { deriveRepositoryId } from "./naming.js";
 import type { WorkspaceInstanceStore } from "./store.js";
 import type { ActiveWorkspaceView } from "./types.js";
 
-export const FOLDER_PREFIX = "folder:";
+export const FOLDER_PREFIX = FOLDER_WORKSPACE_ID_PREFIX;
 
 type ActivePointer = NonNullable<ReturnType<ActiveWorkspacePointerStore["get"]>>;
 

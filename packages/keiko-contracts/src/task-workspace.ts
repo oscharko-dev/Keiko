@@ -645,6 +645,21 @@ export interface WorkspaceInstance {
 
 export type WorkspaceKind = "git" | "folder";
 
+/** Namespace of a workspace bound in place to a local checkout; its SHA-256 identity follows. */
+export const LOCAL_CHECKOUT_WORKSPACE_ID_PREFIX = "local:";
+/** Namespace of an ordinary folder bound without a repository; its SHA-256 identity follows. */
+export const FOLDER_WORKSPACE_ID_PREFIX = "folder:";
+
+const IN_PLACE_WORKSPACE_ID = new RegExp(
+  `^(?:${LOCAL_CHECKOUT_WORKSPACE_ID_PREFIX}|${FOLDER_WORKSPACE_ID_PREFIX})[a-f0-9]{64}$`,
+  "u",
+);
+
+/** True for the id of a workspace bound in place: a local checkout or an ordinary folder. */
+export function isInPlaceWorkspaceId(value: string): boolean {
+  return IN_PLACE_WORKSPACE_ID.test(value);
+}
+
 /**
  * The branch both `baseBranch` and `taskBranch` carry in a folder workspace. It contains a space,
  * which is never a valid ref name, so it can neither name a real branch nor reach a Git command.

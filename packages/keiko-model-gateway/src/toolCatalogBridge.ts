@@ -40,6 +40,7 @@ import type {
   ToolDefinition,
   UsageMetadata,
 } from "./types.js";
+import { isUsableToolCallId } from "./normalize.js";
 import { logCorrelationId, resolveLogSink, type ModelGatewayLogSink } from "./observability.js";
 
 const TOOL_CATALOG_REJECTED_OPERATION = defineActivityLogOperation({
@@ -474,9 +475,7 @@ function captureCall(
     "invalid-arguments",
   );
   requireBridge(
-    typeof object.id === "string" &&
-      /^[A-Za-z0-9_.:-]{1,128}$/u.test(object.id) &&
-      typeof object.name === "string",
+    isUsableToolCallId(object.id) && typeof object.name === "string",
     "invalid-arguments",
   );
   return object as unknown as NormalizedToolCall;

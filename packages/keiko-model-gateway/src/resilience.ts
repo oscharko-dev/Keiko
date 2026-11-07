@@ -95,8 +95,35 @@ export function codingWorkbenchProviderTimeoutMs(timeoutMs: number): number {
 // the route deadline armed behind a streamed call (`gateway-route-deadline.ts` in keiko-server): a
 // route that backed a streamed call with the BUFFERED budget cut a healthy stream at ten minutes
 // while the gateway itself was still reading it (PR #3602 review).
-export function streamRequestBudgetMs(provider: { readonly timeoutMs: number }): number {
-  return Math.max(provider.timeoutMs, GATEWAY_SILENCE_FLOOR_MS, GATEWAY_STREAM_BUDGET_FLOOR_MS);
+export function streamRequestBudgetMs(
+  provider: { readonly timeoutMs: number },
+  maxOutputTokens?: number,
+): number {
+  const base = Math.max(
+    provider.timeoutMs,
+    GATEWAY_SILENCE_FLOOR_MS,
+    GATEWAY_STREAM_BUDGET_FLOOR_MS,
+  );
+  return Math.min(Math.max(base, streamOutputAllowanceMs(maxOutputTokens)), MAX_TIMER_DELAY_MS);
+}
+
+// The slowest generation rate (tokens per second) a LIVE stream is still granted its whole output
+// allowance at. A healthy but slow local model (8 tok/s, 32k tokens = 68 minutes) was cut at the
+// fixed 30-minute floor and generated again from scratch behind the abandoned read. The silence
+// bound (`GATEWAY_SILENCE_FLOOR_MS`) still ends a stream that stops producing, so a larger budget
+// only ever applies to a stream that keeps delivering data events.
+export const GATEWAY_MIN_STREAM_TOKENS_PER_SECOND = 4;
+
+// How long a stream that is allowed `maxOutputTokens` may run at the slowest granted rate, after
+// the wait for its first byte. Zero when the call states no allowance.
+export function streamOutputAllowanceMs(maxOutputTokens: number | undefined): number {
+  if (maxOutputTokens === undefined || !Number.isFinite(maxOutputTokens) || maxOutputTokens <= 0) {
+    return 0;
+  }
+  return (
+    GATEWAY_SILENCE_FLOOR_MS +
+    Math.ceil((maxOutputTokens / GATEWAY_MIN_STREAM_TOKENS_PER_SECOND) * 1000)
+  );
 }
 
 /**
@@ -1250,8 +1277,9 @@ export function bufferedCallBudgetMs(provider: ProviderRetryPolicy, windowMs: nu
 export function streamedCallBudgetMs(
   provider: { readonly timeoutMs: number },
   windowMs: number,
+  maxOutputTokens?: number,
 ): number {
-  const budgetMs = streamRequestBudgetMs(provider);
+  const budgetMs = streamRequestBudgetMs(provider, maxOutputTokens);
   return outageCallBudgetMs(budgetMs, windowMs, budgetMs);
 }
 

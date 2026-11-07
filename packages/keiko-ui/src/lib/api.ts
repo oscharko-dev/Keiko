@@ -173,6 +173,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import { reportClientDiagnostic } from "./client-diagnostics";
 import { clientErrorEvidence } from "./client-error-evidence";
+import { coalescedFetch, mayJoinInflightRead } from "./inflight-reads";
 import { readStoredLocale, translate } from "./i18n";
 import {
   buildBffHeaders,
@@ -325,14 +326,19 @@ async function fetchJson<T>(
   validator?: ResponseValidator,
   correlationId?: string,
   readTimeoutMs?: number,
+  shareInflight = false,
 ): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
   const isStateChanging = method !== "GET" && method !== "HEAD";
-  const res = await fetch(path, {
-    ...init,
-    signal: withReadDeadline(init, isStateChanging, readTimeoutMs),
-    headers: fetchJsonHeaders(init, isStateChanging, correlationId),
-  });
+  const res = await coalescedFetch(
+    path,
+    {
+      ...init,
+      signal: withReadDeadline(init, isStateChanging, readTimeoutMs),
+      headers: fetchJsonHeaders(init, isStateChanging, correlationId),
+    },
+    { joinable: mayJoinInflightRead({ shareInflight, correlationId, signal: init?.signal }) },
+  );
 
   if (!res.ok) throw await bffFailure(res, method, path);
 
@@ -2192,6 +2198,8 @@ export async function fetchGitBranches(
     undefined,
     undefined,
     options?.correlationId,
+    undefined,
+    true,
   );
 }
 

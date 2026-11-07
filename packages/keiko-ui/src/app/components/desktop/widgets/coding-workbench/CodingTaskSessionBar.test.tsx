@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
   CodingTaskSessionBar,
@@ -99,6 +99,22 @@ describe("CodingTaskTranscript", () => {
     expect(transcript).toHaveTextContent("Loose message");
     expect(transcript).not.toHaveTextContent("Answer the feed carries");
     expect(transcript).not.toHaveTextContent("Answer without text");
+  });
+
+  it("labels a scheduled-continuation message with the scheduled label, not as the user", () => {
+    const scheduled: HistoryMessage = {
+      ...historyMessage("m-s", undefined, "Wake-up prompt"),
+      taskType: "scheduled-continuation",
+    };
+    render(
+      <CodingTaskTranscript
+        session={sessionWith([scheduled, historyMessage("m-u", undefined, "Typed by a person")])}
+        shownRun={undefined}
+      />,
+    );
+    const transcript = screen.getByRole("region", { name: "Previous conversation" });
+    expect(within(transcript).getAllByText("Scheduled continuation")).toHaveLength(1);
+    expect(within(transcript).getAllByText("You")).toHaveLength(1);
   });
 
   it("shows nothing of a run whose feed carries the whole conversation, other runs excepted", () => {

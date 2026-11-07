@@ -1,5 +1,7 @@
 import type { CodingSessionContinuity } from "./codingSessionContinuity.js";
 import { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
+import { CodingScheduledWakes } from "./codingScheduledWakes.js";
+import type { RetainedSessionStore } from "./opencodeSessionRetention.js";
 import type { UiStore } from "../store/types.js";
 import type {
   CodingWorkbenchMode,
@@ -244,6 +246,8 @@ export interface CodingRuntimeControlPlane {
   readonly openCodeGatewayReadinessRegistry?: CodingRuntimeHost["openCodeGatewayReadinessRegistry"];
   readonly toolFacadeBridge?: CodingRuntimeHost["toolFacadeBridge"];
   readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
+  /** Scheduled continuations of retained native sessions; absent when retention is off. */
+  readonly codingScheduledWakes?: CodingScheduledWakes | undefined;
 }
 
 interface RuntimeEventReceiver {
@@ -283,15 +287,37 @@ export function createCodingRuntimeControlPlane(
   // A run keeps its state while its snapshot is unsettled: live, or recovery-required and not yet
   // acknowledged. Everything else belongs to no run that could still use it.
   sweepOrphanedRunState(input);
+  const scheduledWakes = scheduledWakesField(input, orchestrator);
   return {
     orchestrator,
     eventHub,
+    ...scheduledWakes,
     runtimeHostQualified: input.runtimeHost !== undefined,
     ...(input.runtimeHost?.safeActivityProjection
       ? { safeActivityProjection: input.runtimeHost.safeActivityProjection }
       : {}),
     ...runtimeHostCapabilities(input.runtimeHost),
   };
+}
+
+/**
+ * Scheduled wakes need a qualified runtime and retained sessions: without either there is no
+ * schedule to wake (#4271). The service looks at the retained schedules while the process runs.
+ */
+function scheduledWakesField(
+  input: CodingRuntimeControlPlaneInput,
+  orchestrator: CodingRuntimeOrchestrator,
+): Pick<CodingRuntimeControlPlane, "codingScheduledWakes"> {
+  const store = input.sessionContinuity?.store;
+  if (input.runtimeHost === undefined || store === undefined) return {};
+  const wakes = new CodingScheduledWakes({
+    store: (): RetainedSessionStore => store,
+    host: orchestrator.scheduledWakeHost(),
+    activityLog: input.activityLog,
+  });
+  orchestrator.attachScheduledWakes(wakes);
+  wakes.start();
+  return { codingScheduledWakes: wakes };
 }
 
 function sweepOrphanedRunState(input: CodingRuntimeControlPlaneInput): void {

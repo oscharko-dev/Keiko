@@ -184,8 +184,26 @@ export const OPENCODE_WITHHELD_BUILT_IN_PLUGINS = Object.freeze([
   "opencode.tool.schedule",
 ]);
 
+/**
+ * The built-in plugins only the native profile loads (ADR-0137 D10, #4271): scheduled wakes of a
+ * session. Keiko holds the producer's scheduler lease in every native run and releases it only in
+ * the wake run it starts at a schedule's due time (`opencodeScheduleLease.ts`).
+ */
+export const OPENCODE_NATIVE_ADMITTED_BUILT_IN_PLUGINS = Object.freeze(["opencode.tool.schedule"]);
+
+/** What a native run withholds: every withheld plugin except the ones it admits. */
+export const OPENCODE_NATIVE_WITHHELD_BUILT_IN_PLUGINS = Object.freeze(
+  OPENCODE_WITHHELD_BUILT_IN_PLUGINS.filter(
+    (plugin) => !OPENCODE_NATIVE_ADMITTED_BUILT_IN_PLUGINS.includes(plugin),
+  ),
+);
+
 const OPENCODE_PLUGIN_REMOVALS = Object.freeze(
   OPENCODE_WITHHELD_BUILT_IN_PLUGINS.map((plugin) => `-${plugin}`),
+);
+
+const OPENCODE_NATIVE_PLUGIN_REMOVALS = Object.freeze(
+  OPENCODE_NATIVE_WITHHELD_BUILT_IN_PLUGINS.map((plugin) => `-${plugin}`),
 );
 
 /** Experimental switches stated explicitly, so a changed producer default cannot open one. */
@@ -205,11 +223,11 @@ const OPENCODE_PROVIDER_CHUNK_TIMEOUT_MS = 30 * 60_000;
 export const OPENCODE_GOVERNED_COMPACTION_PROMPT = `Preserve the exact accepted coding task and enough verified state to continue it correctly. Retain acceptance criteria, constraints, current plan, relevant files and symbols, completed edits, observed failing-before evidence, later verification results, unresolved failures, and immediate next actions. Distinguish verified facts from assumptions. Never report an unrun check as passed, weaken or remove regression coverage, redo a completed failing-before step solely because of compaction, or lose the current user task.`;
 
 /**
- * Replaces the pinned child's model-family default system prompt (v1.18.30 resolves the unknown
+ * Replaces the pinned child's model-family default system prompt (the pinned runtime resolves the unknown
  * model id "coding" to its built-in-tool coding prompt). That default teaches bash/grep/glob/edit
  * workflows and "fewer than 4 lines" text answers while this config removes every built-in tool,
  * which live models followed into text-only turns that never reached a keiko_* tool (#2680
- * follow-up). The v1.18.30 child uses `agent.build.prompt` verbatim INSTEAD of that default and
+ * follow-up). The pinned child uses `agent.build.prompt` verbatim INSTEAD of that default and
  * still appends its environment block after it. Every OPENCODE_MODEL_VISIBLE_TOOL_NAMES entry
  * must stay documented here; the launch-profile test enforces that coupling.
  */
@@ -453,7 +471,7 @@ function fixedOpenCodeProvider(
       },
       options: {
         baseURL: "{env:KEIKO_MODEL_GATEWAY_URL}",
-        // The pinned v1.18.30 child defaults provider chunks to 10 seconds. Coding turns can
+        // The pinned child (`OPENCODE_PINNED_VERSION`) defaults provider chunks to 10 seconds. Coding turns can
         // legitimately reason longer while Keiko's gateway still enforces its shorter provider
         // deadline; align the child watchdog with the outer hard turn/authority ceiling.
         chunkTimeout: OPENCODE_PROVIDER_CHUNK_TIMEOUT_MS,
@@ -691,13 +709,14 @@ function createNativeOpenCodeV2Config(
       ? {}
       : { agents: agentModels.agents }),
     policies: OPENCODE_GATEWAY_PROVIDER_POLICIES,
-    plugins: OPENCODE_PLUGIN_REMOVALS,
+    plugins: OPENCODE_NATIVE_PLUGIN_REMOVALS,
     compaction: { auto: true, keep: { tokens: recent }, buffer: reserved },
     tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
     // The producer offers its plan tool (`todowrite`) only under this switch; Keiko classifies the
     // update as a read in every mode and projects it as the plan card (parity row T19, owner
     // decision of 2026-10-24).
-    experimental: { ...OPENCODE_CLOSED_EXPERIMENTS, todo: true },
+    // Its schedule tools need their switch; a schedule wakes the session only in Keiko's wake run.
+    experimental: { ...OPENCODE_CLOSED_EXPERIMENTS, todo: true, schedules: true },
     // The operator's admitted MCP servers, and nothing else (#3903, `opencodeNativeMcp.ts`).
     mcp,
     // The operator's accepted external references, as the producer's own local references

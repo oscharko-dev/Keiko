@@ -92,6 +92,14 @@ defined in ADR-0124 and corrected by ADR-0125 and ADR-0138, displayed as **Ask f
 (`autonomous-delivery`). No surface may introduce an additional user-facing autonomy mode, a
 surface-local approval envelope, or a parallel authority stack.
 
+**Owner amendment, 2026-11-06 (scheduled continuations, #4271):** a Coding task whose run created a
+schedule is continued at its due time by a run the server starts (ADR-0137, "Scheduled
+continuations"). That run is not a new mode or a background authority: it resumes the task a person
+accepted, in the narrower of the mode every run that held the schedule was in and the mode of the
+task's latest run, under the same deployment ceiling and hard denials. Creating a schedule maps onto
+the existing risky contained-work disposition (asked in Ask for approval and Supervised workspace,
+allowed in Full access), and the person can pause or delete it in the Workbench.
+
 ### D2 — One policy vocabulary, mapped through action classes
 
 A surface expresses its operations as action or effect classes that map onto the shared workbench

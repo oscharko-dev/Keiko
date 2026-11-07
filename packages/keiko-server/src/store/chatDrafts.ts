@@ -4,13 +4,10 @@ import {
   MAX_DESKTOP_CHAT_INPUT_CHARS,
   type ChatDraft,
   type ChatDraftUpdate,
+  isCodingWorkbenchDraftWindowId,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { invalidRequest, notFound, UiStoreError } from "./errors.js";
 import { withImmediateTransaction } from "./transaction.js";
-
-// A Coding Workbench window id as `nextWindowId` mints it (`coding-workbench-<base36>[-<n>]`). The
-// draft key is a closed, bounded token, never a path or free text.
-const CODING_WORKBENCH_WINDOW_ID = /^coding-workbench-[0-9a-z]{1,16}(?:-[0-9a-z]{1,8})?$/u;
 
 function storedDraft(row: Record<string, unknown> | undefined, label: string): ChatDraft {
   if (row === undefined) return { text: "", revision: 0 };
@@ -81,7 +78,7 @@ export function updateChatDraft(
 }
 
 function assertCodingWorkbenchWindowId(windowId: string): void {
-  if (!CODING_WORKBENCH_WINDOW_ID.test(windowId)) throw notFound("Coding Workbench draft");
+  if (!isCodingWorkbenchDraftWindowId(windowId)) throw notFound("Coding Workbench draft");
 }
 
 /**

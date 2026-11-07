@@ -14,7 +14,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 60;
+export const SCHEMA_VERSION = 61;
 
 interface Migration {
   readonly version: number;
@@ -1975,6 +1975,13 @@ export const MIGRATIONS: readonly Migration[] = [
       text TEXT NOT NULL,
       revision INTEGER NOT NULL CHECK (revision >= 1)
     ) STRICT;`,
+  },
+  {
+    version: 61,
+    // #4271: the retention sweep asks "has this run no successor" with a NOT EXISTS probe on
+    // predecessor_run_id for every settled run; without an index each probe scans the table.
+    sql: `CREATE INDEX idx_coding_runtime_predecessor
+      ON coding_runtime_snapshots(predecessor_run_id);`,
   },
 ];
 

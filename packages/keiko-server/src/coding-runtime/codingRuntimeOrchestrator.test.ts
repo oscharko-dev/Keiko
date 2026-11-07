@@ -1030,6 +1030,59 @@ describe("CodingRuntimeOrchestrator", () => {
     );
     expect(JSON.stringify(captured.records)).not.toContain("PRIVATE_ACCEPTED_TASK_CANARY");
   });
+  // #4279 (lifecycle audit): a start that shutdown overtook would launch a runtime nobody stops.
+  describe("a start that shutdown overtook", () => {
+    it("launches nothing when it reaches the lane after shutdown began", async () => {
+      const f = fixture();
+      await f.orchestrator.shutdown();
+
+      const result = await f.orchestrator.start(start);
+
+      expect(result).toEqual({ ok: false, failureCode: "runtime-unavailable" });
+      expect(f.launchResolver.resolve).not.toHaveBeenCalled();
+      expect(f.manager.start).not.toHaveBeenCalled();
+    });
+
+    it("mints nothing when shutdown began while it was prepared", async () => {
+      const f = fixture();
+      let shutdown: Promise<unknown> | undefined;
+      Object.assign(f.launchResolver, {
+        prepare: (): Promise<void> => {
+          shutdown = f.orchestrator.shutdown();
+          return Promise.resolve();
+        },
+      });
+
+      const result = await f.orchestrator.start(start);
+      await shutdown;
+
+      expect(result).toMatchObject({ ok: false, failureCode: "runtime-unavailable" });
+      expect(f.launchResolver.resolve).not.toHaveBeenCalled();
+      expect(f.manager.start).not.toHaveBeenCalled();
+      expect(f.orchestrator.status().state).toBe("idle");
+    });
+
+    it("releases what its launch minted when shutdown began while it resolved", async () => {
+      const f = fixture();
+      let shutdown: Promise<unknown> | undefined;
+      const resolve = f.launchResolver.resolve.getMockImplementation();
+      if (resolve === undefined) throw new Error("expected a launch resolver");
+      f.launchResolver.resolve.mockImplementation((input) => {
+        shutdown = f.orchestrator.shutdown();
+        return resolve(input);
+      });
+
+      const result = await f.orchestrator.start(start);
+      await shutdown;
+
+      expect(result.ok).toBe(true);
+      expect(successfulSnapshot(result).state).toBe("failed");
+      expect(f.manager.start).not.toHaveBeenCalled();
+      expect(f.manager.stop).toHaveBeenCalled();
+      expect(f.orchestrator.hasLiveRun()).toBe(false);
+    });
+  });
+
   // #4271: the client's start deadline ended its wait, and the run still started where nobody saw it.
   describe("a start its client gave up", () => {
     const abandonedDuringPrepare = (f: ReturnType<typeof fixture>): AbortController => {
@@ -8615,6 +8668,100 @@ describe("native session continuity requested by a start", () => {
 
     expect(w.spies.begin).toHaveBeenCalledOnce();
     expect(w.continuity.take("run-2")).toEqual({ kind: "resume", taskId: "task-prior" });
+  });
+
+  // #4271 (ADR-0137, scheduled continuations): the server's own start of a due schedule's task.
+  describe("a scheduled wake", () => {
+    const plan = (
+      consentMode: "governed-assist" | "supervised-coding" | "autonomous-delivery",
+    ) => ({
+      taskId: "task-prior",
+      scheduleId: "sch_1",
+      intent: "  Check the build  ",
+      consentMode,
+    });
+
+    it("resumes the task in the narrower of its consent and the latest run's mode, without a prompt", async () => {
+      const w = world();
+      const host = w.f.orchestrator.scheduledWakeHost();
+
+      const started = await host.start(plan("autonomous-delivery"));
+
+      // The latest run was Supervised workspace: the wider consent cannot widen it.
+      expect(started).toEqual({ ok: true, runId: "run-2", mode: "supervised-coding" });
+      expect(w.f.orchestrator.getSnapshot("run-2")?.requestedMode).toBe("supervised-coding");
+      expect(w.continuity.take("run-2")).toEqual({ kind: "resume", taskId: "task-prior" });
+      expect(w.spies.begin).toHaveBeenCalledWith(
+        expect.objectContaining({ taskIntent: "Check the build", conversationId: "task-prior" }),
+        expect.anything(),
+        "run-2",
+        { scheduled: true },
+      );
+      const dispatched = firstTaskDispatchRequest(w.f.taskDispatcher.dispatch.mock.calls);
+      expect(dispatched).toMatchObject({ origin: "schedule-wake" });
+      expect(dispatched.initialContext).toBeUndefined();
+      expect(w.spies.initialContext).not.toHaveBeenCalled();
+    });
+
+    it("keeps a narrower consent than the latest run's mode", async () => {
+      const w = world();
+      const resolve = w.f.launchResolver.resolve.getMockImplementation();
+      if (resolve === undefined) throw new Error("expected a launch resolver");
+      // The launch clamps to the requested mode, as the real resolver does.
+      w.f.launchResolver.resolve.mockImplementation((input) => ({
+        ...resolve(input),
+        effectiveMode: "governed-assist",
+      }));
+
+      await expect(
+        w.f.orchestrator.scheduledWakeHost().start(plan("governed-assist")),
+      ).resolves.toMatchObject({ ok: true, mode: "governed-assist" });
+      expect(w.f.orchestrator.getSnapshot("run-2")?.requestedMode).toBe("governed-assist");
+    });
+
+    it("waits while a run holds the slot, and blocks nothing once the run is gone", async () => {
+      const w = world();
+      const host = w.f.orchestrator.scheduledWakeHost();
+      expect(host.blocked()).toBeUndefined();
+
+      await host.start(plan("supervised-coding"));
+
+      expect(host.blocked()).toBe("run-active");
+      expect(host.liveTaskId()).toBeUndefined();
+      await expect(host.start(plan("supervised-coding"))).resolves.toEqual({
+        ok: false,
+        refusal: "active-run-conflict",
+      });
+    });
+
+    it("refuses a wake without an intent or a run to continue", async () => {
+      const w = world();
+      const host = w.f.orchestrator.scheduledWakeHost();
+
+      await expect(host.start({ ...plan("supervised-coding"), intent: "   " })).resolves.toEqual({
+        ok: false,
+        refusal: "invalid-intent",
+      });
+      vi.spyOn(w.history, "previousRunId").mockReturnValue(undefined);
+      expect(host.taskOwned("task-prior")).toBe(false);
+      await expect(host.start(plan("supervised-coding"))).resolves.toEqual({
+        ok: false,
+        refusal: "invalid-intent",
+      });
+      expect(w.f.manager.start).not.toHaveBeenCalled();
+    });
+
+    it("starts nothing once the orchestrator shuts down", async () => {
+      const w = world();
+      const host = w.f.orchestrator.scheduledWakeHost();
+      const stop = vi.fn();
+      w.f.orchestrator.attachScheduledWakes({ stop });
+
+      await w.f.orchestrator.shutdown();
+
+      expect(stop).toHaveBeenCalledOnce();
+      expect(host.blocked()).toBe("shutting-down");
+    });
   });
 
   it("declares nothing for a start that continues nothing", async () => {

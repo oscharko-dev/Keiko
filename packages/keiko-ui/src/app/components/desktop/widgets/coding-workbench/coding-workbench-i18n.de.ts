@@ -9,6 +9,21 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.progress.paused": "Pausiert",
   "codingWorkbench.progress.review": "Jetzt prüfen",
   "codingWorkbench.progress.answer": "Frage beantworten",
+  "codingWorkbench.schedules.title": "Geplante Fortsetzungen",
+  "codingWorkbench.schedules.unnamed": "Geplante Fortsetzung",
+  "codingWorkbench.schedules.next": "{label} · nächste {time}",
+  "codingWorkbench.schedules.paused": "{label} · pausiert",
+  "codingWorkbench.schedules.done": "{label} · erledigt",
+  "codingWorkbench.schedules.wait.run-active": "{label} · fällig, wartet auf den laufenden Lauf",
+  "codingWorkbench.schedules.wait.workspace-inactive":
+    "{label} · fällig, wartet auf den Workspace dieser Aufgabe",
+  "codingWorkbench.schedules.wait.retrying": "{label} · fällig, versucht es gleich erneut",
+  "codingWorkbench.schedules.pause": "Pausieren",
+  "codingWorkbench.schedules.resume": "Fortsetzen",
+  "codingWorkbench.schedules.delete": "Löschen",
+  "codingWorkbench.schedules.error":
+    "Die Zeitpläne konnten nicht gelesen oder geändert werden. Bitte erneut versuchen.",
+  "codingWorkbench.history.scheduled": "Geplante Fortsetzung",
   "codingWorkbench.history.title": "Coding History",
   "codingWorkbench.history.new": "Neue Aufgabe",
   "codingWorkbench.history.noBranch": "Ordner",
@@ -1111,6 +1126,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Führt dieses Code-Mode-Programm einmal in der Skript-Sandbox von OpenCode aus.",
   "codingWorkbench.approval.native.help.worktree":
     "Legt einen neuen Aufgaben-Workspace auf eigenem Branch an; dieser Lauf bleibt hier.",
+  "codingWorkbench.approval.native.help.schedule":
+    "Ändert, wann Keiko diese Aufgabe selbst fortsetzt, im Modus, den Sie dafür gewählt haben.",
   "codingWorkbench.approval.native.resources": "Angeforderter Befehl, Pfade oder Adressen",
   "codingWorkbench.approval.native.noResources":
     "Weder Befehl noch Pfad noch Adresse wurde genannt.",
@@ -1128,12 +1145,14 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.native.permission.websearch": "Websuche",
   "codingWorkbench.approval.native.permission.execute": "Code-Mode-Skript",
   "codingWorkbench.approval.native.permission.worktree": "Neuer Task-Workspace",
+  "codingWorkbench.approval.native.permission.schedule": "Geplante Fortsetzung",
   "codingWorkbench.approval.native.permission.other": "Native Aktion",
   "codingWorkbench.approval.native.label.native-shell": "Nativer Shell-Befehl",
   "codingWorkbench.approval.native.label.native-edit": "Native Dateiänderung",
   "codingWorkbench.approval.native.label.native-egress": "Nativer Internetzugriff",
   "codingWorkbench.approval.native.label.native-execute": "Natives Code-Mode-Skript",
   "codingWorkbench.approval.native.label.native-read": "Natives Lesen",
+  "codingWorkbench.approval.native.label.native-schedule": "Nativer Zeitplan",
   "codingWorkbench.approval.evidenceRequired":
     "Die Genehmigung bleibt gesperrt, bis geladen ist, was diese Anfrage berühren würde. Wiederholen Sie diesen Abruf oder lehnen Sie die Anfrage ab.",
   "codingWorkbench.approval.approve": "Einmal genehmigen",

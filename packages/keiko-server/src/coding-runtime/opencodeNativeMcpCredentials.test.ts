@@ -119,6 +119,23 @@ describe("an admitted MCP server's credential across runs (#3903 AC3)", () => {
     expect(JSON.stringify(records)).not.toContain("token-canary");
   });
 
+  it("never lets an older credential replace a newer one a concurrent run already stored", () => {
+    const store = memoryStore();
+    const fresher = { ...credential(ISSUER), expires: 9_000, access: "fresher-canary" };
+    store.saved.set("issues", { integrationId: "mcp_52c0335c7b3cc683", value: fresher });
+    const path = database([{ ...credential(ISSUER), expires: 5_000 }]);
+    const { sink: activityLog, records } = sink();
+    harvestMcpCredentials(RUN, path, store, activityLog, false);
+    expect(store.saved.get("issues")?.value).toEqual(fresher);
+    expect(lines(records)).toEqual([
+      expect.objectContaining({ action: "harvested", outcome: "ok", count: 0, droppedCount: 1 }),
+    ]);
+    // A strictly newer harvest does replace it, as before.
+    const newer = { ...credential(ISSUER), expires: 12_000, access: "newest-canary" };
+    harvestMcpCredentials(RUN, database([newer]), store, activityLog, false);
+    expect(store.saved.get("issues")?.value).toEqual(newer);
+  });
+
   // #3898 AC1 (MCP issuer migration): the SDK stamps an issuerless legacy credential with whatever
   // issuer it discovers next and then presents its refresh token. Keiko never keeps or seeds one:
   // only a credential the runtime itself bound to the expected issuer survives a run.

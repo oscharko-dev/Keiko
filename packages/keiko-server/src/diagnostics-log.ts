@@ -790,6 +790,20 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "prepare-bridge-close",
   "prepare-run-root-remove",
   "tool-facade-failed",
+  // Routine bookkeeping of the governed tool bridge (audit 2026-11-06): settled replay identities
+  // moved to a run's replay filter, and an approval ask refused for the per-run bound or merged into
+  // the prompt already open for the same thing. Counts in `code` only, never a path or a command.
+  "tool-invocation-identities-evicted",
+  "approval-ask-run-bound-refused",
+  "approval-ask-coalesced",
+  // One complete point-of-use verification of the secure-read helper ran (the unchanged helper is
+  // otherwise served from its identity-bound verdict); the run it served is not known here.
+  "secure-read-helper-verified",
+  // The point-of-use verification of the secure-read helper threw instead of answering; the read is
+  // refused, and the closed error class, Keiko frames and cause chain say why.
+  "secure-read-helper-verification-failed",
+  // A governed tool request body was not JSON: the bridge answers 400 and records only that.
+  "tool-bridge-request-body-invalid",
   // The sidecar tool bridge could not record how a delivered tool result renders for the model: the
   // activity-log sink refused the line. The answer, which the facade had already produced, is
   // delivered unchanged and settled once; only the record is lost (PR #3876 review).

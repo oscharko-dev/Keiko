@@ -50,6 +50,9 @@ function historyToolAdmitted(name: string, profile: OpenCodeToolProfile): boolea
 }
 const NATIVE_RETRY_FIELDS: ReadonlySet<string> = new Set(["attempt", "at", "error"]);
 
+// An optional body-free count, the shape most of these fields share.
+const OPTIONAL_COUNT = { type: "integer", dataClass: "count", required: false } as const;
+
 const HISTORY_PROJECTION_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -63,14 +66,14 @@ const HISTORY_PROJECTION_OPERATION = defineActivityLogOperation({
     emptyTextCount: { type: "integer", dataClass: "count", required: true },
     // #3878: how many of the signals carried model reasoning to the live timeline; a count only.
     // `required: false`: lines written before this field existed lack it.
-    reasoningSignalCount: { type: "integer", dataClass: "count", required: false },
-    nativeRetrySignalCount: { type: "integer", dataClass: "count", required: false },
+    reasoningSignalCount: OPTIONAL_COUNT,
+    nativeRetrySignalCount: OPTIONAL_COUNT,
     // #3873 review (PR #3876): the runtime event stream's events that did not cost a history read of
     // their own, because a read already queued or a later control hint's read covered them
     // (`coalescedSyncHints`), since the previous line. Each one is a read saved; when a run's timeline
     // lags or skips an update, this says how many events one read stood for. Absent when the composition
     // reports none (a projection built without the stream).
-    mergedEventCount: { type: "integer", dataClass: "count", required: false },
+    mergedEventCount: OPTIONAL_COUNT,
     // #3873 review (PR #3876): OpenCode 2.0.10 persists a streamed text or reasoning part only empty
     // and complete, so the live timeline grows from the event stream's ephemeral deltas
     // (`opencodeV2LiveText.ts`). Counts since the previous line, never text: the deltas appended to a
@@ -78,12 +81,12 @@ const HISTORY_PROJECTION_OPERATION = defineActivityLogOperation({
     // interrupted since, or it is full); the parts whose complete text did not extend what the
     // timeline had already shown, which keeps the shown text. `required: false` because a line written
     // before these fields existed lacks them.
-    liveDeltaCount: { type: "integer", dataClass: "count", required: false },
-    liveDroppedCount: { type: "integer", dataClass: "count", required: false },
-    liveDivergedCount: { type: "integer", dataClass: "count", required: false },
+    liveDeltaCount: OPTIONAL_COUNT,
+    liveDroppedCount: OPTIONAL_COUNT,
+    liveDivergedCount: OPTIONAL_COUNT,
     // The idle messages of this pass that did not end the run's work because a subagent launched in
     // the background had not yet reported back (`backgroundChildren`); a count, absent when none.
-    heldIdleCount: { type: "integer", dataClass: "count", required: false },
+    heldIdleCount: OPTIONAL_COUNT,
     // #4104: how the pass obtained the session's messages. `tail` read only the messages from the
     // last checkpoint's anchor on and carried the older ones over unchanged; `full` read the whole
     // window (the first pass, a catch-up after an event cap, a retry that holds an uncommitted page);
@@ -98,8 +101,11 @@ const HISTORY_PROJECTION_OPERATION = defineActivityLogOperation({
       required: false,
       values: ["tail", "full", "verify", "anchor-lost"],
     },
-    readMessageCount: { type: "integer", dataClass: "count", required: false },
-    retainedMessageCount: { type: "integer", dataClass: "count", required: false },
+    readMessageCount: OPTIONAL_COUNT,
+    // #4279: the window held only the newest messages of a session past the read bound, so older
+    // ones were left out of this pass. Present only then.
+    windowTruncated: { type: "boolean", dataClass: "closed-enum", required: false },
+    retainedMessageCount: OPTIONAL_COUNT,
   },
   causal: "correlation",
   lifecycle: "state",
@@ -371,6 +377,8 @@ export interface OpenCodeV2SyncStats {
   readonly readMessageCount: number;
   /** The older messages the call carried over from earlier calls without reading them. */
   readonly retainedMessageCount: number;
+  /** Present when the window was the newest messages of a session past the read bound. */
+  readonly windowTruncated?: true;
 }
 
 /** What the messages of one `project` call are: the whole session, or only its newest window. */
@@ -1555,7 +1563,7 @@ class HistoryProjection implements OpenCodeV2HistoryProjection {
         scanned.anchor?.candidateIndex ?? 0,
         base === undefined,
       );
-    const sync = this.settleSync(base, messages.length);
+    const sync = this.settleSync(base, messages.length, window);
     const pending = {
       ...made,
       sync,
@@ -1568,7 +1576,11 @@ class HistoryProjection implements OpenCodeV2HistoryProjection {
     return pending;
   }
 
-  private settleSync(base: TailState | undefined, windowLength: number): OpenCodeV2SyncStats {
+  private settleSync(
+    base: TailState | undefined,
+    windowLength: number,
+    window: OpenCodeV2HistoryWindow | undefined,
+  ): OpenCodeV2SyncStats {
     const planned = this.plannedMode;
     this.plannedMode = undefined;
     this.tailPasses = base === undefined ? 0 : this.tailPasses + 1;
@@ -1576,6 +1588,7 @@ class HistoryProjection implements OpenCodeV2HistoryProjection {
       readMode: settledReadMode(base, planned),
       readMessageCount: windowLength,
       retainedMessageCount: base?.precedingCount ?? 0,
+      ...(window?.truncated === true ? { windowTruncated: true as const } : {}),
     };
     return this.syncOfLastProject;
   }
