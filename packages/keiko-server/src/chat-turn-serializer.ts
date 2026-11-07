@@ -191,7 +191,8 @@ function foregroundOf(store: UiStore): ChatForegroundActivity {
 }
 
 function notifyForeground(activity: ChatForegroundActivity, active: boolean): void {
-  for (const listener of [...activity.listeners]) listener(active);
+  // A Set skips a listener removed during the loop, so no copy is needed to unsubscribe here.
+  for (const listener of activity.listeners) listener(active);
 }
 
 function beginChatForeground(store: UiStore): () => void {

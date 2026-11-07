@@ -33,15 +33,33 @@ const PHONE_RE = /(?:\+\d[\d\s.-]{6,14}\d|\b\d[\d .-]*[ .-]\d[\d .-]{4,12}\d\b)/
 // local-number pattern looks for, so a fact with an end date read as confidential and was refused
 // (#4206 audit). A standalone date, with a valid day and month and no further digit group on either
 // side, is blanked before the telephone check; a dotted number such as "01.23.45.67.89" or
-// "030.12.05.2020" is not a date and keeps every digit. The other checks see the full text. Each
-// alternative is a bounded token, so the replacement reads the text once.
-// Day 1-31 and month 1-12, as "31.12.2027", "1/2/26" or "2026-11-07".
-const CALENDAR_DATE_RE =
-  /(?<![\d./-])(?:(?:0?[1-9]|[12]\d|3[01])([./])(?:0?[1-9]|1[0-2])\1(?:\d{4}|\d{2})|\d{4}-(?:0?[1-9]|1[0-2])-(?:0?[1-9]|[12]\d|3[01]))(?![./-]?\d)/g;
+// "030.12.05.2020" is not a date and keeps every digit. The other checks see the full text.
+// A date-shaped token is "31.12.2027" or "1/2/26" (day, month, year) or "2026-11-07" (year, month,
+// day). Each pattern matches a bounded token, so each replacement reads the text once; the day and
+// month are checked in code, which keeps the patterns simple.
+const DAY_FIRST_DATE_RE = /(?<![\d./-])(\d{1,2})([./])(\d{1,2})\2(?:\d{4}|\d{2})(?![./-]?\d)/g;
+const ISO_DATE_RE = /(?<![\d./-])\d{4}-(\d{1,2})-(\d{1,2})(?![./-]?\d)/g;
+
+function isCalendarDay(day: string, month: string): boolean {
+  const dayNumber = Number(day);
+  const monthNumber = Number(month);
+  return dayNumber >= 1 && dayNumber <= 31 && monthNumber >= 1 && monthNumber <= 12;
+}
+
+function blankCalendarDates(body: string): string {
+  return body
+    .replace(DAY_FIRST_DATE_RE, (token: string, day: string, _separator: string, month: string) =>
+      isCalendarDay(day, month) ? " " : token,
+    )
+    .replace(ISO_DATE_RE, (token: string, month: string, day: string) =>
+      isCalendarDay(day, month) ? " " : token,
+    );
+}
 
 function looksLikeTelephoneNumber(body: string): boolean {
-  return PHONE_RE.test(body.replace(CALENDAR_DATE_RE, " "));
+  return PHONE_RE.test(blankCalendarDates(body));
 }
+
 const CONFIDENTIAL_MARKER_PATTERNS: readonly RegExp[] = [
   /\b(?:confidential|internal(?=\s+only|[:\s])|private(?=[:\s]))\b/i,
   /\b(?:vertraulich|nur\s+intern|intern(?=[:\s])|privat(?=[:\s])|geheim|nicht\s+speichern)\b/i,
