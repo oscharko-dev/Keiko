@@ -1,4 +1,8 @@
 import {
+  jiraEntityPropertyDeclarationForTool,
+  type JIRA_ENTITY_PROPERTY_READ_DEFINITIONS,
+} from "./jiraEntityPropertyDescriptors.js";
+import {
   jiraJobObservationDeclarationForTool,
   type JIRA_JOB_OBSERVATION_READ_DEFINITIONS,
 } from "./jiraJobObservationDescriptors.js";
@@ -222,6 +226,7 @@ type CoreReadToolName = Exclude<
       | keyof typeof JIRA_MAINTENANCE_READ_DEFINITIONS
       | keyof typeof JIRA_RESOURCE_VIEW_READ_DEFINITIONS
       | keyof typeof JIRA_JOB_OBSERVATION_READ_DEFINITIONS
+      | keyof typeof JIRA_ENTITY_PROPERTY_READ_DEFINITIONS
       | keyof typeof JIRA_AGILE_CONTEXT_READ_DEFINITIONS
       | keyof typeof JIRA_FILTER_READ_DEFINITIONS
       | keyof typeof JIRA_PROJECT_STRUCTURE_READ_DEFINITIONS
@@ -408,6 +413,7 @@ function isCoreReadTool(name: JiraManagedReadToolName): name is CoreReadToolName
 }
 function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
   for (const producer of [
+    jiraEntityPropertyDeclarationForTool,
     jiraJobObservationDeclarationForTool,
     jiraResourceViewDeclarationForTool,
     jiraMaintenanceDeclarationForTool,

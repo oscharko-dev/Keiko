@@ -224,6 +224,8 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
   ...reads("permission-definitions", { "jira.permission-definitions": "/permissions" }),
   ...reads("current-actor-metadata", { "jira.myself": "/myself" }),
   ...reads("visible-issue-metadata", {
+    "jira.issue-type-property-keys": "/issuetype/{issueTypeId}/properties",
+    "jira.issue-type-property": "/issuetype/{issueTypeId}/properties/{propertyKey}",
     "jira.fields": "/field",
     "jira.custom-field-option": "/customFieldOption/{id}",
     "jira.global-issue-types": "/issuetype",
@@ -262,6 +264,8 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
     "jira.project-notification-scheme": "/project/{projectKeyOrId}/notificationscheme",
   }),
   ...reads("visible-users", {
+    "jira.user-property-keys": "/user/properties",
+    "jira.user-property": "/user/properties/{propertyKey}",
     "jira.user": "/user",
     "jira.users": "/user/search",
     "jira.user-directory": "/user/list",
@@ -310,7 +314,11 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
     "jira.user-avatars": "/user/avatars",
     "jira.avatars": "/universal_avatar/type/{type}/owner/{owningObjectId}",
   }),
-  ...reads("visible-dashboards", { "jira.dashboards": "/dashboard", "jira.dashboard": "/dashboard/{id}" }),
+  ...reads("visible-dashboards", {
+    "jira.dashboards": "/dashboard", "jira.dashboard": "/dashboard/{id}",
+    "jira.dashboard-item-property-keys": "/dashboard/{dashboardId}/items/{itemId}/properties",
+    "jira.dashboard-item-property": "/dashboard/{dashboardId}/items/{itemId}/properties/{propertyKey}",
+  }),
   ...reads("authenticated-user-preferences", {
     "jira.filter-share-scope": "/filter/defaultShareScope",
     "jira.accessibility-settings": "/user/a11y/personal-settings",
@@ -319,7 +327,11 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
     "jira.filter-permissions": "/filter/{id}/permission",
     "jira.filter-permission": "/filter/{id}/permission/{permissionId}",
   }),
-  ...reads("visible-comments", { "jira.get-comment": "/issue/{issueIdOrKey}/comment/{id}" }),
+  ...reads("visible-comments", {
+    "jira.get-comment": "/issue/{issueIdOrKey}/comment/{id}",
+    "jira.comment-property-keys": "/comment/{commentId}/properties",
+    "jira.comment-property": "/comment/{commentId}/properties/{propertyKey}",
+  }),
   ...reads("visible-link-types", {
     "jira.link-types": "/issueLinkType",
     "jira.link-type": "/issueLinkType/{issueLinkTypeId}",
@@ -344,6 +356,8 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
     "jira.project-version-page": "/project/{projectIdOrKey}/version",
   }),
   ...reads("visible-boards", {
+    "jira.board-property-keys": "/board/{boardId}/properties",
+    "jira.board-property": "/board/{boardId}/properties/{propertyKey}",
     "jira.boards": "/board",
     "jira.board": "/board/{boardId}",
     "jira.board-configuration": "/board/{boardId}/configuration",
@@ -374,12 +388,16 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
     "jira.epic": "/epic/{epicIdOrKey}",
   }, "/rest/agile/1.0"),
   ...reads("visible-sprints", {
+    "jira.sprint-property-keys": "/sprint/{sprintId}/properties",
+    "jira.sprint-property": "/sprint/{sprintId}/properties/{propertyKey}",
     "jira.sprints": "/board/{boardId}/sprint",
     "jira.sprint": "/sprint/{sprintId}",
   }, "/rest/agile/1.0"),
   ...reads("visible-filters", { "jira.filter": "/filter/{id}", "jira.favourite-filters": "/filter/favourite" }),
   ...reads("visible-projects", {
     "jira.projects": "/project",
+    "jira.project-property-keys": "/project/{projectIdOrKey}/properties",
+    "jira.project-property": "/project/{projectIdOrKey}/properties/{propertyKey}",
     "jira.project-picker": "/projects/picker",
   }),
   ...reads("current-project-metadata", {
@@ -402,6 +420,8 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
   ...reads("current-edit-metadata", { "jira.edit-fields": "/issue/{issueIdOrKey}/editmeta" }),
   ...reads("visible-issues", {
     "jira.search": "/search",
+    "jira.issue-property-keys": "/issue/{issueIdOrKey}/properties",
+    "jira.issue-property": "/issue/{issueIdOrKey}/properties/{propertyKey}",
     "jira.issue": "/issue/{issueIdOrKey}",
     "jira.comments": "/issue/{issueIdOrKey}/comment",
   }),

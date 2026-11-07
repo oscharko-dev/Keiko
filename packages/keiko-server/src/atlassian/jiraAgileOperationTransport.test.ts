@@ -26,6 +26,12 @@ const ISSUE_QUERY = {
 const CONTEXT_ISSUE_QUERY = { ...ISSUE_QUERY, validateQuery: "true", jql: "project = SYN AND summary ~ \"A & B\"" };
 // Independent selected identities and filters: the registry supplies no fixture input or response.
 const SCENARIOS: readonly Scenario[] = [
+  { tool: "jira.board-property-keys", args: { boardId: "7" }, parameters: { boardId: "7" }, primaryMethodIndex: 1 },
+  { tool: "jira.board-property", args: { boardId: "7", propertyKey: "view ~settings" },
+    parameters: { boardId: "7", propertyKey: "view ~settings" }, primaryMethodIndex: 1 },
+  { tool: "jira.sprint-property-keys", args: { sprintId: "9" }, parameters: { sprintId: "9" }, primaryMethodIndex: 1 },
+  { tool: "jira.sprint-property", args: { sprintId: "9", propertyKey: "view ~settings" },
+    parameters: { sprintId: "9", propertyKey: "view ~settings" }, primaryMethodIndex: 1 },
   {
     tool: "jira.board-epicless-issues", args: { boardId: "7", ...PAGING, jql: CONTEXT_ISSUE_QUERY.jql },
     parameters: { boardId: "7" }, query: CONTEXT_ISSUE_QUERY,
@@ -127,6 +133,10 @@ const SCENARIOS: readonly Scenario[] = [
 ];
 function agileRead(path: string, state: MutationRemoteState): AtlassianHttpBodyResult {
   const page = { startAt: 2, maxResults: 5, total: 3, isLast: true };
+  if (path.endsWith("/board/7/properties") || path.endsWith("/sprint/9/properties"))
+    return response({ keys: [{ key: "view ~settings", self: "https://untrusted.invalid/property" }] });
+  if (path.endsWith("/board/7/properties/view%20~settings") || path.endsWith("/sprint/9/properties/view%20~settings"))
+    return response({ key: "view ~settings", value: { "a/b~c": [false, null, {}] } });
   if (path.endsWith("/board/7/project"))
     return response({ ...page, values: [{ id: 10000, key: "SYN", name: "Visible project", archived: false }] });
   if (path.endsWith("/board/7/version"))
@@ -163,7 +173,7 @@ describe("native Agile registry and actual connector transport agreement", () =>
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && definition.apiRoot === "/rest/agile/1.0",
     );
-    expect(native).toHaveLength(27);
+    expect(native).toHaveLength(31);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),
@@ -192,5 +202,18 @@ describe("native Agile registry and actual connector transport agreement", () =>
       ["GET", "https://jira.example.invalid/context/rest/agile/1.0/issue/10002/estimation?boardId=7"],
     ]);
     expect(observed.result.data).toMatchObject({ boardId: "7", issueId: "10002", issueKey: "SYN-2", value: 0 });
+  });
+  it("uses the actual Agile entity lookup and fixed property route without following self URLs", async () => {
+    const observed = await observeNativeJiraOperation({ tool: "jira.board-property", args: { boardId: "7", propertyKey: "view ~settings" } }, {
+      deployment: "data-center", baseUrl: "https://jira.example.invalid/context", http: remote(),
+    });
+    expect(observed.requests.map(({ method, url }) => [method, url])).toEqual([
+      ["GET", "https://jira.example.invalid/context/rest/agile/1.0/board/7"],
+      ["GET", "https://jira.example.invalid/context/rest/agile/1.0/board/7/properties/view%20~settings"],
+    ]);
+    expect(observed.result.data).toMatchObject({ boardId: "7", propertyKey: "view ~settings",
+      items: expect.arrayContaining([{ path: "/a~1b~0c/0", kind: "boolean", booleanValue: false }]),
+    });
+    expect(JSON.stringify(observed.result.data)).not.toContain("untrusted.invalid");
   });
 });

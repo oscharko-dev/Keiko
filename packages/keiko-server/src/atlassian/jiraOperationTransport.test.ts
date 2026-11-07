@@ -15,7 +15,7 @@ import {
   response,
   type SyntheticJira,
 } from "../../../../tests/support/jira-managed-remote.js";
-import { jiraOperationContracts } from "./jiraManagedProvider.js";
+import { createJiraProviderForCatalog, jiraOperationContracts } from "./jiraManagedProvider.js";
 import {
   observeNativeJiraOperation,
   assertNativeJiraPrimary as assertPrimary,
@@ -32,6 +32,24 @@ const CREATE = {
 };
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
+  { tool: "jira.comment-property-keys", args: { issueIdOrKey: "SYN-1", commentId: "10002" }, parameters: { commentId: "10002" }, primaryMethodIndex: 2 },
+  { tool: "jira.comment-property", args: { issueIdOrKey: "SYN-1", commentId: "10002", propertyKey: "view ~settings" },
+    parameters: { commentId: "10002", propertyKey: "view ~settings" }, primaryMethodIndex: 2 },
+  { tool: "jira.dashboard-item-property-keys", args: { dashboardId: "71", itemId: "81" }, parameters: { dashboardId: "71", itemId: "81" }, primaryMethodIndex: 1 },
+  { tool: "jira.dashboard-item-property", args: { dashboardId: "71", itemId: "81", propertyKey: "view ~settings" },
+    parameters: { dashboardId: "71", itemId: "81", propertyKey: "view ~settings" }, primaryMethodIndex: 1 },
+  { tool: "jira.issue-property-keys", args: { issueIdOrKey: "SYN-1" }, parameters: { issueIdOrKey: "10001" }, primaryMethodIndex: 1 },
+  { tool: "jira.issue-property", args: { issueIdOrKey: "SYN-1", propertyKey: "view ~settings" },
+    parameters: { issueIdOrKey: "10001", propertyKey: "view ~settings" }, primaryMethodIndex: 1 },
+  { tool: "jira.issue-type-property-keys", args: { issueTypeId: "10001" }, parameters: { issueTypeId: "10001" }, primaryMethodIndex: 1 },
+  { tool: "jira.issue-type-property", args: { issueTypeId: "10001", propertyKey: "view ~settings" },
+    parameters: { issueTypeId: "10001", propertyKey: "view ~settings" }, primaryMethodIndex: 1 },
+  { tool: "jira.project-property-keys", args: { projectIdOrKey: "SYN" }, parameters: { projectIdOrKey: "10000" }, primaryMethodIndex: 1 },
+  { tool: "jira.project-property", args: { projectIdOrKey: "SYN", propertyKey: "view ~settings" },
+    parameters: { projectIdOrKey: "10000", propertyKey: "view ~settings" }, primaryMethodIndex: 1 },
+  { tool: "jira.user-property-keys", args: { username: "synthetic-user" }, query: { userKey: "JIRAUSER10100" }, primaryMethodIndex: 1 },
+  { tool: "jira.user-property", args: { username: "synthetic-user", propertyKey: "view ~settings" },
+    parameters: { propertyKey: "view ~settings" }, query: { userKey: "JIRAUSER10100" }, primaryMethodIndex: 1 },
   { tool: "jira.reindex-status", args: {} },
   { tool: "jira.reindex-progress", args: { taskId: "9223372036854775807" }, query: { taskId: "9223372036854775807" } },
   { tool: "jira.reindex-request", args: { requestId: "7" }, parameters: { requestId: "7" } },
@@ -994,6 +1012,18 @@ function jobObservationRead(path: string): AtlassianHttpBodyResult | undefined {
   };
   return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
 }
+function entityPropertyRead(path: string): AtlassianHttpBodyResult | undefined {
+  const roots = new Set([
+    "comment/10002/properties", "dashboard/71/items/81/properties", "issue/10001/properties",
+    "issuetype/10001/properties", "project/10000/properties", "user/properties",
+  ]);
+  if (roots.has(path)) return response({ keys: [
+    { key: "view ~settings", self: "https://untrusted.invalid/property" }, { key: "a/b%" },
+  ] });
+  const selected = "/view%20~settings";
+  return path.endsWith(selected) && roots.has(path.slice(0, -selected.length))
+    ? response({ key: "view ~settings", value: { "a/b~c": [null, {}, [], false, 0, ""] } }) : undefined;
+}
 function coreMetadataRead(path: string): AtlassianHttpBodyResult | undefined {
   const type = { id: "10001", name: "Story", description: "Story metadata", subtask: false, avatarId: 71 };
   const priority = { id: "3", name: "Normal", statusColor: "#123456" };
@@ -1126,6 +1156,7 @@ function remoteRead(
     assetRead(path, state) ??
     administrationRead(path, absoluteUrl) ??
     jobObservationRead(path) ??
+    entityPropertyRead(path) ??
     issueMetadata(path, state) ??
     fixtureRead(absolute, state)
   );
@@ -1210,7 +1241,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(172);
+    expect(native).toHaveLength(184);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),
@@ -1331,11 +1362,39 @@ describe("native Jira registry and real connector transport agreement", () => {
       const observed = await observeNativeJiraOperation({ tool: "jira.upgrade-result", args: {} }, connection(
         () => Promise.resolve(response({}, status)),
       ));
-      expect(observed.result.data).toEqual({ outcome: "succeeded", upgradeState });
+      expect(observed.result.data).toMatchObject({ outcome: "succeeded", upgradeState });
       expect(observed.requests).toHaveLength(1);
       expect(observed.requests[0]?.method).toBe("GET");
     },
   );
+  it("binds native issue property identity before returning typed values without following key links", async () => {
+    const observed = await observe({ tool: "jira.issue-property", args: { issueIdOrKey: "SYN-1", propertyKey: "view ~settings" } });
+    expect(observed.requests.map(({ method, url }) => [method, new URL(url).pathname])).toEqual([
+      ["GET", "/context/rest/api/2/issue/SYN-1"], ["GET", "/context/rest/api/2/issue/10001/properties/view%20~settings"],
+    ]);
+    expect(observed.result.data).toMatchObject({ issueId: "10001", issueKey: "SYN-1", propertyKey: "view ~settings",
+      items: expect.arrayContaining([
+        { path: "", kind: "object", childCount: 1 }, { path: "/a~1b~0c/0", kind: "null" },
+        { path: "/a~1b~0c/1", kind: "object", childCount: 0 }, { path: "/a~1b~0c/2", kind: "array", childCount: 0 },
+      ]),
+    });
+    const keys = await observe({ tool: "jira.issue-property-keys", args: { issueIdOrKey: "SYN-1" } });
+    expect(keys.result.data.items).toEqual([{ key: "view ~settings" }, { key: "a/b%" }]);
+    expect(keys.requests).toHaveLength(2);
+    expect(JSON.stringify(keys.result.data)).not.toContain("untrusted.invalid");
+  });
+  it.each(["/", "\\", "%2f", ".", ".."])("rejects unaddressable property selection %j before the real HTTP port", async (propertyKey) => {
+    const http = remote();
+    const provider = createJiraProviderForCatalog(() => connection(http), ["jira.issue-property"]);
+    const tool = provider.tools()[0];
+    if (tool === undefined) throw new TypeError("Missing issue property fixture tool");
+    const result = await tool.execute({ issueIdOrKey: "SYN-1", propertyKey }, {
+      invocationId: "property-refusal", correlationId: "property-refusal", signal: new AbortController().signal,
+      beforeEffect: () => true,
+    });
+    expect(result.data).toMatchObject({ outcome: "failed", reason: "invalid-input" });
+    expect(http).not.toHaveBeenCalled();
+  });
   it.each(["jira.create", "jira.edit"] as const)(
     "keeps %s's approved link continuation on POST issueLink",
     async (tool) => {

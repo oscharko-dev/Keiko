@@ -18,6 +18,7 @@ import { executeJiraConfigurationRead, isJiraConfigurationRead } from "./jira-ma
 import { executeJiraRuntimeSettingsRead, isJiraRuntimeSettingsRead } from "./jira-managed-runtime-settings.js";
 import { executeJiraMaintenanceRead, isJiraMaintenanceRead } from "./jira-managed-maintenance-reads.js";
 import { executeJiraJobObservationRead, isJiraJobObservationRead } from "./jira-managed-job-observations.js";
+import { executeJiraEntityPropertyRead, isJiraEntityPropertyRead } from "./jira-managed-entity-properties.js";
 import { executeJiraResourceLookupRead, isJiraResourceLookupRead } from "./jira-managed-resource-lookups.js";
 import { executeJiraColumnRead, isJiraColumnRead } from "./jira-managed-column-reads.js";
 import { executeJiraRoleRead, isJiraRoleRead } from "./jira-managed-role-reads.js";
@@ -33,6 +34,7 @@ import {
 import { jiraBrowseUrl } from "./jira-browse-url.js";
 import { JIRA_AGILE_READ_OPERATIONS, executeJiraAgileRead } from "./jira-agile-reads.js";
 import { executeJiraAgileContextRead, isJiraAgileContextRead } from "./jira-agile-context-reads.js";
+import { jiraAgileRequest } from "./jira-agile-request.js";
 import { JIRA_FILTER_READ_OPERATIONS, executeJiraFilterRead } from "./jira-filter-reads.js";
 import { jiraProjectBrowseUrl } from "./jira-project-browse-url.js";
 import { executeJiraComponentRead, isJiraComponentRead } from "./jira-managed-components.js";
@@ -351,6 +353,7 @@ async function read<Context extends ManagedMcpInvocationContext>(
 }
 
 type NativeDetailRead =
+  | Parameters<typeof executeJiraEntityPropertyRead>[0]
   | Parameters<typeof executeJiraJobObservationRead>[0]
   | Parameters<typeof executeJiraResourceLookupRead>[0]
   | Parameters<typeof executeJiraColumnRead>[0]
@@ -381,6 +384,7 @@ type NativeDetailRead =
   | Parameters<typeof executeJiraJqlMetadataRead>[0];
 function isNativeDetailRead(name: string): name is NativeDetailRead {
   return [
+    isJiraEntityPropertyRead,
     isJiraJobObservationRead,
     isJiraResourceLookupRead,
     isJiraColumnRead,
@@ -473,6 +477,11 @@ async function nativeDetailRead<Context extends ManagedMcpInvocationContext>(
   const connected = await connection(context);
   if (connected.deployment !== "data-center") return failure("unsupported-deployment");
   const request = requestFor(connected, context);
+  if (isJiraEntityPropertyRead(name)) return executeJiraEntityPropertyRead(name, args, {
+    platform: request,
+    agile: jiraAgileRequest(connected, context),
+    baseUrl: connected.baseUrl,
+  });
   const administration = administrationRead(name, args, request);
   if (administration !== undefined) return administration;
   if (isJiraParticipationRead(name))

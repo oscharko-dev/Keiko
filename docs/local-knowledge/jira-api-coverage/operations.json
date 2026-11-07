@@ -521,6 +521,50 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.board-property": {
+      "identity": "GET /rest/agile/1.0/board/{boardId}/properties/{propertyKey}",
+      "effect": "read",
+      "permissionPolicy": "visible-boards",
+      "kind": "constrained-tool",
+      "constraints": "Native Agile board ID is independently read and matched before the property request; the existing Agile request owner retains routing. The returned key must match the selected bounded, transport-addressable property key. Native JSON values become complete typed JSON Pointer facts with explicit null/false/zero/empty values, bounded depth, node count and UTF-8 bytes; malformed or oversized values are refused, never truncated or parsed again. No property writes, remote URL following, inferred permissions or arbitrary routing.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-properties.ts",
+        "packages/keiko-connectors/src/jira-entity-property-bindings.ts",
+        "packages/keiko-connectors/src/jira-entity-property-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-reads.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.board-property-keys": {
+      "identity": "GET /rest/agile/1.0/board/{boardId}/properties",
+      "effect": "read",
+      "permissionPolicy": "visible-boards",
+      "kind": "constrained-tool",
+      "constraints": "Native Agile board ID is independently read and matched before the property request; the existing Agile request owner retains routing. Native key collections are validated in full, require unique bounded keys and are locally paginated. Observed keys remain data even when the transport cannot safely address them; native self URLs are omitted. No property writes, remote URL following, inferred permissions or arbitrary routing.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-properties.ts",
+        "packages/keiko-connectors/src/jira-entity-property-bindings.ts",
+        "packages/keiko-connectors/src/jira-entity-property-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-reads.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.board-refined-velocity": {
       "identity": "GET /rest/agile/1.0/board/{boardId}/settings/refined-velocity",
       "effect": "read",
@@ -670,6 +714,50 @@
       "testFiles": [
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts"
+      ]
+    },
+    "jira.comment-property": {
+      "identity": "GET /rest/api/2/comment/{commentId}/properties/{propertyKey}",
+      "effect": "read",
+      "permissionPolicy": "visible-comments",
+      "kind": "constrained-tool",
+      "constraints": "Canonical issue and exact native comment are bound through the existing comment admission owner before the fixed comment property route. The returned key must match the selected bounded, transport-addressable property key. Native JSON values become complete typed JSON Pointer facts with explicit null/false/zero/empty values, bounded depth, node count and UTF-8 bytes; malformed or oversized values are refused, never truncated or parsed again. No property writes, remote URL following, inferred permissions or arbitrary routing.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-properties.ts",
+        "packages/keiko-connectors/src/jira-entity-property-bindings.ts",
+        "packages/keiko-connectors/src/jira-entity-property-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-reads.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.comment-property-keys": {
+      "identity": "GET /rest/api/2/comment/{commentId}/properties",
+      "effect": "read",
+      "permissionPolicy": "visible-comments",
+      "kind": "constrained-tool",
+      "constraints": "Canonical issue and exact native comment are bound through the existing comment admission owner before the fixed comment property route. Native key collections are validated in full, require unique bounded keys and are locally paginated. Observed keys remain data even when the transport cannot safely address them; native self URLs are omitted. No property writes, remote URL following, inferred permissions or arbitrary routing.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-properties.ts",
+        "packages/keiko-connectors/src/jira-entity-property-bindings.ts",
+        "packages/keiko-connectors/src/jira-entity-property-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-reads.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
     "jira.comments": {
@@ -886,6 +974,50 @@
         "packages/keiko-connectors/src/jira-managed-saved-views.test.ts",
         "packages/keiko-server/src/atlassian/jiraSavedViewDescriptors.test.ts",
         "packages/keiko-connectors/src/jira-managed-read-request.test.ts"
+      ]
+    },
+    "jira.dashboard-item-property": {
+      "identity": "GET /rest/api/2/dashboard/{dashboardId}/items/{itemId}/properties/{propertyKey}",
+      "effect": "read",
+      "permissionPolicy": "visible-dashboards",
+      "kind": "constrained-tool",
+      "constraints": "Dashboard identity is independently bound; selectedItemId remains requested context because no independent native item-detail GET is published. The property response owns item visibility/existence. The returned key must match the selected bounded, transport-addressable property key. Native JSON values become complete typed JSON Pointer facts with explicit null/false/zero/empty values, bounded depth, node count and UTF-8 bytes; malformed or oversized values are refused, never truncated or parsed again. No property writes, remote URL following, inferred permissions or arbitrary routing.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-properties.ts",
+        "packages/keiko-connectors/src/jira-entity-property-bindings.ts",
+        "packages/keiko-connectors/src/jira-entity-property-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-reads.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.dashboard-item-property-keys": {
+      "identity": "GET /rest/api/2/dashboard/{dashboardId}/items/{itemId}/properties",
+      "effect": "read",
+      "permissionPolicy": "visible-dashboards",
+      "kind": "constrained-tool",
+      "constraints": "Dashboard identity is independently bound; selectedItemId remains requested context because no independent native item-detail GET is published. The property response owns item visibility/existence. Native key collections are validated in full, require unique bounded keys and are locally paginated. Observed keys remain data even when the transport cannot safely address them; native self URLs are omitted. No property writes, remote URL following, inferred permissions or arbitrary routing.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-properties.ts",
+        "packages/keiko-connectors/src/jira-entity-property-bindings.ts",
+        "packages/keiko-connectors/src/jira-entity-property-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-reads.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
     "jira.dashboards": {
@@ -1422,6 +1554,50 @@
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-issue-details.ts"],
       "testFiles": ["packages/keiko-connectors/src/jira-managed-issue-details.test.ts"]
     },
+    "jira.issue-property": {
+      "identity": "GET /rest/api/2/issue/{issueIdOrKey}/properties/{propertyKey}",
+      "effect": "read",
+      "permissionPolicy": "visible-issues",
+      "kind": "constrained-tool",
+      "constraints": "The selected issue alias is independently resolved to the canonical issue ID/key before querying its numeric-ID property route. The returned key must match the selected bounded, transport-addressable property key. Native JSON values become complete typed JSON Pointer facts with explicit null/false/zero/empty values, bounded depth, node count and UTF-8 bytes; malformed or oversized values are refused, never truncated or parsed again. No property writes, remote URL following, inferred permissions or arbitrary routing.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-properties.ts",
+        "packages/keiko-connectors/src/jira-entity-property-bindings.ts",
+        "packages/keiko-connectors/src/jira-entity-property-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-reads.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.issue-property-keys": {
+      "identity": "GET /rest/api/2/issue/{issueIdOrKey}/properties",
+      "effect": "read",
+      "permissionPolicy": "visible-issues",
+      "kind": "constrained-tool",
+      "constraints": "The selected issue alias is independently resolved to the canonical issue ID/key before querying its numeric-ID property route. Native key collections are validated in full, require unique bounded keys and are locally paginated. Observed keys remain data even when the transport cannot safely address them; native self URLs are omitted. No property writes, remote URL following, inferred permissions or arbitrary routing.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-properties.ts",
+        "packages/keiko-connectors/src/jira-entity-property-bindings.ts",
+        "packages/keiko-connectors/src/jira-entity-property-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-reads.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.issue-security-scheme": {
       "identity": "GET /rest/api/2/issuesecurityschemes/{id}",
       "effect": "read",
@@ -1519,6 +1695,50 @@
         "packages/keiko-connectors/src/jira-managed-core-metadata.test.ts",
         "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
         "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.issue-type-property": {
+      "identity": "GET /rest/api/2/issuetype/{issueTypeId}/properties/{propertyKey}",
+      "effect": "read",
+      "permissionPolicy": "visible-issue-metadata",
+      "kind": "constrained-tool",
+      "constraints": "The selected issue-type identity is independently read through the existing exact metadata owner before its property request. The returned key must match the selected bounded, transport-addressable property key. Native JSON values become complete typed JSON Pointer facts with explicit null/false/zero/empty values, bounded depth, node count and UTF-8 bytes; malformed or oversized values are refused, never truncated or parsed again. No property writes, remote URL following, inferred permissions or arbitrary routing.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-properties.ts",
+        "packages/keiko-connectors/src/jira-entity-property-bindings.ts",
+        "packages/keiko-connectors/src/jira-entity-property-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-reads.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.issue-type-property-keys": {
+      "identity": "GET /rest/api/2/issuetype/{issueTypeId}/properties",
+      "effect": "read",
+      "permissionPolicy": "visible-issue-metadata",
+      "kind": "constrained-tool",
+      "constraints": "The selected issue-type identity is independently read through the existing exact metadata owner before its property request. Native key collections are validated in full, require unique bounded keys and are locally paginated. Observed keys remain data even when the transport cannot safely address them; native self URLs are omitted. No property writes, remote URL following, inferred permissions or arbitrary routing.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-properties.ts",
+        "packages/keiko-connectors/src/jira-entity-property-bindings.ts",
+        "packages/keiko-connectors/src/jira-entity-property-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-reads.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
@@ -2166,6 +2386,50 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.project-property": {
+      "identity": "GET /rest/api/2/project/{projectIdOrKey}/properties/{propertyKey}",
+      "effect": "read",
+      "permissionPolicy": "visible-projects",
+      "kind": "constrained-tool",
+      "constraints": "The selected project alias is independently resolved to native project ID/key before querying its numeric-ID property route. The returned key must match the selected bounded, transport-addressable property key. Native JSON values become complete typed JSON Pointer facts with explicit null/false/zero/empty values, bounded depth, node count and UTF-8 bytes; malformed or oversized values are refused, never truncated or parsed again. No property writes, remote URL following, inferred permissions or arbitrary routing.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-properties.ts",
+        "packages/keiko-connectors/src/jira-entity-property-bindings.ts",
+        "packages/keiko-connectors/src/jira-entity-property-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-reads.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.project-property-keys": {
+      "identity": "GET /rest/api/2/project/{projectIdOrKey}/properties",
+      "effect": "read",
+      "permissionPolicy": "visible-projects",
+      "kind": "constrained-tool",
+      "constraints": "The selected project alias is independently resolved to native project ID/key before querying its numeric-ID property route. Native key collections are validated in full, require unique bounded keys and are locally paginated. Observed keys remain data even when the transport cannot safely address them; native self URLs are omitted. No property writes, remote URL following, inferred permissions or arbitrary routing.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-properties.ts",
+        "packages/keiko-connectors/src/jira-entity-property-bindings.ts",
+        "packages/keiko-connectors/src/jira-entity-property-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-reads.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.project-role": {
       "identity": "GET /rest/api/2/project/{projectIdOrKey}/role/{id}",
       "effect": "read",
@@ -2804,6 +3068,50 @@
         "packages/keiko-connectors/src/jira-agile-templates.test.ts"
       ]
     },
+    "jira.sprint-property": {
+      "identity": "GET /rest/agile/1.0/sprint/{sprintId}/properties/{propertyKey}",
+      "effect": "read",
+      "permissionPolicy": "visible-sprints",
+      "kind": "constrained-tool",
+      "constraints": "Native Agile sprint ID is independently read and matched before the property request; the existing Agile request owner retains routing. The returned key must match the selected bounded, transport-addressable property key. Native JSON values become complete typed JSON Pointer facts with explicit null/false/zero/empty values, bounded depth, node count and UTF-8 bytes; malformed or oversized values are refused, never truncated or parsed again. No property writes, remote URL following, inferred permissions or arbitrary routing.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-properties.ts",
+        "packages/keiko-connectors/src/jira-entity-property-bindings.ts",
+        "packages/keiko-connectors/src/jira-entity-property-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-reads.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.sprint-property-keys": {
+      "identity": "GET /rest/agile/1.0/sprint/{sprintId}/properties",
+      "effect": "read",
+      "permissionPolicy": "visible-sprints",
+      "kind": "constrained-tool",
+      "constraints": "Native Agile sprint ID is independently read and matched before the property request; the existing Agile request owner retains routing. Native key collections are validated in full, require unique bounded keys and are locally paginated. Observed keys remain data even when the transport cannot safely address them; native self URLs are omitted. No property writes, remote URL following, inferred permissions or arbitrary routing.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-properties.ts",
+        "packages/keiko-connectors/src/jira-entity-property-bindings.ts",
+        "packages/keiko-connectors/src/jira-entity-property-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-reads.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.sprint-update": {
       "identity": "POST /rest/agile/1.0/sprint/{sprintId}",
       "effect": "write",
@@ -3236,6 +3544,50 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.user-property": {
+      "identity": "GET /rest/api/2/user/properties/{propertyKey}",
+      "effect": "read",
+      "permissionPolicy": "visible-users",
+      "kind": "constrained-tool",
+      "constraints": "Exactly one username or userKey selector is independently resolved through the existing user read owner; the property query uses the observed userKey and never changes credentials or user state. The returned key must match the selected bounded, transport-addressable property key. Native JSON values become complete typed JSON Pointer facts with explicit null/false/zero/empty values, bounded depth, node count and UTF-8 bytes; malformed or oversized values are refused, never truncated or parsed again. No property writes, remote URL following, inferred permissions or arbitrary routing.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-properties.ts",
+        "packages/keiko-connectors/src/jira-entity-property-bindings.ts",
+        "packages/keiko-connectors/src/jira-entity-property-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-reads.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.user-property-keys": {
+      "identity": "GET /rest/api/2/user/properties",
+      "effect": "read",
+      "permissionPolicy": "visible-users",
+      "kind": "constrained-tool",
+      "constraints": "Exactly one username or userKey selector is independently resolved through the existing user read owner; the property query uses the observed userKey and never changes credentials or user state. Native key collections are validated in full, require unique bounded keys and are locally paginated. Observed keys remain data even when the transport cannot safely address them; native self URLs are omitted. No property writes, remote URL following, inferred permissions or arbitrary routing.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-properties.ts",
+        "packages/keiko-connectors/src/jira-entity-property-bindings.ts",
+        "packages/keiko-connectors/src/jira-entity-property-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-reads.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.users": {
       "identity": "GET /rest/api/2/user/search",
       "effect": "read",
@@ -3567,8 +3919,8 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "c0cba6de4ed62edea38697b175dfd7bccbf5f240ecd266ec7ebe2b06697b1679",
-    "nativeOperationCount": 199
+    "sha256": "e40dce9cecf7ad27c1fefa75ad04d137eb56d135df468424d7983d8dbe938471",
+    "nativeOperationCount": 215
   },
   "operations": [
     {
@@ -3982,10 +4334,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.board-property-keys"]
     },
     {
       "identity": "DELETE /rest/agile/1.0/board/{boardId}/properties/{propertyKey}",
@@ -4046,10 +4398,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.board-property"]
     },
     {
       "identity": "PUT /rest/agile/1.0/board/{boardId}/properties/{propertyKey}",
@@ -4910,10 +5262,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.sprint-property-keys"]
     },
     {
       "identity": "DELETE /rest/agile/1.0/sprint/{sprintId}/properties/{propertyKey}",
@@ -4974,10 +5326,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.sprint-property"]
     },
     {
       "identity": "PUT /rest/agile/1.0/sprint/{sprintId}/properties/{propertyKey}",
@@ -5822,10 +6174,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.comment-property-keys"]
     },
     {
       "identity": "DELETE /rest/api/2/comment/{commentId}/properties/{propertyKey}",
@@ -5886,10 +6238,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.comment-property"]
     },
     {
       "identity": "PUT /rest/api/2/comment/{commentId}/properties/{propertyKey}",
@@ -6334,10 +6686,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.dashboard-item-property-keys"]
     },
     {
       "identity": "DELETE /rest/api/2/dashboard/{dashboardId}/items/{itemId}/properties/{propertyKey}",
@@ -6398,10 +6750,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.dashboard-item-property"]
     },
     {
       "identity": "PUT /rest/api/2/dashboard/{dashboardId}/items/{itemId}/properties/{propertyKey}",
@@ -8214,10 +8566,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.issue-property-keys"]
     },
     {
       "identity": "DELETE /rest/api/2/issue/{issueIdOrKey}/properties/{propertyKey}",
@@ -8278,10 +8630,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.issue-property"]
     },
     {
       "identity": "PUT /rest/api/2/issue/{issueIdOrKey}/properties/{propertyKey}",
@@ -9742,10 +10094,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.issue-type-property-keys"]
     },
     {
       "identity": "DELETE /rest/api/2/issuetype/{issueTypeId}/properties/{propertyKey}",
@@ -9806,10 +10158,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.issue-type-property"]
     },
     {
       "identity": "PUT /rest/api/2/issuetype/{issueTypeId}/properties/{propertyKey}",
@@ -12046,10 +12398,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.project-property-keys"]
     },
     {
       "identity": "DELETE /rest/api/2/project/{projectIdOrKey}/properties/{propertyKey}",
@@ -12110,10 +12462,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.project-property"]
     },
     {
       "identity": "PUT /rest/api/2/project/{projectIdOrKey}/properties/{propertyKey}",
@@ -15746,10 +16098,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.user-property-keys"]
     },
     {
       "identity": "DELETE /rest/api/2/user/properties/{propertyKey}",
@@ -15810,10 +16162,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.user-property"]
     },
     {
       "identity": "PUT /rest/api/2/user/properties/{propertyKey}",
