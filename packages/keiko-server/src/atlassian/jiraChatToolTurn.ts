@@ -22,11 +22,12 @@ import { requireDispatch } from "../tool-catalog/catalogToolErrors.js";
 import {
   mintAcceptedJiraChatAuthority,
   reserveCurrentJiraChatAuthority,
+  resolveCurrentJiraChatAuthority,
   type JiraChatAuthorityDeps,
 } from "./jiraChatAuthority.js";
 import {
   createJiraChatCatalogAdmission,
-  jiraChatCatalogConsumerPort,
+  createJiraChatCatalogConsumerPort,
   type JiraChatAdmissionOptions,
   type JiraChatCatalogAction,
   type JiraChatCatalogConsumer,
@@ -47,6 +48,10 @@ import {
 } from "./jiraChatDraft.js";
 import { untracedAdvisory } from "./jiraChatCatalogRuntime.js";
 import type { TraceSession } from "../requirement-trace.js";
+import {
+  createJiraChatSourcePreparation,
+  type JiraChatSourcePreparation,
+} from "./jiraChatRequirementBinding.js";
 import type {
   CatalogJsonObject,
   ToolResultEnvelope,
@@ -113,7 +118,8 @@ function draftRequirementsCheck(
 type ReviewAction = Pick<JiraChatCatalogAction, "actionId" | "argumentsDigest">;
 export type JiraChatTurnReviewPorts = Required<
   Pick<JiraChatAdmissionOptions, "preflightWrite" | "attachmentPreview" | "draftItemRefs">
->;
+> &
+  Pick<JiraChatAdmissionOptions, "sourcePreparation">;
 interface JiraChatTurnReviewAccess {
   readonly writeExchange: (actionId: string) => ChatToolExchange | undefined;
   readonly reviewableWrite: (action: ReviewAction) => boolean;
@@ -206,10 +212,38 @@ function jiraTurnContext(options: JiraChatTurnOptions): JiraChatCatalogContext {
   };
 }
 
+export function jiraSourcePreparationForTurn(
+  options: JiraChatTurnOptions,
+  context: JiraChatCatalogContext,
+): JiraChatSourcePreparation {
+  return createJiraChatSourcePreparation({
+    chatId: options.message.chatId,
+    draftStore: options.deps.jiraDraftStore,
+    openTrace: () =>
+      options.openTrace?.(context) ?? {
+        resolve: () => ({ ok: false, reason: "unavailable", problems: [] }),
+        unitCount: () => 0,
+        close: () => undefined,
+      },
+    admitted: () =>
+      !context.signal.aborted &&
+      resolveCurrentJiraChatAuthority(
+        options.deps,
+        context.chatId,
+        context.authorityReference,
+        new Date().toISOString(),
+        context.correlationId,
+      ).ok,
+  });
+}
+
 export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
+  private readonly sourcePreparation: JiraChatSourcePreparation;
   public constructor(private readonly jiraOptions: JiraChatTurnOptions) {
     const { authority, deps, managed, correlationId, message } = jiraOptions;
     const context = jiraTurnContext(jiraOptions);
+    const sourcePreparation = jiraSourcePreparationForTurn(jiraOptions, context);
+    const consumerPort = createJiraChatCatalogConsumerPort(sourcePreparation.sourceDigestFor);
     const bind =
       (
         selected: ManagedProviderCatalog<JiraChatCatalogConsumer>,
@@ -221,12 +255,13 @@ export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
           context: current,
           budgetPort,
           invocationRegistry,
-          consumerPort: jiraChatCatalogConsumerPort,
+          consumerPort,
           admission: createJiraChatCatalogAdmission({
             deps,
             context: () => current,
             now: Date.now,
             ...this.consentPorts(),
+            sourcePreparation,
             ...createJiraChatTurnReviewPorts(jiraOptions, {
               writeExchange: (actionId) => this.writeExchange(actionId),
               reviewableWrite: (action) => this.reviewableWrite(action),
@@ -243,12 +278,14 @@ export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
       budget: authority.envelope.budget,
       guidance: JIRA_TOOL_GUIDANCE,
       bind: bind(managed),
+      prepareInvocation: sourcePreparation.prepareInvocation,
       selectTools: async (identities) => {
         requireDispatch(deps.jiraChatCatalog !== undefined, "failed", "handler-unavailable");
         const selected = await deps.jiraChatCatalog.select(identities);
         return { managed: selected, bind: bind(selected), close: selected.close };
       },
     });
+    this.sourcePreparation = sourcePreparation;
   }
   protected override reserveAuthorityPrompt(promptTokens: number): boolean {
     return reserveChatToolPrompt(this.jiraOptions, reserveCurrentJiraChatAuthority, promptTokens);
@@ -259,7 +296,13 @@ export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
     identity: string,
     result: ToolResultEnvelope,
   ): JiraMutationOutcome | undefined {
-    return observeJiraChatMutation(this.jiraOptions, call, identity, result);
+    return observeJiraChatMutation(
+      this.jiraOptions,
+      call,
+      identity,
+      result,
+      this.sourcePreparation.sourceDigestFor(identity, sha256Hex(canonicalise(call.arguments))),
+    );
   }
 }
 
@@ -287,6 +330,7 @@ export function observeJiraChatMutation(
   call: NormalizedResponse["toolCalls"][number],
   identity: string,
   result: ToolResultEnvelope,
+  sourceDigest?: string,
 ): JiraMutationOutcome | undefined {
   const operation = JIRA_MUTATION_OPERATIONS.find(
     (value) => result.toolRef?.canonicalId === `keiko.${value}`,
@@ -304,6 +348,7 @@ export function observeJiraChatMutation(
       actionId: identity,
       idempotencyKey: identity,
       argumentsDigest: sha256Hex(canonicalise(call.arguments)),
+      ...(sourceDigest === undefined ? {} : { sourceDigest }),
       operationBinding: contract.binding,
     },
     correlationId,

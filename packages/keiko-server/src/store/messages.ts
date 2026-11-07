@@ -185,7 +185,12 @@ function rowToMessage(db: DatabaseSync, row: MessageRow): ChatMessage {
     documentContext: decodeStoredDocumentContext(row.document_context_json, row.role),
     toolTranscript: history.transcript,
   };
-  return projectChatToolMutationHistory(db, message, history.operationBindings);
+  return projectChatToolMutationHistory(
+    db,
+    message,
+    history.operationBindings,
+    history.sourceDigests,
+  );
 }
 
 const COLUMNS =

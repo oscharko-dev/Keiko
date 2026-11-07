@@ -2998,6 +2998,62 @@ describe("four-item Epic and Task template fullchain", () => {
     });
   });
 
+  it("refuses a source revision changed after the staged preview was approved", async () => {
+    const f = fixture(true, undefined, true, false, true);
+    await journeyPod(f);
+    saveTemplates(f);
+    typedJira(f);
+    journeyModel(f);
+    const pending = sendBatch(f, "source-revision-approval");
+    void pending.catch(() => undefined);
+    const approval = await pendingApproval(f);
+    const reference = journeyReference(f);
+    const before = f.deps.jiraDraftStore?.peek(journeyString(reference.draftId), f.chatId);
+    expect(before?.sourceBindings).toHaveLength(4);
+    expect(
+      before?.items.every((item) =>
+        String((item.fields as Record<string, unknown>).description).includes("Keiko traceability"),
+      ),
+    ).toBe(true);
+    const session = openKnowledgeStoreForDeps(f.deps);
+    try {
+      session.store._internal.db
+        .prepare("UPDATE documents SET safe_display_name = ?")
+        .run("Changed source.md");
+      session.store._internal.db
+        .prepare("UPDATE capsules SET updated_at = updated_at + 1000")
+        .run();
+    } finally {
+      session.close();
+    }
+    expect(await postWriteDecision(f, approval, "approve")).toBe(200);
+    expect((await pending).status).toBe(200);
+    expect(f.writes()).toBe(0);
+    expect(f.deps.jiraDraftStore?.peek(journeyString(reference.draftId), f.chatId)?.items).toEqual(
+      before?.items,
+    );
+    expect(JSON.stringify(journeyExchanges(f))).not.toContain("sourceDigest");
+  });
+
+  it("binds a traced draft before Full access writes and retains its receipts without an approval", async () => {
+    const f = fixture(true, undefined, true, false, true);
+    f.deps.store.updateChat(f.chatId, { toolMode: "autonomous-delivery" });
+    await journeyPod(f);
+    saveTemplates(f);
+    typedJira(f);
+    journeyModel(f);
+    expect((await sendBatch(f, "source-full-access")).status).toBe(200);
+    expect(f.writes()).toBe(4);
+    expect(latestExchange(f)?.approval).toBeUndefined();
+    expect(latestExchange(f)?.mutationOutcome).toBe("succeeded");
+    expect(
+      f.jira.issues.every((issue) =>
+        String(issue.fields.description).includes("Keiko traceability"),
+      ),
+    ).toBe(true);
+    expect(JSON.stringify(journeyExchanges(f))).not.toContain("sourceDigest");
+  });
+
   it("approves the complete templated batch once and reconciles a later turn without duplicate parents or children", async () => {
     const argumentsToStage = backlog();
     const f = fixture(true, undefined, true, false, true);

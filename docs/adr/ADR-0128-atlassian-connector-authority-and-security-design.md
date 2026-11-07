@@ -705,7 +705,8 @@ effect. The HTTP verb alone never determines the operation's authority. Existing
 source, credential-generation, permission and one-use approval guards remain the execution owners.
 Persisted approval views use the private historical snapshot described in ADR-0181, without
 restoring execution authority from history. The discovery tools described there expose metadata
-under the existing Chat read grant; selecting schemas does not approve a remote operation.
+under current accepted Chat authority, without Jira HTTP or a Jira read-grant lookup. Selecting
+schemas does not approve a remote operation; remote calls retain their existing authority checks.
 
 **Attachments (#4176, 2026-10-31).** `jira.attach` maps to `update-issue-fields` (medium): it
 changes an existing issue exactly as an edit does and is governed, approved, journaled and
@@ -1513,10 +1514,17 @@ without answer or tool-result bodies.
   updates) is applied first and the trace merged into the one legal field mutation, so it neither
   conflicts with it nor removes trace labels the caller's set left out. What the instance dropped is returned in the tool
   result as `trace {labelsApplied, footerApplied, droppedLabels}` and counted on the log. The item
-  identity, the journal and the approval are unaffected; `jira.draft` keeps its byte bound and no item-count limit.
+  identity and existing journal remain authoritative; `jira.draft` keeps its byte bound and no item-count limit.
   The traced labels and footer are part of the item the customer-template gate (#4177) judges, so a
   template that governs `description` or `labels` sees the final values, not the model's draft; the
-  pre-approval dry run of a create or edit judges the values as the model wrote them.
+  pre-approval dry run judges the prepared source-derived values before asking for approval.
+  Preparation binds the canonical description, applied footer and labels, and complete document and
+  requirement revision digests. This private source digest participates in the exact action digest
+  and is persisted before approval or effects; truncated display digests are insufficient. A staged
+  draft commits to its prepared items and private source bindings before returning its preview.
+  Execution rechecks the bound revisions and refuses changed or unavailable sources rather than
+  substituting a new footer under an old approval. A traced staged draft without that binding must
+  be staged again. Unreferenced writes do not open Knowledge Pods.
   A traced draft also preserves the original acceptance criteria before a page is staged, before
   human approval and again before final execution. Each referenced unit requires all its original
   criteria; an explicit criterion reference requires that exact criterion. The canonical description
@@ -1527,6 +1535,7 @@ without answer or tool-result bodies.
   no approved description is silently rewritten. This proves content preservation, not semantic
   implementation or fulfillment of a criterion. The existing source lifecycle and model-use guards,
   preview digest, template checks, journal and idempotent reconciliation continue to apply.
+  Direct create and edit calls apply the same criterion check whenever they supply a description.
 - _Change check._ A new document version is compared with the backlog through the labels alone;
   no earlier inventory is kept anywhere, so the baseline is what Jira holds. `change-queries`
   returns, per document, label-only JQL batches under the JQL length bound for items whose revision

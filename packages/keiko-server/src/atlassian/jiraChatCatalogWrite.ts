@@ -41,6 +41,7 @@ export function jiraChatWriteAction(
           operation,
           action.argumentsDigest,
           action.operationBinding,
+          action.sourceDigest,
         ),
       };
 }

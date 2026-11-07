@@ -702,9 +702,14 @@ function firstStoredExchange(f: ReturnType<typeof fixture>): ChatToolExchange | 
 }
 
 describe("authoritative late mutation history", () => {
-  it.each(["current", "retired"] as const)(
-    "recovers a late acknowledgement from its %s contract snapshot without a write approval",
-    (kind) => {
+  it.each([
+    { kind: "current", sourceDigest: undefined },
+    { kind: "retired", sourceDigest: undefined },
+    { kind: "current", sourceDigest: "a".repeat(64) },
+    { kind: "retired", sourceDigest: "a".repeat(64) },
+  ])(
+    "recovers a late acknowledgement from its $kind contract and source $sourceDigest without a write approval",
+    ({ kind, sourceDigest }) => {
       const f = observedMutationFixture(false);
       const current = contractApproval(f).operationBinding;
       const operationBinding =
@@ -716,6 +721,7 @@ describe("authoritative late mutation history", () => {
           f.intent.operation,
           sha256Hex(canonicalise(mutationCall.arguments)),
           operationBinding,
+          sourceDigest,
         ),
       };
       f.db.prepare("UPDATE chat_messages SET tool_transcript_json = NULL WHERE id = ?").run(f.id);
@@ -724,6 +730,12 @@ describe("authoritative late mutation history", () => {
         { kind: "started", call: mutationCall, operationBinding },
         "late-contract-proof",
       );
+      if (sourceDigest !== undefined)
+        f.store.updateChatToolTranscript(
+          f.id,
+          { kind: "write-prepared", callId: mutationCall.id, sourceDigest },
+          "late-contract-proof",
+        );
       const journal = f.store.chatToolMutations;
       if (journal === undefined) throw new TypeError("Missing mutation journal");
       journal.prepare(intent);
@@ -737,6 +749,7 @@ describe("authoritative late mutation history", () => {
       expect(exchange?.approval).toBeUndefined();
       expect(exchange?.result).toBeUndefined();
       expect(exchange).not.toHaveProperty("operationBinding");
+      expect(exchange).not.toHaveProperty("sourceDigest");
     },
   );
 
@@ -1054,6 +1067,99 @@ function contractApproval(f: ReturnType<typeof fixture>): {
 }
 
 describe("persisted Jira operation approval contracts", () => {
+  it("pins the prepared source before approval and keeps it private across history reads", () => {
+    const f = fixture();
+    const bound = contractApproval(f);
+    const sourceDigest = "a".repeat(64);
+    f.store.updateChatToolTranscript(
+      f.id,
+      { kind: "started", call: mutationCall, operationBinding: bound.operationBinding },
+      "source-proof",
+    );
+    const prepared = { kind: "write-prepared" as const, callId: mutationCall.id, sourceDigest };
+    f.store.updateChatToolTranscript(f.id, prepared, "source-proof");
+    f.store.updateChatToolTranscript(f.id, prepared, "source-proof");
+    const reviewed = {
+      ...bound.approval,
+      actionDigest: jiraOperationActionDigest(
+        bound.approval.operation,
+        sha256Hex(canonicalise(mutationCall.arguments)),
+        bound.operationBinding,
+        sourceDigest,
+      ),
+    };
+    f.store.updateChatToolTranscript(
+      f.id,
+      { kind: "write-approval", callId: mutationCall.id, approval: reviewed },
+      "source-proof",
+    );
+    const exchange = f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0];
+    expect(exchange?.approval).toEqual(reviewed);
+    expect(exchange).not.toHaveProperty("sourceDigest");
+    expect(() => {
+      f.store.updateChatToolTranscript(
+        f.id,
+        { ...prepared, sourceDigest: "b".repeat(64) },
+        "source-proof",
+      );
+    }).toThrow();
+    const row = f.db
+      .prepare("SELECT tool_transcript_json AS json FROM chat_messages WHERE id = ?")
+      .get(f.id) as { json: string };
+    const stored = JSON.parse(row.json) as { exchanges: { sourceDigest: string }[] };
+    expect(stored.exchanges[0]?.sourceDigest).toBe(sourceDigest);
+    if (stored.exchanges[0] === undefined) throw new TypeError("Missing exchange");
+    stored.exchanges[0].sourceDigest = "b".repeat(64);
+    f.db
+      .prepare("UPDATE chat_messages SET tool_transcript_json = ? WHERE id = ?")
+      .run(JSON.stringify(stored), f.id);
+    expect(() => f.store.findMessageById(f.id)).toThrow();
+  });
+
+  it.each(["approved", "settled", "foreign", "unbound", "malformed"] as const)(
+    "refuses a source snapshot that is %s before it can change reviewed history",
+    (kind) => {
+      const f = fixture();
+      const bound = contractApproval(f);
+      const ownCall =
+        kind === "foreign" ? { ...mutationCall, name: "mcp_synthetic_write" } : mutationCall;
+      f.store.updateChatToolTranscript(
+        f.id,
+        {
+          kind: "started",
+          call: ownCall,
+          ...(kind === "foreign" || kind === "unbound"
+            ? {}
+            : { operationBinding: bound.operationBinding }),
+        },
+        "source-refusal",
+      );
+      if (kind === "approved")
+        f.store.updateChatToolTranscript(
+          f.id,
+          { kind: "write-approval", callId: mutationCall.id, approval: bound.approval },
+          "source-refusal",
+        );
+      if (kind === "settled")
+        f.store.updateChatToolTranscript(
+          f.id,
+          { kind: "settled", callId: mutationCall.id, result: result() },
+          "source-refusal",
+        );
+      expect(() => {
+        f.store.updateChatToolTranscript(
+          f.id,
+          {
+            kind: "write-prepared",
+            callId: mutationCall.id,
+            sourceDigest: kind === "malformed" ? "invalid" : "a".repeat(64),
+          },
+          "source-refusal",
+        );
+      }).toThrow();
+    },
+  );
+
   it("pins the write contract before its first approval and refuses replacement or omission", () => {
     const f = fixture();
     const bound = contractApproval(f);

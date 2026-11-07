@@ -189,6 +189,11 @@ export interface ChatToolTurnOptions<Context extends ToolConsumerContext> {
   /** Rules shared by every offered tool of a source, said once instead of in each description. */
   readonly guidance?: string;
   readonly bind: ChatCatalogBind<Context>;
+  /** Source adapters commit derived write data before approval or dispatch, inside this turn. */
+  readonly prepareInvocation?: (
+    call: ChatToolExchange["call"],
+    actionId: string,
+  ) => Promise<{ readonly sourceDigest?: string } | undefined>;
   readonly selectTools?: (
     identities: readonly string[],
   ) => Promise<ChatToolCatalogSelection<Context>>;
@@ -740,6 +745,20 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       this.activeSelectionRequestId = undefined;
     }
   }
+  private async prepareInvocation(
+    call: NormalizedResponse["toolCalls"][number],
+    identity: string,
+  ): Promise<void> {
+    const prepared = await this.options.prepareInvocation?.(publicToolCall(call), identity);
+    if (prepared?.sourceDigest === undefined) return;
+    const { deps, message, correlationId } = this.options;
+    deps.store.updateChatToolTranscript(
+      message.id,
+      { kind: "write-prepared", callId: call.id, sourceDigest: prepared.sourceDigest },
+      correlationId,
+    );
+    await this.publish();
+  }
   private async dispatch(
     call: NormalizedResponse["toolCalls"][number],
     origin?: "runtime",
@@ -754,6 +773,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     this.callIds.add(call.id);
     await this.startExchange(call, call.invocation);
     const identity = sha256Hex(canonicalise({ messageId: message.id, callId: call.id }));
+    await this.prepareInvocation(call, identity);
     const { outcome, progress } = await this.dispatchWithProgress(call.invocation, identity);
     requireDispatch(outcome.kind === "settled", "invalid", "recovery-required");
     await this.settleToolSelection(identity, outcome.result.status === "completed");

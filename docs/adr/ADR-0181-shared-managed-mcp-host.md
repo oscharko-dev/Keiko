@@ -529,6 +529,15 @@ or digest is refused. Older builds do not understand the new private snapshot; r
 requires a compatible forward repair or restoring the pre-update database backup, never dropping
 approval history to make an old reader accept it.
 
+Requirement-derived Jira writes also persist a private full source digest in a `write-prepared`
+transition before approval or effects. The exact action hash binds that digest beside the operation
+contract and original arguments; public tool-call arguments and transcript wire data remain unchanged.
+Source preparation belongs to the accepted turn and survives catalog selection within that turn.
+It cannot be replaced after preparation, and execution refuses a changed or unavailable source.
+Historical approvals and late receipts validate with their captured source digest, including Full
+access without an approval card. Missing historical source digests retain the earlier hash formula;
+they do not authorize a new traced execution.
+
 ## Centrally configured external MCP servers (#4081)
 
 The same package owns SDK clients for configured stdio, Streamable HTTP and legacy SSE servers.

@@ -60,6 +60,40 @@ function scopeOf(references: string): string {
 }
 
 describe("source acceptance criteria before a Jira draft can be staged or approved", () => {
+  it("binds complete source revisions even when displayed short digests stay equal", async () => {
+    const { f: source, open } = await session([
+      { capsuleId: "cap-revision", text: specification(1).text },
+    ]);
+    const update = (suffix: string): void => {
+      source.withStore((store) => {
+        store._internal.db
+          .prepare("UPDATE documents SET content_hash = ? WHERE capsule_id = ?")
+          .run("a".repeat(12) + suffix.repeat(52), "cap-revision");
+        store._internal.db
+          .prepare("UPDATE capsules SET updated_at = updated_at + 1000 WHERE id = ?")
+          .run("cap-revision");
+      });
+    };
+    const resolve = (): Extract<TraceResolution, { ok: true }> => {
+      const trace = open();
+      try {
+        const result = trace.resolve(["LH-001"]);
+        expect(result.ok).toBe(true);
+        if (!result.ok) throw new TypeError("Expected synthetic requirement trace");
+        return result;
+      } finally {
+        trace.close();
+      }
+    };
+    update("b");
+    const first = resolve();
+    update("c");
+    const second = resolve();
+    expect(first.trace).toEqual(second.trace);
+    expect(first.sourceDigest).toMatch(/^[0-9a-f]{64}$/u);
+    expect(second.sourceDigest).not.toBe(first.sourceDigest);
+  });
+
   it("matches exact source punctuation after the canonical Markdown-to-wiki projection", async () => {
     const text = specification(1).text.replace(
       "Thema 1 ist verfügbar.",

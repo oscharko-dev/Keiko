@@ -1,0 +1,282 @@
+import {
+  descriptionWithFooter,
+  parseRequirementIds,
+  type JiraDraftStore,
+  type JiraDraftPreparation,
+} from "@oscharko-dev/keiko-connectors";
+import { projectJiraDescriptionInput } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
+import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
+import { chatDraftArguments } from "./jiraChatDraftArguments.js";
+import { traceRefusalData, type ItemTrace, type TraceSession } from "../requirement-trace.js";
+
+type SourceOperation = "jira.create" | "jira.edit" | "jira.draft";
+export interface PreparedJiraRequirementItem {
+  readonly ref: string;
+  readonly item: CatalogJsonObject;
+  readonly sourceDigest: string;
+  readonly trace: ItemTrace;
+}
+type PreparedItem =
+  | { readonly ok: true; readonly prepared?: PreparedJiraRequirementItem }
+  | { readonly ok: false; readonly data: CatalogJsonObject };
+export interface PreparedJiraSource {
+  readonly operation: SourceOperation;
+  readonly argumentsDigest: string;
+  readonly sourceDigest: string;
+  readonly items: readonly PreparedJiraRequirementItem[];
+}
+interface SourceEntry {
+  readonly argumentsDigest: string;
+  readonly source?: PreparedJiraSource;
+  readonly refusal?: CatalogJsonObject;
+}
+export interface JiraChatSourcePreparation {
+  readonly prepareInvocation: (
+    call: ChatToolExchange["call"],
+    actionId: string,
+  ) => Promise<{ readonly sourceDigest?: string } | undefined>;
+  readonly sourceFor: (actionId: string, argumentsDigest: string) => PreparedJiraSource | undefined;
+  readonly sourceDigestFor: (actionId: string, argumentsDigest: string) => string | undefined;
+  readonly refusalFor: (actionId: string, argumentsDigest: string) => CatalogJsonObject | undefined;
+  readonly current: (source: PreparedJiraSource) => boolean;
+}
+interface SourcePreparationOptions {
+  readonly chatId: string;
+  readonly draftStore: JiraDraftStore | undefined;
+  readonly openTrace: () => TraceSession;
+  readonly admitted: () => boolean;
+}
+
+function object(value: unknown): CatalogJsonObject | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as CatalogJsonObject)
+    : undefined;
+}
+function unavailable(): CatalogJsonObject {
+  return { outcome: "rejected", reason: "field-validation", requirementRefusal: "unavailable" };
+}
+function projectedFields(
+  fields: CatalogJsonObject,
+  trace: ItemTrace,
+): CatalogJsonObject | undefined {
+  const description = fields.description;
+  const projected =
+    description === undefined ? undefined : projectJiraDescriptionInput(description);
+  if (description !== undefined && projected === undefined) return undefined;
+  const labels = fields.labels;
+  if (
+    labels !== undefined &&
+    (!Array.isArray(labels) || !labels.every((label) => typeof label === "string"))
+  )
+    return undefined;
+  return {
+    ...fields,
+    description: descriptionWithFooter(projected?.text, trace),
+    labels: [...new Set([...((labels as readonly string[] | undefined) ?? []), ...trace.labels])],
+  };
+}
+
+/** One canonical source-derived payload, before staging or a write's approval digest exists. */
+export function prepareJiraRequirementItem(
+  item: CatalogJsonObject,
+  session: TraceSession | undefined,
+  ref = "single",
+  requireDescription = false,
+): PreparedItem {
+  const references = parseRequirementIds(item.requirementIds);
+  if (references === null) return { ok: true };
+  if (references === undefined || session === undefined) return { ok: false, data: unavailable() };
+  const fields = object(item.fields) ?? {};
+  const check = requirementDescriptionCheck(fields, requireDescription);
+  const resolution = session.resolve(references, check);
+  if (!resolution.ok)
+    return { ok: false, data: { outcome: "rejected", ...traceRefusalData(resolution, ref) } };
+  const normalized = projectedFields(fields, resolution.trace);
+  if (normalized === undefined) return { ok: false, data: unavailable() };
+  const prepared = { ...item, fields: normalized };
+  const sourceDigest = sha256Hex(
+    canonicalise({
+      revisionDigest: resolution.sourceDigest,
+      fields: normalized,
+      trace: resolution.trace,
+    }),
+  );
+  return { ok: true, prepared: { ref, item: prepared, sourceDigest, trace: resolution.trace } };
+}
+function requirementDescriptionCheck(
+  fields: CatalogJsonObject,
+  required: boolean,
+): { readonly description: unknown } | undefined {
+  return fields.description === undefined && !required
+    ? undefined
+    : { description: fields.description };
+}
+
+function sourceOperation(name: string): SourceOperation | undefined {
+  return (["jira.create", "jira.edit", "jira.draft"] as const).find(
+    (operation) => name === operation || name === operation.replaceAll(".", "_"),
+  );
+}
+function itemList(
+  operation: SourceOperation,
+  args: CatalogJsonObject,
+): readonly CatalogJsonObject[] {
+  if (operation !== "jira.draft") return [args];
+  if (!Array.isArray(args.items)) return [];
+  const items: CatalogJsonObject[] = [];
+  for (const raw of args.items) {
+    const item = object(raw);
+    if (item !== undefined) items.push(item);
+  }
+  return items;
+}
+function prepareItems(
+  operation: SourceOperation,
+  args: CatalogJsonObject,
+  openTrace: () => TraceSession,
+): {
+  readonly items: readonly PreparedJiraRequirementItem[];
+  readonly refusal?: CatalogJsonObject;
+} {
+  let session: TraceSession | undefined;
+  const items: PreparedJiraRequirementItem[] = [];
+  try {
+    for (const item of itemList(operation, args)) {
+      if (parseRequirementIds(item.requirementIds) !== null) session ??= openTrace();
+      const ref = operation === "jira.draft" && typeof item.ref === "string" ? item.ref : "single";
+      const result = prepareJiraRequirementItem(item, session, ref, operation === "jira.draft");
+      if (!result.ok) return { items: [], refusal: result.data };
+      if (result.prepared !== undefined) items.push(result.prepared);
+    }
+    return { items };
+  } finally {
+    session?.close();
+  }
+}
+function bindingDigest(items: readonly PreparedJiraRequirementItem[]): string {
+  return sha256Hex(canonicalise(items.map(({ ref, sourceDigest }) => ({ ref, sourceDigest }))));
+}
+
+export function prepareJiraDraftRequirements(
+  items: readonly Readonly<Record<string, unknown>>[],
+  openTrace: () => TraceSession,
+): JiraDraftPreparation {
+  const result = prepareItems(
+    "jira.draft",
+    { items: items as readonly CatalogJsonObject[] },
+    openTrace,
+  );
+  if (result.refusal !== undefined) return { ok: false, data: result.refusal, violationCount: 1 };
+  return {
+    ok: true,
+    items: items.map(
+      (item) => result.items.find((candidate) => candidate.ref === item.ref)?.item ?? item,
+    ),
+    sourceBindings: result.items.map(({ ref, sourceDigest }) => ({ ref, sourceDigest })),
+  };
+}
+
+function stagedSourceMatches(
+  options: SourcePreparationOptions,
+  operation: SourceOperation,
+  args: CatalogJsonObject,
+  items: readonly PreparedJiraRequirementItem[],
+): boolean {
+  const staged =
+    operation === "jira.draft" && typeof args.draftId === "string"
+      ? options.draftStore?.peek(args.draftId, options.chatId)
+      : undefined;
+  return (
+    staged === undefined ||
+    items.every((item) =>
+      staged.sourceBindings?.some(
+        (binding) => binding.ref === item.ref && binding.sourceDigest === item.sourceDigest,
+      ),
+    )
+  );
+}
+function preparedEntry(
+  options: SourcePreparationOptions,
+  operation: SourceOperation,
+  args: CatalogJsonObject,
+  argumentsDigest: string,
+): SourceEntry {
+  if (!options.admitted()) return { argumentsDigest, refusal: unavailable() };
+  const draft =
+    operation === "jira.draft"
+      ? chatDraftArguments(options.draftStore, options.chatId, args)
+      : { ok: true as const, arguments: args };
+  if (!draft.ok) return { argumentsDigest, refusal: unavailable() };
+  const result = prepareItems(operation, draft.arguments, options.openTrace);
+  if (!stagedSourceMatches(options, operation, args, result.items)) {
+    return { argumentsDigest, refusal: unavailable() };
+  }
+  const source =
+    result.items.length === 0
+      ? undefined
+      : {
+          operation,
+          argumentsDigest,
+          sourceDigest: bindingDigest(result.items),
+          items: result.items,
+        };
+  return deepFreeze(
+    structuredClone({
+      argumentsDigest,
+      ...(result.refusal === undefined ? {} : { refusal: result.refusal }),
+      ...(source === undefined ? {} : { source }),
+    }),
+  );
+}
+function sourceIsCurrent(options: SourcePreparationOptions, source: PreparedJiraSource): boolean {
+  if (!options.admitted()) return false;
+  const args =
+    source.operation === "jira.draft"
+      ? { items: source.items.map((item) => item.item) }
+      : (source.items[0]?.item ?? {});
+  const current = prepareItems(source.operation, args, options.openTrace);
+  return current.refusal === undefined && bindingDigest(current.items) === source.sourceDigest;
+}
+
+/** Owned by one existing Chat turn; no entry is replaced and no state survives that turn. */
+export function createJiraChatSourcePreparation(
+  options: SourcePreparationOptions,
+): JiraChatSourcePreparation {
+  const prepared = new Map<string, SourceEntry>();
+  const sourceFor = (actionId: string, argumentsDigest: string): PreparedJiraSource | undefined => {
+    const entry = prepared.get(actionId);
+    return entry?.argumentsDigest === argumentsDigest ? entry.source : undefined;
+  };
+  const prepare = (call: ChatToolExchange["call"], actionId: string): SourceEntry | undefined => {
+    const operation = sourceOperation(call.name);
+    const args = object(call.arguments);
+    if (operation === undefined || args === undefined) return undefined;
+    const argumentsDigest = sha256Hex(canonicalise(args));
+    const held = prepared.get(actionId);
+    if (held !== undefined) return held.argumentsDigest === argumentsDigest ? held : undefined;
+    const entry = preparedEntry(options, operation, args, argumentsDigest);
+    prepared.set(actionId, entry);
+    return entry;
+  };
+  return {
+    prepareInvocation: (
+      call,
+      actionId,
+    ): Promise<{ readonly sourceDigest?: string } | undefined> => {
+      const source = prepare(call, actionId)?.source;
+      return Promise.resolve(
+        source === undefined ? undefined : { sourceDigest: source.sourceDigest },
+      );
+    },
+    sourceFor,
+    sourceDigestFor: (actionId, digest) => sourceFor(actionId, digest)?.sourceDigest,
+    refusalFor: (actionId, digest): CatalogJsonObject | undefined => {
+      const entry = prepared.get(actionId);
+      return entry?.argumentsDigest === digest ? entry.refusal : undefined;
+    },
+    current: (source) => sourceIsCurrent(options, source),
+  };
+}

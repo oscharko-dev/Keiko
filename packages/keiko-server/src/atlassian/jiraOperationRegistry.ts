@@ -287,12 +287,14 @@ export function jiraOperationActionDigest(
   operation: JiraMutationOperation,
   argumentsDigest: string,
   operationBinding?: JiraOperationBinding,
+  sourceDigest?: string,
 ): string {
   return sha256Hex(
     canonicalise({
       operation,
       argumentsDigest,
       ...(operationBinding === undefined ? {} : { operationBinding }),
+      ...(sourceDigest === undefined ? {} : { sourceDigest }),
     }),
   );
 }

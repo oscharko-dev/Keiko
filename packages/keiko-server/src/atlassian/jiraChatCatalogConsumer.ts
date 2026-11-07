@@ -85,6 +85,8 @@ export interface JiraChatCatalogAction extends ToolConsumerActionIdentity {
   readonly argumentsDigest: string;
   /** Required for Jira operations; local Knowledge/discovery reads carry no Jira binding. */
   readonly operationBinding?: JiraOperationBinding;
+  /** Server-prepared source payload, captured before the approval identity is minted. */
+  readonly sourceDigest?: string;
 }
 export interface JiraChatCatalogConsumer extends CatalogConsumer {
   readonly context: JiraChatCatalogContext;
@@ -93,6 +95,7 @@ export interface JiraChatCatalogConsumer extends CatalogConsumer {
     readonly write?: {
       readonly action: JiraChatCatalogAction;
       readonly beforeMutation: () => boolean;
+      readonly source?: import("./jiraChatRequirementBinding.js").PreparedJiraSource;
     };
   };
 }
@@ -129,11 +132,13 @@ function validActionFields(action: CatalogJsonObject): boolean {
 function validActionBinding(tool: string, action: CatalogJsonObject): boolean {
   const bound = jiraOperationForTool(tool) !== undefined;
   const keys = bound
-    ? "actionId,argumentsDigest,idempotencyKey,operationBinding,tool"
+    ? `actionId,argumentsDigest,idempotencyKey,operationBinding,${action.sourceDigest === undefined ? "" : "sourceDigest,"}tool`
     : "actionId,argumentsDigest,idempotencyKey,tool";
   return (
     Object.keys(action).sort(compareStrings).join() === keys &&
-    (!bound || isCurrentJiraOperationBinding(tool, action.operationBinding))
+    (!bound || isCurrentJiraOperationBinding(tool, action.operationBinding)) &&
+    (action.sourceDigest === undefined ||
+      (typeof action.sourceDigest === "string" && /^[0-9a-f]{64}$/u.test(action.sourceDigest)))
   );
 }
 function actionBinding(tool: string): Pick<JiraChatCatalogAction, "operationBinding"> {
@@ -153,29 +158,42 @@ function captureAction(value: CatalogJsonValue): JiraChatCatalogAction | undefin
     idempotencyKey: action.idempotencyKey as string,
     argumentsDigest: action.argumentsDigest as string,
     ...actionBinding(tool),
+    ...(typeof action.sourceDigest === "string" ? { sourceDigest: action.sourceDigest } : {}),
   };
 }
 
-export const jiraChatCatalogConsumerPort: CatalogConsumerPort<JiraChatCatalogConsumer> = {
-  scope: (context) => ({
-    kind: "jira-chat",
-    chatId: context.chatId,
-    authorityRunId: context.authorityReference.runId,
-    authorityDigest: context.authorityReference.envelopeDigest,
-  }),
-  staleReason: "consumer-stale",
-  requiredEffects: () => ["connector-access"],
-  captureAction: (handler, value) => {
+export function createJiraChatCatalogConsumerPort(
+  sourceDigestFor?: (actionId: string, argumentsDigest: string) => string | undefined,
+): CatalogConsumerPort<JiraChatCatalogConsumer> {
+  const capture = (value: CatalogJsonValue): JiraChatCatalogAction | undefined => {
     const action = captureAction(value);
-    const operation = action === undefined ? undefined : jiraOperationForTool(action.tool);
-    return handler.binding?.catalogAction === action?.tool &&
-      (operation === undefined ||
-        handler.descriptor.descriptorDigest === operation.declaration.descriptor.descriptorDigest)
-      ? action
-      : undefined;
-  },
-  captureApprovedAction: captureAction,
-};
+    if (action === undefined) return undefined;
+    const sourceDigest = sourceDigestFor?.(action.actionId, action.argumentsDigest);
+    if (action.sourceDigest !== undefined && action.sourceDigest !== sourceDigest) return undefined;
+    return sourceDigest === undefined ? action : { ...action, sourceDigest };
+  };
+  return {
+    scope: (context) => ({
+      kind: "jira-chat",
+      chatId: context.chatId,
+      authorityRunId: context.authorityReference.runId,
+      authorityDigest: context.authorityReference.envelopeDigest,
+    }),
+    staleReason: "consumer-stale",
+    requiredEffects: () => ["connector-access"],
+    captureAction: (handler, value): JiraChatCatalogAction | undefined => {
+      const action = capture(value);
+      const operation = action === undefined ? undefined : jiraOperationForTool(action.tool);
+      return handler.binding?.catalogAction === action?.tool &&
+        (operation === undefined ||
+          handler.descriptor.descriptorDigest === operation.declaration.descriptor.descriptorDigest)
+        ? action
+        : undefined;
+    },
+    captureApprovedAction: capture,
+  };
+}
+export const jiraChatCatalogConsumerPort = createJiraChatCatalogConsumerPort();
 
 /** Use with the application-owned managed catalog; this creates no MCP host or transport. */
 function hasNextPage(data: CatalogJsonObject): boolean {
@@ -221,6 +239,7 @@ export function jiraChatCatalogRoutes(
 }
 
 export interface JiraChatAdmissionOptions {
+  readonly sourcePreparation?: import("./jiraChatRequirementBinding.js").JiraChatSourcePreparation;
   readonly deps: JiraChatAuthorityDeps & Pick<UiHandlerDeps, "atlassianActionApprovalRegistry">;
   readonly context: () => JiraChatCatalogContext;
   readonly now: () => number;
@@ -347,7 +366,9 @@ async function requestWriteStage(
   action: JiraChatCatalogAction,
   context: JiraChatCatalogContext,
 ): Promise<void> {
-  const refusal = await options.preflightWrite?.(action, context);
+  const refusal =
+    options.sourcePreparation?.refusalFor(action.actionId, action.argumentsDigest) ??
+    (await options.preflightWrite?.(action, context));
   if (refusal !== undefined) {
     const binding = jiraOperationBindingForTool(action.tool);
     requireDispatch(binding !== undefined, "failed", "provider-reported-error");
@@ -416,6 +437,7 @@ function mutationGuard(
   action: JiraChatCatalogAction,
 ): JiraChatCatalogConsumer["guard"] {
   let claim: ChatWriteApprovalClaim | undefined;
+  const source = options.sourcePreparation?.sourceFor(action.actionId, action.argumentsDigest);
   const check = (): boolean => preview(options, capability, action, claim).ok;
   return READ_TOOLS.has(action.tool)
     ? { check }
@@ -423,8 +445,15 @@ function mutationGuard(
         check,
         write: {
           action,
+          ...(source === undefined ? {} : { source }),
           beforeMutation: (): boolean => {
             if (!check()) return false;
+            if (
+              action.sourceDigest !== undefined &&
+              (source?.sourceDigest !== action.sourceDigest ||
+                options.sourcePreparation?.current(source) !== true)
+            )
+              return false;
             // One approval covers one action; a backlog draft dispatches its items under it (#4178).
             if (claim !== undefined) return true;
             const result = claimJiraChatWrite(options, action);
