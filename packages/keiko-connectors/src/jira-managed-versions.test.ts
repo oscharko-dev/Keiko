@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { AtlassianWriteHttpOutcome } from "./atlassian-write-http.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
+import { jiraObjectMutationBody } from "./jira-test-request/_support.js";
 import {
   executeJiraVersionMutation,
   executeJiraVersionRead,
@@ -49,7 +50,7 @@ function fixture(override?: Override): ReturnType<typeof vi.fn<JiraMutationReque
     if (replacement !== undefined) return Promise.resolve(replacement);
     if (method !== "GET") {
       written = true;
-      version = { ...version, ...body };
+      version = { ...version, ...jiraObjectMutationBody(body) };
       return Promise.resolve(
         answer(method === "POST" ? version : undefined, method === "POST" ? 201 : 200),
       );

@@ -3,6 +3,7 @@ import {
   type AtlassianConnectorWriteFailureReason,
   type JiraFieldMetadata,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type { CatalogJsonValue } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import type {
   AtlassianWriteHttpOutcome,
@@ -15,10 +16,14 @@ import {
 } from "./jira-field-metadata.js";
 import { jiraMetadataPageLast, parseJiraFieldMap } from "./jira-managed-metadata.js";
 
+/** Fixed native owners may serialize a complete JSON value; the HTTP owner still enforces method,
+ * UTF-8 bytes, custody, authority and multipart exclusion on the same serialized body channel.
+ */
+export type JiraMutationBody = Readonly<Record<string, unknown>> | CatalogJsonValue;
 export type JiraMutationRequest = (
   path: string,
   method?: AtlassianWriteHttpRequest["method"],
-  body?: Readonly<Record<string, unknown>>,
+  body?: JiraMutationBody,
   expect?: AtlassianWriteHttpRequest["expect"],
   upload?: AtlassianWriteHttpRequest["upload"],
 ) => Promise<AtlassianWriteHttpOutcome>;

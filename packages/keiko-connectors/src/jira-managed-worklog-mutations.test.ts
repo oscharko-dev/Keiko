@@ -3,6 +3,7 @@ import { parseJiraIssueTemplate } from "@oscharko-dev/keiko-contracts/runtime/at
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { AtlassianWriteHttpOutcome } from "./atlassian-write-http.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
+import { jiraObjectMutationBody } from "./jira-test-request/_support.js";
 import type { JiraIssueTemplateSource } from "./jira-managed-template-gate.js";
 import {
   executeJiraWorklogMutation,
@@ -73,7 +74,7 @@ function fixture(
         `${method === "POST" ? `issue/${ISSUE.id}/worklog` : PATH}?adjustEstimate=leave`,
       );
       written = true;
-      current = { ...current, ...body };
+      current = { ...current, ...jiraObjectMutationBody(body) };
       return Promise.resolve(options.write ?? ok(current, method === "POST" ? 201 : 200));
     }
     return Promise.resolve(read(path));
@@ -234,7 +235,7 @@ describe("native worklog changes with fixed remaining estimates", () => {
       ok: true,
       receipt: RECEIPT,
     });
-    expect(request.mock.calls[1]?.[2]?.comment).toBe("*native*\r\ntext");
+    expect(jiraObjectMutationBody(request.mock.calls[1]?.[2]).comment).toBe("*native*\r\ntext");
   });
   it("compares started instants and canonicalizes the reviewed timestamp to UTC", async () => {
     const request = fixture();
@@ -242,7 +243,7 @@ describe("native worklog changes with fixed remaining estimates", () => {
       ok: true,
       receipt: RECEIPT,
     });
-    expect(request.mock.calls[1]?.[2]?.started).toBe(WORKLOG.started);
+    expect(jiraObjectMutationBody(request.mock.calls[1]?.[2]).started).toBe(WORKLOG.started);
   });
   it.each([undefined, null])(
     "retains an unrestricted worklog without inventing visibility",

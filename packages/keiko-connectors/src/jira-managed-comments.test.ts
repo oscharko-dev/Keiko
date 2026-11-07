@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AtlassianWriteHttpOutcome } from "./atlassian-write-http.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
+import { jiraObjectMutationBody } from "./jira-test-request/_support.js";
 import {
   executeJiraCommentRead,
   executeJiraCommentMutation,
@@ -41,7 +42,7 @@ function fixture(
     expect(path).toBe(PATH);
     if (method === "PUT") {
       written = true;
-      current = { ...current, ...body };
+      current = { ...current, ...jiraObjectMutationBody(body) };
       return Promise.resolve(options.write ?? response(current));
     }
     return Promise.resolve(response(written ? (options.after ?? current) : current));

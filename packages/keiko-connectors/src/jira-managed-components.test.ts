@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AtlassianWriteHttpOutcome } from "./atlassian-write-http.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
+import { jiraObjectMutationBody } from "./jira-test-request/_support.js";
 import {
   executeJiraComponentMutation,
   executeJiraComponentRead,
@@ -42,14 +43,15 @@ function fixture(override?: (call: FixtureCall) => AtlassianWriteHttpOutcome | u
   let component: Record<string, unknown> = structuredClone(COMPONENT);
   let written = false;
   const request = vi.fn<JiraMutationRequest>((path, method = "GET", body) => {
-    const custom = override?.({ path, method, body, written });
+    const fields = body === undefined ? undefined : jiraObjectMutationBody(body);
+    const custom = override?.({ path, method, body: fields, written });
     if (custom !== undefined) return Promise.resolve(custom);
     if (method !== "GET") {
       written = true;
       component = {
         ...component,
-        ...body,
-        ...(body?.leadUserName === undefined ? {} : { lead: { name: body.leadUserName } }),
+        ...jiraObjectMutationBody(body),
+        ...(fields?.leadUserName === undefined ? {} : { lead: { name: fields.leadUserName } }),
       };
       return Promise.resolve(response(component, method === "POST" ? 201 : 200));
     }
