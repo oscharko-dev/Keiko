@@ -170,6 +170,8 @@ export function nativeRead(
     },
     "/context/rest/api/2/component/71": state.component,
     "/context/rest/api/2/version/81": state.version,
+    "/context/rest/api/2/filter/42": { id: "42", name: "Scoped", jql: "project = SYN" },
+    "/context/rest/agile/1.0/board/7": state.board,
     "/context/rest/agile/1.0/board/7/configuration": state.board,
     "/context/rest/agile/1.0/sprint/9": state.sprint,
     "/context/rest/agile/1.0/epic/SYN-11": state.epic,

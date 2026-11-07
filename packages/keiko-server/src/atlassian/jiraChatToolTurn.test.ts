@@ -11,7 +11,6 @@ import {
 import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
 import { createServerLogger, setServerLogger } from "../observability/index.js";
 import { logKnowledgeCoverage, knowledgeTurnCoverage } from "../chat-tool-knowledge-coverage.js";
-import { CHAT_CATALOG_TOOLS } from "./jiraChatCatalogConsumer.js";
 import { DatabaseSync } from "node:sqlite";
 import { createServer } from "node:http";
 import { JiraChatToolTurn } from "./jiraChatToolTurn.js";
@@ -284,6 +283,29 @@ function endsTurn(repeatTools: boolean | number, round: number): boolean {
   if (typeof repeatTools === "number") return round > repeatTools;
   return !repeatTools && round % 2 === 0;
 }
+function describeFixtureOperation(
+  request: GatewayCallRequest,
+  base: NormalizedResponse,
+  canonicalId: string,
+): NormalizedResponse {
+  const contract = jiraOperationContracts().find(
+    (entry) => entry.declaration.descriptor.toolRef.canonicalId === canonicalId,
+  );
+  if (contract === undefined) throw new TypeError("Missing fixture operation contract");
+  const bridge = createGatewayToolCatalogBridge({ ...request, stream: false }, Date.now);
+  return {
+    ...base,
+    content: "",
+    finishReason: "tool_calls",
+    toolCalls: [
+      bridge.bind({
+        id: `describe-${base.usage.requestId}`,
+        name: "jira_describe",
+        arguments: { identities: [contract.binding.identity] },
+      }),
+    ],
+  };
+}
 function syntheticModel(
   calls: GatewayCallRequest[],
   mutation: Mutation,
@@ -291,6 +313,7 @@ function syntheticModel(
   draft: DraftCall,
   bodies?: readonly string[],
 ): ModelPort {
+  let operationRound = 0;
   const respond = (request: GatewayCallRequest): NormalizedResponse => {
     calls.push(request);
     const reservation = request.attemptAdmission?.({
@@ -312,13 +335,16 @@ function syntheticModel(
       },
     };
     reservation?.settle(base.usage, true, "observed");
-    if (request.toolCatalog?.kind !== "bound" || endsTurn(repeatTools, calls.length)) return base;
+    if (request.toolCatalog?.kind !== "bound") return base;
     expect(reservation).toBeDefined();
-    const bridge = createGatewayToolCatalogBridge({ ...request, stream: false }, Date.now);
     const tool = request.toolCatalog.projection.tools.find(
       (entry) => entry.toolRef.canonicalId === offeredTool(mutation, draft),
     );
-    if (tool === undefined) throw new Error("Missing offered Jira projects tool");
+    if (tool === undefined)
+      return describeFixtureOperation(request, base, offeredTool(mutation, draft));
+    operationRound++;
+    if (endsTurn(repeatTools, operationRound)) return base;
+    const bridge = createGatewayToolCatalogBridge({ ...request, stream: false }, Date.now);
     if (typeof mutation === "object") mutation.beforeCall?.();
     return {
       ...base,
@@ -331,8 +357,8 @@ function syntheticModel(
           arguments: toolArguments(
             mutation,
             draft,
-            bodies?.[calls.length - 1],
-            commentKeysByRound[calls.length - 1],
+            bodies?.[operationRound - 1],
+            commentKeysByRound[operationRound - 1],
           ),
         }),
       ],
@@ -349,13 +375,38 @@ async function* syntheticStream(
   if (resolved.content.length > 0) yield { type: "delta", token: resolved.content };
   yield { type: "done", response: resolved };
 }
+// These lifecycle scenarios exercise the original issue workflows, not every newly registered API.
+const FIXTURE_OPERATION_TOOLS: ReadonlySet<string> = new Set([
+  "jira.projects",
+  "jira.issue-types",
+  "jira.create-fields",
+  "jira.edit-fields",
+  "jira.search",
+  "jira.issue",
+  "jira.comments",
+  "jira.transitions",
+  "jira.assignable-users",
+  "jira.report",
+  "jira.draft-stage",
+  "jira.create",
+  "jira.edit",
+  "jira.assign",
+  "jira.comment",
+  "jira.transition",
+  "jira.draft",
+  "jira.attach",
+]);
 function preselectFixtureCatalog(deps: UiHandlerDeps): void {
   // These lower-level lifecycle fixtures start with an explicitly selected set. The demand-entry
   // tests below restore get() and exercise discovery and typed next-round admission end to end.
   const catalog = deps.jiraChatCatalog;
   if (catalog === undefined) throw new TypeError("Missing Jira catalog");
   vi.spyOn(catalog, "get").mockImplementation(() =>
-    catalog.select(jiraOperationContracts().map((entry) => entry.binding.identity)),
+    catalog.select(
+      jiraOperationContracts()
+        .filter((entry) => FIXTURE_OPERATION_TOOLS.has(entry.definition.tool))
+        .map((entry) => entry.binding.identity),
+    ),
   );
 }
 
@@ -493,8 +544,15 @@ function stallAfterFirstRound(f: ReturnType<typeof fixture>, onStalled?: () => v
     },
   });
   const callStream: NonNullable<ModelPort["callStream"]> = (request, signal) => {
-    rounds++;
-    return rounds === 1 ? original(request, signal) : stalled(signal);
+    const selected =
+      request.toolCatalog?.kind === "bound" &&
+      request.toolCatalog.projection.tools.some(
+        (entry) =>
+          entry.toolRef.canonicalId === "keiko.jira.projects" ||
+          entry.toolRef.canonicalId === "keiko.jira.draft",
+      );
+    if (selected) rounds++;
+    return rounds <= 1 ? original(request, signal) : stalled(signal);
   };
   Object.assign(f.model, {
     callStream,
@@ -509,6 +567,8 @@ it.each([false, true])(
   "delivers the transcript answer when the turn reaches its deadline (stream=%s)",
   async (stream) => {
     const f = fixture(false, undefined, true, true);
+    if (f.deps.jiraChatCatalog === undefined) throw new TypeError("Missing Jira catalog");
+    vi.mocked(f.deps.jiraChatCatalog.get).mockRestore();
     Object.assign(f.deps, {
       chatToolTurnBudget: { ...TEN_CALL_BUDGET, maxRuntimeMs: 1_500 },
     });
@@ -526,9 +586,13 @@ it.each([false, true])(
     const result = await pending;
     expect(f.requests()).toBe(1);
     const [user, assistant] = f.deps.store.listMessages(f.chatId);
-    expect(user?.toolTranscript?.exchanges).toHaveLength(1);
+    expect(user?.toolTranscript?.exchanges.map((entry) => entry.call.name)).toEqual([
+      "jira_describe",
+      "jira_projects",
+    ]);
+    expect(f.calls).toHaveLength(2);
     expect(assistant?.content).toContain("this turn reached its time limit");
-    expect(assistant?.content).toContain("Reads completed: 1.");
+    expect(assistant?.content).toContain("Reads completed: 2.");
     if (stream) expect(response.body()).toContain("event: done");
     else expect(result).toMatchObject({ status: 200 });
   },
@@ -881,7 +945,7 @@ function expectUnchangedJiraOffer(calls: readonly GatewayCallRequest[]): void {
 function expectJiraDraftUnionOffered(calls: readonly GatewayCallRequest[]): void {
   const offered = calls[0]?.toolCatalog;
   if (offered?.kind !== "bound") throw new Error("Missing real Chat catalog offer");
-  expect(offered.projection.tools).toHaveLength(CHAT_CATALOG_TOOLS.length);
+  expect(offered.projection.tools).toHaveLength(FIXTURE_OPERATION_TOOLS.size + 5);
   expect(
     offered.projection.tools.find((tool) => tool.alias === "jira_draft")?.inputSchema.oneOf,
   ).toHaveLength(2);

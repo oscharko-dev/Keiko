@@ -9,7 +9,7 @@ import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
-import { chatDraftArguments } from "./jiraChatDraftArguments.js";
+import { chatDraftArguments, draftRefusalData } from "./jiraChatDraftArguments.js";
 import { traceRefusalData, type ItemTrace, type TraceSession } from "../requirement-trace.js";
 import { logRequirementTrace } from "../requirement-inventory-activity.js";
 
@@ -235,7 +235,7 @@ function preparedEntry(
     operation === "jira.draft"
       ? chatDraftArguments(options.draftStore, options.chatId, args)
       : { ok: true as const, arguments: args };
-  if (!draft.ok) return { argumentsDigest, refusal: unavailable() };
+  if (!draft.ok) return { argumentsDigest, refusal: draftRefusalData(draft) };
   const result = prepareItems(operation, draft.arguments, options.openTrace);
   const refusal = stagedSourceRefusal(options, operation, args, result.items);
   if (refusal !== undefined) {
