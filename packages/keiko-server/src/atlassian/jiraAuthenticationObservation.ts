@@ -8,7 +8,8 @@ import type {
 type Request = AtlassianHttpRequest | AtlassianHttpBodyRequest;
 
 // Retained Jira 11.3 API: these GETs document 401 for missing WebSudo or view permission
-// as well as authentication. Other resources (including issue-type schemes) remain definitive.
+// as well as authentication. The exact tab POST/PUT/DELETE paths below separately document 401
+// for unauthorized administrators. Other resources/methods remain definitive; no write is retried.
 const AMBIGUOUS_PATHS: readonly (readonly string[])[] = [
   ["index-snapshot"],
   ["user", "columns"],
@@ -29,6 +30,18 @@ const AMBIGUOUS_PATHS: readonly (readonly string[])[] = [
   ["screens", "id", "tabs", "id", "fields"],
   ["screens", "id", "availableFields"],
 ];
+// Retained 11.3 POST /screens/{screenId}/tabs and PUT/DELETE /screens/{screenId}/tabs/{tabId}.
+// The same existing identity probe preserves the original synchronous status and absolute deadline.
+function ambiguousTabWrite(method: Request["method"], parts: readonly string[]): boolean {
+  if (parts[0] !== "screens" || parts[2] !== "tabs" || !/^[1-9]\d{0,18}$/u.test(parts[1] ?? ""))
+    return false;
+  if (method === "POST") return parts.length === 3;
+  return (
+    (method === "PUT" || method === "DELETE") &&
+    parts.length === 4 &&
+    /^[1-9]\d{0,18}$/u.test(parts[3] ?? "")
+  );
+}
 
 export function ambiguousJiraAuthenticationResponse(
   metadata: AtlassianCredentialMetadata,
@@ -37,8 +50,7 @@ export function ambiguousJiraAuthenticationResponse(
   if (
     metadata.provider !== "jira" ||
     metadata.deployment !== "data-center" ||
-    metadata.livePod === undefined ||
-    request.method !== "GET"
+    metadata.livePod === undefined
   )
     return false;
   const base = new URL(metadata.baseUrl);
@@ -46,6 +58,7 @@ export function ambiguousJiraAuthenticationResponse(
   const prefix = `${base.pathname.replace(/\/$/, "")}/rest/api/2/`;
   if (target.origin !== base.origin || !target.pathname.startsWith(prefix)) return false;
   const parts = target.pathname.slice(prefix.length).split("/");
+  if (request.method !== "GET") return ambiguousTabWrite(request.method, parts);
   return AMBIGUOUS_PATHS.some(
     (path) =>
       path.length === parts.length &&

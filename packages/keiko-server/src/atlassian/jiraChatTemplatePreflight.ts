@@ -38,6 +38,9 @@ import {
 
 /** Field and metadata writes share read-only validation; templates apply only to issue fields. */
 const FIELD_OPERATIONS = [
+  "jira.create-screen-tab",
+  "jira.rename-screen-tab",
+  "jira.delete-screen-tab",
   "jira.create",
   "jira.edit",
   "jira.transition",

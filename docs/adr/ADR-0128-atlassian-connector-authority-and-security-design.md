@@ -632,7 +632,11 @@ the result once. This classification does not depend on a possibly stale metadat
 This does not introduce credential polling.
 
 The retained native API also documents 401 for missing WebSudo or view permission on specific
-workflow-scheme and screen GETs. Only those server-owned method/path identities await one bounded
+server-owned GET identities, including workflow-scheme and screen observations. Jira 11.3's
+`ScreensResource` additionally documents administrator-permission 401 responses for exactly
+`POST /screens/{screenId}/tabs` and `PUT`/`DELETE /screens/{screenId}/tabs/{tabId}`
+([native screen resource](https://docs.atlassian.com/software/jira/docs/api/11.3.0/com/atlassian/jira/rest/v2/issue/ScreensResource.html)).
+Only those enumerated method/path identities await one bounded
 same-target `myself` read before deciding whether the credential failed. The original status and
 synchronous response acknowledgement remain unchanged. The identity read retains ordinary saved
 target admission, the original authority guard, signal, remaining deadline and captured credential
@@ -642,6 +646,18 @@ the original 401 as an operation permission denial without granting authority or
 compatibility. An explicit authentication failure still invalidates through the existing custody
 owner. Timeout, malformed data, revoked authority, cancellation or stale observations are not proof
 of credential failure. Upstream JSON cannot supply this port-owned observation.
+
+Screen-tab create, rename and delete remain high-risk actions in the existing authority and
+approval pipeline. Admission binds the current screen ID/name and the complete tab snapshot;
+deletion also matches the reviewed ordered field IDs and requires another tab to remain.
+Each invocation performs at most one mutation. A fresh same-parent read confirms the observed
+tab ID and name, or exact absence with a remaining tab. Creation without an acknowledged new
+tab ID stays unknown; a name match cannot recover identity. A journal replay never calls the
+provider or starts automatic reconciliation, and private receipts remain in the existing
+transcript, not in new journal columns. The native documented 400 refusals, delete-only 412,
+and positively classified administrator 401 settle as rejected only with the existing
+structured Jira error-document proof. Other responses retain uncertainty; no general 4xx or
+bulk-operation rule is widened.
 
 Both outbound HTTP factories capture the selected credential generation by value. The custody
 resolver checks it against current private metadata before reading ciphertext, so an old transport

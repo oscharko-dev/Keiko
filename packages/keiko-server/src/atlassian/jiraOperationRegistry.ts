@@ -19,6 +19,9 @@ type CompositeTool = "jira.report" | "jira.draft-stage" | "jira.draft";
 type NativeTool = Exclude<JiraOperationTool, CompositeTool>;
 type JiraOperationEffect = "remote-read" | "remote-write" | "local-report" | "local-draft";
 type JiraPermissionPolicy =
+  | "screen-tab-create-and-readback"
+  | "screen-tab-rename-and-readback"
+  | "screen-tab-delete-and-absence"
   | "observed-column-layout"
   | "observed-maintenance-status"
   | "admin-workflow-configuration"
@@ -161,6 +164,9 @@ function writes<const K extends NativeTool>(
   return result as NativeGroup<K>;
 }
 const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
+  ...writes("screen-tab-create-and-readback", { "jira.create-screen-tab": ["POST", "/screens/{screenId}/tabs"] }),
+  ...writes("screen-tab-rename-and-readback", { "jira.rename-screen-tab": ["PUT", "/screens/{screenId}/tabs/{tabId}"] }),
+  ...writes("screen-tab-delete-and-absence", { "jira.delete-screen-tab": ["DELETE", "/screens/{screenId}/tabs/{tabId}"] }),
   ...reads("observed-column-layout", {
     "jira.system-columns": "/settings/columns",
     "jira.user-columns": "/user/columns",

@@ -175,6 +175,9 @@ const FIELD_ADMISSION = defineActivityLogOperation({
         "jira.transition",
         "jira.assign",
         "jira.draft",
+        "jira.create-screen-tab",
+        "jira.rename-screen-tab",
+        "jira.delete-screen-tab",
         "jira.create-project",
         "jira.update-project",
         "jira.create-component",
@@ -282,6 +285,9 @@ export function recordJiraFieldRefusal(
     readonly operation:
       | JiraTemplateOperation
       | "jira.draft"
+      | "jira.create-screen-tab"
+      | "jira.rename-screen-tab"
+      | "jira.delete-screen-tab"
       | "jira.create-project"
       | "jira.update-project"
       | "jira.create-component"

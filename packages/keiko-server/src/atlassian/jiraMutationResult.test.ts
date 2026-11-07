@@ -20,6 +20,45 @@ const PARTIAL: JiraMutationAttempt = {
   links: LINKS,
 };
 
+describe("screen tab receipts", () => {
+  it.each(["jira.create-screen-tab", "jira.rename-screen-tab", "jira.delete-screen-tab"] as const)(
+    "requires both exact screen and tab identities for confirmed %s", (operation) => {
+      const receipt = { screenId: "9223372036854775807", tabId: "9007199254740993" };
+      expect(validJiraMutationAttempt({ ok: true, receipt }, operation)).toEqual({ ok: true, receipt });
+      expect(validJiraMutationAttempt({ ok: true, receipt: { screenId: "71" } }, operation))
+        .toEqual({ ok: false, reason: "malformed-payload" });
+      expect(jiraAttemptToolResult("succeeded", { ok: true, receipt }).data).toMatchObject({ outcome: "succeeded", ...receipt });
+      const uncertain = validJiraMutationAttempt({ ok: false, reason: "timeout", receipt }, operation);
+      expect(jiraAttemptToolResult("succeeded-unconfirmed", uncertain).data).toMatchObject({ outcome: "succeeded-unconfirmed", ...receipt });
+    },
+  );
+  it("retains only known screen context when create acknowledgement was lost", () => {
+    const attempt = validJiraMutationAttempt({ ok: false, reason: "timeout", receipt: { screenId: "71" } }, "jira.create-screen-tab");
+    expect(attempt).toEqual({ ok: false, reason: "timeout", receipt: { screenId: "71" } });
+    const result = jiraAttemptToolResult("unknown", attempt);
+    expect(result.data).toMatchObject({ outcome: "unknown", screenId: "71" });
+    expect(result.data).not.toHaveProperty("tabId");
+    expect(result.data).not.toHaveProperty("name");
+  });
+  it.each([
+    { tabId: "81" }, { screenId: "0", tabId: "81" }, { screenId: "71", tabId: "9223372036854775808" },
+    { screenId: "71", tabId: "81", issueKey: "SYN-1" }, { screenId: "71", tabId: "81", projectId: "10000" },
+    { screenId: "71", tabId: "81", browseUrl: "https://untrusted.invalid/screen" },
+    { screenId: "71", tabId: "81", name: "Unobserved tab" },
+  ])("refuses malformed or cross-entity tab receipt fields %j", (receipt) => {
+    expect(validJiraMutationAttempt({ ok: true, receipt }, "jira.create-screen-tab"))
+      .toEqual({ ok: false, reason: "malformed-payload" });
+    expect(validJiraMutationAttempt({ ok: false, reason: "timeout", receipt }, "jira.create-screen-tab"))
+      .not.toHaveProperty("receipt");
+  });
+  it("retains the exact already-current target without promoting it to a successful write", () => {
+    const attempt = validJiraMutationAttempt({ ok: false, reason: "conflict", receipt: { screenId: "71", tabId: "81" },
+      detail: { unchanged: true } }, "jira.rename-screen-tab");
+    expect(jiraAttemptToolResult("rejected", attempt).data).toMatchObject({ outcome: "rejected", reason: "conflict",
+      unchanged: true, screenId: "71", tabId: "81" });
+  });
+});
+
 describe("updated comment receipts", () => {
   it("requires both the issue and the independently confirmed comment identity", () => {
     const receipt = { issueKey: "SYN-1", commentId: "10002" };

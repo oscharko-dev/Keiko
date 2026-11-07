@@ -4,6 +4,9 @@ import { compareStrings } from "./comparators.js";
 
 /** Remote effects remain separate from the enclosing MCP/catalog terminal status. */
 export const JIRA_MUTATION_OPERATIONS = [
+  "jira.create-screen-tab",
+  "jira.rename-screen-tab",
+  "jira.delete-screen-tab",
   "jira.create",
   "jira.create-project",
   "jira.update-project",
@@ -152,6 +155,8 @@ export type JiraMutationResultState = (typeof JIRA_MUTATION_RESULT_STATES)[numbe
 
 /** Validated Jira identities only; remote bodies and headers never become a mutation receipt. */
 export interface JiraMutationReceipt {
+  readonly screenId?: string;
+  readonly tabId?: string;
   readonly projectId?: string;
   readonly projectKey?: string;
   readonly projectName?: string;

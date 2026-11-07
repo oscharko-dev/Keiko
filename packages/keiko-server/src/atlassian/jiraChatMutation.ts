@@ -36,7 +36,7 @@ export interface JiraChatMutationExecution {
   readonly httpPortFactory: (lifecycle: AtlassianHttpLifecycleOptions) => AtlassianHttpBodyPort;
   /** Current binding, authority, approval and budget admission for metadata and confirmation reads. */
   readonly beforeEffect: () => boolean;
-  /** Claim this exact mutation's approval inside the journal transaction, only before POST/PUT. */
+  /** Claim this exact mutation's approval inside the journal transaction, only before POST/PUT/DELETE. */
   readonly beforeMutation: (itemRef?: string) => boolean;
   readonly execute: (http: AtlassianHttpBodyPort) => Promise<JiraMutationAttempt>;
 }
@@ -134,10 +134,30 @@ function jiraRejectedWithoutEffect(
   // Only reviewed single-resource error contracts establish no effect. Bulk errors may
   // follow a partial effect, even with a structured Jira error document, and remain uncertain.
   return (
-    ATOMIC_ERROR_OPERATIONS.has(record.operation) &&
+    atomicRejectionStatus(record, attempt) &&
     definitiveRejectionStatus(record.httpStatus) &&
     jiraErrorDocument(attempt)
   );
+}
+/**
+ * Retained Jira 11.3 ScreensResource documents these single-tab no-effect failures.
+ * A 401 additionally needs the existing server-owned positive identity observation;
+ * error documents and the durable original HTTP status remain mandatory for settlement.
+ */
+function atomicRejectionStatus(record: ChatToolMutationRecord, attempt: JiraMutationAttempt): boolean {
+  const operation = record.operation;
+  if (
+    operation === "jira.create-screen-tab" ||
+    operation === "jira.rename-screen-tab" ||
+    operation === "jira.delete-screen-tab"
+  ) {
+    if (record.httpStatus === 401) return !attempt.ok && attempt.reason === "permission-denied";
+    return (
+      record.httpStatus === 400 ||
+      (operation === "jira.delete-screen-tab" && record.httpStatus === 412)
+    );
+  }
+  return ATOMIC_ERROR_OPERATIONS.has(operation);
 }
 function jiraErrorDocument(attempt: JiraMutationAttempt): boolean {
   if (attempt.ok) return false;

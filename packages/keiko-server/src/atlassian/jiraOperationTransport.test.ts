@@ -32,6 +32,12 @@ const CREATE = {
 };
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
+  { tool: "jira.create-screen-tab", args: { screenId: "71", expectedScreenName: "Details & QA", name: "After" },
+    parameters: { screenId: "71" } },
+  { tool: "jira.rename-screen-tab", args: { screenId: "71", expectedScreenName: "Details & QA", tabId: "81", expectedName: "Details", name: "After" },
+    parameters: { screenId: "71", tabId: "81" } },
+  { tool: "jira.delete-screen-tab", args: { screenId: "71", expectedScreenName: "Details & QA", tabId: "81", expectedName: "Details", expectedFieldIds: ["summary"] },
+    parameters: { screenId: "71", tabId: "81" } },
   { tool: "jira.comment-property-keys", args: { issueIdOrKey: "SYN-1", commentId: "10002" }, parameters: { commentId: "10002" }, primaryMethodIndex: 2 },
   { tool: "jira.comment-property", args: { issueIdOrKey: "SYN-1", commentId: "10002", propertyKey: "view ~settings" },
     parameters: { commentId: "10002", propertyKey: "view ~settings" }, primaryMethodIndex: 2 },
@@ -629,6 +635,7 @@ const SCENARIOS: readonly Scenario[] = [
   },
 ];
 interface RemoteState extends SyntheticJira {
+  screenTabs: readonly Record<string, unknown>[] | undefined;
   worklog: Record<string, unknown>;
   worklogDeleted: boolean;
   commentDeleted: boolean;
@@ -638,6 +645,29 @@ interface RemoteState extends SyntheticJira {
   project: Record<string, unknown>;
   component: Record<string, unknown>;
   version: Record<string, unknown>;
+}
+const SCREEN_TAB_WRITES = new Set(["jira.create-screen-tab", "jira.rename-screen-tab", "jira.delete-screen-tab"]);
+function screenTabRead(path: string, state: RemoteState): AtlassianHttpBodyResult | undefined {
+  return state.screenTabs !== undefined && path === "screens/71/tabs" ? response(state.screenTabs) : undefined;
+}
+function screenTabWrite(path: string, request: AtlassianHttpBodyRequest, state: RemoteState): AtlassianHttpBodyResult | undefined {
+  const tabs = state.screenTabs;
+  if (tabs === undefined) return undefined;
+  if (path === "screens/71/tabs" && request.method === "POST") {
+    expect(JSON.parse(request.bodyJson ?? "null")).toEqual({ name: "After" });
+    state.screenTabs = [...tabs, { id: 83, name: "After" }];
+    return response({ id: 83, name: "After" }, 201);
+  }
+  if (path !== "screens/71/tabs/81") return undefined;
+  if (request.method === "PUT") {
+    expect(JSON.parse(request.bodyJson ?? "null")).toEqual({ name: "After" });
+    state.screenTabs = tabs.map((tab) => tab.id === 81 ? { ...tab, name: "After" } : tab);
+    return response(undefined, 204);
+  }
+  if (request.method !== "DELETE") return undefined;
+  expect(request.bodyJson).toBeUndefined();
+  state.screenTabs = tabs.filter((tab) => tab.id !== 81);
+  return response(undefined, 204);
 }
 function collaborationRead(path: string, state: RemoteState): AtlassianHttpBodyResult | undefined {
   const type = { id: "11", name: "Relates", inward: "relates to", outward: "relates to" };
@@ -1147,6 +1177,7 @@ function remoteRead(
   absoluteUrl: string,
 ): AtlassianHttpBodyResult {
   return (
+    screenTabRead(path, state) ??
     projectRead(path, state) ??
     structureRead(path, state) ??
     collaborationRead(path, state) ??
@@ -1163,6 +1194,7 @@ function remoteRead(
 }
 function remote(tool?: string): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> {
   const state: RemoteState = {
+    screenTabs: SCREEN_TAB_WRITES.has(tool ?? "") ? [{ id: 81, name: "Details" }, { id: 82, name: "Other" }] : undefined,
     fields: {
       summary: "Before",
       assignee: { name: "previous-user" },
@@ -1205,7 +1237,8 @@ function remote(tool?: string): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> 
     return Promise.resolve(
       path === "project" || path === "project/10000"
         ? projectWrite(request, state)
-        : (participationWrite(path, request.method, state) ??
+        : (screenTabWrite(path, request, state) ??
+            participationWrite(path, request.method, state) ??
             assetWrite(path, request, state) ??
             worklogWrite(path, request, state) ??
             collaborationWrite(path, request, state) ??
@@ -1241,7 +1274,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(184);
+    expect(native).toHaveLength(187);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),
@@ -1395,6 +1428,26 @@ describe("native Jira registry and real connector transport agreement", () => {
     expect(result.data).toMatchObject({ outcome: "failed", reason: "invalid-input" });
     expect(http).not.toHaveBeenCalled();
   });
+  it.each(["jira.create-screen-tab", "jira.rename-screen-tab", "jira.delete-screen-tab"] as const)(
+    "confirms %s through the same reviewed screen and complete native tabs after exactly one write", async (tool) => {
+      const scenario = SCENARIOS.find((candidate) => candidate.tool === tool);
+      if (scenario === undefined) throw new TypeError("Missing screen tab fixture");
+      const observed = await observe(scenario);
+      const writeIndex = observed.requests.findIndex((request) => request.method !== "GET");
+      expect(writeIndex).toBeGreaterThan(0);
+      expect(observed.requests.filter((request) => request.method !== "GET")).toHaveLength(1);
+      const readback = observed.requests.slice(writeIndex + 1);
+      expect(readback.map(({ method, url }) => [method, new URL(url).pathname])).toEqual([
+        ["GET", "/context/rest/api/2/screens"], ["GET", "/context/rest/api/2/screens/71/tabs"],
+      ]);
+      const firstReadback = readback[0];
+      if (firstReadback === undefined) throw new TypeError("Missing screen readback");
+      expect(new URL(firstReadback.url).searchParams.get("search")).toBe("Details & QA");
+      expect(observed.result.data).toMatchObject({ outcome: "succeeded", screenId: "71", tabId: tool === "jira.create-screen-tab" ? "83" : "81" });
+      if (tool === "jira.delete-screen-tab")
+        expect(observed.requests.slice(0, writeIndex).some(({ url }) => new URL(url).pathname === "/context/rest/api/2/screens/71/tabs/81/fields")).toBe(true);
+    },
+  );
   it.each(["jira.create", "jira.edit"] as const)(
     "keeps %s's approved link continuation on POST issueLink",
     async (tool) => {

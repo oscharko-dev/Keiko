@@ -31,6 +31,12 @@ const RECEIPT_KEYS: ReadonlySet<string> = new Set([
   "transitionId",
   "attachmentId",
 ]);
+const SCREEN_TAB_RECEIPTS = {
+  "jira.create-screen-tab": ["screenId", "tabId"],
+  "jira.rename-screen-tab": ["screenId", "tabId"],
+  "jira.delete-screen-tab": ["screenId", "tabId"],
+} as const;
+type ScreenTabOperation = keyof typeof SCREEN_TAB_RECEIPTS;
 const AGILE_RECEIPTS = {
   "jira.board-create": ["boardId"],
   "jira.sprint-create": ["sprintId"],
@@ -63,6 +69,7 @@ type CollaborationOperation = keyof typeof COLLABORATION_RECEIPTS;
 const REQUIRED_RECEIPTS: Readonly<
   Record<JiraMutationOperation, readonly (keyof JiraMutationReceipt)[]>
 > = {
+  ...SCREEN_TAB_RECEIPTS,
   ...AGILE_RECEIPTS,
   ...STRUCTURE_RECEIPTS,
   ...COLLABORATION_RECEIPTS,
@@ -81,6 +88,17 @@ const REQUIRED_RECEIPTS: Readonly<
 
 function confirmed(value: unknown): boolean {
   return value === true;
+}
+function screenTabOperation(operation: JiraMutationOperation): operation is ScreenTabOperation {
+  return Object.hasOwn(SCREEN_TAB_RECEIPTS, operation);
+}
+function validScreenTabReceipt(receipt: JiraMutationReceipt): boolean {
+  return (
+    int64Identity(receipt.screenId) &&
+    Object.entries(receipt).every(
+      ([key, value]) => (key === "screenId" || key === "tabId") && int64Identity(value),
+    )
+  );
 }
 
 const PROJECT_RECEIPT_KEYS = new Set(["projectId", "projectKey", "projectName", "browseUrl"]);
@@ -235,6 +253,7 @@ function validProjectReceipt(receipt: JiraMutationReceipt): boolean {
   });
 }
 function validIdentities(receipt: JiraMutationReceipt, operation: JiraMutationOperation): boolean {
+  if (screenTabOperation(operation)) return validScreenTabReceipt(receipt);
   if (projectOperation(operation)) return validProjectReceipt(receipt);
   if (agileOperation(operation)) return validAgileReceipt(receipt, operation);
   if (structureOperation(operation)) return validStructureReceipt(receipt, operation);
@@ -256,6 +275,7 @@ function partialReceipt(
 }
 function partialIdentity(receipt: JiraMutationReceipt, operation: JiraMutationOperation): boolean {
   return (
+    screenTabOperation(operation) ||
     projectOperation(operation) ||
     agileOperation(operation) ||
     structureOperation(operation) ||

@@ -867,6 +867,29 @@
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-projects.ts"],
       "testFiles": ["packages/keiko-connectors/src/jira-managed-projects.test.ts"]
     },
+    "jira.create-screen-tab": {
+      "identity": "POST /rest/api/2/screens/{screenId}/tabs",
+      "effect": "write",
+      "permissionPolicy": "screen-tab-create-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Exact screen ID and reviewed screen name are independently bound through bounded native screen pages; complete tab collections retain identity and same-parent scope. Existing high-risk authority, immutable operation binding, one-use approval when required and durable no-replay journal remain authoritative. One typed name; duplicate names and collection bounds refuse before POST. A readable acknowledged new native tab ID is required and cannot reuse an existing tab identity. Fresh same-screen tab readback must match that ID and requested name; lost acknowledgement never infers identity from a name or retries.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-screen-tab-mutations.ts",
+        "packages/keiko-connectors/src/jira-screen-tab-admission.ts",
+        "packages/keiko-connectors/src/jira-managed-screen-reads.ts",
+        "packages/keiko-connectors/src/jira-managed-configuration-reads.ts",
+        "packages/keiko-server/src/atlassian/jiraScreenTabDescriptors.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-screen-tab-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraScreenTabDescriptors.test.ts",
+        "packages/keiko-server/src/store/jiraScreenTabMigration.test.ts",
+        "packages/keiko-server/src/store/jiraOperationMigration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.create-version": {
       "identity": "POST /rest/api/2/version",
       "effect": "write",
@@ -1068,6 +1091,29 @@
         "packages/keiko-connectors/src/jira-managed-comment-delete.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.delete-screen-tab": {
+      "identity": "DELETE /rest/api/2/screens/{screenId}/tabs/{tabId}",
+      "effect": "write",
+      "permissionPolicy": "screen-tab-delete-and-absence",
+      "kind": "constrained-tool",
+      "constraints": "Exact screen ID and reviewed screen name are independently bound through bounded native screen pages; complete tab collections retain identity and same-parent scope. Existing high-risk authority, immutable operation binding, one-use approval when required and durable no-replay journal remain authoritative. Exact reviewed tab ID/name and complete ordered field-ID snapshot; changed fields, duplicate IDs and last-tab deletion refuse before one DELETE. Acknowledgement is confirmed only by exact absence in the complete list of the same still-readable screen with another tab remaining; bare404, permission loss or incomplete readback is not deletion proof.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-screen-tab-mutations.ts",
+        "packages/keiko-connectors/src/jira-screen-tab-admission.ts",
+        "packages/keiko-connectors/src/jira-managed-screen-reads.ts",
+        "packages/keiko-connectors/src/jira-managed-configuration-reads.ts",
+        "packages/keiko-server/src/atlassian/jiraScreenTabDescriptors.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-screen-tab-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraScreenTabDescriptors.test.ts",
+        "packages/keiko-server/src/store/jiraScreenTabMigration.test.ts",
+        "packages/keiko-server/src/store/jiraOperationMigration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
@@ -2718,6 +2764,29 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.rename-screen-tab": {
+      "identity": "PUT /rest/api/2/screens/{screenId}/tabs/{tabId}",
+      "effect": "write",
+      "permissionPolicy": "screen-tab-rename-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Exact screen ID and reviewed screen name are independently bound through bounded native screen pages; complete tab collections retain identity and same-parent scope. Existing high-risk authority, immutable operation binding, one-use approval when required and durable no-replay journal remain authoritative. Exact reviewed tab ID/name; changed snapshots or duplicate new names refuse before one PUT, and unchanged names report an explicit no-op. The bound target survives a status-only 2xx acknowledgement and is independently read in the fresh complete same-screen tab list; no acknowledgement field retargets the request.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-screen-tab-mutations.ts",
+        "packages/keiko-connectors/src/jira-screen-tab-admission.ts",
+        "packages/keiko-connectors/src/jira-managed-screen-reads.ts",
+        "packages/keiko-connectors/src/jira-managed-configuration-reads.ts",
+        "packages/keiko-server/src/atlassian/jiraScreenTabDescriptors.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-screen-tab-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraScreenTabDescriptors.test.ts",
+        "packages/keiko-server/src/store/jiraScreenTabMigration.test.ts",
+        "packages/keiko-server/src/store/jiraOperationMigration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.resolution": {
       "identity": "GET /rest/api/2/resolution/{id}",
       "effect": "read",
@@ -3919,8 +3988,8 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "e40dce9cecf7ad27c1fefa75ad04d137eb56d135df468424d7983d8dbe938471",
-    "nativeOperationCount": 215
+    "sha256": "412d6dadab1f1016e1c02004feaed80455a7f71f30474e941b6e54b7c11cc31e",
+    "nativeOperationCount": 218
   },
   "operations": [
     {
@@ -14142,10 +14211,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.create-screen-tab"]
     },
     {
       "identity": "DELETE /rest/api/2/screens/{screenId}/tabs/{tabId}",
@@ -14174,10 +14243,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.delete-screen-tab"]
     },
     {
       "identity": "PUT /rest/api/2/screens/{screenId}/tabs/{tabId}",
@@ -14206,10 +14275,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.rename-screen-tab"]
     },
     {
       "identity": "GET /rest/api/2/screens/{screenId}/tabs/{tabId}/fields",

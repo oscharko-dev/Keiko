@@ -9,8 +9,10 @@ import {
 } from "./jira-presentation-values";
 const SCREEN_FIELDS = new Set(["jira_screen_tab_fields", "jira_screen_available_fields"]);
 const WORKFLOW_SCHEMES = new Set(["jira_workflow_scheme", "jira_workflow_scheme_draft"]);
+const SCREEN_TAB_WRITES = new Set(["jira_create_screen_tab", "jira_rename_screen_tab", "jira_delete_screen_tab"]);
 export const JIRA_ADMINISTRATION_TOOLS: ReadonlySet<string> = new Set([
   "jira_screen_tabs",
+  ...SCREEN_TAB_WRITES,
   ...SCREEN_FIELDS,
   "jira_issue_type_schemes",
   "jira_issue_type_scheme",
@@ -36,6 +38,33 @@ const TEXT_FACTS: Readonly<Record<string, WidgetMessageKey>> = {
   lastModified: "chat.jira.fact.lastModified",
   type: "chat.jira.fact.screenFieldType",
 };
+const TAB_ARGUMENTS: Readonly<Record<string, WidgetMessageKey>> = {
+  screenId: "chat.jira.fact.screenId", tabId: "chat.jira.fact.screenTabId",
+  expectedScreenName: "chat.jira.screenTabs.expectedScreenName",
+  expectedName: "chat.jira.screenTabs.expectedName", name: "chat.jira.screenTabs.newName",
+  expectedFieldIds: "chat.jira.screenTabs.expectedFieldIds",
+};
+export function jiraScreenTabArgumentLabel(operation: string | undefined, field: string): WidgetMessageKey | undefined {
+  return operation !== undefined && SCREEN_TAB_WRITES.has(operation.replace(/[.-]/gu, "_"))
+    ? TAB_ARGUMENTS[field] : undefined;
+}
+function receiptId(value: unknown): string | undefined {
+  return typeof value === "string" && /^[1-9]\d{0,18}$/u.test(value) && BigInt(value) <= 9223372036854775807n
+    ? value : undefined;
+}
+const TAB_CONFIRMED: Readonly<Record<string, WidgetMessageKey>> = {
+  jira_create_screen_tab: "chat.jira.screenTabs.created",
+  jira_rename_screen_tab: "chat.jira.screenTabs.renamed",
+  jira_delete_screen_tab: "chat.jira.screenTabs.deleted",
+};
+function screenTabReceipt(tool: string, source: Source): JiraAgileDetails {
+  const screenId = receiptId(source.screenId);
+  const tabId = receiptId(source.tabId);
+  const confirmed = source.outcome === "succeeded" && screenId !== undefined && tabId !== undefined
+    ? TAB_CONFIRMED[tool] : undefined;
+  return { facts: [...fact("chat.jira.fact.screenId", screenId), ...fact("chat.jira.fact.screenTabId", tabId)],
+    labels: confirmed !== undefined ? [confirmed] : tabId === undefined ? ["chat.jira.screenTabs.tabUnconfirmed"] : [] };
+}
 function entityIdLabel(tool: string): WidgetMessageKey {
   if (tool === "jira_screens") return "chat.jira.fact.screenId";
   if (tool === "jira_screen_tabs") return "chat.jira.fact.screenTabId";
@@ -116,6 +145,7 @@ function labelsFor(tool: string, source: Source): WidgetMessageKey[] {
 }
 /** Configuration observations are not proof of field requiredness, write permission or activation. */
 export function jiraAdministrationDetails(tool: string, source: Source): JiraAgileDetails {
+  if (SCREEN_TAB_WRITES.has(tool)) return screenTabReceipt(tool, source);
   const facts = Object.entries(TEXT_FACTS).flatMap(([field, label]) => fact(label, source[field]));
   facts.push(
     ...fact(entityIdLabel(tool), source.id),

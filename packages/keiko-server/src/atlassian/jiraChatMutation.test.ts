@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi, type Mock } from "vitest";
 import type { JiraMutationAttempt } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { JiraAcknowledgedMutationError } from "@oscharko-dev/keiko-connectors";
 import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
 import { buildUiStoreOverDatabase, createNodeUiStore } from "../store/index.js";
@@ -13,6 +14,7 @@ import type { JiraChatToolMutationIntent as ChatToolMutationIntent } from "../st
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import { executeJiraChatMutation, type JiraChatMutationExecution } from "./jiraChatMutation.js";
 import { createGatewayAtlassianHttpBodyPort } from "./httpPort.js";
+import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
 
 const cleanup: (() => void)[] = [];
 afterEach(() => {
@@ -1083,4 +1085,138 @@ it("does not turn revoked admission into a no-effect claim while an HTTP attempt
     reject?.(new Error("synthetic cleanup"));
     await owner;
   }
+});
+
+const TAB_WRITES = ["jira.create-screen-tab", "jira.rename-screen-tab", "jira.delete-screen-tab"] as const;
+type TabWrite = (typeof TAB_WRITES)[number];
+function tabArguments(operation: TabWrite): CatalogJsonObject {
+  const screen = { screenId: "11", expectedScreenName: "Review screen" };
+  if (operation === "jira.create-screen-tab") return { ...screen, name: "Implementation" };
+  const tab = { ...screen, tabId: "21", expectedName: "Fields" };
+  return operation === "jira.rename-screen-tab" ? { ...tab, name: "Implementation" }
+    : { ...tab, expectedFieldIds: ["summary"] };
+}
+function tabFixture(operation: TabWrite, observation: "confirmed" | "denied-readback" | "lost-ack", path = ":memory:") {
+  const f = fixture(path);
+  let changed = false;
+  const original = [{ id: 21, name: "Fields" }, { id: 22, name: "Other" }];
+  const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
+  f.effects.mockImplementation((input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    const method = init?.method ?? "GET";
+    if (method !== "GET") {
+      expect(f.input.journal?.find(f.input.intent.invocationId)?.phase).toBe("dispatched");
+      changed = true;
+      if (observation === "lost-ack") return Promise.reject(new Error("Synthetic lost screen-tab response"));
+      return Promise.resolve(operation === "jira.delete-screen-tab" ? new Response(null, { status: 204 })
+        : json({ id: operation === "jira.create-screen-tab" ? 23 : 21, name: "Implementation" }));
+    }
+    if (changed && observation === "denied-readback") return Promise.resolve(json({ errorMessages: ["Not permitted"] }, 403));
+    if (url.pathname.endsWith("/screens")) return Promise.resolve(json({
+      startAt: 0, maxResults: 100, total: 1, isLast: true, screens: [{ id: 11, name: "Review screen" }],
+    }));
+    if (url.pathname.endsWith("/fields")) return Promise.resolve(json([{ id: "summary", name: "Summary" }]));
+    const tabs = !changed ? original : operation === "jira.create-screen-tab"
+      ? [...original, { id: 23, name: "Implementation" }]
+      : operation === "jira.rename-screen-tab" ? [{ id: 21, name: "Implementation" }, original[1]] : [original[1]];
+    return Promise.resolve(json(tabs));
+  });
+  const execute: JiraChatMutationExecution["execute"] = async (http) => {
+    let attempted: JiraMutationAttempt = { ok: false, reason: "unavailable" };
+    const provider = createJiraProviderForCatalog(
+      () => ({ deployment: "data-center", baseUrl: "https://jira.example.invalid", http }),
+      [operation],
+      async (_operation, _args, _context, executeNative) => {
+        attempted = await executeNative(http);
+        return { data: { outcome: "pending" } };
+      },
+    );
+    const tool = provider.tools()[0];
+    if (tool === undefined) throw new TypeError("Missing screen-tab tool");
+    await tool.execute(tabArguments(operation), {
+      invocationId: f.input.intent.invocationId,
+      correlationId: f.input.intent.correlationId,
+      signal: new AbortController().signal,
+      beforeEffect: () => true,
+    });
+    return attempted;
+  };
+  return { ...f, input: { ...f.input, intent: { ...f.input.intent, operation }, execute } };
+}
+it.each(TAB_WRITES)("journals one real %s effect and its independent same-parent readback", async (operation) => {
+  const f = tabFixture(operation, "confirmed");
+  expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: {
+    outcome: "succeeded", screenId: "11", tabId: operation === "jira.create-screen-tab" ? "23" : "21",
+  } });
+  expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: { outcome: "succeeded", replayed: true } });
+  expect(f.effects.mock.calls.filter(([, init]) => init?.method !== "GET")).toHaveLength(1);
+  expect(f.input.journal?.find(f.input.intent.invocationId)).toMatchObject({ phase: "settled", outcome: "succeeded" });
+  expect(f.logs.lines().join()).not.toMatch(/Review screen|Implementation|jira\.example/u);
+});
+it.each(TAB_WRITES)("retains exact %s acknowledgement IDs when readback is denied without replay", async (operation) => {
+  const f = tabFixture(operation, "denied-readback");
+  expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: {
+    outcome: "succeeded-unconfirmed", screenId: "11", tabId: operation === "jira.create-screen-tab" ? "23" : "21",
+  } });
+  const observedRequests = f.effects.mock.calls.length;
+  expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: { outcome: "succeeded-unconfirmed", replayed: true } });
+  expect(f.effects).toHaveBeenCalledTimes(observedRequests);
+  expect(f.effects.mock.calls.filter(([, init]) => init?.method !== "GET")).toHaveLength(1);
+});
+it.each(TAB_WRITES)("keeps %s lost acknowledgement unknown with no provider call after store reload", async (operation) => {
+  const directory = mkdtempSync(join(tmpdir(), "keiko-tab-replay-"));
+  const path = join(directory, "ui.sqlite");
+  try {
+    const f = tabFixture(operation, "lost-ack", path);
+    const observed = await executeJiraChatMutation(f.input);
+    expect(observed).toMatchObject({ data: { outcome: "unknown", screenId: "11" } });
+    if (operation === "jira.create-screen-tab") expect(observed.data).not.toHaveProperty("tabId");
+    else expect(observed.data.tabId).toBe("21");
+    f.close();
+    const reopened = createNodeUiStore(path);
+    try {
+      const execute = vi.fn(f.input.execute);
+      expect(await executeJiraChatMutation({ ...f.input, journal: reopened.chatToolMutations, execute }))
+        .toMatchObject({ data: { outcome: "unknown", replayed: true } });
+      expect(execute).not.toHaveBeenCalled();
+      expect(f.effects.mock.calls.filter(([, init]) => init?.method !== "GET")).toHaveLength(1);
+    } finally {
+      reopened.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+it.each([
+  ["jira.create-screen-tab", 400, "field-validation", true, "rejected"],
+  ["jira.rename-screen-tab", 400, "field-validation", true, "rejected"],
+  ["jira.delete-screen-tab", 400, "field-validation", true, "rejected"],
+  ["jira.delete-screen-tab", 412, "field-validation", true, "rejected"],
+  ["jira.create-screen-tab", 401, "permission-denied", true, "rejected"],
+  ["jira.rename-screen-tab", 401, "permission-denied", true, "rejected"],
+  ["jira.delete-screen-tab", 401, "permission-denied", true, "rejected"],
+  ["jira.create-screen-tab", 401, "auth-failed", true, "unknown"],
+  ["jira.rename-screen-tab", 401, "permission-denied", false, "unknown"],
+  ["jira.delete-screen-tab", 412, "field-validation", false, "unknown"],
+  ["jira.create-screen-tab", 412, "field-validation", true, "unknown"],
+  ["jira.rename-screen-tab", 412, "field-validation", true, "unknown"],
+  ["jira.delete-screen-tab", 409, "field-validation", true, "unknown"],
+  ["jira.create-screen-tab", 403, "permission-denied", true, "unknown"],
+  ["jira.rename-screen-tab", 503, "unavailable", true, "unknown"],
+] as const)("settles only documented %s status%s with the required proof (%s,%s)", async (operation, status, reason, document, outcome) => {
+  const f = fixture();
+  f.effects.mockImplementation(() => Promise.resolve(new Response(document ? '{"errorMessages":["Native refusal"]}' : "", { status })));
+  const method = operation === "jira.create-screen-tab" ? "POST" : operation === "jira.rename-screen-tab" ? "PUT" : "DELETE";
+  const path = operation === "jira.create-screen-tab" ? "screens/11/tabs" : "screens/11/tabs/21";
+  const input: JiraChatMutationExecution = {
+    ...f.input, intent: { ...f.input.intent, operation },
+    execute: async (http) => {
+      await http({ method, url: `https://jira.example.invalid/rest/api/2/${path}`,
+        ...(method === "DELETE" ? {} : { bodyJson: "{}" }), maxBodyBytes: 1000, timeoutMs: 1000 });
+      return { ok: false, reason, ...(document ? { detail: { messages: ["Native refusal"] } } : {}) };
+    },
+  };
+  expect(await executeJiraChatMutation(input)).toMatchObject({ data: { outcome } });
+  expect(await executeJiraChatMutation(input)).toMatchObject({ data: { outcome, replayed: true } });
+  expect(f.effects).toHaveBeenCalledOnce();
 });

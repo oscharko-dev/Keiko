@@ -586,6 +586,9 @@ export type AtlassianSyncJobState =
 // ─── Governed action vocabulary and effect-class table (ADR-0128 D4) ──────────
 export type AtlassianConnectorActionType =
   | JiraManagedReadToolName
+  | "create-screen-tab"
+  | "rename-screen-tab"
+  | "delete-screen-tab"
   | "create-project"
   | "update-project"
   | "create-component"
@@ -623,6 +626,9 @@ export type AtlassianConnectorActionType =
 
 export const ATLASSIAN_CONNECTOR_ACTION_TYPES: readonly AtlassianConnectorActionType[] =
   Object.freeze([
+    "create-screen-tab",
+    "rename-screen-tab",
+    "delete-screen-tab",
     "sync-space",
     "sync-project",
     "search-issues-live",
@@ -672,6 +678,9 @@ export const JIRA_MANAGED_ACTION_TYPES: Readonly<
     JiraManagedReadToolName
   >),
   "jira.create": "create-issue",
+  "jira.create-screen-tab": "create-screen-tab",
+  "jira.rename-screen-tab": "rename-screen-tab",
+  "jira.delete-screen-tab": "delete-screen-tab",
   "jira.create-project": "create-project",
   "jira.update-project": "update-project",
   "jira.create-component": "create-component",
@@ -730,6 +739,9 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
   Record<AtlassianConnectorActionType, AtlassianConnectorActionClass>
 > = Object.freeze({
   ...jiraReadActionValues("connector-access"),
+  "create-screen-tab": "connector-write",
+  "rename-screen-tab": "connector-write",
+  "delete-screen-tab": "connector-write",
   "create-project": "connector-write",
   "update-project": "connector-write",
   "create-component": "connector-write",
@@ -770,6 +782,9 @@ export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
   Record<AtlassianConnectorActionType, AtlassianConnectorProvider>
 > = Object.freeze({
   ...jiraReadActionValues("jira"),
+  "create-screen-tab": "jira",
+  "rename-screen-tab": "jira",
+  "delete-screen-tab": "jira",
   "create-project": "jira",
   "update-project": "jira",
   "create-component": "jira",
@@ -810,6 +825,9 @@ export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchConnectorScope>
 > = Object.freeze({
   ...jiraReadActionValues("issue-tracker.read"),
+  "create-screen-tab": "issue-tracker.write",
+  "rename-screen-tab": "issue-tracker.write",
+  "delete-screen-tab": "issue-tracker.write",
   "create-project": "issue-tracker.write",
   "update-project": "issue-tracker.write",
   "create-component": "issue-tracker.write",
@@ -853,6 +871,9 @@ export const ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchApprovalRisk>
 > = Object.freeze({
   ...jiraReadActionValues("low"),
+  "create-screen-tab": "high",
+  "rename-screen-tab": "high",
+  "delete-screen-tab": "high",
   "create-project": "high",
   "update-project": "medium",
   "create-component": "high",

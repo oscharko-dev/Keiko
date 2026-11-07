@@ -480,6 +480,9 @@ describe("the dry run before approval", () => {
   });
 
   it.each([
+    "jira.create-screen-tab",
+    "jira.rename-screen-tab",
+    "jira.delete-screen-tab",
     "jira.create-project",
     "jira.update-project",
     "jira.create-component",
@@ -519,6 +522,26 @@ describe("the dry run before approval", () => {
       expect(f.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
     },
   );
+
+  it.each([
+    ["jira.create-screen-tab", { screenId: "11", expectedScreenName: "Review screen", name: "Additional" }],
+    ["jira.rename-screen-tab", { screenId: "11", expectedScreenName: "Review screen", tabId: "21", expectedName: "Fields", name: "Renamed" }],
+    ["jira.delete-screen-tab", { screenId: "11", expectedScreenName: "Review screen", tabId: "21", expectedName: "Fields", expectedFieldIds: ["summary"] }],
+  ] as const)("checks the exact %s snapshot before approval with GET requests only", async (operation, args) => {
+    const f = preflight(TEMPLATE, args, operation);
+    f.http.mockImplementation((request) => {
+      const path = new URL(request.url).pathname;
+      const body = path.endsWith("/screens")
+        ? { startAt: 0, maxResults: 100, total: 1, isLast: true, screens: [{ id: 11, name: "Review screen" }] }
+        : path.endsWith("/fields") ? [{ id: "summary", name: "Summary" }]
+          : [{ id: 21, name: "Fields" }, { id: 22, name: "Other" }];
+      return Promise.resolve(response(body));
+    });
+    expect(await f.run()).toBeUndefined();
+    expect(f.http).toHaveBeenCalled();
+    expect(f.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
+    expect(f.http.mock.calls.some(([request]) => request.url.includes("/issue/"))).toBe(false);
+  });
 
   it("lets a conforming proposal through to the human's approval", async () => {
     const f = preflight(TEMPLATE, {

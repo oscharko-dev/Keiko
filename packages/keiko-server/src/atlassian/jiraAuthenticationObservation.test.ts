@@ -7,6 +7,7 @@ import type {
   AtlassianCredentialMetadata,
   AtlassianHttpBodyRequest,
 } from "@oscharko-dev/keiko-connectors";
+import { executeAtlassianWriteRequest } from "@oscharko-dev/keiko-connectors";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { buildAtlassianConnectorCredentialDeps } from "./wiring.js";
 import { createAtlassianCredentialMetadataStore } from "./credentialMetadataStore.js";
@@ -412,4 +413,116 @@ it("keeps body-free evidence and does not attribute the probe status to the prim
   expect(JSON.stringify(checked)).not.toMatch(
     /private admin|synthetic-user|https:|myself|workflowscheme/,
   );
+});
+
+const TAB_REQUESTS = [
+  ["POST", "screens/1/tabs"],
+  ["PUT", "screens/1/tabs/2"],
+  ["DELETE", "screens/1/tabs/2"],
+] as const;
+function tabRequest(method: "POST" | "PUT" | "DELETE", path: string): AtlassianHttpBodyRequest {
+  return { ...request(path), method, ...(method === "DELETE" ? {} : { bodyJson: '{"name":"Reviewed"}' }) };
+}
+it.each(TAB_REQUESTS)("observes documented %s %s admin401 once and returns permission denial without invalidation", async (method, path) => {
+  const methods: string[] = [];
+  const f = fixture((index, init) => {
+    methods.push(init?.method ?? "GET");
+    return index === 0 ? response({ errorMessages: ["Administrator permission required"] }, 401) : response(IDENTITY);
+  });
+  const statuses: number[] = [];
+  const result = await executeAtlassianWriteRequest({
+    http: f.deps.httpBodyPortFactory(f.metadata, undefined, {
+      onResponse: (_request, status) => { statuses.push(status); return true; },
+    }),
+  }, {
+    method, url: request(path).url,
+    ...(method === "DELETE" ? {} : { bodyJson: '{"name":"Reviewed"}' }),
+    expect: "none",
+  });
+  expect(result).toMatchObject({ ok: false, reason: "permission-denied", httpStatus: 401 });
+  expect(f.urls).toEqual([request(path).url, `${BASE}/rest/api/2/myself`]);
+  expect(methods).toEqual([method, "GET"]);
+  expect(statuses).toEqual([401]);
+  expect(f.current()).toEqual(f.metadata);
+  expect(f.invalidated).toEqual([]);
+  expect(JSON.stringify(f.events)).not.toMatch(/Administrator permission|required|synthetic-user|Reviewed|https:/u);
+});
+it.each([
+  ["POST", "screens/1/tabs/2"],
+  ["PUT", "screens/1/tabs"],
+  ["DELETE", "screens/1/tabs"],
+  ["POST", "screens/0/tabs"],
+  ["PUT", "screens/1/tabs/0"],
+  ["DELETE", "screens/1/tabs/2/fields"],
+  ["POST", "screens/1/tabs/2/move/1"],
+  ["PUT", "project/1"],
+] as const)("retains ordinary credential failure for unlisted %s %s", async (method, path) => {
+  const f = fixture(() => response({}, 401));
+  await f.deps.httpBodyPortFactory(f.metadata)(tabRequest(method, path));
+  expect(f.urls).toHaveLength(1);
+  expect(f.invalidated).toEqual([2]);
+});
+it.each(TAB_REQUESTS)("still invalidates expired credentials confirmed after %s %s", async (method, path) => {
+  const f = fixture(() => response({}, 401));
+  const result = await f.deps.httpBodyPortFactory(f.metadata)(tabRequest(method, path));
+  expect(result).toMatchObject({ status: 401 });
+  expect(result).not.toHaveProperty("authentication");
+  expect(f.urls).toHaveLength(2);
+  expect(f.invalidated).toEqual([2]);
+});
+it.each(["expired", "cancelled", "revision", "generation"] as const)("cannot apply positive tab-write auth evidence after %s changes", async (state) => {
+  const controller = new AbortController();
+  let now = 1000;
+  vi.spyOn(Date, "now").mockImplementation(() => now);
+  const f = fixture((index) => {
+    if (index === 0) return response({}, 401);
+    if (state === "expired") now += 2000;
+    if (state === "cancelled") controller.abort();
+    if (state === "generation") f.deps.custody.updateLivePod(f.metadata.authRef, {
+      expectedGeneration: 1, apiToken: ["replacement", "synthetic", "credential"].join("-"),
+    });
+    if (state === "revision") {
+      const ticket = f.deps.custody.beginVerification(f.metadata.authRef);
+      if (ticket === undefined) throw new TypeError("Missing verification ticket");
+      f.deps.custody.finishVerification(f.metadata.authRef, 1, ticket.revision, "ok");
+    }
+    return response(IDENTITY);
+  });
+  const result = await f.deps.httpBodyPortFactory(f.metadata)({ ...tabRequest("PUT", "screens/1/tabs/2"), signal: controller.signal });
+  expect(result).toMatchObject({ status: 401 });
+  expect(result).not.toHaveProperty("authentication");
+  expect(f.urls).toHaveLength(2);
+  expect(f.current().livePod?.verificationStatus).toBe(state === "generation" ? "unverified" : "ok");
+});
+it("stops a tab-write auth probe when original authority is revoked and never repeats DELETE", async () => {
+  let allowed = true;
+  const f = fixture(() => { allowed = false; return response({}, 401); });
+  await expect(f.deps.httpBodyPortFactory(f.metadata, undefined, {
+    beforeDispatch: () => allowed,
+  })(tabRequest("DELETE", "screens/1/tabs/2"))).rejects.toMatchObject({ code: "invalid-input" });
+  expect(f.urls).toHaveLength(1);
+  expect(f.current()).toEqual(f.metadata);
+});
+it("spends only the tab-write's subsecond remaining deadline on identity IO", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(1000);
+  let probeSignal: AbortSignal | null | undefined;
+  let entered: (() => void) | undefined;
+  const ready = new Promise<void>((resolve) => { entered = resolve; });
+  const f = fixture((index, init) => {
+    if (index === 0) { vi.setSystemTime(1990); return response({}, 401); }
+    probeSignal = init?.signal;
+    entered?.();
+    return new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+    });
+  });
+  const pending = f.deps.httpBodyPortFactory(f.metadata)(tabRequest("POST", "screens/1/tabs"));
+  await ready;
+  expect(probeSignal?.aborted).toBe(false);
+  await vi.advanceTimersByTimeAsync(10);
+  await pending;
+  expect(probeSignal?.aborted).toBe(true);
+  expect(f.urls).toHaveLength(2);
+  expect(f.current()).toEqual(f.metadata);
 });

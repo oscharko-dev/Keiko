@@ -58,7 +58,7 @@ function selection(name: ScreenRead, args: CatalogJsonObject): Selection | undef
   const native = nativeSelection(name, args);
   return native === undefined ? undefined : { ...native, ...page };
 }
-function tab(value: unknown): CatalogJsonObject | undefined {
+export function jiraScreenTabProjection(value: unknown): CatalogJsonObject | undefined {
   const raw = asRecord(value);
   const id = typeof raw?.id === "number" && Number.isSafeInteger(raw.id) ? String(raw.id) : raw?.id;
   return raw !== undefined && jiraNativeId(id) && jiraNativeText(raw.name, 255)
@@ -77,7 +77,7 @@ function fieldOptions(raw: Record<string, unknown>): CatalogJsonObject | undefin
   }
   return optional;
 }
-function field(value: unknown): CatalogJsonObject | undefined {
+export function jiraScreenFieldProjection(value: unknown): CatalogJsonObject | undefined {
   const raw = asRecord(value);
   if (raw === undefined || !isSafeAtlassianIdentifier(raw.id) || !jiraNativeText(raw.name, 255))
     return undefined;
@@ -98,7 +98,7 @@ function projectResponse(
   const items = projectJiraCollection(
     values,
     TOOL_CATALOG_LIMITS.maxArrayItems,
-    name === "jira.screen-tabs" ? tab : field,
+    name === "jira.screen-tabs" ? jiraScreenTabProjection : jiraScreenFieldProjection,
     "id",
   );
   if (items === undefined) return jiraReadFailure("malformed-payload");

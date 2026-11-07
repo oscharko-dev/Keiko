@@ -1,4 +1,8 @@
 import {
+  jiraScreenTabDeclarationForTool,
+  type JIRA_SCREEN_TAB_WRITE_DEFINITIONS,
+} from "./jiraScreenTabDescriptors.js";
+import {
   jiraParticipationDeclarationForTool,
   type JIRA_PARTICIPATION_WRITE_DEFINITIONS,
 } from "./jiraParticipationDescriptors.js";
@@ -394,6 +398,7 @@ type CoreMutationToolName = Exclude<
     | keyof typeof JIRA_ISSUE_COLLABORATION_WRITE_DEFINITIONS
     | keyof typeof JIRA_PARTICIPATION_WRITE_DEFINITIONS
     | keyof typeof JIRA_DELETION_DEFINITIONS
+    | keyof typeof JIRA_SCREEN_TAB_WRITE_DEFINITIONS
   >
 >;
 const DEFINITIONS: Readonly<
@@ -562,6 +567,8 @@ function isCoreMutationTool(name: JiraMutationOperation): name is CoreMutationTo
   return Object.hasOwn(DEFINITIONS, name);
 }
 export function jiraMutationDeclaration(name: JiraMutationOperation): ManagedMcpToolDeclaration {
+  const screenTab = jiraScreenTabDeclarationForTool(name);
+  if (screenTab !== undefined) return screenTab;
   const agile = jiraAgileDeclarationForTool(name);
   if (agile !== undefined) return agile;
   const structure = jiraProjectStructureDeclarationForTool(name);

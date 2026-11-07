@@ -14,6 +14,7 @@ import {
 import { jiraNamed, jiraNameOf, NO_JIRA_NAMES, restatesTarget, type JiraNames } from "./jiraNames";
 import { jiraAgileArgumentLabel } from "./jira-agile-presentation";
 import { jiraProjectMetadataArgumentLabel } from "./jira-project-metadata-presentation";
+import { jiraScreenTabArgumentLabel } from "./jira-administration-presentation";
 
 type Raw = Readonly<Record<string, unknown>>;
 type Fact = JiraDraftField;
@@ -205,6 +206,14 @@ function sourceValue(source: unknown): JiraDraftValue {
   const path = record(source)?.path;
   return typeof path === "string" ? textValue(path) : jiraDraftValueOf(source);
 }
+function screenTabFacts(operation: string | undefined, key: string, value: unknown, t: OptionalWidgetTranslate): readonly Fact[] | undefined {
+  const label = jiraScreenTabArgumentLabel(operation, key);
+  if (label === undefined) return undefined;
+  if (key !== "expectedFieldIds") return [{ id: t(label), value: jiraDraftValueOf(value) }];
+  return [{ id: t(label), value: Array.isArray(value) && value.length === 0
+    ? textValue(t("chat.jira.screenTabs.reviewedEmptyFields")) : Array.isArray(value)
+      ? listOf(value.map((entry: unknown) => jiraDraftValueOf(entry))) : jiraDraftValueOf(value) }];
+}
 
 /** One argument of a managed Jira write as one or more facts, in request order. */
 function jiraFacts(key: string, value: unknown, t: OptionalWidgetTranslate): readonly Fact[] {
@@ -260,6 +269,8 @@ export function jiraActionFacts(
     if (!managed) return [{ id: key, value: jiraDraftValueOf(value) }];
     const deletionPreview = deletionFacts(operation, key, value, t);
     if (deletionPreview !== undefined) return deletionPreview;
+    const screenTabPreview = screenTabFacts(operation, key, value, t);
+    if (screenTabPreview !== undefined) return screenTabPreview;
     const worklogPreview = worklog
       ? worklogFacts(key, value, t, operation === "jira.update-worklog")
       : undefined;

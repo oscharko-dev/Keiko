@@ -73,6 +73,49 @@ afterEach(() => {
   window.localStorage.removeItem(I18N_STORAGE_KEY);
 });
 
+describe.each(["en", "de"] as const)("reviewed screen tab changes in %s", (locale) => {
+  it.each(["jira.create-screen-tab", "jira.rename-screen-tab"] as const)(
+    "shows the bound screen and exact reviewed/new names for %s", async (operation) => {
+      const review = await reviewed(operation, { screenId: "9223372036854775807", expectedScreenName: "Reviewed screen",
+        ...(operation === "jira.rename-screen-tab" ? { tabId: "9007199254740993", expectedName: "Current tab" } : {}),
+        name: "New tab name",
+      }, locale);
+      for (const value of ["9223372036854775807", "Reviewed screen", "New tab name"])
+        expect(review.text).toContain(value);
+      for (const label of locale === "en" ? ["Reviewed screen name", "New tab name"] : ["Geprüfter Maskenname", "Neuer Tab-Name"])
+        expect(review.text).toContain(label);
+      if (operation === "jira.rename-screen-tab") {
+        expect(review.text).toContain("9007199254740993");
+        expect(review.text).toContain("Current tab");
+        expect(review.text).toContain(locale === "en" ? "Reviewed current tab name" : "Geprüfter aktueller Tab-Name");
+      }
+      expect(review.text).not.toContain(locale === "en" ? "File name" : "Dateiname");
+      expectNoJson(review);
+      expect(await axe(review.container)).toHaveNoViolations();
+    },
+  );
+  it("displays the entire ordered reviewed field layout before deleting the selected tab", async () => {
+    const review = await reviewed("jira.delete-screen-tab", { screenId: "71", expectedScreenName: "Reviewed screen",
+      tabId: "81", expectedName: "Reviewed tab", expectedFieldIds: ["summary", "customfield_10001", "description"],
+    }, locale);
+    for (const value of ["71", "81", "Reviewed screen", "Reviewed tab", "summary", "customfield_10001", "description"])
+      expect(review.text).toContain(value);
+    expect(review.text).toContain(locale === "en" ? "Delete Jira screen tab" : "Jira-Masken-Tab löschen");
+    expect(review.text).toContain(locale === "en" ? "Reviewed field IDs in their exact order" : "Geprüfte Feld-IDs in ihrer genauen Reihenfolge");
+    expect(review.text.indexOf("summary")).toBeLessThan(review.text.indexOf("customfield_10001"));
+    expect(review.text.indexOf("customfield_10001")).toBeLessThan(review.text.indexOf("description"));
+    expectNoJson(review);
+    expect(await axe(review.container)).toHaveNoViolations();
+  });
+  it("distinguishes an explicitly reviewed empty field layout from omitted fields", async () => {
+    const review = await reviewed("jira.delete-screen-tab", { screenId: "71", expectedScreenName: "Reviewed screen",
+      tabId: "81", expectedName: "Reviewed tab", expectedFieldIds: [],
+    }, locale);
+    expect(review.text).toContain(locale === "en" ? "The reviewed tab contains no fields." : "Der geprüfte Tab enthält keine Felder.");
+    expectNoJson(review);
+  });
+});
+
 describe.each(["en", "de"] as const)("reviewed Jira deletion snapshots in %s", (locale) => {
   it.each(["role", "group"] as const)(
     "names the exact comment body and %s restriction before deleting it",
