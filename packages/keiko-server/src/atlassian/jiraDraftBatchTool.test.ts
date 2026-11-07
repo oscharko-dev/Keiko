@@ -319,6 +319,21 @@ describe("jira.draft-batch (#4173)", () => {
     expect(h.confirmed).toHaveLength(h.requests.length);
   });
 
+  it("asks every page and outline call for no reasoning", async () => {
+    const h = await harness(
+      (request) => page(keysOf(request)),
+      [{ capsuleId: "cap-a", text: specification(2).text }],
+    );
+
+    await h.run(ARGS);
+
+    expect(h.requests.length).toBeGreaterThan(0);
+    for (const request of h.requests) {
+      expect(request.reasoningPreference).toBe("off");
+      expect(request.reasoningEffort).toBeUndefined();
+    }
+  });
+
   it("puts the issue template and the person's guidance into the page prompt", async () => {
     const h = await harness(
       (request) => page(keysOf(request)),

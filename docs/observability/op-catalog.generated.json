@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "071ec1c775dc0d7ebf46f45a99807bc2530e4d0d8330ed8e1e788f4b003d34cd",
+    "catalogDigest": "1cf99718e1474f8eb5131e3dddff9993eaa88bea3bac8be12792d20204087b25",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -2792,7 +2792,13 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["stream_options", "stream", "max_tokens", "max_completion_tokens"]
+            "values": [
+              "stream_options",
+              "stream",
+              "max_tokens",
+              "max_completion_tokens",
+              "reasoning_effort"
+            ]
           }
         },
         "causal": "correlation",
@@ -2801,8 +2807,8 @@
         "failureClasses": ["gateway-chat-provider-call"],
         "proofIds": ["chat.request.compatibility-retry.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/openai-adapter.ts:176",
-        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:2524"]
+        "registrationSite": "packages/keiko-model-gateway/src/openai-adapter.ts:177",
+        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:2602"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2892,8 +2898,8 @@
         "failureClasses": ["gateway-chat-provider-call"],
         "proofIds": ["chat.request.dispatch.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/openai-adapter.ts:123",
-        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:448"]
+        "registrationSite": "packages/keiko-model-gateway/src/openai-adapter.ts:124",
+        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:477"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -3080,8 +3086,8 @@
         "failureClasses": ["gateway-stream-read"],
         "proofIds": ["chat.response.streamed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/openai-adapter.ts:292",
-        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:2177"]
+        "registrationSite": "packages/keiko-model-gateway/src/openai-adapter.ts:321",
+        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:2210"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -25169,8 +25175,8 @@
         "failureClasses": ["gateway-tool-arguments"],
         "proofIds": ["gateway.tool-arguments.redacted.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/openai-adapter.ts:357",
-        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:2155"]
+        "registrationSite": "packages/keiko-model-gateway/src/openai-adapter.ts:386",
+        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:2188"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -110748,7 +110754,7 @@
     {
       "op": "<dynamic>",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:2309",
+      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:2342",
       "package": "keiko-model-gateway"
     },
     {
@@ -110766,19 +110772,19 @@
     {
       "op": "chat.request.compatibility-retry",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:179",
+      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:180",
       "package": "keiko-model-gateway"
     },
     {
       "op": "chat.request.dispatch",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:126",
+      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:127",
       "package": "keiko-model-gateway"
     },
     {
       "op": "chat.response.streamed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:295",
+      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:324",
       "package": "keiko-model-gateway"
     },
     {
@@ -111060,7 +111066,7 @@
     {
       "op": "gateway.tool-arguments.redacted",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:360",
+      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:389",
       "package": "keiko-model-gateway"
     },
     {

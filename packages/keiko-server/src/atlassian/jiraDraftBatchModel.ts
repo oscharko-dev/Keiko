@@ -90,6 +90,9 @@ function requestFor(
     stream: false,
     maxOutputTokens: setup.profile.reservedOutputTokens,
     temperature: 0,
+    // Mechanical JSON writing from given text: the page needs no reasoning (measured: 3,349 of
+    // 5,895 completion tokens were reasoning). Orchestration rounds keep the model's default.
+    reasoningPreference: "off",
     ...(setup.structured
       ? {
           responseFormat: {

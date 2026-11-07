@@ -76,6 +76,7 @@ import {
   OTHER_OUTPUT_TOKEN_FIELD,
   providerOutputTokenLimit,
   rejectsOutputTokenField,
+  rejectsReasoningEffortParameter,
   requiresNoReasoningWithTools,
   type OutputTokenField,
 } from "./output-token-limit.js";
@@ -184,12 +185,18 @@ const CHAT_REQUEST_COMPATIBILITY_RETRY_OPERATION = defineActivityLogOperation({
     endpointDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
     // The field the retry left out: the optional stream fields, or the output-token field the
-    // deployment rejected in favour of the other one (#3639).
+    // deployment rejected in favour of the other one (#3639), or the preferred-off reasoning effort.
     omittedField: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["stream_options", "stream", "max_tokens", "max_completion_tokens"],
+      values: [
+        "stream_options",
+        "stream",
+        "max_tokens",
+        "max_completion_tokens",
+        "reasoning_effort",
+      ],
     },
   },
   causal: "correlation",
@@ -284,7 +291,29 @@ function rememberChatCompatibility(
   endpoints.set(url, { mode, expiresAt: now + STRICT_STREAM_OPTIONS_REPROBE_MS });
 }
 
+// Deployments that rejected the `reasoning_effort` a request only preferred (reasoningPreference
+// "off"); later requests to the same endpoint omit it. Scoped and bounded like the memos above.
+let reasoningOmittedEndpoints = new WeakMap<object, Set<string>>();
+
+function reasoningOmitted(scope: object, url: string): boolean {
+  return reasoningOmittedEndpoints.get(scope)?.has(url) === true;
+}
+
+function setReasoningOmitted(scope: object, url: string, omitted: boolean): void {
+  const endpoints = reasoningOmittedEndpoints.get(scope) ?? new Set<string>();
+  endpoints.delete(url);
+  if (omitted) {
+    if (endpoints.size >= MAX_STRICT_STREAM_OPTIONS_ENDPOINTS) {
+      const oldest = endpoints.values().next().value;
+      if (oldest !== undefined) endpoints.delete(oldest);
+    }
+    endpoints.add(url);
+  }
+  reasoningOmittedEndpoints.set(scope, endpoints);
+}
+
 export function resetChatCompatibilityMemoForTests(): void {
+  reasoningOmittedEndpoints = new WeakMap<object, Set<string>>();
   chatCompatibilityEndpoints = new WeakMap<object, Map<string, ChatCompatibilityMemo>>();
   outputTokenFieldEndpoints = new WeakMap<object, Map<string, OutputTokenField>>();
 }
@@ -692,7 +721,22 @@ function reasoningEffortField(
   if (request.tools !== undefined && requiresNoReasoningWithTools(config.modelId)) {
     return { reasoning_effort: "none" };
   }
-  return request.reasoningEffort !== undefined ? { reasoning_effort: request.reasoningEffort } : {};
+  if (request.reasoningEffort !== undefined) return { reasoning_effort: request.reasoningEffort };
+  // A server-chosen preference for a mechanical call: lowest precedence, wire-only "none".
+  return request.reasoningPreference === "off" ? { reasoning_effort: "none" } : {};
+}
+
+// Whether the wire "none" comes from the preference alone: an explicit effort or the tool-calling
+// override (reasoningEffortField) decides otherwise and is never answered as a preference.
+function sendsReasoningPreference(
+  request: ProviderGatewayRequest,
+  config: ModelProviderConfig,
+): boolean {
+  return (
+    request.reasoningPreference === "off" &&
+    request.reasoningEffort === undefined &&
+    !(request.tools !== undefined && requiresNoReasoningWithTools(config.modelId))
+  );
 }
 
 function buildBody(request: ProviderGatewayRequest, config: ModelProviderConfig): ChatRequestBody {
@@ -1906,8 +1950,10 @@ export class OpenAiAdapter implements ProviderAdapter {
       ...request,
       tools: catalog.tools.length === 0 ? undefined : catalog.tools,
     };
-    const dispatched = await this.dispatchWithOutputTokenFallback(toolRequest, config, (field) =>
-      this.dispatch(toolRequest, withOutputTokenField(config, field), secrets),
+    const dispatched = await this.dispatchWithReasoningFallback(toolRequest, config, () =>
+      this.dispatchWithOutputTokenFallback(toolRequest, config, (field) =>
+        this.dispatch(toolRequest, withOutputTokenField(config, field), secrets),
+      ),
     );
     try {
       const { response } = dispatched;
@@ -2252,7 +2298,7 @@ export class OpenAiAdapter implements ProviderAdapter {
     const url = chatCompletionsUrl(config);
     const reservation = this.transportReservation(request, config);
     const { body, deadline } = this.prepareHttpDispatch(
-      request,
+      this.withRememberedReasoningOmission(request, config, url),
       config,
       reservation,
       url,
@@ -2359,19 +2405,23 @@ export class OpenAiAdapter implements ProviderAdapter {
     };
     const mode = chatCompatibilityMode(memoScope, url, this.now);
     if (mode === "whole-body") {
-      return this.dispatchWithOutputTokenFallback(request, config, (field) =>
-        this.dispatch(request, withOutputTokenField(config, field), secrets, false, bounds),
+      return this.dispatchWithReasoningFallback(request, config, () =>
+        this.dispatchWithOutputTokenFallback(request, config, (field) =>
+          this.dispatch(request, withOutputTokenField(config, field), secrets, false, bounds),
+        ),
       );
     }
     const includeUsage = mode !== "omit-usage";
-    const first = await this.dispatchWithOutputTokenFallback(request, config, (field) =>
-      this.dispatch(
-        request,
-        withOutputTokenField(config, field),
-        secrets,
-        true,
-        bounds,
-        includeUsage,
+    const first = await this.dispatchWithReasoningFallback(request, config, () =>
+      this.dispatchWithOutputTokenFallback(request, config, (field) =>
+        this.dispatch(
+          request,
+          withOutputTokenField(config, field),
+          secrets,
+          true,
+          bounds,
+          includeUsage,
+        ),
       ),
     );
     if (first.response.ok || !isStrictChatShapeRejection(first.response.status)) return first;
@@ -2501,6 +2551,43 @@ export class OpenAiAdapter implements ProviderAdapter {
     return retry;
   }
 
+  private withRememberedReasoningOmission(
+    request: ProviderGatewayRequest,
+    config: ModelProviderConfig,
+    url: string,
+  ): ProviderGatewayRequest {
+    if (request.reasoningPreference === undefined) return request;
+    if (!reasoningOmitted(this.deps.compatibilityMemoScope ?? config, url)) return request;
+    return { ...request, reasoningPreference: undefined };
+  }
+
+  // A request that only PREFERRED no reasoning (reasoningPreference "off") is answered once without
+  // `reasoning_effort` when the provider names it as unsupported; the deployment then remembers to
+  // omit it. The memo is set before the retry (dispatch reads it) and withdrawn if the retry fails,
+  // so no other rejection can poison later requests. Every POST settles its own attempt admission.
+  private async dispatchWithReasoningFallback(
+    request: ProviderGatewayRequest,
+    config: ModelProviderConfig,
+    run: () => Promise<DispatchedResponse>,
+  ): Promise<DispatchedResponse> {
+    const first = await run();
+    const url = chatCompletionsUrl(config);
+    const scope = this.deps.compatibilityMemoScope ?? config;
+    const sent = sendsReasoningPreference(request, config) && !reasoningOmitted(scope, url);
+    if (!sent || first.response.ok || !isStrictChatShapeRejection(first.response.status)) {
+      return first;
+    }
+    const secrets = [config.apiKey, config.baseUrl];
+    const payload = await this.readErrorBody(first.response.clone(), config, secrets, first.signal);
+    if (!rejectsReasoningEffortParameter(payload)) return first;
+    first.dispose();
+    this.logChatCompatibilityRetry(url, config, first.response.status, "reasoning_effort");
+    setReasoningOmitted(scope, url, true);
+    const retry = await run();
+    if (!retry.response.ok) setReasoningOmitted(scope, url, false);
+    return retry;
+  }
+
   private mayRetryOutputTokenField(
     first: DispatchedResponse,
     field: OutputTokenField | undefined,
@@ -2518,7 +2605,7 @@ export class OpenAiAdapter implements ProviderAdapter {
     url: string,
     config: ModelProviderConfig,
     status: number,
-    omittedField: "stream_options" | "stream" | OutputTokenField,
+    omittedField: "stream_options" | "stream" | "reasoning_effort" | OutputTokenField,
   ): void {
     this.log.write(
       activityLogEvent(
