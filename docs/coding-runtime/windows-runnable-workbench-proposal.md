@@ -1,10 +1,10 @@
 # Proposal: a runnable Coding Workbench on Windows
 
-Issue [#4068](https://github.com/oscharko-dev/Keiko/issues/4068). Status: **draft for owner
-decision**, 2026-11-06. A1, B1 and D1 are implemented for review; C and E remain proposals, and C
-now needs an owner decision (see C). The
-first confined Workbench run on Windows succeeded on 2026-11-06, with the run's state on the system
-volume ([record](../qa/opencode-windows-qualification.md)).
+Issue [#4068](https://github.com/oscharko-dev/Keiko/issues/4068). Status: **A, B, D and E decided**
+on 2026-11-07 by the #4068 Windows owner under the owner's scope transfer of 2026-10-24. A1, B1 and
+D1 are implemented; C is not implemented, and its variant is still to be chosen (see C). The first
+confined Workbench run on Windows succeeded on 2026-11-06, with the run's state on the system volume
+([record](../qa/opencode-windows-qualification.md)).
 
 ## Goal
 
@@ -12,15 +12,15 @@ Make a governed coding run start and finish on Windows, first from a checkout an
 release, without relaxing ADR-0043. Today every Windows start is refused before spawn, and readiness
 reports `gateway-service-unqualified`.
 
-## Decisions requested
+## Decisions
 
-| #   | Question                                                    | Recommendation                                                     |
-| --- | ----------------------------------------------------------- | ------------------------------------------------------------------ |
-| A   | May a checkout install and use the D18 broker?              | Yes: a dev-lane pin on the same broker (A1)                        |
-| B   | How does the confined tree reach its workspace?             | Grant on Keiko-managed worktrees and support roots only (B1)       |
-| C   | How is `HKCU\Environment` closed to the confined tree?      | Owner decision on the key's access list; C1, C2 and a label failed |
-| D   | How does the host reach OpenCode's server in the tree?      | One brokered inbound loopback port per run (D1)                    |
-| E   | Which model and gateway may the first model-backed run use? | Owner names one; until then, scripted-gateway runs only            |
+| #   | Question                                                    | Decision (2026-11-07)                                             |
+| --- | ----------------------------------------------------------- | ----------------------------------------------------------------- |
+| A   | May a checkout install and use the D18 broker?              | Yes: a dev-lane pin on the same broker (A1)                       |
+| B   | How does the confined tree reach its workspace?             | Grant on Keiko-managed worktrees and support roots only (B1)      |
+| C   | How is `HKCU\Environment` closed to the confined tree?      | Open: only the key's access list works; C1, C2 and a label failed |
+| D   | How does the host reach OpenCode's server in the tree?      | One brokered inbound loopback port per run (D1)                   |
+| E   | Which model and gateway may the first model-backed run use? | The Windows owner selects them per run, recorded body-free        |
 
 ## Where it stops today
 
@@ -111,8 +111,8 @@ reports `gateway-service-unqualified`.
 
   The remaining lever is the key's own access list: removing the read entries for
   `ALL APPLICATION PACKAGES` and `registryRead`, either while a tree lives or permanently. Both
-  change what every AppContainer app of this user may read, so this is an owner decision. Nothing of
-  C is implemented.
+  change what every AppContainer app of this user may read, so the variant is a decision for the
+  Windows owner, still to be made. Nothing of C is implemented.
 
 ## D. Inbound control route
 

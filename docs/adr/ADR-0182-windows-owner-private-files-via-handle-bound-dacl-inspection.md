@@ -79,7 +79,8 @@ retain or checkout: the failure propagates through the existing `coding-runtime.
 failure path, the previous entry stays and no staging or copy remains.
 
 A run's own state directory is made owner-private with inheritable entries when the run is prepared,
-before anything is written below it (`opencodeRuntimeComposition.ts`, amended 2026-11-06, #4068).
+before anything is written below it (`opencodeRuntimeComposition.ts`, amended 2026-11-06, #4068;
+decided 2026-11-07 by the Windows owner under the owner's scope transfer of 2026-10-24).
 Every file the runtime or Keiko later writes there inherits that protection, a fresh run's database
 included; before, those files inherited whatever the state directory's parents granted. A resumed
 run's checked-out copy, protected owner-only by the store, is then handed back to that directory's

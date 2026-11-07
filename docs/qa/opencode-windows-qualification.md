@@ -739,9 +739,10 @@ Historical dependency order before SCM integration (see the current priorities b
    Windows applicability of native/POSIX test fixtures without counting skips as execution.
 3. Extend the existing npm builder/discovery approval path for Windows; obtain the release owner's
    approved package/helper versions and publication. Do not invent approval digests or bypass them.
-4. Execute the remaining W1–W15 matrix with owner-approved model/Gateway configuration, isolated
-   synthetic repositories and body-free Activity Log evidence, including installed portable/npm
-   upgrade/rollback and all three authority modes. Do not close #4068 on this component increment.
+4. Execute the remaining W1–W15 matrix with the model and Gateway configuration the Windows owner
+   selects for each run, isolated synthetic repositories and body-free Activity Log evidence,
+   including installed portable/npm upgrade/rollback and all three authority modes. Do not close
+   #4068 on this component increment.
 
 ## Dev integration revalidation — 2026-10-31
 
@@ -1123,9 +1124,10 @@ Windows 11 host, unprivileged, Node only (no WFP, service or UAC action):
 - `native-toolchain-roots` fails 14 of 19 tests on this host (symlink `EPERM` and POSIX fixtures). The
   count is the same without this change, and the native profile it covers is not used on Windows.
 
-Not exercised: real proxy, CA, OpenSSL or FIPS traffic, inbound sidecar control, fragmented responses
-against a live gateway, a model-backed task (blocked until the owner approves a model and gateway
-configuration), and Windows 11 hardware for any native result above.
+Not exercised: real proxy, CA, OpenSSL or FIPS traffic, inbound sidecar control, fragmented
+responses against a live gateway, a model-backed task (the Windows owner selects the model and
+gateway per run; each run records its configuration body-free), and Windows 11 hardware for any
+native result above.
 
 ## Retained session privacy and held entries (W9 components)
 
@@ -1421,8 +1423,9 @@ start to finish.
 
 Limits:
 
-- **Model.** The model was the one the dev UI was configured with, not an owner-approved model
-  (item E of the proposal). Its evidence stays `functional-not-platform-qualified`.
+- **Model.** The model was the one the dev UI was configured with, not a model the Windows owner had
+  selected for qualification (item E of the proposal). Its evidence stays
+  `functional-not-platform-qualified`.
 - **Coverage.** All three modes and a local commit were exercised (see below). Push and pull
   requests were not.
 - **User checkout.** A run on the user's own checkout (Lokal) gets no workspace grant. Since

@@ -825,11 +825,11 @@ list through the documented `NetworkIsolationSetAppContainerConfig` API
   the broker revokes the exemption of every SID that still carries a persistent durable deny
   guard; the guards themselves stay, and their recovery remains open work.
 
-Filesystem grants (amended 2026-11-06, #4068, pending owner approval in review). A fresh per-tree
-SID can open nothing it was not granted. On 2026-11-06 the first confined run on a standard user's
-machine could not load its own runtime. The host now sends the tree's grants to the supervisor as
-one closed `KGG1` frame, after the launch packet and before the broker open
-(`native/runtime-supervisor/windows/gateway_grants.c`):
+Filesystem grants (amended 2026-11-06, #4068; decided 2026-11-07 by the Windows owner under the
+owner's scope transfer of 2026-10-24). A fresh per-tree SID can open nothing it was not granted. On
+2026-11-06 the first confined run on a standard user's machine could not load its own runtime. The
+host now sends the tree's grants to the supervisor as one closed `KGG1` frame, after the launch
+packet and before the broker open (`native/runtime-supervisor/windows/gateway_grants.c`):
 
 - **What.** The per-tree SID gets read on the runtime root and modify on the run's private state
   directory. It also gets read on the verified ripgrep directory when that directory lies outside
@@ -871,12 +871,12 @@ one closed `KGG1` frame, after the launch packet and before the broker open
   `executionLocations: ["worktree"]`, so the Workbench preselects a new worktree and offers no
   other location. Other hosts omit the field and keep both locations.
 
-Inbound control (amended 2026-11-06, #4068, pending owner approval in review). The host drives
-OpenCode through the server the runtime opens on `127.0.0.1` inside the tree. Windows drops that
-inbound loopback connection twice, silently: its application isolation blocks loopback into any
-AppContainer, and Windows Firewall blocks inbound to a package without a rule. The D18 exemption
-lifts only the outbound direction. The broker now admits exactly this connection after the
-exemption and before its acknowledgement:
+Inbound control (amended 2026-11-06, #4068; decided 2026-11-07 by the Windows owner under the
+owner's scope transfer of 2026-10-24). The host drives OpenCode through the server the runtime opens
+on `127.0.0.1` inside the tree. Windows drops that inbound loopback connection twice, silently: its
+application isolation blocks loopback into any AppContainer, and Windows Firewall blocks inbound to
+a package without a rule. The D18 exemption lifts only the outbound direction. The broker now admits
+exactly this connection after the exemption and before its acknowledgement:
 
 - **Capability.** The tree's profile and token carry `privateNetworkClientServer`, which Windows
   requires before an AppContainer may accept a connection. Keiko's per-tree connect filters still
@@ -915,13 +915,13 @@ Issue #4068 needs the D18 broker on a customer machine. `keiko gateway-service
   accept. Until releases carry a verified Authenticode signature, UAC names an unknown publisher.
 - **Pins.** A release-qualified Windows package yields its attested helper's digest. A Windows dev
   checkout yields the digest of the runtime supervisor it built, as its dev-lane manifest records
-  and discovery re-verifies against the source tree (amended 2026-11-06, #4068, pending owner
-  approval in review). The checkout path needs the explicit `--dev-lane` flag, so an administrator
-  installs a locally built broker only by choosing it. Its runs take the same broker, filters and
-  loopback exemption as a release's. Their evidence stays `functional-not-platform-qualified`, so
-  no checkout run counts as platform qualification. A release launch reads a broker with a checkout
-  pin as stale, and `repair` replaces it. A Windows evaluation package and the npm runtime lane
-  yield no pin.
+  and discovery re-verifies against the source tree (amended 2026-11-06, #4068; decided 2026-11-07
+  by the Windows owner under the owner's scope transfer of 2026-10-24). The checkout path needs the
+  explicit `--dev-lane` flag, so an administrator installs a locally built broker only by choosing
+  it. Its runs take the same broker, filters and loopback exemption as a release's. Their evidence
+  stays `functional-not-platform-qualified`, so no checkout run counts as platform qualification. A
+  release launch reads a broker with a checkout pin as stale, and `repair` replaces it. A Windows
+  evaluation package and the npm runtime lane yield no pin.
 - **Placement.** The image goes to `%ProgramFiles%\KeikoRuntimeGateway`, which is owned by
   Administrators and closed to inherited or user write access. The copy is verified again there,
   before the running service is stopped, so a failed copy leaves the old broker serving.
