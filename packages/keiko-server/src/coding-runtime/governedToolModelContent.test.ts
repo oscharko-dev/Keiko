@@ -240,7 +240,15 @@ describe("the closed Git outcome on the rendering record (#4271)", () => {
     const schema = activityLogOperationSchema("coding-runtime.tool-result-rendered");
     expect(schema?.diagnosticWhen).toContainEqual({
       field: "gitOutcome",
-      values: ["verification-failed", "verification-missing", "blocked", "changed", "not-done"],
+      values: [
+        "verification-failed",
+        "verification-missing",
+        "not-staged",
+        "unsaved-changes",
+        "blocked",
+        "changed",
+        "not-done",
+      ],
     });
 
     const { result } = executeLocalSupportQuery(

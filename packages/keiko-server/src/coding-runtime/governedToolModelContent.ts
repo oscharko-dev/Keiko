@@ -102,7 +102,15 @@ const CODING_RUNTIME_TOOL_RESULT_RENDERED_OPERATION = defineActivityLogOperation
     // human, like a completed one, stays optional context.
     {
       field: "gitOutcome",
-      values: ["verification-failed", "verification-missing", "blocked", "changed", "not-done"],
+      values: [
+        "verification-failed",
+        "verification-missing",
+        "not-staged",
+        "unsaved-changes",
+        "blocked",
+        "changed",
+        "not-done",
+      ],
     },
   ],
   failureClasses: ["coding-runtime-tool-result"],

@@ -1303,13 +1303,16 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Verification has not run: the verifier found nothing it can run for this request, for example because the selected package has no test, lint or build script. That is not a failing check.",
   "codingWorkbench.activity.verification.not-run":
     "Verification did not run to completion: a step was skipped, denied or cancelled. That is not a failing check.",
-  "codingWorkbench.activity.git.completed": "Keiko carried out this step.",
   "codingWorkbench.activity.git.waiting-for-approval":
     "Waiting for a decision before this step is carried out.",
   "codingWorkbench.activity.git.verification-failed":
     "Not committed: the verification of the staged change failed. Fix the failing check, verify again, then commit.",
   "codingWorkbench.activity.git.verification-missing":
     "Not committed: no passing verification covers the staged change yet. Verify the staged change, then commit.",
+  "codingWorkbench.activity.git.not-staged":
+    "Not committed: part of the change is not staged yet. Stage the whole change, verify the staged change, then commit.",
+  "codingWorkbench.activity.git.unsaved-changes":
+    "Not committed: files open in the editor hold unsaved changes. Save them, verify the staged change, then commit.",
   "codingWorkbench.activity.git.blocked":
     "Not done: Keiko's policy or authority checks refused this step.",
   "codingWorkbench.activity.git.changed":

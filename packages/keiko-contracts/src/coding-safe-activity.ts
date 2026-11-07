@@ -88,7 +88,8 @@ export type CodingSafeActivityVerificationOutcome =
  * committed or staged. `completed` is a step Keiko carried out; every other word names why it did
  * not: `waiting-for-approval` the human decision still open, `verification-failed` and
  * `verification-missing` a commit that no passing verification of the staged change covers,
- * `blocked` a policy or authority refusal, `changed` a candidate or repository that moved since the
+ * `not-staged` a commit whose change is only partly staged, `unsaved-changes` a commit that open
+ * editor files with unsaved changes hold back, `blocked` a policy or authority refusal, `changed` a candidate or repository that moved since the
  * proposal, and `not-done` a step that failed or whose result is uncertain.
  */
 export const CODING_SAFE_ACTIVITY_GIT_OUTCOMES = [
@@ -96,6 +97,8 @@ export const CODING_SAFE_ACTIVITY_GIT_OUTCOMES = [
   "waiting-for-approval",
   "verification-failed",
   "verification-missing",
+  "not-staged",
+  "unsaved-changes",
   "blocked",
   "changed",
   "not-done",

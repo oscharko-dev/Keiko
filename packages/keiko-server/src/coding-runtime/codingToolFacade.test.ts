@@ -2412,7 +2412,8 @@ describe("CodingToolFacade Git presentation (#4271)", () => {
     ["blocked", "message-policy", "blocked"],
     ["verification-failed", "verification-failed", "verification-failed"],
     ["verification-failed", "verification-missing", "verification-missing"],
-    ["verification-failed", "candidate-not-staged", "verification-missing"],
+    ["verification-failed", "candidate-not-staged", "not-staged"],
+    ["blocked", "buffers-dirty", "unsaved-changes"],
     ["drift", "verification-stale", "changed"],
     ["failed", "execution-failed", "not-done"],
     ["recovery-required", "execution-uncertain", "not-done"],
@@ -2440,6 +2441,17 @@ describe("CodingToolFacade Git presentation (#4271)", () => {
     [{ kind: "fetch", status: "auth-failed" }, "not-done"],
   ] as const)("presents the Git result %j as %s", (git, gitOutcome) => {
     expect(codingToolGitPresentation(completedWith("git", git))).toEqual({ gitOutcome });
+  });
+
+  it("fails closed to not done for a Git or commit status it does not know", () => {
+    expect(
+      codingToolGitPresentation(completedWith("git", { kind: "stage", status: "unexpected" })),
+    ).toEqual({ gitOutcome: "not-done" });
+    expect(
+      codingToolGitPresentation(
+        completedWith("verifiedCommit", { status: "unexpected", reason: "unexpected" }),
+      ),
+    ).toEqual({ gitOutcome: "not-done" });
   });
 
   it("presents nothing for reads, an unprepared proposal, other results and other statuses", () => {

@@ -732,14 +732,18 @@ outcome as an optional field, declared `diagnosticWhen` for every outcome but `p
 report keeps a verification that did not pass.
 
 The same projection carries a governed Git step's closed outcome (`gitOutcome`: `completed`,
-`waiting-for-approval`, `verification-failed`, `verification-missing`, `blocked`, `changed`,
-`not-done`; lab T37, #4271). The facade answers a refused stage, unstage, branch, fetch, pull or
-verified commit as a completed call that carries the refusal, so the call state alone painted a
-commit that never happened as "Succeeded". `codingToolGitPresentation` derives the word from the
-result the model received (never from a message or path); the timeline shows every word but
-`completed` as not done or waiting for approval, with a one-line reason, and the same field is
-recorded body-free on `coding-runtime.tool-result-rendered`, declared `diagnosticWhen` for
-`verification-failed`, `verification-missing`, `blocked`, `changed` and `not-done`.
+`waiting-for-approval`, `verification-failed`, `verification-missing`, `not-staged`,
+`unsaved-changes`, `blocked`, `changed`, `not-done`; lab T37, #4271). The facade answers a refused
+stage, unstage, branch, fetch, pull or verified commit as a completed call that carries the
+refusal, so the call state alone painted a commit that never happened as "Succeeded".
+`codingToolGitPresentation` derives the word from the result the model received (never from a
+message or path): a commit's exact cause where the card can name it (a failed check, a change only
+partly staged, unsaved editor files), otherwise its status, and a status it does not know fails
+closed to `not-done`. A prepared stage or unstage proposal (`ready`) claims no outcome. The timeline
+shows every word but `completed` as not done or waiting for approval, with a one-line reason, and
+keeps such a card out of the collapsed group of succeeded steps; a carried-out step adds no
+sentence to its badge. The same field is recorded body-free on `coding-runtime.tool-result-rendered`,
+declared `diagnosticWhen` for every word but `completed` and `waiting-for-approval`.
 
 An explicit Stop or takeover keeps the run's live safe-activity feed, as standalone OpenCode keeps
 the tool steps of an aborted session (owner decision 2026-10-30, #3907 F3). Until then both ends

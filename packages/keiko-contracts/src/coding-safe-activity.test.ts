@@ -129,6 +129,8 @@ describe("coding safe-activity contract", () => {
       "waiting-for-approval",
       "verification-failed",
       "verification-missing",
+      "not-staged",
+      "unsaved-changes",
       "blocked",
       "changed",
       "not-done",

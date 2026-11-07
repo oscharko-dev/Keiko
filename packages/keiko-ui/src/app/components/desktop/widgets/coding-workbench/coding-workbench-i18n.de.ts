@@ -1347,13 +1347,16 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Die Verifizierung ist nicht gelaufen: Der Verifizierer hat für diese Anfrage nichts gefunden, was er ausführen kann, etwa weil das gewählte Paket kein test-, lint- oder build-Skript hat. Das ist keine fehlgeschlagene Prüfung.",
   "codingWorkbench.activity.verification.not-run":
     "Die Verifizierung ist nicht vollständig gelaufen: Ein Schritt wurde übersprungen, abgelehnt oder abgebrochen. Das ist keine fehlgeschlagene Prüfung.",
-  "codingWorkbench.activity.git.completed": "Keiko hat diesen Schritt ausgeführt.",
   "codingWorkbench.activity.git.waiting-for-approval":
     "Wartet auf eine Entscheidung, bevor dieser Schritt ausgeführt wird.",
   "codingWorkbench.activity.git.verification-failed":
     "Nicht committet: Die Verifizierung der vorgemerkten Änderung ist fehlgeschlagen. Behebe die fehlgeschlagene Prüfung, verifiziere erneut und committe dann.",
   "codingWorkbench.activity.git.verification-missing":
     "Nicht committet: Noch keine bestandene Verifizierung deckt die vorgemerkte Änderung ab. Verifiziere die vorgemerkte Änderung und committe dann.",
+  "codingWorkbench.activity.git.not-staged":
+    "Nicht committet: Ein Teil der Änderung ist noch nicht vorgemerkt. Merke die ganze Änderung vor, verifiziere die vorgemerkte Änderung und committe dann.",
+  "codingWorkbench.activity.git.unsaved-changes":
+    "Nicht committet: Im Editor geöffnete Dateien enthalten ungespeicherte Änderungen. Speichere sie, verifiziere die vorgemerkte Änderung und committe dann.",
   "codingWorkbench.activity.git.blocked":
     "Nicht durchgeführt: Die Richtlinien- oder Berechtigungsprüfung von Keiko hat diesen Schritt abgelehnt.",
   "codingWorkbench.activity.git.changed":

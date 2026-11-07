@@ -453,11 +453,11 @@ function groupCompletedTools(items: readonly TimelineItem[]): readonly TimelineI
   const grouped: TimelineItem[] = [];
   for (const item of items) {
     const previous = grouped.at(-1);
-    if (item.kind !== "tool" || item.tool.state !== "succeeded") {
+    if (item.kind !== "tool" || !shownAsSucceeded(item.tool)) {
       grouped.push(item);
     } else if (previous?.kind === "group") {
       grouped[grouped.length - 1] = { ...previous, tools: [...previous.tools, item] };
-    } else if (previous?.kind === "tool" && previous.tool.state === "succeeded") {
+    } else if (previous?.kind === "tool" && shownAsSucceeded(previous.tool)) {
       grouped[grouped.length - 1] = {
         kind: "group",
         id: `group:${previous.id}`,
@@ -470,6 +470,12 @@ function groupCompletedTools(items: readonly TimelineItem[]): readonly TimelineI
     }
   }
   return grouped;
+}
+
+// A call folds into the "N steps" group only when its card itself reads "Succeeded": a Git step
+// Keiko refused keeps the call state `succeeded` but must stay visible on its own (lab T37, #4271).
+function shownAsSucceeded(tool: CodingSafeActivityTool): boolean {
+  return shownToolState(tool) === "succeeded";
 }
 
 function canMergeToolItem(
@@ -1180,8 +1186,9 @@ function ToolOutcome({
       </p>
     );
   }
+  // A carried-out Git step needs no sentence beyond its "Succeeded" badge.
   const gitOutcome = tool.presentation?.gitOutcome;
-  if (gitOutcome !== undefined) {
+  if (gitOutcome !== undefined && gitOutcome !== "completed") {
     return (
       <p className={styles.cmpToolOutcome}>{t(`codingWorkbench.activity.git.${gitOutcome}`)}</p>
     );

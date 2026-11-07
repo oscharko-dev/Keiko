@@ -407,32 +407,43 @@ export function codingToolVerificationPresentation(
   return verificationOutcome === undefined ? {} : Object.freeze({ verificationOutcome });
 }
 
-type GitStatusOutcomes = Readonly<Record<string, CodingSafeActivityGitOutcome | undefined>>;
+// The shared lifecycle statuses of a stage, an unstage, a branch and the verified commit. A status
+// this table does not name fails closed to `not-done`: an unknown outcome never reads "Succeeded".
+const GIT_STEP_OUTCOME_BY_STATUS: ReadonlyMap<string, CodingSafeActivityGitOutcome> = new Map([
+  ["succeeded", "completed"],
+  ["approval-required", "waiting-for-approval"],
+  ["blocked", "blocked"],
+  ["drift", "changed"],
+  ["failed", "not-done"],
+  ["recovery-required", "not-done"],
+  ["verification-failed", "verification-missing"],
+]);
 
-// The shared lifecycle statuses of a stage, an unstage and a branch. `ready` is a prepared proposal
-// that nothing carried out yet: it claims no outcome.
-const GIT_STEP_OUTCOME_BY_STATUS: GitStatusOutcomes = {
-  succeeded: "completed",
-  "approval-required": "waiting-for-approval",
-  blocked: "blocked",
-  drift: "changed",
-  failed: "not-done",
-  "recovery-required": "not-done",
-};
+// Commit refusals whose cause the card names exactly (lab T37 audit, #4271): a failed check, a
+// change only partly staged, and open editor files with unsaved changes. Every other reason keeps
+// its status word.
+const COMMIT_OUTCOME_BY_REASON: ReadonlyMap<string, CodingSafeActivityGitOutcome> = new Map([
+  ["verification-failed", "verification-failed"],
+  ["candidate-not-staged", "not-staged"],
+  ["buffers-dirty", "unsaved-changes"],
+]);
 
 const GIT_SYNC_COMPLETED_STATUSES: ReadonlySet<string> = new Set(["succeeded", "up-to-date"]);
 
-function commitOutcome(commit: VerifiedCommitResult): CodingSafeActivityGitOutcome | undefined {
-  if (commit.status !== "verification-failed") return GIT_STEP_OUTCOME_BY_STATUS[commit.status];
-  return commit.reason === "verification-failed" ? "verification-failed" : "verification-missing";
+function gitStepOutcome(status: string): CodingSafeActivityGitOutcome {
+  return GIT_STEP_OUTCOME_BY_STATUS.get(status) ?? "not-done";
 }
 
+function commitOutcome(commit: VerifiedCommitResult): CodingSafeActivityGitOutcome {
+  return COMMIT_OUTCOME_BY_REASON.get(commit.reason) ?? gitStepOutcome(commit.status);
+}
+
+// `ready` is a stage or unstage proposal prepared but not yet carried out: it claims no outcome.
 function gitResultOutcome(git: CodingRuntimeGitResult): CodingSafeActivityGitOutcome | undefined {
   if (git.kind === "fetch" || git.kind === "pull")
     return GIT_SYNC_COMPLETED_STATUSES.has(git.status) ? "completed" : "not-done";
-  if (git.kind === "stage" || git.kind === "unstage" || git.kind === "branch")
-    return GIT_STEP_OUTCOME_BY_STATUS[git.status];
-  return undefined;
+  if (git.kind !== "stage" && git.kind !== "unstage" && git.kind !== "branch") return undefined;
+  return git.status === "ready" ? undefined : gitStepOutcome(git.status);
 }
 
 /**
