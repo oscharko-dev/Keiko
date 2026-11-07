@@ -14,8 +14,8 @@
 // the scripts still pass distinct projects, and the config still turns them into distinct state
 // directories. Either half alone is insufficient — the flags could diverge while the config ignores
 // them, or the config could split while a lane stops passing a project.
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -31,10 +31,81 @@ function projectOf(command) {
   return /--project=(\S+)/u.exec(command)?.[1];
 }
 
-function configStateDir(config) {
+function configServerEnv(config) {
   const servers = config.webServer;
   const last = Array.isArray(servers) ? servers.at(-1) : servers;
-  return last?.env?.KEIKO_STATE_DIR;
+  return last?.env;
+}
+
+function configStateDir(config) {
+  return configServerEnv(config)?.KEIKO_STATE_DIR;
+}
+
+// The durable stores the BFF opens besides its state directory. Each falls back to a location
+// outside the run when its variable is absent; the evidence store's fallback is `./.keiko/evidence`
+// in the checkout, so a run without `KEIKO_EVIDENCE_DIR` shared its memory audit, and with it the
+// Journal's content-free Refused rows, with every engine and suite (#4212).
+const DURABLE_STORE_VARIABLES = ["KEIKO_UI_DATA_DIR", "KEIKO_MEMORY_DIR", "KEIKO_EVIDENCE_DIR"];
+
+// A config whose web server is not the product BFF launched from the environment hands its own
+// server the state, and that server must place the evidence store inside it: the built
+// `tests/e2e/servers/*-server` entries reach the shared coding-runtime server, which passes
+// `buildUiHandlerDeps` an explicit evidence directory under its state root, or pass `keiko ui` an
+// `--evidence-dir` inside their state, and a support server passes one of its own.
+const SHARED_SERVER = "coding-runtime-server-shared";
+const SHARED_SERVER_EVIDENCE = 'evidenceDir: join(bffStateRoot, "evidence")';
+const BUILT_SERVER_ENTRY = /"([a-z0-9-]+-server)\.mjs"/u;
+const CLI_EVIDENCE_ARGUMENT = /"--evidence-dir",\s*resolve\(stateDir, "evidence"\)/u;
+const SUPPORT_SERVER_ENTRY = /node (tests\/e2e\/support\/[a-z0-9-]+-server\.mjs)/u;
+const BASE_CONFIG_IMPORT = 'from "./playwright.config.js"';
+
+function withoutComments(source) {
+  return source.replaceAll(/\/\*[\s\S]*?\*\//gu, "").replaceAll(/^\s*\/\/.*$/gmu, "");
+}
+
+function sourceOf(path) {
+  return withoutComments(readFileSync(resolve(repoRoot, path), "utf8"));
+}
+
+function importsServer(source, name) {
+  return source.includes(`from "./${name}.mjs"`);
+}
+
+// Direct import of the shared server, through the delivery server that imports it, or its own
+// `keiko ui` launch with an evidence directory inside its state.
+function ownsEvidenceInState(name) {
+  const source = sourceOf(`tests/e2e/servers/${name}.mts`);
+  if (importsServer(source, SHARED_SERVER) || CLI_EVIDENCE_ARGUMENT.test(source)) return true;
+  const delivery = "coding-issue-delivery-server";
+  return name !== delivery && importsServer(source, delivery) && ownsEvidenceInState(delivery);
+}
+
+// Where the evidence store of a config's product server lives, or `missing`.
+function evidenceOwner(file) {
+  const source = sourceOf(file);
+  if (!source.includes("webServer")) return "no-server";
+  if (source.includes("KEIKO_EVIDENCE_DIR:")) return "environment";
+  if (source.includes(BASE_CONFIG_IMPORT)) return "base-config";
+  const built = BUILT_SERVER_ENTRY.exec(source)?.[1];
+  if (built !== undefined) return ownsEvidenceInState(built) ? "built-server" : "missing";
+  const support = SUPPORT_SERVER_ENTRY.exec(source)?.[1];
+  if (support !== undefined && /evidenceDir: join\(/u.test(sourceOf(support))) {
+    return "support-server";
+  }
+  return "missing";
+}
+
+function e2eConfigFiles() {
+  const configDir = resolve(repoRoot, "tests/e2e/config");
+  const e2eDir = resolve(repoRoot, "tests/e2e");
+  return [
+    ...readdirSync(configDir)
+      .filter((name) => name.endsWith(".config.ts"))
+      .map((name) => join(configDir, name)),
+    ...readdirSync(e2eDir)
+      .filter((name) => name.endsWith(".config.ts"))
+      .map((name) => join(e2eDir, name)),
+  ];
 }
 
 function restoreEnvironment(name, value) {
@@ -50,7 +121,7 @@ function restoreEnvironment(name, value) {
 // (`--project=firefox`, one argv element) that every script in this repo uses today, and the `space`
 // form (`--project firefox`, two argv elements) that a developer invoking `playwright test` by hand
 // is just as entitled to use. Both must resolve to the same isolated state directory.
-async function stateDirFor(projectArgument, form = "equals") {
+async function serverEnvFor(projectArgument, form = "equals") {
   vi.resetModules();
   const argv = process.argv;
   const override = process.env.KEIKO_E2E_STATE_DIR;
@@ -63,13 +134,17 @@ async function stateDirFor(projectArgument, form = "equals") {
   delete process.env.KEIKO_E2E_STATE_DIR;
   try {
     const { default: config } = await import(CONFIG);
-    return configStateDir(config);
+    return configServerEnv(config);
   } finally {
     process.argv = argv;
     restoreEnvironment("KEIKO_E2E_STATE_DIR", override);
     restoreEnvironment("KEIKO_E2E_VALIDATED_PROJECT", validatedProject);
     restoreEnvironment("KEIKO_E2E_VALIDATED_STATE_ID", validatedStateId);
   }
+}
+
+async function stateDirFor(projectArgument, form = "equals") {
+  return (await serverEnvFor(projectArgument, form))?.KEIKO_STATE_DIR;
 }
 
 async function parentAndWorkerStateDirs(project) {
@@ -171,5 +246,44 @@ describe("the release-smoke browser lanes cannot share durable state", () => {
     await expect(configImportWith(projectArgs)).rejects.toThrow(
       "requires exactly one concrete --project",
     );
+  });
+});
+
+describe("every e2e BFF keeps its durable stores inside its own state", () => {
+  it("places each store of an engine under that engine's state directory", async () => {
+    // Sequential for the same reason as the state-directory test: each import rewrites `process.argv`.
+    const chromium = await serverEnvFor("chromium");
+    const firefox = await serverEnvFor("firefox");
+    const webkit = await serverEnvFor("webkit");
+    const environments = [chromium, firefox, webkit];
+    for (const variable of DURABLE_STORE_VARIABLES) {
+      const directories = environments.map((env) => env?.[variable]);
+      expect(
+        directories.every((directory) => Boolean(directory)),
+        `${variable} is not set for every engine`,
+      ).toBe(true);
+      expect(new Set(directories).size, `two engines share ${variable}`).toBe(directories.length);
+      for (const [index, directory] of directories.entries()) {
+        const fromState = relative(environments[index].KEIKO_STATE_DIR, directory);
+        expect(fromState.startsWith(".."), `${variable} lies outside the state directory`).toBe(
+          false,
+        );
+      }
+    }
+  });
+
+  it("gives every e2e config an evidence store inside its own state", () => {
+    const owners = e2eConfigFiles().map((file) => [relative(repoRoot, file), evidenceOwner(file)]);
+    expect(owners.length).toBeGreaterThan(50);
+    const missing = owners.filter(([, owner]) => owner === "missing").map(([file]) => file);
+    expect(missing).toEqual([]);
+    const kinds = new Set(owners.map(([, owner]) => owner));
+    for (const kind of ["environment", "base-config", "built-server", "support-server"]) {
+      expect(kinds.has(kind), `no config exercises the ${kind} rule`).toBe(true);
+    }
+  });
+
+  it("keeps the explicit evidence directory of the coding-runtime server inside its state", () => {
+    expect(sourceOf(`tests/e2e/servers/${SHARED_SERVER}.mts`)).toContain(SHARED_SERVER_EVIDENCE);
   });
 });
