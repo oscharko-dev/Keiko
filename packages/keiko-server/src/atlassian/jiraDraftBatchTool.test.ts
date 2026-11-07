@@ -504,7 +504,7 @@ describe("jira.draft-batch (#4173)", () => {
 
     const result = await h.run({ ...ARGS, requirements: { ids: ["LH-008", "LH-009"] } });
 
-    // A filtered selection never stands for the whole collection (#4292).
+    // A selection of part of the collection never stands for the whole collection (#4292).
     expect(result.data).toMatchObject({
       outcome: "succeeded",
       draftedCount: 2,
@@ -711,6 +711,25 @@ describe("jira.draft-batch (#4173)", () => {
     const covered = stagedItems(h).flatMap((item) => item.requirementIds as string[]);
     expect(covered).toHaveLength(60);
     expect(new Set(covered).size).toBe(60);
+  });
+
+  it("counts a documents filter that selects every requirement as the whole collection", async () => {
+    const h = await harness(
+      (request) => page(keysOf(request)),
+      [{ capsuleId: "cap-a", text: specification(3).text }],
+    );
+    const probe = await h.run({ ...ARGS, requirements: { documents: ["no-such-document"] } });
+    const [scope] = probe.data.availableDocuments as readonly string[];
+    if (scope === undefined) throw new Error("Expected the Pod's document scope");
+
+    const result = await h.run({ ...ARGS, requirements: { documents: [scope] } });
+
+    expect(result.data).toMatchObject({
+      outcome: "succeeded",
+      requirementCount: 3,
+      coveredRequirementCount: 3,
+      wholeCollection: true,
+    });
   });
 
   it("scopes the remaining ids to their documents and says when more remain than listed", async () => {

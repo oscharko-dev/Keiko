@@ -103,6 +103,8 @@ type Collected =
       readonly cut: boolean;
       /** References that more than one requirement carried; only the first was kept. */
       readonly duplicateRefs: readonly string[];
+      /** The selection holds every requirement of the Pods' uncut collection, filtered or not. */
+      readonly wholeCollection: boolean;
     }
   | {
       readonly ok: false;
@@ -138,11 +140,14 @@ function selectedRequirements(
   readonly duplicateRefs: string[];
   /** Selected requirements the continued draft already holds; a re-run never drafts them twice. */
   readonly alreadyDrafted: number;
+  /** Every requirement the filter selected, duplicates and already drafted ones included. */
+  readonly selectedCount: number;
 } {
   let alreadyDrafted = 0;
   const byRef = new Map<string, DraftBatchRequirement>();
   const duplicateRefs = new Set<string>();
-  for (const { entry } of selectUnits(units, args.filter, redact)) {
+  const selectedUnits = selectUnits(units, args.filter, redact);
+  for (const { entry } of selectedUnits) {
     const ref = requirementReference(entry);
     if (drafted.has(ref)) {
       alreadyDrafted += 1;
@@ -160,7 +165,12 @@ function selectedRequirements(
       criteria: entry.acceptanceCriteria.map((item) => redact(item.text)),
     });
   }
-  return { requirements: [...byRef.values()], duplicateRefs: [...duplicateRefs], alreadyDrafted };
+  return {
+    requirements: [...byRef.values()],
+    duplicateRefs: [...duplicateRefs],
+    alreadyDrafted,
+    selectedCount: selectedUnits.length,
+  };
 }
 
 function noRequirements(
@@ -201,6 +211,8 @@ function collectRequirements(
         cut,
         requirements: selected.requirements,
         duplicateRefs: selected.duplicateRefs,
+        // A filter naming every document of the Pod still drafts the whole collection (#4292).
+        wholeCollection: !cut && selected.selectedCount === collection.units.length,
       };
     return noRequirements(collection.units.length, collection.units, args, selected.alreadyDrafted);
   } finally {
@@ -315,6 +327,8 @@ interface BatchRun {
   fatalReason?: string | undefined;
   /** References more than one requirement carried: only the first was drafted, all are reported. */
   duplicateRefs: readonly string[];
+  /** The selection held every requirement of the Pods' uncut collection. */
+  wholeCollection: boolean;
 }
 
 function record(run: BatchRun, activity: JiraDraftBatchActivity): void {
@@ -427,9 +441,9 @@ function failedRefs(run: BatchRun, result: DraftBatchResult): readonly string[] 
   return [...new Set([...run.duplicateRefs, ...result.failedRequirementRefs])];
 }
 
-/** A new, unfiltered draft read the Pods' whole requirement collection itself (#4292). */
+/** A new draft whose selection held the Pods' whole requirement collection (#4292). */
 function readWholeCollection(run: BatchRun): boolean {
-  return !run.args.filtered && run.args.draftId === undefined;
+  return run.wholeCollection && run.args.draftId === undefined;
 }
 
 function resultData(run: BatchRun, result: DraftBatchResult): CatalogJsonObject {
@@ -642,6 +656,7 @@ async function runBatch(
   const collected = collectRequirements(deps, context, args, draftedRefs(current));
   if (!collected.ok) return refusalResult(run, collected.refusal, collected.facts);
   run.duplicateRefs = collected.duplicateRefs;
+  run.wholeCollection = collected.wholeCollection;
   const model = createBatchModel(deps, context);
   if (typeof model === "string") return refusalResult(run, model);
   const rules = await readJiraCreateTemplateRules(
@@ -683,7 +698,14 @@ export function createJiraDraftBatchExecutor(
       });
       return refused("invalid-input", REFUSAL_GUIDANCE["invalid-input"]);
     }
-    const run: BatchRun = { deps, context, args, startedAt, duplicateRefs: [] };
+    const run: BatchRun = {
+      deps,
+      context,
+      args,
+      startedAt,
+      duplicateRefs: [],
+      wholeCollection: false,
+    };
     if (connection.deployment !== "data-center")
       return refusalResult(run, "unsupported-deployment");
     try {
