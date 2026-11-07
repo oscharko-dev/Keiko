@@ -22,6 +22,7 @@ import {
   jiraChatCatalogConsumerPort,
   jiraChatCatalogRoutes,
   jiraChatReadCatalogRoutes,
+  type JiraChatCatalogAction,
   type JiraChatCatalogConsumer,
   type JiraChatCatalogContext,
 } from "./jiraChatCatalogConsumer.js";
@@ -1250,17 +1251,32 @@ describe("ordinary Chat catalog read admission", () => {
         maxPatchBytes: 0,
       },
     });
-    deadlineSpan = 3_000_000;
-    const f = await catalogFixture(5, undefined, true);
-    const offered = f.binder.offer();
-    expect(await dispatch(f, "jira", {}, "keiko.jira.projects", offered)).toMatchObject({
-      result: { status: "completed" },
-    });
+    const f = await catalogFixture(5);
+    expect(await dispatch(f, "jira")).toMatchObject({ result: { status: "completed" } });
     const before = grants.findGrantedChatReadGrant(grantSubject())?.expiresAt;
+    const current = context();
+    const admission = createJiraChatCatalogAdmission({
+      deps: { ...deps, atlassianActionApprovalRegistry: grants },
+      context: () => current,
+      now: () => now,
+    });
+    const guardOf = (tool: JiraChatCatalogAction["tool"]): JiraChatCatalogConsumer["guard"] => {
+      const admitted = admission.authorityPort.admit(current.authority, {
+        actionId: `guard-${tool}`,
+        idempotencyKey: `guard-key-${tool}`,
+        tool,
+        argumentsDigest: "a".repeat(64),
+      });
+      if (!admitted.ok) throw new Error("Expected admission");
+      return admitted.mutationGuard;
+    };
     now = start + 120_000;
-    await dispatch(f, "pod", {}, "keiko.knowledge.requirements", offered);
+    expect(guardOf(KNOWLEDGE_CHAT_TOOLS[0]).check()).toBe(true);
     expect(grants.findGrantedChatReadGrant(grantSubject())?.expiresAt).toBe(before);
-    expect(f.handlers.some((handler) => handler.execute.mock.calls.length > 1)).toBe(false);
+    expect(guardOf(JIRA_MANAGED_READ_TOOLS[0]).check()).toBe(true);
+    expect(grants.findGrantedChatReadGrant(grantSubject())?.expiresAt).toBe(
+      now + ATLASSIAN_ACTION_APPROVAL_TTL_MS,
+    );
   });
 
   it("leaves a pending grant to expire", () => {
