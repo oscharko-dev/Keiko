@@ -245,6 +245,14 @@ function mutationExecutor(deps: UiHandlerDeps): MutationExecutor {
   };
 }
 
+function traceDescriptionCheck(
+  args: CatalogJsonObject,
+): { readonly description: unknown } | undefined {
+  const fields = args.fields;
+  if (fields === null || typeof fields !== "object" || !("description" in fields)) return undefined;
+  return { description: fields.description };
+}
+
 /** The explicit requirement references of a create or edit, validated before anything is sent. */
 export async function executeTracedMutation(
   deps: UiHandlerDeps,
@@ -261,15 +269,7 @@ export async function executeTracedMutation(
   const tally = newTally();
   const logged = operation === "jira.create" ? "create" : "edit";
   try {
-    const fields = args.fields;
-    const description =
-      fields !== null && typeof fields === "object" && !Array.isArray(fields)
-        ? fields.description
-        : undefined;
-    const resolution = session.resolve(
-      references,
-      description === undefined ? undefined : { description },
-    );
+    const resolution = session.resolve(references, traceDescriptionCheck(args));
     if (!resolution.ok) {
       tallyRefusal(tally, resolution);
       logTrace(turn.correlationId, logged, tally);
