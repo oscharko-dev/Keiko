@@ -490,10 +490,9 @@ describe("production code-quality invocation wiring (#3915)", () => {
     }
   }, 60_000);
 
-  // Skipped under #4145 (ratchet, owner decision 2026-11-03 on #3914): this pin binds
-  // epic-migrated source or the epic's qualification CI chain, absent from the dev snapshot.
-  // #3991 restores it unchanged when full enforcement lands; the ratchet governs dev until then.
-  it.skip("retains full local lint and requires hosted policy before typed Core lint", () => {
+  // #3991 (owner decision 2026-11-07): the typed tail is the #4182 per-package lint, never one
+  // `eslint .`.
+  it("retains full local lint and requires hosted policy before typed Core lint", () => {
     const manifest = JSON.parse(read("package.json"));
     expect(manifest.scripts["check:code-quality-policy"]).toBe(
       "node scripts/check-code-quality-policy.mjs",
@@ -519,7 +518,7 @@ describe("production code-quality invocation wiring (#3915)", () => {
     expect(manifest.scripts["check:code-quality-policy:raw-reader"]).toBe(
       "node --test scripts/__tests__/code-quality-raw-reader-smoke.mjs",
     );
-    expect(manifest.scripts["lint:typed"]).toContain("eslint/bin/eslint.js . --max-warnings=0");
+    expect(manifest.scripts["lint:typed"]).toContain("scripts/lint-repository.mjs");
     expect(manifest.scripts["lint:typed"]).toContain(
       "npm --workspace @oscharko-dev/keiko-ui run lint",
     );

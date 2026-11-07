@@ -484,7 +484,7 @@ jobs:
       - run: npm run check:release-required-workflows
       - run: npm run check:portable-approvals
       - run: npm run check:git-client-evidence
-      - run: npm run lint
+      - run: npm run lint:typed
         env:
           NODE_OPTIONS: --max-old-space-size=12288
       - name: Linux native compiler version (#3991)

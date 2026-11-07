@@ -148,8 +148,23 @@ those records adapt their findings. The raw-reader step qualifies the `ownField`
 Its producer is `packages/keiko-contracts/src/contract-validation-primitives.ts`, which the public
 `runtime/code-task-acceptance` subpath re-exports.
 
+A `public-parser` record binds its `public-api-proof` consumer in one of two shapes. The first is an
+exported wrapper `const result = validateX(input); return result;` whose return annotation names the
+checked result alias. The second is a local alias of the imported public validator,
+`export { validateX as parseX }` (owner decision 2026-11-07 on #3991). The alias adds no code, so the
+binder reads the producer's own declaration instead. That declaration must have exactly one
+required parameter declared `unknown` and must name the owner's checked result alias as its return
+type. The binder refuses an alias of any other import, a producer with a typed parameter, an inline
+or foreign result type and an `export ... from` another module. The 14 memory parser records use
+the alias shape in `packages/keiko-contracts/src/memory.test.ts`. Splitting wrappers into runs of
+three to stay below the duplication window is still refused (REVIEW-3918-015).
+
 A tree that matches a pull-request head whose full matrix already passed skips this job under the
 same reuse rule as the other gated jobs (ADR-0178).
+
+Local `npm run lint` builds the packages, runs the same three steps and then `npm run lint:typed`,
+the per-package ESLint run from #4182 plus the keiko-ui lint. Core quality runs only
+`npm run lint:typed`, after this job, so it does not repeat the qualification.
 
 ## Engine
 
