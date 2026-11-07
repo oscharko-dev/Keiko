@@ -2,9 +2,10 @@ import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { URL } from "node:url";
-import { gzipSync, gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import { checkJiraApiInventory } from "../check-jira-api-inventory.mjs";
+import { jiraInventoryFixture } from "./jira-api-inventory.fixture.mjs";
+import { jiraApiManifestDigest, jiraApiSourcePath } from "../lib/jira-api-sources.mjs";
 
 const INVENTORY = new URL("../../docs/local-knowledge/jira-api-coverage/", import.meta.url);
 const temporary = [];
@@ -28,9 +29,10 @@ afterEach(() => {
 });
 
 describe("Jira API inventory provenance and completeness", () => {
-  it("reconciles every committed identity with the four byte-exact published specifications", () => {
+  it("checks committed factual accounting offline without requiring original source bytes", () => {
     expect(checkJiraApiInventory()).toEqual({
       ok: true,
+      verification: "ledger",
       operations: 439,
       paths: 291,
       families: 67,
@@ -52,7 +54,7 @@ describe("Jira API inventory provenance and completeness", () => {
       (ledger) => {
         ledger.operations[0].identity = "GET /rest/api/2/not-published";
       },
-      "unknown-operation",
+      "operation-identity",
     ],
     [
       "method drift",
@@ -160,20 +162,63 @@ describe("Jira API inventory provenance and completeness", () => {
     expect(checkJiraApiInventory(directory).errors).toEqual(["source-completeness"]);
   });
 
-  it("refuses altered source bytes even when valid JSON preserves the operation count", () => {
-    const directory = copyInventory();
-    const path = join(directory, "sources/jira-10.3.json.gz");
-    const original = gunzipSync(readFileSync(path)).toString("utf8");
-    writeFileSync(path, gzipSync(original.replace("10.3.27", "10.3.28")));
-    expect(checkJiraApiInventory(directory).errors).toEqual(["source-digest"]);
+  it("reconciles explicitly provisioned originals independently of the normalized digest", () => {
+    const fixture = jiraInventoryFixture(copyInventory());
+    expect(
+      checkJiraApiInventory(fixture.directory, {
+        reconcileSources: true,
+        cacheDirectory: fixture.cacheDirectory,
+      }),
+    ).toMatchObject({ ok: true, verification: "sources", operations: 2, families: 2 });
   });
 
-  it("does not read a source path outside the inventory", () => {
+  it("fails explicit reconciliation when no originals have been provisioned", () => {
+    const fixture = jiraInventoryFixture(copyInventory(), { cacheSources: false });
+    expect(checkJiraApiInventory(fixture.directory).ok).toBe(true);
+    expect(
+      checkJiraApiInventory(fixture.directory, {
+        reconcileSources: true,
+        cacheDirectory: fixture.cacheDirectory,
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("detects source disagreement even when an edited normalized manifest has a matching digest", () => {
+    const fixture = jiraInventoryFixture(copyInventory());
+    fixture.ledger.operations[0].sources = structuredClone(fixture.ledger.operations[0].sources);
+    fixture.ledger.operations[0].sources[0].operationId = "changedAfterCapture";
+    fixture.provenance.manifest.sha256 = jiraApiManifestDigest(fixture.ledger.operations);
+    writeFileSync(join(fixture.directory, "operations.json"), JSON.stringify(fixture.ledger));
+    writeFileSync(join(fixture.directory, "provenance.json"), JSON.stringify(fixture.provenance));
+    expect(checkJiraApiInventory(fixture.directory).ok).toBe(true);
+    expect(
+      checkJiraApiInventory(fixture.directory, {
+        reconcileSources: true,
+        cacheDirectory: fixture.cacheDirectory,
+      }).errors,
+    ).toEqual(["operation-provenance"]);
+  });
+
+  it("refuses altered cached bytes even when valid JSON preserves the operation count", () => {
+    const fixture = jiraInventoryFixture(copyInventory());
+    const source = fixture.provenance.sources[0];
+    const path = jiraApiSourcePath(fixture.cacheDirectory, source);
+    const original = readFileSync(path, "utf8");
+    writeFileSync(path, original.replace("fixture-10.3", "fixture-10.4"));
+    expect(
+      checkJiraApiInventory(fixture.directory, {
+        reconcileSources: true,
+        cacheDirectory: fixture.cacheDirectory,
+      }).errors,
+    ).toEqual(["source-digest"]);
+  });
+
+  it("rejects a source-supplied path instead of reading outside the fixed cache", () => {
     const directory = copyInventory();
     changeJson(directory, "provenance.json", (provenance) => {
       provenance.sources[0].file = "../../../../package.json";
     });
-    expect(checkJiraApiInventory(directory).errors).toEqual(["source-path"]);
+    expect(checkJiraApiInventory(directory).errors).toEqual(["source-fields"]);
   });
 
   it("fails closed on unreadable inventory data", () => {

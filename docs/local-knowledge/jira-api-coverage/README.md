@@ -9,13 +9,22 @@ retrieved on 2026-11-07. Runtime availability has not been qualified by this inv
 every initial row therefore says `unknown` and has no verification references. The epic remains
 open until its workflow acceptance and operation-level completion conditions are proven.
 
-## Retained sources
+## Source provenance and local originals
 
 [provenance.json](provenance.json) identifies each official source URL, original-byte SHA-256,
-original byte count, source version, and operation/path/component-schema counts. The four
-`sources/*.json.gz` files retain the complete original JSON bytes, including component schemas,
-parameters, descriptions, and response definitions. Gzip timestamps are zero. Decompression,
-not reserialization of parsed JSON, reproduces each recorded digest.
+original byte count, source version, and operation/path/component-schema counts. The repository
+retains normalized method/path/operation-ID facts, rather than redistributing the complete
+Atlassian source documents and their component schemas. Originals are fetched directly from
+Atlassian on demand and retained under the gitignored `.jira-api-sources/<release>/<sha256>.json`
+cache. The provisioner preserves exact original bytes, including all schemas, descriptions and
+response definitions; reserialization is not used to reproduce a digest.
+
+Run `node scripts/provision-jira-api-sources.mjs` when original schemas or full source reconciliation are
+needed. The explicit network step accepts only the four canonical URLs below, sends no
+credentials, refuses redirects, bounds response bytes by the pinned source length, verifies
+SHA-256 before atomic installation, and verifies existing cache entries before reuse. It never
+fetches sources as a side effect of an ordinary test or offline inventory check. The local cache
+is not part of the tracked source tree or a runtime dependency.
 
 | Published release                                                                                   | Source `info.version`        | Operations | Paths | Component schemas |
 | --------------------------------------------------------------------------------------------------- | ---------------------------- | ---------: | ----: | ----------------: |
@@ -132,14 +141,23 @@ Cloud, Service Management, Assets, webhooks, plugins and private/UI-only APIs ar
 
 ## Integrity verification
 
-Run `npm run check:jira-api-inventory`. The offline gate decompresses and verifies the original
-source digests, reconstructs the method/path union, and checks every ledger identity, source
-operation ID, family/cluster assignment and capability reference. It rejects omissions,
-duplicates, invented paths, missing prerequisites, unsupported state claims and unapproved
-policy exclusions. The ordinary root test lane includes adversarial tests over copies of the
-actual retained inputs.
+Run `node scripts/check-jira-api-inventory.mjs` for offline ledger integrity. It checks the pinned
+normalized identity/source-ID digest, historical union and per-release counts, family/cluster
+assignments, capability references, prerequisites and state claims. The digest is SHA-256 of
+UTF-8 `JSON.stringify` over identity/source-ID tuples sorted by identity and release; the shared
+script helper owns that projection. Implementation state is excluded so delivery can advance
+without rewriting source provenance. This check reports `PASS ledger`; it does not assert that
+original source bytes were present or reconciled.
 
-The gate checks accounting integrity. It makes no network calls, probes no Jira installation,
+For full source reconciliation, run `node scripts/provision-jira-api-sources.mjs` followed by
+`node scripts/check-jira-api-inventory.mjs --sources`. The latter never downloads implicitly: missing or
+modified originals fail closed. It verifies every original-byte digest and retained component
+count, independently reconstructs the complete method/path union from the original documents,
+and compares all source operation IDs and ledger rows. Only that mode reports `PASS sources`.
+The ordinary root test lane exercises both modes with adversarial normalized-ledger changes and
+small, repository-authored source fixtures; full upstream schemas are not copied into tests.
+
+Both gate modes check accounting integrity. They make no network calls, probe no Jira installation,
 and cannot certify operation correctness, authority, permissions, live compatibility or workflow
 acceptance. Refreshing sources requires retaining new original bytes, reviewing changes and
 updating provenance and all affected rows together; a changed digest is never silently accepted.

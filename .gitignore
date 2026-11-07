@@ -208,6 +208,8 @@ tests/memory-eval/scorecard.json
 # Checksum-verified ripgrep runtime for local/CI verification and portable staging
 # (scripts/provision-ripgrep.mjs).
 .ripgrep/
+# Original Jira OpenAPI bytes fetched and digest-verified on demand; never redistributed.
+.jira-api-sources/
 
 # Vitest blob reports produced by a sharded coverage run and consumed by `--mergeReports`
 # (scripts test:coverage:packages:shard / :merge). Intermediate measurement evidence, never committed.

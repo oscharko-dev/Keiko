@@ -1,17 +1,19 @@
 #!/usr/bin/env node
 // Offline provenance and completeness gate for the Jira Software Data Center inventory (#4287).
 // Public specification bytes are inputs to coverage accounting, never executable HTTP authority.
-import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { gunzipSync } from "node:zlib";
-import { sha256 } from "./lib/digest.mjs";
 import { readJsonFile } from "./lib/json.mjs";
+import {
+  JiraApiInventoryError,
+  jiraApiManifestDigest,
+  readJiraApiSource,
+  requireJiraInventory as requireValid,
+  validateJiraApiProvenance,
+} from "./lib/jira-api-sources.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const INVENTORY_DIRECTORY = "docs/local-knowledge/jira-api-coverage";
-const RELEASES = new Set(["10.3", "10.4", "11.2", "11.3"]);
-const SOURCE_IDS = { 10.3: "10003", 10.4: "10004", 11.2: "11002", 11.3: "11003" };
 const METHODS = new Set(["get", "post", "put", "delete", "patch", "head", "options", "trace"]);
 const STATES = new Set([
   "not-implemented",
@@ -42,45 +44,12 @@ const FAMILY_CLUSTER = new Map(
   ),
 );
 
-class InventoryValidationError extends TypeError {}
-
-function requireValid(condition, code) {
-  if (!condition) throw new InventoryValidationError(code);
-}
-
 function nonemptyText(value) {
   return typeof value === "string" && value.length > 0;
 }
 
 function textList(value) {
   return Array.isArray(value) && value.every(nonemptyText);
-}
-
-function loadSource(directory, source) {
-  requireValid(RELEASES.has(source.release), "source-release");
-  requireValid(source.file === `sources/jira-${source.release}.json.gz`, "source-path");
-  requireValid(
-    source.url ===
-      `https://developer.atlassian.com/server/jira/platform/jira_software_dc_${SOURCE_IDS[source.release]}_swagger.v3.json`,
-    "source-url",
-  );
-  requireValid(/^[0-9a-f]{64}$/u.test(source.sha256), "source-digest-shape");
-  requireValid(
-    Number.isSafeInteger(source.bytes) && source.bytes > 0 && source.bytes <= 2_000_000,
-    "source-byte-bound",
-  );
-  const bytes = gunzipSync(readFileSync(join(directory, source.file)), {
-    maxOutputLength: source.bytes,
-  });
-  requireValid(bytes.length === source.bytes && sha256(bytes) === source.sha256, "source-digest");
-  const spec = JSON.parse(bytes.toString("utf8"));
-  requireValid(spec.info.version === source.infoVersion, "source-version");
-  requireValid(Object.keys(spec.paths).length === source.pathCount, "source-path-count");
-  requireValid(
-    Object.keys(spec.components.schemas).length === source.schemaCount,
-    "source-schema-count",
-  );
-  return spec;
 }
 
 function collectSource(spec, source, union) {
@@ -108,18 +77,76 @@ function collectSource(spec, source, union) {
   requireValid(count === source.operationCount, "source-operation-count");
 }
 
-function sourceUnion(directory, provenance) {
-  requireValid(provenance.schemaVersion === 1, "provenance-schema");
-  requireValid(Array.isArray(provenance.sources), "provenance-sources");
-  const releases = provenance.sources.map((source) => source.release);
-  requireValid(
-    releases.length === RELEASES.size && new Set(releases).size === RELEASES.size,
-    "source-completeness",
-  );
+function sourceUnion(cacheDirectory, provenance) {
   const union = new Map();
   for (const source of provenance.sources)
-    collectSource(loadSource(directory, source), source, union);
+    collectSource(readJiraApiSource(cacheDirectory, source), source, union);
   return union;
+}
+
+function normalizedUnion(ledger, provenance) {
+  requireValid(Array.isArray(ledger.operations), "ledger-operations");
+  const union = new Map();
+  const releases = new Set(provenance.sources.map((source) => source.release));
+  for (const row of ledger.operations) {
+    requireValid(typeof row.identity === "string", "operation-identity");
+    const [method, path, extra] = row.identity.split(" ");
+    const root = ROOTS.find((candidate) => path?.startsWith(`/rest${candidate}`));
+    requireValid(
+      extra === undefined && METHODS.has(method.toLowerCase()) && root !== undefined,
+      "operation-identity",
+    );
+    requireValid(Array.isArray(row.sources) && row.sources.length > 0, "operation-provenance");
+    requireValid(
+      row.sources.every(
+        (source) => releases.has(source.release) && nonemptyText(source.operationId),
+      ),
+      "operation-provenance",
+    );
+    requireValid(
+      new Set(row.sources.map((source) => source.release)).size === row.sources.length,
+      "operation-provenance",
+    );
+    union.set(row.identity, {
+      method,
+      path,
+      apiRoot: `/rest${root.slice(0, -1)}`,
+      family: path.slice(`/rest${root}`.length).split("/")[0],
+      sources: row.sources,
+    });
+  }
+  requireValid(
+    ledger.operations.length === provenance.manifest.operationCount &&
+      union.size === provenance.manifest.operationCount,
+    "operation-completeness",
+  );
+  return union;
+}
+
+function validateManifest(ledger, provenance, union) {
+  const entries = [...union.values()];
+  requireValid(
+    new Set(entries.map((entry) => entry.path)).size === provenance.manifest.pathCount,
+    "manifest-path-count",
+  );
+  requireValid(
+    new Set(entries.map((entry) => entry.family)).size === provenance.manifest.familyCount,
+    "manifest-family-count",
+  );
+  requireValid(
+    jiraApiManifestDigest(ledger.operations) === provenance.manifest.sha256,
+    "operation-provenance",
+  );
+  for (const source of provenance.sources) {
+    const rows = ledger.operations.filter((row) =>
+      row.sources.some((reference) => reference.release === source.release),
+    );
+    requireValid(rows.length === source.operationCount, "source-operation-count");
+    requireValid(
+      new Set(rows.map((row) => row.path)).size === source.pathCount,
+      "source-path-count",
+    );
+  }
 }
 
 function validateState(row) {
@@ -189,15 +216,22 @@ function validateLedger(ledger, union) {
     );
 }
 
-/** Tests mutate real committed inputs; the gate independently re-derives identities from sources. */
-export function checkJiraApiInventory(directory = join(REPO_ROOT, INVENTORY_DIRECTORY)) {
+/** The default is offline ledger integrity; explicit source reconciliation reads verified cache bytes. */
+export function checkJiraApiInventory(
+  directory = join(REPO_ROOT, INVENTORY_DIRECTORY),
+  { reconcileSources = false, cacheDirectory = join(REPO_ROOT, ".jira-api-sources") } = {},
+) {
   try {
     const provenance = readJsonFile(join(directory, "provenance.json"));
     const ledger = readJsonFile(join(directory, "operations.json"));
-    const union = sourceUnion(directory, provenance);
+    validateJiraApiProvenance(provenance);
+    const normalized = normalizedUnion(ledger, provenance);
+    const union = reconcileSources ? sourceUnion(cacheDirectory, provenance) : normalized;
     validateLedger(ledger, union);
+    validateManifest(ledger, provenance, union);
     return {
       ok: true,
+      verification: reconcileSources ? "sources" : "ledger",
       operations: union.size,
       paths: new Set([...union.values()].map((entry) => entry.path)).size,
       families: new Set([...union.values()].map((entry) => entry.family)).size,
@@ -206,16 +240,19 @@ export function checkJiraApiInventory(directory = join(REPO_ROOT, INVENTORY_DIRE
   } catch (error) {
     return {
       ok: false,
-      errors: [error instanceof InventoryValidationError ? error.message : "inventory-unreadable"],
+      errors: [error instanceof JiraApiInventoryError ? error.message : "inventory-unreadable"],
     };
   }
 }
 
 if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  const result = checkJiraApiInventory();
+  const args = process.argv.slice(2);
+  const result = args.every((arg) => arg === "--sources")
+    ? checkJiraApiInventory(undefined, { reconcileSources: args.includes("--sources") })
+    : { ok: false, errors: ["invalid-arguments"] };
   if (result.ok) {
     console.log(
-      `jira-api-inventory: PASS (${result.operations} operations, ${result.paths} paths, ${result.families} families)`,
+      `jira-api-inventory: PASS ${result.verification} (${result.operations} operations, ${result.paths} paths, ${result.families} families)`,
     );
   } else {
     console.error(`jira-api-inventory: FAIL (${result.errors.join(", ")})`);
