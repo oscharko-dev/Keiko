@@ -1175,6 +1175,7 @@
     "keiko-server/atlassian/jiraManagedSchemas",
     "keiko-server/atlassian/jiraMutationResult",
     "keiko-server/atlassian/jiraMutationToolId",
+    "keiko-server/atlassian/jiraOpenDraft",
     "keiko-server/atlassian/jiraPodAccess",
     "keiko-server/atlassian/jiraPodLifecycle",
     "keiko-server/atlassian/jiraReportActivity",

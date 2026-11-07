@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a8c2de4af69b074257726856cae6e6a46554e3b3b286c93de5e77cf3f0eb94f4"
+    "catalogDigest": "81ab52760699b54b4a06f2aa1c04a18dd11b4a7fb3b69924c0f49e753df5683c"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -1313,7 +1313,10 @@
     "atlassian.credential.updated.line": [
       "packages/keiko-server/src/atlassian/credentialRoutes.test.ts"
     ],
-    "atlassian.jira-draft.line": ["packages/keiko-server/src/atlassian/jiraDraftRoutes.test.ts"],
+    "atlassian.jira-draft.line": [
+      "packages/keiko-server/src/atlassian/jiraDraftRoutes.test.ts",
+      "packages/keiko-server/src/atlassian/jiraOpenDraft.test.ts"
+    ],
     "atlassian.jira-draft-batch.line": [
       "packages/keiko-server/src/atlassian/jiraDraftBatchTool.test.ts"
     ],

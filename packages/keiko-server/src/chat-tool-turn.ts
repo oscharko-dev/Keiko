@@ -112,6 +112,7 @@ import { CatalogDispatchFault, requireDispatch } from "./tool-catalog/catalogToo
 import { isGatewayAdmissionRefusal } from "./grounded-gateway-error-status.js";
 import {
   knowledgeTurnCoverage,
+  draftBatchCoveredRequirements,
   knowledgeCoverageCorrection,
   logKnowledgeCoverage,
 } from "./chat-tool-knowledge-coverage.js";
@@ -971,7 +972,11 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
 
   private knowledgeAnswer(answer: NormalizedResponse): NormalizedResponse {
     const coverage = knowledgeTurnCoverage(this.settledExchanges);
-    logKnowledgeCoverage(this.options.correlationId, coverage);
+    logKnowledgeCoverage(
+      this.options.correlationId,
+      coverage,
+      draftBatchCoveredRequirements(this.settledExchanges),
+    );
     return answer;
   }
 
@@ -1015,7 +1020,11 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       exchanges,
       budget,
     });
-    logKnowledgeCoverage(correlationId, knowledgeTurnCoverage(exchanges));
+    logKnowledgeCoverage(
+      correlationId,
+      knowledgeTurnCoverage(exchanges),
+      draftBatchCoveredRequirements(exchanges),
+    );
     this.endedAnswer = {
       modelId,
       content: chatToolTurnPartialAnswer(exchanges, reason),
@@ -1469,7 +1478,13 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
         log: { correctionKind: "unsupported-issue-key", unsupportedKeyCount: unsupported.length },
       });
     const coverage = knowledgeTurnCoverage(this.settledExchanges);
-    const knowledge = coverage === undefined ? undefined : knowledgeCoverageCorrection(coverage);
+    const knowledge =
+      coverage === undefined
+        ? undefined
+        : knowledgeCoverageCorrection(
+            coverage,
+            draftBatchCoveredRequirements(this.settledExchanges),
+          );
     if (knowledge !== undefined && coverage !== undefined)
       corrections.push({
         content: knowledge,

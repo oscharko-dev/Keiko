@@ -6,6 +6,7 @@ import type {
   CatalogJsonValue,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
+  draftBatchCoveredRequirements,
   knowledgeTurnCoverage,
   knowledgeCoverageCorrection,
   knowledgeCoverageIssues,
@@ -323,4 +324,49 @@ it("retains unreadable search documents even when metadata reports extraction su
     "keiko.knowledge.documents",
   );
   expect(requiredCoverage([page]).unavailableDocumentCount).toBe(1);
+});
+
+describe("a completed draft batch covers the requirements it drafted (#4292)", () => {
+  const batch = (data: object): ChatToolExchange =>
+    exchange(
+      { outcome: "succeeded", requirementCount: 370, coveredRequirementCount: 370, ...data },
+      {},
+      "keiko.jira.draft.batch",
+    );
+  const partialRead = exchange(units(["doc:REQ-1"], "next"));
+
+  it("asks for no further Knowledge pages once a batch drafted every selected requirement", () => {
+    const exchanges = [partialRead, batch({})];
+    const coverage = requiredCoverage(exchanges);
+    expect(coverage.pendingPageCount).toBe(1);
+
+    expect(draftBatchCoveredRequirements(exchanges)).toBe(370);
+    expect(knowledgeCoverageCorrection(coverage, draftBatchCoveredRequirements(exchanges))).toBe(
+      undefined,
+    );
+  });
+
+  it("still asks when the batch paused, failed, covered fewer or selected nothing", () => {
+    for (const data of [
+      { paused: true },
+      { outcome: "failed" },
+      { coveredRequirementCount: 369 },
+      { requirementCount: 0, coveredRequirementCount: 0 },
+    ]) {
+      const exchanges = [partialRead, batch(data)];
+      expect(draftBatchCoveredRequirements(exchanges)).toBeUndefined();
+      expect(
+        knowledgeCoverageCorrection(
+          requiredCoverage(exchanges),
+          draftBatchCoveredRequirements(exchanges),
+        ),
+      ).toContain("same selection");
+    }
+    const knowledgeOnly = exchange(
+      { outcome: "succeeded", requirementCount: 3, coveredRequirementCount: 3 },
+      {},
+      "keiko.knowledge.requirements",
+    );
+    expect(draftBatchCoveredRequirements([knowledgeOnly])).toBeUndefined();
+  });
 });

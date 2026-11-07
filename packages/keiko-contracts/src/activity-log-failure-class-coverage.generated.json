@@ -41665,6 +41665,12 @@
               "required": true
             },
             {
+              "name": "draftBatchCoveredRequirementCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "hasNextPage",
               "type": "boolean",
               "dataClass": "closed-enum",

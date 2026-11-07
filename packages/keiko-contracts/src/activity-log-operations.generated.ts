@@ -1144,7 +1144,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["staged", "submitted", "refused", "progress", "executed"],
+        values: ["staged", "submitted", "refused", "progress", "executed", "named"],
       },
       refusal: {
         type: "string",
@@ -31638,6 +31638,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       pendingPageCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      draftBatchCoveredRequirementCount: {
         type: "integer",
         dataClass: "count",
         required: false,

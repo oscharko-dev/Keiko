@@ -28,7 +28,7 @@ const JIRA_DRAFT_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["staged", "submitted", "refused", "progress", "executed"],
+      values: ["staged", "submitted", "refused", "progress", "executed", "named"],
     },
     refusal: {
       type: "string",
@@ -74,7 +74,11 @@ const JIRA_DRAFT_OPERATION = defineActivityLogOperation({
 });
 
 export interface JiraDraftLogInput extends Omit<JiraDraftActivity, "phase" | "refusal"> {
-  readonly phase: JiraDraftActivity["phase"] | "submitted";
+  /**
+   * `named`: a tool turn told the model which staged draft the Chat holds (#4292). Naming stages,
+   * checks and waits for nothing, so its page, reference, violation and duration counts are zero.
+   */
+  readonly phase: JiraDraftActivity["phase"] | "submitted" | "named";
   readonly refusal?: JiraDraftRefusalKind;
 }
 

@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a8c2de4af69b074257726856cae6e6a46554e3b3b286c93de5e77cf3f0eb94f4",
+    "catalogDigest": "81ab52760699b54b4a06f2aa1c04a18dd11b4a7fb3b69924c0f49e753df5683c",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1203,7 +1203,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["staged", "submitted", "refused", "progress", "executed"]
+            "values": ["staged", "submitted", "refused", "progress", "executed", "named"]
           },
           "refusal": {
             "type": "string",
@@ -1291,7 +1291,7 @@
         "proofIds": ["atlassian.jira-draft.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/atlassian/jiraDraftActivity.ts:19",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraDraftActivity.ts:110"]
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraDraftActivity.ts:114"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -33000,6 +33000,11 @@
             "dataClass": "count",
             "required": false
           },
+          "draftBatchCoveredRequirementCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "reviewFailureStage": {
             "type": "string",
             "dataClass": "closed-enum",
@@ -33099,8 +33104,8 @@
         "failureClasses": ["requirement-inventory"],
         "proofIds": ["knowledge.documents.operation.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/knowledge-document-activity.ts:60",
-        "emitterSites": ["packages/keiko-server/src/knowledge-document-activity.ts:163"]
+        "registrationSite": "packages/keiko-server/src/knowledge-document-activity.ts:62",
+        "emitterSites": ["packages/keiko-server/src/knowledge-document-activity.ts:166"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -100136,6 +100141,12 @@
                   "required": true
                 },
                 {
+                  "name": "draftBatchCoveredRequirementCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "hasNextPage",
                   "type": "boolean",
                   "dataClass": "closed-enum",
@@ -112297,7 +112308,7 @@
     {
       "op": "chat.tool-turn.batch-progress",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-tool-turn.ts:312",
+      "site": "packages/keiko-server/src/chat-tool-turn.ts:313",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -114896,7 +114907,7 @@
     {
       "op": "knowledge.documents.operation",
       "category": "search",
-      "site": "packages/keiko-server/src/knowledge-document-activity.ts:63",
+      "site": "packages/keiko-server/src/knowledge-document-activity.ts:65",
       "package": "keiko-server"
     },
     {
