@@ -52,6 +52,12 @@ export function workspacePackages(root) {
     .map((entry) => entry.name);
 }
 
+// The ESLint arguments one partition runs with. Zero warnings is the repository's lint policy, so
+// every partition carries `--max-warnings=0` ahead of its own paths.
+export function eslintArguments(partitionArgs) {
+  return ["--max-warnings=0", ...partitionArgs];
+}
+
 export function runPartitions(partitions, run) {
   const failed = partitions.filter((partition) => {
     console.log(`lint-repository: ${partition.label}`);
@@ -67,7 +73,7 @@ async function main() {
   const failed = runPartitions(partitions, (args) => {
     const result = spawnSync(
       process.execPath,
-      [...process.execArgv, ESLINT_BIN, "--max-warnings=0", ...args],
+      [...process.execArgv, ESLINT_BIN, ...eslintArguments(args)],
       { cwd: root, stdio: "inherit" },
     );
     return result.status ?? 1;
