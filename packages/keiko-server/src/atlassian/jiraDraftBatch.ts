@@ -150,6 +150,8 @@ class BatchState {
   tooLargeCount = 0;
   /** The slowest page so far, retries included: the estimate of the next one. */
   slowestPageMs = 0;
+  /** The slowest single model call so far: the estimate before any page has run. */
+  slowestCallMs = 0;
   error: unknown;
   readonly drafted = new Set<string>();
   readonly failed: DraftBatchEntry[] = [];
@@ -199,6 +201,20 @@ function perRequirementEntries(state: BatchState): readonly DraftBatchEntry[] {
   }));
 }
 
+/** One model call, its duration kept as the estimate of the next one. */
+async function timedGenerate(
+  state: BatchState,
+  ports: DraftBatchPorts,
+  messages: readonly DraftBatchMessage[],
+  purpose: "outline" | "fill",
+): Promise<DraftBatchGeneration> {
+  const startedAt = ports.budget?.nowMs() ?? 0;
+  const generated = await ports.generate(messages, purpose);
+  if (ports.budget !== undefined)
+    state.slowestCallMs = Math.max(state.slowestCallMs, ports.budget.nowMs() - startedAt);
+  return generated;
+}
+
 /**
  * One model call. An error that is not a cancellation ends the model work of the batch: nothing
  * more is asked, and what is already staged stays a valid, reported partial result.
@@ -217,7 +233,7 @@ async function generate(
   }
   state.calls += 1;
   try {
-    return await ports.generate(messages, purpose);
+    return await timedGenerate(state, ports, messages, purpose);
   } catch (error) {
     if (ports.signal.aborted) throw error;
     state.stopReason = "model-failed";
@@ -320,6 +336,12 @@ async function groupedEntries(
   const groups: OutlineGroup[] = [];
   const pending: OutlineChunk[] = [...firstOutlineChunks(state)];
   for (let next = pending.shift(); next !== undefined; next = pending.shift()) {
+    if (!fitsDeadline(state, ports)) {
+      // No time for another grouping call: what is left becomes one issue each, drafted later.
+      state.stopReason = "deadline";
+      groups.push(...[next, ...pending].flatMap((chunk) => chunk.chunk.map(singleGroup)));
+      break;
+    }
     const step = await outlineChunk(state, ports, next.chunk);
     groups.push(...step.groups);
     for (const half of step.halves ?? []) pending.push({ chunk: half, retried: next.retried });
@@ -598,11 +620,15 @@ function withoutOversized(state: BatchState, ports: DraftBatchPorts): DraftBatch
 const PAGE_ESTIMATE_MARGIN = 1.25;
 const DEADLINE_RESERVE_MS = 10_000;
 
-/** A next page runs only when the slowest page so far, with a margin, still ends before the deadline. */
-function pageFitsDeadline(state: BatchState, ports: DraftBatchPorts): boolean {
+/**
+ * More work (an outline chunk or a page) starts only when the slowest page or model call so far,
+ * with a margin, still ends before the deadline. Before any measurement only the reserve counts.
+ */
+function fitsDeadline(state: BatchState, ports: DraftBatchPorts): boolean {
   const { budget } = ports;
-  if (budget === undefined || state.slowestPageMs === 0) return true;
-  const estimate = state.slowestPageMs * PAGE_ESTIMATE_MARGIN + DEADLINE_RESERVE_MS;
+  if (budget === undefined) return true;
+  const slowest = Math.max(state.slowestPageMs, state.slowestCallMs);
+  const estimate = slowest * PAGE_ESTIMATE_MARGIN + DEADLINE_RESERVE_MS;
   return budget.nowMs() + estimate <= budget.deadlineAtMs;
 }
 
@@ -614,7 +640,7 @@ async function draftAll(state: BatchState, ports: DraftBatchPorts): Promise<void
     page !== undefined;
     page = nextPage(state, retries, pending)
   ) {
-    if (!pageFitsDeadline(state, ports)) {
+    if (state.stopReason === "deadline" || !fitsDeadline(state, ports)) {
       state.stopReason = "deadline";
       break;
     }

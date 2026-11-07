@@ -676,12 +676,33 @@ describe("runJiraDraftBatch deadline", () => {
     expect(result.failedRequirementRefs).toEqual(rest);
   });
 
-  it("always drafts the first page, whatever the deadline", async () => {
+  it("pauses before the first page when the budget cannot hold it, naming every requirement", async () => {
     const { h, ports } = clocked(1);
     const result = await runJiraDraftBatch(input(25), ports);
-    expect(h.fillCalls).toHaveLength(1);
+    expect(h.fillCalls).toHaveLength(0);
+    expect(h.stageCalls).toHaveLength(0);
     expect(result.stopReason).toBe("deadline");
-    expect(result.progress.draftedCount).toBe(10);
+    expect(result.draftId).toBeUndefined();
+    expect(result.deferredRequirementRefs).toEqual(requirements(25).map((item) => item.ref));
+  });
+
+  it("pauses between outline chunks and drafts nothing it has no time for", async () => {
+    let now = 0;
+    const h = harness({
+      outline: (refs, call) => (call === 1 && refs.length > 1 ? { kind: "exhausted" } : undefined),
+      onGenerate: () => {
+        now += 100_000;
+      },
+    });
+    const ports: DraftBatchPorts = {
+      ...h.ports,
+      budget: { nowMs: (): number => now, deadlineAtMs: 150_000 },
+    };
+    const result = await runJiraDraftBatch(input(12, { granularity: "grouped" }), ports);
+    expect(h.outlineCalls).toHaveLength(1);
+    expect(h.fillCalls).toHaveLength(0);
+    expect(result.stopReason).toBe("deadline");
+    expect(result.deferredRequirementRefs).toEqual(requirements(12).map((item) => item.ref));
   });
 
   it("is unchanged when every page fits", async () => {

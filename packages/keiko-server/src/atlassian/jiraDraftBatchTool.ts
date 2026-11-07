@@ -5,6 +5,7 @@ import {
   resolveJiraDraftPlacement,
   type JiraCreateTemplateRules,
   type JiraDraftPlacement,
+  type StagedJiraDraft,
   type JiraDraftBatchExecutor,
   type JiraDraftToolDeps,
   type JiraManagedConnection,
@@ -75,6 +76,10 @@ const REFUSAL_GUIDANCE: Partial<Record<JiraDraftBatchRefusal, string>> = {
     "Send projectId (project key such as KER, or numeric id; letters, digits and underscore only), granularity, and create; issueTypeId (name or id) is optional.",
   "project-not-found":
     "Jira has no project with that key or id that this connection can read. Ask the user for the project key and call again.",
+  "draft-unavailable":
+    "That draft no longer exists (drafts expire when idle). Call again without draftId to start a new draft.",
+  "draft-mismatch":
+    "That draft was started in another project or issue type. Use the same projectId and issueTypeId as before, or call without draftId to start a new draft.",
   "no-usable-issue-type":
     "This project offers no issue type for drafting (only subtask types). Tell the user and ask for another project.",
   "issue-type-not-found":
@@ -362,10 +367,21 @@ function resultGuidance(run: BatchRun, result: DraftBatchResult, failedCount: nu
     : "The draft is complete and saved for review. Tell the user how many issues were drafted from how many requirements, and that nothing was created in Jira.";
 }
 
+/** The one unambiguous way to continue: the same call again, with the same draft. */
+function deadlineGuidance(result: DraftBatchResult, drafted: number): string {
+  const count = remainingCount(result);
+  const listed = Math.min(count, REMAINING_IDS_MAX);
+  return [
+    `Time ran out: ${String(drafted)} of ${String(result.progress.plannedCount)} issues are drafted and saved; ${String(count)} requirements are not drafted yet.`,
+    "Tell the user, then call jira_draft_batch again now with the same draftId and the same requirements filter as before (requirements already in the draft are skipped); Keiko offers the approval once the whole draft is complete.",
+    `If the draft is gone, call without draftId and with requirements.documents = remainingDocuments and requirements.ids = remainingRequirementIds.${count > listed ? ` Only ${String(listed)} of the ${String(count)} ids are listed, so prefer the draftId route.` : ""}`,
+  ].join(" ");
+}
+
 function partialGuidance(run: BatchRun, result: DraftBatchResult, drafted: number): string {
   const notes = [
     result.stopReason === "deadline"
-      ? `Time ran out: ${String(drafted)} of ${String(result.progress.plannedCount)} issues are drafted and saved. Tell the user, and once the draft is handled call jira_draft_batch again with the same draftId and no requirements filter (or requirements.ids = remainingRequirementIds if the draft is gone); only the ${String(remainingCount(result))} requirements not yet drafted are drafted.`
+      ? deadlineGuidance(result, drafted)
       : `${String(drafted)} of ${String(result.progress.plannedCount)} issues are drafted. Report failedRequirementRefs to the user and offer to retry them with requirements.ids and the same draftId.`,
     result.stopReason === "model-failed"
       ? "The model failed part-way; the issues drafted before are saved."
@@ -387,10 +403,25 @@ function remainingCount(result: DraftBatchResult): number {
   return result.deferredRequirementRefs.length;
 }
 
+/** A reference is `<document scope>:<id>`; the scope is hex, so the first colon splits it exactly. */
+function refParts(ref: string): { readonly document: string; readonly id: string } {
+  const at = ref.indexOf(":");
+  return { document: ref.slice(0, at), id: ref.slice(at + 1) };
+}
+
 function remainingIds(result: DraftBatchResult): string[] {
-  return result.deferredRequirementRefs
-    .map((ref) => ref.slice(ref.lastIndexOf(":") + 1))
-    .slice(0, REMAINING_IDS_MAX);
+  return result.deferredRequirementRefs.slice(0, REMAINING_IDS_MAX).map((ref) => refParts(ref).id);
+}
+
+/** The documents of the listed ids, so the ids match in the right documents only. */
+function remainingDocuments(result: DraftBatchResult): string[] {
+  return [
+    ...new Set(
+      result.deferredRequirementRefs
+        .slice(0, REMAINING_IDS_MAX)
+        .map((ref) => refParts(ref).document),
+    ),
+  ].slice(0, 20);
 }
 
 function failedRefs(run: BatchRun, result: DraftBatchResult): readonly string[] {
@@ -425,6 +456,7 @@ function resultData(run: BatchRun, result: DraftBatchResult): CatalogJsonObject 
           paused: true,
           remainingCount: remainingCount(result),
           remainingRequirementIds: remainingIds(result),
+          remainingDocuments: remainingDocuments(result),
         }
       : {}),
     guidance: succeeded ? resultGuidance(run, result, failedCount) : failureGuidance(result, fatal),
@@ -434,6 +466,8 @@ function resultData(run: BatchRun, result: DraftBatchResult): CatalogJsonObject 
 function failureGuidance(result: DraftBatchResult, fatal: string | undefined): string {
   if (fatal === "too-large")
     return "The backlog is larger than one draft can hold. Tell the user the items already written are saved and offer to draft the rest as a second batch with fewer requirements.";
+  if (result.stopReason === "deadline")
+    return "Time ran out before anything could be drafted. Tell the user in plain language that nothing was created and offer to try again.";
   if (result.stopReason === "model-failed")
     return "The model failed before anything could be drafted. Tell the user in plain language that nothing was created and offer to try again.";
   return "Nothing was drafted. Tell the user in plain language and offer to retry with fewer requirements.";
@@ -479,20 +513,37 @@ function refusalResult(
   return refused(refusal, REFUSAL_GUIDANCE[refusal], facts);
 }
 
-/** Requirements the continued draft already holds, so a resumed batch drafts only the rest. */
-function draftedRefs(
+/** The draft a resumed batch continues, only for the Chat that started it. */
+function continuedDraft(
   draft: JiraDraftToolDeps<JiraDraftBatchContext>,
   context: JiraDraftBatchContext,
   args: JiraDraftBatchArguments,
-): ReadonlySet<string> {
-  const current =
-    args.draftId === undefined ? undefined : draft.store.peek(args.draftId, draft.owner(context));
+): StagedJiraDraft | undefined {
+  return args.draftId === undefined
+    ? undefined
+    : draft.store.peek(args.draftId, draft.owner(context));
+}
+
+/** Requirements a continued draft already holds, so a resumed batch drafts only the rest. */
+function draftedRefs(current: StagedJiraDraft | undefined): ReadonlySet<string> {
   const refs = new Set<string>();
   for (const item of current?.items ?? [])
     if (Array.isArray(item.requirementIds))
       for (const ref of item.requirementIds as unknown[])
         if (typeof ref === "string") refs.add(ref);
   return refs;
+}
+
+/** A resumed batch writes into the draft's own project and issue type, never another. */
+function placementMatches(
+  current: StagedJiraDraft | undefined,
+  placement: JiraDraftPlacement,
+): boolean {
+  const first = current?.items[0];
+  return (
+    first === undefined ||
+    (first.projectId === placement.projectId && first.issueTypeId === placement.issueTypeId)
+  );
 }
 
 /** The project and issue type as numeric ids, or the refusal that tells the model how to retry. */
@@ -548,17 +599,44 @@ function batchInput(
   };
 }
 
+function batchPorts(
+  run: BatchRun,
+  connection: JiraManagedConnection,
+  draft: JiraDraftToolDeps<JiraDraftBatchContext>,
+  model: BatchModel,
+): DraftBatchPorts {
+  const { context } = run;
+  return {
+    generate: model.generate,
+    stage: (items, draftId) => stagePage(run, connection, draft, items, draftId),
+    progress: (progress): void => {
+      context.reportBatchProgress?.(progress);
+    },
+    observe: (observed): void => {
+      observation(run, observed);
+    },
+    signal: context.signal,
+    budget: context.mutationGuard.executionBudget,
+    remainingCalls: context.remainingModelCalls,
+  };
+}
+
 async function runBatch(
   run: BatchRun,
   connection: JiraManagedConnection,
   draft: JiraDraftToolDeps<JiraDraftBatchContext>,
 ): Promise<ManagedMcpToolResult> {
   const { deps, context, args } = run;
-  const collected = collectRequirements(deps, context, args, draftedRefs(draft, context, args));
-  if (!collected.ok) return refusalResult(run, collected.refusal, collected.facts);
-  run.duplicateRefs = collected.duplicateRefs;
+  const current = continuedDraft(draft, context, args);
+  if (args.draftId !== undefined && current === undefined)
+    return refusalResult(run, "draft-unavailable");
+  requireDispatch(context.beforeEffect(), "denied", "effect-denied");
   const placement = await resolvePlacement(run, connection);
   if ("data" in placement) return placement;
+  if (!placementMatches(current, placement)) return refusalResult(run, "draft-mismatch");
+  const collected = collectRequirements(deps, context, args, draftedRefs(current));
+  if (!collected.ok) return refusalResult(run, collected.refusal, collected.facts);
+  run.duplicateRefs = collected.duplicateRefs;
   const model = createBatchModel(deps, context);
   if (typeof model === "string") return refusalResult(run, model);
   const rules = await readJiraCreateTemplateRules(
@@ -574,19 +652,7 @@ async function runBatch(
     requirementCount: collected.requirements.length,
     createRequested: args.create,
   });
-  const ports: DraftBatchPorts = {
-    generate: model.generate,
-    stage: (items, draftId) => stagePage(run, connection, draft, items, draftId),
-    progress: (progress): void => {
-      context.reportBatchProgress?.(progress);
-    },
-    observe: (observed): void => {
-      observation(run, observed);
-    },
-    signal: context.signal,
-    budget: context.mutationGuard.executionBudget,
-    remainingCalls: context.remainingModelCalls,
-  };
+  const ports = batchPorts(run, connection, draft, model);
   const result = await runJiraDraftBatch(
     batchInput(args, placement, collected.requirements, rules, model),
     ports,

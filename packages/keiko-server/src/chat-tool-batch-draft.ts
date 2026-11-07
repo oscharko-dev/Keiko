@@ -13,6 +13,7 @@ export const BATCH_DRAFT_SKIP_REASONS = [
   "not-completed",
   "not-requested",
   "items-failed",
+  "paused",
   "refs-unresolved",
   "no-draft",
   "not-offered",
@@ -76,6 +77,7 @@ export function batchDraftDecision(exchange: ChatToolExchange): BatchDraftDecisi
 }
 function cleanBatchSkip(data: Readonly<Record<string, unknown>>): BatchDraftSkipReason | undefined {
   if (data.createRequested !== true) return "not-requested";
+  if (data.paused === true) return "paused";
   if (data.failedCount !== 0) return "items-failed";
   return data.unresolvedRefCount === 0 ? undefined : "refs-unresolved";
 }

@@ -60,6 +60,7 @@ describe("batchDraftDecision", () => {
       "not-requested",
     ],
     ["a missing request flag", exchange({ ...clean, createRequested: undefined }), "not-requested"],
+    ["a paused batch", exchange({ ...clean, paused: true, failedCount: 5 }), "paused"],
     ["failed issues", exchange({ ...clean, failedCount: 1 }), "items-failed"],
     ["unresolved references", exchange({ ...clean, unresolvedRefCount: 2 }), "refs-unresolved"],
     ["a missing draft id", exchange({ ...clean, draftId: undefined }), "no-draft"],

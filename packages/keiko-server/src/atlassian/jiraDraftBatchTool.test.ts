@@ -682,6 +682,60 @@ describe("jira.draft-batch (#4173)", () => {
     expect(new Set(covered).size).toBe(60);
   });
 
+  it("scopes the remaining ids to their documents and says when more remain than listed", async () => {
+    let now = 0;
+    const h = await harness(
+      (request) => {
+        now += 100_000;
+        return page(keysOf(request));
+      },
+      [{ capsuleId: "cap-a", text: specification(120).text }],
+    );
+
+    const result = await h.run(ARGS, { budget: { nowMs: () => now, deadlineAtMs: 200_000 } });
+
+    const count = Number(result.data.remainingCount);
+    expect(count).toBeGreaterThan(50);
+    expect(result.data.remainingRequirementIds).toHaveLength(50);
+    expect(result.data.remainingDocuments).toHaveLength(1);
+    expect(result.data.guidance).toEqual(expect.stringContaining("same requirements filter"));
+    expect(result.data.guidance).toEqual(expect.stringContaining("prefer the draftId route"));
+    expect(proofLines(h).at(-1)).toMatchObject({ stopReason: "deadline" });
+  });
+
+  it("fails a failed-at-deadline batch with the closed reason when nothing was staged", async () => {
+    const h = await harness(
+      (request) => page(keysOf(request)),
+      [{ capsuleId: "cap-a", text: specification(5).text }],
+    );
+    const result = await h.run(ARGS, { budget: { nowMs: () => 0, deadlineAtMs: 1 } });
+    expect(result.isError).toBe(true);
+    expect(result.data).toMatchObject({ outcome: "failed", reason: "deadline" });
+    expect(h.requests).toHaveLength(0);
+  });
+
+  it("refuses a resume with a draft that does not exist, before any work", async () => {
+    const h = await harness(
+      (request) => page(keysOf(request)),
+      [{ capsuleId: "cap-a", text: specification(3).text }],
+    );
+    const result = await h.run({ ...ARGS, draftId: "aaaaaaaa-2222-4333-8444-555555555555" });
+    expect(result.data.reason).toBe("draft-unavailable");
+    expect(h.requests).toHaveLength(0);
+  });
+
+  it("refuses a resume in another issue type than the draft's", async () => {
+    const h = await harness(
+      (request) => page(keysOf(request)),
+      [{ capsuleId: "cap-a", text: specification(3).text }],
+    );
+    await h.run(ARGS);
+    const calls = h.requests.length;
+    const result = await h.run({ ...ARGS, draftId: DRAFT_ID, issueTypeId: "Epic" });
+    expect(result.data.reason).toBe("draft-mismatch");
+    expect(h.requests).toHaveLength(calls);
+  });
+
   it("leaves a batch that fits its deadline unchanged", async () => {
     let now = 0;
     const h = await harness(
@@ -711,7 +765,7 @@ describe("jira.draft-batch (#4173)", () => {
     expect(result.data).toMatchObject({ requirementCount: 2, draftedCount: 2 });
   });
 
-  it("maps a draft that cannot continue to a failed result with the closed reason", async () => {
+  it("refuses a vanished draft before any model work, with a refused line", async () => {
     const h = await harness(
       (request) => page(keysOf(request)),
       [{ capsuleId: "cap-a", text: specification(2).text }],
@@ -720,13 +774,11 @@ describe("jira.draft-batch (#4173)", () => {
     const result = await h.run({ ...ARGS, draftId: "99999999-2222-4333-8444-555555555555" });
 
     expect(result.isError).toBe(true);
-    expect(result.data).toMatchObject({ outcome: "failed", reason: "draft-not-found" });
-    const completed = proofLines(h).find((line) => line.phase === "completed");
-    expect(completed).toMatchObject({
-      outcome: "failed",
-      stopReason: "stage-failed",
-      level: "warn",
-    });
+    expect(result.data).toMatchObject({ outcome: "failed", reason: "draft-unavailable" });
+    expect(h.requests).toHaveLength(0);
+    expect(proofLines(h)).toEqual([
+      expect.objectContaining({ phase: "refused", refusal: "draft-unavailable", level: "warn" }),
+    ]);
   });
 
   it("corrects a page the draft-stage tool rejected, with the violations it named", async () => {

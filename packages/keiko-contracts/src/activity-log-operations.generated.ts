@@ -1288,6 +1288,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "project-not-found",
           "issue-type-not-found",
           "no-usable-issue-type",
+          "draft-mismatch",
         ],
       },
       stopReason: {
@@ -3596,6 +3597,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "not-completed",
           "not-requested",
           "items-failed",
+          "paused",
           "refs-unresolved",
           "no-draft",
           "not-offered",

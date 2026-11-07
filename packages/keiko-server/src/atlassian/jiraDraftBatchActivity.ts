@@ -54,6 +54,7 @@ export const JIRA_DRAFT_BATCH_REFUSALS = [
   "project-not-found",
   "issue-type-not-found",
   "no-usable-issue-type",
+  "draft-mismatch",
 ] as const;
 export type JiraDraftBatchRefusal = (typeof JIRA_DRAFT_BATCH_REFUSALS)[number];
 
@@ -168,6 +169,7 @@ const REFUSAL_KIND: Readonly<Record<JiraDraftBatchRefusal, ActivityLogErrorKind>
   "project-not-found": "invalid-request",
   "issue-type-not-found": "invalid-request",
   "no-usable-issue-type": "invalid-request",
+  "draft-mismatch": "conflict",
 };
 
 const STOP_KIND: Readonly<Record<JiraDraftBatchStopReason, ActivityLogErrorKind>> = {

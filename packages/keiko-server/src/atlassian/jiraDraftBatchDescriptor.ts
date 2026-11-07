@@ -102,6 +102,7 @@ export const JIRA_DRAFT_BATCH_DECLARATION: ManagedMcpToolDeclaration = Object.fr
         guidance: text(1024),
         paused: { type: "boolean" },
         remainingCount: COUNT,
+        remainingDocuments: { type: "array", maxItems: 20, items: text(32) },
         remainingRequirementIds: { type: "array", maxItems: 50, items: text(80) },
         availableIssueTypes: { type: "array", maxItems: 20, items: text(120) },
         availableRequirementCount: COUNT,
