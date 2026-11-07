@@ -144,8 +144,9 @@ reports `gateway-service-unqualified`.
    - The tree reads its worktree and writes its state.
    - Denied: another worktree, a user checkout, and the runtime root for writing.
    - Implemented on 2026-11-06, ahead of D1, because without it the runtime could not start. The
-     runtime now starts confined and announces its server. The denial probes have not run on Windows 11
-     yet ([record](../qa/opencode-windows-qualification.md)).
+     runtime now starts confined and announces its server. The denial probes passed on Windows 11
+     on 2026-11-07 through the production grant code, without WFP
+     ([record](../qa/opencode-windows-qualification.md)).
 4. **C1 or C2.** The `HKCU\Environment` probe in `runtime_boundary.test.c` is denied, and every
    positive control passes.
 5. **First Workbench runs.**

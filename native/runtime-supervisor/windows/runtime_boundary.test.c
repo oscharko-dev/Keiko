@@ -12,6 +12,8 @@
 #include <string.h>
 #include <wchar.h>
 
+#include "gateway_grants.h"
+
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "shell32.lib")
@@ -22,6 +24,7 @@
 #define COMMAND_CHARS 8192
 #define OUTPUT_BYTES 8192
 #define PROBE_ARG_COUNT 12
+#define GRANTS_PROBE_ARG_COUNT 9
 
 static void report(const char *name, DWORD code) {
   char line[96];
@@ -148,6 +151,21 @@ static int run_probe(int argc, wchar_t **argv) {
   return 0;
 }
 
+/* B1: what a confined tree reaches through the production grants (gateway_grants.c), not through a
+ * hand-made entry. Paths: runtime file, runtime directory, state directory, own worktree file, own
+ * worktree directory, another run's worktree file, the user's own checkout file. */
+static int run_grants_probe(int argc, wchar_t **argv) {
+  if (argc != GRANTS_PROBE_ARG_COUNT) return 2;
+  report("grants-read-runtime", read_file_code(argv[2]));
+  report("grants-write-runtime", create_file_code(argv[3]));
+  report("grants-write-state", create_file_code(argv[4]));
+  report("grants-read-own-worktree", read_file_code(argv[5]));
+  report("grants-write-own-worktree", create_file_code(argv[6]));
+  report("grants-read-other-worktree", read_file_code(argv[7]));
+  report("grants-read-user-checkout", read_file_code(argv[8]));
+  return 0;
+}
+
 static DWORD write_sentinel(const wchar_t *path) {
   const char body[] = "W1-SENTINEL";
   DWORD written = 0, code = ERROR_SUCCESS;
@@ -177,9 +195,18 @@ static DWORD grant_read(wchar_t *path, PSID sid, DWORD access) {
   return result;
 }
 
-/* Only an AppContainer SID, stdin-less, with exactly the output pipe inherited. */
-static DWORD launch(PSID sid, wchar_t *executable, const wchar_t *arguments, void *environment,
-                    HANDLE output, HANDLE job, PROCESS_INFORMATION *process) {
+/* The capabilities a confined probe's token carries, as the supervisor passes a tree's grants. */
+struct probe_capabilities {
+  SID_AND_ATTRIBUTES *entries;
+  DWORD count;
+};
+
+static const struct probe_capabilities NO_CAPABILITIES = {NULL, 0};
+
+/* Only an AppContainer SID and its capabilities, stdin-less, with exactly the output pipe inherited. */
+static DWORD launch(PSID sid, struct probe_capabilities held, wchar_t *executable,
+                    const wchar_t *arguments, void *environment, HANDLE output, HANDLE job,
+                    PROCESS_INFORMATION *process) {
   STARTUPINFOEXW startup = {0};
   SECURITY_CAPABILITIES capabilities = {0};
   HANDLE inherited[1];
@@ -194,6 +221,8 @@ static DWORD launch(PSID sid, wchar_t *executable, const wchar_t *arguments, voi
     goto done;
   }
   capabilities.AppContainerSid = sid;
+  capabilities.Capabilities = held.entries;
+  capabilities.CapabilityCount = held.count;
   startup.StartupInfo.cb = sizeof(startup);
   startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
   startup.StartupInfo.hStdOutput = output;
@@ -252,8 +281,8 @@ struct probe_output {
   DWORD launch_error;
 };
 
-static void run_and_capture(PSID sid, wchar_t *executable, const wchar_t *arguments, void *environment,
-                            struct probe_output *out) {
+static void run_and_capture(PSID sid, struct probe_capabilities held, wchar_t *executable,
+                            const wchar_t *arguments, void *environment, struct probe_output *out) {
   SECURITY_ATTRIBUTES inherit = {sizeof(inherit), NULL, TRUE};
   PROCESS_INFORMATION process = {0};
   HANDLE read_end = NULL, write_end = NULL;
@@ -266,7 +295,7 @@ static void run_and_capture(PSID sid, wchar_t *executable, const wchar_t *argume
     out->launch_error = GetLastError();
     goto done;
   }
-  out->launch_error = launch(sid, executable, arguments, environment, write_end, job, &process);
+  out->launch_error = launch(sid, held, executable, arguments, environment, write_end, job, &process);
   CloseHandle(write_end);
   write_end = NULL;
   if (out->launch_error != ERROR_SUCCESS || process.hProcess == NULL) goto done;
@@ -347,6 +376,11 @@ struct fixture {
   wchar_t root[PATH_CHARS], workspace[PATH_CHARS], secrets[PATH_CHARS], image[PATH_CHARS];
   wchar_t env_file[PATH_CHARS], key_file[PATH_CHARS], workspace_file[PATH_CHARS], granted[PATH_CHARS];
   wchar_t profile_dir[PATH_CHARS], credentials[PATH_CHARS];
+  /* B1: a run's runtime root and state directory, its own and another run's managed worktree,
+   * and the user's own checkout. */
+  wchar_t runtime_dir[PATH_CHARS], runtime_file[PATH_CHARS], state_dir[PATH_CHARS];
+  wchar_t own_dir[PATH_CHARS], own_file[PATH_CHARS], other_dir[PATH_CHARS], other_file[PATH_CHARS];
+  wchar_t checkout_dir[PATH_CHARS], checkout_file[PATH_CHARS];
   wchar_t profile[64], peer_profile[64];
   PSID sid, peer_sid;
 };
@@ -373,6 +407,14 @@ static DWORD fixture_paths(struct fixture *f) {
        join_path(f->key_file, f->secrets, L"id_rsa") &&
        join_path(f->workspace_file, f->workspace, L"inside.txt") &&
        join_path(f->granted, f->root, L"granted.txt") &&
+       join_path(f->runtime_dir, f->root, L"runtime") &&
+       join_path(f->runtime_file, f->runtime_dir, L"payload.txt") &&
+       join_path(f->state_dir, f->root, L"state") && join_path(f->own_dir, f->root, L"own-worktree") &&
+       join_path(f->own_file, f->own_dir, L"inside.txt") &&
+       join_path(f->other_dir, f->root, L"other-worktree") &&
+       join_path(f->other_file, f->other_dir, L"inside.txt") &&
+       join_path(f->checkout_dir, f->root, L"user-checkout") &&
+       join_path(f->checkout_file, f->checkout_dir, L"inside.txt") &&
        _snwprintf_s(f->profile_dir, PATH_CHARS, _TRUNCATE, L"%ls", profile) >= 0 &&
        _snwprintf_s(f->credentials, PATH_CHARS, _TRUNCATE, L"%ls\\Microsoft\\Credentials", roaming) >= 0 &&
        _snwprintf_s(f->profile, 64, _TRUNCATE, L"keiko.w1.%lu", pid) >= 0 &&
@@ -388,11 +430,18 @@ static DWORD fixture_create(struct fixture *f) {
   HRESULT created;
   if (result != ERROR_SUCCESS) return result;
   if (!CreateDirectoryW(f->root, NULL) || !CreateDirectoryW(f->workspace, NULL) ||
-      !CreateDirectoryW(f->secrets, NULL)) return GetLastError();
+      !CreateDirectoryW(f->secrets, NULL) || !CreateDirectoryW(f->runtime_dir, NULL) ||
+      !CreateDirectoryW(f->state_dir, NULL) || !CreateDirectoryW(f->own_dir, NULL) ||
+      !CreateDirectoryW(f->other_dir, NULL) || !CreateDirectoryW(f->checkout_dir, NULL))
+    return GetLastError();
   if ((result = write_sentinel(f->env_file)) != ERROR_SUCCESS ||
       (result = write_sentinel(f->key_file)) != ERROR_SUCCESS ||
       (result = write_sentinel(f->workspace_file)) != ERROR_SUCCESS ||
-      (result = write_sentinel(f->granted)) != ERROR_SUCCESS) return result;
+      (result = write_sentinel(f->granted)) != ERROR_SUCCESS ||
+      (result = write_sentinel(f->runtime_file)) != ERROR_SUCCESS ||
+      (result = write_sentinel(f->own_file)) != ERROR_SUCCESS ||
+      (result = write_sentinel(f->other_file)) != ERROR_SUCCESS ||
+      (result = write_sentinel(f->checkout_file)) != ERROR_SUCCESS) return result;
   if (GetModuleFileNameW(NULL, self, PATH_CHARS) == 0 || !CopyFileW(self, f->image, TRUE)) return GetLastError();
   created = CreateAppContainerProfile(f->profile, f->profile, L"Disposable W1 boundary test", NULL, 0, &f->sid);
   if (FAILED(created)) return (DWORD)created;
@@ -401,12 +450,14 @@ static DWORD fixture_create(struct fixture *f) {
 }
 
 static void fixture_remove(struct fixture *f) {
-  const wchar_t *const files[] = {f->env_file, f->key_file, f->workspace_file, f->granted, f->image};
+  const wchar_t *const files[] = {f->env_file,   f->key_file,      f->workspace_file,
+                                  f->granted,    f->image,         f->runtime_file,
+                                  f->own_file,   f->other_file,    f->checkout_file};
+  const wchar_t *const directories[] = {f->workspace, f->secrets,   f->runtime_dir, f->state_dir,
+                                        f->own_dir,   f->other_dir, f->checkout_dir, f->root};
   size_t index;
   for (index = 0; index < ARRAYSIZE(files); ++index) (void)DeleteFileW(files[index]);
-  (void)RemoveDirectoryW(f->workspace);
-  (void)RemoveDirectoryW(f->secrets);
-  (void)RemoveDirectoryW(f->root);
+  for (index = 0; index < ARRAYSIZE(directories); ++index) (void)RemoveDirectoryW(directories[index]);
   if (f->sid != NULL) {
     (void)DeleteAppContainerProfile(f->profile);
     FreeSid(f->sid);
@@ -422,9 +473,154 @@ static DWORD start_hold(PSID sid, wchar_t *image, HANDLE job, PROCESS_INFORMATIO
   HANDLE null_out = CreateFileW(L"NUL", GENERIC_WRITE, FILE_SHARE_WRITE, &inherit, OPEN_EXISTING, 0, NULL);
   DWORD result;
   if (null_out == INVALID_HANDLE_VALUE) return GetLastError();
-  result = launch(sid, image, L"--hold", NULL, null_out, job, process);
+  result = launch(sid, NO_CAPABILITIES, image, L"--hold", NULL, null_out, job, process);
   CloseHandle(null_out);
   return result;
+}
+
+/* One KGG1 frame as the host sends it: header, entry count, then (access, principal, path[, name]). */
+struct grant_frame {
+  unsigned char bytes[8192];
+  size_t length;
+  unsigned count;
+};
+
+static void put_u32(unsigned char *at, DWORD value) {
+  at[0] = (unsigned char)value;
+  at[1] = (unsigned char)(value >> 8);
+  at[2] = (unsigned char)(value >> 16);
+  at[3] = (unsigned char)(value >> 24);
+}
+
+static int frame_text(struct grant_frame *frame, const wchar_t *text) {
+  char utf8[PATH_CHARS * 3];
+  int bytes = WideCharToMultiByte(CP_UTF8, 0, text, -1, utf8, (int)sizeof(utf8), NULL, NULL);
+  if (bytes <= 1 || frame->length + 4 + (size_t)(bytes - 1) > sizeof(frame->bytes)) return 0;
+  put_u32(frame->bytes + frame->length, (DWORD)(bytes - 1));
+  memcpy(frame->bytes + frame->length + 4, utf8, (size_t)(bytes - 1));
+  frame->length += 4 + (size_t)(bytes - 1);
+  return 1;
+}
+
+static void frame_begin(struct grant_frame *frame) {
+  memset(frame, 0, sizeof(*frame));
+  memcpy(frame->bytes, "KGG1", 4);
+  frame->bytes[4] = 1;
+  frame->bytes[6] = 1;
+  frame->length = 14;
+}
+
+static int frame_add(struct grant_frame *frame, int access, int principal, const wchar_t *path,
+                     const wchar_t *capability) {
+  if (frame->length + 2 > sizeof(frame->bytes)) return 0;
+  frame->bytes[frame->length++] = (unsigned char)access;
+  frame->bytes[frame->length++] = (unsigned char)principal;
+  if (!frame_text(frame, path)) return 0;
+  if (capability != NULL && !frame_text(frame, capability)) return 0;
+  ++frame->count;
+  return 1;
+}
+
+static int frame_parse(struct grant_frame *frame, struct keiko_gateway_grants *grants) {
+  put_u32(frame->bytes + 8, (DWORD)(frame->length - 12));
+  frame->bytes[12] = (unsigned char)frame->count;
+  frame->bytes[13] = (unsigned char)(frame->count >> 8);
+  return keiko_gateway_grants_parse(frame->bytes, frame->length, grants);
+}
+
+static const char *const GRANTS_CONTROL_ALLOWED[] = {
+    "grants-read-runtime",        "grants-write-runtime",       "grants-write-state",
+    "grants-read-own-worktree",   "grants-write-own-worktree",  "grants-read-other-worktree",
+    "grants-read-user-checkout",
+};
+static const char *const GRANTS_CONFINED_ALLOWED[] = {
+    "grants-read-runtime", "grants-write-state", "grants-read-own-worktree"};
+static const char *const GRANTS_CONFINED_DENIED[] = {
+    "grants-write-runtime", "grants-write-own-worktree", "grants-read-other-worktree",
+    "grants-read-user-checkout"};
+
+static int expect_codes(const char *text, const char *const *names, size_t count, long expected,
+                        const char *label) {
+  size_t index;
+  int failures = 0;
+  for (index = 0; index < count; ++index) {
+    long code = observed_code(text, names[index]);
+    if (code != expected) {
+      printf("FAIL %s %s=%ld (expected %ld)\n", label, names[index], code, expected);
+      ++failures;
+    }
+  }
+  return failures;
+}
+
+/* The tree's own grants (runtime read, state modify, its worktree through its capability) and, as
+ * another run would leave it, a second worktree's capability grant held by a different tree. */
+static int build_grants(struct fixture *f, struct keiko_gateway_grants *own,
+                        struct keiko_gateway_grants *other) {
+  static const wchar_t OWN[] = L"keiko.workspace.0123456789abcdef0123456789abcdef";
+  static const wchar_t OTHER[] = L"keiko.workspace.fedcba9876543210fedcba9876543210";
+  struct grant_frame frame;
+  frame_begin(&frame);
+  if (!frame_add(&frame, KEIKO_GRANT_READ, KEIKO_GRANT_TREE, f->runtime_dir, NULL) ||
+      !frame_add(&frame, KEIKO_GRANT_MODIFY, KEIKO_GRANT_TREE, f->state_dir, NULL) ||
+      !frame_add(&frame, KEIKO_GRANT_READ, KEIKO_GRANT_CAPABILITY, f->own_dir, OWN) ||
+      !frame_parse(&frame, own))
+    return 0;
+  frame_begin(&frame);
+  return frame_add(&frame, KEIKO_GRANT_READ, KEIKO_GRANT_CAPABILITY, f->other_dir, OTHER) &&
+         frame_parse(&frame, other);
+}
+
+static int run_grants_boundary(struct fixture *f) {
+  struct keiko_gateway_grants own = {0}, other = {0};
+  struct probe_output *control = calloc(2, sizeof(*control));
+  struct probe_output *confined = control == NULL ? NULL : control + 1;
+  wchar_t *arguments = calloc(COMMAND_CHARS, sizeof(wchar_t));
+  struct probe_capabilities held;
+  int failures = 0, applied_own = 0, applied_other = 0;
+  if (control == NULL || arguments == NULL || !build_grants(f, &own, &other)) {
+    printf("FAIL grants frame\n");
+    failures = 1;
+    goto done;
+  }
+  applied_own = keiko_gateway_grants_apply(&own, f->sid) == KEIKO_GRANTS_APPLIED;
+  applied_other = keiko_gateway_grants_apply(&other, f->peer_sid) == KEIKO_GRANTS_APPLIED;
+  if (!applied_own || !applied_other || own.capability_count != 1) {
+    printf("FAIL grants apply own=%d other=%d capabilities=%lu\n", applied_own, applied_other,
+           own.capability_count);
+    failures = 1;
+    goto done;
+  }
+  if (_snwprintf_s(arguments, COMMAND_CHARS, _TRUNCATE,
+                   L"--grants-probe \"%ls\" \"%ls\" \"%ls\" \"%ls\" \"%ls\" \"%ls\" \"%ls\"",
+                   f->runtime_file, f->runtime_dir, f->state_dir, f->own_file, f->own_dir,
+                   f->other_file, f->checkout_file) < 0) {
+    failures = 1;
+    goto done;
+  }
+  held.entries = own.capabilities;
+  held.count = own.capability_count;
+  run_and_capture(NULL, NO_CAPABILITIES, f->image, arguments, NULL, control);
+  run_and_capture(f->sid, held, f->image, arguments, NULL, confined);
+  printf("grants control launch=%lu exit=%lu\n%s", control->launch_error, control->exit_code,
+         control->text);
+  printf("grants confined launch=%lu exit=%lu\n%s", confined->launch_error, confined->exit_code,
+         confined->text);
+  failures += expect_codes(control->text, GRANTS_CONTROL_ALLOWED, ARRAYSIZE(GRANTS_CONTROL_ALLOWED),
+                           0, "unconfined control");
+  failures += expect_codes(confined->text, GRANTS_CONFINED_ALLOWED,
+                           ARRAYSIZE(GRANTS_CONFINED_ALLOWED), 0, "confined");
+  failures += expect_codes(confined->text, GRANTS_CONFINED_DENIED, ARRAYSIZE(GRANTS_CONFINED_DENIED),
+                           ERROR_ACCESS_DENIED, "confined");
+done:
+  if (applied_own) keiko_gateway_grants_revoke(&own, f->sid);
+  if (applied_other) keiko_gateway_grants_revoke(&other, f->peer_sid);
+  keiko_gateway_grants_clear(&own);
+  keiko_gateway_grants_clear(&other);
+  free(control);
+  free(arguments);
+  printf(failures == 0 ? "B1 grants: PASS\n" : "B1 grants: FAIL\n");
+  return failures;
 }
 
 static int run_boundary(struct fixture *f) {
@@ -480,18 +676,19 @@ static int run_boundary(struct fixture *f) {
     failures = 1;
     goto done;
   }
-  run_and_capture(NULL, f->image, arguments, NULL, control);
-  run_and_capture(f->sid, f->image, arguments, NULL, confined);
+  run_and_capture(NULL, NO_CAPABILITIES, f->image, arguments, NULL, control);
+  run_and_capture(f->sid, NO_CAPABILITIES, f->image, arguments, NULL, confined);
   if (_snwprintf_s(socket_arguments, 64, _TRUNCATE, L"--socket-probe %u", (unsigned)ntohs(local.sin_port)) < 0) {
     failures = 1;
     goto done;
   }
-  run_and_capture(NULL, f->image, socket_arguments, empty_environment, hermetic);
+  run_and_capture(NULL, NO_CAPABILITIES, f->image, socket_arguments, empty_environment, hermetic);
   printf("hermetic launch=%lu exit=%lu\n%s", hermetic->launch_error, hermetic->exit_code, hermetic->text);
   printf("control launch=%lu exit=%lu\n%s", control->launch_error, control->exit_code, control->text);
   printf("confined launch=%lu exit=%lu\n%s", confined->launch_error, confined->exit_code, confined->text);
   failures += verify_control(control->text);
   failures += verify_confined(confined->text);
+  failures += run_grants_boundary(f);
 done:
   if (job != NULL) CloseHandle(job);
   if (foreign.hProcess != NULL) {
@@ -521,6 +718,7 @@ int wmain(int argc, wchar_t **argv) {
   }
   if (argc == 3 && wcscmp(argv[1], L"--socket-probe") == 0) return run_socket_probe(argv[2]);
   if (argc > 1 && wcscmp(argv[1], L"--probe") == 0) return run_probe(argc, argv);
+  if (argc > 1 && wcscmp(argv[1], L"--grants-probe") == 0) return run_grants_probe(argc, argv);
   f = calloc(1, sizeof(*f));
   if (f == NULL) return 2;
   setup = fixture_create(f);

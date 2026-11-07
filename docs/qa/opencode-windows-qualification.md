@@ -1364,7 +1364,7 @@ Limits:
 
 - No model turn was reached.
 - The denial probes of the proposal's step B (another worktree, a user checkout, the runtime root
-  for writing) have not run on this host.
+  for writing) ran on 2026-11-07 and passed; see "B1 denial probes" below.
 - The proposal's startup sweep of stale tree ACEs is not implemented. A stale entry names a SID no
   later process can obtain.
 - The worktree capability is derived from the worktree's canonical path, so a moved worktree
@@ -1425,11 +1425,13 @@ Limits:
   (item E of the proposal). Its evidence stays `functional-not-platform-qualified`.
 - **Coverage.** All three modes and a local commit were exercised (see below). Push and pull
   requests were not.
-- **User checkout.** A run on the user's own checkout (Lokal) gets no workspace grant. It still
-  starts and then fails inside the runtime; it should be refused before spawn with a closed reason.
-- **Volumes.** The volume finding comes from one host and one non-system volume. A refusal that names
-  it before spawn is not implemented.
-- **Proofs not run.** Neither the transport proof nor the step B denial probes ran on this host.
+- **User checkout.** A run on the user's own checkout (Lokal) gets no workspace grant. Since
+  2026-11-07 it is refused before spawn as `workspace-location-unsupported`, and readiness offers
+  only a new worktree.
+- **Volumes.** The volume finding comes from one host and one non-system volume. Since 2026-11-07 a
+  worktree on another volume is refused before spawn as `workspace-volume-unsupported`.
+- **Proofs not run.** The transport proof did not run on this host. The step B denial probes ran
+  on 2026-11-07 (below).
 - **Native tests.** The native readback rules for the inbound permit run in the disposable-runner
   filter suite, now against the production `gateway_inbound.c`. The broker's firewall step has no
   hosted run yet.
@@ -1469,6 +1471,44 @@ The W1 `HKCU\Environment` blocker stays open. On the same host a plain AppContai
 user's real key. A less privileged AppContainer, a deny entry for the tree's SID and a medium
 no-read-up label each failed to stop it; the proposal's section C records why. The remaining fix
 changes the key's own access list, which is an owner decision. No code for it is part of this branch.
+
+### B1 denial probes and a hands-on session (2026-11-07)
+
+Host: Windows 11 Home 10.0.26200 x64, standard user, NTFS on `C:`, MSVC 2022 build with
+`/W4 /WX /analyze`. `runtime_boundary.test.c` now applies the tree's grants through the production
+`keiko_gateway_grants_apply` from a real `KGG1` frame: read on the runtime root, modify on the state
+directory, and read on the run's own worktree through its `keiko.workspace.<32 hex>` capability. A
+second worktree carries another run's capability, held by a different tree. Every operation first
+succeeds unconfined; a confined denial counts only then.
+
+| Operation from the confined tree             | Result      |
+| -------------------------------------------- | ----------- |
+| Read the runtime root                        | allowed (0) |
+| Write into the runtime root                  | denied (5)  |
+| Write into the state directory               | allowed (0) |
+| Read its own worktree through its capability | allowed (0) |
+| Write into its own worktree                  | denied (5)  |
+| Read another run's worktree                  | denied (5)  |
+| Read the user's own checkout                 | denied (5)  |
+
+The existing W1 probes passed in the same run: foreign and peer processes, `.env`, key files, the
+ungranted workspace, the user profile, the credential store and host loopback are denied. The
+`HKCU\Environment` blocker stays open. The probe runs without WFP, so it does not cover the
+broker's inbound permit or a foreign port (D1).
+
+A hands-on session on the same host, reconstructed from the Activity Log, found three defects:
+
+- Every follow-up in a task failed a few seconds after spawn (`RuntimeUnexpectedExit`, then
+  `runtime-reap-unproven`): the resumed run's database copy carried a protected owner-only DACL
+  that kept the tree's inherited grant out. A run's state directory is now owner-private with
+  inheritable entries, and the copy is handed back to that inherited DACL (ADR-0182). Proven by a
+  Windows-only test on real ACLs; a live resumed run on this host has not been repeated yet.
+- Every Workbench composer draft read and save was refused: the draft route expected
+  `coding-workbench-…` keys, but the Workbench window is named `coding`. Fixed and covered by an e2e
+  draft restore through the real route.
+- The Workbench preselected the user's own checkout. Readiness now lists
+  `executionLocations: ["worktree"]` behind the broker, and the start refusals above name what to
+  change.
 
 ## Update impact
 
