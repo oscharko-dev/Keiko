@@ -46,7 +46,10 @@ import {
   recordChatToolTurnEnded,
   type ChatToolTurnEndReason,
 } from "./chat-tool-turn-ending.js";
-import { onChatScopeInterruption } from "./chat-turn-serializer.js";
+import {
+  onChatScopeInterruption,
+  type ChatGenerationInterruption,
+} from "./chat-turn-serializer.js";
 import {
   groundedToolAttemptConfirmation,
   groundedNestedToolCallRelease,
@@ -740,7 +743,9 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     signal.addEventListener("abort", cancel, { once: true });
     if (signal.aborted) cancel();
     const { deps, message } = this.options;
-    const release = onChatScopeInterruption(deps, message.chatId, () => this.endForScopeChange());
+    const release = onChatScopeInterruption(deps, message.chatId, (reason) =>
+      this.endForScopeChange(reason),
+    );
     try {
       return await this.runRounds(model, request, signal, observeRound, retryFollows);
     } catch (error) {
@@ -789,12 +794,12 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
    * change: the turn stops at once and answers from its transcript (#4175). A turn with nothing
    * to report stays a cancellation.
    */
-  private endForScopeChange(): boolean {
+  private endForScopeChange(reason?: ChatGenerationInterruption): boolean {
     const { deps, message } = this.options;
     const exchanges = deps.store.findMessageById(message.id)?.toolTranscript?.exchanges ?? [];
     if (this.context.signal.aborted || !chatToolTurnHoldsWrite(exchanges)) return false;
     this.scopeChangeEnded = true;
-    this.abortController.abort();
+    this.abortController.abort(reason);
     return true;
   }
 

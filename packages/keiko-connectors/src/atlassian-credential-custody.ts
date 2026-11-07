@@ -317,7 +317,12 @@ export interface AtlassianCredentialCustodyDeps {
   readonly metadataStore: AtlassianCredentialMetadataStore;
   // Server-owned invalidation follows durable revocation. null means credential removal.
   readonly onLivePodInvalidated?:
-    | ((podId: string, authenticationGeneration: number | null, correlationId?: string) => void)
+    | ((
+        podId: string,
+        authenticationGeneration: number | null,
+        correlationId?: string,
+        reason?: "authentication-failed",
+      ) => void)
     | undefined;
   readonly now?: () => number;
 }
@@ -702,8 +707,15 @@ function commitVerificationStatus(
       ...(compatibility === undefined ? {} : { compatibility: structuredClone(compatibility) }),
     },
   });
-  if (nextGeneration !== generation)
-    deps.onLivePodInvalidated?.(metadata.livePod.podId, nextGeneration, correlationId);
+  if (nextGeneration === generation) return;
+  if (status === "auth-failed")
+    deps.onLivePodInvalidated?.(
+      metadata.livePod.podId,
+      nextGeneration,
+      correlationId,
+      "authentication-failed",
+    );
+  else deps.onLivePodInvalidated?.(metadata.livePod.podId, nextGeneration, correlationId);
 }
 
 function observeAuthenticationFailure(

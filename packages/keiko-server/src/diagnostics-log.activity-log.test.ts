@@ -43,6 +43,25 @@ describe("diagnostic records on the activity log", () => {
     rmSync(stateDir, { recursive: true, force: true });
   });
 
+  it("records a Jira credential revocation as authority denial rather than an internal fault", () => {
+    defaultServerDiagnosticSink.record(
+      serverDiagnosticFromError({
+        correlationId: "jira-authentication-proof",
+        operation: "POST /api/desktop/chat",
+        source: "chat.turn.authentication",
+        error: Object.assign(new Error("Synthetic authentication failure"), {
+          code: "JIRA_AUTHENTICATION_FAILED",
+        }),
+        redact: () => DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+      }),
+    );
+    expect(readActivityLine(stateDir)).toMatchObject({
+      errorKind: "authority-denied",
+      code: "JIRA_AUTHENTICATION_FAILED",
+      correlationId: "jira-authentication-proof",
+    });
+  });
+
   it("never throws from record() when the Activity Log cannot be opened, and recovers later", () => {
     resetServerLogFailureNotices();
     const logsPath = join(stateDir, "logs");

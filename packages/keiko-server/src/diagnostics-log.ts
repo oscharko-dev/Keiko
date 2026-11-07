@@ -556,6 +556,7 @@ const DIAGNOSTIC_CODE_KIND_RULES: readonly Readonly<{
 ];
 
 function closedDiagnosticErrorKind(errorClass: string, code?: string): ActivityLogErrorKind {
+  if (code === "JIRA_AUTHENTICATION_FAILED") return "authority-denied";
   if (errorClass === "CallerAttemptAdmissionError") return "authority-denied";
   const registered = activityLogErrorKindOr(errorClass, "internal");
   if (registered !== "internal" || errorClass === "internal") return registered;

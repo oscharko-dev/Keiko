@@ -586,7 +586,15 @@ removal. Older/repeated generation notifications are harmless. The existing Chat
 then interrupts affected generations; other Pods' Chats remain untouched. A running tool turn that
 already holds a write takes a scope change itself (2026-11-03, S17): it stops at once and answers from
 its transcript, naming those writes, with `authority-invalid` on `chat.tool-turn.ended`. A turn with
-no write to report, a human stop and queued turns stay cancellations. Applied scope changes
+no write to report, a human stop and queued turns stay cancellations. Observed authentication
+revocation is carried as a server-owned interruption reason from custody through the same
+serializer, including the running tool-turn callback. It preserves the saved effect transcript
+but terminates with `JIRA_AUTHENTICATION_FAILED` in buffered, streamed and grounded Chat; a
+stream that already started emits the stable code in its terminal error frame. The cause is
+not inferred from mutable credential state after cancellation, so a later successful verification
+cannot rewrite the interrupted request’s outcome. HTTP 409 denotes the invalidated bound Jira
+credential, not failed local app-session authentication; EN/DE remediation points to the
+Knowledge Pods hub. Neither the old request nor its effects are retried. Applied scope changes
 and requested cancellation use the registered `chat.scope.update` event. Request correlation passes
 through custody and invalidation, linking the HTTP result, binding effects and cancellation; only
 operations outside a request mint a fresh server correlation. Cleanup failure cannot restore access: incomplete token replacement

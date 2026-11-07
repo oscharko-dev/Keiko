@@ -36,12 +36,16 @@ bindings. See the [Live Pod guide](../local-knowledge/atlassian-connector-guide.
 for the first-read disclosure, per-action write approvals and current platform limits.
 
 When an authenticated Jira read returns `401` or identifies the caller as anonymous, custody
-revokes the current generation and stops the Chat turn. A grounded Chat reports
+revokes the current generation and stops the Chat turn. Buffered, streamed and grounded Chat report
 `JIRA_AUTHENTICATION_FAILED` so the person can repair and reverify the connection; it does not
 retry the request or conceal this failure as ordinary cancellation. Closing the request,
 removing the Pod or changing the Chat's mode still cancels the turn normally. Start with the
 body-free `atlassian.connection.checked` authentication outcome and the correlated structured
-grounded-request diagnostic when investigating this distinction.
+chat-request diagnostic when investigating this distinction. The interruption carries the observed
+authentication cause even if a later verification succeeds before the old request settles.
+After streaming starts, the terminal error frame carries the same stable code. Local app-session
+authentication remains valid; HTTP 409 describes the invalidated Jira binding. Repair the Pod in
+the **Knowledge Pods** hub; the server does not replay the interrupted request.
 
 Data Center verification additionally reports `unsupported-version` for a deployment other than
 Server or Data Center, a release below 10.3.0, or inconsistent numeric release information from

@@ -265,7 +265,12 @@ describe("Jira Live Pod custody", () => {
     const check = f.custody.beginVerification(created.authRef);
     assert(check);
     f.custody.finishVerification(created.authRef, 1, check.revision, "auth-failed");
-    expect(invalidated).toHaveBeenCalledExactlyOnceWith(created.livePod.podId, 2, undefined);
+    expect(invalidated).toHaveBeenCalledExactlyOnceWith(
+      created.livePod.podId,
+      2,
+      undefined,
+      "authentication-failed",
+    );
     f.custody.finishVerification(created.authRef, 1, check.revision, "ok");
     expect(invalidated).toHaveBeenCalledTimes(1);
   });
@@ -373,6 +378,7 @@ describe("Jira Live Pod custody", () => {
     const invalidated = vi.fn();
     const f = custodyOverFakes(invalidated);
     const created = f.custody.create(livePodInput(), "a".repeat(64));
+    assert(created.deployment === "data-center" && created.livePod);
     const probe = f.custody.beginVerification(created.authRef);
     assert(probe);
     f.custody.finishVerification(created.authRef, 1, probe.revision, "ok");
@@ -387,7 +393,12 @@ describe("Jira Live Pod custody", () => {
       generation: 2,
       livePod: { verificationStatus: "auth-failed", verificationInProgress: false },
     });
-    expect(invalidated).toHaveBeenCalledTimes(1);
+    expect(invalidated).toHaveBeenCalledExactlyOnceWith(
+      created.livePod.podId,
+      2,
+      "observed",
+      "authentication-failed",
+    );
     expect(secretRead).not.toHaveBeenCalled();
     expect(
       custodyErrorCode(() => f.executionResolver.resolveForExecution(created.authRef, 1)),

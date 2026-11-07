@@ -10,6 +10,7 @@ import {
   parseGatewayConfig,
   toolCallingConfigurationFingerprint,
   type GatewayCallRequest,
+  type GatewayStreamChunk,
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import {
@@ -19,6 +20,9 @@ import {
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import { handleGroundedAsk } from "./grounded-qa.js";
+import { handleSendDesktopChat } from "./chat-handlers.js";
+import { handleSendDesktopChatStream } from "./chat-stream-handlers.js";
+import { STREAMING } from "./routes.js";
 import { mockRequest, mockResponse } from "./_support.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
@@ -45,6 +49,7 @@ interface Fixture {
 
 interface ResponseHooks {
   beforeResponse?: () => void;
+  afterInvalidation?: () => void;
 }
 
 afterEach(async () => {
@@ -67,6 +72,7 @@ function configure(deps: UiHandlerDeps): void {
         {
           ...createDefaultChatCapability(MODEL),
           toolCalling: true,
+          contextWindow: 32768,
           toolCallingVerification: {
             status: "verified",
             checkedAt: new Date().toISOString(),
@@ -87,36 +93,51 @@ function configure(deps: UiHandlerDeps): void {
 }
 
 function projectModel(calls: GatewayCallRequest[]): ModelPort {
-  return {
-    call: (request): Promise<NormalizedResponse> => {
-      calls.push(request);
-      const reservation = request.attemptAdmission?.({ promptTokens: 100, maxOutputTokens: 100 });
-      const response: NormalizedResponse = {
-        modelId: MODEL,
-        content: "",
-        finishReason: "tool_calls",
-        toolCalls: [],
-        structuredOutput: null,
-        usage: {
-          requestId: `request-${String(calls.length)}`,
-          promptTokens: 100,
-          completionTokens: 10,
-          latencyMs: 1,
-          costClass: "low",
-        },
-      };
-      reservation?.settle(response.usage, true, "observed");
-      if (request.toolCatalog?.kind !== "bound")
-        throw new TypeError("Missing bound Jira tool catalog");
-      const tool = request.toolCatalog.projection.tools.find(
-        (entry) => entry.toolRef.canonicalId === "keiko.jira.projects",
+  const call = (request: GatewayCallRequest): Promise<NormalizedResponse> => {
+    calls.push(request);
+    const reservation = request.attemptAdmission?.({ promptTokens: 100, maxOutputTokens: 100 });
+    const response: NormalizedResponse = {
+      modelId: MODEL,
+      content: "",
+      finishReason: "tool_calls",
+      toolCalls: [],
+      structuredOutput: null,
+      usage: {
+        requestId: `request-${String(calls.length)}`,
+        promptTokens: 100,
+        completionTokens: 10,
+        latencyMs: 1,
+        costClass: "low",
+      },
+    };
+    reservation?.settle(response.usage, true, "observed");
+    if (request.toolCatalog?.kind !== "bound")
+      throw new TypeError("Missing bound Jira tool catalog");
+    const project = request.toolCatalog.projection.tools.find(
+      (entry) => entry.toolRef.canonicalId === "keiko.jira.projects",
+    );
+    const tool =
+      project ??
+      request.toolCatalog.projection.tools.find(
+        (entry) => entry.toolRef.canonicalId === "keiko.jira.describe",
       );
-      if (tool === undefined) throw new TypeError("Missing Jira projects tool");
-      const bridge = createGatewayToolCatalogBridge({ ...request, stream: false }, Date.now);
-      return Promise.resolve({
-        ...response,
-        toolCalls: [bridge.bind({ id: "jira-projects", name: tool.alias, arguments: {} })],
-      });
+    if (tool === undefined) throw new TypeError("Missing Jira projects tool");
+    const bridge = createGatewayToolCatalogBridge({ ...request, stream: false }, Date.now);
+    return Promise.resolve({
+      ...response,
+      toolCalls: [
+        bridge.bind({
+          id: `jira-call-${String(calls.length)}`,
+          name: tool.alias,
+          arguments: project === undefined ? { identities: ["GET /rest/api/2/project"] } : {},
+        }),
+      ],
+    });
+  };
+  return {
+    call,
+    callStream: async function* (request): AsyncGenerator<GatewayStreamChunk> {
+      yield { type: "done", response: await call(request) };
     },
   };
 }
@@ -238,8 +259,9 @@ function credentialsFor(
     env: { KEIKO_ATLASSIAN_CONNECTOR_CREDENTIALS_KEY: randomBytes(32).toString("base64") },
     egress: () => undefined,
     activityLog: log,
-    onLivePodInvalidated: (podId, generation, correlationId): void => {
-      invalidateJiraPodChats(deps.store, podId, generation, correlationId, deps);
+    onLivePodInvalidated: (podId, generation, correlationId, reason): void => {
+      invalidateJiraPodChats(deps.store, podId, generation, correlationId, deps, reason);
+      hooks.afterInvalidation?.();
     },
     fetchImpl: (_url, init): Promise<Response> => {
       fetches.push(init?.method ?? "GET");
@@ -276,11 +298,11 @@ describe("grounded Jira authentication failure", () => {
         error: {
           code: "JIRA_AUTHENTICATION_FAILED",
           message:
-            "Jira authentication failed. Check the connection in Settings and verify it again.",
+            "Jira authentication failed. Open the Knowledge Pods hub and verify the connection again.",
         },
       },
     });
-    expect(f.calls).toHaveLength(1);
+    expect(f.calls.at(-1)?.toolCatalog?.kind).toBe("bound");
     expect(f.log.events.find((event) => event.op === "atlassian.connection.checked")).toMatchObject(
       {
         extra: { action: "request", outcome: "auth-failed" },
@@ -291,7 +313,7 @@ describe("grounded Jira authentication failure", () => {
         code: "JIRA_AUTHENTICATION_FAILED",
         correlationId: f.context.correlationId,
         operation: "POST /api/chats/messages/grounded",
-        source: "grounded.qa.jira-authentication",
+        source: "chat.turn.authentication",
       }),
     );
   });
@@ -306,7 +328,7 @@ describe("grounded Jira authentication failure", () => {
       status: 499,
       body: { error: { code: "CANCELLED" } },
     });
-    expect(f.calls).toHaveLength(1);
+    expect(f.calls.at(-1)?.toolCatalog?.kind).toBe("bound");
     expect(f.fetches).toEqual(["GET"]);
     expect(f.diagnostics.some((record) => record.code === "JIRA_AUTHENTICATION_FAILED")).toBe(
       false,
@@ -331,7 +353,7 @@ describe("grounded Jira authentication failure", () => {
         status: 499,
         body: { error: { code: "CANCELLED" } },
       });
-      expect(f.calls).toHaveLength(1);
+      expect(f.calls.at(-1)?.toolCatalog?.kind).toBe("bound");
       expect(f.fetches).toEqual(["GET"]);
       expect(f.deps.atlassianConnectorCredentials?.custody.getMetadata(f.authRef)).toMatchObject({
         generation: 1,
@@ -342,4 +364,82 @@ describe("grounded Jira authentication failure", () => {
       );
     },
   );
+});
+
+function normalChatContext(f: Fixture): {
+  context: RouteContext;
+  response: ReturnType<typeof mockResponse>;
+} {
+  const chat = f.deps.store.updateChat(f.chatId, { connectedScopes: [] });
+  const response = mockResponse({ captureBody: true });
+  return {
+    response,
+    context: {
+      ...f.context,
+      req: mockRequest({
+        body: JSON.stringify({
+          chatId: f.chatId,
+          projectPath: chat.projectPath,
+          content: "List Jira projects",
+        }),
+      }),
+      res: response.res,
+    },
+  };
+}
+
+describe("ordinary Jira Chat authentication failure", () => {
+  it.each([
+    { status: 401, anonymous: false },
+    { status: 200, anonymous: true },
+  ])("preserves buffered HTTP $status authentication failure", async (remote) => {
+    const f = fixture(remote.status, remote.anonymous);
+    const { context } = normalChatContext(f);
+    const result = await handleSendDesktopChat(context, f.deps);
+    await runSerializedChatTurn(f.deps, f.chatId, new AbortController().signal, () => undefined);
+    expect(f.fetches).toEqual(["GET"]);
+    expect(result).toMatchObject({
+      status: 409,
+      body: { error: { code: "JIRA_AUTHENTICATION_FAILED", correlationId: context.correlationId } },
+    });
+  });
+
+  it.each([
+    { status: 401, anonymous: false },
+    { status: 200, anonymous: true },
+  ])(
+    "preserves streamed HTTP $status authentication failure after headers start",
+    async (remote) => {
+      const f = fixture(remote.status, remote.anonymous);
+      const { context, response } = normalChatContext(f);
+      const result = await handleSendDesktopChatStream(context, f.deps);
+      await runSerializedChatTurn(f.deps, f.chatId, new AbortController().signal, () => undefined);
+      expect(result).toBe(STREAMING);
+      expect(response.statusCode()).toBe(200);
+      expect(f.fetches).toEqual(["GET"]);
+      expect(response.body()).toContain("event: error\n");
+      expect(response.body()).toContain('"code":"JIRA_AUTHENTICATION_FAILED"');
+      expect(response.body()).not.toContain("event: cancelled");
+      expect(response.body()).not.toContain("event: done");
+    },
+  );
+
+  it("retains the observed cause when verification succeeds before the cancelled handler settles", async () => {
+    const hooks: ResponseHooks = {};
+    const f = fixture(401, false, hooks);
+    hooks.afterInvalidation = (): void => {
+      const custody = f.deps.atlassianConnectorCredentials?.custody;
+      const ticket = custody?.beginVerification(f.authRef, 2);
+      if (ticket === undefined) throw new TypeError("Missing re-verification ticket");
+      expect(custody?.finishVerification(f.authRef, 2, ticket.revision, "ok")).toBe(true);
+    };
+    expect(await ask(f)).toMatchObject({
+      status: 409,
+      body: { error: { code: "JIRA_AUTHENTICATION_FAILED" } },
+    });
+    expect(f.deps.atlassianConnectorCredentials?.custody.getMetadata(f.authRef)).toMatchObject({
+      livePod: { verificationStatus: "ok" },
+    });
+    expect(f.fetches).toEqual(["GET"]);
+  });
 });

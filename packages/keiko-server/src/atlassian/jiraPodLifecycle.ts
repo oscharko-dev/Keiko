@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { UiStore, Chat } from "../store/index.js";
-import { interruptChangedChatGenerations } from "../chat-turn-serializer.js";
+import {
+  CHAT_TURN_JIRA_AUTHENTICATION_FAILED,
+  interruptChangedChatGenerations,
+} from "../chat-turn-serializer.js";
 import type { UiHandlerDeps } from "../deps.js";
 export type JiraChatAccessOwners = Pick<
   UiHandlerDeps,
@@ -23,10 +26,18 @@ export function invalidateJiraPodChats(
   authenticationGeneration: number | null,
   correlationId: string = randomUUID(),
   owners: JiraChatAccessOwners = {},
+  reason?: "authentication-failed",
 ): void {
   for (const change of store.invalidateJiraPod(podId, authenticationGeneration, correlationId)) {
     revokeJiraChatAccess(owners, change.current.id, correlationId);
-    interruptChangedChatGenerations({ store }, change.previous, change.current, correlationId);
+    interruptChangedChatGenerations(
+      { store },
+      change.previous,
+      change.current,
+      correlationId,
+      {},
+      reason === "authentication-failed" ? CHAT_TURN_JIRA_AUTHENTICATION_FAILED : undefined,
+    );
   }
 }
 
