@@ -1532,11 +1532,11 @@ puts them back. ADR-0043 D18 states the rules, including the crash recovery and 
 | Supervisor and boundary test build; supervisor process-tree protocol test         | PASS   |
 
 Not run yet: the boundary test (`node scripts/testing/test-windows-runtime-boundary.mjs`, also part
-of `npm run check:native:windows`) now runs its confined probe under the production guard
-on the user's real key and expects `registry-user-environment` to be denied and the key's entries
-restored exactly. It changes the real key's access list for the probe's lifetime, so it was left to
-the Windows owner to run on this host; CI runs it on the hosted Windows runner. The W1 blocker stays
-open until that run passes on Windows 11 hardware.
+of `npm run check:native:windows`) now runs its confined probe under the production guard on the
+user's real key and expects `registry-user-environment` to be denied and the key's entries restored
+exactly. It changes the real key's access list for the probe's lifetime, so it was left to the
+Windows owner to run on this host; the `Cross-platform smoke (windows-latest)` CI job runs it. The
+W1 blocker stays open until that run passes on Windows 11 hardware.
 
 ## Update impact
 
