@@ -153,6 +153,25 @@ type AnswerCorrectionLog =
 // one context-window retry as the authority.
 const CONTINUATION_WINDOW_SHARE = 0.8;
 
+/**
+ * A runtime observation as this turn's prompt carries it: its call id by position instead of the
+ * stored random id, so the runtime prefix sent this turn is byte-identical to the previous turn's
+ * and the provider can reuse it. Stored ids, call identity and replayed history are unchanged.
+ */
+function promptStableRuntimeMessages(
+  messages: readonly GatewayMessage[],
+  position: number,
+): GatewayMessage[] {
+  const id = `runtime-${String(position)}`;
+  return messages.map((entry) => ({
+    ...entry,
+    ...(entry.toolCalls === undefined
+      ? {}
+      : { toolCalls: entry.toolCalls.map((call) => ({ ...call, id })) }),
+    ...(entry.toolCallId === undefined ? {} : { toolCallId: id }),
+  }));
+}
+
 /** Catalogs must be resolved before minting so a failed preparation retains no authority. */
 export function mintAndBoundChatTurn<
   Authority extends { readonly ok: true; readonly envelope: ChatToolAuthorityEnvelope },
@@ -759,7 +778,10 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       ?.toolTranscript?.exchanges.find((exchange) => exchange.call.id === id);
     requireDispatch(stored?.result !== undefined, "invalid", "recovery-required");
     const messages = gatewayMessagesForToolExchange(stored);
-    if (origin === "runtime") this.runtimeContext.push(...messages);
+    if (origin === "runtime")
+      this.runtimeContext.push(
+        ...promptStableRuntimeMessages(messages, this.runtimeContext.length),
+      );
     else
       this.continuation.push(
         ...(this.currentToolResponse === undefined

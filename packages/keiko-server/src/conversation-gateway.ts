@@ -21,16 +21,35 @@ export function gatewayMessagesForTurn(
     : [...turn.verbatim];
 }
 
+/**
+ * What the model reads of a settled call: its outcome, page and data. The envelope's invocation id,
+ * tool reference, projection digest and metrics are Keiko's own bookkeeping; they differ on every
+ * call, so sending them costs tokens and breaks the provider's reuse of an unchanged prompt prefix.
+ */
+function modelToolResult(
+  result: NonNullable<ChatToolExchange["result"]>,
+): Pick<
+  NonNullable<ChatToolExchange["result"]>,
+  "status" | "reason" | "effectStarted" | "page" | "data"
+> {
+  return {
+    status: result.status,
+    reason: result.reason,
+    effectStarted: result.effectStarted,
+    page: result.page,
+    data: result.data,
+  };
+}
+
 /** Historical observations never redispatch a call. Keep its remote outcome separate from the
  * catalog settlement, since cancellation cannot roll back an already acknowledged mutation. */
 export function gatewayMessagesForToolExchange(
   exchange: ChatToolExchange,
 ): GatewayConversationMessage[] {
-  const result = exchange.result ?? {
-    status: "unavailable",
-    reason: "observation-unavailable",
-    effect: "unknown",
-  };
+  const result =
+    exchange.result === undefined
+      ? { status: "unavailable", reason: "observation-unavailable", effect: "unknown" }
+      : modelToolResult(exchange.result);
   return [
     {
       role: "assistant",
