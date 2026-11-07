@@ -124,7 +124,7 @@ const CODING_RUNTIME_SAFE_ACTIVITY_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["pending", "running", "failed", "succeeded"],
+      values: ["pending", "running", "failed", "succeeded", "denied"],
     },
     // #3610: why the projection refused a well-formed signal, on a projection-rejected drop only.
     rejection: {
@@ -156,7 +156,10 @@ const CODING_RUNTIME_SAFE_ACTIVITY_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-const NATIVE_TOOL_DENIED_TOOLS: readonly string[] = [
+// The native tools outside Code Mode plus Code Mode's own `execute` entry (the tools it runs are
+// reported as `execute`), spelled out so the operation registry can read the closed vocabulary; the
+// owning test pins it to OPENCODE_NATIVE_TOOL_NAMES so the two cannot drift.
+export const NATIVE_TOOL_DENIED_TOOLS: readonly string[] = [
   "read",
   "glob",
   "grep",
@@ -510,11 +513,9 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     const rollbackNeeded = isFeedNearProjectionLimit(entry, this.limits);
     const priorFeed = rollbackNeeded ? structuredClone(entry.feed) : undefined;
     const priorMessageTurns = rollbackNeeded ? new Map(entry.messageTurns) : undefined;
-    const denial = newNativeToolDenial(entry, signal);
-    const application = applySignal(entry, signal, this.limits);
+    const application = this.applyRecordingDenial(runId, entry, signal);
     const ended = this.endedApplication(runId, entry, signal, application);
     if (ended !== undefined) return ended;
-    this.recordNativeToolDenial(runId, denial);
     if (signal.signalId !== undefined) {
       rememberBoundedIdentity(entry.signalIds, signal.signalId, this.maxSignalIdentities);
     }
@@ -804,6 +805,19 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
       ),
     );
     return true;
+  }
+
+  // OpenCode's rejection is a fact even when it arrives after Keiko settled the call another way, so
+  // it is recorded for every application the projection did not refuse.
+  private applyRecordingDenial(
+    runId: string,
+    entry: ProjectionEntry,
+    signal: CodingSafeActivitySignal,
+  ): SignalApplication {
+    const denial = newNativeToolDenial(entry, signal);
+    const application = applySignal(entry, signal, this.limits);
+    if (projectionRejection(application) === undefined) this.recordNativeToolDenial(runId, denial);
+    return application;
   }
 
   // Once per call: the first OpenCode update that reports the call rejected is recorded, also when
@@ -1321,14 +1335,21 @@ function shrinkPlan(plan: MutablePlan, maxBytes: number): void {
 }
 
 type SettledToolState = "succeeded" | "failed" | "denied" | "cancelled";
-type RestatedToolState = "pending" | "running" | "failed" | "succeeded";
+type RestatedToolState = "pending" | "running" | "failed" | "succeeded" | "denied";
+const RESTATED_TOOL_STATES: ReadonlySet<CodingSafeActivityToolState> = new Set<RestatedToolState>([
+  "pending",
+  "running",
+  "failed",
+  "succeeded",
+  "denied",
+]);
 
 function isSettledToolState(state: CodingSafeActivityToolState): state is SettledToolState {
   return TERMINAL_TOOL_STATES.has(state);
 }
 
 function isRestatedToolState(state: CodingSafeActivityToolState): state is RestatedToolState {
-  return state === "pending" || state === "running" || state === "failed" || state === "succeeded";
+  return RESTATED_TOOL_STATES.has(state);
 }
 
 function callIdDigest(callId: string): string {
@@ -1493,18 +1514,27 @@ const TERMINAL_TOOL_STATES: ReadonlySet<CodingSafeActivityToolState> = new Set([
 // 10 ms read). The facade also returns HTTP 200 with a governed failed result for a red verification;
 // OpenCode calls that transport success even though Keiko already settled the tool as failed. Keiko
 // alone settles denied and cancelled calls, which OpenCode may likewise report as generic failure
-// or completed. These restatements keep Keiko's verdict and produce evidence, not omitted updates.
-// A settlement never restates pending or running, so one that tries is still a refused regression.
+// or completed, and a call Keiko stopped or failed may still arrive as OpenCode's own permission
+// rejection (#4271). These restatements keep Keiko's verdict and produce evidence, not omitted
+// updates. A settlement never restates pending or running, so one that tries is still a refused
+// regression; a rejection after success is contradictory and is refused as well.
 function staleOpenCodeRestatement(
   from: CodingSafeActivityToolState,
   signal: Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>,
 ): boolean {
   if (signal.messageId === undefined || !TERMINAL_TOOL_STATES.has(from)) return false;
   if (signal.state === "pending" || signal.state === "running") return true;
-  return (
-    (from === "denied" || from === "cancelled" || from === "failed") &&
-    (signal.state === "failed" || signal.state === "succeeded")
-  );
+  return restatesKeikoSettlement(from, signal.state);
+}
+
+function restatesKeikoSettlement(
+  from: CodingSafeActivityToolState,
+  to: CodingSafeActivityToolState,
+): boolean {
+  if (from !== "denied" && from !== "cancelled" && from !== "failed") return false;
+  // denied after denied is an ordinary idempotent repeat, not a restatement.
+  if (to === "denied") return from !== "denied";
+  return to === "failed" || to === "succeeded";
 }
 
 function allowedToolTransition(

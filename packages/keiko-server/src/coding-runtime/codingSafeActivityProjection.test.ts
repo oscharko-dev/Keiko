@@ -18,7 +18,9 @@ import {
   createCodingSafeActivityProjection,
   type CodingSafeActivityContent,
   type CodingSafeActivitySignal,
+  NATIVE_TOOL_DENIED_TOOLS,
 } from "./codingSafeActivityProjection.js";
+import { OPENCODE_NATIVE_TOOL_NAMES } from "./opencodeNativeTools.js";
 import {
   DEFAULT_RUNTIME_MAX_DURATION_MINUTES,
   MAX_RUNTIME_MAX_DURATION_MINUTES,
@@ -431,6 +433,10 @@ describe("bounded coding safe-activity projection", () => {
     ["failed", "succeeded"],
     ["denied", "running"],
     ["cancelled", "pending"],
+    // #4271 T40 audit: OpenCode's permission rejection of a call Keiko already settled (a Stop or a
+    // failed facade round trip) is a late restatement, never a refused transition.
+    ["cancelled", "denied"],
+    ["failed", "denied"],
   ] as const)(
     "keeps a settled %s call when OpenCode's earlier %s update arrives late",
     (settled, late) => {
@@ -1969,6 +1975,48 @@ describe("OpenCode permission rejection evidence (#4271)", () => {
     expect(deniedLines(log)).toHaveLength(1);
     expect(deniedLines(log)[0]).toMatchObject({ extra: { tool: "shell", occurrenceCount: 1 } });
     expect(firstTurnToolStates(projection)).toContainEqual(["call_k", "denied"]);
+  });
+
+  it("names exactly the native tools outside Code Mode and Code Mode's own execute entry", () => {
+    expect(NATIVE_TOOL_DENIED_TOOLS).toEqual([...OPENCODE_NATIVE_TOOL_NAMES, "execute"]);
+  });
+
+  it("records a rejection OpenCode reports after Keiko stopped the call, keeping it cancelled", () => {
+    const { projection, log } = projectionWithLog();
+    projection.ingest(RUN_ID, denial("call_s", "running"));
+    projection.ingest(RUN_ID, {
+      kind: "tool",
+      callId: "call_s",
+      state: "cancelled",
+      occurredAt: "2026-07-18T17:00:00.003Z",
+    });
+    expect(projection.ingest(RUN_ID, denial("call_s", "denied"))).toBe(true);
+    expect(firstTurnToolStates(projection)).toContainEqual(["call_s", "cancelled"]);
+    expect(deniedLines(log)).toHaveLength(1);
+    expect(log.events.filter((event) => event.op === "coding-runtime.safe-activity")).toEqual([
+      expect.objectContaining({
+        extra: expect.objectContaining({
+          event: "superseded",
+          reason: "late-restatement",
+          settledState: "cancelled",
+          restatedState: "denied",
+        }) as unknown,
+      }),
+    ]);
+  });
+
+  it("refuses a rejection OpenCode reports after the call succeeded, recording no denial", () => {
+    const { projection, log } = projectionWithLog();
+    projection.ingest(RUN_ID, denial("call_ok", "running"));
+    projection.ingest(RUN_ID, {
+      kind: "tool",
+      callId: "call_ok",
+      state: "succeeded",
+      occurredAt: "2026-07-18T17:00:00.003Z",
+    });
+    expect(projection.ingest(RUN_ID, denial("call_ok", "denied"))).toBe(false);
+    expect(firstTurnToolStates(projection)).toContainEqual(["call_ok", "succeeded"]);
+    expect(deniedLines(log)).toEqual([]);
   });
 
   it("records nothing for a failure or a Keiko-only settlement", () => {

@@ -137,8 +137,9 @@ const OPENCODE_PERMISSION_REJECTED_ERROR_TYPE = "permission.rejected";
  * True when an errored tool part was refused by OpenCode's own static permission rules (the
  * mode-independent `external_directory` deny floor) before Keiko's policy hook was consulted. Only
  * the closed upstream token `error.type` is compared, against its exact literal; the upstream
- * `message` is untrusted and is never read. The live and history projections both call this, so a
- * reloaded run shows the same refusal card as the live one.
+ * `message` is untrusted and is never read. Every native tool signal of a run, live or reloaded,
+ * comes from the history projection (`opencodeV2History.ts` displayToolState), so the live card
+ * and the reloaded one show the same refusal.
  */
 export function isOpenCodePermissionRejection(state: unknown): boolean {
   if (!isPlainRecord(state) || state.status !== "error") return false;
