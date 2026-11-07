@@ -367,6 +367,34 @@ describe("a completed draft batch covers the requirements it drafted (#4292)", (
     }
   });
 
+  const partialDocumentRead = exchange(
+    { outcome: "succeeded", view: "text", documentComplete: false, nextCursor: "doc-next" },
+    {},
+    "keiko.knowledge.documents",
+  );
+
+  it("keeps an unfinished document read pending whether it ran before or after the batch (F29)", () => {
+    for (const order of [
+      [partialDocumentRead, batch({})],
+      [batch({}), partialDocumentRead],
+    ]) {
+      const coverage = requiredCoverage(order);
+      expect(coverage.pendingPageCount).toBe(1);
+      expect(knowledgeCoverageCorrection(coverage)).toContain("same selection");
+      expect(knowledgeCoverageIssues(coverage)).toContainEqual(
+        expect.objectContaining({ kind: "pending-reads", count: 1 }),
+      );
+    }
+  });
+
+  it("settles only the earlier requirement chain, not one started after the batch (F29)", () => {
+    const later = exchange(units(["doc:REQ-9"], "later"), { view: "units", query: "other" });
+    expect(requiredCoverage([partialRead, batch({}), later]).pendingPageCount).toBe(1);
+    expect(requiredCoverage([partialRead, partialDocumentRead, batch({})]).pendingPageCount).toBe(
+      1,
+    );
+  });
+
   it("judges the latest batch, and a batch alone is no Knowledge read", () => {
     const later = batch({ coveredRequirementCount: 12 });
     expect(requiredCoverage([partialRead, batch({}), later]).pendingPageCount).toBe(1);

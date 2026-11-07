@@ -42,6 +42,8 @@ function count(value: unknown): number {
 interface Stream {
   readonly cursor: string | undefined;
   readonly continuous: boolean;
+  /** Position of the exchange that last advanced this chain. */
+  readonly seq: number;
 }
 interface ReviewCoverage {
   readonly revision: string;
@@ -68,6 +70,10 @@ interface Tally {
   readonly streams: Map<string, Stream>;
   /** The latest draft batch's coverage of the whole collection; undefined when it covered less. */
   batchCovered: number | undefined;
+  /** Exchange position of the batch behind `batchCovered`. */
+  batchSeq: number;
+  /** Exchanges observed so far; orders chains against the batch. */
+  seq: number;
 }
 export interface KnowledgeTurnCoverage {
   readonly documentCount: number;
@@ -103,6 +109,7 @@ function observeStream(
     cursor: typeof data.nextCursor === "string" ? data.nextCursor : undefined,
     continuous:
       cursor === undefined || (previous?.continuous === true && previous.cursor === cursor),
+    seq: tally.seq,
   });
 }
 
@@ -239,6 +246,7 @@ function observeReviewTarget(tally: Tally, exchange: ChatToolExchange): void {
   )
     tally.reviewTargets.add(exchange.call.arguments.documentScope);
 }
+const REQUIREMENTS_TOOL = "keiko.knowledge.requirements";
 const DRAFT_BATCH_TOOL = "keiko.jira.draft.batch";
 
 /** A completed, unfiltered new batch that drafted every requirement of the collection. */
@@ -257,9 +265,29 @@ function everyRequirementCovered(selected: unknown, covered: unknown): number | 
 
 /** A draft batch settles the turn's batch coverage; every other exchange is a Knowledge receipt. */
 function observeExchange(tally: Tally, exchange: ChatToolExchange): void {
-  if (exchange.result?.toolRef?.canonicalId === DRAFT_BATCH_TOOL)
+  tally.seq++;
+  if (exchange.result?.toolRef?.canonicalId === DRAFT_BATCH_TOOL) {
     tally.batchCovered = wholeBatchCoverage(exchange);
-  else observe(tally, exchange);
+    tally.batchSeq = tally.seq;
+  } else observe(tally, exchange);
+}
+
+/**
+ * A whole-collection batch drafted the requirements an earlier requirement page chain was
+ * reading. Document, search and review continuations, and any read after the batch, stay pending.
+ */
+function settledByBatch(tally: Tally, key: string, stream: Stream): boolean {
+  return (
+    tally.batchCovered !== undefined &&
+    stream.seq < tally.batchSeq &&
+    key.startsWith(`${REQUIREMENTS_TOOL}|`)
+  );
+}
+function pendingPageCount(tally: Tally): number {
+  return [...tally.streams].filter(
+    ([key, stream]) =>
+      (stream.cursor !== undefined || !stream.continuous) && !settledByBatch(tally, key, stream),
+  ).length;
 }
 
 function observe(tally: Tally, exchange: ChatToolExchange): void {
@@ -331,6 +359,8 @@ export function knowledgeTurnCoverage(
     reviewed: new Map(),
     streams: new Map(),
     batchCovered: undefined,
+    batchSeq: 0,
+    seq: 0,
   };
   for (const exchange of exchanges) observeExchange(tally, exchange);
   if (!tally.observed) return undefined;
@@ -347,12 +377,7 @@ export function knowledgeTurnCoverage(
     failedOperationCount: tally.failedOperations,
     omittedRequirementCount: tally.omittedRequirements,
     truncatedRequirementCount: tally.truncatedRequirements.size,
-    pendingPageCount:
-      covered === undefined
-        ? [...tally.streams.values()].filter(
-            (stream) => stream.cursor !== undefined || !stream.continuous,
-          ).length
-        : 0,
+    pendingPageCount: pendingPageCount(tally),
     ...(covered === undefined ? {} : { draftBatchCoveredRequirementCount: covered }),
   };
 }
