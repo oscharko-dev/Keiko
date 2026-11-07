@@ -160,6 +160,162 @@ describe("jira.draft-stage (#4178)", () => {
     ]);
   });
 
+  it("stages the prepared description and labels before validation and binds private revisions", async () => {
+    const h = harness({ templates: [template()], unreadable: 0 });
+    const sourceDigest = "a".repeat(64);
+    const description = "h2. Acceptance criteria\n* works\n\nh2. Source\nRevision A";
+    const prepareRequirements = vi.fn((items: readonly Record<string, unknown>[]) => ({
+      ok: true as const,
+      items: items.map((entry) => ({
+        ...entry,
+        fields: { summary: "Prepared", description, labels: ["keiko-source-revision"] },
+      })),
+      sourceBindings: [{ ref: "source", sourceDigest }],
+    }));
+    const result = await executeJiraDraftStageTool(
+      pageOf("source"),
+      CONTEXT,
+      connection(undefined, [
+        ...CREATE_FIELDS,
+        {
+          ...field("labels", "array"),
+          schema: { type: "array", items: "string", system: "labels" },
+        },
+      ]),
+      { ...h.deps, prepareRequirements },
+    );
+    expect(result.isError).toBeUndefined();
+    const held = h.deps.store.get(text(result.data.draftId), "chat-1");
+    expect(prepareRequirements).toHaveBeenCalledExactlyOnceWith(pageOf("source").items, CONTEXT);
+    expect(held).toMatchObject({
+      items: [{ fields: { description, labels: ["keiko-source-revision"] } }],
+      sourceBindings: [{ ref: "source", sourceDigest }],
+    });
+    expect(
+      resolveJiraDraftArguments(
+        {
+          draftId: result.data.draftId,
+          draftDigest: result.data.draftDigest,
+        },
+        () => held,
+      ),
+    ).toEqual({ ok: true, arguments: { items: held?.items } });
+    expect(result.data).not.toHaveProperty("sourceBindings");
+  });
+
+  it("checks template sections against prepared fields rather than the original page", async () => {
+    const h = harness();
+    const result = await executeJiraDraftStageTool(
+      pageOf("source"),
+      CONTEXT,
+      connection({ templates: [template()], unreadable: 0 }),
+      {
+        ...h.deps,
+        prepareRequirements: () => ({
+          ok: true,
+          items: [
+            item("source", { fields: { summary: "Prepared", description: "No required section" } }),
+          ],
+          sourceBindings: [{ ref: "source", sourceDigest: "a".repeat(64) }],
+        }),
+      },
+    );
+    expect(result).toMatchObject({ isError: true, data: { reason: "field-validation" } });
+    expect(h.deps.store.size()).toBe(0);
+  });
+
+  it("refuses source preparation before metadata reads and never appends a failed page", async () => {
+    const h = harness();
+    const remote = connection();
+    const result = await executeJiraDraftStageTool(pageOf("source"), CONTEXT, remote, {
+      ...h.deps,
+      prepareRequirements: () => ({
+        ok: false,
+        data: { outcome: "rejected", reason: "field-validation" },
+        violationCount: 2,
+      }),
+    });
+    expect(result).toMatchObject({ isError: true, data: { reason: "field-validation" } });
+    expect(remote.http).not.toHaveBeenCalled();
+    expect(h.deps.store.size()).toBe(0);
+    expect(h.activity).toMatchObject([{ phase: "refused", violationCount: 2 }]);
+  });
+
+  it.each(["different-ref", "unknown-binding"])(
+    "refuses a prepared page with %s before metadata reads",
+    async (fault) => {
+      const h = harness();
+      const remote = connection();
+      const result = await executeJiraDraftStageTool(pageOf("source"), CONTEXT, remote, {
+        ...h.deps,
+        prepareRequirements: () => ({
+          ok: true,
+          items: [item(fault === "different-ref" ? "different" : "source")],
+          sourceBindings: [
+            {
+              ref: fault === "unknown-binding" ? "unknown" : "source",
+              sourceDigest: "a".repeat(64),
+            },
+          ],
+        }),
+      });
+      expect(result).toMatchObject({ isError: true, data: { reason: "invalid-input" } });
+      expect(remote.http).not.toHaveBeenCalled();
+      expect(h.deps.store.size()).toBe(0);
+    },
+  );
+
+  it("captures prepared fields before asynchronous metadata reads can change their source", async () => {
+    const h = harness();
+    const prepared = {
+      ref: "source",
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Reviewed", description: "h2. Acceptance criteria\n* reviewed" },
+    };
+    const binding = { ref: "source", sourceDigest: "a".repeat(64) };
+    const remote = connection();
+    const delegate = vi.mocked(remote.http).getMockImplementation();
+    if (delegate === undefined) throw new Error("expected fixture HTTP");
+    vi.mocked(remote.http).mockImplementation((request) => {
+      prepared.fields.description = "Changed while checking metadata";
+      binding.sourceDigest = "b".repeat(64);
+      return delegate(request);
+    });
+    const result = await executeJiraDraftStageTool(pageOf("source"), CONTEXT, remote, {
+      ...h.deps,
+      prepareRequirements: () => ({ ok: true, items: [prepared], sourceBindings: [binding] }),
+    });
+    expect(result.isError).toBeUndefined();
+    const held = h.deps.store.get(text(result.data.draftId), "chat-1");
+    expect(held).toMatchObject({
+      items: [{ fields: { description: "h2. Acceptance criteria\n* reviewed" } }],
+      sourceBindings: [{ sourceDigest: "a".repeat(64) }],
+    });
+    expect(
+      resolveJiraDraftArguments(
+        { draftId: result.data.draftId, draftDigest: result.data.draftDigest },
+        () =>
+          held === undefined
+            ? undefined
+            : {
+                ...held,
+                sourceBindings: [{ ref: "source", sourceDigest: "b".repeat(64) }],
+              },
+      ),
+    ).toEqual({ ok: false, reason: "draft-changed" });
+  });
+
+  it("rejects untrusted model source bindings as extra stage arguments", async () => {
+    const h = harness();
+    const result = await h.stage({
+      ...pageOf("source"),
+      sourceBindings: [{ ref: "source", sourceDigest: "a".repeat(64) }],
+    });
+    expect(result).toMatchObject({ isError: true, data: { reason: "invalid-input" } });
+    expect(h.deps.store.size()).toBe(0);
+  });
+
   it("assembles a 70-item draft in pages and resolves to exactly those items", async () => {
     const h = harness();
     const first = await h.stage({ items: page(0, JIRA_DRAFT_PAGE_ITEMS_MAX) });

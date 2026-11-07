@@ -277,6 +277,7 @@ export { createJiraReportTemplateChecker } from "./jira-report-template-checker.
 export { createJiraReportStore, type JiraReportStore } from "./jira-report-store.js";
 export {
   createJiraDraftStore,
+  type JiraDraftSourceBinding,
   type JiraDraftStore,
   type StagedJiraDraft,
 } from "./jira-draft-store.js";
@@ -285,6 +286,7 @@ export {
   parseJiraDraftReference,
   resolveJiraDraftArguments,
   type JiraDraftActivity,
+  type JiraDraftPreparation,
   type JiraDraftTemplateRefusal,
   type JiraDraftRefusal,
   type JiraDraftResolution,

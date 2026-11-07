@@ -5,6 +5,7 @@ import {
   type JiraTemplateViolation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import type {
   ManagedMcpInvocationContext,
   ManagedMcpToolResult,
@@ -18,6 +19,8 @@ import {
 } from "./jira-draft.js";
 import {
   jiraDraftDigest,
+  validJiraDraftSourceBindings,
+  type JiraDraftSourceBinding,
   type JiraDraftStore,
   type StagedJiraDraft,
   type StagedJiraDraftItem,
@@ -65,6 +68,9 @@ export interface JiraDraftToolDeps<Context extends ManagedMcpInvocationContext> 
   /** Binds a draft to the Chat that started it. */
   readonly owner: (context: Context) => string;
   readonly activity?: ((activity: JiraDraftActivity, context: Context) => void) | undefined;
+  /** Prepares the exact reviewed fields and privately binds their source revisions before staging. */
+  readonly prepareRequirements?:
+    ((items: readonly StagedJiraDraftItem[], context: Context) => JiraDraftPreparation) | undefined;
   /** Source-bound criterion checks supplied by the composing Chat before a draft digest is minted. */
   readonly checkRequirements?:
     | ((
@@ -74,6 +80,14 @@ export interface JiraDraftToolDeps<Context extends ManagedMcpInvocationContext> 
     | undefined;
   readonly now?: (() => number) | undefined;
 }
+
+export type JiraDraftPreparation =
+  | {
+      readonly ok: true;
+      readonly items: readonly StagedJiraDraftItem[];
+      readonly sourceBindings: readonly JiraDraftSourceBinding[];
+    }
+  | { readonly ok: false; readonly data: CatalogJsonObject; readonly violationCount: number };
 
 const DRAFT_ID = new RegExp(JIRA_DRAFT_ID_PATTERN, "u");
 const DRAFT_DIGEST = new RegExp(JIRA_DRAFT_DIGEST_PATTERN, "u");
@@ -289,16 +303,29 @@ function pageFieldRefusals(
   return jiraDraftFieldRefusals(parsed, context, connection, { reconcile: false });
 }
 
-function pageRequirementRefusal<Context extends ManagedMcpInvocationContext>(
+function preparePageRequirements<Context extends ManagedMcpInvocationContext>(
   run: StageRun<Context>,
   items: readonly StagedJiraDraftItem[],
-): ManagedMcpToolResult | undefined {
+): JiraDraftPreparation {
+  if (run.deps.prepareRequirements !== undefined)
+    return run.deps.prepareRequirements(items, run.context);
   const requirements = run.deps.checkRequirements?.(items, run.context);
-  if (requirements === undefined) return undefined;
-  refuseStage(run, "invalid-fields", items.length, {
-    violationCount: requirements.violationCount,
-  });
-  return { isError: true, data: requirements.data };
+  return requirements === undefined
+    ? { ok: true, items, sourceBindings: [] }
+    : { ok: false, ...requirements };
+}
+
+function validPreparedPage(
+  original: readonly StagedJiraDraftItem[],
+  prepared: Extract<JiraDraftPreparation, { readonly ok: true }>,
+): boolean {
+  return (
+    prepared.items.length === original.length &&
+    prepared.items.every(
+      (item, index) => isJiraDraftItem(item) && item.ref === original[index]?.ref,
+    ) &&
+    validJiraDraftSourceBindings(prepared.items, prepared.sourceBindings)
+  );
 }
 
 function stagedActivity<Context extends ManagedMcpInvocationContext>(
@@ -337,16 +364,24 @@ export async function executeJiraDraftStageTool<Context extends ManagedMcpInvoca
     return { ...refused, data: { ...refused.data, guidance: invalidPageGuidance(rawArgs) } };
   }
   if (connection.deployment !== "data-center") return refuseStage(run, "unsupported-deployment", 0);
-  const requirements = pageRequirementRefusal(run, args.items);
-  if (requirements !== undefined) return requirements;
-  const template = await firstJiraDraftTemplateRefusal(args.items, context, connection);
+  const prepared = preparePageRequirements(run, args.items);
+  if (!prepared.ok) {
+    refuseStage(run, "invalid-fields", args.items.length, {
+      violationCount: prepared.violationCount,
+    });
+    return { isError: true, data: prepared.data };
+  }
+  if (!validPreparedPage(args.items, prepared))
+    return refuseStage(run, "invalid-input", args.items.length);
+  const { items, sourceBindings } = deepFreeze(structuredClone(prepared));
+  const template = await firstJiraDraftTemplateRefusal(items, context, connection);
   if (template !== undefined) {
     refuseStage(run, "template-violation", args.items.length, {
       violationCount: template.violations.length,
     });
     return templateRefusalResult(template);
   }
-  const fields = await pageFieldRefusals(args.items, context, connection);
+  const fields = await pageFieldRefusals(items, context, connection);
   const firstField = fields.refusals[0];
   if (firstField !== undefined) {
     refuseStage(run, "invalid-fields", args.items.length, { violationCount: fields.total });
@@ -356,7 +391,8 @@ export async function executeJiraDraftStageTool<Context extends ManagedMcpInvoca
     deps.owner(context),
     args.draftId,
     connectionFingerprint(connection),
-    args.items,
+    items,
+    sourceBindings,
   );
   if (!appended.ok) return refuseStage(run, appended.refusal, args.items.length);
   stagedActivity(run, appended.draft, args, now);
@@ -399,7 +435,8 @@ export function resolveJiraDraftArguments(
   const draft = reference === undefined ? undefined : lookup(reference.draftId);
   if (reference === undefined || draft === undefined)
     return { ok: false, reason: "draft-not-found" };
-  return draft.digest === reference.draftDigest && jiraDraftDigest(draft.items) === draft.digest
+  return draft.digest === reference.draftDigest &&
+    jiraDraftDigest(draft.items, draft.sourceBindings) === draft.digest
     ? { ok: true, arguments: { items: draft.items } as CatalogJsonObject }
     : { ok: false, reason: "draft-changed" };
 }
