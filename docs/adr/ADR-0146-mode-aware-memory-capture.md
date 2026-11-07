@@ -83,13 +83,16 @@ Amended 2026-11-07 (#4206, owner decision). Nobody approves a routine private fa
 without asking. For a candidate that already survives the content gates (D3), the persisted `status`
 no longer depends on the selected mode:
 
-| Mode | Routine, public-sensitivity candidate |
-| --- | --- |
-| `governed-assist` (Ask for approval) | `accepted` — used at once |
-| `supervised-coding` (Supervised workspace) | `accepted` — used at once |
-| `autonomous-delivery` (Full access) | `accepted` — used at once |
+| Mode | Routine private (user-scope) candidate | Routine team or project candidate |
+| --- | --- | --- |
+| `governed-assist` (Ask for approval) | `accepted` — used at once | `proposed` |
+| `supervised-coding` (Supervised workspace) | `accepted` — used at once | `accepted` |
+| `autonomous-delivery` (Full access) | `accepted` — used at once | `accepted` |
 
-`memoryCaptureAutoAcceptEligible(deps, outcome)` takes no mode. The one exception is an explicit
+`memoryCaptureAutoAcceptEligible(deps, mode, outcome)` ignores the mode for a private fact. A fact
+the learner places in a team or project scope is project memory, which #4206 leaves to MemoriaViva
+step 3: it keeps the monotonic mode rule (`memoryUnattendedAcceptanceAllowed`), and the Journal names
+`mode-requires-approval` when it waits. The one exception for private facts is an explicit
 operator restriction: when an operator configured the Memory/Coding deployment ceiling to
 `governed-assist` (the `codingRuntimeDeploymentCeiling` option or `KEIKO_CODING_DEPLOYMENT_CEILING`;
 an invalid configured value also resolves to `governed-assist`), routine facts are held `proposed`
@@ -403,7 +406,14 @@ bodies or user text.
 
 - Routine private facts are used without approval in every mode (#4206, owner decision), subject to
   the same confidence gate the maintenance sweep already enforces; only an explicitly configured
-  `governed-assist` Memory ceiling holds them for review.
+  `governed-assist` Memory ceiling holds them for review. Team and project facts keep the mode rule
+  until project memory (step 3) decides otherwise.
+- The Journal shows a forget only when a person asked for it (Memory Center, a clear statement in a
+  Chat). The `memory:forgotten` audit event carries the tombstone's `forgetterSurface`, so retention
+  and maintenance tombstones never read as the person's decision.
+- A calendar date is not read as a telephone number: dates are blanked before the telephone-shape
+  check, so a fact with an end date ("bis 31.12.2027") is learned rather than refused as
+  confidential.
 - The Memory Journal (#2547's projection, #2548's UI, M1.2/M1.3) keeps its `proposed` vs.
   `accepted` distinction, now driven by the operator restriction and the confidence gate rather than
   by the selected mode.

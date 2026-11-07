@@ -111036,7 +111036,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1816",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1818",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -111272,7 +111272,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-salience.ts:341",
+      "site": "packages/keiko-server/src/memory-salience.ts:342",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -111633,7 +111633,7 @@
     {
       "op": "chat.compaction.summary.scheduled",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:2193",
+      "site": "packages/keiko-server/src/chat-handlers.ts:2195",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -114632,7 +114632,7 @@
     {
       "op": "memory.learn.pass",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-salience.ts:1088",
+      "site": "packages/keiko-server/src/memory-salience.ts:1096",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -114685,7 +114685,7 @@
     {
       "op": "memory.salience",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-salience.ts:280",
+      "site": "packages/keiko-server/src/memory-salience.ts:281",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

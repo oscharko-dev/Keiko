@@ -2419,7 +2419,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "memoria.settings.mode.autonomousDelivery.description":
     "Keiko may accept waiting routine memories within the deployment ceiling.",
   "memoria.settings.mode.clamped":
-    "The deployment ceiling currently enforces {effectiveMode} for captures.",
+    "The deployment ceiling currently enforces {effectiveMode} for waiting memories.",
   "memoria.consolidation.title": "MemoriaViva Consolidation",
   "memoria.consolidation.description":
     "Start a bounded consolidation job, inspect its output, and cancel it while it is still queued or running.",

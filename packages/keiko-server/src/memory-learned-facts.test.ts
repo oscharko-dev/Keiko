@@ -268,7 +268,9 @@ describe("a changed fact replaces the older one", () => {
     expect(liveBodies(vault, ctx)).toHaveLength(2);
   });
 
-  it("waits for the person's approval in Ask mode and then replaces through the correction path", async () => {
+  // #4206: the governed-assist ceiling given to `say` is an operator restriction, the only thing that
+  // still holds a private fact for review.
+  it("waits for the person's approval under an operator restriction and then replaces through the correction path", async () => {
     const vault = makeVault();
     const ctx = context();
     await say(

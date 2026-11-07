@@ -71,6 +71,19 @@ describe("classifySensitivity", () => {
     expect(classifySensitivity("Lokale Nummer 030-1234567 ist privat")).toBe("confidential");
   });
 
+  // #4206 audit: with no review step left a confidential body is refused, and a calendar date had
+  // the shape of a local telephone number, so a fact with an end date was never learned.
+  it("reads a calendar date as a date, not as a telephone number", () => {
+    expect(classifySensitivity("Ich arbeite bei Acme bis 31.12.2027.")).toBe("public");
+    expect(classifySensitivity("seit 01.03.2024 bei Acme")).toBe("public");
+    expect(classifySensitivity("I started on 2026-11-07.")).toBe("public");
+    expect(classifySensitivity("from 1/2/2026 on")).toBe("public");
+    expect(classifySensitivity("bis 31.12.2027, Tel 030 1234 5678")).toBe("confidential");
+    expect(classifySensitivity("Ruf mich am 31.12.2027 unter +49 30 1234567 an")).toBe(
+      "confidential",
+    );
+  });
+
   it("keeps false-positive-near German number examples public", () => {
     expect(classifySensitivity("Wir haben 12345678901 Testfälle im synthetischen Benchmark")).toBe(
       "public",

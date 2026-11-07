@@ -140,6 +140,12 @@ function statusForCapture(capture: PersistedJournalCapture): MemoryRecord["statu
   return capture.currentStatus ?? (capture.outcome === "proposed" ? "proposed" : "accepted");
 }
 
+// #4206: a routine fact is used at once in every mode, so the mode explains only a memory that still
+// waits for review. Elsewhere the badge would claim an approval that never happened.
+function waitsForReview(capture: JournalCapture): boolean {
+  return !isRecordFree(capture) && statusForCapture(capture) === "proposed";
+}
+
 function captureTime(occurredAt: number): string {
   const date = new Date(occurredAt);
   return Number.isNaN(date.getTime()) ? "—" : date.toISOString();
@@ -154,9 +160,9 @@ function JournalMetadata({
 }): ReactNode {
   return (
     <>
-      {capture.mode === undefined && capture.outcome === "forgotten" ? null : (
+      {waitsForReview(capture) ? (
         <span className={styles.mvJournalMetaBadge}>{modeLabel(capture, t)}</span>
-      )}
+      ) : null}
       <span>{t("memoria.journal.surface", { surface: surfaceLabel(capture, t) })}</span>
       <span>{t("memoria.journal.source", { source: capture.provenance.sourceKind })}</span>
       <span data-reason={capture.reason}>

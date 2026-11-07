@@ -182,6 +182,17 @@ describe("a routine fact needs no approval (#4206)", () => {
     }
   });
 
+  // #4206 audit: a calendar date read as a telephone number, so a fact with an end date was refused
+  // as confidential once no review step was left.
+  it("accepts a fact with an end date and keeps the date", async () => {
+    const sentence = "Ich arbeite bei Acme bis 31.12.2027.";
+    const learner = fixture(sentence);
+    await learn(learner, sentence, "governed-assist");
+    const [record] = stored(learner);
+    expect(record?.status).toBe("accepted");
+    expect(new Date(record?.validity.validUntil ?? 0).getUTCFullYear()).toBe(2027);
+  });
+
   it("is accepted under the production default, which names no configured ceiling", async () => {
     const sentence = "I keep my release notes in the team wiki.";
     const learner = fixture(sentence, {

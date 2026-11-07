@@ -1573,9 +1573,11 @@ function capturedMemoryBody(
 function acceptedCaptureCandidate(
   record: MemoryRecord,
   deps: UiHandlerDeps,
+  mode: CodingWorkbenchMode,
   outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
 ): MemoryRecord {
-  return memoryCaptureAutoAcceptEligible(deps, outcome) || memoryExplicitStatementEligible(outcome)
+  return memoryCaptureAutoAcceptEligible(deps, mode, outcome) ||
+    memoryExplicitStatementEligible(outcome)
     ? promoteEligibleMemoryRecord(record)
     : record;
 }
@@ -1642,7 +1644,7 @@ async function candidateActionFromOutcome(
   if (isSuppressedByForgetTombstone(deps.memoryVault, record)) {
     return refusedCandidateAction(FORGOTTEN_MEMORY_SUPPRESSION_REASON, explicit, correlationId);
   }
-  const candidate = acceptedCaptureCandidate(record, deps, outcome);
+  const candidate = acceptedCaptureCandidate(record, deps, mode, outcome);
   const result = await persistCandidateRecord(
     outcome,
     deps,

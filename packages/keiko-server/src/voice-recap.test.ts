@@ -20,6 +20,7 @@ import { buildRedactor, type UiHandlerDeps } from "./deps.js";
 import type { RouteContext } from "./routes.js";
 import { createInMemoryUiStore, type Chat, type UiStore } from "./store/index.js";
 import { handleBuildVoiceRecap, type RecapResponseBody } from "./voice-recap.js";
+import { replayMemoryCaptureAuditLedger } from "./memory-capture-projection.js";
 import {
   createVoiceRecapContentAttestationStore,
   type VoiceRecapContentAttestationStore,
@@ -535,6 +536,21 @@ describe("handleBuildVoiceRecap", () => {
     expect(body.candidatesProposed).toBe(0);
     expect(body.candidatesRejected).toBeGreaterThan(0);
     expect(proposedCount()).toBe(0);
+    // #4206: the person reads the refusal in the Journal, body-free, as a spoken one.
+    const ledger = replayMemoryCaptureAuditLedger(evidenceStore, 0);
+    const refusals = ledger.filter(
+      (event) => event.kind === "memory:rejected" && event.initiatorSurface === "voice",
+    );
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]?.summary).toMatch(/\|none\|provider-base-url$/u);
+    expect(JSON.stringify(ledger)).not.toContain("llm.internal");
+  });
+
+  it("journals no refusal for a recap that only had nothing to keep", async () => {
+    const chat = createChat();
+    await handleBuildVoiceRecap(ctx(recapBody(chat, ["ok", "thanks"])), deps());
+    const ledger = replayMemoryCaptureAuditLedger(evidenceStore, 0);
+    expect(ledger.filter((event) => event.kind === "memory:rejected")).toEqual([]);
   });
 
   it("rejects an oversize request body with 413", async () => {

@@ -29,6 +29,15 @@ import { looksLikeEuDePii } from "./secret-patterns.js";
 // one, so each run is read once. It accepts exactly what the earlier form accepted.
 const EMAIL_RE = /@(?<=\b[A-Za-z0-9._%+-]+@)[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/;
 const PHONE_RE = /(?:\+\d[\d\s.-]{6,14}\d|\b\d[\d .-]*[ .-]\d[\d .-]{4,12}\d\b)/;
+// A calendar date is not a telephone number. "bis 31.12.2027" has the digit-and-separator shape the
+// local-number pattern looks for, so a fact with an end date read as confidential and was refused
+// (#4206 audit). Dates are blanked before the telephone check; the other checks see the full text.
+// Each alternative is a fixed-width token, so the replacement reads the text once.
+const CALENDAR_DATE_RE = /\b(?:\d{1,2}[./]\d{1,2}[./](?:\d{4}|\d{2})|\d{4}-\d{1,2}-\d{1,2})\b/g;
+
+function looksLikeTelephoneNumber(body: string): boolean {
+  return PHONE_RE.test(body.replace(CALENDAR_DATE_RE, " "));
+}
 const CONFIDENTIAL_MARKER_PATTERNS: readonly RegExp[] = [
   /\b(?:confidential|internal(?=\s+only|[:\s])|private(?=[:\s]))\b/i,
   /\b(?:vertraulich|nur\s+intern|intern(?=[:\s])|privat(?=[:\s])|geheim|nicht\s+speichern)\b/i,
@@ -54,7 +63,7 @@ export function classifySensitivity(
   if (
     CONFIDENTIAL_MARKER_PATTERNS.some((pattern) => pattern.test(body)) ||
     EMAIL_RE.test(body) ||
-    PHONE_RE.test(body) ||
+    looksLikeTelephoneNumber(body) ||
     looksLikeEuDePii(body)
   ) {
     return "confidential";

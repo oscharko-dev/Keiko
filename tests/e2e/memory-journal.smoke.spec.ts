@@ -15,7 +15,7 @@ interface ChatResponse {
 }
 
 interface RecentCapture {
-  readonly outcome: "captured" | "proposed" | "auto-accepted" | "rejected";
+  readonly outcome: "captured" | "proposed" | "auto-accepted" | "rejected" | "forgotten";
   readonly occurredAt: number;
   readonly memoryId?: string;
 }
@@ -204,7 +204,7 @@ async function captureAndOpenJournal(
   const memoryWindow = await openMemoryWindow(context.page);
   await memoryWindow.getByRole("button", { name: "Journal", exact: true }).click();
   const rows = memoryWindow.getByTestId("memory-journal-row");
-  // Two rows: the just-captured proposal, plus a content-free "Refused" row for the earlier
+  // Two rows: the just-captured fact, plus a content-free "Refused" row for the earlier
   // secret-content turn from exerciseDeniedCaptures() — #2551 made denied/secret captures
   // visible-but-content-free in the Journal for transparency (certified by
   // tests/e2e/memoriaviva-m1-certification.spec.ts's certifyContentFreeJournalRefusal), so a
@@ -214,11 +214,17 @@ async function captureAndOpenJournal(
     `[data-testid="memory-journal-row"][data-memory-id="${memoryId ?? ""}"]`,
   );
   await expect(row).toHaveAttribute("data-memory-id", memoryId ?? "");
-  await expect(row.getByText("Ask for approval")).toBeVisible();
-  await expect(row.getByText("Awaiting review")).toBeVisible();
+  // #4206: a routine fact is used at once in every mode. Nothing waits for review, and the row
+  // names no mode, because no approval was asked for.
+  await expect(row.getByText("Auto-captured")).toBeVisible();
+  await expect(row.getByText("Awaiting review")).toHaveCount(0);
+  await expect(row.getByText("Ask for approval")).toHaveCount(0);
   await expect(row.getByText(/^Why: /)).toBeVisible();
+  await expect
+    .poll(async () => retrieveMemoryIds(context.request, context.chat, context.projectPath))
+    .toContain(memoryId);
   // Newest first: this journey's refusal is the first refused row.
-  const refusedRows = rows.filter({ hasNotText: "Awaiting review" });
+  const refusedRows = rows.filter({ hasText: "Refused" });
   await expect.poll(async () => rowCountSince(refusedRows, context.since)).toBe(1);
   const refusedRow = refusedRows.first();
   await expect(refusedRow.getByText("Refused", { exact: true })).toBeVisible();
@@ -302,7 +308,7 @@ test.afterEach(() => {
 
 test.use({ viewport: { width: 1440, height: 1000 } });
 
-test("disabled capture stays empty; secret input stays absent; a captured proposal is newest and legible; Keep promotes it; failed Forget is closed; successful Forget removes it from Journal and retrieval @smoke", async ({
+test("disabled capture stays empty; secret input stays absent; a captured fact is newest, legible and in use at once; Keep acknowledges it; failed Forget is closed; successful Forget removes it from Journal and retrieval @smoke", async ({
   page,
   request,
 }) => {

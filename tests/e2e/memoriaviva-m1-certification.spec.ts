@@ -276,9 +276,10 @@ async function certifyGovernedJournal(
   const window = await openMemoryWindow(context.page);
   await window.getByRole("button", { name: "Journal", exact: true }).click();
   const row = window.locator(`[data-memory-id="${memoryId}"]`);
-  await expect(row.getByText("Ask for approval")).toBeVisible();
+  // Nothing waits for review, so the row names no mode: no approval was asked for.
+  await expect(row.getByText("Auto-captured")).toBeVisible();
   await expect(row.getByText("Awaiting review")).toHaveCount(0);
-  await expect(row.getByRole("button", { name: "Keep" })).toHaveCount(0);
+  await expect(row.getByText("Ask for approval")).toHaveCount(0);
   await row.getByRole("button", { name: "Forget" }).click();
   await expect
     .poll(async () => (await storedMemoryIds(context.request)).includes(memoryId))
@@ -400,8 +401,11 @@ function assertTypedTurnsUnchangedAndDesktopAttributed(
   for (const marker of typedMarkers) {
     expect(countMarker(after, marker)).toBe(countMarker(before, marker));
   }
+  // A person's forget (#4206) is a record-free Journal entry derived by the vault, not a turn
+  // capture, so it carries no turn surface.
   const desktop = after.filter(
-    (capture) => capture.bodyExcerpt?.includes("M1_VOICE_CAPTURE") !== true,
+    (capture) =>
+      capture.outcome !== "forgotten" && capture.bodyExcerpt?.includes("M1_VOICE_CAPTURE") !== true,
   );
   expect(desktop.length).toBeGreaterThan(0);
   expect(desktop.map((capture) => capture.provenance.initiatorSurface)).toEqual(

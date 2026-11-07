@@ -640,7 +640,7 @@ export const DE_MESSAGES = {
   "memoria.settings.useInChatLabel": "MemoriaViva in Chat-Anfragen verwenden",
 
   "memoria.settings.mode.hydrateError":
-    "Der Erinnerungsautonomiemodus konnte nicht geladen werden. Um Freigabe bitten bleibt aktiv.",
+    "Der Erinnerungsautonomiemodus konnte nicht geladen werden. Wartende Erinnerungen bleiben Vorschläge.",
   "memoria.settings.mode.persistError":
     "Der Erinnerungsautonomiemodus konnte nicht gespeichert werden. Der vorherige Modus bleibt aktiv.",
 

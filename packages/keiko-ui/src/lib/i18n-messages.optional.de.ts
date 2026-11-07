@@ -2510,7 +2510,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "memoria.settings.mode.autonomousDelivery.description":
     "Keiko darf wartende Routine-Erinnerungen innerhalb der Deployment-Grenze übernehmen.",
   "memoria.settings.mode.clamped":
-    "Die Deployment-Grenze erzwingt aktuell {effectiveMode} für Erfassungen.",
+    "Die Deployment-Grenze erzwingt aktuell {effectiveMode} für wartende Erinnerungen.",
   "memoria.consolidation.title": "MemoriaViva-Konsolidierung",
   "memoria.consolidation.description":
     "Starte einen begrenzten Konsolidierungsjob, prüfe seine Ausgabe und brich ihn ab, solange er wartet oder läuft.",

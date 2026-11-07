@@ -225,17 +225,23 @@ export function memoryUnattendedAcceptanceAllowed(mode: CodingWorkbenchMode | un
   return isCodingWorkbenchMode(mode) && mode !== "governed-assist";
 }
 
-// Whether a captured routine fact is accepted at once (ADR-0146 D2, #4206). It is, in every mode:
-// nobody is asked to approve a memory. Hard denials stay upstream and mode-invariant — a secret body
-// never becomes a candidate, and `restricted` and `confidential` content is refused before this is
-// asked (`isPersistableMemoryCandidate`). Only an explicit operator restriction keeps the fact for
-// review. A correction of a known fact is a candidate too, so it replaces that fact in the same
+// Whether a captured routine fact is accepted at once (ADR-0146 D2, #4206). A routine PRIVATE fact
+// is, in every mode: nobody is asked to approve a memory about themselves. Hard denials stay upstream
+// and mode-invariant — a secret body never becomes a candidate, and `restricted` and `confidential`
+// content is refused before this is asked (`isPersistableMemoryCandidate`). Only an explicit operator
+// restriction keeps the fact for review. A fact about the team or project is project memory, which
+// #4206 leaves to step 3: it keeps the effective mode's rule (`mode` is already clamped by the
+// ceiling). A correction of a known fact is a candidate too, so it replaces that fact in the same
 // transaction (`applyLearnedSupersession`).
 export function memoryCaptureAutoAcceptEligible(
   deps: MemoryCeilingDeps,
+  mode: CodingWorkbenchMode,
   outcome: CaptureOutcome,
 ): boolean {
-  return isPersistableMemoryCandidate(outcome) && !memoryOperatorRestrictsAcceptance(deps);
+  if (!isPersistableMemoryCandidate(outcome) || memoryOperatorRestrictsAcceptance(deps)) {
+    return false;
+  }
+  return outcome.proposal.scope.kind === "user" || memoryUnattendedAcceptanceAllowed(mode);
 }
 
 // A person's own clear "Merke dir" is their decision, not unattended learning, so it holds in every

@@ -510,32 +510,60 @@ describe("memory learning passes", () => {
 
   // Chat messages are never edited in place: a corrected statement is the person's next turn. It
   // replaces the learned fact through the ordinary supersession rules, whether the earlier turn was
-  // learned already or is learned in the same pass. In Full access the replacement is made at once;
-  // in Ask for approval it waits as a proposal beside the fact it would replace.
+  // learned already or is learned in the same pass. A private fact needs no approval in any mode
+  // (#4206), so the replacement is made at once even in Ask for approval; only an operator's
+  // configured restriction keeps it waiting as a proposal beside the fact it would replace.
+  const FULL_ACCESS_CEILING = { codingRuntimeDeploymentCeiling: "autonomous-delivery" } as const;
+  const OPERATOR_RESTRICTION = {
+    memoryDeploymentCeiling: "governed-assist",
+    memoryDeploymentCeilingConfigured: true,
+  } as const;
   it.each([
-    ["after the first statement was learned", true, "autonomous-delivery", "accepted"],
-    ["while both statements were still pending", false, "autonomous-delivery", "accepted"],
-    ["as a proposal when the person asks for approval", true, "governed-assist", "proposed"],
-  ] as const)("replaces a corrected fact %s", async (_name, learnBetween, mode, status) => {
-    const deps = makeDeps({ codingRuntimeDeploymentCeiling: "autonomous-delivery" });
-    const chat = makeChat(deps);
-    const runtime = memoryLearningRuntime(deps);
-    writeTurn(deps, chat, "I use PostgreSQL 14.", true, mode);
-    if (learnBetween) await runtime.runPass("inactivity", undefined);
-    writeTurn(deps, chat, "I use PostgreSQL 16.", true, mode);
-    await runtime.runPass("inactivity", undefined);
-    const byStatus = (wanted: MemoryRecord["status"]): readonly string[] =>
-      learned(deps, chat, [wanted]).map((record) => record.body);
-    expect(byStatus(status)).toContain("I use PostgreSQL 16.");
-    if (status === "accepted") {
-      expect(byStatus("accepted")).toEqual(["I use PostgreSQL 16."]);
-      expect(byStatus("superseded")).toEqual(["I use PostgreSQL 14."]);
-    } else {
-      // Nothing is replaced before the person approves: the earlier fact still stands.
-      expect(bodies(deps, chat)).toEqual(["I use PostgreSQL 14.", "I use PostgreSQL 16."]);
-      expect(byStatus("superseded")).toEqual([]);
-    }
-  });
+    [
+      "after the first statement was learned",
+      true,
+      "autonomous-delivery",
+      FULL_ACCESS_CEILING,
+      "accepted",
+    ],
+    [
+      "while both statements were still pending",
+      false,
+      "autonomous-delivery",
+      FULL_ACCESS_CEILING,
+      "accepted",
+    ],
+    ["at once in Ask for approval", true, "governed-assist", FULL_ACCESS_CEILING, "accepted"],
+    [
+      "as a proposal under an operator restriction",
+      true,
+      "autonomous-delivery",
+      OPERATOR_RESTRICTION,
+      "proposed",
+    ],
+  ] as const)(
+    "replaces a corrected fact %s",
+    async (_name, learnBetween, mode, ceiling, status) => {
+      const deps = makeDeps(ceiling);
+      const chat = makeChat(deps);
+      const runtime = memoryLearningRuntime(deps);
+      writeTurn(deps, chat, "I use PostgreSQL 14.", true, mode);
+      if (learnBetween) await runtime.runPass("inactivity", undefined);
+      writeTurn(deps, chat, "I use PostgreSQL 16.", true, mode);
+      await runtime.runPass("inactivity", undefined);
+      const byStatus = (wanted: MemoryRecord["status"]): readonly string[] =>
+        learned(deps, chat, [wanted]).map((record) => record.body);
+      expect(byStatus(status)).toContain("I use PostgreSQL 16.");
+      if (status === "accepted") {
+        expect(byStatus("accepted")).toEqual(["I use PostgreSQL 16."]);
+        expect(byStatus("superseded")).toEqual(["I use PostgreSQL 14."]);
+      } else {
+        // Nothing is replaced before the person approves: the earlier fact still stands.
+        expect(bodies(deps, chat)).toEqual(["I use PostgreSQL 14.", "I use PostgreSQL 16."]);
+        expect(byStatus("superseded")).toEqual([]);
+      }
+    },
+  );
 
   it("reports a failing pass, frees the runtime and retries later", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });

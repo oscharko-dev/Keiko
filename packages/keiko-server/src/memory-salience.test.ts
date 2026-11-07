@@ -842,7 +842,8 @@ describe("captureSalientFromTurn", () => {
         "Automatically inferred from conversation (salience capture)",
       );
       expect(record.provenance.sourceKind).toBe("system-default");
-      expect(record.status).toBe("proposed");
+      // #4206: a routine private fact is accepted at once under default deps.
+      expect(record.status).toBe("accepted");
     }
   });
 
@@ -1028,7 +1029,8 @@ describe("captureSalientFromTurn", () => {
     expect(actions).toHaveLength(3);
   });
 
-  it("persists confidential salience candidates as masked reviewable proposals", async () => {
+  // #4206: nobody reviews a memory any more, so confidential content is refused and stored nowhere.
+  it("refuses confidential salience candidates and stores nothing", async () => {
     const vault = makeVault();
     const deps = makeDeps({
       memoryVault: vault,
@@ -1052,23 +1054,14 @@ describe("captureSalientFromTurn", () => {
       "gpt-test",
       "ok",
     );
-    expect(actions).toHaveLength(1);
-    expect(actions[0]).toMatchObject({
-      kind: "candidate",
-      body: "Sensitive memory pending review.",
-      requiresApproval: true,
-    });
-    const records = readMemories(vault, ctx);
-    expect(records).toHaveLength(1);
-    expect(records[0]?.status).toBe("proposed");
-    expect(records[0]?.provenance.sensitivity).toBe("confidential");
-    expect(records[0]?.body).toBe("My private support email is developer@example.com.");
+    expect(actions).toEqual([{ kind: "rejected", reason: "sensitive-memory-requires-approval" }]);
+    expect(readMemories(vault, ctx)).toEqual([]);
   });
 
-  it("isPersistableMemoryCandidate guard persists non-restricted sensitive and public candidates", async () => {
-    // Model returns two items: one with an email address (confidential → reviewable masked
-    // candidate) and one plain public fact. Credential/restricted shapes are still rejected by
-    // memory-capture before this persistence layer.
+  it("isPersistableMemoryCandidate guard refuses confidential candidates and persists public ones", async () => {
+    // Model returns two items: one with an email address (confidential → refused, #4206) and one
+    // plain public fact. Credential/restricted shapes are still rejected by memory-capture before
+    // this persistence layer.
     const vault = makeVault();
     const deps = makeDeps({
       memoryVault: vault,
@@ -1102,19 +1095,14 @@ describe("captureSalientFromTurn", () => {
       "ok",
     );
     expect(actions).toHaveLength(2);
-    const candidates = actions.filter((a) => a.kind === "candidate");
-    expect(candidates).toHaveLength(2);
-    expect(candidates[0]).toMatchObject({
-      kind: "candidate",
-      body: "Sensitive memory pending review.",
-      requiresApproval: true,
-    });
-    expect(candidates[1]).toMatchObject({
+    expect(actions[0]).toEqual({ kind: "rejected", reason: "sensitive-memory-requires-approval" });
+    expect(actions[1]).toMatchObject({
       kind: "candidate",
       body: "I work in the payments domain.",
       requiresApproval: false,
+      status: "accepted",
     });
-    expect(countMemories(vault, ctx)).toBe(2);
+    expect(countMemories(vault, ctx)).toBe(1);
   });
 
   it("does not skip salience when the user text contains PII alongside a public fact", async () => {
@@ -1151,17 +1139,14 @@ describe("captureSalientFromTurn", () => {
       "ok",
     );
     expect(actions).toHaveLength(2);
-    expect(actions[0]).toMatchObject({
-      kind: "candidate",
-      body: "Sensitive memory pending review.",
-      requiresApproval: true,
-    });
+    expect(actions[0]).toEqual({ kind: "rejected", reason: "sensitive-memory-requires-approval" });
     expect(actions[1]).toMatchObject({
       kind: "candidate",
       body: "Ich bevorzuge Vitest.",
       requiresApproval: false,
+      status: "accepted",
     });
-    expect(countMemories(vault, ctx)).toBe(2);
+    expect(countMemories(vault, ctx)).toBe(1);
   });
 
   it("skips the salience model call when the user text contains a credential", async () => {

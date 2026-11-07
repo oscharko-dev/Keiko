@@ -72,6 +72,7 @@ import {
   memoryCaptureAutoAcceptEligible,
   memoryCapturePolicyForDeps,
   memoryOperatorRestrictsAcceptance,
+  memoryUnattendedAcceptanceAllowed,
   promoteEligibleMemoryRecord,
   resolveMemoryCaptureAutonomyMode,
   SENSITIVE_MEMORY_ACTION_BODY,
@@ -394,11 +395,18 @@ function recordCaptureDecision(
 }
 
 // Why a persisted fact waits. A sensitive body never reaches this point (it is refused), so the
-// fact is held either by an explicit operator restriction or by the governance promotion strength.
-function proposedDecisionReason(deps: UiHandlerDeps): MemoryCaptureDecisionReason {
-  return memoryOperatorRestrictsAcceptance(deps)
-    ? "operator-requires-approval"
-    : "governance-promotion-deferred";
+// fact is held by an explicit operator restriction, by the mode for a team or project fact (project
+// memory is step 3, not #4206), or by the governance promotion strength.
+function proposedDecisionReason(
+  deps: UiHandlerDeps,
+  mode: CodingWorkbenchMode,
+  inserted: MemoryRecord,
+): MemoryCaptureDecisionReason {
+  if (memoryOperatorRestrictsAcceptance(deps)) return "operator-requires-approval";
+  if (inserted.scope.kind !== "user" && !memoryUnattendedAcceptanceAllowed(mode)) {
+    return "mode-requires-approval";
+  }
+  return "governance-promotion-deferred";
 }
 
 function recordPersistedCandidateDecision(
@@ -412,7 +420,7 @@ function recordPersistedCandidateDecision(
     outcome: accepted ? "auto-accepted" : "proposed",
     scope: inserted.scope,
     sourceKind: inserted.provenance.sourceKind,
-    reason: accepted ? "governance-auto-accepted" : proposedDecisionReason(deps),
+    reason: accepted ? "governance-auto-accepted" : proposedDecisionReason(deps, mode, inserted),
     occurredAt: inserted.createdAt,
     memoryId: inserted.id,
   });
@@ -643,7 +651,7 @@ async function persistCandidate(
   const record = buildMemoryRecordFromProposal(proposalId, outcome);
   const settledBeforeInsert = settleBeforeInsert(vault, record, outcome, trace, refuse);
   if (settledBeforeInsert !== null) return settledBeforeInsert;
-  const candidate = memoryCaptureAutoAcceptEligible(deps, outcome)
+  const candidate = memoryCaptureAutoAcceptEligible(deps, mode, outcome)
     ? promoteEligibleMemoryRecord(record)
     : record;
   let decision: LearnedRelationDecision = "new";

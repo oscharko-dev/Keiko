@@ -141,6 +141,8 @@ function makeVault(
   return vault;
 }
 
+// #4206: the governed-assist ceiling set here is an operator restriction, the only thing that still
+// holds a private fact as proposed.
 function depsFor(
   vault: MemoryVaultStore,
   evidenceStore: ReturnType<typeof createInMemoryEvidenceStore>,

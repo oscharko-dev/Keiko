@@ -2504,7 +2504,8 @@ describe("desktop chat routes", () => {
     memoryVault.close();
   });
 
-  it("persists confidential chat-intent candidates as masked review proposals", async () => {
+  // #4206: nobody reviews a memory any more, so confidential content is refused, not parked.
+  it("refuses confidential chat-intent candidates and stores nothing", async () => {
     const memoryDir = join(tmp, "memory-vault-confidential");
     mkdirSync(memoryDir);
     const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
@@ -2531,27 +2532,16 @@ describe("desktop chat routes", () => {
 
     expect(sendRes.status).toBe(200);
     const body = (await sendRes.json()) as {
-      memory?: {
-        actions: {
-          kind: string;
-          body?: string;
-          proposalId?: string;
-          requiresApproval?: boolean;
-        }[];
-      };
+      memory?: { actions: { kind: string; reason?: string }[] };
     };
-    expect(body.memory?.actions[0]).toMatchObject({
-      kind: "candidate",
-      body: "Sensitive memory pending review.",
-      requiresApproval: true,
-    });
-    const proposalId = body.memory?.actions[0]?.proposalId;
-    expect(proposalId).toBeDefined();
-    if (proposalId !== undefined) {
-      const record = memoryVault.getMemory(proposalId as MemoryId);
-      expect(record?.status).toBe("proposed");
-      expect(record?.provenance.sensitivity).toBe("confidential");
-    }
+    expect(body.memory?.actions).toEqual([
+      {
+        kind: "rejected",
+        reason: "sensitive-memory-requires-approval",
+        explicitStatement: true,
+      },
+    ]);
+    expect(listAllMemories(memoryVault, { includeExpired: true })).toEqual([]);
     memoryVault.close();
   });
 
@@ -2597,7 +2587,7 @@ describe("desktop chat routes", () => {
   });
 
   // eslint-disable-next-line complexity
-  it("captures an ambient identity statement, requires acceptance, and recalls it in a new chat", async () => {
+  it("captures an ambient identity statement, accepts it at once, and recalls it in a new chat", async () => {
     const memoryDir = join(tmp, "memory-vault-ambient-identity");
     mkdirSync(memoryDir);
     const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
@@ -2635,23 +2625,14 @@ describe("desktop chat routes", () => {
     expect(introduceBody.memory?.actions[0]).toMatchObject({
       kind: "candidate",
       body: "The user's name is Paul.",
+      status: "accepted",
     });
     const proposalId = introduceBody.memory?.actions[0]?.proposalId;
     expect(typeof proposalId).toBe("string");
     if (proposalId === undefined) {
       throw new Error("expected ambient identity capture to return a proposal id");
     }
-    expect(memoryVault.getMemory(proposalId as MemoryId)?.status).toBe("proposed");
-
-    const acceptRes = await fetch(
-      `${base()}/api/memory/proposals/${encodeURIComponent(proposalId)}/accept`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
-        body: "{}",
-      },
-    );
-    expect(acceptRes.status).toBe(200);
+    // #4206: a routine private fact needs no approval, so nothing waits for the person.
     expect(memoryVault.getMemory(proposalId as MemoryId)?.status).toBe("accepted");
     const acceptedMemory = memoryVault.getMemory(proposalId as MemoryId);
 
@@ -2702,7 +2683,60 @@ describe("desktop chat routes", () => {
     memoryVault.close();
   });
 
-  it("captures a spoken-profile chat turn as proposed MemoriaViva candidates", async () => {
+  it("holds an ambient identity statement for review under an operator restriction", async () => {
+    const memoryDir = join(tmp, "memory-vault-ambient-identity-restricted");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    // #4206: only an operator restriction still holds a private fact for review.
+    await restartWithDeps(
+      deps(scriptedIdentityRecallModel(), {
+        memoryVault,
+        env: LEARN_AFTER_EACH_TURN,
+        memoryDeploymentCeiling: "governed-assist",
+        memoryDeploymentCeilingConfigured: true,
+      }),
+    );
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "Hallo Keiko, ich bin Paul.",
+        memory: { enabled: true, context: {} },
+      }),
+    });
+    expect(sendRes.status).toBe(200);
+    const body = (await sendRes.json()) as {
+      memory?: { actions: { kind: string; proposalId?: string; status?: string }[] };
+    };
+    expect(body.memory?.actions[0]).toMatchObject({ kind: "candidate", status: "proposed" });
+    const proposalId = body.memory?.actions[0]?.proposalId;
+    if (proposalId === undefined) throw new Error("expected a proposal id");
+    expect(memoryVault.getMemory(proposalId as MemoryId)?.status).toBe("proposed");
+
+    const acceptRes = await fetch(
+      `${base()}/api/memory/proposals/${encodeURIComponent(proposalId)}/accept`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
+        body: "{}",
+      },
+    );
+    expect(acceptRes.status).toBe(200);
+    expect(memoryVault.getMemory(proposalId as MemoryId)?.status).toBe("accepted");
+    memoryVault.close();
+  });
+
+  it("captures a spoken-profile chat turn as accepted MemoriaViva candidates", async () => {
     const memoryDir = join(tmp, "memory-vault-spoken-profile");
     mkdirSync(memoryDir);
     const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
@@ -2748,7 +2782,7 @@ describe("desktop chat routes", () => {
           "Ich bin Softwareentwickler.",
         ]),
       );
-      expect(records.every((record) => record.status === "proposed")).toBe(true);
+      expect(records.every((record) => record.status === "accepted")).toBe(true);
     });
     await vi.waitFor(() => {
       expect(

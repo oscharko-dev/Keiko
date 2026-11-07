@@ -33,10 +33,12 @@ import {
   type VoiceCapabilityResolution,
 } from "@oscharko-dev/keiko-model-gateway";
 import type {
+  CodingWorkbenchMode,
   MemoryAuditEvent,
   MemoryId,
   MemoryProposalId,
   MemoryScope,
+  MemorySourceKind,
   VoiceProfile,
   VoiceSessionRecapAuditRecord,
 } from "@oscharko-dev/keiko-contracts";
@@ -49,6 +51,7 @@ import {
   extractCandidatesFromUserText,
   type CaptureContext,
   type CaptureOutcome,
+  type RejectionReason,
 } from "@oscharko-dev/keiko-memory-capture";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import { validateProjectPath } from "./store/validation.js";
@@ -56,7 +59,10 @@ import { currentAuditRedactString, currentGatewayConfig, type UiHandlerDeps } fr
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
 import { isVoiceDisabledByPolicy } from "./read-handlers.js";
 import { desktopChatErrorResult } from "./chat-handlers.js";
-import { resolveConversationMemoryContext } from "./memory-conversation-context.js";
+import {
+  conversationMemoryScopes,
+  resolveConversationMemoryContext,
+} from "./memory-conversation-context.js";
 import type { ConversationMemoryRuntimeContext } from "./memory-conversation-context.js";
 import {
   isPersistableMemoryCandidate,
@@ -64,13 +70,18 @@ import {
   memoryCapturePolicyForDeps,
   promoteEligibleMemoryRecord,
   resolvePersistedMemoryAutonomyMode,
+  SENSITIVE_MEMORY_REJECTION_REASON,
 } from "./memory-capture-policy.js";
 import { createMemoryTargetResolver } from "./memory-target-resolver.js";
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
 import { exactCaptureSuppressionReason } from "./memory-suppression.js";
 import { embedAndStoreMemory } from "./memory-embedding.js";
 import { recordMemoryAudits } from "./memory-audit-handler.js";
-import { recordAutoAcceptedMemoryCaptureDecision } from "./memory-capture-audit.js";
+import {
+  isJournaledRefusalReason,
+  recordAutoAcceptedMemoryCaptureDecision,
+  recordRefusedCaptureDecision,
+} from "./memory-capture-audit.js";
 import { persistCapturedMemory } from "./memory-capture-persistence.js";
 import type { VoiceRecapContentAttestationStore } from "./voice-recap-provenance.js";
 
@@ -314,7 +325,7 @@ async function persistRecapOutcome(
   const record = buildMemoryRecordFromProposal(proposalId, outcome);
   if (exactCaptureSuppressionReason(vault, record) !== null) return null;
   const candidate =
-    autoAcceptEligible && memoryCaptureAutoAcceptEligible(deps, outcome)
+    autoAcceptEligible && memoryCaptureAutoAcceptEligible(deps, mode, outcome)
       ? promoteEligibleMemoryRecord(record)
       : record;
   const result = persistCapturedMemory(vault, candidate, true);
@@ -330,11 +341,40 @@ async function persistRecapOutcome(
 // forget-tombstone suppression, `buildMemoryRecordFromProposal`, best-effort embed-on-capture.
 // Everything else (rejected, sensitive/approval-gated candidates, governance-action kinds) is
 // COUNTED but never written — surfaced as `candidatesRejected` in the content-free response.
+// Why a recap outcome was not kept, when that reason is one the person reads in the Journal (#4206).
+function recapRefusal(
+  outcome: CaptureOutcome,
+): { readonly reason: RejectionReason; readonly sourceKind: MemorySourceKind } | null {
+  if (outcome.kind === "rejected") {
+    if (!isJournaledRefusalReason(outcome.reason)) return null;
+    const sourceKind =
+      outcome.statement === "remember" ? "explicit-user-instruction" : "system-default";
+    return { reason: outcome.reason, sourceKind };
+  }
+  if (outcome.kind !== "candidate") return null;
+  // Read before the guard: a refused candidate narrows to nothing it could still be.
+  const { sourceKind } = outcome.proposal.provenance;
+  if (isPersistableMemoryCandidate(outcome)) return null;
+  return { reason: SENSITIVE_MEMORY_REJECTION_REASON, sourceKind };
+}
+
+function journalRecapRefusal(
+  deps: UiHandlerDeps,
+  mode: CodingWorkbenchMode,
+  scopes: readonly MemoryScope[],
+  outcome: CaptureOutcome,
+): void {
+  const refusal = recapRefusal(outcome);
+  if (refusal === null) return;
+  recordRefusedCaptureDecision(deps, { mode, surface: "voice", scopes, ...refusal });
+}
+
 async function persistRecapOutcomes(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   outcomes: readonly CaptureOutcome[],
   autoAcceptEligible: boolean,
+  scopes: readonly MemoryScope[],
 ): Promise<RecapPersistResult> {
   const proposed: { id: MemoryId; scope: MemoryScope }[] = [];
   const accepted: { id: MemoryId; scope: MemoryScope }[] = [];
@@ -344,6 +384,7 @@ async function persistRecapOutcomes(
     const persisted = await persistRecapOutcome(deps, vault, outcome, mode, autoAcceptEligible);
     if (persisted === null) {
       rejected += 1;
+      journalRecapRefusal(deps, mode, scopes, outcome);
       continue;
     }
     const memory = { id: persisted.id, scope: persisted.scope };
@@ -416,7 +457,13 @@ async function buildRecapResponse(
     outcomes.push(...extractCandidatesFromUserText(span, captureContext, policy));
   }
   const autoAcceptEligible = provenance === "attested";
-  const persisted = await persistRecapOutcomes(deps, vault, outcomes, autoAcceptEligible);
+  const persisted = await persistRecapOutcomes(
+    deps,
+    vault,
+    outcomes,
+    autoAcceptEligible,
+    conversationMemoryScopes(runtime),
+  );
   recordRecapAudits(deps, profile, request, persisted, startedAtMs);
   return {
     status: "ok",

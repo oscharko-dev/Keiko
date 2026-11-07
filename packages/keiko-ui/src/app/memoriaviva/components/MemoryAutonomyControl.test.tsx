@@ -53,7 +53,7 @@ describe("MemoryAutonomyControl", () => {
   it("surfaces the hydrate and persist error copy as an alert", () => {
     const { rerender } = renderControl({ error: "hydrate" });
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "The memory autonomy mode could not be loaded. Ask for approval remains active.",
+      "The memory autonomy mode could not be loaded. Waiting memories stay proposals.",
     );
     rerender(
       <MemoryAutonomyControl
@@ -77,7 +77,7 @@ describe("MemoryAutonomyControl", () => {
   it("shows a clamped notice when the deployment ceiling lowers the effective mode", () => {
     renderControl({ mode: "autonomous-delivery", effectiveMode: "governed-assist" });
     expect(screen.getByRole("status")).toHaveTextContent(
-      "The deployment ceiling currently enforces Ask for approval for captures.",
+      "The deployment ceiling currently enforces Ask for approval for waiting memories.",
     );
   });
 

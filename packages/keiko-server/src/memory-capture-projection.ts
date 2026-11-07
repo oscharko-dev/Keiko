@@ -295,12 +295,21 @@ function buildProjectedDecision(
 
 // A forget that left a tombstone is the person's decision; a deletion without one (a replaced or
 // expired record) is housekeeping and stays out. The record is gone, so the entry names none.
+// #4206 audit: retention and maintenance also tombstone records. Only a forget a person asked for,
+// in the Memory Center or with a clear statement in a Chat, is the person's Journal entry.
+const PERSON_FORGETTER_SURFACES: ReadonlySet<string> = new Set(["memory-center", "chat-statement"]);
+
+function isPersonForget(forgetterSurface: string | undefined): boolean {
+  return forgetterSurface !== undefined && PERSON_FORGETTER_SURFACES.has(forgetterSurface);
+}
+
 function projectForgetEvent(
   event: Extract<MemoryAuditEvent, { readonly kind: "memory:forgotten" }>,
   ledgerOrder: number,
   allowedScopeKeys: ReadonlySet<string>,
 ): IndexedDecision | null {
-  if (!event.tombstoned || !allowedScopeKeys.has(auditScopeKey(event.scope))) return null;
+  if (!event.tombstoned || !isPersonForget(event.forgetterSurface)) return null;
+  if (!allowedScopeKeys.has(auditScopeKey(event.scope))) return null;
   return {
     decision: {
       eventId: event.eventId,

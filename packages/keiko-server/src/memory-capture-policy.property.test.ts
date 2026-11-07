@@ -1,8 +1,9 @@
 // Property/enumeration tests for the capture decision function (#2546, #4206). No fast-check: the
 // input space (ceilings x configuration x sensitivity x requiresApproval x outcome-kind) is tiny
-// and fully enumerated. These pin the load-bearing properties: a routine fact is accepted whatever
-// the mode, only an explicit operator restriction holds it, hard denials are invariant, and the
-// persistability enforcement is idempotent.
+// and fully enumerated. These pin the load-bearing properties: a routine private fact is accepted
+// whatever the mode, a team or project fact keeps the monotonic mode rule (project memory is step 3,
+// not #4206), only an explicit operator restriction holds a private fact, hard denials are invariant,
+// and the persistability enforcement is idempotent.
 
 import { describe, expect, it } from "vitest";
 import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
@@ -11,7 +12,9 @@ import type {
   MemoryProposal,
   MemoryProposalId,
   MemorySensitivity,
+  MemoryScope,
   ProjectId,
+  UserId,
 } from "@oscharko-dev/keiko-contracts/memory";
 import type { CaptureOutcome } from "@oscharko-dev/keiko-memory-capture";
 import {
@@ -19,6 +22,7 @@ import {
   isPersistableMemoryCandidate,
   memoryCaptureAutoAcceptEligible,
   memoryOperatorRestrictsAcceptance,
+  memoryUnattendedAcceptanceAllowed,
   resolveMemoryCaptureAutonomyMode,
 } from "./memory-capture-policy.js";
 
@@ -50,12 +54,16 @@ function authorityRank(mode: CodingWorkbenchMode): number {
   return CODING_WORKBENCH_MODES.indexOf(mode);
 }
 
-function candidateProposal(sensitivity: MemorySensitivity): MemoryProposal {
+const PRIVATE_SCOPE: MemoryScope = { kind: "user", userId: "local-operator" as UserId };
+const PROJECT_SCOPE: MemoryScope = { kind: "project", projectId: "proj-1" as ProjectId };
+const SCOPES: readonly MemoryScope[] = [PRIVATE_SCOPE, PROJECT_SCOPE];
+
+function candidateProposal(sensitivity: MemorySensitivity, scope: MemoryScope): MemoryProposal {
   return {
     schemaVersion: "1",
     proposalId: "proposal-1" as MemoryProposalId,
     proposedAt: 1_700_000_000_000,
-    scope: { kind: "project", projectId: "proj-1" as ProjectId },
+    scope,
     type: "semantic-fact",
     body: "The platform team ships releases on a fortnightly cadence.",
     tags: [],
@@ -73,8 +81,9 @@ function candidateProposal(sensitivity: MemorySensitivity): MemoryProposal {
 function candidateOutcome(
   sensitivity: MemorySensitivity,
   requiresApproval: boolean,
+  scope: MemoryScope = PRIVATE_SCOPE,
 ): CaptureOutcome {
-  return { kind: "candidate", proposal: candidateProposal(sensitivity), requiresApproval };
+  return { kind: "candidate", proposal: candidateProposal(sensitivity, scope), requiresApproval };
 }
 
 // Non-candidate outcomes: enforcement and eligibility must never mutate or "upgrade" these.
@@ -118,61 +127,104 @@ const RESTRICTED_DEPS: readonly CeilingDeps[] = [
   },
 ];
 
-describe("memoryCaptureAutoAcceptEligible — a routine fact needs no approval (#4206)", () => {
-  it("accepts a public, no-approval candidate under every unrestricted composition", () => {
-    for (const deps of UNRESTRICTED_DEPS) {
-      expect(memoryOperatorRestrictsAcceptance(deps)).toBe(false);
-      expect(memoryCaptureAutoAcceptEligible(deps, candidateOutcome("public", false))).toBe(true);
-    }
+describe("memoryUnattendedAcceptanceAllowed — monotonicity over the mode order", () => {
+  it("is false for governed-assist and for an absent mode, true above it", () => {
+    expect(memoryUnattendedAcceptanceAllowed(undefined)).toBe(false);
+    expect(memoryUnattendedAcceptanceAllowed("governed-assist")).toBe(false);
+    expect(memoryUnattendedAcceptanceAllowed("supervised-coding")).toBe(true);
+    expect(memoryUnattendedAcceptanceAllowed("autonomous-delivery")).toBe(true);
   });
 
-  it("does not depend on the mode a person selected", () => {
-    for (const requested of CODING_WORKBENCH_MODES) {
-      const mode = resolveMemoryCaptureAutonomyMode({}, requested);
-      expect(mode).toBe("governed-assist");
-      expect(memoryCaptureAutoAcceptEligible({}, candidateOutcome("public", false))).toBe(true);
-    }
-  });
-
-  it("holds every candidate for review under an explicit operator restriction", () => {
-    for (const deps of RESTRICTED_DEPS) {
-      expect(memoryOperatorRestrictsAcceptance(deps)).toBe(true);
-      for (const sensitivity of SENSITIVITIES) {
-        for (const requiresApproval of [false, true]) {
-          const outcome = candidateOutcome(sensitivity, requiresApproval);
-          expect(memoryCaptureAutoAcceptEligible(deps, outcome)).toBe(false);
+  it("is upward-closed: allowed at one mode means allowed at every stronger mode", () => {
+    for (const lower of CODING_WORKBENCH_MODES) {
+      for (const higher of CODING_WORKBENCH_MODES) {
+        if (authorityRank(higher) < authorityRank(lower)) continue;
+        if (memoryUnattendedAcceptanceAllowed(lower)) {
+          expect(memoryUnattendedAcceptanceAllowed(higher)).toBe(true);
         }
       }
     }
   });
 });
 
-describe("hard-denial invariance across every composition", () => {
+describe("memoryCaptureAutoAcceptEligible — a routine private fact needs no approval (#4206)", () => {
+  it("accepts a private routine fact in every mode under every unrestricted composition", () => {
+    let checked = 0;
+    for (const deps of UNRESTRICTED_DEPS) {
+      expect(memoryOperatorRestrictsAcceptance(deps)).toBe(false);
+      for (const mode of CODING_WORKBENCH_MODES) {
+        const effective = resolveMemoryCaptureAutonomyMode(deps, mode);
+        const outcome = candidateOutcome("public", false, PRIVATE_SCOPE);
+        expect(memoryCaptureAutoAcceptEligible(deps, effective, outcome)).toBe(true);
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(UNRESTRICTED_DEPS.length * CODING_WORKBENCH_MODES.length);
+  });
+
+  it("keeps the monotonic mode rule for a team or project fact", () => {
+    const outcome = candidateOutcome("public", false, PROJECT_SCOPE);
+    for (const deps of UNRESTRICTED_DEPS) {
+      for (const mode of CODING_WORKBENCH_MODES) {
+        expect(memoryCaptureAutoAcceptEligible(deps, mode, outcome)).toBe(
+          memoryUnattendedAcceptanceAllowed(mode),
+        );
+      }
+      expect(memoryCaptureAutoAcceptEligible(deps, "governed-assist", outcome)).toBe(false);
+    }
+  });
+
+  it("holds every candidate in every scope and mode under an explicit operator restriction", () => {
+    for (const deps of RESTRICTED_DEPS) {
+      expect(memoryOperatorRestrictsAcceptance(deps)).toBe(true);
+      for (const mode of CODING_WORKBENCH_MODES) {
+        for (const scope of SCOPES) {
+          for (const sensitivity of SENSITIVITIES) {
+            for (const requiresApproval of [false, true]) {
+              const outcome = candidateOutcome(sensitivity, requiresApproval, scope);
+              expect(memoryCaptureAutoAcceptEligible(deps, mode, outcome)).toBe(false);
+            }
+          }
+        }
+      }
+    }
+  });
+});
+
+describe("hard-denial invariance across every composition, scope and mode", () => {
   const everyDeps = [...UNRESTRICTED_DEPS, ...RESTRICTED_DEPS];
 
-  it("restricted is never persistable and never eligible", () => {
-    const outcome = candidateOutcome("restricted", false);
-    expect(isPersistableMemoryCandidate(outcome)).toBe(false);
+  function neverEligible(outcome: CaptureOutcome): void {
     for (const deps of everyDeps) {
-      expect(memoryCaptureAutoAcceptEligible(deps, outcome)).toBe(false);
+      for (const mode of CODING_WORKBENCH_MODES) {
+        expect(memoryCaptureAutoAcceptEligible(deps, mode, outcome)).toBe(false);
+      }
+    }
+  }
+
+  it("restricted is never persistable and never eligible", () => {
+    for (const scope of SCOPES) {
+      const outcome = candidateOutcome("restricted", false, scope);
+      expect(isPersistableMemoryCandidate(outcome)).toBe(false);
+      neverEligible(outcome);
     }
   });
 
   it("confidential content is refused, never parked for a review that no longer exists", () => {
-    for (const requiresApproval of [false, true]) {
-      const outcome = candidateOutcome("confidential", requiresApproval);
-      expect(isPersistableMemoryCandidate(outcome)).toBe(false);
-      for (const deps of everyDeps) {
-        expect(memoryCaptureAutoAcceptEligible(deps, outcome)).toBe(false);
+    for (const scope of SCOPES) {
+      for (const requiresApproval of [false, true]) {
+        const outcome = candidateOutcome("confidential", requiresApproval, scope);
+        expect(isPersistableMemoryCandidate(outcome)).toBe(false);
+        neverEligible(outcome);
       }
     }
   });
 
   it("a candidate that still asks for approval is refused even when public", () => {
-    const outcome = candidateOutcome("public", true);
-    expect(isPersistableMemoryCandidate(outcome)).toBe(false);
-    for (const deps of everyDeps) {
-      expect(memoryCaptureAutoAcceptEligible(deps, outcome)).toBe(false);
+    for (const scope of SCOPES) {
+      const outcome = candidateOutcome("public", true, scope);
+      expect(isPersistableMemoryCandidate(outcome)).toBe(false);
+      neverEligible(outcome);
     }
   });
 });
@@ -212,7 +264,9 @@ describe("enforcePersistableMemoryOutcome — idempotence and kind preservation"
       expect(enforced.kind).not.toBe("candidate");
       expect(enforced).toEqual(outcome);
       for (const deps of [...UNRESTRICTED_DEPS, ...RESTRICTED_DEPS]) {
-        expect(memoryCaptureAutoAcceptEligible(deps, outcome)).toBe(false);
+        for (const mode of CODING_WORKBENCH_MODES) {
+          expect(memoryCaptureAutoAcceptEligible(deps, mode, outcome)).toBe(false);
+        }
       }
     }
   });

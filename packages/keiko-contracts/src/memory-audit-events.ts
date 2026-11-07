@@ -135,6 +135,10 @@ export type MemoryAuditEvent =
       readonly memoryId: MemoryId;
       readonly scope: MemoryScope;
       readonly tombstoned: boolean;
+      // #4206: who asked for the forget, from the vault's tombstone (`memory-center`,
+      // `chat-statement`, `retention`, `memory-maintenance`). Absent on older events and on the
+      // maintenance summary lines, which the Journal therefore never shows as a person's forget.
+      readonly forgetterSurface?: string;
     })
   | (MemoryAuditEventEnvelope & {
       readonly kind: "memory:retrieved";

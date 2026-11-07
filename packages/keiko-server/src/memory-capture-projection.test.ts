@@ -71,17 +71,25 @@ function captureEvent(
 
 type ForgottenAuditEvent = Extract<MemoryAuditEvent, { readonly kind: "memory:forgotten" }>;
 
-function forgottenEvent(id: string, occurredAt: number): ForgottenAuditEvent {
+// Mirrors buildTombstonedEvent: the vault derives every tombstone event, so its initiator surface
+// is "system" and only the tombstone's forgetter surface says who asked for the forget. `null` is an
+// event written before #4206, which carries no forgetter surface.
+function forgottenEvent(
+  id: string,
+  occurredAt: number,
+  forgetterSurface: string | null = "memory-center",
+): ForgottenAuditEvent {
   return {
     schemaVersion: "1",
     kind: "memory:forgotten",
     eventId: `forgot-${id}-${String(occurredAt)}`,
     occurredAt,
-    initiatorSurface: "memory-center",
-    summary: "memory forgotten",
+    initiatorSurface: "system",
+    summary: `memory forgotten (surface=${forgetterSurface ?? "unknown"})`,
     memoryId: memoryId(id),
     scope: OWN_SCOPE,
     tombstoned: true,
+    ...(forgetterSurface === null ? {} : { forgetterSurface }),
   };
 }
 
@@ -170,6 +178,10 @@ describe("memory capture projection", () => {
     const projected = projectMemoryCaptureDecisions(
       [
         forgottenEvent("forgotten", 250),
+        forgottenEvent("said-in-chat", 240, "chat-statement"),
+        forgottenEvent("expired", 230, "retention"),
+        forgottenEvent("swept", 220, "memory-maintenance"),
+        forgottenEvent("before-4206", 210, null),
         deletedWithoutTombstone,
         elsewhere,
         { ...forgottenEvent("early", 10) },
@@ -181,8 +193,16 @@ describe("memory capture projection", () => {
         eventId: "forgot-forgotten-250",
         outcome: "forgotten",
         scope: OWN_SCOPE,
-        provenance: { initiatorSurface: "memory-center", sourceKind: "explicit-user-instruction" },
+        provenance: { initiatorSurface: "system", sourceKind: "explicit-user-instruction" },
         occurredAt: 250,
+        reason: "forgotten-by-person",
+      },
+      {
+        eventId: "forgot-said-in-chat-240",
+        outcome: "forgotten",
+        scope: OWN_SCOPE,
+        provenance: { initiatorSurface: "system", sourceKind: "explicit-user-instruction" },
+        occurredAt: 240,
         reason: "forgotten-by-person",
       },
     ]);
