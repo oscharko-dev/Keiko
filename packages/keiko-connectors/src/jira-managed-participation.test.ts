@@ -81,8 +81,8 @@ describe("closed current-user participation", () => {
     },
   );
   it.each([
-    "https://untrusted.invalid/context/rest/api/2/issue/APP-1/watchers",
-    "https://jira.example.invalid/other/rest/api/2/issue/APP-1/watchers",
+    `${BASE}/rest/api/2/issue/APP-1/watchers?expand=other`,
+    `${BASE}/rest/api/2/issue/APP-1/watchers#other`,
     `${BASE}/rest/api/2/issue/OTHER-2/watchers`,
   ])("refuses a contradictory native self before writing", async (self) => {
     const request = vi
@@ -97,6 +97,39 @@ describe("closed current-user participation", () => {
       await executeJiraParticipationMutation("jira.watch", { issueKey: "APP-1" }, request),
     ).toMatchObject({ ok: false, reason: "conflict" });
     expect(request).toHaveBeenCalledTimes(2);
+  });
+  it("confirms participation through proxy self metadata while keeping all requests on the binding", async () => {
+    const request = vi
+      .fn<JiraMutationRequest>()
+      .mockResolvedValueOnce(ISSUE)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        body: {
+          watchCount: 0,
+          isWatching: false,
+          self: "https://public.example.test/other-context/rest/api/2/issue/APP-1/watchers",
+        },
+      })
+      .mockResolvedValueOnce({ ok: true, status: 204, body: undefined })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        body: {
+          watchCount: 1,
+          isWatching: true,
+          self: "http://internal.example.test:8080/rest/api/2/issue/10001/watchers",
+        },
+      });
+    expect(
+      await executeJiraParticipationMutation("jira.watch", { issueKey: "APP-1" }, request),
+    ).toEqual({ ok: true, receipt: { issueKey: "APP-1", issueId: "10001", isWatching: true } });
+    expect(request.mock.calls.map(([path]) => path)).toEqual([
+      "issue/APP-1?fields=summary",
+      "issue/10001/watchers",
+      "issue/10001/watchers",
+      "issue/10001/watchers",
+    ]);
   });
   it.each([
     { watchCount: -1, isWatching: false },

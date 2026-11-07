@@ -210,8 +210,8 @@ describe("bound native comment reads and updates", () => {
     undefined,
     `${BASE_URL}/rest/api/2/issue/10009/comment/${TARGET.commentId}`,
     `${BASE_URL}/rest/api/2/issue/${ISSUE.id}/comment/99`,
-    `https://other.example.test/context/rest/api/2/${PATH}`,
-    `https://jira.example.test/other-context/rest/api/2/${PATH}`,
+    `${COMMENT.self}?`,
+    `${COMMENT.self}#`,
     `${COMMENT.self}?expand=anything`,
     `${COMMENT.self}#fragment`,
   ])("refuses a missing or mismatched comment binding before any PUT", async (self) => {
@@ -222,6 +222,22 @@ describe("bound native comment reads and updates", () => {
     const write = fixture({ before: { ...COMMENT, self } });
     expect(await update(write)).toEqual({ ok: false, reason: "conflict" });
     expect(write.mock.calls).toEqual([[ISSUE_PATH], [PATH]]);
+  });
+  it.each([
+    `https://public.example.test/another-context/rest/api/2/${PATH}`,
+    `http://internal.example.test:8080/rest/api/2/${PATH}`,
+    `https://public.example.test/rest/api/2/${PATH.replace(ISSUE.id, "%31%30%30%30%37")}`,
+  ])("binds proxy self metadata without following or displaying its URL: %s", async (self) => {
+    const read = fixture({ before: { ...COMMENT, self } });
+    const result = await executeJiraCommentRead("jira.get-comment", TARGET, read, BASE_URL);
+    expect(result.data.outcome).toBe("succeeded");
+    expect(JSON.stringify(result)).not.toContain(self);
+    const write = fixture({
+      before: { ...COMMENT, self },
+      after: { ...COMMENT, self, body: "**Native** comment body" },
+    });
+    expect(await update(write)).toEqual({ ok: true, receipt: TARGET });
+    expect(write.mock.calls.map(([path]) => path)).toEqual([ISSUE_PATH, PATH, PATH, PATH]);
   });
   it("refuses an issue lookup whose key does not match the approval", async () => {
     const request = fixture({ issue: { ...ISSUE, key: "SYN-9" } });

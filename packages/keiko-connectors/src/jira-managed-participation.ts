@@ -9,13 +9,14 @@ import {
   type CatalogJsonObject,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import { asRecord, atlassianApiEndpointsFor, atlassianApiUrl } from "./atlassian-sync-classify.js";
+import { asRecord } from "./atlassian-sync-classify.js";
 import { boundJiraReadResult } from "./jira-managed-issue-reads.js";
 import { jiraReadFailure, localJiraPage, projectJiraCollection } from "./jira-managed-metadata.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { readJiraMutationIssue } from "./jira-mutation-confirmation.js";
 import { dispatchFailure, JiraAcknowledgedMutationError } from "./jira-mutation-failure.js";
 import { jiraNativeId, jiraNativeText } from "./jira-native-values.js";
+import { jiraResourceSelfMatches } from "./jira-resource-self.js";
 
 export const JIRA_PARTICIPATION_READS = ["jira.watchers", "jira.votes"] as const;
 export const JIRA_PARTICIPATION_WRITES = [
@@ -49,7 +50,6 @@ interface Binding {
   readonly ok: true;
   readonly issueId: string;
   readonly issueKey: string;
-  readonly baseUrl: string;
 }
 const MALFORMED: Failure = { ok: false, reason: "malformed-payload" };
 const CONFLICT: Failure = { ok: false, reason: "conflict" };
@@ -128,7 +128,7 @@ async function bind(
   const current = await readJiraMutationIssue(request, issueKey, ["summary"]);
   if (!current.ok) return current;
   return jiraNativeId(current.id) && isSafeAtlassianIdentifier(current.key)
-    ? { ok: true, issueId: current.id, issueKey: current.key, baseUrl }
+    ? { ok: true, issueId: current.id, issueKey: current.key }
     : MALFORMED;
 }
 function resource(issueId: string, watch: boolean): string {
@@ -147,11 +147,8 @@ async function inspect(
 }
 function selfMatches(value: unknown, binding: Binding, watch: boolean): boolean {
   if (value === undefined || value === null) return true;
-  if (typeof value !== "string" || !URL.canParse(value)) return false;
-  const endpoints = atlassianApiEndpointsFor(binding.baseUrl, "/rest/api/2/");
-  const actual = new URL(value).href;
-  return [binding.issueId, binding.issueKey].some(
-    (id) => actual === atlassianApiUrl(endpoints, resource(id, watch)),
+  return [binding.issueId, binding.issueKey].some((id) =>
+    jiraResourceSelfMatches(value, resource(id, watch)),
   );
 }
 function stateReceipt(

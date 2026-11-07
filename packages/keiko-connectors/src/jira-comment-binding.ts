@@ -1,6 +1,6 @@
 import { isSafeAtlassianConnectorBaseUrl } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import { atlassianApiEndpointsFor, atlassianApiUrl } from "./atlassian-sync-classify.js";
 import { jiraNativeId } from "./jira-native-values.js";
+import { jiraResourceSelfMatches } from "./jira-resource-self.js";
 
 export interface JiraCommentBinding {
   readonly issueId: string;
@@ -14,18 +14,12 @@ export function jiraCommentSelfMatches(
   binding: JiraCommentBinding,
 ): boolean {
   if (
-    typeof value !== "string" ||
-    !URL.canParse(value) ||
     !isSafeAtlassianConnectorBaseUrl(binding.baseUrl) ||
     !jiraNativeId(binding.issueId) ||
     !jiraNativeId(commentId)
   )
     return false;
-  const expected = atlassianApiUrl(
-    atlassianApiEndpointsFor(binding.baseUrl, "/rest/api/2/"),
-    `issue/${binding.issueId}/comment/${commentId}`,
-  );
-  return new URL(value).href === expected;
+  return jiraResourceSelfMatches(value, `issue/${binding.issueId}/comment/${commentId}`);
 }
 
 export function normalizeJiraCommentBody(body: string): string {
