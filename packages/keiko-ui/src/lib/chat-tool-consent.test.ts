@@ -96,7 +96,8 @@ describe("buffered Chat consent observation", () => {
     await vi.advanceTimersByTimeAsync(1500);
     stop();
     expect(fetch).toHaveBeenCalledTimes(2);
-    for (const call of fetch.mock.calls) expect(call[3]).toBe(CHAT_TOOL_PROGRESS_WINDOW);
+    expect(CHAT_TOOL_PROGRESS_WINDOW).toBe(8);
+    for (const call of fetch.mock.calls) expect(call[3]).toBe(8);
     expect(publish).toHaveBeenCalledExactlyOnceWith(message);
   });
   it("falls back to the whole page when the window misses the turn row", async () => {
