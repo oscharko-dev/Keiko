@@ -608,6 +608,12 @@ export type AtlassianConnectorActionType =
   | "transition-issue"
   | "add-issue-comment"
   | "update-issue-comment"
+  | "create-worklog"
+  | "update-worklog"
+  | "watch-issue"
+  | "unwatch-issue"
+  | "vote-issue"
+  | "unvote-issue"
   | "create-page"
   | "update-page"
   | "add-page-comment";
@@ -622,6 +628,12 @@ export const ATLASSIAN_CONNECTOR_ACTION_TYPES: readonly AtlassianConnectorAction
     "transition-issue",
     "add-issue-comment",
     "update-issue-comment",
+    "create-worklog",
+    "update-worklog",
+    "watch-issue",
+    "unwatch-issue",
+    "vote-issue",
+    "unvote-issue",
     "create-page",
     "update-page",
     "add-page-comment",
@@ -671,6 +683,12 @@ export const JIRA_MANAGED_ACTION_TYPES: Readonly<
   "jira.assign": "assign-issue",
   "jira.comment": "add-issue-comment",
   "jira.update-comment": "update-issue-comment",
+  "jira.create-worklog": "create-worklog",
+  "jira.update-worklog": "update-worklog",
+  "jira.watch": "watch-issue",
+  "jira.unwatch": "unwatch-issue",
+  "jira.vote": "vote-issue",
+  "jira.unvote": "unvote-issue",
   "jira.transition": "transition-issue",
   // A draft only creates issues: it is governed exactly like one create.
   "jira.draft": "create-issue",
@@ -725,6 +743,12 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
   "transition-issue": "connector-write",
   "add-issue-comment": "connector-write",
   "update-issue-comment": "connector-write",
+  "create-worklog": "connector-write",
+  "update-worklog": "connector-write",
+  "watch-issue": "connector-write",
+  "unwatch-issue": "connector-write",
+  "vote-issue": "connector-write",
+  "unvote-issue": "connector-write",
   "create-page": "connector-write",
   "update-page": "connector-write",
   "add-page-comment": "connector-write",
@@ -756,6 +780,12 @@ export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
   "transition-issue": "jira",
   "add-issue-comment": "jira",
   "update-issue-comment": "jira",
+  "create-worklog": "jira",
+  "update-worklog": "jira",
+  "watch-issue": "jira",
+  "unwatch-issue": "jira",
+  "vote-issue": "jira",
+  "unvote-issue": "jira",
   "create-page": "confluence",
   "update-page": "confluence",
   "add-page-comment": "confluence",
@@ -787,6 +817,12 @@ export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
   "transition-issue": "issue-tracker.write",
   "add-issue-comment": "issue-tracker.write",
   "update-issue-comment": "issue-tracker.write",
+  "create-worklog": "issue-tracker.write",
+  "update-worklog": "issue-tracker.write",
+  "watch-issue": "issue-tracker.write",
+  "unwatch-issue": "issue-tracker.write",
+  "vote-issue": "issue-tracker.write",
+  "unvote-issue": "issue-tracker.write",
   "create-page": "knowledge-base.write",
   "update-page": "knowledge-base.write",
   "add-page-comment": "knowledge-base.write",
@@ -821,6 +857,12 @@ export const ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK: Readonly<
   "transition-issue": "high",
   "add-issue-comment": "low",
   "update-issue-comment": "medium",
+  "create-worklog": "medium",
+  "update-worklog": "medium",
+  "watch-issue": "medium",
+  "unwatch-issue": "medium",
+  "vote-issue": "medium",
+  "unvote-issue": "medium",
   "create-page": "high",
   "update-page": "medium",
   "add-page-comment": "low",

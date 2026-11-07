@@ -1,3 +1,7 @@
+import {
+  executeJiraParticipationRead,
+  isJiraParticipationRead,
+} from "./jira-managed-participation.js";
 import { jiraBrowseUrl } from "./jira-browse-url.js";
 import { JIRA_AGILE_READ_OPERATIONS, executeJiraAgileRead } from "./jira-agile-reads.js";
 import { JIRA_FILTER_READ_OPERATIONS, executeJiraFilterRead } from "./jira-filter-reads.js";
@@ -320,14 +324,16 @@ type NativeDetailRead =
   | "jira.get-comment"
   | Parameters<typeof executeJiraSavedViewRead>[0]
   | Parameters<typeof executeJiraAttachmentRead>[0]
-  | Parameters<typeof executeJiraAvatarRead>[0];
+  | Parameters<typeof executeJiraAvatarRead>[0]
+  | Parameters<typeof executeJiraParticipationRead>[0];
 function isNativeDetailRead(name: string): name is NativeDetailRead {
   return (
     isJiraIssueDetailRead(name) ||
     isJiraCommentRead(name) ||
     isJiraSavedViewRead(name) ||
     isJiraAttachmentRead(name) ||
-    isJiraAvatarRead(name)
+    isJiraAvatarRead(name) ||
+    isJiraParticipationRead(name)
   );
 }
 async function nativeDetailRead<Context extends ManagedMcpInvocationContext>(
@@ -339,6 +345,8 @@ async function nativeDetailRead<Context extends ManagedMcpInvocationContext>(
   const connected = await connection(context);
   if (connected.deployment !== "data-center") return failure("unsupported-deployment");
   const request = requestFor(connected, context);
+  if (isJiraParticipationRead(name))
+    return executeJiraParticipationRead(name, args, request, connected.baseUrl);
   if (isJiraSavedViewRead(name)) return executeJiraSavedViewRead(name, args, request);
   if (isJiraAttachmentRead(name)) return executeJiraAttachmentRead(name, args, request);
   if (isJiraAvatarRead(name)) return executeJiraAvatarRead(name, args, request);

@@ -8,7 +8,7 @@ afterEach(() => {
   for (const db of databases.splice(0)) db.close();
 });
 
-function priorDatabase(version: 61 | 62 | 63 = 61): DatabaseSync {
+function priorDatabase(version: 61 | 62 | 63 | 64 = 61): DatabaseSync {
   const db = new DatabaseSync(":memory:");
   databases.push(db);
   db.exec("PRAGMA foreign_keys = ON; PRAGMA synchronous = FULL;");
@@ -227,7 +227,7 @@ it("V64 admits only native comment updates while retaining V63 metadata journals
   }).not.toThrow();
   for (const invalid of [
     "jira.delete-comment",
-    "jira.update-worklog",
+    "jira.delete-worklog",
     "jira.draft",
     "jira.unknown",
   ]) {
@@ -235,6 +235,41 @@ it("V64 admits only native comment updates while retaining V63 metadata journals
       insertMutation(db, invalid, invalid);
     }).toThrow(/CHECK/u);
   }
+});
+
+it.each([
+  "jira.create-worklog",
+  "jira.update-worklog",
+  "jira.watch",
+  "jira.unwatch",
+  "jira.vote",
+  "jira.unvote",
+])("V65 admits %s while preserving complete V64 journals and ownership", (operation) => {
+  const db = priorDatabase(64);
+  insertMutation(db, "jira.update-comment", "comment");
+  insertCodingMutation(db);
+  const before = db.prepare("SELECT * FROM chat_tool_mutations ORDER BY invocation_id").all();
+  const shape = journalShape(db);
+  expect(() => {
+    insertMutation(db, operation, "before");
+  }).toThrow(/CHECK/u);
+  runMigrations(db);
+  runMigrations(db);
+  expect(SCHEMA_VERSION).toBeGreaterThanOrEqual(65);
+  expect(db.prepare("SELECT * FROM chat_tool_mutations ORDER BY invocation_id").all()).toEqual(
+    before,
+  );
+  expect(journalShape(db)).toEqual(shape);
+  expect(db.prepare("PRAGMA synchronous").get()).toEqual({ synchronous: 2 });
+  expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+  expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  expect(() => {
+    insertMutation(db, operation, "after");
+  }).not.toThrow();
+  for (const invalid of ["jira.draft", "jira.delete-worklog", "jira.unknown"])
+    expect(() => {
+      insertMutation(db, invalid, invalid);
+    }).toThrow(/CHECK/u);
 });
 
 it("keeps the migrated native Jira vocabulary exactly aligned with every current write operation", () => {

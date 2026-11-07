@@ -48,11 +48,21 @@ const STRUCTURE_RECEIPTS = {
   "jira.update-version": ["versionId"],
 } as const;
 type StructureOperation = keyof typeof STRUCTURE_RECEIPTS;
+const COLLABORATION_RECEIPTS = {
+  "jira.create-worklog": ["issueKey", "issueId", "worklogId"],
+  "jira.update-worklog": ["issueKey", "issueId", "worklogId"],
+  "jira.watch": ["issueKey", "issueId", "isWatching"],
+  "jira.unwatch": ["issueKey", "issueId", "isWatching"],
+  "jira.vote": ["issueKey", "issueId", "hasVoted"],
+  "jira.unvote": ["issueKey", "issueId", "hasVoted"],
+} as const;
+type CollaborationOperation = keyof typeof COLLABORATION_RECEIPTS;
 const REQUIRED_RECEIPTS: Readonly<
   Record<JiraMutationOperation, readonly (keyof JiraMutationReceipt)[]>
 > = {
   ...AGILE_RECEIPTS,
   ...STRUCTURE_RECEIPTS,
+  ...COLLABORATION_RECEIPTS,
   "jira.create-project": ["projectId", "projectKey"],
   "jira.update-project": ["projectId", "projectKey"],
   "jira.create": ["issueKey", "issueId"],
@@ -79,6 +89,11 @@ function agileOperation(operation: JiraMutationOperation): operation is AgileOpe
 }
 function structureOperation(operation: JiraMutationOperation): operation is StructureOperation {
   return Object.hasOwn(STRUCTURE_RECEIPTS, operation);
+}
+function collaborationOperation(
+  operation: JiraMutationOperation,
+): operation is CollaborationOperation {
+  return Object.hasOwn(COLLABORATION_RECEIPTS, operation);
 }
 function int64Identity(value: unknown): value is string {
   return (
@@ -109,6 +124,22 @@ function validStructureReceipt(
 function issueKey(value: unknown): value is string {
   return typeof value === "string" && /^[A-Z][A-Z0-9_]{0,31}-[1-9][0-9]{0,15}$/u.test(value);
 }
+function validCollaborationReceipt(
+  receipt: JiraMutationReceipt,
+  operation: CollaborationOperation,
+): boolean {
+  const keys: ReadonlySet<string> = new Set([...COLLABORATION_RECEIPTS[operation], "issueId"]);
+  return (
+    isSafeAtlassianIdentifier(receipt.issueKey) &&
+    Object.entries(receipt).every(([key, value]) => {
+      if (!keys.has(key)) return false;
+      if (key === "issueKey") return isSafeAtlassianIdentifier(value);
+      if (key === "isWatching") return value === (operation === "jira.watch");
+      if (key === "hasVoted") return value === (operation === "jira.vote");
+      return int64Identity(value);
+    })
+  );
+}
 function agileReceiptValue(key: string, value: unknown): boolean {
   if (key === "issueKeys")
     return (
@@ -125,11 +156,46 @@ function agileReceiptValue(key: string, value: unknown): boolean {
     Number.isSafeInteger(Number(value))
   );
 }
-function validAgileReceipt(receipt: JiraMutationReceipt, operation: AgileOperation): boolean {
-  const keys: ReadonlySet<string> = new Set(AGILE_RECEIPTS[operation]);
+function agileResultUrl(value: unknown): URL | undefined {
+  if (typeof value !== "string" || value.length > 4096 || !URL.canParse(value)) return undefined;
+  const url = new URL(value);
+  return url.protocol === "https:" && url.username === "" && url.password === "" && url.hash === ""
+    ? url
+    : undefined;
+}
+function agileBoardLink(value: unknown, boardId: unknown): boolean {
+  const url = agileResultUrl(value);
   return (
-    keys.size === Object.keys(receipt).length &&
-    Object.entries(receipt).every(([key, value]) => keys.has(key) && agileReceiptValue(key, value))
+    agileReceiptValue("boardId", boardId) &&
+    url !== undefined &&
+    url.pathname.endsWith("/secure/RapidBoard.jspa") &&
+    [...url.searchParams].length === 1 &&
+    url.searchParams.get("rapidView") === boardId
+  );
+}
+function optionalAgileReceiptKeys(operation: AgileOperation): readonly string[] {
+  if (operation.startsWith("jira.sprint-")) return ["originBoardId", "boardBrowseUrl"];
+  return operation === "jira.backlog-move-issues" ? [] : ["browseUrl"];
+}
+function agileReceiptMember(receipt: JiraMutationReceipt, key: string, value: unknown): boolean {
+  if (key === "boardBrowseUrl") return agileBoardLink(value, receipt.originBoardId);
+  if (key !== "browseUrl") return agileReceiptValue(key, value);
+  if (receipt.boardId !== undefined) return agileBoardLink(value, receipt.boardId);
+  const url = agileResultUrl(value);
+  return (
+    issueKey(receipt.epicKey) &&
+    url?.search === "" &&
+    url.pathname.endsWith(`/browse/${receipt.epicKey}`)
+  );
+}
+function validAgileReceipt(receipt: JiraMutationReceipt, operation: AgileOperation): boolean {
+  const required = AGILE_RECEIPTS[operation];
+  const keys: ReadonlySet<string> = new Set([...required, ...optionalAgileReceiptKeys(operation)]);
+  return (
+    required.every((key) => Object.hasOwn(receipt, key)) &&
+    Object.entries(receipt).every(
+      ([key, value]) => keys.has(key) && agileReceiptMember(receipt, key, value),
+    )
   );
 }
 function projectLink(value: unknown, key: string | undefined): boolean {
@@ -169,6 +235,7 @@ function validIdentities(receipt: JiraMutationReceipt, operation: JiraMutationOp
   if (projectOperation(operation)) return validProjectReceipt(receipt);
   if (agileOperation(operation)) return validAgileReceipt(receipt, operation);
   if (structureOperation(operation)) return validStructureReceipt(receipt, operation);
+  if (collaborationOperation(operation)) return validCollaborationReceipt(receipt, operation);
   return Object.entries(receipt).every(
     ([key, id]) => RECEIPT_KEYS.has(key) && isSafeAtlassianIdentifier(id),
   );

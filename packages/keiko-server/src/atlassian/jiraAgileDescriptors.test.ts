@@ -7,6 +7,20 @@ import {
 } from "./jiraAgileDescriptors.js";
 
 describe("native Agile declarations", () => {
+  it("declares actual board and Epic destinations while sprint links name only board context", () => {
+    expect(JIRA_AGILE_WRITE_DEFINITIONS["jira.board-create"].receipts).toHaveProperty("browseUrl");
+    expect(JIRA_AGILE_WRITE_DEFINITIONS["jira.epic-update"].receipts).toHaveProperty("browseUrl");
+    for (const operation of [
+      "jira.sprint-create",
+      "jira.sprint-update",
+      "jira.sprint-move-issues",
+    ] as const) {
+      const receipt = JIRA_AGILE_WRITE_DEFINITIONS[operation].receipts;
+      expect(receipt).toHaveProperty("originBoardId");
+      expect(receipt).toHaveProperty("boardBrowseUrl");
+      expect(receipt).not.toHaveProperty("browseUrl");
+    }
+  });
   it.each(Object.keys({ ...JIRA_AGILE_READ_DEFINITIONS, ...JIRA_FILTER_READ_DEFINITIONS }))(
     "declares only typed reads for %s",
     (name) => {

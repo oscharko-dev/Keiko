@@ -53,6 +53,259 @@ function show(exchange: ChatToolExchange): ReturnType<typeof render> {
 
 afterEach(() => localStorage.removeItem(I18N_STORAGE_KEY));
 
+describe.each(["en", "de"] as const)("worklog and participation results in %s", (locale) => {
+  beforeEach(async () => {
+    await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+    localStorage.setItem(I18N_STORAGE_KEY, locale);
+  });
+  it("restores worklog identities, observed account state and partial visible lists accessibly", async () => {
+    const exchanges = [
+      projectExchange(
+        { outcome: "succeeded", issueKey: "SYN-7", worklogId: "9007199254740993" },
+        "jira_create_worklog",
+      ),
+      projectExchange(
+        { outcome: "succeeded", issueKey: "SYN-8", worklogId: "92" },
+        "jira_update_worklog",
+      ),
+      projectExchange(
+        {
+          outcome: "succeeded",
+          issueKey: "SYN-9",
+          watchCount: 3,
+          isWatching: true,
+          items: [{ name: "delivery-reviewer", displayName: "Delivery reviewer" }],
+          startAt: 0,
+          total: 1,
+          listComplete: false,
+        },
+        "jira_watchers",
+      ),
+      projectExchange(
+        {
+          outcome: "succeeded",
+          issueKey: "SYN-10",
+          votes: 0,
+          hasVoted: false,
+          items: [],
+          startAt: 0,
+          total: 0,
+          listComplete: true,
+        },
+        "jira_votes",
+      ),
+      ...["jira_watch", "jira_unwatch", "jira_vote", "jira_unvote"].map((operation, index) =>
+        projectExchange(
+          {
+            outcome: "succeeded",
+            issueKey: `SYN-${String(20 + index)}`,
+            ...(index < 2 ? { isWatching: index === 0 } : { hasVoted: index === 2 }),
+          },
+          operation,
+        ),
+      ),
+    ].map((exchange, index) => ({
+      ...exchange,
+      call: { ...exchange.call, id: `collaboration-result-${String(index)}` },
+    }));
+    const restored = JSON.parse(
+      JSON.stringify({ schemaVersion: 1, exchanges }),
+    ) as ChatToolTranscript;
+    const { container } = render(
+      <I18nProvider>
+        <JiraChatTools transcript={restored} turnState="completed" />
+      </I18nProvider>,
+    );
+    expect(
+      screen.getByText(
+        locale === "en" ? "Worklog ID: 9007199254740993" : "Arbeitsprotokoll-ID: 9007199254740993",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByText(locale === "en" ? "Total watchers: 3" : "Beobachter insgesamt: 3"),
+    ).toBeVisible();
+    expect(
+      screen.getByText(locale === "en" ? "Total votes: 0" : "Stimmen insgesamt: 0"),
+    ).toBeVisible();
+    expect(screen.getByText("Delivery reviewer")).toBeVisible();
+    expect(
+      screen.getByText(
+        locale === "en"
+          ? "Jira did not expose the complete member list. The total may include people not shown here."
+          : "Jira hat die vollständige Mitgliederliste nicht offengelegt. Die Gesamtzahl kann hier nicht angezeigte Personen einschließen.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getAllByText(
+        locale === "en"
+          ? "Your account is watching this issue."
+          : "Dein Konto beobachtet diesen Vorgang.",
+      ),
+    ).toHaveLength(2);
+    expect(
+      screen.getByText(
+        locale === "en"
+          ? "Your account is not watching this issue."
+          : "Dein Konto beobachtet diesen Vorgang nicht.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        locale === "en"
+          ? "Your account has voted for this issue."
+          : "Dein Konto hat für diesen Vorgang abgestimmt.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getAllByText(
+        locale === "en"
+          ? "Your account has not voted for this issue."
+          : "Dein Konto hat für diesen Vorgang nicht abgestimmt.",
+      ),
+    ).toHaveLength(2);
+    expect(container.querySelector("pre")).toBeNull();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+  it("keeps an uncertain journal authoritative over a claimed confirmed account state", () => {
+    show({
+      ...projectExchange(
+        { outcome: "succeeded", issueKey: "SYN-7", isWatching: false },
+        "jira_watch",
+      ),
+      mutationOutcome: "unknown",
+    });
+    expect(
+      screen.getByText(
+        locale === "en"
+          ? "The watching state of your account is not confirmed."
+          : "Der Beobachtungsstatus deines Kontos ist nicht bestätigt.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.queryByText(
+        locale === "en"
+          ? "Your account is not watching this issue."
+          : "Dein Konto beobachtet diesen Vorgang nicht.",
+      ),
+    ).toBeNull();
+  });
+  it.each(["jira_watch", "jira_vote"])(
+    "does not turn uncertain %s into a confirmed boolean",
+    (operation) => {
+      show(
+        projectExchange(
+          { outcome: "unknown", issueKey: "SYN-7", isWatching: false, hasVoted: false },
+          operation,
+        ),
+      );
+      expect(
+        screen.getByText(
+          operation === "jira_watch"
+            ? locale === "en"
+              ? "The watching state of your account is not confirmed."
+              : "Der Beobachtungsstatus deines Kontos ist nicht bestätigt."
+            : locale === "en"
+              ? "The vote of your account is not confirmed."
+              : "Die Stimme deines Kontos ist nicht bestätigt.",
+        ),
+      ).toBeVisible();
+      expect(
+        screen.queryByText(
+          /Your account is not watching|Your account has not voted|Dein Konto beobachtet diesen Vorgang nicht|Dein Konto hat für diesen Vorgang nicht abgestimmt/u,
+        ),
+      ).toBeNull();
+    },
+  );
+});
+
+describe.each(["en", "de"] as const)("saved Agile destinations in %s", (locale) => {
+  beforeEach(async () => {
+    await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+    localStorage.setItem(I18N_STORAGE_KEY, locale);
+  });
+  it("restores direct board and Epic destinations and labels sprint context as a board", async () => {
+    const boardUrl = "https://jira.example.test/context/secure/RapidBoard.jspa?rapidView=7";
+    const exchanges = [
+      projectExchange(
+        { outcome: "succeeded", boardId: "7", browseUrl: boardUrl },
+        "jira_board_create",
+      ),
+      projectExchange(
+        {
+          outcome: "succeeded-unconfirmed",
+          sprintId: "9",
+          originBoardId: "7",
+          boardBrowseUrl: boardUrl,
+        },
+        "jira_sprint_update",
+      ),
+      projectExchange(
+        {
+          outcome: "succeeded",
+          epicKey: "SYN-10",
+          issueKeys: ["SYN-11"],
+          browseUrl: "https://jira.example.test/context/browse/SYN-10",
+        },
+        "jira_epic_move_issues",
+      ),
+    ].map((exchange, index) => ({
+      ...exchange,
+      call: { ...exchange.call, id: `agile-destination-${String(index)}` },
+    }));
+    const transcript = { schemaVersion: 1 as const, exchanges };
+    const initial = render(
+      <I18nProvider>
+        <JiraChatTools transcript={transcript} turnState="completed" />
+      </I18nProvider>,
+    );
+    initial.unmount();
+    const restored = JSON.parse(JSON.stringify(transcript)) as ChatToolTranscript;
+    const { container } = render(
+      <I18nProvider>
+        <JiraChatTools transcript={restored} turnState="completed" />
+      </I18nProvider>,
+    );
+    const links = screen.getAllByRole("link", {
+      name: locale === "en" ? /Open board/u : /Board öffnen/u,
+    });
+    expect(links).toHaveLength(2);
+    for (const link of links) expect(link).toHaveAttribute("href", boardUrl);
+    expect(screen.getByRole("link", { name: /SYN-10/u })).toHaveAttribute(
+      "href",
+      "https://jira.example.test/context/browse/SYN-10",
+    );
+    expect(screen.queryByRole("link", { name: /Sprint/u })).toBeNull();
+    expect(screen.getByText(locale === "en" ? "Sprint ID: 9" : "Sprint-ID: 9")).toBeVisible();
+    expect(
+      screen.getByText(
+        locale === "en"
+          ? "Jira accepted the change; confirmation incomplete"
+          : "Jira hat die Änderung angenommen; Bestätigung unvollständig",
+      ),
+    ).toBeVisible();
+    expect(container.querySelector("pre")).toBeNull();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+  it.each([
+    {
+      originBoardId: "7",
+      boardBrowseUrl: "https://jira.example.test/context/secure/RapidBoard.jspa?rapidView=8",
+    },
+    {
+      originBoardId: "7",
+      boardBrowseUrl:
+        "https://jira.example.test/context/secure/RapidBoard.jspa?rapidView=7&extra=true",
+    },
+    { originBoardId: "7", boardBrowseUrl: "https://jira.example.test/context/browse/SYN-10" },
+    { boardBrowseUrl: "https://jira.example.test/context/secure/RapidBoard.jspa?rapidView=7" },
+  ])("does not turn absent or mismatched sprint context into a link %#", (context) => {
+    show(
+      projectExchange({ outcome: "succeeded", sprintId: "9", ...context }, "jira_sprint_update"),
+    );
+    expect(screen.queryByRole("link")).toBeNull();
+  });
+});
+
 describe.each(["en", "de"] as const)("file and avatar metadata in %s (C8)", (locale) => {
   beforeEach(async () => {
     await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
@@ -1083,7 +1336,7 @@ describe.each(["en", "de"] as const)("saved Agile results in %s (AC6)", (locale)
   );
 });
 
-it("uses an Epic's stored issue link but never treats Board or Sprint URLs as qualified links", () => {
+it("uses stored Epic and Board destinations but never invents a Sprint URL", () => {
   const entries = [
     projectExchange(
       {
@@ -1113,7 +1366,7 @@ it("uses an Epic's stored issue link but never treats Board or Sprint URLs as qu
   render(
     <JiraChatTools transcript={{ schemaVersion: 1, exchanges: entries }} turnState="completed" />,
   );
-  expect(screen.getAllByRole("link")).toHaveLength(1);
+  expect(screen.getAllByRole("link")).toHaveLength(2);
   expect(screen.getByRole("link", { name: /SYN-10/u })).toHaveAttribute(
     "href",
     "https://jira.example.test/context/browse/SYN-10",

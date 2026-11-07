@@ -22,6 +22,12 @@ export const JIRA_MUTATION_OPERATIONS = [
   "jira.assign",
   "jira.comment",
   "jira.update-comment",
+  "jira.create-worklog",
+  "jira.update-worklog",
+  "jira.watch",
+  "jira.unwatch",
+  "jira.vote",
+  "jira.unvote",
   "jira.transition",
   "jira.draft",
   "jira.attach",
@@ -156,6 +162,11 @@ export interface JiraMutationReceipt {
   readonly issueKey?: string;
   readonly issueId?: string;
   readonly commentId?: string;
+  readonly worklogId?: string;
+  readonly isWatching?: boolean;
+  readonly hasVoted?: boolean;
+  readonly originBoardId?: string;
+  readonly boardBrowseUrl?: string;
   readonly transitionId?: string;
   readonly attachmentId?: string;
 }

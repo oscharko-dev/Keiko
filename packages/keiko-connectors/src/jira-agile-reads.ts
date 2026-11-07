@@ -53,7 +53,15 @@ function linkedProjection(operation: string, baseUrl: string, project: Projectio
       : EPIC_LINK_READS.has(operation)
         ? jiraBrowseUrl(baseUrl, item.key)
         : undefined;
-    return browseUrl === undefined ? item : { ...item, browseUrl };
+    const boardBrowseUrl =
+      operation === "jira.sprint" || operation === "jira.sprints"
+        ? jiraBoardBrowseUrl(baseUrl, item.originBoardId)
+        : undefined;
+    return {
+      ...item,
+      ...(browseUrl === undefined ? {} : { browseUrl }),
+      ...(boardBrowseUrl === undefined ? {} : { boardBrowseUrl }),
+    };
   };
 }
 const BOARD_TYPES: ReadonlySet<unknown> = new Set(["scrum", "kanban"]);

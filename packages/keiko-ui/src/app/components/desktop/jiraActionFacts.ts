@@ -42,6 +42,52 @@ const PROJECT_ARGUMENT_LABELS: Readonly<Record<string, WidgetMessageKey>> = {
   assigneeType: "chat.jira.fact.projectAssignee",
 };
 
+const WORKLOG_ARGUMENT_LABELS: Readonly<Record<string, WidgetMessageKey>> = {
+  worklogId: "chat.jira.fact.worklogId",
+  timeSpentSeconds: "chat.jira.fact.timeSpentSeconds",
+  started: "chat.jira.fact.workStarted",
+  comment: "chat.jira.fact.worklogComment",
+};
+function worklogFacts(
+  key: string,
+  value: unknown,
+  t: OptionalWidgetTranslate,
+  clearComment: boolean,
+): readonly Fact[] | undefined {
+  if (clearComment && key === "comment" && value === "")
+    return [
+      {
+        id: t("chat.jira.fact.worklogComment"),
+        value: textValue(t("chat.jira.fact.clearWorklogComment")),
+      },
+    ];
+  const label = WORKLOG_ARGUMENT_LABELS[key];
+  if (label !== undefined) return [{ id: t(label), value: jiraDraftValueOf(value) }];
+  return key === "visibility" ? worklogVisibility(value, t) : undefined;
+}
+function worklogVisibility(
+  value: unknown,
+  t: OptionalWidgetTranslate,
+): readonly Fact[] | undefined {
+  const visibility = record(value);
+  if (
+    visibility === undefined ||
+    typeof visibility.value !== "string" ||
+    (visibility.type !== "group" && visibility.type !== "role") ||
+    Object.keys(visibility).length !== 2
+  )
+    return undefined;
+  return [
+    {
+      id: t(
+        visibility.type === "group"
+          ? "chat.jira.fact.visibleToGroup"
+          : "chat.jira.fact.visibleToRole",
+      ),
+      value: textValue(visibility.value),
+    },
+  ];
+}
 function record(value: unknown): Raw | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Raw)
@@ -153,8 +199,13 @@ export function jiraActionFacts(
   if (raw === undefined)
     return [{ id: t("chat.jira.writeApproval.preview"), value: jiraDraftValueOf(args) }];
   const project = operation === "jira.create-project" || operation === "jira.update-project";
+  const worklog = operation === "jira.create-worklog" || operation === "jira.update-worklog";
   return Object.entries(raw).flatMap(([key, value]) => {
     if (!managed) return [{ id: key, value: jiraDraftValueOf(value) }];
+    const worklogPreview = worklog
+      ? worklogFacts(key, value, t, operation === "jira.update-worklog")
+      : undefined;
+    if (worklogPreview !== undefined) return worklogPreview;
     const label = project
       ? PROJECT_ARGUMENT_LABELS[key]
       : (jiraAgileArgumentLabel(operation, key) ??

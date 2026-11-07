@@ -178,7 +178,7 @@ function nativeEntry(property, ast, verified) {
     verified,
   );
   requireValid(
-    new Set(["GET", "POST", "PUT"]).has(method) && new Set(["read", "write"]).has(effect),
+    new Set(["GET", "POST", "PUT", "DELETE"]).has(method) && new Set(["read", "write"]).has(effect),
     "registry-native-effect",
   );
   requireValid(

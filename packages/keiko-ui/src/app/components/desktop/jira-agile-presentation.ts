@@ -19,7 +19,7 @@ const BOARDS = new Set([
   "jira_board_configuration",
   "jira_board_create",
 ]);
-const SPRINTS = new Set([
+export const JIRA_SPRINT_TOOLS: ReadonlySet<string> = new Set([
   "jira_sprints",
   "jira_sprint",
   "jira_sprint_create",
@@ -35,7 +35,7 @@ const EPICS = new Set([
 const FILTERS = new Set(["jira_filter", "jira_favourite_filters"]);
 export const JIRA_AGILE_TOOLS: ReadonlySet<string> = new Set([
   ...BOARDS,
-  ...SPRINTS,
+  ...JIRA_SPRINT_TOOLS,
   ...EPICS,
   ...FILTERS,
   "jira_board_backlog",
@@ -102,13 +102,13 @@ function identityFacts(tool: string, source: Source): JiraOutcomeFact[] {
   return idFacts({
     ...source,
     boardId: source.boardId ?? (BOARDS.has(tool) ? source.id : undefined),
-    sprintId: source.sprintId ?? (SPRINTS.has(tool) ? source.id : undefined),
+    sprintId: source.sprintId ?? (JIRA_SPRINT_TOOLS.has(tool) ? source.id : undefined),
     filterId: source.filterId ?? (FILTERS.has(tool) ? source.id : undefined),
   });
 }
 function agileLabels(tool: string, source: Source): WidgetMessageKey[] {
   const labels = [
-    ...(SPRINTS.has(tool) ? closedLabel(source.state, STATES) : []),
+    ...(JIRA_SPRINT_TOOLS.has(tool) ? closedLabel(source.state, STATES) : []),
     ...(BOARDS.has(tool) ? closedLabel(source.type, BOARD_TYPES) : []),
     ...(FILTERS.has(tool) ? closedLabel(source.shareScope, FILTER_SCOPES) : []),
   ];
@@ -123,7 +123,7 @@ function filterFacts(source: Source): JiraOutcomeFact[] {
 /** Closed native facts from the saved receipt; this projection never invents board/sprint URLs. */
 export function jiraAgileDetails(tool: string, source: Source): JiraAgileDetails {
   if (!JIRA_AGILE_TOOLS.has(tool)) return { facts: [], labels: [] };
-  const sprint = SPRINTS.has(tool);
+  const sprint = JIRA_SPRINT_TOOLS.has(tool);
   const epic = EPICS.has(tool);
   const key = content(source, "epicKey");
   const name = epic ? content(source, "name") : undefined;
@@ -161,5 +161,5 @@ export function jiraAgileArgumentLabel(
   if (tool === undefined || !JIRA_AGILE_TOOLS.has(tool)) return undefined;
   if (field !== "name") return ARGUMENT_LABELS[field];
   if (BOARDS.has(tool)) return "chat.jira.fact.boardName";
-  return SPRINTS.has(tool) ? "chat.jira.fact.sprintName" : "chat.jira.fact.epicName";
+  return JIRA_SPRINT_TOOLS.has(tool) ? "chat.jira.fact.sprintName" : "chat.jira.fact.epicName";
 }

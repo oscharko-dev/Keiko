@@ -73,6 +73,85 @@ afterEach(() => {
   window.localStorage.removeItem(I18N_STORAGE_KEY);
 });
 
+describe.each(["en", "de"] as const)(
+  "readable worklog and self-account approvals in %s",
+  (locale) => {
+    it("names an explicit worklog comment clear before approval", async () => {
+      const review = await reviewed(
+        "jira.update-worklog",
+        { issueKey: "SYN-7", worklogId: "92", comment: "" },
+        locale,
+      );
+      expect(review.text).toContain(
+        locale === "en" ? "Clear the existing comment" : "Vorhandenen Kommentar leeren",
+      );
+      expectNoJson(review);
+    });
+    it.each(["jira.create-worklog", "jira.update-worklog"] as const)(
+      "names exact worklog values for %s",
+      async (operation) => {
+        const review = await reviewed(
+          operation,
+          {
+            issueKey: "SYN-7",
+            ...(operation === "jira.update-worklog"
+              ? { worklogId: "9007199254740993" }
+              : { visibility: { type: "role", value: "Developers" } }),
+            timeSpentSeconds: 3661,
+            started: "2026-11-07T12:00:00+01:00",
+            comment: "Investigated the delivery failure",
+          },
+          locale,
+        );
+        for (const value of [
+          "SYN-7",
+          "3661",
+          "2026-11-07T12:00:00+01:00",
+          "Investigated the delivery failure",
+        ])
+          expect(review.text).toContain(value);
+        for (const value of locale === "en"
+          ? ["Time spent (seconds)", "Work started", "Worklog comment"]
+          : ["Zeitaufwand (Sekunden)", "Arbeitsbeginn", "Kommentar zur Arbeitszeit"])
+          expect(review.text).toContain(value);
+        if (operation === "jira.create-worklog") {
+          expect(review.text).toContain(locale === "en" ? "Visible to role" : "Sichtbar für Rolle");
+          expect(review.text).toContain("Developers");
+        } else expect(review.text).toContain("9007199254740993");
+        expectNoJson(review);
+        expect(await axe(review.container)).toHaveNoViolations();
+      },
+    );
+    it.each([
+      [
+        "jira.watch",
+        "Watch Jira issue with your account",
+        "Jira-Vorgang mit deinem Konto beobachten",
+      ],
+      [
+        "jira.unwatch",
+        "Stop watching Jira issue with your account",
+        "Jira-Vorgang mit deinem Konto nicht mehr beobachten",
+      ],
+      [
+        "jira.vote",
+        "Vote for Jira issue with your account",
+        "Mit deinem Konto für einen Jira-Vorgang abstimmen",
+      ],
+      [
+        "jira.unvote",
+        "Remove your vote from Jira issue",
+        "Deine Stimme für einen Jira-Vorgang entfernen",
+      ],
+    ] as const)("keeps %s explicitly scoped to the current account", async (operation, en, de) => {
+      const review = await reviewed(operation, { issueKey: "SYN-7" }, locale);
+      expect(review.text).toContain(locale === "en" ? en : de);
+      expect(review.text).toContain("SYN-7");
+      expectNoJson(review);
+    });
+  },
+);
+
 describe.each(["en", "de"] as const)("readable comment updates in %s (#4298)", (locale) => {
   it("names the exact existing comment and keeps the native body readable without JSON", async () => {
     const review = await reviewed(

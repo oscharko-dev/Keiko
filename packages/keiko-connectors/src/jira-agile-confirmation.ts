@@ -24,7 +24,10 @@ export function agileEntityReceipt(
 ): JiraMutationReceipt | undefined {
   if (sprint) {
     const sprintId = agileId(item.id);
-    return sprintId === undefined ? undefined : { sprintId };
+    const originBoardId = agileId(item.originBoardId);
+    return sprintId === undefined
+      ? undefined
+      : { sprintId, ...(originBoardId === undefined ? {} : { originBoardId }) };
   }
   return agileIssueKey(item.key) ? { epicKey: item.key } : undefined;
 }
@@ -76,7 +79,11 @@ export async function confirmAgileEntity(
 ): Promise<JiraMutationAttempt> {
   const current = await readAgileEntity(request, path, project, identity);
   if (!current.ok) return { ...current, receipt };
+  const observedReceipt =
+    receipt.sprintId === undefined
+      ? receipt
+      : { ...receipt, ...agileEntityReceipt(current.item, true) };
   return agileFieldsMatch(expected, current.item)
-    ? { ok: true, receipt }
-    : { ...AGILE_CONFLICT, receipt };
+    ? { ok: true, receipt: observedReceipt }
+    : { ...AGILE_CONFLICT, receipt: observedReceipt };
 }

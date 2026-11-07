@@ -85,6 +85,7 @@ const SPRINT = object(
     name: NAME,
     state: SPRINT_STATE,
     originBoardId: ID,
+    boardBrowseUrl: text(4096),
     startDate: DATE,
     endDate: DATE,
     activatedDate: DATE,
@@ -289,13 +290,13 @@ export const JIRA_AGILE_WRITE_DEFINITIONS = {
       "type",
       "filterId",
     ]),
-    receipts: { boardId: ID },
+    receipts: { boardId: ID, browseUrl: text(4096) },
   },
   "jira.sprint-create": {
     description:
       "Create a future sprint on a board and verify its stored fields. Name and board ID are required; dates and goal are optional. Never repeat an uncertain creation automatically.",
     input: object({ ...SPRINT_CHANGES, originBoardId: ID }, ["name", "originBoardId"]),
-    receipts: { sprintId: ID },
+    receipts: { sprintId: ID, originBoardId: ID, boardBrowseUrl: text(4096) },
   },
   "jira.sprint-update": {
     description:
@@ -304,13 +305,18 @@ export const JIRA_AGILE_WRITE_DEFINITIONS = {
       { sprintId: ID, ...SPRINT_CHANGES, state: { type: "string", enum: ["active", "closed"] } },
       ["sprintId"],
     ),
-    receipts: { sprintId: ID },
+    receipts: { sprintId: ID, originBoardId: ID, boardBrowseUrl: text(4096) },
   },
   "jira.sprint-move-issues": {
     description:
       "Move up to 50 unique issues into a future or active sprint. Jira checks edit permissions; each issue's actual membership is read back after the acknowledgement.",
     input: object({ sprintId: ID, issues: ISSUE_KEYS }, ["sprintId", "issues"]),
-    receipts: { sprintId: ID, issueKeys: ISSUE_KEYS },
+    receipts: {
+      sprintId: ID,
+      issueKeys: ISSUE_KEYS,
+      originBoardId: ID,
+      boardBrowseUrl: text(4096),
+    },
   },
   "jira.backlog-move-issues": {
     description:
@@ -334,13 +340,13 @@ export const JIRA_AGILE_WRITE_DEFINITIONS = {
       },
       ["epicIdOrKey"],
     ),
-    receipts: { epicKey: KEY },
+    receipts: { epicKey: KEY, browseUrl: text(4096) },
   },
   "jira.epic-move-issues": {
     description:
       "Move up to 50 unique issues to an epic, replacing any previous epic membership. Jira checks edit permissions for the epic and issues; each issue is read back to confirm the new epic.",
     input: object({ epicIdOrKey: EPIC_ID_OR_KEY, issues: ISSUE_KEYS }, ["epicIdOrKey", "issues"]),
-    receipts: { epicKey: KEY, issueKeys: ISSUE_KEYS },
+    receipts: { epicKey: KEY, issueKeys: ISSUE_KEYS, browseUrl: text(4096) },
   },
 } as const satisfies Readonly<Record<string, WriteDefinition>>;
 

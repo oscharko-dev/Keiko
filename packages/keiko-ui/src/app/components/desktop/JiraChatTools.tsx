@@ -33,6 +33,7 @@ import { useJiraResultEvidence } from "./jira-result-evidence";
 import { JIRA_AGILE_TOOLS } from "./jira-agile-presentation";
 import { JIRA_PROJECT_METADATA_TOOLS } from "./jira-project-metadata-presentation";
 import { JIRA_COLLABORATION_TOOLS } from "./jira-collaboration-presentation";
+import { JIRA_PARTICIPATION_TOOLS } from "./jira-participation-presentation";
 import { JIRA_FILE_METADATA_TOOLS } from "./jira-file-metadata-presentation";
 import { JIRA_SAVED_VIEW_TOOLS } from "./jira-saved-view-presentation";
 import {
@@ -99,6 +100,15 @@ function JiraToolResultDetails({ exchange }: { readonly exchange: ChatToolExchan
     </details>
   );
 }
+function JiraBoardContextLink({ href }: { readonly href: string | undefined }): ReactNode {
+  const t = useTranslate();
+  return href === undefined ? null : (
+    <a className="sm-link" href={href} target="_blank" rel="noopener noreferrer">
+      {t("chat.jira.outcome.openBoard")}
+      <span className="sr-only"> {t("chat.jira.outcome.newTab")}</span>
+    </a>
+  );
+}
 function JiraResultItems({ items }: { readonly items: readonly JiraOutcomeItem[] }): ReactNode {
   const t = useTranslate();
   return (
@@ -130,6 +140,7 @@ function JiraResultItems({ items }: { readonly items: readonly JiraOutcomeItem[]
                 {t(fact.label)}: {fact.value}
               </p>
             ))}
+            <JiraBoardContextLink href={item.boardHref} />
             {item.status === undefined ? null : <p>{item.status}</p>}
             {item.labels.map((label) => (
               <p key={label}>{t(label)}</p>
@@ -260,7 +271,8 @@ function resultCardSemantics(exchange: ChatToolExchange): {
     JIRA_PROJECT_METADATA_TOOLS.has(exchange.call.name) ||
     JIRA_COLLABORATION_TOOLS.has(exchange.call.name) ||
     JIRA_SAVED_VIEW_TOOLS.has(exchange.call.name) ||
-    JIRA_FILE_METADATA_TOOLS.has(exchange.call.name)
+    JIRA_FILE_METADATA_TOOLS.has(exchange.call.name) ||
+    JIRA_PARTICIPATION_TOOLS.has(exchange.call.name)
     ? { tag: "div", role: "group", label: jiraToolLabel(exchange) }
     : { tag: "section", role: undefined, label: jiraToolRegionLabel(exchange) };
 }

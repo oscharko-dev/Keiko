@@ -58,6 +58,8 @@ export const JIRA_MANAGED_READ_TOOLS = [
   "jira.get-comment",
   "jira.link-types",
   "jira.issue-link",
+  "jira.watchers",
+  "jira.votes",
   "jira.worklogs",
   "jira.worklog",
   "jira.attachment-settings",

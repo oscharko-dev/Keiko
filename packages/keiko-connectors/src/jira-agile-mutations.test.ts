@@ -15,6 +15,19 @@ interface Fixture {
 afterEach(() => vi.restoreAllMocks());
 const BOARD = { id: 7, name: "Team", type: "scrum" };
 const SPRINT = { id: 9, name: "Sprint one", state: "future", originBoardId: 7 };
+const BOARD_RECEIPT = {
+  boardId: "7",
+  browseUrl: "https://jira.example.invalid/context/secure/RapidBoard.jspa?rapidView=7",
+};
+const SPRINT_RECEIPT = {
+  sprintId: "9",
+  originBoardId: "7",
+  boardBrowseUrl: "https://jira.example.invalid/context/secure/RapidBoard.jspa?rapidView=7",
+};
+const EPIC_RECEIPT = {
+  epicKey: "APP-11",
+  browseUrl: "https://jira.example.invalid/context/browse/APP-11",
+};
 const EPIC = { id: 11, key: "APP-11", name: "Delivery", summary: "Delivery epic", done: false };
 function response(status: number, body?: unknown): AtlassianHttpBodyResult {
   const bodyText = body === undefined ? "" : JSON.stringify(body);
@@ -55,11 +68,48 @@ function fixture(replies: readonly AtlassianHttpBodyResult[]): Fixture {
 }
 
 describe("native Agile writes and authoritative readback", () => {
+  it("mints the acknowledged board link from the selected instance and context", async () => {
+    const f = fixture([
+      response(200, { id: "42" }),
+      response(201, { ...BOARD, self: "https://foreign.invalid/board" }),
+      response(200, { ...BOARD, filter: { id: "42" }, columnConfig: { columns: [] } }),
+    ]);
+    expect(
+      await f.run("jira.board-create", { name: "Team", type: "scrum", filterId: "42" }),
+    ).toMatchObject({
+      ok: true,
+      receipt: {
+        boardId: "7",
+        browseUrl: "https://jira.example.invalid/context/secure/RapidBoard.jspa?rapidView=7",
+      },
+    });
+  });
+  it("links a sprint only to the board observed on its independent readback", async () => {
+    const f = fixture([
+      response(200, BOARD),
+      response(201, SPRINT),
+      response(200, {
+        ...SPRINT,
+        self: "https://foreign.invalid/sprint",
+        browseUrl: "https://foreign.invalid/",
+      }),
+    ]);
+    const attempt = await f.run("jira.sprint-create", { name: "Sprint one", originBoardId: "7" });
+    expect(attempt).toMatchObject({
+      ok: true,
+      receipt: {
+        sprintId: "9",
+        originBoardId: "7",
+        boardBrowseUrl: "https://jira.example.invalid/context/secure/RapidBoard.jspa?rapidView=7",
+      },
+    });
+    expect(attempt.receipt).not.toHaveProperty("browseUrl");
+  });
   it("creates a sprint once and confirms its fields on the returned resource", async () => {
     const f = fixture([response(200, BOARD), response(201, SPRINT), response(200, SPRINT)]);
     expect(await f.run("jira.sprint-create", { name: "Sprint one", originBoardId: "7" })).toEqual({
       ok: true,
-      receipt: { sprintId: "9" },
+      receipt: SPRINT_RECEIPT,
     });
     expect(f.http.mock.calls.map(([r]) => [r.method, new URL(r.url).pathname])).toEqual([
       ["GET", "/context/rest/agile/1.0/board/7"],
@@ -80,7 +130,7 @@ describe("native Agile writes and authoritative readback", () => {
     expect(await f.run("jira.sprint-create", { name: "Sprint one", originBoardId: "7" })).toEqual({
       ok: false,
       reason: "conflict",
-      receipt: { sprintId: "9" },
+      receipt: SPRINT_RECEIPT,
     });
     expect(f.http.mock.calls.filter(([r]) => r.method === "POST")).toHaveLength(1);
   });
@@ -89,7 +139,7 @@ describe("native Agile writes and authoritative readback", () => {
     const f = fixture([response(200, SPRINT), response(200, changed), response(200, changed)]);
     expect(await f.run("jira.sprint-update", { sprintId: "9", goal: "A clear goal" })).toEqual({
       ok: true,
-      receipt: { sprintId: "9" },
+      receipt: SPRINT_RECEIPT,
     });
     expect(f.http.mock.calls[1]?.[0].method).toBe("POST");
     expect(JSON.parse(f.http.mock.calls[1]?.[0].bodyJson ?? "null")).toEqual({
@@ -121,7 +171,7 @@ describe("native Agile writes and authoritative readback", () => {
     ]);
     expect(
       await f.run("jira.board-create", { name: "Team", type: "scrum", filterId: "42" }),
-    ).toEqual({ ok: true, receipt: { boardId: "7" } });
+    ).toEqual({ ok: true, receipt: BOARD_RECEIPT });
     expect(f.http.mock.calls[2]?.[0].url).toContain("/board/7/configuration");
   });
   it("updates an epic and verifies the same key", async () => {
@@ -129,7 +179,7 @@ describe("native Agile writes and authoritative readback", () => {
     const f = fixture([response(200, EPIC), response(200, changed), response(200, changed)]);
     expect(
       await f.run("jira.epic-update", { epicIdOrKey: "APP-11", done: true, color: "color_2" }),
-    ).toEqual({ ok: true, receipt: { epicKey: "APP-11" } });
+    ).toEqual({ ok: true, receipt: EPIC_RECEIPT });
     expect(JSON.parse(f.http.mock.calls[1]?.[0].bodyJson ?? "null")).toEqual({
       done: true,
       color: { key: "color_2" },
@@ -143,7 +193,7 @@ describe("native Agile writes and authoritative readback", () => {
     ]);
     expect(await f.run("jira.sprint-move-issues", { sprintId: "9", issues: ["APP-12"] })).toEqual({
       ok: true,
-      receipt: { sprintId: "9", issueKeys: ["APP-12"] },
+      receipt: { ...SPRINT_RECEIPT, issueKeys: ["APP-12"] },
     });
     expect(f.http.mock.calls[2]?.[0].url).toContain("/issue/APP-12?fields=sprint");
   });
@@ -162,7 +212,7 @@ describe("native Agile writes and authoritative readback", () => {
       response(200, { id: "12", key: "APP-12", fields: { epic: { id: 11, key: "APP-11" } } }),
     ]);
     expect(await f.run("jira.epic-move-issues", { epicIdOrKey: "11", issues: ["APP-12"] })).toEqual(
-      { ok: true, receipt: { epicKey: "APP-11", issueKeys: ["APP-12"] } },
+      { ok: true, receipt: { ...EPIC_RECEIPT, issueKeys: ["APP-12"] } },
     );
   });
   it.each([
@@ -227,7 +277,7 @@ describe("Agile create prerequisites and confirmed identities", () => {
     ]);
     expect(await f.run("jira.sprint-update", { sprintId: "9", goal: "" })).toEqual({
       ok: true,
-      receipt: { sprintId: "9" },
+      receipt: SPRINT_RECEIPT,
     });
   });
   it.each([
@@ -236,7 +286,7 @@ describe("Agile create prerequisites and confirmed identities", () => {
       { name: "Team", type: "scrum", filterId: "42" },
       { id: "42" },
       BOARD,
-      { boardId: "7" },
+      BOARD_RECEIPT,
     ],
     [
       "jira.sprint-create",
@@ -264,14 +314,14 @@ describe("Agile create prerequisites and confirmed identities", () => {
       { name: "Team", type: "scrum", filterId: "42" },
       { id: "42" },
       { ...BOARD, filter: { id: "42" }, columnConfig: { columns: [] } },
-      { boardId: "7" },
+      BOARD_RECEIPT,
     ],
     [
       "jira.sprint-create",
       { name: "Sprint one", originBoardId: "7" },
       BOARD,
       SPRINT,
-      { sprintId: "9" },
+      SPRINT_RECEIPT,
     ],
   ] as const)(
     "independently confirms a readable 200 creation for %s",

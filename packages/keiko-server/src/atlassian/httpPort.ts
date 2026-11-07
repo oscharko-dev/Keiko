@@ -397,9 +397,9 @@ function assertValidUpload(request: AtlassianHttpBodyRequest): void {
 function assertValidRequestBody(request: AtlassianHttpBodyRequest): void {
   assertValidUpload(request);
   if (request.bodyJson === undefined) return;
-  if (request.method === "GET") {
+  if (request.method !== "POST" && request.method !== "PUT") {
     throw new AtlassianCredentialCustodyError("invalid-input", [
-      "a request body is not allowed on GET",
+      "a request body is allowed only on POST or PUT",
     ]);
   }
   const bodyBytes = Buffer.byteLength(request.bodyJson, "utf8");

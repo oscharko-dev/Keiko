@@ -15,6 +15,18 @@ export const ARGUMENTS: Readonly<Record<JiraMutationOperation, CatalogJsonObject
   "jira.assign": { issueKey: "SYN-1", assigneeName: "synthetic-user" },
   "jira.comment": { issueKey: "SYN-1", body: "Synthetic comment" },
   "jira.update-comment": { issueKey: "SYN-1", commentId: "10002", body: "Changed comment" },
+  "jira.create-worklog": {
+    issueKey: "SYN-1",
+    timeSpentSeconds: 1200,
+    started: "2026-11-07T10:00:00Z",
+    comment: "Investigated",
+    visibility: { type: "role", value: "Developers" },
+  },
+  "jira.update-worklog": { issueKey: "SYN-1", worklogId: "101", comment: "Updated" },
+  "jira.watch": { issueKey: "SYN-1" },
+  "jira.unwatch": { issueKey: "SYN-1" },
+  "jira.vote": { issueKey: "SYN-1" },
+  "jira.unvote": { issueKey: "SYN-1" },
   "jira.transition": {
     issueKey: "SYN-1",
     transitionId: "31",
@@ -68,6 +80,14 @@ export const REMOTE_STATE: Readonly<Record<SingleMutation, object>> = {
     comment: "Changed comment",
     commentVisibility: { type: "role", value: "Developers" },
   },
+  "jira.create-worklog": {
+    worklog: { id: "102", issueId: "10001", timeSpentSeconds: 1200, comment: "Investigated" },
+  },
+  "jira.update-worklog": { worklog: { id: "101", issueId: "10001", comment: "Updated" } },
+  "jira.watch": { isWatching: true },
+  "jira.unwatch": { isWatching: false },
+  "jira.vote": { hasVoted: true },
+  "jira.unvote": { hasVoted: false },
   "jira.transition": { fields: { status: { id: "3" }, customfield_10000: "Screen value" } },
   "jira.attach": { fields: { attachment: [{ id: "10300", size: ATTACHED.length }] } },
   "jira.create-project": {
@@ -106,6 +126,12 @@ export const SUCCESS_RECEIPTS: Readonly<Record<SingleMutation, CatalogJsonObject
   "jira.assign": ISSUE_RECEIPT,
   "jira.comment": ISSUE_RECEIPT,
   "jira.update-comment": { ...ISSUE_RECEIPT, commentId: "10002" },
+  "jira.create-worklog": { ...ISSUE_RECEIPT, issueId: "10001", worklogId: "102" },
+  "jira.update-worklog": { ...ISSUE_RECEIPT, issueId: "10001", worklogId: "101" },
+  "jira.watch": { ...ISSUE_RECEIPT, issueId: "10001", isWatching: true },
+  "jira.unwatch": { ...ISSUE_RECEIPT, issueId: "10001", isWatching: false },
+  "jira.vote": { ...ISSUE_RECEIPT, issueId: "10001", hasVoted: true },
+  "jira.unvote": { ...ISSUE_RECEIPT, issueId: "10001", hasVoted: false },
   "jira.transition": ISSUE_RECEIPT,
   "jira.attach": ISSUE_RECEIPT,
   "jira.create-project": PROJECT_RECEIPT,
@@ -124,6 +150,9 @@ export const SUCCESS_RECEIPTS: Readonly<Record<SingleMutation, CatalogJsonObject
 };
 
 export interface MutationRemoteState extends SyntheticJira {
+  worklog: Record<string, unknown>;
+  isWatching: boolean;
+  hasVoted: boolean;
   commentVisibility: { readonly type: "role"; readonly value: string };
   project: Record<string, unknown>;
   component: Record<string, unknown>;
@@ -142,6 +171,16 @@ export function mutationRemoteState(): MutationRemoteState {
       labels: ["initial"],
     },
     comment: "",
+    worklog: {
+      id: "101",
+      issueId: "10001",
+      timeSpentSeconds: 3600,
+      started: "2026-11-07T09:00:00.000+0000",
+      comment: "Original",
+      visibility: { type: "role", value: "Developers" },
+    },
+    isWatching: false,
+    hasVoted: false,
     commentVisibility: { type: "role", value: "Developers" },
     project: {
       id: "10000",
@@ -168,7 +207,20 @@ export function nativeRead(
   path: string,
   state: MutationRemoteState,
 ): ReturnType<typeof response> | undefined {
+  if (path === `/context/rest/api/2/issue/10001/worklog/${String(state.worklog.id)}`)
+    return response(state.worklog);
+  const person = { name: "synthetic-user", active: true };
   const resources: Readonly<Record<string, unknown>> = {
+    "/context/rest/api/2/issue/10001/watchers": {
+      isWatching: state.isWatching,
+      watchCount: state.isWatching ? 1 : 0,
+      watchers: state.isWatching ? [person] : [],
+    },
+    "/context/rest/api/2/issue/10001/votes": {
+      hasVoted: state.hasVoted,
+      votes: state.hasVoted ? 1 : 0,
+      voters: state.hasVoted ? [person] : [],
+    },
     "/context/rest/api/2/issue/10001/comment/10002": {
       id: "10002",
       self: "https://203.0.113.10/context/rest/api/2/issue/10001/comment/10002",
@@ -284,6 +336,45 @@ function agileWrite(
       return undefined;
   }
 }
+export function nativeParticipationWrite(
+  request: Pick<Request, "method" | "url">,
+  state: MutationRemoteState,
+): ReturnType<typeof response> | undefined {
+  const url = new URL(request.url);
+  if (url.pathname === "/context/rest/api/2/issue/10001/watchers") {
+    if (request.method === "DELETE") {
+      if (url.searchParams.get("username") !== "synthetic-user")
+        throw new TypeError("Expected only the connected user's watcher identity");
+      state.isWatching = false;
+    } else if (request.method === "POST") state.isWatching = true;
+    else throw new TypeError("Unexpected watcher method");
+    return response(undefined, 204);
+  }
+  if (url.pathname === "/context/rest/api/2/issue/10001/votes") {
+    if (request.method === "DELETE") state.hasVoted = false;
+    else if (request.method === "POST") state.hasVoted = true;
+    else throw new TypeError("Unexpected voting method");
+    return response(undefined, 204);
+  }
+  return undefined;
+}
+function worklogWrite(
+  path: string,
+  body: Record<string, unknown>,
+  state: MutationRemoteState,
+): ReturnType<typeof response> | undefined {
+  const create = path === "/context/rest/api/2/issue/10001/worklog";
+  if (!create && path !== "/context/rest/api/2/issue/10001/worklog/101") return undefined;
+  if (JSON.stringify(body.visibility) !== JSON.stringify({ type: "role", value: "Developers" }))
+    throw new TypeError("Expected the selected worklog visibility");
+  state.worklog = {
+    ...(create ? {} : state.worklog),
+    ...body,
+    id: create ? "102" : "101",
+    issueId: "10001",
+  };
+  return response(state.worklog, create ? 201 : 200);
+}
 export function nativeWrite(
   path: string,
   text: string,
@@ -292,5 +383,9 @@ export function nativeWrite(
   const body: unknown = JSON.parse(text);
   if (typeof body !== "object" || body === null || Array.isArray(body))
     throw new TypeError("Expected fixture object body");
-  return platformWrite(path, { ...body }, state) ?? agileWrite(path, { ...body }, state);
+  return (
+    worklogWrite(path, { ...body }, state) ??
+    platformWrite(path, { ...body }, state) ??
+    agileWrite(path, { ...body }, state)
+  );
 }

@@ -101,6 +101,8 @@ const TEMPLATE_ADMISSION = defineActivityLogOperation({
       required: true,
       values: [
         "jira.create",
+        "jira.create-worklog",
+        "jira.update-worklog",
         "jira.edit",
         "jira.transition",
         "jira.assign",
@@ -179,6 +181,12 @@ const FIELD_ADMISSION = defineActivityLogOperation({
         "jira.create-version",
         "jira.update-version",
         "jira.update-comment",
+        "jira.create-worklog",
+        "jira.update-worklog",
+        "jira.watch",
+        "jira.unwatch",
+        "jira.vote",
+        "jira.unvote",
         "jira.board-create",
         "jira.sprint-create",
         "jira.sprint-update",
@@ -216,6 +224,8 @@ const FIELD_ADMISSION = defineActivityLogOperation({
 
 const TEMPLATE_OPERATIONS = [
   "jira.create",
+  "jira.create-worklog",
+  "jira.update-worklog",
   "jira.edit",
   "jira.transition",
   "jira.assign",
@@ -273,7 +283,13 @@ export function recordJiraFieldRefusal(
       | "jira.update-component"
       | "jira.create-version"
       | "jira.update-version"
-      | "jira.update-comment";
+      | "jira.update-comment"
+      | "jira.create-worklog"
+      | "jira.update-worklog"
+      | "jira.watch"
+      | "jira.unwatch"
+      | "jira.vote"
+      | "jira.unvote";
     readonly refusedCount: number;
     readonly validations: readonly (JiraFieldValidationFailure | undefined)[];
   },

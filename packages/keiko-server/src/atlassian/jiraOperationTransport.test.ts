@@ -32,6 +32,44 @@ const CREATE = {
 };
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
+  {
+    tool: "jira.create-worklog",
+    args: {
+      issueKey: "SYN-1",
+      timeSpentSeconds: 1200,
+      started: "2026-11-07T10:00:00Z",
+      comment: "Investigated",
+    },
+    parameters: { issueIdOrKey: "10001" },
+    query: { adjustEstimate: "leave" },
+  },
+  {
+    tool: "jira.update-worklog",
+    args: { issueKey: "SYN-1", worklogId: "101", comment: "Updated" },
+    parameters: { issueIdOrKey: "10001", id: "101" },
+    query: { adjustEstimate: "leave" },
+  },
+  {
+    tool: "jira.watchers",
+    args: { issueKey: "SYN-1", startAt: 0, maxResults: 25 },
+    parameters: { issueIdOrKey: "10001" },
+    primaryMethodIndex: 1,
+  },
+  {
+    tool: "jira.votes",
+    args: { issueKey: "SYN-1", startAt: 0, maxResults: 25 },
+    parameters: { issueIdOrKey: "10001" },
+    primaryMethodIndex: 1,
+  },
+  { tool: "jira.watch", args: { issueKey: "SYN-1" }, parameters: { issueIdOrKey: "10001" } },
+  {
+    tool: "jira.unwatch",
+    args: { issueKey: "SYN-1" },
+    parameters: { issueIdOrKey: "10001" },
+    query: { username: "synthetic-user" },
+  },
+  { tool: "jira.vote", args: { issueKey: "SYN-1" }, parameters: { issueIdOrKey: "10001" } },
+  { tool: "jira.unvote", args: { issueKey: "SYN-1" }, parameters: { issueIdOrKey: "10001" } },
   { tool: "jira.attachment-settings", args: {} },
   { tool: "jira.attachment", args: { attachmentId: "71" }, parameters: { id: "71" } },
   {
@@ -225,13 +263,17 @@ const SCENARIOS: readonly Scenario[] = [
   },
 ];
 interface RemoteState extends SyntheticJira {
+  worklog: Record<string, unknown>;
+  isWatching: boolean;
+  hasVoted: boolean;
   project: Record<string, unknown>;
   component: Record<string, unknown>;
   version: Record<string, unknown>;
 }
 function collaborationRead(path: string, state: RemoteState): AtlassianHttpBodyResult | undefined {
   const type = { id: "11", name: "Relates", inward: "relates to", outward: "relates to" };
-  const worklog = { id: "101", issueId: "10001", timeSpentSeconds: 3600 };
+  const worklog = state.worklog;
+  if (path === `issue/10001/worklog/${String(worklog.id)}`) return response(worklog);
   const bodies: Readonly<Record<string, unknown>> = {
     "issue/10001/comment/10002": {
       id: "10002",
@@ -261,6 +303,49 @@ function collaborationWrite(
     throw new TypeError("Expected the selected comment update");
   state.comment = body.body;
   return response({ id: "10002", body: state.comment });
+}
+function worklogWrite(
+  path: string,
+  request: AtlassianHttpBodyRequest,
+  state: RemoteState,
+): AtlassianHttpBodyResult | undefined {
+  if (path !== "issue/10001/worklog" && path !== "issue/10001/worklog/101") return undefined;
+  const create = path.endsWith("/worklog");
+  const body = JSON.parse(request.bodyJson ?? "{}") as Record<string, unknown>;
+  state.worklog = {
+    ...(create ? {} : state.worklog),
+    ...body,
+    id: create ? "102" : "101",
+    issueId: "10001",
+  };
+  return response(state.worklog, create ? 201 : 200);
+}
+function participationRead(path: string, state: RemoteState): AtlassianHttpBodyResult | undefined {
+  const person = { name: "synthetic-user", active: true };
+  if (path === "myself") return response(person);
+  if (path === "issue/10001/watchers")
+    return response({
+      isWatching: state.isWatching,
+      watchCount: state.isWatching ? 1 : 0,
+      watchers: state.isWatching ? [person] : [],
+    });
+  if (path === "issue/10001/votes")
+    return response({
+      hasVoted: state.hasVoted,
+      votes: state.hasVoted ? 1 : 0,
+      voters: state.hasVoted ? [person] : [],
+    });
+  return undefined;
+}
+function participationWrite(
+  path: string,
+  method: string,
+  state: RemoteState,
+): AtlassianHttpBodyResult | undefined {
+  if (path === "issue/10001/watchers") state.isWatching = method === "POST";
+  else if (path === "issue/10001/votes") state.hasVoted = method === "POST";
+  else return undefined;
+  return response(undefined, 204);
 }
 function structureRead(path: string, state: RemoteState): AtlassianHttpBodyResult | undefined {
   if (path === "component/71") return response(state.component);
@@ -393,6 +478,7 @@ function remoteRead(path: string, absolute: string, state: RemoteState): Atlassi
     projectRead(path, state) ??
     structureRead(path, state) ??
     collaborationRead(path, state) ??
+    participationRead(path, state) ??
     filterRead(path) ??
     savedViewRead(path) ??
     assetRead(path) ??
@@ -400,7 +486,7 @@ function remoteRead(path: string, absolute: string, state: RemoteState): Atlassi
     fixtureRead(absolute, state)
   );
 }
-function remote(): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> {
+function remote(tool?: string): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> {
   const state: RemoteState = {
     fields: {
       summary: "Before",
@@ -411,6 +497,15 @@ function remote(): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> {
       attachment: [],
     },
     comment: "",
+    worklog: {
+      id: "101",
+      issueId: "10001",
+      timeSpentSeconds: 3600,
+      started: "2026-11-07T09:00:00.000+0000",
+      comment: "Original",
+    },
+    isWatching: tool === "jira.unwatch",
+    hasVoted: tool === "jira.unvote",
     component: { id: "71", project: "SYN", name: "Before" },
     version: { id: "81", projectId: 10000, name: "Before" },
     project: {
@@ -428,7 +523,9 @@ function remote(): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> {
     return Promise.resolve(
       path === "project" || path === "project/10000"
         ? projectWrite(request, state)
-        : (collaborationWrite(path, request, state) ??
+        : (participationWrite(path, request.method, state) ??
+            worklogWrite(path, request, state) ??
+            collaborationWrite(path, request, state) ??
             structureWrite(path, request, state) ??
             fixtureWrite(absolute, request.bodyJson, state, request.upload)),
     );
@@ -452,7 +549,7 @@ function connection(http: AtlassianHttpBodyPort): JiraManagedConnection {
   };
 }
 function observe(scenario: Scenario): Promise<Observation> {
-  return observeNativeJiraOperation(scenario, connection(remote()));
+  return observeNativeJiraOperation(scenario, connection(remote(scenario.tool)));
 }
 
 describe("native Jira registry and real connector transport agreement", () => {
@@ -461,7 +558,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(50);
+    expect(native).toHaveLength(58);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),

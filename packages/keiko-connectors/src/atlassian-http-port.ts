@@ -37,7 +37,7 @@ export type AtlassianHttpPort = (request: AtlassianHttpRequest) => Promise<Atlas
 // gates: the sync lane (GET — the adapter enforces the per-response cap `maxBodyBytes`, stopping
 // the stream read at the cap and never buffering past it, while the orchestration derives each
 // request's cap from the run's remaining cumulative byte budget) and the governed write
-// executors (#2244 — POST/PUT with a bounded JSON request body, reading back only the minimal
+// executors (#2244 — POST/PUT with bounded JSON, or bodyless DELETE, reading back only the minimal
 // created-id/version/transition-list payloads under a small response cap). The result stays
 // credential-blind and header-blind: a decoded UTF-8 body (JSON from the connector's own
 // allowlisted host), the byte count actually read, a truncation flag, and — for 429/5xx backoff
@@ -59,9 +59,8 @@ export interface AtlassianHttpUpload {
 }
 
 export interface AtlassianHttpBodyRequest {
-  // GET for reads; POST/PUT for the governed write executors (#2244). The adapter refuses a
-  // request body on GET.
-  readonly method: "GET" | "POST" | "PUT";
+  // GET for reads; POST/PUT/DELETE for governed writes. GET and DELETE carry no request body.
+  readonly method: "GET" | "POST" | "PUT" | "DELETE";
   // Absolute https URL on the connector's configured base URL (same allowlist re-check as the
   // body-less channel).
   readonly url: string;

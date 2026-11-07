@@ -46,6 +46,12 @@ type JiraPermissionPolicy =
   | "visible-link-types"
   | "visible-issue-links"
   | "visible-worklogs"
+  | "visible-watchers"
+  | "visible-voters"
+  | "current-user-watch-and-readback"
+  | "current-user-vote-and-readback"
+  | "worklog-create-and-readback"
+  | "worklog-update-and-readback"
   | "comment-update-and-readback"
   | "visible-versions"
   | "component-create-and-readback"
@@ -75,7 +81,7 @@ export type JiraOperationDefinition = OperationDefinitionBase &
   (
     | {
         readonly kind: "native";
-        readonly method: "GET" | "POST" | "PUT";
+        readonly method: "GET" | "POST" | "PUT" | "DELETE";
         readonly apiRoot: "/rest/api/2" | "/rest/agile/1.0";
         readonly pathTemplate: string;
         /** Create/edit may add the already-approved bounded issue links through their owner. */
@@ -95,7 +101,7 @@ export interface JiraOperationContract {
 
 type JiraApiRoot = "/rest/api/2" | "/rest/agile/1.0";
 type NativeSpecification = readonly [
-  "GET" | "POST" | "PUT",
+  "GET" | "POST" | "PUT" | "DELETE",
   "read" | "write",
   string,
   JiraPermissionPolicy,
@@ -109,7 +115,7 @@ function read(
   return ["GET", "read", path, permissionPolicy, root];
 }
 function write(
-  method: "POST" | "PUT",
+  method: "POST" | "PUT" | "DELETE",
   path: string,
   permissionPolicy: JiraPermissionPolicy,
   root: JiraApiRoot = "/rest/api/2",
@@ -120,6 +126,26 @@ function issueRead(path: string, root: JiraApiRoot = "/rest/api/2"): NativeSpeci
   return ["GET", "read", path, "visible-issues", root];
 }
 const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
+  "jira.watchers": read("/issue/{issueIdOrKey}/watchers", "visible-watchers"),
+  "jira.votes": read("/issue/{issueIdOrKey}/votes", "visible-voters"),
+  "jira.watch": write("POST", "/issue/{issueIdOrKey}/watchers", "current-user-watch-and-readback"),
+  "jira.unwatch": write(
+    "DELETE",
+    "/issue/{issueIdOrKey}/watchers",
+    "current-user-watch-and-readback",
+  ),
+  "jira.vote": write("POST", "/issue/{issueIdOrKey}/votes", "current-user-vote-and-readback"),
+  "jira.unvote": write("DELETE", "/issue/{issueIdOrKey}/votes", "current-user-vote-and-readback"),
+  "jira.create-worklog": write(
+    "POST",
+    "/issue/{issueIdOrKey}/worklog",
+    "worklog-create-and-readback",
+  ),
+  "jira.update-worklog": write(
+    "PUT",
+    "/issue/{issueIdOrKey}/worklog/{id}",
+    "worklog-update-and-readback",
+  ),
   "jira.attachment-settings": read("/attachment/meta", "attachment-availability"),
   "jira.attachment": read("/attachment/{id}", "visible-attachments"),
   "jira.attachment-archive": read("/attachment/{id}/expand/raw", "visible-attachments"),

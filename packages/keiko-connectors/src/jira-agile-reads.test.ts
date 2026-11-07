@@ -33,6 +33,39 @@ function fixture(body: unknown): Fixture {
 }
 
 describe("closed Jira Agile reads", () => {
+  it.each([undefined, 7])(
+    "retains only observed sprint board context (%s)",
+    async (originBoardId) => {
+      const f = fixture({
+        id: 9,
+        name: "Sprint one",
+        state: "future",
+        ...(originBoardId === undefined ? {} : { originBoardId }),
+        self: "https://foreign.invalid/sprint",
+        boardBrowseUrl: "https://foreign.invalid/board",
+      });
+      const result = await executeJiraAgileRead(
+        "jira.sprint",
+        { sprintId: "9" },
+        f.context,
+        f.connection,
+      );
+      expect(result.data).toMatchObject({ outcome: "succeeded", items: [{ id: "9" }] });
+      expect(JSON.stringify(result)).not.toContain("foreign.invalid");
+      if (originBoardId === undefined)
+        expect(JSON.stringify(result)).not.toContain("boardBrowseUrl");
+      else
+        expect(result.data).toMatchObject({
+          items: [
+            {
+              originBoardId: "7",
+              boardBrowseUrl:
+                "https://jira.example.invalid/context/secure/RapidBoard.jspa?rapidView=7",
+            },
+          ],
+        });
+    },
+  );
   it.each([
     [
       "jira.board",

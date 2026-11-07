@@ -8,6 +8,7 @@ import {
 import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
 import {
   JIRA_AGILE_TOOLS,
+  JIRA_SPRINT_TOOLS,
   jiraAgileDetails,
   type JiraOutcomeFact,
   type JiraAgileDetails,
@@ -25,6 +26,10 @@ import {
   JIRA_FILE_METADATA_TOOLS,
   jiraFileMetadataDetails,
 } from "./jira-file-metadata-presentation";
+import {
+  JIRA_PARTICIPATION_TOOLS,
+  jiraParticipationDetails,
+} from "./jira-participation-presentation";
 import { jiraMutationUnchanged } from "./jira-tool-presentation";
 
 export interface JiraOutcomeItem {
@@ -33,6 +38,7 @@ export interface JiraOutcomeItem {
   readonly name?: string;
   readonly body?: string;
   readonly href?: string;
+  readonly boardHref?: string;
   readonly status?: string;
   readonly labels: readonly WidgetMessageKey[];
   readonly facts: readonly JiraOutcomeFact[];
@@ -75,6 +81,7 @@ const STANDALONE_TOOLS = new Set([
   ...JIRA_PROJECT_METADATA_TOOLS,
   ...JIRA_SAVED_VIEW_TOOLS,
   ...JIRA_FILE_METADATA_TOOLS,
+  ...JIRA_PARTICIPATION_TOOLS,
 ]);
 const BOARD_READ_TOOLS = new Set(["jira_board", "jira_boards", "jira_board_configuration"]);
 type UnknownRecord = Readonly<Record<string, unknown>>;
@@ -114,9 +121,8 @@ function savedUrl(value: unknown, queryAllowed = false): URL | undefined {
     ? url
     : undefined;
 }
-function boardLink(value: unknown, tool: string, source: UnknownRecord): string | undefined {
-  if (!BOARD_READ_TOOLS.has(tool)) return undefined;
-  const id = text(source.boardId ?? source.id);
+function boardLink(value: unknown, identity: unknown): string | undefined {
+  const id = text(identity);
   if (id === undefined || !/^[1-9]\d{0,15}$/u.test(id) || !Number.isSafeInteger(Number(id)))
     return undefined;
   const url = savedUrl(value, true);
@@ -195,10 +201,17 @@ function outcomeHref(
   key: string | undefined,
   projectKey: string | undefined,
 ): string | undefined {
-  if (BOARD_READ_TOOLS.has(tool)) return boardLink(source.browseUrl, tool, source);
+  if (tool === "jira_board_create" || JIRA_SPRINT_TOOLS.has(tool)) return undefined;
+  if (BOARD_READ_TOOLS.has(tool)) return boardLink(source.browseUrl, source.boardId ?? source.id);
   return projectKey === undefined
     ? issueLink(source.browseUrl, key)
     : projectLink(source.browseUrl, projectKey);
+}
+function boardContextLink(tool: string, source: UnknownRecord): string | undefined {
+  if (tool === "jira_board_create") return boardLink(source.browseUrl, source.boardId);
+  return JIRA_SPRINT_TOOLS.has(tool)
+    ? boardLink(source.boardBrowseUrl, source.originBoardId)
+    : undefined;
 }
 function outcomeItem(value: unknown, tool: string): JiraOutcomeItem | undefined {
   const source = record(value);
@@ -210,6 +223,7 @@ function outcomeItem(value: unknown, tool: string): JiraOutcomeItem | undefined 
     return metadataDetailsItem(jiraFileMetadataDetails(tool, source));
   const agile = jiraAgileDetails(tool, source);
   const collaboration = jiraCollaborationDetails(tool, source);
+  const participation = jiraParticipationDetails(tool, source);
   const projectKey = text(source.projectKey);
   const key = firstText([
     projectKey,
@@ -235,14 +249,15 @@ function outcomeItem(value: unknown, tool: string): JiraOutcomeItem | undefined 
     agile.body,
     tool === "jira_comments" ? source.body : source.description,
   ]);
-  const facts = [...agile.facts, ...collaboration.facts];
+  const facts = [...agile.facts, ...collaboration.facts, ...participation.facts];
   if (![key, name, body, ...facts].some((entry) => entry !== undefined)) return undefined;
   const status = firstText([record(source.status)?.name, record(source.to)?.name]);
   const href = outcomeHref(tool, source, key, projectKey);
   const projectId = text(source.projectId);
+  const boardHref = boardContextLink(tool, source);
   return {
-    ...textMembers({ key, name, body, status, href, projectId }),
-    labels: [...itemLabels(source), ...agile.labels],
+    ...textMembers({ key, name, body, status, href, projectId, boardHref }),
+    labels: [...itemLabels(source), ...agile.labels, ...participation.labels],
     facts,
   };
 }
@@ -381,7 +396,11 @@ function pageCounts(
 
 /** A display projection of the immutable receipt, shared by the live turn and restored history. */
 export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcomeView {
-  const data = record(exchange.result?.data) ?? {};
+  const stored = record(exchange.result?.data) ?? {};
+  const data =
+    JIRA_PARTICIPATION_TOOLS.has(exchange.call.name) && exchange.mutationOutcome !== undefined
+      ? { ...stored, outcome: exchange.mutationOutcome }
+      : stored;
   return {
     items: outcomeItems(exchange, data),
     ...pageCounts(data, exchange.call.name),

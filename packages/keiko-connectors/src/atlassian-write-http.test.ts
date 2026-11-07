@@ -171,6 +171,18 @@ describe("executeAtlassianWriteRequest — classification", () => {
     expect(outcome).toEqual({ ok: false, reason: "bounds-exceeded" });
     expect(requests).toHaveLength(0);
   });
+
+  it.each(["GET", "DELETE"] as const)(
+    "refuses a JSON body on %s before dispatch",
+    async (method) => {
+      const { port, requests } = scriptedPort([]);
+      expect(await executeAtlassianWriteRequest({ http: port }, request({ method }))).toEqual({
+        ok: false,
+        reason: "malformed-payload",
+      });
+      expect(requests).toHaveLength(0);
+    },
+  );
 });
 
 describe("executeAtlassianWriteRequest — D3 retry discipline", () => {
@@ -260,7 +272,7 @@ describe("executeAtlassianWriteRequest — D3 retry discipline", () => {
   // in-flight request — the caller stayed blocked for up to the full per-request timeout. Every
   // port call (initial attempt and every retry) must carry the EXACT AbortSignal instance passed
   // in, so the adapter can compose it with its own timeout and tear the request down immediately.
-  it.each(["GET", "PUT", "POST"] as const)(
+  it.each(["GET", "PUT", "POST", "DELETE"] as const)(
     "forwards cancellation into every $method call and GET retry (KEIKO-0318)",
     async (method) => {
       const controller = new AbortController();
@@ -268,7 +280,10 @@ describe("executeAtlassianWriteRequest — D3 retry discipline", () => {
       const { port, requests } = scriptedPort([response(503), response(204, "")]);
       const outcome = await executeAtlassianWriteRequest(
         { http: port, sleep: recordedSleep(delays), signal: controller.signal },
-        request({ method, ...(method === "GET" ? { bodyJson: undefined } : {}) }),
+        request({
+          method,
+          ...(method === "GET" || method === "DELETE" ? { bodyJson: undefined } : {}),
+        }),
       );
       expect(outcome).toEqual(
         method === "GET"
@@ -279,6 +294,34 @@ describe("executeAtlassianWriteRequest — D3 retry discipline", () => {
       for (const issued of requests) {
         expect(issued.signal).toBe(controller.signal);
       }
+    },
+  );
+
+  it.each([
+    {
+      kind: "response",
+      status: 429,
+      bodyText: "{}",
+      bodyBytes: 2,
+      truncated: false,
+      retryAfterMs: 500,
+    },
+    response(503),
+    { kind: "network-error" },
+    { kind: "timeout" },
+  ] satisfies readonly AtlassianHttpBodyResult[])(
+    "never repeats DELETE after an uncertain $kind response",
+    async (result) => {
+      const { port, requests } = scriptedPort([result, response(204, "")]);
+      const delays: number[] = [];
+      expect(
+        await executeAtlassianWriteRequest(
+          { http: port, sleep: recordedSleep(delays) },
+          request({ method: "DELETE", bodyJson: undefined }),
+        ),
+      ).toMatchObject({ ok: false });
+      expect(requests).toHaveLength(1);
+      expect(delays).toEqual([]);
     },
   );
 

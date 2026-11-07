@@ -3,7 +3,12 @@ import type { JiraAgileDetails, JiraOutcomeFact } from "./jira-agile-presentatio
 
 type Source = Readonly<Record<string, unknown>>;
 const COMMENTS = new Set(["jira_get_comment", "jira_update_comment"]);
-const WORKLOGS = new Set(["jira_worklogs", "jira_worklog"]);
+const WORKLOGS = new Set([
+  "jira_worklogs",
+  "jira_worklog",
+  "jira_create_worklog",
+  "jira_update_worklog",
+]);
 const LINKS = new Set(["jira_link_types", "jira_issue_link"]);
 export const JIRA_COLLABORATION_TOOLS: ReadonlySet<string> = new Set([
   ...COMMENTS,
@@ -23,7 +28,7 @@ function text(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 function identity(tool: string, source: Source): JiraOutcomeFact[] {
-  const value = text(source.commentId ?? source.id);
+  const value = text(source.commentId ?? source.worklogId ?? source.id);
   if (
     value === undefined ||
     !/^[1-9]\d{0,18}$/u.test(value) ||
@@ -75,7 +80,7 @@ export function jiraCollaborationDetails(tool: string, source: Source): JiraAgil
       const value = text(source[key]);
       return value === undefined ? [] : [{ label, value }];
     }),
-    ...(COMMENTS.has(tool) ? visibilityFacts(source) : []),
+    ...(COMMENTS.has(tool) || WORKLOGS.has(tool) ? visibilityFacts(source) : []),
   ];
   return {
     ...(body === undefined ? {} : { body }),

@@ -33,6 +33,7 @@ import {
   type AgileProjection,
   type AgileFailure,
 } from "./jira-agile-confirmation.js";
+import { jiraBoardBrowseUrl, jiraBrowseUrl } from "./jira-browse-url.js";
 import { mutateAgileMembership } from "./jira-agile-membership.js";
 
 async function create(
@@ -182,7 +183,22 @@ export async function executeJiraAgileMutation(
   context: ManagedMcpInvocationContext,
   connection: JiraManagedConnection,
 ): Promise<JiraMutationAttempt> {
-  return dispatchAgileMutation(operation, args, context, connection, false);
+  const attempt = await dispatchAgileMutation(operation, args, context, connection, false);
+  const receipt = attempt.receipt;
+  if (receipt === undefined) return attempt;
+  const browseUrl =
+    operation === "jira.board-create"
+      ? jiraBoardBrowseUrl(connection.baseUrl, receipt.boardId)
+      : jiraBrowseUrl(connection.baseUrl, receipt.epicKey);
+  const boardBrowseUrl = jiraBoardBrowseUrl(connection.baseUrl, receipt.originBoardId);
+  return {
+    ...attempt,
+    receipt: {
+      ...receipt,
+      ...(browseUrl === undefined ? {} : { browseUrl }),
+      ...(boardBrowseUrl === undefined ? {} : { boardBrowseUrl }),
+    },
+  };
 }
 /** The existing pre-approval lane uses precisely the same admission, with every effect disabled. */
 export async function checkJiraAgileMutationTemplates(

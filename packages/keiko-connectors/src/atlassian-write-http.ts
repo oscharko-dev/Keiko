@@ -7,7 +7,7 @@
 //   - Bounded backoff reusing the sync lane's D3 constants: 500 ms base, factor 2, 8 000 ms
 //     per-attempt cap, at most 5 attempts total, `Retry-After` honored and capped at the same
 //     ceiling.
-//   - Only GET may retry 429/5xx. POST and PUT are dispatched at most once, even
+//   - Only GET may retry 429/5xx. POST, PUT and DELETE are dispatched at most once, even
 //     with Retry-After: a response can be lost or replaced after the mutation committed.
 //     Replaying PUT can also overwrite a concurrent actor's intervening change.
 //     Mutation outcome reconciliation and any explicit new intent belong to the caller.
@@ -48,7 +48,7 @@ export const ATLASSIAN_WRITE_ACTION_TOTAL_TIMEOUT_MS = 90_000;
 // generous for those payloads and small enough that a hostile upstream cannot flood the lane.
 export const ATLASSIAN_WRITE_RESPONSE_MAX_BYTES = 262_144;
 
-export type AtlassianWriteHttpMethod = "GET" | "POST" | "PUT";
+export type AtlassianWriteHttpMethod = "GET" | "POST" | "PUT" | "DELETE";
 
 export interface AtlassianWriteHttpRequest {
   readonly method: AtlassianWriteHttpMethod;
@@ -275,6 +275,8 @@ function driveRetryLoop(
 function requestBodyRefusal(
   request: AtlassianWriteHttpRequest,
 ): Extract<AtlassianWriteHttpOutcome, { ok: false }> | undefined {
+  if (request.bodyJson !== undefined && request.method !== "POST" && request.method !== "PUT")
+    return { ok: false, reason: "malformed-payload" };
   if (request.upload !== undefined) {
     if (request.method !== "POST" || request.bodyJson !== undefined)
       return { ok: false, reason: "malformed-payload" };

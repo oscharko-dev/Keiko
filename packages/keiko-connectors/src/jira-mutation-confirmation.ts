@@ -31,6 +31,7 @@ export type JiraIssueReadback =
   | {
       readonly ok: true;
       readonly id: string;
+      readonly key?: string;
       readonly fields: Record<string, unknown>;
     };
 export type JiraValidatedMutationFields = Extract<JiraFieldValidationResult, { ok: true }> & {
@@ -68,7 +69,7 @@ export async function readJiraMutationIssue(
   )
     return MALFORMED;
   if (body.key.toUpperCase() !== issueKey.toUpperCase() && body.id !== issueKey) return CONFLICT;
-  return { ok: true, id: body.id, fields: values };
+  return { ok: true, id: body.id, key: body.key, fields: values };
 }
 export function jiraMutationFieldSelection(
   values: JiraValidatedMutationFields,

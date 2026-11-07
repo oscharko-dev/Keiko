@@ -455,38 +455,44 @@ describe("createGatewayAtlassianHttpBodyPort — write channel (Issue #2244)", (
     });
   });
 
-  it("issues PUT without a content-type when no body is supplied", async () => {
-    const credentials = resolver();
-    const { fetchImpl, calls } = writeFetchFake(204, "");
-    await bodyPort(
-      fetchImpl,
-      credentials,
-    )({
-      method: "PUT",
-      url: "https://acme.example/rest/api/3/issue/PROJ-9",
-      timeoutMs: 30_000,
-      maxBodyBytes: 1_000,
-    });
-    expect(calls[0]).toMatchObject({ method: "PUT", contentType: null, body: undefined });
-  });
-
-  it("fails closed on a GET carrying a request body", async () => {
-    const credentials = resolver();
-    const { fetchImpl, calls } = writeFetchFake(200, "{}");
-    await expect(
-      bodyPort(
+  it.each(["PUT", "DELETE"] as const)(
+    "issues %s without a body or content-type",
+    async (method) => {
+      const credentials = resolver();
+      const { fetchImpl, calls } = writeFetchFake(204, "");
+      await bodyPort(
         fetchImpl,
         credentials,
       )({
-        method: "GET",
-        url: "https://acme.example/rest/api/3/issue",
+        method,
+        url: "https://acme.example/rest/api/3/issue/PROJ-9",
         timeoutMs: 30_000,
         maxBodyBytes: 1_000,
-        bodyJson: "{}",
-      }),
-    ).rejects.toBeInstanceOf(AtlassianCredentialCustodyError);
-    expect(calls).toHaveLength(0);
-  });
+      });
+      expect(calls[0]).toMatchObject({ method, contentType: null, body: undefined });
+    },
+  );
+
+  it.each(["GET", "DELETE"] as const)(
+    "fails closed on a %s carrying a request body",
+    async (method) => {
+      const credentials = resolver();
+      const { fetchImpl, calls } = writeFetchFake(200, "{}");
+      await expect(
+        bodyPort(
+          fetchImpl,
+          credentials,
+        )({
+          method,
+          url: "https://acme.example/rest/api/3/issue",
+          timeoutMs: 30_000,
+          maxBodyBytes: 1_000,
+          bodyJson: "{}",
+        }),
+      ).rejects.toBeInstanceOf(AtlassianCredentialCustodyError);
+      expect(calls).toHaveLength(0);
+    },
+  );
 
   it("fails closed on an oversized request body before any outbound call", async () => {
     const credentials = resolver();
@@ -569,6 +575,7 @@ describe("createGatewayAtlassianHttpBodyPort — governed upload (#4176)", () =>
   it.each([
     ["a PUT", { method: "PUT" as const }],
     ["a GET", { method: "GET" as const }],
+    ["a DELETE", { method: "DELETE" as const }],
     ["a JSON body beside it", { bodyJson: "{}" }],
     ["a content type that is not multipart", { upload: { ...upload, contentType: "text/html" } }],
     [

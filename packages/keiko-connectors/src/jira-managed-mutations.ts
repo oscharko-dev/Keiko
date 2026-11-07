@@ -1,4 +1,12 @@
 import {
+  executeJiraParticipationMutation,
+  isJiraParticipationMutation,
+} from "./jira-managed-participation.js";
+import {
+  executeJiraWorklogMutation,
+  isJiraWorklogMutation,
+} from "./jira-managed-worklog-mutations.js";
+import {
   isSafeAtlassianIdentifier,
   type AtlassianConnectorWriteFailureReason,
   type JiraFieldValidationFailure,
@@ -1312,6 +1320,30 @@ function untracedReferences(
   );
 }
 
+function dedicatedMutation(
+  operation: JiraMutationOperation,
+  source: CatalogJsonObject,
+  context: ManagedMcpInvocationContext,
+  connection: JiraManagedConnection,
+  check: boolean,
+): Promise<JiraMutationAttempt> | undefined {
+  const args = structuredClone(source);
+  const request = requestFor(connection, context);
+  if (isJiraParticipationMutation(operation))
+    return executeJiraParticipationMutation(operation, args, request, check, connection.baseUrl);
+  if (isJiraWorklogMutation(operation))
+    return executeJiraWorklogMutation(operation, args, request, check, connection.issueTemplates);
+  if (isJiraCommentMutation(operation))
+    return executeJiraCommentMutation(operation, args, request, check, connection.baseUrl);
+  if (isJiraComponentMutation(operation))
+    return executeJiraComponentMutation(operation, args, request, check);
+  if (isJiraVersionMutation(operation))
+    return executeJiraVersionMutation(operation, args, request, check);
+  if (isJiraProjectMutation(operation))
+    return executeJiraProjectMutation(operation, args, request, check);
+  return undefined;
+}
+
 /** Fresh capability metadata and one mutation request. Durability/authority remain server-owned. */
 export function executeJiraManagedMutation(
   operation: JiraMutationOperation,
@@ -1324,32 +1356,8 @@ export function executeJiraManagedMutation(
     return Promise.resolve({ ok: false, reason: "unavailable" });
   if (isJiraAgileMutation(operation))
     return executeJiraAgileMutation(operation, structuredClone(source), context, connection);
-  if (isJiraCommentMutation(operation))
-    return executeJiraCommentMutation(
-      operation,
-      structuredClone(source),
-      requestFor(connection, context),
-      false,
-      connection.baseUrl,
-    );
-  if (isJiraComponentMutation(operation))
-    return executeJiraComponentMutation(
-      operation,
-      structuredClone(source),
-      requestFor(connection, context),
-    );
-  if (isJiraVersionMutation(operation))
-    return executeJiraVersionMutation(
-      operation,
-      structuredClone(source),
-      requestFor(connection, context),
-    );
-  if (isJiraProjectMutation(operation))
-    return executeJiraProjectMutation(
-      operation,
-      structuredClone(source),
-      requestFor(connection, context),
-    );
+  const dedicated = dedicatedMutation(operation, source, context, connection, false);
+  if (dedicated !== undefined) return dedicated;
   // An attachment changes no field a template describes: it takes no template check.
   if (operation === "jira.attach")
     return attachFile(requestFor(connection, context), structuredClone(source), connection);
@@ -1372,7 +1380,7 @@ const TEMPLATE_CHECKED: ReadonlySet<JiraMutationOperation> = new Set([
 /**
  * The same admission pipeline without the write: Chat runs it before asking a human to approve, so
  * a draft that violates an active template is refused instead of being put in front of a person.
- * It reads and validates only; it never issues a POST or PUT.
+ * It reads and validates only; it never issues a POST, PUT or DELETE.
  */
 /** Checks native prerequisites without writing; comment updates preserve observed visibility. */
 function checkedAttempt(
@@ -1384,35 +1392,8 @@ function checkedAttempt(
   if (isJiraAgileMutation(operation))
     return checkJiraAgileMutation(operation, structuredClone(source), context, connection);
   if (connection.deployment !== "data-center") return Promise.resolve({ ok: true, receipt: {} });
-  if (isJiraCommentMutation(operation))
-    return executeJiraCommentMutation(
-      operation,
-      structuredClone(source),
-      requestFor(connection, context),
-      true,
-      connection.baseUrl,
-    );
-  if (isJiraComponentMutation(operation))
-    return executeJiraComponentMutation(
-      operation,
-      structuredClone(source),
-      requestFor(connection, context),
-      true,
-    );
-  if (isJiraVersionMutation(operation))
-    return executeJiraVersionMutation(
-      operation,
-      structuredClone(source),
-      requestFor(connection, context),
-      true,
-    );
-  if (isJiraProjectMutation(operation))
-    return executeJiraProjectMutation(
-      operation,
-      structuredClone(source),
-      requestFor(connection, context),
-      true,
-    );
+  const dedicated = dedicatedMutation(operation, source, context, connection, true);
+  if (dedicated !== undefined) return dedicated;
   // The check mode must never reach any write.
   if (!TEMPLATE_CHECKED.has(operation)) return Promise.resolve({ ok: true, receipt: {} });
   return dispatchMutation(operation, structuredClone(source), requestFor(connection, context), {

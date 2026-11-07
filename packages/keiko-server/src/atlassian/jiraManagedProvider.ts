@@ -1,4 +1,8 @@
 import {
+  jiraParticipationDeclarationForTool,
+  type JIRA_PARTICIPATION_READ_DEFINITIONS,
+} from "./jiraParticipationDescriptors.js";
+import {
   createJiraManagedProvider,
   type JiraManagedConnection,
   type JiraManagedMutationExecutor,
@@ -155,6 +159,7 @@ type CoreReadToolName = Exclude<
       | keyof typeof JIRA_FILTER_READ_DEFINITIONS
       | keyof typeof JIRA_PROJECT_STRUCTURE_READ_DEFINITIONS
       | keyof typeof JIRA_ISSUE_COLLABORATION_READ_DEFINITIONS
+      | keyof typeof JIRA_PARTICIPATION_READ_DEFINITIONS
       | keyof typeof JIRA_SAVED_VIEW_READ_DEFINITIONS
       | keyof typeof JIRA_ASSET_READ_DEFINITIONS
     >
@@ -330,6 +335,8 @@ function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
   if (agile !== undefined) return agile;
   const structure = jiraProjectStructureDeclarationForTool(name);
   if (structure !== undefined) return structure;
+  const participation = jiraParticipationDeclarationForTool(name);
+  if (participation !== undefined) return participation;
   const collaboration = jiraIssueCollaborationDeclarationForTool(name);
   if (collaboration !== undefined) return collaboration;
   const savedView = jiraSavedViewDeclarationForTool(name);

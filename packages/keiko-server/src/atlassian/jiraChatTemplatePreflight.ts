@@ -49,6 +49,12 @@ const FIELD_OPERATIONS = [
   "jira.create-version",
   "jira.update-version",
   "jira.update-comment",
+  "jira.create-worklog",
+  "jira.update-worklog",
+  "jira.watch",
+  "jira.unwatch",
+  "jira.vote",
+  "jira.unvote",
 ] as const;
 type JiraFieldOperation = (typeof FIELD_OPERATIONS)[number] | JiraAgileMutation;
 function fieldOperation(tool: string): JiraFieldOperation | undefined {

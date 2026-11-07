@@ -454,6 +454,24 @@
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-versions.ts"],
       "testFiles": ["packages/keiko-connectors/src/jira-managed-versions.test.ts"]
     },
+    "jira.create-worklog": {
+      "identity": "POST /rest/api/2/issue/{issueIdOrKey}/worklog",
+      "effect": "write",
+      "permissionPolicy": "worklog-create-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "One issue-bound POST with explicit positive safe seconds and zoned start; fixed adjustEstimate=leave. Optional native comment and exact role/group visibility. Saved issue-template admission uses observed/calculated aggregate time, never missing-as-zero. Exact acknowledged ID and independent bound issue/worklog GET; uncertain effects are not replayed. Other estimate adjustment modes and author selection are unsupported.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-worklog-mutations.ts",
+        "packages/keiko-connectors/src/jira-worklog-templates.ts",
+        "packages/keiko-server/src/atlassian/jiraParticipationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-worklog-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.dashboard": {
       "identity": "GET /rest/api/2/dashboard/{id}",
       "effect": "read",
@@ -849,6 +867,40 @@
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-tools.ts"],
       "testFiles": ["packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"]
     },
+    "jira.unvote": {
+      "identity": "DELETE /rest/api/2/issue/{issueIdOrKey}/votes",
+      "effect": "write",
+      "permissionPolicy": "current-user-vote-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Connected-user-only vote DELETE, bound issue identity and independent hasVoted=false readback. Cannot remove another actor vote; already matching state is an explicit no-op, uncertainty is not replayed.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-participation.ts",
+        "packages/keiko-server/src/atlassian/jiraParticipationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-participation.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.unwatch": {
+      "identity": "DELETE /rest/api/2/issue/{issueIdOrKey}/watchers",
+      "effect": "write",
+      "permissionPolicy": "current-user-watch-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Connected-user-only watcher DELETE; actor resolved through the current credential, exact issue identity and independent isWatching=false readback. No caller-selected actor; matching state performs no write and unknown effects are not replayed.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-participation.ts",
+        "packages/keiko-server/src/atlassian/jiraParticipationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-participation.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.update-comment": {
       "identity": "PUT /rest/api/2/issue/{issueIdOrKey}/comment/{id}",
       "effect": "write",
@@ -884,6 +936,24 @@
       "constraints": "At least one supported name/description/calendar date/released/archived field on an existing version; omitted values remain unchanged and its project cannot move. Independent GET confirmation; no delete/merge/replace.",
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-versions.ts"],
       "testFiles": ["packages/keiko-connectors/src/jira-managed-versions.test.ts"]
+    },
+    "jira.update-worklog": {
+      "identity": "PUT /rest/api/2/issue/{issueIdOrKey}/worklog/{id}",
+      "effect": "write",
+      "permissionPolicy": "worklog-update-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "One exact issue/worklog PUT changing seconds, started and/or native comment; fixed adjustEstimate=leave. Observed visibility and unrequested fields retained and independently verified. Saved issue-template admission binds observed safe aggregate delta; inconsistent/unavailable relevant time fails closed. No visibility, author, issue relocation, deletion or arbitrary estimate adjustment.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-worklog-mutations.ts",
+        "packages/keiko-connectors/src/jira-worklog-templates.ts",
+        "packages/keiko-server/src/atlassian/jiraParticipationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-worklog-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
     },
     "jira.user-avatars": {
       "identity": "GET /rest/api/2/user/avatars",
@@ -927,6 +997,72 @@
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-versions.ts"],
       "testFiles": ["packages/keiko-connectors/src/jira-managed-versions.test.ts"]
     },
+    "jira.vote": {
+      "identity": "POST /rest/api/2/issue/{issueIdOrKey}/votes",
+      "effect": "write",
+      "permissionPolicy": "current-user-vote-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Connected-user-only vote POST, bound issue identity and independent hasVoted readback. Native voting/permission restrictions remain authoritative; no actor selection or replay of unknown effects.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-participation.ts",
+        "packages/keiko-server/src/atlassian/jiraParticipationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-participation.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.votes": {
+      "identity": "GET /rest/api/2/issue/{issueIdOrKey}/votes",
+      "effect": "read",
+      "permissionPolicy": "visible-voters",
+      "kind": "constrained-tool",
+      "constraints": "One bound issue voter GET with local bounded paging over visible returned people; native vote count, optional connected-user hasVoted and list completeness remain distinct. No email/self URLs or inferred hidden people/state.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-participation.ts",
+        "packages/keiko-server/src/atlassian/jiraParticipationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-participation.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.watch": {
+      "identity": "POST /rest/api/2/issue/{issueIdOrKey}/watchers",
+      "effect": "write",
+      "permissionPolicy": "current-user-watch-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Connected-user-only watching POST, with bound issue identity, current state inspection and independent isWatching readback. No model-selected username, no other-user operation, no replay of unknown effects; matching state performs no write.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-participation.ts",
+        "packages/keiko-server/src/atlassian/jiraParticipationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-participation.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.watchers": {
+      "identity": "GET /rest/api/2/issue/{issueIdOrKey}/watchers",
+      "effect": "read",
+      "permissionPolicy": "visible-watchers",
+      "kind": "constrained-tool",
+      "constraints": "One bound issue watcher GET with local bounded paging over visible returned people; native count, optional connected-user isWatching and list completeness remain distinct. No email/self URLs or inferred hidden people/state; read permission is not write permission.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-participation.ts",
+        "packages/keiko-server/src/atlassian/jiraParticipationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-participation.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.worklog": {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/worklog/{id}",
       "effect": "read",
@@ -948,8 +1084,8 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "665c8dec770e7a206aaac6505f4ed7d2936752c96b72b40b81bf09fc461a5352",
-    "nativeOperationCount": 68
+    "sha256": "e280a2ad4b3b5f38a60b29d2d31d951d1c30d4525f20a5d0140685982a7352dd",
+    "nativeOperationCount": 76
   },
   "operations": [
     {
@@ -6107,10 +6243,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.unvote"]
     },
     {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/votes",
@@ -6139,10 +6275,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.votes"]
     },
     {
       "identity": "POST /rest/api/2/issue/{issueIdOrKey}/votes",
@@ -6171,10 +6307,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.vote"]
     },
     {
       "identity": "DELETE /rest/api/2/issue/{issueIdOrKey}/watchers",
@@ -6203,10 +6339,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.unwatch"]
     },
     {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/watchers",
@@ -6235,10 +6371,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.watchers"]
     },
     {
       "identity": "POST /rest/api/2/issue/{issueIdOrKey}/watchers",
@@ -6267,10 +6403,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.watch"]
     },
     {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/worklog",
@@ -6331,10 +6467,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.create-worklog"]
     },
     {
       "identity": "DELETE /rest/api/2/issue/{issueIdOrKey}/worklog/{id}",
@@ -6427,10 +6563,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.update-worklog"]
     },
     {
       "identity": "POST /rest/api/2/issueLink",

@@ -720,7 +720,7 @@ creation or default-sharing change is inferred from board creation.
 Planning changes to issue fields reuse the existing edit-template gate before approval and
 again before effects. Native partial Sprint updates preserve omitted fields, and state transitions
 are checked against the current Sprint. Success requires independent readback; unavailable
-confirmation remains uncertain. Reviewed single-resource Board/Sprint/Epic writes can establish
+confirmation remains uncertain. Reviewed single-resource Board/Sprint/Epic and component/version writes can establish
 no effect from Jira's structured rejection. Bulk membership errors remain uncertain even when
 structured and never authorize replay. Post-effect readback has its own bounded, read-only phase;
 bounded concurrent member reads preserve the original authority and cancellation. Unexpected

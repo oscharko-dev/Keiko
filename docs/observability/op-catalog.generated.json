@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "84e39253aa2774b3cc6d7eea70ccaae7e8a37c869568d4bd3fbc12dc786775e6",
+    "catalogDigest": "5ce2a3522365ce2b828a2a41eb33bf77bf5957b49d5787e2eed24879425c5d3f",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -32494,6 +32494,12 @@
               "jira.create-version",
               "jira.update-version",
               "jira.update-comment",
+              "jira.create-worklog",
+              "jira.update-worklog",
+              "jira.watch",
+              "jira.unwatch",
+              "jira.vote",
+              "jira.unvote",
               "jira.board-create",
               "jira.sprint-create",
               "jira.sprint-update",
@@ -32528,8 +32534,8 @@
         "failureClasses": ["atlassian-action-execution"],
         "proofIds": ["jira.field.admission.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:157",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:282"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:159",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:298"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -32555,6 +32561,8 @@
             "required": true,
             "values": [
               "jira.create",
+              "jira.create-worklog",
+              "jira.update-worklog",
               "jira.edit",
               "jira.transition",
               "jira.assign",
@@ -32606,7 +32614,7 @@
         "proofIds": ["jira.template.admission.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:90",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:248"]
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:258"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -114352,7 +114360,7 @@
     {
       "op": "jira.field.admission",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:160",
+      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:162",
       "package": "keiko-server"
     },
     {
@@ -114372,7 +114380,7 @@
     {
       "op": "jira.template-preflight-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatTemplatePreflight.ts:125",
+      "site": "packages/keiko-server/src/atlassian/jiraChatTemplatePreflight.ts:131",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

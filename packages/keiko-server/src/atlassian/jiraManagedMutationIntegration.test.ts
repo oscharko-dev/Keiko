@@ -29,6 +29,7 @@ import {
   SUCCESS_RECEIPTS,
   mutationRemoteState,
   nativeRead,
+  nativeParticipationWrite,
   nativeWrite,
   type MutationRemoteState,
   type SingleMutation,
@@ -205,6 +206,13 @@ async function fixtureWriteResult(
   path: string,
   state: MutationRemoteState,
 ): Promise<ReturnType<typeof fixtureWrite>> {
+  const participation = nativeParticipationWrite(request, state);
+  if (participation !== undefined) return participation;
+  if (
+    path.includes("/worklog") &&
+    new URL(request.url).searchParams.get("adjustEstimate") !== "leave"
+  )
+    throw new TypeError("Worklogs must retain the existing remaining estimate");
   if (!request.headers.get("content-type")?.startsWith("multipart/form-data; boundary=keiko-")) {
     const text = await request.text();
     return nativeWrite(path, text, state) ?? fixtureWrite(path, text, state);
@@ -258,6 +266,7 @@ async function mutationCredentials(
 async function fixture(
   mode: RemoteMode = "confirmed",
   afterAcknowledgement?: "binding-revoked" | "cancelled",
+  initialOperation?: JiraMutationOperation,
 ): Promise<{
   invoke: (
     operation: JiraMutationOperation,
@@ -277,6 +286,8 @@ async function fixture(
   const jira = remote(mode, () => {
     expect(db.journal.find(activeInvocation)?.phase).toBe("dispatched");
   });
+  jira.state.isWatching = initialOperation === "jira.unwatch";
+  jira.state.hasVoted = initialOperation === "jira.unvote";
   const { credentials, metadata } = await mutationCredentials(jira.fetch, db.logs);
   const executeMutation: JiraManagedMutationExecutor<
     CatalogHandlerContext<ConversationConsumer>
@@ -439,7 +450,7 @@ it.each(["binding-revoked", "cancelled"] as const)(
 it.each(SINGLE_MUTATIONS)(
   "executes %s through the real gateway/binder/SDK and durable journal",
   async (operation) => {
-    const f = await fixture();
+    const f = await fixture("confirmed", undefined, operation);
     expect(await f.invoke(operation)).toMatchObject({
       kind: "settled",
       result: {
@@ -468,7 +479,7 @@ it.each(SINGLE_MUTATIONS)(
 it.each(SINGLE_MUTATIONS)(
   "keeps %s unconfirmed when readback is denied and blocks further writes",
   async (operation) => {
-    const f = await fixture("readback-denied");
+    const f = await fixture("readback-denied", undefined, operation);
     expect(await f.invoke(operation)).toMatchObject({
       kind: "settled",
       result: { status: "failed", data: { outcome: "succeeded-unconfirmed" } },
@@ -489,7 +500,7 @@ it.each(SINGLE_MUTATIONS)(
 it.each(SINGLE_MUTATIONS)(
   "never repeats %s after losing the response to an applied mutation",
   async (operation) => {
-    const f = await fixture("lost-response");
+    const f = await fixture("lost-response", undefined, operation);
     expect(await f.invoke(operation)).toMatchObject({
       kind: "settled",
       result: { data: { outcome: "unknown" } },

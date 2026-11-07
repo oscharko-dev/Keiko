@@ -44,6 +44,39 @@ describe("updated comment receipts", () => {
 
 describe("Agile entity and membership receipts", () => {
   it.each([
+    {
+      operation: "jira.board-create",
+      receipt: {
+        boardId: "37",
+        browseUrl: "https://jira.example.invalid/context/secure/RapidBoard.jspa?rapidView=37",
+      },
+    },
+    {
+      operation: "jira.epic-update",
+      receipt: { epicKey: "SYN-1", browseUrl: "https://jira.example.invalid/context/browse/SYN-1" },
+    },
+    {
+      operation: "jira.sprint-update",
+      receipt: {
+        sprintId: "37",
+        originBoardId: "7",
+        boardBrowseUrl: "https://jira.example.invalid/context/secure/RapidBoard.jspa?rapidView=7",
+      },
+    },
+  ] as const)(
+    "preserves validated direct or board-context links for $operation",
+    ({ operation, receipt }) => {
+      const attempt = validJiraMutationAttempt({ ok: true, receipt }, operation);
+      expect(attempt).toEqual({ ok: true, receipt });
+      expect(jiraAttemptToolResult("succeeded", attempt).data).toMatchObject(receipt);
+      const partial = validJiraMutationAttempt(
+        { ok: false, reason: "unavailable", receipt },
+        operation,
+      );
+      expect(jiraAttemptToolResult("succeeded-unconfirmed", partial).data).toMatchObject(receipt);
+    },
+  );
+  it.each([
     { operation: "jira.board-create", receipt: { boardId: "37" } },
     { operation: "jira.sprint-create", receipt: { sprintId: "37" } },
     { operation: "jira.sprint-update", receipt: { sprintId: "37" } },
@@ -65,6 +98,85 @@ describe("Agile entity and membership receipts", () => {
       expect(jiraAttemptToolResult("succeeded-unconfirmed", partial).data).toMatchObject({
         ...receipt,
         outcome: "succeeded-unconfirmed",
+      });
+    },
+  );
+  it.each([
+    {
+      sprintId: "37",
+      boardBrowseUrl: "https://jira.example.invalid/context/secure/RapidBoard.jspa?rapidView=7",
+    },
+    {
+      sprintId: "37",
+      originBoardId: "7",
+      boardBrowseUrl: "https://jira.example.invalid/context/secure/RapidBoard.jspa?rapidView=8",
+    },
+    {
+      sprintId: "37",
+      originBoardId: "7",
+      boardBrowseUrl:
+        "https://user:password@jira.example.invalid/context/secure/RapidBoard.jspa?rapidView=7",
+    },
+    {
+      sprintId: "37",
+      originBoardId: "7",
+      boardBrowseUrl:
+        "https://jira.example.invalid/context/secure/RapidBoard.jspa?rapidView=7&next=foreign",
+    },
+    {
+      sprintId: "37",
+      originBoardId: "7",
+      boardBrowseUrl: "http://jira.example.invalid/context/secure/RapidBoard.jspa?rapidView=7",
+    },
+    {
+      sprintId: "37",
+      originBoardId: "7",
+      boardBrowseUrl:
+        "https://jira.example.invalid/context/secure/RapidBoard.jspa?rapidView=7#foreign",
+    },
+    { sprintId: "37", originBoardId: "9007199254740992" },
+    {
+      sprintId: "37",
+      browseUrl: "https://jira.example.invalid/context/secure/RapidBoard.jspa?sprint=37",
+    },
+  ])("refuses invalid, mismatched or invented sprint destinations %#", (receipt) => {
+    expect(validJiraMutationAttempt({ ok: true, receipt }, "jira.sprint-update")).toEqual({
+      ok: false,
+      reason: "malformed-payload",
+    });
+    expect(
+      validJiraMutationAttempt({ ok: false, reason: "unavailable", receipt }, "jira.sprint-update"),
+    ).not.toHaveProperty("receipt");
+  });
+  it.each([
+    {
+      operation: "jira.board-create",
+      receipt: { boardId: "37", browseUrl: "https://jira.example.invalid/context/browse/SYN-1" },
+    },
+    {
+      operation: "jira.board-create",
+      receipt: {
+        boardId: "37",
+        browseUrl: "https://jira.example.invalid/context/secure/RapidBoard.jspa?rapidView=7",
+      },
+    },
+    {
+      operation: "jira.epic-update",
+      receipt: { epicKey: "SYN-1", browseUrl: "https://jira.example.invalid/context/browse/SYN-2" },
+    },
+    {
+      operation: "jira.epic-update",
+      receipt: {
+        epicKey: "SYN-1",
+        browseUrl: "https://jira.example.invalid/context/browse/SYN-1?next=foreign",
+      },
+    },
+  ] as const)(
+    "refuses mismatched direct entity destinations for $operation",
+    ({ operation, receipt }) => {
+      expect(validJiraMutationAttempt({ ok: true, receipt }, operation)).toEqual({
+        ok: false,
+        reason: "malformed-payload",
       });
     },
   );
@@ -214,6 +326,65 @@ describe("version and component identities", () => {
       reason: "malformed-payload",
     });
   });
+});
+
+describe("worklog, watching and voting receipts", () => {
+  const context = { issueKey: "SYN-1", issueId: "10001" };
+  it.each([
+    { operation: "jira.create-worklog", receipt: { ...context, worklogId: "9223372036854775807" } },
+    { operation: "jira.update-worklog", receipt: { ...context, worklogId: "10002" } },
+    { operation: "jira.watch", receipt: { ...context, isWatching: true } },
+    { operation: "jira.unwatch", receipt: { ...context, isWatching: false } },
+    { operation: "jira.vote", receipt: { ...context, hasVoted: true } },
+    { operation: "jira.unvote", receipt: { ...context, hasVoted: false } },
+  ] as const)("requires independent $operation evidence for success", ({ operation, receipt }) => {
+    expect(validJiraMutationAttempt({ ok: true, receipt }, operation)).toEqual({
+      ok: true,
+      receipt,
+    });
+    const { issueId: _issueId, ...unbound } = receipt;
+    expect(validJiraMutationAttempt({ ok: true, receipt: unbound }, operation)).toEqual({
+      ok: false,
+      reason: "malformed-payload",
+    });
+    expect(validJiraMutationAttempt({ ok: true, receipt: context }, operation)).toEqual({
+      ok: false,
+      reason: "malformed-payload",
+    });
+    const partial = validJiraMutationAttempt(
+      { ok: false, reason: "unavailable", receipt: context },
+      operation,
+    );
+    expect(jiraAttemptToolResult("succeeded-unconfirmed", partial).data).toMatchObject({
+      ...context,
+      outcome: "succeeded-unconfirmed",
+    });
+    expect(partial.receipt).not.toHaveProperty("worklogId");
+    expect(partial.receipt).not.toHaveProperty("isWatching");
+    expect(partial.receipt).not.toHaveProperty("hasVoted");
+  });
+  it.each([
+    { operation: "jira.watch", receipt: { ...context, isWatching: false } },
+    { operation: "jira.unwatch", receipt: { ...context, isWatching: true } },
+    { operation: "jira.vote", receipt: { ...context, hasVoted: false } },
+    { operation: "jira.unvote", receipt: { ...context, hasVoted: true } },
+    { operation: "jira.vote", receipt: { ...context, hasVoted: true, worklogId: "10002" } },
+    { operation: "jira.create-worklog", receipt: { ...context, worklogId: "9223372036854775808" } },
+    { operation: "jira.update-worklog", receipt: { ...context, worklogId: "1.5" } },
+    { operation: "jira.watch", receipt: { ...context, isWatching: true, issueId: "not-an-id" } },
+    { operation: "jira.vote", receipt: { ...context, hasVoted: true, issueKey: "../foreign" } },
+  ] as const)(
+    "refuses mixed, opposite or unvalidated $operation evidence %#",
+    ({ operation, receipt }) => {
+      expect(validJiraMutationAttempt({ ok: true, receipt }, operation)).toEqual({
+        ok: false,
+        reason: "malformed-payload",
+      });
+      expect(
+        validJiraMutationAttempt({ ok: false, reason: "conflict", receipt }, operation),
+      ).not.toHaveProperty("receipt");
+    },
+  );
 });
 
 describe("internal description formatting evidence", () => {

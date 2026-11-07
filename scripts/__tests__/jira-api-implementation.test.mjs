@@ -14,7 +14,7 @@ const BUILDERS = `
 function read(path: string, policy: string, root = "/rest/api/2"): NativeTuple {
   return ["GET", "read", path, policy, root];
 }
-function write(method: "POST" | "PUT", path: string, policy: string, root = "/rest/api/2"): NativeTuple {
+function write(method: "POST" | "PUT" | "DELETE", path: string, policy: string, root = "/rest/api/2"): NativeTuple {
   return [method, "write", path, policy, root];
 }
 function issueRead(path: string, root = "/rest/api/2"): NativeTuple {
@@ -30,6 +30,26 @@ afterEach(() => {
 });
 
 describe("current Jira implementation accounting", () => {
+  it("accounts for a closed DELETE write without allowing arbitrary methods", () => {
+    const f = fixture();
+    writeFileSync(
+      f.registryFile,
+      `${BUILDERS}\nconst NATIVE = { "jira.unvote": write("DELETE", "/issue/{issueIdOrKey}/votes", "current-user-vote-and-readback") };`,
+    );
+    expect(readJiraNativeRegistry(f.registryFile).entries).toEqual([
+      {
+        tool: "jira.unvote",
+        identity: "DELETE /rest/api/2/issue/{issueIdOrKey}/votes",
+        effect: "write",
+        permissionPolicy: "current-user-vote-and-readback",
+      },
+    ]);
+    writeFileSync(
+      f.registryFile,
+      `${BUILDERS}\nconst NATIVE = { "jira.unvote": write("PATCH", "/issue/{issueIdOrKey}/votes", "current-user-vote-and-readback") };`,
+    );
+    expect(() => readJiraNativeRegistry(f.registryFile)).toThrow("registry-native-effect");
+  });
   it("accounts for issue reads with their fixed permission policy and literal API root", () => {
     const f = fixture();
     writeFileSync(
