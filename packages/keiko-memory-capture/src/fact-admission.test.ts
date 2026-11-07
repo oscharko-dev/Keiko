@@ -49,6 +49,26 @@ describe("admitProposedFact", () => {
     ["no span", "Ich mag Tabellen.", "", "no-evidence"],
     ["a span elsewhere", "Ich mag Tabellen.", "Ich mag Listen", "evidence-not-verbatim"],
     ["a different case", "Ich mag Tabellen.", "ich mag tabellen", "evidence-not-verbatim"],
+    // #4206: the provider projection masks an identifier before the model reads the words, so the
+    // model's quote holds the placeholder where the person wrote it. The reason is the identifier.
+    [
+      "a quote with a masked IBAN",
+      "Ich zahle von DE89 3704 0044 0532 0130 00.",
+      "Ich zahle von [REDACTED]",
+      "personal-identifier",
+    ],
+    [
+      "a quote whose masked span is no identifier",
+      "Ich mag Tabellen mit Rahmen.",
+      "Ich mag [REDACTED] mit Rahmen",
+      "evidence-not-verbatim",
+    ],
+    [
+      "a masked quote whose other parts the person never said",
+      "Ich zahle von DE89 3704 0044 0532 0130 00.",
+      "Ich zahle gern von [REDACTED]",
+      "evidence-not-verbatim",
+    ],
     [
       "a span over two sentences",
       "Ich mag Tabellen. Ich mag Listen.",

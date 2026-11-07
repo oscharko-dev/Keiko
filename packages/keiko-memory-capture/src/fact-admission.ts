@@ -2,6 +2,8 @@
 // person's own words only. "Im Zweifel zu wenig": a check that cannot confirm a fact drops it, and
 // the reason stays a closed value.
 
+import { REDACTION_PLACEHOLDER } from "@oscharko-dev/keiko-security";
+
 import {
   anyWordPattern,
   factWords,
@@ -1467,10 +1469,37 @@ function derivedConfidence(body: string, evidence: string, subjectless: boolean)
   return 0.4 + subjectBonus + coverageBonus;
 }
 
+// The model reads the person's words through the provider projection, which masks an identifier
+// such as an IBAN. Its quote then holds the placeholder where the person wrote the identifier and
+// is not verbatim, though what the person said was an identifier Keiko never keeps (#4206). The
+// quote's other parts are found in order in the person's words; a masked span between them that
+// is an identifier names the real reason. No pattern is built from the quote.
+function maskedSpans(evidence: string, text: string): readonly string[] {
+  const parts = evidence.split(REDACTION_PLACEHOLDER);
+  let end = text.indexOf(parts[0] ?? "");
+  if (end === -1) return [];
+  end += (parts[0] ?? "").length;
+  const spans: string[] = [];
+  for (const part of parts.slice(1)) {
+    const start = part.length === 0 ? text.length : text.indexOf(part, end + 1);
+    if (start === -1) return [];
+    spans.push(text.slice(end, start));
+    end = start + part.length;
+  }
+  return spans;
+}
+
+function quotesMaskedIdentifier(evidence: string, text: string): boolean {
+  if (!evidence.includes(REDACTION_PLACEHOLDER)) return false;
+  return maskedSpans(evidence, text).some((span) => looksLikePersonalIdentifier(span));
+}
+
 function spanDropReason(evidence: string, text: string): FactDropReason | null {
   if (evidence.length === 0) return "no-evidence";
   if (evidence.length > EVIDENCE_MAX_CHARS) return "evidence-too-long";
-  if (!text.includes(evidence)) return "evidence-not-verbatim";
+  if (!text.includes(evidence)) {
+    return quotesMaskedIdentifier(evidence, text) ? "personal-identifier" : "evidence-not-verbatim";
+  }
   return INNER_SENTENCE_RE.test(evidence) ? "not-clause-boundary" : null;
 }
 
