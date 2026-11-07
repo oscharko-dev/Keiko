@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "5d2d01972f0311528b4b2cc9e5b56c84df1ea81038ecdce6c384a1fa6238e4f6",
+    "catalogDigest": "39fad7fcba794630a5cd5550159a2ccc47b5eb4e7a4cc39a2bf82a11db995e88",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1268,6 +1268,16 @@
             "dataClass": "count",
             "required": false
           },
+          "readCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "readReusedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "durationMs": {
             "type": "integer",
             "dataClass": "duration",
@@ -1281,7 +1291,7 @@
         "proofIds": ["atlassian.jira-draft.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/atlassian/jiraDraftActivity.ts:19",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraDraftActivity.ts:99"]
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraDraftActivity.ts:109"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -1348,7 +1358,8 @@
               "draft-unavailable",
               "project-not-found",
               "issue-type-not-found",
-              "no-usable-issue-type"
+              "no-usable-issue-type",
+              "draft-mismatch"
             ]
           },
           "stopReason": {
@@ -1433,8 +1444,8 @@
         "failureClasses": ["atlassian-action-execution"],
         "proofIds": ["atlassian.jira-draft-batch.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraDraftBatchActivity.ts:96",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraDraftBatchActivity.ts:225"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraDraftBatchActivity.ts:97",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraDraftBatchActivity.ts:227"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2698,6 +2709,17 @@
             "type": "integer",
             "dataClass": "count",
             "required": true
+          },
+          "stampMemo": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["hit", "reread-token", "reread-age", "reread-missing"]
+          },
+          "capsuleCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
           }
         },
         "causal": "none",
@@ -2707,7 +2729,7 @@
         "proofIds": ["chat.messages.projected.document-context"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/chat-message-projection.ts:9",
-        "emitterSites": ["packages/keiko-server/src/chat-message-projection.ts:44"]
+        "emitterSites": ["packages/keiko-server/src/chat-message-projection.ts:60"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -3724,6 +3746,7 @@
               "not-completed",
               "not-requested",
               "items-failed",
+              "paused",
               "refs-unresolved",
               "no-draft",
               "not-offered",
@@ -36474,8 +36497,8 @@
         "failureClasses": ["workspace-reconnect"],
         "proofIds": ["project.workspace.reconnect.outcome"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/store-handlers.ts:112",
-        "emitterSites": ["packages/keiko-server/src/store-handlers.ts:555"]
+        "registrationSite": "packages/keiko-server/src/store-handlers.ts:113",
+        "emitterSites": ["packages/keiko-server/src/store-handlers.ts:556"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -40392,7 +40415,7 @@
         "proofIds": ["security.vault.key-resolved.source"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-security/src/secret-vault.ts:215",
-        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:601"]
+        "emitterSites": ["packages/keiko-security/src/secret-vault.ts:606"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -59756,6 +59779,18 @@
                   "required": true
                 },
                 {
+                  "name": "readCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "readReusedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "refusal",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -62523,6 +62558,12 @@
               "analyzerProjection": "timeline",
               "safeContextFields": [
                 {
+                  "name": "capsuleCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "messageCount",
                   "type": "integer",
                   "dataClass": "count",
@@ -62533,9 +62574,15 @@
                   "type": "integer",
                   "dataClass": "count",
                   "required": true
+                },
+                {
+                  "name": "stampMemo",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
                 }
               ],
-              "evidenceClasses": ["completeness-state", "count", "loss-state"],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
               "frameCauseEvidence": {
                 "frames": false,
                 "causeChain": false
@@ -111655,7 +111702,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/store-handlers.ts:1346",
+      "site": "packages/keiko-server/src/store-handlers.ts:1347",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -111935,7 +111982,7 @@
     {
       "op": "atlassian.jira-draft-batch",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraDraftBatchActivity.ts:99",
+      "site": "packages/keiko-server/src/atlassian/jiraDraftBatchActivity.ts:100",
       "package": "keiko-server"
     },
     {
@@ -115155,20 +115202,20 @@
     {
       "op": "project.create.trust.grant",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/store-handlers.ts:428",
+      "site": "packages/keiko-server/src/store-handlers.ts:429",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "project.workspace.reconnect",
       "category": "setup",
-      "site": "packages/keiko-server/src/store-handlers.ts:115",
+      "site": "packages/keiko-server/src/store-handlers.ts:116",
       "package": "keiko-server"
     },
     {
       "op": "project.workspace.reconnect",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/store-handlers.ts:571",
+      "site": "packages/keiko-server/src/store-handlers.ts:572",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

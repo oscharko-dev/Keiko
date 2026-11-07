@@ -2078,8 +2078,17 @@ it.each([
     });
     const observation = regeneration?.messages.find((message) => message.role === "tool");
     expect(observation?.toolCallId).toBe(original.call.id);
+    const durable = original.result;
+    if (durable === undefined) throw new Error("Missing durable observation");
+    // The model reads the durable outcome, effect and data, not Keiko's per-call bookkeeping.
     expect(JSON.parse(observation?.content ?? "null")).toEqual({
-      result: original.result,
+      result: {
+        status: durable.status,
+        reason: durable.reason,
+        effectStarted: durable.effectStarted,
+        page: durable.page,
+        data: durable.data,
+      },
       mutationOutcome: outcome,
     });
     expect(f.writes()).toBe(1);
@@ -2983,11 +2992,15 @@ describe("four-item Epic and Task template fullchain", () => {
     ]);
     expect(Object.keys(exchanges[0]?.call ?? {}).sort()).toEqual(["arguments", "id", "name"]);
     const firstRequest = f.calls.find((request) => request.toolCatalog?.kind === "bound");
+    // The runtime inventory pair reaches the first round under its positional prompt id, so the
+    // prompt prefix stays byte-stable across turns; the stored call keeps its own id.
+    expect(firstRequest?.messages).toContainEqual({
+      role: "assistant",
+      content: "",
+      toolCalls: [{ ...exchanges[0]?.call, id: "runtime-0" }],
+    });
     expect(firstRequest?.messages).toContainEqual(
-      expect.objectContaining({
-        role: "tool",
-        toolCallId: exchanges[0]?.call.id,
-      }),
+      expect.objectContaining({ role: "tool", toolCallId: "runtime-0" }),
     );
     expect(firstRequest?.messages.filter((message) => message.role === "user")).toHaveLength(1);
     expect(exchanges.slice(0, -1).every((entry) => entry.result?.status === "completed")).toBe(
