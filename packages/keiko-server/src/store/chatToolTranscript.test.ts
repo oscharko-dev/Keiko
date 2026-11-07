@@ -1128,7 +1128,8 @@ describe("persisted Jira operation approval contracts", () => {
       .map((event) => event.extra?.phase)).toEqual(["captured"]);
     expect(() => f.store.updateChatToolTranscript(f.id, { ...captured,
       call: { ...mutationCall, id: "invalid-capture" },
-      result: { ...result, data: { unexpected: "private-token" } },
+      result: { ...result, status: "failed", reason: "provider-reported-error", page: null,
+        data: { unexpected: "private-token" } } satisfies ToolResultEnvelope,
     }, "native-result")).toThrow();
     expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges).toHaveLength(1);
     expect(JSON.stringify(f.logs.events)).not.toContain("private-token");

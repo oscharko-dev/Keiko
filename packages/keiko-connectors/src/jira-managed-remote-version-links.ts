@@ -46,15 +46,20 @@ function selection(name: LinkRead, args: CatalogJsonObject): Selection | undefin
     ? undefined : { path: `${path}/${encodeURIComponent(args.globalId)}`, versionId: args.versionId, globalId: args.globalId };
 }
 /** Only the native resource path is compared; proxy origins never become request destinations. */
-function membership(self: unknown, selected: Selection): boolean {
-  if (self === undefined || self === null) return true;
-  if (typeof self !== "string" || !URL.canParse(self)) return false;
+function remoteLinkIdentity(self: string): { readonly versionId: string; readonly encodedGlobalId: string } | undefined {
   const url = new URL(self);
   const parts = /\/rest\/api\/2\/version\/([1-9]\d{0,18})\/remotelink\/([^/]+)$/u.exec(url.pathname);
   const versionId = parts?.[1];
   const encodedGlobalId = parts?.[2];
-  if (!jiraNativeId(versionId) || encodedGlobalId === undefined ||
-    (selected.versionId !== undefined && versionId !== selected.versionId)) return false;
+  return jiraNativeId(versionId) && encodedGlobalId !== undefined ? { versionId, encodedGlobalId } : undefined;
+}
+function membership(self: unknown, selected: Selection): boolean {
+  if (self === undefined || self === null) return true;
+  if (typeof self !== "string" || !URL.canParse(self)) return false;
+  const observed = remoteLinkIdentity(self);
+  if (observed === undefined) return false;
+  const { versionId, encodedGlobalId } = observed;
+  if (selected.versionId !== undefined && versionId !== selected.versionId) return false;
   const target = selected.globalId === undefined ? encodedGlobalId : encodeURIComponent(selected.globalId);
   return jiraResourceSelfMatches(self, `version/${versionId}/remotelink/${target}`);
 }

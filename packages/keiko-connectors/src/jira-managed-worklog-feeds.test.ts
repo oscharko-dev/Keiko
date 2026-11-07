@@ -88,8 +88,8 @@ it("rejects rounded native int64 values and oversized pages without returning a 
   }
 });
 it("keeps ordinary native refusal semantics and closed names", async () => {
-  const request = vi.fn<JiraMutationRequest>().mockResolvedValue({ ok: false, reason: "authentication-failed" });
-  expect((await read("jira.deleted-worklogs", {}, request)).data.reason).toBe("authentication-failed");
+  const request = vi.fn<JiraMutationRequest>().mockResolvedValue({ ok: false, reason: "auth-failed" });
+  expect((await read("jira.deleted-worklogs", {}, request)).data.reason).toBe("auth-failed");
   expect(isJiraWorklogFeedRead("jira.updated-worklogs")).toBe(true);
   expect(isJiraWorklogFeedRead("jira.worklog-list")).toBe(false);
 });

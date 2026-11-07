@@ -31,6 +31,8 @@ function observedOutcome(
   result: ManagedMcpToolResult,
   dispatched: boolean,
 ): JiraMutationOutcome {
+  // Captured before the native producer completes. History projects the authoritative journal
+  // outcome over this provisional value after acknowledgement and confirmed producer completion.
   if (result.isError !== true) return "succeeded-unconfirmed";
   if (!dispatched) return result.data.outcome === "rejected" ? "rejected" : "not-dispatched";
   return result.data.outcome === "succeeded-unconfirmed" ? "succeeded-unconfirmed" : "unknown";

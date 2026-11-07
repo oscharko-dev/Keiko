@@ -102,7 +102,7 @@ it("whitelists recipient identity details without remote URLs, HTML or user-emai
     { id: "4", emailAddress: "recipient@example.invalid" },
     { id: "5", recipientKind: "field", recipientId: "customfield_10000" },
   ] }] });
-  expect(JSON.stringify(result)).not.toMatch(/remote\.invalid|private-user@|unrequested actor|<script>/u);
+  expect(JSON.stringify(result)).not.toMatch(/remote\.invalid|private-user@|unrequested actor|<script/iu);
 });
 
 it("flattens only each documented recipient DTO and cannot copy unrelated identities", () => {
