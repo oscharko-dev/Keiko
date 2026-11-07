@@ -43,6 +43,7 @@ import { handleListMemories } from "./memory-handlers.js";
 import type { ConversationMemoryRuntimeContext } from "./memory-conversation-context.js";
 import type { RouteContext } from "./routes.js";
 import { createInMemoryUiStore } from "./store/index.js";
+import { memoryLearningRuntime } from "./memory-learning.js";
 
 interface RecentCaptureWire {
   readonly outcome: "captured" | "proposed" | "auto-accepted" | "rejected";
@@ -188,7 +189,42 @@ function sendRequest(content: string, surface?: "desktop" | "voice"): SendDeskto
   };
 }
 
+// #4213: a committed turn is learned by a later pass from the Chat's stored messages.
+interface StoredTurn {
+  readonly chatId: string;
+  readonly projectPath: string;
+  readonly userMessageId: string;
+  readonly context: ConversationMemoryRuntimeContext;
+}
+
+function storeTurn(deps: UiHandlerDeps, content: string): StoredTurn {
+  const projectPath = mkdtempSync(join(realpathSync(tmpdir()), "keiko-capture-surface-project-"));
+  temporaryDirectories.push(projectPath);
+  deps.store.createProject(projectPath);
+  const chat = deps.store.createChat(projectPath, "Surface", "gpt-test");
+  const now = Date.now();
+  const user = deps.store.createMessage({ chatId: chat.id, role: "user", content, timestamp: now });
+  deps.store.createMessage({
+    chatId: chat.id,
+    role: "assistant",
+    content: "Noted.",
+    timestamp: now + 1,
+  });
+  return {
+    chatId: chat.id,
+    projectPath,
+    userMessageId: user.id,
+    context: {
+      ...context(),
+      workspaceId: projectPath as WorkspaceId,
+      projectId: projectPath as ProjectId,
+      conversationId: chat.id as ConversationId,
+    },
+  };
+}
+
 async function surfaceOfSingleCapture(deps: UiHandlerDeps): Promise<string> {
+  await memoryLearningRuntime(deps).runPass("inactivity", undefined);
   let captures: readonly RecentCaptureWire[] = [];
   await vi.waitFor(() => {
     captures = recentCaptures(deps);
@@ -223,12 +259,15 @@ describe("post-commit capture-surface attribution", () => {
     const evidenceStore = createInMemoryEvidenceStore();
     const vault = makeVault(evidenceStore);
     const deps = depsFor(vault, evidenceStore, modelFact("I prefer stand-ups at 9am."));
+    const turn = storeTurn(deps, "I prefer stand-ups at 9am.");
 
     runPostCommitConversationMemorySideEffects(
       deps,
-      sendRequest("I prefer stand-ups at 9am.", "voice"),
-      context(),
-      "gpt-test",
+      {
+        ...sendRequest("I prefer stand-ups at 9am.", "voice"),
+        sourceMessageId: turn.userMessageId,
+      },
+      turn.context,
       EMPTY_MEMORY_RESULT,
       "ok",
       "correlation-voice",
@@ -241,12 +280,12 @@ describe("post-commit capture-surface attribution", () => {
     const evidenceStore = createInMemoryEvidenceStore();
     const vault = makeVault(evidenceStore);
     const deps = depsFor(vault, evidenceStore, modelFact("My timezone is UTC+1."));
+    const turn = storeTurn(deps, "My timezone is UTC+1.");
 
     runPostCommitConversationMemorySideEffects(
       deps,
-      sendRequest("My timezone is UTC+1."),
-      context(),
-      "gpt-test",
+      { ...sendRequest("My timezone is UTC+1."), sourceMessageId: turn.userMessageId },
+      turn.context,
       EMPTY_MEMORY_RESULT,
       "ok",
       "correlation-desktop",
@@ -259,12 +298,13 @@ describe("post-commit capture-surface attribution", () => {
     const evidenceStore = createInMemoryEvidenceStore();
     const vault = makeVault(evidenceStore);
     const deps = depsFor(vault, evidenceStore, modelFact("I ship on Fridays."));
+    const turn = storeTurn(deps, "I ship on Fridays.");
 
     runPostCommitCanonicalTurnMemorySideEffects(
       deps,
       {
-        chatId: "conversation-a",
-        projectPath: "project-a",
+        chatId: turn.chatId,
+        projectPath: turn.projectPath,
         messages: [
           { role: "user", content: "I ship on Fridays." },
           { role: "assistant", content: "Noted." },
@@ -272,8 +312,7 @@ describe("post-commit capture-surface attribution", () => {
         modelId: "gpt-test",
         memory: { enabled: true, surface: "voice", context: { userId: context().userId } },
       },
-      context(),
-      "gpt-test",
+      turn.context,
       EMPTY_MEMORY_RESULT,
       "ok",
       "correlation-voice-canonical",
@@ -286,22 +325,29 @@ describe("post-commit capture-surface attribution", () => {
     const evidenceStore = createInMemoryEvidenceStore();
     const vault = makeVault(evidenceStore);
     const deps = depsFor(vault, evidenceStore, modelFact("I ship on Fridays."));
+    const turn = storeTurn(deps, "I ship on Fridays.");
+    // A repeated sentence has many rows; the committed id the caller passes names the source.
+    const repeated = deps.store.createMessage({
+      chatId: turn.chatId,
+      role: "user",
+      content: "I ship on Fridays.",
+      timestamp: Date.now() + 2,
+    });
 
     runPostCommitCanonicalTurnMemorySideEffects(
       deps,
       {
-        chatId: "conversation-a",
-        projectPath: "project-a",
+        chatId: turn.chatId,
+        projectPath: turn.projectPath,
         messages: [
           { role: "user", content: "I ship on Fridays." },
           { role: "assistant", content: "Noted." },
         ],
         modelId: "gpt-test",
         memory: { enabled: true, context: { userId: context().userId } },
-        sourceMessageId: "message-current",
+        sourceMessageId: turn.userMessageId,
       },
-      context(),
-      "gpt-test",
+      turn.context,
       EMPTY_MEMORY_RESULT,
       "ok",
       "correlation-canonical-source",
@@ -313,7 +359,8 @@ describe("post-commit capture-surface attribution", () => {
       { status: ["accepted", "proposed"] },
     );
     expect(learned.map((record) => record.provenance.sourceMessageIds)).toEqual([
-      ["message-current"],
+      [turn.userMessageId],
     ]);
+    expect(repeated.id).not.toBe(turn.userMessageId);
   });
 });

@@ -96,17 +96,6 @@ export interface CapturePolicyOptions {
   readonly maxBodyChars?: number;
 }
 
-// Structured workflow outcome handed to the workflow extractor. Local to this package; full
-// workflow contracts live elsewhere. The structured report is a short caller-rendered summary
-// (a few hundred chars) — NOT the raw run log. `capturedAt` is the authoritative observation
-// timestamp for the workflow outcome and is copied into proposal provenance / validity.
-export interface WorkflowOutcomeInput {
-  readonly runId: WorkflowRunId;
-  readonly outcomeKind: "success" | "corrected" | "failed";
-  readonly structuredReport: string;
-  readonly capturedAt: number;
-}
-
 // Discriminated outcome union. Every kind carries the minimum payload the next layer needs.
 // `kind:"candidate"` always carries `requiresApproval` so the BFF route can immediately decide
 // whether to display a confirmation prompt without re-reading the proposal's sensitivity.

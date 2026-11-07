@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 392,
-  "completeClassCount": 392,
+  "supportedClassCount": 393,
+  "completeClassCount": 393,
   "completeness": "complete",
   "classes": [
     {
@@ -38437,6 +38437,168 @@
             "causeChain": false
           },
           "proofIds": ["memory.learn.relation.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "memory-learning-pass",
+      "requirementContract": "memory-learning-pass",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["end", "start"],
+      "lifecycleOperations": {
+        "start": ["memory.learn.pass.started"],
+        "state": [],
+        "end": ["memory.learn.pass.settled"],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "memory.learn.pass.settled",
+          "mode": "parent-correlation"
+        },
+        {
+          "op": "memory.learn.pass.started",
+          "mode": "parent-correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["memory.learn.pass.settled", "memory.learn.pass.started"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "memory.learn.pass.settled",
+          "owner": "keiko-server",
+          "category": "memory",
+          "lifecycle": "end",
+          "causal": "parent-correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "actionCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "cancelLatencyMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": false
+            },
+            {
+              "name": "chatCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "durationMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": true
+            },
+            {
+              "name": "failedTurnCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "forgottenPendingCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "learnedTurnCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "memoryOffTurnCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "pendingChatCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "skippedTurnCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "trigger",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "turnCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "duration",
+            "loss-state"
+          ],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["memory.learn.pass.settled.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "memory.learn.pass.started",
+          "owner": "keiko-server",
+          "category": "memory",
+          "lifecycle": "start",
+          "causal": "parent-correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "chatCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "trigger",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["memory.learn.pass.started.line"],
           "replayReferences": [],
           "missingObligations": []
         }

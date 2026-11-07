@@ -29,6 +29,12 @@ interface VersionRollback {
 // `coding_runtime_snapshots` (no column added), so there is nothing to structurally undo at fixture
 // granularity.
 const ROLLBACKS: readonly VersionRollback[] = [
+  {
+    version: 62,
+    sql: `DROP TABLE chat_memory_learning; DROP INDEX idx_messages_memory_learning;
+    ALTER TABLE chat_messages DROP COLUMN memory_learning_mode;
+    ALTER TABLE chat_messages DROP COLUMN memory_learning;`,
+  },
   { version: 61, sql: "DROP INDEX idx_coding_runtime_predecessor;" },
   { version: 60, sql: "DROP TABLE coding_workbench_drafts;" },
   {

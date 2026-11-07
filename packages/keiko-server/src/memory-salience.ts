@@ -103,10 +103,8 @@ function scopeLabel(scope: MemoryScope): string {
 
 // Bounds the comparison so it stays cheap even for a large vault.
 const MAX_KNOWN_FACTS = 200;
-const MAX_PENDING_SALIENCE_CAPTURES = 32;
 const SALIENCE_MODEL_ENV = "KEIKO_MEMORY_SALIENCE_MODEL_ID";
 const SALIENCE_DEFAULT_SEED = 204;
-let pendingSalienceCaptures = 0;
 
 // Azure OpenAI structured outputs reject a request whose json_schema carries no `name` or whose
 // schema root is an array (both 400) — with a bare root-array schema every salience call on a
@@ -190,10 +188,18 @@ function buildSalienceContext(context: ConversationMemoryRuntimeContext): Captur
   };
 }
 
+// The learning pass owns the signal: a new message aborts it, and the gateway carries the abort to
+// the provider. The call is joined to the pass that made it (#4213).
+interface SalienceCallScope {
+  readonly correlationId: string;
+  readonly parentCorrelationId?: string | undefined;
+  readonly signal: AbortSignal;
+}
+
 function buildCallModel(
   deps: UiHandlerDeps,
   modelId: string,
-  correlationId: string,
+  scope: SalienceCallScope,
 ): NonNullable<SalienceDeps["callModelMessages"]> | null {
   const model = deps.modelPortFactory(modelId);
   if (model === undefined) {
@@ -209,9 +215,14 @@ function buildCallModel(
         stream: false,
         ...(responseFormat !== undefined ? { responseFormat } : {}),
         ...(seed !== undefined ? { seed } : {}),
-        logContext: { correlationId },
+        logContext: {
+          correlationId: scope.correlationId,
+          ...(scope.parentCorrelationId === undefined
+            ? {}
+            : { parentCorrelationId: scope.parentCorrelationId }),
+        },
       },
-      new AbortController().signal,
+      scope.signal,
     );
     return response.content;
   };
@@ -511,6 +522,9 @@ interface LearningTrace {
   readonly mode: CodingWorkbenchMode;
   readonly correlationId: string;
   readonly sourceMessageCount: number;
+  // The person's message the turn rests on. A pass that learns it again, after a stop between the
+  // vault write and the Chat's learned position, adds nothing it already learned from it (#4213).
+  readonly sourceMessageId?: string | undefined;
   readonly conversationId: string;
   // What the person said in the turn, which they may have forgotten while this capture was running.
   readonly statement: string;
@@ -548,6 +562,11 @@ function confirmKnownFact(
   outcome: Extract<SalienceOutcome, { readonly kind: "confirmation" }>,
   trace: LearningTrace,
 ): PersistedCandidate {
+  // Learned from this very message before: saying it once is no confirmation.
+  if (restsOn(vault.getMemory(outcome.memoryId), trace.sourceMessageId)) {
+    recordRelation(outcome, "merged", trace);
+    return { action: null, disposition: "merged" };
+  }
   if (!standsAsSeen(vault, outcome.memoryId, trace.seen.get(outcome.memoryId))) {
     recordRelation(outcome, "refused", trace);
     return { action: null, disposition: "none" };
@@ -557,10 +576,46 @@ function confirmKnownFact(
   return { action: null, disposition: "merged" };
 }
 
+function restsOn(record: MemoryRecord | undefined, sourceMessageId: string | undefined): boolean {
+  if (record === undefined || sourceMessageId === undefined) return false;
+  return (record.provenance.sourceMessageIds ?? []).includes(sourceMessageId);
+}
+
+// A fact the learner already knew, with the same words, learned from this very message.
+function learnedFromThisMessage(
+  vault: MemoryVaultStore,
+  body: string,
+  trace: LearningTrace,
+): boolean {
+  if (trace.sourceMessageId === undefined) return false;
+  for (const id of trace.seen.keys()) {
+    const record = vault.getMemory(id);
+    if (record?.body === body && restsOn(record, trace.sourceMessageId)) return true;
+  }
+  return false;
+}
+
 function standsAsSeen(vault: MemoryVaultStore, id: MemoryId, seen: SeenFact | undefined): boolean {
   if (seen === undefined) return false;
   const current = vault.getMemory(id);
   return current?.status === seen.status && current.updatedAt === seen.updatedAt;
+}
+
+// What settles a candidate before it is stored: it was learned from this very message already, or the
+// person forgot or rejected its words.
+function settleBeforeInsert(
+  vault: MemoryVaultStore,
+  record: MemoryRecord,
+  outcome: SalienceOutcome,
+  trace: LearningTrace,
+  refuse: (reason: RejectionReason) => PersistedCandidate,
+): PersistedCandidate | null {
+  if (learnedFromThisMessage(vault, record.body, trace)) {
+    recordRelation(outcome, "merged", trace);
+    return { action: null, disposition: "merged" };
+  }
+  const exactSuppression = personRefused(vault, record, trace.statement);
+  return exactSuppression === null ? null : refuse(exactSuppression);
 }
 
 // Persists one learned candidate and returns its wire action plus how it settled. Returns a null
@@ -584,8 +639,8 @@ async function persistCandidate(
   if (!isPersistableMemoryCandidate(outcome)) return refuse(SENSITIVE_MEMORY_REJECTION_REASON);
   const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
   const record = buildMemoryRecordFromProposal(proposalId, outcome);
-  const exactSuppression = personRefused(vault, record, trace.statement);
-  if (exactSuppression !== null) return refuse(exactSuppression);
+  const settledBeforeInsert = settleBeforeInsert(vault, record, outcome, trace, refuse);
+  if (settledBeforeInsert !== null) return settledBeforeInsert;
   const candidate = memoryCaptureAutoAcceptEligible(mode, outcome)
     ? promoteEligibleMemoryRecord(record)
     : record;
@@ -649,7 +704,7 @@ async function settleCandidate(
   }
 }
 
-interface SalienceTurnRequest {
+export interface SalienceTurnRequest {
   readonly content: string;
   // The person's message the turn came from, when the caller has one.
   readonly sourceMessageId?: string;
@@ -670,73 +725,12 @@ function captureAuditInitiatorSurface(
   return surface === "voice" ? "voice" : "conversation-center";
 }
 
-function logSalienceCaptureFailure(
-  surface: SalienceCaptureSurface,
-  error: unknown,
-  deps: UiHandlerDeps,
-  correlationId: string,
-): void {
-  emitSalienceFailureDiagnostic(
-    deps,
-    correlationId,
-    `memory.salience.capture.${surface}`,
-    "memory-salience.scheduleMemorySalienceCapture",
-    error,
-  );
-}
-
-function logSalienceCaptureDropped(
-  surface: SalienceCaptureSurface,
-  deps: UiHandlerDeps,
-  correlationId: string,
-): void {
-  emitSalienceDiagnostic(
-    deps,
-    correlationId,
-    "memory-salience.scheduleMemorySalienceCapture",
-    "SalienceCaptureDropped",
-    "salience-capture-dropped-queue-full",
-    `surface=${surface} pending=${String(pendingSalienceCaptures)}/${String(
-      MAX_PENDING_SALIENCE_CAPTURES,
-    )}`,
-  );
-}
-
 // #4098: the Chat content opt-out preserves an answer for the person reading it, not for memory.
 // Memory proposals keep the default projection, so a preserved answer is projected again here.
 function memoryAssistantText(deps: UiHandlerDeps, assistantText: string): string {
   return deploymentContentPolicy(deps) === "preserve"
     ? String(strictRedactor(deps)(assistantText))
     : assistantText;
-}
-
-export function scheduleMemorySalienceCapture(
-  deps: UiHandlerDeps,
-  request: SalienceTurnRequest,
-  context: ConversationMemoryRuntimeContext | undefined,
-  modelId: string,
-  assistantText: string,
-  surface: SalienceCaptureSurface,
-  correlationId: string,
-): void {
-  if (context === undefined || request.memory?.enabled !== true || deps.memoryVault === undefined) {
-    return;
-  }
-  if (pendingSalienceCaptures >= MAX_PENDING_SALIENCE_CAPTURES) {
-    logSalienceCaptureDropped(surface, deps, correlationId);
-    return;
-  }
-  pendingSalienceCaptures += 1;
-  const memoryText = memoryAssistantText(deps, assistantText);
-  setImmediate(() => {
-    void captureSalientFromTurn(deps, request, context, modelId, memoryText, surface, correlationId)
-      .catch((error: unknown) => {
-        logSalienceCaptureFailure(surface, error, deps, correlationId);
-      })
-      .finally(() => {
-        pendingSalienceCaptures -= 1;
-      });
-  });
 }
 
 type TurnSalienceExtraction =
@@ -758,6 +752,8 @@ interface TurnSalienceInputs {
   readonly modelId: string;
   readonly assistantText: string;
   readonly correlationId: string;
+  readonly parentCorrelationId?: string | undefined;
+  readonly signal: AbortSignal;
 }
 
 // The person's message just before this one, so a pronoun can point back to it. A message the
@@ -791,7 +787,7 @@ async function extractTurnSalienceOutcomes(
 ): Promise<TurnSalienceExtraction> {
   const { modelId, assistantText, correlationId } = inputs;
   const salienceModelId = configuredSalienceModelId(deps, modelId);
-  const callModelMessages = buildCallModel(deps, salienceModelId, correlationId);
+  const callModelMessages = buildCallModel(deps, salienceModelId, inputs);
   if (callModelMessages === null) return { kind: "unavailable" };
   const policy = memoryCapturePolicyForDeps(deps);
   const refusalReason = memoryTextSecretEgressRejectionReason(request.content, policy);
@@ -938,13 +934,17 @@ interface SalienceCaptureInputs extends TurnSalienceInputs {
 // The turn-scoped work `captureSalientFromTurn` runs inside its own try/catch. Split out so that
 // function's own body stays a thin boundary (resolve the vault, catch, report) — everything that
 // can throw lives here instead.
+type SalienceCaptureRun =
+  | { readonly kind: "unavailable" }
+  | { readonly kind: "captured"; readonly actions: readonly ConversationMemoryActionWire[] };
+
 async function runSalienceCapture(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   request: SalienceTurnRequest,
   context: ConversationMemoryRuntimeContext,
   inputs: SalienceCaptureInputs,
-): Promise<readonly ConversationMemoryActionWire[]> {
+): Promise<SalienceCaptureRun> {
   const { surface, correlationId } = inputs;
   const mode = resolveMemoryCaptureAutonomyMode(deps, request.memory?.mode);
   const captureContext = buildSalienceContext(context);
@@ -956,10 +956,10 @@ async function runSalienceCapture(
     captureContext,
     inputs,
   );
-  if (extraction.kind === "unavailable") return [];
+  if (extraction.kind === "unavailable") return { kind: "unavailable" };
   if (extraction.kind === "refused") {
     recordTurnCaptureRefusal(deps, mode, surface, context, captureContext.nowMs, extraction.reason);
-    return [];
+    return { kind: "captured", actions: [] };
   }
   const { outcomes, seen } = extraction;
   const { actions, summary } = await persistSalienceActions(deps, vault, outcomes, {
@@ -967,12 +967,13 @@ async function runSalienceCapture(
     mode,
     correlationId,
     sourceMessageCount: request.sourceMessageId === undefined ? 0 : 1,
+    sourceMessageId: request.sourceMessageId,
     conversationId: context.conversationId,
     statement: request.content,
     seen,
   });
   if (outcomes.length > 0) logSalienceCaptureSummary(mode, summary, deps, correlationId);
-  return actions;
+  return { kind: "captured", actions };
 }
 
 // Captures salient memories from a completed chat turn. Never throws — any failure (model error,
@@ -991,12 +992,14 @@ export async function captureSalientFromTurn(
   const vault = activeSalienceVault(deps, request);
   if (vault === undefined || isExplicitMemoryStatement(request.content)) return [];
   try {
-    return await runSalienceCapture(deps, vault, request, context, {
+    const run = await runSalienceCapture(deps, vault, request, context, {
       modelId,
       assistantText,
       surface,
       correlationId,
+      signal: new AbortController().signal,
     });
+    return run.kind === "captured" ? run.actions : [];
   } catch (error) {
     // Boundary: salience must never break the chat path. Log and continue.
     emitSalienceFailureDiagnostic(
@@ -1007,5 +1010,91 @@ export async function captureSalientFromTurn(
       error,
     );
     return [];
+  }
+}
+
+/** One stored turn a learning pass hands to the learner (#4213). */
+export interface StoredLearningTurn {
+  readonly request: SalienceTurnRequest;
+  readonly context: ConversationMemoryRuntimeContext;
+  readonly modelId: string;
+  readonly assistantText: string;
+  readonly surface: SalienceCaptureSurface;
+  /** The turn's own correlation, the assistant message id, which its audit events carry. */
+  readonly correlationId: string;
+  /** The pass that learns the turn. */
+  readonly parentCorrelationId: string;
+}
+
+/**
+ * How a stored turn ended. Only `learned` and `skipped` move a Chat's learned position: an
+ * unavailable model, a failure or a cancellation leaves the turn for a later pass.
+ */
+export type StoredTurnLearningOutcome =
+  "learned" | "skipped" | "unavailable" | "failed" | "cancelled";
+
+export interface StoredTurnLearning {
+  readonly outcome: StoredTurnLearningOutcome;
+  readonly actionCount: number;
+}
+
+function isGatewayFailure(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const code = (error as { readonly code?: unknown }).code;
+  return typeof code === "string" && code.startsWith("GATEWAY_");
+}
+
+function failedTurnLearning(error: unknown, signal: AbortSignal): StoredTurnLearning {
+  if (signal.aborted) return { outcome: "cancelled", actionCount: 0 };
+  return { outcome: isGatewayFailure(error) ? "unavailable" : "failed", actionCount: 0 };
+}
+
+// A turn that failed for a reason other than the model is reported where it failed, under the turn's
+// own correlation and the pass as its parent. An unavailable model and a cancellation are no failure.
+function reportTurnLearningFailure(
+  deps: UiHandlerDeps,
+  turn: StoredLearningTurn,
+  error: unknown,
+): void {
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId: turn.correlationId,
+      parentCorrelationId: turn.parentCorrelationId,
+      operation: "memory.learn.pass",
+      source: "memory-salience.learnStoredTurn",
+      error,
+      redact: (summary): string => String(deps.redactor(summary)),
+    }),
+  );
+}
+
+/** Learns one stored turn under the pass's signal. Never throws: the outcome says what happened. */
+export async function learnStoredTurn(
+  deps: UiHandlerDeps,
+  turn: StoredLearningTurn,
+  signal: AbortSignal,
+): Promise<StoredTurnLearning> {
+  const vault = activeSalienceVault(deps, turn.request);
+  if (vault === undefined || isExplicitMemoryStatement(turn.request.content)) {
+    return { outcome: "skipped", actionCount: 0 };
+  }
+  try {
+    const run = await runSalienceCapture(deps, vault, turn.request, turn.context, {
+      modelId: turn.modelId,
+      assistantText: memoryAssistantText(deps, turn.assistantText),
+      surface: turn.surface,
+      correlationId: turn.correlationId,
+      parentCorrelationId: turn.parentCorrelationId,
+      signal,
+    });
+    // A turn whose facts are stored is learned, even when the pass was cancelled meanwhile.
+    return run.kind === "unavailable"
+      ? { outcome: "unavailable", actionCount: 0 }
+      : { outcome: "learned", actionCount: run.actions.length };
+  } catch (error) {
+    const learning = failedTurnLearning(error, signal);
+    if (learning.outcome === "failed") reportTurnLearningFailure(deps, turn, error);
+    return learning;
   }
 }

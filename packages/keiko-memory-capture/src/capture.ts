@@ -1,5 +1,5 @@
-// Top-level capture entry points. extractCandidatesFromUserText and
-// extractCandidatesFromWorkflowOutcome are the ONLY surfaces downstream packages should call.
+// Top-level capture entry point. extractCandidatesFromUserText is the ONLY surface downstream
+// packages should call: memory is learned from the person's own words (ADR-0146 D4c).
 // Internal extractors are composed here in a fixed priority order so the behaviour is one
 // deterministic function of `(text, context, policy)`.
 //
@@ -24,13 +24,11 @@ import {
   tryExtractRemember,
   tryExtractUpdate,
 } from "./intent-explicit.js";
-import { extractWorkflowOutcomeCandidates } from "./intent-workflow.js";
 import type {
   CaptureContext,
   CaptureOutcome,
   CaptureStatementKind,
   CapturePolicyOptions,
-  WorkflowOutcomeInput,
 } from "./types.js";
 
 type Extractor = (
@@ -91,16 +89,4 @@ export function extractCandidatesFromUserText(
     }
   }
   return [];
-}
-
-export function extractCandidatesFromWorkflowOutcome(
-  outcome: WorkflowOutcomeInput,
-  context: CaptureContext,
-  policy: CapturePolicyOptions = {},
-): readonly CaptureOutcome[] {
-  const preflight = preflightText(outcome.structuredReport, policy);
-  if (preflight !== null) {
-    return [preflight];
-  }
-  return extractWorkflowOutcomeCandidates(outcome, context, policy);
 }

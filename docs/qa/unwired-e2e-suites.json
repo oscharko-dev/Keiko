@@ -13,7 +13,6 @@
     "test:e2e:editor-perf",
     "test:e2e:editor-source-control-2235",
     "test:e2e:managed-language-closeout-2282",
-    "test:e2e:memoriaviva-m1",
     "test:e2e:task-binding-446",
     "test:e2e:workspace-search-2090",
     "test:e2e:workspace-selection-2060"
@@ -60,7 +59,7 @@
     "test:e2e:language-intelligence-1383": "scheduled-nonblocking",
     "test:e2e:local-knowledge": "scheduled-nonblocking",
     "test:e2e:managed-language-closeout-2282": "unwired",
-    "test:e2e:memoriaviva-m1": "unwired",
+    "test:e2e:memoriaviva-m1": "scheduled-nonblocking",
     "test:e2e:merge-governance-478": "scheduled-nonblocking",
     "test:e2e:multi-root-editor-2525": "scheduled-nonblocking",
     "test:e2e:multi-root-search-2526": "scheduled-nonblocking",

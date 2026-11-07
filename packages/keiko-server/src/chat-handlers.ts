@@ -221,7 +221,7 @@ import { persistCapturedMemory } from "./memory-capture-persistence.js";
 import { embedAndStoreMemory } from "./memory-embedding.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
 import { recordAutoAcceptedMemoryCaptureDecision } from "./memory-capture-audit.js";
-import { scheduleMemorySalienceCapture } from "./memory-salience.js";
+import { memoryLearningRuntime } from "./memory-learning.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
   logChatCreationRejectionEvent,
@@ -1806,7 +1806,6 @@ export function runPostCommitConversationMemorySideEffects(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest & { readonly sourceMessageId?: string },
   context: ConversationMemoryRuntimeContext | undefined,
-  modelId: string,
   memory: ConversationMemoryResultWire,
   assistantText: string,
   correlationId: string,
@@ -1816,16 +1815,28 @@ export function runPostCommitConversationMemorySideEffects(
   });
   if (context === undefined) return;
   runPostCommitMemoryEffect(deps, correlationId, "chat.memory.salience", () => {
-    scheduleMemorySalienceCapture(
-      deps,
-      request,
-      context,
-      modelId,
-      assistantText,
-      request.memory?.surface ?? "desktop",
-      correlationId,
-    );
+    markTurnForLearning(deps, request, request.sourceMessageId, correlationId);
   });
+}
+
+// #4213: the turn is learned later, by a pass, from the Chat's own stored messages. What is
+// recorded now is that memory was on, from the request's own memory setting.
+function markTurnForLearning(
+  deps: UiHandlerDeps,
+  request: { readonly memory?: SendDesktopChatRequest["memory"] },
+  sourceMessageId: string | undefined,
+  correlationId: string,
+): void {
+  if (request.memory?.enabled !== true || deps.memoryVault === undefined) return;
+  if (sourceMessageId === undefined) return;
+  memoryLearningRuntime(deps).noteTurn(
+    {
+      messageId: sourceMessageId,
+      surface: request.memory.surface ?? "desktop",
+      ...(request.memory.mode === undefined ? {} : { mode: request.memory.mode }),
+    },
+    correlationId,
+  );
 }
 
 // On the first turn of a freshly-created chat (still bearing the default title), adopt the user's
@@ -2853,7 +2864,6 @@ function commitBufferedTurn(
     deps,
     { ...request, sourceMessageId: result.userMessage.id },
     memoryContext,
-    modelId,
     memory,
     redactedContent,
     assistantMessage.id,
@@ -4316,30 +4326,21 @@ function sourceMessageOf(
   return {};
 }
 
-function scheduleCanonicalTurnSalienceCapture(
+function markCanonicalTurnForLearning(
   deps: UiHandlerDeps,
   request: CanonicalTurnMemoryRequest,
   context: ConversationMemoryRuntimeContext | undefined,
-  modelId: string,
   correlationId: string,
 ): void {
-  if (context === undefined || request.memory?.enabled !== true || deps.memoryVault === undefined) {
-    return;
-  }
+  if (context === undefined) return;
   for (const pair of canonicalTurnSaliencePairs(request)) {
-    scheduleMemorySalienceCapture(
+    const { sourceMessageId } = sourceMessageOf(
       deps,
-      {
-        content: pair.userText,
-        memory: request.memory,
-        ...sourceMessageOf(deps, request, pair.userText, context.conversationId),
-      },
-      context,
-      modelId,
-      pair.assistantText,
-      request.memory.surface ?? "desktop",
-      correlationId,
+      request,
+      pair.userText,
+      context.conversationId,
     );
+    markTurnForLearning(deps, request, sourceMessageId, correlationId);
   }
 }
 
@@ -4347,7 +4348,6 @@ export function runPostCommitCanonicalTurnMemorySideEffects(
   deps: UiHandlerDeps,
   request: CanonicalTurnMemoryRequest,
   context: ConversationMemoryRuntimeContext | undefined,
-  modelId: string,
   memory: ConversationMemoryResultWire,
   assistantText: string,
   correlationId: string,
@@ -4356,7 +4356,7 @@ export function runPostCommitCanonicalTurnMemorySideEffects(
     recordConversationMemoryUse(deps, memory, assistantText, context);
   });
   runPostCommitMemoryEffect(deps, correlationId, "grounded.memory.salience", () => {
-    scheduleCanonicalTurnSalienceCapture(deps, request, context, modelId, correlationId);
+    markCanonicalTurnForLearning(deps, request, context, correlationId);
   });
 }
 

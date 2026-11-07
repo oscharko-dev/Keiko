@@ -20,7 +20,7 @@ import type {
   UserId,
   WorkspaceId,
 } from "@oscharko-dev/keiko-contracts/memory";
-import { captureSalientFromTurn, scheduleMemorySalienceCapture } from "./memory-salience.js";
+import { captureSalientFromTurn, learnStoredTurn } from "./memory-salience.js";
 import {
   conversationMemoryScopes,
   type ConversationMemoryRuntimeContext,
@@ -70,52 +70,6 @@ function fakeModel(content: string | (() => never)): ModelPort {
       });
     },
   };
-}
-
-interface DeferredModel {
-  readonly port: ModelPort;
-  readonly callCount: () => number;
-  readonly resolveAll: () => void;
-}
-
-function deferredModel(): DeferredModel {
-  const resolvers: (() => void)[] = [];
-  let callCount = 0;
-  return {
-    port: {
-      call(request): Promise<NormalizedResponse> {
-        callCount += 1;
-        return new Promise<NormalizedResponse>((resolve) => {
-          resolvers.push(() => {
-            resolve({
-              modelId: request.modelId,
-              content: "[]",
-              finishReason: "stop",
-              toolCalls: [],
-              structuredOutput: null,
-              usage: {
-                requestId: "salience-scheduler-test",
-                promptTokens: 7,
-                completionTokens: 3,
-                latencyMs: 11,
-                costClass: "high",
-              },
-            });
-          });
-        });
-      },
-    },
-    callCount: () => callCount,
-    resolveAll: (): void => {
-      for (const resolve of resolvers.splice(0)) resolve();
-    },
-  };
-}
-
-function yieldToImmediate(): Promise<void> {
-  return new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
 }
 
 let activeVaults: MemoryVaultStore[] = [];
@@ -386,71 +340,75 @@ describe("captureSalientFromTurn", () => {
     expect(new Date(live[0]?.validity.validUntil ?? 0).getUTCFullYear()).toBe(2027);
   });
 
-  it("keeps the shared desktop and voice scheduler off-path, bounded, and reusable", async () => {
+  // #4213: a learning pass owns the signal of its model call; a new message aborts the pass, and the
+  // abort reaches the provider request instead of a signal nobody can abort.
+  it("hands a stored turn's model call the pass's signal and reports the cancellation", async () => {
+    let seenSignal: AbortSignal | undefined;
+    const model: ModelPort = {
+      call(_request, signal): Promise<NormalizedResponse> {
+        seenSignal = signal;
+        return new Promise<NormalizedResponse>((_resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            reject(new Error("aborted by the pass"));
+          });
+        });
+      },
+    };
+    const deps = makeDeps({ memoryVault: makeVault(), modelPortFactory: () => model });
+    const pass = new AbortController();
+    const learning = learnStoredTurn(
+      deps,
+      {
+        request: { content: USER_TEXT, sourceMessageId: "message-1", memory: { enabled: true } },
+        context: context(),
+        modelId: "gpt-test",
+        assistantText: "ok",
+        surface: "desktop",
+        correlationId: "assistant-1",
+        parentCorrelationId: "pass-1",
+      },
+      pass.signal,
+    );
+    await vi.waitFor(() => {
+      expect(seenSignal).toBeDefined();
+    });
+    expect(seenSignal?.aborted).toBe(false);
+    pass.abort("foreground-chat-work");
+    expect(seenSignal?.aborted).toBe(true);
+    await expect(learning).resolves.toEqual({ outcome: "cancelled", actionCount: 0 });
+  });
+
+  it("leaves a stored turn pending when the model is unavailable", async () => {
     const vault = makeVault();
-    const model = deferredModel();
-    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
-    const deps = makeDeps({ memoryVault: vault, modelPortFactory: () => model.port, diagnostics });
     const ctx = context();
-    const request = { content: USER_TEXT, memory: { enabled: true } };
-    try {
-      for (let index = 0; index < 32; index += 1) {
-        scheduleMemorySalienceCapture(
-          deps,
-          request,
-          ctx,
-          "gpt-test",
-          "ok",
-          "desktop",
-          `assistant-${String(index)}`,
-        );
-      }
-      scheduleMemorySalienceCapture(
-        deps,
-        request,
-        ctx,
-        "gpt-test",
-        "ok",
-        "voice",
-        "assistant-dropped",
-      );
-
-      expect(model.callCount()).toBe(0);
-      await vi.waitFor(() => {
-        expect(model.callCount()).toBe(32);
-      });
-      expect(diagnostics.record).toHaveBeenCalledWith(
-        expect.objectContaining({
-          errorClass: "SalienceCaptureDropped",
-          // Issue #3245: `message` is now the fixed closed-vocabulary condition label; the
-          // surface/pending-count detail (previously composed into free text here) moved to `code`.
-          message: "salience-capture-dropped-queue-full",
-          code: "surface=voice pending=32/32",
-          // ADR-0173 D5 / g12: this informational diagnostic used to mint its own disconnected
-          // `randomUUID()` instead of reusing the turn-scoped id the caller already resolved
-          // (`"assistant-dropped"`, the correlationId argument below). Fails before the fix.
-          correlationId: "assistant-dropped",
+    const turn = {
+      request: { content: USER_TEXT, sourceMessageId: "message-1", memory: { enabled: true } },
+      context: ctx,
+      modelId: "gpt-test",
+      assistantText: "ok",
+      surface: "desktop" as const,
+      correlationId: "assistant-1",
+      parentCorrelationId: "pass-1",
+    };
+    const missing = makeDeps({ memoryVault: vault, modelPortFactory: () => undefined });
+    await expect(learnStoredTurn(missing, turn, new AbortController().signal)).resolves.toEqual({
+      outcome: "unavailable",
+      actionCount: 0,
+    });
+    const failing = makeDeps({
+      memoryVault: vault,
+      modelPortFactory: () =>
+        fakeModel(() => {
+          throw Object.assign(new Error("provider down"), { code: "GATEWAY_PROVIDER_ERROR" });
         }),
-      );
-
-      model.resolveAll();
-      await yieldToImmediate();
-      scheduleMemorySalienceCapture(
-        deps,
-        request,
-        ctx,
-        "gpt-test",
-        "ok",
-        "voice",
-        "assistant-retry",
-      );
-      await vi.waitFor(() => {
-        expect(model.callCount()).toBe(33);
-      });
-    } finally {
-      model.resolveAll();
-      await yieldToImmediate();
-    }
+    });
+    await expect(
+      learnStoredTurn(failing, turn, new AbortController().signal),
+    ).resolves.toMatchObject({ outcome: "unavailable", actionCount: 0 });
+    expect(countMemories(vault, ctx)).toBe(0);
+    await expect(
+      learnStoredTurn(makeDeps({ memoryVault: vault }), turn, new AbortController().signal),
+    ).resolves.toEqual({ outcome: "learned", actionCount: 3 });
   });
 
   // #4098: the Chat content opt-out preserves an answer for its reader; memory proposals keep the
@@ -474,14 +432,18 @@ describe("captureSalientFromTurn", () => {
         ...(contentRedaction === undefined ? {} : { contentRedaction }),
       });
       const answer = "The customer hotline is +49 30 12345678.";
-      scheduleMemorySalienceCapture(
+      await learnStoredTurn(
         deps,
-        { content: USER_TEXT, memory: { enabled: true } },
-        context(),
-        "gpt-test",
-        answer,
-        "desktop",
-        "assistant-policy",
+        {
+          request: { content: USER_TEXT, memory: { enabled: true } },
+          context: context(),
+          modelId: "gpt-test",
+          assistantText: answer,
+          surface: "desktop",
+          correlationId: "assistant-policy",
+          parentCorrelationId: "pass-policy",
+        },
+        new AbortController().signal,
       );
       await vi.waitFor(() => {
         expect(seen).toHaveLength(1);

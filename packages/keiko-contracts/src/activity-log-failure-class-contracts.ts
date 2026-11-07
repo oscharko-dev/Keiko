@@ -8033,6 +8033,33 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "memory-learning-pass",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: ["memory.learn.pass.started"],
+      state: [],
+      end: ["memory.learn.pass.settled"],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["memory.learn.pass.settled", "memory.learn.pass.started"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["memory.learn.pass.settled", "memory.learn.pass.started"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["memory.learn.pass.settled", "memory.learn.pass.started"],
+    requiredEvidenceClasses: [
+      "closed-enum",
+      "completeness-state",
+      "count",
+      "duration",
+      "loss-state",
+    ],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "memory-embedding-invalidation",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

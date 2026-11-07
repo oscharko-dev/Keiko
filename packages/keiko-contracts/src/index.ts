@@ -3620,7 +3620,6 @@ export type {
   MemoryUsedEvent,
   MemoryWorkflowContext,
   MemoryWorkflowPort,
-  MemoryWriteCandidateEvent,
 } from "./memory-workflow-port.js";
 
 // ─── Quality Intelligence (Issue #277 / Epic #270) ─────────────────────────────

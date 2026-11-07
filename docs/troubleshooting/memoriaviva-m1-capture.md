@@ -50,11 +50,14 @@ stricter mode than intended.
 3. Confirm the active autonomy mode in **MemoriaViva → Request settings**. In **Ask for approval**
    a routine fact is captured as a `proposed` row, not a silently-applied one; check the Journal
    for a row with the "Awaiting review" indicator rather than assuming nothing happened.
-4. For a realtime-voice turn, background capture settles asynchronously (typically within a few
-   seconds); voice- and desktop-originated captures are tagged distinctly in the underlying data
-   (`voice` vs `conversation-center`) so a future Journal revision can surface it, but today's
-   Journal UI renders both surfaces identically — the absence of a visible surface badge is not a
-   defect.
+4. Learning runs later, in a pass: by default 15 seconds after the last Chat work, when you open
+   another Chat, or at the next start (see
+   [MemoriaViva learning passes](../memory/memoria-viva-learning-passes.md)). A new entry does not
+   appear while you keep writing; wait for the pause or switch Chats. `memory.learn.pass.settled`
+   in the Activity Log shows whether a pass ran, was cancelled by new Chat work, or found the model
+   unavailable. Voice- and desktop-originated captures are tagged distinctly in the underlying data
+   (`voice` vs `conversation-center`), but today's Journal UI renders both surfaces identically —
+   the absence of a visible surface badge is not a defect.
 
 **Resolution**
 

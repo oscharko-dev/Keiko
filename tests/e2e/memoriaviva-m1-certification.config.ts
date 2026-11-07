@@ -71,6 +71,8 @@ export default defineConfig({
         KEIKO_STATE_DIR: stateDir,
         KEIKO_UI_DATA_DIR: join(stateDir, "ui"),
         KEIKO_MEMORY_DIR: join(stateDir, "memory"),
+        // #4213: a journey learns right after its turn instead of after the product's pause.
+        KEIKO_MEMORY_LEARNING_IDLE_MS: "0",
         KEIKO_CONFIG_FILE: runtimeConfigPath,
         KEIKO_CODING_DEPLOYMENT_CEILING: "autonomous-delivery",
       },

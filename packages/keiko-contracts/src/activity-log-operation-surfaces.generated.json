@@ -482,6 +482,8 @@
   "memory.explicit.remember": "memory-knowledge",
   "memory.learn.dropped": "memory-knowledge",
   "memory.learn.extraction": "memory-knowledge",
+  "memory.learn.pass.settled": "memory-knowledge",
+  "memory.learn.pass.started": "memory-knowledge",
   "memory.learn.relation": "memory-knowledge",
   "native-file-dialog.selection.projected": "ui",
   "portable.normal-startup-recovery.completed": "runtime-packages",

@@ -3665,7 +3665,6 @@ function runGroundedPostCommitMemorySideEffects(
     deps,
     groundedCanonicalMemoryRequest(prepared, answer.content),
     prepared.memory.context,
-    prepared.input.modelId ?? prepared.chat.selectedModel,
     answer.memory,
     answer.content,
     answer.assistantMessageId,

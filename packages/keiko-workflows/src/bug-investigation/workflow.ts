@@ -14,7 +14,7 @@ import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { buildBugContext } from "./context.js";
 import { computeBugFingerprint } from "./emit.js";
 import { parseFailureEvidence } from "./failure-parse.js";
-import { acquireMemoryContext, emitMemoryWriteCandidate } from "./memory.js";
+import { acquireMemoryContext } from "./memory.js";
 import { reviewedBugPatchLoop, runBugModelLoop } from "./model-loop.js";
 import {
   cancelledReport,
@@ -106,10 +106,5 @@ export async function investigateBug(
         ? cancelledReport(state, EMPTY_BUG_LOOP, undefined, { frames: [], messages: [] })
         : failedReport(state, error);
   }
-  // Memory write-candidate (Issue #213): emit ONLY for terminal success outcomes
-  // (fix-applied / fix-proposed / investigation-only). NO-OP for cancelled / failed /
-  // rejected, and NO-OP when no port is injected. Emitted before emitCompleted so the audit
-  // ledger and MemoriaViva UI see the candidate alongside the run-completed event.
-  emitMemoryWriteCandidate(state.deps.memoryPort, report, state.input.workspaceRoot);
   return emitCompleted(state, report);
 }

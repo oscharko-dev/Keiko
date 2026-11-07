@@ -606,12 +606,10 @@ describe("keiko-contracts package surface", () => {
     type _MemoryWorkflowContext = import("./index.js").MemoryWorkflowContext;
     type _MemoryUsedEvent = import("./index.js").MemoryUsedEvent;
     type _MemoryOmittedEvent = import("./index.js").MemoryOmittedEvent;
-    type _MemoryWriteCandidateEvent = import("./index.js").MemoryWriteCandidateEvent;
     pin<_MemoryWorkflowPort>();
     pin<_MemoryWorkflowContext>();
     pin<_MemoryUsedEvent>();
     pin<_MemoryOmittedEvent>();
-    pin<_MemoryWriteCandidateEvent>();
     // The pins above are compile-time only: `pin<T>()` is erased, so the real check is that
     // `tsc` can resolve each re-export. What IS observable at runtime is whether the barrel
     // loads at all — a circular or broken re-export throws here. The previous

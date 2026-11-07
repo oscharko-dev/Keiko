@@ -12,10 +12,7 @@ import type {
   WorkflowRunId,
 } from "@oscharko-dev/keiko-contracts/memory";
 import { auditRunIdFor } from "./memory-audit-handler.js";
-import {
-  createWorkflowMemoryPort,
-  describeWorkflowWriteCandidateSummary,
-} from "./memory-workflow-port.js";
+import { createWorkflowMemoryPort } from "./memory-workflow-port.js";
 
 function memoryId(value: string): MemoryId {
   return value as MemoryId;
@@ -54,13 +51,6 @@ function createVault(): { dir: string; vault: MemoryVaultStore } {
     dir,
     vault: createMemoryVault({ memoryDir: dir, redactString: (value) => value }),
   };
-}
-
-function listAllMemories(
-  vault: MemoryVaultStore,
-  options?: Parameters<MemoryVaultStore["listMemoriesAcrossScopes"]>[1],
-): readonly MemoryRecord[] {
-  return vault.listMemoriesAcrossScopes(vault.listMemoryScopes(), options);
 }
 
 function readAuditEvents(store: EvidenceStore, nowMs: number): readonly Record<string, unknown>[] {
@@ -243,120 +233,21 @@ describe("createWorkflowMemoryPort", () => {
     vault.close();
   });
 
-  it("persists workflow write candidates into the vault as proposed memories", () => {
+  // #4213, R9: a workflow's own summary is not the person's words, so it never becomes a memory.
+  it("offers a workflow no way to write a memory", () => {
     const { dir, vault } = createVault();
     cleanup.push(dir);
-    const evidenceStore = createEvidenceStore();
     const port = createWorkflowMemoryPort({
       vault,
-      evidenceStore,
+      evidenceStore: createEvidenceStore(),
       runId: runId("wr-3"),
       redactString: (value) => value,
-      now: () => 1_710_000_000_000,
     });
-
-    if (port.onMemoryWriteCandidate === undefined) {
-      throw new Error("expected workflow memory port to expose onMemoryWriteCandidate");
-    }
-    port.onMemoryWriteCandidate({
-      proposalSummary: "the test runner is vitest",
-      scope: { kind: "project", projectId: projectId("/repo") },
-      source: "workflow-success",
-    });
-
-    const proposed = listAllMemories(vault, { includeExpired: true }).find(
-      (record) => record.status === "proposed",
-    );
-    expect(proposed).toBeDefined();
-    expect(proposed?.body).toBe("the test runner is vitest");
-    expect(proposed?.scope).toEqual({ kind: "project", projectId: "/repo" });
-    expect(proposed?.provenance.sourceWorkflowRunId).toBe("wr-3");
-    const events = readAuditEvents(evidenceStore, 1_710_000_000_000);
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
-      kind: "memory:workflow-write-candidate",
-      workflowRunId: "wr-3",
-      source: "workflow-success",
-      proposedMemoryIds: [proposed?.id],
-    });
-    expect(JSON.stringify(events)).not.toContain("the test runner is vitest");
+    expect(Object.keys(port).sort()).toEqual([
+      "getContextForWorkflow",
+      "onMemoryOmitted",
+      "onMemoryUsed",
+    ]);
     vault.close();
-  });
-
-  it("persists confidential workflow candidates as proposed review records", () => {
-    const { dir, vault } = createVault();
-    cleanup.push(dir);
-    const evidenceStore = createEvidenceStore();
-    const port = createWorkflowMemoryPort({
-      vault,
-      evidenceStore,
-      runId: runId("wr-4"),
-      redactString: (value) => value,
-      now: () => 1_710_000_000_000,
-    });
-
-    if (port.onMemoryWriteCandidate === undefined) {
-      throw new Error("expected workflow memory port to expose onMemoryWriteCandidate");
-    }
-    port.onMemoryWriteCandidate({
-      proposalSummary: "the private support email is developer@example.com",
-      scope: { kind: "project", projectId: projectId("/repo") },
-      source: "workflow-correction",
-    });
-
-    const proposed = listAllMemories(vault, { includeExpired: true }).find(
-      (record) => record.status === "proposed",
-    );
-    expect(proposed).toBeDefined();
-    expect(proposed?.body).toBe("the private support email is developer@example.com");
-    expect(proposed?.provenance.sensitivity).toBe("confidential");
-    const events = readAuditEvents(evidenceStore, 1_710_000_000_000);
-    expect(events[0]).toMatchObject({
-      kind: "memory:workflow-write-candidate",
-      workflowRunId: "wr-4",
-      proposedMemoryIds: [proposed?.id],
-    });
-    expect(JSON.stringify(events)).not.toContain("developer@example.com");
-    vault.close();
-  });
-
-  it("uses supplied customer identifier matchers for workflow candidate rejection", () => {
-    const { dir, vault } = createVault();
-    cleanup.push(dir);
-    const evidenceStore = createEvidenceStore();
-    const port = createWorkflowMemoryPort({
-      vault,
-      evidenceStore,
-      runId: runId("wr-5"),
-      redactString: (value) => value,
-      customerIdentifierMatchers: [/CustomerOmega/],
-      now: () => 1_710_000_000_000,
-    });
-
-    if (port.onMemoryWriteCandidate === undefined) {
-      throw new Error("expected workflow memory port to expose onMemoryWriteCandidate");
-    }
-    port.onMemoryWriteCandidate({
-      proposalSummary: "CustomerOmega requires SSO for releases",
-      scope: { kind: "project", projectId: projectId("/repo") },
-      source: "workflow-success",
-    });
-
-    expect(listAllMemories(vault, { includeExpired: true })).toEqual([]);
-    vault.close();
-  });
-});
-
-describe("describeWorkflowWriteCandidateSummary", () => {
-  it("describes a single governed candidate in the singular", () => {
-    expect(describeWorkflowWriteCandidateSummary(1, "workflow-success")).toBe(
-      "Workflow produced 1 governed memory write candidate (workflow-success).",
-    );
-  });
-
-  it("describes multiple governed candidates in the plural with the count", () => {
-    expect(describeWorkflowWriteCandidateSummary(3, "workflow-correction")).toBe(
-      "Workflow produced 3 governed memory write candidates (workflow-correction).",
-    );
   });
 });

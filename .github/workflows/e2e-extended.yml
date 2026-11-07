@@ -84,6 +84,9 @@ jobs:
           - test:e2e:workspace-surfaces
           - test:e2e:operations-surfaces
           - test:e2e:assistive-surfaces
+          # Epic #4205 (#4213): the MemoriaViva M1 journey had a script and no lane. It proves the
+          # learning pass end to end against the real BFF with a scripted model.
+          - test:e2e:memoriaviva-m1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -104,7 +104,6 @@ interface EngineContext {
   readonly toolArtifacts?: ToolResultArtifactWriter | undefined;
   readonly memoryVault?: MemoryVaultStore | undefined;
   readonly memoryAuditRedactString?: ((input: string) => string) | undefined;
-  readonly memoryCustomerIdentifierMatchers?: readonly RegExp[] | undefined;
   readonly verificationExecutor?:
     | ((
         args: Parameters<typeof executeVerificationEnforced>[0],
@@ -350,9 +349,6 @@ function dispatchWorkflowMemoryDeps(
       evidenceStore: ctx.evidence.store,
       runId,
       redactString: ctx.memoryAuditRedactString ?? ((input: string): string => input),
-      ...(ctx.memoryCustomerIdentifierMatchers === undefined
-        ? {}
-        : { customerIdentifierMatchers: ctx.memoryCustomerIdentifierMatchers }),
     }),
   };
 }

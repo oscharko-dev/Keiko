@@ -350,12 +350,27 @@ D2 lets a fact through.
   record counts, the source message count and closed reason, label, decision and basis values; no
   words of the person or of a fact enter the Activity Log.
 
+### D4d — Learning runs later, in passes, and loses against Chat work
+
+Learning from conversation no longer runs after each turn (Issue #4213). A turn written with memory
+on marks its stored message; a learning pass later reads a Chat's messages after its monotonic
+learned position, in Chat order, and runs the D4c capture on the person's words. Passes start after
+a measured pause without Chat work (default 15 s, `KEIKO_MEMORY_LEARNING_IDLE_MS`), when the person
+opens another Chat, at startup, on a backoff retry when the model was unavailable, and as a
+continuation when a pass reached its bounds. Every serialized Chat turn is foreground work: a pass
+does not start while one runs, and a starting turn aborts a running pass down to the provider
+request. A turn written with memory off is never learned. A clear statement (D4b) still acts at
+message time; a forget the pass reaches is applied again to facts the same pass learned from the
+Chat's earlier, still pending messages. `memory.learn.pass.started` and `memory.learn.pass.settled`
+record each pass body-free. Triggers, bounds and the measurement:
+[MemoriaViva learning passes](../memory/memoria-viva-learning-passes.md).
+
 ### D5 — Capture stays failure-contained and diagnostics stay content-free
 
 Mode resolution cannot throw (it delegates to the total canonical clamp helper) and
 `planMemoryMaintenance` is a pure function; if either path ever throws, it is caught by
-`captureSalientFromTurn`'s existing try/catch boundary, which yields `[]` and leaves the chat
-response unaffected — capture failure never breaks a turn, mode-aware or not. Where mode
+the capture's try/catch boundary (`captureSalientFromTurn`, or `learnStoredTurn` in a learning
+pass), which yields no actions and leaves the chat response unaffected — capture failure never breaks a turn, mode-aware or not. Where mode
 resolution cannot determine an effective mode (D1's fail-closed fallback), the outcome is
 `governed-assist`. A failed UI hydration also explicitly restores `governed-assist`, while a failed
 persist leaves the previously persisted selection unchanged and surfaces a content-free error.

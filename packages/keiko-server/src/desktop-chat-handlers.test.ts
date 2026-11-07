@@ -168,6 +168,9 @@ function scriptedOliverProfileMemoryModel(): ModelPort {
   };
 }
 
+// #4213: learning runs in a pass after a pause; these journeys learn right after the turn.
+const LEARN_AFTER_EACH_TURN = { KEIKO_MEMORY_LEARNING_IDLE_MS: "0" } as const;
+
 function deps(
   model: ModelPort = fakeModel("test response"),
   overrides: Partial<UiHandlerDeps> = {},
@@ -1979,7 +1982,9 @@ describe("desktop chat routes", () => {
         });
       },
     };
-    await restartWithDeps(deps(chatThenHangingSalienceModel, { memoryVault }));
+    await restartWithDeps(
+      deps(chatThenHangingSalienceModel, { memoryVault, env: LEARN_AFTER_EACH_TURN }),
+    );
 
     const createRes = await fetch(`${base()}/api/desktop/chats`, {
       method: "POST",
@@ -2596,7 +2601,9 @@ describe("desktop chat routes", () => {
     const memoryDir = join(tmp, "memory-vault-ambient-identity");
     mkdirSync(memoryDir);
     const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
-    await restartWithDeps(deps(scriptedIdentityRecallModel(), { memoryVault }));
+    await restartWithDeps(
+      deps(scriptedIdentityRecallModel(), { memoryVault, env: LEARN_AFTER_EACH_TURN }),
+    );
 
     const createChatA = await fetch(`${base()}/api/desktop/chats`, {
       method: "POST",
@@ -2699,7 +2706,9 @@ describe("desktop chat routes", () => {
     const memoryDir = join(tmp, "memory-vault-spoken-profile");
     mkdirSync(memoryDir);
     const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
-    await restartWithDeps(deps(scriptedOliverProfileMemoryModel(), { memoryVault }));
+    await restartWithDeps(
+      deps(scriptedOliverProfileMemoryModel(), { memoryVault, env: LEARN_AFTER_EACH_TURN }),
+    );
 
     const createRes = await fetch(`${base()}/api/desktop/chats`, {
       method: "POST",

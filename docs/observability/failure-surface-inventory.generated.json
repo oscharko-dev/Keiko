@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "aaf5bad3c6a1eed8ab2a1dffa6955eba4a14b5f313d31fc6283e4bb101a11cab"
+    "catalogDigest": "79f4e0de15624874862dbdf6cc6f1979829be96d3e503ab656607e2e47c62e60"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -71,10 +71,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 653,
-    "proofCount": 675,
-    "resolvedProofCount": 675,
-    "failureClassCount": 392,
+    "operationCount": 655,
+    "proofCount": 677,
+    "resolvedProofCount": 677,
+    "failureClassCount": 393,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -585,6 +585,8 @@
         "memory.explicit.remember",
         "memory.learn.dropped",
         "memory.learn.extraction",
+        "memory.learn.pass.settled",
+        "memory.learn.pass.started",
         "memory.learn.relation",
         "repository.fingerprint-diff.completed",
         "search.answer.assessed",
@@ -1126,6 +1128,7 @@
     "memory-capture-novelty": ["memory-knowledge.dependency-failure"],
     "memory-explicit-statement": ["memory-knowledge.dependency-failure"],
     "memory-learned-facts": ["memory-knowledge.loss"],
+    "memory-learning-pass": ["memory-knowledge.dependency-failure"],
     "memory-embedding-invalidation": ["memory-knowledge.dependency-failure"],
     "memory-embedding-request": ["memory-knowledge.dependency-failure"],
     "memory-embedding-storage": ["memory-knowledge.rejection"],
@@ -2665,6 +2668,8 @@
     "memory.explicit.remember.line": ["packages/keiko-server/src/memory-capture-autonomy.test.ts"],
     "memory.learn.dropped.line": ["packages/keiko-server/src/memory-learned-facts.test.ts"],
     "memory.learn.extraction.line": ["packages/keiko-server/src/memory-learned-facts.test.ts"],
+    "memory.learn.pass.settled.line": ["packages/keiko-server/src/memory-learning.test.ts"],
+    "memory.learn.pass.started.line": ["packages/keiko-server/src/memory-learning.test.ts"],
     "memory.learn.relation.line": ["packages/keiko-server/src/memory-learned-facts.test.ts"],
     "native-file-dialog.selection.projected.counts": [
       "packages/keiko-server/src/native-file-dialog/route.test.ts"
