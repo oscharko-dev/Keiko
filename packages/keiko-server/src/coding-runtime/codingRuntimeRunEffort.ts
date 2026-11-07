@@ -309,7 +309,7 @@ export class CodingRuntimeRunEffortLedger {
     const run = this.runs.get(runId);
     if (run === undefined) return;
     const selected = markVerificationNotRun(run, reason, targetDigest);
-    if (!verificationBlockerApplies(run, targetDigest, selected)) return;
+    if (!verificationBlockerApplies(targetDigest, selected)) return;
     run.blockerRevision = boundedSum(run.blockerRevision, 1);
     setVerificationBlocker(run, reason, targetDigest);
   }
@@ -423,15 +423,12 @@ function markVerificationNotRun(
 }
 
 function verificationBlockerApplies(
-  run: OrchestratorEffortRecord,
   targetDigest: string | undefined,
   selected: VerificationTargetState | undefined,
 ): boolean {
-  return (
-    targetDigest === undefined ||
-    !hasSelectedTargets(run) ||
-    (selected?.selected === true && !selected.passed)
-  );
+  // A target-scoped refusal blocks repair only for a selected, still failing target: while none is
+  // selected, the target was unrelated to the change and another check can still evidence it.
+  return targetDigest === undefined || (selected?.selected === true && !selected.passed);
 }
 
 function setVerificationBlocker(

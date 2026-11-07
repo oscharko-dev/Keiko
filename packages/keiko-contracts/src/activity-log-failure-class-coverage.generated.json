@@ -11571,6 +11571,7 @@
         "start": [],
         "state": [
           "coding-runtime.native-build-settings.admitted",
+          "coding-runtime.native-certificates.admitted",
           "coding-runtime.native-external-roots.resolved",
           "coding-runtime.native-formatter.bound",
           "coding-runtime.native-narrowing.refused",
@@ -11585,6 +11586,10 @@
       "causalEdges": [
         {
           "op": "coding-runtime.native-build-settings.admitted",
+          "mode": "correlation"
+        },
+        {
+          "op": "coding-runtime.native-certificates.admitted",
           "mode": "correlation"
         },
         {
@@ -11615,6 +11620,7 @@
       "lossSignals": [],
       "resourceSignals": [
         "coding-runtime.native-build-settings.admitted",
+        "coding-runtime.native-certificates.admitted",
         "coding-runtime.native-external-roots.resolved",
         "coding-runtime.native-formatter.bound",
         "coding-runtime.native-narrowing.refused",
@@ -11699,6 +11705,42 @@
             "causeChain": false
           },
           "proofIds": ["coding-runtime.native-build-settings.admitted.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "coding-runtime.native-certificates.admitted",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "capability",
+          "safeContextFields": [
+            {
+              "name": "admittedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "fileCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "namedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["coding-runtime.native-certificates.admitted.emitted-line"],
           "replayReferences": [],
           "missingObligations": []
         },
@@ -15969,6 +16011,12 @@
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "blockedReason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             },
             {
               "name": "causeChain",

@@ -33,6 +33,7 @@ import type {
   CodingToolMutationGuard,
 } from "./codingToolFacadePorts.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
+import { SHELL_VERIFICATION_STATUS_RULE } from "./codingRuntimeVerificationContinuation.js";
 import type { CodingToolActionRequest } from "./codingToolIpc.js";
 import { codingToolDiscoveryText } from "./codingToolIpc.js";
 import { createCodingToolReadEditPorts } from "./codingToolReadEditPorts.js";
@@ -949,6 +950,8 @@ describe("CodingToolFacade", () => {
     expect(guidance).toContain("keiko_verification");
     expect(guidance).toContain("in your shell");
     expect(guidance).toContain("Do not stage again");
+    // #4271 lab: a check piped into `tail` passed and did not count; the refusal says why.
+    expect(guidance).toContain(SHELL_VERIFICATION_STATUS_RULE);
 
     verifiedCommit.reason = "verification-failed";
     expect(await propose()).not.toHaveProperty("guidance");
@@ -1298,6 +1301,33 @@ describe("CodingToolFacade", () => {
         "run the repository's own command for that check (its package script, or the tool itself) in your shell, where its result counts as that verification",
       ) as string,
     });
+  });
+
+  // #4271 lab (T39): a verifier with nothing to run for the resolved package answered a bare code,
+  // and the model ended without running the repository's own build tool in its shell.
+  it("tells the model how a verifier without runnable steps is still evidenced", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "failed", reasonCode: "NO_RUNNABLE_STEPS" }),
+    );
+    const subject = createCodingToolFacade(ports);
+    const result = (await subject.execute({
+      body: requestBody({ action: "verification", verifierId: "unit" }),
+      capability,
+    })) as { readonly reasonCode?: string; readonly guidance?: string; readonly detail?: string };
+    expect(result.reasonCode).toBe("NO_RUNNABLE_STEPS");
+    expect(result.detail).toBeUndefined();
+    expect(result.guidance).toContain("run the repository's own test command");
+    expect(result.guidance).toContain("pass one as packageDir");
+    expect(result.guidance).toContain(SHELL_VERIFICATION_STATUS_RULE);
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "failed", reasonCode: "VERIFICATION_NOT_RUN", notRun: [] }),
+    );
+    const notRun = (await createCodingToolFacade(ports).execute({
+      body: requestBody({ action: "verification", verifierId: "unit" }),
+      capability,
+    })) as { readonly guidance?: string };
+    expect(notRun.guidance).toContain(SHELL_VERIFICATION_STATUS_RULE);
   });
 
   // An empty not-run list names no step, so the facade forwards no detail; the guidance still stands
@@ -1728,14 +1758,18 @@ describe("CodingToolFacade", () => {
       status: "failed",
       reasonCode: code,
       evidence: [{ kind: "governed-delegate", code }],
-      // Two refusals carry guidance: the trust refusal is the operator's decision to change, not the
-      // model's (ADR-0147 D3, 2026-09-10), and a run that left a step unexecuted tells the model
-      // what that means for its next step (F74). Every other code stays bare.
+      // Three refusals carry guidance: the trust refusal is the operator's decision to change, not
+      // the model's (ADR-0147 D3, 2026-09-10), a run that left a step unexecuted tells the model
+      // what that means for its next step (F74), and a verifier with nothing to run names the
+      // shell check that still counts (#4271). Every other code stays bare.
       ...(code === "WORKSPACE_TRUST_REQUIRED"
         ? { guidance: expect.stringContaining("Only the operator can allow them") as unknown }
         : {}),
       ...(code === "VERIFICATION_NOT_RUN"
         ? { guidance: expect.stringContaining("Not every verification step ran") as unknown }
+        : {}),
+      ...(code === "NO_RUNNABLE_STEPS"
+        ? { guidance: expect.stringContaining("This verifier has nothing to run") as unknown }
         : {}),
     });
   });

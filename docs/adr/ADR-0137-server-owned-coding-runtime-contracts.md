@@ -2235,6 +2235,16 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   `keiko-contracts` (`.env`, `.env.*` except `.env.example`, keys, certificates, token and history
   files, `.npmrc`, ...) is the single list that the native read tool's `isDenied` and the kernel
   rule both read, and the kernel translates it into the last Seatbelt rule, after every re-allow.
+  That rule leaves exactly two kinds of `*.pem` leaf to the earlier rules (#4271): the public
+  certificate-authority bundles every TLS client reads (`/private/etc/ssl/cert.pem`, Homebrew's
+  `ca-certificates` bundle and the `cert.pem` link of each Homebrew OpenSSL, and an installed
+  certifi's `site-packages/certifi/cacert.pem`, also as pip's vendored copy), without which no HTTPS client of a native shell verified a server, and
+  the exact files the operator names with `SSL_CERT_FILE` or `NODE_EXTRA_CA_CERTS`
+  (`certificateReadFiles`, at the spelled and the real location, read-only, bound into the policy
+  digest and recorded as counts on `coding-runtime.native-certificates.admitted`). The carve-out
+  is a leaf exception only: a credential-named directory above such a file still denies it, every
+  other credential name keeps its rule, and whether the file is readable at all stays with the
+  read allowlist and the denied roots.
   The tool-state half of `isDenied` (`.git`, `node_modules`, caches, `.gitconfig`, `.config`)
   stays a policy guard only, because Git, npm and the build need those paths. A symlink in the
   workspace to a file outside it, and the `/System/Volumes/Data` spelling of a home path, are

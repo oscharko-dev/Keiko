@@ -119,6 +119,9 @@ function filesystemDigestFields(
     ...(filesystem.linkedFiles === undefined
       ? []
       : ["native-linked-files-v1", ...filesystem.linkedFiles]),
+    ...(filesystem.certificateReadFiles === undefined
+      ? []
+      : ["native-certificate-read-files-v1", ...filesystem.certificateReadFiles]),
   ];
 }
 
