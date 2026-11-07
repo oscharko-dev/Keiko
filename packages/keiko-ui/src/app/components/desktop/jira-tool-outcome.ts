@@ -47,6 +47,7 @@ import { JIRA_ROLE_TOOLS, jiraRoleDetails } from "./jira-role-presentation";
 import { JIRA_RELEASE_TOOLS, jiraReleaseDetails } from "./jira-release-presentation";
 import { JIRA_LOOKUP_TOOLS, jiraLookupDetails } from "./jira-lookup-presentation";
 import { JIRA_JQL_TOOLS, jiraJqlDetails } from "./jira-jql-presentation";
+import { JIRA_AGILE_CONTEXT_TOOLS, JIRA_AGILE_CONTEXT_METADATA_TOOLS, jiraAgileContextDetails } from "./jira-agile-context-presentation";
 
 export interface JiraOutcomeItem {
   readonly key?: string;
@@ -108,6 +109,7 @@ const STANDALONE_TOOLS = new Set([
   ...JIRA_RELEASE_TOOLS,
   ...JIRA_LOOKUP_TOOLS,
   ...JIRA_JQL_TOOLS,
+  ...JIRA_AGILE_CONTEXT_TOOLS,
 ]);
 const BOARD_READ_TOOLS = new Set(["jira_board", "jira_boards", "jira_board_configuration"]);
 type UnknownRecord = Readonly<Record<string, unknown>>;
@@ -241,6 +243,7 @@ function boardContextLink(tool: string, source: UnknownRecord): string | undefin
     : undefined;
 }
 function configurationDetails(tool: string, source: UnknownRecord): readonly JiraAgileDetails[] | undefined {
+  if (JIRA_AGILE_CONTEXT_METADATA_TOOLS.has(tool)) return jiraAgileContextDetails(tool, source);
   if (JIRA_ACCESS_TOOLS.has(tool)) return jiraAccessDetails(tool, source);
   if (JIRA_CORE_METADATA_TOOLS.has(tool)) return jiraCoreMetadataDetails(tool, source);
   if (JIRA_INSTANCE_TOOLS.has(tool)) return jiraInstanceDetails(tool, source);
@@ -255,6 +258,7 @@ function configurationDetails(tool: string, source: UnknownRecord): readonly Jir
 function metadataDetails(tool: string, source: UnknownRecord): JiraAgileDetails | undefined {
   const configuration = configurationDetails(tool, source);
   if (configuration !== undefined) return configuration[0] ?? { facts: [], labels: [] };
+  if (JIRA_AGILE_CONTEXT_TOOLS.has(tool)) return jiraAgileContextDetails(tool, source)[0];
   if (JIRA_DIRECTORY_TOOLS.has(tool)) return jiraDirectoryDetails(tool, source);
   if (JIRA_SAVED_VIEW_TOOLS.has(tool)) return jiraSavedViewDetails(tool, source);
   if (JIRA_FILE_METADATA_TOOLS.has(tool)) return jiraFileMetadataDetails(tool, source);

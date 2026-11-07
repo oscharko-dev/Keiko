@@ -20,6 +20,7 @@ type NativeTool = Exclude<JiraOperationTool, CompositeTool>;
 type JiraOperationEffect = "remote-read" | "remote-write" | "local-report" | "local-draft";
 type JiraPermissionPolicy =
   | "visible-jql-metadata"
+  | "board-issue-estimation"
   | "scoped-user-candidates"
   | "visible-directory-suggestions"
   | "visible-role-configuration"
@@ -299,12 +300,27 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
     "jira.boards": "/board",
     "jira.board": "/board/{boardId}",
     "jira.board-configuration": "/board/{boardId}/configuration",
+    "jira.board-refined-velocity": "/board/{boardId}/settings/refined-velocity",
   }, "/rest/agile/1.0"),
   ...reads("visible-issues", {
     "jira.board-backlog": "/board/{boardId}/backlog",
     "jira.board-issues": "/board/{boardId}/issue",
     "jira.epic-issues": "/epic/{epicIdOrKey}/issue",
     "jira.sprint-issues": "/sprint/{sprintId}/issue",
+    "jira.board-epicless-issues": "/board/{boardId}/epic/none/issue",
+    "jira.board-epic-issues": "/board/{boardId}/epic/{epicId}/issue",
+    "jira.board-sprint-issues": "/board/{boardId}/sprint/{sprintId}/issue",
+    "jira.epicless-issues": "/epic/none/issue",
+    "jira.agile-issue": "/issue/{issueIdOrKey}",
+  }, "/rest/agile/1.0"),
+  ...reads("visible-projects", {
+    "jira.board-projects": "/board/{boardId}/project",
+  }, "/rest/agile/1.0"),
+  ...reads("visible-versions", {
+    "jira.board-versions": "/board/{boardId}/version",
+  }, "/rest/agile/1.0"),
+  ...reads("board-issue-estimation", {
+    "jira.issue-estimation": "/issue/{issueIdOrKey}/estimation",
   }, "/rest/agile/1.0"),
   ...reads("visible-epics", {
     "jira.board-epics": "/board/{boardId}/epic",

@@ -3,7 +3,7 @@ import type {
   JiraFieldReference,
   JiraMutationFailureDetail,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import type { CatalogJsonObject, CatalogJsonValue } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import {
@@ -163,4 +163,21 @@ export function projectJiraCollection(
   if (projected.includes(undefined)) return undefined;
   const valid = projected.filter((value) => value !== undefined);
   return new Set(valid.map((value) => value[identity])).size === valid.length ? valid : undefined;
+}
+
+/** Only caller-owned field names are selected; absence stays unknown and false/zero/empty stay observed. */
+export function projectJiraOptionalFields<K extends string>(
+  raw: Record<string, unknown>,
+  fields: readonly K[],
+  project: (value: unknown, field: K) => CatalogJsonValue | undefined,
+): CatalogJsonObject | undefined {
+  const entries: [string, CatalogJsonValue][] = [];
+  for (const field of fields) {
+    const value = raw[field];
+    if (value === undefined || value === null) continue;
+    const projected = project(value, field);
+    if (projected === undefined) return undefined;
+    entries.push([field, projected]);
+  }
+  return Object.fromEntries(entries);
 }

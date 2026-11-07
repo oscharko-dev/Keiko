@@ -23,8 +23,39 @@ const ISSUE_QUERY = {
   ...QUERY,
   fields: "summary,status,issuetype,project,assignee,priority,labels,created,updated",
 };
+const CONTEXT_ISSUE_QUERY = { ...ISSUE_QUERY, validateQuery: "true", jql: "project = SYN AND summary ~ \"A & B\"" };
 // Independent selected identities and filters: the registry supplies no fixture input or response.
 const SCENARIOS: readonly Scenario[] = [
+  {
+    tool: "jira.board-epicless-issues", args: { boardId: "7", ...PAGING, jql: CONTEXT_ISSUE_QUERY.jql },
+    parameters: { boardId: "7" }, query: CONTEXT_ISSUE_QUERY,
+  },
+  {
+    tool: "jira.board-epic-issues", args: { boardId: "7", epicId: "11", ...PAGING, jql: CONTEXT_ISSUE_QUERY.jql },
+    parameters: { boardId: "7", epicId: "11" }, query: CONTEXT_ISSUE_QUERY,
+  },
+  {
+    tool: "jira.board-sprint-issues", args: { boardId: "7", sprintId: "9", ...PAGING, jql: CONTEXT_ISSUE_QUERY.jql },
+    parameters: { boardId: "7", sprintId: "9" }, query: CONTEXT_ISSUE_QUERY,
+  },
+  { tool: "jira.epicless-issues", args: { ...PAGING, jql: CONTEXT_ISSUE_QUERY.jql }, query: CONTEXT_ISSUE_QUERY },
+  {
+    tool: "jira.board-projects", args: { boardId: "7", ...PAGING }, parameters: { boardId: "7" },
+    query: QUERY, primaryMethodIndex: 1,
+  },
+  {
+    tool: "jira.board-versions", args: { boardId: "7", ...PAGING, released: false }, parameters: { boardId: "7" },
+    query: { ...QUERY, released: "false" }, primaryMethodIndex: 1,
+  },
+  { tool: "jira.board-refined-velocity", args: { boardId: "7" }, parameters: { boardId: "7" } },
+  {
+    tool: "jira.agile-issue", args: { issueIdOrKey: "SYN-2" }, parameters: { issueIdOrKey: "SYN-2" },
+    query: { fields: "summary,description,status,issuetype,project,assignee,reporter,priority,labels,duedate,created,updated", updateHistory: "false" },
+  },
+  {
+    tool: "jira.issue-estimation", args: { issueIdOrKey: "SYN-2", boardId: "7" }, parameters: { issueIdOrKey: "10002" },
+    query: { boardId: "7" }, primaryMethodIndex: 1,
+  },
   {
     tool: "jira.boards",
     args: { ...PAGING, name: "Team", type: "scrum", projectKeyOrId: "SYN" },
@@ -96,6 +127,16 @@ const SCENARIOS: readonly Scenario[] = [
 ];
 function agileRead(path: string, state: MutationRemoteState): AtlassianHttpBodyResult {
   const page = { startAt: 2, maxResults: 5, total: 3, isLast: true };
+  if (path.endsWith("/board/7/project"))
+    return response({ ...page, values: [{ id: 10000, key: "SYN", name: "Visible project", archived: false }] });
+  if (path.endsWith("/board/7/version"))
+    return response({ ...page, values: [{ id: 81, name: "Planned release", released: false, releaseDate: "2026-11-07T23:00:00-0500" }] });
+  if (path.endsWith("/board/7/settings/refined-velocity")) return response({ value: false });
+  if (path.endsWith("/issue/10002/estimation")) return response({ fieldId: "customfield_10001", value: 0 });
+  if (path.endsWith("/issue/SYN-2")) return response({ id: "10002", key: "SYN-2", fields: {
+    summary: "Independent Agile detail", description: "Saved native text", status: { id: "1", name: "Open" },
+    reporter: { name: "synthetic-reporter" }, duedate: "2026-11-07",
+  } });
   if (path.endsWith("/board")) return response({ ...page, values: [state.board] });
   if (path.endsWith("/board/7/epic")) return response({ ...page, values: [state.epic] });
   if (path.endsWith("/board/7/sprint")) return response({ ...page, values: [state.sprint] });
@@ -122,7 +163,7 @@ describe("native Agile registry and actual connector transport agreement", () =>
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && definition.apiRoot === "/rest/agile/1.0",
     );
-    expect(native).toHaveLength(18);
+    expect(native).toHaveLength(27);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),
@@ -142,4 +183,14 @@ describe("native Agile registry and actual connector transport agreement", () =>
       );
     },
   );
+  it("resolves estimation identity without updating issue history before reading the exact numeric target", async () => {
+    const observed = await observeNativeJiraOperation({
+      tool: "jira.issue-estimation", args: { issueIdOrKey: "SYN-2", boardId: "7" },
+    }, { deployment: "data-center", baseUrl: "https://jira.example.invalid/context", http: remote() });
+    expect(observed.requests.map(({ method, url }) => [method, url])).toEqual([
+      ["GET", "https://jira.example.invalid/context/rest/agile/1.0/issue/SYN-2?fields=summary&updateHistory=false"],
+      ["GET", "https://jira.example.invalid/context/rest/agile/1.0/issue/10002/estimation?boardId=7"],
+    ]);
+    expect(observed.result.data).toMatchObject({ boardId: "7", issueId: "10002", issueKey: "SYN-2", value: 0 });
+  });
 });

@@ -155,6 +155,28 @@
     }
   },
   "currentCapabilities": {
+    "jira.agile-issue": {
+      "identity": "GET /rest/agile/1.0/issue/{issueIdOrKey}",
+      "effect": "read",
+      "permissionPolicy": "visible-issues",
+      "kind": "constrained-tool",
+      "constraints": "Single native Agile issue with exact observed numeric ID or case-normalized key binding and the existing supported issue summary/detail projection. Fixed updateHistory=false prevents the GET from changing issue history. No arbitrary fields, expand, self URL following or Agile metadata completeness claim.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-agile-context-reads.ts",
+        "packages/keiko-connectors/src/jira-agile-request.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileContextDescriptors.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-reads.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-agile-context-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileContextDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.application-role": {
       "identity": "GET /rest/api/2/applicationrole/{key}",
       "effect": "read",
@@ -371,6 +393,50 @@
         "packages/keiko-connectors/src/jira-agile-templates.test.ts"
       ]
     },
+    "jira.board-epic-issues": {
+      "identity": "GET /rest/agile/1.0/board/{boardId}/epic/{epicId}/issue",
+      "effect": "read",
+      "permissionPolicy": "visible-issues",
+      "kind": "constrained-tool",
+      "constraints": "Board and exact numeric epic scope; native visible issue paging, bounded optional JQL and fixed supported fields/validateQuery=true. No membership changes or complete-board claim.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-agile-context-reads.ts",
+        "packages/keiko-connectors/src/jira-agile-request.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileContextDescriptors.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-reads.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-agile-context-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileContextDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.board-epicless-issues": {
+      "identity": "GET /rest/agile/1.0/board/{boardId}/epic/none/issue",
+      "effect": "read",
+      "permissionPolicy": "visible-issues",
+      "kind": "constrained-tool",
+      "constraints": "Board-scoped visible issues without an epic, native issue paging and optional bounded JQL filter. Fixed supported fields and validateQuery=true; native search limits and visibility remain authoritative, with no complete-board claim.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-agile-context-reads.ts",
+        "packages/keiko-connectors/src/jira-agile-request.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileContextDescriptors.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-reads.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-agile-context-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileContextDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.board-epics": {
       "identity": "GET /rest/agile/1.0/board/{boardId}/epic",
       "effect": "read",
@@ -394,6 +460,93 @@
         "packages/keiko-connectors/src/jira-agile-projection.ts"
       ],
       "testFiles": ["packages/keiko-connectors/src/jira-agile-reads.test.ts"]
+    },
+    "jira.board-projects": {
+      "identity": "GET /rest/agile/1.0/board/{boardId}/project",
+      "effect": "read",
+      "permissionPolicy": "visible-projects",
+      "kind": "constrained-tool",
+      "constraints": "An independently readable exact board precedes the native project page. Project identities/names and optional description/archive facts are projected without URLs. collectionScope=visible-board-projects; empty results or totals do not establish that no projects are configured or that all associated projects are visible.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-agile-context-reads.ts",
+        "packages/keiko-connectors/src/jira-agile-request.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileContextDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-agile-context-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileContextDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.board-refined-velocity": {
+      "identity": "GET /rest/agile/1.0/board/{boardId}/settings/refined-velocity",
+      "effect": "read",
+      "permissionPolicy": "visible-boards",
+      "kind": "constrained-tool",
+      "constraints": "Exact board setting read; native BooleanSettingBean.value must be an observed boolean. Missing/null/string flags are refused rather than becoming false. No settings write or metric inference.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-agile-context-reads.ts",
+        "packages/keiko-connectors/src/jira-agile-request.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileContextDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-agile-context-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileContextDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.board-sprint-issues": {
+      "identity": "GET /rest/agile/1.0/board/{boardId}/sprint/{sprintId}/issue",
+      "effect": "read",
+      "permissionPolicy": "visible-issues",
+      "kind": "constrained-tool",
+      "constraints": "Exact board/sprint native visible issue page, bounded optional JQL and fixed supported fields/validateQuery=true. Native issue-search limits remain authoritative; no sprint state or membership changes.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-agile-context-reads.ts",
+        "packages/keiko-connectors/src/jira-agile-request.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileContextDescriptors.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-reads.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-agile-context-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileContextDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.board-versions": {
+      "identity": "GET /rest/agile/1.0/board/{boardId}/version",
+      "effect": "read",
+      "permissionPolicy": "visible-versions",
+      "kind": "constrained-tool",
+      "constraints": "An independently readable exact board precedes the native version page with optional explicit released filter. Shared version summary preserves precise IDs, unknown optional metadata and native local calendar dates after validated timestamp decoding. collectionScope=visible-board-versions; empty results never prove no configured releases. No version or release changes.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-agile-context-reads.ts",
+        "packages/keiko-connectors/src/jira-agile-request.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileContextDescriptors.ts",
+        "packages/keiko-connectors/src/jira-managed-versions.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-agile-context-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileContextDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-connectors/src/jira-managed-versions.test.ts"
+      ]
     },
     "jira.boards": {
       "identity": "GET /rest/agile/1.0/board",
@@ -740,6 +893,28 @@
         "packages/keiko-connectors/src/jira-agile-templates.test.ts"
       ]
     },
+    "jira.epicless-issues": {
+      "identity": "GET /rest/agile/1.0/epic/none/issue",
+      "effect": "read",
+      "permissionPolicy": "visible-issues",
+      "kind": "constrained-tool",
+      "constraints": "Native visible issues without an epic, bounded issue paging and optional JQL. Fixed supported fields/validateQuery=true; collectionScope=visible-epicless-issues retains current-user/native search limits and does not establish an exhaustive tenant inventory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-agile-context-reads.ts",
+        "packages/keiko-connectors/src/jira-agile-request.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileContextDescriptors.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-reads.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-agile-context-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileContextDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.favourite-filters": {
       "identity": "GET /rest/api/2/filter/favourite",
       "effect": "read",
@@ -929,7 +1104,8 @@
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-instance-reads.ts",
         "packages/keiko-connectors/src/jira-managed-read-request.ts",
-        "packages/keiko-server/src/atlassian/jiraInstanceDescriptors.ts"
+        "packages/keiko-server/src/atlassian/jiraInstanceDescriptors.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts"
       ],
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-instance-reads.test.ts",
@@ -947,6 +1123,27 @@
       "constraints": "One issue with standard and bounded additional typed fields; comments are separately paginated.",
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-tools.ts"],
       "testFiles": ["packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"]
+    },
+    "jira.issue-estimation": {
+      "identity": "GET /rest/agile/1.0/issue/{issueIdOrKey}/estimation",
+      "effect": "read",
+      "permissionPolicy": "board-issue-estimation",
+      "kind": "constrained-tool",
+      "constraints": "Required board context and a preceding Agile issue identity read with updateHistory=false. The estimate request uses the observed numeric issue ID, preventing caller-alias retarget. Existing field-ID validation and bounded string/finite numeric values preserve native representation; null/absent values remain unknown. No unit inference, estimate change or permission grant.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-agile-context-reads.ts",
+        "packages/keiko-connectors/src/jira-agile-request.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileContextDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-agile-context-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileContextDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
     },
     "jira.issue-link": {
       "identity": "GET /rest/api/2/issueLink/{linkId}",
@@ -1198,7 +1395,8 @@
         "packages/keiko-connectors/src/jira-managed-instance-reads.ts",
         "packages/keiko-connectors/src/jira-directory-values.ts",
         "packages/keiko-connectors/src/jira-managed-read-request.ts",
-        "packages/keiko-server/src/atlassian/jiraInstanceDescriptors.ts"
+        "packages/keiko-server/src/atlassian/jiraInstanceDescriptors.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts"
       ],
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-instance-reads.test.ts",
@@ -1253,7 +1451,8 @@
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-instance-reads.ts",
         "packages/keiko-connectors/src/jira-managed-read-request.ts",
-        "packages/keiko-server/src/atlassian/jiraInstanceDescriptors.ts"
+        "packages/keiko-server/src/atlassian/jiraInstanceDescriptors.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts"
       ],
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-instance-reads.test.ts",
@@ -2039,7 +2238,8 @@
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-instance-reads.ts",
         "packages/keiko-connectors/src/jira-managed-read-request.ts",
-        "packages/keiko-server/src/atlassian/jiraInstanceDescriptors.ts"
+        "packages/keiko-server/src/atlassian/jiraInstanceDescriptors.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts"
       ],
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-instance-reads.test.ts",
@@ -2747,8 +2947,8 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "4bf2b44d1efa1204b4e45b0e3bb2d7286f8caf6860b336b6adeaea92ebce0645",
-    "nativeOperationCount": 160
+    "sha256": "0b6a1ab757cf96e25cd74cafe0c6b284a49e514ed6a5cc60d39347630b12b7f3",
+    "nativeOperationCount": 169
   },
   "operations": [
     {
@@ -3034,10 +3234,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.board-epicless-issues"]
     },
     {
       "identity": "GET /rest/agile/1.0/board/{boardId}/epic/{epicId}/issue",
@@ -3066,10 +3266,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.board-epic-issues"]
     },
     {
       "identity": "GET /rest/agile/1.0/board/{boardId}/issue",
@@ -3130,10 +3330,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.board-projects"]
     },
     {
       "identity": "GET /rest/agile/1.0/board/{boardId}/properties",
@@ -3290,10 +3490,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.board-refined-velocity"]
     },
     {
       "identity": "PUT /rest/agile/1.0/board/{boardId}/settings/refined-velocity",
@@ -3386,10 +3586,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.board-sprint-issues"]
     },
     {
       "identity": "GET /rest/agile/1.0/board/{boardId}/version",
@@ -3418,10 +3618,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.board-versions"]
     },
     {
       "identity": "GET /rest/agile/1.0/epic/none/issue",
@@ -3450,10 +3650,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.epicless-issues"]
     },
     {
       "identity": "POST /rest/agile/1.0/epic/none/issue",
@@ -3706,10 +3906,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.agile-issue"]
     },
     {
       "identity": "GET /rest/agile/1.0/issue/{issueIdOrKey}/estimation",
@@ -3738,10 +3938,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.issue-estimation"]
     },
     {
       "identity": "PUT /rest/agile/1.0/issue/{issueIdOrKey}/estimation",

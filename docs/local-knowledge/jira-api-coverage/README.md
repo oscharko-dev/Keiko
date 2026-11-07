@@ -123,10 +123,10 @@ to Chat or Coding, grant authority, or bypass those owners.
 
 ## Current constrained implementation snapshot
 
-The current registry supplies **160 native identities: 131 reads and 29 writes**. Each is mapped to
+The current registry supplies **169 native identities: 140 reads and 29 writes**. Each is mapped to
 its exact published method/path identity and remains `partial`: the closed typed operation exposes
 only the documented supported fields and behavior, rather than the entire upstream API contract.
-The other **279 operations remain `not-implemented`**. No row is marked fully implemented,
+The other **270 operations remain `not-implemented`**. No row is marked fully implemented,
 executable, owner-deferred or excluded by this snapshot. All 439 source/version IDs, cluster
 assignments, dependencies and qualification fields are retained.
 
@@ -136,7 +136,7 @@ the C6 comment-update/link/worklog read increment; bounded C8 attachment/archive
 worklog create/update with connected-user watching/voting; fourteen C9 workflow-/issue-type-scheme
 and screen reads; three reviewed comment/attachment/worklog deletions; and eight C10 user, group and
 application-role reads; ten permission/security/notification configuration reads; and five additional
-project scheme/accessible-security associations; twenty core issue/project metadata reads; four instance/current-actor observations; seven role/priority-scheme reads; four release-count/project-version-page reads; seven scoped directory/field reads; and two JQL metadata/suggestion reads. The three existing
+project scheme/accessible-security associations; twenty core issue/project metadata reads; four instance/current-actor observations; seven role/priority-scheme reads; four release-count/project-version-page reads; seven scoped directory/field reads; two JQL metadata/suggestion reads; and nine additional Agile context reads. The three existing
 report/draft composites remain compositions, not extra native API identities. Remaining filter
 creation, ranking, other estimate-adjustment modes and destructive operations, administration and
 other inventory gaps stay open. A registered declaration is not evidence that
@@ -223,6 +223,17 @@ value universe. Native boolean strings are decoded explicitly, missing metadata 
 highlighted HTML is omitted. Closed field/predicate selectors do not execute JQL, grant permission or
 prove query validity. The published autocomplete item-schema/example mismatch is handled through the
 explicit DTO documented by Atlassian; runtime qualification remains separate.
+
+Nine additional Agile reads expose scoped epicless/epic/sprint issue pages, board projects and versions,
+refined velocity configuration, a native Agile issue and its board estimate. The existing Agile request
+owner remains the only route. Board project/version pages require a separately readable same board and
+retain visible-result scope even when empty. Single issue reads fix `updateHistory=false`; estimates
+resolve canonical issue identity first and use its observed numeric ID for the estimate request.
+Null or absent estimates remain unknown, strings/numbers remain native and units are not inferred.
+Native Agile version timestamps are validated before retaining their local calendar date through the
+existing version summary. The official [Agile REST reference](https://docs.atlassian.com/jira-software/REST/8.20.1/)
+documents the page wrappers and timestamp examples where the retained Swagger references only an item.
+No runtime compatibility or live availability is inferred from that source interpretation.
 
 `currentRegistry` pins the existing server registry source file's SHA-256 and native declaration
 count. The reconciliation helper parses that file's literal `NATIVE` declarations and verified closed

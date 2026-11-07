@@ -7,7 +7,7 @@ import {
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import { boundJiraReadResult } from "./jira-managed-issue-reads.js";
-import { jiraReadFailure, localJiraPage } from "./jira-managed-metadata.js";
+import { jiraReadFailure, localJiraPage, projectJiraOptionalFields } from "./jira-managed-metadata.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import {
   executeJiraSelectedRead,
@@ -86,24 +86,17 @@ function stringValues(value: unknown): readonly string[] | undefined {
     values.every((item): item is string => jiraNativeText(item, 255)) ? values : undefined;
 }
 function fieldDetails(raw: Record<string, unknown>): CatalogJsonObject | undefined {
-  const result: Record<string, CatalogJsonValue> = {};
-  for (const key of ["auto", "orderable", "searchable"] as const) {
-    const value = raw[key];
-    if (value === undefined || value === null) continue;
-    // Native autocomplete DTOs encode these flags as text; admit actual boolean producers too.
-    if (value !== "true" && value !== "false" && typeof value !== "boolean") return undefined;
-    result[key] = value === true || value === "true";
-  }
-  if (raw.cfid !== undefined && raw.cfid !== null) {
-    if (!jiraNativeText(raw.cfid, 128)) return undefined;
-    result.cfid = raw.cfid;
-  }
-  if (raw.operators !== undefined && raw.operators !== null) {
-    const operators = stringValues(raw.operators);
-    if (operators === undefined) return undefined;
-    result.operators = operators;
-  }
-  return result;
+  const flags = projectJiraOptionalFields(raw, ["auto", "orderable", "searchable"], nativeFlag);
+  const cfid = projectJiraOptionalFields(raw, ["cfid"],
+    (value) => jiraNativeText(value, 128) ? value : undefined);
+  const operators = projectJiraOptionalFields(raw, ["operators"], stringValues);
+  return flags === undefined || cfid === undefined || operators === undefined
+    ? undefined : { ...flags, ...cfid, ...operators };
+}
+/** Native autocomplete DTOs encode these flags as text; admit actual boolean producers too. */
+function nativeFlag(value: unknown): boolean | undefined {
+  if (value !== "true" && value !== "false" && typeof value !== "boolean") return undefined;
+  return value === true || value === "true";
 }
 function completion(value: unknown, kind: Selection["category"]): CatalogJsonObject | undefined {
   if (kind === "reserved-words") return jiraNativeText(value, 255) ? { value } : undefined;
@@ -112,13 +105,9 @@ function completion(value: unknown, kind: Selection["category"]): CatalogJsonObj
   const result: Record<string, CatalogJsonValue> = { value: raw.value };
   // displayName contains native highlighting HTML. Exact value is the plain, usable suggestion.
   if (kind === "suggestions") return result;
-  if (raw.types !== undefined && raw.types !== null) {
-    const types = stringValues(raw.types);
-    if (types === undefined) return undefined;
-    result.types = types;
-  }
+  const types = projectJiraOptionalFields(raw, ["types"], stringValues);
   const fields = kind === "fields" ? fieldDetails(raw) : {};
-  return fields === undefined ? undefined : { ...result, ...fields };
+  return types === undefined || fields === undefined ? undefined : { ...result, ...types, ...fields };
 }
 function exceedsBounds(value: unknown): boolean {
   const raw = asRecord(value);

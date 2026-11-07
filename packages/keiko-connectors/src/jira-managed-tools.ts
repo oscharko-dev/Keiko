@@ -26,6 +26,7 @@ import {
 } from "./jira-managed-participation.js";
 import { jiraBrowseUrl } from "./jira-browse-url.js";
 import { JIRA_AGILE_READ_OPERATIONS, executeJiraAgileRead } from "./jira-agile-reads.js";
+import { executeJiraAgileContextRead, isJiraAgileContextRead } from "./jira-agile-context-reads.js";
 import { JIRA_FILTER_READ_OPERATIONS, executeJiraFilterRead } from "./jira-filter-reads.js";
 import { jiraProjectBrowseUrl } from "./jira-project-browse-url.js";
 import { executeJiraComponentRead, isJiraComponentRead } from "./jira-managed-components.js";
@@ -325,10 +326,12 @@ async function read<Context extends ManagedMcpInvocationContext>(
   connection: JiraManagedProviderDeps<Context>["connection"],
 ): Promise<ManagedMcpToolResult> {
   const agile = JIRA_AGILE_READ_OPERATIONS.find((operation) => operation === name);
+  const agileContext = isJiraAgileContextRead(name) ? name : undefined;
   const filter = JIRA_FILTER_READ_OPERATIONS.find((operation) => operation === name);
-  if (agile !== undefined || filter !== undefined) {
+  if (agile !== undefined || agileContext !== undefined || filter !== undefined) {
     const connected = await connection(context);
     if (connected.deployment !== "data-center") return failure("unsupported-deployment");
+    if (agileContext !== undefined) return executeJiraAgileContextRead(agileContext, args, context, connected);
     return agile !== undefined
       ? executeJiraAgileRead(agile, args, context, connected)
       : executeJiraFilterRead(name, args, context, connected);

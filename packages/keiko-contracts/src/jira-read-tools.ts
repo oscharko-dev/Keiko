@@ -62,6 +62,11 @@ export const JIRA_READ_TOOL_FAMILIES = {
     "jira.boards", "jira.board", "jira.board-configuration", "jira.board-backlog", "jira.board-issues",
     "jira.board-epics", "jira.epic", "jira.epic-issues", "jira.sprints", "jira.sprint", "jira.sprint-issues",
   ],
+  agileContext: [
+    "jira.board-epicless-issues", "jira.board-epic-issues", "jira.board-projects",
+    "jira.board-refined-velocity", "jira.board-sprint-issues", "jira.board-versions",
+    "jira.epicless-issues", "jira.agile-issue", "jira.issue-estimation",
+  ],
   issueMetadata: ["jira.issue-types", "jira.create-fields", "jira.edit-fields"],
   issues: ["jira.search", "jira.issue", "jira.comments"],
   comment: ["jira.get-comment"],

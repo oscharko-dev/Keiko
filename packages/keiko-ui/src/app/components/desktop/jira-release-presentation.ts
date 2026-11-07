@@ -1,6 +1,6 @@
 import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
 import type { JiraAgileDetails, JiraOutcomeFact } from "./jira-agile-presentation";
-import { jiraProjectMetadataDetails } from "./jira-project-metadata-presentation";
+import { jiraVersionSummaryDetails } from "./jira-project-metadata-presentation";
 
 import {
   jiraPresentationFact as fact,
@@ -68,16 +68,6 @@ function counts(tool: string, data: Source): readonly JiraAgileDetails[] {
     labels,
   }, ...(fields ?? [])];
 }
-function version(source: Source): JiraAgileDetails | undefined {
-  if (text(source.versionId) === undefined) return undefined;
-  const details = jiraProjectMetadataDetails("jira_version", source);
-  const name = text(source.name);
-  const body = text(source.description);
-  return {
-    ...details, ...(name === undefined ? {} : { name }), ...(body === undefined ? {} : { body }),
-    facts: [...details.facts, ...fact("chat.jira.fact.projectId", source.projectId)],
-  };
-}
 function versions(data: Source): readonly JiraAgileDetails[] {
   const context = [
     ...fact("chat.jira.fact.projectId", data.projectId),
@@ -88,7 +78,7 @@ function versions(data: Source): readonly JiraAgileDetails[] {
     ...(Array.isArray(data.items) && context.length > 0 ? [{ facts: context, labels: [] }] : []),
     ...sources.flatMap((value: unknown) => {
       const source = record(value);
-      const item = source === undefined ? undefined : version(source);
+      const item = source === undefined ? undefined : jiraVersionSummaryDetails(source);
       return item === undefined ? [] : [item];
     }),
   ];

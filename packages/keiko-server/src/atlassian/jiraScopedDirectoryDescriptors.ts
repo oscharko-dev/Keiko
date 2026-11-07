@@ -29,6 +29,7 @@ const FIELD_ID = {
     { pattern: String.raw`^customfield_\d+$`, minLength: 13, maxLength: 28 },
   ],
 };
+export { FIELD_ID as jiraFieldIdSchema };
 function array(item: CatalogJsonObject, maxItems: number = MAX): CatalogJsonObject {
   return { type: "array", maxItems, items: item };
 }

@@ -1,6 +1,7 @@
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { AtlassianWriteHttpOutcome } from "./atlassian-write-http.js";
+import { jiraDirectoryNumber } from "./jira-directory-values.js";
 import { jiraReadFailure } from "./jira-managed-metadata.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 
@@ -16,11 +17,9 @@ export function selectJiraReadPage(
   allowed: ReadonlySet<string>,
 ): JiraReadPageSelection | undefined {
   if (Object.keys(args).some((key) => !allowed.has(key))) return undefined;
-  const startAt = args.startAt === undefined ? 0 : args.startAt;
-  const maxResults = args.maxResults === undefined ? 25 : args.maxResults;
-  return typeof startAt === "number" && Number.isSafeInteger(startAt) && startAt >= 0 && startAt <= 1_000_000 &&
-    typeof maxResults === "number" && Number.isSafeInteger(maxResults) && maxResults >= 1 && maxResults <= 100
-    ? { startAt, maxResults } : undefined;
+  const startAt = jiraDirectoryNumber(args.startAt, 0, 1_000_000);
+  const maxResults = jiraDirectoryNumber(args.maxResults, 25, 100, 1);
+  return startAt === undefined || maxResults === undefined ? undefined : { startAt, maxResults };
 }
 
 /** Share transport refusal handling after each owner has selected its closed native GET. */

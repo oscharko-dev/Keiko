@@ -1,8 +1,9 @@
 import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
-import type { JiraOutcomeFact } from "./jira-agile-presentation";
+import type { JiraAgileDetails, JiraOutcomeFact } from "./jira-agile-presentation";
 
 import {
   jiraPresentationFact as fact,
+  jiraPresentationText as text,
   type JiraPresentationSource as Source,
 } from "./jira-presentation-values";
 const VERSIONS = new Set([
@@ -93,6 +94,17 @@ export function jiraProjectMetadataDetails(
     labels.push(...componentLabels(source));
   }
   return { facts, labels };
+}
+/** Shared native version summaries retain only observed project and release metadata. */
+export function jiraVersionSummaryDetails(source: Source): JiraAgileDetails | undefined {
+  if (text(source.versionId) === undefined) return undefined;
+  const details = jiraProjectMetadataDetails("jira_version", source);
+  const name = text(source.name);
+  const body = text(source.description);
+  return {
+    ...details, ...(name === undefined ? {} : { name }), ...(body === undefined ? {} : { body }),
+    facts: [...details.facts, ...fact("chat.jira.fact.projectId", source.projectId)],
+  };
 }
 const ARGUMENT_LABELS: Readonly<Record<string, WidgetMessageKey>> = {
   versionId: "chat.jira.fact.versionId",

@@ -1,4 +1,8 @@
 import {
+  jiraAgileContextDeclarationForTool,
+  type JIRA_AGILE_CONTEXT_READ_DEFINITIONS,
+} from "./jiraAgileContextDescriptors.js";
+import {
   jiraJqlDeclarationForTool,
   type JIRA_JQL_READ_DEFINITIONS,
 } from "./jiraJqlDescriptors.js";
@@ -192,6 +196,7 @@ type CoreReadToolName = Exclude<
   | Extract<
       JiraManagedReadToolName,
       | keyof typeof JIRA_AGILE_READ_DEFINITIONS
+      | keyof typeof JIRA_AGILE_CONTEXT_READ_DEFINITIONS
       | keyof typeof JIRA_FILTER_READ_DEFINITIONS
       | keyof typeof JIRA_PROJECT_STRUCTURE_READ_DEFINITIONS
       | keyof typeof JIRA_ISSUE_COLLABORATION_READ_DEFINITIONS
@@ -378,6 +383,7 @@ function isCoreReadTool(name: JiraManagedReadToolName): name is CoreReadToolName
 function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
   for (const producer of [
     jiraAgileDeclarationForTool,
+    jiraAgileContextDeclarationForTool,
     jiraProjectStructureDeclarationForTool,
     jiraAdministrationDeclarationForTool,
     jiraAccessDeclarationForTool,

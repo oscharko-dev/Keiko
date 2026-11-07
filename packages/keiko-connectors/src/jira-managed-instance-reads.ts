@@ -8,7 +8,7 @@ import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import { jiraDirectoryNumber, jiraDirectoryUser } from "./jira-directory-values.js";
 import { boundJiraReadResult } from "./jira-managed-issue-reads.js";
-import { jiraReadFailure, localJiraPage } from "./jira-managed-metadata.js";
+import { jiraReadFailure, localJiraPage, projectJiraOptionalFields } from "./jira-managed-metadata.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { executeJiraSelectedRead, type JiraReadResponse } from "./jira-managed-read-request.js";
 import { jiraNativeText } from "./jira-native-values.js";
@@ -59,19 +59,11 @@ function releaseNumbers(value: unknown): readonly number[] | undefined {
 }
 function serverInfo(body: Record<string, unknown>): CatalogJsonObject | undefined {
   if (!jiraNativeText(body.version, 128)) return undefined;
-  const item: Record<string, CatalogJsonValue> = { version: body.version };
-  for (const key of ["serverTitle", "buildPartnerName", "deploymentType"] as const) {
-    const value = body[key];
-    if (value === undefined || value === null) continue;
-    if (!jiraNativeText(value, 255)) return undefined;
-    item[key] = value;
-  }
-  for (const key of ["buildNumber", "databaseBuildNumber"] as const) {
-    if (body[key] === undefined || body[key] === null) continue;
-    const number = buildNumber(body[key]);
-    if (number === undefined) return undefined;
-    item[key] = number;
-  }
+  const text = projectJiraOptionalFields(body, ["serverTitle", "buildPartnerName", "deploymentType"],
+    (value) => jiraNativeText(value, 255) ? value : undefined);
+  const builds = projectJiraOptionalFields(body, ["buildNumber", "databaseBuildNumber"], buildNumber);
+  if (text === undefined || builds === undefined) return undefined;
+  const item: Record<string, CatalogJsonValue> = { version: body.version, ...text, ...builds };
   if (body.versionNumbers !== undefined && body.versionNumbers !== null) {
     const parts = releaseNumbers(body.versionNumbers);
     if (parts === undefined) return undefined;
@@ -90,43 +82,29 @@ const FEATURES = [
   "votingEnabled",
   "watchingEnabled",
 ] as const;
+const TIME_CHOICES: Readonly<Record<"defaultUnit" | "timeFormat", ReadonlySet<string>>> = {
+  defaultUnit: new Set(["minute", "hour", "day", "week"]),
+  timeFormat: new Set(["pretty", "days", "hours"]),
+};
+function workingTime(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 &&
+    value <= Number.MAX_SAFE_INTEGER ? value : undefined;
+}
 function timeTracking(value: unknown): CatalogJsonObject | undefined {
   const raw = asRecord(value);
   if (raw === undefined) return undefined;
-  const item: Record<string, CatalogJsonValue> = {};
-  for (const key of ["workingHoursPerDay", "workingDaysPerWeek"] as const) {
-    const number = raw[key];
-    if (number === undefined || number === null) continue;
-    if (
-      typeof number !== "number" || !Number.isFinite(number) ||
-      number < 0 || number > Number.MAX_SAFE_INTEGER
-    )
-      return undefined;
-    item[key] = number;
-  }
-  for (const [key, allowed] of [
-    ["defaultUnit", new Set(["minute", "hour", "day", "week"])],
-    ["timeFormat", new Set(["pretty", "days", "hours"])],
-  ] as const) {
-    const value = raw[key];
-    if (value === undefined || value === null) continue;
-    if (typeof value !== "string" || !allowed.has(value)) return undefined;
-    item[key] = value;
-  }
-  return item;
+  const numbers = projectJiraOptionalFields(raw, ["workingHoursPerDay", "workingDaysPerWeek"], workingTime);
+  const choices = projectJiraOptionalFields(raw, ["defaultUnit", "timeFormat"] as const,
+    (entry, key) => typeof entry === "string" && TIME_CHOICES[key].has(entry) ? entry : undefined);
+  return numbers === undefined || choices === undefined ? undefined : { ...numbers, ...choices };
 }
 function configuration(body: Record<string, unknown>): CatalogJsonObject | undefined {
-  const item: Record<string, CatalogJsonValue> = {};
-  for (const key of FEATURES) {
-    const value = body[key];
-    if (value === undefined || value === null) continue;
-    if (typeof value !== "boolean") return undefined;
-    item[key] = value;
-  }
+  const item = projectJiraOptionalFields(body, FEATURES,
+    (value) => typeof value === "boolean" ? value : undefined);
+  if (item === undefined) return undefined;
   if (body.timeTrackingConfiguration !== undefined && body.timeTrackingConfiguration !== null) {
     const tracking = timeTracking(body.timeTrackingConfiguration);
-    if (tracking === undefined) return undefined;
-    item.timeTrackingConfiguration = tracking;
+    return tracking === undefined ? undefined : { ...item, timeTrackingConfiguration: tracking };
   }
   return Object.keys(item).length === 0 ? undefined : item;
 }
@@ -135,17 +113,13 @@ function permissionDefinition(key: string, value: unknown): CatalogJsonObject | 
   if (!jiraNativeText(key, 255) || raw === undefined) return undefined;
   if (raw.type !== undefined && raw.type !== null && raw.type !== "GLOBAL" && raw.type !== "PROJECT")
     return undefined;
-  const item: Record<string, CatalogJsonValue> = { key };
-  for (const field of ["id", "key", "name", "type", "description"] as const) {
-    const fieldValue = raw[field];
-    if (fieldValue === undefined || fieldValue === null) continue;
-    if (!jiraNativeText(fieldValue, field === "description" ? 32768 : 255, field === "description"))
-      return undefined;
-    // The dictionary identity and a separately supplied native key can differ for legacy aliases.
-    item[field === "key" ? "nativeKey" : field] = fieldValue;
-  }
+  const fields = projectJiraOptionalFields(raw, ["id", "key", "name", "type", "description"],
+    (entry, field) => jiraNativeText(entry, field === "description" ? 32768 : 255, field === "description")
+      ? entry : undefined);
+  if (fields === undefined) return undefined;
+  const { key: nativeKey, ...metadata } = fields;
   // havePermission is deliberately absent: this endpoint describes definitions, not actor rights.
-  return item;
+  return { key, ...metadata, ...(typeof nativeKey === "string" ? { nativeKey } : {}) };
 }
 function permissions(body: Record<string, unknown>, selected: Selection): ManagedMcpToolResult {
   const definitions = asRecord(body.permissions);

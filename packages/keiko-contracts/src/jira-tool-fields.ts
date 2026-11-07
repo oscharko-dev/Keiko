@@ -47,6 +47,7 @@ export const JIRA_MANAGED_READ_TOOLS = [
   ...READS.filters,
   ...READS.savedViews,
   ...READS.agile,
+  ...READS.agileContext,
   ...READS.issueMetadata,
   ...READS.issues,
   ...READS.comment,

@@ -115,8 +115,7 @@ const REFERENCE = object({
   name: text(256),
   displayName: text(256),
 });
-const ISSUE = object(
-  {
+const ISSUE_FIELDS = {
     id: text(128),
     key: text(128),
     summary: text(255),
@@ -130,9 +129,16 @@ const ISSUE = object(
     labels: { type: "array", maxItems: 100, items: text(255) },
     created: text(64),
     updated: text(64),
-  },
+};
+const ISSUE = object(
+  ISSUE_FIELDS,
   ["id", "key", "summary", "browseUrl"],
 );
+export {
+  ISSUE as jiraAgileIssueResultSchema,
+  ISSUE_FIELDS as jiraAgileIssueFields,
+  REFERENCE as jiraAgileReferenceSchema,
+};
 const CONFIGURATION = object(
   {
     ...BOARD_FIELDS,
