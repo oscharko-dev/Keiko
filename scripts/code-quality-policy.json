@@ -8,28 +8,65 @@
       "disposition": "targeted-review",
       "migrationIssue": 3989,
       "reason": "Require measured cost and ownership/omission equivalence; accept fixed-state immutable copies when proven.",
-      "activeScopes": []
+      "activeScopes": [
+        "declarations",
+        "package:@oscharko-dev/keiko-git",
+        "package:@oscharko-dev/keiko-harness",
+        "package:@oscharko-dev/keiko-mcp",
+        "package:@oscharko-dev/keiko-memory-consolidation",
+        "package:@oscharko-dev/keiko-memory-governance",
+        "package:@oscharko-dev/keiko-memory-retrieval",
+        "package:@oscharko-dev/keiko-memory-vault",
+        "package:@oscharko-dev/keiko-sdk",
+        "fixtures",
+        "root-product"
+      ]
     },
     {
       "id": "anti-slop/no-reduce-accumulator-copy",
       "disposition": "production-required",
       "migrationIssue": 3915,
       "reason": "Reject needless type-evidence erasure and accumulator copies; preserve boundary input and fresh owned mutation.",
-      "activeScopes": ["production"]
+      "activeScopes": ["production", "documentary", "tests", "declarations", "fixtures"]
     },
     {
       "id": "anti-slop/no-chained-type-assertions",
       "disposition": "production-required",
       "migrationIssue": 3991,
       "reason": "Activate all production owners after their ordered assertion migration; a comment never replaces validation.",
-      "activeScopes": ["package:@oscharko-dev/keiko-contracts"]
+      "activeScopes": [
+        "package:@oscharko-dev/keiko-contracts",
+        "tooling",
+        "documentary",
+        "package:@oscharko-dev/keiko-connectors",
+        "declarations",
+        "package:@oscharko-dev/keiko-git",
+        "package:@oscharko-dev/keiko-mcp",
+        "package:@oscharko-dev/keiko-memory-capture",
+        "package:@oscharko-dev/keiko-memory-consolidation",
+        "package:@oscharko-dev/keiko-memory-governance",
+        "package:@oscharko-dev/keiko-memory-retrieval",
+        "package:@oscharko-dev/keiko-sdk",
+        "package:@oscharko-dev/keiko-verification",
+        "package:@oscharko-dev/keiko-workflows",
+        "package:@oscharko-dev/keiko-workspace",
+        "fixtures",
+        "root-product"
+      ]
     },
     {
       "id": "anti-slop/no-conditional-empty-object-spread",
       "disposition": "targeted-review",
       "migrationIssue": 3989,
       "reason": "Require measured cost and ownership/omission equivalence; accept fixed-state immutable copies when proven.",
-      "activeScopes": []
+      "activeScopes": [
+        "documentary",
+        "declarations",
+        "package:@oscharko-dev/keiko-memory-capture",
+        "package:@oscharko-dev/keiko-tool-catalog",
+        "fixtures",
+        "root-product"
+      ]
     },
     {
       "id": "anti-slop/no-known-value-widening",
@@ -43,28 +80,77 @@
       "disposition": "test-scoped",
       "migrationIssue": 3920,
       "reason": "Migrate internal interceptions to owned seams; qualify legitimate framework and hostile fixtures with real composition.",
-      "activeScopes": []
+      "activeScopes": ["production", "documentary", "declarations", "fixtures"]
     },
     {
       "id": "anti-slop/no-object-parameters",
       "disposition": "boundary-scoped",
       "migrationIssue": 3918,
       "reason": "Preserve truthful unknown input and runtime validation; migrate applicable domain APIs through their owning workstreams.",
-      "activeScopes": ["package:@oscharko-dev/keiko-contracts"]
+      "activeScopes": [
+        "package:@oscharko-dev/keiko-contracts",
+        "tooling",
+        "documentary",
+        "package:@oscharko-dev/keiko-connectors",
+        "package:@oscharko-dev/keiko-editor",
+        "declarations",
+        "package:@oscharko-dev/keiko-evaluations",
+        "package:@oscharko-dev/keiko-git",
+        "package:@oscharko-dev/keiko-harness",
+        "package:@oscharko-dev/keiko-memory-capture",
+        "package:@oscharko-dev/keiko-memory-consolidation",
+        "package:@oscharko-dev/keiko-memory-governance",
+        "package:@oscharko-dev/keiko-memory-retrieval",
+        "package:@oscharko-dev/keiko-memory-vault",
+        "package:@oscharko-dev/keiko-quality-intelligence",
+        "package:@oscharko-dev/keiko-sandbox",
+        "package:@oscharko-dev/keiko-sdk",
+        "package:@oscharko-dev/keiko-verification",
+        "package:@oscharko-dev/keiko-workflows",
+        "fixtures",
+        "root-product"
+      ]
     },
     {
       "id": "anti-slop/no-reflect-apply",
       "disposition": "production-required",
       "migrationIssue": 3915,
       "reason": "Reject needless type-evidence erasure and accumulator copies; preserve boundary input and fresh owned mutation.",
-      "activeScopes": ["production"]
+      "activeScopes": ["production", "documentary", "declarations", "fixtures"]
     },
     {
       "id": "anti-slop/no-reflect-get",
       "disposition": "boundary-scoped",
       "migrationIssue": 3918,
       "reason": "Preserve truthful unknown input and runtime validation; migrate applicable domain APIs through their owning workstreams.",
-      "activeScopes": ["package:@oscharko-dev/keiko-contracts"]
+      "activeScopes": [
+        "package:@oscharko-dev/keiko-contracts",
+        "tooling",
+        "documentary",
+        "package:@oscharko-dev/keiko-connectors",
+        "package:@oscharko-dev/keiko-editor",
+        "declarations",
+        "package:@oscharko-dev/keiko-evaluations",
+        "package:@oscharko-dev/keiko-evidence",
+        "package:@oscharko-dev/keiko-git",
+        "package:@oscharko-dev/keiko-harness",
+        "package:@oscharko-dev/keiko-local-knowledge",
+        "package:@oscharko-dev/keiko-mcp",
+        "package:@oscharko-dev/keiko-memory-capture",
+        "package:@oscharko-dev/keiko-memory-consolidation",
+        "package:@oscharko-dev/keiko-memory-governance",
+        "package:@oscharko-dev/keiko-memory-retrieval",
+        "package:@oscharko-dev/keiko-memory-vault",
+        "package:@oscharko-dev/keiko-model-gateway",
+        "package:@oscharko-dev/keiko-quality-intelligence",
+        "package:@oscharko-dev/keiko-sandbox",
+        "package:@oscharko-dev/keiko-sdk",
+        "package:@oscharko-dev/keiko-tool-catalog",
+        "package:@oscharko-dev/keiko-workflows",
+        "package:@oscharko-dev/keiko-workspace",
+        "fixtures",
+        "root-product"
+      ]
     },
     {
       "id": "anti-slop/no-runtime-typeof",
@@ -92,28 +178,91 @@
       "disposition": "boundary-scoped",
       "migrationIssue": 3918,
       "reason": "Preserve truthful unknown input and runtime validation; migrate applicable domain APIs through their owning workstreams.",
-      "activeScopes": ["package:@oscharko-dev/keiko-contracts"]
+      "activeScopes": [
+        "package:@oscharko-dev/keiko-contracts",
+        "tooling",
+        "documentary",
+        "declarations",
+        "package:@oscharko-dev/keiko-git",
+        "package:@oscharko-dev/keiko-harness",
+        "package:@oscharko-dev/keiko-mcp",
+        "package:@oscharko-dev/keiko-memory-capture",
+        "package:@oscharko-dev/keiko-memory-consolidation",
+        "package:@oscharko-dev/keiko-memory-governance",
+        "package:@oscharko-dev/keiko-memory-retrieval",
+        "package:@oscharko-dev/keiko-memory-vault",
+        "package:@oscharko-dev/keiko-sandbox",
+        "package:@oscharko-dev/keiko-sdk",
+        "package:@oscharko-dev/keiko-verification",
+        "package:@oscharko-dev/keiko-workflows",
+        "fixtures",
+        "root-product"
+      ]
     },
     {
       "id": "anti-slop/no-unknown-type-aliases",
       "disposition": "existing-equivalent",
       "migrationIssue": 3918,
       "reason": "Reuse Sonar simple-alias coverage and repair the scheduler; local aliases are not claimed equivalent.",
-      "activeScopes": []
+      "activeScopes": [
+        "tooling",
+        "documentary",
+        "tests",
+        "package:@oscharko-dev/keiko-activity-log",
+        "package:@oscharko-dev/keiko-cli",
+        "package:@oscharko-dev/keiko-connectors",
+        "package:@oscharko-dev/keiko-contracts",
+        "declarations",
+        "package:@oscharko-dev/keiko-evaluations",
+        "package:@oscharko-dev/keiko-evidence",
+        "package:@oscharko-dev/keiko-git",
+        "package:@oscharko-dev/keiko-harness",
+        "package:@oscharko-dev/keiko-local-knowledge",
+        "package:@oscharko-dev/keiko-mcp",
+        "package:@oscharko-dev/keiko-memory-capture",
+        "package:@oscharko-dev/keiko-memory-consolidation",
+        "package:@oscharko-dev/keiko-memory-governance",
+        "package:@oscharko-dev/keiko-memory-retrieval",
+        "package:@oscharko-dev/keiko-memory-vault",
+        "package:@oscharko-dev/keiko-model-gateway",
+        "package:@oscharko-dev/keiko-quality-intelligence",
+        "package:@oscharko-dev/keiko-sandbox",
+        "package:@oscharko-dev/keiko-sdk",
+        "package:@oscharko-dev/keiko-security",
+        "package:@oscharko-dev/keiko-server",
+        "package:@oscharko-dev/keiko-tool-catalog",
+        "package:@oscharko-dev/keiko-tools",
+        "package:@oscharko-dev/keiko-ui",
+        "package:@oscharko-dev/keiko-verification",
+        "package:@oscharko-dev/keiko-workflows",
+        "package:@oscharko-dev/keiko-workspace",
+        "fixtures",
+        "root-product"
+      ]
     },
     {
       "id": "anti-slop/no-widen-then-assert",
       "disposition": "production-required",
       "migrationIssue": 3915,
       "reason": "Reject needless type-evidence erasure and accumulator copies; preserve boundary input and fresh owned mutation.",
-      "activeScopes": ["production"]
+      "activeScopes": ["production", "documentary", "declarations", "fixtures"]
     },
     {
       "id": "anti-slop/require-safety-comment-for-type-assertion",
       "disposition": "production-required",
       "migrationIssue": 3991,
       "reason": "Activate all production owners after their ordered assertion migration; a comment never replaces validation.",
-      "activeScopes": ["package:@oscharko-dev/keiko-contracts"]
+      "activeScopes": [
+        "package:@oscharko-dev/keiko-contracts",
+        "tooling",
+        "documentary",
+        "declarations",
+        "package:@oscharko-dev/keiko-git",
+        "package:@oscharko-dev/keiko-memory-governance",
+        "package:@oscharko-dev/keiko-sdk",
+        "fixtures",
+        "root-product"
+      ]
     },
     {
       "id": "anti-slop-effect/no-manual-effect-error-tag",
@@ -160,7 +309,38 @@
       "disposition": "targeted-review",
       "migrationIssue": 3989,
       "reason": "Require measured cost and ownership/omission equivalence; accept fixed-state immutable copies when proven.",
-      "activeScopes": []
+      "activeScopes": [
+        "tooling",
+        "documentary",
+        "package:@oscharko-dev/keiko-activity-log",
+        "package:@oscharko-dev/keiko-cli",
+        "package:@oscharko-dev/keiko-connectors",
+        "package:@oscharko-dev/keiko-contracts",
+        "package:@oscharko-dev/keiko-editor",
+        "declarations",
+        "package:@oscharko-dev/keiko-evaluations",
+        "package:@oscharko-dev/keiko-evidence",
+        "package:@oscharko-dev/keiko-git",
+        "package:@oscharko-dev/keiko-harness",
+        "package:@oscharko-dev/keiko-mcp",
+        "package:@oscharko-dev/keiko-memory-capture",
+        "package:@oscharko-dev/keiko-memory-consolidation",
+        "package:@oscharko-dev/keiko-memory-governance",
+        "package:@oscharko-dev/keiko-memory-retrieval",
+        "package:@oscharko-dev/keiko-memory-vault",
+        "package:@oscharko-dev/keiko-model-gateway",
+        "package:@oscharko-dev/keiko-quality-intelligence",
+        "package:@oscharko-dev/keiko-sandbox",
+        "package:@oscharko-dev/keiko-sdk",
+        "package:@oscharko-dev/keiko-security",
+        "package:@oscharko-dev/keiko-tool-catalog",
+        "package:@oscharko-dev/keiko-tools",
+        "package:@oscharko-dev/keiko-ui",
+        "package:@oscharko-dev/keiko-verification",
+        "package:@oscharko-dev/keiko-workflows",
+        "fixtures",
+        "root-product"
+      ]
     }
   ],
   "responsibilities": [

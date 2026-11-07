@@ -162,6 +162,17 @@ three to stay below the duplication window is still refused (REVIEW-3918-015).
 A tree that matches a pull-request head whose full matrix already passed skips this job under the
 same reuse rule as the other gated jobs (ADR-0178).
 
+Rule activation follows the owner's #3991 decision: a rule is active in each scope where it had zero
+raw findings when #3991 activated it, in addition to the scopes it already had. Before that, five
+rules were active only in `package:@oscharko-dev/keiko-contracts`; that contracts-only scope no
+longer describes the policy. The four contracts boundary rules (no-runtime-typeof,
+no-unknown-parameters, no-unsafe-dictionary-type and no-known-value-widening) stay inactive under
+`pending-boundary-migration` (#4278), and the five retired Effect rules stay retired. A scope that
+consists only of production files is not listed separately when `production` is active. Policy
+validation keeps refusing a shrink, so an activated scope stays active. The engine refuses an active
+scope without files on the real repository. A hermetic test fixture writes its policy with only the
+scopes its own files certainly fall in.
+
 Local `npm run lint` builds the packages, runs the same three steps and then `npm run lint:typed`,
 the per-package ESLint run from #4182 plus the keiko-ui lint. Core quality runs only
 `npm run lint:typed`, after this job, so it does not repeat the qualification.

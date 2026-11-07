@@ -41,6 +41,7 @@ import {
   embeddedSemanticOptions,
   createCollectiveSemanticFixture,
 } from "./support/code-quality-responsibility-fixture.mjs";
+import { fixtureScopedPolicy } from "./support/code-quality-fixture.mjs";
 
 function executeCensusChild(root, ci) {
   const entry = new URL("../check-code-quality-policy.mjs", import.meta.url).href;
@@ -1366,7 +1367,7 @@ describe("actual policy entry reports responsibility incompleteness", () => {
   it("keeps v1 report shape and fails v2 enforcement despite existing proof paths and passing runtime controls", async () => {
     const own = await fixture();
     mkdirSync(join(own.root, "scripts"));
-    const v2 = responsibilityPolicy([responsibilityRecord()]);
+    const v2 = fixtureScopedPolicy(responsibilityPolicy([responsibilityRecord()]), own.root);
     const { responsibilities: ignored, ...v1 } = v2;
     expect(ignored).toHaveLength(1);
     v1.version = 1;

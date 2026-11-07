@@ -1,10 +1,19 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+} from "node:fs";
 import { devNull, tmpdir } from "node:os";
 import ts from "typescript";
 import { URL } from "node:url";
 import { dirname, join } from "node:path";
 import { NATIVE_EFFECT_RULES } from "../../lib/code-quality-policy.mjs";
+import { classifyPolicyPath, collectPolicyPaths } from "../../lib/code-quality-inventory.mjs";
 
 // Fixture Git ignores the developer's global and system configuration (hooks, excludes, signing)
 // and never climbs into a repository above the temporary root (REVIEW-3918-044).
@@ -105,18 +114,27 @@ function populateRuntimePolicyFixture(root, helper, linkage) {
       `export { maximum } from "${target}";`,
     );
   emitRuntimeFixture(root);
-  configureEnforcingPolicyFixture(root);
+  // Ignore the emitted output first, so the fixture policy sees the scopes the scan will see.
   writeFileSync(join(root, ".gitignore"), "**/dist/\n");
+  configureEnforcingPolicyFixture(root);
+}
+
+// The production rules with the five retired native Effect rules active again, as the historical
+// fixtures expect. Every activation scope is kept, so it is a baseline that matches production.
+export function historicalNativePolicyRules() {
+  const { rules } = JSON.parse(
+    readFileSync(new URL("../../code-quality-policy.json", import.meta.url)),
+  );
+  return rules.map((rule) => historicalNativeFixtureRule(rule));
 }
 
 export function fixtureOwnedPolicy(records = [], owners = ["alpha"]) {
-  const { upstream, runner, rules } = JSON.parse(
+  const { upstream, runner } = JSON.parse(
     readFileSync(new URL("../../code-quality-policy.json", import.meta.url)),
   );
   // The base fixture owns alpha, not every migrated production package. Keep package activations
   // only for declared fixture owners; global production and native-host guards remain intact.
-  const fixtureRules = rules.map((source) => {
-    const rule = historicalNativeFixtureRule(source);
+  const fixtureRules = historicalNativePolicyRules().map((rule) => {
     return {
       ...rule,
       activeScopes: rule.activeScopes.filter(
@@ -149,11 +167,62 @@ export function configureEnforcingPolicyFixture(root) {
         JSON.parse(readFileSync(join(root, "packages", entry.name, "package.json"), "utf8")).name,
     );
   mkdirSync(join(root, "scripts"), { recursive: true });
+  copyNativePolicyFixtureSources(root);
   writeFileSync(
     join(root, "scripts/code-quality-policy.json"),
-    JSON.stringify(fixtureOwnedPolicy([], owners)),
+    JSON.stringify(fixtureScopedPolicy(fixtureOwnedPolicy([], owners), root)),
   );
-  copyNativePolicyFixtureSources(root);
+}
+
+function fixtureWorkspacePackages(root) {
+  return readdirSync(join(root, "packages"), { withFileTypes: true })
+    .filter(
+      (entry) =>
+        entry.isDirectory() && existsSync(join(root, "packages", entry.name, "package.json")),
+    )
+    .map((entry) => ({
+      name: JSON.parse(readFileSync(join(root, "packages", entry.name, "package.json"), "utf8"))
+        .name,
+      directory: `packages/${entry.name}`,
+    }));
+}
+
+const FIXTURE_SOURCE_EXTENSION = /\.(?:[cm]?[jt]s|[jt]sx)$/u;
+
+// A path with no runtime home (documentation outside a package) keeps its source scope.
+function fixtureRuntimeScope(path, packages, sourceScope) {
+  try {
+    return classifyPolicyPath(path, packages, true).scope;
+  } catch (error) {
+    if (error.message === "unclassified-source") return sourceScope;
+    throw error;
+  }
+}
+
+// The scopes a hermetic fixture's own source files certainly fall in, plus `production` when one of
+// them is production source. The inventory reclassifies a test, declaration or documentary file as
+// runtime source once a package build ships it, so such a file counts for neither scope.
+export function fixtureContainedScopes(root) {
+  const packages = fixtureWorkspacePackages(root);
+  const scopes = new Set();
+  for (const path of collectPolicyPaths(root)) {
+    if (!FIXTURE_SOURCE_EXTENSION.test(path)) continue;
+    const source = classifyPolicyPath(path, packages);
+    if (fixtureRuntimeScope(path, packages, source.scope) !== source.scope) continue;
+    scopes.add(source.scope);
+    if (source.production) scopes.add("production");
+  }
+  return scopes;
+}
+
+// The engine refuses an active scope without files, and the real repository keeps that refusal. A
+// hermetic fixture holds only a few of the repository's scopes, so the policy it writes keeps each
+// rule active only in the scopes the fixture contains at that moment. It changes `policy` in place.
+export function fixtureScopedPolicy(policy, root) {
+  const contained = fixtureContainedScopes(root);
+  for (const rule of policy.rules)
+    rule.activeScopes = rule.activeScopes.filter((scope) => contained.has(scope));
+  return policy;
 }
 
 // Historical analyzer input only; the retired product owner is not restored in this checkout.

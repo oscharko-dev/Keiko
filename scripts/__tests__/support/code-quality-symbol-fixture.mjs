@@ -8,7 +8,10 @@ import {
   fixtureOwnedPolicy,
   copyNativePolicyFixtureSources,
   createPolicyFixtureRepository,
+  fixtureScopedPolicy,
 } from "./code-quality-fixture.mjs";
+
+const POLICY_PATH = "scripts/code-quality-policy.json";
 
 export function createSymbolFixture(
   includeNativeHost = false,
@@ -25,6 +28,7 @@ function populateSymbolFixture(root, includeNativeHost, prepare, additionalOwner
   if (includeNativeHost) copyNativePolicyFixtureSources(root);
   const put = (path, value) => {
     mkdirSync(join(root, path, ".."), { recursive: true });
+    if (path === POLICY_PATH && Array.isArray(value?.rules)) fixtureScopedPolicy(value, root);
     writeFileSync(join(root, path), typeof value === "string" ? value : JSON.stringify(value));
   };
   const options = {
