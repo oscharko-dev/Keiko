@@ -1157,6 +1157,35 @@ describe("ordinary Chat catalog read admission", () => {
     expect(await again("expired")).not.toMatchObject({ result: { status: "completed" } });
   });
 
+  it("slides the grant on each passing check, so model calls of nine minutes keep it current", async () => {
+    registerCurrentAuthority({
+      expiresAt: new Date(start + 3_600_000).toISOString(),
+      budget: {
+        maxRuntimeMs: 7_200_000,
+        maxToolCalls: 20,
+        maxPromptTokens: 10_000,
+        maxPatchBytes: 0,
+      },
+    });
+    deadlineSpan = 3_000_000;
+    const f = await catalogFixture(5);
+    const offered = f.binder.offer();
+    const again = (suffix: string): ReturnType<typeof dispatch> =>
+      dispatch(f, suffix, {}, "keiko.jira.projects", offered);
+    const minutes = (count: number): number => count * 60_000;
+    expect(await again("t0")).toMatchObject({ result: { status: "completed" } });
+    const issued = grants.findGrantedChatReadGrant(grantSubject());
+    now = start + minutes(9);
+    expect(await again("t9")).toMatchObject({ result: { status: "completed" } });
+    now = start + minutes(18);
+    expect(await again("t18")).toMatchObject({ result: { status: "completed" } });
+    expect(grants.findGrantedChatReadGrant(grantSubject())?.grantId).toBe(issued?.grantId);
+    expect(notifications).toBe(1);
+    // A gap longer than the lifetime lets the grant lapse: the next read needs a fresh consent.
+    now += ATLASSIAN_ACTION_APPROVAL_TTL_MS + 1;
+    expect(grants.findGrantedChatReadGrant(grantSubject())).toBeUndefined();
+  });
+
   it("leaves a pending grant to expire", () => {
     registerCurrentAuthority({ expiresAt: new Date(start + 3_600_000).toISOString() });
     const pending = requestJiraChatReadGrant(

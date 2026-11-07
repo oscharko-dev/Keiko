@@ -258,7 +258,7 @@ ports require that grant in every mode, re-resolve current authority before rese
 recheck grant/authority at each HTTP effect and again before publishing the read result.
 A server-accepted (full-access) read grant is the connection's consent, not a human decision: while
 a running invocation's effect guard proves the current authority, binding generations, subject and
-mode, a granted grant past half of its lifetime restarts its time, forward only and capped by the
+mode, a granted grant restarts its time on every passing check once 30 s have elapsed since its last start (sliding window), forward only and capped by the
 envelope expiry (`renewRunningReadGrant`). A long tool such as a requirements batch therefore
 outlives the ten-minute approval lifetime. A pending, rejected, revoked or expired grant is never
 renewed, and every hard denial still ends the invocation.
