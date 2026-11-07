@@ -120,6 +120,7 @@
     "keiko-connectors/jira-connection-verification",
     "keiko-connectors/jira-create-template-metadata",
     "keiko-connectors/jira-draft",
+    "keiko-connectors/jira-draft-placement",
     "keiko-connectors/jira-draft-stage-tool",
     "keiko-connectors/jira-draft-store",
     "keiko-connectors/jira-field-metadata",

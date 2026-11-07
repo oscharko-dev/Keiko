@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "1cf99718e1474f8eb5131e3dddff9993eaa88bea3bac8be12792d20204087b25",
+    "catalogDigest": "5d2d01972f0311528b4b2cc9e5b56c84df1ea81038ecdce6c384a1fa6238e4f6",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1345,14 +1345,17 @@
               "model-unavailable",
               "budget-unavailable",
               "template-unavailable",
-              "draft-unavailable"
+              "draft-unavailable",
+              "project-not-found",
+              "issue-type-not-found",
+              "no-usable-issue-type"
             ]
           },
           "stopReason": {
             "type": "string",
             "dataClass": "closed-enum",
             "required": false,
-            "values": ["stage-failed", "call-limit", "model-failed", "cancelled"]
+            "values": ["stage-failed", "call-limit", "model-failed", "deadline", "cancelled"]
           },
           "requirementCount": {
             "type": "integer",
@@ -1430,8 +1433,8 @@
         "failureClasses": ["atlassian-action-execution"],
         "proofIds": ["atlassian.jira-draft-batch.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraDraftBatchActivity.ts:92",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraDraftBatchActivity.ts:217"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraDraftBatchActivity.ts:96",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraDraftBatchActivity.ts:225"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2808,7 +2811,7 @@
         "proofIds": ["chat.request.compatibility-retry.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/openai-adapter.ts:177",
-        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:2602"]
+        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:2672"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2899,7 +2902,7 @@
         "proofIds": ["chat.request.dispatch.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/openai-adapter.ts:124",
-        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:477"]
+        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:493"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -3086,8 +3089,8 @@
         "failureClasses": ["gateway-stream-read"],
         "proofIds": ["chat.response.streamed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/openai-adapter.ts:321",
-        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:2210"]
+        "registrationSite": "packages/keiko-model-gateway/src/openai-adapter.ts:337",
+        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:2239"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -25175,8 +25178,8 @@
         "failureClasses": ["gateway-tool-arguments"],
         "proofIds": ["gateway.tool-arguments.redacted.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/openai-adapter.ts:386",
-        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:2188"]
+        "registrationSite": "packages/keiko-model-gateway/src/openai-adapter.ts:402",
+        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:2217"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -110754,7 +110757,7 @@
     {
       "op": "<dynamic>",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:2342",
+      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:2371",
       "package": "keiko-model-gateway"
     },
     {
@@ -110784,7 +110787,7 @@
     {
       "op": "chat.response.streamed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:324",
+      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:340",
       "package": "keiko-model-gateway"
     },
     {
@@ -111066,7 +111069,7 @@
     {
       "op": "gateway.tool-arguments.redacted",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:389",
+      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:405",
       "package": "keiko-model-gateway"
     },
     {
@@ -111932,7 +111935,7 @@
     {
       "op": "atlassian.jira-draft-batch",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraDraftBatchActivity.ts:95",
+      "site": "packages/keiko-server/src/atlassian/jiraDraftBatchActivity.ts:99",
       "package": "keiko-server"
     },
     {
@@ -112157,7 +112160,7 @@
     {
       "op": "chat.tool-turn.batch-progress",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-tool-turn.ts:662",
+      "site": "packages/keiko-server/src/chat-tool-turn.ts:681",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
