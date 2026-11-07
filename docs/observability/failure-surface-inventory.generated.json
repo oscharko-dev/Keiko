@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "7b2a0fcd8888477b3220d0bfa04451c3f2b146a73f2fc2e099073c341b5caa08"
+    "catalogDigest": "aaf5bad3c6a1eed8ab2a1dffa6955eba4a14b5f313d31fc6283e4bb101a11cab"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -71,10 +71,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 646,
-    "proofCount": 668,
-    "resolvedProofCount": 668,
-    "failureClassCount": 390,
+    "operationCount": 653,
+    "proofCount": 675,
+    "resolvedProofCount": 675,
+    "failureClassCount": 392,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -583,6 +583,9 @@
         "memory.embedding.store-rejected",
         "memory.explicit.forget",
         "memory.explicit.remember",
+        "memory.learn.dropped",
+        "memory.learn.extraction",
+        "memory.learn.relation",
         "repository.fingerprint-diff.completed",
         "search.answer.assessed",
         "search.citations.reconciled",
@@ -782,6 +785,10 @@
         "portable.windows-authenticode.system-binary-refused",
         "security.fs.atomic-rename-failed",
         "security.fs.atomic-rename-retried",
+        "security.java-parser.unavailable",
+        "security.java-parser.worker-recycled",
+        "security.java-parser.worker-retired",
+        "security.java-parser.worker-started",
         "security.keychain.fallback",
         "security.keychain.withheld",
         "security.log.sink-failed",
@@ -1118,6 +1125,7 @@
     "memory-audit-state-cache": ["lifecycle-crash.dependency-failure"],
     "memory-capture-novelty": ["memory-knowledge.dependency-failure"],
     "memory-explicit-statement": ["memory-knowledge.dependency-failure"],
+    "memory-learned-facts": ["memory-knowledge.loss"],
     "memory-embedding-invalidation": ["memory-knowledge.dependency-failure"],
     "memory-embedding-request": ["memory-knowledge.dependency-failure"],
     "memory-embedding-storage": ["memory-knowledge.rejection"],
@@ -1161,6 +1169,7 @@
     "runtime-git-identity": ["editor-delivery.dependency-failure"],
     "runtime-shutdown": ["lifecycle-crash.crash"],
     "security-atomic-publish": ["runtime-packages.dependency-failure"],
+    "security-java-parse-bound": ["runtime-packages.dependency-failure"],
     "security-keychain-access": ["runtime-packages.dependency-failure"],
     "security-vault-delete": ["runtime-packages.dependency-failure"],
     "security-vault-key-resolution": ["runtime-packages.dependency-failure"],
@@ -2654,6 +2663,9 @@
     "memory.embedding.store-rejected.line": ["packages/keiko-server/src/memory-embedding.test.ts"],
     "memory.explicit.forget.line": ["packages/keiko-server/src/memory-capture-autonomy.test.ts"],
     "memory.explicit.remember.line": ["packages/keiko-server/src/memory-capture-autonomy.test.ts"],
+    "memory.learn.dropped.line": ["packages/keiko-server/src/memory-learned-facts.test.ts"],
+    "memory.learn.extraction.line": ["packages/keiko-server/src/memory-learned-facts.test.ts"],
+    "memory.learn.relation.line": ["packages/keiko-server/src/memory-learned-facts.test.ts"],
     "native-file-dialog.selection.projected.counts": [
       "packages/keiko-server/src/native-file-dialog/route.test.ts"
     ],
@@ -2874,6 +2886,16 @@
     ],
     "security.fs.atomic-rename-retried.attempts": [
       "packages/keiko-security/src/fs-atomic-rename.test.ts"
+    ],
+    "security.java-parser.unavailable.line": ["packages/keiko-security/src/redaction-java.test.ts"],
+    "security.java-parser.worker-recycled.line": [
+      "packages/keiko-security/src/redaction-java.test.ts"
+    ],
+    "security.java-parser.worker-retired.line": [
+      "packages/keiko-security/src/redaction-java.test.ts"
+    ],
+    "security.java-parser.worker-started.line": [
+      "packages/keiko-security/src/redaction-java.test.ts"
     ],
     "security.keychain.fallback.bounded-exit": [
       "packages/keiko-security/src/macos-keychain.test.ts"

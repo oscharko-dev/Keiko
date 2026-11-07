@@ -28,9 +28,46 @@ import { stripUnsafeFormatChars } from "./assertions.js";
 export const REQUIREMENT_EXCERPT_MAX_CHARS = 96 as const;
 
 const ELLIPSIS = "…";
-const EMAIL_ADDRESS_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu;
-const redactExcerptText = (value: string): string =>
-  redact(value).replace(EMAIL_ADDRESS_PATTERN, REDACTION_PLACEHOLDER);
+
+// Replaces every e-mail address, with exactly the matches of
+// /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu, in linear time. That pattern, used directly,
+// read the rest of a text such as "1.1.1." from every position before finding no "@": quadratic
+// in a requirement text of any length. Here each address is found from its "@": the local part is
+// read back to the previous match or to a character it cannot hold, so no character is read for
+// two "@"s, and the host is matched once, anchored behind the "@".
+const LOCAL_PART_CHARACTER = /^[A-Z0-9._%+-]$/iu;
+const WORD_CHARACTER = /^\w$/iu;
+const EMAIL_HOST = /[A-Z0-9.-]+\.[A-Z]{2,}\b/iuy;
+
+function isWordCharacterAt(text: string, index: number): boolean {
+  return index >= 0 && index < text.length && WORD_CHARACTER.test(text.charAt(index));
+}
+
+// Where the address ending at the "@" at `at` starts, or -1: the first word boundary in the run
+// of local-part characters before it, as `\b[…]+@` finds it.
+function localPartStart(text: string, at: number, floor: number): number {
+  let start = at;
+  while (start > floor && LOCAL_PART_CHARACTER.test(text.charAt(start - 1))) start -= 1;
+  for (let index = start; index < at; index += 1) {
+    if (isWordCharacterAt(text, index - 1) !== isWordCharacterAt(text, index)) return index;
+  }
+  return -1;
+}
+
+function redactEmailAddresses(text: string): string {
+  let redacted = "";
+  let copied = 0;
+  for (let at = text.indexOf("@"); at !== -1; at = text.indexOf("@", at + 1)) {
+    const start = localPartStart(text, at, copied);
+    EMAIL_HOST.lastIndex = at + 1;
+    if (start === -1 || !EMAIL_HOST.test(text)) continue;
+    redacted += `${text.slice(copied, start)}${REDACTION_PLACEHOLDER}`;
+    copied = EMAIL_HOST.lastIndex;
+  }
+  return `${redacted}${text.slice(copied)}`;
+}
+
+const redactExcerptText = (value: string): string => redactEmailAddresses(redact(value));
 
 /**
  * Build a short, redacted, single-line excerpt of an atom's canonical text. Returns `undefined`

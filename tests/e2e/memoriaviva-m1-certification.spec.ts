@@ -275,7 +275,7 @@ async function certifyModeCaptures(
   await setMode(context.page, "governed-assist");
   const governed = await sendMeasuredTurn(
     context,
-    "M1_GOVERNED_CAPTURE establishes the fixture release cadence.",
+    "M1_GOVERNED_CAPTURE: I use a governed release cadence.",
     "M1_GOVERNED_CAPTURE",
     "governed-assist",
     "proposed",
@@ -287,7 +287,7 @@ async function certifyModeCaptures(
   await setMode(context.page, "supervised-coding");
   const supervised = await sendMeasuredTurn(
     context,
-    "M1_SUPERVISED_CAPTURE establishes the certified-supervised detail.",
+    "M1_SUPERVISED_CAPTURE: I keep the certified-supervised detail in a weekly cadence.",
     "M1_SUPERVISED_CAPTURE",
     "supervised-coding",
     "auto-accepted",
@@ -298,7 +298,7 @@ async function certifyModeCaptures(
   await setMode(context.page, "autonomous-delivery");
   await sendMeasuredTurn(
     context,
-    "M1_AUTONOMOUS_CAPTURE establishes a silent-learn fact.",
+    "M1_AUTONOMOUS_CAPTURE: I prefer autonomous release notes.",
     "M1_AUTONOMOUS_CAPTURE",
     "autonomous-delivery",
     "auto-accepted",
@@ -331,7 +331,8 @@ async function certifyVoicePath(
     data: {
       chatId: context.chat.id,
       projectPath: context.chat.projectPath,
-      content: "Recall the certified-supervised detail, then note M1_VOICE_CAPTURE.",
+      content:
+        "Recall the certified-supervised detail. M1_VOICE_CAPTURE: I prefer voice-first summaries.",
       memory: {
         enabled: true,
         mode: "autonomous-delivery",
@@ -398,12 +399,12 @@ async function certifyCorrectionMetrics(
   const samples = [
     {
       marker: "M1_REPEAT_CORRECTION",
-      text: "The fixture repeats a correction to an existing detail. M1_REPEAT_CORRECTION",
+      text: "M1_REPEAT_CORRECTION: I run the nightly build on Mondays.",
       repeated: true,
     },
     {
       marker: "M1_FIRST_CORRECTION",
-      text: "The fixture supplies a first correction to a build detail. M1_FIRST_CORRECTION",
+      text: "M1_FIRST_CORRECTION: I sign every release tag.",
       repeated: false,
     },
   ] as const;

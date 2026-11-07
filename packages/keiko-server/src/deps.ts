@@ -131,6 +131,7 @@ import {
 } from "@oscharko-dev/keiko-evidence";
 import {
   bindSecurityLogCorrelation,
+  installJavaParserLogSink,
   keikoApiKeySecretValues,
   redact,
   redactContent,
@@ -6846,6 +6847,8 @@ function buildRedactionProjections(
   egress: GatewayConfig["egress"],
   correlationId: string,
 ): RedactionProjections {
+  // Redaction parses Java in a bounded worker; its starts and retirements reach this log.
+  installJavaParserLogSink(processServerLogSink());
   const redactString = runtimeRedactString(env, runtimeConfig, egress);
   const contentPolicy = resolveLoggedContentPolicy(env, correlationId);
   const contentRedactString = runtimeContentRedactString(

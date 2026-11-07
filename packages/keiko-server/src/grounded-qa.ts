@@ -2280,6 +2280,9 @@ interface PreparedGroundedAsk {
   readonly commitTurnId?: string | undefined;
   readonly scopeIdentity?: string | undefined;
   readonly turnIdentityContent?: string | undefined;
+  // What the person wrote, frozen before a long prompt is compacted: memory learns from and
+  // recalls for these words, never for the model-written summary that replaces them in the answer.
+  readonly spokenContent?: string | undefined;
   readonly memoryContext?: ConversationMemoryRuntimeContext | undefined;
   readonly userMessage?: ChatMessage | undefined;
   readonly memory?: GroundedMemoryPreparation | undefined;
@@ -2353,6 +2356,15 @@ function groundedTurnIdentityContent(
   });
 }
 
+// No fallback to the prompt text: after compaction that is the model's summary, and memory must
+// never learn or recall from it.
+function groundedSpokenContent(prepared: PreparedGroundedAsk): string {
+  if (prepared.spokenContent === undefined) {
+    throw new Error("Grounded spoken content was not frozen before memory use.");
+  }
+  return prepared.spokenContent;
+}
+
 function frozenGroundedTurnIdentity(prepared: PreparedGroundedAsk): string {
   if (prepared.turnIdentityContent === undefined) {
     throw new Error("Grounded turn identity was not frozen before admission.");
@@ -2379,6 +2391,7 @@ function freezeGroundedTurn(
     input,
     scopeIdentity,
     memoryContext,
+    spokenContent: input.content,
     turnIdentityContent: groundedTurnIdentityContent(
       input,
       canonicalChatTurnGroundingScopeIdentity(prepared.chat),
@@ -3309,7 +3322,7 @@ async function prepareGroundedMemory(
       {
         chatId: prepared.chat.id,
         projectPath: prepared.chat.projectPath,
-        content: prepared.input.content,
+        content: groundedSpokenContent(prepared),
         modelId: prepared.input.modelId,
         documentContext: [],
         attachments: [],
@@ -3761,11 +3774,12 @@ function groundedCanonicalMemoryRequest(
     chatId: prepared.chat.id,
     projectPath: prepared.chat.projectPath,
     messages: [
-      { role: "user", content: prepared.input.content },
+      { role: "user", content: groundedSpokenContent(prepared) },
       { role: "assistant", content: assistantContent },
     ],
     modelId: prepared.input.modelId,
     memory: prepared.input.memory,
+    ...(prepared.userMessage === undefined ? {} : { sourceMessageId: prepared.userMessage.id }),
     ...(prepared.input.clientTurnId === undefined
       ? {}
       : { clientTurnId: prepared.input.clientTurnId }),
@@ -3797,7 +3811,7 @@ async function attachGroundedMemory(
       ),
       memoryPreparation.context,
       {
-        retrievalContent: prepared.input.content,
+        retrievalContent: groundedSpokenContent(prepared),
         precomputedMemory: memoryPreparation.result,
         correlationId: prepared.correlationId,
       },

@@ -18,11 +18,16 @@
 import type { MemorySensitivity } from "@oscharko-dev/keiko-contracts/memory";
 import { looksLikeEuDePii } from "./secret-patterns.js";
 
-// Linear single-character-class patterns; no nesting. The phone-shape pattern accepts an optional
+// Single-character-class patterns; no nesting. The phone-shape pattern accepts an optional
 // leading +, then 7–14 digits with separators (space, dash, dot) so the total digit run isn't
 // long enough to trip the secret scanner's PAN detector. The email pattern is a conservative
 // local@host shape — anything resembling a routable address triggers `confidential`.
-const EMAIL_RE = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/;
+//
+// The email pattern starts at the "@" and checks the local part behind it: written as
+// `\b[local]+@host`, it read the rest of a text such as "1.1.1." from every position before
+// finding no "@", quadratic in the text. A local part ends at an "@" and a host cannot contain
+// one, so each run is read once. It accepts exactly what the earlier form accepted.
+const EMAIL_RE = /@(?<=\b[A-Za-z0-9._%+-]+@)[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/;
 const PHONE_RE = /(?:\+\d[\d\s.-]{6,14}\d|\b\d[\d .-]*[ .-]\d[\d .-]{4,12}\d\b)/;
 const CONFIDENTIAL_MARKER_PATTERNS: readonly RegExp[] = [
   /\b(?:confidential|internal(?=\s+only|[:\s])|private(?=[:\s]))\b/i,

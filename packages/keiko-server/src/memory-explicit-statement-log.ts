@@ -20,7 +20,15 @@ const MEMORY_EXPLICIT_OPERATION_BASE = {
   failureClasses: ["memory-explicit-statement"],
 } as const;
 
-const MEMORY_EXPLICIT_FORGET_OUTCOMES = ["forgotten", "ambiguous", "refused", "failed"] as const;
+// `not-stored`: a forget that goes on by asking for the answer ("Forget the formatting, just give me
+// the answer") named nothing stored, so the turn forgot nothing and asked nothing (ADR-0146).
+const MEMORY_EXPLICIT_FORGET_OUTCOMES = [
+  "forgotten",
+  "ambiguous",
+  "refused",
+  "failed",
+  "not-stored",
+] as const;
 
 export type MemoryExplicitForgetOutcome = (typeof MEMORY_EXPLICIT_FORGET_OUTCOMES)[number];
 

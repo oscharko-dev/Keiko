@@ -1,6 +1,7 @@
 import {
   explicitStatementKind,
   isMemoryForgetReference,
+  sameFactWord,
   type CaptureMemoryResolver,
 } from "@oscharko-dev/keiko-memory-capture";
 import type {
@@ -9,7 +10,7 @@ import type {
   MemoryScope,
   MemoryStatus,
 } from "@oscharko-dev/keiko-contracts/memory";
-import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import type { MemoryConversationTouch, MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 
 const TARGETABLE_STATUSES: readonly MemoryStatus[] = [
   "accepted",
@@ -115,6 +116,8 @@ export interface MemoryForgetResolverContext {
   // When the turn before this statement began. "Das" means what that turn left behind. Read only
   // for a bare reference, so an ordinary turn costs no history read.
   readonly lastTurnStartedAt: () => number | undefined;
+  // The person's message of that turn, which a learned fact names as its source.
+  readonly previousMessageId: () => string | undefined;
   // What the person said in that turn.
   readonly previousStatement: () => string | undefined;
 }
@@ -127,26 +130,44 @@ function lastTurnReachedMemory(statement: string | undefined): boolean {
   return statement.trimEnd().endsWith("?") || explicitStatementKind(statement) === "remember";
 }
 
-const MIN_SHARED_PREFIX_CHARS = 4;
-const MAX_INFLECTION_CHARS = 3;
+// Whether this conversation's last turn touched the memory. Each chat keeps its own latest touch, so
+// another chat or maintenance touching it says nothing about "das" and cannot erase this chat's own
+// touch. The person saying the fact again counts on its own, an answer drawing on it only after a
+// turn about memory.
+function reachedInLastTurn(
+  touch: MemoryConversationTouch | undefined,
+  startedAt: number,
+  answerCounts: boolean,
+): boolean {
+  if (touch === undefined) return false;
+  const confirmed = (touch.confirmedAt ?? -1) >= startedAt;
+  const used = (touch.usedAt ?? -1) >= startedAt;
+  return confirmed || (answerCounts && used);
+}
 
-// A forget acts without a question, so a word must really be the same word: "Tabelle" reaches
-// "Tabellen", and "Java" does not reach "JavaScript".
-function sameWord(a: string, b: string): boolean {
-  if (a === b) return true;
-  const [shorter, longer] = a.length < b.length ? [a, b] : [b, a];
-  return (
-    shorter.length >= MIN_SHARED_PREFIX_CHARS &&
-    longer.length - shorter.length <= MAX_INFLECTION_CHARS &&
-    longer.startsWith(shorter)
-  );
+// What the last turn left behind. A learned fact names the turn it came from, so a slow capture of
+// an earlier turn that finishes later is not "das". Only an explicit record without that provenance
+// falls back to its creation time.
+function leftByLastTurn(
+  record: MemoryRecord,
+  previousMessageId: string | undefined,
+  startedAt: number,
+): boolean {
+  const sources = record.provenance.sourceMessageIds;
+  if (sources !== undefined) {
+    return previousMessageId !== undefined && sources.includes(previousMessageId);
+  }
+  // A learned fact is written whenever learning runs, so its time says nothing about which turn it
+  // came from; without its source message it is no "das". An explicit record is written by its turn.
+  return record.provenance.evidenceSpan === undefined && record.createdAt >= startedAt;
 }
 
 function namesRecord(target: string, record: MemoryRecord): boolean {
   const body = tokenize(`${record.body} ${record.tags.join(" ")}`);
   const words = tokenize(target);
   return (
-    words.length > 0 && words.every((word) => body.some((candidate) => sameWord(word, candidate)))
+    words.length > 0 &&
+    words.every((word) => body.some((candidate) => sameFactWord(word, candidate)))
   );
 }
 
@@ -165,19 +186,16 @@ function referredRecords(
   const lastTurnStartedAt = context.lastTurnStartedAt();
   // No earlier turn left anything behind, so an older record of this conversation is not "das".
   if (lastTurnStartedAt === undefined) return [];
-  const left = ofConversation.filter((record) => record.createdAt >= lastTurnStartedAt);
-  const statement = context.previousStatement();
-  // The person said a stored fact again and it was folded into that memory: "das" is that memory,
-  // or the forget would be reported while the fact stays.
-  const said = (record: MemoryRecord): boolean =>
-    statement !== undefined && namesRecord(statement, record);
-  const anyTouched = lastTurnReachedMemory(statement);
-  const stats = vault.getAccessStats(records.map((record) => record.id));
+  const previousMessageId = context.previousMessageId();
+  const left = ofConversation.filter((record) =>
+    leftByLastTurn(record, previousMessageId, lastTurnStartedAt),
+  );
+  const answerCounts = lastTurnReachedMemory(context.previousStatement());
+  const touches = vault.getConversationTouches(context.conversationId);
   const reached = records.filter(
     (record) =>
       !left.includes(record) &&
-      (anyTouched || said(record)) &&
-      (stats.get(record.id)?.lastAccessedAt ?? 0) >= lastTurnStartedAt,
+      reachedInLastTurn(touches.get(record.id), lastTurnStartedAt, answerCounts),
   );
   return [...left, ...reached];
 }

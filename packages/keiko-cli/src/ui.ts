@@ -1845,6 +1845,7 @@ async function startUiServer(options: StartUiServerOptions): Promise<void> {
   });
   applyServerTimeouts(server);
   await listen(server, parsed.port);
+  launch.loadedServer?.prewarmJavaParserWorker();
   const exit = armExitEvidence(server, io, launch, stateDir);
   await reconcileAfterListen({ ...recoveryContext, current: recoveryCurrent, server });
   if (recoveryCurrent !== undefined) readiness.open = true;

@@ -111,7 +111,7 @@ import {
   conversationFusionMode,
   semanticRetrievalGateForText,
 } from "./memory-retrieval-signals.js";
-import { reinforcementAccessIdsForAssistantUse } from "./memory-reinforcement.js";
+import { memoriesUsedInAnswer } from "./memory-answer-use.js";
 import {
   awaitAnyInitializedConversationReadyChatModel,
   awaitInitializedConversationReadiness,
@@ -189,6 +189,7 @@ import {
   persistExplicitStatement,
   previousUserMessage,
   refusedCandidateAction,
+  recordForgetNotStored,
   rejectedActionFromOutcome,
   type ExplicitStatementContext,
   type ExplicitStatementPersistence,
@@ -1488,12 +1489,13 @@ export function recordConversationMemoryUse(
   deps: UiHandlerDeps,
   memory: ConversationMemoryResultWire,
   assistantText: string,
+  context: ConversationMemoryRuntimeContext | undefined,
 ): void {
   const vault = deps.memoryVault;
-  if (vault === undefined || memory.context.memories.length === 0) return;
-  const accessedIds = reinforcementAccessIdsForAssistantUse(memory.context.memories, assistantText);
-  if (accessedIds.length > 0) {
-    vault.recordAccess(accessedIds, Date.now());
+  if (vault === undefined || context === undefined || memory.context.memories.length === 0) return;
+  const usedIds = memoriesUsedInAnswer(memory.context.memories, assistantText);
+  if (usedIds.length > 0) {
+    vault.recordUse(usedIds, Date.now(), context.conversationId);
   }
 }
 
@@ -1736,11 +1738,13 @@ function captureMemoryActions(
           scopes: conversationMemoryScopes(context),
           conversationId: context.conversationId,
           lastTurnStartedAt: () => previousMessage()?.timestamp,
+          previousMessageId: () => previousMessage()?.id,
           previousStatement: () => previousMessage()?.content,
         }),
       }),
     },
   );
+  recordForgetNotStored(request.content, outcomes, correlationId);
   const mode = resolveMemoryCaptureAutonomyMode(deps, request.memory.mode);
   const surface = request.memory.surface ?? "desktop";
   return captureActionsFromOutcomes(
@@ -1800,15 +1804,15 @@ function runPostCommitMemoryEffect(
 
 export function runPostCommitConversationMemorySideEffects(
   deps: UiHandlerDeps,
-  request: SendDesktopChatRequest,
+  request: SendDesktopChatRequest & { readonly sourceMessageId?: string },
   context: ConversationMemoryRuntimeContext | undefined,
   modelId: string,
   memory: ConversationMemoryResultWire,
   assistantText: string,
   correlationId: string,
 ): void {
-  runPostCommitMemoryEffect(deps, correlationId, "chat.memory.reinforcement", () => {
-    recordConversationMemoryUse(deps, memory, assistantText);
+  runPostCommitMemoryEffect(deps, correlationId, "chat.memory.answer-use", () => {
+    recordConversationMemoryUse(deps, memory, assistantText, context);
   });
   if (context === undefined) return;
   runPostCommitMemoryEffect(deps, correlationId, "chat.memory.salience", () => {
@@ -2847,7 +2851,7 @@ function commitBufferedTurn(
   );
   runPostCommitConversationMemorySideEffects(
     deps,
-    request,
+    { ...request, sourceMessageId: result.userMessage.id },
     memoryContext,
     modelId,
     memory,
@@ -4074,6 +4078,8 @@ export interface CanonicalTurnMemoryRequest {
   readonly messages: readonly CanonicalTurnMemoryMessage[];
   readonly modelId: string | undefined;
   readonly memory: ParsedConversationMemoryRequest | undefined;
+  // The stored id of the request's one user message, when the caller committed it.
+  readonly sourceMessageId?: string | undefined;
 }
 
 function canonicalTurnCombinedText(messages: readonly CanonicalTurnMemoryMessage[]): string {
@@ -4124,10 +4130,12 @@ function canonicalMessageMemoryActions(
         scopes,
         conversationId: context.conversationId,
         lastTurnStartedAt: () => previousMessage()?.timestamp,
+        previousMessageId: () => previousMessage()?.id,
         previousStatement,
       }),
     }),
   );
+  recordForgetNotStored(message.content, outcomes, correlationId);
   return captureActionsFromOutcomes(
     outcomes,
     deps,
@@ -4288,6 +4296,26 @@ function canonicalTurnSaliencePairs(
   return pairs;
 }
 
+// The stored row of the person's turn, so a fact learned from a canonical turn names its source like
+// any other learned fact. A committed id the caller passes wins: a repeated sentence has many rows.
+function sourceMessageOf(
+  deps: UiHandlerDeps,
+  request: CanonicalTurnMemoryRequest,
+  content: string,
+  conversationId: string,
+): { readonly sourceMessageId?: string } {
+  const users = request.messages.filter((message) => message.role === "user");
+  if (request.sourceMessageId !== undefined && users.length === 1) {
+    return { sourceMessageId: request.sourceMessageId };
+  }
+  const messages = deps.store.listMessages(conversationId);
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const row = messages[index];
+    if (row?.role === "user" && row.content === content) return { sourceMessageId: row.id };
+  }
+  return {};
+}
+
 function scheduleCanonicalTurnSalienceCapture(
   deps: UiHandlerDeps,
   request: CanonicalTurnMemoryRequest,
@@ -4304,6 +4332,7 @@ function scheduleCanonicalTurnSalienceCapture(
       {
         content: pair.userText,
         memory: request.memory,
+        ...sourceMessageOf(deps, request, pair.userText, context.conversationId),
       },
       context,
       modelId,
@@ -4323,8 +4352,8 @@ export function runPostCommitCanonicalTurnMemorySideEffects(
   assistantText: string,
   correlationId: string,
 ): void {
-  runPostCommitMemoryEffect(deps, correlationId, "grounded.memory.reinforcement", () => {
-    recordConversationMemoryUse(deps, memory, assistantText);
+  runPostCommitMemoryEffect(deps, correlationId, "grounded.memory.answer-use", () => {
+    recordConversationMemoryUse(deps, memory, assistantText, context);
   });
   runPostCommitMemoryEffect(deps, correlationId, "grounded.memory.salience", () => {
     scheduleCanonicalTurnSalienceCapture(deps, request, context, modelId, correlationId);

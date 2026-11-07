@@ -80,6 +80,39 @@ describe("buildDevBffEnv", () => {
     expect(env.KEIKO_MEMORY_DIR).toBe(join(stateDir, "memory"));
   });
 
+  // #4212: without a configured evidence directory the BFF fell back to `./.keiko/evidence` in the
+  // checkout, so dev BFFs with different state directories shared one memory audit. It now lives
+  // inside the state, as under `keiko ui`, and a configured one is left alone.
+  it.each([
+    ["absent", {}, undefined],
+    ["empty", { KEIKO_EVIDENCE_DIR: "" }, undefined],
+    ["configured", { KEIKO_EVIDENCE_DIR: "/custom/evidence" }, "/custom/evidence"],
+    ["relative", { KEIKO_EVIDENCE_DIR: "custom/evidence" }, "custom/evidence"],
+  ])(
+    "keeps the evidence directory inside stateDir when it is %s",
+    (_label, processEnv, expected) => {
+      const repoRoot = tempRepoRoot();
+      const stateDir = join(repoRoot, ".keiko", "dev");
+      const env = buildDevBffEnv({ repoRoot, processEnv, stateDir });
+      expect(env.KEIKO_EVIDENCE_DIR).toBe(expected ?? join(stateDir, "evidence"));
+    },
+  );
+
+  it("takes the evidence directory a repo-local .env configures", () => {
+    const repoRoot = tempRepoRoot();
+    writeFileSync(join(repoRoot, ".env"), "KEIKO_EVIDENCE_DIR=/from-dotenv/evidence\n");
+    const stateDir = join(repoRoot, ".keiko", "dev");
+    const env = buildDevBffEnv({ repoRoot, processEnv: {}, stateDir });
+    expect(env.KEIKO_EVIDENCE_DIR).toBe("/from-dotenv/evidence");
+  });
+
+  it("gives two state directories two evidence directories", () => {
+    const repoRoot = tempRepoRoot();
+    const first = buildDevBffEnv({ repoRoot, processEnv: {}, stateDir: join(repoRoot, "a") });
+    const second = buildDevBffEnv({ repoRoot, processEnv: {}, stateDir: join(repoRoot, "b") });
+    expect(first.KEIKO_EVIDENCE_DIR).not.toBe(second.KEIKO_EVIDENCE_DIR);
+  });
+
   it("keeps an already-set KEIKO_UI_DATA_DIR/KEIKO_MEMORY_DIR instead of overriding it", () => {
     const repoRoot = tempRepoRoot();
     const stateDir = join(repoRoot, ".keiko", "dev");
