@@ -128,6 +128,29 @@ The ledger started empty at `7bbca2e34`; #4145 adds no entry.
 - The baseline on the `dev` snapshot `7bbca2e34` was 46,618 findings. Epic workstreams prune the
   register; #3991 removes it at zero and activates full enforcement.
 
+## Responsibility qualification
+
+#3991 restores the hosted qualification that #4165 removed. The required `ci` context needs the
+`code-quality-policy` job, and Core quality waits for it. The job runs on `ubuntu-24.04-arm` once
+with Node 24.18.0 (and a 12288 MiB heap) and once with Node 26.8.1. Each leg runs these three
+steps in order, with no condition and no `continue-on-error`:
+
+```bash
+npm run check:code-quality-policy:cli-smoke   # bounded default CLI fixture
+npm run check:code-quality-policy:repository  # complete current-subject qualification
+npm run check:code-quality-policy:raw-reader  # the registered raw own-property reader
+```
+
+The repository step runs `check-code-quality-policy.mjs --qualify-responsibilities` over the whole
+repository. It passes only when every registered responsibility record is structurally ready, its
+declared proof assertions pass in one fresh execution, and no active rule keeps a violation after
+those records adapt their findings. The raw-reader step qualifies the `ownField` reader on its own.
+Its producer is `packages/keiko-contracts/src/contract-validation-primitives.ts`, which the public
+`runtime/code-task-acceptance` subpath re-exports.
+
+A tree that matches a pull-request head whose full matrix already passed skips this job under the
+same reuse rule as the other gated jobs (ADR-0178).
+
 ## Engine
 
 The development-only runner is Oxlint 1.78.0 with its 1.78.0 plugin bridge. The MIT upstream

@@ -145,6 +145,8 @@ describe("candidateProvedEveryReusedJob", () => {
   const everyJob = [
     "Semantic duplication",
     "Core quality",
+    "Static code-quality policy (Node 24.18.0)",
+    "Static code-quality policy (Node 26.8.1)",
     "Coverage suite (keiko-ui)",
     "Coverage shard (scripts 1/3)",
     "Coverage shard (scripts 2/3)",
@@ -165,6 +167,16 @@ describe("candidateProvedEveryReusedJob", () => {
     "Coverage shard (packages 1/5)",
   ].map((name) => ({ name, conclusion: "success" }));
 
+  // A reused job that is absent, or present without success, must refuse the whole candidate.
+  async function expectJobEvidenceRefused(name) {
+    const missing = everyJob.filter((job) => job.name !== name);
+    for (const conclusion of [undefined, "failure", "cancelled", "skipped"]) {
+      const jobs = conclusion === undefined ? missing : [...missing, { name, conclusion }];
+      stubFetch({ "/jobs": { body: { jobs } } });
+      await expect(candidateProvedEveryReusedJob(REPO, 1, TOKEN)).resolves.toBe(false);
+    }
+  }
+
   it("accepts a candidate that executed every reused job", async () => {
     stubFetch({ "/jobs": { body: { jobs: everyJob } } });
     await expect(candidateProvedEveryReusedJob(REPO, 1, TOKEN)).resolves.toBe(true);
@@ -184,14 +196,17 @@ describe("candidateProvedEveryReusedJob", () => {
     await expect(candidateProvedEveryReusedJob(REPO, 1, TOKEN)).resolves.toBe(false);
   });
 
+  it.each(["24.18.0", "26.8.1"])(
+    "requires successful exact evidence for static policy Node %s",
+    async (version) => {
+      const name = `Static code-quality policy (Node ${version})`;
+      await expectJobEvidenceRefused(name);
+    },
+  );
+
   it.each([1, 2, 3])("requires successful exact evidence for Node 26 shard %s", async (shard) => {
     const name = `Node 26 compatibility (shard ${shard}/3)`;
-    const missing = everyJob.filter((job) => job.name !== name);
-    for (const conclusion of [undefined, "failure", "cancelled", "skipped"]) {
-      const jobs = conclusion === undefined ? missing : [...missing, { name, conclusion }];
-      stubFetch({ "/jobs": { body: { jobs } } });
-      await expect(candidateProvedEveryReusedJob(REPO, 1, TOKEN)).resolves.toBe(false);
-    }
+    await expectJobEvidenceRefused(name);
   });
 
   it("refuses legacy single-job Node 26 evidence", async () => {
@@ -203,12 +218,7 @@ describe("candidateProvedEveryReusedJob", () => {
 
   it.each([1, 2])("requires successful exact evidence for Firefox shard %s", async (shard) => {
     const name = `Firefox smoke (shard ${shard}/2)`;
-    const missing = everyJob.filter((job) => job.name !== name);
-    for (const conclusion of [undefined, "failure", "cancelled", "skipped"]) {
-      const jobs = conclusion === undefined ? missing : [...missing, { name, conclusion }];
-      stubFetch({ "/jobs": { body: { jobs } } });
-      await expect(candidateProvedEveryReusedJob(REPO, 1, TOKEN)).resolves.toBe(false);
-    }
+    await expectJobEvidenceRefused(name);
   });
 
   it("refuses a malformed payload", async () => {

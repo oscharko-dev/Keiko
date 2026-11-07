@@ -24,6 +24,7 @@ import {
   lastPolicyProgress,
 } from "../lib/code-quality-policy.mjs";
 import { assertRepositoryQualification } from "./code-quality-repository-qualification.mjs";
+import { workspacePackages } from "../lint-repository.mjs";
 import { runNativePolicy } from "../lib/code-quality-runner.mjs";
 import { evaluatePolicyPackages } from "../lib/code-quality-packages.mjs";
 import {
@@ -59,6 +60,9 @@ function enforcingFixture() {
 
 const read = (path) => readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
 const CONTRACTS_SCOPE = "package:@oscharko-dev/keiko-contracts";
+const WORKSPACE_PACKAGE_COUNT = workspacePackages(
+  fileURLToPath(new URL("../../", import.meta.url)),
+).length;
 const STATIC_POLICY_SMOKE_COMMAND = `node --input-type=module -e 'import os from "node:os"; console.log(JSON.stringify({ arch: os.arch(), logicalCpus: os.cpus().length, availableParallelism: os.availableParallelism(), totalMemoryBytes: os.totalmem() }));'
 /usr/bin/time -v npm run check:code-quality-policy:repository
 `;
@@ -526,10 +530,7 @@ describe("production code-quality invocation wiring (#3915)", () => {
     expect(core.steps.filter((step) => step.run === "npm run lint")).toHaveLength(0);
   });
 
-  // Skipped under #4145 (ratchet, owner decision 2026-11-03 on #3914): this pin binds
-  // epic-migrated source or the epic's qualification CI chain, absent from the dev snapshot.
-  // #3991 restores it unchanged when full enforcement lands; the ratchet governs dev until then.
-  it.skip("runs bounded CLI integration then complete qualification in both required hosted ARM policy legs", async () => {
+  it("runs bounded CLI integration then complete qualification in both required hosted ARM policy legs", async () => {
     const workflow = parse(read(".github/workflows/ci.yml"));
     const compatibility = workflow.jobs["node-26-compatibility"];
     const runs = compatibility.steps.map((step) => step.run);
@@ -873,8 +874,8 @@ function qualificationValidatorFixture() {
     subject: "a".repeat(40),
     policySha256: policyDigest(policyBytes),
     inventory: { subject: "a".repeat(40), files: [{ path: "constructed.ts" }] },
-    counts: { expected: 1, visited: 1, packages: 27, violations: 0 },
-    pack: Array.from({ length: 27 }, () => ({})),
+    counts: { expected: 1, visited: 1, packages: WORKSPACE_PACKAGE_COUNT, violations: 0 },
+    pack: Array.from({ length: WORKSPACE_PACKAGE_COUNT }, () => ({})),
     rules: policy.rules,
     scopeRetirements: [
       {
@@ -1101,10 +1102,7 @@ describe("complete production qualification owner", () => {
     expect(owner).toContain("maxBuffer: 32 * 1024 * 1024");
     expect(owner).not.toContain("timeout:");
   });
-  // Skipped under #4145 (ratchet, owner decision 2026-11-03 on #3914): this pin binds
-  // epic-migrated source or the epic's qualification CI chain, absent from the dev snapshot.
-  // #3991 restores it unchanged when full enforcement lands; the ratchet governs dev until then.
-  it.skip("requires serial mandatory fixture full qualification and raw reader", () => {
+  it("requires serial mandatory fixture full qualification and raw reader", () => {
     assertPolicyOperationOrder(parse(read(".github/workflows/ci.yml")).jobs["code-quality-policy"]);
   });
   // Skipped under #4145 (ratchet, owner decision 2026-11-03 on #3914): this pin binds
