@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "63c6f27eb6d0f419b050eec236f7d08d36f80b03dc76f82e25c509036f5f383b"
+    "catalogDigest": "cec5c8a259e7b3107f428607817f925cd5c3b1d49154d6a72b62d5ec262f1988"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -71,9 +71,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 647,
-    "proofCount": 669,
-    "resolvedProofCount": 669,
+    "operationCount": 648,
+    "proofCount": 670,
+    "resolvedProofCount": 670,
     "failureClassCount": 390,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -403,6 +403,7 @@
         "coding-runtime.native-question.routed",
         "coding-runtime.native-session-tree.observed",
         "coding-runtime.native-step.changed",
+        "coding-runtime.native-tool.denied",
         "coding-runtime.native-turn.interrupted",
         "coding-runtime.operation.refused",
         "coding-runtime.operator-decision",
@@ -1757,6 +1758,9 @@
     ],
     "coding-runtime.native-step.changed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts"
+    ],
+    "coding-runtime.native-tool.denied.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.test.ts"
     ],
     "coding-runtime.native-turn.interrupted.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.test.ts"
