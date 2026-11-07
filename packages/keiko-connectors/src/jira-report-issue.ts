@@ -144,6 +144,13 @@ function estimateOf(
   const value = fields[plan.estimateFieldId];
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
+function unusableEstimate(
+  fields: Record<string, unknown>,
+  fieldId: string,
+  estimate: number | undefined,
+): boolean {
+  return Object.hasOwn(fields, fieldId) && fields[fieldId] !== null && estimate === undefined;
+}
 /** Jira returns null (or an empty collection or string) for a field without a value. */
 export function isEmptyJiraValue(value: unknown): boolean {
   if (value === null) return true;
@@ -295,6 +302,8 @@ export function parseJiraReportIssue(
   const identity = identityOf(value);
   if (identity === undefined) return undefined;
   const { key, fields, typeName, typeId, subtask } = identity;
+  const estimate = estimateOf(fields, plan);
+  if (unusableEstimate(fields, plan.estimateFieldId, estimate)) return undefined;
   const status = reference(fields.status);
   const statusCategory = category(status);
   const summary = stringOf(fields.summary, SUMMARY_MAX) ?? "";
@@ -311,7 +320,7 @@ export function parseJiraReportIssue(
     linkedKeys: linkedKeysOf(fields),
     assigned: assignedOf(fields, plan),
     dueDate: stringOf(fields.duedate, 32),
-    estimate: estimateOf(fields, plan),
+    estimate,
     deviations: dedupeDeviations([
       ...requiredDeviations(fields, typeId, plan),
       ...checkerDeviations(facts, plan),

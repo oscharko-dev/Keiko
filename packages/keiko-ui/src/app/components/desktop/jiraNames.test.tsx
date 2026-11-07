@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts";
 import type { ChatToolExchange, ChatToolTranscript } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -90,7 +90,8 @@ describe("the names on a Jira approval", () => {
   it("names the target and fields as this turn's Jira reads called them", () => {
     renderInChat(transcript(...READS, draft("10002")));
     expect(screen.getByText("Project Keiko synthetic · Issue type Task")).toBeVisible();
-    expect(screen.getByText("Description")).toBeVisible();
+    const review = within(screen.getByRole("region", { name: "Review Jira action" }));
+    expect(review.getByText("Description")).toBeVisible();
     // A field the reads did not name keeps its id, and the restated target is said once.
     expect(screen.getByText("customfield_1")).toBeVisible();
     expect(screen.queryByText("issuetype")).toBeNull();

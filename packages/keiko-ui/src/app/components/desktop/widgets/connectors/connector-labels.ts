@@ -128,67 +128,9 @@ export function syncFailureReasonKey(reason: AtlassianSyncFailureReason): Messag
   return SYNC_REASON[reason];
 }
 
-const ACTION_LABEL: Readonly<Record<AtlassianConnectorActionType, MessageKey>> = {
-  "jira.projects": "atlassianConnectors.action.jira.projects",
-  "jira.project": "atlassianConnectors.action.jira.project",
-  "jira.validate-project-key": "atlassianConnectors.action.jira.validate-project-key",
-  "jira.project-permissions": "atlassianConnectors.action.jira.project-permissions",
-  "jira.project-type": "atlassianConnectors.action.jira.project-type",
-  "create-project": "atlassianConnectors.action.create-project",
-  "update-project": "atlassianConnectors.action.update-project",
-  "jira.versions": "atlassianConnectors.action.jira.versions",
-  "jira.version": "atlassianConnectors.action.jira.version",
-  "jira.components": "atlassianConnectors.action.jira.components",
-  "jira.component": "atlassianConnectors.action.jira.component",
-  "create-version": "atlassianConnectors.action.create-version",
-  "update-version": "atlassianConnectors.action.update-version",
-  "create-component": "atlassianConnectors.action.create-component",
-  "update-component": "atlassianConnectors.action.update-component",
-  "jira.boards": "atlassianConnectors.action.jira.boards",
-  "jira.filter": "atlassianConnectors.action.jira.filter",
-  "jira.favourite-filters": "atlassianConnectors.action.jira.favourite-filters",
-  "jira.board": "atlassianConnectors.action.jira.board",
-  "jira.board-configuration": "atlassianConnectors.action.jira.board-configuration",
-  "jira.board-backlog": "atlassianConnectors.action.jira.board-backlog",
-  "jira.board-issues": "atlassianConnectors.action.jira.board-issues",
-  "jira.board-epics": "atlassianConnectors.action.jira.board-epics",
-  "jira.epic": "atlassianConnectors.action.jira.epic",
-  "jira.epic-issues": "atlassianConnectors.action.jira.epic-issues",
-  "jira.sprints": "atlassianConnectors.action.jira.sprints",
-  "jira.sprint": "atlassianConnectors.action.jira.sprint",
-  "jira.sprint-issues": "atlassianConnectors.action.jira.sprint-issues",
-  "create-board": "atlassianConnectors.action.create-board",
-  "create-sprint": "atlassianConnectors.action.create-sprint",
-  "update-sprint": "atlassianConnectors.action.update-sprint",
-  "move-issues-to-sprint": "atlassianConnectors.action.move-issues-to-sprint",
-  "move-issues-to-backlog": "atlassianConnectors.action.move-issues-to-backlog",
-  "update-epic": "atlassianConnectors.action.update-epic",
-  "move-issues-to-epic": "atlassianConnectors.action.move-issues-to-epic",
-  "jira.issue-types": "atlassianConnectors.action.jira.issue-types",
-  "jira.create-fields": "atlassianConnectors.action.jira.create-fields",
-  "jira.edit-fields": "atlassianConnectors.action.jira.edit-fields",
-  "jira.search": "atlassianConnectors.action.jira.search",
-  "jira.issue": "atlassianConnectors.action.jira.issue",
-  "jira.comments": "atlassianConnectors.action.jira.comments",
-  "jira.transitions": "atlassianConnectors.action.jira.transitions",
-  "jira.assignable-users": "atlassianConnectors.action.jira.assignable-users",
-  "jira.report": "atlassianConnectors.action.jira.report",
-  "jira.draft-stage": "atlassianConnectors.action.jira.draft-stage",
-  "assign-issue": "atlassianConnectors.action.assign-issue",
-  "sync-space": "atlassianConnectors.action.sync-space",
-  "sync-project": "atlassianConnectors.action.sync-project",
-  "search-issues-live": "atlassianConnectors.action.search-issues-live",
-  "create-issue": "atlassianConnectors.action.create-issue",
-  "update-issue-fields": "atlassianConnectors.action.update-issue-fields",
-  "transition-issue": "atlassianConnectors.action.transition-issue",
-  "add-issue-comment": "atlassianConnectors.action.add-issue-comment",
-  "create-page": "atlassianConnectors.action.create-page",
-  "update-page": "atlassianConnectors.action.update-page",
-  "add-page-comment": "atlassianConnectors.action.add-page-comment",
-};
-
+/** Every native action has the same catalog prefix; the return type checks the whole union. */
 export function actionTypeLabelKey(actionType: AtlassianConnectorActionType): MessageKey {
-  return ACTION_LABEL[actionType];
+  return `atlassianConnectors.action.${actionType}`;
 }
 
 const RISK_LABEL: Readonly<Record<CodingWorkbenchApprovalRisk, MessageKey>> = {

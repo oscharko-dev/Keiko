@@ -203,6 +203,48 @@ describe("an omitted requested field is unreadable evidence, never an empty valu
     expect(JSON.stringify(activity)).not.toMatch(/REP-|timeoriginalestimate|jira\.example/u);
   });
 
+  it.each([
+    ["timeoriginalestimate", "private-estimate"],
+    ["timeoriginalestimate", { value: 3600 }],
+    ["timeoriginalestimate", -1],
+    [POINTS, "private-estimate"],
+    [POINTS, { value: 3 }],
+    [POINTS, -1],
+  ] as const)("refuses a non-null unusable estimate in %s: %j", async (estimateFieldId, value) => {
+    const activity: JiraReportActivity[] = [];
+    const { result } = await run(
+      { ...options, pageClamp: 7 },
+      {
+        args: { estimateFieldId },
+        deps: { activity: (item) => activity.push(item) },
+        rewrite: (path, body) => {
+          if (path === "search")
+            for (const issue of issuesOf(body))
+              if (issue.key === "REP-15") fieldsOf(issue)[estimateFieldId] = value;
+          return body;
+        },
+      },
+    );
+    expect(result.data.status).toBe("incomplete");
+    expect(completenessOf(result)).toMatchObject({
+      complete: false,
+      reason: "read-failed",
+      failure: "malformed-payload",
+      issuesRead: 14,
+      issuesTotal: 40,
+    });
+    expect(activity).toHaveLength(1);
+    expect(activity[0]).toMatchObject({
+      status: "incomplete",
+      reason: "read-failed",
+      failure: "malformed-payload",
+      issuesRead: 14,
+    });
+    expect(JSON.stringify(activity)).not.toMatch(
+      /private-estimate|REP-|customfield_|timeoriginalestimate/u,
+    );
+  });
+
   it.each([null, 0])(
     "keeps an explicit %s estimate distinct from an unreadable field",
     async (estimate) => {

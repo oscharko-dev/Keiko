@@ -321,6 +321,7 @@ function onPageRead(
   } as const;
   // A field the account may not see is left out of the hit; the report cannot count it as empty.
   if (ingested === "omitted") session.failure = "permission";
+  if (ingested === "invalid") session.failure = "malformed-payload";
   finish(session, deps, reasons[ingested]);
 }
 async function readNextPage(
