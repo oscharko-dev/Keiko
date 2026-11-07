@@ -2244,7 +2244,9 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   digest and recorded as counts on `coding-runtime.native-certificates.admitted`). The carve-out
   is a leaf exception only: a credential-named directory above such a file still denies it, every
   other credential name keeps its rule, and whether the file is readable at all stays with the
-  read allowlist and the denied roots.
+  read allowlist and the denied roots. The system and Homebrew bundles stay unwritable because they
+  lie outside the writable roots; a certifi bundle in the workspace's own `site-packages` stays
+  writable, so installing a package into a project environment works.
   The tool-state half of `isDenied` (`.git`, `node_modules`, caches, `.gitconfig`, `.config`)
   stays a policy guard only, because Git, npm and the build need those paths. A symlink in the
   workspace to a file outside it, and the `/System/Volumes/Data` spelling of a home path, are
