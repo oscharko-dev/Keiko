@@ -15,7 +15,7 @@ import {
 // WCAG: focus-visible rings, aria-live on status regions, role="status" on counters.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { ReactNode, RefObject } from "react";
 import Link from "next/link";
 import type { MemoryRecord } from "@oscharko-dev/keiko-contracts";
 import { fetchMemories, type MemoryListFilters, type MemoryListResponse } from "@/lib/memory-api";
@@ -299,6 +299,32 @@ function MemoryListBody({
   );
 }
 
+// A minimized window stays mounted and hidden (`display: none`). What Keiko learned or forgot while
+// it was hidden must show when it is shown again, so the list reloads when its size returns from
+// zero (#4206). Ordinary resizing of a shown list does not reload it.
+function useReloadWhenShownAgain(target: RefObject<HTMLElement | null>, reload: () => void): void {
+  const reloadRef = useRef(reload);
+  useEffect(() => {
+    reloadRef.current = reload;
+  }, [reload]);
+  useEffect(() => {
+    const element = target.current;
+    if (element === null || typeof ResizeObserver === "undefined") return undefined;
+    let hidden = false;
+    const observer = new ResizeObserver((entries) => {
+      const shown = entries.some(
+        (entry) => entry.contentRect.width > 0 || entry.contentRect.height > 0,
+      );
+      if (hidden && shown) reloadRef.current();
+      hidden = !shown;
+    });
+    observer.observe(element);
+    return (): void => {
+      observer.disconnect();
+    };
+  }, [target]);
+}
+
 export interface MemoryListContentProps {
   readonly filters: MemoryFilterState;
   readonly onFilterChange: (next: MemoryFilterState) => void;
@@ -363,6 +389,12 @@ export function MemoryListContent({
     void load(filters);
   }, [filters, load]);
 
+  const listRef = useRef<HTMLElement | null>(null);
+  const reloadShownList = useCallback((): void => {
+    void load(filters);
+  }, [filters, load]);
+  useReloadWhenShownAgain(listRef, reloadShownList);
+
   return (
     <>
       <header className="lk-header">
@@ -416,6 +448,7 @@ export function MemoryListContent({
       </output>
 
       <section
+        ref={listRef}
         aria-label={t("memoria.memoryRecords")}
         aria-busy={loading}
         style={{ flex: 1, minHeight: 0, overflowY: "auto" }}

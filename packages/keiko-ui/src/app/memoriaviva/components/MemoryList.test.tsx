@@ -105,6 +105,55 @@ beforeEach(() => {
   emptyFetch.mockReset().mockResolvedValue(makeListResponse([]));
 });
 
+// UI walk (#4206): a minimized MemoriaViva window stays mounted and hidden. A fact Keiko forgot or
+// learned meanwhile must show when the window is shown again, not the list of its first mount.
+describe("MemoryListContent — shown again", () => {
+  type SizeCallback = (entries: { contentRect: { width: number; height: number } }[]) => void;
+  let observed: SizeCallback | undefined;
+
+  beforeEach(() => {
+    observed = undefined;
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: SizeCallback) {
+          observed = callback;
+        }
+        observe(): void {}
+        disconnect(): void {}
+      },
+    );
+    return (): void => {
+      vi.unstubAllGlobals();
+    };
+  });
+
+  const size = (width: number, height: number): void => {
+    observed?.([{ contentRect: { width, height } }]);
+  };
+
+  it("reloads when a hidden list is shown again, and only then", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(makeListResponse([makeRecord({ body: "Uses Excel" })]))
+      .mockResolvedValue(makeListResponse([makeRecord({ body: "Leads credit risk" })]));
+    renderDefaultList(fetchImpl);
+    await waitFor(() => {
+      expect(screen.getByText("Uses Excel")).toBeInTheDocument();
+    });
+    size(600, 400);
+    size(640, 400);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+    size(0, 0);
+    size(600, 400);
+    await waitFor(() => {
+      expect(screen.getByText("Leads credit risk")).toBeInTheDocument();
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("MemoryListContent — loading state", () => {
   it("shows loading indicator initially", () => {
     renderDefaultList(fetchWith([]));
