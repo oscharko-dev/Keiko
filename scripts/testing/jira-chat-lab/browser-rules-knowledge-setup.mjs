@@ -123,9 +123,13 @@ export async function uploadBrowserSkill(page, region, markdown, fileName, forma
   const watch = watchTemplateReads(page);
   const dialog = await openSkills(page, region);
   try {
+    // The import control names its accepted files in its tooltip; its label reads "Import". It
+    // stays disabled while the reopened dialog reloads the library, and the library drops an
+    // import it receives in that time, so the file is chosen only once a person could choose it.
+    const importControl = dialog.getByLabel("Import", { exact: true });
+    await expect(importControl).toBeEnabled();
     const uploaded = await responseAfter(page, "POST", "/api/skills", () =>
-      // The import control names its accepted files in its tooltip; its label reads "Import".
-      dialog.getByLabel("Import", { exact: true }).setInputFiles({
+      importControl.setInputFiles({
         name: fileName,
         mimeType: "text/markdown",
         buffer: Buffer.from(markdown),

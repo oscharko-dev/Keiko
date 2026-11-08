@@ -418,6 +418,9 @@ describe("live UI journey wiring", () => {
       /page\.route\(|\.request\.(?:post|put|patch|delete)\(|jsonRequest\(/u,
     );
     expect(setup).toMatch(
+      /await expect\(importControl\)\.toBeEnabled\(\);\s+const uploaded = await responseAfter\(/u,
+    );
+    expect(setup).toMatch(
       /assert\.equal\(\s*templates\.some\(\(entry\) => entry\.id === skill\.id\),\s*false,/u,
     );
     const journey = read("browser-rules-knowledge-journey.mjs");
