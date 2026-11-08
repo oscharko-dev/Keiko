@@ -3,40 +3,70 @@ import type { JiraTemplateViolation } from "./jira-issue-template.js";
 import { compareStrings } from "./comparators.js";
 
 export const JIRA_AVATAR_MUTATIONS = Object.freeze([
-  "jira.upload-temporary-avatar", "jira.crop-temporary-avatar",
-  "jira.upload-issue-type-avatar", "jira.create-issue-type-avatar",
-  "jira.upload-project-avatar", "jira.create-project-avatar", "jira.set-project-avatar", "jira.delete-project-avatar",
-  "jira.upload-owned-avatar", "jira.create-owned-avatar", "jira.delete-owned-avatar",
-  "jira.upload-user-avatar", "jira.create-user-avatar", "jira.set-user-avatar", "jira.delete-user-avatar",
+  "jira.upload-temporary-avatar",
+  "jira.crop-temporary-avatar",
+  "jira.upload-issue-type-avatar",
+  "jira.create-issue-type-avatar",
+  "jira.upload-project-avatar",
+  "jira.create-project-avatar",
+  "jira.set-project-avatar",
+  "jira.delete-project-avatar",
+  "jira.upload-owned-avatar",
+  "jira.create-owned-avatar",
+  "jira.delete-owned-avatar",
+  "jira.upload-user-avatar",
+  "jira.create-user-avatar",
+  "jira.set-user-avatar",
+  "jira.delete-user-avatar",
 ] as const);
 export type JiraAvatarMutation = (typeof JIRA_AVATAR_MUTATIONS)[number];
 /** The existing immutable file review is needed for exactly these five raw image uploads. */
 export const JIRA_AVATAR_UPLOAD_MUTATIONS = Object.freeze([
-  "jira.upload-temporary-avatar", "jira.upload-issue-type-avatar", "jira.upload-project-avatar",
-  "jira.upload-owned-avatar", "jira.upload-user-avatar",
+  "jira.upload-temporary-avatar",
+  "jira.upload-issue-type-avatar",
+  "jira.upload-project-avatar",
+  "jira.upload-owned-avatar",
+  "jira.upload-user-avatar",
 ] as const satisfies readonly JiraAvatarMutation[]);
 export type JiraAvatarUploadMutation = (typeof JIRA_AVATAR_UPLOAD_MUTATIONS)[number];
 export function isJiraAvatarUploadOperation(name: string): name is JiraAvatarUploadMutation {
   return JIRA_AVATAR_UPLOAD_MUTATIONS.some((operation) => operation === name);
 }
 export const JIRA_IDENTITY_MUTATIONS = Object.freeze([
-  "jira.create-user", "jira.update-user", "jira.delete-user", "jira.invalidate-user-session",
-  "jira.schedule-user-anonymization", "jira.rerun-user-anonymization",
+  "jira.create-user",
+  "jira.update-user",
+  "jira.delete-user",
+  "jira.invalidate-user-session",
+  "jira.schedule-user-anonymization",
+  "jira.rerun-user-anonymization",
 ] as const);
 export type JiraIdentityMutation = (typeof JIRA_IDENTITY_MUTATIONS)[number];
 /** Private human-input or owned-session actions. Validation POSTs remain separate read tools. */
 export const JIRA_PRIVATE_ACCOUNT_MUTATIONS = Object.freeze([
-  "jira.update-myself", "jira.update-my-password", "jira.update-user-password",
-  "jira.login", "jira.logout", "jira.release-websudo",
+  "jira.update-myself",
+  "jira.update-my-password",
+  "jira.update-user-password",
+  "jira.login",
+  "jira.logout",
+  "jira.release-websudo",
 ] as const);
 export type JiraPrivateAccountMutation = (typeof JIRA_PRIVATE_ACCOUNT_MUTATIONS)[number];
 export const JIRA_ISSUE_LIFECYCLE_MUTATIONS = Object.freeze([
-  "jira.archive-issues", "jira.delete-issue", "jira.archive-issue", "jira.restore-issue", "jira.move-subtask",
+  "jira.archive-issues",
+  "jira.delete-issue",
+  "jira.archive-issue",
+  "jira.restore-issue",
+  "jira.move-subtask",
 ] as const);
 export type JiraIssueLifecycleMutation = (typeof JIRA_ISSUE_LIFECYCLE_MUTATIONS)[number];
 export const JIRA_PROJECT_LIFECYCLE_MUTATIONS = Object.freeze([
-  "jira.delete-project", "jira.archive-project", "jira.restore-project", "jira.update-project-type",
-  "jira.set-project-permission-scheme", "jira.set-project-priority-scheme", "jira.remove-project-priority-scheme",
+  "jira.delete-project",
+  "jira.archive-project",
+  "jira.restore-project",
+  "jira.update-project-type",
+  "jira.set-project-permission-scheme",
+  "jira.set-project-priority-scheme",
+  "jira.remove-project-priority-scheme",
 ] as const);
 export type JiraProjectLifecycleMutation = (typeof JIRA_PROJECT_LIFECYCLE_MUTATIONS)[number];
 
@@ -97,52 +127,86 @@ export type JiraDirectoryAccessMutation = (typeof JIRA_DIRECTORY_ACCESS_MUTATION
 
 /** One immutable identity source for the uniform entity-property mutation family. */
 export const JIRA_ENTITY_PROPERTY_MUTATIONS = Object.freeze([
-  "jira.set-board-property", "jira.delete-board-property",
-  "jira.set-sprint-property", "jira.delete-sprint-property",
-  "jira.set-comment-property", "jira.delete-comment-property",
-  "jira.set-dashboard-item-property", "jira.delete-dashboard-item-property",
-  "jira.set-issue-property", "jira.delete-issue-property",
-  "jira.set-issue-type-property", "jira.delete-issue-type-property",
-  "jira.set-project-property", "jira.delete-project-property",
-  "jira.set-user-property", "jira.delete-user-property",
+  "jira.set-board-property",
+  "jira.delete-board-property",
+  "jira.set-sprint-property",
+  "jira.delete-sprint-property",
+  "jira.set-comment-property",
+  "jira.delete-comment-property",
+  "jira.set-dashboard-item-property",
+  "jira.delete-dashboard-item-property",
+  "jira.set-issue-property",
+  "jira.delete-issue-property",
+  "jira.set-issue-type-property",
+  "jira.delete-issue-type-property",
+  "jira.set-project-property",
+  "jira.delete-project-property",
+  "jira.set-user-property",
+  "jira.delete-user-property",
 ] as const);
 export type JiraEntityPropertyMutation = (typeof JIRA_ENTITY_PROPERTY_MUTATIONS)[number];
 
 /** Closed saved-filter and current-user preference operations; no arbitrary setting writes. */
 export const JIRA_SAVED_CONFIGURATION_MUTATIONS = Object.freeze([
-  "jira.create-filter", "jira.update-filter", "jira.delete-filter",
-  "jira.set-filter-share-scope", "jira.set-filter-columns", "jira.reset-filter-columns",
-  "jira.add-filter-permission", "jira.delete-filter-permission",
-  "jira.set-my-preference", "jira.delete-my-preference",
+  "jira.create-filter",
+  "jira.update-filter",
+  "jira.delete-filter",
+  "jira.set-filter-share-scope",
+  "jira.set-filter-columns",
+  "jira.reset-filter-columns",
+  "jira.add-filter-permission",
+  "jira.delete-filter-permission",
+  "jira.set-my-preference",
+  "jira.delete-my-preference",
 ] as const);
 export type JiraSavedConfigurationMutation = (typeof JIRA_SAVED_CONFIGURATION_MUTATIONS)[number];
 
 /** Exact reviewed native relationships; remote upsert is distinct from unconditional creation. */
 export const JIRA_LINK_MUTATIONS = Object.freeze([
-  "jira.create-issue-link", "jira.delete-issue-link", "jira.upsert-remote-link",
-  "jira.update-remote-link", "jira.delete-remote-link", "jira.delete-remote-link-by-global-id",
+  "jira.create-issue-link",
+  "jira.delete-issue-link",
+  "jira.upsert-remote-link",
+  "jira.update-remote-link",
+  "jira.delete-remote-link",
+  "jira.delete-remote-link-by-global-id",
 ] as const);
 export type JiraLinkMutation = (typeof JIRA_LINK_MUTATIONS)[number];
 
 /** Project-bound version/component lifecycle changes reuse the existing mutation journal. */
 export const JIRA_RELEASE_LIFECYCLE_MUTATIONS = Object.freeze([
-  "jira.delete-component", "jira.merge-version", "jira.move-version", "jira.remove-and-swap-version",
+  "jira.delete-component",
+  "jira.merge-version",
+  "jira.move-version",
+  "jira.remove-and-swap-version",
 ] as const);
 export type JiraReleaseLifecycleMutation = (typeof JIRA_RELEASE_LIFECYCLE_MUTATIONS)[number];
 
 /** Fixed screen/tab/field configuration effects; no arbitrary schema mutation. */
 export const JIRA_SCREEN_CONFIGURATION_MUTATIONS = Object.freeze([
-  "jira.add-default-screen-field", "jira.add-screen-tab-field", "jira.remove-screen-tab-field",
-  "jira.move-screen-tab-field", "jira.set-screen-field-show-when-empty", "jira.move-screen-tab",
+  "jira.add-default-screen-field",
+  "jira.add-screen-tab-field",
+  "jira.remove-screen-tab-field",
+  "jira.move-screen-tab-field",
+  "jira.set-screen-field-show-when-empty",
+  "jira.move-screen-tab",
 ] as const);
 export type JiraScreenConfigurationMutation = (typeof JIRA_SCREEN_CONFIGURATION_MUTATIONS)[number];
 export const JIRA_BOARD_CONFIGURATION_MUTATIONS = Object.freeze([
-  "jira.delete-board", "jira.set-board-refined-velocity",
+  "jira.delete-board",
+  "jira.set-board-refined-velocity",
 ] as const);
 export type JiraBoardConfigurationMutation = (typeof JIRA_BOARD_CONFIGURATION_MUTATIONS)[number];
+export function isJiraBoardConfigurationMutation(
+  name: string,
+): name is JiraBoardConfigurationMutation {
+  return JIRA_BOARD_CONFIGURATION_MUTATIONS.some((operation) => operation === name);
+}
 export const JIRA_SPRINT_LIFECYCLE_MUTATIONS = Object.freeze([
-  "jira.replace-sprint", "jira.delete-sprint", "jira.swap-sprints",
-  "jira.unmap-sprints", "jira.unmap-all-sprints",
+  "jira.replace-sprint",
+  "jira.delete-sprint",
+  "jira.swap-sprints",
+  "jira.unmap-sprints",
+  "jira.unmap-all-sprints",
 ] as const);
 export type JiraSprintLifecycleMutation = (typeof JIRA_SPRINT_LIFECYCLE_MUTATIONS)[number];
 
@@ -195,36 +259,57 @@ export const JIRA_EMAIL_TEMPLATE_MUTATIONS = Object.freeze([
 export type JiraEmailTemplateMutation = (typeof JIRA_EMAIL_TEMPLATE_MUTATIONS)[number];
 
 export const JIRA_PERMISSION_SCHEME_MUTATIONS = Object.freeze([
-  "jira.create-permission-scheme", "jira.update-permission-scheme", "jira.delete-permission-scheme",
-  "jira.add-permission-grant", "jira.delete-permission-grant", "jira.set-permission-scheme-attribute",
+  "jira.create-permission-scheme",
+  "jira.update-permission-scheme",
+  "jira.delete-permission-scheme",
+  "jira.add-permission-grant",
+  "jira.delete-permission-grant",
+  "jira.set-permission-scheme-attribute",
 ] as const);
 export type JiraPermissionSchemeMutation = (typeof JIRA_PERMISSION_SCHEME_MUTATIONS)[number];
 export const JIRA_ROLE_MUTATIONS = Object.freeze([
-  "jira.create-role", "jira.update-role", "jira.replace-role", "jira.delete-role",
-  "jira.add-role-default-actors", "jira.delete-role-default-actor",
-  "jira.add-project-role-actors", "jira.set-project-role-actors", "jira.delete-project-role-actor",
+  "jira.create-role",
+  "jira.update-role",
+  "jira.replace-role",
+  "jira.delete-role",
+  "jira.add-role-default-actors",
+  "jira.delete-role-default-actor",
+  "jira.add-project-role-actors",
+  "jira.set-project-role-actors",
+  "jira.delete-project-role-actor",
 ] as const);
 export type JiraRoleMutation = (typeof JIRA_ROLE_MUTATIONS)[number];
 
 export const JIRA_AGILE_PLANNING_MUTATIONS = Object.freeze([
-  "jira.epic-remove-issues", "jira.rank-epic", "jira.rank-issues", "jira.set-issue-estimation",
+  "jira.epic-remove-issues",
+  "jira.rank-epic",
+  "jira.rank-issues",
+  "jira.set-issue-estimation",
 ] as const);
 export type JiraAgilePlanningMutation = (typeof JIRA_AGILE_PLANNING_MUTATIONS)[number];
 export const JIRA_VERSION_REMOTE_LINK_MUTATIONS = Object.freeze([
-  "jira.upsert-version-remote-link", "jira.upsert-version-remote-link-by-global-id",
-  "jira.delete-version-remote-link", "jira.delete-version-remote-links",
+  "jira.upsert-version-remote-link",
+  "jira.upsert-version-remote-link-by-global-id",
+  "jira.delete-version-remote-link",
+  "jira.delete-version-remote-links",
 ] as const);
 export type JiraVersionRemoteLinkMutation = (typeof JIRA_VERSION_REMOTE_LINK_MUTATIONS)[number];
 export const JIRA_PROJECT_CATEGORY_MUTATIONS = Object.freeze([
-  "jira.create-project-category", "jira.update-project-category", "jira.delete-project-category",
+  "jira.create-project-category",
+  "jira.update-project-category",
+  "jira.delete-project-category",
 ] as const);
 export type JiraProjectCategoryMutation = (typeof JIRA_PROJECT_CATEGORY_MUTATIONS)[number];
+export function isJiraProjectCategoryMutation(name: string): name is JiraProjectCategoryMutation {
+  return JIRA_PROJECT_CATEGORY_MUTATIONS.some((operation) => operation === name);
+}
 
 export const JIRA_ANONYMIZATION_UNLOCK_MUTATIONS = Object.freeze([
   "jira.unlock-user-anonymization",
 ] as const);
 export const JIRA_EXTENDED_ISSUE_CREATION_MUTATIONS = Object.freeze([
-  "jira.create-issues", "jira.create-reciprocal-remote-link",
+  "jira.create-issues",
+  "jira.create-reciprocal-remote-link",
 ] as const);
 
 /** The original shared mutation executor's closed operations, in their retained catalog order. */
@@ -417,14 +502,50 @@ export type JiraMutationResultState = (typeof JIRA_MUTATION_RESULT_STATES)[numbe
 
 /** Validated Jira identities and closed state facts; never remote bodies or headers.
  * Monitoring booleans on unknown/unconfirmed writes are requested targets, not success evidence. */
-export interface JiraMutationReceipt {
+export interface JiraMutationReceipt extends Readonly<
+  Partial<
+    Record<
+      // Native resource identities are optional until their own operation has independently bound them.
+      | "propertyKey"
+      | "dashboardId"
+      | "selectedItemId"
+      | "issueTypeId"
+      | "userKey"
+      | "username"
+      | "screenId"
+      | "tabId"
+      | "projectId"
+      | "projectKey"
+      | "projectName"
+      | "componentId"
+      | "versionId"
+      | "browseUrl"
+      | "boardId"
+      | "sprintId"
+      | "epicKey"
+      | "issueKey"
+      | "issueId"
+      | "commentId"
+      | "worklogId"
+      | "originBoardId"
+      | "boardBrowseUrl"
+      | "transitionId"
+      | "attachmentId",
+      string
+    >
+  >
+> {
   readonly avatarType?: "user" | "project" | "issuetype";
   readonly avatarId?: string;
   readonly avatarPresent?: boolean;
   readonly avatarSelected?: boolean;
   readonly temporaryAvatar?: true;
   /** Native acknowledgement metadata, not image persistence or independent content evidence. */
-  readonly temporaryCrop?: { readonly cropperOffsetX: number; readonly cropperOffsetY: number; readonly cropperWidth: number };
+  readonly temporaryCrop?: {
+    readonly cropperOffsetX: number;
+    readonly cropperOffsetY: number;
+    readonly cropperWidth: number;
+  };
   readonly temporaryNeedsCropping?: boolean;
   readonly userPresent?: boolean;
   readonly userActive?: boolean;
@@ -542,38 +663,13 @@ export interface JiraMutationReceipt {
   /** The native filter-create API never atomically binds its default-sharing observation. */
   readonly defaultSharingAtomic?: false;
   readonly observedShareScope?: "PRIVATE" | "AUTHENTICATED" | "GLOBAL";
-  readonly propertyKey?: string;
   /** Requested target on unknown/unconfirmed writes; success requires independent readback. */
   readonly propertyPresent?: boolean;
-  readonly dashboardId?: string;
-  readonly selectedItemId?: string;
-  readonly issueTypeId?: string;
-  readonly userKey?: string;
-  readonly username?: string;
   readonly monitoringEnabled?: boolean;
   readonly jmxMetricsExposed?: boolean;
-  readonly screenId?: string;
-  readonly tabId?: string;
-  readonly projectId?: string;
-  readonly projectKey?: string;
-  readonly projectName?: string;
-  readonly componentId?: string;
-  readonly versionId?: string;
-  readonly browseUrl?: string;
-  readonly boardId?: string;
-  readonly sprintId?: string;
-  readonly epicKey?: string;
   readonly issueKeys?: readonly string[];
-  readonly issueKey?: string;
-  readonly issueId?: string;
-  readonly commentId?: string;
-  readonly worklogId?: string;
   readonly isWatching?: boolean;
   readonly hasVoted?: boolean;
-  readonly originBoardId?: string;
-  readonly boardBrowseUrl?: string;
-  readonly transitionId?: string;
-  readonly attachmentId?: string;
 }
 /** Why Keiko's own metadata validation refused a field before dispatch (#4176). */
 export const JIRA_FIELD_VALIDATION_FAILURES = [

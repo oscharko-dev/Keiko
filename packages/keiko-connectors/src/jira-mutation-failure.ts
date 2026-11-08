@@ -15,25 +15,60 @@ export type JiraObservationFailure = Omit<JiraMutationFailure, "receipt"> & {
 export type JiraHttpFailure = Extract<AtlassianWriteHttpOutcome, { ok: false }>;
 
 export function jiraFieldValidationFailure(message: string): JiraObservationFailure {
-  return { ok: false, reason: "field-validation", detail: { validation: "invalid-field", messages: [message] } };
+  return {
+    ok: false,
+    reason: "field-validation",
+    detail: { validation: "invalid-field", messages: [message] },
+  };
 }
 
 type ReceiptFailure<Receipt extends JiraMutationReceipt> = Omit<JiraMutationFailure, "receipt"> & {
   readonly receipt?: Receipt;
 };
 export function jiraConflictFailure(message: string): JiraObservationFailure;
-export function jiraConflictFailure<Receipt extends JiraMutationReceipt>(message: string, receipt: Receipt | undefined): ReceiptFailure<Receipt>;
-export function jiraConflictFailure(message: string, receipt?: JiraMutationReceipt): JiraMutationFailure {
-  return { ok: false, reason: "conflict", detail: { messages: [message] }, ...(receipt === undefined ? {} : { receipt }) };
+export function jiraConflictFailure<Receipt extends JiraMutationReceipt>(
+  message: string,
+  receipt: Receipt | undefined,
+): ReceiptFailure<Receipt>;
+export function jiraConflictFailure(
+  message: string,
+  receipt?: JiraMutationReceipt,
+): JiraMutationFailure {
+  return {
+    ok: false,
+    reason: "conflict",
+    detail: { messages: [message] },
+    ...(receipt === undefined ? {} : { receipt }),
+  };
 }
 
-export function jiraUnchangedFailure<Receipt extends JiraMutationReceipt>(message: string, receipt: Receipt): ReceiptFailure<Receipt> {
-  return { ok: false, reason: "conflict", detail: { unchanged: true, messages: [message] }, receipt };
+export function jiraUnchangedFailure<Receipt extends JiraMutationReceipt>(
+  message: string,
+  receipt: Receipt,
+): ReceiptFailure<Receipt> {
+  return {
+    ok: false,
+    reason: "conflict",
+    detail: { unchanged: true, messages: [message] },
+    receipt,
+  };
 }
 
 /** Private executor failure after acknowledgement; composing owners log the original cause. */
 export class JiraAcknowledgedMutationError extends Error {
   readonly receipt: JiraMutationReceipt;
+
+  /** Preserve acknowledged targets when an independent native observation throws. */
+  static async observe<Result>(
+    receipt: JiraMutationReceipt,
+    observation: () => Promise<Result>,
+  ): Promise<Result> {
+    try {
+      return await observation();
+    } catch (error) {
+      throw new JiraAcknowledgedMutationError(error, receipt);
+    }
+  }
 
   constructor(cause: unknown, receipt: JiraMutationReceipt) {
     super("Jira mutation acknowledgement could not be independently confirmed", { cause });

@@ -4,6 +4,8 @@ type ScenarioOutcome = "succeeded" | "succeeded-unconfirmed";
 export interface JiraManagedScenario {
   readonly args: CatalogJsonObject;
   readonly receipt: CatalogJsonObject;
+  /** Only these independently declared native actor fields may be rebound for a gateway fixture. */
+  readonly receiptActor?: "userKey" | "actorUserKey";
   readonly remoteState: object;
   readonly outcome: ScenarioOutcome;
 }
@@ -14,8 +16,9 @@ function project<Operation extends string, Value>(
 ): Readonly<Record<Operation, Value>> {
   // Every own operation key is copied exactly once; this assertion preserves those static keys
   // across Object.entries/fromEntries. No registry, adapter result or filtering supplies keys.
-  return Object.fromEntries(Object.entries<JiraManagedScenario>(rows)
-    .map(([operation, row]) => [operation, select(row)])) as Record<Operation, Value>;
+  return Object.fromEntries(
+    Object.entries<JiraManagedScenario>(rows).map(([operation, row]) => [operation, select(row)]),
+  ) as Record<Operation, Value>;
 }
 
 /** Assemble the existing gateway tables from independent, explicitly named native scenarios.
@@ -28,7 +31,11 @@ export function jiraManagedScenarios<Operation extends string>(
   const lookup: Readonly<Record<string, ScenarioOutcome>> = outcomes;
   return {
     arguments: project(rows, (row): CatalogJsonObject => ({ ...row.args, expectedActorKey })),
-    receipts: project(rows, (row) => row.receipt),
+    receipts: project(rows, (row): CatalogJsonObject =>
+      row.receiptActor === undefined
+        ? row.receipt
+        : { ...row.receipt, [row.receiptActor]: expectedActorKey },
+    ),
     remoteState: project(rows, (row) => row.remoteState),
     outcomes,
     expectedOutcome: (operation: string): ScenarioOutcome | undefined =>

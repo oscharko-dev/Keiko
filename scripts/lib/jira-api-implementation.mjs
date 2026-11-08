@@ -16,38 +16,35 @@ const BUILDER_FORMS = {
 // These are parsed as syntax only. Keep the reviewed helper semantics closed: no execution,
 // identifier substitution, arbitrary callbacks, or imported runtime declarations are accepted.
 const GROUP_BUILDERS = `
-function reads<const K extends NativeTool>(
-  permissionPolicy: JiraPermissionPolicy,
-  paths: Readonly<Record<K, string>>,
+function operations<const K extends NativeTool, const Policy extends string>(
+  method: "GET" | "POST" | "PUT" | "DELETE",
+  groups: Readonly<Record<Policy, Readonly<Partial<Record<K, string>>>>>,
   root: JiraApiRoot = "/rest/api/2",
-): NativeGroup<K> {
-  const result: Partial<Record<K, NativeSpecification>> = {};
-  for (const tool in paths) {
-    if (Object.hasOwn(paths, tool))
-      result[tool] = ["GET", "read", paths[tool], permissionPolicy, root];
+): Readonly<Record<K, NativeSpecification<Policy>>> {
+  const result: Partial<Record<K, NativeSpecification<Policy>>> = {};
+  for (const permissionPolicy in groups) {
+    if (!Object.hasOwn(groups, permissionPolicy)) continue;
+    const paths: Readonly<Partial<Record<K, string>>> = groups[permissionPolicy];
+    for (const tool in paths) {
+      if (!Object.hasOwn(paths, tool)) continue;
+      const path = paths[tool];
+      if (path !== undefined)
+        result[tool] = [method, method === "GET" ? "read" : "write", path, permissionPolicy, root];
+    }
   }
-  return result as NativeGroup<K>;
-}
-function writes<const K extends NativeTool>(
-  permissionPolicy: JiraPermissionPolicy,
-  paths: Readonly<Record<K, readonly ["POST" | "PUT" | "DELETE", string]>>,
-  root: JiraApiRoot = "/rest/api/2",
-): NativeGroup<K> {
-  const result: Partial<Record<K, NativeSpecification>> = {};
-  for (const tool in paths) {
-    if (!Object.hasOwn(paths, tool)) continue;
-    const [method, path] = paths[tool];
-    result[tool] = [method, "write", path, permissionPolicy, root];
-  }
-  return result as NativeGroup<K>;
+  return result as Readonly<Record<K, NativeSpecification<Policy>>>;
 }`;
-const GROUP_NAMES = new Set(["reads", "writes"]);
+const GROUP_NAMES = new Set(["operations"]);
 
 function syntaxShape(node) {
   const children = [];
-  ts.forEachChild(node, (child) => { children.push(syntaxShape(child)); });
-  const text = ts.isIdentifier(node) || ts.isStringLiteralLike(node) || ts.isNumericLiteral(node)
-    ? node.text : null;
+  ts.forEachChild(node, (child) => {
+    children.push(syntaxShape(child));
+  });
+  const text =
+    ts.isIdentifier(node) || ts.isStringLiteralLike(node) || ts.isNumericLiteral(node)
+      ? node.text
+      : null;
   return [node.kind, text, children];
 }
 function groupBuilderDeclaration(ast, name) {
@@ -61,8 +58,11 @@ function closedGroupReferences(ast, declaration, native) {
   function invalid(node) {
     if (ts.isIdentifier(node) && node.text === declaration.name.text) {
       const parent = node.parent;
-      const directCall = ts.isCallExpression(parent) && parent.expression === node &&
-        ts.isSpreadAssignment(parent.parent) && parent.parent.parent === native;
+      const directCall =
+        ts.isCallExpression(parent) &&
+        parent.expression === node &&
+        ts.isSpreadAssignment(parent.parent) &&
+        parent.parent.parent === native;
       if (node !== declaration.name && !directCall) return true;
     }
     return ts.forEachChild(node, invalid) === true;
@@ -74,8 +74,11 @@ function closedObjectReferences(ast) {
     if (ts.isIdentifier(node) && node.text === "Object") {
       const parent = node.parent;
       if (!ts.isPropertyAccessExpression(parent) || parent.expression !== node) return true;
-      if (parent.name.text !== "prototype" &&
-          !(ts.isCallExpression(parent.parent) && parent.parent.expression === parent)) return true;
+      if (
+        parent.name.text !== "prototype" &&
+        !(ts.isCallExpression(parent.parent) && parent.parent.expression === parent)
+      )
+        return true;
     }
     return ts.forEachChild(node, invalid) === true;
   }
@@ -84,7 +87,12 @@ function closedObjectReferences(ast) {
 function verifyGroupBuilder(ast, name, verified) {
   if (verified.has(name)) return;
   const declaration = groupBuilderDeclaration(ast, name);
-  const expected = ts.createSourceFile("closed-builders.ts", GROUP_BUILDERS, ts.ScriptTarget.Latest, true);
+  const expected = ts.createSourceFile(
+    "closed-builders.ts",
+    GROUP_BUILDERS,
+    ts.ScriptTarget.Latest,
+    true,
+  );
   requireValid(
     closedGroupReferences(ast, declaration, nativeDeclaration(ast)) && closedObjectReferences(ast),
     "registry-native-group-owner",
@@ -104,7 +112,16 @@ function nativeDeclaration(ast) {
     .filter((node) => ts.isIdentifier(node.name) && node.name.text === "NATIVE");
   requireValid(declarations.length === 1, "registry-native-owner");
   requireValid((declarations[0].parent.flags & ts.NodeFlags.Const) !== 0, "registry-native-owner");
-  const initializer = declarations[0].initializer;
+  let initializer = declarations[0].initializer;
+  if (initializer !== undefined && ts.isSatisfiesExpression(initializer))
+    initializer = initializer.expression;
+  if (
+    initializer !== undefined &&
+    ts.isAsExpression(initializer) &&
+    ts.isTypeReferenceNode(initializer.type) &&
+    initializer.type.typeName.getText(ast) === "const"
+  )
+    initializer = initializer.expression;
   requireValid(
     initializer !== undefined && ts.isObjectLiteralExpression(initializer),
     "registry-native-shape",
@@ -259,11 +276,20 @@ function nativeEntry(property, ast, verified) {
   return entryFor(property.name.text, nativeTuple(property.initializer, ast, verified));
 }
 function nativeEffect(method, root, path) {
-  // Two documented POST observations have an explicit read contract. No other method/path may
+  // The fixed POST observations already declared by the registry and ledger have read contracts. No other method/path may
   // acquire a read disposition from its caller or an arbitrary registry tuple.
   if (method === "GET") return "read";
-  return root === "/rest/api/2" && method === "POST" &&
-    new Set(["/search", "/worklog/list"]).has(path) ? "read" : "write";
+  return root === "/rest/api/2" &&
+    method === "POST" &&
+    new Set([
+      "/search",
+      "/worklog/list",
+      "/password/policy/createUser",
+      "/password/policy/updateUser",
+      "/licenseValidator",
+    ]).has(path)
+    ? "read"
+    : "write";
 }
 function entryFor(tool, tuple) {
   const [method, effect, path, permissionPolicy, root = "/rest/api/2"] = tuple;
@@ -286,42 +312,56 @@ function entryFor(tool, tuple) {
     permissionPolicy,
   };
 }
-function groupMember(property, name, policy, root) {
+function groupMember(property, method, policy, root) {
   requireValid(
-    ts.isPropertyAssignment(property) && ts.isStringLiteralLike(property.name),
+    ts.isPropertyAssignment(property) &&
+      ts.isStringLiteralLike(property.name) &&
+      ts.isStringLiteralLike(property.initializer),
     "registry-native-group-property",
   );
-  if (name === "reads") {
-    requireValid(ts.isStringLiteralLike(property.initializer), "registry-native-group-path");
-    return entryFor(property.name.text, ["GET", "read", property.initializer.text, policy, root]);
-  }
-  const tuple = property.initializer;
-  requireValid(
-    ts.isArrayLiteralExpression(tuple) && tuple.elements.length === 2 &&
-      tuple.elements.every(ts.isStringLiteralLike),
-    "registry-native-group-tuple",
-  );
-  const [method, path] = tuple.elements.map((element) => element.text);
-  return entryFor(property.name.text, [method, "write", path, policy, root]);
+  return entryFor(property.name.text, [
+    method,
+    method === "GET" ? "read" : "write",
+    property.initializer.text,
+    policy,
+    root,
+  ]);
 }
 function nativeGroup(property, ast, verified) {
   const call = property.expression;
   requireValid(
-    ts.isCallExpression(call) && ts.isIdentifier(call.expression) &&
-      GROUP_NAMES.has(call.expression.text) && call.typeArguments === undefined,
+    ts.isCallExpression(call) &&
+      ts.isIdentifier(call.expression) &&
+      GROUP_NAMES.has(call.expression.text) &&
+      call.typeArguments === undefined,
     "registry-native-property",
   );
-  const name = call.expression.text;
-  verifyGroupBuilder(ast, name, verified);
-  const [policy, members, root] = call.arguments;
+  verifyGroupBuilder(ast, call.expression.text, verified);
+  const [method, groups, root] = call.arguments;
   requireValid(
     (call.arguments.length === 2 || call.arguments.length === 3) &&
-      policy !== undefined && ts.isStringLiteralLike(policy) && policy.text.length > 0 &&
-      members !== undefined && ts.isObjectLiteralExpression(members) && members.properties.length > 0 &&
+      method !== undefined &&
+      ts.isStringLiteralLike(method) &&
+      new Set(["GET", "POST", "PUT", "DELETE"]).has(method.text) &&
+      groups !== undefined &&
+      ts.isObjectLiteralExpression(groups) &&
+      groups.properties.length > 0 &&
       (root === undefined || ts.isStringLiteralLike(root)),
     "registry-native-group-arguments",
   );
-  return members.properties.map((member) => groupMember(member, name, policy.text, root?.text ?? "/rest/api/2"));
+  return groups.properties.flatMap((group) => {
+    requireValid(
+      ts.isPropertyAssignment(group) &&
+        ts.isStringLiteralLike(group.name) &&
+        group.name.text.length > 0 &&
+        ts.isObjectLiteralExpression(group.initializer) &&
+        group.initializer.properties.length > 0,
+      "registry-native-group-policy",
+    );
+    return group.initializer.properties.map((member) =>
+      groupMember(member, method.text, group.name.text, root?.text ?? "/rest/api/2"),
+    );
+  });
 }
 /** Parse only literals and verified closed builder declarations. Never import/evaluate the runtime. */
 export function readJiraNativeRegistry(file = JIRA_REGISTRY_FILE) {
@@ -335,8 +375,11 @@ export function readJiraNativeRegistry(file = JIRA_REGISTRY_FILE) {
   requireValid(ast.parseDiagnostics.length === 0, "registry-native-syntax");
   const verified = new Set();
   const entries = nativeDeclaration(ast)
-    .properties.flatMap((property) => ts.isSpreadAssignment(property)
-      ? nativeGroup(property, ast, verified) : [nativeEntry(property, ast, verified)])
+    .properties.flatMap((property) =>
+      ts.isSpreadAssignment(property)
+        ? nativeGroup(property, ast, verified)
+        : [nativeEntry(property, ast, verified)],
+    )
     .sort((a, b) => a.tool.localeCompare(b.tool, "en"));
   requireValid(
     entries.length > 0 && new Set(entries.map((entry) => entry.tool)).size === entries.length,

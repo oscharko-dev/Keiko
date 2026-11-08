@@ -31,8 +31,15 @@ import {
   containsPseudoRoleMarker,
   stripUnsafeFormatChars,
 } from "./text-safety.js";
-import { ATLASSIAN_CONNECTOR_BASE_URL_MAX_CHARS, isSafeAtlassianConnectorBaseUrl } from "./atlassian-connector-url.js";
-export { ATLASSIAN_CONNECTOR_BASE_URL_MAX_CHARS, canonicalAtlassianConnectorBaseUrl, isSafeAtlassianConnectorBaseUrl } from "./atlassian-connector-url.js";
+import {
+  ATLASSIAN_CONNECTOR_BASE_URL_MAX_CHARS,
+  isSafeAtlassianConnectorBaseUrl,
+} from "./atlassian-connector-url.js";
+export {
+  ATLASSIAN_CONNECTOR_BASE_URL_MAX_CHARS,
+  canonicalAtlassianConnectorBaseUrl,
+  isSafeAtlassianConnectorBaseUrl,
+} from "./atlassian-connector-url.js";
 
 import { JIRA_READ_TOOL_FAMILIES } from "./jira-read-tools.js";
 import { JIRA_MANAGED_READ_TOOLS, type JiraManagedReadToolName } from "./jira-tool-fields.js";
@@ -126,89 +133,152 @@ const JIRA_RESOURCE_ACCOUNT_WRITE_ACTIONS = Object.freeze([
   "logout",
   "release-websudo",
 ] as const);
-type JiraResourceAccountAction = (typeof JIRA_RESOURCE_ACCOUNT_ADMIN_ACTIONS)[number] | (typeof JIRA_RESOURCE_ACCOUNT_WRITE_ACTIONS)[number];
+type JiraResourceAccountAction =
+  | (typeof JIRA_RESOURCE_ACCOUNT_ADMIN_ACTIONS)[number]
+  | (typeof JIRA_RESOURCE_ACCOUNT_WRITE_ACTIONS)[number];
 
-type JiraEntityPropertyAction = JiraEntityPropertyMutation extends `jira.${infer Action}` ? Action : never;
+type JiraEntityPropertyAction = JiraEntityPropertyMutation extends `jira.${infer Action}`
+  ? Action
+  : never;
 function jiraPropertyAction(name: JiraEntityPropertyMutation): JiraEntityPropertyAction {
   return name.slice(5) as JiraEntityPropertyAction;
 }
 const JIRA_PROPERTY_ACTIONS = Object.freeze(JIRA_ENTITY_PROPERTY_MUTATIONS.map(jiraPropertyAction));
 const JIRA_SAVED_ADMIN_ACTIONS = Object.freeze([
-  "create-filter", "set-filter-share-scope", "add-filter-permission", "delete-filter-permission",
+  "create-filter",
+  "set-filter-share-scope",
+  "add-filter-permission",
+  "delete-filter-permission",
 ] as const);
 const JIRA_SAVED_WRITE_ACTIONS = Object.freeze([
-  "update-filter", "delete-filter", "set-filter-columns", "reset-filter-columns",
-  "set-my-preference", "delete-my-preference",
+  "update-filter",
+  "delete-filter",
+  "set-filter-columns",
+  "reset-filter-columns",
+  "set-my-preference",
+  "delete-my-preference",
 ] as const);
-const JIRA_SAVED_ACTIONS = Object.freeze([...JIRA_SAVED_ADMIN_ACTIONS, ...JIRA_SAVED_WRITE_ACTIONS]);
+const JIRA_SAVED_ACTIONS = Object.freeze([
+  ...JIRA_SAVED_ADMIN_ACTIONS,
+  ...JIRA_SAVED_WRITE_ACTIONS,
+]);
 type JiraSavedConfigurationAction = (typeof JIRA_SAVED_ACTIONS)[number];
 
 type JiraRelationshipOrReleaseMutation = JiraLinkMutation | JiraReleaseLifecycleMutation;
-type JiraRelationshipOrReleaseAction = JiraRelationshipOrReleaseMutation extends `jira.${infer Action}` ? Action : never;
-function relationshipOrReleaseAction(name: JiraRelationshipOrReleaseMutation): JiraRelationshipOrReleaseAction {
+type JiraRelationshipOrReleaseAction =
+  JiraRelationshipOrReleaseMutation extends `jira.${infer Action}` ? Action : never;
+function relationshipOrReleaseAction(
+  name: JiraRelationshipOrReleaseMutation,
+): JiraRelationshipOrReleaseAction {
   return name.slice(5) as JiraRelationshipOrReleaseAction;
 }
-const JIRA_RELATIONSHIP_RELEASE_ACTIONS = Object.freeze([
-  ...JIRA_LINK_MUTATIONS, ...JIRA_RELEASE_LIFECYCLE_MUTATIONS,
-].map(relationshipOrReleaseAction));
+const JIRA_RELATIONSHIP_RELEASE_ACTIONS = Object.freeze(
+  [...JIRA_LINK_MUTATIONS, ...JIRA_RELEASE_LIFECYCLE_MUTATIONS].map(relationshipOrReleaseAction),
+);
 
-type JiraConfigurationMutation = JiraScreenConfigurationMutation | JiraBoardConfigurationMutation | JiraSprintLifecycleMutation;
-type JiraConfigurationAction = JiraConfigurationMutation extends `jira.${infer Action}` ? Action : never;
+type JiraConfigurationMutation =
+  JiraScreenConfigurationMutation | JiraBoardConfigurationMutation | JiraSprintLifecycleMutation;
+type JiraConfigurationAction = JiraConfigurationMutation extends `jira.${infer Action}`
+  ? Action
+  : never;
 function configurationAction(name: JiraConfigurationMutation): JiraConfigurationAction {
   return name.slice(5) as JiraConfigurationAction;
 }
-const JIRA_CONFIGURATION_ACTIONS = Object.freeze([
-  ...JIRA_SCREEN_CONFIGURATION_MUTATIONS, ...JIRA_BOARD_CONFIGURATION_MUTATIONS, ...JIRA_SPRINT_LIFECYCLE_MUTATIONS,
-].map(configurationAction));
+const JIRA_CONFIGURATION_ACTIONS = Object.freeze(
+  [
+    ...JIRA_SCREEN_CONFIGURATION_MUTATIONS,
+    ...JIRA_BOARD_CONFIGURATION_MUTATIONS,
+    ...JIRA_SPRINT_LIFECYCLE_MUTATIONS,
+  ].map(configurationAction),
+);
 const JIRA_CONFIGURATION_ADMIN_ACTIONS = Object.freeze([
-  "add-default-screen-field", "add-screen-tab-field", "remove-screen-tab-field",
-  "move-screen-tab-field", "set-screen-field-show-when-empty", "move-screen-tab", "unmap-all-sprints",
+  "add-default-screen-field",
+  "add-screen-tab-field",
+  "remove-screen-tab-field",
+  "move-screen-tab-field",
+  "set-screen-field-show-when-empty",
+  "move-screen-tab",
+  "unmap-all-sprints",
 ] as const satisfies readonly JiraConfigurationAction[]);
 
-type JiraPlanningVersionOrCategoryMutation = JiraAgilePlanningMutation | JiraVersionRemoteLinkMutation | JiraProjectCategoryMutation;
-type JiraPlanningVersionOrCategoryAction = JiraPlanningVersionOrCategoryMutation extends `jira.${infer Action}` ? Action : never;
-function planningVersionOrCategoryAction(name: JiraPlanningVersionOrCategoryMutation): JiraPlanningVersionOrCategoryAction {
+type JiraPlanningVersionOrCategoryMutation =
+  JiraAgilePlanningMutation | JiraVersionRemoteLinkMutation | JiraProjectCategoryMutation;
+type JiraPlanningVersionOrCategoryAction =
+  JiraPlanningVersionOrCategoryMutation extends `jira.${infer Action}` ? Action : never;
+function planningVersionOrCategoryAction(
+  name: JiraPlanningVersionOrCategoryMutation,
+): JiraPlanningVersionOrCategoryAction {
   return name.slice(5) as JiraPlanningVersionOrCategoryAction;
 }
-const JIRA_PLANNING_VERSION_CATEGORY_ACTIONS = Object.freeze([
-  ...JIRA_AGILE_PLANNING_MUTATIONS, ...JIRA_VERSION_REMOTE_LINK_MUTATIONS, ...JIRA_PROJECT_CATEGORY_MUTATIONS,
-].map(planningVersionOrCategoryAction));
+const JIRA_PLANNING_VERSION_CATEGORY_ACTIONS = Object.freeze(
+  [
+    ...JIRA_AGILE_PLANNING_MUTATIONS,
+    ...JIRA_VERSION_REMOTE_LINK_MUTATIONS,
+    ...JIRA_PROJECT_CATEGORY_MUTATIONS,
+  ].map(planningVersionOrCategoryAction),
+);
 const JIRA_PROJECT_CATEGORY_ACTIONS = Object.freeze([
-  "create-project-category", "update-project-category", "delete-project-category",
+  "create-project-category",
+  "update-project-category",
+  "delete-project-category",
 ] as const satisfies readonly JiraPlanningVersionOrCategoryAction[]);
 
 type JiraAccessConfigurationMutation = JiraPermissionSchemeMutation | JiraRoleMutation;
-type JiraAccessConfigurationAction = JiraAccessConfigurationMutation extends `jira.${infer Action}` ? Action : never;
-function accessConfigurationAction(name: JiraAccessConfigurationMutation): JiraAccessConfigurationAction {
+type JiraAccessConfigurationAction = JiraAccessConfigurationMutation extends `jira.${infer Action}`
+  ? Action
+  : never;
+function accessConfigurationAction(
+  name: JiraAccessConfigurationMutation,
+): JiraAccessConfigurationAction {
   return name.slice(5) as JiraAccessConfigurationAction;
 }
-const JIRA_ACCESS_CONFIGURATION_ACTIONS = Object.freeze([
-  ...JIRA_PERMISSION_SCHEME_MUTATIONS, ...JIRA_ROLE_MUTATIONS,
-].map(accessConfigurationAction));
+const JIRA_ACCESS_CONFIGURATION_ACTIONS = Object.freeze(
+  [...JIRA_PERMISSION_SCHEME_MUTATIONS, ...JIRA_ROLE_MUTATIONS].map(accessConfigurationAction),
+);
 
-type JiraDirectorySchemaOrMaintenanceMutation = JiraGroupMutation | JiraMaintenanceMutation | JiraSchemaMutation | JiraDirectoryAccessMutation;
-type JiraDirectorySchemaOrMaintenanceAction = JiraDirectorySchemaOrMaintenanceMutation extends `jira.${infer Action}` ? Action : never;
+type JiraDirectorySchemaOrMaintenanceMutation =
+  JiraGroupMutation | JiraMaintenanceMutation | JiraSchemaMutation | JiraDirectoryAccessMutation;
+type JiraDirectorySchemaOrMaintenanceAction =
+  JiraDirectorySchemaOrMaintenanceMutation extends `jira.${infer Action}` ? Action : never;
 type JiraIssueAction = JiraIssueActionMutation extends `jira.${infer Action}` ? Action : never;
-function directorySchemaOrMaintenanceAction(name: JiraDirectorySchemaOrMaintenanceMutation): JiraDirectorySchemaOrMaintenanceAction {
+function directorySchemaOrMaintenanceAction(
+  name: JiraDirectorySchemaOrMaintenanceMutation,
+): JiraDirectorySchemaOrMaintenanceAction {
   return name.slice(5) as JiraDirectorySchemaOrMaintenanceAction;
 }
-function issueAction(name: JiraIssueActionMutation): JiraIssueAction { return name.slice(5) as JiraIssueAction; }
-const JIRA_DIRECTORY_SCHEMA_MAINTENANCE_ACTIONS = Object.freeze([
-  ...JIRA_GROUP_MUTATIONS, ...JIRA_MAINTENANCE_MUTATIONS, ...JIRA_SCHEMA_MUTATIONS, ...JIRA_DIRECTORY_ACCESS_MUTATIONS,
-].map(directorySchemaOrMaintenanceAction));
+function issueAction(name: JiraIssueActionMutation): JiraIssueAction {
+  return name.slice(5) as JiraIssueAction;
+}
+const JIRA_DIRECTORY_SCHEMA_MAINTENANCE_ACTIONS = Object.freeze(
+  [
+    ...JIRA_GROUP_MUTATIONS,
+    ...JIRA_MAINTENANCE_MUTATIONS,
+    ...JIRA_SCHEMA_MUTATIONS,
+    ...JIRA_DIRECTORY_ACCESS_MUTATIONS,
+  ].map(directorySchemaOrMaintenanceAction),
+);
 const JIRA_ISSUE_ACTIONS = Object.freeze(JIRA_ISSUE_ACTION_MUTATIONS.map(issueAction));
 
-type JiraSchemeRuntimeOrEmailMutation = JiraOptionSchemeMutation | JiraWorkflowSchemeMutation | JiraInstanceSettingMutation | JiraEmailTemplateMutation;
-type JiraSchemeRuntimeOrEmailAction = JiraSchemeRuntimeOrEmailMutation extends `jira.${infer Action}` ? Action : never;
-function schemeRuntimeOrEmailAction(name: JiraSchemeRuntimeOrEmailMutation): JiraSchemeRuntimeOrEmailAction {
+type JiraSchemeRuntimeOrEmailMutation =
+  | JiraOptionSchemeMutation
+  | JiraWorkflowSchemeMutation
+  | JiraInstanceSettingMutation
+  | JiraEmailTemplateMutation;
+type JiraSchemeRuntimeOrEmailAction =
+  JiraSchemeRuntimeOrEmailMutation extends `jira.${infer Action}` ? Action : never;
+function schemeRuntimeOrEmailAction(
+  name: JiraSchemeRuntimeOrEmailMutation,
+): JiraSchemeRuntimeOrEmailAction {
   return name.slice(5) as JiraSchemeRuntimeOrEmailAction;
 }
-const JIRA_SCHEME_RUNTIME_EMAIL_ACTIONS = Object.freeze([
-  ...JIRA_OPTION_SCHEME_MUTATIONS,
-  ...JIRA_WORKFLOW_SCHEME_MUTATIONS,
-  ...JIRA_INSTANCE_SETTING_MUTATIONS,
-  ...JIRA_EMAIL_TEMPLATE_MUTATIONS,
-].map(schemeRuntimeOrEmailAction));
+const JIRA_SCHEME_RUNTIME_EMAIL_ACTIONS = Object.freeze(
+  [
+    ...JIRA_OPTION_SCHEME_MUTATIONS,
+    ...JIRA_WORKFLOW_SCHEME_MUTATIONS,
+    ...JIRA_INSTANCE_SETTING_MUTATIONS,
+    ...JIRA_EMAIL_TEMPLATE_MUTATIONS,
+  ].map(schemeRuntimeOrEmailAction),
+);
 
 // ─── Schema version ───────────────────────────────────────────────────────────
 // Pinned to "1". A breaking change introduces a NEW literal rather than mutating "1", the same
@@ -831,188 +901,36 @@ export const ATLASSIAN_CONNECTOR_ACTION_TYPES: readonly AtlassianConnectorAction
 /** Full source reference: collision-safe document scope, requirement id and optional criterion. */
 export const JIRA_REQUIREMENT_REFERENCE_CHARS_MAX = 120;
 
+const JIRA_DIRECT_MUTATION_ACTIONS = Object.freeze([
+  ...JIRA_RESOURCE_ACCOUNT_ADMIN_ACTIONS,
+  ...JIRA_RESOURCE_ACCOUNT_WRITE_ACTIONS,
+  ...JIRA_DIRECTORY_SCHEMA_MAINTENANCE_ACTIONS,
+  ...JIRA_ISSUE_ACTIONS,
+  ...JIRA_SCHEME_RUNTIME_EMAIL_ACTIONS,
+  ...JIRA_ACCESS_CONFIGURATION_ACTIONS,
+  ...JIRA_PLANNING_VERSION_CATEGORY_ACTIONS,
+  ...JIRA_CONFIGURATION_ACTIONS,
+  ...JIRA_RELATIONSHIP_RELEASE_ACTIONS,
+  ...JIRA_SAVED_ACTIONS,
+  ...JIRA_PROPERTY_ACTIONS,
+] as const);
+
 export const JIRA_MANAGED_ACTION_TYPES: Readonly<
   Record<JiraManagedReadToolName | JiraMutationOperation, AtlassianConnectorActionType>
 > = Object.freeze({
-  "jira.unlock-user-anonymization": "unlock-user-anonymization",
-  "jira.upload-temporary-avatar": "upload-temporary-avatar",
-  "jira.crop-temporary-avatar": "crop-temporary-avatar",
-  "jira.upload-issue-type-avatar": "upload-issue-type-avatar",
-  "jira.create-issue-type-avatar": "create-issue-type-avatar",
-  "jira.upload-project-avatar": "upload-project-avatar",
-  "jira.create-project-avatar": "create-project-avatar",
-  "jira.set-project-avatar": "set-project-avatar",
-  "jira.delete-project-avatar": "delete-project-avatar",
-  "jira.upload-owned-avatar": "upload-owned-avatar",
-  "jira.create-owned-avatar": "create-owned-avatar",
-  "jira.delete-owned-avatar": "delete-owned-avatar",
-  "jira.upload-user-avatar": "upload-user-avatar",
-  "jira.create-user-avatar": "create-user-avatar",
-  "jira.set-user-avatar": "set-user-avatar",
-  "jira.delete-user-avatar": "delete-user-avatar",
-  "jira.create-user": "create-user",
-  "jira.update-user": "update-user",
-  "jira.delete-user": "delete-user",
-  "jira.invalidate-user-session": "invalidate-user-session",
-  "jira.schedule-user-anonymization": "schedule-user-anonymization",
-  "jira.rerun-user-anonymization": "rerun-user-anonymization",
-  "jira.archive-issues": "archive-issues",
-  "jira.delete-issue": "delete-issue",
-  "jira.archive-issue": "archive-issue",
-  "jira.restore-issue": "restore-issue",
-  "jira.move-subtask": "move-subtask",
-  "jira.create-issues": "create-issues",
-  "jira.create-reciprocal-remote-link": "create-reciprocal-remote-link",
-  "jira.delete-project": "delete-project",
-  "jira.archive-project": "archive-project",
-  "jira.restore-project": "restore-project",
-  "jira.update-project-type": "update-project-type",
-  "jira.set-project-permission-scheme": "set-project-permission-scheme",
-  "jira.set-project-priority-scheme": "set-project-priority-scheme",
-  "jira.remove-project-priority-scheme": "remove-project-priority-scheme",
-  "jira.update-myself": "update-myself",
-  "jira.update-my-password": "update-my-password",
-  "jira.update-user-password": "update-user-password",
-  "jira.login": "login",
-  "jira.logout": "logout",
-  "jira.release-websudo": "release-websudo",
-  "jira.create-group": "create-group",
-  "jira.delete-group": "delete-group",
-  "jira.add-group-user": "add-group-user",
-  "jira.remove-group-user": "remove-group-user",
-  "jira.pin-comment": "pin-comment",
-  "jira.notify-issue": "notify-issue",
-  "jira.request-cluster-index-snapshot": "request-cluster-index-snapshot",
-  "jira.delete-cluster-node": "delete-cluster-node",
-  "jira.mark-cluster-node-offline": "mark-cluster-node-offline",
-  "jira.approve-cluster-upgrade": "approve-cluster-upgrade",
-  "jira.cancel-cluster-upgrade": "cancel-cluster-upgrade",
-  "jira.retry-cluster-upgrade": "retry-cluster-upgrade",
-  "jira.start-cluster-upgrade": "start-cluster-upgrade",
-  "jira.create-index-snapshot": "create-index-snapshot",
-  "jira.start-reindex": "start-reindex",
-  "jira.reindex-issues": "reindex-issues",
-  "jira.process-reindex-requests": "process-reindex-requests",
-  "jira.run-upgrade": "run-upgrade",
-  "jira.create-custom-field": "create-custom-field",
-  "jira.delete-custom-fields": "delete-custom-fields",
-  "jira.create-issue-type": "create-issue-type",
-  "jira.update-issue-type": "update-issue-type",
-  "jira.delete-issue-type": "delete-issue-type",
-  "jira.create-link-type": "create-link-type",
-  "jira.update-link-type": "update-link-type",
-  "jira.delete-link-type": "delete-link-type",
-  "jira.reset-link-type-order": "reset-link-type-order",
-  "jira.move-link-type": "move-link-type",
-  "jira.set-terminology": "set-terminology",
-  "jira.set-application-role": "set-application-role",
-  "jira.set-application-roles": "set-application-roles",
-  "jira.add-user-application": "add-user-application",
-  "jira.remove-user-application": "remove-user-application",
-  "jira.set-user-columns": "set-user-columns",
-  "jira.reset-user-columns": "reset-user-columns",
-  "jira.create-issue-type-scheme": "create-issue-type-scheme",
-  "jira.update-issue-type-scheme": "update-issue-type-scheme",
-  "jira.delete-issue-type-scheme": "delete-issue-type-scheme",
-  "jira.add-issue-type-scheme-projects": "add-issue-type-scheme-projects",
-  "jira.set-issue-type-scheme-projects": "set-issue-type-scheme-projects",
-  "jira.clear-issue-type-scheme-projects": "clear-issue-type-scheme-projects",
-  "jira.remove-issue-type-scheme-project": "remove-issue-type-scheme-project",
-  "jira.create-priority-scheme": "create-priority-scheme",
-  "jira.update-priority-scheme": "update-priority-scheme",
-  "jira.delete-priority-scheme": "delete-priority-scheme",
-  "jira.create-workflow-scheme": "create-workflow-scheme",
-  "jira.update-workflow-scheme": "update-workflow-scheme",
-  "jira.delete-workflow-scheme": "delete-workflow-scheme",
-  "jira.create-workflow-scheme-draft": "create-workflow-scheme-draft",
-  "jira.update-workflow-scheme-draft": "update-workflow-scheme-draft",
-  "jira.delete-workflow-scheme-draft": "delete-workflow-scheme-draft",
-  "jira.set-workflow-scheme-default": "set-workflow-scheme-default",
-  "jira.delete-workflow-scheme-default": "delete-workflow-scheme-default",
-  "jira.set-workflow-scheme-draft-default": "set-workflow-scheme-draft-default",
-  "jira.delete-workflow-scheme-draft-default": "delete-workflow-scheme-draft-default",
-  "jira.set-workflow-scheme-issue-type": "set-workflow-scheme-issue-type",
-  "jira.delete-workflow-scheme-issue-type": "delete-workflow-scheme-issue-type",
-  "jira.set-workflow-scheme-draft-issue-type": "set-workflow-scheme-draft-issue-type",
-  "jira.delete-workflow-scheme-draft-issue-type": "delete-workflow-scheme-draft-issue-type",
-  "jira.set-workflow-scheme-workflow": "set-workflow-scheme-workflow",
-  "jira.delete-workflow-scheme-workflow": "delete-workflow-scheme-workflow",
-  "jira.set-workflow-scheme-draft-workflow": "set-workflow-scheme-draft-workflow",
-  "jira.delete-workflow-scheme-draft-workflow": "delete-workflow-scheme-draft-workflow",
-  "jira.set-application-property": "set-application-property",
-  "jira.set-system-columns": "set-system-columns",
-  "jira.set-instance-base-url": "set-instance-base-url",
-  "jira.set-read-only-mode": "set-read-only-mode",
-  "jira.upload-email-template-pack": "upload-email-template-pack",
-  "jira.apply-email-template-pack": "apply-email-template-pack",
-  "jira.revert-email-template-pack": "revert-email-template-pack",
-  "jira.epic-remove-issues": "epic-remove-issues",
-  "jira.create-permission-scheme": "create-permission-scheme",
-  "jira.update-permission-scheme": "update-permission-scheme",
-  "jira.delete-permission-scheme": "delete-permission-scheme",
-  "jira.add-permission-grant": "add-permission-grant",
-  "jira.delete-permission-grant": "delete-permission-grant",
-  "jira.set-permission-scheme-attribute": "set-permission-scheme-attribute",
-  "jira.create-role": "create-role",
-  "jira.update-role": "update-role",
-  "jira.replace-role": "replace-role",
-  "jira.delete-role": "delete-role",
-  "jira.add-role-default-actors": "add-role-default-actors",
-  "jira.delete-role-default-actor": "delete-role-default-actor",
-  "jira.add-project-role-actors": "add-project-role-actors",
-  "jira.set-project-role-actors": "set-project-role-actors",
-  "jira.delete-project-role-actor": "delete-project-role-actor",
-  "jira.rank-epic": "rank-epic",
-  "jira.rank-issues": "rank-issues",
-  "jira.set-issue-estimation": "set-issue-estimation",
-  "jira.upsert-version-remote-link": "upsert-version-remote-link",
-  "jira.upsert-version-remote-link-by-global-id": "upsert-version-remote-link-by-global-id",
-  "jira.delete-version-remote-link": "delete-version-remote-link",
-  "jira.delete-version-remote-links": "delete-version-remote-links",
-  "jira.create-project-category": "create-project-category",
-  "jira.update-project-category": "update-project-category",
-  "jira.delete-project-category": "delete-project-category",
-  "jira.add-default-screen-field": "add-default-screen-field",
-  "jira.add-screen-tab-field": "add-screen-tab-field",
-  "jira.remove-screen-tab-field": "remove-screen-tab-field",
-  "jira.move-screen-tab-field": "move-screen-tab-field",
-  "jira.set-screen-field-show-when-empty": "set-screen-field-show-when-empty",
-  "jira.move-screen-tab": "move-screen-tab",
-  "jira.delete-board": "delete-board",
-  "jira.set-board-refined-velocity": "set-board-refined-velocity",
-  "jira.replace-sprint": "replace-sprint",
-  "jira.delete-sprint": "delete-sprint",
-  "jira.swap-sprints": "swap-sprints",
-  "jira.unmap-sprints": "unmap-sprints",
-  "jira.unmap-all-sprints": "unmap-all-sprints",
-  "jira.create-issue-link": "create-issue-link",
-  "jira.delete-issue-link": "delete-issue-link",
-  "jira.upsert-remote-link": "upsert-remote-link",
-  "jira.update-remote-link": "update-remote-link",
-  "jira.delete-remote-link": "delete-remote-link",
-  "jira.delete-remote-link-by-global-id": "delete-remote-link-by-global-id",
-  "jira.delete-component": "delete-component",
-  "jira.merge-version": "merge-version",
-  "jira.move-version": "move-version",
-  "jira.remove-and-swap-version": "remove-and-swap-version",
-  "jira.create-filter": "create-filter",
-  "jira.update-filter": "update-filter",
-  "jira.delete-filter": "delete-filter",
-  "jira.set-filter-share-scope": "set-filter-share-scope",
-  "jira.set-filter-columns": "set-filter-columns",
-  "jira.reset-filter-columns": "reset-filter-columns",
-  "jira.add-filter-permission": "add-filter-permission",
-  "jira.delete-filter-permission": "delete-filter-permission",
-  "jira.set-my-preference": "set-my-preference",
-  "jira.delete-my-preference": "delete-my-preference",
+  ...(Object.fromEntries(
+    JIRA_DIRECT_MUTATION_ACTIONS.map((action) => [`jira.${action}`, action]),
+  ) as Record<
+    `jira.${(typeof JIRA_DIRECT_MUTATION_ACTIONS)[number]}`,
+    (typeof JIRA_DIRECT_MUTATION_ACTIONS)[number]
+  >),
   ...(Object.fromEntries(JIRA_MANAGED_READ_TOOLS.map((name) => [name, name])) as Record<
     JiraManagedReadToolName,
     JiraManagedReadToolName
   >),
-  ...(Object.fromEntries(JIRA_ENTITY_PROPERTY_MUTATIONS.map((name) => [name, jiraPropertyAction(name)])) as Record<
-    JiraEntityPropertyMutation,
-    JiraEntityPropertyAction
-  >),
+  ...(Object.fromEntries(
+    JIRA_ENTITY_PROPERTY_MUTATIONS.map((name) => [name, jiraPropertyAction(name)]),
+  ) as Record<JiraEntityPropertyMutation, JiraEntityPropertyAction>),
   "jira.create": "create-issue",
   "jira.set-app-monitoring": "set-app-monitoring",
   "jira.set-ipd-monitoring": "set-ipd-monitoring",
@@ -1055,12 +973,11 @@ export const JIRA_MANAGED_ACTION_TYPES: Readonly<
 });
 function jiraActionValues<Action extends AtlassianConnectorActionType, Value extends string>(
   actions: readonly Action[],
-  value: Value,
+  value: Value | ((action: Action) => Value),
 ): Record<Action, Value> {
-  return Object.fromEntries(actions.map((name) => [name, value])) as Record<
-    Action,
-    Value
-  >;
+  return Object.fromEntries(
+    actions.map((name) => [name, typeof value === "function" ? value(name) : value]),
+  ) as Record<Action, Value>;
 }
 
 // The D4 "Action class" column, verbatim. `connector-access` is the shared
@@ -1147,56 +1064,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
 export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
   Record<AtlassianConnectorActionType, AtlassianConnectorProvider>
 > = Object.freeze({
-  ...jiraActionValues(JIRA_RESOURCE_ACCOUNT_ADMIN_ACTIONS, "jira"),
-  ...jiraActionValues(JIRA_RESOURCE_ACCOUNT_WRITE_ACTIONS, "jira"),
-  ...jiraActionValues(JIRA_DIRECTORY_SCHEMA_MAINTENANCE_ACTIONS, "jira"),
-  ...jiraActionValues(JIRA_ISSUE_ACTIONS, "jira"),
-  ...jiraActionValues(JIRA_SCHEME_RUNTIME_EMAIL_ACTIONS, "jira"),
-  ...jiraActionValues(JIRA_ACCESS_CONFIGURATION_ACTIONS, "jira"),
-  ...jiraActionValues(JIRA_PLANNING_VERSION_CATEGORY_ACTIONS, "jira"),
-  ...jiraActionValues(JIRA_CONFIGURATION_ACTIONS, "jira"),
-  ...jiraActionValues(JIRA_RELATIONSHIP_RELEASE_ACTIONS, "jira"),
-  ...jiraActionValues(JIRA_SAVED_ACTIONS, "jira"),
-  ...jiraActionValues(JIRA_MANAGED_READ_TOOLS, "jira"),
-  ...jiraActionValues(JIRA_PROPERTY_ACTIONS, "jira"),
-  "set-app-monitoring": "jira",
-  "set-ipd-monitoring": "jira",
-  "start-jmx-metrics": "jira",
-  "stop-jmx-metrics": "jira",
-  "create-screen-tab": "jira",
-  "rename-screen-tab": "jira",
-  "delete-screen-tab": "jira",
-  "create-project": "jira",
-  "update-project": "jira",
-  "create-component": "jira",
-  "update-component": "jira",
-  "create-version": "jira",
-  "update-version": "jira",
-  "create-board": "jira",
-  "create-sprint": "jira",
-  "update-sprint": "jira",
-  "move-issues-to-sprint": "jira",
-  "move-issues-to-backlog": "jira",
-  "update-epic": "jira",
-  "move-issues-to-epic": "jira",
-  "assign-issue": "jira",
+  ...jiraActionValues(ATLASSIAN_CONNECTOR_ACTION_TYPES, "jira"),
   "sync-space": "confluence",
-  "sync-project": "jira",
-  "search-issues-live": "jira",
-  "create-issue": "jira",
-  "update-issue-fields": "jira",
-  "transition-issue": "jira",
-  "add-issue-comment": "jira",
-  "update-issue-comment": "jira",
-  "delete-issue-comment": "jira",
-  "delete-attachment": "jira",
-  "delete-worklog": "jira",
-  "create-worklog": "jira",
-  "update-worklog": "jira",
-  "watch-issue": "jira",
-  "unwatch-issue": "jira",
-  "vote-issue": "jira",
-  "unvote-issue": "jira",
   "create-page": "confluence",
   "update-page": "confluence",
   "add-page-comment": "confluence",
@@ -1205,67 +1074,22 @@ export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
 export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchConnectorScope>
 > = Object.freeze({
-  ...jiraActionValues(JIRA_RESOURCE_ACCOUNT_ADMIN_ACTIONS, "issue-tracker.admin"),
-  ...jiraActionValues(JIRA_RESOURCE_ACCOUNT_WRITE_ACTIONS, "issue-tracker.write"),
-  ...jiraActionValues(JIRA_DIRECTORY_SCHEMA_MAINTENANCE_ACTIONS, "issue-tracker.admin"),
-  ...jiraActionValues(JIRA_ISSUE_ACTIONS, "issue-tracker.write"),
-  ...jiraActionValues(JIRA_SCHEME_RUNTIME_EMAIL_ACTIONS, "issue-tracker.admin"),
-  ...jiraActionValues(JIRA_ACCESS_CONFIGURATION_ACTIONS, "issue-tracker.admin"),
-  ...jiraActionValues(JIRA_PLANNING_VERSION_CATEGORY_ACTIONS, "issue-tracker.write"),
-  ...jiraActionValues(JIRA_PROJECT_CATEGORY_ACTIONS, "issue-tracker.admin"),
-  ...jiraActionValues(JIRA_CONFIGURATION_ACTIONS, "issue-tracker.write"),
-  ...jiraActionValues(JIRA_CONFIGURATION_ADMIN_ACTIONS, "issue-tracker.admin"),
-  ...jiraActionValues(JIRA_RELATIONSHIP_RELEASE_ACTIONS, "issue-tracker.write"),
-  ...jiraActionValues(JIRA_SAVED_ADMIN_ACTIONS, "issue-tracker.admin"),
-  ...jiraActionValues(JIRA_SAVED_WRITE_ACTIONS, "issue-tracker.write"),
-  ...jiraActionValues(JIRA_MANAGED_READ_TOOLS, "issue-tracker.read"),
-  "jira.validate-license": "issue-tracker.admin",
-  ...jiraActionValues(JIRA_READ_TOOL_FAMILIES.anonymization, "issue-tracker.admin"),
-  ...jiraActionValues(JIRA_READ_TOOL_FAMILIES.emailTemplatePacks, "issue-tracker.admin"),
-  ...jiraActionValues(JIRA_PROPERTY_ACTIONS, "issue-tracker.write"),
-  "set-issue-type-property": "issue-tracker.admin",
-  "delete-issue-type-property": "issue-tracker.admin",
-  "set-app-monitoring": "issue-tracker.admin",
-  "set-ipd-monitoring": "issue-tracker.admin",
-  "start-jmx-metrics": "issue-tracker.admin",
-  "stop-jmx-metrics": "issue-tracker.admin",
-  "create-screen-tab": "issue-tracker.admin",
-  "rename-screen-tab": "issue-tracker.admin",
-  "delete-screen-tab": "issue-tracker.admin",
-  "create-project": "issue-tracker.write",
-  "update-project": "issue-tracker.write",
-  "create-component": "issue-tracker.write",
-  "update-component": "issue-tracker.write",
-  "create-version": "issue-tracker.write",
-  "update-version": "issue-tracker.write",
-  "create-board": "issue-tracker.write",
-  "create-sprint": "issue-tracker.write",
-  "update-sprint": "issue-tracker.write",
-  "move-issues-to-sprint": "issue-tracker.write",
-  "move-issues-to-backlog": "issue-tracker.write",
-  "update-epic": "issue-tracker.write",
-  "move-issues-to-epic": "issue-tracker.write",
-  "assign-issue": "issue-tracker.write",
-  "sync-space": "knowledge-base.read",
-  "sync-project": "issue-tracker.read",
-  "search-issues-live": "issue-tracker.read",
-  "create-issue": "issue-tracker.write",
-  "update-issue-fields": "issue-tracker.write",
-  "transition-issue": "issue-tracker.write",
-  "add-issue-comment": "issue-tracker.write",
-  "update-issue-comment": "issue-tracker.write",
-  "delete-issue-comment": "issue-tracker.write",
-  "delete-attachment": "issue-tracker.write",
-  "delete-worklog": "issue-tracker.write",
-  "create-worklog": "issue-tracker.write",
-  "update-worklog": "issue-tracker.write",
-  "watch-issue": "issue-tracker.write",
-  "unwatch-issue": "issue-tracker.write",
-  "vote-issue": "issue-tracker.write",
-  "unvote-issue": "issue-tracker.write",
-  "create-page": "knowledge-base.write",
-  "update-page": "knowledge-base.write",
-  "add-page-comment": "knowledge-base.write",
+  ...jiraActionValues(ATLASSIAN_CONNECTOR_ACTION_TYPES, (action): CodingWorkbenchConnectorScope => {
+    const provider =
+      ATLASSIAN_CONNECTOR_ACTION_PROVIDER[action] === "jira" ? "issue-tracker" : "knowledge-base";
+    const actionClass = ATLASSIAN_CONNECTOR_ACTION_CLASS[action];
+    const access =
+      actionClass === "connector-admin"
+        ? "admin"
+        : actionClass === "connector-write"
+          ? "write"
+          : "read";
+    return provider === "knowledge-base"
+      ? actionClass === "connector-access"
+        ? "knowledge-base.read"
+        : "knowledge-base.write"
+      : `issue-tracker.${access}`;
+  }),
 } as const satisfies Readonly<Record<AtlassianConnectorActionType, CodingWorkbenchConnectorScope>>);
 
 /** Required capability only; the current envelope, mode and effect owner still admit execution. */
@@ -1281,70 +1105,36 @@ export function jiraRequiredConnectorScope(
 export const ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchApprovalRisk>
 > = Object.freeze({
-  ...jiraActionValues(JIRA_RESOURCE_ACCOUNT_ADMIN_ACTIONS, "high"),
-  ...jiraActionValues(JIRA_RESOURCE_ACCOUNT_WRITE_ACTIONS, "high"),
-  ...jiraActionValues(JIRA_DIRECTORY_SCHEMA_MAINTENANCE_ACTIONS, "high"),
-  ...jiraActionValues(JIRA_ISSUE_ACTIONS, "high"),
+  ...jiraActionValues(ATLASSIAN_CONNECTOR_ACTION_TYPES, (action) =>
+    ATLASSIAN_CONNECTOR_ACTION_CLASS[action] === "connector-access" ? "low" : "high",
+  ),
   "pin-comment": "medium",
-  ...jiraActionValues(JIRA_SCHEME_RUNTIME_EMAIL_ACTIONS, "high"),
-  ...jiraActionValues(JIRA_ACCESS_CONFIGURATION_ACTIONS, "high"),
-  ...jiraActionValues(JIRA_PLANNING_VERSION_CATEGORY_ACTIONS, "high"),
   "upsert-version-remote-link": "medium",
   "upsert-version-remote-link-by-global-id": "medium",
-  ...jiraActionValues(JIRA_CONFIGURATION_ACTIONS, "high"),
-  ...jiraActionValues(JIRA_RELATIONSHIP_RELEASE_ACTIONS, "medium"),
-  ...jiraActionValues(JIRA_SAVED_ADMIN_ACTIONS, "high"),
-  ...jiraActionValues(JIRA_SAVED_WRITE_ACTIONS, "medium"),
-  "delete-issue-link": "high",
-  "delete-remote-link": "high",
-  "delete-remote-link-by-global-id": "high",
-  "delete-component": "high",
-  "merge-version": "high",
-  "move-version": "high",
-  "remove-and-swap-version": "high",
-  "delete-filter": "high",
-  ...jiraActionValues(JIRA_MANAGED_READ_TOOLS, "low"),
-  "jira.validate-license": "high",
-  ...jiraActionValues(JIRA_PROPERTY_ACTIONS, "high"),
-  "set-app-monitoring": "high",
-  "set-ipd-monitoring": "high",
-  "start-jmx-metrics": "high",
-  "stop-jmx-metrics": "high",
-  "create-screen-tab": "high",
-  "rename-screen-tab": "high",
-  "delete-screen-tab": "high",
-  "create-project": "high",
+  "create-issue-link": "medium",
+  "upsert-remote-link": "medium",
+  "update-remote-link": "medium",
+  "update-filter": "medium",
+  "set-filter-columns": "medium",
+  "reset-filter-columns": "medium",
+  "set-my-preference": "medium",
+  "delete-my-preference": "medium",
+  "jira.email-template-pack": "low",
+  "jira.anonymization-validation": "low",
+  "jira.anonymization-rerun-validation": "low",
+  "jira.anonymization-progress": "low",
   "update-project": "medium",
-  "create-component": "high",
   "update-component": "medium",
-  "create-version": "high",
-  "update-version": "high",
-  "create-board": "high",
-  "create-sprint": "high",
-  "update-sprint": "high",
-  "move-issues-to-sprint": "high",
-  "move-issues-to-backlog": "high",
-  "update-epic": "high",
-  "move-issues-to-epic": "high",
   "assign-issue": "medium",
-  "sync-space": "low",
-  "sync-project": "low",
-  "search-issues-live": "low",
-  "create-issue": "high",
   "update-issue-fields": "medium",
-  "transition-issue": "high",
   "add-issue-comment": "low",
   "update-issue-comment": "medium",
-  "delete-issue-comment": "high",
-  "delete-attachment": "high",
-  "delete-worklog": "high",
   "create-worklog": "medium",
   "update-worklog": "medium",
   "watch-issue": "medium",
   "unwatch-issue": "medium",
   "vote-issue": "medium",
   "unvote-issue": "medium",
-  "create-page": "high",
   "update-page": "medium",
   "add-page-comment": "low",
 } as const satisfies Readonly<Record<AtlassianConnectorActionType, CodingWorkbenchApprovalRisk>>);
@@ -2206,7 +1996,10 @@ export {
   type JiraManagedReadToolName,
 } from "./jira-tool-fields.js";
 export { JIRA_READ_TOOL_FAMILIES } from "./jira-read-tools.js";
-export { JIRA_ENTITY_PROPERTY_MUTATIONS, type JiraEntityPropertyMutation } from "./jira-tool-execution.js";
+export {
+  JIRA_ENTITY_PROPERTY_MUTATIONS,
+  type JiraEntityPropertyMutation,
+} from "./jira-tool-execution.js";
 export {
   JIRA_ATTACHMENT_MAX_BYTES,
   JIRA_ATTACHMENT_NAME_MAX_BYTES,
@@ -2364,10 +2157,22 @@ export {
 } from "./jira-human-input.js";
 export { copyJiraHumanInputReview, type JiraHumanInputReview } from "./jira-human-input-review.js";
 export {
-  JIRA_AVATAR_MUTATIONS, type JiraAvatarMutation,
-  JIRA_AVATAR_UPLOAD_MUTATIONS, type JiraAvatarUploadMutation, isJiraAvatarUploadOperation,
-  JIRA_IDENTITY_MUTATIONS, type JiraIdentityMutation,
-  JIRA_PRIVATE_ACCOUNT_MUTATIONS, type JiraPrivateAccountMutation,
-  JIRA_ISSUE_LIFECYCLE_MUTATIONS, type JiraIssueLifecycleMutation,
-  JIRA_PROJECT_LIFECYCLE_MUTATIONS, type JiraProjectLifecycleMutation,
+  JIRA_AVATAR_MUTATIONS,
+  type JiraAvatarMutation,
+  JIRA_AVATAR_UPLOAD_MUTATIONS,
+  type JiraAvatarUploadMutation,
+  isJiraAvatarUploadOperation,
+  JIRA_IDENTITY_MUTATIONS,
+  type JiraIdentityMutation,
+  JIRA_PRIVATE_ACCOUNT_MUTATIONS,
+  type JiraPrivateAccountMutation,
+  JIRA_ISSUE_LIFECYCLE_MUTATIONS,
+  type JiraIssueLifecycleMutation,
+  JIRA_PROJECT_LIFECYCLE_MUTATIONS,
+  type JiraProjectLifecycleMutation,
+} from "./jira-tool-execution.js";
+
+export {
+  isJiraBoardConfigurationMutation,
+  isJiraProjectCategoryMutation,
 } from "./jira-tool-execution.js";

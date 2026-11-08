@@ -31,11 +31,18 @@ import {
   isAtlassianApplicationRoleVersion,
   type AtlassianApplicationRoleRequest,
   type AtlassianHttpBodyPort,
+  type AtlassianHttpBodyRequest,
   type AtlassianHttpBodyResult,
   type AtlassianHttpUpload,
 } from "./atlassian-http-port.js";
 import { ATLASSIAN_SYNC_RETRY_MAX_ATTEMPTS, retryDelayMs } from "./atlassian-sync-lane.js";
-import { asRecord, parseJsonArray, parseJsonObjectOrArray, parseJsonRecord, parseJsonScalar } from "./atlassian-sync-classify.js";
+import {
+  asRecord,
+  parseJsonArray,
+  parseJsonObjectOrArray,
+  parseJsonRecord,
+  parseJsonScalar,
+} from "./atlassian-sync-classify.js";
 import type { JiraHumanInputHttpRequest } from "./jira-private-identity-ports.js";
 
 // ADR-0128 D3: interactive write/read actions (issue and page CRUD, transitions, comments).
@@ -76,7 +83,13 @@ export interface AtlassianWriteHttpRequest {
   readonly jiraHumanInput?: JiraHumanInputHttpRequest | undefined;
   readonly jiraAvatarImage?: true | undefined;
   // Closed JSON response shapes, or status only; every JSON mode shares the same byte cap.
-  readonly expect: "json" | "json-array" | "json-object-or-array" | "json-scalar" | "none" | "jira-email-template-zip";
+  readonly expect:
+    | "json"
+    | "json-array"
+    | "json-object-or-array"
+    | "json-scalar"
+    | "none"
+    | "jira-email-template-zip";
 }
 
 export interface AtlassianWriteHttpDeps {
@@ -175,7 +188,8 @@ function classifyFailure(
 }
 
 type JsonResponsePayload = Pick<
-  Extract<AtlassianWriteHttpOutcome, { readonly ok: true }>, "body" | "items" | "scalar"
+  Extract<AtlassianWriteHttpOutcome, { readonly ok: true }>,
+  "body" | "items" | "scalar"
 >;
 function jsonResponsePayload(
   bodyText: string,
@@ -190,7 +204,8 @@ function jsonResponsePayload(
       const scalar = parseJsonScalar(bodyText);
       return scalar === undefined ? undefined : { body: undefined, scalar };
     }
-    case "json-object-or-array": return parseJsonObjectOrArray(bodyText);
+    case "json-object-or-array":
+      return parseJsonObjectOrArray(bodyText);
     case "json": {
       const body = parseJsonRecord(bodyText);
       return body === undefined ? undefined : { body };
@@ -210,11 +225,17 @@ function classifyResponse(
     : { ok: true, status: result.status, ...parsed };
 }
 
-function classifyArchive(result: Extract<AtlassianHttpBodyResult, { kind: "response" }>): AtlassianWriteHttpOutcome {
+function classifyArchive(
+  result: Extract<AtlassianHttpBodyResult, { kind: "response" }>,
+): AtlassianWriteHttpOutcome {
   if (result.truncated || result.bodyBytes > JIRA_ATTACHMENT_MAX_BYTES)
     return { ok: false, reason: "bounds-exceeded", httpStatus: result.status };
   const bytes = result.archiveBytes;
-  if (!(bytes instanceof Uint8Array) || bytes.byteLength !== result.bodyBytes || result.bodyText !== "")
+  if (
+    !(bytes instanceof Uint8Array) ||
+    bytes.byteLength !== result.bodyBytes ||
+    result.bodyText !== ""
+  )
     return { ok: false, reason: "malformed-payload", httpStatus: result.status };
   return { ok: true, status: result.status, body: undefined, bytes };
 }
@@ -224,28 +245,36 @@ async function issueOnce(
   request: AtlassianWriteHttpRequest,
   timeoutMs: number,
 ): Promise<AtlassianHttpBodyResult> {
-  return deps.http({
+  const native: AtlassianHttpBodyRequest = {
     method: request.method,
     url: request.url,
     timeoutMs,
-    maxBodyBytes: request.expect === "jira-email-template-zip" ? JIRA_ATTACHMENT_MAX_BYTES : ATLASSIAN_WRITE_RESPONSE_MAX_BYTES,
-    ...(request.bodyJson === undefined ? {} : { bodyJson: request.bodyJson }),
-    ...(request.upload === undefined ? {} : { upload: request.upload }),
-    ...(request.jiraExperimental === undefined ? {} : { jiraExperimental: request.jiraExperimental }),
-    ...(request.jiraPermissionAttribute === undefined ? {} : { jiraPermissionAttribute: request.jiraPermissionAttribute }),
-    ...(request.jiraEmailTemplateArchive === undefined ? {} : { jiraEmailTemplateArchive: request.jiraEmailTemplateArchive }),
-    ...(request.jiraApplicationRole === undefined ? {} : { jiraApplicationRole: request.jiraApplicationRole }),
-    ...(request.jiraUserApplication === undefined ? {} : { jiraUserApplication: request.jiraUserApplication }),
-    ...(request.jiraUserColumns === undefined ? {} : { jiraUserColumns: request.jiraUserColumns }),
-    ...(request.jiraIdentityExperimental === undefined ? {} : { jiraIdentityExperimental: request.jiraIdentityExperimental }),
-    ...(request.jiraProjectPriority === undefined ? {} : { jiraProjectPriority: request.jiraProjectPriority }),
-    ...(request.jiraHumanInput === undefined ? {} : { jiraHumanInput: request.jiraHumanInput }),
-    ...(request.jiraAvatarImage === undefined ? {} : { jiraAvatarImage: request.jiraAvatarImage }),
-    // KEIKO-0318: thread the caller's cancellation into the transport call itself so an abort
-    // tears down the in-flight request (AtlassianHttpBodyRequest.signal) instead of only being
-    // observed between attempts — the between-attempt checks alone only stopped a LATER retry.
+    maxBodyBytes:
+      request.expect === "jira-email-template-zip"
+        ? JIRA_ATTACHMENT_MAX_BYTES
+        : ATLASSIAN_WRITE_RESPONSE_MAX_BYTES,
+    // Cancellation reaches the transport so an abort tears down the in-flight request.
     ...(deps.signal === undefined ? {} : { signal: deps.signal }),
-  });
+  };
+  // This closed projection preserves absence and never forwards arbitrary request properties.
+  for (const field of [
+    "bodyJson",
+    "upload",
+    "jiraExperimental",
+    "jiraPermissionAttribute",
+    "jiraEmailTemplateArchive",
+    "jiraApplicationRole",
+    "jiraUserApplication",
+    "jiraUserColumns",
+    "jiraIdentityExperimental",
+    "jiraProjectPriority",
+    "jiraHumanInput",
+    "jiraAvatarImage",
+  ] as const) {
+    const value = request[field];
+    if (value !== undefined) Object.assign(native, { [field]: value });
+  }
+  return deps.http(native);
 }
 
 // KEIKO-0318: clamp the per-request timeout to whatever budget the aggregate deadline still
@@ -350,15 +379,26 @@ function requestBodyRefusal(
 }
 
 function validArchiveRequest(request: AtlassianWriteHttpRequest): boolean {
-  if (request.jiraEmailTemplateArchive === undefined) return request.expect !== "jira-email-template-zip";
-  if (request.jiraEmailTemplateArchive !== true || request.bodyJson !== undefined ||
-      request.jiraExperimental !== undefined || request.jiraPermissionAttribute !== undefined) return false;
+  if (request.jiraEmailTemplateArchive === undefined)
+    return request.expect !== "jira-email-template-zip";
+  if (
+    request.jiraEmailTemplateArchive !== true ||
+    request.bodyJson !== undefined ||
+    request.jiraExperimental !== undefined ||
+    request.jiraPermissionAttribute !== undefined
+  )
+    return false;
   return archiveRequestShape(request);
 }
 function archiveRequestShape(request: AtlassianWriteHttpRequest): boolean {
-  if (request.method === "GET") return request.expect === "jira-email-template-zip" && request.upload === undefined;
-  return request.method === "POST" && request.expect === "none" &&
-    request.upload?.contentType === "application/zip" && request.upload.bytes instanceof Uint8Array;
+  if (request.method === "GET")
+    return request.expect === "jira-email-template-zip" && request.upload === undefined;
+  return (
+    request.method === "POST" &&
+    request.expect === "none" &&
+    request.upload?.contentType === "application/zip" &&
+    request.upload.bytes instanceof Uint8Array
+  );
 }
 
 // Execute one bounded write-lane request with the method-aware D3 retry discipline. Returns a
@@ -382,8 +422,11 @@ export async function executeAtlassianWriteRequest(
   const result = await driveRetryLoop(deps, request, initial, deadlineAt, now, isAborted, sleep);
   if (result.kind !== "response") return classifyTransport(result);
   const classified = classifyResponse(result, request.expect);
-  if (request.jiraApplicationRole === "version" && classified.ok &&
-      isAtlassianApplicationRoleVersion(result.applicationRoleVersion))
+  if (
+    request.jiraApplicationRole === "version" &&
+    classified.ok &&
+    isAtlassianApplicationRoleVersion(result.applicationRoleVersion)
+  )
     return { ...classified, applicationRoleVersion: result.applicationRoleVersion };
   return classified;
 }

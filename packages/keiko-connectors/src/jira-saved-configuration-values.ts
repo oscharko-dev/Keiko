@@ -1,10 +1,20 @@
-import type { JiraMutationAttempt, JiraMutationReceipt } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import { TOOL_CATALOG_LIMITS, type CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import type {
+  JiraMutationAttempt,
+  JiraMutationReceipt,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  TOOL_CATALOG_LIMITS,
+  type CatalogJsonObject,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { asRecord } from "./atlassian-sync-classify.js";
 import { jiraDirectoryUser } from "./jira-directory-values.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { projectJiraFilterPermissions } from "./jira-managed-saved-views.js";
-import { dispatchFailure, jiraConflictFailure as savedConflict, type JiraObservationFailure } from "./jira-mutation-failure.js";
+import {
+  dispatchFailure,
+  jiraConflictFailure as savedConflict,
+  type JiraObservationFailure,
+} from "./jira-mutation-failure.js";
 import { jiraNativeId, jiraNativeName, jiraNativeText } from "./jira-native-values.js";
 
 export interface JiraSavedConfigurationReceipt extends JiraMutationReceipt {
@@ -18,9 +28,13 @@ export interface JiraSavedConfigurationReceipt extends JiraMutationReceipt {
 export type SavedFailure = Omit<Extract<JiraMutationAttempt, { readonly ok: false }>, "receipt"> & {
   readonly receipt?: JiraSavedConfigurationReceipt;
 };
-export type JiraSavedConfigurationAttempt = SavedFailure | { readonly ok: true; readonly receipt: JiraSavedConfigurationReceipt };
+export type JiraSavedConfigurationAttempt =
+  SavedFailure | { readonly ok: true; readonly receipt: JiraSavedConfigurationReceipt };
 export type SavedObservation<T> = JiraObservationFailure | { readonly ok: true; readonly value: T };
-export interface SavedActor { readonly key: string; readonly name: string }
+export interface SavedActor {
+  readonly key: string;
+  readonly name: string;
+}
 export interface SavedFilter {
   readonly id: string;
   readonly ownerKey: string;
@@ -30,11 +44,20 @@ export interface SavedFilter {
 }
 export const SAVED_MALFORMED: JiraObservationFailure = { ok: false, reason: "malformed-payload" };
 export { savedConflict };
-export { jiraFieldValidationFailure as savedInvalid, jiraUnchangedFailure as savedUnchanged } from "./jira-mutation-failure.js";
-export function savedUnconfirmed(message: string, receipt: JiraSavedConfigurationReceipt): SavedFailure {
+export {
+  jiraFieldValidationFailure as savedInvalid,
+  jiraUnchangedFailure as savedUnchanged,
+} from "./jira-mutation-failure.js";
+export function savedUnconfirmed(
+  message: string,
+  receipt: JiraSavedConfigurationReceipt,
+): SavedFailure {
   return { ok: false, reason: "unavailable", detail: { messages: [message] }, receipt };
 }
-export function savedExactKeys(value: Readonly<Record<string, unknown>>, allowed: ReadonlySet<string>): boolean {
+export function savedExactKeys(
+  value: Readonly<Record<string, unknown>>,
+  allowed: ReadonlySet<string>,
+): boolean {
   return Object.keys(value).every((key) => allowed.has(key));
 }
 export function savedText(value: unknown, max: number, empty = false): value is string {
@@ -43,56 +66,100 @@ export function savedText(value: unknown, max: number, empty = false): value is 
 export function savedName(value: unknown): value is string {
   return jiraNativeName(value, 255) && !/\p{Surrogate}/u.test(value);
 }
-export async function readSavedActor(request: JiraMutationRequest, expectedKey: string): Promise<SavedObservation<SavedActor>> {
+export async function readSavedActor(
+  request: JiraMutationRequest,
+  expectedKey: string,
+): Promise<SavedObservation<SavedActor>> {
   const response = await request("myself", "GET", undefined, "json");
   if (!response.ok) return dispatchFailure(response);
   const user = response.status === 200 ? jiraDirectoryUser(response.body) : undefined;
-  if (user === undefined || !savedText(user.key, 255) || !savedText(user.name, 255)) return SAVED_MALFORMED;
-  if (user.key !== expectedKey) return savedConflict("The connected Jira user no longer matches the reviewed user. Review the current identity; an acknowledged operation remains unconfirmed and must not be replayed.");
+  if (user === undefined || !savedText(user.key, 255) || !savedText(user.name, 255))
+    return SAVED_MALFORMED;
+  if (user.key !== expectedKey)
+    return savedConflict(
+      "The connected Jira user no longer matches the reviewed user. Review the current identity; an acknowledged operation remains unconfirmed and must not be replayed.",
+    );
   return { ok: true, value: { key: user.key, name: user.name } };
 }
 export function projectSavedFilter(value: unknown): SavedFilter | undefined {
   const raw = asRecord(value);
   const owner = jiraDirectoryUser(raw?.owner);
-  if (raw === undefined || !jiraNativeId(raw.id) || typeof owner?.key !== "string") return undefined;
+  if (raw === undefined || !jiraNativeId(raw.id) || typeof owner?.key !== "string")
+    return undefined;
   if (!savedName(raw.name) || !savedText(raw.jql, 2048)) return undefined;
   const description = raw.description ?? null;
   if (description !== null && !savedText(description, 32768, true)) return undefined;
   return { id: raw.id, ownerKey: owner.key, name: raw.name, jql: raw.jql, description };
 }
-export async function readOwnedFilter(request: JiraMutationRequest, id: string, actorKey: string): Promise<SavedObservation<SavedFilter>> {
+export async function readOwnedFilter(
+  request: JiraMutationRequest,
+  id: string,
+  actorKey: string,
+): Promise<SavedObservation<SavedFilter>> {
   const response = await request(`filter/${id}`, "GET", undefined, "json");
   if (!response.ok) return dispatchFailure(response);
   const filter = response.status === 200 ? projectSavedFilter(response.body) : undefined;
   if (filter === undefined || filter.id !== id) return SAVED_MALFORMED;
-  if (filter.ownerKey !== actorKey) return savedConflict("The filter no longer has the reviewed connected-user owner. Ownership changed or is different; an acknowledged operation remains unconfirmed and must not be replayed.");
+  if (filter.ownerKey !== actorKey)
+    return savedConflict(
+      "The filter no longer has the reviewed connected-user owner. Ownership changed or is different; an acknowledged operation remains unconfirmed and must not be replayed.",
+    );
   return { ok: true, value: filter };
 }
-export async function bindSavedFilterOwner(request: JiraMutationRequest, filterId: string, actorKey: string): Promise<SavedObservation<true>> {
+export function bindSavedFilterOwner(
+  request: JiraMutationRequest,
+  filterId: string,
+  actorKey: string,
+): Promise<SavedObservation<true>>;
+export function bindSavedFilterOwner<Value>(
+  request: JiraMutationRequest,
+  filterId: string,
+  actorKey: string,
+  observe: (request: JiraMutationRequest, filterId: string) => Promise<SavedObservation<Value>>,
+): Promise<SavedObservation<Value>>;
+export async function bindSavedFilterOwner(
+  request: JiraMutationRequest,
+  filterId: string,
+  actorKey: string,
+  observe?: (request: JiraMutationRequest, filterId: string) => Promise<SavedObservation<unknown>>,
+): Promise<SavedObservation<unknown>> {
   const actor = await readSavedActor(request, actorKey);
   if (!actor.ok) return actor;
   const filter = await readOwnedFilter(request, filterId, actorKey);
-  return filter.ok ? { ok: true, value: true } : filter;
+  if (!filter.ok) return filter;
+  return observe === undefined ? { ok: true, value: true } : observe(request, filterId);
 }
 export function sameSavedFilter(actual: SavedFilter, expected: SavedFilter): boolean {
-  return actual.id === expected.id && actual.ownerKey === expected.ownerKey && actual.name === expected.name &&
-    actual.jql === expected.jql && actual.description === expected.description;
+  return (
+    actual.id === expected.id &&
+    actual.ownerKey === expected.ownerKey &&
+    actual.name === expected.name &&
+    actual.jql === expected.jql &&
+    actual.description === expected.description
+  );
 }
 export type DefaultShareScope = "PRIVATE" | "AUTHENTICATED" | "GLOBAL";
 export function savedShareScope(value: unknown): value is DefaultShareScope {
   return value === "PRIVATE" || value === "AUTHENTICATED" || value === "GLOBAL";
 }
-export async function readSavedShareScope(request: JiraMutationRequest): Promise<SavedObservation<DefaultShareScope>> {
+export async function readSavedShareScope(
+  request: JiraMutationRequest,
+): Promise<SavedObservation<DefaultShareScope>> {
   const response = await request("filter/defaultShareScope", "GET", undefined, "json");
   if (!response.ok) return dispatchFailure(response);
   return response.status === 200 && savedShareScope(response.body?.scope)
-    ? { ok: true, value: response.body.scope } : SAVED_MALFORMED;
+    ? { ok: true, value: response.body.scope }
+    : SAVED_MALFORMED;
 }
-export async function readSavedPermissions(request: JiraMutationRequest, filterId: string): Promise<SavedObservation<readonly CatalogJsonObject[]>> {
+export async function readSavedPermissions(
+  request: JiraMutationRequest,
+  filterId: string,
+): Promise<SavedObservation<readonly CatalogJsonObject[]>> {
   const response = await request(`filter/${filterId}/permission`, "GET", undefined, "json-array");
   if (!response.ok) return dispatchFailure(response);
   if (response.status !== 200 || response.items === undefined) return SAVED_MALFORMED;
-  if (response.items.length > TOOL_CATALOG_LIMITS.maxArrayItems) return { ok: false, reason: "bounds-exceeded" };
+  if (response.items.length > TOOL_CATALOG_LIMITS.maxArrayItems)
+    return { ok: false, reason: "bounds-exceeded" };
   const permissions = projectJiraFilterPermissions(response.items);
   return permissions === undefined ? SAVED_MALFORMED : { ok: true, value: permissions };
 }
