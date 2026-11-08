@@ -60,8 +60,8 @@ function compiler(dialect: CatalogJsonValue | undefined): Ajv {
   return validator;
 }
 const VALIDATORS = new Map<string, ValidateFunction>();
-function validationFor(schema: CatalogJsonObject): ValidateFunction {
-  requireCatalog(isBoundedExternalJsonSchema(schema), "unsupported-schema");
+function validationFor(schema: CatalogJsonObject, bounded = false): ValidateFunction {
+  requireCatalog(bounded || isBoundedExternalJsonSchema(schema), "unsupported-schema");
   const identity = canonicalise(schema);
   const cached = VALIDATORS.get(identity);
   if (cached !== undefined) return cached;
@@ -83,6 +83,12 @@ function validationFor(schema: CatalogJsonObject): ValidateFunction {
 export function compileExternalCatalogSchema(value: unknown): CatalogJsonObject {
   requireCatalog(isBoundedExternalJsonSchema(value), "unsupported-schema");
   const schema = catalogObject(copyCatalogJson(value));
+  const declared = { ...schema, $schema: schema.$schema ?? EXTERNAL_JSON_SCHEMA_DEFAULT };
+  validationFor(declared, true);
+  return declared;
+}
+/** The caller already owns a bounded private copy; no second copy or bound walk is needed. */
+export function compileOwnedExternalCatalogSchema(schema: CatalogJsonObject): CatalogJsonObject {
   const declared = { ...schema, $schema: schema.$schema ?? EXTERNAL_JSON_SCHEMA_DEFAULT };
   validationFor(declared);
   return declared;

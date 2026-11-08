@@ -65,6 +65,16 @@ async function confirmDraft(
   const direct = await readReviewedScheme(request, desired, `workflowscheme/${parent.id}/draft`);
   return direct === undefined ? { ok: true, receipt } : { ...direct, receipt };
 }
+/** A missing scheme after an acknowledged delete is not proof of its consequences. */
+function failedReadback(
+  input: WorkflowSchemeInput,
+  failure: Extract<Awaited<ReturnType<typeof readWorkflowSchemeSnapshot>>, { ok: false }>,
+  receipt: WorkflowSchemeMutationReceipt,
+): WorkflowSchemeAttempt {
+  return input.kind === "delete" && failure.reason === "not-found"
+    ? unconfirmed(receipt)
+    : { ...failure, receipt };
+}
 async function confirmScheme(
   request: JiraMutationRequest,
   input: WorkflowSchemeInput,
@@ -72,7 +82,7 @@ async function confirmScheme(
 ): Promise<WorkflowSchemeAttempt> {
   if (receipt.schemeId === undefined) return unconfirmed(receipt);
   const actual = await readWorkflowSchemeSnapshot(request, `workflowscheme/${receipt.schemeId}`);
-  if (!actual.ok) return { ...actual, receipt };
+  if (!actual.ok) return failedReadback(input, actual, receipt);
   if (input.kind === "delete") return unconfirmed(receipt);
   const desired = desiredWorkflowScheme(input, receipt.schemeId);
   if (desired === undefined || !sameWorkflowScheme(actual.value, desired))

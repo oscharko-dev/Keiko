@@ -208,7 +208,10 @@ async function confirmType(
 ): Promise<SchemaAttempt> {
   if (known.issueTypeId === undefined) return schemaUnconfirmed(known);
   const current = await readSchemaType(request, known.issueTypeId);
-  if (!current.ok) return { ...current, receipt: known };
+  if (!current.ok)
+    return input.kind === "delete" && current.reason === "not-found"
+      ? schemaUnconfirmed(known)
+      : { ...current, receipt: known };
   if (input.kind !== "update") return schemaUnconfirmed(known);
   return sameSchemaValue(current.value, { ...input.expected, ...input.target })
     ? { ok: true, receipt: known }
@@ -225,7 +228,10 @@ async function confirmLink(
   }
   if (known.linkTypeId === undefined) return schemaUnconfirmed(known);
   const current = await readSchemaLink(request, known.linkTypeId);
-  if (!current.ok) return { ...current, receipt: known };
+  if (!current.ok)
+    return input.kind === "delete" && current.reason === "not-found"
+      ? schemaUnconfirmed(known)
+      : { ...current, receipt: known };
   if (input.kind === "delete") return schemaUnconfirmed(known);
   return sameSchemaValue(current.value, { ...input.target, id: known.linkTypeId })
     ? { ok: true, receipt: known }

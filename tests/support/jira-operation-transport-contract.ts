@@ -140,11 +140,11 @@ export async function observeNativeJiraOperation(
         throw new TypeError(
           "An unconfirmed deletion must retain an independently specified known receipt",
         );
-      expect(attempt).toMatchObject({
-        ok: false,
-        reason: "unavailable",
-        receipt: scenario.expectedReceipt,
-      });
+      // The browse link is attached only by the tool layer from the bound instance and a validated
+      // key; the mutation attempt never carries a link. The final result below pins the full receipt.
+      const { browseUrl: toolLink, ...attemptReceipt } = scenario.expectedReceipt;
+      expect(attempt).toMatchObject({ ok: false, reason: "unavailable", receipt: attemptReceipt });
+      if (toolLink !== undefined) expect(attempt.receipt).not.toHaveProperty("browseUrl");
       if (attempt.ok || attempt.receipt === undefined)
         throw new TypeError("Expected acknowledged, unconfirmed deletion with known target");
       return {

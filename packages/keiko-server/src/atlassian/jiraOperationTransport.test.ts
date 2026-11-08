@@ -3233,7 +3233,12 @@ function worklogWrite(
   return response(state.worklog, create ? 201 : 200);
 }
 function participationRead(path: string, state: RemoteState): AtlassianHttpBodyResult | undefined {
-  const person = { name: "synthetic-user", active: true };
+  const person = {
+    key: "synthetic-key",
+    name: "synthetic-user",
+    displayName: "Synthetic User",
+    active: true,
+  };
   if (path === "myself") return response(person);
   if (path === "issue/10001/watchers")
     return response({
@@ -4636,7 +4641,13 @@ describe("native Jira registry and real connector transport agreement", () => {
       resolved: false,
     });
     expect(observed.result.data).not.toHaveProperty("items");
-    expect(JSON.stringify(observed.result.data)).not.toContain("untrusted.invalid");
+    // The native URL is data inside the typed review snapshot only (the descriptor-owned review
+    // contract); it is never a top-level link, never followed and never replaces the trusted link.
+    const { reviewSnapshot, ...visible } = observed.result.data as Record<string, unknown>;
+    expect(reviewSnapshot).toMatchObject({ url: "https://untrusted.invalid/target" });
+    expect(JSON.stringify(visible)).not.toContain("untrusted.invalid");
+    expect(visible).not.toHaveProperty("url");
+    expect(visible.browseUrl).toBe("https://jira.example.invalid/context/browse/SYN-1");
   });
   it("keeps picker contexts bound while returning only plain suggestions and trusted browse URLs", async () => {
     const scenario = SCENARIOS.find(({ tool }) => tool === "jira.issue-picker");

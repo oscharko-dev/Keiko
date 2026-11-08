@@ -10,6 +10,7 @@ import type {
 import { executeAtlassianWriteRequest } from "@oscharko-dev/keiko-connectors";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { buildAtlassianConnectorCredentialDeps } from "./wiring.js";
+import { ambiguousJiraAuthenticationResponse } from "./jiraAuthenticationObservation.js";
 import { createAtlassianCredentialMetadataStore } from "./credentialMetadataStore.js";
 import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
 
@@ -688,33 +689,33 @@ const DOCUMENTED_NATIVE_WRITE_401 = [
   { method: "POST", path: "cluster/zdu/start" },
   { method: "POST", path: "index-snapshot" },
   { method: "POST", path: "reindex/request" },
-  { method: "POST", path: "/workflowscheme" },
-  { method: "PUT", path: "/workflowscheme/1" },
-  { method: "DELETE", path: "/workflowscheme/1" },
-  { method: "POST", path: "/workflowscheme/1/createdraft" },
-  { method: "PUT", path: "/workflowscheme/1/draft" },
-  { method: "DELETE", path: "/workflowscheme/1/draft" },
-  { method: "PUT", path: "/workflowscheme/1/default" },
-  { method: "DELETE", path: "/workflowscheme/1/default" },
-  { method: "PUT", path: "/workflowscheme/1/draft/default" },
-  { method: "DELETE", path: "/workflowscheme/1/draft/default" },
-  { method: "PUT", path: "/workflowscheme/1/issuetype/2" },
-  { method: "DELETE", path: "/workflowscheme/1/issuetype/2" },
-  { method: "PUT", path: "/workflowscheme/1/draft/issuetype/2" },
-  { method: "DELETE", path: "/workflowscheme/1/draft/issuetype/2" },
-  { method: "PUT", path: "/workflowscheme/1/workflow" },
-  { method: "DELETE", path: "/workflowscheme/1/workflow" },
-  { method: "PUT", path: "/workflowscheme/1/draft/workflow" },
-  { method: "DELETE", path: "/workflowscheme/1/draft/workflow" },
-  { method: "PUT", path: "/issue/SYN-1/assignee" },
-  { method: "POST", path: "/issue/SYN-1/watchers" },
-  { method: "DELETE", path: "/issue/SYN-1/watchers" },
-  { method: "POST", path: "/screens/addToDefault/customfield_10000" },
-  { method: "POST", path: "/screens/1/tabs/2/fields" },
-  { method: "DELETE", path: "/screens/1/tabs/2/fields/1" },
-  { method: "POST", path: "/screens/1/tabs/2/fields/1/move" },
-  { method: "PUT", path: "/screens/1/tabs/2/fields/1/updateShowWhenEmptyIndicator/false" },
-  { method: "POST", path: "/screens/1/tabs/2/move/0" },
+  { method: "POST", path: "workflowscheme" },
+  { method: "PUT", path: "workflowscheme/1" },
+  { method: "DELETE", path: "workflowscheme/1" },
+  { method: "POST", path: "workflowscheme/1/createdraft" },
+  { method: "PUT", path: "workflowscheme/1/draft" },
+  { method: "DELETE", path: "workflowscheme/1/draft" },
+  { method: "PUT", path: "workflowscheme/1/default" },
+  { method: "DELETE", path: "workflowscheme/1/default" },
+  { method: "PUT", path: "workflowscheme/1/draft/default" },
+  { method: "DELETE", path: "workflowscheme/1/draft/default" },
+  { method: "PUT", path: "workflowscheme/1/issuetype/2" },
+  { method: "DELETE", path: "workflowscheme/1/issuetype/2" },
+  { method: "PUT", path: "workflowscheme/1/draft/issuetype/2" },
+  { method: "DELETE", path: "workflowscheme/1/draft/issuetype/2" },
+  { method: "PUT", path: "workflowscheme/1/workflow" },
+  { method: "DELETE", path: "workflowscheme/1/workflow" },
+  { method: "PUT", path: "workflowscheme/1/draft/workflow" },
+  { method: "DELETE", path: "workflowscheme/1/draft/workflow" },
+  { method: "PUT", path: "issue/SYN-1/assignee" },
+  { method: "POST", path: "issue/SYN-1/watchers" },
+  { method: "DELETE", path: "issue/SYN-1/watchers" },
+  { method: "POST", path: "screens/addToDefault/customfield_10000" },
+  { method: "POST", path: "screens/1/tabs/2/fields" },
+  { method: "DELETE", path: "screens/1/tabs/2/fields/1" },
+  { method: "POST", path: "screens/1/tabs/2/fields/1/move" },
+  { method: "PUT", path: "screens/1/tabs/2/fields/1/updateShowWhenEmptyIndicator/false" },
+  { method: "POST", path: "screens/1/tabs/2/move/0" },
 ] as const;
 it.each(DOCUMENTED_NATIVE_WRITE_401)(
   "keeps the actual $method $path permission refusal without credential loss or write replay",
@@ -760,6 +761,18 @@ it.each(DOCUMENTED_NATIVE_WRITE_401)(
     expect(f.invalidated).toEqual([2]);
   },
 );
+it("refuses an encoded-separator native segment before any request or credential loss", async () => {
+  const path = "screens/addToDefault/unsafe%2Ffield";
+  const f = fixture(() => response({}, 401));
+  await expect(
+    f.deps.httpBodyPortFactory(f.metadata)({ ...request(path), method: "POST", bodyJson: "{}" }),
+  ).rejects.toMatchObject({ code: "invalid-input" });
+  expect(f.urls).toEqual([]);
+  expect(f.invalidated).toEqual([]);
+  expect(
+    ambiguousJiraAuthenticationResponse(f.metadata, { ...request(path), method: "POST" }),
+  ).toBe(false);
+});
 it.each([
   { method: "POST", path: "workflowscheme/1/draft" },
   { method: "PUT", path: "workflowscheme/1/createdraft" },
@@ -769,7 +782,6 @@ it.each([
   { method: "POST", path: "screens/1/tabs/2/fields/3/move/unknown" },
   { method: "PUT", path: "screens/1/tabs/2/fields/3/updateShowWhenEmptyIndicator/0" },
   { method: "POST", path: "screens/1/tabs/2/move/2147483648" },
-  { method: "POST", path: "screens/addToDefault/unsafe%2Ffield" },
   { method: "POST", path: "issue/SYN-1/assignee" },
   { method: "PUT", path: "issue/SYN-1/watchers" },
   { method: "POST", path: "issue/SYN-1/notify" },
