@@ -5,7 +5,7 @@ import { randomBytes } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { chromium, expect } from "@playwright/test";
 import { encodeCodingAppSessionPairingFragment } from "../../packages/keiko-contracts/dist/coding-app-session.js";
@@ -28,16 +28,23 @@ import {
 import {
   completedTurnEvidence,
   completedToolRoundTripEvidence,
+  customerShapeChooserClass,
   customerShapeFailureSummary,
+  customerShapeFolderClass,
   customerShapeRequestEvidence,
   customerShapeSupportReportCorrelations,
   customerShapeSupportReportEvidence,
   customerShapeSupportTimelineEvidence,
+  customerShapeWorkbenchFolderFacts,
   linkedFailureEvidence,
 } from "../lib/customer-shape-evidence.mjs";
 
 const CSRF = { "X-Keiko-CSRF": "1" };
 const TURN_TIMEOUT_MS = 120_000;
+const WORKBENCH_WINDOW_ID = "qualification-workbench";
+// The Workbench restores its window and then its repository catalog after the reload; a human sees
+// the chooser settle on the repository before they press Start.
+const WORKBENCH_FOLDER_TIMEOUT_MS = 30_000;
 
 function run(command, args, options) {
   return execFileSync(command, args, {
@@ -274,12 +281,12 @@ async function awaitSettledUsage(stateDir, runId) {
 
 async function pairWorkbench(page, repository, pairingSecret) {
   await page.addInitScript(
-    ({ argument: root, storageKeys }) => {
+    ({ argument: { root, windowId }, storageKeys }) => {
       globalThis.localStorage.setItem(
         storageKeys.workspace,
         JSON.stringify([
           {
-            id: "qualification-workbench",
+            id: windowId,
             type: "coding",
             x: 40,
             y: 48,
@@ -293,7 +300,7 @@ async function pairWorkbench(page, repository, pairingSecret) {
         ]),
       );
     },
-    await workspaceStorageArgs(page, repository),
+    await workspaceStorageArgs(page, { root: repository, windowId: WORKBENCH_WINDOW_ID }),
   );
   const fragment = encodeCodingAppSessionPairingFragment(
     mintLauncherPairingAttestation({
@@ -353,8 +360,62 @@ async function startedRunId(responsePromise) {
   return startedRun.runId;
 }
 
-async function runTurn(page, repository, scpRepository, pairingSecret, phase) {
-  const expectFailure = phase === "failure-proof" || phase === "truncation-proof";
+function repositoryChooser(page) {
+  return page.getByRole("combobox", { name: "Choose coding repository", exact: true });
+}
+
+// What the browser holds for the Workbench window: the seeded layout scope, the window and its
+// folder. Read only for a failure report; the classes, never the paths, reach the CI log.
+async function workbenchFolderFacts(page, repository, project) {
+  try {
+    const { storageKeys } = await workspaceStorageArgs(page, null);
+    const layout = await page.evaluate(
+      ({ key, windowId }) => {
+        const storage = globalThis.localStorage;
+        const scopes = Object.keys(storage).filter((name) => name.startsWith("keiko.workspace.v4"));
+        const raw = storage.getItem(key);
+        const windows = raw === null ? null : JSON.parse(raw);
+        const list = Array.isArray(windows) ? windows : [];
+        const window = list.find((entry) => entry?.id === windowId);
+        return {
+          layoutStored: raw !== null,
+          layoutScopeCount: scopes.length,
+          windowCount: list.length,
+          windowFound: window !== undefined,
+          repositoryPath: window?.cfg?.repositoryPath,
+        };
+      },
+      { key: storageKeys.workspace, windowId: WORKBENCH_WINDOW_ID },
+    );
+    const label = await repositoryChooser(page).textContent({ timeout: 2_000 });
+    return customerShapeWorkbenchFolderFacts({
+      ...layout,
+      cfgFolder: customerShapeFolderClass(layout.repositoryPath, repository, project),
+      chooserFolder: customerShapeChooserClass(label, repository, project),
+    });
+  } catch {
+    return { unavailable: true };
+  }
+}
+
+function reportWorkbenchFolder(facts, phase) {
+  process.stderr.write(`customer-shape ${phase} workbench folder: ${JSON.stringify(facts)}\n`);
+}
+
+// The run starts in the folder the chooser shows. Start only once it shows the provisioned
+// repository: the Yarn project around it holds the installed runtime and is refused before spawn.
+async function expectWorkbenchOnRepository(page, repository, project, phase) {
+  try {
+    await expect(repositoryChooser(page)).toContainText(basename(repository), {
+      timeout: WORKBENCH_FOLDER_TIMEOUT_MS,
+    });
+  } catch (error) {
+    reportWorkbenchFolder(await workbenchFolderFacts(page, repository, project), phase);
+    throw error;
+  }
+}
+
+async function runTurn(page, repository, scpRepository, project, pairingSecret, phase) {
   const expectToolCall = phase === "tool-proof";
   await pairWorkbench(page, repository, pairingSecret);
   const scpBound = await page.request.post("/api/task-workspaces", {
@@ -376,6 +437,7 @@ async function runTurn(page, repository, scpRepository, pairingSecret, phase) {
         ? "Discover README.md in this repository, then briefly confirm the Workbench is ready."
         : "Reply briefly to confirm that the Workbench is ready.",
     );
+  await expectWorkbenchOnRepository(page, repository, project, phase);
   const started = page.waitForResponse(
     (response) =>
       response.request().method() === "POST" &&
@@ -383,18 +445,27 @@ async function runTurn(page, repository, scpRepository, pairingSecret, phase) {
   );
   await page.getByRole("button", { name: "Start coding run", exact: true }).click();
   const runId = await startedRunId(started);
-  if (expectFailure) {
+  try {
+    await expectTurnOutcome(page, phase);
+  } catch (error) {
+    reportWorkbenchFolder(await workbenchFolderFacts(page, repository, project), phase);
+    throw error;
+  }
+  return runId;
+}
+
+async function expectTurnOutcome(page, phase) {
+  if (phase === "failure-proof" || phase === "truncation-proof") {
     const failure =
       phase === "truncation-proof"
         ? /The model response stream (?:ended before this step completed|stopped before the turn completed)/u
         : /The model (?:gateway did not complete this step|provider rejected this turn)/u;
     await expect(page.getByText(failure).first()).toBeVisible({ timeout: 45_000 });
-  } else {
-    await expect(page.getByText(CUSTOMER_SHAPE_REPLY, { exact: true })).toBeVisible({
-      timeout: TURN_TIMEOUT_MS,
-    });
+    return;
   }
-  return runId;
+  await expect(page.getByText(CUSTOMER_SHAPE_REPLY, { exact: true })).toBeVisible({
+    timeout: TURN_TIMEOUT_MS,
+  });
 }
 
 function assertGatewayEvidence(twin, firstRequest, lines, runId, phase) {
@@ -503,7 +574,7 @@ async function qualifyInstalled(
       baseURL: `http://127.0.0.1:${String(port)}`,
       viewport: { width: 1440, height: 1400 },
     });
-    const runId = await runTurn(page, repository, scpRepository, pairingSecret, phase);
+    const runId = await runTurn(page, repository, scpRepository, project, pairingSecret, phase);
     if (expectFailure) await awaitProjectedTurnFailure(stateDir, runId);
     else await awaitSettledUsage(stateDir, runId);
     const lines = activityLines(stateDir);
