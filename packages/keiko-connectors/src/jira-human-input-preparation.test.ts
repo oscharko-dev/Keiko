@@ -10,7 +10,7 @@ describe("existing held-call human information continuation", () => {
     const selected = await prepareJiraHumanInput(f.inputs, f.binding, (view) => {
       views.push(view);
       if (view.state === "awaiting-input") f.inputs.submit(view.requestId, f.binding, view.revision, { password: PASSWORD });
-    }, new AbortController().signal);
+    }, new AbortController().signal, () => undefined);
     expect(views.map((view) => view.state)).toEqual(["awaiting-input", "ready"]);
     expect(selected.binding).toEqual(f.binding);
     expect(f.inputs.inspect(selected.requestId, f.binding)).toMatchObject({ state: "ready", revision: selected.revision });
@@ -23,8 +23,29 @@ describe("existing held-call human information continuation", () => {
       id = view.requestId;
       if (view.state === "awaiting-input") f.inputs.submit(view.requestId, f.binding, view.revision, { password: PASSWORD });
       else abort.abort();
-    }, abort.signal)).rejects.toMatchObject({ code: "cancelled" });
+    }, abort.signal, () => undefined)).rejects.toMatchObject({ code: "cancelled" });
     expect(f.inputs.inspect(id, f.binding)?.state).toBe("cancelled");
     expect([...f.sealedPortEntries.values()].join("")).not.toContain(PASSWORD);
+  });
+  it("clears ready values when publication fails after the credential binding is revoked", async () => {
+    const f = privateJiraCustodyFixture("jira.login"); let id = "";
+    const failure = new TypeError("Synthetic view persistence failure");
+    await expect(prepareJiraHumanInput(f.inputs, f.binding, (view) => {
+      id = view.requestId;
+      if (view.state === "awaiting-input") f.inputs.submit(id, f.binding, view.revision, { password: PASSWORD });
+      else { f.custody.beginVerification(f.binding.authRef, 1); throw failure; }
+    }, new AbortController().signal, () => undefined)).rejects.toBe(failure);
+    expect(f.inputs.cancelOwned(id, f.binding.principalDigest)?.state).toBe("cancelled");
+    expect([...f.sealedPortEntries.values()].join("")).not.toContain(PASSWORD);
+  });
+  it("retains the original publication failure when cleanup fails and reports only through its cleanup observer", async () => {
+    const f = privateJiraCustodyFixture("jira.login");
+    const original = new TypeError("Synthetic original publication failure");
+    const cleanup = new Error("Synthetic private storage unavailable");
+    const failures: unknown[] = [];
+    await expect(prepareJiraHumanInput({ ...f.inputs, cancel: () => { throw cleanup; } }, f.binding,
+      () => { throw original; }, new AbortController().signal, (error) => { failures.push(error); }))
+      .rejects.toBe(original);
+    expect(failures).toEqual([cleanup]);
   });
 });

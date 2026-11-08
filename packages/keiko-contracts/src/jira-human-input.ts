@@ -1,9 +1,7 @@
+import { copyJiraHumanInputReview, type JiraHumanInputReview } from "./jira-human-input-review.js";
+import { JIRA_HUMAN_INPUT_PURPOSES, type JiraHumanInputPurpose } from "./jira-human-input-purpose.js";
+export { JIRA_HUMAN_INPUT_PURPOSES, type JiraHumanInputPurpose } from "./jira-human-input-purpose.js";
 /** Human-only, write-only input for a server-bound Jira operation. These are never tool arguments. */
-export const JIRA_HUMAN_INPUT_PURPOSES = [
-  "update-myself", "update-my-password", "update-user-password", "validate-create-user-password",
-  "validate-update-user-password", "validate-license", "login", "unlock-user-anonymization",
-] as const;
-export type JiraHumanInputPurpose = (typeof JIRA_HUMAN_INPUT_PURPOSES)[number];
 export const JIRA_HUMAN_INPUT_FIELDS = ["password", "currentPassword", "newPassword", "oldPassword", "license", "ownerShutdownConfirmation"] as const;
 export type JiraHumanInputField = (typeof JIRA_HUMAN_INPUT_FIELDS)[number];
 export type JiraHumanInputState = "awaiting-input" | "ready" | "consumed" | "cancelled" | "expired";
@@ -16,6 +14,8 @@ export interface JiraHumanInputView {
   readonly expiresAt: number;
   readonly fields: readonly JiraHumanInputField[];
   readonly optionalFields: readonly JiraHumanInputField[];
+  /** Absent only on historical views; never enough to enable a new secret submission. */
+  readonly review?: JiraHumanInputReview;
 }
 /** Only the authenticated human BFF accepts this DTO. Never forward it to a runtime/model. */
 export interface JiraHumanInputSubmission {
@@ -44,12 +44,18 @@ const VIEW_STATES: ReadonlySet<unknown> = new Set<JiraHumanInputState>(["awaitin
 function viewRecord(value: unknown): Record<string, unknown> | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
   const keys = Reflect.ownKeys(value);
-  if (keys.length !== VIEW_KEYS.size || keys.some((key) => typeof key !== "string" || !VIEW_KEYS.has(key))) return undefined;
+  if (keys.length !== VIEW_KEYS.size + (Object.hasOwn(value, "review") ? 1 : 0) ||
+      keys.some((key) => typeof key !== "string" || (!VIEW_KEYS.has(key) && key !== "review"))) return undefined;
   const result: Record<string, unknown> = {};
   for (const key of VIEW_KEYS) {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     if (descriptor === undefined || !("value" in descriptor)) return undefined;
     result[key] = descriptor.value;
+  }
+  if (Object.hasOwn(value, "review")) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, "review");
+    if (descriptor?.enumerable !== true || !("value" in descriptor)) return undefined;
+    result.review = descriptor.value;
   }
   return result;
 }
@@ -66,5 +72,6 @@ export function isJiraHumanInputView(value: unknown): value is JiraHumanInputVie
       !/^jhi_[a-f0-9]{64}$/u.test(raw.requestId) || typeof raw.revision !== "string" ||
       !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(raw.revision)) return false;
   const fields = JIRA_HUMAN_INPUT_FIELD_SETS[purpose];
-  return exactFields(raw.fields, fields.required) && exactFields(raw.optionalFields, fields.optional);
+  return exactFields(raw.fields, fields.required) && exactFields(raw.optionalFields, fields.optional) &&
+    (!Object.hasOwn(raw, "review") || copyJiraHumanInputReview(raw.review, purpose) !== undefined);
 }

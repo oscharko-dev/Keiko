@@ -14,25 +14,26 @@ export async function prepareJiraHumanInput(
   binding: JiraHumanInputBinding,
   publish: (view: JiraHumanInputView) => void | Promise<void>,
   signal: AbortSignal,
+  cleanupFailed: (error: unknown) => void,
 ): Promise<JiraHumanInputSelection> {
   const prepared = custody.prepare(binding);
-  await publish(prepared);
-  if (signal.aborted) {
-    custody.cancel(prepared.requestId, binding);
-    throw new JiraHumanInputCustodyError("cancelled");
+  try {
+    await publish(prepared);
+    if (signal.aborted) throw new JiraHumanInputCustodyError("cancelled");
+    const current = prepared.state === "awaiting-input"
+      ? await custody.wait(prepared.requestId, binding, signal)
+      : custody.inspect(prepared.requestId, binding);
+    if (current === undefined) throw new JiraHumanInputCustodyError("not-ready");
+    if (current.state !== prepared.state || current.revision !== prepared.revision) await publish(current);
+    if (signal.aborted) throw new JiraHumanInputCustodyError("cancelled");
+    if (current.state !== "ready")
+      throw new JiraHumanInputCustodyError(current.state === "expired" || current.state === "cancelled" ? current.state : "not-ready");
+    const original = custody.bindingFor(current.requestId, binding.principalDigest);
+    if (original === undefined) throw new JiraHumanInputCustodyError("binding-changed");
+    return { requestId: current.requestId, revision: current.revision, binding: original };
+  } catch (error) {
+    try { custody.cancel(prepared.requestId, binding); }
+    catch (cleanupError) { cleanupFailed(cleanupError); }
+    throw error;
   }
-  const current = prepared.state === "awaiting-input"
-    ? await custody.wait(prepared.requestId, binding, signal)
-    : custody.inspect(prepared.requestId, binding);
-  if (current === undefined) throw new JiraHumanInputCustodyError("not-ready");
-  if (current.state !== prepared.state || current.revision !== prepared.revision) await publish(current);
-  if (signal.aborted) {
-    custody.cancel(prepared.requestId, binding);
-    throw new JiraHumanInputCustodyError("cancelled");
-  }
-  if (current.state !== "ready")
-    throw new JiraHumanInputCustodyError(current.state === "expired" || current.state === "cancelled" ? current.state : "not-ready");
-  const original = custody.bindingFor(current.requestId, binding.principalDigest);
-  if (original === undefined) throw new JiraHumanInputCustodyError("binding-changed");
-  return { requestId: current.requestId, revision: current.revision, binding: original };
 }

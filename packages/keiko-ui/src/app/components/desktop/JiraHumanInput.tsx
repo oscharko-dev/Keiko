@@ -3,8 +3,11 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import type { JiraHumanInputField, JiraHumanInputPurpose, JiraHumanInputView } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ChatToolExchange, ChatTurnState } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { getJiraHumanInput, submitJiraHumanInput, cancelJiraHumanInput } from "@/lib/jira-human-input-api";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { bffRequestErrorKind } from "@/lib/http";
 import { useOptionalWidgetTranslate as useTranslate, type WidgetMessageKey } from "@/lib/optional-widget-i18n";
 import { TextField } from "./widgets/connectors/TextField";
+import { jiraHumanInputReviewFacts, sameJiraHumanInputReview } from "./jira-human-input-presentation";
 import styles from "./JiraChatTools.module.css";
 
 const FIELD_KEYS: Readonly<Record<JiraHumanInputField, WidgetMessageKey>> = {
@@ -23,16 +26,16 @@ const STATE_KEYS: Readonly<Record<JiraHumanInputView["state"], WidgetMessageKey>
   "awaiting-input": "chat.jira.humanInput.waiting", ready: "chat.jira.humanInput.ready",
   consumed: "chat.jira.humanInput.consumed", cancelled: "chat.jira.humanInput.cancelled", expired: "chat.jira.humanInput.expired",
 };
+function reportInputFailure(action: "refresh" | "submit" | "cancel", error: unknown): void {
+  reportClientDiagnostic(`jira-human-input-${action}-failed`, {
+    kind: "other", failureStage: "jira human input", errorKind: bffRequestErrorKind(error),
+  });
+}
 function forwardInputState(previous: JiraHumanInputView, next: JiraHumanInputView): boolean {
   if (previous.state === next.state) return previous.revision === next.revision;
   if (previous.state === "awaiting-input") return next.state !== "awaiting-input";
   return previous.state === "ready" && previous.revision === next.revision &&
     (next.state === "consumed" || next.state === "cancelled" || next.state === "expired");
-}
-function reviewedNode(call: ChatToolExchange["call"] | undefined): string | undefined {
-  const task = call?.arguments.expectedTask;
-  if (task === null || typeof task !== "object" || Array.isArray(task)) return undefined;
-  return "executingNode" in task && typeof task.executingNode === "string" ? task.executingNode : undefined;
 }
 interface PrivateFieldProps {
   readonly field: JiraHumanInputField;
@@ -62,15 +65,16 @@ function PrivateField({ field, view, value, node, change }: PrivateFieldProps): 
     onChange={(next) => { change(field, next); }} />;
 }
 /** Values exist only while typing and during the single BFF submission, never in saved drafts. */
-export function JiraHumanInput({ initial, turnState, call }: {
+export function JiraHumanInput({ initial, turnState }: {
   readonly initial: JiraHumanInputView;
   readonly turnState: ChatTurnState | undefined;
   readonly call?: ChatToolExchange["call"];
 }): ReactNode {
   const t = useTranslate();
-  const node = reviewedNode(call);
   const attestation = initial.purpose === "unlock-user-anonymization";
   const [view, setView] = useState(initial);
+  const reviewFacts = jiraHumanInputReviewFacts(view, t);
+  const node = view.review?.targetKind === "anonymization-task" ? view.review.executingNode : undefined;
   const latest = useRef(initial);
   const [locallyExpired, setLocallyExpired] = useState(initial.expiresAt <= Date.now());
   const [values, setValues] = useState<Partial<Record<JiraHumanInputField, string>>>({});
@@ -78,10 +82,12 @@ export function JiraHumanInput({ initial, turnState, call }: {
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   const mounted = useRef(true);
-  const pending = turnState === "pending" && view.state === "awaiting-input" && !locallyExpired && view.expiresAt > Date.now();
+  const pending = turnState === "pending" && view.state === "awaiting-input" && !locallyExpired && view.expiresAt > Date.now() && reviewFacts !== undefined;
   const shownState = locallyExpired && (view.state === "awaiting-input" || view.state === "ready") ? "expired" : view.state;
   const accept = useCallback((next: JiraHumanInputView): void => {
     if (initial.requestId !== next.requestId || initial.purpose !== next.purpose || initial.expiresAt !== next.expiresAt) throw new TypeError("Private input request changed");
+    if ((latest.current.review !== undefined || next.review !== undefined) && !sameJiraHumanInputReview(latest.current, next))
+      throw new TypeError("Private input review changed");
     if (!forwardInputState(latest.current, next)) return;
     latest.current = next;
     if (mounted.current) { setView(next); setVerified(true); setFailed(false); }
@@ -89,19 +95,32 @@ export function JiraHumanInput({ initial, turnState, call }: {
   const refresh = useCallback(async (signal?: AbortSignal): Promise<void> => {
     setVerified(false);
     try { accept(await getJiraHumanInput(initial.requestId, signal)); }
-    catch { if (mounted.current && !signal?.aborted) setFailed(true); }
+    catch (error) {
+      if (signal?.aborted) return;
+      reportInputFailure("refresh", error);
+      if (mounted.current) { setValues({}); setFailed(true); }
+    }
   }, [accept, initial.requestId]);
-  useEffect(() => { accept(initial); }, [accept, initial]);
   useEffect(() => {
     mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  useEffect(() => {
+    try { accept(initial); }
+    catch (error) {
+      setValues({}); setVerified(false); setFailed(true);
+      reportInputFailure("refresh", error);
+    }
+  }, [accept, initial]);
+  useEffect(() => {
     // Durable terminal views remain sufficient after short-lived private vault records expire.
-    if (TERMINAL_STATES.has(initial.state)) {
+    if (TERMINAL_STATES.has(latest.current.state)) {
       setVerified(true);
-      return () => { mounted.current = false; };
+      return;
     }
     const abort = new AbortController();
     void refresh(abort.signal);
-    return () => { mounted.current = false; abort.abort(); };
+    return () => { abort.abort(); };
   }, [refresh, initial.revision, initial.state, turnState]);
   useEffect(() => {
     if (!pending) setValues({});
@@ -119,7 +138,10 @@ export function JiraHumanInput({ initial, turnState, call }: {
     try {
       accept(cancel ? await cancelJiraHumanInput(view.requestId) :
         await submitJiraHumanInput(view.requestId, { expectedRevision: view.revision, values: supplied }));
-    } catch { if (mounted.current) setFailed(true); }
+    } catch (error) {
+      reportInputFailure(cancel ? "cancel" : "submit", error);
+      if (mounted.current) setFailed(true);
+    }
     finally { if (mounted.current) setBusy(false); }
   }
   const ready = view.fields.every((field) => (values[field]?.length ?? 0) > 0);
@@ -128,8 +150,13 @@ export function JiraHumanInput({ initial, turnState, call }: {
       <h4>{t("chat.jira.humanInput.title")}</h4>
       <p>{t(STATE_KEYS[shownState])}</p>
       <p>{t(attestation ? "chat.jira.humanInput.attestationPrivate" : "chat.jira.humanInput.private")}</p>
+      {reviewFacts === undefined ? <p>{t("chat.jira.humanInput.review.unavailable")}</p> :
+        <dl className={styles.cmpFactsGroup}>{reviewFacts.map((fact) => <div key={fact.label}>
+          <dt>{fact.label}</dt><dd>{fact.value}</dd>
+        </div>)}</dl>}
       {failed ? <p role="alert">{t("chat.jira.humanInput.failed")}</p> : null}
-      {pending ? <form onSubmit={(event) => { event.preventDefault(); void send(false); }} autoComplete="off">
+      {/* Keep private entry outside a browser credential form: only the explicit control sends it. */}
+      {pending ? <div>
         <fieldset disabled={busy || !verified}>
           <legend>{t("chat.jira.humanInput.fields")}</legend>
           {[...view.fields, ...view.optionalFields].map((field) => <PrivateField key={field}
@@ -138,11 +165,12 @@ export function JiraHumanInput({ initial, turnState, call }: {
           />)}
         </fieldset>
         <div className={styles.cmpActions}>
-          <button type="submit" className="lk-btn lk-btn--primary" disabled={busy || !verified || !ready}>{t("chat.jira.humanInput.submit")}</button>
+          <button type="button" className="lk-btn lk-btn--primary" disabled={busy || !verified || !ready} onClick={() => { void send(false); }}>{t("chat.jira.humanInput.submit")}</button>
           <button type="button" className="lk-btn" disabled={busy} onClick={() => { void send(true); }}>{t("chat.jira.humanInput.cancel")}</button>
         </div>
-      </form> : null}
-      {!verified ? <button type="button" className="lk-btn" disabled={busy} onClick={() => { void refresh(); }}>{t("chat.jira.humanInput.refresh")}</button> : null}
+      </div> : null}
+      {!verified || (reviewFacts === undefined && !TERMINAL_STATES.has(view.state)) ?
+        <button type="button" className="lk-btn" disabled={busy} onClick={() => { void refresh(); }}>{t("chat.jira.humanInput.refresh")}</button> : null}
     </section>
   );
 }

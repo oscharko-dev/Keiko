@@ -220,6 +220,7 @@ class ChatSourcesToolTurn extends ChatToolTurn<ChatSourcesContext> {
               await humanInput?.prepare(call, actionId, ports);
               return source;
             },
+            finalizeInvocation: (actionId: string) => humanInput?.finalize(actionId),
           }),
       ...(primary.kind === "jira"
         ? {

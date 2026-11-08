@@ -347,6 +347,7 @@ class CodingJiraPodService implements CodingJiraPods {
 
   private async dispose(entry: PodEntry): Promise<void> {
     entry.lifetime.abort();
+    for (const pending of entry.inputs.values()) pending.release();
     entry.inputs.clear();
     if (this.#disposed.has(entry)) return;
     this.#disposed.add(entry);
@@ -673,6 +674,7 @@ class CodingJiraPodService implements CodingJiraPods {
     } catch (error) {
       return this.failedCall(error, line, started, scopedContext);
     } finally {
+      inputs.get(context.invocationId)?.release();
       inputs.delete(context.invocationId);
     }
   }

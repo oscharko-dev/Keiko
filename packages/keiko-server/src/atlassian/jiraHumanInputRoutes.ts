@@ -80,14 +80,17 @@ function response(ctx: RouteContext, deps: UiHandlerDeps, owned: OwnedInput, vie
 }
 async function run(ctx: RouteContext, deps: UiHandlerDeps, action: Action): Promise<RouteResult> {
   try {
+    if (action === "cancel") {
+      const id = requestId(ctx); const principal = jiraChatActorDigest(deps);
+      if (id === undefined || principal === undefined) return failure(ctx, 404);
+      // Delete-only custody does not need a still-live call or revoked execution authority.
+      const view = deps.atlassianConnectorCredentials?.custody.humanInputs?.cancelOwned(id, principal);
+      return view === undefined ? failure(ctx, 404) : { status: 200, headers: NO_STORE, body: view };
+    }
     const owned = ownedInput(ctx, deps, action);
     if (owned === undefined) return failure(ctx, 404);
     if (action === "inspect") return response(ctx, deps, owned, owned.custody.inspect(owned.requestId, owned.binding));
-    if (action === "cancel") {
-      const view = owned.custody.cancel(owned.requestId, owned.binding);
-      recordJiraHumanInput(deps.atlassianConnectorCredentials, ctx.correlationId, "cancelled");
-      return response(ctx, deps, owned, view);
-    }
+    if (owned.binding.review === undefined) return failure(ctx, 409);
     // This bounded reader logs counts/classifications only. No input value enters a diagnostic.
     const body = await readJsonRequestBodyOutcome(ctx.req, JIRA_HUMAN_INPUT_MAX_BYTES + 1024, ctx.correlationId);
     if (body.kind === "rejected") return { ...body.response, headers: NO_STORE };

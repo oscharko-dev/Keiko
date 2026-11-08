@@ -332,6 +332,7 @@ export interface AtlassianCredentialCustodyDeps {
       ) => void)
     | undefined;
   readonly now?: () => number;
+  readonly onHumanInputCleared?: (correlationId: string, phase: "cancelled" | "expired") => void;
 }
 
 export interface CreatedAtlassianCredentialCustody {
@@ -918,7 +919,8 @@ export function createAtlassianCredentialCustody(
     const raw = deps.metadataStore.get(authRef);
     return raw !== undefined && isAtlassianCredentialMetadata(raw) ? raw : undefined;
   };
-  const humanInputs = createJiraHumanInputCustody({ vault: privateVault, now, metadata });
+  const humanInputs = createJiraHumanInputCustody({ vault: privateVault, now, metadata,
+    onCleared: (binding, phase) => deps.onHumanInputCleared?.(binding.authority.runId, phase) });
   const sessions = createJiraPrivateSessionCustody({ vault: privateVault, now, metadata });
   const custody: AtlassianCredentialCustody = {
     humanInputs: humanInputs.custody,

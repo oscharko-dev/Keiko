@@ -3225,6 +3225,7 @@ describe("POST /api/diagnostics/client", () => {
     ["chat bind", "chat-bind"],
     ["command palette", "command-palette"],
     ["window palette", "window-palette"],
+    ["jira human input", "jira-human-input"],
   ])("logs both phases of %s under the stage's own correlation id", async (stageId, logStage) => {
     const sink = captureServerLog();
     for (const body of [

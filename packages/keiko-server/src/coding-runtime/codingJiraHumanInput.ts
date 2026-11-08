@@ -1,5 +1,5 @@
 import {
-  copyHumanInputBinding, createJiraReadRequest, checkJiraManagedMutation, prepareJiraHumanInput, JiraHumanInputCustodyError,
+  copyHumanInputBinding, createJiraReadRequest, checkJiraManagedMutation, prepareJiraHumanInput, prepareJiraHumanInputReview, JiraHumanInputCustodyError,
   type JiraHumanInputBinding, type JiraHumanInputSelection,
 } from "@oscharko-dev/keiko-connectors";
 import { JIRA_HUMAN_INPUT_MAX_LIFETIME_MS, JIRA_HUMAN_INPUT_PURPOSES, JIRA_MUTATION_OPERATIONS, type JiraHumanInputView } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -14,7 +14,7 @@ import type { UiHandlerDeps } from "../deps.js";
 import type { AtlassianConnectorCredentialDeps } from "../atlassian/credentialRoutes.js";
 import type { JiraLivePodCredential } from "../atlassian/jiraPodAccess.js";
 import { jiraOperationForTool } from "../atlassian/jiraManagedProvider.js";
-import { recordJiraHumanInput } from "../atlassian/credentialActivity.js";
+import { cancelUnclaimedJiraHumanInput, recordJiraHumanInput, reportJiraHumanInputCleanupFailure } from "../atlassian/credentialActivity.js";
 
 export interface CodingJiraInputAuthority {
   readonly taskId: string;
@@ -34,6 +34,7 @@ export interface PendingCodingJiraInput {
   readonly argumentsValue: CatalogJsonObject;
   readonly current: () => boolean;
   readonly publish: (view: JiraHumanInputView) => void;
+  readonly release: () => void;
   requestId: string | undefined;
   selection: JiraHumanInputSelection | undefined;
 }
@@ -111,13 +112,13 @@ async function needsInput(input: PrepareInput, args: CatalogJsonObject, credenti
   return checked.ok;
 }
 function pendingBinding(input: PrepareInput, authority: CodingJiraInputAuthority, credential: JiraLivePodCredential,
-  args: CatalogJsonObject, observed: { key: string; name: string }): JiraHumanInputBinding {
+  args: CatalogJsonObject, observed: { key: string; name: string }, review: NonNullable<JiraHumanInputBinding["review"]>): JiraHumanInputBinding {
   const binding = copyHumanInputBinding({
     context: { kind: "coding", taskId: authority.taskId, runId: authority.authority.runId, callId: input.context.invocationId },
     authority: authority.authority, principalDigest: authority.principalDigest,
     authRef: credential.authRef, authenticationGeneration: credential.generation,
     verificationRevision: credential.livePod.verificationRevision, operation: input.operation,
-    argumentsDigest: sha256Hex(canonicalise(args)), actorUserKey: observed.key, actorUsername: observed.name,
+    argumentsDigest: sha256Hex(canonicalise(args)), actorUserKey: observed.key, actorUsername: observed.name, review,
     expiresAt: Math.min(authority.expiresAt, Date.now() + JIRA_HUMAN_INPUT_MAX_LIFETIME_MS),
   });
   return binding ?? refuse();
@@ -133,6 +134,10 @@ function pendingState(input: PrepareInput, binding: JiraHumanInputBinding, args:
   const pending: PendingCodingJiraInput = {
     binding, argumentsValue: args, requestId: undefined, selection: undefined,
     current: () => input.inputs.get(input.context.invocationId) === pending && current(),
+    release: () => {
+      if (pending.requestId !== undefined) cancelUnclaimedJiraHumanInput(input.deps.atlassianConnectorCredentials,
+        pending.requestId, pending.binding);
+    },
     publish: (view) => {
       if (!pending.current() || (pending.requestId !== undefined && pending.requestId !== view.requestId)) return refuse();
       transcript.humanInput(started, view, input.context.correlationId);
@@ -160,17 +165,19 @@ async function awaitSelection(input: PrepareInput, pending: PendingCodingJiraInp
       if (input.context.signal.aborted) throw new ManagedMcpError("aborted", undefined, "none");
       pending.publish(view);
       if (view.state === "awaiting-input") recordJiraHumanInput(input.deps.atlassianConnectorCredentials, input.context.correlationId, "requested");
-    }, input.context.signal);
+    }, input.context.signal, (error) => reportJiraHumanInputCleanupFailure(input.deps.atlassianConnectorCredentials, pending.binding, error));
     if (!pending.current()) return refuse();
     return pending;
   } catch (error) {
+    pending.release();
     if (!(error instanceof JiraHumanInputCustodyError)) throw error;
     throw new ManagedMcpError(error.code === "cancelled" ? "aborted" : "not-admitted", undefined, "none");
   }
 }
 /** Metadata is retained by the real invocation; no OpenCode question or model argument receives input. */
 export async function prepareCodingJiraHumanInput(input: PrepareInput): Promise<PendingCodingJiraInput | undefined> {
-  if (!JIRA_HUMAN_INPUT_PURPOSES.some((purpose) => `jira.${purpose}` === input.operation)) return undefined;
+  const purpose = JIRA_HUMAN_INPUT_PURPOSES.find((value) => `jira.${value}` === input.operation);
+  if (purpose === undefined) return undefined;
   const contract = jiraOperationForTool(input.operation);
   const args = ownedArgs(input.args);
   if (contract === undefined || describeCatalogSchemaMismatch(contract.declaration.descriptor.inputSchema, args) !== undefined) return undefined;
@@ -178,7 +185,10 @@ export async function prepareCodingJiraHumanInput(input: PrepareInput): Promise<
   const current = () => authorityCurrent(input, authority) && credentialCurrent(input, credential);
   if (!await needsInput(input, args, credential, current)) return undefined;
   const observed = await actor(input, credential, args, current);
-  const binding = pendingBinding(input, authority, credential, args, observed);
+  const review = await prepareJiraHumanInputReview(purpose, args, credential.baseUrl,
+    createJiraReadRequest(readConnection(input, credential, current), { ...input.context, beforeEffect: current }));
+  if (!current() || review === undefined || review.actorUserKey !== observed.key || review.actorUsername !== observed.name) return refuse();
+  const binding = pendingBinding(input, authority, credential, args, observed, review);
   const history = boundHistory(input, authority);
   const pending = pendingState(input, binding, args, history.transcript, () => current() && history.current());
   if (input.inputs.has(input.context.invocationId)) return refuse();

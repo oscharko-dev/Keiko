@@ -3,6 +3,7 @@ import { isChatJiraPodId } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { isAtlassianConnectorAuthRef } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   JIRA_HUMAN_INPUT_MAX_BYTES, JIRA_HUMAN_INPUT_MAX_LIFETIME_MS, JIRA_HUMAN_INPUT_PURPOSES, JIRA_HUMAN_INPUT_FIELD_SETS,
+  copyJiraHumanInputReview, type JiraHumanInputReview,
   type JiraHumanInputField, type JiraHumanInputPurpose, type JiraHumanInputState, type JiraHumanInputView,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { savedExactKeys, savedName, savedText } from "./jira-saved-configuration-values.js";
@@ -23,6 +24,7 @@ export interface JiraHumanInputBinding {
   readonly argumentsDigest: string;
   readonly actorUserKey: string;
   readonly actorUsername: string;
+  readonly review?: JiraHumanInputReview;
   readonly expiresAt: number;
 }
 export type JiraHumanInputValues = Readonly<Partial<Record<JiraHumanInputField, string>>>;
@@ -41,7 +43,7 @@ export function humanInputPurpose(operation: string): JiraHumanInputPurpose | un
 }
 const DIGEST = /^[a-f0-9]{64}$/u;
 const REVISION = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
-const BINDING_KEYS = new Set(["context", "authority", "principalDigest", "authRef", "authenticationGeneration", "verificationRevision", "operation", "argumentsDigest", "actorUserKey", "actorUsername", "expiresAt"]);
+const BINDING_KEYS = new Set(["context", "authority", "principalDigest", "authRef", "authenticationGeneration", "verificationRevision", "operation", "argumentsDigest", "actorUserKey", "actorUsername", "expiresAt", "review"]);
 const CHAT_KEYS = new Set(["kind", "chatId", "messageId", "callId", "podId", "bindingGeneration"]);
 const CODING_KEYS = new Set(["kind", "taskId", "runId", "callId"]);
 const RECORD_KEYS = new Set(["schemaVersion", "kind", "binding", "requestId", "revision", "state", "values"]);
@@ -70,9 +72,12 @@ export function copyHumanInputBinding(value: unknown): JiraHumanInputBinding | u
       typeof raw.principalDigest !== "string" || !DIGEST.test(raw.principalDigest) || typeof raw.argumentsDigest !== "string" || !DIGEST.test(raw.argumentsDigest) ||
       !generation(raw.authenticationGeneration) || !generation(raw.verificationRevision) || !savedName(raw.actorUserKey) || !savedName(raw.actorUsername) ||
       typeof raw.expiresAt !== "number" || !Number.isSafeInteger(raw.expiresAt) || raw.expiresAt <= 0) return undefined;
+  const review = Object.hasOwn(raw, "review") ? copyJiraHumanInputReview(raw.review, purpose) : undefined;
+  if (Object.hasOwn(raw, "review") && (review === undefined || review.actorUserKey !== raw.actorUserKey || review.actorUsername !== raw.actorUsername)) return undefined;
   return Object.freeze({ context: Object.freeze(selected), authority, principalDigest: raw.principalDigest, authRef: raw.authRef,
     authenticationGeneration: raw.authenticationGeneration, verificationRevision: raw.verificationRevision,
-    operation: `jira.${purpose}`, argumentsDigest: raw.argumentsDigest, actorUserKey: raw.actorUserKey, actorUsername: raw.actorUsername, expiresAt: raw.expiresAt });
+    operation: `jira.${purpose}`, argumentsDigest: raw.argumentsDigest, actorUserKey: raw.actorUserKey, actorUsername: raw.actorUsername, expiresAt: raw.expiresAt,
+    ...(review === undefined ? {} : { review }) });
 }
 export function currentHumanInputLifetime(binding: JiraHumanInputBinding, now: number): boolean {
   return Number.isSafeInteger(now) && now >= 0 && binding.expiresAt > now && binding.expiresAt - now <= JIRA_HUMAN_INPUT_MAX_LIFETIME_MS;
@@ -89,7 +94,8 @@ export function humanInputView(record: JiraHumanInputRecord, state = record.stat
   if (purpose === undefined) throw new TypeError("Unsupported Jira private input purpose");
   const fields = JIRA_HUMAN_INPUT_FIELD_SETS[purpose];
   return Object.freeze({ requestId: record.requestId, revision: record.revision, purpose, state, expiresAt: record.binding.expiresAt,
-    fields: Object.freeze([...fields.required]), optionalFields: Object.freeze([...fields.optional]) });
+    fields: Object.freeze([...fields.required]), optionalFields: Object.freeze([...fields.optional]),
+    ...(record.binding.review === undefined ? {} : { review: record.binding.review }) });
 }
 export function parseHumanInputValues(operation: string, value: unknown): JiraHumanInputValues | undefined {
   const purpose = humanInputPurpose(operation); const raw = asRecord(value);

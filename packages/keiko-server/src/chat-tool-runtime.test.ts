@@ -572,6 +572,33 @@ it("rejects mixed-Chat private input after the bound Jira scope is revoked", asy
   expect(JSON.stringify(f.deps.store.listMessages(f.chatId))).not.toContain(PRIVATE_PASSWORD);
 });
 
+it("clears ready private input after a pre-dispatch mixed-Chat revocation and permits owner cleanup after the turn", async () => {
+  const f = privateProfileFixture(false); const pending = send(f);
+  void pending.catch(() => undefined);
+  const input = await pendingPrivateInput(f);
+  expect((await submitPrivateProfileInput(f, input)).status).toBe(200);
+  await vi.waitFor(() => { expect(privateProfileExchange(f)?.approval).toBeDefined(); });
+  const inputs = f.deps.atlassianConnectorCredentials?.custody.humanInputs;
+  if (inputs === undefined) throw new TypeError("Missing input custody");
+  const cancel = vi.spyOn(inputs, "cancel");
+  const chat = f.deps.store.findChatById(f.chatId);
+  if (chat === undefined) throw new TypeError("Missing mixed Chat");
+  const update = context({ jiraPodId: null, expectedGroundingScopeIdentity: deriveChatGroundingScopeIdentity(chat) });
+  update.url.searchParams.set("id", f.chatId);
+  expect((await handleUpdateChat(update, f.deps)).status).toBe(200);
+  await pending;
+  expect(cancel).toHaveBeenCalledWith(input.requestId, expect.objectContaining({ operation: "jira.update-myself" }));
+  const cleanup = await handleCancelJiraHumanInput(context({}, { requestId: input.requestId }), f.deps);
+  expect(cleanup).toMatchObject({ status: 200, body: { state: "cancelled" } });
+  expect((await submitPrivateProfileInput(f, input)).status).not.toBe(200);
+  const principal = f.deps.serverPrincipal;
+  Object.assign(f.deps, { serverPrincipal: () => "different-ended-input-owner" });
+  try { expect((await handleCancelJiraHumanInput(context({}, { requestId: input.requestId }), f.deps)).status).toBe(404); }
+  finally { Object.assign(f.deps, { serverPrincipal: principal }); }
+  expect(f.requests.every((request) => request.method === "GET")).toBe(true);
+  expect(JSON.stringify({ cleanup, messages: f.deps.store.listMessages(f.chatId) })).not.toContain(PRIVATE_PASSWORD);
+});
+
 it("keeps protected input metadata private from a different local principal", async () => {
   const f = privateProfileFixture(true); const pending = send(f);
   void pending.catch(() => undefined);

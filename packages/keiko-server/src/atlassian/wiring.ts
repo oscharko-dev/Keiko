@@ -1,5 +1,5 @@
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import { recordConnectionCheck } from "./credentialActivity.js";
+import { recordConnectionCheck, recordJiraHumanInput } from "./credentialActivity.js";
 import { createJiraPrivatePorts } from "./httpPrivateIdentity.js";
 import type {
   AtlassianCredentialHttpOptions,
@@ -82,15 +82,25 @@ export interface BuildAtlassianConnectorCredentialDepsOptions {
 // first custody operation, never at BFF construction time.
 function lazyVaultPort(
   options: BuildAtlassianConnectorCredentialDepsOptions,
+  onReady: () => void,
 ): AtlassianCredentialVaultPort {
   let vault: LocalSecretVault | undefined;
-  const open = (): LocalSecretVault =>
-    (vault ??= openAtlassianCredentialVault({
+  let maintained = false;
+  let maintaining = false;
+  const open = (): LocalSecretVault => {
+    vault ??= openAtlassianCredentialVault({
       configPath: options.configPath,
       env: options.env,
       ...(options.keychainAccess === undefined ? {} : { keychainAccess: options.keychainAccess }),
       securityLogSink: options.securityLogSink,
-    }));
+    });
+    // Re-entry is the same opened vault used by the bounded retention pass, not another open.
+    if (!maintained && !maintaining) {
+      maintaining = true;
+      try { onReady(); maintained = true; } finally { maintaining = false; }
+    }
+    return vault;
+  };
   return {
     list: () => open().list(),
     get: (reference: string): string | undefined => open().get(reference),
@@ -118,11 +128,14 @@ export function buildAtlassianConnectorCredentialDeps(
 ): AtlassianConnectorCredentialDeps {
   const listenerPorts = new Set<number>();
   const metadataStore = createAtlassianCredentialMetadataStore({ configPath: options.configPath });
+  let maintainInputs = (): void => undefined;
   const { custody, executionResolver } = createAtlassianCredentialCustody({
-    vault: lazyVaultPort(options),
+    vault: lazyVaultPort(options, () => maintainInputs()),
     metadataStore,
     onLivePodInvalidated: options.onLivePodInvalidated,
+    onHumanInputCleared: (correlationId, phase) => recordJiraHumanInput(options, correlationId, phase),
   });
+  maintainInputs = () => custody.humanInputs?.sweepExpired();
   const owner = { options, listenerPorts, executionResolver, custody, metadataStore };
   return {
     custody,

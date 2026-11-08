@@ -200,6 +200,8 @@ export interface ChatToolTurnOptions<Context extends ToolConsumerContext> {
     actionId: string,
     ports: ChatToolInvocationPreparationPorts,
   ) => Promise<{ readonly sourceDigest?: string } | undefined>;
+  /** Release private per-call material after outcome retention, including pre-dispatch refusal. */
+  readonly finalizeInvocation?: (actionId: string) => void;
   readonly selectTools?: (
     identities: readonly string[],
   ) => Promise<ChatToolCatalogSelection<Context>>;
@@ -786,35 +788,39 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     this.callIds.add(call.id);
     await this.startExchange(call, call.invocation);
     const identity = sha256Hex(canonicalise({ messageId: message.id, callId: call.id }));
-    await this.prepareInvocation(call, identity);
-    const { outcome, progress } = await this.dispatchWithProgress(call.invocation, identity);
-    requireDispatch(outcome.kind === "settled", "invalid", "recovery-required");
-    await this.settleToolSelection(identity, outcome.result.status === "completed");
-    this.refreshWriteApproval(call.id);
-    const descriptor = managed.catalog.descriptors.find(
-      (entry) => entry.toolRef.canonicalId === call.invocation?.toolRef.canonicalId,
-    );
-    requireDispatch(descriptor !== undefined, "invalid", "recovery-required");
-    this.budget.acceptReceipt(outcome.receipt, descriptor);
-    const mutationOutcome = this.observedMutation(call, identity, outcome.result);
-    const draftProgress = interruptedDraftProgress(progress, outcome.result, mutationOutcome);
-    deps.store.updateChatToolTranscript(
-      message.id,
-      {
-        kind: "settled",
-        callId: call.id,
-        result: outcome.result,
-        ...(draftProgress === undefined ? {} : { draftProgress }),
-        binding: {
-          descriptor,
-          projectionDigest: managed.projection.projectionDigest,
+    try {
+      await this.prepareInvocation(call, identity);
+      const { outcome, progress } = await this.dispatchWithProgress(call.invocation, identity);
+      requireDispatch(outcome.kind === "settled", "invalid", "recovery-required");
+      await this.settleToolSelection(identity, outcome.result.status === "completed");
+      this.refreshWriteApproval(call.id);
+      const descriptor = managed.catalog.descriptors.find(
+        (entry) => entry.toolRef.canonicalId === call.invocation?.toolRef.canonicalId,
+      );
+      requireDispatch(descriptor !== undefined, "invalid", "recovery-required");
+      this.budget.acceptReceipt(outcome.receipt, descriptor);
+      const mutationOutcome = this.observedMutation(call, identity, outcome.result);
+      const draftProgress = interruptedDraftProgress(progress, outcome.result, mutationOutcome);
+      deps.store.updateChatToolTranscript(
+        message.id,
+        {
+          kind: "settled",
+          callId: call.id,
+          result: outcome.result,
+          ...(draftProgress === undefined ? {} : { draftProgress }),
+          binding: {
+            descriptor,
+            projectionDigest: managed.projection.projectionDigest,
+          },
+          ...(mutationOutcome === undefined ? {} : { mutationOutcome }),
         },
-        ...(mutationOutcome === undefined ? {} : { mutationOutcome }),
-      },
-      correlationId,
-    );
-    this.appendObservedExchange(call.id, origin);
-    await this.publish();
+        correlationId,
+      );
+      this.appendObservedExchange(call.id, origin);
+      await this.publish();
+    } finally {
+      this.options.finalizeInvocation?.(identity);
+    }
   }
   private async startExchange(
     call: NormalizedResponse["toolCalls"][number],

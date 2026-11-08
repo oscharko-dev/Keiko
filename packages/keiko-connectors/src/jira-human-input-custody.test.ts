@@ -59,12 +59,57 @@ describe("human input on existing Atlassian custody", () => {
     expect(f.inputs.inspect(pending.requestId, f.binding)).toMatchObject({ state: "expired" });
     expect(errorCode(() => f.privateInputs.claim(pending.requestId, f.binding, ready.revision))).toBe("expired");
     expect([...f.sealedPortEntries.values()].join("")).not.toContain(PRIVATE_VALUE);
+    expect(f.clearedPhases).toEqual(["expired"]);
   });
   it("revokes readiness when the existing connector verification revision changes", () => {
     const f = fixture(); const pending = f.inputs.prepare(f.binding);
     f.custody.beginVerification(f.binding.authRef, 1);
     expect(f.inputs.bindingFor(pending.requestId, PRINCIPAL)).toBeUndefined();
     expect(errorCode(() => f.inputs.inspect(pending.requestId, f.binding))).toBe("binding-changed");
+  });
+  it("allows only the owning principal to clear a ready input after credential revocation", () => {
+    const f = fixture("jira.login"); const pending = f.inputs.prepare(f.binding);
+    f.inputs.submit(pending.requestId, f.binding, pending.revision, { password: PRIVATE_VALUE });
+    f.custody.beginVerification(f.binding.authRef, 1);
+    expect(f.inputs.cancelOwned(pending.requestId, "c".repeat(64))).toBeUndefined();
+    expect([...f.sealedPortEntries.values()].join("")).toContain(PRIVATE_VALUE);
+    expect(f.inputs.cancelOwned(pending.requestId, PRINCIPAL)?.state).toBe("cancelled");
+    expect([...f.sealedPortEntries.values()].join("")).not.toContain(PRIVATE_VALUE);
+    expect(f.inputs.cancel(pending.requestId, f.binding)?.state).toBe("cancelled");
+    expect(f.clearedPhases).toEqual(["cancelled"]);
+  });
+  it("emits expiry once after the actual CAS and reclaims expired ready input through the same bounded sweep", () => {
+    const f = fixture("jira.login"); const pending = f.inputs.prepare(f.binding);
+    f.inputs.submit(pending.requestId, f.binding, pending.revision, { password: PRIVATE_VALUE });
+    f.advance(60_000);
+    const restarted = f.fork().custody.humanInputs;
+    if (restarted === undefined) throw new TypeError("Missing restarted custody");
+    restarted.sweepExpired(); restarted.sweepExpired();
+    expect([...f.sealedPortEntries.values()].join("")).not.toContain(PRIVATE_VALUE);
+    expect(restarted.cancelOwned(pending.requestId, PRINCIPAL)).toBeUndefined();
+    expect(f.clearedPhases).toEqual(["expired"]);
+  });
+  it("does not report expiry when the vault refuses the transition CAS", () => {
+    const f = fixture("jira.login"); const pending = f.inputs.prepare(f.binding);
+    f.inputs.submit(pending.requestId, f.binding, pending.revision, { password: PRIVATE_VALUE });
+    f.advance(60_000); f.vault.compareAndSet = () => false;
+    expect(errorCode(() => f.inputs.inspect(pending.requestId, f.binding))).toBe("not-pending");
+    expect(f.clearedPhases).toEqual([]);
+  });
+  it("refuses a changed plaintext reread before CAS without retaining the original serialized secret", () => {
+    const f = fixture("jira.login"); const pending = f.inputs.prepare(f.binding);
+    const ready = f.inputs.submit(pending.requestId, f.binding, pending.revision, { password: PRIVATE_VALUE });
+    const ref = humanInputReference(ready.requestId); if (ref === undefined) throw new TypeError("Missing reference");
+    const get = f.vault.get; let reads = 0;
+    f.vault.get = (key) => {
+      if (key === ref && ++reads === 2) {
+        const original = get(key); if (original === undefined) throw new TypeError("Missing ready record");
+        f.sealedPortEntries.set(key, original.replace(PRIVATE_VALUE, "synthetic changed private value"));
+      }
+      return get(key);
+    };
+    expect(errorCode(() => f.privateInputs.claim(ready.requestId, f.binding, ready.revision))).toBe("not-pending");
+    expect(f.inputs.cancelOwned(ready.requestId, PRINCIPAL)?.state).toBe("cancelled");
   });
   it("retains consumed/cancelled tombstones until expiry, then reclaims only expired Jira input records", () => {
     const f = fixture("jira.login"); const pending = f.inputs.prepare(f.binding);

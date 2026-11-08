@@ -19,7 +19,7 @@ function fixture() {
   let current = true;
   const publish = vi.fn();
   const pending: PendingCodingJiraInput = { binding, argumentsValue: { expectedActorKey: "actor-key" },
-    requestId: `jhi_${"d".repeat(64)}`, selection: undefined, current: () => current, publish };
+    requestId: `jhi_${"d".repeat(64)}`, selection: undefined, current: () => current, publish, release: vi.fn() };
   return { pending, publish, revoke: () => { current = false; } };
 }
 describe("current Coding input references carry no authority of their own", () => {
@@ -109,6 +109,35 @@ function heldInputFixture(operation = "jira.login") {
 }
 
 describe("Coding protected input on the existing native invocation and history", () => {
+  it("clears ready values when authority changes before preparation can return", async () => {
+    const f = heldInputFixture(); const preparation = prepareCodingJiraHumanInput(f.input);
+    const view = await f.requested;
+    const pending = f.inputs.get(f.input.context.invocationId);
+    if (pending === undefined) throw new TypeError("Missing held invocation");
+    const secret = "synthetic-ready-before-revocation";
+    f.privateState.inputs.submit(view.requestId, pending.binding, view.revision, { password: secret });
+    f.revoke();
+    await expect(preparation).rejects.toMatchObject({ reason: "not-admitted" });
+    expect([...f.privateState.sealedPortEntries.values()].join("")).not.toContain(secret);
+    expect(f.privateState.inputs.cancelOwned(view.requestId, pending.binding.principalDigest)?.state).toBe("cancelled");
+  });
+  it.each([false, true])("releases ready input at call completion without replacing a consumed claim (claimed=%s)", async (claimed) => {
+    const f = heldInputFixture(); const preparation = prepareCodingJiraHumanInput(f.input);
+    const view = await f.requested;
+    const pending = f.inputs.get(f.input.context.invocationId);
+    if (pending === undefined) throw new TypeError("Missing held invocation");
+    const secret = "synthetic-ready-before-call-exit";
+    f.privateState.inputs.submit(view.requestId, pending.binding, view.revision, { password: secret });
+    const selected = await preparation;
+    if (selected?.selection === undefined) throw new TypeError("Missing private selection");
+    if (claimed) f.privateState.privateInputs.claim(view.requestId, selected.binding, selected.selection.revision);
+    selected.release(); selected.release();
+    expect([...f.privateState.sealedPortEntries.values()].join("")).not.toContain(secret);
+    expect(f.privateState.clearedPhases).toEqual(claimed ? [] : ["cancelled"]);
+    expect(f.privateState.inputs.inspect(view.requestId, selected.binding)?.state).toBe(claimed ? "consumed" : "cancelled");
+    expect(() => f.privateState.privateInputs.claim(view.requestId, selected.binding, selected.selection?.revision ?? ""))
+      .toThrow(claimed ? "not-ready" : "cancelled");
+  });
   it("persists a reloadable pending card, then binds only the submitted immutable revision", async () => {
     const f = heldInputFixture();
     const preparation = prepareCodingJiraHumanInput(f.input);

@@ -6,6 +6,7 @@ export function privateJiraCustodyFixture(operation: JiraHumanInputBinding["oper
   readonly baseUrl?: string; readonly actorKey?: string; readonly actorUsername?: string;
 } = {}) {
   let now = 1_800_000_000_000;
+  const clearedPhases: ("cancelled" | "expired")[] = [];
   const entries = new Map<string, string>(); const leases = new Set<string>();
   const metadata = new Map<string, AtlassianCredentialMetadata>();
   const vault = {
@@ -22,7 +23,8 @@ export function privateJiraCustodyFixture(operation: JiraHumanInputBinding["oper
     },
   };
   const metadataStore = { get: (id: string) => metadata.get(id), list: () => [...metadata.values()], insert: (value: AtlassianCredentialMetadata) => { metadata.set(value.authRef, value); }, delete: (id: string) => metadata.delete(id) };
-  const fork = () => createAtlassianCredentialCustody({ now: () => now, vault, metadataStore });
+  const fork = () => createAtlassianCredentialCustody({ now: () => now, vault, metadataStore,
+    onHumanInputCleared: (_correlationId, phase) => { clearedPhases.push(phase); } });
   const { custody, executionResolver } = fork();
   const created = custody.create({ provider: "jira", deployment: "data-center", displayName: "Synthetic Jira", baseUrl: options.baseUrl ?? "https://jira.example.invalid/context",
     authScheme: "bearer-pat", apiToken: ["synthetic", "private", "pat"].join("-"), livePodCreationRequestId: "7765d9e4-fc9a-46d5-aea4-24880fec5e1e" }, principal);
@@ -35,5 +37,5 @@ export function privateJiraCustodyFixture(operation: JiraHumanInputBinding["oper
     authority: { runId: "authority-run-1", envelopeDigest: "d".repeat(64) }, principalDigest: principal,
     authRef: created.authRef, authenticationGeneration: 1, verificationRevision: verification.revision, operation,
     argumentsDigest: "b".repeat(64), actorUserKey: options.actorKey ?? "actor-key", actorUsername: options.actorUsername ?? "Native Actor", expiresAt: now + 60_000 };
-  return { custody, executionResolver, inputs, privateInputs, sessions, binding, sealedPortEntries: entries, vault, fork, advance: (milliseconds: number) => { now += milliseconds; } };
+  return { custody, executionResolver, inputs, privateInputs, sessions, binding, sealedPortEntries: entries, vault, fork, clearedPhases, advance: (milliseconds: number) => { now += milliseconds; } };
 }

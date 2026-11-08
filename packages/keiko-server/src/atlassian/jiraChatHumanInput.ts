@@ -1,7 +1,7 @@
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { captureCatalogJson, describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
 import { jiraOperationForTool } from "./jiraManagedProvider.js";
-import { createJiraReadRequest, checkJiraManagedMutation, prepareJiraHumanInput, type JiraHumanInputBinding, type JiraHumanInputSelection } from "@oscharko-dev/keiko-connectors";
+import { createJiraReadRequest, checkJiraManagedMutation, prepareJiraHumanInput, prepareJiraHumanInputReview, type JiraHumanInputBinding, type JiraHumanInputSelection } from "@oscharko-dev/keiko-connectors";
 import { JIRA_MUTATION_OPERATIONS, JIRA_HUMAN_INPUT_PURPOSES, JIRA_HUMAN_INPUT_MAX_LIFETIME_MS, JIRA_MANAGED_ACTION_TYPES, type JiraHumanInputPurpose } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
@@ -12,7 +12,7 @@ import type { JiraChatCatalogContext } from "./jiraChatCatalogConsumer.js";
 import { isCurrentJiraChatReadGrant, requestJiraChatReadGrant, resolveCurrentJiraChatAuthority } from "./jiraChatAuthority.js";
 import { jiraChatActorDigest } from "./jiraPodAccess.js";
 import { decideAtlassianEnvelopeAction } from "./actionPolicy.js";
-import { recordJiraHumanInput } from "./credentialActivity.js";
+import { cancelUnclaimedJiraHumanInput, recordJiraHumanInput, reportJiraHumanInputCleanupFailure } from "./credentialActivity.js";
 
 const ALIASES = new Map(JIRA_HUMAN_INPUT_PURPOSES.map((purpose) => [`jira_${purpose.replaceAll("-", "_")}`, purpose]));
 interface Prepared {
@@ -57,12 +57,15 @@ export function createJiraChatHumanInput(options: JiraChatTurnOptions, context: 
     const body = actor.ok && actor.status === 200 ? actor.body : undefined;
     requireDispatch(admitted() && body?.key === expected && typeof body.name === "string" && body.name.length > 0 && body.name.length <= 255,
       "denied", "authority-invalid");
+    const review = await prepareJiraHumanInputReview(purpose, call.arguments, resolved.credential.baseUrl, request);
+    requireDispatch(admitted() && review !== undefined && review.actorUserKey === expected && review.actorUsername === body.name,
+      "denied", "authority-invalid");
     return { context: { kind: "chat", chatId: context.chatId, messageId: options.message.id, callId: call.id,
       podId: resolved.envelope.subject.podId, bindingGeneration: resolved.envelope.subject.bindingGeneration },
       authority: context.authorityReference,
       principalDigest, authRef: resolved.credential.authRef, authenticationGeneration: resolved.credential.generation,
       verificationRevision: resolved.credential.livePod.verificationRevision, operation: `jira.${purpose}`,
-      argumentsDigest: sha256Hex(canonicalise(call.arguments)), actorUserKey: expected, actorUsername: body.name,
+      argumentsDigest: sha256Hex(canonicalise(call.arguments)), actorUserKey: expected, actorUsername: body.name, review,
       expiresAt: Math.min(Date.parse(context.deadlineAt), Date.now() + JIRA_HUMAN_INPUT_MAX_LIFETIME_MS) };
   }
   return {
@@ -96,10 +99,17 @@ export function createJiraChatHumanInput(options: JiraChatTurnOptions, context: 
       const selection = await prepareJiraHumanInput(custody, bound, async (view) => {
         await ports.publishHumanInput(view);
         if (view.state === "awaiting-input") recordJiraHumanInput(options.deps.atlassianConnectorCredentials, context.correlationId, "requested");
-      }, context.signal);
-      requireDispatch(admitted(), "denied", "authority-invalid");
+      }, context.signal, (error) => reportJiraHumanInputCleanupFailure(options.deps.atlassianConnectorCredentials, bound, error));
       active = { operation: bound.operation, argumentsDigest: bound.argumentsDigest, selection };
       selections.set(actionId, active);
+      requireDispatch(admitted(), "denied", "authority-invalid");
+    },
+    finalize(actionId: string): void {
+      const selected = selections.get(actionId); if (selected === undefined) return;
+      cancelUnclaimedJiraHumanInput(options.deps.atlassianConnectorCredentials,
+        selected.selection.requestId, selected.selection.binding);
+      if (active === selected) active = undefined;
+      selections.delete(actionId);
     },
     currentSelection(): JiraHumanInputSelection | undefined { return active?.selection; },
     revisionFor(actionId: string, argumentsDigest: string): string | undefined {

@@ -18,4 +18,12 @@ describe("client defect context", () => {
     ]);
     expect(isClientDefectContext(["stage:unknown-launcher"])).toBe(false);
   });
+
+  it("retains only the human-input stage without secret request details", () => {
+    expect(clientDefectContext({ clientKind: "other", stage: "jira-human-input" })).toEqual([
+      "kind:other", "stage:jira-human-input",
+    ]);
+    expect(isClientDefectContext(["stage:jira-human-input"])).toBe(true);
+    expect(isClientDefectContext(["stage:jira-human-input:synthetic-private-entry"])).toBe(false);
+  });
 });

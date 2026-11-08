@@ -31,6 +31,8 @@ import {
   containsPseudoRoleMarker,
   stripUnsafeFormatChars,
 } from "./text-safety.js";
+import { ATLASSIAN_CONNECTOR_BASE_URL_MAX_CHARS } from "./atlassian-connector-url.js";
+export { ATLASSIAN_CONNECTOR_BASE_URL_MAX_CHARS, canonicalAtlassianConnectorBaseUrl, isSafeAtlassianConnectorBaseUrl } from "./atlassian-connector-url.js";
 
 import { JIRA_READ_TOOL_FAMILIES } from "./jira-read-tools.js";
 import { JIRA_MANAGED_READ_TOOLS, type JiraManagedReadToolName } from "./jira-tool-fields.js";
@@ -423,7 +425,6 @@ export function isAtlassianConnectorAuthRef(value: unknown): value is string {
 }
 
 // ─── Bounded identifiers and display text ─────────────────────────────────────
-export const ATLASSIAN_CONNECTOR_BASE_URL_MAX_CHARS = 2048;
 export const ATLASSIAN_CONNECTOR_DISPLAY_NAME_MAX_CHARS = 100;
 export const ATLASSIAN_CONNECTOR_IDENTIFIER_MAX_CHARS = 128;
 
@@ -454,48 +455,6 @@ export function isSafeAtlassianDisplayName(value: unknown): value is string {
   if (stripUnsafeFormatChars(value) !== value) return false;
   if (containsAbsolutePath(value) || containsPseudoRoleMarker(value)) return false;
   return !containsUrlOrCredentialMarker(value);
-}
-
-// ─── Base URL validation (ADR-0128 D3) ────────────────────────────────────────
-// The WHATWG parser guarantees a non-empty host for `https:` URLs (an empty host is a parse
-// error), so no separate hostname check is needed after a successful parse.
-function isSafeParsedBaseUrl(url: URL): boolean {
-  return (
-    url.protocol === "https:" &&
-    url.username.length === 0 &&
-    url.password.length === 0 &&
-    url.search.length === 0 &&
-    url.hash.length === 0
-  );
-}
-
-// HTTPS only; no embedded credentials; no query; no fragment. A path is allowed (Data Center
-// context paths). The parsed-URL checks catch real userinfo/query/fragment components; the
-// string-level scan afterwards is fail-closed defense in depth for the empty-marker forms
-// (`https://:@host`, trailing `?` or `#`) that parse with empty userinfo/search/hash. The same
-// validation runs again at request-construction time downstream (ADR-0128 D3).
-export function isSafeAtlassianConnectorBaseUrl(value: unknown): value is string {
-  if (typeof value !== "string" || value.length === 0) return false;
-  if (value.length > ATLASSIAN_CONNECTOR_BASE_URL_MAX_CHARS) return false;
-  if (/\s/u.test(value)) return false;
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    return false;
-  }
-  if (!isSafeParsedBaseUrl(url)) return false;
-  return !value.includes("@") && !value.includes("?") && !value.includes("#");
-}
-
-/** Exact target identity; ambiguous path encodings and normalizing traversal are not admitted. */
-export function canonicalAtlassianConnectorBaseUrl(value: unknown): string | undefined {
-  if (!isSafeAtlassianConnectorBaseUrl(value)) return undefined;
-  const url = new URL(value);
-  const normalized = url.toString().replace(/\/$/, "");
-  if (normalized !== value.replace(/\/$/, "")) return undefined;
-  if (url.pathname.includes("%") || url.pathname.includes("//")) return undefined;
-  return normalized;
 }
 
 // ─── Connector descriptor (ADR-0128 D2) ───────────────────────────────────────
@@ -2408,6 +2367,7 @@ export {
   type JiraHumanInputView,
   type JiraHumanInputSubmission,
 } from "./jira-human-input.js";
+export { copyJiraHumanInputReview, type JiraHumanInputReview } from "./jira-human-input-review.js";
 export {
   JIRA_AVATAR_MUTATIONS, type JiraAvatarMutation,
   JIRA_AVATAR_UPLOAD_MUTATIONS, type JiraAvatarUploadMutation, isJiraAvatarUploadOperation,

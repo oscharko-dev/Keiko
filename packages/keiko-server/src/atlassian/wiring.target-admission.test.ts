@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import type {
   AtlassianCredentialMetadata,
   AtlassianHttpBodyRequest,
+  JiraHumanInputBinding,
 } from "@oscharko-dev/keiko-connectors";
 import type { OutboundHttpEgressConfig } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
@@ -116,6 +117,38 @@ afterEach(() => {
 });
 
 describe("stored Data Center admission through real custody, wiring and verification", () => {
+  it("sweeps expired ready input once on the first legitimate vault use after restart, never during construction", () => {
+    const f = fixture(); const deps = f.build();
+    const created = createDataCenter(deps, PRIVATE_BASE);
+    const verification = deps.custody.beginVerification(created.authRef);
+    if (verification === undefined || created.livePod === undefined) throw new TypeError("Missing verified Pod");
+    deps.custody.finishVerification(created.authRef, created.generation, verification.revision, "ok");
+    const binding: JiraHumanInputBinding = {
+      context: { kind: "chat", chatId: "synthetic-chat", messageId: "synthetic-message", callId: "synthetic-call",
+        podId: created.livePod.podId, bindingGeneration: 1 },
+      authority: { runId: "synthetic-input-run", envelopeDigest: "a".repeat(64) }, principalDigest: "a".repeat(64),
+      authRef: created.authRef, authenticationGeneration: created.generation, verificationRevision: verification.revision,
+      operation: "jira.login", argumentsDigest: "b".repeat(64), actorUserKey: "synthetic-key", actorUsername: "synthetic-user",
+      expiresAt: Date.now() + 1000,
+    };
+    const inputs = deps.custody.humanInputs; if (inputs === undefined) throw new TypeError("Missing input custody");
+    const pending = inputs.prepare(binding);
+    inputs.submit(pending.requestId, binding, pending.revision, { password: "synthetic-expired-private-input" });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(binding.expiresAt);
+    try {
+      const restarted = f.build(); const restoredInputs = restarted.custody.humanInputs;
+      if (restoredInputs === undefined) throw new TypeError("Missing restored input custody");
+      const sweep = vi.spyOn(restoredInputs, "sweepExpired");
+      expect(restarted.custody.list()).toHaveLength(1);
+      expect(sweep).not.toHaveBeenCalled();
+      expect(restoredInputs.inspect(pending.requestId, binding)).toBeUndefined();
+      expect(restoredInputs.inspect(pending.requestId, binding)).toBeUndefined();
+      expect(sweep).toHaveBeenCalledTimes(1);
+      const phases = persistedActivityLogLines(readPersistedActivityLog(f.directory), "atlassian.jira.human-input")
+        .map((line) => JSON.parse(line) as { phase?: string });
+      expect(phases.filter((line) => line.phase === "expired")).toHaveLength(1);
+    } finally { clock.mockRestore(); }
+  });
   it.each([
     [PRIVATE_BASE, "private"],
     ["https://127.0.0.1:18443/context", "loopback"],

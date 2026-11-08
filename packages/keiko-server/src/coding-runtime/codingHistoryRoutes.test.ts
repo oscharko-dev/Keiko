@@ -234,6 +234,7 @@ describe("live private input is a current native history projection", () => {
       binding, argumentsValue: args, requestId: view.requestId, selection: undefined,
       current: () => active && owner.nativeTurn("private-history-run")?.userMessageId === turn.userMessageId,
       publish: (next) => transcript.humanInput(started, next, "history-route-test"),
+      release: () => undefined,
     };
     Object.assign(deps, {
       store, serverPrincipal: () => "operator", atlassianConnectorCredentials: { custody: privateState.custody },

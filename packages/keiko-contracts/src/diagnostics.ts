@@ -1074,6 +1074,7 @@ export const CLIENT_STAGE_IDS = [
   "transcript navigation",
   "browser approval",
   "knowledge pod selection",
+  "jira human input",
 ] as const;
 export type ClientStageId = (typeof CLIENT_STAGE_IDS)[number];
 

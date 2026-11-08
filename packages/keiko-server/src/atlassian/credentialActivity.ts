@@ -2,7 +2,7 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import type { AtlassianCredentialMetadata } from "@oscharko-dev/keiko-connectors";
+import type { AtlassianCredentialMetadata, JiraHumanInputBinding } from "@oscharko-dev/keiko-connectors";
 import type { AtlassianConnectionVerificationStatus } from "@oscharko-dev/keiko-contracts";
 import { contentFreeErrorClass, emitServerDiagnostic } from "../diagnostics-log.js";
 import type { AtlassianConnectorCredentialDeps } from "./credentialRoutes.js";
@@ -293,4 +293,24 @@ export function recordJiraHumanInput(
       operation: "atlassian.jira.human-input", source: "atlassian.credential-activity.human-input",
       errorClass: contentFreeErrorClass(error), message: "jira-private-input-activity-log-failed" });
   }
+}
+
+/** Cleanup may not replace an already received native ACK/outcome with a local vault failure. */
+export function cancelUnclaimedJiraHumanInput(
+  deps: Pick<AtlassianConnectorCredentialDeps, "custody" | "diagnostics"> | undefined,
+  requestId: string,
+  binding: JiraHumanInputBinding,
+): void {
+  try { deps?.custody.humanInputs?.cancel(requestId, binding); }
+  catch (error) { reportJiraHumanInputCleanupFailure(deps, binding, error); }
+}
+export function reportJiraHumanInputCleanupFailure(
+  deps: Pick<AtlassianConnectorCredentialDeps, "diagnostics"> | undefined,
+  binding: JiraHumanInputBinding,
+  error: unknown,
+): void {
+  emitServerDiagnostic(deps?.diagnostics, { correlationId: binding.authority.runId,
+    timestamp: new Date().toISOString(), operation: "atlassian.jira.human-input",
+    source: "atlassian.credential-activity.human-input", errorClass: contentFreeErrorClass(error),
+    message: "jira-private-input-cleanup-failed" });
 }

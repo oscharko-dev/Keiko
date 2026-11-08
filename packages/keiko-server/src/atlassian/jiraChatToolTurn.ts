@@ -318,6 +318,7 @@ export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
         await humanInput.prepare(call, actionId, ports);
         return source;
       },
+      finalizeInvocation: (actionId) => humanInput.finalize(actionId),
       selectTools: async (identities) => {
         requireDispatch(deps.jiraChatCatalog !== undefined, "failed", "handler-unavailable");
         const selected = await deps.jiraChatCatalog.select(identities);

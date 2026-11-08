@@ -7,7 +7,9 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
+import { privateJiraCustodyFixture } from "../../../../tests/support/jira-private-custody-fixture.js";
 import {
+  cancelUnclaimedJiraHumanInput,
   recordCredentialCreated,
   recordConnectionCheck,
   recordCredentialUpdated,
@@ -24,6 +26,26 @@ const metadata: AtlassianCredentialMetadata = {
 };
 
 describe("credential creation activity", () => {
+  it("preserves an acknowledged outcome when input cleanup fails and exposes no private failure text", () => {
+    const f = privateJiraCustodyFixture("jira.login");
+    const view = f.inputs.prepare(f.binding);
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const privateText = "synthetic private cleanup value";
+    const outcome = { ok: false, reason: "unavailable", receipt: { userKey: "synthetic-actor" } };
+    const finish = () => {
+      try { return outcome; }
+      finally {
+        cancelUnclaimedJiraHumanInput({
+          custody: { ...f.custody, humanInputs: { ...f.inputs, cancel: () => { throw new Error(privateText); } } },
+          diagnostics: { record: (record) => { diagnostics.push(record); } },
+        }, view.requestId, f.binding);
+      }
+    };
+    expect(finish()).toBe(outcome);
+    expect(diagnostics).toMatchObject([{ message: "jira-private-input-cleanup-failed" }]);
+    expect(JSON.stringify(diagnostics)).not.toContain(privateText);
+    expect(JSON.stringify(diagnostics)).not.toContain(f.binding.authRef);
+  });
   it("does not turn an applied update into a retryable failure when logging fails", () => {
     const diagnostics: ServerDiagnosticRecord[] = [];
     expect(() => {

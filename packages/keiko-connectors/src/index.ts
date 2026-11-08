@@ -29,6 +29,7 @@ export {
 export { JiraHumanInputCustodyError, type JiraHumanInputCustody, type JiraHumanInputExecutionResolver } from "./jira-human-input-custody.js";
 export { copyHumanInputBinding, humanInputView, parseHumanInputValues, type JiraHumanInputBinding, type JiraHumanInputContext, type JiraHumanInputValues } from "./jira-human-input-values.js";
 export { prepareJiraHumanInput, type JiraHumanInputSelection } from "./jira-human-input-preparation.js";
+export { prepareJiraHumanInputReview } from "./jira-human-input-review.js";
 export { jiraNativeId } from "./jira-native-values.js";
 export { jiraApplicationLinkId } from "./jira-reciprocal-link-values.js";
 export { JiraPrivateSessionError, type JiraPrivateSessionAccess, type JiraPrivateSessionExecutionResolver } from "./jira-private-session-custody.js";
