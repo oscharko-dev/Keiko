@@ -1458,19 +1458,18 @@ the approval.
   Markdown: ATX, setext (three or more `=` or `-`) and Jira wiki (`h2.`) headings. The projected
   Data Center wire description is judged in native wiki mode: only `hN.` headings count, so a
   native `#` numbered list or setext-looking text never satisfies a required section. Explicit
-  Explicit Markdown is projected before this check and before the reviewed draft/action digest.
-  The bounded CommonMark parser and constrained Jira writer support headings, ordinary paragraphs,
-  emphasis, inline and fenced/indented code, simple nested lists, validated links, simple quotes,
-  unaligned tables and strikethrough. Unsupported or lossy structures are refused as a whole,
-  including HTML, images, unsafe destinations, unterminated fences and discarded table cells.
-  Literal wiki punctuation and native heading/quote prefixes in Markdown prose are escaped;
-  code contents remain code. Bare native strings never enter that converter and remain unchanged.
-  Template section identities and source-criterion matching use the same rendered projection.
-  The existing Chat/Coding mutation evidence records the closed `supported-markdown` projection
-  even without a heading, alongside the actual converted-heading count; neither field contains
-  description content. The existing public headings-only helper remains unchanged for its callers.
-  An untagged plain string that reads as Markdown only is serialized to native wiki by the same
-  projection before this check (#4173), and native strings remain unchanged.
+  Markdown is projected before this check and before the reviewed draft/action digest. The same
+  bounded canonical heading reader and wiki writer described above supply the wire description,
+  template section identities and source-criterion matching. Safe image destinations become wiki
+  images; quoted source lines keep their literal `>` prefix. Code contents remain literal, and an
+  unterminated fence keeps the heading pass's result. An untagged plain string that reads as
+  Markdown only uses this projection too (#4173); ambiguous native strings remain unchanged.
+  Input and projected output must both fit the field's existing bounds; refusal never returns
+  partially converted fields. The existing public headings-only helper remains unchanged.
+  Existing Chat/Coding mutation evidence records the closed `supported-markdown` projection for
+  an explicit Markdown value or an actual rewrite, even without a heading, alongside any positive
+  converted-heading count. An unchanged native string carries neither conversion claim. Neither
+  field contains description content, and no second parser or projection owner is introduced.
   Backtick and tilde fences are Markdown syntax only: native descriptions and the native samples
   from which a template is proposed recognize matching `{code}` and `{noformat}` blocks instead.
   Markdown heading discovery ignores backtick/tilde fences and wiki code macros. Native wire

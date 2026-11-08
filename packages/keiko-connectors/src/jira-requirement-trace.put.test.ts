@@ -108,9 +108,28 @@ describe("explicit Markdown description in a traced edit", () => {
     expect(result).toMatchObject({ ok: true, descriptionConvertedHeadingCount: 2 });
     expect(remote.puts()).toHaveLength(1);
     expect(stored.fields.description).toBe(
-      `h2. Requirement\nExact body\nh2. Source\n{quote}\nExact quote\n{quote}\n\n${block("NEW")}`,
+      `h2. Requirement\nExact body\nh2. Source\n> Exact quote\n\n${block("NEW")}`,
     );
     expect(JSON.stringify(description)).toBe(before);
+  });
+
+  it("writes explicit Markdown acceptance criteria as wiki before adding the trace", async () => {
+    const stored: Stored = { fields: { summary: "old", labels: [], description: "Old text" } };
+    const remote = jira(stored);
+    const description = Object.freeze({
+      format: "markdown",
+      text: "## Context\nReviewed\n## Acceptance criteria\n- Observable result\n- Exact boundary",
+    });
+    expect(await remote.edit({ fields: { description } }, trace())).toMatchObject({
+      ok: true,
+      descriptionConvertedHeadingCount: 2,
+      descriptionProjection: "supported-markdown",
+    });
+    expect(remote.puts()).toHaveLength(1);
+    expect(stored.fields.description).toBe(
+      `h2. Context\nReviewed\nh2. Acceptance criteria\n* Observable result\n* Exact boundary\n\n${block("NEW")}`,
+    );
+    expect(description.text).toContain("## Acceptance criteria");
   });
 
   it("preserves native ordered lists without conversion evidence", async () => {

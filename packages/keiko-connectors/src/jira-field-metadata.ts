@@ -447,7 +447,9 @@ function markdownDescriptionValue(field: JiraFieldMetadata, value: unknown): Val
   return {
     ok: true,
     value: serialized.text,
-    descriptionProjection: "supported-markdown",
+    ...(typeof value !== "string" || serialized.text !== source
+      ? { descriptionProjection: "supported-markdown" as const }
+      : {}),
     ...(serialized.convertedHeadingCount === 0
       ? {}
       : { descriptionConvertedHeadingCount: serialized.convertedHeadingCount }),

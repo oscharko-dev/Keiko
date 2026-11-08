@@ -26,7 +26,7 @@ describe("Data Center description serialization", () => {
     expect(prepareJiraDescriptionFields(fields, parsed.fields)).toMatchObject(expected);
   });
 
-  it("refuses an unsupported Markdown document without returning a partially converted value", () => {
+  it("projects supported Markdown images through the shared dev wiki writer", () => {
     const parsed = parseJiraFieldMetadata([field("description", "string")]);
     if (!parsed.ok) throw new TypeError("Missing synthetic description");
     const result = prepareJiraDescriptionFields(
@@ -39,12 +39,22 @@ describe("Data Center description serialization", () => {
       parsed.fields,
     );
     expect(result).toMatchObject({
-      ok: false,
-      fieldId: "description",
-      reason: "invalid-field",
+      ok: true,
+      fields: { description: "h2. Heading\n!https://example.invalid/image.png!" },
+      descriptionConvertedHeadingCount: 1,
+      descriptionProjection: "supported-markdown",
     });
-    if (result.ok) throw new TypeError("Expected unsupported Markdown refusal");
-    expect(result.message).toContain("unsupported structure");
+  });
+  it("refuses an oversized Markdown projection without returning partially converted fields", () => {
+    const parsed = parseJiraFieldMetadata([field("description", "string")]);
+    if (!parsed.ok) throw new TypeError("Missing synthetic description");
+    const text = `## Heading\n${"{".repeat(32752)}`;
+    expect(text.length).toBeLessThan(32768);
+    const result = prepareJiraDescriptionFields(
+      { description: { format: "markdown", text } },
+      parsed.fields,
+    );
+    expect(result).toMatchObject({ ok: false, fieldId: "description", reason: "invalid-field" });
     expect(result).not.toHaveProperty("fields");
   });
   it("serializes only the description and carries an internal actual conversion count", () => {
