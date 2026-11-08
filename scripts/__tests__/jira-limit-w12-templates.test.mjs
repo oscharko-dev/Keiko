@@ -10,9 +10,19 @@ const ports = vi.hoisted(() => ({
   read: vi.fn(),
   browser: vi.fn(),
   english: vi.fn(),
+  open: vi.fn(),
+  close: vi.fn(),
+  watch: vi.fn(),
+  listed: vi.fn(),
+  checked: vi.fn(),
 }));
 vi.mock("../testing/jira-chat-lab/browser-rules-knowledge-setup.mjs", () => ({
   uploadBrowserSkill: ports.upload,
+  openSkills: ports.open,
+  closeSkillsIfOpen: ports.close,
+  watchTemplateReads: ports.watch,
+  listedAfter: ports.listed,
+  checkedTemplate: ports.checked,
 }));
 vi.mock("../testing/jira-chat-lab/project-agile-oracles.mjs", () => ({
   projectAgileRead: ports.read,
@@ -97,63 +107,40 @@ function fixture() {
   return { ctx, controller, skills, uploads, region, page };
 }
 
+/** The Skills dialog reopened on resume: it lists the stored templates and checks each one. */
 function resumeUi(f, { valid = true } = {}) {
-  let current;
-  let listed = false;
-  const row = {
-    filter: () => row,
-    count: async () => 1,
-    getByRole: () => ({ click: async () => undefined }),
-    getByText: () => ({ waitFor: async () => undefined }),
-  };
-  const dialog = {
-    waitFor: async () => undefined,
-    getByRole: vi.fn((role, options) => {
-      if (role === "listitem")
-        return {
-          filter: ({ hasText }) => {
-            current = [...f.skills.values()].find((skill) => skill.name === hasText);
-            return row;
-          },
-        };
-      if (options.name === "Jira issue templates")
-        return {
-          click: async () => {
-            listed = true;
-          },
-        };
-      return { click: async () => undefined };
-    }),
-  };
-  f.region.getByRole.mockReturnValue({ click: async () => undefined });
-  f.page.getByRole = vi.fn(() => dialog);
-  f.page.waitForResponse = vi.fn(async (accept) => {
-    const validation = listed;
-    const path = validation ? "/api/skills/jira-templates/validate" : "/api/skills/jira-templates";
-    const response = {
-      status: () => 200,
-      url: () => "http://127.0.0.1" + path,
-      request: () => ({
-        method: () => (validation ? "POST" : "GET"),
-        postDataJSON: () => ({ markdown: current.body }),
-      }),
-      json: async () =>
-        validation
-          ? { valid, findings: [], checked: { project: true } }
-          : {
-              templates: f.uploads.map(({ formal, skill }) => ({
-                id: skill.id,
-                revision: skill.revision,
-                valid: true,
-                project: formal.project,
-                issueType: formal.issueType,
-                activations: ["create"],
-              })),
-            },
-    };
-    expect(accept(response)).toBe(true);
-    return response;
+  const dialog = { name: "skills-dialog" };
+  const watch = { mark: () => 7, stop: vi.fn() };
+  ports.open.mockImplementation(async (actualPage, actualRegion) => {
+    expect(actualPage).toBe(f.page);
+    expect(actualRegion).toBe(f.region);
+    return dialog;
   });
+  ports.watch.mockImplementation((actualPage) => {
+    expect(actualPage).toBe(f.page);
+    return watch;
+  });
+  ports.listed.mockImplementation(async (actualWatch, mark, accept) => {
+    expect(actualWatch).toBe(watch);
+    expect(mark).toBe(7);
+    const templates = f.uploads.map(({ formal, skill }) => ({
+      id: skill.id,
+      revision: skill.revision,
+      valid: true,
+      project: formal.project,
+      issueType: formal.issueType,
+      activations: ["create"],
+    }));
+    expect(accept(templates)).toBe(true);
+    return templates;
+  });
+  ports.checked.mockImplementation(async (actualDialog, actualWatch, skill, markdown) => {
+    expect(actualDialog).toBe(dialog);
+    expect(actualWatch).toBe(watch);
+    expect(f.skills.get(skill.id).body).toBe(markdown);
+    if (!valid) throw new Error("template-check-mismatch");
+  });
+  return { dialog, watch };
 }
 
 beforeEach(() => {
@@ -320,14 +307,19 @@ describe("W12 runtime-bound template installation", () => {
     ports.upload.mockClear();
     ports.read.mockClear();
     f.ctx.intent = memoryLimitIntent(f.ctx.intent.state);
-    resumeUi(f);
+    const { dialog, watch } = resumeUi(f);
     expect(await installTemplates(f.ctx)).toMatchObject({
       status: "green",
       detail: "templates-reverified",
       counts: { installed: 4, verified: 4 },
     });
     expect(ports.upload).not.toHaveBeenCalled();
-    expect(f.page.waitForResponse).toHaveBeenCalledTimes(5);
+    expect(ports.listed).toHaveBeenCalledTimes(1);
+    expect(ports.checked.mock.calls.map(([, , skill]) => skill.id)).toEqual(
+      f.uploads.map(({ skill }) => skill.id),
+    );
+    expect(watch.stop).toHaveBeenCalledTimes(1);
+    expect(ports.close).toHaveBeenCalledWith(dialog);
     expect(ports.read).toHaveBeenCalledTimes(4);
   });
 

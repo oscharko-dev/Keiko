@@ -1,14 +1,20 @@
 import assert from "node:assert/strict";
 import { resolveLimitBrowser } from "./limit-run-browser.mjs";
 import { withEnglishLimitUi } from "./limit-run-language.mjs";
-import { responseAfter, uploadBrowserSkill } from "./browser-rules-knowledge-setup.mjs";
+import {
+  checkedTemplate,
+  closeSkillsIfOpen,
+  listedAfter,
+  openSkills,
+  uploadBrowserSkill,
+  watchTemplateReads,
+} from "./browser-rules-knowledge-setup.mjs";
 import { openLimitStep } from "./limit-run-step.mjs";
 import { projectAgileRead } from "./project-agile-oracles.mjs";
 import { STRUCTURE_RULES } from "./requirements/corpus.mjs";
 import {
   epicTemplateMarkdown,
   gradeTemplateListing,
-  gradeTemplateValidation,
   runtimeTemplateProjectKey,
   templateMarkdown,
 } from "./requirements/templates.mjs";
@@ -89,41 +95,24 @@ async function storedTemplates(ctx, templates, expected) {
 }
 
 async function revalidateStoredTemplates(ctx, region, stored) {
-  await region.getByRole("button", { name: "Skills", exact: true }).click();
-  const dialog = ctx.page.getByRole("dialog", { name: "Skills", exact: true });
-  await dialog.waitFor();
+  const watch = watchTemplateReads(ctx.page);
+  const opened = watch.mark();
+  const dialog = await openSkills(ctx.page, region);
   try {
-    const listed = await responseAfter(ctx.page, "GET", "/api/skills/jira-templates", () =>
-      dialog.getByRole("button", { name: "Jira issue templates", exact: true }).click(),
+    const templates = await listedAfter(watch, opened, (listed) =>
+      stored.every(({ skill }) => listed.some((entry) => entry.id === skill.id)),
     );
-    assert.equal(listed.status(), 200);
-    const { templates } = await listed.json();
     for (const { skill, markdown, formal } of stored) {
       assert.deepEqual(gradeTemplateListing(templates, skill, formal), {
         defined: true,
         activated: true,
       });
       assert.equal(templates.find((entry) => entry.id === skill.id).revision, skill.revision);
-      const row = dialog
-        .getByRole("listitem")
-        .filter({ hasText: skill.name })
-        .filter({
-          has: ctx.page.getByRole("button", { name: "Validate against Jira", exact: true }),
-        });
-      assert.equal(await row.count(), 1);
-      const validated = await responseAfter(
-        ctx.page,
-        "POST",
-        "/api/skills/jira-templates/validate",
-        () => row.getByRole("button", { name: "Validate against Jira", exact: true }).click(),
-      );
-      assert.equal(validated.status(), 200);
-      assert.equal(validated.request().postDataJSON().markdown, markdown);
-      assert.equal(gradeTemplateValidation(await validated.json()).ok, true);
-      await row.getByText("The template matches the Jira instance.", { exact: true }).waitFor();
+      await checkedTemplate(dialog, watch, skill, markdown, formal);
     }
   } finally {
-    await dialog.getByRole("button", { name: "Close skills", exact: true }).click();
+    watch.stop();
+    await closeSkillsIfOpen(dialog);
   }
 }
 

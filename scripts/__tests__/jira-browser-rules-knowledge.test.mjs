@@ -409,8 +409,9 @@ describe("live UI journey wiring", () => {
       "Source path",
       "Relative document paths",
       "Index this Knowledge Pod now",
-      "Validate against Jira",
+      "Use in this chat",
       "Active in this chat",
+      "Matches Jira.",
     ])
       expect(setup).toContain(control);
     expect(setup).not.toMatch(

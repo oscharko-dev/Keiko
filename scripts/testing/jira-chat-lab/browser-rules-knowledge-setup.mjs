@@ -18,7 +18,101 @@ export async function responseAfter(page, method, path, action) {
   return response;
 }
 
-async function skills(page, region) {
+/**
+ * Every Jira template list read and automatic template check the Skills dialog makes while it is
+ * watched. Each read keeps the request sequence it was issued at, so a read can be told apart from
+ * one that predates a store change.
+ */
+export function watchTemplateReads(page) {
+  let sequence = 0;
+  const issued = new WeakMap();
+  const lists = [];
+  const checks = [];
+  const onRequest = (request) => issued.set(request, ++sequence);
+  const onResponse = (response) => {
+    const request = response.request();
+    const path = new URL(response.url()).pathname;
+    const read = {
+      response,
+      issuedAt: issued.get(request) ?? 0,
+      body: response.json().catch(() => undefined),
+    };
+    if (request.method() === "GET" && path === "/api/skills/jira-templates") lists.push(read);
+    if (request.method() === "POST" && path === "/api/skills/jira-templates/validate")
+      checks.push(read);
+  };
+  page.on("request", onRequest);
+  page.on("response", onResponse);
+  return {
+    mark: () => sequence,
+    lists,
+    checks,
+    stop: () => {
+      page.off("request", onRequest);
+      page.off("response", onResponse);
+    },
+  };
+}
+
+/** The newest watched read that satisfies the predicate, once the dialog has made one. */
+async function awaitRead(reads, accept) {
+  let found;
+  await expect
+    .poll(
+      async () => {
+        for (const read of reads) if (await accept(read)) found = read;
+        return found !== undefined;
+      },
+      { timeout: 60_000 },
+    )
+    .toBe(true);
+  return found;
+}
+
+/** The newest template list issued after the store changed at `mark`. */
+export async function listedAfter(watch, mark, accept = () => true) {
+  const read = await awaitRead(
+    watch.lists,
+    async (entry) => entry.issuedAt > mark && accept((await entry.body)?.templates ?? []),
+  );
+  assert.equal(read.response.status(), 200);
+  return (await read.body).templates;
+}
+
+/**
+ * The automatic check of one stored template: the dialog validates each listed template against
+ * the selected Jira Pod by itself and shows the outcome in the template's row.
+ */
+export async function checkedTemplate(dialog, watch, skill, markdown, formal) {
+  const check = await awaitRead(
+    watch.checks,
+    async (entry) => entry.response.request().postDataJSON()?.markdown === markdown,
+  );
+  assert.equal(check.response.status(), 200);
+  if (formal.parentIssueTypes !== undefined)
+    assert.ok(
+      markdown.includes(
+        `parentIssueTypes: [${formal.parentIssueTypes.map((type) => JSON.stringify(type)).join(", ")}]`,
+      ),
+      "Validation must use the stored uploaded parent-type clause",
+    );
+  assert.equal(gradeTemplateValidation(await check.body).ok, true);
+  await skillRow(dialog, skill)
+    .getByText(`${formal.project} · ${formal.issueType} — Matches Jira.`, { exact: true })
+    .waitFor();
+}
+
+function skillRow(dialog, skill) {
+  return dialog.getByRole("listitem").filter({ hasText: skill.name });
+}
+
+/** Closes the Skills dialog when a step left it open, so a failure never blocks the window. */
+export async function closeSkillsIfOpen(dialog) {
+  if (await dialog.isVisible())
+    await dialog.getByRole("button", { name: "Close skills", exact: true }).click();
+}
+
+export async function openSkills(page, region) {
   await region.getByRole("button", { name: "Skills", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Skills", exact: true });
   await dialog.waitFor();
@@ -26,92 +120,69 @@ async function skills(page, region) {
 }
 
 export async function uploadBrowserSkill(page, region, markdown, fileName, formal) {
-  const dialog = await skills(page, region);
-  const uploaded = await responseAfter(page, "POST", "/api/skills", () =>
-    // The import control names its accepted files in its visible tooltip; its label reads "Import".
-    dialog
-      .getByTitle("Upload Markdown (.md, up to 128 KiB)", { exact: true })
-      .locator('input[type="file"]')
-      .setInputFiles({
+  const watch = watchTemplateReads(page);
+  const dialog = await openSkills(page, region);
+  try {
+    const uploaded = await responseAfter(page, "POST", "/api/skills", () =>
+      // The import control names its accepted files in its tooltip; its label reads "Import".
+      dialog.getByLabel("Import", { exact: true }).setInputFiles({
         name: fileName,
         mimeType: "text/markdown",
         buffer: Buffer.from(markdown),
       }),
-  );
-  assert.equal(uploaded.status(), 201);
-  const { skill } = await uploaded.json();
-  if (formal) await inspectBrowserTemplate(page, dialog, skill, formal);
-  else {
-    const row = dialog.getByRole("listitem").filter({
-      has: page.getByRole("button", { name: skill.name, exact: true }),
-    });
-    await row.getByRole("button", { name: "Select", exact: true }).click();
-    await row.getByRole("button", { name: "Active in this chat", exact: true }).waitFor();
-    const templates = await listedBrowserTemplates(page, dialog);
-    assert.equal(
-      templates.some((entry) => entry.id === skill.id),
-      false,
-      "The active prose skill must not appear as a formal template",
     );
+    assert.equal(uploaded.status(), 201);
+    const stored = watch.mark();
+    const { skill } = await uploaded.json();
+    if (formal) await installedTemplate(dialog, watch, stored, { skill, markdown, formal });
+    else await selectedProseSkill(dialog, watch, stored, skill);
+    return skill;
+  } finally {
+    watch.stop();
+    await closeSkillsIfOpen(dialog);
   }
-  await dialog.getByRole("button", { name: "Close skills", exact: true }).click();
-  return skill;
 }
 
-async function listedBrowserTemplates(page, dialog) {
-  const listed = await responseAfter(page, "GET", "/api/skills/jira-templates", () =>
-    dialog.getByRole("button", { name: "Jira issue templates", exact: true }).click(),
+async function installedTemplate(dialog, watch, stored, { skill, markdown, formal }) {
+  const templates = await listedAfter(watch, stored, (listed) =>
+    listed.some((entry) => entry.id === skill.id),
   );
-  assert.equal(listed.status(), 200);
-  return (await listed.json()).templates;
+  assert.deepEqual(gradeTemplateListing(templates, skill, formal), {
+    defined: true,
+    activated: true,
+  });
+  await checkedTemplate(dialog, watch, skill, markdown, formal);
 }
 
-async function inspectBrowserTemplate(page, dialog, skill, formal) {
-  assert.deepEqual(
-    gradeTemplateListing(await listedBrowserTemplates(page, dialog), skill, formal),
-    { defined: true, activated: true },
+async function selectedProseSkill(dialog, watch, stored, skill) {
+  const row = skillRow(dialog, skill);
+  await row.getByRole("button", { name: "Use in this chat", exact: true }).click();
+  await row.getByRole("button", { name: "Active in this chat", exact: true }).waitFor();
+  const templates = await listedAfter(watch, stored);
+  assert.equal(
+    templates.some((entry) => entry.id === skill.id),
+    false,
+    "The active prose skill must not appear as a formal template",
   );
-  const row = dialog
-    .getByRole("listitem")
-    .filter({ hasText: skill.name })
-    .filter({
-      has: page.getByRole("button", { name: "Validate against Jira", exact: true }),
-    });
-  await row
-    .getByText(`${formal.project} · ${formal.issueType} · create`, { exact: true })
-    .waitFor();
-  const validated = await responseAfter(page, "POST", "/api/skills/jira-templates/validate", () =>
-    row.getByRole("button", { name: "Validate against Jira", exact: true }).click(),
-  );
-  assert.equal(validated.status(), 200);
-  if (formal.parentIssueTypes !== undefined) {
-    const markdown = validated.request().postDataJSON().markdown;
-    assert.equal(typeof markdown, "string");
-    assert.ok(
-      markdown.includes(
-        `parentIssueTypes: [${formal.parentIssueTypes.map((type) => JSON.stringify(type)).join(", ")}]`,
-      ),
-      "Validation must use the stored uploaded parent-type clause",
-    );
-  }
-  assert.equal(gradeTemplateValidation(await validated.json()).ok, true);
-  await row.getByText("The template matches the Jira instance.", { exact: true }).waitFor();
 }
 
 export async function removeBrowserSkill(page, region, skill) {
-  const dialog = await skills(page, region);
-  await dialog.getByRole("button", { name: skill.name, exact: true }).click();
-  const preview = dialog.getByRole("region", { name: "Skill preview", exact: true });
-  await preview.getByRole("button", { name: "Delete", exact: true }).click();
-  const deleted = await responseAfter(
-    page,
-    "DELETE",
-    `/api/skills/${encodeURIComponent(skill.id)}`,
-    () => preview.getByRole("button", { name: "Delete skill", exact: true }).click(),
-  );
-  assert.ok(deleted.ok());
-  await expect(dialog.getByRole("button", { name: skill.name, exact: true })).toHaveCount(0);
-  await dialog.getByRole("button", { name: "Close skills", exact: true }).click();
+  const dialog = await openSkills(page, region);
+  try {
+    const row = skillRow(dialog, skill);
+    await row.getByRole("button").first().click();
+    await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+    const deleted = await responseAfter(
+      page,
+      "DELETE",
+      `/api/skills/${encodeURIComponent(skill.id)}`,
+      () => dialog.getByRole("button", { name: "Delete skill", exact: true }).click(),
+    );
+    assert.ok(deleted.ok());
+    await expect(row).toHaveCount(0);
+  } finally {
+    await closeSkillsIfOpen(dialog);
+  }
 }
 
 /** Existing synthetic document writer, split across explicitly selected files and a folder. */

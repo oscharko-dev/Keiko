@@ -27,7 +27,9 @@ function languageControls(state, options) {
       if (name === "close") {
         state.settings = false;
         state.top = "fallback-window";
-        if (options.failClose) throw new Error("settings-close-failed");
+        state.closes = (state.closes ?? 0) + 1;
+        if (options.failClose || (options.failRestoreClose && state.closes > 1))
+          throw new Error("settings-close-failed");
       }
     },
     async option(name) {
@@ -216,6 +218,18 @@ describe("limit-run language through ordinary Settings", () => {
     expect(run).not.toHaveBeenCalled();
     expect(f.state.locale).toBe("de");
     expect(f.ctx.locale).toBe("de");
+    expect(f.state.top).toBe("chat-1");
+  });
+  it("keeps the task failure first when the language cleanup also fails", async () => {
+    const f = fixture("de", { failRestoreClose: true });
+    const failure = await withEnglishLimitUi(f.ctx, async () => {
+      throw new Error("task-failed");
+    }).catch((error) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(failure.errors.map((error) => error.message)).toEqual([
+      "task-failed",
+      "settings-close-failed",
+    ]);
     expect(f.state.top).toBe("chat-1");
   });
   it("restores foreground even if closing the temporary Settings window fails", async () => {

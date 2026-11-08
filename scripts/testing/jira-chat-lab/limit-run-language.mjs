@@ -81,15 +81,35 @@ export async function withEnglishLimitUi(ctx, run) {
   ctx.signal.throwIfAborted();
   const original = supportedLocale(await ctx.page.locator("html").getAttribute("lang"));
   const previous = await foregroundWindow(ctx.page);
+  let outcome;
   try {
     await changeLimitUiLanguage(ctx, "en");
-    return await run();
-  } finally {
+    outcome = { value: await run() };
+  } catch (error) {
+    outcome = { error };
+  }
+  await restoreLimitUi(ctx, original, previous, outcome);
+  return outcome.value;
+}
+
+/**
+ * Restores the language and foreground window. A cleanup failure never hides the step's own
+ * failure: both are reported together, the step's first.
+ */
+async function restoreLimitUi(ctx, original, previous, outcome) {
+  try {
     try {
       // This cleanup changes only the local Settings control; it never resumes cancelled work.
       await applyLanguage(ctx, original, true);
     } finally {
       await restoreForeground(ctx.page, previous);
     }
+  } catch (cleanup) {
+    if ("error" in outcome)
+      throw new AggregateError([outcome.error, cleanup], "Limit-run step and UI cleanup failed", {
+        cause: cleanup,
+      });
+    throw cleanup;
   }
+  if ("error" in outcome) throw outcome.error;
 }
