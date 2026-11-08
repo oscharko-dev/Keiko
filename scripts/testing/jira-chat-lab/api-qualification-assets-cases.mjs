@@ -1,8 +1,4 @@
 // Exact AC7 asset identities. Every effect uses the existing governed catalog and journal.
-// The two generic temporary-avatar recipes deliberately require an independent native oracle.
-// Jira10.3 documents temporaryCrop as changing crop instructions, without a resource identity/GET:
-// https://docs.atlassian.com/software/jira/docs/api/10.3.1/com/atlassian/jira/rest/v2/issue/AvatarResource.html
-// Actor reads or an unchanged public avatar collection never substitute for that missing proof.
 import assert from "node:assert/strict";
 import { basicAuth, labRequest } from "./lab-client.mjs";
 import { readCase } from "./api-qualification-cases.mjs";
@@ -13,9 +9,7 @@ import { proof, read, readRecord } from "./api-qualification-read.mjs";
 import {
   observeEmailPack,
   prepareAttachmentSource,
-  prepareAvatarSource,
   prepareEmailSource,
-  publishAssetLoginInput,
   requireEmailDefault,
 } from "./api-qualification-assets-fixtures.mjs";
 
@@ -253,81 +247,6 @@ async function materializedEmailReadback(context, data, f) {
   return { ...proof(6), materializedByGovernedApply: true };
 }
 
-const avatarTarget = { kind: "session", avatarType: "user" };
-function avatarUploadArgs(f) {
-  return {
-    ...actorArgs(f),
-    target: avatarTarget,
-    ...f.assetAvatarFile,
-    acceptTemporaryReplacement: true,
-  };
-}
-async function avatar(context, f) {
-  await observeAdminActor(context, f);
-  assert.ok(
-    new Set(["10.3", "10.4"]).has(context.session.jiraVersion.split(".").slice(0, 2).join(".")),
-  );
-  assert.equal(
-    typeof context.qualificationTemporaryAvatarOracle,
-    "function",
-    "No independent native temporary-avatar reader is available; actor/collection reads cannot qualify temporary persistence",
-  );
-  await prepareAvatarSource(context, f);
-}
-async function avatarReadback(context, data, f, crop = false) {
-  const native = await context.qualificationTemporaryAvatarOracle({ target: avatarTarget });
-  assert.equal(native.actorUserKey, f.adminActorKey);
-  assert.equal(native.avatarType, "user");
-  assert.equal(native.uploadSha256, f.assetAvatarFile.expectedFile.sha256);
-  assert.equal(native.uploadBytes, f.assetAvatarFile.expectedFile.sizeBytes);
-  assert.equal(data.actorUserKey, native.actorUserKey);
-  assert.equal(data.uploadSha256, native.uploadSha256);
-  assert.equal(data.uploadBytes, native.uploadBytes);
-  assertQualificationJson(data.temporaryCrop, native.crop);
-  assert.equal(data.temporaryNeedsCropping, native.needsCropping);
-  assert.equal(data.temporaryAvatar, true);
-  if (crop) assertQualificationJson(native.crop, f.assetAvatarCrop);
-  f.assetTemporaryAvatar = {
-    uploadSha256: native.uploadSha256,
-    uploadBytes: native.uploadBytes,
-    crop: native.crop,
-    needsCropping: native.needsCropping,
-  };
-  f.assetAvatarGeometry = native.geometry;
-  return proof(crop ? 11 : 10);
-}
-export function qualificationChangedCrop(geometry, current) {
-  assert.ok(geometry, "No independently observed native crop target or image bounds are available");
-  const { width, height, nextCrop } = geometry;
-  assert.ok(Number.isSafeInteger(width) && width > 0);
-  assert.ok(Number.isSafeInteger(height) && height > 0);
-  assert.ok(nextCrop, "No independently observed changed crop is available");
-  const { cropperOffsetX: x, cropperOffsetY: y, cropperWidth: side } = nextCrop;
-  assert.ok(Number.isSafeInteger(x) && x >= 0);
-  assert.ok(Number.isSafeInteger(y) && y >= 0);
-  assert.ok(Number.isSafeInteger(side) && side > 0);
-  assert.ok(x + side <= width && y + side <= height);
-  assert.notDeepEqual(nextCrop, current, "An unchanged crop cannot qualify the crop endpoint");
-  return { cropperOffsetX: x, cropperOffsetY: y, cropperWidth: side };
-}
-export async function prepareAssetAvatarLogin(context, f) {
-  await fixtureWrite(
-    context,
-    "jira.login",
-    actorArgs(f),
-    async (c, data) => {
-      const native = await read(c, "/rest/api/2/myself");
-      assert.equal(native.key, f.adminActorKey);
-      assert.equal(data.actorUserKey, native.key);
-      assert.equal(data.userKey, native.key);
-      assert.equal(data.username, native.name);
-      assert.equal(data.sessionEstablished, true);
-      return proof(5);
-    },
-    publishAssetLoginInput,
-  );
-}
-
 export const API_QUALIFICATION_ASSETS_CASES = [
   {
     ...adminMutationCase(
@@ -388,42 +307,6 @@ export const API_QUALIFICATION_ASSETS_CASES = [
     },
     ensureAttachment,
   ),
-  {
-    ...adminMutationCase(
-      "jira.upload-temporary-avatar",
-      avatarUploadArgs,
-      (c, data, f) => avatarReadback(c, data, f),
-      avatar,
-    ),
-    prerequisiteTools: ["jira.login"],
-    prepareInvocation: prepareAssetAvatarLogin,
-    verifyInvocation: (c, f, data) => avatarReadback(c, data, f),
-  },
-  {
-    ...adminMutationCase(
-      "jira.crop-temporary-avatar",
-      (f) => ({
-        ...actorArgs(f),
-        target: avatarTarget,
-        expectedTemporary: f.assetTemporaryAvatar,
-        crop: f.assetAvatarCrop,
-      }),
-      (c, data, f) => avatarReadback(c, data, f, true),
-      avatar,
-    ),
-    prerequisiteTools: ["jira.login", "jira.upload-temporary-avatar"],
-    prepareInvocation: async (c, f) => {
-      await prepareAssetAvatarLogin(c, f);
-      await fixtureWrite(c, "jira.upload-temporary-avatar", avatarUploadArgs(f), (context, data) =>
-        avatarReadback(context, data, f),
-      );
-      f.assetAvatarCrop = qualificationChangedCrop(
-        f.assetAvatarGeometry,
-        f.assetTemporaryAvatar.crop,
-      );
-    },
-    verifyInvocation: (c, f, data) => avatarReadback(c, data, f, true),
-  },
   adminMutationCase(
     "jira.set-dashboard-item-property",
     (f) => ({ ...propertyArgs(f), expectAbsent: true, valueNodes: propertyNodes(f) }),

@@ -53,14 +53,18 @@ missing capabilities require their own independent evidence. No policy deferral
 is decided by this driver.
 
 `docs/local-knowledge/jira-api-coverage/qualification-proposals.json` records the
-integrator's 2026-11-08 decision: seven cluster mutations, upgrade execution and
-notification delivery are deferred. Those nine rows carry the decision reference,
+integrator's 2026-11-08 decision: seven cluster mutations, upgrade execution,
+notification delivery, the two temporary-avatar mutations (Jira 10.3 documents no
+resource identity or GET, and another session cannot observe the product session's
+temporary state) and the reciprocal remote link (it needs an owned second laboratory
+instance with mutual application links, which the single laboratory lacks) are
+deferred. Those twelve rows carry the decision reference,
 never a native receipt or passing readback. Cluster reads and filter deletion still
 need native qualification; deletion preserves the product's unconfirmed outcome.
 Additional exceptions require another explicit owner decision.
 
 The planning, application-role, asset, filter, link and index case modules supply
-the first 51 entries in the shared AC7 split. Preparatory writes use the same
+the first 48 entries in the shared AC7 split. Preparatory writes use the same
 governed provider and produce separate private receipts, settled journals and native
 readbacks. Declared same-turn prerequisites share one bounded accepted authority
 and private lifetime; their evidence cannot replace the frozen primary witness.
@@ -75,22 +79,11 @@ through native Jira UI, with a name beginning `Synthetic AC7 `; `optionFieldId` 
 verify these bindings before any corresponding effect. Missing bindings fail closed.
 
 The programmatic entry point is
-`qualifyApi(directory, only, snapshotId, { reciprocalPeer, temporaryAvatarOracle, emailDefaultOracle })`.
-`reciprocalPeer: { session, issueKey }` must refer to an explicitly owned second
-session with real mutual application links and authentication. It never starts or
-discovers another lab; the normal one-lab limit still applies. Without that
-precondition the reciprocal recipe cannot qualify. The generic temporary-avatar
-recipes need a genuine independent native `temporaryAvatarOracle`; an actor or
-unchanged public avatar list proves no temporary persistence. Its observation must
-include `actorUserKey`, `avatarType`, `uploadSha256`, `uploadBytes`, `crop` and
-`needsCropping`; cropping additionally requires independently observed
-`geometry: { width, height, nextCrop }` with a different valid crop. Supply a
-synthetic `assets/avatar.png` large enough to permit that change; the existing
-one-pixel fixture can only exercise upload. Avatar readback runs inside the held
-private lifetime before its canonical logout. `emailDefaultOracle`
+`qualifyApi(directory, only, snapshotId, { emailDefaultOracle })`.
+`emailDefaultOracle`
 must bind the fresh owned image's complete native default template manifest before
-synthetic uploads. The ordinary CLI supplies none of these optional bindings, so
-missing required oracles remain failures, without creating new deferrals.
+synthetic uploads. The ordinary CLI supplies no such binding, so a missing required
+oracle remains a failure, without creating new deferrals.
 
 The issue lifecycle cases in `api-qualification-issue-cases.mjs` use their own
 newly created issue and native acknowledgement IDs. Property lifecycle cases in

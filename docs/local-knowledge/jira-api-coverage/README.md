@@ -130,6 +130,13 @@ No identity remains without a constrained source mapping. No row is marked fully
 executable, owner-deferred or excluded by this snapshot. All 439 source/version IDs, cluster
 assignments, dependencies and qualification fields are retained.
 
+Live AC7 qualification has twelve integrator-decided deferrals, recorded in
+`qualification-proposals.json` (the tools stay implemented and governed): seven cluster mutations,
+upgrade execution and notification delivery, plus the two temporary-avatar mutations, which Jira
+10.3 documents without a GET or resource identity and whose session-held state no other session can
+observe, and reciprocal remote linking, which needs an owned second laboratory instance with mutual
+application links. Each entry names what would end the deferral.
+
 This snapshot includes ordinary project setup; board/backlog/Epic and sprint operations; bounded
 filter reads; versions/components; existing issue workflows; the C7 dashboard/filter-sharing reads;
 the C6 comment-update/link/worklog read increment; bounded C8 attachment/archive and avatar metadata;
@@ -524,7 +531,8 @@ authority. New upload clears that slot before dispatch, including lost ACK; crop
 the exact reviewed actor/target/hash/crop snapshot before effect. Only project/user selection can
 confirm complete observed selection metadata. Thirteen other effects remain unconfirmed and never
 prove image pixels or global assignment. The legacy generic temporary/crop routes require a real
-server-owned 10.3/10.4 binding; they are absent from the retained 11.3 API. Coding task/workspace paths
+server-owned 10.3/10.4 binding; they are absent from the retained 11.3 API, and their live
+qualification is deferred. Coding task/workspace paths
 do not grant connected-file authority, so a missing Coding upload source remains unavailable.
 These boundaries are owned by the [avatar leaf](../../../packages/keiko-connectors/src/jira-managed-avatar-mutations.ts),
 [Chat composition](../../../packages/keiko-server/src/atlassian/jiraAvatarComposition.ts) and
@@ -538,7 +546,7 @@ Five issue-lifecycle calls, bulk creation, reciprocal linking and seven project-
 also retain acknowledged uncertainty. Bulk creation prepares every item through the existing
 metadata/formal/source/duplicate owner before one POST; partial ACK IDs never imply positional
 attribution or a safe replay. Reciprocal linking requires an existing configured application link,
-with no generic foreign fetch. Project restore does not silently launch reindexing. Issue/project
+with no generic foreign fetch; its live qualification is deferred until an owned peer exists. Project restore does not silently launch reindexing. Issue/project
 deletion evaluates surviving parent/link/issue-picker references through the
 [existing formal-impact owner](../../../packages/keiko-connectors/src/jira-managed-template-gate.ts);
 neither visible JQL prefixes nor bare404 establish a complete population or absence. Archives do

@@ -3,7 +3,7 @@ import { URL } from "node:url";
 import { expect, it } from "vitest";
 import { API_QUALIFICATION_ALL_CASES } from "../testing/jira-chat-lab/api-qualification-case-list.mjs";
 
-// Fixed handoff scope: operations 1–51 from the agreed Codex 4 / integrator split.
+// Fixed handoff scope: operations 1–51 minus the three deferred identities (#4321) from the agreed Codex 4 / integrator split.
 // The separate completeness test continues to require all 439 native inventory identities.
 const assigned = JSON.parse(
   readFileSync(new URL("./fixtures/jira-ac7-codex4-half.json", import.meta.url), "utf8"),
@@ -15,10 +15,10 @@ const ledger = JSON.parse(
   ),
 );
 
-it("pins exactly 51 distinct assigned tool-to-native bindings in the handoff fixture", () => {
-  expect(assigned).toHaveLength(51);
-  expect(new Set(assigned.map((row) => row.tool)).size).toBe(51);
-  expect(new Set(assigned.map((row) => row.identity)).size).toBe(51);
+it("pins exactly 48 distinct assigned tool-to-native bindings in the handoff fixture", () => {
+  expect(assigned).toHaveLength(48);
+  expect(new Set(assigned.map((row) => row.tool)).size).toBe(48);
+  expect(new Set(assigned.map((row) => row.identity)).size).toBe(48);
   for (const row of assigned) {
     expect(Object.keys(row).sort()).toEqual(["identity", "tool"]);
     expect(row.tool).toMatch(/^jira\.[a-z-]+$/u);

@@ -78,7 +78,7 @@ function save() {
   writeFileSync(f.ledgerPath, JSON.stringify(f.ledger), { mode: 0o600 });
   writeFileSync(f.reportPath, JSON.stringify(f.report), { mode: 0o600 });
 }
-it("publishes nine decided deferrals as policy evidence, never as passed native operations", async () => {
+it("publishes twelve decided deferrals as policy evidence, never as passed native operations", async () => {
   const policy = JSON.parse(
     readFileSync(
       new URL(
@@ -97,11 +97,11 @@ it("publishes nine decided deferrals as policy evidence, never as passed native 
   writeFileSync(join(f.root, "qualification-proposals.json"), JSON.stringify(policy));
   save();
   const result = await writeQualificationLedger(f);
-  expect(result.counts.deferred).toBe(9);
-  expect(result.counts.executable).toBe(f.ledger.operations.length - 9);
+  expect(result.counts.deferred).toBe(12);
+  expect(result.counts.executable).toBe(f.ledger.operations.length - 12);
   const archive = JSON.parse(readFileSync(join(f.root, result.evidenceFile), "utf8"));
   const deferred = archive.operations.filter((row) => row.runtimeAvailability === "deferred");
-  expect(deferred).toHaveLength(9);
+  expect(deferred).toHaveLength(12);
   expect(deferred.every((row) => row.ownerDecision.decidedBy === "integrator")).toBe(true);
   expect(
     deferred.every(
@@ -109,7 +109,18 @@ it("publishes nine decided deferrals as policy evidence, never as passed native 
     ),
   ).toBe(true);
   const actual = JSON.parse(readFileSync(f.ledgerPath, "utf8"));
-  expect(actual.operations.filter((row) => row.runtimeAvailability === "deferred")).toHaveLength(9);
+  expect(actual.operations.filter((row) => row.runtimeAvailability === "deferred")).toHaveLength(
+    12,
+  );
+  const references = new Map(deferred.map((row) => [row.identity, row.ownerDecision.reference]));
+  expect(Object.fromEntries(references)).toMatchObject({
+    "POST /rest/api/2/avatar/{type}/temporary":
+      "qualification-proposals.json#temporary-avatar-needs-independent-session-observation",
+    "POST /rest/api/2/avatar/{type}/temporaryCrop":
+      "qualification-proposals.json#temporary-avatar-needs-independent-session-observation",
+    "POST /rest/api/2/issue/remotelink/reciprocal":
+      "qualification-proposals.json#reciprocal-link-requires-owned-peer-instance",
+  });
 });
 it("publishes 439 independently graded rows and body-free readback references from one complete run", async () => {
   const result = await writeQualificationLedger(f);

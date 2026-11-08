@@ -67,22 +67,8 @@ const fixture = () => ({
   remoteLinkId: "53",
   remoteDesired: remoteValue(),
   remoteBefore: remoteLinkReview(remoteRow()),
-  reciprocalIssue: {
-    id: source.id,
-    key: source.key,
-    summary: source.fields.summary,
-    projectId: "10000",
-    issueTypeId: "10001",
-  },
-  reciprocalTarget: { id: target.id, key: target.key },
-  reciprocalApplication: {
-    id: "22222222-2222-4222-8222-222222222222",
-    name: "Synthetic peer",
-    displayUrl: "https://127.0.0.1:18444",
-    rpcUrl: "https://127.0.0.1:18444",
-  },
 });
-function session(peer = false) {
+function session() {
   const directory = mkdtempSync(join(tmpdir(), "keiko-ac7-filter-link-"));
   directories.push(directory);
   mkdirSync(join(directory, "secrets"));
@@ -91,9 +77,8 @@ function session(peer = false) {
   const value = {
     schemaVersion: 1,
     syntheticOnly: true,
-    project: `keiko-jira-4081-${peer ? "peer" : "source"}`,
+    project: "keiko-jira-4081-source",
     ...DEFAULT_LAB_CONNECTION,
-    ...(peer ? { httpPort: 18082, httpsPort: 18444 } : {}),
   };
   writeFileSync(join(directory, "session.json"), JSON.stringify(value), { mode: 0o600 });
   return { ...value, directory };
@@ -139,7 +124,7 @@ afterEach(() => {
     rmSync(directory, { recursive: true, force: true });
 });
 
-it("covers exactly the 18 assigned native identities without duplicating existing recipes", () => {
+it("covers exactly the 17 assigned native identities without duplicating existing recipes", () => {
   const expected = [
     "DELETE /rest/api/2/filter/{id}/columns",
     "GET /rest/api/2/filter/{id}/columns",
@@ -151,7 +136,6 @@ it("covers exactly the 18 assigned native identities without duplicating existin
     "POST /rest/api/2/index-snapshot",
     "GET /rest/api/2/index/summary",
     "GET /rest/api/2/issue/picker",
-    "POST /rest/api/2/issue/remotelink/reciprocal",
     "DELETE /rest/api/2/issue/{issueIdOrKey}/remotelink",
     "POST /rest/api/2/issue/{issueIdOrKey}/remotelink",
     "DELETE /rest/api/2/issue/{issueIdOrKey}/remotelink/{linkId}",
@@ -362,9 +346,7 @@ it("qualifies both core issue-link effects and all five ordinary remote-link ope
     if (path.endsWith("/remotelink")) return links;
     return issues.get(path.split("/").at(-1));
   });
-  for (const entry of API_QUALIFICATION_LINK_CASES.filter(
-    (row) => row.tool !== "jira.create-reciprocal-remote-link",
-  )) {
+  for (const entry of API_QUALIFICATION_LINK_CASES) {
     await entry.prepare?.(c, f);
     const args = entry.arguments(f);
     const data = applyLinkEffect(entry.tool, args, f, issues, links);
@@ -475,154 +457,5 @@ it("compares concrete issue-picker suggestions and refuses a missing selected is
   value = { sections: [{ issues: [] }] };
   await expect(specification("jira.issue-picker").readback(c, { sections: [] }, f)).rejects.toThrow(
     "selected owned issue",
-  );
-});
-
-function configuredPeer(manifest, session, wrongDestination) {
-  const origin = labSessionConnection(session).httpsOrigin;
-  return {
-    list: [
-      {
-        appLinkState: "OK",
-        hasIncomingAuthenticationProviders: true,
-        hasOutgoingAuthenticationProviders: true,
-        application: {
-          ...manifest,
-          displayUrl: origin,
-          rpcUrl: wrongDestination ? "https://foreign.invalid" : origin,
-        },
-      },
-    ],
-  };
-}
-function reciprocalLinks(side, state, missingBacklink) {
-  if (!state.linked || missingBacklink) return [];
-  const object = { url: `${side.origin}/browse/${side.issue.id}`, title: side.issue.key };
-  if (side.backlink) object.summary = state.created.fields.summary;
-  return [
-    {
-      id: side.id,
-      globalId: `appId=${side.manifest.id}&issueId=${side.issue.id}`,
-      application: { type: "com.atlassian.jira", name: side.manifest.name },
-      relationship: side.relationship,
-      object,
-    },
-  ];
-}
-function reciprocalFixture({ wrongDestination = false, missingBacklink = false } = {}) {
-  const c = { actor: "admin", session: session() };
-  const peer = session(true);
-  c.qualificationReciprocalPeer = { session: peer, issueKey: target.key };
-  const localManifest = {
-    id: "11111111-1111-4111-8111-111111111111",
-    name: "Synthetic source",
-    typeId: "jira",
-  };
-  const peerManifest = {
-    id: "22222222-2222-4222-8222-222222222222",
-    name: "Synthetic peer",
-    typeId: "jira",
-  };
-  const state = { created: undefined, linked: false };
-  const sides = new Map([
-    [
-      c.session.httpPort,
-      {
-        manifest: peerManifest,
-        ownManifest: localManifest,
-        origin: labSessionConnection(peer).httpsOrigin,
-        issue: target,
-        id: 61,
-        relationship: "relates to",
-        backlink: false,
-        peerSession: peer,
-      },
-    ],
-    [
-      peer.httpPort,
-      {
-        manifest: localManifest,
-        ownManifest: peerManifest,
-        origin: labSessionConnection(c.session).httpsOrigin,
-        issue: source,
-        id: 62,
-        relationship: "related by",
-        backlink: true,
-        peerSession: c.session,
-      },
-    ],
-  ]);
-  c.qualificationFixture = async (entry) => {
-    expect(entry.tool).toBe("jira.create");
-    state.created = issue(source.id, source.key, entry.arguments.fields.summary);
-    await entry.readback(c, { issueKey: source.key });
-  };
-  native((url) => {
-    const side = sides.get(Number(url.port));
-    const path = url.pathname;
-    if (path.endsWith("/myself")) return actor;
-    if (path.endsWith("/serverInfo"))
-      return {
-        version: DEFAULT_LAB_CONNECTION.jiraVersion,
-        versionNumbers: [10, 3, 26],
-        deploymentType: "Data Center",
-      };
-    if (path.endsWith("/manifest")) return side.ownManifest;
-    if (path.endsWith("/listApplicationlinks")) {
-      return configuredPeer(side.manifest, side.peerSession, wrongDestination);
-    }
-    if (path.endsWith("/project/KEIKO")) return { id: "10000" };
-    if (path.includes("/remotelink")) {
-      const rows = reciprocalLinks(side, state, side.backlink && missingBacklink);
-      return /\/remotelink\/[0-9]+$/u.test(path) ? rows[0] : rows;
-    }
-    return side.backlink ? target : state.created;
-  });
-  return {
-    c,
-    f: fixture(),
-    link: () => {
-      state.linked = true;
-    },
-  };
-}
-
-it("fails closed without an explicitly supplied owned reciprocal peer", async () => {
-  await expect(
-    specification("jira.create-reciprocal-remote-link").prepare(
-      { actor: "admin", session: session() },
-      fixture(),
-    ),
-  ).rejects.toThrow("operator-supplied owned peer session");
-});
-
-it("binds mutual configured app links and independently confirms both reciprocal effects", async () => {
-  const { c, f, link } = reciprocalFixture();
-  const entry = specification("jira.create-reciprocal-remote-link");
-  await entry.prepare(c, f);
-  expect(entry.arguments(f)).toMatchObject({
-    remoteIssueId: target.id,
-    expectedApplication: { id: "22222222-2222-4222-8222-222222222222" },
-  });
-  link();
-  await expect(entry.readback(c, { outcome: "succeeded-unconfirmed" }, f)).resolves.toMatchObject({
-    matched: true,
-  });
-});
-
-it("refuses foreign configured destinations before creating a local reciprocal fixture", async () => {
-  const { c, f } = reciprocalFixture({ wrongDestination: true });
-  const fixtureCall = vi.spyOn(c, "qualificationFixture");
-  await expect(specification("jira.create-reciprocal-remote-link").prepare(c, f)).rejects.toThrow();
-  expect(fixtureCall).not.toHaveBeenCalled();
-});
-
-it("refuses reciprocal success when only the local effect exists", async () => {
-  const { c, f, link } = reciprocalFixture({ missingBacklink: true });
-  const entry = specification("jira.create-reciprocal-remote-link");
-  await entry.prepare(c, f);
-  link();
-  await expect(entry.readback(c, { outcome: "succeeded-unconfirmed" }, f)).rejects.toThrow(
-    "independent matching links on both",
   );
 });
