@@ -469,11 +469,12 @@ export async function gateJiraSchemaRuleImpact(input: {
   if (set === undefined) return OK;
   if (set.unreadable > 0) return unreadableRefusal(set.unreadableNames);
   if (set.templates.length === 0) return OK;
-  if (input.impact.kind === "issue-deletion") return issueDeletionImpact(input.request, set.templates);
-  const catalog = input.impact.kind === "custom-fields"
+  const impact = input.impact;
+  if (impact.kind === "issue-deletion") return issueDeletionImpact(input.request, set.templates);
+  const catalog = impact.kind === "custom-fields"
     ? await readJiraFieldCatalog(input.request) : JIRA_TEMPLATE_SYSTEM_FIELDS;
   if (catalog === undefined) return unreadableRefusal(["native field catalog for schema impact"]);
-  const affected = set.templates.filter((template) => schemaRuleAffected(template, input.impact, catalog));
+  const affected = set.templates.filter((template) => schemaRuleAffected(template, impact, catalog));
   return schemaImpactResult(affected);
 }
 

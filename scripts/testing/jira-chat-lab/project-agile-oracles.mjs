@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { URL } from "node:url";
 import { basicAuth, labRequest, labSessionConnection } from "./lab-client.mjs";
 
 /** Read-only native oracle. No product receipt, model answer or fixture creation is ground truth. */

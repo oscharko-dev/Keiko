@@ -78,7 +78,7 @@ function issueRefMatches(value: unknown, expected: LinkIssue): boolean {
   return raw?.id === expected.id && raw.key === expected.key;
 }
 function linkDetail(raw: Record<string, unknown> | undefined, linkId: string): { readonly raw: Record<string, unknown>; readonly type: NativeLinkType } | undefined {
-  if (raw === undefined || raw.id !== linkId) return undefined;
+  if (raw?.id !== linkId) return undefined;
   const type = nativeLinkType(raw.type);
   return type === undefined || !linkSelfMatches(raw.self, linkId) ? undefined : { raw, type };
 }

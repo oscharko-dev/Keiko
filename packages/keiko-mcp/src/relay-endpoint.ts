@@ -186,22 +186,25 @@ function resultCapture(
 }
 
 /** A technical read failure is not a permission refusal and never enters mutation recovery. */
-function retainReadRelayFailure(
+function throwRelayCallFailure(
   input: RelayCall,
   capture: ManagedMcpReadCapture | undefined,
   observation: RelayObservation,
   reason: ManagedMcpFailure,
+  effect: ManagedMcpEffect,
   primaryError: unknown,
-): unknown {
+): never {
+  const failure = (cause: unknown): RelayToolFailure =>
+    new RelayToolFailure(failureText(reason, effect, input.mutation), reason, effect, cause);
   if (input.mutation || input.connection.localProvider !== "jira" || capture === undefined ||
-      observation.retained !== undefined || observation.localFailure === true) return primaryError;
+      observation.retained !== undefined || observation.localFailure === true) throw failure(primaryError);
   try {
     capture.retainRelayFailure(reason);
-    return primaryError;
   } catch (captureError) {
     // Preserve both original causes, while the SDK receives only the primary closed failure.
-    return new AggregateError([primaryError, captureError], "Jira read result retention failed");
+    throw failure(new AggregateError([primaryError, captureError], "Jira read result retention failed"));
   }
+  throw failure(primaryError);
 }
 
 function isLocalMetadataRead(input: Pick<RelayCall, "connection" | "name" | "mutation">): boolean {
@@ -270,10 +273,9 @@ async function invokeRelayTool(input: RelayCall): Promise<CallToolResult> {
     return result;
   } catch (error) {
     const { reason, effect } = failureOf(error);
-    const cause = retainReadRelayFailure(input, readCapture, observation, reason, error);
     await settleFailedCall(input, context, permit, effect);
     // The SDK delivers a thrown error's message to the model as an error result.
-    throw new RelayToolFailure(failureText(reason, effect, input.mutation), reason, effect, cause);
+    throwRelayCallFailure(input, readCapture, observation, reason, effect, error);
   } finally {
     readCapture?.release();
   }

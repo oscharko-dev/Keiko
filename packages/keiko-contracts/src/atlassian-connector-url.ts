@@ -18,12 +18,8 @@ export function isSafeAtlassianConnectorBaseUrl(value: unknown): value is string
   if (typeof value !== "string" || value.length === 0) return false;
   if (value.length > ATLASSIAN_CONNECTOR_BASE_URL_MAX_CHARS) return false;
   if (/\s/u.test(value)) return false;
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    return false;
-  }
+  if (!URL.canParse(value)) return false;
+  const url = new URL(value);
   if (!isSafeParsedBaseUrl(url)) return false;
   return !value.includes("@") && !value.includes("?") && !value.includes("#");
 }

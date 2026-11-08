@@ -1,7 +1,7 @@
 import { TOOL_CATALOG_LIMITS, type CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { JIRA_READ_TOOL_FAMILIES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import { asArray, asRecord } from "./atlassian-sync-classify.js";
+import { asArray, asRecord, parseAtlassianJsonValue } from "./atlassian-sync-classify.js";
 import { jiraPropertyValue, JIRA_PROPERTY_VALUE_MAX_BYTES } from "./jira-entity-property-values.js";
 import { boundJiraReadResult } from "./jira-managed-issue-reads.js";
 import { jiraReadFailure, localJiraPage } from "./jira-managed-metadata.js";
@@ -68,9 +68,8 @@ export function projectJiraRemoteVersionLinkValue(value: unknown): Projected {
   if (value === undefined || value === null) return { item: { valueAvailable: false } };
   if (typeof value !== "string") return { reason: "malformed-payload" };
   if (Buffer.byteLength(value, "utf8") > JIRA_PROPERTY_VALUE_MAX_BYTES) return { reason: "bounds-exceeded" };
-  let decoded: unknown;
-  try { decoded = JSON.parse(value) as unknown; }
-  catch { return { reason: "malformed-payload" }; }
+  const decoded = parseAtlassianJsonValue(value);
+  if (decoded === undefined) return { reason: "malformed-payload" };
   const nodes = jiraPropertyValue(decoded);
   return nodes.ok ? { item: { valueAvailable: true, valueNodes: nodes.items } } : { reason: nodes.reason };
 }

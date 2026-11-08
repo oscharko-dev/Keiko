@@ -24,7 +24,7 @@ export function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function parseAtlassianJsonValue(bodyText: string): unknown {
+export function parseAtlassianJsonValue(bodyText: string): unknown {
   try {
     return JSON.parse(bodyText) as unknown;
   } catch {

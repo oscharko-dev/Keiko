@@ -8,7 +8,7 @@ import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { dispatchFailure } from "./jira-mutation-failure.js";
 import { directoryAccessRefusal, type DirectoryAccessFailure, type DirectoryAccessInput, type DirectoryAccessObservation } from "./jira-directory-access-values.js";
 
-type Actor = { readonly key: string; readonly name: string };
+interface Actor { readonly key: string; readonly name: string }
 function selfAccessRefusal(): DirectoryAccessFailure {
   return directoryAccessRefusal("This role change removes a group of the connected actor and could revoke this connection's own application or administration access. Use a different authorized Jira administrator connection that is independent of the removed groups. No write was sent.", "conflict");
 }

@@ -16,7 +16,7 @@ export function projectAgileArguments(values) {
     assert.equal(extra.length, 0);
     return { directory, permittedToken, reconcile: true };
   }
-  assert.ok(modelId && modelId.length <= 255 && !/[\u0000-\u001f\u007f]/u.test(modelId));
+  assert.ok(modelId && modelId.length <= 255 && !/\p{Cc}/u.test(modelId));
   assert.ok(permittedToken && isAbsolute(permittedToken));
   assert.ok(deniedToken && isAbsolute(deniedToken));
   assert.notEqual(resolve(permittedToken), resolve(deniedToken));

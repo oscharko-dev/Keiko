@@ -741,7 +741,7 @@ async function readChangingIssue(
   metadata: readonly JiraFieldMetadata[],
   { values, transitionId }: IssueReading,
   { purpose, issueKey }: FieldTarget,
-): Promise<JiraIssueReadback> {
+): Promise<JiraIssueReadback | ReturnType<typeof jiraAlreadyHeldRefusal>> {
   const prior = await readJiraMutationIssue(
     request,
     issueKey,

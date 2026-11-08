@@ -1,4 +1,4 @@
-import { AtlassianCredentialCustodyError, isAtlassianApplicationRoleVersion, type AtlassianHttpBodyRequest } from "@oscharko-dev/keiko-connectors";
+import { AtlassianCredentialCustodyError, isAtlassianApplicationRoleVersion, parseJsonObjectOrArray, type AtlassianHttpBodyRequest } from "@oscharko-dev/keiko-connectors";
 import { isSafeAtlassianIdentifier } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 
@@ -33,13 +33,11 @@ function nativeRoleKey(value: unknown): string | undefined {
   return isSafeAtlassianIdentifier(value.key) && nativeRoleGroups(groups) && nativeRoleGroups(defaults) &&
     defaults.every((group) => groups.includes(group)) ? value.key : undefined;
 }
-function decodedRoleBody(body: string): unknown {
-  try { return JSON.parse(body); } catch { return undefined; }
-}
 function validRoleBody(body: string, suffix: string): boolean {
-  const value = decodedRoleBody(body);
-  if (suffix !== "") return nativeRoleKey(value) === suffix.slice(1);
-  if (!Array.isArray(value) || value.length === 0 || value.length > TOOL_CATALOG_LIMITS.maxArrayItems) return false;
+  const parsed = parseJsonObjectOrArray(body);
+  if (suffix !== "") return nativeRoleKey(parsed?.body) === suffix.slice(1);
+  const value = parsed?.items;
+  if (value === undefined || value.length === 0 || value.length > TOOL_CATALOG_LIMITS.maxArrayItems) return false;
   const keys = value.map(nativeRoleKey);
   return keys.every((key) => key !== undefined) && new Set(keys).size === keys.length;
 }
