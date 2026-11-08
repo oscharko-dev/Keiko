@@ -8,7 +8,7 @@ import {
   SPRINT_LIFECYCLE_FIXTURE_CASES,
   sprintLifecycleFixture,
 } from "./jira-sprint-lifecycle-fixture.js";
-import { response } from "./jira-managed-remote.js";
+import { nativeOutcomeResponse, reviewedAgileTransport } from "./jira-managed-remote.js";
 
 type SprintCase = (typeof SPRINT_LIFECYCLE_FIXTURE_CASES)[number];
 const NATIVE_BODIES: Readonly<Record<SprintCase["name"], CatalogJsonObject | undefined>> = {
@@ -50,13 +50,6 @@ interface SprintTransportFixture {
   readonly snapshot: () => CatalogJsonObject;
 }
 type SprintFixture = ReturnType<typeof sprintLifecycleFixture>;
-type SprintOutcome = Awaited<ReturnType<SprintFixture["ports"]["requests"]["agile"]>>;
-
-function sprintResponse(result: SprintOutcome): AtlassianHttpBodyResult {
-  return result.ok
-    ? response(result.items ?? result.body, result.status)
-    : response({}, result.httpStatus ?? 503);
-}
 
 async function sprintRead(
   fixture: SprintFixture,
@@ -68,7 +61,7 @@ async function sprintRead(
   const path = selectedReadPath(url, roots[0], roots[1]);
   if (path === undefined) return undefined;
   expect(url.search).toBe(path === "board/7/sprint" ? "?startAt=0&maxResults=100" : "");
-  return sprintResponse(
+  return nativeOutcomeResponse(
     await fixture.ports.requests.agile(`${path}${url.search}`, "GET", undefined, "json"),
   );
 }
@@ -83,26 +76,16 @@ export function sprintLifecycleTransportFixture(
 ): SprintTransportFixture {
   const fixture = sprintLifecycleFixture();
   fixture.actor.key = actorKey;
-  let writes = 0;
-  return {
+  return reviewedAgileTransport({
     snapshot: fixture.snapshot,
     read: (request) => sprintRead(fixture, request, [platformRoot, agileRoot]),
-    async write(request: AtlassianHttpBodyRequest): Promise<AtlassianHttpBodyResult | undefined> {
-      const url = new URL(request.url);
-      if (url.pathname !== `${agileRoot}/${selected.path}`) return undefined;
-      expect(request.method).toBe(selected.method);
-      expect(url.search).toBe("");
-      expect(request.jiraExperimental).toBe(
-        selected.name === "jira.unmap-sprints" || selected.name === "jira.unmap-all-sprints"
-          ? true
-          : undefined,
-      );
-      const body = NATIVE_BODIES[selected.name];
-      expect(request.bodyJson).toBe(body === undefined ? undefined : JSON.stringify(body));
-      expect(++writes).toBe(1);
-      return sprintResponse(
-        await fixture.ports.requests.agile(selected.path, selected.method, body, "none"),
-      );
-    },
-  };
+    root: agileRoot,
+    selected,
+    body: NATIVE_BODIES[selected.name],
+    experimental:
+      selected.name === "jira.unmap-sprints" || selected.name === "jira.unmap-all-sprints"
+        ? true
+        : undefined,
+    port: fixture.ports.requests.agile,
+  });
 }

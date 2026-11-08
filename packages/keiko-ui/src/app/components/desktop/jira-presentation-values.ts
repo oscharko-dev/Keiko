@@ -1,5 +1,6 @@
 import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
 import type { JiraOutcomeFact } from "./jira-agile-presentation";
+import type { JiraDraftValue } from "./jiraDraftTree";
 
 export type JiraPresentationSource = Readonly<Record<string, unknown>>;
 
@@ -61,4 +62,14 @@ export function jiraPresentationMutationLabels(
   if (source.outcome === "rejected" && source.reason === "conflict" && source.unchanged === true)
     return ["chat.jira.savedConfiguration.unchanged"];
   return ["chat.jira.savedConfiguration.unconfirmed"];
+}
+/** One plain text value of a reviewed draft. */
+export const jiraPresentationLiteral = (text: string): JiraDraftValue => ({ kind: "text", text });
+/** The catalog tool a reviewed operation names (dots and dashes folded), when one of the sets owns it. */
+export function jiraSelectedMutationTool(
+  operation: string | undefined,
+  ...owners: readonly ReadonlySet<string>[]
+): string | undefined {
+  const tool = operation?.replace(/[.-]/gu, "_");
+  return tool !== undefined && owners.some((owner) => owner.has(tool)) ? tool : undefined;
 }

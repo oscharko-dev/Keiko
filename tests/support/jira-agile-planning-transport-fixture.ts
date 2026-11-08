@@ -8,7 +8,7 @@ import {
   AGILE_PLANNING_FIXTURE_CASES,
   agilePlanningFixture,
 } from "./jira-agile-planning-fixture.js";
-import { response } from "./jira-managed-remote.js";
+import { nativeOutcomeResponse, reviewedAgileTransport } from "./jira-managed-remote.js";
 
 type PlanningCase = (typeof AGILE_PLANNING_FIXTURE_CASES)[number];
 const NATIVE_BODIES: Readonly<Record<PlanningCase["name"], CatalogJsonObject>> = {
@@ -38,13 +38,6 @@ interface PlanningTransportFixture {
   readonly snapshot: () => CatalogJsonObject;
 }
 type PlanningFixture = ReturnType<typeof agilePlanningFixture>;
-type PlanningOutcome = Awaited<ReturnType<PlanningFixture["ports"]["requests"]["agile"]>>;
-
-function planningResponse(result: PlanningOutcome): AtlassianHttpBodyResult {
-  return result.ok
-    ? response(result.items ?? result.body, result.status)
-    : response({}, result.httpStatus ?? 503);
-}
 
 function readPath(
   request: AtlassianHttpBodyRequest,
@@ -71,7 +64,7 @@ async function planningRead(
   expect(request.bodyJson).toBeUndefined();
   expect(request.jiraExperimental).toBeUndefined();
   const port = platform ? native.ports.requests.issue : native.ports.requests.agile;
-  return planningResponse(
+  return nativeOutcomeResponse(
     await port(path, "GET", undefined, path === "field" ? "json-array" : "json"),
   );
 }
@@ -86,21 +79,13 @@ export function agilePlanningTransportFixture(
 ): PlanningTransportFixture {
   const native = agilePlanningFixture();
   native.actor.key = actorKey;
-  let writes = 0;
-  return {
+  return reviewedAgileTransport({
     snapshot: native.snapshot,
     read: (request) => planningRead(native, request, [platformRoot, agileRoot]),
-    async write(request: AtlassianHttpBodyRequest): Promise<AtlassianHttpBodyResult | undefined> {
-      const url = new URL(request.url);
-      if (`${url.pathname}${url.search}` !== `${agileRoot}/${selected.path}`) return undefined;
-      expect(request.method).toBe(selected.method);
-      expect(request.jiraExperimental).toBeUndefined();
-      const body = NATIVE_BODIES[selected.name];
-      expect(request.bodyJson).toBe(JSON.stringify(body));
-      expect(++writes).toBe(1);
-      return planningResponse(
-        await native.ports.requests.agile(selected.path, selected.method, body, "none"),
-      );
-    },
-  };
+    root: agileRoot,
+    selected,
+    body: NATIVE_BODIES[selected.name],
+    experimental: undefined,
+    port: native.ports.requests.agile,
+  });
 }

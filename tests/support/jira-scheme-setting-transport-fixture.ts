@@ -49,30 +49,45 @@ const INSTANCE_READS = new Set([
 ]);
 type TransportFixture = ReturnType<typeof reviewedPlatformTransportFixture>;
 
+type NativeFixture = Parameters<typeof reviewedPlatformTransportFixture>[2] extends infer R
+  ? {
+      actor: { key: string };
+      request: R;
+      snapshot: Parameters<typeof reviewedPlatformTransportFixture>[4];
+    }
+  : never;
+
+function nativeTransport(
+  spec: Parameters<typeof reviewedPlatformTransportFixture>[1],
+  native: NativeFixture,
+  actorKey: string,
+  reads: ReadonlySet<string>,
+): TransportFixture {
+  native.actor.key = actorKey;
+  return reviewedPlatformTransportFixture(
+    ROOT,
+    spec,
+    native.request,
+    (path) => reads.has(path),
+    native.snapshot,
+  );
+}
+
 function optionTransportController(
   operation: string | undefined,
   actorKey: string,
 ): TransportFixture | undefined {
   const option = OPTION_SCHEME_MUTATION_CASES.find((item) => item.tool === operation);
-  if (option !== undefined) {
-    const native = optionSchemeFixture();
-    native.actor.key = actorKey;
-    return reviewedPlatformTransportFixture(
-      ROOT,
-      {
-        ...option,
-        acknowledgement:
-          option.tool === "jira.create-issue-type-scheme" ||
-          option.tool === "jira.create-priority-scheme"
-            ? "json"
-            : "none",
-      },
-      native.request,
-      (path) => OPTION_READS.has(path),
-      native.snapshot,
-    );
-  }
-  return undefined;
+  if (option === undefined) return undefined;
+  const creates =
+    option.tool === "jira.create-issue-type-scheme" ||
+    option.tool === "jira.create-priority-scheme";
+  return nativeTransport(
+    { ...option, acknowledgement: creates ? "json" : "none" },
+    optionSchemeFixture(),
+    actorKey,
+    OPTION_READS,
+  );
 }
 
 function workflowTransportController(
@@ -80,25 +95,16 @@ function workflowTransportController(
   actorKey: string,
 ): TransportFixture | undefined {
   const workflow = WORKFLOW_SCHEME_MUTATION_FIXTURE_CASES.find((item) => item.name === operation);
-  if (workflow !== undefined) {
-    const native = workflowSchemeMutationFixture(workflow.draft);
-    native.actor.key = actorKey;
-    return reviewedPlatformTransportFixture(
-      ROOT,
-      {
-        ...workflow,
-        acknowledgement:
-          workflow.name === "jira.create-workflow-scheme" ||
-          workflow.name === "jira.create-workflow-scheme-draft"
-            ? "json"
-            : "none",
-      },
-      native.request,
-      (path) => WORKFLOW_READS.has(path),
-      native.snapshot,
-    );
-  }
-  return undefined;
+  if (workflow === undefined) return undefined;
+  const creates =
+    workflow.name === "jira.create-workflow-scheme" ||
+    workflow.name === "jira.create-workflow-scheme-draft";
+  return nativeTransport(
+    { ...workflow, acknowledgement: creates ? "json" : "none" },
+    workflowSchemeMutationFixture(workflow.draft),
+    actorKey,
+    WORKFLOW_READS,
+  );
 }
 
 function instanceTransportController(
@@ -107,14 +113,11 @@ function instanceTransportController(
 ): TransportFixture | undefined {
   const instance = INSTANCE_SETTING_FIXTURE_CASES.find((item) => item.name === operation);
   if (instance === undefined) return undefined;
-  const native = instanceSettingMutationFixture();
-  native.actor.key = actorKey;
-  return reviewedPlatformTransportFixture(
-    ROOT,
+  return nativeTransport(
     { ...instance, method: "PUT", acknowledgement: "none" },
-    native.request,
-    (path) => INSTANCE_READS.has(path),
-    native.snapshot,
+    instanceSettingMutationFixture(),
+    actorKey,
+    INSTANCE_READS,
   );
 }
 

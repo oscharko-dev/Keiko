@@ -1,6 +1,10 @@
 import type { OptionalWidgetTranslate, WidgetMessageKey } from "@/lib/optional-widget-i18n";
 import { jiraDraftValueOf, type JiraDraftField, type JiraDraftValue } from "./jiraDraftTree";
-import { jiraPresentationRecord as record } from "./jira-presentation-values";
+import {
+  jiraPresentationRecord as record,
+  jiraPresentationLiteral as literal,
+  jiraSelectedMutationTool,
+} from "./jira-presentation-values";
 import { jiraReviewedPropertyNodes } from "./jira-property-mutation-presentation";
 import {
   jiraReviewedMutationScalar as scalar,
@@ -47,11 +51,8 @@ const GROUP_LABELS: Readonly<Record<string, WidgetMessageKey>> = {
   id: "chat.jira.planning.nativeId",
   key: "chat.jira.fact.issue",
 };
-const literal = (text: string): JiraDraftValue => ({ kind: "text", text });
-function selected(operation: string | undefined): string | undefined {
-  const tool = operation?.replace(/[.-]/gu, "_");
-  return tool !== undefined && JIRA_PLANNING_MUTATION_TOOLS.has(tool) ? tool : undefined;
-}
+const selected = (operation: string | undefined): string | undefined =>
+  jiraSelectedMutationTool(operation, JIRA_PLANNING_MUTATION_TOOLS);
 function reviewedGroup(value: unknown, t: OptionalWidgetTranslate): JiraDraftValue {
   const source = record(value);
   if (source === undefined) return scalar(value, t);

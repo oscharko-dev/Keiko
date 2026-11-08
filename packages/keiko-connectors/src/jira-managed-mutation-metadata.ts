@@ -3,7 +3,10 @@ import {
   type AtlassianConnectorWriteFailureReason,
   type JiraFieldMetadata,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import type { CatalogJsonValue } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import type {
+  CatalogJsonObject,
+  CatalogJsonValue,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import type {
   AtlassianWriteHttpOutcome,
@@ -132,4 +135,79 @@ export async function jiraTransitionMutationMetadata(
   const matches = transitions.map(asRecord).filter((item) => item?.id === transitionId);
   if (matches.length === 0) return { ok: false, reason: "invalid-transition" };
   return matches.length === 1 ? selectedTransitionMetadata(matches[0]) : MALFORMED;
+}
+/** The bound on a known-target receipt that is journaled before any native request is sent. */
+export const JIRA_MUTATION_RECEIPT_MAX_BYTES = 16384;
+export function jiraMutationReceiptFits(receipt: unknown): boolean {
+  return (
+    new TextEncoder().encode(JSON.stringify(receipt)).byteLength <= JIRA_MUTATION_RECEIPT_MAX_BYTES
+  );
+}
+/**
+ * The one admission order every fixed-effect mutation shares: admit against the live native state,
+ * stop there for a dry check, admit again immediately before the effect, then dispatch exactly once.
+ */
+export async function runAdmittedMutation<Attempt>(
+  admit: () => Promise<Attempt | undefined>,
+  check: boolean,
+  checked: Attempt,
+  dispatch: () => Promise<Attempt>,
+): Promise<Attempt> {
+  const refused = await admit();
+  if (refused !== undefined) return refused;
+  if (check) return checked;
+  const current = await admit();
+  return current ?? dispatch();
+}
+/** The fixed refusals, receipt and dry-check result one fixed-effect mutation family declares once. */
+export interface FixedMutationSpec<Input, Receipt, Attempt> {
+  readonly refuse: (message: string) => Attempt;
+  readonly invalid: string;
+  readonly oversize: string;
+  readonly receiptOf: (input: Input) => Receipt;
+  readonly checked: Attempt;
+}
+/** A fixed-effect mutation from parsed input to its single dispatch, with the shared receipt bound. */
+export async function runFixedMutation<Input, Receipt, Attempt>(
+  spec: FixedMutationSpec<Input, Receipt, Attempt>,
+  input: Input | undefined,
+  check: boolean,
+  run: {
+    readonly admit: (input: Input, receipt: Receipt) => Promise<Attempt | undefined>;
+    readonly dispatch: (input: Input, receipt: Receipt) => Promise<Attempt>;
+  },
+): Promise<Attempt> {
+  if (input === undefined) return spec.refuse(spec.invalid);
+  const receipt = spec.receiptOf(input);
+  if (!jiraMutationReceiptFits(receipt)) return spec.refuse(spec.oversize);
+  return runAdmittedMutation(
+    () => run.admit(input, receipt),
+    check,
+    spec.checked,
+    () => run.dispatch(input, receipt),
+  );
+}
+/** The exported executor of one fixed-effect mutation family: parse, bound, admit twice, dispatch once. */
+export function fixedMutationExecutor<Operation, Input, Receipt, Attempt>(
+  spec: FixedMutationSpec<Input, Receipt, Attempt>,
+  parse: (operation: Operation, args: CatalogJsonObject) => Input | undefined,
+  run: {
+    readonly admit: (request: JiraMutationRequest, input: Input) => Promise<Attempt | undefined>;
+    readonly dispatch: (
+      request: JiraMutationRequest,
+      input: Input,
+      receipt: Receipt,
+    ) => Promise<Attempt>;
+  },
+): (
+  operation: Operation,
+  args: CatalogJsonObject,
+  request: JiraMutationRequest,
+  check?: boolean,
+) => Promise<Attempt> {
+  return (operation, args, request, check = false) =>
+    runFixedMutation(spec, parse(operation, args), check, {
+      admit: (input) => run.admit(request, input),
+      dispatch: (input, receipt) => run.dispatch(request, input, receipt),
+    });
 }

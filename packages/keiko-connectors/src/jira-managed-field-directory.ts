@@ -17,7 +17,12 @@ import {
   type JiraReadResponse,
   type JiraReadSelection,
 } from "./jira-managed-read-request.js";
-import { jiraNativeId, jiraNativeNumericId, jiraNativeText } from "./jira-native-values.js";
+import {
+  jiraNativeBooleans,
+  jiraNativeId,
+  jiraNativeNumericId,
+  jiraNativeText,
+} from "./jira-native-values.js";
 
 export const JIRA_FIELD_DIRECTORY_READS = JIRA_READ_TOOL_FAMILIES.fieldDirectory;
 type FieldRead = (typeof JIRA_FIELD_DIRECTORY_READS)[number];
@@ -53,13 +58,7 @@ function schema(value: unknown): CatalogJsonObject | undefined {
   return result;
 }
 function fieldFlags(raw: Record<string, unknown>): CatalogJsonObject | undefined {
-  const result: Record<string, CatalogJsonValue> = {};
-  for (const key of ["custom", "orderable", "navigable", "searchable"] as const) {
-    if (raw[key] === undefined || raw[key] === null) continue;
-    if (typeof raw[key] !== "boolean") return undefined;
-    result[key] = raw[key];
-  }
-  return result;
+  return jiraNativeBooleans(raw, ["custom", "orderable", "navigable", "searchable"]);
 }
 function fieldClauseNames(raw: Record<string, unknown>): CatalogJsonObject | undefined {
   if (raw.clauseNames === undefined || raw.clauseNames === null) return {};

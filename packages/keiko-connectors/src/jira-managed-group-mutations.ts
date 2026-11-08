@@ -1,5 +1,9 @@
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
+import {
+  fixedMutationExecutor,
+  type FixedMutationSpec,
+  type JiraMutationRequest,
+} from "./jira-managed-mutation-metadata.js";
 import { dispatchFailure, JiraAcknowledgedMutationError } from "./jira-mutation-failure.js";
 import { readSavedActor } from "./jira-saved-configuration-values.js";
 import {
@@ -14,14 +18,9 @@ import {
   parseGroupMutationInput,
   type GroupMutationAttempt,
   type GroupMutationInput,
-  type JiraGroupMutation,
   type JiraGroupMutationReceipt,
 } from "./jira-group-mutation-values.js";
-export {
-  JIRA_GROUP_MUTATIONS,
-  isJiraGroupMutation,
-  type JiraGroupMutation,
-} from "./jira-group-mutation-values.js";
+export { JIRA_GROUP_MUTATIONS, isJiraGroupMutation } from "./jira-group-mutation-values.js";
 
 function effect(input: GroupMutationInput): {
   readonly path: string;
@@ -76,30 +75,25 @@ async function confirm(
     receipt,
   );
 }
+const GROUP_MUTATION: FixedMutationSpec<
+  GroupMutationInput,
+  JiraGroupMutationReceipt,
+  GroupMutationAttempt
+> = {
+  refuse: groupMutationRefusal,
+  invalid:
+    "Use the exact actor key and native group name. Membership requires the exact user key and username, group-and-subgroup expectedObservedMembership and acceptGlobalPermissionChange:true. Deletion additionally requires confirmUnverifiedDeletion:true and an independently readable different optional swapGroupName. Group pickers or default/project-role membership cannot replace direct membership.",
+  oversize:
+    "The known group target receipt exceeds the existing 16 KiB bound. No request was sent.",
+  receiptOf: groupMutationReceipt,
+  checked: { ok: true, receipt: {} },
+};
 /** Fixed GroupResource operations, independently bound principal namespaces and one native effect. */
-export async function executeJiraGroupMutation(
-  operation: JiraGroupMutation,
-  args: CatalogJsonObject,
-  request: JiraMutationRequest,
-  check = false,
-): Promise<GroupMutationAttempt> {
-  const input = parseGroupMutationInput(operation, args);
-  if (input === undefined)
-    return groupMutationRefusal(
-      "Use the exact actor key and native group name. Membership requires the exact user key and username, group-and-subgroup expectedObservedMembership and acceptGlobalPermissionChange:true. Deletion additionally requires confirmUnverifiedDeletion:true and an independently readable different optional swapGroupName. Group pickers or default/project-role membership cannot replace direct membership.",
-    );
-  const receipt = groupMutationReceipt(input);
-  if (new TextEncoder().encode(JSON.stringify(receipt)).byteLength > 16384)
-    return groupMutationRefusal(
-      "The known group target receipt exceeds the existing 16 KiB bound. No request was sent.",
-    );
-  const refused = await admitGroupMutation(request, input);
-  if (refused !== undefined) return refused;
-  if (check) return { ok: true, receipt: {} };
-  const current = await admitGroupMutation(request, input);
-  if (current !== undefined) return current;
-  return dispatch(request, input, receipt);
-}
+export const executeJiraGroupMutation = fixedMutationExecutor(
+  GROUP_MUTATION,
+  parseGroupMutationInput,
+  { admit: admitGroupMutation, dispatch },
+);
 async function dispatch(
   request: JiraMutationRequest,
   input: GroupMutationInput,

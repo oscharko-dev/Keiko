@@ -1,3 +1,4 @@
+import { readbackFault } from "./jira-fixture-readback.js";
 import assert from "node:assert/strict";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -243,12 +244,16 @@ function settingEffect(
     : { ok: true, status: state.controls.acknowledgementStatus, body: undefined };
 }
 
-function settingReadbackFault(state: InstanceSettingState): AtlassianWriteHttpOutcome | undefined {
-  if (!state.wrote) return undefined;
-  if (state.controls.throwReadback) throw new Error("Synthetic instance setting readback defect");
-  if (state.controls.denyReadback)
-    return { ok: false, reason: "permission-denied", httpStatus: 403 };
-  return undefined;
+function settingReadbackFault(
+  state: InstanceSettingState,
+  path: string,
+): AtlassianWriteHttpOutcome | undefined {
+  return readbackFault(
+    state.controls,
+    state.wrote ? 1 : 0,
+    path,
+    "Synthetic instance setting readback defect",
+  );
 }
 
 function settingResponse(
@@ -259,7 +264,7 @@ function settingResponse(
   expect: unknown,
 ): AtlassianWriteHttpOutcome {
   state.calls.push({ path, method, body: structuredClone(body), expect });
-  const fault = settingReadbackFault(state);
+  const fault = settingReadbackFault(state, path);
   if (fault !== undefined) return fault;
   // This simulated port remains bound; the desired base URL is only a scalar body.
   const url = new URL(path, "https://bound.synthetic.invalid/");

@@ -1,3 +1,5 @@
+import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+
 /** Native project/component text permits ordinary line breaks, never terminal controls. */
 // eslint-disable-next-line no-control-regex -- preserve tabs, LF and CR while refusing other controls.
 const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u;
@@ -41,4 +43,19 @@ export function jiraNativePermissionSchemeNumericId(value: unknown): string | un
 /** Names are sent exactly as reviewed; refuse input Jira would trim rather than guessing readback. */
 export function jiraNativeName(value: unknown, max: number): value is string {
   return jiraNativeText(value, max) && value === value.trim();
+}
+
+/** The listed native Boolean fields that are present; any non-Boolean value refuses the whole set. */
+export function jiraNativeBooleans(
+  raw: Readonly<Record<string, unknown>>,
+  keys: readonly string[],
+): CatalogJsonObject | undefined {
+  const result: Record<string, boolean> = {};
+  for (const key of keys) {
+    const value = raw[key];
+    if (value === undefined || value === null) continue;
+    if (typeof value !== "boolean") return undefined;
+    result[key] = value;
+  }
+  return result;
 }

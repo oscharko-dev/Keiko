@@ -3,7 +3,11 @@ import {
   type CatalogJsonObject,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { AtlassianWriteHttpOutcome } from "./atlassian-write-http.js";
-import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
+import {
+  fixedMutationExecutor,
+  type FixedMutationSpec,
+  type JiraMutationRequest,
+} from "./jira-managed-mutation-metadata.js";
 import {
   readMaintenanceMutationState,
   readMaintenanceRequests,
@@ -227,28 +231,30 @@ async function afterAcknowledgement(
     throw new JiraAcknowledgedMutationError(error, receipt);
   }
 }
+const MAINTENANCE_MUTATION: FixedMutationSpec<
+  MaintenanceInput,
+  MaintenanceReceipt,
+  MaintenanceAttempt
+> = {
+  refuse: maintenanceRefusal,
+  invalid:
+    "Provide the exact actor, complete typed native review, confirmUnverifiedEffect:true and only the operation's documented selectors. Node liveness must be observed; reindex flags are explicit Booleans. No raw paths, URLs, JQL, task IDs, arbitrary types or body options are accepted.",
+  oversize:
+    "The complete known context exceeds the existing 16 KiB receipt bound before any native request.",
+  receiptOf: maintenanceReceipt,
+  checked: { ok: true, receipt: {} },
+};
 /** Fixed administrative requests only. No job polling, redirects, retries, guessed job IDs or global success inference. */
-export async function executeJiraMaintenanceMutation(
-  operation: JiraMaintenanceMutation,
-  args: CatalogJsonObject,
+export const executeJiraMaintenanceMutation = fixedMutationExecutor(
+  MAINTENANCE_MUTATION,
+  parseMaintenanceInput,
+  { admit: admit, dispatch: dispatchMaintenance },
+);
+async function dispatchMaintenance(
   request: JiraMutationRequest,
-  check = false,
+  input: MaintenanceInput,
+  receipt: MaintenanceReceipt,
 ): Promise<MaintenanceAttempt> {
-  const input = parseMaintenanceInput(operation, args);
-  if (input === undefined)
-    return maintenanceRefusal(
-      "Provide the exact actor, complete typed native review, confirmUnverifiedEffect:true and only the operation's documented selectors. Node liveness must be observed; reindex flags are explicit Booleans. No raw paths, URLs, JQL, task IDs, arbitrary types or body options are accepted.",
-    );
-  const receipt = maintenanceReceipt(input);
-  if (!maintenanceReceiptFits(receipt))
-    return maintenanceRefusal(
-      "The complete known context exceeds the existing 16 KiB receipt bound before any native request.",
-    );
-  const refusal = await admit(request, input);
-  if (refusal !== undefined) return refusal;
-  if (check) return { ok: true, receipt: {} };
-  const currentRefusal = await admit(request, input);
-  if (currentRefusal !== undefined) return currentRefusal;
   const effect = effectFor(input);
   const response = await request(effect.path, effect.method, undefined, effect.expect);
   if (!response.ok) return { ...dispatchFailure(response), receipt };

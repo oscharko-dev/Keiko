@@ -1,3 +1,4 @@
+import { readUserBySelectors } from "./jira-user-selector-reads.js";
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { jiraDirectoryUser } from "./jira-directory-values.js";
 import { bindJiraGroupPrincipal } from "./jira-group-principal.js";
@@ -149,13 +150,12 @@ async function bindUser(
   request: JiraMutationRequest,
   expected: RoleUser,
 ): Promise<RoleFailure | undefined> {
-  const named = await observedUser(request, "username", expected.name);
-  if (!named.ok) return named;
-  const keyed = await observedUser(request, "key", expected.key);
-  if (!keyed.ok) return keyed;
-  return [named.value, keyed.value].every(
-    (user) => user.key === expected.key && user.name === expected.name,
-  )
+  const pair = await readUserBySelectors(
+    (selector, value) => observedUser(request, selector, value),
+    expected,
+  );
+  if (!pair.ok) return pair;
+  return pair.value.every((user) => user.key === expected.key && user.name === expected.name)
     ? undefined
     : roleRefusal(
         "The reviewed user key and native username no longer identify the same user. No key/name fallback is permitted.",

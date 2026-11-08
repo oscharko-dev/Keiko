@@ -1,21 +1,10 @@
 // Synthetic project-scoped resources; every effect goes through Keiko, every oracle is separate.
 import assert from "node:assert/strict";
 import { readCase } from "./api-qualification-cases.mjs";
-import { basicAuth, labRequest } from "./lab-client.mjs";
 import { assertQualificationJson } from "./api-qualification-json.mjs";
+import { proof, read, readRecord } from "./api-qualification-read.mjs";
 
 const single = { nativeRoot: "single", productRoot: "single" };
-const proof = (assertionCount) => ({ matched: true, assertionCount });
-async function read(context, path) {
-  const response = await labRequest(
-    context.session,
-    "GET",
-    path,
-    basicAuth(context.session, context.actor),
-  );
-  assert.equal(response.status, 200);
-  return response.value;
-}
 const relatedCountsCase = (tool, path, suffix, fields, idKey) =>
   readCase(tool, (f) => `${path(f)}/${suffix}`, fields, {
     ...single,
@@ -152,10 +141,8 @@ export const API_QUALIFICATION_RELEASE_CASES = [
       assigneeType: "PROJECT_DEFAULT",
     }),
     async (context, data, f) => {
-      assert.match(data.componentId, /^[1-9][0-9]*$/u);
       f.componentId = data.componentId;
-      const actual = await read(context, componentPath(f));
-      assert.equal(String(actual.id), f.componentId);
+      const actual = await readRecord(context, f.componentId, componentPath(f));
       assert.equal(actual.name, componentName(f));
       assert.equal(actual.project, "KEIKO");
       assert.equal(actual.description, "Synthetic AC7 component");

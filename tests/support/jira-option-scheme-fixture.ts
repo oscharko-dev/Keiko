@@ -24,56 +24,145 @@ const OTHER = { id: "10001", key: "OTHER", name: "Other project" };
 const ISSUE = { expectedActorKey: ACTOR, expectedScheme: ISSUE_SCHEME_REVIEW };
 const PRIORITY = { expectedActorKey: ACTOR, expectedScheme: PRIORITY_SCHEME_REVIEW };
 const ASSOCIATION = { ...ISSUE, expectedProjects: [CURRENT], confirmUnverifiedConsequences: true };
+type SchemeFields<Members extends string, Default extends string> = Readonly<
+  Record<Members, readonly string[]> &
+    Record<Default, string> &
+    Record<"name" | "description", string>
+>;
+type SchemeReceipt = Readonly<{ userKey: string; schemeId: string; schemePresent: boolean }>;
+interface SchemeCrudCase<
+  Tool extends string,
+  Method extends string,
+  Args extends object,
+  Body extends object | undefined,
+  Confirmed extends boolean,
+> {
+  readonly tool: Tool;
+  readonly args: Args;
+  readonly method: Method;
+  readonly path: string;
+  readonly body: Body;
+  readonly confirmed: Confirmed;
+  readonly receipt: SchemeReceipt;
+}
+type SchemeCrudCases<
+  Create extends string,
+  Update extends string,
+  Remove extends string,
+  Base extends object,
+  Members extends string,
+  Default extends string,
+> = readonly [
+  SchemeCrudCase<
+    Create,
+    "POST",
+    { readonly expectedActorKey: string } & SchemeFields<Members, Default>,
+    SchemeFields<Members, Default>,
+    true
+  >,
+  SchemeCrudCase<
+    Update,
+    "PUT",
+    Base & SchemeFields<Members, Default>,
+    SchemeFields<Members, Default>,
+    true
+  >,
+  SchemeCrudCase<
+    Remove,
+    "DELETE",
+    Base & { readonly confirmUnverifiedConsequences: true },
+    undefined,
+    false
+  >,
+];
+interface SchemeCrudSpec<
+  Create extends string,
+  Update extends string,
+  Remove extends string,
+  Base extends object,
+  Members extends string,
+  Default extends string,
+> {
+  readonly tools: readonly [Create, Update, Remove];
+  readonly names: readonly [string, string];
+  readonly base: Base;
+  readonly members: Members;
+  readonly defaultMember: Default;
+  readonly collection: string;
+  readonly id: string;
+}
+// The reviewed arguments list the members before the default; the native body the reverse.
+function schemeFields<Members extends string, Default extends string>(
+  spec: { readonly members: Members; readonly defaultMember: Default },
+  name: string,
+  defaultFirst: boolean,
+): SchemeFields<Members, Default> {
+  const members = { [spec.members]: ["2", "1"] };
+  const fallback = { [spec.defaultMember]: "2" };
+  const ordered = defaultFirst ? { ...fallback, ...members } : { ...members, ...fallback };
+  return { name, description: "", ...ordered } as SchemeFields<Members, Default>;
+}
+const schemeReceipt = (schemeId: string, schemePresent: boolean): SchemeReceipt => ({
+  userKey: ACTOR,
+  schemeId,
+  schemePresent,
+});
+// Create, update and delete share one shape for the issue-type and the priority scheme.
+function schemeCrudCases<
+  Create extends string,
+  Update extends string,
+  Remove extends string,
+  Base extends object,
+  Members extends string,
+  Default extends string,
+>(
+  spec: SchemeCrudSpec<Create, Update, Remove, Base, Members, Default>,
+): SchemeCrudCases<Create, Update, Remove, Base, Members, Default> {
+  const item = `${spec.collection}/${spec.id}`;
+  return [
+    {
+      tool: spec.tools[0],
+      args: { expectedActorKey: ACTOR, ...schemeFields(spec, spec.names[0], false) },
+      method: "POST",
+      path: spec.collection,
+      body: schemeFields(spec, spec.names[0], true),
+      confirmed: true,
+      receipt: schemeReceipt("9007199254740993", true),
+    },
+    {
+      tool: spec.tools[1],
+      args: { ...spec.base, ...schemeFields(spec, spec.names[1], false) },
+      method: "PUT",
+      path: item,
+      body: schemeFields(spec, spec.names[1], true),
+      confirmed: true,
+      receipt: schemeReceipt(spec.id, true),
+    },
+    {
+      tool: spec.tools[2],
+      args: { ...spec.base, confirmUnverifiedConsequences: true },
+      method: "DELETE",
+      path: item,
+      body: undefined,
+      confirmed: false,
+      receipt: schemeReceipt(spec.id, false),
+    },
+  ];
+}
 export const OPTION_SCHEME_MUTATION_CASES = [
-  {
-    tool: "jira.create-issue-type-scheme",
-    args: {
-      expectedActorKey: ACTOR,
-      name: "Planning types",
-      description: "",
-      issueTypeIds: ["2", "1"],
-      defaultIssueTypeId: "2",
-    },
-    method: "POST",
-    path: "issuetypescheme",
-    body: {
-      name: "Planning types",
-      description: "",
-      defaultIssueTypeId: "2",
-      issueTypeIds: ["2", "1"],
-    },
-    confirmed: true,
-    receipt: { userKey: ACTOR, schemeId: "9007199254740993", schemePresent: true },
-  },
-  {
-    tool: "jira.update-issue-type-scheme",
-    args: {
-      ...ISSUE,
-      name: "Delivery types revised",
-      description: "",
-      issueTypeIds: ["2", "1"],
-      defaultIssueTypeId: "2",
-    },
-    method: "PUT",
-    path: "issuetypescheme/7",
-    body: {
-      name: "Delivery types revised",
-      description: "",
-      defaultIssueTypeId: "2",
-      issueTypeIds: ["2", "1"],
-    },
-    confirmed: true,
-    receipt: { userKey: ACTOR, schemeId: "7", schemePresent: true },
-  },
-  {
-    tool: "jira.delete-issue-type-scheme",
-    args: { ...ISSUE, confirmUnverifiedConsequences: true },
-    method: "DELETE",
-    path: "issuetypescheme/7",
-    body: undefined,
-    confirmed: false,
-    receipt: { userKey: ACTOR, schemeId: "7", schemePresent: false },
-  },
+  ...schemeCrudCases({
+    tools: [
+      "jira.create-issue-type-scheme",
+      "jira.update-issue-type-scheme",
+      "jira.delete-issue-type-scheme",
+    ],
+    names: ["Planning types", "Delivery types revised"],
+    base: ISSUE,
+    members: "issueTypeIds",
+    defaultMember: "defaultIssueTypeId",
+    collection: "issuetypescheme",
+    id: "7",
+  }),
   {
     tool: "jira.add-issue-type-scheme-projects",
     args: { ...ASSOCIATION, projects: [OTHER] },
@@ -138,55 +227,19 @@ export const OPTION_SCHEME_MUTATION_CASES = [
       associationChange: "remove",
     },
   },
-  {
-    tool: "jira.create-priority-scheme",
-    args: {
-      expectedActorKey: ACTOR,
-      name: "Planning priorities",
-      description: "",
-      optionIds: ["2", "1"],
-      defaultOptionId: "2",
-    },
-    method: "POST",
-    path: "priorityschemes",
-    body: {
-      name: "Planning priorities",
-      description: "",
-      defaultOptionId: "2",
-      optionIds: ["2", "1"],
-    },
-    confirmed: true,
-    receipt: { userKey: ACTOR, schemeId: "9007199254740993", schemePresent: true },
-  },
-  {
-    tool: "jira.update-priority-scheme",
-    args: {
-      ...PRIORITY,
-      name: "Delivery priorities revised",
-      description: "",
-      optionIds: ["2", "1"],
-      defaultOptionId: "2",
-    },
-    method: "PUT",
-    path: "priorityschemes/9",
-    body: {
-      name: "Delivery priorities revised",
-      description: "",
-      defaultOptionId: "2",
-      optionIds: ["2", "1"],
-    },
-    confirmed: true,
-    receipt: { userKey: ACTOR, schemeId: "9", schemePresent: true },
-  },
-  {
-    tool: "jira.delete-priority-scheme",
-    args: { ...PRIORITY, confirmUnverifiedConsequences: true },
-    method: "DELETE",
-    path: "priorityschemes/9",
-    body: undefined,
-    confirmed: false,
-    receipt: { userKey: ACTOR, schemeId: "9", schemePresent: false },
-  },
+  ...schemeCrudCases({
+    tools: [
+      "jira.create-priority-scheme",
+      "jira.update-priority-scheme",
+      "jira.delete-priority-scheme",
+    ],
+    names: ["Planning priorities", "Delivery priorities revised"],
+    base: PRIORITY,
+    members: "optionIds",
+    defaultMember: "defaultOptionId",
+    collection: "priorityschemes",
+    id: "9",
+  }),
 ] as const;
 type SchemeBody = Parameters<JiraMutationRequest>[2];
 type SchemeRecord = Record<string, unknown>;

@@ -1,7 +1,11 @@
 import { guardJiraDirectorySelfAccess } from "./jira-directory-self-access.js";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { AtlassianWriteHttpOutcome } from "./atlassian-write-http.js";
-import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
+import {
+  jiraMutationReceiptFits,
+  runAdmittedMutation,
+  type JiraMutationRequest,
+} from "./jira-managed-mutation-metadata.js";
 import { dispatchFailure, JiraAcknowledgedMutationError } from "./jira-mutation-failure.js";
 import { readSavedActor } from "./jira-saved-configuration-values.js";
 import type { JiraDirectoryAccessPorts } from "./jira-directory-access-request.js";
@@ -225,16 +229,16 @@ export async function executeJiraDirectoryAccessMutation(
       "unavailable",
     );
   const receipt = directoryAccessReceipt(input);
-  if (new TextEncoder().encode(JSON.stringify(receipt)).byteLength > 16384)
+  if (!jiraMutationReceiptFits(receipt))
     return directoryAccessRefusal(
       "The known directory target receipt exceeds the existing 16 KiB bound. Reduce the selection before any request.",
     );
-  const refused = await admitDirectoryMutation(request, ports, input, receipt);
-  if (refused !== undefined) return refused;
-  if (check) return { ok: true, receipt: {} };
-  const current = await admitDirectoryMutation(request, ports, input, receipt);
-  if (current !== undefined) return current;
-  return dispatchDirectoryMutation(request, ports, input, receipt);
+  return runAdmittedMutation(
+    () => admitDirectoryMutation(request, ports, input, receipt),
+    check,
+    { ok: true, receipt: {} },
+    () => dispatchDirectoryMutation(request, ports, input, receipt),
+  );
 }
 async function admitDirectoryMutation(
   request: JiraMutationRequest,

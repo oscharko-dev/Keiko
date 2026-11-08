@@ -2,7 +2,10 @@ import type {
   CatalogJsonObject,
   CatalogJsonValue,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
+import {
+  jiraMutationReceiptFits,
+  type JiraMutationRequest,
+} from "./jira-managed-mutation-metadata.js";
 import { dispatchFailure, JiraAcknowledgedMutationError } from "./jira-mutation-failure.js";
 import { readSavedActor } from "./jira-saved-configuration-values.js";
 import {
@@ -121,7 +124,7 @@ export async function executeJiraInstanceSettingMutation(
       "Use the exact actor and typed expected value. Only four documented nonsecret application keys are supported. System column lists are complete, ordered and nonempty, with repetitions preserved. Base URL/read-only changes require confirmInstanceWide:true; desired base URL must be HTTPS without credentials/query/fragment. Banner fields and arbitrary properties are unsupported.",
     );
   const receipt = instanceSettingReceipt(input);
-  if (new TextEncoder().encode(JSON.stringify(receipt)).byteLength > 16384)
+  if (!jiraMutationReceiptFits(receipt))
     return instanceSettingRefusal(
       "The requested ordered column receipt exceeds the existing 16 KiB bound. Reduce the column sequence before any request.",
     );

@@ -1,3 +1,4 @@
+import { dispatchFixtureCall } from "./jira-fixture-readback.js";
 import assert from "node:assert/strict";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { AtlassianWriteHttpOutcome } from "../../packages/keiko-connectors/src/atlassian-write-http.js";
@@ -153,14 +154,6 @@ function bulkEffect(
   };
 }
 
-function bulkReadbackFault(state: BulkCreateState): AtlassianWriteHttpOutcome | undefined {
-  if (state.effects === 0) return undefined;
-  if (state.controls.throwReadback) throw new Error("Synthetic bulk readback failure");
-  if (state.controls.denyReadback)
-    return { ok: false, reason: "permission-denied", httpStatus: 403 };
-  return undefined;
-}
-
 function bulkResponse(
   state: BulkCreateState,
   path: string,
@@ -168,11 +161,15 @@ function bulkResponse(
   value: unknown,
   expect: unknown,
 ): AtlassianWriteHttpOutcome {
-  state.calls.push({ path, method, body: structuredClone(value), expect });
-  const fault = bulkReadbackFault(state);
-  if (fault !== undefined) return fault;
-  if (method === "GET") return bulkRead(state, path);
-  return bulkEffect(state, path, method, value, expect);
+  return dispatchFixtureCall(
+    state,
+    { path, method, body: value, expect },
+    "Synthetic bulk readback failure",
+    {
+      read: (readPath) => bulkRead(state, readPath),
+      write: (call) => bulkEffect(state, call.path, call.method, call.body, call.expect),
+    },
+  );
 }
 
 export function bulkCreateFixture(): BulkCreateFixture {

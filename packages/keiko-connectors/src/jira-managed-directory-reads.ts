@@ -24,7 +24,7 @@ import {
 } from "./jira-managed-metadata.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { executeJiraSelectedRead, type JiraReadResponse } from "./jira-managed-read-request.js";
-import { jiraNativeText } from "./jira-native-values.js";
+import { jiraNativeBooleans, jiraNativeText } from "./jira-native-values.js";
 
 export const JIRA_DIRECTORY_READS = JIRA_READ_TOOL_FAMILIES.directory;
 type DirectoryRead = (typeof JIRA_DIRECTORY_READS)[number];
@@ -141,13 +141,7 @@ function applicationRoleGroups(raw: Record<string, unknown>): CatalogJsonObject 
   return result;
 }
 function applicationRoleFlags(raw: Record<string, unknown>): CatalogJsonObject | undefined {
-  const result: Record<string, CatalogJsonValue> = {};
-  for (const key of ["defined", "hasUnlimitedSeats", "platform", "selectedByDefault"] as const) {
-    if (raw[key] === undefined || raw[key] === null) continue;
-    if (typeof raw[key] !== "boolean") return undefined;
-    result[key] = raw[key];
-  }
-  return result;
+  return jiraNativeBooleans(raw, ["defined", "hasUnlimitedSeats", "platform", "selectedByDefault"]);
 }
 function applicationRoleSeats(raw: Record<string, unknown>): CatalogJsonObject | undefined {
   const result: Record<string, CatalogJsonValue> = {};

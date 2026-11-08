@@ -1,19 +1,9 @@
 // Issue effects are sent only by the governed catalog; these reads are independent oracles.
 import assert from "node:assert/strict";
-import { basicAuth, labRequest } from "./lab-client.mjs";
 import { readCase } from "./api-qualification-cases.mjs";
 import { API_QUALIFICATION_COMMENT_PROPERTY_CASES } from "./api-qualification-property-cases.mjs";
+import { proof, read } from "./api-qualification-read.mjs";
 
-async function read(context, path) {
-  const response = await labRequest(
-    context.session,
-    "GET",
-    path,
-    basicAuth(context.session, context.actor),
-  );
-  assert.equal(response.status, 200);
-  return response.value;
-}
 const issuePath = (fixture) => `/rest/api/2/issue/${fixture.createdIssueKey}`;
 const key = (fixture) => {
   assert.match(fixture.createdIssueKey, /^KEIKO-[1-9][0-9]*$/u);
@@ -30,7 +20,6 @@ async function assertCollectionLacks(context, fixture, segment, collection, id) 
   );
   return proof(3);
 }
-const proof = (assertionCount) => ({ matched: true, assertionCount });
 const mutation = (tool, args, readback, scope = {}) => ({
   ...scope,
   tool,

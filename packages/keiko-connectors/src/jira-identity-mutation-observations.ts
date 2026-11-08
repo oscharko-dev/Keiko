@@ -1,6 +1,7 @@
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { jiraDirectoryUser } from "./jira-directory-values.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
+import { readUserBySelectors } from "./jira-user-selector-reads.js";
 import { dispatchFailure } from "./jira-mutation-failure.js";
 import { readSavedActor, savedName } from "./jira-saved-configuration-values.js";
 import { projectJiraAnonymizationValidation } from "./jira-managed-anonymization-reads.js";
@@ -40,14 +41,15 @@ export async function bindIdentityUser(
   request: JiraMutationRequest,
   expected: IdentityUser,
 ): Promise<IdentityObservation<CatalogJsonObject>> {
-  const named = await readUser(request, "username", expected.name);
-  if (!named.ok) return named;
-  const keyed = await readUser(request, "key", expected.key);
-  if (!keyed.ok) return keyed;
-  return [named.value, keyed.value].every(
+  const pair = await readUserBySelectors(
+    (selector, value) => readUser(request, selector, value),
+    expected,
+  );
+  if (!pair.ok) return pair;
+  return pair.value.every(
     (user) => user.key === expected.key && user.name === expected.name && user.deleted !== true,
   )
-    ? keyed
+    ? { ok: true, value: pair.value[1] }
     : identityRefusal(
         "The exact reviewed user key and username no longer identify the same non-deleted user. Read both identities again; do not substitute a same-name user from another directory.",
         "conflict",

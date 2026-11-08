@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import { actorReadback } from "./jira-fixture-readback.js";
+import {
+  actorReadback,
+  assertDispatchedWrite,
+  readbackFault,
+  type RecordedCall,
+  type SharedFixtureControls,
+} from "./jira-fixture-readback.js";
 import { settleSync } from "./jira-fixture-settle.js";
 import type { AtlassianWriteHttpOutcome } from "../../packages/keiko-connectors/src/atlassian-write-http.js";
 import { asRecord } from "../../packages/keiko-connectors/src/atlassian-sync-classify.js";
@@ -165,12 +171,7 @@ export const MAINTENANCE_MUTATION_FIXTURE_CASES = [
   },
 ] as const satisfies readonly MaintenanceCase[];
 
-interface MaintenanceControls {
-  lostAck: boolean;
-  denyReadback: boolean;
-  throwReadback: boolean;
-  actorChangesAfter: boolean;
-  actorChangesBefore: boolean;
+interface MaintenanceControls extends SharedFixtureControls {
   reject: boolean;
   noPriorReindex: boolean;
   upgradeRunning: boolean;
@@ -181,12 +182,7 @@ interface MaintenanceControls {
   ackIds: readonly unknown[];
   malformedAck: boolean;
 }
-interface MaintenanceCall {
-  path: string;
-  method: string;
-  body: unknown;
-  expect: unknown;
-}
+type MaintenanceCall = RecordedCall;
 interface MaintenanceState {
   readonly selected: MaintenanceCase;
   readonly actor: { key: string; name: string };
@@ -299,25 +295,19 @@ function maintenanceApply(state: MaintenanceState): void {
 }
 function maintenanceReadbackFailure(
   state: MaintenanceState,
+  path: string,
 ): AtlassianWriteHttpOutcome | undefined {
-  if (state.effects > 0 && state.controls.throwReadback)
-    throw new Error("Synthetic maintenance readback fault");
-  if (state.effects > 0 && state.controls.denyReadback)
-    return { ok: false, reason: "permission-denied", httpStatus: 403 };
-  return undefined;
+  return readbackFault(state.controls, state.effects, path, "Synthetic maintenance readback fault");
 }
 function maintenanceWrite(
   state: MaintenanceState,
   call: MaintenanceCall,
 ): AtlassianWriteHttpOutcome {
   const { selected, controls } = state;
-  assert.equal(call.method, selected.method);
-  assert.equal(call.path, selected.path);
-  assert.equal(call.body, undefined);
-  assert.equal(
-    call.expect,
-    selected.name === "jira.process-reindex-requests" ? "json-array" : "none",
-  );
+  assertDispatchedWrite(selected, call, {
+    body: undefined,
+    expect: selected.name === "jira.process-reindex-requests" ? "json-array" : "none",
+  });
   if (controls.reject) return { ok: false, reason: "conflict", httpStatus: 409 };
   assert.equal(++state.effects, 1);
   maintenanceApply(state);
@@ -336,7 +326,7 @@ function maintenanceRequest(
   call: MaintenanceCall,
 ): AtlassianWriteHttpOutcome {
   state.calls.push({ ...call, body: structuredClone(call.body) });
-  const failure = maintenanceReadbackFailure(state);
+  const failure = maintenanceReadbackFailure(state, call.path);
   if (failure !== undefined) return failure;
   return call.method === "GET" ? maintenanceRead(state, call.path) : maintenanceWrite(state, call);
 }

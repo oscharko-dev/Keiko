@@ -1,6 +1,10 @@
 import type { OptionalWidgetTranslate, WidgetMessageKey } from "@/lib/optional-widget-i18n";
 import type { JiraDraftField, JiraDraftValue } from "./jiraDraftTree";
-import { jiraPresentationRecord as record } from "./jira-presentation-values";
+import {
+  jiraPresentationRecord as record,
+  jiraPresentationLiteral as literal,
+  jiraSelectedMutationTool,
+} from "./jira-presentation-values";
 import { jiraReviewedMutationScalar as scalar } from "./jira-structural-mutation-approval";
 import {
   JIRA_SCHEME_ADMINISTRATION_TOOLS,
@@ -63,15 +67,12 @@ const MEMBER_LABELS: Readonly<Record<string, WidgetMessageKey>> = {
   sizeBytes: "chat.jira.emailPack.byteCount",
   sha256: "chat.jira.emailPack.rawDigest",
 };
-const literal = (text: string): JiraDraftValue => ({ kind: "text", text });
-function selected(operation: string | undefined): string | undefined {
-  const tool = operation?.replace(/[.-]/gu, "_");
-  return tool !== undefined &&
-    (JIRA_SCHEME_ADMINISTRATION_TOOLS.has(tool) ||
-      JIRA_INSTANCE_ADMINISTRATION_WRITE_TOOLS.has(tool))
-    ? tool
-    : undefined;
-}
+const selected = (operation: string | undefined): string | undefined =>
+  jiraSelectedMutationTool(
+    operation,
+    JIRA_SCHEME_ADMINISTRATION_TOOLS,
+    JIRA_INSTANCE_ADMINISTRATION_WRITE_TOOLS,
+  );
 function memberLabel(
   key: string,
   t: OptionalWidgetTranslate,

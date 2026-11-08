@@ -12,7 +12,7 @@ import {
   PROJECT_CATEGORY_FIXTURE_CASES,
   projectCategoryFixture,
 } from "./jira-project-category-fixture.js";
-import { response } from "./jira-managed-remote.js";
+import { nativeOutcomeResponse } from "./jira-managed-remote.js";
 
 export interface ReviewedTransportFixture {
   readonly read: (
@@ -53,9 +53,7 @@ export function reviewedPlatformTransportFixture(
       expect(request.jiraPermissionAttribute).toBeUndefined();
       const array = path === "projectCategory" || path === "role";
       const result = await native(path, "GET", undefined, array ? "json-array" : "json");
-      return result.ok
-        ? response(result.items ?? result.body, result.status)
-        : response({}, result.httpStatus ?? 503);
+      return nativeOutcomeResponse(result);
     },
     async write(request: AtlassianHttpBodyRequest): Promise<AtlassianHttpBodyResult | undefined> {
       const url = new URL(request.url);
@@ -74,9 +72,7 @@ export function reviewedPlatformTransportFixture(
         selected.body,
         selected.acknowledgement,
       );
-      return result.ok
-        ? response(result.items ?? result.body, result.status)
-        : response({}, result.httpStatus ?? 503);
+      return nativeOutcomeResponse(result);
     },
   };
 }

@@ -1,4 +1,10 @@
 import assert from "node:assert/strict";
+import {
+  assertDispatchedWrite,
+  dispatchFixtureCall,
+  type RecordedCall,
+  type SharedFixtureControls,
+} from "./jira-fixture-readback.js";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { AtlassianWriteHttpOutcome } from "../../packages/keiko-connectors/src/atlassian-write-http.js";
 import type { JiraMutationRequest } from "../../packages/keiko-connectors/src/jira-managed-mutation-metadata.js";
@@ -128,28 +134,18 @@ export const DIRECTORY_ACCESS_FIXTURE_CASES = [
   },
 ] as const satisfies readonly DirectoryAccessCase[];
 
-interface DirectoryAccessControls {
-  lostAck: boolean;
-  denyReadback: boolean;
-  throwReadback: boolean;
+interface DirectoryAccessControls extends SharedFixtureControls {
   weakVersion: boolean;
   missingVersion: boolean;
   staleVersion: boolean;
   roleChangesBefore: boolean;
-  actorChangesAfter: boolean;
-  actorChangesBefore: boolean;
   wrongUser: boolean;
   missingGroups: boolean;
   unrelatedUnknownGroups: boolean;
   wrongReadback: boolean;
   denied: boolean;
 }
-interface DirectoryAccessCall {
-  path: string;
-  method: string;
-  body: unknown;
-  expect: unknown;
-}
+type DirectoryAccessCall = RecordedCall;
 interface DirectoryAccessState {
   readonly selected: DirectoryAccessCase;
   readonly actor: { key: string; name: string };
@@ -266,10 +262,11 @@ function directoryEffect(
   expect: unknown,
 ): AtlassianWriteHttpOutcome {
   const { controls, selected } = state;
-  assert.equal(path, selected.path);
-  assert.equal(method, selected.method);
-  assert.equal(expect, "none");
-  assert.deepEqual(body, selected.body);
+  assertDispatchedWrite(
+    selected,
+    { path, method, body, expect },
+    { body: selected.body, expect: "none" },
+  );
   if (controls.denied) return { ok: false, reason: "permission-denied", httpStatus: 403 };
   if (controls.staleVersion) return { ok: false, reason: "conflict", httpStatus: 412 };
   assert.equal(++state.effects, 1);
@@ -279,16 +276,6 @@ function directoryEffect(
     : { ok: true, status: 204, body: undefined };
 }
 
-function directoryReadbackFault(
-  state: DirectoryAccessState,
-): AtlassianWriteHttpOutcome | undefined {
-  if (state.effects === 0) return undefined;
-  if (state.controls.throwReadback) throw new Error("Synthetic directory readback fault");
-  if (state.controls.denyReadback)
-    return { ok: false, reason: "permission-denied", httpStatus: 403 };
-  return undefined;
-}
-
 function directoryResponse(
   state: DirectoryAccessState,
   path: string,
@@ -296,11 +283,15 @@ function directoryResponse(
   body: unknown,
   expect: unknown,
 ): AtlassianWriteHttpOutcome {
-  state.calls.push({ path, method, body: structuredClone(body), expect });
-  const fault = directoryReadbackFault(state);
-  if (fault !== undefined) return fault;
-  if (method === "GET") return directoryRead(state, path);
-  return directoryEffect(state, path, method, body, expect);
+  return dispatchFixtureCall(
+    state,
+    { path, method, body, expect },
+    "Synthetic directory readback fault",
+    {
+      read: (readPath) => directoryRead(state, readPath),
+      write: (call) => directoryEffect(state, call.path, call.method, call.body, call.expect),
+    },
+  );
 }
 
 function directoryPorts(request: JiraMutationRequest): JiraDirectoryAccessPorts {

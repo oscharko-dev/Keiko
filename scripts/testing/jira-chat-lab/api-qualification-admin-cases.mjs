@@ -1,19 +1,8 @@
 // Isolated synthetic configuration lifecycles through the existing governed qualifier.
 import assert from "node:assert/strict";
-import { basicAuth, labRequest } from "./lab-client.mjs";
 import { readCase } from "./api-qualification-cases.mjs";
 import { assertQualificationJson } from "./api-qualification-json.mjs";
-const proof = (assertionCount) => ({ matched: true, assertionCount });
-async function read(context, path) {
-  const response = await labRequest(
-    context.session,
-    "GET",
-    path,
-    basicAuth(context.session, context.actor),
-  );
-  assert.equal(response.status, 200);
-  return response.value;
-}
+import { assertNoRecord, proof, read, readRecord } from "./api-qualification-read.mjs";
 async function actor(context, f) {
   const value = await read(context, "/rest/api/2/myself");
   assert.equal(value.name, "keiko-admin");
@@ -45,9 +34,7 @@ async function category(context, f) {
 }
 async function categoryReadback(context, data, f, updated = false) {
   f.categoryId ??= data.categoryId;
-  assert.match(f.categoryId, /^[1-9][0-9]*$/u);
-  const value = await read(context, categoryPath(f));
-  assert.equal(String(value.id), f.categoryId);
+  const value = await readRecord(context, f.categoryId, categoryPath(f));
   assert.equal(value.name, name(f, "category"));
   assert.equal(value.description, updated ? "Synthetic updated category" : "Synthetic category");
   return proof(3);
@@ -66,9 +53,7 @@ async function linkSequence(context, f) {
 }
 async function linkReadback(context, data, f, updated = false) {
   f.adminLinkTypeId ??= data.linkTypeId;
-  assert.match(f.adminLinkTypeId, /^[1-9][0-9]*$/u);
-  const value = await read(context, linkPath(f));
-  assert.equal(String(value.id), f.adminLinkTypeId);
+  const value = await readRecord(context, f.adminLinkTypeId, linkPath(f));
   assert.equal(value.name, name(f, "link"));
   assert.equal(value.inward, updated ? "synthetic revised inward" : "synthetic inward");
   assert.equal(value.outward, "synthetic outward");
@@ -94,9 +79,7 @@ async function permission(context, f) {
 }
 async function permissionReadback(context, data, f, description) {
   f.adminPermissionSchemeId ??= data.schemeId;
-  assert.match(f.adminPermissionSchemeId, /^[1-9][0-9]*$/u);
-  const value = await read(context, schemePath(f));
-  assert.equal(String(value.id), f.adminPermissionSchemeId);
+  const value = await readRecord(context, f.adminPermissionSchemeId, schemePath(f));
   assert.equal(value.name, name(f, "permissions"));
   assert.equal(value.description, description);
   return proof(3);
@@ -124,9 +107,7 @@ const roleArgs = (f) => ({
 });
 async function roleReadback(context, data, f, description) {
   f.adminRoleId ??= data.roleId;
-  assert.match(f.adminRoleId, /^[1-9][0-9]*$/u);
-  const value = await read(context, rolePath(f));
-  assert.equal(String(value.id), f.adminRoleId);
+  const value = await readRecord(context, f.adminRoleId, rolePath(f));
   assert.equal(value.name, name(f, "role"));
   assert.equal(value.description, description);
   return proof(3);
@@ -297,11 +278,7 @@ export const API_QUALIFICATION_ADMIN_CASES = [
     }),
     async (c, _d, f) => {
       const rows = (await read(c, "/rest/api/2/issueLinkType")).issueLinkTypes;
-      assert.equal(
-        rows.some((r) => String(r.id) === f.adminLinkTypeId),
-        false,
-      );
-      return proof(1);
+      return assertNoRecord(rows, f.adminLinkTypeId);
     },
     link,
   ),
@@ -353,11 +330,7 @@ export const API_QUALIFICATION_ADMIN_CASES = [
     (f) => ({ ...permissionArgs(f), confirmUnverifiedDeletion: true }),
     async (c, _d, f) => {
       const rows = (await read(c, "/rest/api/2/permissionscheme")).permissionSchemes;
-      assert.equal(
-        rows.some((r) => String(r.id) === f.adminPermissionSchemeId),
-        false,
-      );
-      return proof(1);
+      return assertNoRecord(rows, f.adminPermissionSchemeId);
     },
     permission,
   ),

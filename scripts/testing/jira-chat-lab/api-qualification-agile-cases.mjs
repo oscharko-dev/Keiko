@@ -3,12 +3,7 @@ import assert from "node:assert/strict";
 import { basicAuth, labRequest } from "./lab-client.mjs";
 import { readCase } from "./api-qualification-cases.mjs";
 import { qualificationPropertyCases } from "./api-qualification-property-cases.mjs";
-const proof = (assertionCount) => ({ matched: true, assertionCount });
-async function read(c, path) {
-  const r = await labRequest(c.session, "GET", path, basicAuth(c.session, c.actor));
-  assert.equal(r.status, 200);
-  return r.value;
-}
+import { proof, read, readRecord } from "./api-qualification-read.mjs";
 async function actor(c, f) {
   const a = await read(c, "/rest/api/2/myself");
   assert.equal(a.name, "keiko-admin");
@@ -86,10 +81,8 @@ export const API_QUALIFICATION_AGILE_CASES = [
       jql: "project = KEIKO ORDER BY Rank ASC",
     }),
     async (c, d, f) => {
-      assert.match(d.filterId, /^[1-9][0-9]*$/u);
       f.agileFilterId = d.filterId;
-      const v = await read(c, filterPath(f));
-      assert.equal(String(v.id), f.agileFilterId);
+      const v = await readRecord(c, f.agileFilterId, filterPath(f));
       assert.equal(v.name, filterName(f));
       assert.equal(v.jql, "project = KEIKO ORDER BY Rank ASC");
       assert.equal(v.owner.key, f.agileActorKey);

@@ -293,6 +293,23 @@ function schemaRead(state: SchemaState, url: URL): AtlassianWriteHttpOutcome {
   if (url.pathname === "/terminology/entries") return schemaArray(state.terms);
   return schemaTypeRead(state, url.pathname) ?? schemaLinkRead(state, url.pathname);
 }
+/** A delete removes the stored record; any other write merges the native body into it. */
+function storedChange(
+  store: Map<string, Record<string, unknown>>,
+  id: string,
+  method: string,
+  body: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  if (method === "DELETE") {
+    assert.ok(store.delete(id));
+    return {};
+  }
+  const current = store.get(id);
+  assert.ok(current);
+  assert.ok(body);
+  Object.assign(current, body);
+  return {};
+}
 function schemaTypeEffect(
   state: SchemaState,
   url: URL,
@@ -312,15 +329,7 @@ function schemaTypeEffect(
   }
   const id = /^\/issuetype\/(\d+)$/u.exec(url.pathname)?.[1];
   if (id === undefined) return undefined;
-  if (method === "DELETE") {
-    assert.ok(types.delete(id));
-    return {};
-  }
-  const current = types.get(id);
-  assert.ok(current);
-  assert.ok(body);
-  Object.assign(current, body);
-  return {};
+  return storedChange(types, id, method, body);
 }
 function schemaLinkEffect(
   state: SchemaState,
@@ -341,15 +350,7 @@ function schemaLinkEffect(
     return {};
   const id = /^\/issueLinkType\/(\d+)$/u.exec(url.pathname)?.[1];
   if (id === undefined) return undefined;
-  if (method === "DELETE") {
-    assert.ok(links.delete(id));
-    return {};
-  }
-  const current = links.get(id);
-  assert.ok(current);
-  assert.ok(body);
-  Object.assign(current, body);
-  return {};
+  return storedChange(links, id, method, body);
 }
 function schemaFieldEffect(
   state: SchemaState,

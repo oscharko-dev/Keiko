@@ -675,6 +675,20 @@ type SettlementEvent = Extract<
   { readonly op: "tool-catalog.invocation-settled" }
 >;
 
+function settledMeasurements(
+  event: SettlementEvent,
+): Pick<
+  ActivityLogEventFields<typeof TOOL_CATALOG_INVOCATION_SETTLED_OPERATION>,
+  "inputBytes" | "outputBytes" | "resultCount" | "truncated"
+> {
+  return {
+    ...(event.inputBytes === undefined ? {} : { inputBytes: event.inputBytes }),
+    ...(event.outputBytes === undefined ? {} : { outputBytes: event.outputBytes }),
+    ...(event.resultCount === undefined ? {} : { resultCount: event.resultCount }),
+    ...(event.truncated === undefined ? {} : { truncated: event.truncated }),
+  };
+}
+
 function settledFields(
   event: SettlementEvent,
 ): ActivityLogEventFields<typeof TOOL_CATALOG_INVOCATION_SETTLED_OPERATION> {
@@ -697,10 +711,7 @@ function settledFields(
     durationMs: event.durationMs,
     effectStarted: event.effectStarted,
     budgetDisposition: event.budgetDisposition,
-    ...(event.inputBytes === undefined ? {} : { inputBytes: event.inputBytes }),
-    ...(event.outputBytes === undefined ? {} : { outputBytes: event.outputBytes }),
-    ...(event.resultCount === undefined ? {} : { resultCount: event.resultCount }),
-    ...(event.truncated === undefined ? {} : { truncated: event.truncated }),
+    ...settledMeasurements(event),
     ...(event.providerReason === undefined ? {} : { providerReason: event.providerReason }),
     ...(event.status === "failed" ? { frames: event.frames, causeChain: event.causeChain } : {}),
   };
