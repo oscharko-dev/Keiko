@@ -286,6 +286,37 @@ function stagedItems(h: Harness): readonly CatalogJsonObject[] {
   return (draft?.items ?? []) as readonly CatalogJsonObject[];
 }
 
+interface PausingRun {
+  readonly h: Harness;
+  /** A call whose model takes long enough that the batch pauses at its deadline. */
+  readonly pause: (args: Record<string, unknown>) => ReturnType<Harness["run"]>;
+  /** A call with time enough for the whole selection. */
+  readonly finish: (args: Record<string, unknown>) => ReturnType<Harness["run"]>;
+}
+
+async function pausingHarness(spec: number, storeNow?: () => number): Promise<PausingRun> {
+  let now = 0;
+  const h = await harness(
+    (request) => {
+      now += 100_000;
+      return page(keysOf(request));
+    },
+    [{ capsuleId: "cap-a", text: specification(spec).text }],
+    storeNow === undefined ? {} : { storeNow },
+  );
+  return {
+    h,
+    pause: (args): ReturnType<Harness["run"]> => {
+      now = 0;
+      return h.run(args, { budget: { nowMs: () => now, deadlineAtMs: 200_000 } });
+    },
+    finish: (args): ReturnType<Harness["run"]> => {
+      now = 0;
+      return h.run(args, { budget: { nowMs: () => now, deadlineAtMs: 100_000_000 } });
+    },
+  };
+}
+
 function descriptionOf(item: CatalogJsonObject | undefined): string {
   const fields = item?.fields as { readonly description?: { readonly text?: string } } | undefined;
   return fields?.description?.text ?? "";
@@ -698,7 +729,7 @@ describe("jira.draft-batch (#4173)", () => {
     expect(drafted).toBeGreaterThan(0);
     expect(drafted).toBeLessThan(60);
     expect(first.data.remainingCount).toBe(60 - drafted);
-    expect(first.data.remainingRequirementIds).toHaveLength(60 - drafted);
+    expect(first.data).not.toHaveProperty("remainingRequirementIds");
     expect(first.data.guidance).toEqual(expect.stringContaining("call jira_draft_batch again"));
     expect(
       describeCatalogSchemaMismatch(
@@ -721,7 +752,7 @@ describe("jira.draft-batch (#4173)", () => {
     expect(new Set(covered).size).toBe(60);
   });
 
-  describe("review findings F17, F18 and F27 of #4292", () => {
+  describe("review findings F17, F18, F27 and F33 of #4292", () => {
     it("keeps document-owned [n] markers when the Chat has an unrelated citation namespace", async () => {
       const text = specification(1).text.replace(
         "Thema 1 ist verfügbar.",
@@ -772,37 +803,29 @@ describe("jira.draft-batch (#4173)", () => {
       ).toEqual({ kind: "skip", reason: "selection-incomplete" });
     }, 120_000);
 
-    it("restarts the original selection when the paused draft expired", async () => {
-      let now = 0;
+    it("drafts the whole original selection again from the result once the draft is lost", async () => {
       let clock = 0;
-      const h = await harness(
-        (request) => {
-          now += 100_000;
-          return page(keysOf(request));
-        },
-        [{ capsuleId: "cap-a", text: specification(60).text }],
-        { storeNow: () => clock },
-      );
-      const first = await h.run(
-        { ...ARGS, create: true },
-        { budget: { nowMs: () => now, deadlineAtMs: 200_000 } },
-      );
-      expect(first.data).toMatchObject({ paused: true });
+      const run = await pausingHarness(60, () => clock);
+      const probe = await run.h.run({ ...ARGS, requirements: { documents: ["no-such-document"] } });
+      const [scope] = probe.data.availableDocuments as readonly string[];
+      if (scope === undefined) throw new Error("Expected the Pod's document scope");
+      const first = await run.pause({
+        ...ARGS,
+        create: true,
+        requirements: { documents: [scope] },
+      });
+      expect(first.data).toMatchObject({ paused: true, selectionDocuments: [scope] });
+      expect(first.data).not.toHaveProperty("remainingRequirementIds");
+      expect(first.data.guidance).toEqual(expect.stringContaining("Never start a new draft"));
       clock += 5 * 60 * 60 * 1000;
-      expect(h.store.peek(DRAFT_ID, h.chatId)).toBeUndefined();
-      now = 0;
+      expect(run.h.store.peek(DRAFT_ID, run.h.chatId)).toBeUndefined();
 
-      const retry = await h.run(
-        {
-          ...ARGS,
-          create: true,
-          requirements: {
-            documents: first.data.remainingDocuments as string[],
-            ids: first.data.remainingRequirementIds as string[],
-          },
-        },
-        { budget: { nowMs: () => now, deadlineAtMs: 100_000_000 } },
-      );
+      // Exactly what the result says: no draftId, the requirements filter it names.
+      const retry = await run.finish({
+        ...ARGS,
+        create: true,
+        requirements: { documents: first.data.selectionDocuments },
+      });
 
       expect(retry.data).toMatchObject({
         outcome: "succeeded",
@@ -810,75 +833,47 @@ describe("jira.draft-batch (#4173)", () => {
         coveredRequirementCount: 60,
         failedCount: 0,
       });
-      const covered = stagedItems(h).flatMap((item) => item.requirementIds as string[]);
+      const covered = stagedItems(run.h).flatMap((item) => item.requirementIds as string[]);
       expect(new Set(covered).size).toBe(60);
     });
 
-    it("continues a live paused draft when the retry names only its tail", async () => {
-      let now = 0;
-      const h = await harness(
-        (request) => {
-          now += 100_000;
-          return page(keysOf(request));
-        },
-        [{ capsuleId: "cap-a", text: specification(60).text }],
-      );
-      const first = await h.run(
-        { ...ARGS, create: true },
-        { budget: { nowMs: () => now, deadlineAtMs: 200_000 } },
-      );
-      expect(first.data).toMatchObject({ paused: true, draftId: DRAFT_ID });
-      now = 0;
+    it("needs no recovery state: a restarted Keiko drafts the whole selection again", async () => {
+      const before = await pausingHarness(60);
+      const first = await before.pause({ ...ARGS, create: true });
+      expect(first.data).toMatchObject({ paused: true });
+      // An unfiltered call names no filter, so the result names none either.
+      expect(first.data).not.toHaveProperty("selectionDocuments");
 
-      const retry = await h.run(
-        {
-          ...ARGS,
-          create: true,
-          requirements: {
-            documents: first.data.remainingDocuments as string[],
-            ids: first.data.remainingRequirementIds as string[],
-          },
-        },
-        { budget: { nowMs: () => now, deadlineAtMs: 100_000_000 } },
-      );
+      // A new store and executor, as after a restart, with the same Pod content.
+      const after = await pausingHarness(60);
+      const retry = await after.finish({ ...ARGS, create: true });
 
-      expect(retry.data).toMatchObject({ outcome: "succeeded", draftId: DRAFT_ID, failedCount: 0 });
-      const covered = stagedItems(h).flatMap((item) => item.requirementIds as string[]);
+      expect(retry.data).toMatchObject({ outcome: "succeeded", requirementCount: 60 });
+      const covered = stagedItems(after.h).flatMap((item) => item.requirementIds as string[]);
       expect(new Set(covered).size).toBe(60);
     });
 
-    it("drafts the whole rest of the selection when the retry names part of the tail", async () => {
-      let now = 0;
-      const h = await harness(
-        (request) => {
-          now += 100_000;
-          return page(keysOf(request));
-        },
-        [{ capsuleId: "cap-a", text: specification(60).text }],
+    it("honours a later scoped request instead of widening it to the paused selection (F33)", async () => {
+      const run = await pausingHarness(60);
+      const first = await run.pause({ ...ARGS, create: true });
+      expect(first.data).toMatchObject({ paused: true });
+      const drafted = new Set(
+        stagedItems(run.h).flatMap((item) => item.requirementIds as string[]),
       );
-      const first = await h.run(
-        { ...ARGS, create: true },
-        { budget: { nowMs: () => now, deadlineAtMs: 200_000 } },
-      );
-      const remaining = first.data.remainingRequirementIds as string[];
-      expect(remaining.length).toBeGreaterThan(2);
-      now = 0;
+      const deferred = Array.from(
+        { length: 60 },
+        (_, index) => `LH-${String(index + 1).padStart(3, "0")}`,
+      ).find((id) => ![...drafted].some((ref) => ref.endsWith(`:${id}`)));
+      if (deferred === undefined) throw new Error("Expected a requirement the pause deferred");
 
-      const retry = await h.run(
-        {
-          ...ARGS,
-          create: true,
-          requirements: {
-            documents: first.data.remainingDocuments as string[],
-            ids: remaining.slice(0, 2),
-          },
-        },
-        { budget: { nowMs: () => now, deadlineAtMs: 100_000_000 } },
-      );
+      const scoped = await run.finish({ ...ARGS, create: true, requirements: { ids: [deferred] } });
 
-      expect(retry.data).toMatchObject({ outcome: "succeeded", draftId: DRAFT_ID, failedCount: 0 });
-      const covered = stagedItems(h).flatMap((item) => item.requirementIds as string[]);
-      expect(new Set(covered).size).toBe(60);
+      expect(scoped.data).toMatchObject({
+        outcome: "succeeded",
+        newDraft: true,
+        requirementCount: 1,
+        draftedCount: 1,
+      });
     });
   });
 
@@ -921,7 +916,7 @@ describe("jira.draft-batch (#4173)", () => {
     expect(result.data.requirementCount).toBeLessThan(5);
   });
 
-  it("scopes the remaining ids to their documents and says when more remain than listed", async () => {
+  it("tells the model to draft the whole selection again when a paused draft is lost", async () => {
     let now = 0;
     const h = await harness(
       (request) => {
@@ -933,12 +928,12 @@ describe("jira.draft-batch (#4173)", () => {
 
     const result = await h.run(ARGS, { budget: { nowMs: () => now, deadlineAtMs: 200_000 } });
 
-    const count = Number(result.data.remainingCount);
-    expect(count).toBeGreaterThan(50);
-    expect(result.data.remainingRequirementIds).toHaveLength(50);
-    expect(result.data.remainingDocuments).toHaveLength(1);
+    expect(Number(result.data.remainingCount)).toBeGreaterThan(50);
+    expect(result.data).not.toHaveProperty("remainingDocuments");
     expect(result.data.guidance).toEqual(expect.stringContaining("same requirements filter"));
-    expect(result.data.guidance).toEqual(expect.stringContaining("prefer the draftId route"));
+    expect(result.data.guidance).toEqual(
+      expect.stringContaining("whole selection is drafted again"),
+    );
     expect(proofLines(h).at(-1)).toMatchObject({ stopReason: "deadline" });
   });
 

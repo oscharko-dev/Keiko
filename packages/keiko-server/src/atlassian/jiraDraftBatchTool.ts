@@ -78,7 +78,7 @@ const REFUSAL_GUIDANCE: Partial<Record<JiraDraftBatchRefusal, string>> = {
   "project-not-found":
     "Jira has no project with that key or id that this connection can read. Ask the user for the project key and call again.",
   "draft-unavailable":
-    "That draft no longer exists (drafts expire when idle). Call again without draftId to start a new draft.",
+    "That draft no longer exists (drafts expire when idle). Call again without draftId and with the same requirements filter as the call that started it: the requirements drafted before existed only in that draft, so the whole selection is drafted again.",
   "draft-mismatch":
     "That draft was started in another project or issue type. Use the same projectId and issueTypeId as before, or call without draftId to start a new draft.",
   "no-usable-issue-type":
@@ -349,8 +349,7 @@ function rejectionGuidance(data: CatalogJsonObject): string {
 interface BatchRun {
   readonly deps: UiHandlerDeps;
   readonly context: JiraDraftBatchContext;
-  /** The parsed arguments; a retry that names only a live paused draft's tail adopts its id. */
-  args: JiraDraftBatchArguments;
+  readonly args: JiraDraftBatchArguments;
   readonly startedAt: number;
   /** Set by the stage port when the draft itself cannot continue; cleared by a staged page. */
   fatalReason?: string | undefined;
@@ -362,21 +361,7 @@ interface BatchRun {
   selectionComplete: boolean;
   /** Requirements a cut collection did not list. */
   omittedCount: number;
-  /** The paused draft was gone, so the original selection was drafted again from the start. */
-  restarted: boolean;
-  readonly pausedBatches: PausedBatches;
 }
-
-/** What a paused batch needs to continue; counts and references, never text. */
-interface PausedBatch {
-  readonly draftId: string;
-  readonly filter: JiraDraftBatchArguments["filter"];
-  readonly filtered: boolean;
-  readonly deferred: ReadonlySet<string>;
-}
-/** The latest paused batch per draft owner, so a lost draft restarts its whole selection (F27). */
-type PausedBatches = Map<string, PausedBatch>;
-const PAUSED_BATCHES_MAX = 64;
 
 function record(run: BatchRun, activity: JiraDraftBatchActivity): void {
   recordJiraDraftBatchActivity(run.deps.activityLog, run.context.correlationId, activity);
@@ -427,8 +412,6 @@ function resultGuidance(run: BatchRun, result: DraftBatchResult, failedCount: nu
   if (failedCount > 0) return partialGuidance(run, result, drafted);
   if (!run.selectionComplete)
     return `The draft holds the ${String(drafted)} requirements Keiko could list, but ${String(run.omittedCount)} requirements were not listed, so the requirements filter may have missed some. Tell the user; Keiko does not offer to create the issues. Narrow requirements.documents to whole documents and draft again.`;
-  if (run.restarted)
-    return `The earlier partial draft had expired, so Keiko drafted the whole original selection again: ${String(drafted)} issues. ${completeGuidance(args.create)}`;
   return completeGuidance(args.create);
 }
 
@@ -440,16 +423,10 @@ function completeGuidance(create: boolean): string {
 
 /** The one unambiguous way to continue: the same call again, with the same draft. */
 function deadlineGuidance(result: DraftBatchResult, drafted: number): string {
-  const count = remainingCount(result);
-  const listed = Math.min(count, REMAINING_IDS_MAX);
-  const listedNote =
-    count > listed
-      ? ` Only ${String(listed)} of the ${String(count)} ids are listed, so prefer the draftId route.`
-      : "";
   return [
-    `Time ran out: ${String(drafted)} of ${String(result.progress.plannedCount)} issues are drafted and saved; ${String(count)} requirements are not drafted yet.`,
+    `Time ran out: ${String(drafted)} of ${String(result.progress.plannedCount)} issues are drafted and saved; ${String(remainingCount(result))} requirements are not drafted yet.`,
     "Tell the user, then call jira_draft_batch again now with the same draftId and the same requirements filter as before (requirements already in the draft are skipped); Keiko offers the approval once the whole draft is complete.",
-    `If the draft is gone, call without draftId and with requirements.documents = remainingDocuments and requirements.ids = remainingRequirementIds.${listedNote}`,
+    "If the draft is gone, call without draftId and with requirements.documents, ids, priorities and query set to selectionDocuments, selectionIds, selectionPriorities and selectionQuery (omit each one absent here): the requirements drafted so far existed only in that draft, so the whole selection is drafted again. Never start a new draft with only the requirements that were not drafted yet.",
   ].join(" ");
 }
 
@@ -471,32 +448,8 @@ function partialGuidance(run: BatchRun, result: DraftBatchResult, drafted: numbe
   return notes.filter((note) => note !== "").join(" ");
 }
 
-/** Ids `requirements.ids` takes; the schema bounds how many one call may name. */
-const REMAINING_IDS_MAX = 50;
-
 function remainingCount(result: DraftBatchResult): number {
   return result.deferredRequirementRefs.length;
-}
-
-/** A reference is `<document scope>:<id>`; the scope is hex, so the first colon splits it exactly. */
-function refParts(ref: string): { readonly document: string; readonly id: string } {
-  const at = ref.indexOf(":");
-  return { document: ref.slice(0, at), id: ref.slice(at + 1) };
-}
-
-function remainingIds(result: DraftBatchResult): string[] {
-  return result.deferredRequirementRefs.slice(0, REMAINING_IDS_MAX).map((ref) => refParts(ref).id);
-}
-
-/** The documents of the listed ids, so the ids match in the right documents only. */
-function remainingDocuments(result: DraftBatchResult): string[] {
-  return [
-    ...new Set(
-      result.deferredRequirementRefs
-        .slice(0, REMAINING_IDS_MAX)
-        .map((ref) => refParts(ref).document),
-    ),
-  ].slice(0, 20);
 }
 
 function failedRefs(run: BatchRun, result: DraftBatchResult): readonly string[] {
@@ -508,13 +461,26 @@ function readWholeCollection(run: BatchRun): boolean {
   return run.wholeCollection && run.args.draftId === undefined;
 }
 
-/** Facts that keep an incomplete or restarted selection from reading as a clean batch. */
+/** Facts that keep an incomplete selection from reading as a clean batch. */
 function selectionFacts(run: BatchRun): CatalogJsonObject {
   return {
     ...(run.selectionComplete
       ? {}
       : { selectionIncomplete: true, omittedRequirementCount: run.omittedCount }),
-    ...(run.restarted ? { restartedSelection: true } : {}),
+  };
+}
+
+/**
+ * The requirements filter of the call, so a paused draft that is lost can be drafted again in
+ * full from the result alone; no recovery state is kept between calls (F27, F33).
+ */
+function originalRequirements(args: JiraDraftBatchArguments): CatalogJsonObject {
+  const { documents, ids, priorities, query } = args.filter;
+  return {
+    ...(documents === undefined ? {} : { selectionDocuments: [...documents] }),
+    ...(ids === undefined ? {} : { selectionIds: [...ids] }),
+    ...(priorities === undefined ? {} : { selectionPriorities: [...priorities] }),
+    ...(query === undefined ? {} : { selectionQuery: query }),
   };
 }
 
@@ -547,8 +513,7 @@ function resultData(run: BatchRun, result: DraftBatchResult): CatalogJsonObject 
       ? {
           paused: true,
           remainingCount: remainingCount(result),
-          remainingRequirementIds: remainingIds(result),
-          remainingDocuments: remainingDocuments(result),
+          ...originalRequirements(run.args),
         }
       : {}),
     guidance: succeeded ? resultGuidance(run, result, failedCount) : failureGuidance(result, fatal),
@@ -721,79 +686,6 @@ function batchPorts(
   };
 }
 
-/**
- * A paused batch whose draft is gone cannot be completed from its tail alone: the staged head only
- * ever lived in that draft. When the retry names exactly requirements the paused batch had not
- * drafted yet, the original selection is drafted again from the start (F27).
- */
-function collectWithRecovery(
-  run: BatchRun,
-  draft: JiraDraftToolDeps<JiraDraftBatchContext>,
-  current: StagedJiraDraft | undefined,
-  placement: JiraDraftPlacement,
-): Collected {
-  const { deps, context, args } = run;
-  const collected = collectRequirements(deps, context, args, draftedRefs(current));
-  if (!collected.ok || args.draftId !== undefined) return collected;
-  const owner = draft.owner(context);
-  const paused = run.pausedBatches.get(owner);
-  if (paused === undefined || !collected.requirements.every(({ ref }) => paused.deferred.has(ref)))
-    return collected;
-  const live = draft.store.peek(paused.draftId, owner);
-  if (live !== undefined) {
-    // The staged head still lives in the paused draft: the tail continues that draft, so the
-    // draft that is approved holds the whole original selection (F27).
-    if (!placementMatches(live, placement)) return collected;
-    // Continue with the rest of the original selection, so a retry naming only part of the tail
-    // cannot leave the approved draft without the requirements it omitted.
-    run.args = { ...args, draftId: paused.draftId };
-    return collectRequirements(
-      deps,
-      context,
-      { ...args, filter: paused.filter, filtered: paused.filtered },
-      draftedRefs(live),
-    );
-  }
-  run.restarted = true;
-  return collectRequirements(
-    deps,
-    context,
-    { ...args, filter: paused.filter, filtered: paused.filtered },
-    new Set(),
-  );
-}
-
-function originalSelection(
-  run: BatchRun,
-  earlier: PausedBatch | undefined,
-  draftId: string,
-): PausedBatch | undefined {
-  return earlier?.draftId === draftId || run.restarted ? earlier : undefined;
-}
-
-/** Keeps the selection of a paused batch, or forgets it once the draft is complete. */
-function rememberPaused(
-  run: BatchRun,
-  draft: JiraDraftToolDeps<JiraDraftBatchContext>,
-  result: DraftBatchResult,
-): void {
-  const owner = draft.owner(run.context);
-  const { pausedBatches } = run;
-  if (result.stopReason !== "deadline" || result.draftId === undefined) {
-    pausedBatches.delete(owner);
-    return;
-  }
-  const keep = originalSelection(run, pausedBatches.get(owner), result.draftId);
-  pausedBatches.delete(owner);
-  if (pausedBatches.size >= PAUSED_BATCHES_MAX) pausedBatches.clear();
-  pausedBatches.set(owner, {
-    draftId: result.draftId,
-    filter: keep?.filter ?? run.args.filter,
-    filtered: keep?.filtered ?? run.args.filtered,
-    deferred: new Set(result.deferredRequirementRefs),
-  });
-}
-
 async function runBatch(
   run: BatchRun,
   connection: JiraManagedConnection,
@@ -807,7 +699,7 @@ async function runBatch(
   const placement = await resolvePlacement(run, connection);
   if ("data" in placement) return placement;
   if (!placementMatches(current, placement)) return refusalResult(run, "draft-mismatch");
-  const collected = collectWithRecovery(run, draft, current, placement);
+  const collected = collectRequirements(deps, context, args, draftedRefs(current));
   if (!collected.ok) return refusalResult(run, collected.refusal, collected.facts);
   run.duplicateRefs = collected.duplicateRefs;
   run.wholeCollection = collected.wholeCollection;
@@ -830,10 +722,9 @@ async function runBatch(
   });
   const ports = batchPorts(run, connection, draft, model);
   const result = await runJiraDraftBatch(
-    batchInput(run.args, placement, collected.requirements, rules, model),
+    batchInput(args, placement, collected.requirements, rules, model),
     ports,
   );
-  rememberPaused(run, draft, result);
   const data = resultData(run, result);
   record(run, completionActivity(run, result, data));
   return { data, ...(data.outcome === "failed" ? { isError: true } : {}) };
@@ -844,7 +735,6 @@ export function createJiraDraftBatchExecutor(
   deps: UiHandlerDeps,
   draft: JiraDraftToolDeps<JiraDraftBatchContext>,
 ): JiraDraftBatchExecutor<JiraDraftBatchContext> {
-  const pausedBatches: PausedBatches = new Map();
   return async (rawArgs, context, connection) => {
     const startedAt = Date.now();
     const args = parseJiraDraftBatchArguments(rawArgs);
@@ -865,8 +755,6 @@ export function createJiraDraftBatchExecutor(
       wholeCollection: false,
       selectionComplete: true,
       omittedCount: 0,
-      restarted: false,
-      pausedBatches,
     };
     if (connection.deployment !== "data-center")
       return refusalResult(run, "unsupported-deployment");
