@@ -20,6 +20,7 @@ import { executeJiraDirectoryRead, isJiraDirectoryRead } from "./jira-managed-di
 import { executeJiraAccessSchemeRead, isJiraAccessSchemeRead } from "./jira-managed-access-schemes.js";
 import { executeJiraNotificationSchemeRead, isJiraNotificationSchemeRead } from "./jira-managed-notification-schemes.js";
 import { executeJiraProjectAssociationRead, isJiraProjectAssociationRead } from "./jira-managed-project-associations.js";
+import { jiraProjectLifecycleRequests } from "./jira-project-lifecycle-request.js";
 import { executeJiraCoreMetadataRead, isJiraCoreMetadataRead } from "./jira-managed-core-metadata.js";
 import { executeJiraInstanceRead, isJiraInstanceRead } from "./jira-managed-instance-reads.js";
 import { executeJiraConfigurationRead, isJiraConfigurationRead } from "./jira-managed-configuration-reads.js";
@@ -517,6 +518,8 @@ function selectedObservationRead(
   connection: JiraManagedConnection,
   request: ReturnType<typeof requestFor>,
 ): Promise<ManagedMcpToolResult> | undefined {
+  if (name === "jira.project-priority-scheme")
+    return executeJiraProjectAssociationRead(name, args, request, jiraProjectLifecycleRequests(connection, context).priority.read);
   if (name === "jira.email-template-pack") {
     const ports = jiraManagedEmailTemplatePorts(connection, context, request, true);
     return ports === undefined ? Promise.resolve(failure("unavailable")) : executeJiraEmailTemplateRead(args, ports);

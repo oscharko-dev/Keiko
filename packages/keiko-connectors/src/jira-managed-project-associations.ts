@@ -18,6 +18,7 @@ import {
 import { boundJiraReadResult } from "./jira-managed-issue-reads.js";
 import { jiraReadFailure, localJiraPage, projectJiraCollection } from "./jira-managed-metadata.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
+import type { JiraProjectLifecyclePorts } from "./jira-project-lifecycle-ports.js";
 import { readJiraBoundProject } from "./jira-managed-projects.js";
 import { jiraWorkflowSchemeResult } from "./jira-managed-workflow-schemes.js";
 import { jiraNativeId, jiraNativeNumericId } from "./jira-native-values.js";
@@ -136,19 +137,19 @@ export async function executeJiraProjectAssociationRead(
   name: AssociationRead,
   args: CatalogJsonObject,
   request: JiraMutationRequest,
+  priorityRead?: JiraProjectLifecyclePorts["priority"]["read"],
 ): Promise<ManagedMcpToolResult> {
   const selected = selection(name, args);
   if (selected === undefined) return jiraReadFailure("invalid-input");
+  const read = name === "jira.project-priority-scheme"
+    ? priorityRead
+    : (projectId: string) => request(`project/${projectId}/${SUFFIX[name]}`, "GET", undefined, "json");
+  if (read === undefined) return jiraReadFailure("unavailable");
   const current = await readJiraBoundProject(request, selected.project);
   if (!current.ok) return jiraReadFailure(current.reason, current.detail);
   const project = current.project;
   if (!jiraNativeId(project.projectId)) return jiraReadFailure("malformed-payload");
-  const response = await request(
-    `project/${project.projectId}/${SUFFIX[name]}`,
-    "GET",
-    undefined,
-    "json",
-  );
+  const response = await read(project.projectId);
   if (!response.ok) return jiraReadFailure(response.reason, response.remote);
   const body = asRecord(response.body);
   if (response.status !== 200 || body === undefined) return jiraReadFailure("malformed-payload");

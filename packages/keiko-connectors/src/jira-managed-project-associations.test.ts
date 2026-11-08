@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
+import type { JiraProjectLifecyclePorts } from "./jira-project-lifecycle-ports.js";
 import {
   executeJiraProjectAssociationRead,
   isJiraProjectAssociationRead,
@@ -19,13 +20,16 @@ function requestFor(
     .mockResolvedValueOnce({ ok: true, status: 200, body: project })
     .mockResolvedValue({ ok: true, status: 200, body });
 }
+function priorityFor(body: Record<string, unknown>) {
+  return vi.fn<JiraProjectLifecyclePorts["priority"]["read"]>()
+    .mockResolvedValue({ ok: true, status: 200, body });
+}
 describe("canonical project configuration associations", () => {
   it.each([
     ["jira.project-permission-scheme", "permissionscheme", PERMISSION],
     ["jira.project-issue-security-scheme", "issuesecuritylevelscheme", SECURITY],
     ["jira.project-security-levels", "securitylevel", { levels: SECURITY.levels }],
     ["jira.project-workflow-scheme", "workflowscheme", WORKFLOW],
-    ["jira.project-priority-scheme", "priorityscheme", PRIORITY],
   ] as const)("reads %s through the independently bound numeric project", async (name, suffix, body) => {
     const request = requestFor(body);
     expect((await executeJiraProjectAssociationRead(name, { projectIdOrKey: "SYN" }, request)).data).toMatchObject({ outcome: "succeeded", projectId: PROJECT.id, projectKey: PROJECT.key });
@@ -33,6 +37,37 @@ describe("canonical project configuration associations", () => {
       ["project/SYN"],
       [`project/${PROJECT.id}/${suffix}`, "GET", undefined, "json"],
     ]);
+  });
+  it.each([
+    { selector: "syn", project: PROJECT },
+    { selector: "10001", project: PROJECT },
+    { selector: "9007199254740993", project: { ...PROJECT, id: "9007199254740993" } },
+  ])("uses the fixed priority read with the observed exact project ID for $selector", async ({ selector, project }) => {
+    const request = requestFor(PRIORITY, project);
+    const priorityRead = priorityFor(PRIORITY);
+    const result = await executeJiraProjectAssociationRead("jira.project-priority-scheme", { projectIdOrKey: selector }, request, priorityRead);
+    expect(result.data).toMatchObject({ outcome: "succeeded", projectId: project.id, projectKey: "SYN", id: "10" });
+    expect(request.mock.calls).toEqual([[`project/${selector}`]]);
+    expect(priorityRead.mock.calls).toEqual([[project.id]]);
+  });
+  it("refuses a missing fixed priority port before lookup instead of falling back to an ordinary GET", async () => {
+    const request = requestFor(PRIORITY);
+    expect((await executeJiraProjectAssociationRead("jira.project-priority-scheme", { projectIdOrKey: "SYN" }, request)).data.reason).toBe("unavailable");
+    expect(request).not.toHaveBeenCalled();
+  });
+  it("never calls the fixed priority port for a mismatched observed project", async () => {
+    const request = requestFor(PRIORITY, { ...PROJECT, id: "10002", key: "OTHER" });
+    const priorityRead = priorityFor(PRIORITY);
+    expect((await executeJiraProjectAssociationRead("jira.project-priority-scheme", { projectIdOrKey: "SYN" }, request, priorityRead)).data.reason).toBe("conflict");
+    expect(request.mock.calls).toEqual([["project/SYN"]]);
+    expect(priorityRead).not.toHaveBeenCalled();
+  });
+  it("preserves a fixed-port native refusal without retrying an ordinary association route", async () => {
+    const request = requestFor(PRIORITY);
+    const priorityRead = priorityFor(PRIORITY).mockResolvedValue({ ok: false, reason: "permission-denied", httpStatus: 403 });
+    expect((await executeJiraProjectAssociationRead("jira.project-priority-scheme", { projectIdOrKey: "SYN" }, request, priorityRead)).data.reason).toBe("permission-denied");
+    expect(request.mock.calls).toEqual([["project/SYN"]]);
+    expect(priorityRead.mock.calls).toEqual([[PROJECT.id]]);
   });
   it.each(["syn", "10001"])("preserves canonical context for selector %s", async (projectIdOrKey) => {
     const result = await executeJiraProjectAssociationRead("jira.project-permission-scheme", { projectIdOrKey }, requestFor(PERMISSION));
@@ -75,11 +110,11 @@ describe("canonical project configuration associations", () => {
     expect(result.data.items).toEqual([{ issueTypeId: "1", originalWorkflow: "Prior" }]);
   });
   it("keeps native priority flags/options separate from effective issue configuration", async () => {
-    const result = await executeJiraProjectAssociationRead("jira.project-priority-scheme", { projectIdOrKey: "SYN" }, requestFor({ ...PRIORITY, projectKeys: ["OTHER"], self: "https://untrusted.invalid/priority" }));
+    const result = await executeJiraProjectAssociationRead("jira.project-priority-scheme", { projectIdOrKey: "SYN" }, requestFor(PRIORITY), priorityFor({ ...PRIORITY, projectKeys: ["OTHER"], self: "https://untrusted.invalid/priority" }));
     expect(result.data).toEqual({ outcome: "succeeded", projectId: PROJECT.id, projectKey: PROJECT.key, ...PRIORITY, id: "10" });
   });
   it("does not fabricate priority defaults or option lists", async () => {
-    const result = await executeJiraProjectAssociationRead("jira.project-priority-scheme", { projectIdOrKey: "SYN" }, requestFor({ id: 10, name: PRIORITY.name, optionIds: null, defaultScheme: null, defaultOptionId: null }));
+    const result = await executeJiraProjectAssociationRead("jira.project-priority-scheme", { projectIdOrKey: "SYN" }, requestFor(PRIORITY), priorityFor({ id: 10, name: PRIORITY.name, optionIds: null, defaultScheme: null, defaultOptionId: null }));
     expect(result.data).toEqual({ outcome: "succeeded", projectId: PROJECT.id, projectKey: PROJECT.key, id: "10", name: PRIORITY.name });
   });
   it.each([
@@ -89,7 +124,7 @@ describe("canonical project configuration associations", () => {
     { optionIds: ["01"] },
     { id: Number.MAX_SAFE_INTEGER + 1 },
   ])("refuses malformed priority metadata: %j", async (changed) => {
-    expect((await executeJiraProjectAssociationRead("jira.project-priority-scheme", { projectIdOrKey: "SYN" }, requestFor({ ...PRIORITY, ...changed }))).data.reason).toBe("malformed-payload");
+    expect((await executeJiraProjectAssociationRead("jira.project-priority-scheme", { projectIdOrKey: "SYN" }, requestFor(PRIORITY), priorityFor({ ...PRIORITY, ...changed }))).data.reason).toBe("malformed-payload");
   });
   it.each([
     { projectIdOrKey: "../SYN" },

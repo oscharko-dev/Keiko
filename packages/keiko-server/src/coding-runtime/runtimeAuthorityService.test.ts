@@ -344,7 +344,24 @@ function serviceInState(state: CodingWorkbenchRuntimeStateName): {
 }
 
 describe("CodingRuntimeAuthorityService", () => {
-  it("logs the exact minted authority grants for lower-mode reconstruction", () => {
+  it.each([
+    {
+      selection: "ordinary scopes without a Jira Pod",
+      connectorScopes: ["source-control.read", "source-control.write"],
+    },
+    {
+      selection: "all seven explicitly authorized connector scopes",
+      connectorScopes: [
+        "source-control.read",
+        "source-control.write",
+        "issue-tracker.read",
+        "issue-tracker.write",
+        "issue-tracker.admin",
+        "knowledge-base.read",
+        "knowledge-base.write",
+      ],
+    },
+  ] as const)("persists the exact minted grants for $selection", ({ connectorScopes }) => {
     const activity: ServerLogEvent[] = [];
     const authority = new CodingRuntimeAuthorityService(
       new EditorAgentAuthorityRegistry(),
@@ -364,7 +381,7 @@ describe("CodingRuntimeAuthorityService", () => {
         "delivery-substrate",
         "connector-access",
       ],
-      connectorScopes: ["source-control.read", "source-control.write"],
+      connectorScopes,
       networkPolicy: { mode: "deny-all", allowLoopback: false, connectorScopes: [] },
     };
     const confirmation = authority.confirmStart(intent, trusted.taskId, trusted.operatorId, NOW);
@@ -391,6 +408,9 @@ describe("CodingRuntimeAuthorityService", () => {
     });
     const mintedEvent = activity.find((event) => event.op === "coding-runtime.authority.minted");
     if (mintedEvent === undefined) throw new Error("expected authority.minted line");
+    // The physical sink compares the whole registration, even when this event uses no Jira
+    // scopes. A stale generated six-scope registration must fail this proof, never drop the
+    // ordinary mint silently; the explicit seven-scope case also exercises its vocabulary/bound.
     expect(
       expectActivityLogProof(
         "coding-runtime.authority.minted.emitted-line",

@@ -42,6 +42,9 @@ describe("Agile planning, version link and category exact receipts", () => {
     }
   });
   it.each(CASES)("requires own complete context for $operation without invoking getters", ({ operation, receipt }) => {
+    const plain = { ...receipt };
+    Object.setPrototypeOf(plain, null);
+    expect(validJiraPlanningLifecycleReceipt(plain, operation)).toBe(true);
     for (const key of Object.keys(receipt)) {
       const missing = { ...receipt }; Reflect.deleteProperty(missing, key);
       refused(missing, operation);
@@ -87,6 +90,11 @@ describe("Agile planning, version link and category exact receipts", () => {
     refused({ ...receipt, globalIds: ["same", "same"] }, "jira.delete-version-remote-links");
     const hidden = ["one"]; Object.defineProperty(hidden, Symbol("foreign"), { value: "x" });
     refused({ ...receipt, globalIds: hidden }, "jira.delete-version-remote-links");
+    const hiddenIndex = ["one"]; Object.defineProperty(hiddenIndex, "0", { value: "one", enumerable: false });
+    refused({ ...receipt, globalIds: hiddenIndex }, "jira.delete-version-remote-links");
+    const inheritedArray = ["one"]; Object.setPrototypeOf(inheritedArray, null);
+    refused({ ...receipt, globalIds: inheritedArray }, "jira.delete-version-remote-links");
+    expect(validJiraPlanningLifecycleReceipt({ ...receipt, globalIds: [] }, "jira.delete-version-remote-links")).toBe(true);
     const issues = ["10001"]; const keys = ["SYN-1"];
     const removal = validJiraMutationAttempt({ ok: true, receipt: { userKey: "synthetic-actor", issueIds: issues, issueKeys: keys, epicPresent: false } }, "jira.epic-remove-issues");
     issues[0] = "10002"; keys[0] = "SYN-2";

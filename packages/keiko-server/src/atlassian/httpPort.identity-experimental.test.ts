@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { AtlassianCredentialCustodyError, type AtlassianHttpBodyRequest } from "@oscharko-dev/keiko-connectors";
 import { createGatewayAtlassianHttpBodyPort } from "./httpPort.js";
+import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
 
 const BASE = "https://jira.example.invalid/context";
 const AUTH = `atlassian-cred:${"Cc3-_".repeat(4)}Xx`;
@@ -12,7 +13,67 @@ function fixture() {
   return { resolveForExecution, beforeDispatch, fetchImpl,
     port: createGatewayAtlassianHttpBodyPort({ baseUrl: BASE, authRef: AUTH, credentials: { resolveForExecution }, beforeDispatch, fetchImpl }) };
 }
+function projectReadFixture(
+  name: "jira.project-priority-scheme" | "jira.project-permission-scheme",
+  suffix: "priorityscheme" | "permissionscheme",
+  status = 200,
+) {
+  const f = fixture();
+  f.fetchImpl.mockImplementation(async (input) => {
+    const url = String(input);
+    if (url === `${BASE}/rest/api/2/project/syn`)
+      return Response.json({ id: "9007199254740993", key: "SYN", name: "Synthetic project" });
+    if (url === `${BASE}/rest/api/2/project/9007199254740993/${suffix}`)
+      return Response.json({ id: 9, name: "Synthetic scheme" }, { status });
+    throw new TypeError("Unexpected native project association request");
+  });
+  const provider = createJiraProviderForCatalog(
+    () => ({ deployment: "data-center", baseUrl: BASE, http: f.port }),
+    [name],
+  );
+  const tool = provider.tools()[0];
+  if (tool === undefined) throw new TypeError("Missing project association read");
+  const beforeEffect = vi.fn(() => true);
+  return { ...f, beforeEffect, run: () => tool.execute({ projectIdOrKey: "syn" }, {
+    invocationId: "native-project-priority-read", correlationId: "native-project-priority-read",
+    signal: new AbortController().signal, beforeEffect,
+  }) };
+}
 describe("closed native user/project experimental HTTP flags", () => {
+  it.each([
+    ["jira.project-priority-scheme", "priorityscheme", "true"],
+    ["jira.project-permission-scheme", "permissionscheme", null],
+  ] as const)("composes %s through its real provider while leaving ordinary GET headers unchanged", async (name, suffix, expectedHeader) => {
+    const f = projectReadFixture(name, suffix);
+    expect(await f.run()).toMatchObject({ data: {
+      outcome: "succeeded", projectId: "9007199254740993", projectKey: "SYN", id: "9", name: "Synthetic scheme",
+    } });
+    expect(f.fetchImpl.mock.calls.map(([url, init]) => [
+      String(url), init?.method, new Headers(init?.headers).get("X-ExperimentalApi"), init?.body,
+    ])).toEqual([
+      [`${BASE}/rest/api/2/project/syn`, "GET", null, undefined],
+      [`${BASE}/rest/api/2/project/9007199254740993/${suffix}`, "GET", expectedHeader, undefined],
+    ]);
+    expect(f.beforeEffect).toHaveBeenCalledTimes(2);
+    expect(f.beforeDispatch).toHaveBeenCalledTimes(2);
+    expect(f.resolveForExecution).toHaveBeenCalledTimes(2);
+  });
+  it("preserves native permission refusal without falling back to an unflagged priority GET", async () => {
+    const f = projectReadFixture("jira.project-priority-scheme", "priorityscheme", 403);
+    expect(await f.run()).toMatchObject({ isError: true, data: { outcome: "failed", reason: "permission-denied" } });
+    expect(f.fetchImpl).toHaveBeenCalledTimes(2);
+    const primary = f.fetchImpl.mock.calls[1];
+    expect(String(primary?.[0])).toBe(`${BASE}/rest/api/2/project/9007199254740993/priorityscheme`);
+    expect(new Headers(primary?.[1]?.headers).get("X-ExperimentalApi")).toBe("true");
+  });
+  it("rechecks admission before the priority GET without materialising further credentials", async () => {
+    const f = projectReadFixture("jira.project-priority-scheme", "priorityscheme");
+    f.beforeEffect.mockReturnValueOnce(true).mockReturnValue(false);
+    expect(await f.run()).toMatchObject({ isError: true, data: { outcome: "failed", reason: "effect-denied" } });
+    expect(f.fetchImpl).toHaveBeenCalledOnce();
+    expect(f.beforeDispatch).toHaveBeenCalledOnce();
+    expect(f.resolveForExecution).toHaveBeenCalledOnce();
+  });
   it("emits the fixed header and exact JSON numeric body only on the bound priority route", async () => {
     const f = fixture(); expect(await f.port(PRIORITY)).toMatchObject({ status: 204 });
     const init = f.fetchImpl.mock.calls[0]?.[1];

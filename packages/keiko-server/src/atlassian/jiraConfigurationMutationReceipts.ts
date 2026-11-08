@@ -3,6 +3,7 @@ import {
   isSafeAtlassianIdentifier, type JiraScreenConfigurationMutation, type JiraBoardConfigurationMutation,
   type JiraSprintLifecycleMutation, type JiraMutationOperation, type JiraMutationReceipt,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { receiptArray, receiptFields, receiptNativeId, receiptOwnData } from "./jiraReceiptValues.js";
 
 export const JIRA_CONFIGURATION_MUTATION_RECEIPTS = {
   "jira.add-default-screen-field": ["fieldId", "fieldPresent"],
@@ -23,29 +24,8 @@ export type JiraConfigurationReceiptOperation = keyof typeof JIRA_CONFIGURATION_
 export function isJiraConfigurationReceiptOperation(operation: JiraMutationOperation): operation is JiraConfigurationReceiptOperation {
   return Object.hasOwn(JIRA_CONFIGURATION_MUTATION_RECEIPTS, operation);
 }
-function ownValue(value: object, key: PropertyKey): unknown {
-  const descriptor = Object.getOwnPropertyDescriptor(value, key);
-  return descriptor !== undefined && descriptor.enumerable && "value" in descriptor ? descriptor.value : undefined;
-}
-function int64(value: unknown): value is string {
-  return typeof value === "string" && /^[1-9][0-9]{0,18}$/u.test(value) && BigInt(value) <= 9223372036854775807n;
-}
 function agileId(value: unknown): value is string {
-  return int64(value) && Number.isSafeInteger(Number(value));
-}
-function boundedSprintArray(value: unknown): value is readonly unknown[] {
-  return Array.isArray(value) && Object.getPrototypeOf(value) === Array.prototype &&
-    value.length > 0 && value.length <= 50 && Reflect.ownKeys(value).length === value.length + 1;
-}
-function sprintIds(value: unknown): boolean {
-  if (!boundedSprintArray(value)) return false;
-  const ids = new Set<string>();
-  for (let index = 0; index < value.length; index++) {
-    const id = ownValue(value, String(index));
-    if (!agileId(id) || ids.has(id)) return false;
-    ids.add(id);
-  }
-  return true;
+  return receiptNativeId(value) && Number.isSafeInteger(Number(value));
 }
 function stateValue(key: PropertyKey, value: unknown, operation: JiraConfigurationReceiptOperation): boolean | undefined {
   if (key === "showWhenEmpty" || key === "refinedVelocityEnabled") return typeof value === "boolean";
@@ -60,18 +40,16 @@ function receiptValue(key: PropertyKey, value: unknown, operation: JiraConfigura
   if (state !== undefined) return state;
   if (key === "userKey") return jiraPropertyUserText(value);
   if (key === "fieldId") return isSafeAtlassianIdentifier(value);
-  if (key === "sprintIds") return sprintIds(value);
-  return key === "screenId" || key === "tabId" ? int64(value) : agileId(value);
+  if (key === "sprintIds") return receiptArray(value, 1, 50, agileId);
+  return key === "screenId" || key === "tabId" ? receiptNativeId(value) : agileId(value);
 }
 /** Selected identities are known before dispatch. Validate the original own data, including arrays,
  * before copying it; an unknown outcome must not hide foreign fields or turn missing context into facts. */
 export function validJiraConfigurationReceipt(receipt: JiraMutationReceipt, operation: JiraConfigurationReceiptOperation): boolean {
-  const prototype: unknown = Object.getPrototypeOf(receipt);
-  if (prototype !== Object.prototype && prototype !== null) return false;
   const required: readonly PropertyKey[] = JIRA_CONFIGURATION_MUTATION_RECEIPTS[operation];
-  if (Reflect.ownKeys(receipt).length !== required.length) return false;
-  if (!required.every((key) => receiptValue(key, ownValue(receipt, key), operation))) return false;
-  return operation !== "jira.swap-sprints" || ownValue(receipt, "sprintId") !== ownValue(receipt, "swapSprintId");
+  if (!receiptFields(receipt, required)) return false;
+  if (!required.every((key) => receiptValue(key, receiptOwnData(receipt, key), operation))) return false;
+  return operation !== "jira.swap-sprints" || receiptOwnData(receipt, "sprintId") !== receiptOwnData(receipt, "swapSprintId");
 }
 const UNCONFIRMABLE: ReadonlySet<JiraMutationOperation> = new Set([
   "jira.add-default-screen-field", "jira.delete-board", "jira.delete-sprint", "jira.swap-sprints", "jira.unmap-all-sprints",

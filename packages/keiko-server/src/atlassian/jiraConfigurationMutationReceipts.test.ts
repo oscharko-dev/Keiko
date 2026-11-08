@@ -59,6 +59,9 @@ describe("screen, board and sprint configuration receipts", () => {
     }
   });
   it.each(CASES)("requires all own selected facts for $operation", ({ operation, receipt }) => {
+    const plain = { ...receipt };
+    Object.setPrototypeOf(plain, null);
+    expect(validJiraConfigurationReceipt(plain, operation)).toBe(true);
     for (const key of Object.keys(receipt)) {
       const missing = { ...receipt };
       Reflect.deleteProperty(missing, key);
@@ -115,5 +118,11 @@ describe("screen, board and sprint configuration receipts", () => {
     const hidden = ["11"];
     Object.defineProperty(hidden, Symbol("foreign"), { value: "12" });
     refused(field(SAMPLE, "sprintIds", hidden), "jira.unmap-sprints");
+    const hiddenIndex = ["11"];
+    Object.defineProperty(hiddenIndex, "0", { value: "11", enumerable: false });
+    refused(field(SAMPLE, "sprintIds", hiddenIndex), "jira.unmap-sprints");
+    const inheritedArray = ["11"];
+    Object.setPrototypeOf(inheritedArray, null);
+    refused(field(SAMPLE, "sprintIds", inheritedArray), "jira.unmap-sprints");
   });
 });

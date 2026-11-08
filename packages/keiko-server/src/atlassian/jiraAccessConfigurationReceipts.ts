@@ -1,6 +1,7 @@
 import { jiraPropertyPathKey, jiraPropertyUserText, rolePrincipalText } from "@oscharko-dev/keiko-connectors";
 import { isSafeAtlassianIdentifier, type JiraMutationOperation, type JiraMutationReceipt,
   type JiraRoleMutation, type JiraPermissionSchemeMutation } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { receiptArray, receiptFields, receiptNativeId, receiptOwnData, receiptWithinBudget } from "./jiraReceiptValues.js";
 
 const ROLE = ["roleId", "userKey", "rolePresent"] as const;
 const ACTORS = [...ROLE, "roleActorsScope", "actorChange", "actorUserKeys", "actorGroupNames"] as const;
@@ -28,27 +29,6 @@ export type JiraAccessConfigurationOperation = keyof typeof JIRA_ACCESS_CONFIGUR
 export function isJiraAccessConfigurationOperation(operation: JiraMutationOperation): operation is JiraAccessConfigurationOperation {
   return Object.hasOwn(JIRA_ACCESS_CONFIGURATION_RECEIPTS, operation);
 }
-function own(value: object, key: PropertyKey): unknown {
-  const descriptor = Object.getOwnPropertyDescriptor(value, key);
-  return descriptor !== undefined && descriptor.enumerable && "value" in descriptor ? descriptor.value : undefined;
-}
-function id(value: unknown): value is string {
-  return typeof value === "string" && /^[1-9][0-9]{0,18}$/u.test(value) && BigInt(value) <= 9223372036854775807n;
-}
-function arrayShape(value: unknown): value is readonly unknown[] {
-  return Array.isArray(value) && Object.getPrototypeOf(value) === Array.prototype && value.length <= 50 &&
-    Reflect.ownKeys(value).length === value.length + 1;
-}
-function principals(value: unknown): boolean {
-  if (!arrayShape(value)) return false;
-  const seen = new Set<string>();
-  for (let index = 0; index < value.length; index++) {
-    const item = own(value, String(index));
-    if (!rolePrincipalText(item) || seen.has(item)) return false;
-    seen.add(item);
-  }
-  return true;
-}
 const ACTOR_OPERATIONS = {
   "jira.add-role-default-actors": { scope: "role-defaults", change: "add" },
   "jira.delete-role-default-actor": { scope: "role-defaults", change: "remove" },
@@ -60,7 +40,7 @@ function actorOperation(operation: JiraAccessConfigurationOperation): operation 
   return Object.hasOwn(ACTOR_OPERATIONS, operation);
 }
 function actorValue(key: PropertyKey, value: unknown, operation: JiraAccessConfigurationOperation): boolean | undefined {
-  if (key === "actorUserKeys" || key === "actorGroupNames") return principals(value);
+  if (key === "actorUserKeys" || key === "actorGroupNames") return receiptArray(value, 0, 50, rolePrincipalText);
   if (!actorOperation(operation)) return undefined;
   if (key === "roleActorsScope") return value === ACTOR_OPERATIONS[operation].scope;
   if (key === "actorChange") return value === ACTOR_OPERATIONS[operation].change;
@@ -79,41 +59,38 @@ function receiptValue(key: PropertyKey, value: unknown, operation: JiraAccessCon
   if (key === "projectKey") return isSafeAtlassianIdentifier(value);
   if (key === "attributeKey") return jiraPropertyPathKey(value);
   if (key === "attributeEnabled") return typeof value === "boolean";
-  return id(value);
+  return receiptNativeId(value);
 }
 function optionalAcknowledgement(key: PropertyKey, operation: JiraAccessConfigurationOperation): boolean {
   if (operation === "jira.create-role") return key === "roleId";
   if (operation === "jira.create-permission-scheme") return key === "schemeId";
   return operation === "jira.add-permission-grant" && key === "permissionId";
 }
-function allowedKeys(receipt: JiraMutationReceipt, operation: JiraAccessConfigurationOperation): boolean {
+function receiptContext(receipt: JiraMutationReceipt, operation: JiraAccessConfigurationOperation): boolean {
   const allowed: readonly PropertyKey[] = JIRA_ACCESS_CONFIGURATION_RECEIPTS[operation];
-  return Reflect.ownKeys(receipt).every((key) =>
-    (allowed.includes(key) || (key === "swapRoleId" && operation === "jira.delete-role")) && receiptValue(key, own(receipt, key), operation));
-}
-function requiredContext(receipt: JiraMutationReceipt, operation: JiraAccessConfigurationOperation): boolean {
-  return JIRA_ACCESS_CONFIGURATION_RECEIPTS[operation].every((key) =>
-    own(receipt, key) !== undefined || (!Object.hasOwn(receipt, key) && optionalAcknowledgement(key, operation)));
+  const required = allowed.filter((key) => !optionalAcknowledgement(key, operation));
+  const optional = allowed.filter((key) => optionalAcknowledgement(key, operation));
+  if (operation === "jira.delete-role") optional.push("swapRoleId");
+  return receiptFields(receipt, required, optional) && Reflect.ownKeys(receipt).every((key) =>
+    receiptValue(key, receiptOwnData(receipt, key), operation));
 }
 function actorCount(receipt: JiraMutationReceipt, operation: JiraAccessConfigurationOperation): boolean {
   if (!actorOperation(operation)) return true;
-  const users = own(receipt, "actorUserKeys"); const groups = own(receipt, "actorGroupNames");
+  const users = receiptOwnData(receipt, "actorUserKeys"); const groups = receiptOwnData(receipt, "actorGroupNames");
   if (!Array.isArray(users) || !Array.isArray(groups)) return false;
   const count = users.length + groups.length;
   if (count > 50) return false;
   const change = ACTOR_OPERATIONS[operation].change;
-  if (change === "replace") return Number.isSafeInteger(Number(own(receipt, "roleId")));
+  if (change === "replace") return Number.isSafeInteger(Number(receiptOwnData(receipt, "roleId")));
   if (change === "remove") return count === 1;
   return count > 0 && (users.length === 0 || groups.length === 0);
 }
 /** Original plain own data only, including partial receipts; never wash unsafe data via spread. */
 export function validJiraAccessConfigurationReceipt(receipt: JiraMutationReceipt, operation: JiraAccessConfigurationOperation): boolean {
-  const prototype: unknown = Object.getPrototypeOf(receipt);
-  if (prototype !== Object.prototype && prototype !== null) return false;
-  if (!allowedKeys(receipt, operation) || !requiredContext(receipt, operation)) return false;
-  const swap = own(receipt, "swapRoleId");
-  if (swap !== undefined && swap === own(receipt, "roleId")) return false;
-  return actorCount(receipt, operation) && Buffer.byteLength(JSON.stringify(receipt), "utf8") <= 16384;
+  if (!receiptContext(receipt, operation)) return false;
+  const swap = receiptOwnData(receipt, "swapRoleId");
+  if (swap !== undefined && swap === receiptOwnData(receipt, "roleId")) return false;
+  return actorCount(receipt, operation) && receiptWithinBudget(receipt);
 }
 export function canConfirmJiraAccessConfiguration(operation: JiraMutationOperation): boolean {
   if (!isJiraAccessConfigurationOperation(operation)) return true;

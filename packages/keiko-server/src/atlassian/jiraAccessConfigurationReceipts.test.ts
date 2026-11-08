@@ -35,6 +35,9 @@ describe("exact role and permission configuration receipt boundaries", () => {
     }
   });
   it.each(CASES)("rejects foreign, hidden, accessor, symbol and inherited context for $operation", ({ operation, receipt }) => {
+    const plain = { ...receipt };
+    Object.setPrototypeOf(plain, null);
+    expect(valid(plain, operation)).toBe(true);
     for (const key of ["browseUrl", "effectivePermissions", "principals", "description", "body", Symbol("foreign")])
       refused(changed(receipt, key, "synthetic"), operation);
     for (const key of Object.keys(receipt)) {
@@ -48,14 +51,21 @@ describe("exact role and permission configuration receipt boundaries", () => {
     }
   });
   it.each([
-    { operation: "jira.create-role", receipt: { userKey: "synthetic-actor", rolePresent: true } },
-    { operation: "jira.create-permission-scheme", receipt: { userKey: "synthetic-actor", schemePresent: true } },
-    { operation: "jira.add-permission-grant", receipt: { userKey: "synthetic-actor", schemeId: "7", grantPresent: true } },
-  ] as const)("retains known context without inventing the missing ACK ID for $operation", ({ operation, receipt }) => {
+    { operation: "jira.create-role", receipt: { userKey: "synthetic-actor", rolePresent: true }, ackKey: "roleId" },
+    { operation: "jira.create-permission-scheme", receipt: { userKey: "synthetic-actor", schemePresent: true }, ackKey: "schemeId" },
+    { operation: "jira.add-permission-grant", receipt: { userKey: "synthetic-actor", schemeId: "7", grantPresent: true }, ackKey: "permissionId" },
+  ] as const)("retains known context without inventing the missing ACK ID for $operation", ({ operation, receipt, ackKey }) => {
     expect(valid(receipt, operation)).toBe(true);
     expect(validJiraMutationAttempt({ ok: false, reason: "timeout", receipt }, operation)).toEqual({ ok: false, reason: "timeout", receipt });
     expect(validJiraMutationAttempt({ ok: true, receipt }, operation)).toEqual({ ok: false, reason: "malformed-payload", receipt });
     refused(changed(receipt, "userKey", undefined), operation);
+    const plain = { ...receipt }; Object.setPrototypeOf(plain, null);
+    expect(valid(plain, operation)).toBe(true);
+    refused(changed(receipt, ackKey, undefined), operation);
+    const getter = vi.fn(() => "7"); const accessor = { ...receipt };
+    Object.defineProperty(accessor, ackKey, { get: getter, enumerable: true });
+    refused(accessor, operation);
+    expect(getter).not.toHaveBeenCalled();
   });
   it("does not accept incomplete known target or project context", () => {
     const source = ROLE_MUTATION_FIXTURE_CASES[6].receipt;
@@ -108,6 +118,10 @@ describe("exact role and permission configuration receipt boundaries", () => {
     refused({ ...ROLE_MUTATION_FIXTURE_CASES[4].receipt, actorUserKeys: sparse }, "jira.add-role-default-actors");
     const foreign = ["next-key"]; Object.defineProperty(foreign, Symbol("extra"), { value: "hidden" });
     refused({ ...ROLE_MUTATION_FIXTURE_CASES[4].receipt, actorUserKeys: foreign }, "jira.add-role-default-actors");
+    const hiddenIndex = ["next-key"]; Object.defineProperty(hiddenIndex, "0", { value: "next-key", enumerable: false });
+    refused({ ...ROLE_MUTATION_FIXTURE_CASES[4].receipt, actorUserKeys: hiddenIndex }, "jira.add-role-default-actors");
+    const inheritedArray = ["next-key"]; Object.setPrototypeOf(inheritedArray, null);
+    refused({ ...ROLE_MUTATION_FIXTURE_CASES[4].receipt, actorUserKeys: inheritedArray }, "jira.add-role-default-actors");
   });
   it("keeps complete principal receipt bytes and text within the producer boundary", () => {
     const receipt = ROLE_MUTATION_FIXTURE_CASES[4].receipt;
