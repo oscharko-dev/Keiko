@@ -16,7 +16,8 @@ export type JiraDataCenterCompatibilityResult =
   | { readonly status: "ok"; readonly compatibility: JiraDataCenterCompatibilityFacts }
   | { readonly status: Exclude<AtlassianConnectionVerificationStatus, "ok"> };
 
-function serverCompatibility(value: Record<string, unknown>): JiraDataCenterCompatibilityResult {
+/** Shared native serverInfo projection; observing a release does not qualify its operations. */
+export function jiraServerCompatibility(value: Record<string, unknown>): JiraDataCenterCompatibilityResult {
   if (
     typeof value.version !== "string" ||
     !Array.isArray(value.versionNumbers) ||
@@ -112,7 +113,7 @@ export async function verifyJiraDataCenterCompatibility(
   const deadline = now() + ATLASSIAN_VERIFY_CONNECTION_TIMEOUT_MS;
   const server = await probe(port, `${prefix}serverInfo`, deadline, now);
   if ("failure" in server) return failedProbe(server.failure);
-  const result = serverCompatibility(server.value);
+  const result = jiraServerCompatibility(server.value);
   if (result.status !== "ok") return result;
   const identity = await verifyJiraDataCenterIdentity(
     port,

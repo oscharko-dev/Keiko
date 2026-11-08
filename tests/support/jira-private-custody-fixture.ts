@@ -1,9 +1,11 @@
 import { createAtlassianCredentialCustody, type AtlassianCredentialMetadata } from "../../packages/keiko-connectors/src/atlassian-credential-custody.js";
 import type { JiraHumanInputBinding } from "../../packages/keiko-connectors/src/jira-human-input-values.js";
+import type { JiraDataCenterCompatibilityFacts } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 
 /** Private synthetic custody over one shared port; production kernel guards have separate sources. */
 export function privateJiraCustodyFixture(operation: JiraHumanInputBinding["operation"] = "jira.update-my-password", principal = "a".repeat(64), options: {
   readonly baseUrl?: string; readonly actorKey?: string; readonly actorUsername?: string;
+  readonly compatibility?: JiraDataCenterCompatibilityFacts;
 } = {}) {
   let now = 1_800_000_000_000;
   const clearedPhases: ("cancelled" | "expired")[] = [];
@@ -29,8 +31,8 @@ export function privateJiraCustodyFixture(operation: JiraHumanInputBinding["oper
   const created = custody.create({ provider: "jira", deployment: "data-center", displayName: "Synthetic Jira", baseUrl: options.baseUrl ?? "https://jira.example.invalid/context",
     authScheme: "bearer-pat", apiToken: ["synthetic", "private", "pat"].join("-"), livePodCreationRequestId: "7765d9e4-fc9a-46d5-aea4-24880fec5e1e" }, principal);
   const verification = custody.beginVerification(created.authRef, 1);
-  if (verification === undefined || created.livePod === undefined) throw new TypeError("Missing synthetic Pod verification");
-  custody.finishVerification(created.authRef, 1, verification.revision, "ok");
+  if (verification === undefined || created.deployment !== "data-center" || created.livePod === undefined) throw new TypeError("Missing synthetic Pod verification");
+  custody.finishVerification(created.authRef, 1, verification.revision, "ok", undefined, options.compatibility);
   const inputs = custody.humanInputs; const privateInputs = executionResolver.humanInputs; const sessions = executionResolver.sessions;
   if (inputs === undefined || privateInputs === undefined || sessions === undefined) throw new TypeError("Missing real private custody facets");
   const binding: JiraHumanInputBinding = { context: { kind: "chat", chatId: "chat-1", messageId: "message-1", callId: "call-1", podId: created.livePod.podId, bindingGeneration: 1 },

@@ -165,6 +165,13 @@ function avatarController(selected: PrivateNativeCase): NativeController | undef
       if (url.pathname === `${AUTH}session` && request.method === "GET") {
         expect(request.headers.has("cookie")).toBe(true); await emptyBody(request); return Response.json({ name: ACTOR.name });
       }
+      if (url.pathname === `${API}serverInfo` && request.method === "GET") {
+        authentication(request, false); expect(url.search).toBe(""); await emptyBody(request);
+        if (selected.tool === "jira.upload-temporary-avatar")
+          return Response.json({ version: "10.3.26", versionNumbers: [10, 3, 26], deploymentType: "Data Center" });
+        expect(selected.tool).toBe("jira.crop-temporary-avatar");
+        return Response.json({ version: "10.4.0", versionNumbers: [10, 4, 0], deploymentType: "Data Center" });
+      }
       if (request.method !== "GET") return write(request);
       expect(url.pathname.startsWith(API)).toBe(true); await emptyBody(request);
       return avatarRead(url.pathname.slice(API.length) + url.search, rows);

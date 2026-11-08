@@ -20,6 +20,7 @@ export interface JiraPrivatePortOptions {
 export interface JiraPrivatePortFactoryResult {
   readonly identity: JiraPrivateIdentityPorts;
   readonly withAvatarSession: NonNullable<JiraAvatarPorts["withSession"]>;
+  readonly legacyTemporaryRelease?: "10.3" | "10.4";
 }
 const UNAVAILABLE: AtlassianWriteHttpOutcome = { ok: false, reason: "unavailable" };
 const CHANGED: AtlassianWriteHttpOutcome = { ok: false, reason: "conflict" };
@@ -113,6 +114,7 @@ export function createJiraPrivatePorts(
     }));
   }
   return {
+    ...(options.legacyTemporaryRelease === undefined ? {} : { legacyTemporaryRelease: options.legacyTemporaryRelease }),
     identity: { perform, session: sessionAction, unlock: (expectedActorKey) => options.selection?.binding.actorUserKey === expectedActorKey
       ? perform("unlock-user-anonymization", {}) : Promise.resolve(CHANGED) },
     withAvatarSession: async (expectedActorKey, execute) => {

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { jiraSessionBindingForInput, type JiraHumanInputSelection, type JiraHumanInputBinding,
   type JiraManagedConnection, type AtlassianCredentialMetadata, type AtlassianHttpBodyPort } from "@oscharko-dev/keiko-connectors";
-import { JIRA_HUMAN_INPUT_PURPOSES, JIRA_HUMAN_INPUT_FIELD_SETS, type JiraHumanInputPurpose } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { JIRA_HUMAN_INPUT_PURPOSES, JIRA_HUMAN_INPUT_FIELD_SETS, type JiraHumanInputPurpose, type JiraDataCenterCompatibilityFacts } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
@@ -83,16 +83,36 @@ function inputSelection(fixture: PrivateFixture, binding: JiraHumanInputBinding)
     const ready = state.inputs.submit(pending.requestId, binding, pending.revision, values);
     return { requestId: ready.requestId, revision: ready.revision, binding };
 }
+function observedLegacyRelease(fixture: PrivateFixture): "10.3" | "10.4" | undefined {
+    const metadata = fixture.state.custody.getMetadata(fixture.state.binding.authRef);
+    if (metadata?.deployment !== "data-center" || metadata.livePod?.verificationStatus !== "ok" ||
+      metadata.livePod.verificationRevision !== fixture.state.binding.verificationRevision ||
+      metadata.generation !== fixture.state.binding.authenticationGeneration) return undefined;
+    const version = metadata.livePod.compatibility?.versionNumbers;
+    if (version?.[0] !== 10) return undefined;
+    return version[1] === 3 ? "10.3" : version[1] === 4 ? "10.4" : undefined;
+}
+function legacyCompatibility(tool: string): JiraDataCenterCompatibilityFacts | undefined {
+    // Literal native fixture choices, independent of registry declarations or result projections.
+    if (tool === "jira.upload-temporary-avatar") return { schemaVersion: 1, deploymentType: "Data Center",
+      versionNumbers: [10, 3, 26], restApi: "v2", agileApi: "unverified" };
+    if (tool === "jira.crop-temporary-avatar") return { schemaVersion: 1, deploymentType: "Data Center",
+      versionNumbers: [10, 4, 0], restApi: "v2", agileApi: "unverified" };
+    return undefined;
+}
 async function ports(fixture: PrivateFixture, context: ManagedMcpInvocationContext, args: CatalogJsonObject,
   lifecycle: AtlassianHttpLifecycleOptions = {}, current?: CurrentBinding): Promise<PrivatePorts> {
     const binding = bindingFor(fixture, context, args, current);
     const scope = jiraSessionBindingForInput(binding);
     await seedSession(fixture, scope);
     const selection = inputSelection(fixture, binding);
+    const legacyTemporaryRelease = observedLegacyRelease(fixture);
     const privatePorts = createJiraPrivatePorts({ ...fixture.options, ...lifecycle }, { ...fixture.options, ...lifecycle }, context,
-      { ...(selection === undefined ? {} : { selection }), sessionScope: scope, legacyTemporaryRelease: "10.3" });
+      { ...(selection === undefined ? {} : { selection }), sessionScope: scope,
+        ...(legacyTemporaryRelease === undefined ? {} : { legacyTemporaryRelease }) });
     return { privateIdentity: privatePorts.identity,
-      avatars: { ...avatarFiles(fixture, context), withSession: privatePorts.withAvatarSession, legacyTemporaryRelease: "10.3" } };
+      avatars: { ...avatarFiles(fixture, context), withSession: privatePorts.withAvatarSession,
+        ...(privatePorts.legacyTemporaryRelease === undefined ? {} : { legacyTemporaryRelease: privatePorts.legacyTemporaryRelease }) } };
 }
 /** Real custody, HTTP/session ports and connected-file/image admission. Only the native server
  * and the Vault storage port are synthetic; no capability callback supplies an allowed result. */
@@ -101,7 +121,7 @@ export function privateNativeComposition(tool: string | undefined, baseUrl: stri
   const selected = privateNativeCase(tool); if (selected === undefined) return undefined;
   const purpose = JIRA_HUMAN_INPUT_PURPOSES.find((value) => selected.tool === `jira.${value}`);
   const state = privateJiraCustodyFixture(purpose === undefined ? "jira.login" : `jira.${purpose}`, "a".repeat(64),
-    { baseUrl, actorKey: ACTOR.key, actorUsername: ACTOR.name });
+    { baseUrl, actorKey: ACTOR.key, actorUsername: ACTOR.name, compatibility: legacyCompatibility(selected.tool) });
   const metadata = state.custody.getMetadata(state.binding.authRef);
   if (metadata === undefined) throw new TypeError("Missing actual fixture credential metadata");
   const options = { baseUrl, authRef: metadata.authRef, credentials: state.executionResolver, fetchImpl, activityLog };

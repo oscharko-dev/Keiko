@@ -1,6 +1,6 @@
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { recordConnectionCheck, recordJiraHumanInput } from "./credentialActivity.js";
-import { createJiraPrivatePorts } from "./httpPrivateIdentity.js";
+import { createJiraPrivatePorts, type JiraPrivatePortOptions } from "./httpPrivateIdentity.js";
 import type {
   AtlassianCredentialHttpOptions,
   AtlassianConnectorCredentialDeps,
@@ -123,6 +123,28 @@ function lazyVaultPort(
   };
 }
 
+function legacyAvatarRelease(metadata: AtlassianCredentialMetadata): "10.3" | "10.4" | undefined {
+  if (metadata.deployment !== "data-center") return undefined;
+  const pod = metadata.livePod;
+  if (pod?.verificationStatus !== "ok" || pod.verificationInProgress || pod.credentialOperation !== undefined) return undefined;
+  const version = pod.compatibility?.versionNumbers;
+  if (version?.[0] !== 10) return undefined;
+  if (version[1] === 3) return "10.3";
+  return version[1] === 4 ? "10.4" : undefined;
+}
+
+function boundPrivateOptions(selected: AtlassianCredentialMetadata, current: AtlassianCredentialMetadata | undefined,
+  options: JiraPrivatePortOptions): JiraPrivatePortOptions {
+  // Never accept a caller's compatibility hint: use the same current persisted verification.
+  const { legacyTemporaryRelease: _hint, ...retained } = options;
+  if (selected.deployment !== "data-center" || current?.deployment !== "data-center" ||
+      selected.generation !== current.generation || selected.baseUrl !== current.baseUrl ||
+      selected.livePod?.podId !== current.livePod?.podId ||
+      selected.livePod?.verificationRevision !== current.livePod?.verificationRevision) return retained;
+  const legacyTemporaryRelease = legacyAvatarRelease(current);
+  return legacyTemporaryRelease === undefined ? retained : { ...retained, legacyTemporaryRelease };
+}
+
 export function buildAtlassianConnectorCredentialDeps(
   options: BuildAtlassianConnectorCredentialDepsOptions,
 ): AtlassianConnectorCredentialDeps {
@@ -142,7 +164,7 @@ export function buildAtlassianConnectorCredentialDeps(
     jiraPrivatePortFactory: (metadata, context, privateOptions, lifecycle = {}) => createJiraPrivatePorts(
       credentialTransportOptions(owner, metadata, context.correlationId, lifecycle),
       credentialTransportOptions(owner, metadata, context.correlationId, lifecycle, false),
-      context, privateOptions,
+      context, boundPrivateOptions(metadata, custody.getMetadata(metadata.authRef), privateOptions),
     ),
     registerListener: (port): (() => void) => {
       listenerPorts.add(port);

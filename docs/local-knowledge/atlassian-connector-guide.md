@@ -409,10 +409,20 @@ separately records incomplete qualification; a passing focused test is not full 
   capability stays unverified until its own operations are qualified. Data Center sync and
   Confluence Data Center remain unsupported. Cloud connectors and their existing records remain compatible; a Cloud connector
   is not automatically converted into a Data Center Live Pod.
-- **Bounded Live Chat operations.** Unsupported plugin fields, issue/page/comment deletion,
-  attachments, worklogs, bulk writes and arbitrary Jira REST requests are unavailable. A live
-  connection does not imply an indexed snapshot. Confluence Live Chat tools remain outside this
-  Epic; see [#2953](https://github.com/oscharko-dev/Keiko/issues/2953).
+- **Bounded Live Chat operations.** Governed Jira operations now cover projects, boards and
+  sprints, issue relationships and lifecycle, comments, attachments, worklogs, saved configuration
+  and supported account and administration work. Discover the required operation, review its
+  fields and follow its result card. Availability still depends on the verified Jira release,
+  actual native permissions and the selected authority. Instance administration requires its
+  separate human opt-in; ordinary write access does not grant it. Acknowledged but unconfirmed
+  changes require inspection before another write. Unsupported plugin fields and arbitrary REST
+  requests remain unavailable. A live connection does not imply an indexed snapshot. Confluence
+  Live Chat tools remain outside this Epic; see [#2953](https://github.com/oscharko-dev/Keiko/issues/2953).
+- **Protected account input.** Supply passwords and licenses only in the protected input card.
+  Check the displayed connection, purpose and target before providing a value. These values stay
+  outside the conversation and model request. Cancellation and expiry do not establish whether a
+  separately acknowledged Jira write completed; use the operation result and Jira readback before
+  deciding how to continue.
 - **No OAuth 2.0 (3LO).** API-token Basic authentication is sufficient for a single local user's own
   credential and needs no redirect-based consent flow, browser round-trip, or refresh-token custody.
   OAuth is deferred until multi-user or app-marketplace distribution creates an actual need.

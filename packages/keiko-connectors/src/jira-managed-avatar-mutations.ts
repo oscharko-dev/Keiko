@@ -6,6 +6,7 @@ import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { dispatchFailure, JiraAcknowledgedMutationError } from "./jira-mutation-failure.js";
 import { jiraNativeNumericId } from "./jira-native-values.js";
 import { readSavedActor } from "./jira-saved-configuration-values.js";
+import { jiraServerCompatibility } from "./jira-connection-verification.js";
 import { parseJiraAvatarMutation, type AvatarInput, type AvatarCropInput, type AvatarSelectionInput, type AvatarUploadInput } from "./jira-avatar-mutation-input.js";
 import { admitAvatarInput, avatarCropAcknowledgement, bindAvatarTarget, readAvatarCollection, sameAvatarRows, sameAvatarTarget } from "./jira-avatar-mutation-observations.js";
 import { AVATAR_MALFORMED, avatarFailure, avatarConflict, avatarInvalid, avatarTypeOf, avatarUnavailable,
@@ -140,14 +141,26 @@ async function cropAvatar(operation: JiraAvatarMutation, input: AvatarCropInput,
     return unconfirmed({ ...known, temporaryCrop: observed.crop, temporaryNeedsCropping: observed.needsCropping });
   } catch (error) { throw new JiraAcknowledgedMutationError(error, known); }
 }
+async function legacyReleaseAdmission(ports: JiraAvatarPorts): Promise<AvatarFailure | undefined> {
+  const expected = ports.legacyTemporaryRelease;
+  if (expected === undefined) return avatarUnavailable("These legacy temporary-avatar endpoints require a current verified Jira10.3/10.4 connection. The selected connection does not supply that release binding; no avatar request was sent.");
+  const response = await ports.request("serverInfo", "GET", undefined, "json");
+  if (!response.ok) return dispatchFailure(response);
+  const observed = response.status === 200 && response.body !== undefined ? jiraServerCompatibility(response.body) : undefined;
+  if (observed?.status !== "ok" || observed.compatibility.versionNumbers[0] !== 10 ||
+      observed.compatibility.versionNumbers[1] !== (expected === "10.3" ? 3 : 4))
+    return avatarUnavailable("The current native Jira release does not match the verified10.3/10.4 binding for this legacy endpoint. Reverify the connection; no avatar request was sent.");
+  return undefined;
+}
 /** Fixed avatar APIs only. Temporary uploads/crops require the composing owner's existing,
  * exclusive cookie-session custody; credentials, paths, bytes and session tokens are not model input. */
 export async function executeJiraAvatarMutation(operation: JiraAvatarMutation, args: CatalogJsonObject, ports: JiraAvatarPorts, check = false): Promise<JiraAvatarAttempt> {
   const input = parseJiraAvatarMutation(operation, args);
   if (input === undefined) return avatarInvalid("Review the exact actor and target identity, complete native avatar metadata, and explicit selected flags. Uploads require a governed connected PNG/JPEG source with actual file digest/size and acknowledgement that the session's temporary image is replaced. Crop/create requires the current private session snapshot; never supply remote URLs or image bytes.");
   if (input.kind === "set" || input.kind === "delete") return selectAvatar(operation, input, ports.request, check);
-  if (input.target.kind === "session" && ports.legacyTemporaryRelease === undefined)
-    return avatarUnavailable("These legacy temporary-avatar endpoints are published for the retained Jira10.3/10.4 APIs, not the pinned11.3 API. No server-owned compatible release binding is available; no request was sent.");
+  if (input.target.kind === "session") {
+    const refused = await legacyReleaseAdmission(ports); if (refused !== undefined) return refused;
+  }
   const withSession = ports.withSession;
   if (withSession === undefined) return avatarUnavailable("A private Jira session bound to this connector generation and the reviewed actor is unavailable. Native temporary images are session-owned; a credential or model-provided snapshot cannot substitute for that session.");
   return withSession(input.actor, (session) => input.kind === "upload" ? uploadAvatar(operation, input, ports, session, check) : cropAvatar(operation, input, session, check));

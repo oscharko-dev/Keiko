@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { JiraAcknowledgedMutationError, jiraSessionBindingForInput, type JiraHumanInputSelection } from "@oscharko-dev/keiko-connectors";
 import { privateJiraCustodyFixture } from "../../../../tests/support/jira-private-custody-fixture.js";
@@ -8,7 +9,7 @@ const BASE = "https://jira.example.invalid/context";
 const PASSWORD = ["synthetic", "human", "password"].join(" ");
 const COOKIE = { name: "JSESSIONID", value: ["synthetic", "private", "cookie"].join("-") };
 type FixturePurpose = "login" | "update-user-password" | "unlock-user-anonymization" | "validate-update-user-password";
-function fixture(purpose: FixturePurpose = "login") {
+function fixture(purpose: FixturePurpose = "login", legacyTemporaryRelease?: "10.3" | "10.4") {
   const custody = privateJiraCustodyFixture(`jira.${purpose}`);
   const pending = custody.inputs.prepare(custody.binding);
   const values = purpose === "unlock-user-anonymization" ? { ownerShutdownConfirmation: "confirmed" }
@@ -28,6 +29,8 @@ function fixture(purpose: FixturePurpose = "login") {
     if (url === `${BASE}/rest/api/2/user/password?key=target-key` && init?.method === "PUT") return new Response(null, { status: controls.privateStatus });
     if (url === `${BASE}/rest/api/2/user/anonymization/unlock` && init?.method === "DELETE") return new Response(null, { status: controls.privateStatus });
     if (url === `${BASE}/rest/api/2/password/policy/updateUser` && init?.method === "POST") return Response.json([]);
+    if (url === `${BASE}/rest/api/2/avatar/user/temporary?filename=avatar.png&size=8` && init?.method === "POST")
+      return Response.json({ cropperOffsetX: 0, cropperOffsetY: 0, cropperWidth: 1, needsCropping: false });
     throw new TypeError("Unexpected synthetic private-session route");
   });
   const beforeEffect = vi.fn(() => true); const controller = new AbortController();
@@ -35,10 +38,26 @@ function fixture(purpose: FixturePurpose = "login") {
   const onResponse = vi.fn<NonNullable<CreateAtlassianHttpPortOptions["onResponse"]>>(() => true);
   const options = { baseUrl: BASE, authRef: custody.binding.authRef, credentials: custody.executionResolver, fetchImpl, onResponse };
   const onConsumed = vi.fn();
-  const ports = createJiraPrivatePorts(options, options, context, { selection, sessionScope: jiraSessionBindingForInput(custody.binding), onConsumed });
+  const ports = createJiraPrivatePorts(options, options, context, { selection, sessionScope: jiraSessionBindingForInput(custody.binding), onConsumed,
+    ...(legacyTemporaryRelease === undefined ? {} : { legacyTemporaryRelease }) });
   return { ...custody, controls, fetchImpl, beforeEffect, controller, ports, onConsumed, onResponse };
 }
 describe("real private Jira session composition", () => {
+  it.each(["10.3", "10.4"] as const)("passes the same bound %s release to the leaf and the private HTTP avatar guard", async (release) => {
+    const f = fixture("login", release); await f.ports.identity.perform("login", {});
+    const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const file = { name: "avatar.png", sizeBytes: bytes.byteLength, sha256: createHash("sha256").update(bytes).digest("hex") };
+    expect(f.ports.legacyTemporaryRelease).toBe(release);
+    await f.ports.withAvatarSession("actor-key", async (session) => {
+      expect(await session.upload("jira.upload-temporary-avatar", { kind: "session", avatarType: "user" }, file, "image/png", bytes))
+        .toMatchObject({ ok: true, status: 200 });
+      return { ok: false, reason: "unavailable" };
+    });
+    const writes = f.fetchImpl.mock.calls.filter(([url]) => String(url).includes("/avatar/"));
+    expect(writes).toHaveLength(1);
+    expect(new Headers(writes[0]?.[1]?.headers).get("cookie")).toBe(`${COOKIE.name}=${COOKIE.value}`);
+    expect(new Headers(writes[0]?.[1]?.headers).has("authorization")).toBe(false);
+  });
   it("establishes a session only after cookie-only actor/session proofs and never substitutes the PAT", async () => {
     const f = fixture(); const result = await f.ports.identity.perform("login", {});
     expect(result).toEqual({ ok: true, status: 200, body: { sessionEstablished: true, userKey: "actor-key", username: "Native Actor" } });

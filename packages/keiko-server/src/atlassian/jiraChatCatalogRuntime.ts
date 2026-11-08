@@ -284,7 +284,7 @@ function mutationExecutor(deps: UiHandlerDeps): MutationExecutor {
             // Private cookie/body ports must share this exact journal's dispatch and ACK hooks.
             const ports = jiraChatPrivatePorts(deps, context, prepared.current.credential, context, lifecycle);
             return execute(http, trace, { privateIdentity: ports?.identity,
-              avatars: { withSession: ports?.withAvatarSession } });
+              avatars: { withSession: ports?.withAvatarSession, legacyTemporaryRelease: ports?.legacyTemporaryRelease } });
           },
         }),
       source?.items[0]?.trace,
@@ -465,7 +465,8 @@ function connection(
       correlationId: context.correlationId,
       signal: context.signal,
       review: () => avatarAttachmentReview(deps, current.envelope, context),
-    }), ...(privatePorts === undefined ? {} : { withSession: privatePorts.withAvatarSession }) },
+    }), ...(privatePorts === undefined ? {} : { withSession: privatePorts.withAvatarSession,
+      legacyTemporaryRelease: privatePorts.legacyTemporaryRelease }) },
     attachmentSource: jiraChatAttachmentSource(deps, {
       chatId: context.chatId,
       correlationId: context.correlationId,

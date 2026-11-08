@@ -482,7 +482,8 @@ class CodingJiraPodService implements CodingJiraPods {
       },
     }, this.transportLifecycle(binding, context, context.dispatch));
     // Session access is real; no Coding filesystem source or image inspection is inferred here.
-    return { privateIdentity: ports.identity, avatars: { withSession: ports.withAvatarSession } };
+    return { privateIdentity: ports.identity, avatars: { withSession: ports.withAvatarSession,
+      legacyTemporaryRelease: ports.legacyTemporaryRelease } };
   }
 
   /** Every request, read or write, is gated on the run and on the Pod being exactly as chosen. */

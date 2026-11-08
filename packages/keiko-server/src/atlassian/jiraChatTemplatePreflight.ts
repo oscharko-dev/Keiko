@@ -197,7 +197,8 @@ function dryRunTarget(
         correlationId: context.correlationId,
         signal: context.signal,
         review: () => ({ required: true, reviewed: undefined }),
-      }), ...(privatePorts === undefined ? {} : { withSession: privatePorts.withAvatarSession }) },
+      }), ...(privatePorts === undefined ? {} : { withSession: privatePorts.withAvatarSession,
+        legacyTemporaryRelease: privatePorts.legacyTemporaryRelease }) },
     },
   };
 }

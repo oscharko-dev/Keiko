@@ -25,7 +25,8 @@ function createArgs(target: JiraAvatarTarget = TARGET): CatalogJsonObject {
 }
 function harness(target: JiraAvatarTarget = TARGET) {
   const state = { rows: avatarFixtureRows(target).map((row) => ({ ...row })), effect: undefined as AtlassianWriteHttpOutcome | undefined, writes: 0,
-    temporary: undefined as JiraAvatarTemporarySnapshot | undefined, readbackFailure: false, throwAfterAck: false };
+    temporary: undefined as JiraAvatarTemporarySnapshot | undefined, readbackFailure: false, throwAfterAck: false,
+    server: { version: "10.4.0", versionNumbers: [10, 4, 0], deploymentType: "Data Center" } };
   const request = vi.fn<JiraMutationRequest>(async (path, method = "GET", body) => {
     if (method !== "GET") {
       state.writes++;
@@ -35,6 +36,7 @@ function harness(target: JiraAvatarTarget = TARGET) {
     }
     if (state.writes > 0 && state.throwAfterAck) throw new TypeError("synthetic readback defect");
     if (state.writes > 0 && state.readbackFailure) return { ok: false, reason: "permission-denied" };
+    if (path === "serverInfo") return { ok: true, status: 200, body: state.server };
     if (path === "myself") return { ok: true, status: 200, body: { key: ACTOR, name: "synthetic-user" } };
     if (path === "project/100") return { ok: true, status: 200, body: { id: "100", key: "SYN", name: "Synthetic" } };
     if (path === "issuetype/7") return { ok: true, status: 200, body: { id: "7", name: "Story", description: null, subtask: false, avatarId: "41" } };
@@ -165,6 +167,35 @@ describe("session-owned temporary avatars", () => {
     const h = harness();
     expect(await executeJiraAvatarMutation("jira.upload-temporary-avatar", uploadArgs({ kind: "session", avatarType: "user" }), { ...h.ports, legacyTemporaryRelease: undefined })).toMatchObject({ ok: false, reason: "unavailable" });
     expect(h.withSession).not.toHaveBeenCalled();
+  });
+  it.each(["10.3", "10.4"] as const)("uses the current native %s release for both legacy operations without confirming the image", async (release) => {
+    const target = { kind: "session", avatarType: "user" } as const;
+    const h = harness(target);
+    h.state.server = { version: `${release}.0`, versionNumbers: [10, release === "10.3" ? 3 : 4, 0], deploymentType: "Data Center" };
+    const ports = { ...h.ports, legacyTemporaryRelease: release };
+    expect(await executeJiraAvatarMutation("jira.upload-temporary-avatar", uploadArgs(target), ports))
+      .toMatchObject({ ok: false, receipt: { temporaryAvatar: true, uploadSha256: FILE.sha256 } });
+    expect(await executeJiraAvatarMutation("jira.crop-temporary-avatar", { expectedActorKey: ACTOR, target,
+      expectedTemporary: { ...TEMP, crop: { ...CROP } }, crop: { ...CROP } }, ports))
+      .toMatchObject({ ok: false, receipt: { temporaryAvatar: true, uploadSha256: FILE.sha256 } });
+    expect(h.request.mock.calls.filter(([path]) => path === "serverInfo")).toHaveLength(2);
+    expect(h.state.writes).toBe(2);
+  });
+  it.each([
+    { version: "11.3.13", versionNumbers: [11, 3, 13], deploymentType: "Data Center" },
+    { version: "10.3.27", versionNumbers: [10, 3, 27], deploymentType: "Data Center" },
+    { version: "10.4.0", versionNumbers: [10, 4, 1], deploymentType: "Data Center" },
+  ])("refuses stale or inconsistent native release evidence before reading image bytes", async (server) => {
+    const h = harness(); h.state.server = server;
+    expect(await executeJiraAvatarMutation("jira.upload-temporary-avatar", uploadArgs({ kind: "session", avatarType: "user" }), h.ports))
+      .toMatchObject({ ok: false, reason: "unavailable" });
+    expect(h.withSession).not.toHaveBeenCalled(); expect(h.source).not.toHaveBeenCalled(); expect(h.state.writes).toBe(0);
+  });
+  it("retains a real native release-read refusal instead of sending a legacy effect", async () => {
+    const h = harness(); h.request.mockResolvedValueOnce({ ok: false, reason: "permission-denied", httpStatus: 403 });
+    expect(await executeJiraAvatarMutation("jira.upload-temporary-avatar", uploadArgs({ kind: "session", avatarType: "user" }), h.ports))
+      .toMatchObject({ ok: false, reason: "permission-denied" });
+    expect(h.withSession).not.toHaveBeenCalled(); expect(h.state.writes).toBe(0);
   });
   it.each(["jira.upload-project-avatar", "jira.create-project-avatar"] satisfies readonly JiraAvatarMutation[])("keeps malformed source/target inputs before effects: %s", async (operation) => {
     const h = harness();
