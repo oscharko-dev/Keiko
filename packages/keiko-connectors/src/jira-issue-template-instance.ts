@@ -12,6 +12,7 @@ import {
   type JiraMutationRequest,
 } from "./jira-managed-mutation-metadata.js";
 import { readJiraFieldCatalog } from "./jira-managed-template-gate.js";
+import { jiraTemplateNativeIssueType } from "./jira-template-parent-types.js";
 
 /**
  * Read-only instance facts for the Jira Pod template settings (#4177): what a template is
@@ -126,6 +127,23 @@ function statusNames(types: readonly unknown[], wantedId: string | undefined): r
   return [...names];
 }
 
+async function readParentIssueTypes(request: JiraMutationRequest) {
+  const response = await request("issuetype", "GET", undefined, "json-array");
+  if (!response.ok) return response;
+  if (response.status !== 200 || response.items === undefined || response.items.length > 1000)
+    return MALFORMED;
+  const types: { id: string; name: string }[] = [];
+  const seen = new Set<string>();
+  for (const item of response.items) {
+    const type = jiraTemplateNativeIssueType(item);
+    if (type === undefined) return MALFORMED;
+    if (seen.has(type.id)) return MALFORMED;
+    seen.add(type.id);
+    types.push({ id: type.id, name: type.name });
+  }
+  return { ok: true, types } as const;
+}
+
 /** The live facts one template is validated against; unreadable parts are left out, not guessed. */
 export async function readJiraTemplateInstanceMetadata(
   request: JiraMutationRequest,
@@ -134,6 +152,9 @@ export async function readJiraTemplateInstanceMetadata(
   const read = await readProject(request, template.project);
   if (!read.ok) return read;
   const { project } = read;
+  const parentTypes = template.parent.issueTypes === undefined
+    ? undefined : await readParentIssueTypes(request);
+  if (parentTypes !== undefined && !parentTypes.ok) return parentTypes;
   const fields = await readJiraFieldCatalog(request);
   const linkTypes = await readLinkTypes(request);
   const statuses =
@@ -144,6 +165,7 @@ export async function readJiraTemplateInstanceMetadata(
       ...(fields === undefined ? {} : { fields }),
       ...(linkTypes === undefined ? {} : { linkTypes }),
       ...(statuses === undefined ? {} : { statuses }),
+      ...(parentTypes === undefined ? {} : { parentIssueTypes: parentTypes.types }),
       ...(project === undefined
         ? {}
         : { project: { key: project.key, issueTypes: project.issueTypes } }),

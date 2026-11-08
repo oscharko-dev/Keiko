@@ -61,7 +61,12 @@ export interface JiraIssueTemplate {
     readonly pattern?: string;
     readonly minCount?: number;
   };
-  readonly parent: { readonly field?: string; readonly link?: string };
+  readonly parent: {
+    readonly field?: string;
+    readonly link?: string;
+    /** Allowed native parent issue-type names or IDs; requires an explicit parent field. */
+    readonly issueTypes?: readonly string[];
+  };
 }
 
 export const JIRA_TEMPLATE_PARSE_ERROR_CODES = [
@@ -101,6 +106,7 @@ export const JIRA_TEMPLATE_RULE_IDS = [
   "label-pattern",
   "label-count",
   "parent-missing",
+  "parent-type-mismatch",
   "template-unreadable",
 ] as const;
 export type JiraTemplateRuleId = (typeof JIRA_TEMPLATE_RULE_IDS)[number];
@@ -131,6 +137,7 @@ const KEYS = [
   "minLabels",
   "parentField",
   "parentLink",
+  "parentIssueTypes",
   "optionalSections",
 ] as const;
 type TemplateKey = (typeof KEYS)[number];
@@ -497,6 +504,24 @@ function hasRules(template: JiraIssueTemplate): boolean {
   );
 }
 
+function readParent(reader: Reader, entries: readonly RawEntry[]): JiraIssueTemplate["parent"] {
+  const field = reader.scalar("parentField", JIRA_ISSUE_TEMPLATE_LIMITS.textChars);
+  const link = reader.scalar("parentLink", JIRA_ISSUE_TEMPLATE_LIMITS.textChars);
+  const entry = entryOf(entries, "parentIssueTypes");
+  const issueTypes = reader.list(
+    "parentIssueTypes", JIRA_ISSUE_TEMPLATE_LIMITS.listItems, JIRA_ISSUE_TEMPLATE_LIMITS.textChars,
+  );
+  if (entry !== undefined && (field === undefined || issueTypes.length === 0 ||
+    issueTypes.some((type) => type.trim().length === 0))) {
+    reader.errors.push({ code: "invalid-value", key: "parentIssueTypes", line: entry.line });
+  }
+  return {
+    ...(field === undefined ? {} : { field }),
+    ...(link === undefined ? {} : { link }),
+    ...(entry === undefined ? {} : { issueTypes }),
+  };
+}
+
 /**
  * Strict, total parser. A document that is not a template yields `not-a-template`; a template
  * document that is malformed yields every error found (bounded), never a partial template.
@@ -514,8 +539,7 @@ export function parseJiraIssueTemplate(markdown: string): JiraIssueTemplateParse
   const activations = readActivations(reader);
   const summary = readSummary(reader);
   const labels = readLabels(reader);
-  const parentField = reader.scalar("parentField", JIRA_ISSUE_TEMPLATE_LIMITS.textChars);
-  const parentLink = reader.scalar("parentLink", JIRA_ISSUE_TEMPLATE_LIMITS.textChars);
+  const parent = readParent(reader, scan.entries);
   const requiredFields = reader.list(
     "requiredFields",
     JIRA_ISSUE_TEMPLATE_LIMITS.listItems,
@@ -541,10 +565,7 @@ export function parseJiraIssueTemplate(markdown: string): JiraIssueTemplateParse
       requiredFields,
       requiredSections,
       labels,
-      parent: {
-        ...(parentField === undefined ? {} : { field: parentField }),
-        ...(parentLink === undefined ? {} : { link: parentLink }),
-      },
+      parent,
     };
     if (hasRules(template)) return { ok: true, template };
     errors.push({ code: "no-rules" });

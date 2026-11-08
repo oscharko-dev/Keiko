@@ -24,6 +24,7 @@ function named(id: string, type: string, name: string, required = false): Record
 const CREATE_FIELDS = [
   field("project", "project", true),
   field("issuetype", "issuetype", true),
+  named("parent", "issuelink", "Parent"),
   named("summary", "string", "Summary", true),
   {
     ...named("description", "string", "Description"),
@@ -166,6 +167,7 @@ function readRoutes(remote: Remote): readonly ReadRoute[] {
       ? { suffix: "/field", body: [{ id: "customfield_10016", name: "Story Points" }] }
       : { suffix: "/field", body: {}, status: 404 },
     { suffix: "/issue/SYN-1", body: { id: "10001", key: "SYN-1", fields: remote.issue } },
+    { suffix: "/issue/SYN-2", body: { id: "10002", key: "SYN-2", fields: { issuetype: remote.parentType ?? { id: "7", name: "Task" } } } },
   ];
 }
 interface Remote {
@@ -173,6 +175,7 @@ interface Remote {
   fieldCatalog: boolean;
   /** Jira answered transitions without transition or status names. */
   unnamedTransitions?: boolean;
+  parentType?: { id: string; name: string };
 }
 function fixture(
   templates: JiraIssueTemplateSet | (() => JiraIssueTemplateSet) | undefined,
@@ -259,6 +262,19 @@ const SET = (...templates: JiraIssueTemplate[]): JiraIssueTemplateSet => ({
 });
 
 describe("create", () => {
+  it("blocks a disallowed independently read parent type before the real create dispatch", async () => {
+    const saved = SET(template(["activateOn: [create]", "parentField: parent", "parentIssueTypes: [Task]"]));
+    const invalid = fixture(saved, { issue: {}, fieldCatalog: true, parentType: { id: "8", name: "Epic" } });
+    const args = { ...CREATE, fields: { ...CREATE.fields, parent: { key: "SYN-2" } } };
+    expect(await invalid.run("jira.create", args)).toMatchObject({ ok: false, reason: "field-validation",
+      violations: [{ ruleId: "parent-type-mismatch", template: "SYN/Story" }],
+    });
+    expect(invalid.writes()).toEqual([]);
+    const valid = fixture(saved);
+    await valid.run("jira.create", args);
+    expect(valid.paths()).toContain("GET /context/rest/api/2/issue/SYN-2");
+    expect(valid.writes()).toEqual(["POST /context/rest/api/2/issue"]);
+  });
   it("refuses a violating create with structured violations and never writes", async () => {
     const f = fixture(SET(template([...ALL_POINTS, "requiredFields: [Story Points]"])));
     const result = await f.run("jira.create", {

@@ -417,7 +417,10 @@ Cloud, Service Management, Assets, webhooks, plugins and private/UI-only APIs ar
 
 ## Integrity verification
 
-Run `node scripts/check-jira-api-inventory.mjs` for offline ledger integrity. It checks the pinned
+Run `npm run check:jira-api-inventory` for offline ledger integrity. The existing root regression
+`scripts/__tests__/check-jira-api-inventory.test.mjs` checks the committed repository inventory
+as well as hostile fixtures during the normal test lane. Integrity is separate from runtime
+availability and acceptance. The gate checks the pinned
 normalized identity/source-ID digest, historical union and per-release counts, family/cluster
 assignments, historical capability references, prerequisites and state claims. It also reconciles
 every current capability and row mapping with the existing registry source, rejecting stale digests,

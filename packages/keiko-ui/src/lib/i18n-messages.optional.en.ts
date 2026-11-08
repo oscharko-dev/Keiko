@@ -1863,6 +1863,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.fact.updateRemove": "Remove from {fieldId}: {value}",
 
   "chat.jira.resultUnavailable": "Result unavailable",
+  "chat.tool.readableResultUnavailable": "A readable view of this result is unavailable.",
+  "chat.tool.readableResultHelp": "Ask for a supported result view. Do not repeat an action just to recover its display; check its existing outcome first.",
   "chat.jira.partial": "Partial Jira result. Some available data is not included.",
   "chat.jira.outcome.results": "Jira results",
   "chat.jira.outcome.projectId": "Project ID: {id}",
@@ -1913,6 +1915,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.outcome.rule.label-pattern": "A label does not follow the required pattern.",
   "chat.jira.outcome.rule.label-count": "The number of labels does not meet the template rule.",
   "chat.jira.outcome.rule.parent-missing": "The issue needs a parent ({subject}).",
+  "chat.jira.outcome.rule.parent-type-mismatch": "The parent must have an allowed issue type ({subject}).",
   "chat.jira.outcome.rule.template-unreadable":
     "The template could not be read. Check it before requesting the change again.",
   "chat.jira.outcome.failure.auth":

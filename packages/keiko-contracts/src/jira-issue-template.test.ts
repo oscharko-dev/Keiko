@@ -23,6 +23,24 @@ function failure(markdown: string): readonly { code: string; key?: string; line?
 }
 
 describe("parseJiraIssueTemplate", () => {
+  it("stores an explicit parent-type clause and leaves historical presence-only rules unchanged", () => {
+    const parsed = parseJiraIssueTemplate(template([...VALID, "parentField: parent", "parentIssueTypes: [Task, 10002]"]));
+    expect(parsed.ok && parsed.template.parent).toEqual({ field: "parent", issueTypes: ["Task", "10002"] });
+    const legacy = parseJiraIssueTemplate(template([...VALID, "parentField: parent"]));
+    expect(legacy.ok && legacy.template.parent).toEqual({ field: "parent" });
+  });
+  it.each([
+    ["parentIssueTypes: [Task]"],
+    ["parentLink: Blocks", "parentIssueTypes: [Task]"],
+    ["parentField: parent", "parentIssueTypes: []"],
+    ["parentField: parent", "parentIssueTypes: Task"],
+    ["parentField: parent", 'parentIssueTypes: [" "]'],
+    ["parentField: parent", `parentIssueTypes: [${Array.from({ length: 51 }, (_, index) => `Type${index}`).join(", ")}]`],
+  ])("refuses an unbound, empty, malformed or over-bound parent-type clause: %j", (...lines) => {
+    expect(failure(template([...VALID, ...lines]))).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: "parentIssueTypes" }),
+    ]));
+  });
   it("parses a full template with every rule type", () => {
     const result = parseJiraIssueTemplate(
       template(

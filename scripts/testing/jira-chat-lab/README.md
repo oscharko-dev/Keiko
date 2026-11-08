@@ -61,6 +61,66 @@ does not count as acceptance and must be qualified again as a complete new group
 after reconciliation. Raw REST fixture setup is not a substitute for this product
 path. The final acceptance record identifies the exact tested product artifact.
 
+## Project setup and Agile lifecycle through the visible UI
+
+The AC5/AC6 browser group uses the real model, connected Jira Pods, composer,
+administration opt-in and exact write approvals. Supply two existing actors through
+private PAT files: the permitted actor must independently have native `ADMINISTER`
+permission and private default filter sharing; the denied actor must lack that
+permission. The group grants no permissions and changes no global defaults.
+
+```sh
+KEIKO_JIRA_LAB_GATEWAY_CONFIG=/absolute/private/keiko.config.json \
+  npm run jira:lab:browser-project-agile -- /absolute/private/session actual-model-id \
+  /absolute/private/permitted-PAT /absolute/private/denied-PAT
+
+npm run jira:lab:browser-project-agile -- /absolute/private/session --reconcile \
+  /absolute/private/permitted-PAT
+```
+
+Twelve steps cover allowed/denied project creation, Epic and Task creation with the
+intended relation, a private filter, Scrum board, sprint creation and assignment,
+start and completion, and two refused invalid state changes. Independent native
+reads require exact fields, relations, membership and state. Keys and links must
+remain visible after reload. The native dispatch witness forwards real responses
+unchanged and refuses unexpected or repeated writes before forwarding.
+
+This group creates uniquely named projects and retains its effects. It never resets
+`REQ`, restarts Jira or removes remote fixtures. A failure retains its exclusive
+pending intent and product state. `--reconcile` reads the retained targets without
+resuming writes or deleting that marker. The current license must have at least
+thirty minutes remaining. Run groups sequentially in a coordinated machine/Gateway
+window; never stop another session's instance. Source tests and a prepared driver
+are not live acceptance evidence. The finite fourteen-operation catalog group
+above is separate from the epic's 439-identity accounting.
+
+## Formal rules and knowledge-grounded authoring through the visible UI
+
+The AC1/AC2/AC4 source journey uses ordinary skill upload, validation and selection,
+Pod creation and connection, source selection, indexing, the composer and exact
+approvals. Supply the actual configured chat and embedding model identifiers and
+an existing seeded `REQ` board:
+
+```sh
+KEIKO_JIRA_LAB_GATEWAY_CONFIG=/absolute/private/keiko.config.json \
+  npm run jira:lab:browser-rules-knowledge -- /absolute/private/session actual-model-id \
+  actual-embedding-model-id existing-REQ-board-id
+```
+
+The group checks refused and corrected Epic writes in all three modes; Task, Bug
+and subtask writes use Ask for approval. A prose skill must create no enforcement
+record or formal refusal. The parent-type clause must reject an Epic as a subtask's
+parent and accept its intended Task. Independent native reads check required
+fields, exact types and the Subtask → Task → Epic relations.
+
+Supported documents and folders are selected and indexed in the actual Knowledge
+UI before model-assisted Epic creation. Native Jira readback checks readable
+descriptions and meaningful document/page/section references; visible Epics and
+board backlog rows are evaluated separately. Keys and links must survive reload.
+An exclusive persisted intent prevents replay after an interrupted run; this group
+does not reset or clean up Jira. These authored sources still require current-head
+live execution and do not establish acceptance by themselves.
+
 ## Complete paginated search through ordinary Chat
 
 After the same licensed HTTPS/read/write preflight, use the existing seeded project with

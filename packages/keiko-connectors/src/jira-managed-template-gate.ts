@@ -21,6 +21,7 @@ import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { readJiraMutationIssue } from "./jira-mutation-confirmation.js";
 import { parseJiraFieldMetadata } from "./jira-field-metadata.js";
 import { jiraNativeText } from "./jira-native-values.js";
+import { bindJiraTemplateParentTypes } from "./jira-template-parent-types.js";
 
 /**
  * Write admission against customer-defined issue templates (#4177). One gate sits between the
@@ -401,13 +402,16 @@ export type JiraSchemaRuleImpact =
   | { readonly kind: "custom-fields"; readonly fields: readonly JiraFieldCatalogEntry[] }
   | { readonly kind: "link-type"; readonly names: readonly string[] };
 function schemaRuleAffected(template: JiraIssueTemplate, impact: Exclude<JiraSchemaRuleImpact, { readonly kind: "issue-deletion" }>, catalog: readonly JiraFieldCatalogEntry[]): boolean {
-  if (impact.kind === "issue-type") return impact.types.some((type) =>
-    sameType(template.issueType, type.id) || sameType(template.issueType, type.name));
+  if (impact.kind === "issue-type") return typeSchemaRuleAffected(template, impact.types);
   if (impact.kind === "link-type") return linkSchemaRuleAffected(template, impact.names);
   return references([template]).some((reference) => {
     const ids = resolveJiraTemplateFieldIds(reference, catalog);
     return ids.length === 0 || ids.some((id) => impact.fields.some((field) => field.id === id));
   });
+}
+function typeSchemaRuleAffected(template: JiraIssueTemplate, types: readonly { readonly id: string; readonly name: string }[]): boolean {
+  return [template.issueType, ...(template.parent.issueTypes ?? [])].some((reference) =>
+    types.some((type) => sameType(reference, type.id) || sameType(reference, type.name)));
 }
 function linkSchemaRuleAffected(template: JiraIssueTemplate, names: readonly string[]): boolean {
   if (template.parent.link !== undefined && names.some((name) => sameType(template.parent.link ?? "", name))) return true;
@@ -613,7 +617,9 @@ async function checkCandidates(
   const ordered = requiredLinksFirst(input.links ?? [], matching);
   // Only the link that rides on the request itself exists in the state this write leaves.
   const primary = planJiraIssueLinks(ordered, identity.prior.issuelinks).inline;
-  const subject = subjectOf(input, identity, primary);
+  const subject = await bindJiraTemplateParentTypes(
+    input.request, subjectOf(input, identity, primary), matching, catalog,
+  );
   const unreadable = evidenceViolations(subject, matching, catalog);
   if (unreadable.length > 0) return { ok: false, reason: "field-validation", violations: unreadable };
   const violations = checkJiraIssueTemplates(

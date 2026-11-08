@@ -18,6 +18,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/knowledge-turn-coverage";
 import {
   jiraToolDetailsLabel,
+  isKnownJiraToolAlias,
   jiraToolLabel,
   jiraToolRegionLabel,
   jiraToolState,
@@ -133,10 +134,13 @@ function JiraToolResultDetails({ exchange }: { readonly exchange: ChatToolExchan
   const data = exchange.result?.data ?? exchange.draftProgress;
   if (data == null) return null;
   return (
-    <details>
-      <summary>{t(jiraToolDetailsLabel(exchange))}</summary>
-      <pre className={styles.cmpResult}>{JSON.stringify(data, null, 2)}</pre>
-    </details>
+    <div>
+      <p>{t("chat.tool.readableResultUnavailable")}</p>
+      <details>
+        <summary>{t(jiraToolDetailsLabel(exchange))}</summary>
+        <p>{t("chat.tool.readableResultHelp")}</p>
+      </details>
+    </div>
   );
 }
 function JiraContextLink({ href, label }: {
@@ -207,6 +211,7 @@ const RULE_MESSAGES = {
   "label-pattern": "chat.jira.outcome.rule.label-pattern",
   "label-count": "chat.jira.outcome.rule.label-count",
   "parent-missing": "chat.jira.outcome.rule.parent-missing",
+  "parent-type-mismatch": "chat.jira.outcome.rule.parent-type-mismatch",
   "template-unreadable": "chat.jira.outcome.rule.template-unreadable",
 } as const satisfies Readonly<Record<JiraOutcomeRule["ruleId"], string>>;
 const VALIDATION_MESSAGES = {
@@ -386,7 +391,7 @@ function JiraToolExchange({
       {localDenial === undefined ? null : <p>{t(localDenial)}</p>}
       {report === undefined ? null : <JiraReportCard view={report} chatId={chatId} />}
       {report === undefined && partial !== undefined ? <p>{t(partial)}</p> : null}
-      {exchange.call.name.startsWith("jira_") ? (
+      {isKnownJiraToolAlias(exchange.call.name) ? (
         report === undefined ? (
           <JiraToolOutcome exchange={exchange} />
         ) : null

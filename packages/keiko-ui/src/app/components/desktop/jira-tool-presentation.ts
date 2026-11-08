@@ -92,6 +92,10 @@ const MCP_OUTCOME_KEYS: Readonly<Record<JiraMutationResultState, WidgetMessageKe
   pending: "chat.mcp.write.pending",
 };
 const MANAGED_TOOLS = [...JIRA_MANAGED_READ_TOOLS, ...JIRA_MUTATION_OPERATIONS];
+/** A familiar prefix does not give an unknown result the native Jira presentation contract. */
+export function isKnownJiraToolAlias(name: string): boolean {
+  return MANAGED_TOOLS.some((operation) => operation.replace(/[.-]/gu, "_") === name);
+}
 /** The Chat alias of the local `knowledge.requirements` read (#4179). */
 const REQUIREMENTS_TOOL_ALIAS = "knowledge_requirements";
 const KNOWLEDGE_TOOLS: Readonly<

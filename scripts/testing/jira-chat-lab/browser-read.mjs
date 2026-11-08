@@ -46,21 +46,23 @@ export async function openBrowser(chat, origin) {
   );
   return { browser, page };
 }
-export async function createPod(page, session) {
+export async function createPod(page, session, options = {}) {
+  const label = options.label ?? "Browser Jira";
+  const tokenFile = options.tokenFile ?? join(session.directory, "secrets", "api-token");
   await page.getByRole("button", { name: "Local Knowledge", exact: true }).click();
   const hub = page.getByRole("region", { name: /Local Knowledge/ });
   await hub.getByRole("button", { name: "Create Jira Pod", exact: true }).click();
   stage("hub-open");
   const form = hub.getByTestId("acx-add-form");
-  await form.getByLabel("Label", { exact: true }).fill("Browser Jira");
+  await form.getByLabel("Label", { exact: true }).fill(label);
   await form.getByLabel("Base URL", { exact: true }).fill("https://127.0.0.1:18443");
   await form
     .getByLabel("API token", { exact: true })
-    .fill(readPrivateFile(join(session.directory, "secrets", "api-token")).trim());
+    .fill(readPrivateFile(tokenFile).trim());
   const verified = await verifyPodAction(page, () =>
     form.getByRole("button", { name: "Create Jira Pod", exact: true }).click(),
   );
-  const card = hub.getByTestId("acx-connector").filter({ hasText: "Browser Jira" });
+  const card = hub.getByTestId("acx-connector").filter({ hasText: label });
   await assertVerifiedPod(page, card, verified);
   stage("pod-verified");
   await page.getByRole("button", { name: "Local Knowledge", exact: true }).click();

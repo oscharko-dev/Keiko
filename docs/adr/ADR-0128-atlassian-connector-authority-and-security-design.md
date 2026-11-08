@@ -1431,7 +1431,15 @@ the approval.
   status>` for a definition of ready), `summaryMinLength`/`summaryMaxLength`/`summaryPattern`,
   `requiredFields` (instance field ids or names; a field is present when its value has any content,
   not only a name, key or id: a time-tracking estimate counts), `requiredLabels`/`labelPattern`/`minLabels`,
-  `parentField` (an instance field) and `parentLink` (a link type), `optionalSections`. The
+  `parentField` (an instance field) and `parentLink` (a link type), `optionalSections`.
+  Optional `parentIssueTypes: [Task]` requires `parentField` and a nonempty bounded list of native
+  issue-type names or IDs. The existing pre-effect gate resolves that field's post-write parent,
+  independently reads its native type through the bound issue reader, and refuses unreadable or
+  contradictory identities and disallowed types. Embedded/model-supplied type hints are no proof.
+  Without this clause the existing parent-presence rule is unchanged. Validation reads the native
+  type catalog; saving and activation still use the ordinary Markdown skill library. The synchronous
+  report checker, without independent parent-type evidence, reports `template-unreadable` rather
+  than passing the clause. Prose-only skills never enter this enforcement path. The
   level-2 headings of the template body (`## Title`, or a setext title underlined with `---`) are
   the required description sections, each of which must be present and carry content. One reader
   (`jira-description-sections.ts`) uses Markdown mode for template bodies and explicitly tagged

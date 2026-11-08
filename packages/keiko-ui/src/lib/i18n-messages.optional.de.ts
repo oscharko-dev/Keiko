@@ -1870,6 +1870,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.fact.updateRemove": "Aus {fieldId} entfernen: {value}",
 
   "chat.jira.resultUnavailable": "Ergebnis nicht verfügbar",
+  "chat.tool.readableResultUnavailable": "Für dieses Ergebnis ist keine lesbare Ansicht verfügbar.",
+  "chat.tool.readableResultHelp": "Bitte um eine unterstützte Ergebnisansicht. Wiederhole eine Aktion nicht nur wegen der fehlenden Darstellung; prüfe zuerst ihren bisherigen Ausgang.",
   "chat.jira.partial": "Jira-Teilergebnis. Nicht alle verfügbaren Daten sind enthalten.",
   "chat.jira.outcome.results": "Jira-Ergebnisse",
   "chat.jira.outcome.projectId": "Projekt-ID: {id}",
@@ -1921,6 +1923,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.outcome.rule.label-missing": "Das Label „{subject}“ ist erforderlich.",
   "chat.jira.outcome.rule.label-pattern": "Ein Label entspricht nicht dem vorgeschriebenen Muster.",
   "chat.jira.outcome.rule.label-count": "Die Anzahl der Labels entspricht nicht der Vorlagenregel.",
+  "chat.jira.outcome.rule.parent-type-mismatch": "Das übergeordnete Issue muss einen erlaubten Vorgangstyp haben ({subject}).",
   "chat.jira.outcome.rule.parent-missing":
     "Der Vorgang benötigt einen übergeordneten Vorgang ({subject}).",
   "chat.jira.outcome.rule.template-unreadable":

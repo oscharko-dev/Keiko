@@ -169,6 +169,7 @@ const TEMPLATE_ADMISSION = defineActivityLogOperation({
         "label-pattern",
         "label-count",
         "parent-missing",
+        "parent-type-mismatch",
         "template-unreadable",
       ],
       maxItems: 25,

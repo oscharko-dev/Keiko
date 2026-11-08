@@ -158,6 +158,11 @@ describe.each(["en", "de"] as const)("pending native Coding input in %s", (local
       expiresAt: Date.now() + 60_000,
       fields: ["password"],
       optionalFields: [],
+      review: {
+        jiraBaseUrl: "https://jira.example.invalid/context",
+        actorUserKey: "synthetic-actor", actorUsername: "synthetic-operator",
+        targetKind: "user", targetUserKey: "synthetic-actor", targetUsername: "synthetic-operator",
+      },
     };
     const empty = sessionWith([]).detail;
     const pending = sessionWith([inputMessage(view, "pending")]).detail;
@@ -204,6 +209,11 @@ describe.each(["en", "de"] as const)("pending native Coding input in %s", (local
         expiresAt: Date.now() + 60_000,
         fields: ["password"],
         optionalFields: [],
+        review: {
+          jiraBaseUrl: "https://jira.example.invalid/context",
+          actorUserKey: "synthetic-actor", actorUsername: "synthetic-operator",
+          targetKind: "user", targetUserKey: "synthetic-actor", targetUsername: "synthetic-operator",
+        },
       };
       vi.mocked(inputApi.getJiraHumanInput).mockResolvedValue(view);
       render(
