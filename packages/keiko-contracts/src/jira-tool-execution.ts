@@ -37,8 +37,27 @@ export const JIRA_RELEASE_LIFECYCLE_MUTATIONS = Object.freeze([
 ] as const);
 export type JiraReleaseLifecycleMutation = (typeof JIRA_RELEASE_LIFECYCLE_MUTATIONS)[number];
 
+/** Fixed screen/tab/field configuration effects; no arbitrary schema mutation. */
+export const JIRA_SCREEN_CONFIGURATION_MUTATIONS = Object.freeze([
+  "jira.add-default-screen-field", "jira.add-screen-tab-field", "jira.remove-screen-tab-field",
+  "jira.move-screen-tab-field", "jira.set-screen-field-show-when-empty", "jira.move-screen-tab",
+] as const);
+export type JiraScreenConfigurationMutation = (typeof JIRA_SCREEN_CONFIGURATION_MUTATIONS)[number];
+export const JIRA_BOARD_CONFIGURATION_MUTATIONS = Object.freeze([
+  "jira.delete-board", "jira.set-board-refined-velocity",
+] as const);
+export type JiraBoardConfigurationMutation = (typeof JIRA_BOARD_CONFIGURATION_MUTATIONS)[number];
+export const JIRA_SPRINT_LIFECYCLE_MUTATIONS = Object.freeze([
+  "jira.replace-sprint", "jira.delete-sprint", "jira.swap-sprints",
+  "jira.unmap-sprints", "jira.unmap-all-sprints",
+] as const);
+export type JiraSprintLifecycleMutation = (typeof JIRA_SPRINT_LIFECYCLE_MUTATIONS)[number];
+
 /** Remote effects remain separate from the enclosing MCP/catalog terminal status. */
 export const JIRA_MUTATION_OPERATIONS = [
+  ...JIRA_SCREEN_CONFIGURATION_MUTATIONS,
+  ...JIRA_BOARD_CONFIGURATION_MUTATIONS,
+  ...JIRA_SPRINT_LIFECYCLE_MUTATIONS,
   ...JIRA_LINK_MUTATIONS,
   ...JIRA_RELEASE_LIFECYCLE_MUTATIONS,
   ...JIRA_SAVED_CONFIGURATION_MUTATIONS,
@@ -199,6 +218,17 @@ export type JiraMutationResultState = (typeof JIRA_MUTATION_RESULT_STATES)[numbe
 /** Validated Jira identities and closed state facts; never remote bodies or headers.
  * Monitoring booleans on unknown/unconfirmed writes are requested targets, not success evidence. */
 export interface JiraMutationReceipt {
+  readonly fieldId?: string;
+  /** Requested presence until independent native layout readback succeeds. */
+  readonly fieldPresent?: boolean;
+  readonly showWhenEmpty?: boolean;
+  readonly boardPresent?: boolean;
+  readonly refinedVelocityEnabled?: boolean;
+  readonly sprintIds?: readonly string[];
+  readonly swapSprintId?: string;
+  readonly sprintSynced?: boolean;
+  readonly sprintPresent?: boolean;
+  readonly allSprints?: true;
   readonly linkId?: string;
   readonly linkTypeId?: string;
   readonly linkedIssueId?: string;

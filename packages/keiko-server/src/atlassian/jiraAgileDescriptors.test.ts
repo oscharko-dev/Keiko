@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
+import { isBoundedExternalJsonSchema } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import {
   JIRA_AGILE_READ_DEFINITIONS,
   JIRA_FILTER_READ_DEFINITIONS,
@@ -7,6 +9,19 @@ import {
 } from "./jiraAgileDescriptors.js";
 
 describe("native Agile declarations", () => {
+  it("admits optional exact Sprint review facts without conflating null, missing or false", () => {
+    const schema = JIRA_AGILE_READ_DEFINITIONS["jira.sprint"].item;
+    const base = { id: "9", name: "Sprint", state: "future" };
+    expect(isBoundedExternalJsonSchema(schema)).toBe(true);
+    expect(describeCatalogSchemaMismatch(schema, base)).toBeUndefined();
+    expect(describeCatalogSchemaMismatch(schema, { ...base, reviewSnapshot: {
+      ...base, originBoardId: "7", synced: false, autoStartStop: false,
+      startDate: null, endDate: null, goal: "", incompleteIssuesDestinationId: null,
+    } })).toBeUndefined();
+    expect(describeCatalogSchemaMismatch(schema, { ...base, reviewSnapshot: { ...base, originBoardId: "7" } })).toBeUndefined();
+    for (const reviewSnapshot of [null, { ...base, originBoardId: "7", synced: null }, { ...base, originBoardId: "7", self: "https://metadata.invalid" }])
+      expect(describeCatalogSchemaMismatch(schema, { ...base, reviewSnapshot })).toBeDefined();
+  });
   it("declares actual board and Epic destinations while sprint links name only board context", () => {
     expect(JIRA_AGILE_WRITE_DEFINITIONS["jira.board-create"].receipts).toHaveProperty("browseUrl");
     expect(JIRA_AGILE_WRITE_DEFINITIONS["jira.epic-update"].receipts).toHaveProperty("browseUrl");

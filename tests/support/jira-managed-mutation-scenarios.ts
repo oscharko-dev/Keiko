@@ -2,6 +2,7 @@ import type { JiraMutationOperation } from "@oscharko-dev/keiko-contracts/runtim
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { response, type SyntheticJira } from "./jira-managed-remote.js";
 import { LIFECYCLE_ARGUMENTS, LIFECYCLE_RECEIPTS, LIFECYCLE_REMOTE_STATE } from "./jira-managed-lifecycle-scenarios.js";
+import { CONFIGURATION_ARGUMENTS, CONFIGURATION_RECEIPTS, CONFIGURATION_REMOTE_STATE } from "./jira-managed-configuration-scenarios.js";
 import { SAVED_CONFIGURATION_ARGUMENTS, SAVED_CONFIGURATION_REMOTE_STATE, SAVED_CONFIGURATION_RECEIPTS,
   savedConfigurationRemoteState, nativeSavedConfigurationRead, type SavedConfigurationRemoteState } from "./jira-managed-saved-configuration-scenarios.js";
 import {
@@ -17,6 +18,7 @@ import {
 export type SingleMutation = Exclude<JiraMutationOperation, "jira.draft">;
 export const ATTACHED = new TextEncoder().encode("synthetic attachment body");
 export const ARGUMENTS: Readonly<Record<JiraMutationOperation, CatalogJsonObject>> = {
+  ...CONFIGURATION_ARGUMENTS,
   ...LIFECYCLE_ARGUMENTS,
   ...SAVED_CONFIGURATION_ARGUMENTS,
   ...ADMINISTRATION_ARGUMENTS,
@@ -82,6 +84,7 @@ export const ARGUMENTS: Readonly<Record<JiraMutationOperation, CatalogJsonObject
 
 /** Observed remote state after the request, independent of returned receipts and registry metadata. */
 export const REMOTE_STATE: Readonly<Record<SingleMutation, object>> = {
+  ...CONFIGURATION_REMOTE_STATE,
   ...LIFECYCLE_REMOTE_STATE,
   ...SAVED_CONFIGURATION_REMOTE_STATE,
   ...ADMINISTRATION_REMOTE_STATE,
@@ -144,6 +147,7 @@ const PROJECT_RECEIPT = {
 };
 const COMPONENT_RECEIPT = { componentId: "71", projectId: "10000", projectKey: "SYN" };
 export const SUCCESS_RECEIPTS: Readonly<Record<SingleMutation, CatalogJsonObject>> = {
+  ...CONFIGURATION_RECEIPTS,
   ...LIFECYCLE_RECEIPTS,
   ...SAVED_CONFIGURATION_RECEIPTS,
   ...ADMINISTRATION_SUCCESS_RECEIPTS,

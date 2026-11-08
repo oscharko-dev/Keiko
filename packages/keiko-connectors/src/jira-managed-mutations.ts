@@ -1,4 +1,7 @@
 import { executeJiraScreenTabMutation, isJiraScreenTabMutation } from "./jira-managed-screen-tab-mutations.js";
+import { executeJiraScreenConfigurationMutation, isJiraScreenConfigurationMutation } from "./jira-managed-screen-configuration.js";
+import { executeJiraBoardConfigurationMutation, isJiraBoardConfigurationMutation } from "./jira-managed-board-configuration-mutations.js";
+import { executeJiraSprintLifecycleMutation, isJiraSprintLifecycleMutation } from "./jira-managed-sprint-lifecycle.js";
 import { executeJiraMonitoringMutation, isJiraMonitoringMutation } from "./jira-managed-monitoring-mutations.js";
 import { executeJiraEntityPropertyMutation, isJiraEntityPropertyMutation } from "./jira-managed-entity-property-mutations.js";
 import { executeJiraFilterMutation, isJiraFilterMutation } from "./jira-managed-filter-mutations.js";
@@ -10,7 +13,7 @@ import { executeJiraVersionLifecycleMutation, isJiraVersionLifecycleMutation } f
 import { executeJiraIssueLinkMutation, isJiraIssueLinkMutation } from "./jira-managed-issue-link-mutations.js";
 import { executeJiraRemoteLinkMutation, isJiraRemoteLinkMutation } from "./jira-managed-remote-link-mutations.js";
 import { jiraFilterBrowseUrl } from "./jira-browse-url.js";
-import { jiraAgileRequest } from "./jira-agile-request.js";
+import { jiraAgileRequest, jiraAgileRequests, jiraExperimentalAgileRequest } from "./jira-agile-request.js";
 import {
   executeJiraParticipationMutation,
   isJiraParticipationMutation,
@@ -1395,6 +1398,16 @@ function configurationMutation(
     return executeJiraMonitoringMutation(operation, args, request, check);
   if (isJiraScreenTabMutation(operation))
     return executeJiraScreenTabMutation(operation, args, request, check);
+  if (isJiraScreenConfigurationMutation(operation))
+    return executeJiraScreenConfigurationMutation(operation, args, request, check);
+  if (isJiraBoardConfigurationMutation(operation))
+    return executeJiraBoardConfigurationMutation(operation, args, jiraAgileRequests(connection, context), check);
+  if (isJiraSprintLifecycleMutation(operation))
+    return executeJiraSprintLifecycleMutation(operation, args, {
+      requests: jiraAgileRequests(connection, context),
+      ...(connection.issueTemplates === undefined ? {} : { templates: connection.issueTemplates }),
+      experimentalAgile: jiraExperimentalAgileRequest(connection, context),
+    }, check);
   return savedConfigurationMutation(operation, args, request, check, connection.baseUrl);
 }
 function nativeLifecycleMutation(
@@ -1525,13 +1538,15 @@ function isNativeLifecycleMutation(operation: JiraMutationOperation): boolean {
   return [isJiraComponentDelete, isJiraVersionLifecycleMutation, isJiraIssueLinkMutation, isJiraRemoteLinkMutation]
     .some((accepts) => accepts(operation));
 }
+function isReviewedConfigurationMutation(operation: JiraMutationOperation): boolean {
+  return [isJiraEntityPropertyMutation, isJiraScreenTabMutation, isJiraScreenConfigurationMutation,
+    isJiraBoardConfigurationMutation, isJiraSprintLifecycleMutation, isJiraMonitoringMutation].some((accepts) => accepts(operation));
+}
 function requiresSuccessfulPreflight(operation: JiraMutationOperation): boolean {
   return (
     isNativeLifecycleMutation(operation) ||
     isSavedConfigurationMutation(operation) ||
-    isJiraEntityPropertyMutation(operation) ||
-    isJiraScreenTabMutation(operation) ||
-    isJiraMonitoringMutation(operation) ||
+    isReviewedConfigurationMutation(operation) ||
     isJiraAgileMutation(operation) ||
     isJiraCommentMutation(operation) ||
     isJiraCommentDelete(operation) ||

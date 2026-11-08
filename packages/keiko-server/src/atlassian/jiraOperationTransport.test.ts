@@ -26,6 +26,7 @@ import { propertyTransportFixture, PROPERTY_FIXTURE_KEY, REVIEWED_PROPERTY_NODES
 import { POST_AND_IDENTITY_READ_SCENARIOS, POST_AND_IDENTITY_READ_TOOLS, postAndIdentityReadTransport } from "../../../../tests/support/jira-post-and-identity-read-fixture.js";
 import { RELEASE_LIFECYCLE_FIXTURE_CASES, releaseLifecycleTransportFixture } from "../../../../tests/support/jira-release-lifecycle-fixture.js";
 import { LINK_MUTATION_FIXTURE_CASES, linkMutationTransportFixture } from "../../../../tests/support/jira-link-mutation-fixture.js";
+import { SCREEN_CONFIGURATION_FIXTURE_CASES as SCREEN_CONFIGURATION_CASES, screenConfigurationTransportFixture } from "../../../../tests/support/jira-screen-configuration-fixture.js";
 import {
   SAVED_CONFIGURATION_ARGUMENTS,
   SAVED_CONFIGURATION_RECEIPTS,
@@ -44,6 +45,18 @@ const CREATE = {
 };
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
+  { tool: "jira.add-default-screen-field", args: SCREEN_CONFIGURATION_CASES[0].args, parameters: { fieldId: "customfield_10001" },
+    expectedOutcome: "succeeded-unconfirmed", expectedReceipt: { fieldId: "customfield_10001", fieldPresent: true } },
+  { tool: "jira.add-screen-tab-field", args: SCREEN_CONFIGURATION_CASES[1].args, parameters: { screenId: "11", tabId: "21" },
+    expectedReceipt: { screenId: "11", tabId: "21", fieldId: "customfield_10001", fieldPresent: true } },
+  { tool: "jira.remove-screen-tab-field", args: SCREEN_CONFIGURATION_CASES[2].args, parameters: { screenId: "11", tabId: "21", id: "description" },
+    expectedReceipt: { screenId: "11", tabId: "21", fieldId: "description", fieldPresent: false } },
+  { tool: "jira.move-screen-tab-field", args: SCREEN_CONFIGURATION_CASES[3].args, parameters: { screenId: "11", tabId: "21", id: "summary" },
+    expectedReceipt: { screenId: "11", tabId: "21", fieldId: "summary" } },
+  { tool: "jira.set-screen-field-show-when-empty", args: SCREEN_CONFIGURATION_CASES[4].args, parameters: { screenId: "11", tabId: "21", id: "summary", newValue: "true" },
+    expectedReceipt: { screenId: "11", tabId: "21", fieldId: "summary", showWhenEmpty: true } },
+  { tool: "jira.move-screen-tab", args: SCREEN_CONFIGURATION_CASES[5].args, parameters: { screenId: "11", tabId: "21", pos: "1" },
+    expectedReceipt: { screenId: "11", tabId: "21" } },
   ...POST_AND_IDENTITY_READ_SCENARIOS,
   { tool: "jira.delete-component", args: RELEASE_LIFECYCLE_FIXTURE_CASES[0].args, parameters: { id: "71" }, query: { moveIssuesTo: "72" },
     expectedOutcome: "succeeded-unconfirmed", expectedReceipt: { componentId: "71", replacementComponentId: "72", projectId: "10000", projectKey: "SYN", userKey: "synthetic-actor" } },
@@ -1416,11 +1429,13 @@ function remote(tool?: string, initiallyPresent = true): ReturnType<typeof vi.fn
   });
 }
 function lifecycleRemote(tool: string | undefined): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> | undefined {
+  const selectedScreen = SCREEN_CONFIGURATION_CASES.find((item) => item.tool === tool);
   const selectedLink = LINK_MUTATION_FIXTURE_CASES.find((item) => item.tool === tool);
   const release = RELEASE_LIFECYCLE_FIXTURE_CASES.some((item) => item.tool === tool);
-  const fixture = selectedLink === undefined
+  const related = selectedLink === undefined
     ? (release ? releaseLifecycleTransportFixture("/context/rest/api/2") : undefined)
     : linkMutationTransportFixture("/context/rest/api/2", selectedLink);
+  const fixture = selectedScreen === undefined ? related : screenConfigurationTransportFixture("/context/rest/api/2", selectedScreen);
   if (fixture === undefined) return undefined;
   return vi.fn<AtlassianHttpBodyPort>(async (request) => {
     const url = new URL(request.url);
@@ -1485,7 +1500,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(249);
+    expect(native).toHaveLength(255);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),
@@ -1497,6 +1512,20 @@ describe("native Jira registry and real connector transport agreement", () => {
     const writes = observed.requests.filter((request) => request.method !== "GET");
     expect(writes).toHaveLength(observed.definition.method === "GET" ? 0 : 1);
     if (scenario.expectedReceipt !== undefined) expect(observed.result.data).toMatchObject(scenario.expectedReceipt);
+  });
+  it("retains default-screen addition as unconfirmed without a guessed screen or tab identity", async () => {
+    const scenario = SCENARIOS.find(({ tool }) => tool === "jira.add-default-screen-field");
+    if (scenario === undefined) throw new TypeError("Missing default screen fixture");
+    const observed = await observe(scenario);
+    expect(observed.result).toMatchObject({ isError: true, data: {
+      outcome: "succeeded-unconfirmed", fieldId: "customfield_10001", fieldPresent: true,
+    } });
+    expect(observed.result.data).not.toHaveProperty("screenId");
+    expect(observed.result.data).not.toHaveProperty("tabId");
+    expect(observed.requests.map(({ method, url }) => [method, url])).toEqual([
+      ["GET", "https://jira.example.invalid/context/rest/api/2/field"],
+      ["POST", "https://jira.example.invalid/context/rest/api/2/screens/addToDefault/customfield_10001"],
+    ]);
   });
   it("mints the version-move after URI only from the bound context and confirms the complete native order", async () => {
     const scenario = SCENARIOS.find(({ tool }) => tool === "jira.move-version");

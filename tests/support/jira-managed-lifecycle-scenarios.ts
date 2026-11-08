@@ -2,6 +2,7 @@ import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/go
 import type { AtlassianHttpBodyRequest, AtlassianHttpBodyResult } from "@oscharko-dev/keiko-connectors";
 import { LINK_MUTATION_FIXTURE_CASES, linkMutationTransportFixture } from "./jira-link-mutation-fixture.js";
 import { RELEASE_LIFECYCLE_FIXTURE_CASES, releaseLifecycleTransportFixture } from "./jira-release-lifecycle-fixture.js";
+import { configurationTransportController } from "./jira-managed-configuration-scenarios.js";
 
 type LifecycleMutation = (typeof RELEASE_LIFECYCLE_FIXTURE_CASES)[number]["tool"] | (typeof LINK_MUTATION_FIXTURE_CASES)[number]["tool"];
 const ACTOR = "synthetic-key";
@@ -65,30 +66,33 @@ export function expectedLifecycleOutcome(operation: string): "succeeded" | "succ
   return Object.hasOwn(outcomes, operation) ? outcomes[operation] : undefined;
 }
 interface Controller {
-  readonly read: (request: AtlassianHttpBodyRequest) => AtlassianHttpBodyResult | undefined;
-  readonly write: (request: AtlassianHttpBodyRequest) => AtlassianHttpBodyResult | undefined;
+  readonly read: (request: AtlassianHttpBodyRequest) => AtlassianHttpBodyResult | undefined | Promise<AtlassianHttpBodyResult | undefined>;
+  readonly write: (request: AtlassianHttpBodyRequest) => AtlassianHttpBodyResult | undefined | Promise<AtlassianHttpBodyResult | undefined>;
   readonly snapshot: () => object;
 }
 const API_ROOT = "/context/rest/api/2";
 function controller(operation: string | undefined): Controller | undefined {
+  const configuration = configurationTransportController(operation);
+  if (configuration !== undefined) return configuration;
   if (release.some((item) => item.tool === operation)) return releaseLifecycleTransportFixture(API_ROOT);
   const selected = links.find((item) => item.tool === operation);
   return selected === undefined ? undefined : linkMutationTransportFixture(API_ROOT, selected);
 }
 export function lifecycleRemoteFixture(operation: string | undefined): {
-  readonly read: (path: string) => AtlassianHttpBodyResult | undefined;
+  readonly read: (url: string) => Promise<AtlassianHttpBodyResult | undefined>;
   readonly write: (request: Request) => Promise<AtlassianHttpBodyResult | undefined>;
   readonly snapshot: () => object | undefined;
 } {
   const selected = controller(operation);
   return {
-    read: (path) => selected?.read({ method: "GET", url: `https://203.0.113.10${path}`, timeoutMs: 1000, maxBodyBytes: 262144 }),
+    read: async (url) => selected?.read({ method: "GET", url, timeoutMs: 1000, maxBodyBytes: 262144 }),
     async write(request) {
       if (selected === undefined) return undefined;
       const method = request.method;
       if (method !== "POST" && method !== "PUT" && method !== "DELETE") return undefined;
       const bodyJson = await request.clone().text();
       return selected.write({ method, url: request.url, timeoutMs: 1000, maxBodyBytes: 262144,
+        ...(request.headers.get("x-experimentalapi") === "true" ? { jiraExperimental: true } : {}),
         ...(bodyJson === "" ? {} : { bodyJson }) });
     },
     snapshot: () => selected?.snapshot(),

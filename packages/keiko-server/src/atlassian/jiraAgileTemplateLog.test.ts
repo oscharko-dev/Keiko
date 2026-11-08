@@ -13,6 +13,8 @@ import {
 afterEach(resetServerLogger);
 
 it.each([
+  "jira.replace-sprint",
+  "jira.delete-sprint",
   ...JIRA_LINK_MUTATIONS,
   "jira.delete-component",
   "jira.merge-version",

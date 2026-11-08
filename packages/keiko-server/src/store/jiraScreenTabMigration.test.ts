@@ -55,7 +55,7 @@ describe("V67 screen-tab operations retain the existing durable journal", () => 
     runMigrations(db);
     insert(db, "jira.create-screen-tab", "first");
     insert(db, "jira.rename-screen-tab", "second");
-    for (const operation of ["jira.draft", "jira.create-screen", "jira.delete-screen", "jira.move-screen-tab", "jira.unknown"])
+    for (const operation of ["jira.draft", "jira.create-screen", "jira.delete-screen", "jira.move-screen", "jira.unknown"])
       expect(() => { insert(db, operation, operation); }).toThrow(/CHECK/u);
     for (const clause of [
       "http_status=201", "protocol_outcome='success'", "phase='acknowledged'",

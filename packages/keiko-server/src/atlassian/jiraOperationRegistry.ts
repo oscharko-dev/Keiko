@@ -19,6 +19,19 @@ type CompositeTool = "jira.report" | "jira.draft-stage" | "jira.draft";
 type NativeTool = Exclude<JiraOperationTool, CompositeTool>;
 type JiraOperationEffect = "remote-read" | "remote-write" | "local-report" | "local-draft";
 type JiraPermissionPolicy =
+  | "instance-admin-default-screen-field-unconfirmed"
+  | "instance-admin-screen-field-add-and-readback"
+  | "instance-admin-screen-field-delete-and-absence"
+  | "instance-admin-screen-field-order-and-readback"
+  | "instance-admin-screen-field-display-and-readback"
+  | "instance-admin-screen-tab-order-and-readback"
+  | "board-delete-unconfirmed"
+  | "board-refined-velocity-and-readback"
+  | "sprint-replace-and-readback"
+  | "sprint-delete-and-membership-uncertainty"
+  | "sprint-swap-and-position-uncertainty"
+  | "sprint-unmap-and-readback"
+  | "instance-admin-sprint-unmap-all-unconfirmed"
   | "issue-link-create-and-readback"
   | "issue-link-delete-and-absence"
   | "remote-link-upsert-and-readback"
@@ -193,6 +206,45 @@ function writes<const K extends NativeTool>(
   return result as NativeGroup<K>;
 }
 const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
+  ...writes("instance-admin-default-screen-field-unconfirmed", {
+    "jira.add-default-screen-field": ["POST", "/screens/addToDefault/{fieldId}"],
+  }),
+  ...writes("instance-admin-screen-field-add-and-readback", {
+    "jira.add-screen-tab-field": ["POST", "/screens/{screenId}/tabs/{tabId}/fields"],
+  }),
+  ...writes("instance-admin-screen-field-delete-and-absence", {
+    "jira.remove-screen-tab-field": ["DELETE", "/screens/{screenId}/tabs/{tabId}/fields/{id}"],
+  }),
+  ...writes("instance-admin-screen-field-order-and-readback", {
+    "jira.move-screen-tab-field": ["POST", "/screens/{screenId}/tabs/{tabId}/fields/{id}/move"],
+  }),
+  ...writes("instance-admin-screen-field-display-and-readback", {
+    "jira.set-screen-field-show-when-empty": ["PUT", "/screens/{screenId}/tabs/{tabId}/fields/{id}/updateShowWhenEmptyIndicator/{newValue}"],
+  }),
+  ...writes("instance-admin-screen-tab-order-and-readback", {
+    "jira.move-screen-tab": ["POST", "/screens/{screenId}/tabs/{tabId}/move/{pos}"],
+  }),
+  ...writes("board-delete-unconfirmed", {
+    "jira.delete-board": ["DELETE", "/board/{boardId}"],
+  }, "/rest/agile/1.0"),
+  ...writes("board-refined-velocity-and-readback", {
+    "jira.set-board-refined-velocity": ["PUT", "/board/{boardId}/settings/refined-velocity"],
+  }, "/rest/agile/1.0"),
+  ...writes("sprint-replace-and-readback", {
+    "jira.replace-sprint": ["PUT", "/sprint/{sprintId}"],
+  }, "/rest/agile/1.0"),
+  ...writes("sprint-delete-and-membership-uncertainty", {
+    "jira.delete-sprint": ["DELETE", "/sprint/{sprintId}"],
+  }, "/rest/agile/1.0"),
+  ...writes("sprint-swap-and-position-uncertainty", {
+    "jira.swap-sprints": ["POST", "/sprint/{sprintId}/swap"],
+  }, "/rest/agile/1.0"),
+  ...writes("sprint-unmap-and-readback", {
+    "jira.unmap-sprints": ["PUT", "/sprint/unmap"],
+  }, "/rest/agile/1.0"),
+  ...writes("instance-admin-sprint-unmap-all-unconfirmed", {
+    "jira.unmap-all-sprints": ["PUT", "/sprint/unmap-all"],
+  }, "/rest/agile/1.0"),
   ...writes("issue-link-create-and-readback", {
     "jira.create-issue-link": ["POST", "/issueLink"],
   }),

@@ -701,9 +701,9 @@ Memory retains its separate explicit-or-`governed-assist` default. This availabi
 itself grant a Chat read grant, mutation approval, connector scope or authority envelope.
 
 
-**Explicit instance administration (#4287, review 4503902861).** The thirteen implemented administration writes—application/IPD monitoring, JMX exposure
-start/stop, screen-tab create/rename/delete, issue-type property set/delete, filter creation,
-future-filter default sharing and filter permission addition/removal—use the separate connector class
+**Explicit instance administration (#4287, review 4503902861).** The twenty implemented administration writes—application/IPD monitoring, JMX exposure
+start/stop, screen-tab and screen-field layout changes, issue-type property set/delete, filter creation,
+future-filter default sharing, filter permission addition/removal and instance-wide sprint synchronization cleanup—use the separate connector class
 `connector-admin` and require `issue-tracker.admin`. Ordinary `issue-tracker.write` never admits
 these operations, including in Full access. They retain high risk and the same Workbench
 `connector-access` class, `internet` resource scope, supervised `connector-write` kind and existing
@@ -729,6 +729,13 @@ those native permissions nor permits a privileged credential fallback. Conversel
 with native project-creation permission does not acquire Keiko's instance-administration scope.
 This keeps the accepted project-setup workflow distinct from changing instance runtime or shared
 schema configuration, while enforcing both local task authority and the actual Jira permission.
+
+Board deletion/refined-velocity and selected sprint replacement/deletion/swap/unmap retain ordinary
+write scope and high risk. Selected unmap changes synchronization only; instance-wide unmap is an
+administration action even when the reviewed input contains only a sample. Only the two exact native
+unmap PUT routes accept the server-owned literal experimental opt-in; the custody owner validates it
+before dispatch admission and emits a fixed header. Model-supplied headers or arbitrary experimental
+routes have no execution path. Native project/board permissions remain independent of local scope.
 
 Three native anonymization validation/progress observations use that same explicit admin scope
 while retaining low read risk and the existing per-Chat read grant. Their GET contracts do not

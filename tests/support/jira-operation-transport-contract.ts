@@ -38,6 +38,8 @@ export interface Observation {
 const UNCONFIRMED_NATIVE_OPERATIONS: ReadonlySet<string> = new Set([
   "jira.delete-filter", "jira.delete-my-preference", "jira.delete-component",
   "jira.merge-version", "jira.remove-and-swap-version",
+  "jira.add-default-screen-field", "jira.delete-board",
+  "jira.delete-sprint", "jira.swap-sprints", "jira.unmap-all-sprints",
 ]);
 export async function observeNativeJiraOperation(
   scenario: Scenario,

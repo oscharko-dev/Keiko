@@ -35,6 +35,12 @@ import {
 import { JIRA_READ_TOOL_FAMILIES } from "./jira-read-tools.js";
 import { JIRA_MANAGED_READ_TOOLS, type JiraManagedReadToolName } from "./jira-tool-fields.js";
 import {
+  JIRA_SCREEN_CONFIGURATION_MUTATIONS,
+  JIRA_BOARD_CONFIGURATION_MUTATIONS,
+  JIRA_SPRINT_LIFECYCLE_MUTATIONS,
+  type JiraScreenConfigurationMutation,
+  type JiraBoardConfigurationMutation,
+  type JiraSprintLifecycleMutation,
   JIRA_LINK_MUTATIONS,
   JIRA_RELEASE_LIFECYCLE_MUTATIONS,
   type JiraLinkMutation,
@@ -67,6 +73,19 @@ function relationshipOrReleaseAction(name: JiraRelationshipOrReleaseMutation): J
 const JIRA_RELATIONSHIP_RELEASE_ACTIONS = Object.freeze([
   ...JIRA_LINK_MUTATIONS, ...JIRA_RELEASE_LIFECYCLE_MUTATIONS,
 ].map(relationshipOrReleaseAction));
+
+type JiraConfigurationMutation = JiraScreenConfigurationMutation | JiraBoardConfigurationMutation | JiraSprintLifecycleMutation;
+type JiraConfigurationAction = JiraConfigurationMutation extends `jira.${infer Action}` ? Action : never;
+function configurationAction(name: JiraConfigurationMutation): JiraConfigurationAction {
+  return name.slice(5) as JiraConfigurationAction;
+}
+const JIRA_CONFIGURATION_ACTIONS = Object.freeze([
+  ...JIRA_SCREEN_CONFIGURATION_MUTATIONS, ...JIRA_BOARD_CONFIGURATION_MUTATIONS, ...JIRA_SPRINT_LIFECYCLE_MUTATIONS,
+].map(configurationAction));
+const JIRA_CONFIGURATION_ADMIN_ACTIONS = Object.freeze([
+  "add-default-screen-field", "add-screen-tab-field", "remove-screen-tab-field",
+  "move-screen-tab-field", "set-screen-field-show-when-empty", "move-screen-tab", "unmap-all-sprints",
+] as const satisfies readonly JiraConfigurationAction[]);
 
 // ─── Schema version ───────────────────────────────────────────────────────────
 // Pinned to "1". A breaking change introduces a NEW literal rather than mutating "1", the same
@@ -622,6 +641,7 @@ export type AtlassianConnectorActionType =
   | JiraEntityPropertyAction
   | JiraSavedConfigurationAction
   | JiraRelationshipOrReleaseAction
+  | JiraConfigurationAction
   | "set-app-monitoring"
   | "set-ipd-monitoring"
   | "start-jmx-metrics"
@@ -666,6 +686,7 @@ export type AtlassianConnectorActionType =
 
 export const ATLASSIAN_CONNECTOR_ACTION_TYPES: readonly AtlassianConnectorActionType[] =
   Object.freeze([
+    ...JIRA_CONFIGURATION_ACTIONS,
     ...JIRA_RELATIONSHIP_RELEASE_ACTIONS,
     ...JIRA_SAVED_ACTIONS,
     ...JIRA_PROPERTY_ACTIONS,
@@ -720,6 +741,19 @@ export const JIRA_REQUIREMENT_REFERENCE_CHARS_MAX = 120;
 export const JIRA_MANAGED_ACTION_TYPES: Readonly<
   Record<JiraManagedReadToolName | JiraMutationOperation, AtlassianConnectorActionType>
 > = Object.freeze({
+  "jira.add-default-screen-field": "add-default-screen-field",
+  "jira.add-screen-tab-field": "add-screen-tab-field",
+  "jira.remove-screen-tab-field": "remove-screen-tab-field",
+  "jira.move-screen-tab-field": "move-screen-tab-field",
+  "jira.set-screen-field-show-when-empty": "set-screen-field-show-when-empty",
+  "jira.move-screen-tab": "move-screen-tab",
+  "jira.delete-board": "delete-board",
+  "jira.set-board-refined-velocity": "set-board-refined-velocity",
+  "jira.replace-sprint": "replace-sprint",
+  "jira.delete-sprint": "delete-sprint",
+  "jira.swap-sprints": "swap-sprints",
+  "jira.unmap-sprints": "unmap-sprints",
+  "jira.unmap-all-sprints": "unmap-all-sprints",
   "jira.create-issue-link": "create-issue-link",
   "jira.delete-issue-link": "delete-issue-link",
   "jira.upsert-remote-link": "upsert-remote-link",
@@ -816,6 +850,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASSES: readonly AtlassianConnectorActi
 export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
   Record<AtlassianConnectorActionType, AtlassianConnectorActionClass>
 > = Object.freeze({
+  ...jiraActionValues(JIRA_CONFIGURATION_ACTIONS, "connector-write"),
+  ...jiraActionValues(JIRA_CONFIGURATION_ADMIN_ACTIONS, "connector-admin"),
   ...jiraActionValues(JIRA_RELATIONSHIP_RELEASE_ACTIONS, "connector-write"),
   ...jiraActionValues(JIRA_SAVED_ADMIN_ACTIONS, "connector-admin"),
   ...jiraActionValues(JIRA_SAVED_WRITE_ACTIONS, "connector-write"),
@@ -870,6 +906,7 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
 export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
   Record<AtlassianConnectorActionType, AtlassianConnectorProvider>
 > = Object.freeze({
+  ...jiraActionValues(JIRA_CONFIGURATION_ACTIONS, "jira"),
   ...jiraActionValues(JIRA_RELATIONSHIP_RELEASE_ACTIONS, "jira"),
   ...jiraActionValues(JIRA_SAVED_ACTIONS, "jira"),
   ...jiraActionValues(JIRA_MANAGED_READ_TOOLS, "jira"),
@@ -920,6 +957,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
 export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchConnectorScope>
 > = Object.freeze({
+  ...jiraActionValues(JIRA_CONFIGURATION_ACTIONS, "issue-tracker.write"),
+  ...jiraActionValues(JIRA_CONFIGURATION_ADMIN_ACTIONS, "issue-tracker.admin"),
   ...jiraActionValues(JIRA_RELATIONSHIP_RELEASE_ACTIONS, "issue-tracker.write"),
   ...jiraActionValues(JIRA_SAVED_ADMIN_ACTIONS, "issue-tracker.admin"),
   ...jiraActionValues(JIRA_SAVED_WRITE_ACTIONS, "issue-tracker.write"),
@@ -984,6 +1023,7 @@ export function jiraRequiredConnectorScope(
 export const ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchApprovalRisk>
 > = Object.freeze({
+  ...jiraActionValues(JIRA_CONFIGURATION_ACTIONS, "high"),
   ...jiraActionValues(JIRA_RELATIONSHIP_RELEASE_ACTIONS, "medium"),
   ...jiraActionValues(JIRA_SAVED_ADMIN_ACTIONS, "high"),
   ...jiraActionValues(JIRA_SAVED_WRITE_ACTIONS, "medium"),
@@ -1924,6 +1964,12 @@ export {
   JIRA_RELEASE_LIFECYCLE_MUTATIONS,
   type JiraLinkMutation,
   type JiraReleaseLifecycleMutation,
+  JIRA_SCREEN_CONFIGURATION_MUTATIONS,
+  JIRA_BOARD_CONFIGURATION_MUTATIONS,
+  JIRA_SPRINT_LIFECYCLE_MUTATIONS,
+  type JiraScreenConfigurationMutation,
+  type JiraBoardConfigurationMutation,
+  type JiraSprintLifecycleMutation,
   JIRA_SAVED_CONFIGURATION_MUTATIONS,
   type JiraSavedConfigurationMutation,
   JIRA_MUTATION_OUTCOMES,

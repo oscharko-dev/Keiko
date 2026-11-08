@@ -103,6 +103,8 @@ const TEMPLATE_ADMISSION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: true,
       values: [
+        "jira.replace-sprint",
+        "jira.delete-sprint",
         "jira.create-issue-link",
         "jira.delete-issue-link",
         "jira.upsert-remote-link",
@@ -211,6 +213,8 @@ const FIELD_ADMISSION = defineActivityLogOperation({
 });
 
 const TEMPLATE_OPERATIONS = [
+  "jira.replace-sprint",
+  "jira.delete-sprint",
   ...JIRA_LINK_MUTATIONS,
   "jira.delete-component",
   "jira.merge-version",

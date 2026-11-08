@@ -357,12 +357,14 @@ const ADMIN_READ_ACTIONS = [
 const ADMIN_READ_SET: ReadonlySet<string> = new Set(ADMIN_READ_ACTIONS);
 // Explicit expectations for the added native writes; no production policy table supplies values.
 const ADMIN_ACTIONS = [
+  "add-default-screen-field", "add-screen-tab-field", "remove-screen-tab-field", "move-screen-tab-field", "set-screen-field-show-when-empty", "move-screen-tab", "unmap-all-sprints",
   "create-screen-tab", "rename-screen-tab", "delete-screen-tab",
   "set-app-monitoring", "set-ipd-monitoring", "start-jmx-metrics", "stop-jmx-metrics",
   "set-issue-type-property", "delete-issue-type-property",
   "create-filter", "set-filter-share-scope", "add-filter-permission", "delete-filter-permission",
 ] as const satisfies readonly AtlassianConnectorActionType[];
 const HIGH_WRITES = [
+  "delete-board", "set-board-refined-velocity", "replace-sprint", "delete-sprint", "swap-sprints", "unmap-sprints",
   "delete-issue-link", "delete-remote-link", "delete-remote-link-by-global-id",
   "delete-component", "merge-version", "move-version", "remove-and-swap-version",
   "delete-filter",

@@ -17,6 +17,9 @@ import {
   type Scenario,
 } from "../../../../tests/support/jira-operation-transport-contract.js";
 import { propertyTransportFixture, PROPERTY_FIXTURE_KEY, REVIEWED_PROPERTY_NODES, REQUESTED_PROPERTY_NODES } from "../../../../tests/support/jira-property-transport-fixture.js";
+import { BOARD_CONFIGURATION_FIXTURE_CASES as BOARD_CONFIGURATION_CASES, boardConfigurationTransportFixture } from "../../../../tests/support/jira-board-configuration-fixture.js";
+import { SPRINT_LIFECYCLE_FIXTURE_CASES as SPRINT_LIFECYCLE_CASES } from "../../../../tests/support/jira-sprint-lifecycle-fixture.js";
+import { sprintLifecycleTransportFixture } from "../../../../tests/support/jira-sprint-lifecycle-transport-fixture.js";
 
 const PAGING = { startAt: 2, maxResults: 5 };
 const QUERY = { startAt: "2", maxResults: "5" };
@@ -27,6 +30,20 @@ const ISSUE_QUERY = {
 const CONTEXT_ISSUE_QUERY = { ...ISSUE_QUERY, validateQuery: "true", jql: "project = SYN AND summary ~ \"A & B\"" };
 // Independent selected identities and filters: the registry supplies no fixture input or response.
 const SCENARIOS: readonly Scenario[] = [
+  { tool: "jira.replace-sprint", args: SPRINT_LIFECYCLE_CASES[0].args, parameters: { sprintId: "11" },
+    expectedReceipt: { userKey: "synthetic-actor", sprintId: "11", originBoardId: "7", sprintPresent: true } },
+  { tool: "jira.delete-sprint", args: SPRINT_LIFECYCLE_CASES[1].args, parameters: { sprintId: "11" },
+    expectedOutcome: "succeeded-unconfirmed", expectedReceipt: { userKey: "synthetic-actor", sprintId: "11", originBoardId: "7", sprintPresent: false } },
+  { tool: "jira.swap-sprints", args: SPRINT_LIFECYCLE_CASES[2].args, parameters: { sprintId: "11" },
+    expectedOutcome: "succeeded-unconfirmed", expectedReceipt: { userKey: "synthetic-actor", sprintId: "11", originBoardId: "7", swapSprintId: "12" } },
+  { tool: "jira.unmap-sprints", args: SPRINT_LIFECYCLE_CASES[3].args,
+    expectedReceipt: { userKey: "synthetic-actor", sprintIds: ["12"], sprintSynced: false } },
+  { tool: "jira.unmap-all-sprints", args: SPRINT_LIFECYCLE_CASES[4].args,
+    expectedOutcome: "succeeded-unconfirmed", expectedReceipt: { userKey: "synthetic-actor", sprintIds: ["12"], sprintSynced: false, allSprints: true } },
+  { tool: "jira.delete-board", args: BOARD_CONFIGURATION_CASES[0].args, parameters: { boardId: "7" },
+    expectedOutcome: "succeeded-unconfirmed", expectedReceipt: { boardId: "7", filterId: "42", userKey: "synthetic-actor", boardPresent: false } },
+  { tool: "jira.set-board-refined-velocity", args: BOARD_CONFIGURATION_CASES[1].args, parameters: { boardId: "7" },
+    expectedReceipt: { boardId: "7", filterId: "42", userKey: "synthetic-actor", refinedVelocityEnabled: false } },
   { tool: "jira.set-board-property", args: { boardId: "7", propertyKey: PROPERTY_FIXTURE_KEY, expectedValueNodes: REVIEWED_PROPERTY_NODES, valueNodes: REQUESTED_PROPERTY_NODES }, parameters: { boardId: "7", propertyKey: PROPERTY_FIXTURE_KEY } },
   { tool: "jira.delete-board-property", args: { boardId: "7", propertyKey: PROPERTY_FIXTURE_KEY, expectedValueNodes: REVIEWED_PROPERTY_NODES }, parameters: { boardId: "7", propertyKey: PROPERTY_FIXTURE_KEY } },
   { tool: "jira.set-sprint-property", args: { sprintId: "9", propertyKey: PROPERTY_FIXTURE_KEY, expectedValueNodes: REVIEWED_PROPERTY_NODES, valueNodes: REQUESTED_PROPERTY_NODES }, parameters: { sprintId: "9", propertyKey: PROPERTY_FIXTURE_KEY } },
@@ -166,7 +183,26 @@ const PROPERTY_WRITE_ROOTS: Readonly<Record<string, string>> = {
   "jira.set-board-property": "board/7/properties", "jira.delete-board-property": "board/7/properties",
   "jira.set-sprint-property": "sprint/9/properties", "jira.delete-sprint-property": "sprint/9/properties",
 };
+function configurationRemote(tool?: string): AtlassianHttpBodyPort | undefined {
+  const selectedSprint = SPRINT_LIFECYCLE_CASES.find((item) => item.name === tool);
+  const selectedBoard = BOARD_CONFIGURATION_CASES.find((item) => item.tool === tool);
+  let fixture: ReturnType<typeof sprintLifecycleTransportFixture> | ReturnType<typeof boardConfigurationTransportFixture> | undefined;
+  if (selectedSprint !== undefined)
+    fixture = sprintLifecycleTransportFixture("/context/rest/api/2", "/context/rest/agile/1.0", selectedSprint);
+  else if (selectedBoard !== undefined)
+    fixture = boardConfigurationTransportFixture("/context/rest/api/2", "/context/rest/agile/1.0", selectedBoard);
+  if (fixture === undefined) return undefined;
+  const selected = fixture;
+  return async (request) => {
+    expect(new URL(request.url).origin).toBe("https://jira.example.invalid");
+    const result = await (request.method === "GET" ? selected.read(request) : selected.write(request));
+    if (result === undefined) throw new TypeError("Unexpected reviewed Agile configuration route");
+    return result;
+  };
+}
 function remote(tool?: string): AtlassianHttpBodyPort {
+  const configuration = configurationRemote(tool);
+  if (configuration !== undefined) return configuration;
   const state = mutationRemoteState();
   const root = PROPERTY_WRITE_ROOTS[tool ?? ""];
   const property = propertyTransportFixture(root === undefined ? undefined : `/context/rest/agile/1.0/${root}`);
@@ -184,7 +220,7 @@ describe("native Agile registry and actual connector transport agreement", () =>
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && definition.apiRoot === "/rest/agile/1.0",
     );
-    expect(native).toHaveLength(35);
+    expect(native).toHaveLength(42);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),
@@ -202,8 +238,59 @@ describe("native Agile registry and actual connector transport agreement", () =>
       expect(observed.requests.filter((request) => request.method !== "GET")).toHaveLength(
         observed.definition.method === "GET" ? 0 : 1,
       );
+      if (scenario.expectedReceipt !== undefined) expect(observed.result.data).toMatchObject(scenario.expectedReceipt);
     },
   );
+  it("does not convert acknowledged board deletion and a selected404 into confirmed absence", async () => {
+    const scenario = SCENARIOS.find(({ tool }) => tool === "jira.delete-board");
+    if (scenario === undefined) throw new TypeError("Missing board deletion fixture");
+    const observed = await observeNativeJiraOperation(scenario, {
+      deployment: "data-center", baseUrl: "https://jira.example.invalid/context", http: remote(scenario.tool),
+    });
+    expect(observed.result).toMatchObject({ isError: true, data: {
+      outcome: "succeeded-unconfirmed", boardId: "7", filterId: "42", userKey: "synthetic-actor", boardPresent: false,
+    } });
+    expect(observed.requests.map(({ method, url }) => [method, url])).toEqual([
+      ["GET", "https://jira.example.invalid/context/rest/api/2/myself"],
+      ["GET", "https://jira.example.invalid/context/rest/agile/1.0/board/7/configuration"],
+      ["DELETE", "https://jira.example.invalid/context/rest/agile/1.0/board/7"],
+      ["GET", "https://jira.example.invalid/context/rest/api/2/myself"],
+      ["GET", "https://jira.example.invalid/context/rest/agile/1.0/board/7"],
+    ]);
+  });
+  it.each([
+    ["jira.unmap-sprints", "sprint/unmap", "succeeded", '{"sprintIds":[12]}'],
+    ["jira.unmap-all-sprints", "sprint/unmap-all", "succeeded-unconfirmed", undefined],
+  ] as const)("keeps %s experimental opt-in fixed to one PUT and distinguishes selected proof from the instance sample", async (tool, path, outcome, bodyJson) => {
+    const scenario = SCENARIOS.find((entry) => entry.tool === tool);
+    if (scenario === undefined) throw new TypeError("Missing sprint cleanup fixture");
+    const observed = await observeNativeJiraOperation(scenario, {
+      deployment: "data-center", baseUrl: "https://jira.example.invalid/context", http: remote(tool),
+    });
+    const effects = observed.requests.filter((request) => request.method !== "GET");
+    expect(effects).toHaveLength(1);
+    expect(effects[0]).toMatchObject({ method: "PUT", url: `https://jira.example.invalid/context/rest/agile/1.0/${path}`, jiraExperimental: true });
+    expect(effects[0]?.bodyJson).toBe(bodyJson);
+    expect(observed.requests.filter((request) => request.method === "GET").every((request) => request.jiraExperimental === undefined)).toBe(true);
+    expect(observed.requests.at(-1)?.method).toBe("GET");
+    expect(observed.result.data).toMatchObject({ outcome, sprintIds: ["12"], sprintSynced: false });
+    expect(observed.result.isError).toBe(tool === "jira.unmap-all-sprints" ? true : undefined);
+  });
+  it.each([false, true])("serializes and independently confirms native refined-velocity value %s", async (value) => {
+    const selected = BOARD_CONFIGURATION_CASES[1];
+    const fixture = boardConfigurationTransportFixture("/context/rest/api/2", "/context/rest/agile/1.0", selected, value);
+    const observed = await observeNativeJiraOperation({ tool: selected.tool,
+      args: { ...selected.args, expectedValue: !value, value }, parameters: { boardId: "7" },
+    }, { deployment: "data-center", baseUrl: "https://jira.example.invalid/context", http: async (request) => {
+      const result = request.method === "GET" ? fixture.read(request) : fixture.write(request);
+      if (result === undefined) throw new TypeError("Unexpected board setting route");
+      return result;
+    } });
+    expect(observed.requests.find(({ method }) => method === "PUT")?.bodyJson).toBe(JSON.stringify({ value }));
+    expect(observed.result.data).toMatchObject({ outcome: "succeeded", refinedVelocityEnabled: value });
+    expect(fixture.snapshot()).toMatchObject({ boardPresent: true, refinedVelocityEnabled: value, writes: 1 });
+    expect(observed.requests.at(-1)?.url).toBe("https://jira.example.invalid/context/rest/agile/1.0/board/7/settings/refined-velocity");
+  });
   it("resolves estimation identity without updating issue history before reading the exact numeric target", async () => {
     const observed = await observeNativeJiraOperation({
       tool: "jira.issue-estimation", args: { issueIdOrKey: "SYN-2", boardId: "7" },

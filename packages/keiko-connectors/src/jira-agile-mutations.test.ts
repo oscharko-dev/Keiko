@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { parseJiraIssueTemplate } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { AtlassianHttpBodyPort, AtlassianHttpBodyResult } from "./atlassian-http-port.js";
 // Exercise the production managed router as well as the native adapter.
 import { checkJiraManagedMutation, executeJiraManagedMutation } from "./jira-managed-mutations.js";
@@ -68,6 +69,30 @@ function fixture(replies: readonly AtlassianHttpBodyResult[]): Fixture {
 }
 
 describe("native Agile writes and authoritative readback", () => {
+  it.each(["Sprint", "summary"])("applies saved %s rules before the existing partial sprint completion effect", async (field) => {
+    const parsed = parseJiraIssueTemplate([
+      "---", "keiko: jira-issue-template", "version: 1", "project: HIDDEN",
+      "issueType: Story", "activateOn: [edit]", `requiredFields: [${field}]`, "---", "",
+    ].join("\n"));
+    if (!parsed.ok) throw new TypeError("Synthetic sprint formal template must parse");
+    const active = { ...SPRINT, state: "active" };
+    const closed = { ...SPRINT, state: "closed" };
+    const catalog = [{ id: "customfield_10020", name: "Sprint", schema: {
+      type: "array", items: "string", custom: "com.pyxis.greenhopper.jira:gh-sprint", customId: 10020,
+    } }];
+    const f = fixture(field === "Sprint" ? [response(200, active), response(200, catalog)]
+      : [response(200, active), response(200, closed), response(200, closed)]);
+    const result = await executeJiraManagedMutation("jira.sprint-update", { sprintId: "9", state: "closed" }, f.context, {
+      ...f.connection, issueTemplates: () => ({ templates: [parsed.template], unreadable: 0 }),
+    });
+    if (field === "Sprint") {
+      expect(result).toMatchObject({ ok: false, reason: "field-validation", violations: [{ ruleId: "template-unreadable" }] });
+      expect(f.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
+    } else {
+      expect(result.ok).toBe(true);
+      expect(f.http.mock.calls.filter(([request]) => request.method === "POST")).toHaveLength(1);
+    }
+  });
   it("mints the acknowledged board link from the selected instance and context", async () => {
     const f = fixture([
       response(200, { id: "42" }),

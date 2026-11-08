@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { SCREEN_CONFIGURATION_FIXTURE_CASES } from "../../../../tests/support/jira-screen-configuration-fixture.js";
+import { BOARD_CONFIGURATION_FIXTURE_CASES } from "../../../../tests/support/jira-board-configuration-fixture.js";
+import { SPRINT_LIFECYCLE_FIXTURE_CASES } from "../../../../tests/support/jira-sprint-lifecycle-fixture.js";
 import {
   JIRA_FIELD_VALIDATION_FAILURES,
   JIRA_MUTATION_OPERATIONS,
@@ -398,6 +401,16 @@ describe("the template marker", () => {
 });
 
 describe("the dry run before approval", () => {
+  it.each([
+    ...SCREEN_CONFIGURATION_FIXTURE_CASES.map(({ tool, args }) => ({ tool, args })),
+    ...BOARD_CONFIGURATION_FIXTURE_CASES.map(({ tool, args }) => ({ tool, args })),
+    ...SPRINT_LIFECYCLE_FIXTURE_CASES.map(({ name, args }) => ({ tool: name, args })),
+  ])("refuses denied $tool prerequisites before approval or any native write", async ({ tool, args }) => {
+    const f = preflight(TEMPLATE, args, tool);
+    f.http.mockImplementation(() => Promise.resolve(response({ errorMessages: ["Denied"] }, 403)));
+    expect(await f.run()).toMatchObject({ outcome: "rejected", reason: "permission-denied" });
+    expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);
+  });
   function preflight(
     templateText: string,
     args: Record<string, unknown> | undefined,

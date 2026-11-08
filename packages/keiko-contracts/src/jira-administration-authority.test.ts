@@ -8,6 +8,7 @@ import {
 import { CODING_WORKBENCH_MODES } from "./coding-workbench.js";
 
 const ADMIN_TOOLS = [
+  "jira.add-default-screen-field", "jira.add-screen-tab-field", "jira.remove-screen-tab-field", "jira.move-screen-tab-field", "jira.set-screen-field-show-when-empty", "jira.move-screen-tab", "jira.unmap-all-sprints",
   "jira.anonymization-validation", "jira.anonymization-rerun-validation", "jira.anonymization-progress",
   "jira.create-filter", "jira.set-filter-share-scope",
   "jira.add-filter-permission", "jira.delete-filter-permission",
@@ -30,6 +31,18 @@ describe("explicit Jira instance administration authority", () => {
         ["issue-tracker.read", "issue-tracker.write", "issue-tracker.admin"], ["connector-access"]))
         .toMatchObject({ disposition: mode === "autonomous-delivery" ? "allowed" : "review-required" });
     }
+  });
+
+  it.each([
+    "jira.delete-board", "jira.set-board-refined-velocity", "jira.replace-sprint",
+    "jira.delete-sprint", "jira.swap-sprints", "jira.unmap-sprints",
+  ] as const)("keeps %s on its independently required ordinary-write grant", (tool) => {
+    expect(jiraRequiredConnectorScope(tool)).toBe("issue-tracker.write");
+    expect(ATLASSIAN_CONNECTOR_ACTION_CLASS[JIRA_MANAGED_ACTION_TYPES[tool]])
+      .toBe("connector-write");
+    expect(decideAtlassianConnectorAction(JIRA_MANAGED_ACTION_TYPES[tool],
+      "autonomous-delivery", ["issue-tracker.admin"], ["connector-access"]).disposition)
+      .toBe("denied");
   });
 
   it("keeps ordinary writes distinct and still requires the envelope action class", () => {

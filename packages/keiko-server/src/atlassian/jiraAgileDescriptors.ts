@@ -14,6 +14,7 @@ import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/ru
 import { createToolDescriptor, createToolRef } from "@oscharko-dev/keiko-tool-catalog";
 import { ATLASSIAN_ACTION_APPROVAL_TTL_MS } from "./actionApprovalLimits.js";
 import { object, text } from "./jiraManagedSchemas.js";
+import { jiraSprintLifecycleSnapshotSchema } from "./jiraSprintLifecycleDescriptors.js";
 
 const FAILURE_FIELD_ERRORS = {
   type: "array",
@@ -79,8 +80,7 @@ const ISSUE_KEYS = {
 };
 const BOARD_FIELDS = { id: ID, name: NAME, type: BOARD_TYPE, browseUrl: text(4096) };
 const BOARD = object(BOARD_FIELDS, ["id", "name", "type"]);
-const SPRINT = object(
-  {
+const SPRINT_FIELDS = {
     id: ID,
     name: NAME,
     state: SPRINT_STATE,
@@ -91,9 +91,9 @@ const SPRINT = object(
     activatedDate: DATE,
     completeDate: DATE,
     goal: text(2048),
-  },
-  ["id", "name", "state"],
-);
+};
+const SPRINT = object(SPRINT_FIELDS, ["id", "name", "state"]);
+const SPRINT_DETAIL = object({ ...SPRINT_FIELDS, reviewSnapshot: jiraSprintLifecycleSnapshotSchema }, ["id", "name", "state"]);
 const EPIC = object(
   {
     id: ID,
@@ -268,10 +268,10 @@ export const JIRA_AGILE_READ_DEFINITIONS = {
     paged: true,
   },
   "jira.sprint": {
-    description: "Read one visible sprint including its state, goal and available dates.",
+    description: "Read one visible sprint including its state, goal and available dates. Optional reviewSnapshot preserves exact native identity and all supported lifecycle facts for a reviewed replacement/delete/unmap: absent flags or dates remain unknown, explicit null remains null. If a complete supported snapshot cannot be projected, reviewSnapshot is unavailable; the ordinary summary does not authorize guessing it. No issue-membership or global-population proof is implied.",
     parameters: { sprintId: ID },
     required: ["sprintId"],
-    item: SPRINT,
+    item: SPRINT_DETAIL,
     paged: false,
   },
   "jira.sprint-issues": {

@@ -22,6 +22,7 @@ import type {
   JiraIssueTemplateSource,
   JiraTemplateGateResult,
 } from "./jira-managed-template-gate.js";
+import { gateJiraBulkReferenceChange } from "./jira-managed-template-gate.js";
 import { gateJiraAgileIssueChange } from "./jira-agile-templates.js";
 import { jiraCreationAcknowledgement } from "./jira-creation-acknowledgement.js";
 import { dispatchFailure } from "./jira-mutation-failure.js";
@@ -126,15 +127,19 @@ interface UpdateSelection {
   readonly id: string;
   readonly receipt: JiraMutationReceipt;
 }
-function updateAdmission(
+async function updateAdmission(
   requests: JiraAgileRequests,
   input: AgileMutationInput,
   source: JiraIssueTemplateSource | undefined,
   item: CatalogJsonObject,
 ): Promise<JiraTemplateGateResult> {
-  return input.operation === "jira.sprint-update"
-    ? Promise.resolve(sprintTransition(input.body, item) ?? { ok: true })
-    : gateJiraAgileIssueChange(requests, source, input, item);
+  if (input.operation !== "jira.sprint-update")
+    return gateJiraAgileIssueChange(requests, source, input, item);
+  const transition = sprintTransition(input.body, item);
+  if (transition !== undefined) return transition;
+  return input.body.state === "closed"
+    ? gateJiraBulkReferenceChange({ request: requests.issue, source, kind: "sprint" })
+    : { ok: true };
 }
 async function sendUpdate(
   requests: JiraAgileRequests,

@@ -281,8 +281,9 @@ function fieldCatalogValues(items: readonly unknown[]): readonly JiraFieldCatalo
 }
 
 interface BulkReferenceRule { readonly template: JiraIssueTemplate; readonly reference: string }
-function bulkReferenceRules(templates: readonly JiraIssueTemplate[], projectKey: string): readonly BulkReferenceRule[] {
-  return templates.filter((template) => template.project.trim().toLowerCase() === projectKey.trim().toLowerCase() &&
+type BulkReferenceKind = "component" | "version" | "sprint";
+function bulkReferenceRules(templates: readonly JiraIssueTemplate[], projectKey: string | undefined): readonly BulkReferenceRule[] {
+  return templates.filter((template) => (projectKey === undefined || template.project.trim().toLowerCase() === projectKey.trim().toLowerCase()) &&
     template.activations.some((activation) => activation.kind === "edit"))
     .flatMap((template) => [...template.requiredFields, ...(template.parent.field === undefined ? [] : [template.parent.field])]
       .map((reference) => ({ template, reference })));
@@ -299,15 +300,27 @@ function mayHoldVersion(id: string, values: readonly unknown[]): boolean {
   const kind = parsed.fields[0]?.kind;
   return kind === undefined || kind === "opaque" || kind === "unsupported";
 }
-function bulkFieldAffected(id: string, kind: "component" | "version", values: readonly unknown[]): boolean {
+function mayHoldSprint(id: string, values: readonly unknown[]): boolean {
+  const matches = values.map(asRecord).filter((value) => value?.id === id);
+  if (matches.length !== 1) return true;
+  if (asRecord(matches[0]?.schema)?.custom === "com.pyxis.greenhopper.jira:gh-sprint") return true;
+  // As with version references, opaque/malformed custom fields cannot prove disjoint impact.
+  return mayHoldVersion(id, values);
+}
+function bulkFieldAffected(id: string, kind: BulkReferenceKind, values: readonly unknown[]): boolean {
   if (kind === "component") return id === "components";
+  if (kind === "sprint") return sprintFieldAffected(id, values);
   if (id === "fixVersions" || id === "versions") return true;
   return id.startsWith("customfield_") && mayHoldVersion(id, values);
+}
+function sprintFieldAffected(id: string, values: readonly unknown[]): boolean {
+  if (id === "sprint" || id === "closedSprints") return true;
+  return id.startsWith("customfield_") && mayHoldSprint(id, values);
 }
 function bulkReferenceViolation(rule: BulkReferenceRule): JiraTemplateViolation {
   return { ruleId: "template-unreadable", template: jiraIssueTemplateLabel(rule.template), subject: `Bulk issue-field impact: ${rule.reference}`.slice(0, 120) };
 }
-function bulkReferenceViolations(rules: readonly BulkReferenceRule[], kind: "component" | "version", values: readonly unknown[] | undefined): readonly JiraTemplateViolation[] {
+function bulkReferenceViolations(rules: readonly BulkReferenceRule[], kind: BulkReferenceKind, values: readonly unknown[] | undefined): readonly JiraTemplateViolation[] {
   const catalog = values === undefined ? JIRA_TEMPLATE_SYSTEM_FIELDS : [...JIRA_TEMPLATE_SYSTEM_FIELDS, ...fieldCatalogValues(values)];
   const violations: JiraTemplateViolation[] = [];
   for (const rule of rules) {
@@ -321,12 +334,14 @@ function bulkReferenceViolations(rules: readonly BulkReferenceRule[], kind: "com
  * collection or atomic per-issue post-state contract. A visible JQL result or entity count cannot
  * prove that coverage. Reuse the formal template source and field resolver to refuse only impacted
  * rules before the bulk effect; callers can correct individual issues through governed jira.edit.
- * This gate never interprets prose skills or treats version ordering as an issue-field mutation. */
+ * A sprint's visible board/issues do not establish its full project population: omit projectKey
+ * for that impact and consider all edit-active formal rules. This gate never interprets prose
+ * skills or treats version ordering/sprint synchronization flags as issue-field mutations. */
 export async function gateJiraBulkReferenceChange(input: {
   readonly request: JiraMutationRequest;
   readonly source: JiraIssueTemplateSource | undefined;
-  readonly projectKey: string;
-  readonly kind: "component" | "version";
+  readonly projectKey?: string;
+  readonly kind: BulkReferenceKind;
 }): Promise<JiraTemplateGateResult> {
   const set = input.source?.();
   if (set === undefined) return OK;

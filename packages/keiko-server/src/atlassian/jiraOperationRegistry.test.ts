@@ -17,11 +17,30 @@ import { jiraRequiredConnectorScope } from "@oscharko-dev/keiko-contracts/runtim
 const JIRA_MUTATION_DECLARATIONS = jiraMutationDeclarations();
 
 describe("server-owned Jira operation contracts", () => {
+  it.each([
+    { tool: "jira.add-default-screen-field", identity: "POST /rest/api/2/screens/addToDefault/{fieldId}", permissionPolicy: "instance-admin-default-screen-field-unconfirmed" },
+    { tool: "jira.add-screen-tab-field", identity: "POST /rest/api/2/screens/{screenId}/tabs/{tabId}/fields", permissionPolicy: "instance-admin-screen-field-add-and-readback" },
+    { tool: "jira.remove-screen-tab-field", identity: "DELETE /rest/api/2/screens/{screenId}/tabs/{tabId}/fields/{id}", permissionPolicy: "instance-admin-screen-field-delete-and-absence" },
+    { tool: "jira.move-screen-tab-field", identity: "POST /rest/api/2/screens/{screenId}/tabs/{tabId}/fields/{id}/move", permissionPolicy: "instance-admin-screen-field-order-and-readback" },
+    { tool: "jira.set-screen-field-show-when-empty", identity: "PUT /rest/api/2/screens/{screenId}/tabs/{tabId}/fields/{id}/updateShowWhenEmptyIndicator/{newValue}", permissionPolicy: "instance-admin-screen-field-display-and-readback" },
+    { tool: "jira.move-screen-tab", identity: "POST /rest/api/2/screens/{screenId}/tabs/{tabId}/move/{pos}", permissionPolicy: "instance-admin-screen-tab-order-and-readback" },
+    { tool: "jira.delete-board", identity: "DELETE /rest/agile/1.0/board/{boardId}", permissionPolicy: "board-delete-unconfirmed" },
+    { tool: "jira.set-board-refined-velocity", identity: "PUT /rest/agile/1.0/board/{boardId}/settings/refined-velocity", permissionPolicy: "board-refined-velocity-and-readback" },
+    { tool: "jira.replace-sprint", identity: "PUT /rest/agile/1.0/sprint/{sprintId}", permissionPolicy: "sprint-replace-and-readback" },
+    { tool: "jira.delete-sprint", identity: "DELETE /rest/agile/1.0/sprint/{sprintId}", permissionPolicy: "sprint-delete-and-membership-uncertainty" },
+    { tool: "jira.swap-sprints", identity: "POST /rest/agile/1.0/sprint/{sprintId}/swap", permissionPolicy: "sprint-swap-and-position-uncertainty" },
+    { tool: "jira.unmap-sprints", identity: "PUT /rest/agile/1.0/sprint/unmap", permissionPolicy: "sprint-unmap-and-readback" },
+    { tool: "jira.unmap-all-sprints", identity: "PUT /rest/agile/1.0/sprint/unmap-all", permissionPolicy: "instance-admin-sprint-unmap-all-unconfirmed" },
+  ] as const)("binds $tool to its independently expected native identity", ({ tool, identity, permissionPolicy }) => {
+    expect(jiraOperationForTool(tool)?.definition).toMatchObject({
+      kind: "native", identity, permissionPolicy, effects: ["remote-write"],
+    });
+  });
   it("binds every administration write to an explicit instance-admin permission contract", () => {
     const admin = jiraOperationContracts().filter((entry) =>
       jiraRequiredConnectorScope(entry.definition.tool) === "issue-tracker.admin" &&
       entry.definition.effects.includes("remote-write"));
-    expect(admin).toHaveLength(13);
+    expect(admin).toHaveLength(20);
     for (const contract of admin) {
       expect(contract.definition.permissionPolicy).toMatch(/^instance-admin-/);
       expect(contract.definition.effects).toContain("remote-write");
@@ -72,7 +91,7 @@ describe("server-owned Jira operation contracts", () => {
   });
   it("keeps executable native operations distinct from local compositions", () => {
     const entries = jiraOperationContracts();
-    expect(entries.filter((entry) => entry.definition.kind === "native")).toHaveLength(284);
+    expect(entries.filter((entry) => entry.definition.kind === "native")).toHaveLength(297);
     expect(entries.filter((entry) => entry.definition.kind === "composite")).toHaveLength(3);
     expect(jiraOperationForTool("jira.discover")).toBeUndefined();
     expect(jiraOperationForTool("DELETE /rest/api/2/project")).toBeUndefined();

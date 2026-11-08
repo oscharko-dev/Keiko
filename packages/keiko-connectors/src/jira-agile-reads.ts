@@ -23,6 +23,7 @@ import {
 import { jiraAgileRequest } from "./jira-agile-request.js";
 import { agileInputId } from "./jira-agile-inputs.js";
 import { jiraBoardBrowseUrl, jiraBrowseUrl } from "./jira-browse-url.js";
+import { jiraSprintLifecycleSnapshot } from "./jira-sprint-lifecycle-values.js";
 
 export const JIRA_AGILE_READ_OPERATIONS = JIRA_READ_TOOL_FAMILIES.agile;
 export type JiraAgileReadOperation = (typeof JIRA_AGILE_READ_OPERATIONS)[number];
@@ -33,6 +34,12 @@ const BOARD_LINK_READS: ReadonlySet<string> = new Set([
   "jira.board-configuration",
 ]);
 const EPIC_LINK_READS: ReadonlySet<string> = new Set(["jira.epic", "jira.board-epics"]);
+function reviewedSprint(value: unknown): CatalogJsonObject | undefined {
+  const item = agileSprint(value);
+  if (item === undefined) return undefined;
+  const reviewSnapshot = jiraSprintLifecycleSnapshot(value, true);
+  return { ...item, ...(reviewSnapshot === undefined ? {} : { reviewSnapshot }) };
+}
 function linkedProjection(operation: string, baseUrl: string, project: Projection): Projection {
   return (value): CatalogJsonObject | undefined => {
     const item = project(value);
@@ -83,7 +90,7 @@ function otherEntityRoute(name: string, args: CatalogJsonObject): ReadRoute | un
       : {
           path: `sprint/${sprintId}${name.endsWith("issues") ? "/issue" : ""}`,
           keys: ["sprintId"],
-          project: agileSprint,
+          project: reviewedSprint,
           mode: name.endsWith("issues") ? "issues" : "single",
           identity: sprintId,
         };

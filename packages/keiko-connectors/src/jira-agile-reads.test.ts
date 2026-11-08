@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import { executeJiraAgileRead } from "./jira-agile-reads.js";
+import { jiraSprintLifecycleSnapshot } from "./jira-sprint-lifecycle-values.js";
 
 interface Fixture {
   readonly http: ReturnType<typeof vi.fn<AtlassianHttpBodyPort>>;
@@ -33,6 +34,40 @@ function fixture(body: unknown): Fixture {
 }
 
 describe("closed Jira Agile reads", () => {
+  it("exposes the same exact lifecycle snapshot without turning omitted metadata into null or false", async () => {
+    const native = {
+      id: 9, originBoardId: 7, name: "Sprint one", state: "future", synced: false,
+      autoStartStop: true, startDate: "2027-01-01T09:00:00.000Z", endDate: null,
+      goal: "", incompleteIssuesDestinationId: null, self: "https://metadata.invalid/sprint/9",
+    };
+    const f = fixture(native);
+    const result = await executeJiraAgileRead("jira.sprint", { sprintId: "9" }, f.context, f.connection);
+    expect(result.data).toMatchObject({ items: [{ reviewSnapshot: jiraSprintLifecycleSnapshot(native, true) }] });
+    expect(result.data).toMatchObject({ items: [{ reviewSnapshot: {
+      id: "9", originBoardId: "7", synced: false, autoStartStop: true, endDate: null, goal: "", incompleteIssuesDestinationId: null,
+    } }] });
+    expect(JSON.stringify(result)).not.toContain("metadata.invalid");
+    expect(JSON.stringify(result)).not.toContain("completeDate");
+    expect(JSON.stringify(result)).not.toContain("activatedDate");
+    expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);
+  });
+  it.each([
+    { synced: null }, { synced: "false" }, { autoStartStop: 0 },
+    { incompleteIssuesDestinationId: "9007199254740992" }, { undocumentedLifecycleField: true },
+  ])("leaves an unprojectable lifecycle snapshot unavailable without inventing replacement facts: %j", async (extra) => {
+    const f = fixture({ id: 9, originBoardId: 7, name: "Sprint one", state: "future", ...extra });
+    const result = await executeJiraAgileRead("jira.sprint", { sprintId: "9" }, f.context, f.connection);
+    expect(result.data).toMatchObject({ outcome: "succeeded", items: [{ id: "9", originBoardId: "7" }] });
+    expect(JSON.stringify(result)).not.toContain("reviewSnapshot");
+  });
+  it("preserves a valid partial observation as partial instead of fabricating missing writable fields", async () => {
+    const f = fixture({ id: 9, originBoardId: 7, name: "Sprint one", state: "future" });
+    const result = await executeJiraAgileRead("jira.sprint", { sprintId: "9" }, f.context, f.connection);
+    expect(result.data).toMatchObject({ items: [{ reviewSnapshot: { id: "9", originBoardId: "7", name: "Sprint one", state: "future" } }] });
+    expect(JSON.stringify(result)).not.toContain("synced");
+    expect(JSON.stringify(result)).not.toContain("autoStartStop");
+    expect(JSON.stringify(result)).not.toContain("incompleteIssuesDestinationId");
+  });
   it.each([undefined, 7])(
     "retains only observed sprint board context (%s)",
     async (originBoardId) => {

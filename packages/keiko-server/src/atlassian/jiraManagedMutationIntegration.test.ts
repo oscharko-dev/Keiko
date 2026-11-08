@@ -41,6 +41,7 @@ import { jiraMutationToolId } from "./jiraMutationToolId.js";
 import { nativeAdministrationWrite } from "../../../../tests/support/jira-managed-administration-scenarios.js";
 import { expectedSavedConfigurationOutcome, nativeSavedConfigurationWrite, prepareSavedConfiguration } from "../../../../tests/support/jira-managed-saved-configuration-scenarios.js";
 import { expectedLifecycleOutcome, lifecycleRemoteFixture, LIFECYCLE_EXPECTED_OUTCOMES } from "../../../../tests/support/jira-managed-lifecycle-scenarios.js";
+import { expectedConfigurationOutcome, CONFIGURATION_EXPECTED_OUTCOMES } from "../../../../tests/support/jira-managed-configuration-scenarios.js";
 import { jiraChatCatalogRoutes } from "./jiraChatCatalogConsumer.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import {
@@ -193,15 +194,16 @@ function verificationProbe(path: string): ReturnType<typeof response> | undefine
   }
   return undefined;
 }
-function fixtureReadResult(
+async function fixtureReadResult(
   mode: RemoteMode,
-  path: string,
+  url: string,
   state: MutationRemoteState,
   writes: number,
   lifecycle: ReturnType<typeof lifecycleRemoteFixture>,
-): ReturnType<typeof fixtureRead> {
+): Promise<ReturnType<typeof fixtureRead>> {
   if (mode === "readback-denied" && writes > 0) return response({}, 403);
-  return verificationProbe(path) ?? lifecycle.read(path) ?? nativeRead(path, state) ?? fixtureRead(path, state);
+  const path = new URL(url).pathname;
+  return verificationProbe(path) ?? await lifecycle.read(url) ?? nativeRead(path, state) ?? fixtureRead(path, state);
 }
 function remote(
   mode: RemoteMode,
@@ -223,6 +225,9 @@ function remote(
       const request = new Request(input, init);
       expect(request.headers.get("authorization")).toBe(["Bearer", "synthetic-test-pat"].join(" "));
       const path = new URL(request.url).pathname;
+      const experimental = request.method === "PUT" &&
+        (path === "/context/rest/agile/1.0/sprint/unmap" || path === "/context/rest/agile/1.0/sprint/unmap-all");
+      expect(request.headers.get("x-experimentalapi")).toBe(experimental ? "true" : null);
       if (request.method !== "GET") {
         beforeWrite();
         writes += 1;
@@ -231,7 +236,7 @@ function remote(
       if (refusal !== undefined) return refusal;
       const result =
         request.method === "GET"
-          ? fixtureReadResult(mode, path, state, writes, lifecycle)
+          ? await fixtureReadResult(mode, request.url, state, writes, lifecycle)
           : await fixtureWriteResult(request, path, state, lifecycle);
       if (request.method !== "GET" && mode === "lost-response")
         throw new TypeError("Synthetic connection loss after commit");
@@ -523,7 +528,7 @@ it.each(SINGLE_MUTATIONS)(
   "executes %s through the real gateway/binder/SDK and durable journal",
   async (operation) => {
     const f = await fixture("confirmed", undefined, operation, reviewedAuthority(operation));
-    const expectedOutcome = expectedLifecycleOutcome(operation) ?? expectedSavedConfigurationOutcome(operation) ?? "succeeded";
+    const expectedOutcome = expectedConfigurationOutcome(operation) ?? expectedLifecycleOutcome(operation) ?? expectedSavedConfigurationOutcome(operation) ?? "succeeded";
     expect(await f.invoke(operation)).toMatchObject({
       kind: "settled",
       result: {
@@ -887,9 +892,11 @@ it("keeps an independent complete argument/state/receipt case for every register
   expect(Object.keys(ARGUMENTS).sort()).toEqual([...JIRA_MUTATION_OPERATIONS].sort());
   expect(Object.keys(REMOTE_STATE).sort()).toEqual([...SINGLE_MUTATIONS].sort());
   expect(Object.keys(SUCCESS_RECEIPTS).sort()).toEqual([...SINGLE_MUTATIONS].sort());
-  expect(ADMIN_MUTATIONS).toHaveLength(13);
+  expect(ADMIN_MUTATIONS).toHaveLength(20);
   expect(Object.entries(LIFECYCLE_EXPECTED_OUTCOMES).filter(([, outcome]) => outcome === "succeeded-unconfirmed").map(([name]) => name).sort())
     .toEqual(["jira.delete-component", "jira.merge-version", "jira.remove-and-swap-version"]);
+  expect(Object.entries(CONFIGURATION_EXPECTED_OUTCOMES).filter(([, outcome]) => outcome === "succeeded-unconfirmed").map(([name]) => name).sort())
+    .toEqual(["jira.add-default-screen-field", "jira.delete-board", "jira.delete-sprint", "jira.swap-sprints", "jira.unmap-all-sprints"]);
 });
 it.each(ADMIN_MUTATIONS)("does not grant %s administration from ordinary issue scopes or verified credentials", async (operation) => {
   const f = await fixture("confirmed", undefined, operation);
