@@ -208,26 +208,6 @@ async function reviewedAttachment(
   return access.readAllowed(action) ? preview : undefined;
 }
 
-async function reviewedAvatar(
-  options: JiraChatTurnOptions,
-  access: JiraChatTurnReviewAccess,
-  action: JiraChatCatalogAction,
-  args: CatalogJsonObject | undefined,
-): Promise<JiraAttachmentPreview | undefined> {
-  if (args === undefined || !access.reviewableWrite(action) || !access.readAllowed(action))
-    return undefined;
-  const path = emailTemplatePath(args);
-  if (path === undefined) return undefined;
-  const preview = await previewJiraAvatarImage(
-    options.deps,
-    options.message.chatId,
-    path,
-    options.correlationId,
-    options.signal,
-  );
-  return access.readAllowed(action) ? preview : undefined;
-}
-
 function emailTemplatePath(args: CatalogJsonObject): string | undefined {
   const source: unknown = args.source;
   if (source === null || typeof source !== "object" || Array.isArray(source)) return undefined;
@@ -235,7 +215,16 @@ function emailTemplatePath(args: CatalogJsonObject): string | undefined {
     return undefined;
   return typeof source.path === "string" ? source.path : undefined;
 }
-async function reviewedEmailTemplate(
+type ConnectedFilePreview = (
+  deps: JiraChatTurnOptions["deps"],
+  chatId: string,
+  path: string,
+  correlationId: string,
+  signal: AbortSignal | undefined,
+) => Promise<JiraAttachmentPreview | undefined>;
+
+async function reviewedConnectedFile(
+  preview: ConnectedFilePreview,
   options: JiraChatTurnOptions,
   access: JiraChatTurnReviewAccess,
   action: JiraChatCatalogAction,
@@ -245,15 +234,31 @@ async function reviewedEmailTemplate(
     return undefined;
   const path = emailTemplatePath(args);
   if (path === undefined) return undefined;
-  const preview = await previewJiraEmailTemplatePack(
+  const result = await preview(
     options.deps,
     options.message.chatId,
     path,
     options.correlationId,
     options.signal,
   );
-  return access.readAllowed(action) ? preview : undefined;
+  return access.readAllowed(action) ? result : undefined;
 }
+
+const reviewedAvatar = (
+  options: JiraChatTurnOptions,
+  access: JiraChatTurnReviewAccess,
+  action: JiraChatCatalogAction,
+  args: CatalogJsonObject | undefined,
+): Promise<JiraAttachmentPreview | undefined> =>
+  reviewedConnectedFile(previewJiraAvatarImage, options, access, action, args);
+
+const reviewedEmailTemplate = (
+  options: JiraChatTurnOptions,
+  access: JiraChatTurnReviewAccess,
+  action: JiraChatCatalogAction,
+  args: CatalogJsonObject | undefined,
+): Promise<JiraAttachmentPreview | undefined> =>
+  reviewedConnectedFile(previewJiraEmailTemplatePack, options, access, action, args);
 
 function jiraTurnContext(options: JiraChatTurnOptions): JiraChatCatalogContext {
   const { authority, correlationId, message, signal } = options;

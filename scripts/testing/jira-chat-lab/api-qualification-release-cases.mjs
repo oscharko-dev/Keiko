@@ -15,6 +15,23 @@ async function read(context, path) {
   assert.equal(response.status, 200);
   return response.value;
 }
+const relatedCountsCase = (tool, path, suffix, fields, idKey) =>
+  readCase(tool, (f) => `${path(f)}/${suffix}`, fields, {
+    ...single,
+    args: (f) => ({ [idKey]: f[idKey] }),
+  });
+const updateMutation = (tool, idKey, path, name, label) =>
+  mutation(
+    tool,
+    (f) => ({ [idKey]: f[idKey], description: `Synthetic AC7 ${label} updated` }),
+    async (context, _data, f) => {
+      const actual = await read(context, path(f));
+      assert.equal(String(actual.id), f[idKey]);
+      assert.equal(actual.name, name(f));
+      assert.equal(actual.description, `Synthetic AC7 ${label} updated`);
+      return proof(3);
+    },
+  );
 const componentPath = (f) => `/rest/api/2/component/${f.componentId}`;
 const versionPath = (f) => `/rest/api/2/version/${f.versionId}`;
 const componentName = (f) => `Synthetic AC7 component ${f.runId}`;
@@ -146,26 +163,14 @@ export const API_QUALIFICATION_RELEASE_CASES = [
     args: (f) => ({ componentId: f.componentId }),
     nativeRoot: "single",
   }),
-  readCase(
+  relatedCountsCase(
     "jira.component-related-issue-counts",
-    (f) => `${componentPath(f)}/relatedIssueCounts`,
+    componentPath,
+    "relatedIssueCounts",
     ["issueCount"],
-    {
-      ...single,
-      args: (f) => ({ componentId: f.componentId }),
-    },
+    "componentId",
   ),
-  mutation(
-    "jira.update-component",
-    (f) => ({ componentId: f.componentId, description: "Synthetic AC7 component updated" }),
-    async (context, _data, f) => {
-      const actual = await read(context, componentPath(f));
-      assert.equal(String(actual.id), f.componentId);
-      assert.equal(actual.name, componentName(f));
-      assert.equal(actual.description, "Synthetic AC7 component updated");
-      return proof(3);
-    },
-  ),
+  updateMutation("jira.update-component", "componentId", componentPath, componentName, "component"),
   mutation(
     "jira.delete-component",
     (f) => ({
@@ -232,35 +237,21 @@ export const API_QUALIFICATION_RELEASE_CASES = [
     args: (f) => ({ versionId: f.versionId }),
     nativeNames: { versionId: "id" },
   }),
-  readCase(
+  relatedCountsCase(
     "jira.version-related-issue-counts",
-    (f) => `${versionPath(f)}/relatedIssueCounts`,
+    versionPath,
+    "relatedIssueCounts",
     ["issuesAffectedCount", "issuesFixedCount"],
-    {
-      ...single,
-      args: (f) => ({ versionId: f.versionId }),
-    },
+    "versionId",
   ),
-  readCase(
+  relatedCountsCase(
     "jira.version-unresolved-issue-count",
-    (f) => `${versionPath(f)}/unresolvedIssueCount`,
+    versionPath,
+    "unresolvedIssueCount",
     ["issuesUnresolvedCount"],
-    {
-      ...single,
-      args: (f) => ({ versionId: f.versionId }),
-    },
+    "versionId",
   ),
-  mutation(
-    "jira.update-version",
-    (f) => ({ versionId: f.versionId, description: "Synthetic AC7 release updated" }),
-    async (context, _data, f) => {
-      const actual = await read(context, versionPath(f));
-      assert.equal(String(actual.id), f.versionId);
-      assert.equal(actual.name, versionName(f));
-      assert.equal(actual.description, "Synthetic AC7 release updated");
-      return proof(3);
-    },
-  ),
+  updateMutation("jira.update-version", "versionId", versionPath, versionName, "release"),
   createLink("jira.upsert-version-remote-link", "a"),
   createLink("jira.upsert-version-remote-link-by-global-id", "b"),
   {

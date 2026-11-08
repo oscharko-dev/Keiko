@@ -19,6 +19,17 @@ const key = (fixture) => {
   assert.match(fixture.createdIssueKey, /^KEIKO-[1-9][0-9]*$/u);
   return fixture.createdIssueKey;
 };
+async function assertCollectionLacks(context, fixture, segment, collection, id) {
+  const issue = await read(context, issuePath(fixture));
+  assert.equal(issue.key, key(fixture));
+  const actual = await read(context, `${issuePath(fixture)}/${segment}?maxResults=100`);
+  assert.equal(actual.total, actual[collection].length);
+  assert.equal(
+    actual[collection].some((entry) => entry.id === id),
+    false,
+  );
+  return proof(3);
+}
 const proof = (assertionCount) => ({ matched: true, assertionCount });
 const mutation = (tool, args, readback, scope = {}) => ({
   ...scope,
@@ -134,17 +145,7 @@ export const API_QUALIFICATION_ISSUE_CASES = [
   mutation(
     "jira.delete-comment",
     (f) => ({ issueKey: key(f), commentId: f.commentId, expectedBody: UPDATED_COMMENT }),
-    async (context, _data, f) => {
-      const issue = await read(context, issuePath(f));
-      assert.equal(issue.key, key(f));
-      const comments = await read(context, `${issuePath(f)}/comment?maxResults=100`);
-      assert.equal(comments.total, comments.comments.length);
-      assert.equal(
-        comments.comments.some((comment) => comment.id === f.commentId),
-        false,
-      );
-      return proof(3);
-    },
+    (context, _data, f) => assertCollectionLacks(context, f, "comment", "comments", f.commentId),
   ),
   mutation(
     "jira.watch",
@@ -245,16 +246,6 @@ export const API_QUALIFICATION_ISSUE_CASES = [
       comment: COMMENT,
       visibility: null,
     }),
-    async (context, _data, f) => {
-      const issue = await read(context, issuePath(f));
-      assert.equal(issue.key, key(f));
-      const actual = await read(context, `${issuePath(f)}/worklog?maxResults=100`);
-      assert.equal(actual.total, actual.worklogs.length);
-      assert.equal(
-        actual.worklogs.some((worklog) => worklog.id === f.worklogId),
-        false,
-      );
-      return proof(3);
-    },
+    (context, _data, f) => assertCollectionLacks(context, f, "worklog", "worklogs", f.worklogId),
   ),
 ];
