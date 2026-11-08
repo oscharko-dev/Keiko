@@ -1,6 +1,17 @@
 // Synthetic local Jira laboratory only. The fixed Jira backend never becomes a general proxy.
+import { X509Certificate, createPrivateKey } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:https";
 import { request } from "node:http";
 import { join, resolve } from "node:path";
@@ -12,7 +23,7 @@ function requirePrivateFile(path) {
   if ((stat.mode & 0o777) !== 0o600) chmodSync(path, 0o600);
 }
 
-export function initializeLabTls(directory) {
+export function initializeLabTls(directory, { onRenew = () => undefined } = {}) {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   if (lstatSync(directory).isSymbolicLink()) throw new TypeError("Lab TLS directory is a symlink");
   const paths = Object.fromEntries(
@@ -20,15 +31,58 @@ export function initializeLabTls(directory) {
   );
   if (Object.values(paths).every(existsSync)) {
     Object.values(paths).forEach(requirePrivateFile);
+    if (labTlsRemainingSeconds(directory) < 7 * 86_400) {
+      const staging = mkdtempSync(join(directory, "renew-"));
+      try {
+        generateCertificates(staging);
+        for (const [name, path] of Object.entries(paths)) renameSync(join(staging, name), path);
+        onRenew();
+      } finally {
+        rmSync(staging, { recursive: true, force: true });
+      }
+    }
     return paths;
   }
   if (Object.values(paths).some(existsSync)) throw new TypeError("Incomplete lab TLS material");
+  generateCertificates(directory);
+  Object.values(paths).forEach(requirePrivateFile);
+  return paths;
+}
+
+function generateCertificates(directory) {
   const run = (args) =>
     execFileSync("openssl", args, { cwd: directory, stdio: "ignore", timeout: 30_000 });
   createRootCertificate(run);
   createServerCertificate(run, directory);
-  Object.values(paths).forEach(requirePrivateFile);
-  return paths;
+  for (const name of ["ca.key", "ca.pem", "server.key", "server.pem"])
+    requirePrivateFile(join(directory, name));
+}
+
+export function labTlsRemainingSeconds(directory) {
+  const certificates = ["ca", "server"].map((name) => {
+    const path = join(directory, `${name}.pem`);
+    const key = join(directory, `${name}.key`);
+    requirePrivateFile(path);
+    requirePrivateFile(key);
+    const certificate = new X509Certificate(readFileSync(path));
+    if (
+      !certificate.checkPrivateKey(createPrivateKey(readFileSync(key))) ||
+      Date.parse(certificate.validFrom) > Date.now()
+    )
+      throw new TypeError("Lab TLS identity is invalid");
+    return certificate;
+  });
+  const [ca, server] = certificates;
+  if (
+    !ca.ca ||
+    !ca.verify(ca.publicKey) ||
+    !server.verify(ca.publicKey) ||
+    server.checkIP("127.0.0.1") !== "127.0.0.1"
+  )
+    throw new TypeError("Lab TLS chain is invalid");
+  return Math.floor(
+    (Math.min(...certificates.map((cert) => Date.parse(cert.validTo))) - Date.now()) / 1000,
+  );
 }
 
 function createRootCertificate(run) {
@@ -40,7 +94,7 @@ function createRootCertificate(run) {
     "-nodes",
     "-sha256",
     "-days",
-    "7",
+    "365",
     "-subj",
     "/CN=Keiko synthetic Jira laboratory CA",
     "-keyout",
@@ -86,7 +140,7 @@ function createServerCertificate(run, directory) {
     "-out",
     "server.pem",
     "-days",
-    "7",
+    "365",
     "-sha256",
     "-extfile",
     "server.ext",

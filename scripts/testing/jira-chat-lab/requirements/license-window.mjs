@@ -60,6 +60,8 @@ async function waitForLicense(session, minimumSeconds) {
  * lane as using Jira.
  */
 export async function ensureLicenseWindow(session, directory, minimumSeconds) {
+  if (!Number.isSafeInteger(minimumSeconds) || minimumSeconds < 1 || minimumSeconds > 7200)
+    throw new TypeError("Invalid laboratory license window");
   const remaining = await renewedLicense(session, directory, minimumSeconds);
   await enterActive(directory);
   return remaining;

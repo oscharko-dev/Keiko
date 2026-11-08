@@ -217,3 +217,19 @@ describe("parallel lab lanes", () => {
     await expect(attempt).resolves.toBe(1);
   });
 });
+
+it("keeps an outer scorecard lane active after a nested product preflight releases", async () => {
+  const directory = sessionDirectory();
+  const releaseOuter = registerLane(directory, SELF);
+  await enterActive(directory, { pid: SELF, isAlive: liveSet(SELF), pollMs: 1, log: quiet });
+  const releaseInner = registerLane(directory, SELF);
+  try {
+    releaseInner();
+    releaseInner();
+    expect(otherActiveLanes(directory, OTHER, liveSet(SELF))).toEqual([SELF]);
+  } finally {
+    releaseInner();
+    releaseOuter();
+  }
+  expect(existsSync(join(directory, "lanes", String(SELF)))).toBe(false);
+});

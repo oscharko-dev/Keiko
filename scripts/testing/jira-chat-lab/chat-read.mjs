@@ -40,6 +40,7 @@ import {
 } from "./lab-client.mjs";
 import { sessionVerificationPort } from "./product-port.mjs";
 import { establishedReadGrant } from "./read-grant.mjs";
+import { prepareLabRun } from "./run-preflight.mjs";
 import { drainLiveChatTurns } from "./chat-lifecycle.mjs";
 
 process.on("warning", (warning) => {
@@ -516,6 +517,7 @@ function createLiveDeps(root, session, secret, retainState, restoring = false, m
     env: {
       ...modelEnv,
       KEIKO_OS_KEYCHAIN: "off",
+      KEIKO_MEMORY_DIR: join(root, "memory"),
       [SESSION_PAIRING_LAUNCHER_SECRET_ENV]: secret,
       KEIKO_ATLASSIAN_CONNECTOR_CREDENTIALS_KEY: credentialKey,
     },
@@ -658,7 +660,16 @@ export async function withModelFreeJira({ session, run, stateReady, decorateAtla
   });
 }
 
-async function withLabProduct({
+async function withLabProduct(options) {
+  const release = await prepareLabRun(options.session);
+  try {
+    return await runLabProduct(options);
+  } finally {
+    release();
+  }
+}
+
+async function runLabProduct({
   session,
   modelId,
   run,

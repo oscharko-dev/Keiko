@@ -325,7 +325,25 @@ the containers at that boundary, because two lanes outlast one license.
 
 `session.mjs stop <directory>` stops only that manifest’s containers and retains
 its volumes. This harness does not delete existing laboratories or renew licenses
-in the background. Use a new directory/project for an independent session.
+in the background. Before a live or model-free product run, the existing lane lock
+checks a 45-minute run window plus five minutes of margin and restarts only the
+owned lab, at that boundary, if the published test license needs renewal. Another
+active lane blocks that restart. Docker must be available to perform renewal;
+a failed renewal withholds the run. Use a new directory/project for an independent session.
+
+The same preflight requires at least twelve hours of native PAT validity for each
+seeded actor, renews a nearly
+expired fixture PAT with that actor's existing basic credentials, verifies the
+replacement by native identity and token readback, then retires only its predecessor.
+Private pending markers block replay after uncertain creation or retirement. Renewal
+occurs before Keiko binds the credential, never halfway through a turn.
+
+New lab CA and server certificates last 365 days. `session.mjs start` renews existing
+TLS material with less than seven days remaining and recreates only the owned TLS
+front after renewal so the new certificates are served. The run preflight refuses
+a TLS interval shorter than its run window; restart the owned session at an idle
+boundary before retrying. Each retained product state has its own `memory/` directory
+via `KEIKO_MEMORY_DIR`; it never shares the user's ordinary Memory store.
 
 ## Seed and inspect basic fixtures
 
