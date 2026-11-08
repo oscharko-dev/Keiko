@@ -1,18 +1,27 @@
-import { assert, describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { assert, describe, expect, it, vi } from "vitest";
 import type { AtlassianCredentialMetadata } from "@oscharko-dev/keiko-connectors";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
+  persistedActivityLogLines,
+  readPersistedActivityLog,
 } from "../../../../tests/support/activity-log-proof.js";
-import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
+import { defaultServerDiagnosticSink, type ServerDiagnosticRecord } from "../diagnostics-log.js";
+import { closeFileServerLogSinks } from "../observability/index.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { privateJiraCustodyFixture } from "../../../../tests/support/jira-private-custody-fixture.js";
 import {
   cancelUnclaimedJiraHumanInput,
   recordCredentialCreated,
   recordConnectionCheck,
   recordCredentialUpdated,
+  recordJiraHumanInput,
+  reportJiraHumanInputCleanupFailure,
 } from "./credentialActivity.js";
 
 const metadata: AtlassianCredentialMetadata = {
@@ -26,6 +35,77 @@ const metadata: AtlassianCredentialMetadata = {
 };
 
 describe("credential creation activity", () => {
+  it.each([undefined, "private-submit-proof", "unknown-correlation-id", "invalid parent"])(
+    "never invents a Submit parent or a self-parent for %s",
+    (operationCorrelationId) => {
+      const lines: string[] = [];
+      recordJiraHumanInput(
+        {
+          activityLog: {
+            write: (event): void => {
+              lines.push(formatActivityLogProofLine(event));
+            },
+          },
+        },
+        "private-submit-proof",
+        "provided",
+        operationCorrelationId,
+      );
+      expect(lines).toHaveLength(1);
+      const proof = expectActivityLogProof("atlassian.jira.human-input.line", lines[0] ?? "");
+      expect(proof).toMatchObject({ correlationId: "private-submit-proof", phase: "provided" });
+      expect(proof).not.toHaveProperty("parentCorrelationId");
+    },
+  );
+  it.each(["bound-operation", "legacy"] as const)(
+    "persists private-input cleanup failure under its %s correlation without leaking custody context",
+    (kind) => {
+      const f = privateJiraCustodyFixture("jira.login");
+      const operationCorrelationId = "private-cleanup-operation-proof";
+      const binding =
+        kind === "bound-operation" ? { ...f.binding, operationCorrelationId } : f.binding;
+      const directory = mkdtempSync(join(tmpdir(), "keiko-input-cleanup-correlation-"));
+      const stderr = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      vi.stubEnv("KEIKO_STATE_DIR", directory);
+      try {
+        reportJiraHumanInputCleanupFailure(
+          { diagnostics: defaultServerDiagnosticSink },
+          binding,
+          new Error("synthetic private password or cookie material"),
+        );
+        const lines = persistedActivityLogLines(
+          readPersistedActivityLog(directory),
+          "server.diagnostic.failure",
+        );
+        expect(lines).toHaveLength(1);
+        const proof = expectActivityLogProof(
+          "server.diagnostic.failure.activity-log-line",
+          lines[0] ?? "",
+        );
+        expect(proof).toMatchObject({
+          correlationId:
+            kind === "bound-operation" ? operationCorrelationId : UNKNOWN_CORRELATION_ID,
+          diagnosticOperation: "atlassian.jira.human-input",
+          source: "atlassian.credential-activity.human-input",
+        });
+        expect(proof).not.toHaveProperty("parentCorrelationId");
+        for (const value of [
+          binding.authority.runId,
+          binding.authRef,
+          binding.actorUserKey,
+          binding.actorUsername,
+          binding.argumentsDigest,
+          "synthetic private password or cookie material",
+        ])
+          expect(lines.join("\n")).not.toContain(value);
+      } finally {
+        closeFileServerLogSinks();
+        stderr.mockRestore();
+        vi.unstubAllEnvs();
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
   it("preserves an acknowledged outcome when input cleanup fails and exposes no private failure text", () => {
     const f = privateJiraCustodyFixture("jira.login");
     const view = f.inputs.prepare(f.binding);
@@ -33,12 +113,29 @@ describe("credential creation activity", () => {
     const privateText = "synthetic private cleanup value";
     const outcome = { ok: false, reason: "unavailable", receipt: { userKey: "synthetic-actor" } };
     const finish = () => {
-      try { return outcome; }
-      finally {
-        cancelUnclaimedJiraHumanInput({
-          custody: { ...f.custody, humanInputs: { ...f.inputs, cancel: () => { throw new Error(privateText); } } },
-          diagnostics: { record: (record) => { diagnostics.push(record); } },
-        }, view.requestId, f.binding);
+      try {
+        return outcome;
+      } finally {
+        cancelUnclaimedJiraHumanInput(
+          {
+            custody: {
+              ...f.custody,
+              humanInputs: {
+                ...f.inputs,
+                cancel: () => {
+                  throw new Error(privateText);
+                },
+              },
+            },
+            diagnostics: {
+              record: (record) => {
+                diagnostics.push(record);
+              },
+            },
+          },
+          view.requestId,
+          f.binding,
+        );
       }
     };
     expect(finish()).toBe(outcome);

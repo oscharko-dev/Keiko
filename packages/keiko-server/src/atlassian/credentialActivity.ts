@@ -2,9 +2,13 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import type { AtlassianCredentialMetadata, JiraHumanInputBinding } from "@oscharko-dev/keiko-connectors";
+import type {
+  AtlassianCredentialMetadata,
+  JiraHumanInputBinding,
+} from "@oscharko-dev/keiko-connectors";
 import type { AtlassianConnectionVerificationStatus } from "@oscharko-dev/keiko-contracts";
 import { contentFreeErrorClass, emitServerDiagnostic } from "../diagnostics-log.js";
+import { correlationIdOrUnknown, UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { AtlassianConnectorCredentialDeps } from "./credentialRoutes.js";
 
 const ATLASSIAN_CREDENTIAL_LISTED_OPERATION = defineActivityLogOperation({
@@ -274,24 +278,56 @@ export function recordCredentialUpdated(
 }
 
 const JIRA_HUMAN_INPUT_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation", schemaVersion: 1, op: "atlassian.jira.human-input",
-  category: "security", owner: "keiko-server", emitter: "atlassian.credentialActivity.recordJiraHumanInput",
-  fields: { phase: { type: "string", dataClass: "closed-enum", required: true,
-    values: ["requested", "provided", "cancelled", "consumed", "expired"] } },
-  causal: "correlation", lifecycle: "state", analyzerProjection: "timeline",
-  failureClasses: ["atlassian-credential-custody"], proofIds: ["atlassian.jira.human-input.line"], releaseImpact: "patch",
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "atlassian.jira.human-input",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "atlassian.credentialActivity.recordJiraHumanInput",
+  fields: {
+    phase: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["requested", "provided", "cancelled", "consumed", "expired"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["atlassian-credential-custody"],
+  proofIds: ["atlassian.jira.human-input.line"],
+  releaseImpact: "patch",
 });
 /** No submitted values, public request IDs, user labels or secret-derived digests. */
 export function recordJiraHumanInput(
   deps: Pick<AtlassianConnectorCredentialDeps, "activityLog" | "diagnostics"> | undefined,
   correlationId: string,
   phase: "requested" | "provided" | "cancelled" | "consumed" | "expired",
+  operationCorrelationId?: string,
 ): void {
-  try { deps?.activityLog?.write(activityLogEvent(JIRA_HUMAN_INPUT_OPERATION, { correlationId }, { phase })); }
-  catch (error) {
-    emitServerDiagnostic(deps?.diagnostics, { correlationId, timestamp: new Date().toISOString(),
-      operation: "atlassian.jira.human-input", source: "atlassian.credential-activity.human-input",
-      errorClass: contentFreeErrorClass(error), message: "jira-private-input-activity-log-failed" });
+  const parent = correlationIdOrUnknown(operationCorrelationId);
+  const parentCorrelationId =
+    phase === "provided" && parent !== UNKNOWN_CORRELATION_ID && parent !== correlationId
+      ? parent
+      : undefined;
+  try {
+    deps?.activityLog?.write(
+      activityLogEvent(
+        JIRA_HUMAN_INPUT_OPERATION,
+        { correlationId, ...(parentCorrelationId === undefined ? {} : { parentCorrelationId }) },
+        { phase },
+      ),
+    );
+  } catch (error) {
+    emitServerDiagnostic(deps?.diagnostics, {
+      correlationId,
+      timestamp: new Date().toISOString(),
+      operation: "atlassian.jira.human-input",
+      source: "atlassian.credential-activity.human-input",
+      errorClass: contentFreeErrorClass(error),
+      message: "jira-private-input-activity-log-failed",
+    });
   }
 }
 
@@ -301,16 +337,23 @@ export function cancelUnclaimedJiraHumanInput(
   requestId: string,
   binding: JiraHumanInputBinding,
 ): void {
-  try { deps?.custody.humanInputs?.cancel(requestId, binding); }
-  catch (error) { reportJiraHumanInputCleanupFailure(deps, binding, error); }
+  try {
+    deps?.custody.humanInputs?.cancel(requestId, binding);
+  } catch (error) {
+    reportJiraHumanInputCleanupFailure(deps, binding, error);
+  }
 }
 export function reportJiraHumanInputCleanupFailure(
   deps: Pick<AtlassianConnectorCredentialDeps, "diagnostics"> | undefined,
-  binding: JiraHumanInputBinding,
+  binding: Pick<JiraHumanInputBinding, "operationCorrelationId">,
   error: unknown,
 ): void {
-  emitServerDiagnostic(deps?.diagnostics, { correlationId: binding.authority.runId,
-    timestamp: new Date().toISOString(), operation: "atlassian.jira.human-input",
-    source: "atlassian.credential-activity.human-input", errorClass: contentFreeErrorClass(error),
-    message: "jira-private-input-cleanup-failed" });
+  emitServerDiagnostic(deps?.diagnostics, {
+    correlationId: correlationIdOrUnknown(binding.operationCorrelationId),
+    timestamp: new Date().toISOString(),
+    operation: "atlassian.jira.human-input",
+    source: "atlassian.credential-activity.human-input",
+    errorClass: contentFreeErrorClass(error),
+    message: "jira-private-input-cleanup-failed",
+  });
 }

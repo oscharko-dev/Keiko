@@ -47,8 +47,15 @@ import {
   isSafeAtlassianDisplayName,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { LocalSecretVault } from "@oscharko-dev/keiko-security/secret-vault";
-import { createJiraHumanInputCustody, type JiraHumanInputCustody, type JiraHumanInputExecutionResolver } from "./jira-human-input-custody.js";
-import { createJiraPrivateSessionCustody, type JiraPrivateSessionExecutionResolver } from "./jira-private-session-custody.js";
+import {
+  createJiraHumanInputCustody,
+  type JiraHumanInputCustody,
+  type JiraHumanInputExecutionResolver,
+} from "./jira-human-input-custody.js";
+import {
+  createJiraPrivateSessionCustody,
+  type JiraPrivateSessionExecutionResolver,
+} from "./jira-private-session-custody.js";
 
 // ─── Bounds for the credential material itself (hostile-input guards) ─────────
 // The account email and API token feed `Authorization: Basic base64(email:token)` downstream, so
@@ -251,7 +258,11 @@ export function isAtlassianCredentialMetadata(
 
 // ─── Injected ports (implemented by keiko-server, the composition root) ───────
 // Enumeration is private and used only for bounded expiration of Jira input/session records.
-export type AtlassianCredentialVaultPort = Pick<LocalSecretVault, "get" | "set" | "delete" | "compareAndSet" | "acquireLease"> & Partial<Pick<LocalSecretVault, "list">>;
+export type AtlassianCredentialVaultPort = Pick<
+  LocalSecretVault,
+  "get" | "set" | "delete" | "compareAndSet" | "acquireLease"
+> &
+  Partial<Pick<LocalSecretVault, "list">>;
 
 // Non-secret metadata persistence. keiko-server implements this over a private, 0600-hardened
 // JSON store in the same `<config-dir>/credentials/` custody domain as the vault (ADR-0128 D2) —
@@ -332,7 +343,10 @@ export interface AtlassianCredentialCustodyDeps {
       ) => void)
     | undefined;
   readonly now?: () => number;
-  readonly onHumanInputCleared?: (correlationId: string, phase: "cancelled" | "expired") => void;
+  readonly onHumanInputCleared?: (
+    correlationId: string | undefined,
+    phase: "cancelled" | "expired",
+  ) => void;
 }
 
 export interface CreatedAtlassianCredentialCustody {
@@ -910,17 +924,36 @@ export function createAtlassianCredentialCustody(
     get: (reference) => vaultOp(() => deps.vault.get(reference)),
     set: (reference, value) => vaultOp(() => deps.vault.set(reference, value)),
     delete: (reference) => vaultOp(() => deps.vault.delete(reference)),
-    ...(deps.vault.compareAndSet === undefined ? {} : { compareAndSet: (reference: string, expected: string | undefined, next: string | undefined) =>
-      vaultOp(() => deps.vault.compareAndSet?.(reference, expected, next) ?? false) }),
-    ...(deps.vault.acquireLease === undefined ? {} : { acquireLease: (reference: string, scope?: "record" | "collection") => vaultOp(() => deps.vault.acquireLease?.(reference, scope)) }),
-    ...(deps.vault.list === undefined ? {} : { list: () => vaultOp(() => deps.vault.list?.() ?? []) }),
+    ...(deps.vault.compareAndSet === undefined
+      ? {}
+      : {
+          compareAndSet: (
+            reference: string,
+            expected: string | undefined,
+            next: string | undefined,
+          ) => vaultOp(() => deps.vault.compareAndSet?.(reference, expected, next) ?? false),
+        }),
+    ...(deps.vault.acquireLease === undefined
+      ? {}
+      : {
+          acquireLease: (reference: string, scope?: "record" | "collection") =>
+            vaultOp(() => deps.vault.acquireLease?.(reference, scope)),
+        }),
+    ...(deps.vault.list === undefined
+      ? {}
+      : { list: () => vaultOp(() => deps.vault.list?.() ?? []) }),
   };
   const metadata = (authRef: string): AtlassianCredentialMetadata | undefined => {
     const raw = deps.metadataStore.get(authRef);
     return raw !== undefined && isAtlassianCredentialMetadata(raw) ? raw : undefined;
   };
-  const humanInputs = createJiraHumanInputCustody({ vault: privateVault, now, metadata,
-    onCleared: (binding, phase) => deps.onHumanInputCleared?.(binding.authority.runId, phase) });
+  const humanInputs = createJiraHumanInputCustody({
+    vault: privateVault,
+    now,
+    metadata,
+    onCleared: (binding, phase) =>
+      deps.onHumanInputCleared?.(binding.operationCorrelationId, phase),
+  });
   const sessions = createJiraPrivateSessionCustody({ vault: privateVault, now, metadata });
   const custody: AtlassianCredentialCustody = {
     humanInputs: humanInputs.custody,

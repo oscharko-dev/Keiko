@@ -1218,6 +1218,10 @@ function createRunToolSurface(args: RunToolSurfaceInput): RunToolSurface {
 
 function createRunRecord(args: Omit<RunToolSurfaceInput, "signal">): ResolverRunRecord {
   const { input, request, context, minted, authority, research, onRuntimeEvent } = args;
+  const deadlineMs = authority.runtimeDeadline(request.runId);
+  if (deadlineMs === undefined || !Number.isSafeInteger(deadlineMs)) {
+    throw new TypeError("Missing accepted runtime deadline");
+  }
   const controller = new AbortController();
   const surface = createRunToolSurface({ ...args, signal: controller.signal });
   const backend = createBackendRun({
@@ -1233,6 +1237,8 @@ function createRunRecord(args: Omit<RunToolSurfaceInput, "signal">): ResolverRun
     contextUsage: args.contextUsage,
   });
   const detachLease = attachedRuntimeMutationLease(input, surface, backend, request.runId);
+  const finishJira = runPrivateFinalizer(input, request.runId);
+  armRunExpiry(controller, deadlineMs, runtimeNow(input).getTime(), finishJira);
   return {
     manager: backend.manager,
     ciRepairBudget: surface.ciRepairBudget,
@@ -1249,8 +1255,58 @@ function createRunRecord(args: Omit<RunToolSurfaceInput, "signal">): ResolverRun
     ...(backend.questionPort ? { questionPort: backend.questionPort } : {}),
     ...(backend.permissionPort ? { permissionPort: backend.permissionPort } : {}),
     toolBridge: backend.toolBridge,
-    dispose: createRunDisposer(detachLease, surface.leases, surface.invocationRegistry, backend),
+    dispose: createRunDisposer(
+      detachLease,
+      surface.leases,
+      surface.invocationRegistry,
+      backend,
+      controller,
+      finishJira,
+    ),
     unavailableOptionalTools: surface.unavailableOptionalTools,
+  };
+}
+
+/** The accepted run already owns this controller and deadline. Idle time must end its
+ * private resources too; no tool call, authority re-query or Jira-specific TTL is required. */
+function armRunExpiry(
+  controller: AbortController,
+  deadlineMs: number,
+  nowMs: number,
+  finishJira: () => Promise<void>,
+): void {
+  if (controller.signal.aborted) {
+    void finishJira();
+    return;
+  }
+  const delayMs = Number.isFinite(nowMs) ? Math.max(0, deadlineMs - nowMs) : 0;
+  const timeout = setTimeout(() => controller.abort(), delayMs);
+  timeout.unref();
+  controller.signal.addEventListener(
+    "abort",
+    () => {
+      clearTimeout(timeout);
+      void finishJira();
+    },
+    { once: true },
+  );
+}
+
+function runPrivateFinalizer(
+  input: ProductionCodingRuntimeResolverInput,
+  runId: string,
+): () => Promise<void> {
+  let settled: Promise<void> | undefined;
+  return (): Promise<void> => {
+    // Publish completion before closeRun can re-enter the existing disposer.
+    settled ??= Promise.resolve().then(async () => {
+      try {
+        await input.jiraPods?.closeRun(runId);
+      } catch (error) {
+        recordBackendDisposalFailure(input.diagnostics, runId, error);
+      }
+    });
+    return settled;
   };
 }
 
@@ -1366,12 +1422,19 @@ function createRunDisposer(
   leases: ReturnType<typeof createCodingRuntimeEditorMutationLeaseCoordinator>,
   invocationRegistry: ReturnType<typeof createCodingToolInvocationRegistry>,
   backend: QualifiedProductionRuntimeRun,
+  controller: AbortController,
+  finishJira: () => Promise<void>,
 ): () => Promise<void> {
   return async (): Promise<void> => {
-    detachLease?.();
-    leases.dispose();
-    invocationRegistry.dispose();
-    await backend.dispose?.();
+    controller.abort();
+    try {
+      detachLease?.();
+      leases.dispose();
+      invocationRegistry.dispose();
+      await backend.dispose?.();
+    } finally {
+      await finishJira();
+    }
   };
 }
 
@@ -1460,17 +1523,19 @@ function createBackendRun({
     workspaceIsCurrent: runtimeWorkspaceIsCurrent(input, context),
     jiraAuthority: {
       runId: request.runId,
+      signal: controller.signal,
       currentScopes: (phase) => runtimeJiraScopes(input, context, minted, authority, phase),
       currentInputAuthority: () => runtimeJiraInputAuthority(input, context, minted, authority),
-      promptFits: (promptTokens) => authority.delegationFits({
-        capability: minted.toolFacadeCapability,
-        adapterKind: adapterKind(context),
-        liveFacts: productionRuntimeAuthorityFacts(input.workspaceAuthority, context),
-        workspaceRoot: context.workspaceRoot,
-        deploymentCeiling: context.deploymentCeiling,
-        nowIso: runtimeNow(input).toISOString(),
-        usage: { toolCalls: 0, patchBytes: 0, promptTokens },
-      }),
+      promptFits: (promptTokens) =>
+        authority.delegationFits({
+          capability: minted.toolFacadeCapability,
+          adapterKind: adapterKind(context),
+          liveFacts: productionRuntimeAuthorityFacts(input.workspaceAuthority, context),
+          workspaceRoot: context.workspaceRoot,
+          deploymentCeiling: context.deploymentCeiling,
+          nowIso: runtimeNow(input).toISOString(),
+          usage: { toolCalls: 0, patchBytes: 0, promptTokens },
+        }),
     },
     resolveWorkspaceRootAccess,
     contextUsage,
@@ -1962,19 +2027,32 @@ function runtimeJiraEnvelope(
     deploymentCeiling: context.deploymentCeiling,
     nowIso: runtimeNow(input).toISOString(),
   };
-  const resolved = phase === "discovery" && authority.state().state === "starting"
-    ? authority.revalidateCapabilityForPendingSpawn(request)
-    : authority.revalidateCapabilityForMutation(request);
+  const resolved =
+    phase === "discovery" && authority.state().state === "starting"
+      ? authority.revalidateCapabilityForPendingSpawn(request)
+      : authority.revalidateCapabilityForMutation(request);
   return resolved.ok ? resolved.envelope : undefined;
 }
 
-function runtimeJiraInputAuthority(input: ProductionCodingRuntimeResolverInput, context: CodingRuntimeTrustedContext,
-  minted: MintedRuntime, authority: CodingRuntimeAuthorityService): ReturnType<NonNullable<CodingJiraRunAuthority["currentInputAuthority"]>> {
+function runtimeJiraInputAuthority(
+  input: ProductionCodingRuntimeResolverInput,
+  context: CodingRuntimeTrustedContext,
+  minted: MintedRuntime,
+  authority: CodingRuntimeAuthorityService,
+): ReturnType<NonNullable<CodingJiraRunAuthority["currentInputAuthority"]>> {
   const envelope = runtimeJiraEnvelope(input, context, minted, authority, "effect");
-  if (envelope === undefined || envelope.authority.runId !== minted.authorityRef.runId ||
-      editorAgentAuthorityEnvelopeDigest(envelope.authority) !== minted.authorityRef.envelopeDigest) return undefined;
-  return Object.freeze({ taskId: context.taskId, principalDigest: sha256Hex(context.operatorId),
-    authority: Object.freeze({ ...minted.authorityRef }), expiresAt: Date.parse(envelope.authority.expiresAt) });
+  if (
+    envelope === undefined ||
+    envelope.authority.runId !== minted.authorityRef.runId ||
+    editorAgentAuthorityEnvelopeDigest(envelope.authority) !== minted.authorityRef.envelopeDigest
+  )
+    return undefined;
+  return Object.freeze({
+    taskId: context.taskId,
+    principalDigest: sha256Hex(context.operatorId),
+    authority: Object.freeze({ ...minted.authorityRef }),
+    expiresAt: Date.parse(envelope.authority.expiresAt),
+  });
 }
 
 function runtimeMutationLive(

@@ -18,22 +18,54 @@ export function jiraChatPrivatePorts(
   const factory = deps.atlassianConnectorCredentials?.jiraPrivatePortFactory;
   const chat = deps.store.findChatById(context.chatId);
   const pod = chat?.jiraPodBinding;
-  if (factory === undefined || pod === undefined || pod.podId !== credential.livePod.podId ||
-      pod.bindingGeneration !== chat?.jiraBindingGeneration || pod.authenticationGeneration !== credential.generation) return undefined;
+  if (
+    factory === undefined ||
+    pod === undefined ||
+    pod.podId !== credential.livePod.podId ||
+    pod.bindingGeneration !== chat?.jiraBindingGeneration ||
+    pod.authenticationGeneration !== credential.generation
+  )
+    return undefined;
   const selection = context.activeHumanInput?.();
-  return factory(credential, invocation, {
-    sessionScope: { context: { kind: "chat", chatId: context.chatId, podId: pod.podId, bindingGeneration: pod.bindingGeneration },
-      authority: context.authorityReference,
-      principalDigest: credential.livePod.ownerDigest, authRef: credential.authRef,
-      authenticationGeneration: credential.generation, verificationRevision: credential.livePod.verificationRevision,
-      expiresAt: Date.parse(context.deadlineAt) },
-    ...(selection === undefined ? {} : { selection }),
-    onConsumed: (view): void => {
-      const binding = selection?.binding.context;
-      if (binding?.kind !== "chat" || binding.chatId !== context.chatId || binding.messageId !== context.userMessageId ||
-          view.requestId !== selection?.requestId) throw new TypeError("Private Jira input context changed");
-      deps.store.updateChatToolTranscript(binding.messageId, { kind: "human-input", callId: binding.callId, view }, context.correlationId);
-      recordJiraHumanInput(deps.atlassianConnectorCredentials, context.correlationId, "consumed");
+  const ports = factory(
+    credential,
+    invocation,
+    {
+      lifetimeSignal: context.privateLifetime?.signal ?? context.signal,
+      sessionScope: {
+        context: {
+          kind: "chat",
+          chatId: context.chatId,
+          podId: pod.podId,
+          bindingGeneration: pod.bindingGeneration,
+        },
+        authority: context.authorityReference,
+        principalDigest: credential.livePod.ownerDigest,
+        authRef: credential.authRef,
+        authenticationGeneration: credential.generation,
+        verificationRevision: credential.livePod.verificationRevision,
+        expiresAt: Date.parse(context.deadlineAt),
+      },
+      ...(selection === undefined ? {} : { selection }),
+      onConsumed: (view): void => {
+        const binding = selection?.binding.context;
+        if (
+          binding?.kind !== "chat" ||
+          binding.chatId !== context.chatId ||
+          binding.messageId !== context.userMessageId ||
+          view.requestId !== selection?.requestId
+        )
+          throw new TypeError("Private Jira input context changed");
+        deps.store.updateChatToolTranscript(
+          binding.messageId,
+          { kind: "human-input", callId: binding.callId, view },
+          context.correlationId,
+        );
+        recordJiraHumanInput(deps.atlassianConnectorCredentials, context.correlationId, "consumed");
+      },
     },
-  }, lifecycle ?? { beforeDispatch: invocation.beforeEffect });
+    lifecycle ?? { beforeDispatch: invocation.beforeEffect },
+  );
+  context.privateLifetime?.register(ports.finish);
+  return ports;
 }

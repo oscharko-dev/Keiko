@@ -1,4 +1,5 @@
 import { createJiraChatHumanInput } from "./jiraChatHumanInput.js";
+import { createJiraPrivateLifetime } from "./httpPrivateIdentity.js";
 import { chatKnowledgeScopes } from "../requirement-inventory.js";
 import { reserveChatToolPrompt } from "../chat-tool-approvals.js";
 import { jiraTurnGuidance } from "./jiraOpenDraft.js";
@@ -288,8 +289,10 @@ export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
     const { authority, deps, managed, correlationId, message } = jiraOptions;
     const baseContext = jiraTurnContext(jiraOptions);
     const humanInput = createJiraChatHumanInput(jiraOptions, baseContext);
+    const privateLifetime = createJiraPrivateLifetime(baseContext.signal, correlationId);
     const context = {
       ...baseContext,
+      privateLifetime,
       humanInputFor: humanInput.selectionFor,
       activeHumanInput: humanInput.currentSelection,
     };
@@ -343,6 +346,10 @@ export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
         return source;
       },
       finalizeInvocation: (actionId) => humanInput.finalize(actionId),
+      finalizeTurn: async () => {
+        humanInput.finish();
+        await privateLifetime.finish();
+      },
       selectTools: async (identities) => {
         requireDispatch(deps.jiraChatCatalog !== undefined, "failed", "handler-unavailable");
         const selected = await deps.jiraChatCatalog.select(identities, {

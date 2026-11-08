@@ -31,8 +31,15 @@ import {
   containsPseudoRoleMarker,
   stripUnsafeFormatChars,
 } from "./text-safety.js";
-import { ATLASSIAN_CONNECTOR_BASE_URL_MAX_CHARS, isSafeAtlassianConnectorBaseUrl } from "./atlassian-connector-url.js";
-export { ATLASSIAN_CONNECTOR_BASE_URL_MAX_CHARS, canonicalAtlassianConnectorBaseUrl, isSafeAtlassianConnectorBaseUrl } from "./atlassian-connector-url.js";
+import {
+  ATLASSIAN_CONNECTOR_BASE_URL_MAX_CHARS,
+  isSafeAtlassianConnectorBaseUrl,
+} from "./atlassian-connector-url.js";
+export {
+  ATLASSIAN_CONNECTOR_BASE_URL_MAX_CHARS,
+  canonicalAtlassianConnectorBaseUrl,
+  isSafeAtlassianConnectorBaseUrl,
+} from "./atlassian-connector-url.js";
 
 import { JIRA_READ_TOOL_FAMILIES } from "./jira-read-tools.js";
 import { JIRA_MANAGED_READ_TOOLS, type JiraManagedReadToolName } from "./jira-tool-fields.js";
@@ -126,89 +133,152 @@ const JIRA_RESOURCE_ACCOUNT_WRITE_ACTIONS = Object.freeze([
   "logout",
   "release-websudo",
 ] as const);
-type JiraResourceAccountAction = (typeof JIRA_RESOURCE_ACCOUNT_ADMIN_ACTIONS)[number] | (typeof JIRA_RESOURCE_ACCOUNT_WRITE_ACTIONS)[number];
+type JiraResourceAccountAction =
+  | (typeof JIRA_RESOURCE_ACCOUNT_ADMIN_ACTIONS)[number]
+  | (typeof JIRA_RESOURCE_ACCOUNT_WRITE_ACTIONS)[number];
 
-type JiraEntityPropertyAction = JiraEntityPropertyMutation extends `jira.${infer Action}` ? Action : never;
+type JiraEntityPropertyAction = JiraEntityPropertyMutation extends `jira.${infer Action}`
+  ? Action
+  : never;
 function jiraPropertyAction(name: JiraEntityPropertyMutation): JiraEntityPropertyAction {
   return name.slice(5) as JiraEntityPropertyAction;
 }
 const JIRA_PROPERTY_ACTIONS = Object.freeze(JIRA_ENTITY_PROPERTY_MUTATIONS.map(jiraPropertyAction));
 const JIRA_SAVED_ADMIN_ACTIONS = Object.freeze([
-  "create-filter", "set-filter-share-scope", "add-filter-permission", "delete-filter-permission",
+  "create-filter",
+  "set-filter-share-scope",
+  "add-filter-permission",
+  "delete-filter-permission",
 ] as const);
 const JIRA_SAVED_WRITE_ACTIONS = Object.freeze([
-  "update-filter", "delete-filter", "set-filter-columns", "reset-filter-columns",
-  "set-my-preference", "delete-my-preference",
+  "update-filter",
+  "delete-filter",
+  "set-filter-columns",
+  "reset-filter-columns",
+  "set-my-preference",
+  "delete-my-preference",
 ] as const);
-const JIRA_SAVED_ACTIONS = Object.freeze([...JIRA_SAVED_ADMIN_ACTIONS, ...JIRA_SAVED_WRITE_ACTIONS]);
+const JIRA_SAVED_ACTIONS = Object.freeze([
+  ...JIRA_SAVED_ADMIN_ACTIONS,
+  ...JIRA_SAVED_WRITE_ACTIONS,
+]);
 type JiraSavedConfigurationAction = (typeof JIRA_SAVED_ACTIONS)[number];
 
 type JiraRelationshipOrReleaseMutation = JiraLinkMutation | JiraReleaseLifecycleMutation;
-type JiraRelationshipOrReleaseAction = JiraRelationshipOrReleaseMutation extends `jira.${infer Action}` ? Action : never;
-function relationshipOrReleaseAction(name: JiraRelationshipOrReleaseMutation): JiraRelationshipOrReleaseAction {
+type JiraRelationshipOrReleaseAction =
+  JiraRelationshipOrReleaseMutation extends `jira.${infer Action}` ? Action : never;
+function relationshipOrReleaseAction(
+  name: JiraRelationshipOrReleaseMutation,
+): JiraRelationshipOrReleaseAction {
   return name.slice(5) as JiraRelationshipOrReleaseAction;
 }
-const JIRA_RELATIONSHIP_RELEASE_ACTIONS = Object.freeze([
-  ...JIRA_LINK_MUTATIONS, ...JIRA_RELEASE_LIFECYCLE_MUTATIONS,
-].map(relationshipOrReleaseAction));
+const JIRA_RELATIONSHIP_RELEASE_ACTIONS = Object.freeze(
+  [...JIRA_LINK_MUTATIONS, ...JIRA_RELEASE_LIFECYCLE_MUTATIONS].map(relationshipOrReleaseAction),
+);
 
-type JiraConfigurationMutation = JiraScreenConfigurationMutation | JiraBoardConfigurationMutation | JiraSprintLifecycleMutation;
-type JiraConfigurationAction = JiraConfigurationMutation extends `jira.${infer Action}` ? Action : never;
+type JiraConfigurationMutation =
+  JiraScreenConfigurationMutation | JiraBoardConfigurationMutation | JiraSprintLifecycleMutation;
+type JiraConfigurationAction = JiraConfigurationMutation extends `jira.${infer Action}`
+  ? Action
+  : never;
 function configurationAction(name: JiraConfigurationMutation): JiraConfigurationAction {
   return name.slice(5) as JiraConfigurationAction;
 }
-const JIRA_CONFIGURATION_ACTIONS = Object.freeze([
-  ...JIRA_SCREEN_CONFIGURATION_MUTATIONS, ...JIRA_BOARD_CONFIGURATION_MUTATIONS, ...JIRA_SPRINT_LIFECYCLE_MUTATIONS,
-].map(configurationAction));
+const JIRA_CONFIGURATION_ACTIONS = Object.freeze(
+  [
+    ...JIRA_SCREEN_CONFIGURATION_MUTATIONS,
+    ...JIRA_BOARD_CONFIGURATION_MUTATIONS,
+    ...JIRA_SPRINT_LIFECYCLE_MUTATIONS,
+  ].map(configurationAction),
+);
 const JIRA_CONFIGURATION_ADMIN_ACTIONS = Object.freeze([
-  "add-default-screen-field", "add-screen-tab-field", "remove-screen-tab-field",
-  "move-screen-tab-field", "set-screen-field-show-when-empty", "move-screen-tab", "unmap-all-sprints",
+  "add-default-screen-field",
+  "add-screen-tab-field",
+  "remove-screen-tab-field",
+  "move-screen-tab-field",
+  "set-screen-field-show-when-empty",
+  "move-screen-tab",
+  "unmap-all-sprints",
 ] as const satisfies readonly JiraConfigurationAction[]);
 
-type JiraPlanningVersionOrCategoryMutation = JiraAgilePlanningMutation | JiraVersionRemoteLinkMutation | JiraProjectCategoryMutation;
-type JiraPlanningVersionOrCategoryAction = JiraPlanningVersionOrCategoryMutation extends `jira.${infer Action}` ? Action : never;
-function planningVersionOrCategoryAction(name: JiraPlanningVersionOrCategoryMutation): JiraPlanningVersionOrCategoryAction {
+type JiraPlanningVersionOrCategoryMutation =
+  JiraAgilePlanningMutation | JiraVersionRemoteLinkMutation | JiraProjectCategoryMutation;
+type JiraPlanningVersionOrCategoryAction =
+  JiraPlanningVersionOrCategoryMutation extends `jira.${infer Action}` ? Action : never;
+function planningVersionOrCategoryAction(
+  name: JiraPlanningVersionOrCategoryMutation,
+): JiraPlanningVersionOrCategoryAction {
   return name.slice(5) as JiraPlanningVersionOrCategoryAction;
 }
-const JIRA_PLANNING_VERSION_CATEGORY_ACTIONS = Object.freeze([
-  ...JIRA_AGILE_PLANNING_MUTATIONS, ...JIRA_VERSION_REMOTE_LINK_MUTATIONS, ...JIRA_PROJECT_CATEGORY_MUTATIONS,
-].map(planningVersionOrCategoryAction));
+const JIRA_PLANNING_VERSION_CATEGORY_ACTIONS = Object.freeze(
+  [
+    ...JIRA_AGILE_PLANNING_MUTATIONS,
+    ...JIRA_VERSION_REMOTE_LINK_MUTATIONS,
+    ...JIRA_PROJECT_CATEGORY_MUTATIONS,
+  ].map(planningVersionOrCategoryAction),
+);
 const JIRA_PROJECT_CATEGORY_ACTIONS = Object.freeze([
-  "create-project-category", "update-project-category", "delete-project-category",
+  "create-project-category",
+  "update-project-category",
+  "delete-project-category",
 ] as const satisfies readonly JiraPlanningVersionOrCategoryAction[]);
 
 type JiraAccessConfigurationMutation = JiraPermissionSchemeMutation | JiraRoleMutation;
-type JiraAccessConfigurationAction = JiraAccessConfigurationMutation extends `jira.${infer Action}` ? Action : never;
-function accessConfigurationAction(name: JiraAccessConfigurationMutation): JiraAccessConfigurationAction {
+type JiraAccessConfigurationAction = JiraAccessConfigurationMutation extends `jira.${infer Action}`
+  ? Action
+  : never;
+function accessConfigurationAction(
+  name: JiraAccessConfigurationMutation,
+): JiraAccessConfigurationAction {
   return name.slice(5) as JiraAccessConfigurationAction;
 }
-const JIRA_ACCESS_CONFIGURATION_ACTIONS = Object.freeze([
-  ...JIRA_PERMISSION_SCHEME_MUTATIONS, ...JIRA_ROLE_MUTATIONS,
-].map(accessConfigurationAction));
+const JIRA_ACCESS_CONFIGURATION_ACTIONS = Object.freeze(
+  [...JIRA_PERMISSION_SCHEME_MUTATIONS, ...JIRA_ROLE_MUTATIONS].map(accessConfigurationAction),
+);
 
-type JiraDirectorySchemaOrMaintenanceMutation = JiraGroupMutation | JiraMaintenanceMutation | JiraSchemaMutation | JiraDirectoryAccessMutation;
-type JiraDirectorySchemaOrMaintenanceAction = JiraDirectorySchemaOrMaintenanceMutation extends `jira.${infer Action}` ? Action : never;
+type JiraDirectorySchemaOrMaintenanceMutation =
+  JiraGroupMutation | JiraMaintenanceMutation | JiraSchemaMutation | JiraDirectoryAccessMutation;
+type JiraDirectorySchemaOrMaintenanceAction =
+  JiraDirectorySchemaOrMaintenanceMutation extends `jira.${infer Action}` ? Action : never;
 type JiraIssueAction = JiraIssueActionMutation extends `jira.${infer Action}` ? Action : never;
-function directorySchemaOrMaintenanceAction(name: JiraDirectorySchemaOrMaintenanceMutation): JiraDirectorySchemaOrMaintenanceAction {
+function directorySchemaOrMaintenanceAction(
+  name: JiraDirectorySchemaOrMaintenanceMutation,
+): JiraDirectorySchemaOrMaintenanceAction {
   return name.slice(5) as JiraDirectorySchemaOrMaintenanceAction;
 }
-function issueAction(name: JiraIssueActionMutation): JiraIssueAction { return name.slice(5) as JiraIssueAction; }
-const JIRA_DIRECTORY_SCHEMA_MAINTENANCE_ACTIONS = Object.freeze([
-  ...JIRA_GROUP_MUTATIONS, ...JIRA_MAINTENANCE_MUTATIONS, ...JIRA_SCHEMA_MUTATIONS, ...JIRA_DIRECTORY_ACCESS_MUTATIONS,
-].map(directorySchemaOrMaintenanceAction));
+function issueAction(name: JiraIssueActionMutation): JiraIssueAction {
+  return name.slice(5) as JiraIssueAction;
+}
+const JIRA_DIRECTORY_SCHEMA_MAINTENANCE_ACTIONS = Object.freeze(
+  [
+    ...JIRA_GROUP_MUTATIONS,
+    ...JIRA_MAINTENANCE_MUTATIONS,
+    ...JIRA_SCHEMA_MUTATIONS,
+    ...JIRA_DIRECTORY_ACCESS_MUTATIONS,
+  ].map(directorySchemaOrMaintenanceAction),
+);
 const JIRA_ISSUE_ACTIONS = Object.freeze(JIRA_ISSUE_ACTION_MUTATIONS.map(issueAction));
 
-type JiraSchemeRuntimeOrEmailMutation = JiraOptionSchemeMutation | JiraWorkflowSchemeMutation | JiraInstanceSettingMutation | JiraEmailTemplateMutation;
-type JiraSchemeRuntimeOrEmailAction = JiraSchemeRuntimeOrEmailMutation extends `jira.${infer Action}` ? Action : never;
-function schemeRuntimeOrEmailAction(name: JiraSchemeRuntimeOrEmailMutation): JiraSchemeRuntimeOrEmailAction {
+type JiraSchemeRuntimeOrEmailMutation =
+  | JiraOptionSchemeMutation
+  | JiraWorkflowSchemeMutation
+  | JiraInstanceSettingMutation
+  | JiraEmailTemplateMutation;
+type JiraSchemeRuntimeOrEmailAction =
+  JiraSchemeRuntimeOrEmailMutation extends `jira.${infer Action}` ? Action : never;
+function schemeRuntimeOrEmailAction(
+  name: JiraSchemeRuntimeOrEmailMutation,
+): JiraSchemeRuntimeOrEmailAction {
   return name.slice(5) as JiraSchemeRuntimeOrEmailAction;
 }
-const JIRA_SCHEME_RUNTIME_EMAIL_ACTIONS = Object.freeze([
-  ...JIRA_OPTION_SCHEME_MUTATIONS,
-  ...JIRA_WORKFLOW_SCHEME_MUTATIONS,
-  ...JIRA_INSTANCE_SETTING_MUTATIONS,
-  ...JIRA_EMAIL_TEMPLATE_MUTATIONS,
-].map(schemeRuntimeOrEmailAction));
+const JIRA_SCHEME_RUNTIME_EMAIL_ACTIONS = Object.freeze(
+  [
+    ...JIRA_OPTION_SCHEME_MUTATIONS,
+    ...JIRA_WORKFLOW_SCHEME_MUTATIONS,
+    ...JIRA_INSTANCE_SETTING_MUTATIONS,
+    ...JIRA_EMAIL_TEMPLATE_MUTATIONS,
+  ].map(schemeRuntimeOrEmailAction),
+);
 
 // ─── Schema version ───────────────────────────────────────────────────────────
 // Pinned to "1". A breaking change introduces a NEW literal rather than mutating "1", the same
@@ -1009,10 +1079,9 @@ export const JIRA_MANAGED_ACTION_TYPES: Readonly<
     JiraManagedReadToolName,
     JiraManagedReadToolName
   >),
-  ...(Object.fromEntries(JIRA_ENTITY_PROPERTY_MUTATIONS.map((name) => [name, jiraPropertyAction(name)])) as Record<
-    JiraEntityPropertyMutation,
-    JiraEntityPropertyAction
-  >),
+  ...(Object.fromEntries(
+    JIRA_ENTITY_PROPERTY_MUTATIONS.map((name) => [name, jiraPropertyAction(name)]),
+  ) as Record<JiraEntityPropertyMutation, JiraEntityPropertyAction>),
   "jira.create": "create-issue",
   "jira.set-app-monitoring": "set-app-monitoring",
   "jira.set-ipd-monitoring": "set-ipd-monitoring",
@@ -1057,10 +1126,7 @@ function jiraActionValues<Action extends AtlassianConnectorActionType, Value ext
   actions: readonly Action[],
   value: Value,
 ): Record<Action, Value> {
-  return Object.fromEntries(actions.map((name) => [name, value])) as Record<
-    Action,
-    Value
-  >;
+  return Object.fromEntries(actions.map((name) => [name, value])) as Record<Action, Value>;
 }
 
 // The D4 "Action class" column, verbatim. `connector-access` is the shared
@@ -1101,6 +1167,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
   ...jiraActionValues(JIRA_PROPERTY_ACTIONS, "connector-write"),
   "set-issue-type-property": "connector-admin",
   "delete-issue-type-property": "connector-admin",
+  "set-user-property": "connector-admin",
+  "delete-user-property": "connector-admin",
   "set-app-monitoring": "connector-admin",
   "set-ipd-monitoring": "connector-admin",
   "start-jmx-metrics": "connector-admin",
@@ -1225,6 +1293,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
   ...jiraActionValues(JIRA_PROPERTY_ACTIONS, "issue-tracker.write"),
   "set-issue-type-property": "issue-tracker.admin",
   "delete-issue-type-property": "issue-tracker.admin",
+  "set-user-property": "issue-tracker.admin",
+  "delete-user-property": "issue-tracker.admin",
   "set-app-monitoring": "issue-tracker.admin",
   "set-ipd-monitoring": "issue-tracker.admin",
   "start-jmx-metrics": "issue-tracker.admin",
@@ -2206,7 +2276,10 @@ export {
   type JiraManagedReadToolName,
 } from "./jira-tool-fields.js";
 export { JIRA_READ_TOOL_FAMILIES } from "./jira-read-tools.js";
-export { JIRA_ENTITY_PROPERTY_MUTATIONS, type JiraEntityPropertyMutation } from "./jira-tool-execution.js";
+export {
+  JIRA_ENTITY_PROPERTY_MUTATIONS,
+  type JiraEntityPropertyMutation,
+} from "./jira-tool-execution.js";
 export {
   JIRA_ATTACHMENT_MAX_BYTES,
   JIRA_ATTACHMENT_NAME_MAX_BYTES,
@@ -2365,10 +2438,17 @@ export {
 } from "./jira-human-input.js";
 export { copyJiraHumanInputReview, type JiraHumanInputReview } from "./jira-human-input-review.js";
 export {
-  JIRA_AVATAR_MUTATIONS, type JiraAvatarMutation,
-  JIRA_AVATAR_UPLOAD_MUTATIONS, type JiraAvatarUploadMutation, isJiraAvatarUploadOperation,
-  JIRA_IDENTITY_MUTATIONS, type JiraIdentityMutation,
-  JIRA_PRIVATE_ACCOUNT_MUTATIONS, type JiraPrivateAccountMutation,
-  JIRA_ISSUE_LIFECYCLE_MUTATIONS, type JiraIssueLifecycleMutation,
-  JIRA_PROJECT_LIFECYCLE_MUTATIONS, type JiraProjectLifecycleMutation,
+  JIRA_AVATAR_MUTATIONS,
+  type JiraAvatarMutation,
+  JIRA_AVATAR_UPLOAD_MUTATIONS,
+  type JiraAvatarUploadMutation,
+  isJiraAvatarUploadOperation,
+  JIRA_IDENTITY_MUTATIONS,
+  type JiraIdentityMutation,
+  JIRA_PRIVATE_ACCOUNT_MUTATIONS,
+  type JiraPrivateAccountMutation,
+  JIRA_ISSUE_LIFECYCLE_MUTATIONS,
+  type JiraIssueLifecycleMutation,
+  JIRA_PROJECT_LIFECYCLE_MUTATIONS,
+  type JiraProjectLifecycleMutation,
 } from "./jira-tool-execution.js";

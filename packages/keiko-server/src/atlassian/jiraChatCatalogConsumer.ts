@@ -72,6 +72,10 @@ import { jiraCatalogResult } from "./jiraCatalogResult.js";
 
 /** Private ordinary-Chat scope. Neither a workspace nor a Coding session is required. */
 export interface JiraChatCatalogContext extends ToolConsumerContext {
+  /** Server-private whole-turn lifetime, shared by Jira-only and mixed-source producers. */
+  readonly privateLifetime?: ReturnType<
+    typeof import("./httpPrivateIdentity.js").createJiraPrivateLifetime
+  >;
   readonly activeHumanInput?: () =>
     import("@oscharko-dev/keiko-connectors").JiraHumanInputSelection | undefined;
   readonly humanInputFor?: (

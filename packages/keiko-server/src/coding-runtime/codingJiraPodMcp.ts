@@ -1,8 +1,22 @@
 import type { CodingWorkbenchConnectorScope } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
-import { prepareCodingJiraHumanInput, currentCodingJiraInput, type CodingJiraCurrentInputResolver, type CodingJiraInputAuthority, type PendingCodingJiraInput } from "./codingJiraHumanInput.js";
+import {
+  prepareCodingJiraHumanInput,
+  currentCodingJiraInput,
+  type CodingJiraCurrentInputResolver,
+  type CodingJiraInputAuthority,
+  type PendingCodingJiraInput,
+} from "./codingJiraHumanInput.js";
 import { recordJiraHumanInput } from "../atlassian/credentialActivity.js";
-import { jiraRequiredConnectorScope, JIRA_MANAGED_ACTION_TYPES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import { createCodingJiraCatalog, isCodingJiraDiscovery, type CodingJiraCatalog } from "./codingJiraCatalog.js";
+import { createJiraPrivateLifetime } from "../atlassian/httpPrivateIdentity.js";
+import {
+  jiraRequiredConnectorScope,
+  JIRA_MANAGED_ACTION_TYPES,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  createCodingJiraCatalog,
+  isCodingJiraDiscovery,
+  type CodingJiraCatalog,
+} from "./codingJiraCatalog.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { JIRA_TOOL_GUIDANCE } from "../atlassian/jiraToolGuidance.js";
 import {
@@ -27,10 +41,7 @@ import type {
   ManagedMcpToolResult,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type { McpServerDefinition } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
-import {
-  createMcpRelayEndpoint,
-  ManagedMcpError,
-} from "@oscharko-dev/keiko-mcp";
+import { createMcpRelayEndpoint, ManagedMcpError } from "@oscharko-dev/keiko-mcp";
 
 import type { AtlassianConnectorCredentialDeps } from "../atlassian/credentialRoutes.js";
 import { createJiraProviderForCatalog } from "../atlassian/jiraManagedProvider.js";
@@ -80,22 +91,31 @@ import {
  */
 
 export interface CodingJiraPodDeps extends JiraPodAccessDeps {
-  readonly codingRuntimeOrchestrator?: Pick<NonNullable<UiHandlerDeps["codingRuntimeOrchestrator"]>, "refreshHistory"> | undefined;
+  readonly codingRuntimeOrchestrator?:
+    Pick<NonNullable<UiHandlerDeps["codingRuntimeOrchestrator"]>, "refreshHistory"> | undefined;
   /** Bound by server composition to its current credential floor; never supplied by the runtime. */
-  readonly emailTemplateInspection?: (signal: AbortSignal) => NonNullable<JiraManagedConnection["emailTemplates"]>;
+  readonly emailTemplateInspection?: (
+    signal: AbortSignal,
+  ) => NonNullable<JiraManagedConnection["emailTemplates"]>;
   /**
    * The skill library holds the customer-defined issue templates every Jira write is checked by.
    * Required: a Pod wired without it would write unchecked, so that cannot be expressed.
    */
   readonly store: Pick<UiHandlerDeps["store"], "markdownSkills" | "codingHistory">;
   readonly atlassianConnectorCredentials?:
-    Pick<AtlassianConnectorCredentialDeps, "custody" | "httpBodyPortFactory" | "jiraPrivatePortFactory" | "activityLog" | "diagnostics"> | undefined;
+    | Pick<
+        AtlassianConnectorCredentialDeps,
+        "custody" | "httpBodyPortFactory" | "jiraPrivatePortFactory" | "activityLog" | "diagnostics"
+      >
+    | undefined;
 }
 
 export type CodingJiraConnections = Pick<ConfiguredMcpConnections, "generation" | "serve">;
 
 export interface CodingJiraRunAuthority {
   readonly runId: string;
+  /** Existing server-owned run cancellation, never a serialized Authority Envelope field. */
+  readonly signal?: AbortSignal;
   /** Revalidates the same live run envelope; an absent/revoked envelope grants nothing. */
   readonly currentScopes: (
     phase: "discovery" | "effect",
@@ -139,14 +159,17 @@ export interface CodingJiraPods {
   /** Late binding: the custody graph exists only after the coding runtime was composed. */
   readonly attach: (deps: CodingJiraPodDeps) => void;
   readonly close: () => Promise<void>;
+  readonly closeRun: (runId: string) => Promise<void>;
 }
 
 interface PodEntry {
+  readonly runId: string;
   readonly binding: CodingJiraPodBinding;
   readonly lifetime: AbortController;
   readonly ready: Promise<ReturnType<typeof createMcpRelayEndpoint>>;
   readonly host: CodingJiraCatalog<JiraInvocationContext>;
   readonly inputs: Map<string, PendingCodingJiraInput>;
+  readonly privateLifetime: ReturnType<typeof createJiraPrivateLifetime>;
 }
 
 const ENTRY_MAX = 8;
@@ -182,7 +205,8 @@ function callToolResult(data: CatalogJsonObject, isError: boolean): CatalogJsonO
 }
 
 function toolOf(name: string): CodingJiraPodLine["tool"] {
-  return Object.hasOwn(JIRA_MANAGED_ACTION_TYPES, name) && Object.hasOwn(CODING_JIRA_TOOL_RISKS, name)
+  return Object.hasOwn(JIRA_MANAGED_ACTION_TYPES, name) &&
+    Object.hasOwn(CODING_JIRA_TOOL_RISKS, name)
     ? (name as NonNullable<CodingJiraPodLine["tool"]>)
     : undefined;
 }
@@ -245,7 +269,7 @@ function recordJiraCallFailure(
 
 class CodingJiraPodService implements CodingJiraPods {
   readonly #entries = new Map<string, PodEntry>();
-  readonly #disposed = new WeakSet<PodEntry>();
+  readonly #disposed = new WeakMap<PodEntry, Promise<void>>();
   /** Reports of Coding runs; each belongs to the Pod binding that started it. */
   readonly #reports: JiraReportStore = createJiraReportStore();
   #deps: CodingJiraPodDeps | undefined;
@@ -261,7 +285,11 @@ class CodingJiraPodService implements CodingJiraPods {
     if (this.#closed || binding.context.kind !== "coding") return undefined;
     for (const entry of this.#entries.values()) {
       if (entry.lifetime.signal.aborted) continue;
-      const found = currentCodingJiraInput(entry.inputs.get(binding.context.callId), binding, requestId);
+      const found = currentCodingJiraInput(
+        entry.inputs.get(binding.context.callId),
+        binding,
+        requestId,
+      );
       if (found !== undefined) return found;
     }
     return undefined;
@@ -307,6 +335,10 @@ class CodingJiraPodService implements CodingJiraPods {
     this.#entries.clear();
     await Promise.allSettled(entries.map((entry) => this.dispose(entry)));
   }
+  public async closeRun(runId: string): Promise<void> {
+    const entries = [...this.#entries].filter(([, entry]) => entry.runId === runId);
+    await Promise.allSettled(entries.map(([key, entry]) => this.forget(key, entry)));
+  }
 
   /** A Pod that is no longer the chosen one yields a revoked signal, so no relay is bound for it. */
   private jiraGeneration(
@@ -314,7 +346,12 @@ class CodingJiraPodService implements CodingJiraPods {
     correlationId: string,
     authority: CodingJiraRunAuthority | undefined,
   ): AbortSignal {
-    if (authority === undefined || authority.runId !== correlationId) return AbortSignal.abort();
+    if (
+      authority === undefined ||
+      authority.runId !== correlationId ||
+      authority.signal?.aborted === true
+    )
+      return AbortSignal.abort();
     if (this.current(binding) === undefined) return AbortSignal.abort();
     const scopes = authority.currentScopes("discovery");
     return scopes === undefined
@@ -353,12 +390,16 @@ class CodingJiraPodService implements CodingJiraPods {
     authority: CodingJiraRunAuthority,
     scopes: readonly CodingWorkbenchConnectorScope[],
   ): PodEntry {
-    if (this.#closed) throw NOT_ADMITTED();
+    if (this.#closed || authority.signal?.aborted === true) throw NOT_ADMITTED();
     const key = `${this.key(binding)}:${authority.runId}:${[...scopes].sort().join(",")}`;
     const existing = this.#entries.get(key);
     if (existing !== undefined && !existing.lifetime.signal.aborted) return existing;
-    if (existing !== undefined) void this.dispose(existing);
+    if (existing !== undefined) {
+      void this.forget(key, existing);
+      throw NOT_ADMITTED();
+    }
     this.evictOldest();
+    if (this.#entries.size >= ENTRY_MAX) throw NOT_ADMITTED();
     const created = this.open(binding, correlationId, authority, scopedTools(scopes));
     this.#entries.set(key, created);
     created.lifetime.signal.addEventListener(
@@ -368,28 +409,37 @@ class CodingJiraPodService implements CodingJiraPods {
       },
       { once: true },
     );
+    if (created.lifetime.signal.aborted) void this.forget(key, created);
     return created;
   }
 
   private evictOldest(): void {
-    for (const [key, entry] of this.#entries) {
-      if (this.#entries.size < ENTRY_MAX) break;
-      this.#entries.delete(key);
-      void this.dispose(entry);
-    }
+    if (this.#entries.size < ENTRY_MAX) return;
+    const first = this.#entries.entries().next().value;
+    if (first !== undefined) void this.forget(first[0], first[1]);
   }
 
   private async forget(key: string, entry: PodEntry): Promise<void> {
-    if (this.#entries.get(key) === entry) this.#entries.delete(key);
-    await this.dispose(entry);
+    try {
+      await this.dispose(entry);
+    } finally {
+      if (this.#entries.get(key) === entry) this.#entries.delete(key);
+    }
   }
 
   private async dispose(entry: PodEntry): Promise<void> {
+    const previous = this.#disposed.get(entry);
+    if (previous !== undefined) return previous;
+    // Publish the disposal promise before abort synchronously notifies the same entry again.
+    const disposal = Promise.resolve().then(() => this.disposeEntry(entry));
+    this.#disposed.set(entry, disposal);
+    return disposal;
+  }
+
+  private async disposeEntry(entry: PodEntry): Promise<void> {
     entry.lifetime.abort();
     for (const pending of entry.inputs.values()) pending.release();
     entry.inputs.clear();
-    if (this.#disposed.has(entry)) return;
-    this.#disposed.add(entry);
     try {
       await entry.ready.then(
         (endpoint) => endpoint.close(),
@@ -403,6 +453,8 @@ class CodingJiraPodService implements CodingJiraPods {
         reason: "internal",
         error,
       });
+    } finally {
+      await entry.privateLifetime.finish();
     }
   }
 
@@ -413,15 +465,28 @@ class CodingJiraPodService implements CodingJiraPods {
     tools: readonly CodingJiraTool[],
   ): PodEntry {
     const lifetime = new AbortController();
+    const endRun = (): void => {
+      lifetime.abort();
+    };
+    authority.signal?.addEventListener("abort", endRun, { once: true });
+    lifetime.signal.addEventListener(
+      "abort",
+      () => authority.signal?.removeEventListener("abort", endRun),
+      { once: true },
+    );
+    if (authority.signal?.aborted === true) endRun();
+    const privateLifetime = createJiraPrivateLifetime(lifetime.signal, correlationId);
     const inputs = new Map<string, PendingCodingJiraInput>();
     const host = createCodingJiraCatalog<JiraInvocationContext>({
       tools,
       correlationId,
-      admitted: (tool, context) => this.current(binding) !== undefined &&
+      admitted: (tool, context) =>
+        this.current(binding) !== undefined &&
         this.scopeRefusal(authority, context, requiredScope(tool)) === undefined,
       fits: (selected, result) => authority.catalogFits?.(selected, result),
-      provider: (selected) => createJiraProviderForCatalog(
-          (context) => this.connection(binding, context),
+      provider: (selected) =>
+        createJiraProviderForCatalog(
+          (context) => this.connection(binding, context, privateLifetime),
           selected,
           (operation, _args, context, execute) => this.mutate(binding, operation, context, execute),
           {
@@ -434,13 +499,12 @@ class CodingJiraPodService implements CodingJiraPods {
         ),
       log: this.log ?? { write: (): void => undefined },
     });
-    const ready = host.ready
-      .then(() =>
-        createMcpRelayEndpoint(
-          this.hostConnection(host, lifetime.signal, binding, authority, inputs),
-          CODING_JIRA_TOOL_RISKS,
-        ),
-      );
+    const ready = host.ready.then(() =>
+      createMcpRelayEndpoint(
+        this.hostConnection(host, lifetime.signal, binding, authority, inputs),
+        CODING_JIRA_TOOL_RISKS,
+      ),
+    );
     // A host that cannot be admitted ends the binding; the rejection reaches the awaiting serve.
     ready.catch((error: unknown) => {
       lifetime.abort();
@@ -451,7 +515,7 @@ class CodingJiraPodService implements CodingJiraPods {
         error,
       });
     });
-    return { binding, lifetime, ready, host, inputs };
+    return { runId: authority.runId, binding, lifetime, ready, host, inputs, privateLifetime };
   }
 
   private async serveJira(
@@ -479,6 +543,7 @@ class CodingJiraPodService implements CodingJiraPods {
   private connection(
     binding: CodingJiraPodBinding,
     context: JiraInvocationContext,
+    privateLifetime: ReturnType<typeof createJiraPrivateLifetime>,
   ): JiraManagedConnection {
     const credential = this.current(binding);
     const deps = this.#deps;
@@ -493,37 +558,65 @@ class CodingJiraPodService implements CodingJiraPods {
         beforeDispatch: () => this.admit(binding, context),
       }),
       issueTemplates: jiraIssueTemplateSource(deps.store),
-      ...this.privateConnection(binding, context, credential),
-      ...(deps.emailTemplateInspection === undefined ? {} : { emailTemplates: deps.emailTemplateInspection(context.signal) }),
+      ...this.privateConnection(binding, context, credential, privateLifetime),
+      ...(deps.emailTemplateInspection === undefined
+        ? {}
+        : { emailTemplates: deps.emailTemplateInspection(context.signal) }),
       templateMetadataActivity: (activity): void => {
         recordJiraTemplateMetadata(undefined, context.correlationId, activity);
       },
     };
   }
 
-  private privateConnection(binding: CodingJiraPodBinding, context: JiraInvocationContext,
-    credential: JiraLivePodCredential): Pick<JiraManagedConnection, "privateIdentity" | "avatars"> {
+  private privateConnection(
+    binding: CodingJiraPodBinding,
+    context: JiraInvocationContext,
+    credential: JiraLivePodCredential,
+    privateLifetime: ReturnType<typeof createJiraPrivateLifetime>,
+  ): Pick<JiraManagedConnection, "privateIdentity" | "avatars"> {
     const deps = this.#deps;
     const factory = deps?.atlassianConnectorCredentials?.jiraPrivatePortFactory;
     const authority = context.inputAuthority();
     if (factory === undefined || authority === undefined) return {};
     const pending = context.humanInput;
     const selection = pending?.selection;
-    const ports = factory(credential, context, {
-      sessionScope: { context: { kind: "coding", taskId: authority.taskId, runId: authority.authority.runId },
-        authority: authority.authority, principalDigest: authority.principalDigest,
-        authRef: credential.authRef, authenticationGeneration: credential.generation,
-        verificationRevision: credential.livePod.verificationRevision, expiresAt: authority.expiresAt },
-      ...(selection === undefined ? {} : { selection }),
-      onConsumed: (view) => {
-        if (pending === undefined || selection?.requestId !== view.requestId) throw NOT_ADMITTED();
-        pending.publish(view);
-        recordJiraHumanInput(deps?.atlassianConnectorCredentials, context.correlationId, "consumed");
+    const ports = factory(
+      credential,
+      context,
+      {
+        lifetimeSignal: privateLifetime.signal,
+        sessionScope: {
+          context: { kind: "coding", taskId: authority.taskId, runId: authority.authority.runId },
+          authority: authority.authority,
+          principalDigest: authority.principalDigest,
+          authRef: credential.authRef,
+          authenticationGeneration: credential.generation,
+          verificationRevision: credential.livePod.verificationRevision,
+          expiresAt: authority.expiresAt,
+        },
+        ...(selection === undefined ? {} : { selection }),
+        onConsumed: (view) => {
+          if (pending === undefined || selection?.requestId !== view.requestId)
+            throw NOT_ADMITTED();
+          pending.publish(view);
+          recordJiraHumanInput(
+            deps?.atlassianConnectorCredentials,
+            context.correlationId,
+            "consumed",
+          );
+        },
       },
-    }, this.transportLifecycle(binding, context, context.dispatch));
+      this.transportLifecycle(binding, context, context.dispatch),
+    );
+    privateLifetime.register(ports.finish);
     // Session access is real; no Coding filesystem source or image inspection is inferred here.
-    return { privateIdentity: ports.identity, avatars: { withSession: ports.withAvatarSession,
-      legacyTemporaryRelease: ports.legacyTemporaryRelease } };
+    return {
+      privateIdentity: ports.identity,
+      avatars: {
+        withSession: ports.withAvatarSession,
+        legacyTemporaryRelease: ports.legacyTemporaryRelease,
+      },
+    };
   }
 
   /** Every request, read or write, is gated on the run and on the Pod being exactly as chosen. */
@@ -614,11 +707,18 @@ class CodingJiraPodService implements CodingJiraPods {
     context: JiraInvocationContext,
     dispatch: Dispatch,
   ): AtlassianHttpBodyPort {
-    return factory(credential, context.correlationId, this.transportLifecycle(binding, context, dispatch));
+    return factory(
+      credential,
+      context.correlationId,
+      this.transportLifecycle(binding, context, dispatch),
+    );
   }
 
-  private transportLifecycle(binding: CodingJiraPodBinding, context: JiraInvocationContext,
-    dispatch: Dispatch): import("../atlassian/credentialRoutes.js").AtlassianCredentialHttpOptions {
+  private transportLifecycle(
+    binding: CodingJiraPodBinding,
+    context: JiraInvocationContext,
+    dispatch: Dispatch,
+  ): import("../atlassian/credentialRoutes.js").AtlassianCredentialHttpOptions {
     return {
       beforeDispatch: (request) => {
         if (!this.admit(binding, context)) return false;
@@ -648,23 +748,36 @@ class CodingJiraPodService implements CodingJiraPods {
       localMetadataTools: ["jira.discover", "jira.describe"],
       dispatchGate: true,
       instructions: JIRA_TOOL_GUIDANCE,
-      get tools() { return host.tools; },
-      call: (name, args, context) => isCodingJiraDiscovery(name)
-        ? this.discover(host, binding, name, args, context, authority)
-        : this.call(host, binding, name, args, context, authority, inputs),
+      get tools() {
+        return host.tools;
+      },
+      call: (name, args, context) =>
+        isCodingJiraDiscovery(name)
+          ? this.discover(host, binding, name, args, context, authority)
+          : this.call(host, binding, name, args, context, authority, inputs),
       close: () => host.close(),
     };
   }
 
-  private async discover(host: PodEntry["host"], binding: CodingJiraPodBinding,
-    name: string, args: CatalogJsonObject, context: ManagedMcpInvocationContext,
-    authority: CodingJiraRunAuthority): Promise<CatalogJsonObject> {
+  private async discover(
+    host: PodEntry["host"],
+    binding: CodingJiraPodBinding,
+    name: string,
+    args: CatalogJsonObject,
+    context: ManagedMcpInvocationContext,
+    authority: CodingJiraRunAuthority,
+  ): Promise<CatalogJsonObject> {
     // Catalog metadata uses the existing read grant; it never mints a native operation receipt.
     const scoped = this.scopedContext(authority, context, "issue-tracker.read");
-    const guarded = { ...scoped, beforeEffect: () => scoped.beforeEffect() && this.current(binding) !== undefined };
-    try { return callToolResult(await host.call(name, args, guarded), false); }
-    catch (error) {
-      if (scoped.scopeState.missing) throw new ManagedMcpError("connector-scope-missing", undefined, "none");
+    const guarded = {
+      ...scoped,
+      beforeEffect: () => scoped.beforeEffect() && this.current(binding) !== undefined,
+    };
+    try {
+      return callToolResult(await host.call(name, args, guarded), false);
+    } catch (error) {
+      if (scoped.scopeState.missing)
+        throw new ManagedMcpError("connector-scope-missing", undefined, "none");
       const result = providerResult(error);
       if (result !== undefined) return callToolResult(result, true);
       throw error;
@@ -690,19 +803,33 @@ class CodingJiraPodService implements CodingJiraPods {
     };
     if (this.current(binding) === undefined)
       return this.refuseCall(context.correlationId, line, started);
-    if (tool === undefined) return this.refuseCall(context.correlationId, line, started, "unavailable");
+    if (tool === undefined)
+      return this.refuseCall(context.correlationId, line, started, "unavailable");
     const refusal = this.scopeRefusal(authority, context, requiredScope(tool));
     if (refusal === "scope-missing") context.retainLocalFailure?.("connector-scope-missing");
-    if (refusal !== undefined) return this.refuseCall(context.correlationId, line, started, refusal);
+    if (refusal !== undefined)
+      return this.refuseCall(context.correlationId, line, started, refusal);
     const scopedContext = this.scopedContext(authority, context, requiredScope(tool));
     try {
       const deps = this.#deps;
       if (deps === undefined) throw NOT_ADMITTED();
-      const humanInput = await prepareCodingJiraHumanInput({ deps, operation: name, args, context: scopedContext,
-        inputs, currentAuthority: scopedContext.inputAuthority, currentCredential: () => this.current(binding) });
-      const preparedContext = humanInput === undefined ? scopedContext : {
-        ...scopedContext, humanInput, beforeEffect: () => humanInput.current(),
-      };
+      const humanInput = await prepareCodingJiraHumanInput({
+        deps,
+        operation: name,
+        args,
+        context: scopedContext,
+        inputs,
+        currentAuthority: scopedContext.inputAuthority,
+        currentCredential: () => this.current(binding),
+      });
+      const preparedContext =
+        humanInput === undefined
+          ? scopedContext
+          : {
+              ...scopedContext,
+              humanInput,
+              beforeEffect: () => humanInput.current(),
+            };
       const data = await host.call(name, humanInput?.argumentsValue ?? args, preparedContext);
       recordCodingJiraPod(this.log, context.correlationId, {
         ...line,
@@ -725,7 +852,11 @@ class CodingJiraPodService implements CodingJiraPods {
     context: ManagedMcpInvocationContext,
     scope: CodingWorkbenchConnectorScope,
   ): "scope-missing" | "unavailable" | undefined {
-    if (authority.runId !== context.correlationId || context.signal.aborted || !context.beforeEffect())
+    if (
+      authority.runId !== context.correlationId ||
+      context.signal.aborted ||
+      !context.beforeEffect()
+    )
       return "unavailable";
     const scopes = authority.currentScopes("effect");
     if (scopes === undefined) return "unavailable";

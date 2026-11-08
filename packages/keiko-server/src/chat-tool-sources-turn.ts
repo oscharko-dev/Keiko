@@ -48,6 +48,7 @@ import {
 } from "./atlassian/jiraChatCatalogConsumer.js";
 import type { JiraChatSourcePreparation } from "./atlassian/jiraChatRequirementBinding.js";
 import { createJiraChatHumanInput } from "./atlassian/jiraChatHumanInput.js";
+import { createJiraPrivateLifetime } from "./atlassian/httpPrivateIdentity.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import {
   combineChatCatalogs,
@@ -145,6 +146,10 @@ function sourcePreparationFor(options: Options): {
           ...baseContext,
           jira: {
             ...baseContext.jira,
+            privateLifetime: createJiraPrivateLifetime(
+              baseContext.jira.signal,
+              options.correlationId,
+            ),
             humanInputFor: humanInput.selectionFor,
             activeHumanInput: humanInput.currentSelection,
           },
@@ -228,6 +233,10 @@ class ChatSourcesToolTurn extends ChatToolTurn<ChatSourcesContext> {
               return source;
             },
             finalizeInvocation: (actionId: string) => humanInput?.finalize(actionId),
+            finalizeTurn: async () => {
+              humanInput?.finish();
+              await initialContext.jira.privateLifetime?.finish();
+            },
           }),
       ...(primary.kind === "jira"
         ? {
