@@ -84,24 +84,32 @@ it("admits all 439 native contracts through the production selected provider", a
           ),
         );
         const failures = [];
-        for (const row of ledger.operations) {
+        const selectOperation = async (row) => {
           let selected;
           try {
             selected = await context.deps.jiraChatCatalog.select([row.identity]);
           } catch (error) {
             failures.push({ identity: row.identity, reason: error.reason, effect: error.effect });
-            continue;
+            return;
           }
           const operation = jiraOperationForTool(row.currentCapabilityIds[0]);
-          expect(
-            selected.catalog.descriptors.some(
-              (descriptor) =>
-                descriptor.toolRef.canonicalId ===
-                operation.declaration.descriptor.toolRef.canonicalId,
-            ),
-          ).toBe(true);
-          await selected.close();
-        }
+          try {
+            expect(
+              selected.catalog.descriptors.some(
+                (descriptor) =>
+                  descriptor.toolRef.canonicalId ===
+                  operation.declaration.descriptor.toolRef.canonicalId,
+              ),
+            ).toBe(true);
+          } finally {
+            await selected.close();
+          }
+        };
+        // Keep one selected provider alive at a time without awaiting inside an iteration loop.
+        await ledger.operations.reduce(
+          (pending, row) => pending.then(() => selectOperation(row)),
+          Promise.resolve(),
+        );
         expect(
           failures
             .map((failure) => `${failure.identity}: ${failure.reason}/${failure.effect}`)

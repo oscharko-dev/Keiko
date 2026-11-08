@@ -27,6 +27,29 @@ it("updates the independently reviewed native default scheme 0 through one gover
   expect(f.schemes.get("0")?.description).toBe("");
 });
 
+it("refuses deletion of Jira's default permission scheme before any native request", async () => {
+  const f = fixture();
+  const expected = { ...SNAPSHOT, id: "0" };
+  f.schemes.set("0", { id: "0", name: expected.name, description: expected.description });
+  f.grants.set(
+    "0",
+    expected.permissions.map((grant) => structuredClone(grant)),
+  );
+  expect(
+    await execute(
+      "jira.delete-permission-scheme",
+      {
+        ...CASES[2].args,
+        expectedScheme: expected,
+      },
+      f.ports,
+    ),
+  ).toMatchObject({ ok: false, reason: "field-validation" });
+  expect(f.calls).toEqual([]);
+  expect(f.writes()).toBe(0);
+  expect(f.schemes.has("0")).toBe(true);
+});
+
 it.each(CASES)(
   "executes exactly one $tool effect and preserves independently reviewed native identity",
   async (selected) => {

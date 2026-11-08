@@ -313,7 +313,7 @@ const SELECT_INPUT: Readonly<
   "jira.create-permission-scheme": schemeTargetInput,
   "jira.update-permission-scheme": schemeTargetInput,
   "jira.delete-permission-scheme": (base, args) =>
-    args.confirmUnverifiedDeletion === true ? base : undefined,
+    args.confirmUnverifiedDeletion === true && jiraNativeId(base.expected?.id) ? base : undefined,
   "jira.add-permission-grant": grantInput,
   "jira.delete-permission-grant": (base, args) =>
     jiraNativeId(args.permissionId) &&
