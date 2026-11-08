@@ -26,9 +26,11 @@ it.each(["jira.create", "jira.draft", "jira.edit", "jira.attach"] as const)(
   async (operation) => {
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "debug" }));
-    const executor = vi.fn<JiraManagedMutationExecutor<ManagedMcpInvocationContext>>(async () => ({
-      data: { outcome: "unconfirmed", issueKey: "SYN-1", operation: "jira.proxy" },
-    }));
+    const executor = vi.fn<JiraManagedMutationExecutor<ManagedMcpInvocationContext>>(() =>
+      Promise.resolve({
+        data: { outcome: "unconfirmed", issueKey: "SYN-1", operation: "jira.proxy" },
+      }),
+    );
     const provider = createJiraProviderForCatalog(
       () => ({
         deployment: "data-center",
@@ -77,7 +79,10 @@ it("preserves a known unconfirmed receipt when the provider activity sink fails"
       http: vi.fn(),
     }),
     ["jira.attach"],
-    async () => ({ data: { outcome: "unconfirmed", issueKey: "SYN-1", attachmentId: "10001" } }),
+    () =>
+      Promise.resolve({
+        data: { outcome: "unconfirmed", issueKey: "SYN-1", attachmentId: "10001" },
+      }),
   );
   const tool = provider.tools()[0];
   if (tool === undefined) throw new TypeError("Missing attachment provider");

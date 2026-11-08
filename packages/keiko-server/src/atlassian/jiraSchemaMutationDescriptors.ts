@@ -60,7 +60,7 @@ const MODULE = {
     { not: { pattern: "^:|:$|:.*:" } },
   ],
 };
-const ids = (max: number) => ({
+const ids = (max: number): CatalogJsonObject => ({
   type: "array",
   minItems: 1,
   maxItems: max,

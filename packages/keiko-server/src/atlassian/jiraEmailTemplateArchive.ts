@@ -67,6 +67,44 @@ function entries(
     .sort(([left], [right]) => compareStrings(left, right))
     .map(([path, bytes]) => ({ path, sizeBytes: bytes.byteLength, sha256: digest(bytes) }));
 }
+function contentFailure(
+  refusal: Extract<
+    Awaited<ReturnType<typeof admitJiraEmailTemplateParts>>,
+    { readonly ok: false }
+  >["refusal"],
+): Inspection {
+  switch (refusal) {
+    case "cancelled":
+    case "bounds-exceeded":
+      return { ok: false, reason: refusal };
+    case "contains-credential":
+      return {
+        ok: false,
+        reason: "field-validation",
+        contentRefusal: refusal,
+        detail: {
+          fieldId: "source",
+          validation: "invalid-field",
+          messages: [
+            "The email-template archive contains credential material and cannot be exposed or uploaded. Remove the credential and review a new archive.",
+          ],
+        },
+      };
+    case "unscannable":
+      return {
+        ok: false,
+        reason: "field-validation",
+        contentRefusal: refusal,
+        detail: {
+          fieldId: "source",
+          validation: "invalid-field",
+          messages: [
+            "Every email-template archive entry must be fully scannable by the existing content policy. Unsupported or unreadable content was refused.",
+          ],
+        },
+      };
+  }
+}
 /** Native ZIPs are fully inspected in memory. No files, URLs, template evaluation or output text. */
 export async function inspectJiraEmailTemplateArchive(
   bytes: Uint8Array,
@@ -93,39 +131,7 @@ export async function inspectJiraEmailTemplateArchive(
     deadlineAt,
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   });
-  if (!admitted.ok) {
-    switch (admitted.refusal) {
-      case "cancelled":
-      case "bounds-exceeded":
-        return { ok: false, reason: admitted.refusal };
-      case "contains-credential":
-        return {
-          ok: false,
-          reason: "field-validation",
-          contentRefusal: admitted.refusal,
-          detail: {
-            fieldId: "source",
-            validation: "invalid-field",
-            messages: [
-              "The email-template archive contains credential material and cannot be exposed or uploaded. Remove the credential and review a new archive.",
-            ],
-          },
-        };
-      case "unscannable":
-        return {
-          ok: false,
-          reason: "field-validation",
-          contentRefusal: admitted.refusal,
-          detail: {
-            fieldId: "source",
-            validation: "invalid-field",
-            messages: [
-              "Every email-template archive entry must be fully scannable by the existing content policy. Unsupported or unreadable content was refused.",
-            ],
-          },
-        };
-    }
-  }
+  if (!admitted.ok) return contentFailure(admitted.refusal);
   const projected = entries(read.parts);
   if (projected === undefined) return malformed();
   if (options.signal?.aborted) return { ok: false, reason: "cancelled" };

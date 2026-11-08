@@ -6,7 +6,9 @@ import {
   jiraWorklogFeedDeclarationForTool,
 } from "./jiraWorklogFeedDescriptors.js";
 
-function declaration(name: string) {
+function declaration(
+  name: string,
+): import("@oscharko-dev/keiko-contracts/runtime/managed-mcp").ManagedMcpToolDeclaration {
   const selected = jiraWorklogFeedDeclarationForTool(name);
   if (selected === undefined) throw new TypeError("Missing worklog feed declaration");
   return selected;

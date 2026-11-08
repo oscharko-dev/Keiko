@@ -60,7 +60,7 @@ describe("strict issue/project lifecycle receipts", () => {
     ({ name, receipt }) => {
       let reads = 0;
       const required = JIRA_RESOURCE_LIFECYCLE_RECEIPTS[name][0];
-      const inherited: JiraMutationReceipt = Object.create(receipt);
+      const inherited: JiraMutationReceipt = Object.create(receipt) as JiraMutationReceipt;
       for (const bad of [
         inherited,
         { ...receipt, [Symbol("foreign")]: "x" },

@@ -360,7 +360,7 @@ describe("document retrieval, source trace and distinct board views", () => {
 
 describe("live UI journey wiring", () => {
   const read = (name) =>
-    readFileSync(new URL(`../testing/jira-chat-lab/${name}`, import.meta.url), "utf8");
+    readFileSync(new globalThis.URL(`../testing/jira-chat-lab/${name}`, import.meta.url), "utf8");
 
   it("uses real UI controls for all setup mutations and shares the real browser turn owner", () => {
     const setup = read("browser-rules-knowledge-setup.mjs");

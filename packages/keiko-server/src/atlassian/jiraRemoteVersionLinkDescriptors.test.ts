@@ -6,7 +6,9 @@ import {
   jiraRemoteVersionLinkDeclarationForTool,
 } from "./jiraRemoteVersionLinkDescriptors.js";
 
-function declaration(name: string) {
+function declaration(
+  name: string,
+): import("@oscharko-dev/keiko-contracts/runtime/managed-mcp").ManagedMcpToolDeclaration {
   const selected = jiraRemoteVersionLinkDeclarationForTool(name);
   if (selected === undefined) throw new TypeError("Missing remote version link declaration");
   return selected;

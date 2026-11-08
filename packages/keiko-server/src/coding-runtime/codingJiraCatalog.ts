@@ -80,8 +80,7 @@ async function retire<Context extends ManagedMcpInvocationContext>(
   }
 }
 
-/** One run's replaceable subset, using the same managed hosts and local discovery as Chat. */
-export function createCodingJiraCatalog<Context extends ManagedMcpInvocationContext>(input: {
+interface CodingJiraCatalogInput<Context extends ManagedMcpInvocationContext> {
   readonly tools: readonly CodingJiraTool[];
   readonly provider: (tools: readonly CodingJiraTool[]) => ManagedMcpProvider<Context>;
   readonly log: ManagedMcpLogPort;
@@ -92,124 +91,153 @@ export function createCodingJiraCatalog<Context extends ManagedMcpInvocationCont
     tools: readonly ExternalMcpTool[],
     result: CatalogJsonObject,
   ) => boolean | undefined;
-}): CodingJiraCatalog<Context> {
-  const allowed = new Set<string>(input.tools);
-  const discovery = createManagedMcpHost<JiraCatalogDiscoveryContext>({
-    providers: [createJiraCatalogDiscoveryProvider({ tools: allowed, nativeToolNames: true })],
-    log: input.log,
-  });
-  let initial: readonly ExternalMcpTool[] = Object.freeze([]);
-  let tools = initial;
-  let selected: ManagedMcpHost<Context> | undefined;
-  let selecting = false;
-  let active = 0;
-  let closed = false;
-  const ready = discovery.admit(input.correlationId).then(() => {
-    if (closed) throw new ManagedMcpError("not-admitted");
-    initial = advertised(discovery);
-    tools = initial;
-  });
+}
+class JiraCatalogSelection<Context extends ManagedMcpInvocationContext> {
+  readonly discovery: ManagedMcpHost<JiraCatalogDiscoveryContext>;
+  readonly ready: Promise<void>;
+  private initial: readonly ExternalMcpTool[];
+  tools: readonly ExternalMcpTool[];
+  selected: ManagedMcpHost<Context> | undefined;
+  selecting = false;
+  active = 0;
+  closed = false;
 
-  function requireCurrent(context: ManagedMcpInvocationContext): void {
+  constructor(private readonly input: CodingJiraCatalogInput<Context>) {
+    const allowed = new Set<string>(input.tools);
+    this.discovery = createManagedMcpHost<JiraCatalogDiscoveryContext>({
+      providers: [createJiraCatalogDiscoveryProvider({ tools: allowed, nativeToolNames: true })],
+      log: input.log,
+    });
+    this.initial = Object.freeze([]);
+    this.tools = this.initial;
+    this.ready = this.discovery.admit(input.correlationId).then(() => {
+      if (this.closed) throw new ManagedMcpError("not-admitted");
+      this.initial = advertised(this.discovery);
+      this.tools = this.initial;
+    });
+  }
+  private requireCurrent(context: ManagedMcpInvocationContext): void {
     requireDispatch(
-      !closed && active === 0 && !context.signal.aborted && context.beforeEffect(),
+      !this.closed && this.active === 0 && !context.signal.aborted && context.beforeEffect(),
       "denied",
       "effect-denied",
     );
   }
-  function selectedNames(
+  private selectedNames(
     identities: readonly string[],
     context: ManagedMcpInvocationContext,
   ): CodingJiraTool[] {
     return jiraToolsForIdentities(identities).map((name) => {
-      const tool = input.tools.find((allowedName) => allowedName === name);
+      const tool = this.input.tools.find((allowedName) => allowedName === name);
       requireDispatch(tool !== undefined, "denied", "effect-denied");
-      requireDispatch(input.admitted(tool, context), "denied", "effect-denied");
+      requireDispatch(this.input.admitted(tool, context), "denied", "effect-denied");
       return tool;
     });
   }
+  private requireFittingSelection(
+    narrowed: readonly CodingJiraTool[],
+    next: readonly ExternalMcpTool[],
+    result: CatalogJsonObject,
+  ): void {
+    if (narrowed.length > 0) {
+      const fits = this.input.fits(next, result);
+      requireDispatch(fits !== undefined, "failed", "handler-unavailable");
+      requireDispatch(fits, "denied", "budget-exhausted");
+    }
+  }
 
-  async function select(
+  async select(
     identities: readonly string[],
     result: CatalogJsonObject,
     context: ManagedMcpInvocationContext,
   ): Promise<void> {
-    requireCurrent(context);
-    requireDispatch(!selecting, "denied", "effect-denied");
-    const narrowed = selectedNames(identities, context);
+    this.requireCurrent(context);
+    requireDispatch(!this.selecting, "denied", "effect-denied");
+    const narrowed = this.selectedNames(identities, context);
     // The same refusal as the Chat catalog: an oversized selection never reaches a host.
     if (narrowed.length > MANAGED_MCP_TOOLS_MAX) throw new ToolCatalogError("input-bound");
-    selecting = true;
+    this.selecting = true;
     let candidate: ManagedMcpHost<Context> | undefined;
     try {
       if (narrowed.length > 0)
-        candidate = createManagedMcpHost({ providers: [input.provider(narrowed)], log: input.log });
+        candidate = createManagedMcpHost({
+          providers: [this.input.provider(narrowed)],
+          log: this.input.log,
+        });
       await candidate?.admit(context.correlationId);
-      const next = [...initial, ...(candidate === undefined ? [] : advertised(candidate))];
+      const next = [...this.initial, ...(candidate === undefined ? [] : advertised(candidate))];
       requireDispatch(
         Buffer.byteLength(JSON.stringify(next)) <= TOOL_CATALOG_LIMITS.maxResultBytes,
         "denied",
         "budget-exhausted",
       );
-      requireCurrent(context);
+      this.requireCurrent(context);
       requireDispatch(
-        narrowed.every((name) => input.admitted(name, context)),
+        narrowed.every((name) => this.input.admitted(name, context)),
         "denied",
         "effect-denied",
       );
-      if (narrowed.length > 0) {
-        const fits = input.fits(next, result);
-        requireDispatch(fits !== undefined, "failed", "handler-unavailable");
-        requireDispatch(fits, "denied", "budget-exhausted");
-      }
-      const previous = selected;
-      selected = candidate;
+      this.requireFittingSelection(narrowed, next, result);
+      const previous = this.selected;
+      this.selected = candidate;
       candidate = undefined;
-      tools = Object.freeze(next);
+      this.tools = Object.freeze(next);
       await retire(previous, context.correlationId);
     } catch (error) {
       if (error instanceof ManagedMcpError)
         throw new CatalogDispatchFault("failed", "handler-unavailable", error);
       throw error;
     } finally {
-      selecting = false;
+      this.selecting = false;
       await retire(candidate, context.correlationId);
     }
   }
+}
+
+/** One run's replaceable subset, using the same managed hosts and local discovery as Chat. */
+export function createCodingJiraCatalog<Context extends ManagedMcpInvocationContext>(
+  input: CodingJiraCatalogInput<Context>,
+): CodingJiraCatalog<Context> {
+  const selection = new JiraCatalogSelection(input);
 
   return {
-    ready,
+    ready: selection.ready,
     get tools(): readonly ExternalMcpTool[] {
-      return tools;
+      return selection.tools;
     },
     async call(
       name: string,
       args: CatalogJsonObject,
       context: Context,
     ): Promise<CatalogJsonObject> {
-      if (closed || context.signal.aborted || !context.beforeEffect())
+      if (selection.closed || context.signal.aborted || !context.beforeEffect())
         throw new ManagedMcpError("not-admitted");
       if (isCodingJiraDiscovery(name))
-        return discovery.call(name, args, {
+        return selection.discovery.call(name, args, {
           ...context,
           jiraDiscoveryResultFits: (result) =>
             Buffer.byteLength(JSON.stringify(result)) <= TOOL_CATALOG_LIMITS.maxResultBytes,
-          selectJiraOperations: (identities, result) => select(identities, result, context),
+          selectJiraOperations: (identities, result) =>
+            selection.select(identities, result, context),
         });
-      const host = selected;
-      if (selecting || host === undefined || !tools.some((tool) => tool.name === name))
+      const host = selection.selected;
+      if (
+        selection.selecting ||
+        host === undefined ||
+        !selection.tools.some((tool) => tool.name === name)
+      )
         throw new ManagedMcpError("not-admitted", undefined, "none");
-      active += 1;
+      selection.active += 1;
       try {
         return await host.call(name, args, context);
       } finally {
-        active -= 1;
+        selection.active -= 1;
       }
     },
     async close(): Promise<void> {
-      closed = true;
-      tools = Object.freeze([]);
-      await Promise.all([discovery.close(), selected?.close()]);
+      selection.closed = true;
+      selection.tools = Object.freeze([]);
+      await Promise.all([selection.discovery.close(), selection.selected?.close()]);
     },
   };
 }

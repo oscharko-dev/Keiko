@@ -58,7 +58,9 @@ describe("private account receipt evidence", () => {
         { ok: false, reason: "timeout", receipt },
         operation,
       );
-      const stored = JSON.parse(JSON.stringify(jiraAttemptToolResult("unknown", uncertain)));
+      const stored = JSON.parse(
+        JSON.stringify(jiraAttemptToolResult("unknown", uncertain)),
+      ) as unknown;
       expect(stored).toMatchObject({ isError: true, data: { outcome: "unknown", ...receipt } });
       expect(Object.isFrozen(uncertain.receipt)).toBe(true);
     },

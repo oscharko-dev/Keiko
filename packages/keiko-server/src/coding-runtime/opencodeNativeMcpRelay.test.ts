@@ -177,7 +177,7 @@ it("routes local and token-backed servers through the shared manager and revokes
     expect.any(Request),
     expect.objectContaining({
       correlationId: "shared-run",
-      invocationId: expect.any(String),
+      invocationId: expect.any(String) as unknown,
     }),
   );
   generation.abort();

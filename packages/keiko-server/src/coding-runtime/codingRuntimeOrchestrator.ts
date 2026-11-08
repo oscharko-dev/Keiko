@@ -2267,7 +2267,7 @@ export class CodingRuntimeOrchestrator {
   /** Durable private-input metadata changed; publish only the live run's existing status. */
   async refreshHistory(runId: string): Promise<void> {
     try {
-      await this.serial(async () => {
+      await this.serialValue(() => {
         const current = this.current();
         if (current?.runId !== runId || current.state !== "running") return;
         // This changes the public snapshot revision, never the Authority Envelope or its expiry.

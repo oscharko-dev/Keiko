@@ -59,15 +59,19 @@ function nativeRoleGroups(value: unknown): value is readonly string[] {
     new Set(value).size === value.length
   );
 }
+function nativeRoleFields(
+  value: object,
+): value is { readonly key: unknown; readonly groups: unknown; readonly defaultGroups: unknown } {
+  return (
+    Object.keys(value).length === 3 &&
+    "key" in value &&
+    "groups" in value &&
+    "defaultGroups" in value
+  );
+}
 function nativeRoleKey(value: unknown): string | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-  if (
-    Object.keys(value).length !== 3 ||
-    !("key" in value) ||
-    !("groups" in value) ||
-    !("defaultGroups" in value)
-  )
-    return undefined;
+  if (!nativeRoleFields(value)) return undefined;
   const groups = value.groups;
   const defaults = value.defaultGroups;
   return isSafeAtlassianIdentifier(value.key) &&
@@ -86,16 +90,21 @@ function validRoleBody(body: string, suffix: string): boolean {
   const keys = value.map(nativeRoleKey);
   return keys.every((key) => key !== undefined) && new Set(keys).size === keys.length;
 }
+function roleVersionField(value: unknown): value is { readonly ifMatch: unknown } {
+  return !(
+    value === null ||
+    typeof value !== "object" ||
+    Object.keys(value).length !== 1 ||
+    !Object.hasOwn(value, "ifMatch")
+  );
+}
 function applicationRoleWriteHeaders(
   request: AtlassianHttpBodyRequest,
   url: URL,
 ): Record<string, string> {
   const version = request.jiraApplicationRole;
   if (
-    version === null ||
-    typeof version !== "object" ||
-    Object.keys(version).length !== 1 ||
-    !Object.hasOwn(version, "ifMatch") ||
+    !roleVersionField(version) ||
     !isAtlassianApplicationRoleVersion(version.ifMatch) ||
     request.method !== "PUT" ||
     typeof request.bodyJson !== "string"

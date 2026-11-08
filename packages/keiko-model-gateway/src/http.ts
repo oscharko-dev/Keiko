@@ -1389,7 +1389,57 @@ async function fetchHttpViaProxy(
   });
 }
 
-// eslint-disable-next-line max-lines-per-function
+function httpsTunnelResponse(
+  target: URL,
+  init: PreparedRequestInit,
+  socket: tls.TLSSocket,
+  headers: Record<string, string>,
+  body: Awaited<ReturnType<typeof bodyToWire>>,
+  tunnelKey: string,
+  cap: number,
+): Promise<Response> {
+  return responseFromClientRequest((resolve, reject) => {
+    const req = httpRequest(
+      {
+        method: init.method ?? "GET",
+        hostname: target.hostname,
+        port: Number(targetPort(target)),
+        path: `${target.pathname}${target.search}`,
+        headers,
+        signal: init.signal ?? undefined,
+        createConnection: () => socket,
+      },
+      (res) => {
+        const responseAllowsReuse = (res.headers.connection ?? "").toLowerCase() !== "close";
+        resolveNodeResponse(
+          res,
+          resolve,
+          reject,
+          () => {
+            socket.destroy();
+            req.destroy();
+          },
+          cap,
+          () => {
+            if (responseAllowsReuse) releaseIdleHttpsProxyTunnel(tunnelKey, socket);
+            else socket.destroy();
+          },
+        );
+      },
+    );
+    req.on("error", (error) => {
+      socket.destroy();
+      reject(mapProxyError(error));
+    });
+    req.end(body);
+  });
+}
+
+function prepareTunnelHeaders(headers: Record<string, string>, target: URL): void {
+  if (!Object.hasOwn(headers, "connection")) headers.connection = "keep-alive";
+  // Match the direct transport's Host spelling, including pre-signed SigV4 URLs.
+  if (!Object.hasOwn(headers, "host")) headers.host = hostHeader(target);
+}
 async function fetchHttpsViaProxy(
   target: URL,
   init: PreparedRequestInit,
@@ -1413,51 +1463,10 @@ async function fetchHttpsViaProxy(
     init.signal?.throwIfAborted();
     const headers = originalHeaders ?? dispatchHeaderRecord(init);
     const body = init.prepareBody === undefined ? staticBody : await bodyToWire(preparedBody(init));
-    if (!Object.hasOwn(headers, "connection")) {
-      headers.connection = "keep-alive";
-    }
-    // Ensure Host header omits :443 so it matches what undici sends directly and
-    // satisfies SigV4 pre-signed S3 URLs behind a proxy.
-    if (!Object.hasOwn(headers, "host")) {
-      headers.host = hostHeader(target);
-    }
+    prepareTunnelHeaders(headers, target);
     socket.setKeepAlive(true);
     const cap = maxResponseBytes ?? MAX_RESPONSE_BYTES;
-    return await responseFromClientRequest((resolve, reject) => {
-      const req = httpRequest(
-        {
-          method: init.method ?? "GET",
-          hostname: target.hostname,
-          port: Number(targetPort(target)),
-          path: `${target.pathname}${target.search}`,
-          headers,
-          signal: init.signal ?? undefined,
-          createConnection: () => socket,
-        },
-        (res) => {
-          const responseAllowsReuse = (res.headers.connection ?? "").toLowerCase() !== "close";
-          resolveNodeResponse(
-            res,
-            resolve,
-            reject,
-            () => {
-              socket.destroy();
-              req.destroy();
-            },
-            cap,
-            () => {
-              if (responseAllowsReuse) releaseIdleHttpsProxyTunnel(tunnelKey, socket);
-              else socket.destroy();
-            },
-          );
-        },
-      );
-      req.on("error", (error) => {
-        socket.destroy();
-        reject(mapProxyError(error));
-      });
-      req.end(body);
-    });
+    return await httpsTunnelResponse(target, init, socket, headers, body, tunnelKey, cap);
   } catch (error) {
     socket.destroy();
     throw error;

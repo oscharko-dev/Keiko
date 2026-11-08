@@ -8,7 +8,9 @@ import {
 } from "./jiraSavedConfigurationMutationDescriptors.js";
 import { JIRA_FILTER_READ_DEFINITIONS } from "./jiraAgileDescriptors.js";
 
-function declaration(name: string) {
+function declaration(
+  name: string,
+): import("@oscharko-dev/keiko-contracts/runtime/managed-mcp").ManagedMcpToolDeclaration {
   const result = jiraSavedConfigurationMutationDeclarationForTool(name);
   if (result === undefined) throw new TypeError("Missing saved configuration declaration");
   return result;

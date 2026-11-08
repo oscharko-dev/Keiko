@@ -63,16 +63,18 @@ function validBinding(value: unknown, generation: number): value is ChatJiraPodB
 type StoredJiraChatState = Omit<JiraChatState, "schemaVersion"> & {
   readonly schemaVersion: 1 | 2;
 };
+function validStateGeneration(value: Record<string, unknown>): boolean {
+  return (
+    (value.schemaVersion === 1 || value.schemaVersion === 2) &&
+    Number.isSafeInteger(value.generation) &&
+    !(Number(value.generation) < 0) &&
+    isCodingWorkbenchMode(value.mode)
+  );
+}
 
 function validState(value: unknown): value is StoredJiraChatState {
   if (!record(value) || !Object.keys(value).every((key) => STATE_KEYS.has(key))) return false;
-  if (
-    (value.schemaVersion !== 1 && value.schemaVersion !== 2) ||
-    !Number.isSafeInteger(value.generation) ||
-    Number(value.generation) < 0 ||
-    !isCodingWorkbenchMode(value.mode)
-  )
-    return false;
+  if (!validStateGeneration(value)) return false;
   return (
     validMcpSelection(value.mcpServers) &&
     validAdministrationState(value) &&
@@ -87,7 +89,7 @@ function validAdministrationState(value: Record<string, unknown>): boolean {
   return (
     value.schemaVersion === 2 &&
     typeof selected === "boolean" &&
-    (selected === false || value.binding !== undefined)
+    (!selected || value.binding !== undefined)
   );
 }
 

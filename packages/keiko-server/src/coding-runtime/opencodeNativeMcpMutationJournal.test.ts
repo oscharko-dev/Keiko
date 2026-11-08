@@ -63,14 +63,23 @@ function jiraResult(
   if (operationBinding === undefined) throw new Error("Expected Jira binding");
   return { ...result, data: { ...result.data, operationBinding } };
 }
-function jiraPermit(f: Fixture) {
+function jiraPermit(f: Fixture): {
+  permit: import("@oscharko-dev/keiko-contracts/runtime/managed-mcp").ManagedMcpMutationInvocation;
+  retain: (result: ManagedMcpToolResult) => ManagedMcpToolResult;
+} {
   f.owner.prepare(jiraRequest);
   const permit = f.owner.begin({ ...jiraRequest, localProvider: "jira", beforeEffect: () => true });
   if (permit?.retainProviderResult === undefined)
     throw new Error("Expected private result capture");
   return { permit, retain: permit.retainProviderResult };
 }
-function jiraRead(f: Fixture, signal = new AbortController().signal) {
+function jiraRead(
+  f: Fixture,
+  signal = new AbortController().signal,
+): {
+  capture: import("@oscharko-dev/keiko-contracts/runtime/managed-mcp").ManagedMcpReadCapture;
+  retain: (result: ManagedMcpToolResult) => ManagedMcpToolResult;
+} {
   const capture = f.owner.beginReadCapture({
     runId: identity.runId,
     toolName: "jira.projects",
@@ -96,7 +105,9 @@ function jiraReadResult(failed = false): ManagedMcpToolResult {
         },
       };
 }
-function jiraExchange(f: Fixture) {
+function jiraExchange(
+  f: Fixture,
+): import("@oscharko-dev/keiko-contracts/bff-wire").ChatToolExchange | undefined {
   const turn = f.store.codingHistory?.nativeTurn(identity.runId);
   return turn === undefined
     ? undefined
@@ -113,7 +124,7 @@ function forcedOccupancy(
   const original = f.history.nativeToolTranscript;
   vi.spyOn(f.history, "nativeToolTranscript").mockImplementation((...args) => ({
     ...original(...args),
-    occupancy: () => occupancy,
+    occupancy: (): { readonly bytes: number; readonly exchangeCount: number } => occupancy,
   }));
 }
 
@@ -238,7 +249,8 @@ it.each([false, true])(
 it("retains read scope denial without provider data, write state or a journal row", () => {
   const f = fixture();
   const { capture } = jiraRead(f);
-  if (capture.retainLocalFailure === undefined) throw new Error("Expected local refusal capture");
+  if (typeof capture.retainLocalFailure !== "function")
+    throw new Error("Expected local refusal capture");
   capture.retainLocalFailure("connector-scope-missing");
   capture.release();
   expect(jiraExchange(f)?.result).toMatchObject({
@@ -289,11 +301,15 @@ it("enforces the scope-only local failure API at runtime before retaining any ou
     "arbitrary-provider-text",
     null,
   ]) {
-    expect(() => Reflect.apply(capture.retainLocalFailure, undefined, [reason])).toThrow();
+    expect(
+      () => Reflect.apply(capture.retainLocalFailure, undefined, [reason]) as unknown,
+    ).toThrow();
     expect(jiraExchange(f)).toBeUndefined();
   }
   for (const reason of ["arbitrary-provider-text", "constructor", null]) {
-    expect(() => Reflect.apply(capture.retainRelayFailure, undefined, [reason])).toThrow();
+    expect(
+      () => Reflect.apply(capture.retainRelayFailure, undefined, [reason]) as unknown,
+    ).toThrow();
     expect(jiraExchange(f)).toBeUndefined();
   }
   capture.retainLocalFailure("connector-scope-missing");
@@ -361,15 +377,21 @@ it("refuses late technical error retention after release, cancellation or accept
   const f = fixture();
   const released = jiraRead(f);
   released.capture.release();
-  expect(() => released.capture.retainRelayFailure("protocol-error")).toThrow();
+  expect(() => {
+    released.capture.retainRelayFailure("protocol-error");
+  }).toThrow();
   const controller = new AbortController();
   const cancelled = jiraRead(f, controller.signal);
   controller.abort();
-  expect(() => cancelled.capture.retainRelayFailure("aborted")).toThrow();
+  expect(() => {
+    cancelled.capture.retainRelayFailure("aborted");
+  }).toThrow();
   cancelled.capture.release();
   const stale = jiraRead(f);
   f.owner.bindTurn(identity.runId, "msg_next_human", "New human instruction");
-  expect(() => stale.capture.retainRelayFailure("deadline-exceeded")).toThrow("owner changed");
+  expect(() => {
+    stale.capture.retainRelayFailure("deadline-exceeded");
+  }).toThrow("owner changed");
   stale.capture.release();
   expect(jiraExchange(f)).toBeUndefined();
   expect(f.db.prepare("SELECT COUNT(*) AS count FROM chat_tool_mutations").get()?.count).toBe(0);
@@ -581,7 +603,7 @@ it("cannot promote an acknowledged provider result when its durable capture fail
   const original = f.history.nativeToolTranscript;
   vi.spyOn(f.history, "nativeToolTranscript").mockImplementation((...args) => ({
     ...original(...args),
-    capture: () => {
+    capture: (): never => {
       throw new Error("Synthetic durable store unavailable");
     },
   }));
@@ -651,8 +673,8 @@ it("looks up the exact captured invocation after earlier undispatched refusals",
   for (let index = 0; index < 34; index++) {
     const refused = {
       ...jiraRequest,
-      callId: `refused-${index}`,
-      argumentsValue: { ...jiraRequest.argumentsValue, body: `Refused ${index}` },
+      callId: `refused-${String(index)}`,
+      argumentsValue: { ...jiraRequest.argumentsValue, body: `Refused ${String(index)}` },
     };
     f.owner.prepare(refused);
     f.owner.begin({ ...refused, beforeEffect: () => true })?.release?.();
@@ -717,7 +739,7 @@ it("keeps generic Chat APIs isolated and refuses capture after the accepted Codi
   const turn = f.history.nativeTurn(identity.runId);
   if (turn === undefined) throw new Error("Expected native turn");
   expect(f.store.findMessageById(turn.userMessageId)).toBeUndefined();
-  expect(() =>
+  expect(() => {
     f.store.updateChatToolTranscript(
       turn.userMessageId,
       {
@@ -729,8 +751,8 @@ it("keeps generic Chat APIs isolated and refuses capture after the accepted Codi
         },
       },
       "generic-chat",
-    ),
-  ).toThrow();
+    );
+  }).toThrow();
   expect(() =>
     f.history.nativeToolTranscript(identity.runId, { ...turn, userMessageId: "foreign-message" }),
   ).toThrow();

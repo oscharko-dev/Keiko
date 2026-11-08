@@ -10,13 +10,13 @@ const OPTIONS = {
   maxEntries: 8,
   maxInflatedBytes: 4096,
   timeoutMs: 1000,
-  now: () => 0,
+  now: (): number => 0,
 };
 const STRICT = { ...OPTIONS, rejectNonRegularEntries: true };
-function one() {
+function one(): Buffer<ArrayBuffer> {
   return Buffer.from(zipTextEntries([{ name: "template.vm", content: "Safe synthetic $value" }]));
 }
-function withAttributes(attributes: number) {
+function withAttributes(attributes: number): Buffer<ArrayBuffer> {
   const bytes = one();
   bytes.writeUInt32LE(attributes, emailZipOffsets(bytes).central + 38);
   return bytes;
@@ -117,7 +117,7 @@ it("refuses unaccounted bytes between local files and the central directory", as
   expect(await readBoundedOoxmlPackage(bytes, STRICT)).toEqual({ ok: false, reason: "malformed" });
   expect((await readBoundedOoxmlPackage(bytes, OPTIONS)).ok).toBe(true);
 });
-function descriptorZip() {
+function descriptorZip(): Buffer<ArrayBuffer> {
   const original = one();
   const { central } = emailZipOffsets(original);
   const descriptor = Buffer.alloc(16);

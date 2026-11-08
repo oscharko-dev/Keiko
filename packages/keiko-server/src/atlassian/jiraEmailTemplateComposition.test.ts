@@ -35,7 +35,35 @@ afterEach(() => {
   vi.restoreAllMocks();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
-function fixture(review: () => JiraChatAttachmentReview) {
+function fixture(review: () => JiraChatAttachmentReview): {
+  deps: JiraChatAttachmentDeps;
+  options: {
+    chatId: string;
+    correlationId: string;
+    signal: AbortSignal;
+    review: () => JiraChatAttachmentReview;
+  };
+  context: {
+    invocationId: string;
+    correlationId: string;
+    signal: AbortSignal;
+    beforeEffect: () => boolean;
+  };
+  connection: JiraManagedConnection;
+  http: import("vitest").Mock<AtlassianHttpBodyPort>;
+  native: {
+    snapshot: () => { writes: number; action: string | null };
+    read(
+      request: import("@oscharko-dev/keiko-connectors").AtlassianHttpBodyRequest,
+    ): Promise<import("@oscharko-dev/keiko-connectors").AtlassianHttpBodyResult | undefined>;
+    write(
+      request: import("@oscharko-dev/keiko-connectors").AtlassianHttpBodyRequest,
+    ): Promise<import("@oscharko-dev/keiko-connectors").AtlassianHttpBodyResult | undefined>;
+  };
+  path: string;
+  logs: import("../../../../tests/support/buffered-server-log.js").BufferedServerLogSink;
+  execute: (selected?: JiraManagedConnection) => Promise<JiraMutationAttempt>;
+} {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-email-composition-")));
   roots.push(root);
   mkdirSync(join(root, "docs"));
@@ -60,7 +88,7 @@ function fixture(review: () => JiraChatAttachmentReview) {
     invocationId: "email-composition",
     correlationId: "email-composition",
     signal: new AbortController().signal,
-    beforeEffect: () => true,
+    beforeEffect: (): boolean => true,
   };
   const logs = createBufferedServerLogSink();
   vi.spyOn(processServerLogSink(), "write").mockImplementation(logs.write);

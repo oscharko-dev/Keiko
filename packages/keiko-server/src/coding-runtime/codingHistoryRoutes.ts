@@ -1,3 +1,4 @@
+import type { JiraHumanInputView } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import { currentAuditRedactString, type UiHandlerDeps } from "../deps.js";
 import { errorBody, type RouteContext, type RouteDefinition, type RouteResult } from "../routes.js";
@@ -70,11 +71,11 @@ function currentInputMessage(
     return message;
   const turn = deps.store.codingHistory?.nativeTurn(message.runId);
   if (turn?.chatId !== detail.task.id || turn.userMessageId !== message.id) return message;
-  const held = message.toolTranscript?.exchanges.some((exchange) =>
+  const held = message.toolTranscript.exchanges.some((exchange) =>
     currentInputExchange(deps, detail.task.taskId, message.runId, exchange),
   );
   // Historical transcript rows alone never activate a form after a restart or a later turn.
-  return held === true ? { ...message, turnState: "pending" } : message;
+  return held ? { ...message, turnState: "pending" } : message;
 }
 
 function currentInputExchange(
@@ -92,10 +93,15 @@ function currentInputExchange(
   if (binding === undefined || !sameInputCall(binding, taskId, runId, exchange)) return false;
   const current = custody?.inspect(view.requestId, binding);
   return (
-    current?.revision === view.revision &&
-    current.state === view.state &&
+    sameInputView(current, view) &&
     deps.codingJiraInputContext?.(binding, view.requestId) !== undefined
   );
+}
+function sameInputView(
+  current: JiraHumanInputView | undefined,
+  view: NonNullable<ReturnType<typeof waitingInput>>,
+): boolean {
+  return current?.revision === view.revision && current.state === view.state;
 }
 
 function sameInputCall(

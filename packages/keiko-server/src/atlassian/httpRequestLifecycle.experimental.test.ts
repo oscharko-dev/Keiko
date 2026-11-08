@@ -12,7 +12,14 @@ const REQUEST: AtlassianHttpBodyRequest = {
   maxBodyBytes: 1024,
   bodyJson: '{"sprintIds":[12]}',
 };
-function options() {
+function options(): {
+  authRef: string;
+  correlationId: string;
+  beforeDispatch: import("vitest").Mock<() => boolean>;
+  credentials: {
+    resolveForExecution: import("vitest").Mock<() => { scheme: "bearer-pat"; apiToken: string }>;
+  };
+} {
   return {
     authRef: "synthetic-credential-reference",
     correlationId: "experimental-transport",

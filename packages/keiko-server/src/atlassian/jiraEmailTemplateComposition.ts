@@ -35,7 +35,11 @@ export function jiraChatEmailTemplateComposition(
 ): NonNullable<JiraManagedConnection["emailTemplates"]> {
   return {
     ...jiraEmailTemplateInspection(deps, options.signal),
-    sourceFor: (check) => {
+    sourceFor: (
+      check,
+    ): ReturnType<
+      NonNullable<NonNullable<JiraManagedConnection["emailTemplates"]>["sourceFor"]>
+    > => {
       if (check) return jiraChatEmailTemplatePreviewSource(deps, options);
       return async (request) => {
         const review = options.review();

@@ -42,7 +42,22 @@ const REQUEST: AtlassianHttpBodyRequest = {
   maxBodyBytes: 4096,
   jiraHumanInput: { selection, fields: {} },
 };
-function fixture(response: () => Response = () => new Response(null, { status: 204 })) {
+function fixture(response: () => Response = () => new Response(null, { status: 204 })): {
+  claim: import("vitest").Mock<() => JiraHumanInputValues>;
+  order: string[];
+  onConsumed: import("vitest").Mock<() => void>;
+  port: import("@oscharko-dev/keiko-connectors").AtlassianHttpBodyPort;
+  baseUrl: string;
+  authRef: string;
+  credentials: {
+    humanInputs: { claim: import("vitest").Mock<() => JiraHumanInputValues> };
+    resolveForExecution: import("vitest").Mock<() => { scheme: "bearer-pat"; apiToken: string }>;
+  };
+  beforeDispatch: import("vitest").Mock<() => boolean>;
+  onResponse: import("vitest").Mock<() => boolean>;
+  onHumanInputConsumed: import("vitest").Mock<() => void>;
+  fetchImpl: import("vitest").Mock<typeof fetch>;
+} {
   let consumed = false;
   const order: string[] = [];
   const claim = vi.fn((): JiraHumanInputValues => {

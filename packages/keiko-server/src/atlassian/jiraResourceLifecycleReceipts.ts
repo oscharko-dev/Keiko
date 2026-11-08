@@ -66,14 +66,18 @@ function optionalFields(operation: JiraResourceLifecycleOperation): readonly Pro
   if (operation === "jira.create-issues") return BULK_OPTIONAL;
   return operation === "jira.create-reciprocal-remote-link" ? ["linkId"] : [];
 }
+const RESOURCE_KEY_FIELDS: ReadonlySet<PropertyKey> = new Set([
+  "issueKey",
+  "projectKey",
+  "projectTypeKey",
+]);
 function scalar(
   key: PropertyKey,
   value: unknown,
   operation: JiraResourceLifecycleOperation,
 ): boolean {
   if (key === "userKey") return jiraPropertyUserText(value);
-  if (key === "issueKey" || key === "projectKey" || key === "projectTypeKey")
-    return isSafeAtlassianIdentifier(value);
+  if (RESOURCE_KEY_FIELDS.has(key)) return isSafeAtlassianIdentifier(value);
   if (key === "applicationLinkId") return jiraApplicationLinkId(value);
   if (key === "applicationLinkDestinationDigest") return receiptDigest(value);
   if (key === "originalPosition" || key === "currentPosition")

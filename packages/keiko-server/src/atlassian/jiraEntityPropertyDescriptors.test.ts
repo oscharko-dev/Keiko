@@ -164,7 +164,7 @@ it.each([
       ["property-keys", path],
       ["property", `${path}/{propertyKey}`],
     ]) {
-      expect(jiraOperationForTool(`jira.${entity}-${suffix}`)?.definition).toMatchObject({
+      expect(jiraOperationForTool(`jira.${entity}-${String(suffix)}`)?.definition).toMatchObject({
         kind: "native",
         method: "GET",
         apiRoot,

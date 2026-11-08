@@ -25,6 +25,22 @@ const DESCRIPTION =
   "A page that breaks an issue template is refused whole with the violations to correct. The result returns draftId and draftDigest for review. " +
   "Only when the user requests creation in Jira and unresolvedRefCount is 0, call jira.draft with only draftId and the last draftDigest; that tool performs Jira writes under the current write authority and required human approval.";
 
+function draftStageInputSchema(): ReturnType<typeof compileExternalCatalogSchema> {
+  return compileExternalCatalogSchema(
+    object(
+      {
+        draftId: JIRA_DRAFT_ID_SCHEMA,
+        items: {
+          type: "array",
+          minItems: 1,
+          maxItems: JIRA_DRAFT_PAGE_ITEMS_MAX,
+          items: JIRA_DRAFT_ITEM_SCHEMA,
+        },
+      },
+      ["items"],
+    ),
+  );
+}
 export function jiraDraftStageDeclaration(): ManagedMcpToolDeclaration {
   return Object.freeze({
     name: "jira.draft-stage",
@@ -32,20 +48,7 @@ export function jiraDraftStageDeclaration(): ManagedMcpToolDeclaration {
     descriptor: createToolDescriptor({
       toolRef: createToolRef("keiko.jira.draft.stage", 1),
       description: DESCRIPTION,
-      inputSchema: compileExternalCatalogSchema(
-        object(
-          {
-            draftId: JIRA_DRAFT_ID_SCHEMA,
-            items: {
-              type: "array",
-              minItems: 1,
-              maxItems: JIRA_DRAFT_PAGE_ITEMS_MAX,
-              items: JIRA_DRAFT_ITEM_SCHEMA,
-            },
-          },
-          ["items"],
-        ),
-      ),
+      inputSchema: draftStageInputSchema(),
       resultSchema: object(
         {
           outcome: { type: "string", enum: ["succeeded", "failed", "rejected"] },

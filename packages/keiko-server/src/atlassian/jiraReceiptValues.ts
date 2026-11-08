@@ -37,6 +37,19 @@ export function receiptInteger(value: unknown, minimum: number, maximum: number)
 export function receiptDigest(value: unknown): value is string {
   return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
 }
+function boundedReceiptArray(
+  value: unknown,
+  minimum: number,
+  maximum: number,
+): value is readonly unknown[] {
+  return !(
+    !Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Array.prototype ||
+    value.length < minimum ||
+    value.length > maximum ||
+    Reflect.ownKeys(value).length !== value.length + 1
+  );
+}
 export function receiptArray(
   value: unknown,
   minimum: number,
@@ -44,14 +57,7 @@ export function receiptArray(
   item: (value: unknown) => boolean,
   unique = true,
 ): value is readonly unknown[] {
-  if (
-    !Array.isArray(value) ||
-    Object.getPrototypeOf(value) !== Array.prototype ||
-    value.length < minimum ||
-    value.length > maximum ||
-    Reflect.ownKeys(value).length !== value.length + 1
-  )
-    return false;
+  if (!boundedReceiptArray(value, minimum, maximum)) return false;
   const seen = new Set<unknown>();
   for (let index = 0; index < value.length; index++) {
     const current = receiptOwnData(value, String(index));

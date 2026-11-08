@@ -64,6 +64,19 @@ function orderedList(value: unknown, t: OptionalWidgetTranslate): JiraDraftValue
         }
     : jiraDraftValueOf(value);
 }
+const KNOWN_PERMISSION_FIELDS = new Set([
+  "id",
+  "type",
+  "groupName",
+  "projectId",
+  "projectKey",
+  "roleId",
+  "roleName",
+  "userName",
+  "userDisplayName",
+  "view",
+  "edit",
+]);
 function permission(value: unknown, t: OptionalWidgetTranslate): JiraDraftValue {
   const source = record(value);
   if (source === undefined) return jiraDraftValueOf(value);
@@ -81,19 +94,6 @@ function permission(value: unknown, t: OptionalWidgetTranslate): JiraDraftValue 
         ? "chat.jira.savedView.editGranted"
         : "chat.jira.savedView.editNotGranted",
   ];
-  const known = new Set([
-    "id",
-    "type",
-    "groupName",
-    "projectId",
-    "projectKey",
-    "roleId",
-    "roleName",
-    "userName",
-    "userDisplayName",
-    "view",
-    "edit",
-  ]);
   return {
     kind: "group",
     members: [
@@ -103,7 +103,7 @@ function permission(value: unknown, t: OptionalWidgetTranslate): JiraDraftValue 
         value: literal(labels.map((label) => t(label)).join(" · ")),
       },
       ...Object.entries(source)
-        .filter(([field]) => !known.has(field))
+        .filter(([field]) => !KNOWN_PERMISSION_FIELDS.has(field))
         .map(([field, entry]) => ({
           name:
             field === "userKey"

@@ -16,7 +16,18 @@ const PROJECT_TYPE = {
   descriptionI18nKey: "type.software",
   color: "#ffffff",
 };
-const page = (item: CatalogJsonObject) => ({ items: [item], startAt: 0, total: 1 });
+const page = (
+  item: CatalogJsonObject,
+): {
+  items: Readonly<
+    Record<
+      string,
+      import("@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog").CatalogJsonValue
+    >
+  >[];
+  startAt: number;
+  total: number;
+} => ({ items: [item], startAt: 0, total: 1 });
 it("admits strict optional issue-type review facts without inventing missing description", () => {
   const declaration = jiraCoreMetadataDeclarationForTool("jira.issue-type");
   if (declaration === undefined) throw new TypeError("Missing declaration");

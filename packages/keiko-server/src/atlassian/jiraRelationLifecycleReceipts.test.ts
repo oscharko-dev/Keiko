@@ -153,7 +153,7 @@ describe("link and release lifecycle receipt evidence", () => {
           receipt: missing,
         });
       } else expectRefused(missing, operation);
-      Object.setPrototypeOf(missing, { [key]: Reflect.get(receipt, key) });
+      Object.setPrototypeOf(missing, { [key]: Reflect.get(receipt, key) as unknown });
       expectRefused(missing, operation);
     }
   });
@@ -196,7 +196,7 @@ describe("link and release lifecycle receipt evidence", () => {
   it.each(CASES.filter(({ operation }) => operation.includes("link")))(
     "requires the operation's exact presence target for $operation",
     ({ operation, receipt }) => {
-      const current = Reflect.get(receipt, "linkPresent");
+      const current = Reflect.get(receipt, "linkPresent") as unknown;
       for (const value of [!current, String(current), null])
         expectRefused(withField(receipt, "linkPresent", value), operation);
     },
@@ -320,7 +320,7 @@ describe("immutable replacement identity arrays", () => {
     const hidden = ["42"];
     Object.defineProperty(hidden, "extra", { value: "synthetic" });
     const inherited = ["42"];
-    Object.setPrototypeOf(inherited, Object.create(Array.prototype));
+    Object.setPrototypeOf(inherited, Object.create(Array.prototype) as object);
     const tooMany = Array.from({ length: TOOL_CATALOG_LIMITS.maxArrayItems + 1 }, (_, index) =>
       String(index + 1),
     );

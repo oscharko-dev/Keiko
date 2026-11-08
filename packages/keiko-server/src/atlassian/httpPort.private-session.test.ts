@@ -17,7 +17,25 @@ const UPLOAD: AtlassianHttpBodyRequest = {
   jiraAvatarImage: true,
   upload: { contentType: "image/png", bytes: BYTES },
 };
-function fixture() {
+function fixture(): {
+  cookie: import("vitest").Mock<() => string>;
+  credential: import("vitest").Mock<() => never>;
+  beforeDispatch: import("vitest").Mock<() => boolean>;
+  fetchImpl: import("vitest").Mock<typeof fetch>;
+  options: {
+    baseUrl: string;
+    authRef: string;
+    credentials: { resolveForExecution: import("vitest").Mock<() => never> };
+    beforeDispatch: import("vitest").Mock<() => boolean>;
+    fetchImpl: import("vitest").Mock<typeof fetch>;
+    privateAuthentication: {
+      kind: "session";
+      scope: "avatar";
+      cookie: import("vitest").Mock<() => string>;
+    };
+  };
+  port: import("@oscharko-dev/keiko-connectors").AtlassianHttpBodyPort;
+} {
   const cookie = vi.fn(() => COOKIE);
   const credential = vi.fn(() => {
     throw new TypeError("A cookie-only request cannot resolve PAT material");
@@ -133,7 +151,7 @@ describe("fixed private avatar/session HTTP scope", () => {
       const onResponse = vi.fn(() => true);
       const value = "synthetic-session";
       const spelling = escaped
-        ? [...value]
+        ? Array.from(value)
             .map((character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`)
             .join("")
         : value;

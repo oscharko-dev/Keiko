@@ -101,8 +101,11 @@ function canonicalGitChangeScope(scope: ChatGitChangeScope): CanonicalGitChangeS
 }
 
 // A Chat that never had a Jira Pod binding keeps its pre-Jira identity: no `jira` key at all.
+function hasJiraScope(chat: Chat): boolean {
+  return (chat.jiraBindingGeneration ?? 0) !== 0 || chat.jiraPodBinding !== undefined;
+}
 function canonicalJiraScope(chat: Chat): { readonly jira?: Record<string, unknown> } {
-  if ((chat.jiraBindingGeneration ?? 0) === 0 && chat.jiraPodBinding === undefined) return {};
+  if (!hasJiraScope(chat)) return {};
   return {
     jira: {
       podId: chat.jiraPodBinding?.podId ?? null,

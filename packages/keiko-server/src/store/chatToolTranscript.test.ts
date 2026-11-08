@@ -1119,7 +1119,7 @@ describe("persisted Jira operation approval contracts", () => {
     const captured = { kind: "captured", call, result, binding } as const;
     f.store.updateChatToolTranscript(f.id, captured, "native-read");
     expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges).toEqual([{ call, result }]);
-    expect(() =>
+    expect(() => {
       f.store.updateChatToolTranscript(
         f.id,
         {
@@ -1127,9 +1127,9 @@ describe("persisted Jira operation approval contracts", () => {
           mutationOutcome: "succeeded",
         },
         "native-read",
-      ),
-    ).toThrow();
-    expect(() =>
+      );
+    }).toThrow();
+    expect(() => {
       f.store.updateChatToolTranscript(
         f.id,
         {
@@ -1137,9 +1137,9 @@ describe("persisted Jira operation approval contracts", () => {
           operationBinding: contract.binding,
         },
         "native-read",
-      ),
-    ).toThrow();
-    expect(() =>
+      );
+    }).toThrow();
+    expect(() => {
       f.store.updateChatToolTranscript(
         f.id,
         {
@@ -1147,9 +1147,9 @@ describe("persisted Jira operation approval contracts", () => {
           result: { ...result, effectStarted: true },
         },
         "native-read",
-      ),
-    ).toThrow();
-    expect(() =>
+      );
+    }).toThrow();
+    expect(() => {
       f.store.updateChatToolTranscript(
         f.id,
         {
@@ -1157,8 +1157,8 @@ describe("persisted Jira operation approval contracts", () => {
           call: { ...call, name: "jira_guessed" },
         },
         "native-read",
-      ),
-    ).toThrow();
+      );
+    }).toThrow();
     expect(chatToolTranscriptOccupancy(f.db, f.id).exchangeCount).toBe(1);
   });
 
@@ -1207,7 +1207,7 @@ describe("persisted Jira operation approval contracts", () => {
         .filter((event) => event.op === "chat.tool-transcript.updated")
         .map((event) => event.extra?.phase),
     ).toEqual(["captured"]);
-    expect(() =>
+    expect(() => {
       f.store.updateChatToolTranscript(
         f.id,
         {
@@ -1222,11 +1222,11 @@ describe("persisted Jira operation approval contracts", () => {
           } satisfies ToolResultEnvelope,
         },
         "native-result",
-      ),
-    ).toThrow();
+      );
+    }).toThrow();
     expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges).toHaveLength(1);
     expect(JSON.stringify(f.logs.events)).not.toContain("private-token");
-    expect(() =>
+    expect(() => {
       f.store.updateChatToolTranscript(
         f.id,
         {
@@ -1236,8 +1236,8 @@ describe("persisted Jira operation approval contracts", () => {
           binding,
         },
         "native-result",
-      ),
-    ).toThrow();
+      );
+    }).toThrow();
   });
 
   it.each(["jira.create-project", "jira.update-project"] as const)(
@@ -1610,12 +1610,13 @@ describe("private Jira input transcript ownership", () => {
     store.updateChatToolTranscript(id, { kind: "started", call: inputCall }, "private-input-proof");
     const update = (
       view: import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors").JiraHumanInputView,
-    ) =>
+    ): void => {
       store.updateChatToolTranscript(
         id,
         { kind: "human-input", callId: inputCall.id, view },
         "private-input-proof",
       );
+    };
     update(awaiting);
     const ready = {
       ...awaiting,
@@ -1623,12 +1624,20 @@ describe("private Jira input transcript ownership", () => {
       revision: "87654321-1234-4123-8123-123456789abc",
     };
     update(ready);
-    expect(() => update({ ...ready, revision: awaiting.revision })).toThrow();
-    expect(() => update({ ...ready, requestId: `jhi_${"b".repeat(64)}` })).toThrow();
-    expect(() => update({ ...ready, expiresAt: ready.expiresAt + 1 })).toThrow();
+    expect(() => {
+      update({ ...ready, revision: awaiting.revision });
+    }).toThrow();
+    expect(() => {
+      update({ ...ready, requestId: `jhi_${"b".repeat(64)}` });
+    }).toThrow();
+    expect(() => {
+      update({ ...ready, expiresAt: ready.expiresAt + 1 });
+    }).toThrow();
     const cancelled = { ...ready, state: "cancelled" as const };
     update(cancelled);
-    expect(() => update(ready)).toThrow();
+    expect(() => {
+      update(ready);
+    }).toThrow();
     expect(store.findMessageById(id)?.toolTranscript?.exchanges[0]?.humanInput).toEqual(cancelled);
   });
   it("rejects secret-bearing extras and metadata attached to another operation", () => {
@@ -1638,13 +1647,13 @@ describe("private Jira input transcript ownership", () => {
       { ...awaiting, values: { password: "synthetic-never-store" } },
       { ...awaiting, purpose: "validate-license", fields: ["license"] },
     ]) {
-      expect(() =>
+      expect(() => {
         store.updateChatToolTranscript(
           id,
           { kind: "human-input", callId: inputCall.id, view: view as typeof awaiting },
           "private-input-proof",
-        ),
-      ).toThrow();
+        );
+      }).toThrow();
     }
     expect(JSON.stringify(store.findMessageById(id)?.toolTranscript)).not.toContain(
       "synthetic-never-store",
@@ -1700,7 +1709,7 @@ describe("private Jira input transcript ownership", () => {
       binding,
       mutationOutcome: "not-dispatched",
     } as const;
-    expect(() =>
+    expect(() => {
       f.store.updateChatToolTranscript(
         f.id,
         {
@@ -1711,8 +1720,8 @@ describe("private Jira input transcript ownership", () => {
           },
         },
         "coding-private-input",
-      ),
-    ).toThrow();
+      );
+    }).toThrow();
     f.store.updateChatToolTranscript(f.id, captured, "coding-private-input");
     expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0]).toMatchObject({
       humanInput: awaiting,
@@ -1734,9 +1743,9 @@ describe("private Jira input transcript ownership", () => {
         nativeArgumentsDigest: "f".repeat(64),
       },
     ] as const)
-      expect(() =>
-        f.store.updateChatToolTranscript(f.id, update, "coding-private-input"),
-      ).toThrow();
+      expect(() => {
+        f.store.updateChatToolTranscript(f.id, update, "coding-private-input");
+      }).toThrow();
     expect(f.store.findMessageById(f.id)?.toolTranscript).toBeUndefined();
   });
 });

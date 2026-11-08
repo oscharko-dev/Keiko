@@ -48,6 +48,13 @@ const PROJECTED = defineActivityLogOperation({
   releaseImpact: "minor",
 });
 
+function sameMutationMessage(message: ChatMessage, record: ChatToolMutationRecord): boolean {
+  return (
+    record.userMessageId === message.id &&
+    record.chatId === message.chatId &&
+    record.turnRef === message.canonicalTurnRef
+  );
+}
 function matchesCall(
   message: ChatMessage,
   call: ChatToolExchange,
@@ -71,9 +78,7 @@ function matchesCall(
     (record.sourceKind !== "configured-mcp" ||
       (operationBinding === undefined && sourceDigest === undefined)) &&
     record.invocationId === expected &&
-    record.userMessageId === message.id &&
-    record.chatId === message.chatId &&
-    record.turnRef === message.canonicalTurnRef &&
+    sameMutationMessage(message, record) &&
     call.call.name === record.operation.replace(/[.-]/gu, "_") &&
     record.actionDigest === action
   );
@@ -150,6 +155,13 @@ function codingCallMatches(
     nativeArgumentsDigest === record.consumer?.argumentsDigest
   );
 }
+function deniedEmptyResult(result: {
+  readonly status: unknown;
+  readonly reason?: unknown;
+  readonly data: unknown;
+}): boolean {
+  return result.status === "denied" && result.reason === "effect-denied" && result.data === null;
+}
 function codingResultMatches(
   exchange: ChatToolExchange,
   operation: JiraMutationOperation,
@@ -162,7 +174,7 @@ function codingResultMatches(
     result.toolRef?.canonicalId === jiraMutationToolId(operation) &&
     (isResultObject(result.data)
       ? canonicalise(result.data.operationBinding) === canonicalise(binding)
-      : result.status === "denied" && result.reason === "effect-denied" && result.data === null)
+      : deniedEmptyResult(result))
   );
 }
 function isResultObject(value: unknown): value is CatalogJsonObject {
@@ -195,6 +207,26 @@ function observedOutcome(
   return neverDispatched(message, exchange, records) ? "not-dispatched" : undefined;
 }
 
+function mutationRecords(
+  db: DatabaseSync,
+  message: ChatMessage,
+  transcript: ChatToolTranscript,
+  operationBindings: ReadonlyMap<string, JiraOperationBinding>,
+): readonly ChatToolMutationRecord[] {
+  const chatRecords =
+    message.canonicalTurnRef === undefined
+      ? []
+      : readChatToolMutationTurn(db, message.chatId, message.canonicalTurnRef);
+  // This prefix only preselects a lookup; validCodingObservation proves its full stored identity.
+  const codingIds = transcript.exchanges
+    .filter(
+      (exchange) => exchange.call.id.startsWith("mcp-") && operationBindings.has(exchange.call.id),
+    )
+    .map((exchange) => exchange.call.id);
+  const codingRecords = readCodingJiraMutationMessage(db, message.chatId, message.id, codingIds);
+  return [...chatRecords, ...codingRecords];
+}
+
 /** Historical effects remain visible after authority expires or the connection closes.
  * The journal is authoritative; projection neither grants authority nor executes an action. */
 export function projectChatToolMutationHistory(
@@ -207,18 +239,7 @@ export function projectChatToolMutationHistory(
   const message = projectChatReadConsentHistory(db, input);
   const transcript = message.toolTranscript;
   if (message.role !== "user" || transcript === undefined) return message;
-  const chatRecords =
-    message.canonicalTurnRef === undefined
-      ? []
-      : readChatToolMutationTurn(db, message.chatId, message.canonicalTurnRef);
-  // This prefix only preselects a lookup; validCodingObservation proves its full stored identity.
-  const codingIds = transcript.exchanges
-    .filter(
-      (exchange) => exchange.call.id.startsWith("mcp-") && operationBindings.has(exchange.call.id),
-    )
-    .map((exchange) => exchange.call.id);
-  const codingRecords = readCodingJiraMutationMessage(db, message.chatId, message.id, codingIds);
-  const records = [...chatRecords, ...codingRecords];
+  const records = mutationRecords(db, message, transcript, operationBindings);
   let observationCount = 0;
   let correlationId: string | undefined;
   const exchanges = transcript.exchanges.map((exchange) => {

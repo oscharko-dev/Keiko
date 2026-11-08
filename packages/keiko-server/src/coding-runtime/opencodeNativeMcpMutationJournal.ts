@@ -29,6 +29,13 @@ import {
 } from "../store/chatToolTranscript.js";
 import { CHAT_TOOL_TURN_BUDGET } from "../chat-tool-turn-budget.js";
 
+function admittedReadCapture(request: {
+  readonly localProvider: unknown;
+  readonly signal: AbortSignal;
+}): boolean {
+  return request.localProvider === "jira" && !request.signal.aborted;
+}
+
 export interface NativeMcpCallIdentity {
   readonly runId: string;
   readonly sessionId: string;
@@ -150,7 +157,7 @@ class NativeMutationJournal implements NativeMcpMutationJournal {
   beginReadCapture(
     request: Parameters<NativeMcpMutationJournal["beginReadCapture"]>[0],
   ): ManagedMcpReadCapture | undefined {
-    if (request.localProvider !== "jira" || request.signal.aborted) return undefined;
+    if (!admittedReadCapture(request)) return undefined;
     const turn = this.#history.nativeTurn(request.runId);
     if (turn === undefined || this.input.snapshots.get(request.runId) === undefined)
       return undefined;
@@ -222,18 +229,24 @@ class NativeMutationJournal implements NativeMcpMutationJournal {
       },
     });
   }
-  begin(
+  private preparedRecord(
     request: Parameters<NativeMcpMutationJournal["begin"]>[0],
-  ): ReturnType<NativeMcpMutationJournal["begin"]> {
+  ): ChatToolMutationRecord | undefined {
     if (request.sessionId === undefined) return undefined;
     const turn = this.#history.nativeTurn(request.runId);
     if (turn === undefined) return undefined;
-    const record = this.#preparedNative({
+    return this.#preparedNative({
       ...request,
       turnRef: turn.turnRef,
       sessionId: request.sessionId,
       argumentsDigest: sha256Hex(canonicalise(capturedArguments(request.argumentsValue))),
     });
+  }
+
+  begin(
+    request: Parameters<NativeMcpMutationJournal["begin"]>[0],
+  ): ReturnType<NativeMcpMutationJournal["begin"]> {
+    const record = this.preparedRecord(request);
     const consumer = record?.consumer;
     if (
       record?.sourceKind !== "configured-mcp" ||

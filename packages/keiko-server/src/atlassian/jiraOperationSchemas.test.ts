@@ -23,7 +23,10 @@ import { JIRA_JOB_OBSERVATION_READ_DEFINITIONS } from "./jiraJobObservationDescr
 import { jiraNativeDeclaration } from "./jiraProjectStructureDescriptors.js";
 import { object, text } from "./jiraManagedSchemas.js";
 
-function selected(name: string) {
+function schemaArray(value: CatalogJsonValue | undefined): value is readonly CatalogJsonValue[] {
+  return Array.isArray(value);
+}
+function selected(name: string): import("./jiraOperationRegistry.js").JiraOperationContract {
   const entry = jiraOperationForTool(name);
   if (entry === undefined) throw new TypeError("Missing canonical Jira declaration");
   return entry;
@@ -278,7 +281,7 @@ describe("operation bindings preserve closed result alternatives", () => {
     );
     const { descriptorDigest: _digest, ...original } = raw.descriptor;
     const required = original.resultSchema.required;
-    if (!Array.isArray(required)) throw new TypeError("Missing authored requirements");
+    if (!schemaArray(required)) throw new TypeError("Missing authored requirements");
     const projection = createToolDescriptor({
       ...original,
       toolRef: createToolRef(original.toolRef.canonicalId, original.toolRef.contractVersion + 1),

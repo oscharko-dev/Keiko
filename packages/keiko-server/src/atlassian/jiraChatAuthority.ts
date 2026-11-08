@@ -186,6 +186,13 @@ function currentFacts(
   };
 }
 
+function currentChatMode(envelope: JiraChatAuthorityEnvelope, chat: Chat): boolean {
+  return (
+    isRequestedChatToolModeCurrent(envelope, chat) &&
+    envelope.connectorScopes.includes("issue-tracker.admin") ===
+      (chat.jiraAdministrationEnabled === true)
+  );
+}
 /** Private current-state resolution only. Consent, action approval and reservation are separate gates. */
 export function resolveCurrentJiraChatAuthority(
   deps: JiraChatAuthorityDeps,
@@ -218,11 +225,7 @@ export function resolveCurrentJiraChatAuthority(
       correlationId,
     );
   if (!isJiraEnvelope(resolution.envelope)) return { ok: false, reason: "invalid" };
-  if (
-    !isRequestedChatToolModeCurrent(resolution.envelope, facts.chat) ||
-    resolution.envelope.connectorScopes.includes("issue-tracker.admin") !==
-      (facts.chat.jiraAdministrationEnabled === true)
-  ) {
+  if (!currentChatMode(resolution.envelope, facts.chat)) {
     return recordChatAuthorityResult(
       "current-state",
       { ok: false, reason: "invalid" },

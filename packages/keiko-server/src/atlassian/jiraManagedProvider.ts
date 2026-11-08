@@ -513,20 +513,23 @@ function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
   if (!isCoreReadTool(name)) throw new TypeError("Unsupported Jira read tool");
   return coreDeclaration(name);
 }
+function coreInputSchema(definition: (typeof DEFINITIONS)[CoreReadToolName]): CatalogJsonObject {
+  return object(
+    {
+      ...(definition.paged === false
+        ? {}
+        : { startAt: PAGE_NUMBER, maxResults: { type: "integer", minimum: 1, maximum: 100 } }),
+      ...definition.arguments,
+    },
+    definition.required,
+  );
+}
 function coreDeclaration(name: CoreReadToolName): ManagedMcpToolDeclaration {
   const definition = DEFINITIONS[name];
   const descriptor = createToolDescriptor({
     toolRef: readToolRef(name),
     description: definition.description,
-    inputSchema: object(
-      {
-        ...(definition.paged === false
-          ? {}
-          : { startAt: PAGE_NUMBER, maxResults: { type: "integer", minimum: 1, maximum: 100 } }),
-        ...definition.arguments,
-      },
-      definition.required,
-    ),
+    inputSchema: coreInputSchema(definition),
     resultSchema: coreResultSchema(
       name,
       object(

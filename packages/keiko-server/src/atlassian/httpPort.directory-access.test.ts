@@ -43,7 +43,18 @@ function fixture(
     new Response(JSON.stringify([ROLE]), {
       headers: { etag: VERSION, "content-type": "application/json" },
     }),
-) {
+): {
+  port: import("@oscharko-dev/keiko-connectors").AtlassianHttpBodyPort;
+  baseUrl: string;
+  authRef: string;
+  correlationId: string;
+  credentials: {
+    resolveForExecution: import("vitest").Mock<() => { scheme: "bearer-pat"; apiToken: string }>;
+  };
+  beforeDispatch: import("vitest").Mock<() => boolean>;
+  onResponse: import("vitest").Mock<() => boolean>;
+  fetchImpl: import("vitest").Mock<typeof fetch>;
+} {
   const credentials = {
     resolveForExecution: vi.fn(() => ({
       scheme: "bearer-pat" as const,
