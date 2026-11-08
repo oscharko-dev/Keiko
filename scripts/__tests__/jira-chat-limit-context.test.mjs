@@ -642,7 +642,14 @@ function cardBlocks(f, failReport) {
       "setUiLanguage",
     ].map((name) => [name, vi.fn(async () => stepResult(name))]),
   );
-  blocks.createFaultPlan = vi.fn(() => ({ maybeInject: vi.fn() }));
+  blocks.createFaultPlan = vi.fn(({ scope }) => ({
+    maybeInject: vi.fn(async () => ({
+      step: `ac8-${scope}`,
+      status: "green",
+      detail: "Independent fault evidence",
+      counts: { injected: 2, recovered: 2, duplicates: 0, lost: 0 },
+    })),
+  }));
   blocks.runBulkEpics = vi.fn(async () => {
     f.intent.record("bulkEpics", {
       seeded: Array.from({ length: 37 }, (_, index) => ({
