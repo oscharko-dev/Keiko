@@ -10,17 +10,24 @@ import { eachJourneyInLicenseWindow } from "../testing/jira-chat-lab/requirement
 import {
   enterActive,
   otherActiveLanes,
-  registerLane,
+  registerLane as registerNativeLane,
   withExclusiveRestart,
 } from "../testing/jira-chat-lab/requirements/lab-lanes.mjs";
 
 const directories = [];
+const releases = [];
+function registerLane(...args) {
+  const release = registerNativeLane(...args);
+  releases.push(release);
+  return release;
+}
 function sessionDirectory() {
   const directory = mkdtempSync(join(tmpdir(), "keiko-lab-lanes-"));
   directories.push(directory);
   return directory;
 }
 afterEach(() => {
+  for (const release of releases.splice(0)) release();
   for (const directory of directories.splice(0))
     rmSync(directory, { recursive: true, force: true });
 });
