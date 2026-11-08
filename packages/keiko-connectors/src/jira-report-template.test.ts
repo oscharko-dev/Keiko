@@ -260,6 +260,22 @@ describe("the report and the write gate share one template source", () => {
 });
 
 describe("an unreadable template source never reads as zero deviations", () => {
+  it("keeps missing independent parent types out of paginated deviation totals", async () => {
+    const report = await reportOf(() => ({
+      templates: [template("parentField: parent", "parentIssueTypes: [Epic]")],
+      unreadable: 0,
+    }), { pageClamp: 5 });
+    expect(report.completeness).toMatchObject({
+      complete: false, reason: "template-unreadable", issuesRead: 40, issuesTotal: 40,
+    });
+    expect(report.completeness.pageCount).toBeGreaterThan(2);
+    expect(report.compliance).toMatchObject({
+      checker: "unavailable", deviationCount: 0, issuesWithDeviations: 0, byRule: [],
+    });
+    const text = jiraReportCommentText(report);
+    expect(text).toContain("Template checker: unavailable.");
+    expect(text).not.toContain("Not judged by any template: 0");
+  });
   const broken: JiraIssueTemplateSource = () => ({
     templates: [template()],
     unreadable: 1,
