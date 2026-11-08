@@ -14,6 +14,7 @@ import {
   useEffect,
   useId,
   useMemo,
+  useReducer,
   useRef,
   useState,
   useSyncExternalStore,
@@ -525,7 +526,7 @@ function useCitedPage(
 ): CitedPage {
   const passage = sessionEntry?.display.passage;
   const reportedFor = useRef<object | null>(null);
-  const [, setFramedCount] = useState(0);
+  const [, notifyFramed] = useReducer((count: number) => count + 1, 0);
   const onSettled = useCallback<CitationHighlightSettled>(
     (highlight) => {
       if (reportedFor.current === load) return;
@@ -535,7 +536,7 @@ function useCitedPage(
         correlationId: newClientCorrelationId(),
         citationHighlight: highlight,
       });
-      if (highlight.outcome === "framed") setFramedCount((count) => count + 1);
+      if (highlight.outcome === "framed") notifyFramed();
     },
     [load],
   );
@@ -707,13 +708,14 @@ export function PdfCitationPreviewWindow({
       const frame = element?.querySelector("[data-citation-box]");
       const target = frame ?? element;
       // Scroll only the page region: scrollIntoView would also move the workspace around it.
+      const margin = frame === null || frame === undefined ? 0 : CITATION_FRAME_MARGIN_PX;
       const top =
         target === undefined
           ? estimatedPageOffset(pageNumber)
           : target.getBoundingClientRect().top -
             scroller.getBoundingClientRect().top +
             scroller.scrollTop -
-            (frame === null || frame === undefined ? 0 : CITATION_FRAME_MARGIN_PX);
+            margin;
       scroller.scrollTo({ top: Math.max(0, top) });
     },
     [estimatedPageOffset],

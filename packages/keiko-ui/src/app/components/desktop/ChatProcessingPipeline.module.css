@@ -49,17 +49,15 @@
 
 .cmpStep[data-state="done"] .cmpIcon {
   color: var(--feedback-success);
-}
-
-.cmpStep[data-state="active"] .cmpIcon {
-  color: var(--accent-text);
-  border-color: var(--accent-line);
-  background: var(--accent-dim);
+  animation: cmp-step-done 240ms ease-out;
 }
 
 /* The running step breathes, so a person sees Keiko is still at work; reduced motion keeps
    the same colour and label without movement. */
 .cmpStep[data-state="active"] .cmpIcon {
+  color: var(--accent-text);
+  border-color: var(--accent-line);
+  background: var(--accent-dim);
   animation: cmp-step-active 1.6s ease-in-out infinite;
 }
 
@@ -71,10 +69,6 @@
   50% {
     box-shadow: 0 0 0 5px var(--accent-dim);
   }
-}
-
-.cmpStep[data-state="done"] .cmpIcon {
-  animation: cmp-step-done 240ms ease-out;
 }
 
 @keyframes cmp-step-done {

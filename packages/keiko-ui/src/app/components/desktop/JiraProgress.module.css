@@ -4,47 +4,55 @@
   gap: 6px;
   min-width: 0;
 }
+/* A native <progress>: the browser supplies the progressbar role and value; the reset below
+   keeps the track and fill identical to the former hand-drawn bar. */
 .cmpTrack {
+  appearance: none;
+  display: block;
+  inline-size: 100%;
   block-size: 6px;
+  border: 0;
   border-radius: var(--radius-sm);
   background: var(--border-subtle);
+  color: var(--feedback-info);
   overflow: hidden;
 }
-.cmpFill {
-  block-size: 100%;
-  inline-size: var(--cmp-progress, 0%);
-  border-radius: inherit;
-  background: var(--feedback-info);
+.cmpTrack::-webkit-progress-bar {
+  background: transparent;
+}
+.cmpTrack::-webkit-progress-value {
+  background: currentcolor;
+  border-radius: var(--radius-sm);
   transition: inline-size 200ms ease-out;
 }
-.cmpProgress[data-tone="success"] .cmpFill {
-  background: var(--feedback-success);
+.cmpTrack::-moz-progress-bar {
+  background: currentcolor;
+  border-radius: var(--radius-sm);
 }
-.cmpProgress[data-tone="warning"] .cmpFill {
-  background: var(--feedback-warning);
+.cmpProgress[data-tone="success"] .cmpTrack {
+  color: var(--feedback-success);
 }
-@media (forced-colors: active) {
-  .cmpProgress[data-indeterminate="true"] .cmpFill {
-    animation: none;
-    background: Highlight;
-  }
+.cmpProgress[data-tone="warning"] .cmpTrack {
+  color: var(--feedback-warning);
 }
 @media (prefers-reduced-motion: reduce) {
-  .cmpFill {
+  .cmpTrack::-webkit-progress-value {
     transition: none;
   }
 }
-.cmpProgress[data-stopped="true"] .cmpFill {
+.cmpProgress[data-stopped="true"] .cmpTrack::-webkit-progress-value {
   transition: none;
 }
 @media (forced-colors: active) {
   .cmpTrack {
     border: 1px solid CanvasText;
     background: Canvas;
-  }
-  .cmpFill {
-    background: Highlight;
+    color: Highlight;
     forced-color-adjust: none;
+  }
+  .cmpProgress[data-indeterminate="true"] .cmpTrack {
+    animation: none;
+    background: Highlight;
   }
 }
 .cmpLabel {
@@ -57,8 +65,7 @@
   min-width: 0;
 }
 /* Work without a countable end yet: the design system's shimmer, still when motion is reduced. */
-.cmpProgress[data-indeterminate="true"] .cmpFill {
-  inline-size: 100%;
+.cmpProgress[data-indeterminate="true"] .cmpTrack {
   background: linear-gradient(
     90deg,
     var(--skeleton-base),
@@ -74,9 +81,8 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .cmpProgress[data-indeterminate="true"] .cmpFill {
+  .cmpProgress[data-indeterminate="true"] .cmpTrack {
     animation: none;
-    background: var(--feedback-info);
-    opacity: 0.4;
+    background: color-mix(in srgb, var(--feedback-info) 40%, var(--border-subtle));
   }
 }

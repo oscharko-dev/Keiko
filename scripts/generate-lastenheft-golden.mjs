@@ -181,35 +181,48 @@ function allocate() {
   return requirements;
 }
 
-// eslint-disable-next-line complexity -- one requirement is drawn from the seeded stream in a fixed order; splitting would reorder the stream
+const compareStrings = (a, b) => {
+  if (a < b) return -1;
+  return a > b ? 1 : 0;
+};
+
+/** The statement paragraphs of one requirement, drawn from the seeded stream in a fixed order. */
+function buildParagraphs(random, group, title, first, ref) {
+  const longTarget = LONG_TARGETS.get(title);
+  if (longTarget !== undefined) return [longStatement(random, first, longTarget)];
+  const extra = group.style === "table" ? 1 : random.int(0, 2);
+  const sentences = random.sample(details(random, ref), extra);
+  const paragraphs = [[first, ...sentences].join(" ")];
+  if (group.style !== "table" && random.chance(0.18))
+    paragraphs.push(random.sample(details(random, ref), 1)[0]);
+  return paragraphs;
+}
+
+/** The optional metadata lines of one requirement, drawn in a fixed order. */
+function buildMeta(random, group, ref) {
+  const meta = {};
+  if (group.style === "heading" || group.style === "plain") {
+    if (random.chance(0.22)) meta.note = random.pick(NOTES);
+    if (random.chance(0.25)) meta.source = random.pick(SOURCES);
+    if (random.chance(0.12)) meta.status = random.pick(STATUSES);
+    if (random.chance(0.15)) meta.dependency = [ref(), ref()].sort(compareStrings).join(", ");
+    if (random.chance(0.08)) meta.jira = `KRED-${String(random.int(20, 400))}`;
+  }
+  return meta;
+}
+
 function buildRequirement(item, ids, random) {
   const { group, title } = item;
   const priority = random.pick([...PRIORITIES, ...PRIORITIES, "Muss", "Muss", "Soll"]);
   const shown = group.priorityValues === undefined ? priority : ENGLISH_PRIORITY[priority];
   const ref = () => random.pick(ids.filter((other) => other !== item.id));
   const first = `${group.subject} ${MODAL[priority]} ${item.predicate}.`;
-  const longTarget = LONG_TARGETS.get(title);
-  let paragraphs;
-  if (longTarget !== undefined) paragraphs = [longStatement(random, first, longTarget)];
-  else {
-    const extra = group.style === "table" ? 1 : random.int(0, 2);
-    const sentences = random.sample(details(random, ref), extra);
-    paragraphs = [[first, ...sentences].join(" ")];
-    if (group.style !== "table" && random.chance(0.18))
-      paragraphs.push(random.sample(details(random, ref), 1)[0]);
-  }
+  const paragraphs = buildParagraphs(random, group, title, first, ref);
   const criteria =
     group.style === "table"
       ? []
       : random.sample(criteriaPool(random, title, ref), random.pick(CRITERIA_COUNTS));
-  const meta = {};
-  if (group.style === "heading" || group.style === "plain") {
-    if (random.chance(0.22)) meta.note = random.pick(NOTES);
-    if (random.chance(0.25)) meta.source = random.pick(SOURCES);
-    if (random.chance(0.12)) meta.status = random.pick(STATUSES);
-    if (random.chance(0.15)) meta.dependency = [ref(), ref()].sort().join(", ");
-    if (random.chance(0.08)) meta.jira = `KRED-${String(random.int(20, 400))}`;
-  }
+  const meta = buildMeta(random, group, ref);
   return {
     id: item.id,
     title,
@@ -233,30 +246,44 @@ const table = (header, rows, records) => ({ t: "table", header, rows, records })
 const bullets = (items) => ({ t: "list", ordered: false, items, lead: undefined });
 const lines = (rows) => ({ t: "lines", rows });
 
-// eslint-disable-next-line complexity -- the optional parts of one requirement are laid out in document order
+function requirementHeading(requirement) {
+  const { group } = requirement;
+  if (group.style === "bracket")
+    return h(6, `[${requirement.id}] ${requirement.title} [${requirement.priority}]`);
+  if (group.style === "heading") return h(6, `${requirement.id} ${requirement.title}`);
+  return p(`${requirement.id}: ${requirement.title}`);
+}
+
+const META_LINES = [
+  ["note", "Hinweis"],
+  ["priority", undefined],
+  ["source", "Quelle"],
+  ["status", "Status"],
+  ["dependency", "Abhängigkeiten"],
+  ["jira", "Jira"],
+];
+
+function requirementKeyLines(requirement) {
+  const { group } = requirement;
+  const priorityLine = `${group.priorityKey ?? "Priorität"}: ${requirement.priority}`;
+  const keyLines = [];
+  for (const [key, label] of META_LINES) {
+    if (key === "priority") {
+      if (group.style !== "bracket") keyLines.push(priorityLine);
+    } else if (requirement.meta[key] !== undefined)
+      keyLines.push(`${label}: ${requirement.meta[key]}`);
+  }
+  return keyLines;
+}
+
 function requirementBlocks(requirement) {
   const { group } = requirement;
-  const blocks = [];
   const criteriaKey =
     group.priorityKey === "Priority" ? "Acceptance criteria:" : "Abnahmekriterien:";
-  const priorityLine = `${group.priorityKey ?? "Priorität"}: ${requirement.priority}`;
-  if (group.style === "bracket") {
-    blocks.push(h(6, `[${requirement.id}] ${requirement.title} [${requirement.priority}]`));
-  } else if (group.style === "heading") {
-    blocks.push(h(6, `${requirement.id} ${requirement.title}`));
-  } else {
-    blocks.push(p(`${requirement.id}: ${requirement.title}`));
-  }
+  const blocks = [requirementHeading(requirement)];
   for (const [index, text] of requirement.paragraphs.entries())
     blocks.push(p(text, requirement.wrap && index === 0));
-  const keyLines = [];
-  if (requirement.meta.note !== undefined) keyLines.push(`Hinweis: ${requirement.meta.note}`);
-  if (group.style !== "bracket") keyLines.push(priorityLine);
-  if (requirement.meta.source !== undefined) keyLines.push(`Quelle: ${requirement.meta.source}`);
-  if (requirement.meta.status !== undefined) keyLines.push(`Status: ${requirement.meta.status}`);
-  if (requirement.meta.dependency !== undefined)
-    keyLines.push(`Abhängigkeiten: ${requirement.meta.dependency}`);
-  if (requirement.meta.jira !== undefined) keyLines.push(`Jira: ${requirement.meta.jira}`);
+  const keyLines = requirementKeyLines(requirement);
   const criteria = {
     t: "list",
     ordered: requirement.numbered,
@@ -592,7 +619,7 @@ function wrapWords(text, width) {
   return out;
 }
 
-const cell = (value) => value.replaceAll("|", "\\|");
+const cell = (value) => value.replaceAll("|", String.raw`\|`);
 
 export function renderMarkdown(blocks) {
   const out = [];
@@ -645,28 +672,28 @@ function docxTable(header, rows) {
     .join("")}</w:tbl>`;
 }
 
-export function renderDocumentXml(blocks) {
-  const parts = [];
-  for (const block of blocks) {
-    switch (block.t) {
-      case "h":
-        parts.push(docxParagraph(block.text, `Heading${String(block.level)}`));
-        break;
-      case "p":
-        parts.push(docxParagraph(block.text));
-        break;
-      case "lines":
-        for (const row of block.rows) parts.push(docxParagraph(row));
-        break;
-      case "list":
-        if (block.lead !== undefined) parts.push(docxParagraph(block.lead));
-        for (const [index, item] of block.items.entries())
-          parts.push(docxParagraph(block.ordered ? `${String(index + 1)}. ${item}` : `- ${item}`));
-        break;
-      default:
-        parts.push(docxTable(block.header, block.rows));
-    }
+function docxBlockParts(block) {
+  switch (block.t) {
+    case "h":
+      return [docxParagraph(block.text, `Heading${String(block.level)}`)];
+    case "p":
+      return [docxParagraph(block.text)];
+    case "lines":
+      return block.rows.map((row) => docxParagraph(row));
+    case "list":
+      return [
+        ...(block.lead === undefined ? [] : [docxParagraph(block.lead)]),
+        ...block.items.map((item, index) =>
+          docxParagraph(block.ordered ? `${String(index + 1)}. ${item}` : `- ${item}`),
+        ),
+      ];
+    default:
+      return [docxTable(block.header, block.rows)];
   }
+}
+
+export function renderDocumentXml(blocks) {
+  const parts = blocks.flatMap(docxBlockParts);
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${parts.join("")}</w:body></w:document>`;
 }
 
@@ -763,11 +790,49 @@ function wrapsOntoIdentifier(text, width) {
   return wrapWords(text, width).some((line, index) => index > 0 && IDENTIFIER_AT_START.test(line));
 }
 
+/** Appends the flat lines of one block; false when the block is a record table that noted itself. */
+function pushFlatBlock(block, out, note) {
+  switch (block.t) {
+    case "h":
+      out.push("", block.text);
+      return true;
+    case "p":
+      out.push(...wrapWords(block.text, PDF_WRAP));
+      return true;
+    case "lines":
+      out.push(...block.rows);
+      return true;
+    case "list":
+      if (block.lead !== undefined) out.push(block.lead);
+      for (const [index, item] of block.items.entries())
+        out.push(
+          ...wrapWords(block.ordered ? `${String(index + 1)}. ${item}` : `- ${item}`, PDF_WRAP),
+        );
+      return true;
+    default:
+      return pushFlatTable(block, out, note);
+  }
+}
+
+function pushFlatTable(block, out, note) {
+  if (block.records !== undefined) {
+    for (const record of block.records) {
+      const start = out.length;
+      out.push(record.head, ...wrapWords(record.statement, PDF_WRAP), record.priority);
+      note(record.id, start);
+      out.push("");
+    }
+    return false;
+  }
+  out.push(block.header.join("  "));
+  for (const row of block.rows) out.push(...wrapWords(row.join("  "), PDF_WRAP));
+  return true;
+}
+
 /**
  * The flat text a PDF carries (no recorded headings, no table cells) and, per requirement, the
  * lines it occupies, so the page break positions of the typeset PDF are known.
  */
-// eslint-disable-next-line complexity -- one switch over the block kinds of the document model
 export function renderFlatLines(blocks) {
   const out = [];
   const spans = new Map();
@@ -781,37 +846,7 @@ export function renderFlatLines(blocks) {
   };
   for (const block of blocks) {
     const from = out.length;
-    switch (block.t) {
-      case "h":
-        out.push("", block.text);
-        break;
-      case "p":
-        out.push(...wrapWords(block.text, PDF_WRAP));
-        break;
-      case "lines":
-        out.push(...block.rows);
-        break;
-      case "list":
-        if (block.lead !== undefined) out.push(block.lead);
-        for (const [index, item] of block.items.entries())
-          out.push(
-            ...wrapWords(block.ordered ? `${String(index + 1)}. ${item}` : `- ${item}`, PDF_WRAP),
-          );
-        break;
-      default:
-        if (block.records !== undefined) {
-          for (const record of block.records) {
-            const start = out.length;
-            out.push(record.head, ...wrapWords(record.statement, PDF_WRAP), record.priority);
-            note(record.id, start);
-            out.push("");
-          }
-          continue;
-        }
-        out.push(block.header.join("  "));
-        for (const row of block.rows) out.push(...wrapWords(row.join("  "), PDF_WRAP));
-    }
-    if (block.req !== undefined) note(block.req, from);
+    if (pushFlatBlock(block, out, note) && block.req !== undefined) note(block.req, from);
   }
   return { lines: out, spans };
 }

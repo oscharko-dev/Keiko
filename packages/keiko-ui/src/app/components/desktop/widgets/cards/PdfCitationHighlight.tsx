@@ -91,10 +91,10 @@ export function PdfCitationHighlight({
   readonly onSettled: CitationHighlightSettled;
 }): ReactNode {
   const boxes = useHighlightBoxes(rendered, passage, onSettled);
-  // The boxes are positions on one page; their order is their identity.
-  return boxes.map((box, index) => (
+  // The boxes are positions on one page; their geometry is their identity.
+  return boxes.map((box) => (
     <span
-      key={index}
+      key={`${String(box.left)}:${String(box.top)}:${String(box.width)}:${String(box.height)}`}
       className={styles.cmpCitationBox}
       data-citation-box=""
       aria-hidden="true"

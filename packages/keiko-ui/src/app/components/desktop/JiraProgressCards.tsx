@@ -1,5 +1,5 @@
 "use client";
-import { useId, type CSSProperties, type ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import type { ChatToolExchange, ChatTurnState } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 import cardStyles from "./JiraChatTools.module.css";
@@ -28,8 +28,6 @@ function ProgressBar({
 }): ReactNode {
   const labelId = useId();
   const indeterminate = value === undefined;
-  const percent = indeterminate ? 0 : Math.min(100, Math.round((value / max) * 100));
-  const fill = { "--cmp-progress": `${String(percent)}%` } as CSSProperties;
   const counted = value === undefined ? {} : { "aria-valuemax": max, "aria-valuenow": value };
   return (
     <div
@@ -41,15 +39,14 @@ function ProgressBar({
       <span id={labelId} className={styles.cmpLabel}>
         {label}
       </span>
-      <div
+      <progress
         className={styles.cmpTrack}
-        role="progressbar"
         aria-labelledby={labelId}
         aria-valuemin={0}
+        max={max > 0 ? max : undefined}
+        value={value}
         {...counted}
-      >
-        <div className={styles.cmpFill} style={fill} />
-      </div>
+      />
     </div>
   );
 }
