@@ -210,6 +210,11 @@ above is separate from the epic's 439-identity accounting.
 
 AC5/AC6/AC8/AC9 use three independent Chats and verified Jira Pods for project lead, developer and tech lead. Preparation uses only the administrative lab client: one fresh Scrum project derived from the reserved group identity, one board, two Epics, eight Stories, one Task and the real numeric Story Points field on the create/edit screens. The existing identity and permission seed owners provide separate PATs and native permission readback. The developer has no Manage Sprints permission; additional create/comment/link/resolve rights support the requested daily tasks.
 
+The administrator owns the filter and board. A single view-only project share is bounded by the
+fresh project's exact direct-user permission scheme for the three roles and administrative oracle.
+Setup verifies the scheme before and after sharing, and each role PAT must independently read the
+same board before any model turn begins.
+
 Run the group only in the integrator’s coordinated real Jira/Keiko/model window:
 
 ```sh

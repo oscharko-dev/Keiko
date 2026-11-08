@@ -9,7 +9,11 @@ import {
   labNativeId as nativeId,
 } from "./lab-client.mjs";
 import { ensureFixtureIdentity } from "./seed-identities.mjs";
-import { seedBrowserRolePermissions, verifyBrowserRolePermissions } from "./seed-permissions.mjs";
+import {
+  seedBrowserRolePermissions,
+  verifyBrowserRolePermissions,
+  verifyBrowserRoleScheme,
+} from "./seed-permissions.mjs";
 import { discoverEstimateField, ensureOnScreens } from "./requirements/estimate-field.mjs";
 import { assertDistinctBrowserRoleActors } from "./browser-roles-bindings.mjs";
 export { verifyBrowserRoleBindings } from "./browser-roles-bindings.mjs";
@@ -26,6 +30,7 @@ const WRITE_NAMES = new Set([
   "roles-associate-permission-scheme",
   "roles-private-default",
   "roles-create-filter",
+  "roles-share-filter",
   "roles-create-board",
   "screen-add",
   "add-to-default",
@@ -198,10 +203,13 @@ async function privateDefault(jira) {
   if (after.scope !== "PRIVATE") throw new TypeError("The role filter would not be private");
 }
 
+function sameFilterOwner(filter, actor) {
+  return filter.owner?.key === actor.key && filter.owner?.name === actor.name;
+}
+
 function privatelyOwnedFilter(filter, actor) {
   return (
-    filter.owner?.key === actor.key &&
-    filter.owner?.name === actor.name &&
+    sameFilterOwner(filter, actor) &&
     Array.isArray(filter.sharePermissions) &&
     filter.sharePermissions.length === 0
   );
@@ -224,8 +232,70 @@ async function createPrivateFilter(jira, project, actor) {
     observed.jql !== jql ||
     !privatelyOwnedFilter(observed, actor)
   )
-    throw new TypeError("The selected filter is not privately owned by the project lead");
+    throw new TypeError("The selected filter is not privately owned by its seeded administrator");
   return { id, name };
+}
+
+function absentOtherSharePrincipals(permission) {
+  return ["role", "group", "user"].every(
+    (key) => permission[key] === undefined || permission[key] === null,
+  );
+}
+
+function exactProjectShare(permission, project) {
+  return (
+    permission?.type === "project" &&
+    permission.view === true &&
+    permission.edit === false &&
+    nativeId(permission.project?.id) === project.id &&
+    (permission.project.key === undefined || permission.project.key === project.key) &&
+    absentOtherSharePrincipals(permission)
+  );
+}
+
+async function shareCohortFilter(jira, state, actors, filter) {
+  await verifyBrowserRoleScheme(jira, state.project.key, actors, state.permissions);
+  // The native filter-permission owner uses this project/view-only POST schema.
+  await jira.call("roles-share-filter", "POST", `/rest/api/2/filter/${filter.id}/permission`, {
+    type: "project",
+    projectId: state.project.id,
+    view: true,
+    edit: false,
+  });
+  const observed = await jira.call(
+    "roles-observe-shared-filter",
+    "GET",
+    `/rest/api/2/filter/${filter.id}`,
+  );
+  if (
+    nativeId(observed.id) !== filter.id ||
+    observed.name !== filter.name ||
+    observed.jql !== `project = ${state.project.key} ORDER BY Rank ASC` ||
+    !sameFilterOwner(observed, actors.admin) ||
+    !Array.isArray(observed.sharePermissions) ||
+    observed.sharePermissions.length !== 1 ||
+    !exactProjectShare(observed.sharePermissions[0], state.project)
+  )
+    throw new TypeError("The board filter is not shared with the exact project cohort");
+  await verifyBrowserRoleScheme(jira, state.project.key, actors, state.permissions);
+}
+
+async function verifyBoardAccess(portFor, board) {
+  for (const role of ["admin", ...ROLES]) {
+    const observed = await portFor(role).call(
+      "roles-verify-board-access",
+      "GET",
+      `/rest/agile/1.0/board/${board.id}`,
+    );
+    if (
+      nativeId(observed.id) !== board.id ||
+      observed.name !== board.name ||
+      observed.type !== "scrum"
+    )
+      throw new TypeError(
+        "Native board access does not retain the same Scrum board for every principal",
+      );
+  }
 }
 
 async function createBoard(jira, state, filter, persist) {
@@ -252,7 +322,7 @@ async function createBoard(jira, state, filter, persist) {
     config.type !== "scrum" ||
     nativeId(config.filter?.id) !== filter.id
   )
-    throw new TypeError("The new Scrum board is not bound to the private filter");
+    throw new TypeError("The new Scrum board is not bound to the cohort filter");
   state.board = { id, name };
   state.filter = filter;
   await persist();
@@ -467,12 +537,10 @@ export async function seedBrowserRoles(session, group, persist, options = {}) {
   state.permissions = await seedBrowserRolePermissions(jira, state.project.key, actors);
   await persist();
   await verifyBrowserRolePermissions(portFor, state.project.key, state.permissions);
-  const filter = await createPrivateFilter(
-    portFor("projectLead"),
-    state.project,
-    actors.projectLead,
-  );
-  const config = await createBoard(portFor("projectLead"), state, filter, persist);
+  const filter = await createPrivateFilter(jira, state.project, actors.admin);
+  await shareCohortFilter(jira, state, actors, filter);
+  const config = await createBoard(jira, state, filter, persist);
+  await verifyBoardAccess(portFor, state.board);
   const fields = await roleFields(jira, state, config, persist);
   await createEpics(jira, state, fields, persist);
   await createStories(jira, state, fields, actors, persist);

@@ -275,23 +275,43 @@ export async function seedBrowserRolePermissions(jira, projectKey, actors) {
     },
   );
   const schemeId = labNativeId(scheme?.id);
+  const selected = { ...plan, schemeId };
+  await verifyBrowserRoleGrants(jira, actors, selected);
+  const path = `/rest/api/2/project/${encodeURIComponent(projectKey)}/permissionscheme`;
+  await jira.call("roles-associate-permission-scheme", "PUT", path, { id: scheme.id });
+  await verifyBrowserRoleAssociation(jira, projectKey, selected);
+  return selected;
+}
+
+async function verifyBrowserRoleGrants(jira, actors, plan) {
   const observed = await jira.call(
     "roles-observe-permission-scheme",
     "GET",
-    `/rest/api/2/permissionscheme/${schemeId}?expand=permissions`,
+    `/rest/api/2/permissionscheme/${plan.schemeId}?expand=permissions`,
   );
+  const permissions = browserRoleGrants(plan, actors);
   if (
-    labNativeId(observed.id) !== schemeId ||
+    labNativeId(observed.id) !== plan.schemeId ||
     !Array.isArray(observed.permissions) ||
     normalizeGrants(observed.permissions) !== normalizeGrants(permissions)
   )
     throw new TypeError("Native role permission grants differ from the exact requested scheme");
-  const path = `/rest/api/2/project/${encodeURIComponent(projectKey)}/permissionscheme`;
-  await jira.call("roles-associate-permission-scheme", "PUT", path, { id: scheme.id });
-  const selected = await jira.call("roles-observe-associated-scheme", "GET", path);
-  if (labNativeId(selected.id) !== schemeId)
+}
+
+async function verifyBrowserRoleAssociation(jira, projectKey, plan) {
+  const selected = await jira.call(
+    "roles-observe-associated-scheme",
+    "GET",
+    `/rest/api/2/project/${encodeURIComponent(projectKey)}/permissionscheme`,
+  );
+  if (labNativeId(selected.id) !== plan.schemeId)
     throw new TypeError("The fresh project did not retain its role permission scheme");
-  return { ...plan, schemeId: schemeId };
+}
+
+/** The project share is bounded by this exact direct-user scheme, including its admin oracle. */
+export async function verifyBrowserRoleScheme(jira, projectKey, actors, plan) {
+  await verifyBrowserRoleGrants(jira, actors, plan);
+  await verifyBrowserRoleAssociation(jira, projectKey, plan);
 }
 
 /** Explicit native booleans prove both each role's grants and its withheld administrative rights. */

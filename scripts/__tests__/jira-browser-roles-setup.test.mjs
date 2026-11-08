@@ -68,6 +68,7 @@ function initialState(options) {
     scope: "GLOBAL",
     screenPoints: false,
     scheme: undefined,
+    schemeReads: 0,
   };
 }
 function boardConfiguration() {
@@ -132,7 +133,18 @@ function readRoutes(state, role) {
   return new Map([
     ["/rest/api/2/permissions", () => permissions()],
     [`/rest/api/2/project/${projectKey}`, () => state.project],
-    [`/rest/api/2/permissionscheme/${NATIVE.scheme}?expand=permissions`, () => state.scheme],
+    [
+      `/rest/api/2/permissionscheme/${NATIVE.scheme}?expand=permissions`,
+      () => {
+        state.schemeReads += 1;
+        if (state.options.schemeBeforeShare && state.schemeReads === 2)
+          state.scheme.permissions.push({
+            permission: "BROWSE_PROJECTS",
+            holder: { type: "group", parameter: "unexpected-audience" },
+          });
+        return state.scheme;
+      },
+    ],
     [`/rest/api/2/project/${projectKey}/permissionscheme`, () => ({ id: NATIVE.scheme })],
     ["/rest/api/2/filter/defaultShareScope", () => ({ scope: state.scope })],
     [`/rest/api/2/filter/${NATIVE.filter}`, () => state.filter],
@@ -155,6 +167,11 @@ function readRoutes(state, role) {
   ]);
 }
 function readNative(state, role, path) {
+  if (
+    path === `/rest/agile/1.0/board/${NATIVE.board}` &&
+    role === state.options.inaccessibleBoardRole
+  )
+    throw new TypeError("Native board access is denied for the selected principal");
   const routes = readRoutes(state, role);
   if (path.startsWith("/rest/api/2/mypermissions?")) return routes.get("permissions-for-actor")();
   if (routes.has(path)) return structuredClone(routes.get(path)());
@@ -174,7 +191,15 @@ function newIssue(state, body) {
   state.issues.set(id, { id, key, fields });
   return { id, key };
 }
-function writeRoutes(state) {
+function nativeShareDto(state, permission) {
+  if (state.options.nullPrincipals)
+    Object.assign(permission, { role: null, group: null, user: null });
+  if (state.options.omitProjectKey) Reflect.deleteProperty(permission.project, "key");
+  if (state.options.deviatingProjectKey) permission.project.key = "FOREIGN";
+  if (state.options.extraPrincipal !== undefined)
+    permission[state.options.extraPrincipal.name] = state.options.extraPrincipal.value;
+}
+function writeRoutes(state, role) {
   return new Map([
     [
       "roles-create-project",
@@ -192,6 +217,11 @@ function writeRoutes(state) {
       "roles-create-permission-scheme",
       (body) => {
         state.scheme = { id: NATIVE.scheme, ...body };
+        if (state.options.schemeAtCreation)
+          state.scheme.permissions.push({
+            permission: "BROWSE_PROJECTS",
+            holder: { type: "group", parameter: "unexpected-audience" },
+          });
         return state.scheme;
       },
     ],
@@ -208,10 +238,43 @@ function writeRoutes(state) {
         state.filter = {
           id: NATIVE.filter,
           ...body,
-          owner: state.actors.projectLead,
+          owner: state.actors[role],
           sharePermissions: state.options.publicFilter ? [{ type: "global" }] : [],
         };
         return state.filter;
+      },
+    ],
+    [
+      "roles-share-filter",
+      (body) => {
+        state.schemeAtShare = structuredClone(state.scheme);
+        const permission = {
+          id: "960051",
+          type: "project",
+          view: true,
+          edit: false,
+          project: { id: NATIVE.project, key: state.project.key },
+        };
+        expect(body).toEqual({
+          type: "project",
+          projectId: NATIVE.project,
+          view: true,
+          edit: false,
+        });
+        nativeShareDto(state, permission);
+        state.filter.sharePermissions = [permission];
+        if (state.options.shareAudience === "global") permission.type = "global";
+        if (state.options.shareAudience === "group") permission.type = "group";
+        if (state.options.shareAudience === "other-project") permission.project.id = "830099";
+        if (state.options.shareAudience === "project-role") permission.role = { id: "15" };
+        if (state.options.shareAudience === "duplicate")
+          state.filter.sharePermissions.push(structuredClone(permission));
+        if (state.options.schemeAfterShare)
+          state.scheme.permissions.push({
+            permission: "BROWSE_PROJECTS",
+            holder: { type: "user", parameter: "unexpected-user" },
+          });
+        return permission;
       },
     ],
     [
@@ -263,7 +326,7 @@ function fixture(options = {}) {
           method,
           path,
         });
-        const run = writeRoutes(state).get(name);
+        const run = writeRoutes(state, role).get(name);
         if (run === undefined) throw new TypeError(`Unexpected stub write: ${name}`);
         const result = run(body);
         if (options.unclear === name)
@@ -281,7 +344,7 @@ function fixture(options = {}) {
 }
 
 describe("model-free browser role setup", () => {
-  it("seeds a fresh Scrum project and private board with native identities and exact role fixtures", async () => {
+  it("seeds a fresh Scrum project and cohort board with native identities and exact role fixtures", async () => {
     const f = fixture();
     const result = await f.run();
     expect(result.project).toMatchObject({
@@ -303,8 +366,8 @@ describe("model-free browser role setup", () => {
     expect(result.storyPointsField.id).toBe(NATIVE.points);
     expect(f.state.screenPoints).toBe(true);
     expect(f.state.issues.size).toBe(11);
-    expect(f.state.filter.sharePermissions).toEqual([]);
-    expect(f.state.filter.owner.key).toBe(f.state.actors.projectLead.key);
+    expect(f.state.filter.sharePermissions).toHaveLength(1);
+    expect(f.state.filter.owner.key).toBe(f.state.actors.admin.key);
     expect(f.group.rolesSetup.phase).toBe("ready");
     expect(f.group.rolesSetup.currentIntent).toBeUndefined();
     expect(
@@ -313,13 +376,140 @@ describe("model-free browser role setup", () => {
     expect(JSON.stringify(f.state.snapshots)).not.toContain("Bearer ");
     await expect(f.run()).rejects.toThrow("already started");
   });
+  it("shares only the exact project cohort and verifies board access through all three PATs and the admin oracle", async () => {
+    const f = fixture();
+    await f.run();
+    const share = f.state.calls.filter((call) => call.name === "roles-share-filter");
+    expect(share).toEqual([
+      {
+        role: "admin",
+        name: "roles-share-filter",
+        method: "POST",
+        path: `/rest/api/2/filter/${NATIVE.filter}/permission`,
+        body: { type: "project", projectId: NATIVE.project, view: true, edit: false },
+      },
+    ]);
+    expect(f.state.filter.owner).toEqual(f.state.actors.admin);
+    expect(f.state.filter.sharePermissions).toEqual([
+      {
+        id: "960051",
+        type: "project",
+        view: true,
+        edit: false,
+        project: { id: NATIVE.project, key: f.state.project.key },
+      },
+    ]);
+    const reads = f.state.calls.filter((call) => call.name === "roles-verify-board-access");
+    expect(reads.map((call) => call.role)).toEqual([
+      "admin",
+      "projectLead",
+      "developer",
+      "techLead",
+    ]);
+    expect(
+      reads.every(
+        (call) => call.method === "GET" && call.path === `/rest/agile/1.0/board/${NATIVE.board}`,
+      ),
+    ).toBe(true);
+    expect(f.state.scheme).toEqual(f.state.schemeAtShare);
+    const grants = f.state.scheme.permissions;
+    const browse = grants.filter((grant) => grant.permission === "BROWSE_PROJECTS");
+    expect(browse.map((grant) => grant.holder)).toEqual(
+      ["admin", "projectLead", "developer", "techLead"].map((role) => ({
+        type: "user",
+        parameter: f.state.actors[role].name,
+      })),
+    );
+    expect(
+      grants
+        .filter((grant) => grant.permission === NATIVE.manage)
+        .map((grant) => grant.holder.parameter),
+    ).toEqual([f.state.actors.admin.name, f.state.actors.projectLead.name]);
+    expect(
+      f.state.calls.filter((call) => call.name === "roles-create-permission-scheme"),
+    ).toHaveLength(1);
+    expect(
+      f.state.calls.some(
+        (call) => call.name === "roles-share-filter" && call.role === "projectLead",
+      ),
+    ).toBe(false);
+  });
+  it.each([false, true])(
+    "accepts native null recipient fields with optional project key omitted=%s",
+    async (omitProjectKey) => {
+      const f = fixture({ nullPrincipals: true, omitProjectKey });
+      await expect(f.run()).resolves.toHaveProperty("board.id", NATIVE.board);
+      expect(f.state.filter.sharePermissions[0]).toMatchObject({
+        role: null,
+        group: null,
+        user: null,
+        project: { id: NATIVE.project },
+      });
+      expect(
+        f.state.calls.filter((call) => call.name === "roles-verify-board-access"),
+      ).toHaveLength(4);
+    },
+  );
+  it.each([
+    { name: "role", value: {} },
+    { name: "role", value: { id: "15" } },
+    { name: "group", value: {} },
+    { name: "group", value: { name: "foreign" } },
+    { name: "user", value: {} },
+    { name: "user", value: { name: "foreign" } },
+  ])("refuses an additional native principal $name=$value", async (extraPrincipal) => {
+    const f = fixture({ extraPrincipal });
+    await expect(f.run()).rejects.toThrow("exact project cohort");
+    expect(f.state.board).toBeUndefined();
+  });
+  it("refuses a deviating native project key when the optional key is present", async () => {
+    const f = fixture({ deviatingProjectKey: true });
+    await expect(f.run()).rejects.toThrow("exact project cohort");
+    expect(f.state.board).toBeUndefined();
+  });
+  it.each(["admin", "projectLead", "developer", "techLead"])(
+    "refuses inaccessible native board access for %s before seeding issues",
+    async (role) => {
+      const f = fixture({ inaccessibleBoardRole: role });
+      await expect(f.run()).rejects.toThrow("board access");
+      expect(f.state.issues.size).toBe(0);
+      expect(f.group.rolesSetup.phase).not.toBe("ready");
+    },
+  );
+  it.each(["global", "group", "other-project", "project-role", "duplicate"])(
+    "refuses unexpected %s filter sharing before creating the board",
+    async (shareAudience) => {
+      const f = fixture({ shareAudience });
+      await expect(f.run()).rejects.toThrow("exact project cohort");
+      expect(f.state.board).toBeUndefined();
+    },
+  );
+  it.each(["schemeBeforeShare", "schemeAfterShare"])(
+    "refuses permission audience drift at %s without widening grants",
+    async (option) => {
+      const f = fixture({ [option]: true });
+      await expect(f.run()).rejects.toThrow("exact requested scheme");
+      expect(f.state.board).toBeUndefined();
+      expect(f.state.calls.filter((call) => call.name === "roles-share-filter")).toHaveLength(
+        option === "schemeBeforeShare" ? 0 : 1,
+      );
+    },
+  );
+  it("verifies exact created grants before associating the scheme", async () => {
+    const f = fixture({ schemeAtCreation: true });
+    await expect(f.run()).rejects.toThrow("exact requested scheme");
+    expect(f.state.calls.some((call) => call.name === "roles-associate-permission-scheme")).toBe(
+      false,
+    );
+    expect(f.state.filter).toBeUndefined();
+  });
   it("retains a durable intent after a native commit loses its acknowledgement and never retries", async () => {
     const f = fixture({ unclear: "roles-create-board" });
     await expect(f.run()).rejects.toThrow("acknowledgement lost");
     expect(f.state.board).toBeDefined();
     expect(f.group.rolesSetup.currentIntent).toMatchObject({
       name: "roles-create-board",
-      actor: "projectLead",
+      actor: "admin",
     });
     const calls = f.state.calls.length;
     await expect(f.run()).rejects.toThrow("already started");
