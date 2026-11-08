@@ -9,6 +9,8 @@ import {
   readCase,
 } from "../testing/jira-chat-lab/api-qualification-cases.mjs";
 import { DEFAULT_LAB_CONNECTION } from "../testing/jira-chat-lab/lab-client.mjs";
+import { API_QUALIFICATION_CASES } from "../testing/jira-chat-lab/api-qualification-cases.mjs";
+import { API_QUALIFICATION_OBSERVATION_CASES } from "../testing/jira-chat-lab/api-qualification-observation-cases.mjs";
 
 it("observes restricted fixture metadata as the lab admin while retaining the API actor identity", async () => {
   const directory = mkdtempSync(join(tmpdir(), "keiko-ac7-fixture-authority-"));
@@ -43,6 +45,49 @@ it("observes restricted fixture metadata as the lab admin while retaining the AP
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+it.each([
+  {
+    tool: "jira.screens",
+    native: { screens: [{ id: 1, name: "Synthetic screen" }] },
+    product: [{ id: "1", name: "Synthetic screen" }],
+  },
+  {
+    tool: "jira.create-fields",
+    native: { values: [{ fieldId: "summary", name: "Summary", required: true }] },
+    product: [{ id: "summary", name: "Summary", required: true }],
+  },
+  {
+    tool: "jira.edit-fields",
+    native: { fields: { summary: { name: "Summary", required: true } } },
+    product: [{ id: "summary", name: "Summary", required: true }],
+  },
+])(
+  "compares the native $tool wrapper and field identity with the product projection",
+  async ({ tool, native: body, product }) => {
+    const directory = mkdtempSync(join(tmpdir(), "keiko-ac7-native-shape-"));
+    mkdirSync(join(directory, "secrets"));
+    writeFileSync(join(directory, "secrets/api-user-password"), "synthetic-api", { mode: 0o600 });
+    const native = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new globalThis.Response(JSON.stringify(body), { status: 200 }));
+    const specification = [...API_QUALIFICATION_CASES, ...API_QUALIFICATION_OBSERVATION_CASES].find(
+      (entry) => entry.tool === tool,
+    );
+    try {
+      await expect(
+        specification.readback(
+          { actor: "api", session: { ...DEFAULT_LAB_CONNECTION, directory } },
+          { items: product },
+          { issueTypeId: "10001", issueKeys: ["KEIKO-1"] },
+        ),
+      ).resolves.toMatchObject({ matched: true });
+    } finally {
+      native.mockRestore();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+);
 
 it("requires independent identity equality even when collection counts match", async () => {
   const directory = mkdtempSync(join(tmpdir(), "keiko-ac7-readback-"));

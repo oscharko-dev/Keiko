@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { URL } from "node:url";
 import {
   applyQualificationReport,
   classifyQualification,
@@ -31,6 +33,18 @@ function observation() {
 }
 
 describe("native Jira qualification evidence", () => {
+  it("recognizes the actual parameter spelling of every inventory identity", () => {
+    const ledger = JSON.parse(
+      readFileSync(
+        new URL("../../docs/local-knowledge/jira-api-coverage/operations.json", import.meta.url),
+        "utf8",
+      ),
+    );
+    for (const row of ledger.operations) {
+      const concrete = row.path.replace(/\{[^}]+\}/gu, "42");
+      expect(matchesNativeIdentity(row.identity, row.method, concrete), row.identity).toBe(true);
+    }
+  });
   it("refuses success without the real settled effect and budget receipt", () => {
     const o = observation();
     for (const receipt of [

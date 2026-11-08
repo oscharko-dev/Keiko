@@ -27,6 +27,12 @@ image digest and the complete 439-identity inventory. A focused run still accoun
 for every untested identity as unknown and exits nonzero; it cannot update the
 ledger or supply final acceptance.
 
+The driver runs at most 32 accepted turns in each sequential paired-product
+lifecycle against the same owned Jira. This preserves the production registry's
+64 retained-authority bound without clearing, increasing or expiring that bound.
+Each lifecycle retains its own product database in `productStateFiles`; fixture
+identities carry forward across batches and uncertain effects stop the whole run.
+
 Private qualification Chats are created through the existing store, with a
 descriptive model-free label and no gateway configuration. Credential creation,
 verification and binding retain their authenticated production routes. Each call

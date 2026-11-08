@@ -35,6 +35,26 @@ const ledgerPath = join(repository, "docs/local-knowledge/jira-api-coverage/oper
 const stage = (value) =>
   console.log(JSON.stringify({ operation: "jira-api-qualification", ...value }));
 
+export async function runQualificationBatches({
+  session,
+  specifications,
+  witness,
+  stateReady,
+  run,
+}) {
+  // Keep the product's retained-authority bound intact. Each finite batch uses the existing
+  // paired-product lifecycle sequentially against the same owned Jira, with separate evidence.
+  for (let start = 0; start < specifications.length; start += 32) {
+    const batch = start / 32;
+    await withModelFreeJira({
+      session,
+      decorateAtlassianHttp: witness?.decorate,
+      stateReady: (root) => stateReady?.(root, batch),
+      run: (context) => run(context, specifications.slice(start, start + 32), batch),
+    });
+  }
+}
+
 function sourceRevision() {
   const options = { cwd: repository, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] };
   const dirty = execFileSync("git", ["status", "--porcelain", "--untracked-files=normal"], options);
@@ -130,12 +150,14 @@ async function runCase(context, chat, specification, fixture, witness, directory
   return evidence;
 }
 
-async function executeCases(context, specifications, report, directory, witness) {
+async function executeCases(context, specifications, report, directory, witness, priorFixture) {
   context.actor = "api";
-  const fixture = await observeQualificationFixtures(
-    context,
-    JSON.parse(readFileSync(join(context.session.directory, "fixture.json"), "utf8")),
-  );
+  const fixture =
+    priorFixture ??
+    (await observeQualificationFixtures(
+      context,
+      JSON.parse(readFileSync(join(context.session.directory, "fixture.json"), "utf8")),
+    ));
   fixture.runId = report.runId;
   const chats = new Map();
   for (const specification of specifications) {
@@ -160,6 +182,7 @@ async function executeCases(context, specifications, report, directory, witness)
     if (specification.mutation && evidence.runtimeAvailability === "unknown")
       throw new TypeError("Reconcile the failed mutation before dispatching dependent cases");
   }
+  return fixture;
 }
 
 function createReport(session, ledger, revision, runId) {
@@ -232,11 +255,20 @@ export async function qualifyApi(directory, only, snapshotId) {
   await admitSnapshot(session, selected, report, snapshotId);
   const witness = qualificationWitness(session);
   privateJson(join(output, report.file), report, true);
-  await withModelFreeJira({
+  let fixture;
+  await runQualificationBatches({
     session,
-    decorateAtlassianHttp: witness.decorate,
-    stateReady: (root) => privateJson(join(output, "product-state.json"), { root }, true),
-    run: (context) => executeCases(context, selected, report, output, witness),
+    specifications: selected,
+    witness,
+    stateReady: (root, batch) => {
+      const file = batch === 0 ? "product-state.json" : `product-state-${batch}.json`;
+      privateJson(join(output, file), { root }, true);
+      (report.productStateFiles ??= []).push(file);
+      privateJson(join(output, report.file), report);
+    },
+    run: async (context, selected) => {
+      fixture = await executeCases(context, selected, report, output, witness, fixture);
+    },
   });
   const counts = qualificationSummary(report.operations);
   rmSync(pending);

@@ -167,7 +167,10 @@ export const API_QUALIFICATION_CASES = [
   nativePage("jira.priority-page", "/rest/api/2/priority/page"),
   nativePage("jira.resolution-page", "/rest/api/2/resolution/page"),
   nativePage("jira.status-page", "/rest/api/2/status/page"),
-  nativePage("jira.screens", "/rest/api/2/screens"),
+  readCase("jira.screens", "/rest/api/2/screens?startAt=0&maxResults=100", ["id", "name"], {
+    args: () => ({ maxResults: 100 }),
+    nativeRoot: "screens",
+  }),
   collection("jira.workflows", "/rest/api/2/workflow", ["name"]),
   collection("jira.terminology", "/rest/api/2/terminology/entries", ["originalName"]),
   readCase("jira.terminology-entry", "/rest/api/2/terminology/entries/epic", ["originalName"], {

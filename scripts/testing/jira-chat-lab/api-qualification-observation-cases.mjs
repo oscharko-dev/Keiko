@@ -16,8 +16,7 @@ const avatars = (value) => [
   ...value.system.map((entry) => ({ ...entry, category: "system" })),
   ...value.custom.map((entry) => ({ ...entry, category: "custom" })),
 ];
-const fieldRows = (value) =>
-  Object.entries(value.fields).map(([fieldId, field]) => ({ ...field, fieldId }));
+const fieldRows = (value) => Object.entries(value.fields).map(([id, field]) => ({ ...field, id }));
 
 export const API_QUALIFICATION_OBSERVATION_CASES = [
   readCase("jira.fields", "/rest/api/2/field", ["id", "name"], { args: page }),
@@ -34,13 +33,14 @@ export const API_QUALIFICATION_OBSERVATION_CASES = [
     "jira.create-fields",
     (f) =>
       `/rest/api/2/issue/createmeta/KEIKO/issuetypes/${f.issueTypeId}?startAt=0&maxResults=100`,
-    ["fieldId", "name", "required"],
+    ["id", "name", "required"],
     {
       args: (f) => ({ projectKey: "KEIKO", issueTypeId: f.issueTypeId, maxResults: 100 }),
       nativeRoot: "values",
+      nativeNames: { id: "fieldId" },
     },
   ),
-  readCase("jira.edit-fields", (f) => issuePath(f, "editmeta"), ["fieldId", "name", "required"], {
+  readCase("jira.edit-fields", (f) => issuePath(f, "editmeta"), ["id", "name", "required"], {
     args: (f) => ({ issueKey: f.issueKeys[0], maxResults: 100 }),
     nativeRoot: fieldRows,
   }),
@@ -70,13 +70,13 @@ export const API_QUALIFICATION_OBSERVATION_CASES = [
   ),
   readCase(
     "jira.permission-users",
-    "/rest/api/2/user/permission/search?permissions=BROWSE_PROJECTS&projectKey=KEIKO&username=keiko&startAt=0&maxResults=100",
+    "/rest/api/2/user/permission/search?permissions=BROWSE&projectKey=KEIKO&username=keiko&startAt=0&maxResults=100",
     users,
     {
       args: () => ({
         projectKey: "KEIKO",
         query: "keiko",
-        permissions: ["BROWSE_PROJECTS"],
+        permissions: ["BROWSE"],
         startAt: 0,
         maxResults: 100,
       }),

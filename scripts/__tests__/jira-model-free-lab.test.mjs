@@ -10,6 +10,7 @@ import {
   qualificationWitness,
 } from "../testing/jira-chat-lab/api-qualification-runtime.mjs";
 import { DEFAULT_LAB_CONNECTION } from "../testing/jira-chat-lab/lab-client.mjs";
+import { runQualificationBatches } from "../testing/jira-chat-lab/api-qualification.mjs";
 
 vi.mock("../testing/jira-chat-lab/lab-client.mjs", async (original) => ({
   ...(await original()),
@@ -79,11 +80,11 @@ function syntheticNativeTransport(request, actor = "api") {
 }
 
 it.each([
-  { actor: "api", administration: false },
-  { actor: "admin", administration: true },
+  { actor: "api", administration: false, calls: 65 },
+  { actor: "admin", administration: true, calls: 2 },
 ])(
   "dispatches successive model-free $actor turns through the real provider, authority and budget receipt",
-  async ({ actor, administration }) => {
+  async ({ actor, administration, calls }) => {
     const directory = mkdtempSync(join(tmpdir(), "keiko-model-free-dispatch-"));
     const session = {
       ...DEFAULT_LAB_CONNECTION,
@@ -96,14 +97,17 @@ it.each([
     writeFileSync(join(directory, "secrets", `${actor}-token`), "synthetic-unit-token", {
       mode: 0o600,
     });
+    let dispatched = 0;
     try {
-      await withModelFreeJira({
+      await runQualificationBatches({
         session,
-        decorateAtlassianHttp: () => () => (request) => syntheticNativeTransport(request, actor),
-        run: async (context) => {
+        specifications: Array.from({ length: calls }, (_, index) => index),
+        witness: { decorate: () => () => (request) => syntheticNativeTransport(request, actor) },
+        run: async (context, specifications) => {
           const chat = await prepareModelFreeChat(context, actor, administration);
           expect(chat.jiraAdministrationEnabled === true).toBe(administration);
-          for (let call = 0; call < 2; call += 1) {
+          for (const specification of specifications) {
+            expect(specification).toBe(dispatched++);
             const result = await dispatchQualification(
               context,
               chat,
@@ -130,9 +134,10 @@ it.each([
               .listMessages(chat.id)
               .filter((message) => message.role === "user")
               .map((message) => message.turnState),
-          ).toEqual(["completed", "completed"]);
+          ).toEqual(specifications.map(() => "completed"));
         },
       });
+      expect(dispatched).toBe(calls);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

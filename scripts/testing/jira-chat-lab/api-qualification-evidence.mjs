@@ -12,7 +12,9 @@ export function matchesNativeIdentity(identity, method, pathname) {
   return (
     expected.length === actual.length &&
     expected.every((part, index) =>
-      /^\{[A-Za-z][A-Za-z0-9]*\}$/u.test(part) ? actual[index].length > 0 : part === actual[index],
+      /^\{[A-Za-z][A-Za-z0-9_-]*\}$/u.test(part)
+        ? actual[index].length > 0
+        : part === actual[index],
     )
   );
 }
