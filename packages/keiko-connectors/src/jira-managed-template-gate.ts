@@ -152,8 +152,9 @@ function undecidableTransitionRefusal(labels: readonly string[]): JiraTemplateGa
   };
 }
 
+const NUMERIC_ID = /^\d{1,32}$/u;
 function numericId(value: unknown): value is string {
-  return typeof value === "string" && /^\d{1,32}$/u.test(value);
+  return typeof value === "string" && NUMERIC_ID.test(value);
 }
 
 interface Identity {
@@ -197,10 +198,11 @@ function boundProjectKey(
   selected: string,
 ): string | undefined {
   if (response.status !== 200 || !numericId(response.body?.id)) return undefined;
-  const key = response.body?.key;
+  const key = response.body.key;
   if (!isSafeAtlassianIdentifier(key)) return undefined;
-  const matches = numericId(selected)
-    ? response.body?.id === selected
+  // A string predicate would narrow an already-string project key to never on its false arm.
+  const matches = NUMERIC_ID.test(selected)
+    ? response.body.id === selected
     : key.toUpperCase() === selected.toUpperCase();
   return matches ? key : undefined;
 }
