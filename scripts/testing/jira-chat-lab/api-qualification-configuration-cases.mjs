@@ -83,10 +83,16 @@ export const API_QUALIFICATION_CONFIGURATION_CASES = [
     ["key"],
     { args: page },
   ),
-  readCase("jira.project-type", "/rest/api/2/project/type/software/accessible", ["key"], {
-    ...single,
-    args: () => ({ projectTypeKey: "software" }),
-  }),
+  readCase(
+    "jira.project-type",
+    "/rest/api/2/project/type/software/accessible",
+    ["projectTypeKey", "name"],
+    {
+      ...single,
+      args: () => ({ projectTypeKey: "software" }),
+      nativeNames: { projectTypeKey: "key", name: "formattedKey" },
+    },
+  ),
   readCase(
     "jira.pinned-comments",
     (f) => `/rest/api/2/issue/${f.issueKeys[0]}/pinned-comments`,
@@ -143,7 +149,7 @@ export const API_QUALIFICATION_CONFIGURATION_CASES = [
     "/rest/api/2/project/KEIKO/notificationscheme",
     ["id", "name"],
     {
-      ...single,
+      nativeRoot: "single",
       args: project,
     },
   ),
@@ -214,13 +220,13 @@ export const API_QUALIFICATION_CONFIGURATION_CASES = [
       (f) => `/rest/api/2/notificationscheme/${id(f, "notificationSchemeId")}`,
       ["id", "name"],
       {
-        ...single,
+        nativeRoot: "single",
         args: (f) => ({ schemeId: id(f, "notificationSchemeId") }),
       },
     ),
     "notificationSchemeId",
-    "/rest/api/2/project/KEIKO/notificationscheme",
-    (value) => value.id,
+    "/rest/api/2/notificationscheme?startAt=0&maxResults=100",
+    (value) => value.values[0]?.id,
   ),
   priority(
     readCase(
@@ -280,11 +286,12 @@ export const API_QUALIFICATION_CONFIGURATION_CASES = [
     readCase(
       "jira.workflow-scheme-issue-type",
       (f) => `/rest/api/2/workflowscheme/${id(f, "workflowSchemeId")}/issuetype/${f.issueTypeId}`,
-      ["issueTypeId", "workflow"],
+      ["issueTypeId"],
       {
         ...single,
         args: (f) => ({ schemeId: id(f, "workflowSchemeId"), issueTypeId: f.issueTypeId }),
         nativeNames: { issueTypeId: "issueType" },
+        optionalFields: ["workflow"],
       },
     ),
   ),

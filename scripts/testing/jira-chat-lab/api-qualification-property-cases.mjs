@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { basicAuth, labRequest } from "./lab-client.mjs";
 import { readCase } from "./api-qualification-cases.mjs";
+import { assertQualificationJson } from "./api-qualification-json.mjs";
 
 const propertyKey = (fixture) => `keiko-ac7-${fixture.runId}`;
 const value = (fixture) => `Synthetic AC7 ${fixture.runId}`;
@@ -16,6 +17,8 @@ const entities = [
   },
   {
     name: "user",
+    actor: "admin",
+    administration: true,
     arguments: () => ({ username: "keiko-api" }),
     parent: () => "/rest/api/2/user?username=keiko-api",
     root: () => "/rest/api/2/user/properties",
@@ -63,13 +66,13 @@ function propertyReadback(entity, present, read) {
     }
     if (read) {
       assert.equal(data.propertyKey, selected);
-      assert.deepEqual(data.items, nodes(fixture));
+      assertQualificationJson(data.items, nodes(fixture));
     } else assert.equal(data.propertyPresent, present);
     return { matched: true, assertionCount: present ? (read ? 9 : 8) : 6 };
   };
 }
 
-function propertyCases(entity) {
+export function qualificationPropertyCases(entity) {
   const scope = { actor: entity.actor ?? "api", administration: entity.administration === true };
   const selection = (f) => ({ ...entity.arguments(f), propertyKey: propertyKey(f) });
   return [
@@ -90,7 +93,7 @@ function propertyCases(entity) {
               ["key"],
               {
                 args: (f) => ({ ...entity.arguments(f), maxResults: 100 }),
-                nativeRoot: "keys",
+                nativeRoot: (value) => value.keys,
               },
             ),
           },
@@ -112,8 +115,8 @@ function propertyCases(entity) {
   ];
 }
 
-export const API_QUALIFICATION_PROPERTY_CASES = entities.flatMap(propertyCases);
-export const API_QUALIFICATION_COMMENT_PROPERTY_CASES = propertyCases({
+export const API_QUALIFICATION_PROPERTY_CASES = entities.flatMap(qualificationPropertyCases);
+export const API_QUALIFICATION_COMMENT_PROPERTY_CASES = qualificationPropertyCases({
   name: "comment",
   includeKeys: true,
   arguments: (f) => ({ issueIdOrKey: f.createdIssueKey, commentId: f.commentId }),

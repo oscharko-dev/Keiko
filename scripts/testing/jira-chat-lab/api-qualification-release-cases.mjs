@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { readCase } from "./api-qualification-cases.mjs";
 import { basicAuth, labRequest } from "./lab-client.mjs";
+import { assertQualificationJson } from "./api-qualification-json.mjs";
 
 const single = { nativeRoot: "single", productRoot: "single" };
 const proof = (assertionCount) => ({ matched: true, assertionCount });
@@ -70,7 +71,9 @@ async function versionContext(context, f) {
 async function links(context, f) {
   const observed = await read(context, `${versionPath(f)}/remotelink`);
   assert.ok(Array.isArray(observed.links));
-  const values = observed.links.map((row) => JSON.parse(row.link));
+  const values = observed.links.map((row) =>
+    typeof row.link === "string" ? JSON.parse(row.link) : row.link,
+  );
   const ordered = (rows) => rows.toSorted((a, b) => a.globalId.localeCompare(b.globalId));
   assert.deepEqual(ordered(values), ordered(f.linkSuffixes.map((suffix) => linkValue(f, suffix))));
   f.linkSnapshots = values.map((value) => ({
@@ -111,11 +114,11 @@ function linkReadback(path) {
     const rows = Array.isArray(observed.links) ? observed.links : [observed];
     assert.equal(data.items.length, rows.length);
     for (const [index, row] of rows.entries()) {
-      const value = JSON.parse(row.link);
+      const value = typeof row.link === "string" ? JSON.parse(row.link) : row.link;
       const suffix = f.linkSuffixes.find((entry) => linkId(f, entry) === value.globalId);
       assert.notEqual(suffix, undefined);
       assert.deepEqual(value, linkValue(f, suffix));
-      assert.deepEqual(data.items[index].valueNodes, observedLinkNodes(value));
+      assertQualificationJson(data.items[index].valueNodes, observedLinkNodes(value));
       assert.equal(data.items[index].globalId, value.globalId);
     }
     return proof(1 + rows.length * 4);
@@ -128,7 +131,7 @@ export const API_QUALIFICATION_RELEASE_CASES = [
     (f) => ({
       projectIdOrKey: "KEIKO",
       name: componentName(f),
-      description: "",
+      description: "Synthetic AC7 component",
       assigneeType: "PROJECT_DEFAULT",
     }),
     async (context, data, f) => {
@@ -138,7 +141,7 @@ export const API_QUALIFICATION_RELEASE_CASES = [
       assert.equal(String(actual.id), f.componentId);
       assert.equal(actual.name, componentName(f));
       assert.equal(actual.project, "KEIKO");
-      assert.equal(actual.description, "");
+      assert.equal(actual.description, "Synthetic AC7 component");
       return proof(5);
     },
   ),

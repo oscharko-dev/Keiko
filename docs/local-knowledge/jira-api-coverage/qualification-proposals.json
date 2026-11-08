@@ -46,6 +46,18 @@
         "scripts/testing/jira-chat-lab/setup.mjs",
         "packages/keiko-server/src/atlassian/jiraIssueActionMutationDescriptors.ts"
       ]
+    },
+    {
+      "id": "filter-delete-needs-independent-complete-absence-proof",
+      "proposedDisposition": "deferred",
+      "identities": ["DELETE /rest/api/2/filter/{id}"],
+      "rationale": "The current bound implementation deliberately retains filter deletion as acknowledged/unconfirmed. A selected filter GET returning 404 and absence from favourites do not independently prove deletion of an owned filter. The existing qualification oracle therefore records deletionConfirmed=false and cannot mark the identity executable, denied or version-unavailable. This proposal records that evidence limit; it does not approve an exemption or weaken the product confirmation rule.",
+      "requiredForQualification": "An owner-reviewed independent absence oracle covering the complete owned-filter population, or an explicit owner disposition for this identity. Preserve the settled receipt, same-owner observations and original unconfirmed outcome; never use favourites or a bare resource 404 as deletion proof.",
+      "sourceReferences": [
+        "packages/keiko-connectors/src/jira-managed-filter-mutations.ts",
+        "packages/keiko-connectors/src/jira-managed-saved-configuration-mutations.test.ts",
+        "scripts/testing/jira-chat-lab/api-qualification-agile-cases.mjs"
+      ]
     }
   ]
 }

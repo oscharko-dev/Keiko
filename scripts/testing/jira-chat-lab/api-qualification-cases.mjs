@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { URLSearchParams } from "node:url";
 import { assertSessionServerInfo, basicAuth, labRequest } from "./lab-client.mjs";
+import { assertQualificationJson } from "./api-qualification-json.mjs";
 
 async function nativeRead(context, path) {
   return labRequest(context.session, "GET", path, basicAuth(context.session, context.actor));
@@ -52,11 +53,25 @@ function rowValues(rows, fields, names = {}) {
     }),
   );
 }
+function assertOptionalFields(actual, native, fields, names) {
+  for (const [index, row] of native.slice(0, 100).entries()) {
+    for (const field of fields) {
+      const observed = row[names?.[field] ?? field];
+      if (observed === undefined || observed === null)
+        assert.equal(Object.hasOwn(actual[index], field), false);
+      else
+        assertQualificationJson(
+          rowValues([actual[index]], [field]),
+          rowValues([row], [field], names),
+        );
+    }
+  }
+}
 export function readCase(
   tool,
   path,
   fields,
-  { args = () => ({}), nativeRoot, productRoot, nativeNames } = {},
+  { args = () => ({}), nativeRoot, productRoot, nativeNames, optionalFields = [] } = {},
 ) {
   return {
     tool,
@@ -72,15 +87,16 @@ export function readCase(
       const projected = projectRows(data, productRoot);
       const actual = rowValues(projected, fields);
       const expected = rowValues(native, fields, nativeNames).slice(0, 100);
-      assert.deepEqual(
+      assertQualificationJson(
         actual,
         expected,
         "Keiko's observation must equal the independent native read",
       );
+      assertOptionalFields(projected, native, optionalFields, nativeNames);
       // Empty collections prove their exact count, not an invented sample row.
       return {
         matched: true,
-        assertionCount: 1 + actual.length * fields.length,
+        assertionCount: 1 + actual.length * (fields.length + optionalFields.length),
         nativeCount: native.length,
         projectedCount: projected.length,
       };

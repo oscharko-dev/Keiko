@@ -75,35 +75,6 @@ export const API_QUALIFICATION_ISSUE_CASES = [
       return proof(2);
     },
   ),
-  {
-    ...mutation(
-      "jira.transition",
-      (f) => ({ issueKey: key(f), transitionId: f.transitionId }),
-      async (context, _data, f) => {
-        const actual = await read(context, issuePath(f));
-        assert.equal(actual.key, key(f));
-        assert.equal(actual.fields.status.id, f.transitionStatusId);
-        return proof(2);
-      },
-    ),
-    prepare: async (context, f) => {
-      const actual = await read(context, issuePath(f));
-      const transitions = await read(
-        context,
-        `${issuePath(f)}/transitions?expand=transitions.fields`,
-      );
-      const selected = transitions.transitions.find(
-        (entry) =>
-          entry.to.id !== actual.fields.status.id &&
-          !Object.values(entry.fields ?? {}).some(
-            (field) => field.required === true && !field.hasDefaultValue,
-          ),
-      );
-      assert.ok(selected, "A real transition without unsupplied required fields is required");
-      f.transitionId = selected.id;
-      f.transitionStatusId = selected.to.id;
-    },
-  },
   mutation(
     "jira.comment",
     (f) => ({ issueKey: key(f), body: COMMENT }),
@@ -198,6 +169,7 @@ export const API_QUALIFICATION_ISSUE_CASES = [
       assert.equal(Date.parse(actual.started), Date.parse(STARTED));
       assert.equal(actual.comment, COMMENT);
       f.worklogId = actual.id;
+      f.worklogStarted = actual.started;
       return proof(5);
     },
   ),
@@ -241,7 +213,7 @@ export const API_QUALIFICATION_ISSUE_CASES = [
       issueKey: key(f),
       worklogId: f.worklogId,
       timeSpentSeconds: 900,
-      started: STARTED,
+      started: f.worklogStarted,
       comment: COMMENT,
       visibility: null,
     }),
@@ -257,4 +229,33 @@ export const API_QUALIFICATION_ISSUE_CASES = [
       return proof(3);
     },
   ),
+  {
+    ...mutation(
+      "jira.transition",
+      (f) => ({ issueKey: key(f), transitionId: f.transitionId }),
+      async (context, _data, f) => {
+        const actual = await read(context, issuePath(f));
+        assert.equal(actual.key, key(f));
+        assert.equal(actual.fields.status.id, f.transitionStatusId);
+        return proof(2);
+      },
+    ),
+    prepare: async (context, f) => {
+      const actual = await read(context, issuePath(f));
+      const transitions = await read(
+        context,
+        `${issuePath(f)}/transitions?expand=transitions.fields`,
+      );
+      const selected = transitions.transitions.find(
+        (entry) =>
+          entry.to.id !== actual.fields.status.id &&
+          !Object.values(entry.fields ?? {}).some(
+            (field) => field.required === true && !field.hasDefaultValue,
+          ),
+      );
+      assert.ok(selected, "A real transition without unsupplied required fields is required");
+      f.transitionId = selected.id;
+      f.transitionStatusId = selected.to.id;
+    },
+  },
 ];
