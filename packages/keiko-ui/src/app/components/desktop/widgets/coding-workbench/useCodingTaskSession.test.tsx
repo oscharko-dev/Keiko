@@ -407,10 +407,7 @@ describe("coding task selection", () => {
     await act(async () => Promise.resolve());
     expect(read).not.toHaveBeenCalledWith("chat-latest", expect.any(String));
     expect(result.current.conversationId).toBe("chat-two");
-    // The hold is recorded once per pick, body-free: another settled run adds no second line.
-    rerender({ run: { ...snapshot("chat-later"), runId: "run-later" } });
-    await act(async () => Promise.resolve());
-    expect(read).not.toHaveBeenCalledWith("chat-later", expect.any(String));
+    // The hold is recorded once per pick, body-free.
     expect(reportClientDiagnostic).toHaveBeenCalledExactlyOnceWith(
       "[keiko] coding workbench interaction: history-run-held",
       {
@@ -422,6 +419,32 @@ describe("coding task selection", () => {
     // A run that becomes active afterwards owns the window again.
     rerender({ run: { ...snapshot("chat-next"), runId: "run-next", state: "running" } });
     await waitFor(() => expect(read).toHaveBeenCalledWith("chat-next", expect.any(String)));
+  });
+
+  // Audit (#4271): the window's own run can settle before a status read ever sees it active; it
+  // is a run after the pick, so the window follows it like any other.
+  it("follows a run started after the pick even when it is first seen settled", async () => {
+    const two = { ...detail, task: { ...detail.task, id: "chat-two", latestRunId: "run-two" } };
+    read.mockImplementation((id: string) =>
+      Promise.resolve(id === "chat-two" ? two : { ...detail, task: { ...detail.task, id } }),
+    );
+    const { result, rerender } = renderHook(
+      ({ run }: { readonly run: CodingWorkbenchRuntimeSnapshot | null }) =>
+        useCodingTaskSession({
+          snapshot: run,
+          active: run?.state === "running",
+          root: "/repo",
+          workspace: activeWorkspace(),
+          selection: "chat-two",
+        }),
+      { initialProps: { run: null as CodingWorkbenchRuntimeSnapshot | null } },
+    );
+    await waitFor(() => expect(result.current.conversationId).toBe("chat-two"));
+    rerender({ run: { ...snapshot("chat-latest"), runId: "run-latest" } });
+    await act(async () => Promise.resolve());
+    expect(result.current.conversationId).toBe("chat-two");
+    rerender({ run: { ...snapshot("chat-own"), runId: "run-own" } });
+    await waitFor(() => expect(read).toHaveBeenCalledWith("chat-own", expect.any(String)));
   });
 
   it("keeps New task empty when a settled run of another task arrives afterwards", async () => {

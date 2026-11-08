@@ -100,9 +100,6 @@ interface TaskLoader {
   readonly load: (id: string, activate: boolean) => Promise<void>;
 }
 
-/** After a pick, settled runs of other tasks are held off; `reported` logged that once. */
-type PickHold = "none" | "held" | "reported";
-
 export function useCodingTaskSession(options: SessionInput): CodingTaskSession {
   const [forkTarget, setForkTarget] = useState<string | undefined>(undefined);
   const input = {
@@ -111,13 +108,13 @@ export function useCodingTaskSession(options: SessionInput): CodingTaskSession {
     forkTarget,
   };
   const ignoredRun = useRef<string | undefined>(undefined);
-  const pickHold = useRef<PickHold>("none");
+  const awaitingRun = useRef(false);
   const latest = useRef(input);
   latest.current = input;
   const controller = useTaskLoader(latest);
   const { detail, pending, setPending, error, setError, load } = controller;
-  const newTask = useNewTask(latest, ignoredRun, pickHold, controller);
-  useSessionSelection(input, load, newTask, ignoredRun, pickHold);
+  const newTask = useNewTask(latest, ignoredRun, awaitingRun, controller);
+  useSessionSelection(input, load, newTask, ignoredRun, awaitingRun);
   const finish = async (): Promise<void> => {
     if (input.active || detail === null) return;
     setPending(true);
@@ -494,7 +491,7 @@ function useHistoryScope(
 function useNewTask(
   latest: { current: SessionInput },
   ignoredRun: { current: string | undefined },
-  pickHold: { current: PickHold },
+  awaitingRun: { current: boolean },
   controller: TaskLoader,
 ): () => Promise<void> {
   const { sequence, setDetail, setError, setPending } = controller;
@@ -509,7 +506,7 @@ function useNewTask(
       });
     }
     ignoredRun.current = current.snapshot?.runId;
-    pickHold.current = "held";
+    awaitingRun.current = current.snapshot?.runId === undefined;
     sequence.current += 1;
     setDetail(null);
     setError(false);
@@ -524,7 +521,7 @@ function useNewTask(
     } finally {
       setPending(false);
     }
-  }, [latest, ignoredRun, pickHold, sequence, setDetail, setError, setPending]);
+  }, [latest, ignoredRun, awaitingRun, sequence, setDetail, setError, setPending]);
   return newTask;
 }
 
@@ -547,7 +544,7 @@ function useSessionSelection(
   load: (id: string, activate: boolean) => Promise<void>,
   newTask: () => Promise<void>,
   ignoredRun: { current: string | undefined },
-  pickHold: { current: PickHold },
+  awaitingRun: { current: boolean },
 ): void {
   const { selection, snapshot, active } = input;
   const activeWorkspaceId = input.workspace?.activeInstance?.workspaceId;
@@ -563,18 +560,18 @@ function useSessionSelection(
     }
     if (lastSelection.current === selection || active) return;
     lastSelection.current = selection;
-    pickHold.current = "held";
     selectionHandled.current?.();
     if (selection.startsWith("new:")) void newTask();
     else {
       ignoredRun.current = snapshot?.runId;
+      awaitingRun.current = snapshot?.runId === undefined;
       void load(selection, true);
     }
-  }, [selection, active, snapshot?.runId, load, newTask, ignoredRun, pickHold]);
+  }, [selection, active, snapshot?.runId, load, newTask, ignoredRun, awaitingRun]);
   useEffect(() => {
     const id = snapshot?.conversationId;
     if (id === undefined || snapshot?.runId === ignoredRun.current) return;
-    if (!followsAfterPick(pickHold, active)) return;
+    if (!followsRun(awaitingRun, ignoredRun, snapshot?.runId, active)) return;
     void load(id, false);
     window.dispatchEvent(new Event(CODING_HISTORY_CHANGED));
   }, [
@@ -585,25 +582,27 @@ function useSessionSelection(
     active,
     load,
     ignoredRun,
-    pickHold,
+    awaitingRun,
   ]);
 }
 
 /**
- * Whether the window may follow the runtime's run after the operator picked a task (#4271). The
- * runtime status names the process's latest run, not this window's task, and a window opened
- * from Coding History reads it only after the pick: a settled run of another task must not
- * replace the picked one. A run that becomes active afterwards owns the window again.
+ * Whether the window follows the runtime's run (#4271). The runtime status names the process's
+ * latest run, not this window's task. A task picked before the window knew that run, as in a
+ * window opened from Coding History, ignores the run the next status read reports when it has
+ * already settled: it belongs to another task and must not replace the picked one. A run already
+ * active, and every later run (the window's own start among them), is followed as before.
  */
-function followsAfterPick(pickHold: { current: PickHold }, active: boolean): boolean {
-  if (pickHold.current === "none") return true;
-  if (active) {
-    pickHold.current = "none";
-    return true;
-  }
-  if (pickHold.current === "held") {
-    pickHold.current = "reported";
-    reportCodingWorkbenchInteraction({ interaction: "history-run-held" }, newClientCorrelationId());
-  }
+function followsRun(
+  awaitingRun: { current: boolean },
+  ignoredRun: { current: string | undefined },
+  runId: string | undefined,
+  active: boolean,
+): boolean {
+  if (!awaitingRun.current) return true;
+  awaitingRun.current = false;
+  if (active) return true;
+  ignoredRun.current = runId;
+  reportCodingWorkbenchInteraction({ interaction: "history-run-held" }, newClientCorrelationId());
   return false;
 }
