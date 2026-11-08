@@ -19,6 +19,7 @@ it("binds issue and property lifecycle arguments to the real operation contracts
     createdIssueKey: "KEIKO-4",
     commentId: "37",
     worklogId: "41",
+    worklogStarted: "2026-11-08T08:00:00.000+0000",
     transitionId: "11",
     runId: "synthetic-run",
     componentId: "71",
@@ -68,7 +69,7 @@ it("selects actual native fixture identities using reads and admits every config
     "/rest/api/2/project/KEIKO/permissionscheme": { id: 0 },
     "/rest/api/2/permissionscheme/0/permission": { permissions: [{ id: 37 }] },
     "/rest/api/2/project/KEIKO/workflowscheme": { id: 53 },
-    "/rest/api/2/project/KEIKO/notificationscheme": { id: 61 },
+    "/rest/api/2/notificationscheme": { values: [{ id: 61 }] },
     "/rest/api/2/issuetypescheme": { schemes: [{ id: "59" }] },
     "/rest/api/2/priorityschemes": { schemes: [{ id: 41 }] },
     "/rest/api/2/screens": { screens: [{ id: 43 }] },
@@ -84,7 +85,8 @@ it("selects actual native fixture identities using reads and admits every config
   const fixture = { issueKeys: ["KEIKO-1"], issueTypeId: "10003" };
   const context = { actor: "admin", session: { ...DEFAULT_LAB_CONNECTION, directory } };
   try {
-    for (const specification of API_QUALIFICATION_CONFIGURATION_CASES) {
+    await API_QUALIFICATION_CONFIGURATION_CASES.reduce(async (previous, specification) => {
+      await previous;
       await specification.prepare?.(context, fixture);
       const operation = jiraOperationForTool(specification.tool);
       expect(operation, specification.tool).toBeDefined();
@@ -95,7 +97,7 @@ it("selects actual native fixture identities using reads and admits every config
         ),
         specification.tool,
       ).toBeUndefined();
-    }
+    }, Promise.resolve());
     expect(fixture).toMatchObject({
       permissionSchemeId: "0",
       permissionGrantId: "37",
@@ -163,16 +165,76 @@ it("compares permission holders independently without treating expanded metadata
   }
 });
 
+it("compares the accessible project type's native key with the product projectTypeKey", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "keiko-ac7-project-type-"));
+  mkdirSync(join(directory, "secrets"));
+  writeFileSync(join(directory, "secrets/admin-password"), "synthetic-admin", { mode: 0o600 });
+  const native = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    new globalThis.Response(JSON.stringify({ key: "software", formattedKey: "Software" }), {
+      status: 200,
+    }),
+  );
+  const specification = API_QUALIFICATION_CONFIGURATION_CASES.find(
+    ({ tool }) => tool === "jira.project-type",
+  );
+  try {
+    await expect(
+      specification.readback(
+        { actor: "admin", session: { ...DEFAULT_LAB_CONNECTION, directory } },
+        { projectTypeKey: "software", name: "Software" },
+        {},
+      ),
+    ).resolves.toMatchObject({ matched: true });
+  } finally {
+    native.mockRestore();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+it.each(["jira.notification-scheme", "jira.project-notification-scheme"])(
+  "compares the single %s using its native object and catalog items",
+  async (tool) => {
+    const directory = mkdtempSync(join(tmpdir(), "keiko-ac7-notification-"));
+    mkdirSync(join(directory, "secrets"));
+    writeFileSync(join(directory, "secrets/admin-password"), "synthetic-admin", { mode: 0o600 });
+    const native = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new globalThis.Response(JSON.stringify({ id: 61, name: "Synthetic notifications" }), {
+          status: 200,
+        }),
+    );
+    try {
+      const specification = API_QUALIFICATION_CONFIGURATION_CASES.find(
+        (entry) => entry.tool === tool,
+      );
+      await expect(
+        specification.readback(
+          { actor: "admin", session: { ...DEFAULT_LAB_CONNECTION, directory } },
+          { items: [{ id: "61", name: "Synthetic notifications" }] },
+          { notificationSchemeId: "61" },
+        ),
+      ).resolves.toMatchObject({ matched: true });
+    } finally {
+      native.mockRestore();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+);
+
 it("compares version-link values using the native JSON member order", async () => {
   const directory = mkdtempSync(join(tmpdir(), "keiko-ac7-version-link-"));
   mkdirSync(join(directory, "secrets"));
   writeFileSync(join(directory, "secrets/admin-password"), "synthetic-admin", { mode: 0o600 });
   const globalId = "keiko-ac7-synthetic-run-a";
-  const native = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-    new globalThis.Response(JSON.stringify({ link: JSON.stringify({ flag: true, globalId }) }), {
-      status: 200,
-    }),
-  );
+  const native = vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation(
+      async () =>
+        new globalThis.Response(
+          JSON.stringify({ link: JSON.stringify({ flag: true, globalId }) }),
+          { status: 200 },
+        ),
+    );
   const specification = API_QUALIFICATION_RELEASE_CASES.find(
     ({ tool }) => tool === "jira.version-remote-link",
   );
@@ -185,7 +247,15 @@ it("compares version-link values using the native JSON member order", async () =
   const context = { actor: "admin", session: { ...DEFAULT_LAB_CONNECTION, directory } };
   try {
     await expect(
-      specification.readback(context, { items: [{ globalId, valueNodes: nodes }] }, fixture),
+      specification.readback(
+        context,
+        {
+          items: [
+            { globalId, valueNodes: nodes.map((node) => Object.assign(Object.create(null), node)) },
+          ],
+        },
+        fixture,
+      ),
     ).resolves.toMatchObject({ matched: true });
     const altered = structuredClone(nodes);
     altered[1].booleanValue = false;

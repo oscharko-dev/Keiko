@@ -25,6 +25,8 @@ import { API_QUALIFICATION_OBSERVATION_CASES } from "./api-qualification-observa
 import { API_QUALIFICATION_PROPERTY_CASES } from "./api-qualification-property-cases.mjs";
 import { API_QUALIFICATION_CONFIGURATION_CASES } from "./api-qualification-configuration-cases.mjs";
 import { API_QUALIFICATION_RELEASE_CASES } from "./api-qualification-release-cases.mjs";
+import { API_QUALIFICATION_ADMIN_CASES } from "./api-qualification-admin-cases.mjs";
+import { API_QUALIFICATION_AGILE_CASES } from "./api-qualification-agile-cases.mjs";
 import { requireQualificationSnapshot } from "./api-qualification-snapshot.mjs";
 import {
   classifyQualification,
@@ -298,6 +300,8 @@ export async function qualifyApi(directory, only, snapshotId) {
     ...API_QUALIFICATION_ISSUE_CASES,
     ...API_QUALIFICATION_PROPERTY_CASES,
     ...API_QUALIFICATION_RELEASE_CASES,
+    ...API_QUALIFICATION_ADMIN_CASES,
+    ...API_QUALIFICATION_AGILE_CASES,
   ]).filter((entry) => only === undefined || only.includes(entry.tool));
   assert.ok(selected.length > 0);
   await observeRelease(session);

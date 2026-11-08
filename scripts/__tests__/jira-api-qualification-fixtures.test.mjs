@@ -231,6 +231,26 @@ it("requires independent identity equality even when collection counts match", a
       permissionDenied: true,
       status: 403,
     });
+    native.mockImplementation(
+      async () => new globalThis.Response(JSON.stringify({ issueType: "1" }), { status: 200 }),
+    );
+    const mapping = readCase(
+      "jira.workflow-scheme-issue-type",
+      "/rest/api/2/workflowscheme/37/issuetype/1",
+      ["issueTypeId"],
+      {
+        nativeRoot: "single",
+        productRoot: "single",
+        nativeNames: { issueTypeId: "issueType" },
+        optionalFields: ["workflow"],
+      },
+    );
+    await expect(mapping.readback(context, { issueTypeId: "1" }, {})).resolves.toMatchObject({
+      matched: true,
+    });
+    await expect(
+      mapping.readback(context, { issueTypeId: "1", workflow: "Invented default" }, {}),
+    ).rejects.toThrow();
   } finally {
     native.mockRestore();
     rmSync(directory, { recursive: true, force: true });
