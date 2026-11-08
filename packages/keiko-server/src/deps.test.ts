@@ -34,9 +34,7 @@ import type {
   MemoryUserId,
   WorkspaceManifest,
 } from "@oscharko-dev/keiko-contracts";
-import {
-  ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
-} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { ATLASSIAN_CONNECTOR_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { standardPodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import { composeCodingContextConnectors } from "./coding-context/codingContextRoutes.js";
@@ -91,7 +89,6 @@ import {
 } from "./diagnostics-log.js";
 import type { WorkspaceReconciliationService } from "./task-workspace/types.js";
 import { currentOpenSseStreamCount } from "./sse-write.js";
-import { KNOWLEDGE_CHAT_TOOLS } from "./requirementsToolName.js";
 import { createWorkspaceWatchService } from "./editor/watch/workspaceWatchService.js";
 import type {
   WorkspaceInstance,

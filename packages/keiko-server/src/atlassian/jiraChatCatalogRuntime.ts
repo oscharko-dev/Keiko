@@ -140,11 +140,8 @@ const withBatchTools = (tools: typeof JIRA_CHAT_TOOLS): typeof JIRA_CHAT_TOOLS =
   ...new Set([...tools, ...JIRA_BATCH_TOOLS]),
 ];
 /** The exact tool names the default (unselected) Jira chat catalog offers. */
-export const JIRA_DEFAULT_CATALOG_TOOLS: readonly string[] = [
-  ...withBatchTools(JIRA_BASE_TOOLS),
-  ...JIRA_CATALOG_DISCOVERY_TOOLS,
-  ...KNOWLEDGE_CHAT_TOOLS,
-];
+export const JIRA_DEFAULT_CATALOG_TOOLS: NonNullable<Parameters<typeof jiraChatCatalogRoutes>[0]> =
+  [...withBatchTools(JIRA_BASE_TOOLS), ...JIRA_CATALOG_DISCOVERY_TOOLS, ...KNOWLEDGE_CHAT_TOOLS];
 /** Without the batch, its companion goes too unless the turn selected the draft run itself. */
 const batchOnlyTools = (tools: typeof JIRA_CHAT_TOOLS): readonly string[] =>
   tools.includes(JIRA_DRAFT_TOOL) ? [JIRA_DRAFT_BATCH_TOOL] : JIRA_BATCH_TOOLS;
