@@ -114,6 +114,12 @@ describe("reviewed global role and project actor mutations", () => {
     expect(await execute(test.name, test.args, f.request)).toMatchObject({ ok: false, reason: "conflict" });
     expect(f.calls.every((call) => call.method === "GET")).toBe(true);
   });
+  it("binds groups only through supported exact-name picker observations", async () => {
+    const f = roleMutationFixture(); const test = ROLE_MUTATION_FIXTURE_CASES[7];
+    await execute(test.name, structuredClone(test.args), f.request);
+    expect(f.calls.some((call) => call.path === "groups/picker?query=next-group&maxResults=100")).toBe(true);
+    expect(f.calls.some((call) => call.method === "GET" && call.path.startsWith("group?"))).toBe(false);
+  });
   it("keeps identical user and group names in separate native namespaces", async () => {
     const f = roleMutationFixture(); f.groups.add("next-user");
     const test = ROLE_MUTATION_FIXTURE_CASES[4];

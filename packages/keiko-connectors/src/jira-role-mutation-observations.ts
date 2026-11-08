@@ -1,5 +1,6 @@
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { jiraDirectoryUser } from "./jira-directory-values.js";
+import { bindJiraGroupPrincipal } from "./jira-group-principal.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { readJiraBoundProject } from "./jira-managed-projects.js";
 import { jiraRoleSummary } from "./jira-managed-role-reads.js";
@@ -88,15 +89,9 @@ async function bindUser(request: JiraMutationRequest, expected: RoleUser): Promi
   return [named.value, keyed.value].every((user) => user.key === expected.key && user.name === expected.name)
     ? undefined : roleRefusal("The reviewed user key and native username no longer identify the same user. No key/name fallback is permitted.", "conflict");
 }
-async function bindGroup(request: JiraMutationRequest, name: string): Promise<RoleFailure | undefined> {
-  const response = await request(`group?${new URLSearchParams({ groupname: name }).toString()}`);
-  if (!response.ok) return dispatchFailure(response);
-  if (response.status !== 200 || !rolePrincipalText(response.body?.name)) return ROLE_MALFORMED;
-  return response.body.name === name ? undefined : roleRefusal("The native group name does not match the reviewed group principal.", "conflict");
-}
 export async function bindRolePrincipals(request: JiraMutationRequest, selected: RolePrincipals): Promise<RoleFailure | undefined> {
   for (const user of selected.users) { const failure = await bindUser(request, user); if (failure !== undefined) return failure; }
-  for (const name of selected.groups) { const failure = await bindGroup(request, name); if (failure !== undefined) return failure; }
+  for (const name of selected.groups) { const failure = await bindJiraGroupPrincipal(request, name); if (failure !== undefined) return failure; }
   return undefined;
 }
 export async function bindSwap(request: JiraMutationRequest, input: RoleSelection): Promise<RoleFailure | undefined> {

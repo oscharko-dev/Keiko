@@ -11,7 +11,7 @@ const ROLE_READS = new Set([
   "project/SYN", "project/10000", "project/10000/role/7",
   "user?username=next-user", "user?key=next-key",
   "user?username=current-user", "user?key=current-key",
-  "group?groupname=next-group", "group?groupname=current-group",
+  "groups/picker?query=next-group&maxResults=100", "groups/picker?query=current-group&maxResults=100",
 ]);
 const PERMISSION_READS = new Set([
   "myself", "permissionscheme", "permissionscheme/7", "permissionscheme/7/permission",

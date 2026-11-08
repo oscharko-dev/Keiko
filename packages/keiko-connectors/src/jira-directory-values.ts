@@ -5,6 +5,11 @@ import type {
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import { jiraNativeText } from "./jira-native-values.js";
 
+export function jiraDirectoryGroup(value: unknown): CatalogJsonObject | undefined {
+  const raw = asRecord(value);
+  return raw !== undefined && jiraNativeText(raw.name, 255) ? { name: raw.name } : undefined;
+}
+
 export function jiraDirectoryNumber(
   value: unknown,
   fallback: number,

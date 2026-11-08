@@ -10,6 +10,7 @@ import {
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import {
+  jiraDirectoryGroup,
   jiraDirectoryNumber,
   jiraDirectoryTotal,
   jiraDirectoryUsers,
@@ -81,10 +82,6 @@ function selection(name: DirectoryRead, args: CatalogJsonObject): Selection | un
     maxResults,
   };
 }
-function group(value: unknown): CatalogJsonObject | undefined {
-  const raw = asRecord(value);
-  return raw !== undefined && jiraNativeText(raw.name, 255) ? { name: raw.name } : undefined;
-}
 function role(value: unknown): CatalogJsonObject | undefined {
   const raw = asRecord(value);
   if (raw === undefined || !isSafeAtlassianIdentifier(raw.key)) return undefined;
@@ -141,7 +138,7 @@ function groups(body: Record<string, unknown>, selected: Selection): ManagedMcpT
   const items =
     values === undefined
       ? undefined
-      : projectJiraCollection(values, selected.maxResults, group, "name");
+      : projectJiraCollection(values, selected.maxResults, jiraDirectoryGroup, "name");
   if (items === undefined || !jiraDirectoryTotal(body.total, items.length))
     return jiraReadFailure("malformed-payload");
   // The native picker has no offset. Do not emit a locally invented continuation.

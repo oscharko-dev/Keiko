@@ -58,7 +58,7 @@ export function roleMutationFixture() {
       const user = users.find((item) => item.name === url.searchParams.get("username") || item.key === url.searchParams.get("key"));
       return user === undefined ? missing() : ok({ ...user, ...(controls.wrongUserKey ? { key: "other-key" } : {}) });
     }
-    if (url.pathname === "/group") { const name = url.searchParams.get("groupname"); return name !== null && groups.has(name) ? ok({ name }) : missing(); }
+    if (url.pathname === "/groups/picker") { const query = url.searchParams.get("query") ?? ""; const found = [...groups].filter((name) => name.includes(query)); return ok({ groups: found.map((name) => ({ name })), total: found.length }); }
     return undefined;
   }
   function read(url: URL): AtlassianWriteHttpOutcome {
