@@ -128,9 +128,17 @@ async function renameWorkflowChat(page, chatId, title) {
 // Chat History's New button creates through the desktop canvas route (`createDesktopChat`).
 const UI_CHAT_CREATION_PATH = "/api/desktop/chats";
 
+// Chat creation joins the startup model readiness check, which a large local model can hold for
+// longer than the composer helper's wait. Settle it first through the UI's own bounded model read.
+async function settleModelStartup(page) {
+  const settled = await page.request.get("/api/models?settleStartup=1");
+  assert.equal(settled.status(), 200, "The startup model readiness must settle before a Chat");
+}
+
 /** The existing ordinary UI creator owns the POST; this owner only observes its identity. */
 export async function openWorkflowChat(page, context, options = {}) {
   if (options.chatId !== undefined) return focusWorkflowChat(page, context, options.chatId);
+  await settleModelStartup(page);
   await options.onPhase?.({ phase: "chat-creation-may-have-started" });
   const [response] = await Promise.all([
     page.waitForResponse(

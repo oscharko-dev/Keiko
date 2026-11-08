@@ -487,6 +487,7 @@ describe("one ordinary browser owner for the three limit-run Chats", () => {
     expect(creation).toBeDefined();
     expect(creation(response("POST", "/api/chats", {}, 201))).toBe(false);
     expect(creation(response("GET", "/api/desktop/chats", {}))).toBe(false);
+    expect(page.request.get).toHaveBeenCalledWith("/api/models?settleStartup=1");
   });
 
   it("selects the requested model through its visible UI rather than an API write", async () => {
