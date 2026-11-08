@@ -102,7 +102,30 @@ function context() {
     getByRole: vi.fn(() => region),
     url: () => "http://127.0.0.1:32209/",
     context: () => ({
-      cookies: async () => [{ name: "fixture-session", value: "synthetic-cookie" }],
+      // The product scopes its session cookie to each consuming API path, never to the origin.
+      cookies: async (urls) =>
+        urls === undefined
+          ? [
+              {
+                name: "fixture-session",
+                value: "synthetic-cookie",
+                domain: "127.0.0.1",
+                path: "/api/chats",
+              },
+              {
+                name: "fixture-session",
+                value: "synthetic-cookie",
+                domain: "127.0.0.1",
+                path: "/api/skills",
+              },
+              {
+                name: "foreign-session",
+                value: "foreign-cookie",
+                domain: "foreign.invalid",
+                path: "/",
+              },
+            ]
+          : [],
     }),
     evaluate: vi.fn(async (_read, key) =>
       key === "fixture-workspace"
@@ -309,29 +332,40 @@ describe("W12 existing browser Chat binding", () => {
     expect(chatRead.searchParams.get("projectPath")).toBe("/synthetic/workspace");
   });
 
-  it.each(["wrong-model", "wrong-id", "duplicate-chat", "missing-window", "no-session"])(
-    "refuses an ambiguous or unpaired browser identity: %s",
-    async (fault) => {
-      const ctx = context();
-      if (fault === "missing-window") ctx.page.evaluate.mockResolvedValue([]);
-      else if (fault === "no-session") ctx.page.context = () => ({ cookies: async () => [] });
-      else
-        ctx.page.request.get.mockImplementation(async (path) => {
-          const chat = {
-            id: fault === "wrong-id" ? "22222222-2222-4222-8222-222222222222" : CHAT_ID,
-            projectPath: "/synthetic/workspace",
-            selectedModel: fault === "wrong-model" ? "other-model" : ctx.modelId,
-          };
-          const value =
-            path === "/api/projects"
-              ? { projects: [{ path: "/synthetic/workspace" }] }
-              : {
-                  chats: fault === "duplicate-chat" ? [chat, chat] : [chat],
-                };
-          return { status: () => 200, json: async () => value };
-        });
-      await expect(resolveLimitBrowser(ctx)).rejects.toThrow();
-      expect(ports.turn).not.toHaveBeenCalled();
-    },
-  );
+  it.each([
+    "wrong-model",
+    "wrong-id",
+    "duplicate-chat",
+    "missing-window",
+    "no-session",
+    "split-session",
+  ])("refuses an ambiguous or unpaired browser identity: %s", async (fault) => {
+    const ctx = context();
+    if (fault === "missing-window") ctx.page.evaluate.mockResolvedValue([]);
+    else if (fault === "no-session") ctx.page.context = () => ({ cookies: async () => [] });
+    else if (fault === "split-session")
+      ctx.page.context = () => ({
+        cookies: async () => [
+          { name: "fixture-session", value: "first", domain: "127.0.0.1", path: "/api/chats" },
+          { name: "fixture-session", value: "second", domain: "127.0.0.1", path: "/api/skills" },
+        ],
+      });
+    else
+      ctx.page.request.get.mockImplementation(async (path) => {
+        const chat = {
+          id: fault === "wrong-id" ? "22222222-2222-4222-8222-222222222222" : CHAT_ID,
+          projectPath: "/synthetic/workspace",
+          selectedModel: fault === "wrong-model" ? "other-model" : ctx.modelId,
+        };
+        const value =
+          path === "/api/projects"
+            ? { projects: [{ path: "/synthetic/workspace" }] }
+            : {
+                chats: fault === "duplicate-chat" ? [chat, chat] : [chat],
+              };
+        return { status: () => 200, json: async () => value };
+      });
+    await expect(resolveLimitBrowser(ctx)).rejects.toThrow();
+    expect(ports.turn).not.toHaveBeenCalled();
+  });
 });

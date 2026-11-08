@@ -58,6 +58,26 @@ async function observedChat(page, chatId, modelId) {
   return matches[0];
 }
 
+/**
+ * The paired session's cookie header for direct API requests. The product scopes its session
+ * cookie to each consuming API path, so none of them applies to the bare origin; every
+ * projection carries the same bearer, and conflicting values for one name fail closed.
+ */
+async function pairedSessionCookie(page, hostname) {
+  const host = hostname.replace(/^\[|\]$/gu, "");
+  const values = new Map();
+  for (const entry of await page.context().cookies()) {
+    if (entry.domain !== host) continue;
+    assert.ok(
+      !values.has(entry.name) || values.get(entry.name) === entry.value,
+      "One paired browser session must carry one value per cookie name",
+    );
+    values.set(entry.name, entry.value);
+  }
+  assert.ok(values.size > 0, "The existing browser session must already be paired");
+  return [...values].map(([name, value]) => `${name}=${value}`).join("; ");
+}
+
 /** No Chat creation, pairing, storage rewrite or credential persistence; cookies stay in memory. */
 export async function resolveLimitBrowser(ctx, expectedChat) {
   const page = ctx.page;
@@ -73,9 +93,7 @@ export async function resolveLimitBrowser(ctx, expectedChat) {
     supplied.some((value) => value?.id === chat.id && value.projectPath === chat.projectPath),
     "The visible Chat must be supplied by the orchestrator",
   );
-  const cookies = await page.context().cookies(origin);
-  assert.ok(cookies.length > 0, "The existing browser session must already be paired");
-  const cookie = cookies.map((entry) => `${entry.name}=${entry.value}`).join("; ");
+  const cookie = await pairedSessionCookie(page, hostname);
   return {
     page,
     region,
