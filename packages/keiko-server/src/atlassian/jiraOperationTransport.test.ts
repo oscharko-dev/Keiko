@@ -1,3 +1,7 @@
+import { FINAL_NATIVE_SCENARIOS } from "../../../../tests/support/jira-final-native-scenarios.js";
+import { projectIssueTransportController } from "../../../../tests/support/jira-project-issue-transport-fixture.js";
+import { privateNativeTransportController } from "../../../../tests/support/jira-private-native-transport-fixture.js";
+import { privateNativeComposition } from "../../../../tests/support/jira-private-native-composition.js";
 import { systemAdministrationTransportController } from "../../../../tests/support/jira-system-administration-transport-fixture.js";
 import { DIRECTORY_ACCESS_FIXTURE_CASES as DIRECTORY_CASES } from "../../../../tests/support/jira-directory-access-fixture.js";
 import { MAINTENANCE_MUTATION_FIXTURE_CASES as MAINTENANCE_CASES } from "../../../../tests/support/jira-maintenance-mutation-fixture.js";
@@ -62,6 +66,7 @@ const CREATE = {
 };
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
+  ...FINAL_NATIVE_SCENARIOS,
   { tool: "jira.set-application-role", args: DIRECTORY_CASES[0].args, parameters: { key: "jira-software" }, expectedReceipt: DIRECTORY_CASES[0].receipt, expectedOutcome: "succeeded-unconfirmed" },
   { tool: "jira.set-application-roles", args: DIRECTORY_CASES[1].args, expectedReceipt: DIRECTORY_CASES[1].receipt, expectedOutcome: "succeeded-unconfirmed" },
   { tool: "jira.add-user-application", args: DIRECTORY_CASES[2].args, query: { username: "Target User", applicationKey: "jira-software" }, expectedReceipt: DIRECTORY_CASES[2].receipt, expectedOutcome: "succeeded-unconfirmed" },
@@ -1568,6 +1573,12 @@ function reviewedPlatformFixture(tool: string | undefined) {
   return selectedCategory === undefined ? undefined : projectCategoryTransportFixture("/context/rest/api/2", selectedCategory);
 }
 function lifecycleRemote(tool: string | undefined): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> | undefined {
+  const projectIssue = projectIssueTransportController(tool, "synthetic-key", "https://jira.example.invalid/context");
+  if (projectIssue !== undefined) return vi.fn(async (request) => {
+    const result = await (request.method === "GET" ? projectIssue.read(request) : projectIssue.write(request));
+    if (result === undefined) throw new TypeError("Unexpected independent project/issue native route");
+    return result;
+  });
   const selectedScreen = SCREEN_CONFIGURATION_CASES.find((item) => item.tool === tool);
   const selectedLink = LINK_MUTATION_FIXTURE_CASES.find((item) => item.tool === tool);
   const release = RELEASE_LIFECYCLE_FIXTURE_CASES.some((item) => item.tool === tool);
@@ -1632,7 +1643,23 @@ function connection(http: AtlassianHttpBodyPort): JiraManagedConnection {
       }),
   };
 }
-function observe(scenario: Scenario): Promise<Observation> {
+async function observe(scenario: Scenario): Promise<Observation> {
+  const native = privateNativeTransportController(scenario.tool);
+  if (native !== undefined) {
+    const composition = privateNativeComposition(scenario.tool, "https://jira.example.invalid/context",
+      async (input, init) => native.handle(new Request(input, init)));
+    if (composition === undefined) throw new TypeError("Missing real private corpus composition");
+    const privateRequests: AtlassianHttpBodyRequest[] = [];
+    try {
+      const context = { invocationId: "transport-contract", correlationId: "transport-contract",
+        signal: new AbortController().signal, beforeEffect: () => true };
+      const privatePorts = await composition.ports(context, scenario.args, { beforeDispatch: (request) => {
+        if ("maxBodyBytes" in request) privateRequests.push(request); return true;
+      } });
+      return await observeNativeJiraOperation(scenario,
+        { ...connection(composition.http()), ...privatePorts }, privateRequests);
+    } finally { composition.close(); }
+  }
   return observeNativeJiraOperation(scenario, connection(remote(scenario.tool)));
 }
 
@@ -1642,7 +1669,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(348);
+    expect(native).toHaveLength(393);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),

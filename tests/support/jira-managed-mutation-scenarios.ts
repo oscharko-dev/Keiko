@@ -1,3 +1,5 @@
+import { PRIVATE_ARGUMENTS, PRIVATE_RECEIPTS, PRIVATE_REMOTE_STATE } from "./jira-managed-final-scenarios.js";
+import { PROJECT_ISSUE_ARGUMENTS, PROJECT_ISSUE_RECEIPTS, PROJECT_ISSUE_EXPECTED_REMOTE_STATE } from "./jira-project-issue-transport-fixture.js";
 import { SYSTEM_ADMINISTRATION_ARGUMENTS, SYSTEM_ADMINISTRATION_RECEIPTS, SYSTEM_ADMINISTRATION_REMOTE_STATE } from "./jira-managed-system-administration-scenarios.js";
 import { SCHEME_SETTING_ARGUMENTS, SCHEME_SETTING_RECEIPTS, SCHEME_SETTING_REMOTE_STATE } from "./jira-managed-scheme-setting-scenarios.js";
 import { PERMISSION_ROLE_ARGUMENTS, PERMISSION_ROLE_RECEIPTS, PERMISSION_ROLE_REMOTE_STATE } from "./jira-managed-permission-role-scenarios.js";
@@ -22,6 +24,7 @@ import {
 export type SingleMutation = Exclude<JiraMutationOperation, "jira.draft">;
 export const ATTACHED = new TextEncoder().encode("synthetic attachment body");
 export const ARGUMENTS: Readonly<Record<JiraMutationOperation, CatalogJsonObject>> = {
+  ...PRIVATE_ARGUMENTS, ...PROJECT_ISSUE_ARGUMENTS,
   ...CONFIGURATION_ARGUMENTS,
   ...PERMISSION_ROLE_ARGUMENTS,
   ...SYSTEM_ADMINISTRATION_ARGUMENTS,
@@ -92,6 +95,7 @@ export const ARGUMENTS: Readonly<Record<JiraMutationOperation, CatalogJsonObject
 
 /** Observed remote state after the request, independent of returned receipts and registry metadata. */
 export const REMOTE_STATE: Readonly<Record<SingleMutation, object>> = {
+  ...PRIVATE_REMOTE_STATE, ...PROJECT_ISSUE_EXPECTED_REMOTE_STATE,
   ...CONFIGURATION_REMOTE_STATE,
   ...PERMISSION_ROLE_REMOTE_STATE,
   ...SYSTEM_ADMINISTRATION_REMOTE_STATE,
@@ -159,6 +163,7 @@ const PROJECT_RECEIPT = {
 };
 const COMPONENT_RECEIPT = { componentId: "71", projectId: "10000", projectKey: "SYN" };
 export const SUCCESS_RECEIPTS: Readonly<Record<SingleMutation, CatalogJsonObject>> = {
+  ...PRIVATE_RECEIPTS, ...PROJECT_ISSUE_RECEIPTS,
   ...CONFIGURATION_RECEIPTS,
   ...PERMISSION_ROLE_RECEIPTS,
   ...SYSTEM_ADMINISTRATION_RECEIPTS,

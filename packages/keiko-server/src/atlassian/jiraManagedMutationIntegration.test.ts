@@ -1,3 +1,9 @@
+import { expectedFinalOutcome, FINAL_EXPECTED_OUTCOMES } from "../../../../tests/support/jira-managed-final-scenarios.js";
+import { privateNativeTransportController } from "../../../../tests/support/jira-private-native-transport-fixture.js";
+import { privateNativeComposition } from "../../../../tests/support/jira-private-native-composition.js";
+import { PRIVATE_NATIVE_COOKIE, PRIVATE_NATIVE_PASSWORD, PRIVATE_NATIVE_LICENSE } from "../../../../tests/support/jira-private-native-cases.js";
+import { PRIVATE_ACCOUNT_READ_CASES } from "../../../../tests/support/jira-private-account-fixture.js";
+import { privateNativeCase } from "../../../../tests/support/jira-private-native-cases.js";
 import { expectedSystemAdministrationOutcome, SYSTEM_ADMINISTRATION_EXPECTED_OUTCOMES } from "../../../../tests/support/jira-managed-system-administration-scenarios.js";
 import { expectedSchemeSettingOutcome, SCHEME_SETTING_EXPECTED_OUTCOMES } from "../../../../tests/support/jira-managed-scheme-setting-scenarios.js";
 import { emailTemplateFixtureAdmission } from "../../../../tests/support/jira-email-template-transport-fixture.js";
@@ -93,6 +99,7 @@ function reviewedAuthority(operation: JiraMutationOperation): FixtureAuthoritySe
   return jiraRequiredConnectorScope(operation) === "issue-tracker.admin" ? { adminScope: true } : {};
 }
 function database(): {
+  store: ReturnType<typeof buildUiStoreOverDatabase>;
   journal: ReturnType<typeof createChatToolMutationStore>;
   chatId: string;
   userMessageId: string;
@@ -122,6 +129,7 @@ function database(): {
     throw new Error("Expected admitted synthetic turn");
   const logs = createBufferedServerLogSink();
   return {
+    store,
     journal: createChatToolMutationStore(db, () => 1000, logs),
     chatId: chat.id,
     userMessageId: turn.userMessage.id,
@@ -214,13 +222,14 @@ async function fixtureReadResult(
     if (observed === undefined) throw new TypeError("Missing independent configured URL observation");
     return observed;
   }
-  return verificationProbe(path) ?? await lifecycle.read(url) ?? nativeRead(path, state) ?? fixtureRead(path, state);
+  return await lifecycle.read(url) ?? verificationProbe(path) ?? nativeRead(path, state) ?? fixtureRead(path, state);
 }
 async function assertNativeRequestHeaders(request: Request, path: string): Promise<void> {
   expect(request.headers.get("authorization")).toBe(["Bearer", "synthetic-test-pat"].join(" "));
   const experimental = (request.method === "PUT" &&
     (path === "/context/rest/agile/1.0/sprint/unmap" || path === "/context/rest/agile/1.0/sprint/unmap-all")) ||
-    ((request.method === "POST" || request.method === "DELETE") && path === "/context/rest/api/2/user/application");
+    ((request.method === "POST" || request.method === "DELETE") && path === "/context/rest/api/2/user/application") ||
+    /^\/context\/rest\/api\/2\/project\/[1-9][0-9]*\/priorityscheme(?:\/[1-9][0-9]*)?$/u.test(path);
   expect(request.headers.get("x-experimentalapi")).toBe(experimental ? "true" : null);
   if (path === "/context/rest/api/2/email-templates") {
     expect(request.headers.get("x-atlassian-token")).toBeNull();
@@ -261,6 +270,7 @@ function remote(
 } {
   const state = mutationRemoteState();
   const lifecycle = lifecycleRemoteFixture(initialOperation);
+  const privateNative = privateNativeTransportController(initialOperation);
   state.lifecycle = lifecycle.snapshot();
   let writes = 0;
   return {
@@ -269,13 +279,20 @@ function remote(
     fetch: async (input, init): Promise<Response> => {
       const request = new Request(input, init);
       const path = new URL(request.url).pathname;
-      await assertNativeRequestHeaders(request, path);
+      if (privateNative === undefined) await assertNativeRequestHeaders(request, path);
       if (request.method !== "GET") {
         beforeWrite();
         writes += 1;
       }
       const refusal = await scriptedRefusal(mode, request);
       if (refusal !== undefined) return refusal;
+      if (privateNative !== undefined) {
+        if (request.method === "GET" && mode === "readback-denied" && writes > 0) return Response.json({}, { status: 403 });
+        const result = await privateNative.handle(request);
+        state.lifecycle = privateNative.snapshot();
+        if (request.method !== "GET" && mode === "lost-response") throw new TypeError("Synthetic connection loss after commit");
+        return result;
+      }
       const result =
         request.method === "GET"
           ? await fixtureReadResult(mode, request.url, state, writes, lifecycle, initialOperation)
@@ -383,6 +400,7 @@ async function fixture(
   state: MutationRemoteState;
   logs: ReturnType<typeof createBufferedServerLogSink>;
   offered: unknown;
+  privatePrerequisites: { sessionAvailable: boolean; sourceAvailable: boolean; inputAvailable: boolean } | undefined;
 }> {
   const db = database();
   // Explicit fixture authority mirrors the independent human opt-in; mode and custody add no admin.
@@ -409,7 +427,23 @@ async function fixture(
     jira.state.fields.timespent = 3600;
     jira.state.fields.timetracking = { originalEstimateSeconds: 7200, remainingEstimateSeconds: 3600, timeSpentSeconds: 3600 };
   }
-  const { credentials, metadata } = await mutationCredentials(jira.fetch, db.logs);
+  const privateComposition = privateNativeComposition(initialOperation, BASE_URL, jira.fetch, db.logs, { store: db.store, chatId: db.chatId });
+  if (privateComposition !== undefined) cleanup.push(privateComposition.close);
+  const ordinaryCredentials = privateComposition === undefined ? await mutationCredentials(jira.fetch, db.logs) : undefined;
+  const metadata = privateComposition?.metadata ?? ordinaryCredentials?.metadata;
+  if (metadata === undefined) throw new TypeError("Missing native fixture credentials");
+  function httpPort(lifecycle: AtlassianHttpLifecycleOptions, correlationId: string): AtlassianHttpBodyPort {
+    if (privateComposition !== undefined) return privateComposition.http(lifecycle);
+    if (ordinaryCredentials === undefined) throw new TypeError("Missing ordinary native fixture credentials");
+    return ordinaryCredentials.credentials.httpBodyPortFactory(metadata, correlationId, lifecycle);
+  }
+  function observedLifecycle(lifecycle: AtlassianHttpLifecycleOptions): AtlassianHttpLifecycleOptions {
+    return { ...lifecycle, onResponse: (request, status) => {
+      const observed = lifecycle.onResponse?.(request, status) === true;
+      if (request.method !== "GET" && observed) invalidate();
+      return observed;
+    } };
+  }
   const executeMutation: JiraManagedMutationExecutor<
     CatalogHandlerContext<ConversationConsumer>
   > = (operation, args, context, execute) => {
@@ -420,7 +454,7 @@ async function fixture(
       userMessageId: db.userMessageId,
       turnRef: db.turnRef,
       actorId: context.actorId,
-      podId: "synthetic-pod",
+      podId: privateComposition?.metadata.livePod?.podId ?? "synthetic-pod",
       bindingGeneration: context.binding.generation,
       credentialGeneration: 1,
       authorityDigest: sha256Hex(canonicalise({ authority: context.authority, connectorScopes: [...connectorScopes] })),
@@ -432,18 +466,21 @@ async function fixture(
       journal: db.journal,
       intent: activeIntent,
       httpPortFactory: (lifecycle: AtlassianHttpLifecycleOptions): AtlassianHttpBodyPort =>
-        credentials.httpBodyPortFactory(metadata, context.correlationId, {
-          ...lifecycle,
-          onResponse: (request, status): boolean => {
-            const observed = lifecycle.onResponse?.(request, status) === true;
-            if (request.method !== "GET" && observed) invalidate();
-            return observed;
-          },
-        }),
+        httpPort(observedLifecycle(lifecycle), context.correlationId),
       beforeEffect: () => context.beforeEffect() && connectorScopes.has(jiraRequiredConnectorScope(operation)),
       beforeMutation: () => context.beforeEffect() && connectorScopes.has(jiraRequiredConnectorScope(operation)),
     };
-    if (operation !== "jira.draft") return executeJiraChatMutation({ ...shared, execute });
+    if (operation !== "jira.draft") return executeJiraChatMutation({ ...shared, execute: async (http, lifecycle) => {
+      if (privateComposition === undefined) return execute(http);
+      const livePod = privateComposition.metadata.livePod;
+      if (livePod === undefined) throw new TypeError("Missing real private Pod binding");
+      const ports = await privateComposition.ports(context, args, observedLifecycle(lifecycle), {
+        context: { kind: "chat", chatId: context.chatId, messageId: db.userMessageId, callId: context.invocationId,
+          podId: livePod.podId, bindingGeneration: context.binding.generation },
+        authority: { runId: db.turnRef, envelopeDigest: shared.intent.authorityDigest },
+      });
+      return execute(http, undefined, ports);
+    } });
     // The draft itself is never journaled; its one synthetic item is what reaches Jira.
     activeInvocation = jiraDraftChildIntent(activeIntent, "one").invocationId;
     return executeJiraChatDraft({
@@ -533,6 +570,7 @@ async function fixture(
     state: jira.state,
     logs: db.logs,
     offered: gateway.tools,
+    privatePrerequisites: privateComposition?.controls,
     invoke: async (operation, args = ARGUMENTS[operation]): Promise<CatalogToolDispatchOutcome> => {
       const id = `model-call-${String(++serial)}`;
       const projected = managed.projection.tools.find(
@@ -569,11 +607,84 @@ it.each(["binding-revoked", "cancelled"] as const)(
   },
 );
 
+it.each(["jira.login", "jira.upload-project-avatar"] as const)("retains %s native acknowledgement before cancelled private proof/cleanup", async (operation) => {
+  const f = await fixture("confirmed", "cancelled", operation, reviewedAuthority(operation));
+  const outcome = await f.invoke(operation);
+  expect(outcome).toMatchObject({ kind: "settled", result: { status: "cancelled", data: null } });
+  expect(f.journal.find(f.intent().invocationId)).toMatchObject({ phase: "settled", outcome: "succeeded-unconfirmed" });
+  expect(f.writes()).toBe(1);
+  await f.invoke(operation);
+  expect(f.writes()).toBe(1);
+});
+
+it.each([
+  { operation: "jira.upload-project-avatar", missing: "sessionAvailable" },
+  { operation: "jira.upload-project-avatar", missing: "sourceAvailable" },
+  { operation: "jira.login", missing: "inputAvailable" },
+  { operation: "jira.unlock-user-anonymization", missing: "inputAvailable" },
+] as const)("refuses $operation before native effects when real $missing is unavailable", async ({ operation, missing }) => {
+  const f = await fixture("confirmed", undefined, operation, reviewedAuthority(operation));
+  if (f.privatePrerequisites === undefined) throw new TypeError("Missing actual private corpus composition");
+  f.privatePrerequisites[missing] = false;
+  const outcome = await f.invoke(operation);
+  expect(outcome).toMatchObject({ kind: "settled", result: { status: "failed", data: { outcome: "not-dispatched" } } });
+  expect(f.writes()).toBe(0);
+  expect(f.journal.find(f.intent().invocationId)?.phase).not.toBe("acknowledged");
+});
+
+it.each(PRIVATE_ACCOUNT_READ_CASES)("keeps $name a native POST read through the actual catalog and private custody", async (item) => {
+  const selected = privateNativeCase(item.name); const native = privateNativeTransportController(item.name);
+  if (selected === undefined || native === undefined) throw new TypeError("Missing independent validator fixture");
+  const db = database(); let invocation = "";
+  const composition = privateNativeComposition(item.name, BASE_URL, async (input, init) => native.handle(new Request(input, init)),
+    db.logs, { store: db.store, chatId: db.chatId });
+  if (composition === undefined) throw new TypeError("Missing actual private validator composition");
+  cleanup.push(composition.close);
+  const mutation = vi.fn<JiraManagedMutationExecutor<CatalogHandlerContext<ConversationConsumer>>>(async () => {
+    throw new TypeError("Read validation must never enter the mutation executor");
+  });
+  const provider = createJiraProviderForCatalog<CatalogHandlerContext<ConversationConsumer>>(async (context) => {
+    invocation = context.invocationId;
+    const pod = composition.metadata.livePod; if (pod === undefined) throw new TypeError("Missing validator Pod");
+    const ports = await composition.ports(context, selected.args, {}, {
+      context: { kind: "chat", chatId: context.chatId, messageId: db.userMessageId, callId: context.invocationId,
+        podId: pod.podId, bindingGeneration: context.binding.generation },
+      authority: { runId: context.runId, envelopeDigest: sha256Hex(context.authority) },
+    });
+    return { deployment: "data-center", baseUrl: BASE_URL, http: composition.http(), ...ports };
+  }, [item.name], mutation);
+  const managed = await createManagedProviderCatalog<ConversationConsumer>({ providers: [provider],
+    profile: { id: "jira-private-validator-fixture", version: 1 },
+    log: { primary: db.logs, diagnostics: { record: () => undefined } }, correlationId: "private-validator", now: () => 1000,
+    routes: jiraChatCatalogRoutes([item.name]).map(({ name, alias }) => ({ name, alias, catalogAction: name,
+      previewAction: (identity): ConversationAction => ({ ...identity, action: "lookup", query: name }),
+      actionFor: (args, identity): ConversationAction => ({ ...identity, action: "lookup", query: canonicalise({ name, args }) }),
+      resultFor: (data): CatalogHandlerResult => ({ data, page: { truncated: false, reason: "none", cursor: null }, resultCount: 1 }),
+    })),
+  });
+  cleanup.push(() => managed.close());
+  const consumer = createConversationConsumerFixture(undefined, managed); consumer.context.chatId = db.chatId; cleanup.push(consumer.dispose);
+  const gateway = createGatewayToolCatalogBridge({ modelId: "synthetic-model", messages: [], toolCatalog: {
+    kind: "bound", catalog: managed.catalog, projection: managed.projection, offered: consumer.binder.offer(),
+  } }, () => 1000, db.logs);
+  const projected = managed.projection.tools[0]; if (projected === undefined) throw new TypeError("Missing actual validator descriptor");
+  const call = gateway.bind({ id: "private-validation-call", name: projected.alias, arguments: selected.args });
+  const result = await consumer.binder.dispatch(call.invocation, { actionId: "private-validation-call", idempotencyKey: "private-validation-call" });
+  expect(result).toMatchObject({ kind: "settled", result: { status: "completed", data: {
+    outcome: "succeeded", accepted: true, violationCount: 0, validationScope: item.scope,
+  } } });
+  expect(native.snapshot()).toEqual({ validations: 1 }); expect(mutation).not.toHaveBeenCalled();
+  expect(db.journal.find(invocation)).toBeUndefined();
+  for (const secret of [PRIVATE_NATIVE_PASSWORD, PRIVATE_NATIVE_LICENSE, PRIVATE_NATIVE_COOKIE.value]) {
+    expect(JSON.stringify(result)).not.toContain(secret); expect(db.logs.lines().join()).not.toContain(secret);
+  }
+});
+
 it.each(SINGLE_MUTATIONS)(
   "executes %s through the real gateway/binder/SDK and durable journal",
   async (operation) => {
     const f = await fixture("confirmed", undefined, operation, reviewedAuthority(operation));
-    const expectedOutcome = expectedSystemAdministrationOutcome(operation) ?? expectedSchemeSettingOutcome(operation) ?? expectedPermissionRoleOutcome(operation) ?? expectedPlanningOutcome(operation) ?? expectedConfigurationOutcome(operation) ?? expectedLifecycleOutcome(operation) ?? expectedSavedConfigurationOutcome(operation) ?? "succeeded";
+    const expectedOutcome = expectedFinalOutcome(operation) ?? expectedSystemAdministrationOutcome(operation) ?? expectedSchemeSettingOutcome(operation) ?? expectedPermissionRoleOutcome(operation) ?? expectedPlanningOutcome(operation) ?? expectedConfigurationOutcome(operation) ?? expectedLifecycleOutcome(operation) ?? expectedSavedConfigurationOutcome(operation) ?? "succeeded";
     expect(await f.invoke(operation)).toMatchObject({
       kind: "settled",
       result: {
@@ -597,6 +708,10 @@ it.each(SINGLE_MUTATIONS)(
     expect(f.logs.lines().join()).not.toMatch(
       /synthetic-test-pat|203\.0\.113\.10|Synthetic comment|SYN-1/u,
     );
+    for (const secret of [PRIVATE_NATIVE_PASSWORD, PRIVATE_NATIVE_LICENSE, PRIVATE_NATIVE_COOKIE.value]) {
+      expect(JSON.stringify(f.offered)).not.toContain(secret);
+      expect(f.logs.lines().join()).not.toContain(secret);
+    }
   },
 );
 it.each(SINGLE_MUTATIONS)(
@@ -937,7 +1052,11 @@ it("keeps an independent complete argument/state/receipt case for every register
   expect(Object.keys(ARGUMENTS).sort()).toEqual([...JIRA_MUTATION_OPERATIONS].sort());
   expect(Object.keys(REMOTE_STATE).sort()).toEqual([...SINGLE_MUTATIONS].sort());
   expect(Object.keys(SUCCESS_RECEIPTS).sort()).toEqual([...SINGLE_MUTATIONS].sort());
-  expect(ADMIN_MUTATIONS).toHaveLength(73);
+  expect(ADMIN_MUTATIONS).toHaveLength(137);
+  expect(Object.keys(FINAL_EXPECTED_OUTCOMES)).toHaveLength(42);
+  expect(Object.entries(FINAL_EXPECTED_OUTCOMES).filter(([, outcome]) => outcome === "succeeded").map(([name]) => name).sort()).toEqual([
+    "jira.login", "jira.set-project-avatar", "jira.set-user-avatar", "jira.update-myself", "jira.update-user",
+  ]);
   expect(Object.keys(SCHEME_SETTING_EXPECTED_OUTCOMES)).toHaveLength(35);
   expect(Object.entries(SCHEME_SETTING_EXPECTED_OUTCOMES).filter(([, outcome]) => outcome === "succeeded-unconfirmed").map(([name]) => name).sort()).toEqual([
     "jira.add-issue-type-scheme-projects", "jira.apply-email-template-pack", "jira.clear-issue-type-scheme-projects",

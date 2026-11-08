@@ -19,6 +19,7 @@ import type {
   JiraOperationDefinition,
   JiraOperationTool,
 } from "../../packages/keiko-server/src/atlassian/jiraOperationRegistry.js";
+import { FINAL_EXPECTED_OUTCOMES } from "./jira-managed-final-scenarios.js";
 
 export interface Scenario {
   readonly tool: JiraOperationTool;
@@ -29,6 +30,8 @@ export interface Scenario {
   /** Only explicitly documented native absence or aggregate-reference proof limits opt in. */
   readonly expectedOutcome?: "succeeded-unconfirmed";
   readonly expectedReceipt?: CatalogJsonObject;
+  /** Independent literal native fixture route, never constructed from the production registry. */
+  readonly expectedPrimary?: { readonly method: "POST" | "PUT" | "DELETE"; readonly apiRoot: "/rest/api/2" | "/rest/auth/1"; readonly path: string };
 }
 export interface Observation {
   readonly requests: readonly AtlassianHttpBodyRequest[];
@@ -36,6 +39,7 @@ export interface Observation {
   readonly definition: Extract<JiraOperationDefinition, { readonly kind: "native" }>;
 }
 const UNCONFIRMED_NATIVE_OPERATIONS: ReadonlySet<string> = new Set([
+  ...Object.entries(FINAL_EXPECTED_OUTCOMES).filter(([, outcome]) => outcome === "succeeded-unconfirmed").map(([name]) => name),
   "jira.add-group-user",
   "jira.add-user-application",
   "jira.approve-cluster-upgrade",
@@ -83,6 +87,7 @@ const UNCONFIRMED_NATIVE_OPERATIONS: ReadonlySet<string> = new Set([
 export async function observeNativeJiraOperation(
   scenario: Scenario,
   supplied: JiraManagedConnection,
+  privateRequests: readonly AtlassianHttpBodyRequest[] = [],
 ): Promise<Observation> {
   const requests: AtlassianHttpBodyRequest[] = [];
   const http: AtlassianHttpBodyPort = (request) => {
@@ -146,7 +151,7 @@ export async function observeNativeJiraOperation(
     });
   } else expect(result.isError).toBeUndefined();
   return {
-    requests,
+    requests: [...requests, ...privateRequests],
     result,
     definition: contract.definition,
   };
@@ -157,6 +162,13 @@ export function assertNativeJiraPrimary(observation: Observation, scenario: Scen
     .filter((request) => request.method === definition.method)
     .at(scenario.primaryMethodIndex ?? 0);
   if (primary === undefined) throw new TypeError("No native operation was dispatched");
+  if (scenario.expectedPrimary !== undefined) {
+    const expected = scenario.expectedPrimary;
+    expect([primary.method, primary.url]).toEqual([expected.method,
+      `https://jira.example.invalid/context${expected.apiRoot}/${expected.path}`]);
+    expect([definition.method, definition.apiRoot]).toEqual([expected.method, expected.apiRoot]);
+    return;
+  }
   const expectedPath =
     definition.apiRoot +
     definition.pathTemplate.replaceAll(/\{([^{}]+)\}/gu, (_match, parameter: string) => {

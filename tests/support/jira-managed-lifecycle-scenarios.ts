@@ -1,3 +1,4 @@
+import { projectIssueTransportController } from "./jira-project-issue-transport-fixture.js";
 import { systemAdministrationTransportController } from "./jira-system-administration-transport-fixture.js";
 import { permissionRoleTransportController } from "./jira-permission-role-transport-fixture.js";
 import { schemeSettingTransportController } from "./jira-scheme-setting-transport-fixture.js";
@@ -77,6 +78,8 @@ interface Controller {
 }
 const API_ROOT = "/context/rest/api/2";
 function controller(operation: string | undefined): Controller | undefined {
+  const projectIssue = projectIssueTransportController(operation, ACTOR, "https://203.0.113.10/context");
+  if (projectIssue !== undefined) return projectIssue;
   const next = systemAdministrationTransportController(operation, ACTOR) ?? schemeSettingTransportController(operation, ACTOR) ?? emailTemplateTransportController(operation, ACTOR);
   if (next !== undefined) return next;
   const permissionRole = permissionRoleTransportController(operation, ACTOR);
@@ -97,6 +100,8 @@ export function lifecycleRemoteFixture(operation: string | undefined): {
   const selected = controller(operation);
   return {
     read: async (url) => selected?.read({ method: "GET", url, timeoutMs: 1000, maxBodyBytes: 262144,
+      ...(new URL(url).pathname === "/context/rest/api/2/project/10000/priorityscheme" &&
+        (operation === "jira.set-project-priority-scheme" || operation === "jira.remove-project-priority-scheme") ? { jiraProjectPriority: true } : {}),
       ...(new URL(url).pathname === "/context/rest/api/2/applicationrole" && (operation === "jira.set-application-role" || operation === "jira.set-application-roles") ? { jiraApplicationRole: "version" } : {}),
       ...(new URL(url).pathname === "/context/rest/api/2/email-templates" ? { jiraEmailTemplateArchive: true } : {}),
     }),
@@ -119,13 +124,15 @@ export function lifecycleRemoteFixture(operation: string | undefined): {
 /** Reconstruct only flags backed by native headers/media on their fixed routes. The controller
  * asserts these flags, so missing/misrouted gateway headers cannot be hidden by the fixture. */
 function directoryRequestFlags(request: Request): Pick<AtlassianHttpBodyRequest,
-  "jiraApplicationRole" | "jiraUserApplication" | "jiraUserColumns" | "jiraExperimental"> {
+  "jiraApplicationRole" | "jiraUserApplication" | "jiraUserColumns" | "jiraExperimental" | "jiraProjectPriority"> {
   const path = new URL(request.url).pathname;
   const experimental = request.headers.get("x-experimentalapi") === "true";
   const ifMatch = request.headers.get("if-match");
+  const projectPriority = /^\/context\/rest\/api\/2\/project\/[1-9][0-9]*\/priorityscheme(?:\/[1-9][0-9]*)?$/u.test(path);
   return {
     ...(experimental && path === "/context/rest/api/2/user/application" ? { jiraUserApplication: true } : {}),
-    ...(experimental && path !== "/context/rest/api/2/user/application" ? { jiraExperimental: true } : {}),
+    ...(experimental && projectPriority ? { jiraProjectPriority: true } : {}),
+    ...(experimental && !projectPriority && path !== "/context/rest/api/2/user/application" ? { jiraExperimental: true } : {}),
     ...(request.method === "PUT" && (path === "/context/rest/api/2/applicationrole" || path === "/context/rest/api/2/applicationrole/jira-software") && ifMatch !== null
       ? { jiraApplicationRole: { ifMatch } } : {}),
     ...(request.method === "PUT" && path === "/context/rest/api/2/user/columns" && request.headers.get("content-type") === "application/x-www-form-urlencoded"
