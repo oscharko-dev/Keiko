@@ -1057,7 +1057,7 @@ it("keeps an independent complete argument/state/receipt case for every register
   expect(Object.keys(ARGUMENTS).sort()).toEqual([...JIRA_MUTATION_OPERATIONS].sort());
   expect(Object.keys(REMOTE_STATE).sort()).toEqual([...SINGLE_MUTATIONS].sort());
   expect(Object.keys(SUCCESS_RECEIPTS).sort()).toEqual([...SINGLE_MUTATIONS].sort());
-  expect(ADMIN_MUTATIONS).toHaveLength(137);
+  expect(ADMIN_MUTATIONS).toHaveLength(139);
   expect(Object.keys(FINAL_EXPECTED_OUTCOMES)).toHaveLength(42);
   expect(Object.entries(FINAL_EXPECTED_OUTCOMES).filter(([, outcome]) => outcome === "succeeded").map(([name]) => name).sort()).toEqual([
     "jira.login", "jira.set-project-avatar", "jira.set-user-avatar", "jira.update-myself", "jira.update-user",

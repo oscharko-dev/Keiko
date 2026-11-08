@@ -3156,7 +3156,7 @@
     "jira.delete-user-property": {
       "identity": "DELETE /rest/api/2/user/properties/{propertyKey}",
       "effect": "write",
-      "permissionPolicy": "entity-property-and-readback",
+      "permissionPolicy": "instance-admin-entity-property-and-readback",
       "kind": "constrained-tool",
       "constraints": "The selected user is independently read and rebound by observed canonical user key; malformed Unicode identifiers are refused before query normalization. The user selector remains a fixed typed query, never an arbitrary endpoint. Delete requires complete reviewed expectedValueNodes; explicit JSON null and empty values remain present data. Typed nodes reconstruct only one complete bounded JSON value with canonical pointers, exact fields and child counts, safe own properties and the existing Unicode/number/32768-byte limits. Complete unique key lists and the exact value or native 404 must agree before effect; a bare 404 never proves absence. Changed or unreadable reviewed state refuses, and an equal desired state reports an explicit no-op. Existing high-risk authority, one-use approval and durable journal govern at most one fixed DELETE. After acknowledgement, canonical entity rebinding and fresh complete key/value readback must establish the desired state. Unknown/unconfirmed receipts retain requested propertyPresent only; no replay, remote URL following, generic routing or authority inference.",
       "sourceFiles": [
@@ -7380,7 +7380,7 @@
     "jira.set-user-property": {
       "identity": "PUT /rest/api/2/user/properties/{propertyKey}",
       "effect": "write",
-      "permissionPolicy": "entity-property-and-readback",
+      "permissionPolicy": "instance-admin-entity-property-and-readback",
       "kind": "constrained-tool",
       "constraints": "The selected user is independently read and rebound by observed canonical user key; malformed Unicode identifiers are refused before query normalization. The user selector remains a fixed typed query, never an arbitrary endpoint. Set requires complete reviewed expectedValueNodes or independently proven expectAbsent=true, plus complete desired valueNodes. Typed nodes reconstruct only one complete bounded JSON value with canonical pointers, exact fields and child counts, safe own properties and the existing Unicode/number/32768-byte limits. Complete unique key lists and the exact value or native 404 must agree before effect; a bare 404 never proves absence. Changed or unreadable reviewed state refuses, and an equal desired state reports an explicit no-op. Existing high-risk authority, one-use approval and durable journal govern at most one fixed PUT. After acknowledgement, canonical entity rebinding and fresh complete key/value readback must establish the desired state. Unknown/unconfirmed receipts retain requested propertyPresent only; no replay, remote URL following, generic routing or authority inference.",
       "sourceFiles": [
@@ -9569,7 +9569,7 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "c7bae77a7e39e52379e99ad58550de610185d0b1d949045234544eb87e9cde9a",
+    "sha256": "28faf3322e81a3a4db57de41f4d368a5a6e7f6da252a92145302a55365e09ad2",
     "nativeOperationCount": 439
   },
   "operations": [

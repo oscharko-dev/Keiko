@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
   "supportedClassCount": 394,
-  "completeClassCount": 393,
-  "completeness": "incomplete",
+  "completeClassCount": 394,
+  "completeness": "complete",
   "classes": [
     {
       "failureClass": "activity-log-contract",
@@ -3141,13 +3141,8 @@
           "missingObligations": []
         }
       ],
-      "missingObligations": [
-        "causal-edges",
-        "executable-proof",
-        "lifecycle-state",
-        "resource-signals"
-      ],
-      "completeness": "incomplete"
+      "missingObligations": [],
+      "completeness": "complete"
     },
     {
       "failureClass": "browser-handoff",

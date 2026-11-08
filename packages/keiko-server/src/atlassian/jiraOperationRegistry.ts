@@ -616,7 +616,6 @@ const NATIVE = {
         "/dashboard/{dashboardId}/items/{itemId}/properties/{propertyKey}",
       "jira.set-issue-property": "/issue/{issueIdOrKey}/properties/{propertyKey}",
       "jira.set-project-property": "/project/{projectIdOrKey}/properties/{propertyKey}",
-      "jira.set-user-property": "/user/properties/{propertyKey}",
     },
     "owned-filter-columns-and-readback": {
       "jira.set-filter-columns": "/filter/{id}/columns",
@@ -629,6 +628,7 @@ const NATIVE = {
     },
     "instance-admin-entity-property-and-readback": {
       "jira.set-issue-type-property": "/issuetype/{issueTypeId}/properties/{propertyKey}",
+      "jira.set-user-property": "/user/properties/{propertyKey}",
     },
     "instance-admin-issue-type-scheme-projects-unconfirmed": {
       "jira.set-issue-type-scheme-projects": "/issuetypescheme/{schemeId}/associations",
@@ -744,7 +744,6 @@ const NATIVE = {
         "/dashboard/{dashboardId}/items/{itemId}/properties/{propertyKey}",
       "jira.delete-issue-property": "/issue/{issueIdOrKey}/properties/{propertyKey}",
       "jira.delete-project-property": "/project/{projectIdOrKey}/properties/{propertyKey}",
-      "jira.delete-user-property": "/user/properties/{propertyKey}",
     },
     "component-delete-and-reference-uncertainty": {
       "jira.delete-component": "/component/{id}",
@@ -772,6 +771,7 @@ const NATIVE = {
     },
     "instance-admin-entity-property-and-readback": {
       "jira.delete-issue-type-property": "/issuetype/{issueTypeId}/properties/{propertyKey}",
+      "jira.delete-user-property": "/user/properties/{propertyKey}",
     },
     "instance-admin-issue-type-scheme-delete-unconfirmed": {
       "jira.delete-issue-type-scheme": "/issuetypescheme/{schemeId}",

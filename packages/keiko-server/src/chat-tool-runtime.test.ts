@@ -14,6 +14,7 @@ import {
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { updateCapsuleState } from "@oscharko-dev/keiko-local-knowledge";
 import { seedCapsuleWithVectors } from "@oscharko-dev/keiko-local-knowledge/testing";
 import type { ChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts";
@@ -36,6 +37,10 @@ import { jiraChatActorDigest } from "./atlassian/jiraPodAccess.js";
 import { handleDecideChatWriteApproval } from "./atlassian/chatWriteApprovalRoutes.js";
 import { installMcpChatCatalogRuntime } from "./mcp/mcpChatCatalogRuntime.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 import { conversationForGateway } from "./conversation-gateway.js";
 import { jiraOperationContracts, jiraOperationForTool } from "./atlassian/jiraManagedProvider.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
@@ -412,16 +417,22 @@ function preselectKnownFixtureTools(deps: UiHandlerDeps, options: Options): void
   if (options.demandDiscovery === true) return;
   const catalog = deps.jiraChatCatalog;
   if (catalog === undefined) throw new TypeError("Missing Jira catalog");
+  const canonicalIds = new Set(
+    options.jiraAction !== undefined
+      ? [options.jiraAction.canonicalId]
+      : options.steps !== undefined
+        ? ["keiko.jira.draft.stage", "keiko.jira.draft"]
+        : [options.write === true ? "keiko.jira.comment" : "keiko.jira.projects"],
+  );
+  const selected = jiraOperationContracts().filter((entry) =>
+    canonicalIds.has(entry.declaration.descriptor.toolRef.canonicalId),
+  );
+  expect(
+    new Set(selected.map((entry) => entry.declaration.descriptor.toolRef.canonicalId)),
+  ).toEqual(canonicalIds);
+  expect(selected.length).toBeLessThanOrEqual(320);
   vi.spyOn(catalog, "get").mockImplementation(() =>
-    catalog.select(
-      jiraOperationContracts()
-        .filter(
-          (entry) =>
-            options.jiraAction === undefined ||
-            entry.declaration.descriptor.toolRef.canonicalId === options.jiraAction.canonicalId,
-        )
-        .map((entry) => entry.binding.identity),
-    ),
+    catalog.select(selected.map((entry) => entry.binding.identity)),
   );
 }
 function send(f: Fixture): ReturnType<typeof handleSendDesktopChat> {
@@ -484,7 +495,19 @@ const PRIVATE_PROFILE = {
 } as const;
 const PRIVATE_PASSWORD = "synthetic-human-only-profile-password";
 
-function privateProfileFixture(defaultMode: boolean, unchanged = false) {
+interface PrivateProfileFixture extends Fixture {
+  readonly argumentsValue: {
+    readonly expectedActorKey: string;
+    readonly expectedUser: typeof PRIVATE_PROFILE;
+    readonly displayName: string;
+  };
+  readonly requests: { method: string; path: string }[];
+}
+function privateProfileFixture(
+  defaultMode: boolean,
+  unchanged = false,
+  activityLog?: ServerLogSink,
+): PrivateProfileFixture {
   const displayName = unchanged ? PRIVATE_PROFILE.displayName : "Reviewed private actor";
   const argumentsValue = {
     expectedActorKey: PRIVATE_PROFILE.key,
@@ -501,23 +524,32 @@ function privateProfileFixture(defaultMode: boolean, unchanged = false) {
   const configPath = join(f.root, "private-credentials.json");
   const requests: { method: string; path: string }[] = [];
   let observedName: string = PRIVATE_PROFILE.displayName;
-  const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
-    const method = init?.method ?? "GET";
-    const path = new URL(String(url)).pathname;
-    requests.push({ method, path });
-    if (path !== "/rest/api/2/myself") throw new TypeError("Unexpected private profile route");
-    if (method === "GET") return Response.json({ ...PRIVATE_PROFILE, displayName: observedName });
-    if (method !== "PUT") throw new TypeError("Unexpected private profile method");
-    expect(JSON.parse(String(init?.body))).toEqual({ displayName, password: PRIVATE_PASSWORD });
-    observedName = displayName;
-    return new Response(null, { status: 204 });
-  });
+  const fetchImpl = vi.fn<typeof fetch>(
+    (url, init) =>
+      new Promise<Response>((resolve) => {
+        const method = init?.method ?? "GET";
+        const path = new URL(url instanceof Request ? url.url : url).pathname;
+        requests.push({ method, path });
+        if (path !== "/rest/api/2/myself") throw new TypeError("Unexpected private profile route");
+        if (method === "GET") {
+          resolve(Response.json({ ...PRIVATE_PROFILE, displayName: observedName }));
+          return;
+        }
+        if (method !== "PUT") throw new TypeError("Unexpected private profile method");
+        if (typeof init?.body !== "string")
+          throw new TypeError("Missing private profile JSON body");
+        expect(JSON.parse(init.body)).toEqual({ displayName, password: PRIVATE_PASSWORD });
+        observedName = displayName;
+        resolve(new Response(null, { status: 204 }));
+      }),
+  );
   const credentials = buildAtlassianConnectorCredentialDeps({
     configPath,
     env: { KEIKO_STATE_DIR: f.root },
     egress: () => undefined,
     keychainAccess: NO_LOCAL_VAULT_KEYCHAIN,
     fetchImpl,
+    ...(activityLog === undefined ? {} : { activityLog }),
   });
   const existing = f.deps.atlassianConnectorCredentials;
   const principal = jiraChatActorDigest(f.deps);
@@ -581,7 +613,10 @@ async function pendingPrivateInput(f: Fixture): Promise<JiraHumanInputView> {
   return view;
 }
 
-function submitPrivateProfileInput(f: Fixture, view: JiraHumanInputView) {
+function submitPrivateProfileInput(
+  f: Fixture,
+  view: JiraHumanInputView,
+): ReturnType<typeof handleSubmitJiraHumanInput> {
   return handleSubmitJiraHumanInput(
     context(
       {
@@ -593,6 +628,161 @@ function submitPrivateProfileInput(f: Fixture, view: JiraHumanInputView) {
     f.deps,
   );
 }
+
+function privateInputActivityFixture(): PrivateProfileFixture & { readonly lines: string[] } {
+  const lines: string[] = [];
+  const f = privateProfileFixture(true, false, {
+    write: (event): void => {
+      if (event.op === "atlassian.jira.human-input") lines.push(formatActivityLogProofLine(event));
+    },
+  });
+  return { ...f, lines };
+}
+function privateInputActivityProofs(lines: readonly string[]): readonly Record<string, unknown>[] {
+  return lines.map((line) => expectActivityLogProof("atlassian.jira.human-input.line", line));
+}
+function expectNoPrivateInputLogContent(lines: readonly string[], view: JiraHumanInputView): void {
+  const text = lines.join("\n");
+  for (const privateValue of [
+    PRIVATE_PASSWORD,
+    PRIVATE_PROFILE.key,
+    PRIVATE_PROFILE.name,
+    "jira.example.invalid",
+    "synthetic-private-profile-pat",
+    view.requestId,
+    view.revision,
+  ])
+    expect(text).not.toContain(privateValue);
+}
+
+function assertPrivateProfileJournal(
+  f: PrivateProfileFixture,
+  input: JiraHumanInputView,
+  defaultMode: boolean,
+): JiraHumanInputView {
+  const exchange = privateProfileExchange(f);
+  const message = f.deps.store.listMessages(f.chatId)[0];
+  const contract = jiraOperationForTool("jira.update-myself");
+  if (exchange?.humanInput === undefined || message === undefined || contract === undefined)
+    throw new TypeError("Missing retained private exchange");
+  expect(exchange.humanInput.state).toBe("consumed");
+  expect(exchange.humanInput.revision).not.toBe(input.revision);
+  expect(exchange).toMatchObject({ mutationOutcome: "succeeded", result: { status: "completed" } });
+  const invocationId = sha256Hex(canonicalise({ messageId: message.id, callId: exchange.call.id }));
+  const argumentsDigest = sha256Hex(canonicalise(f.argumentsValue));
+  const digest = jiraOperationActionDigest(
+    "jira.update-myself",
+    argumentsDigest,
+    contract.binding,
+    undefined,
+    exchange.humanInput.revision,
+  );
+  expect(f.deps.store.chatToolMutations?.find(invocationId)).toMatchObject({
+    actionDigest: digest,
+    phase: "settled",
+    outcome: "succeeded",
+  });
+  expect(digest).not.toBe(
+    jiraOperationActionDigest("jira.update-myself", argumentsDigest, contract.binding),
+  );
+  if (defaultMode) expect(exchange.approval).toBeUndefined();
+  else expect(exchange.approval?.actionDigest).toBe(digest);
+  return exchange.humanInput;
+}
+
+it("keeps requested and consumed on the operation timeline and causally binds its separate Submit request", async () => {
+  const f = privateInputActivityFixture();
+  const pending = send(f);
+  void pending.catch(() => undefined);
+  const input = await pendingPrivateInput(f);
+  const submitCorrelation = "private-input-submit-proof";
+  const submitted = await handleSubmitJiraHumanInput(
+    {
+      ...context(
+        { expectedRevision: input.revision, values: { password: PRIVATE_PASSWORD } },
+        { requestId: input.requestId },
+      ),
+      correlationId: submitCorrelation,
+    },
+    f.deps,
+  );
+  expect(submitted.status).toBe(200);
+  expect((await pending).status).toBe(200);
+  const proofs = privateInputActivityProofs(f.lines);
+  expect(proofs.map(({ phase }) => phase)).toEqual(["requested", "provided", "consumed"]);
+  expect(proofs[0]).toMatchObject({ correlationId: CORRELATION, phase: "requested" });
+  expect(proofs[1]).toMatchObject({
+    correlationId: submitCorrelation,
+    parentCorrelationId: CORRELATION,
+    phase: "provided",
+  });
+  expect(proofs[2]).toMatchObject({ correlationId: CORRELATION, phase: "consumed" });
+  expect(proofs[0]).not.toHaveProperty("parentCorrelationId");
+  expect(proofs[2]).not.toHaveProperty("parentCorrelationId");
+  expectNoPrivateInputLogContent(f.lines, input);
+});
+
+it("keeps cancelled private input on the originating operation rather than the cancellation request or authority ID", async () => {
+  const f = privateInputActivityFixture();
+  const pending = send(f);
+  void pending.catch(() => undefined);
+  const input = await pendingPrivateInput(f);
+  expect(
+    await handleCancelJiraHumanInput(
+      {
+        ...context({}, { requestId: input.requestId }),
+        correlationId: "private-input-cancel-proof",
+      },
+      f.deps,
+    ),
+  ).toMatchObject({
+    status: 200,
+    body: { state: "cancelled" },
+  });
+  await expect(pending).rejects.toMatchObject({
+    name: "JiraHumanInputCustodyError",
+    code: "cancelled",
+  });
+  const proofs = privateInputActivityProofs(f.lines);
+  expect(proofs.map(({ phase }) => phase)).toEqual(["requested", "cancelled"]);
+  for (const proof of proofs) {
+    expect(proof.correlationId).toBe(CORRELATION);
+    expect(proof).not.toHaveProperty("parentCorrelationId");
+  }
+  expect(f.requests.every(({ method }) => method === "GET")).toBe(true);
+  expectNoPrivateInputLogContent(f.lines, input);
+});
+
+it("keeps expired private input on the originating operation when its custody observation ends the held call", async () => {
+  const f = privateInputActivityFixture();
+  const pending = send(f);
+  void pending.catch(() => undefined);
+  const input = await pendingPrivateInput(f);
+  const custody = f.deps.atlassianConnectorCredentials?.custody.humanInputs;
+  const principal = jiraChatActorDigest(f.deps);
+  if (custody === undefined || principal === undefined)
+    throw new TypeError("Missing private input owner");
+  const binding = custody.bindingFor(input.requestId, principal);
+  if (binding === undefined) throw new TypeError("Missing operation-bound input");
+  const clock = vi.spyOn(Date, "now").mockReturnValue(input.expiresAt);
+  try {
+    expect(custody.inspect(input.requestId, binding)?.state).toBe("expired");
+  } finally {
+    clock.mockRestore();
+  }
+  await expect(pending).rejects.toMatchObject({
+    name: "JiraHumanInputCustodyError",
+    code: "expired",
+  });
+  const proofs = privateInputActivityProofs(f.lines);
+  expect(proofs.map(({ phase }) => phase)).toEqual(["requested", "expired"]);
+  for (const proof of proofs) {
+    expect(proof.correlationId).toBe(CORRELATION);
+    expect(proof).not.toHaveProperty("parentCorrelationId");
+  }
+  expect(f.requests.every(({ method }) => method === "GET")).toBe(true);
+  expectNoPrivateInputLogContent(f.lines, input);
+});
 
 it.each([false, true])(
   "binds private input and journal revision through a mixed Chat (allowed=%s)",
@@ -609,38 +799,7 @@ it.each([false, true])(
     expect((await submitPrivateProfileInput(f, input)).status).toBe(200);
     if (!defaultMode) await approveWrite(f, "jira-chat-write");
     expect((await pending).status).toBe(200);
-    const exchange = privateProfileExchange(f);
-    const message = f.deps.store.listMessages(f.chatId)[0];
-    const contract = jiraOperationForTool("jira.update-myself");
-    if (exchange?.humanInput === undefined || message === undefined || contract === undefined)
-      throw new TypeError("Missing retained private exchange");
-    expect(exchange.humanInput.state).toBe("consumed");
-    expect(exchange.humanInput.revision).not.toBe(input.revision);
-    expect(exchange).toMatchObject({
-      mutationOutcome: "succeeded",
-      result: { status: "completed" },
-    });
-    const invocationId = sha256Hex(
-      canonicalise({ messageId: message.id, callId: exchange.call.id }),
-    );
-    const argumentsDigest = sha256Hex(canonicalise(f.argumentsValue));
-    const digest = jiraOperationActionDigest(
-      "jira.update-myself",
-      argumentsDigest,
-      contract.binding,
-      undefined,
-      exchange.humanInput.revision,
-    );
-    expect(f.deps.store.chatToolMutations?.find(invocationId)).toMatchObject({
-      actionDigest: digest,
-      phase: "settled",
-      outcome: "succeeded",
-    });
-    expect(digest).not.toBe(
-      jiraOperationActionDigest("jira.update-myself", argumentsDigest, contract.binding),
-    );
-    if (defaultMode) expect(exchange.approval).toBeUndefined();
-    else expect(exchange.approval?.actionDigest).toBe(digest);
+    const consumedInput = assertPrivateProfileJournal(f, input, defaultMode);
     expect(f.requests.filter((request) => request.method === "PUT")).toEqual([
       { method: "PUT", path: "/rest/api/2/myself" },
     ]);
@@ -649,7 +808,7 @@ it.each([false, true])(
     ).not.toContain(PRIVATE_PASSWORD);
     expect((await send(f)).status).toBe(200);
     expect(f.requests.filter((request) => request.method === "PUT")).toHaveLength(1);
-    expect((await submitPrivateProfileInput(f, exchange.humanInput)).status).not.toBe(200);
+    expect((await submitPrivateProfileInput(f, consumedInput)).status).not.toBe(200);
   },
 );
 
@@ -659,7 +818,10 @@ it("keeps an exact profile no-op free of private input in the mixed Chat", async
   expect(f.effects).toEqual(["mcp-read"]);
   expect(f.requests.every((request) => request.method === "GET")).toBe(true);
   expect(privateProfileExchange(f)?.humanInput).toBeUndefined();
-  expect(privateProfileExchange(f)?.mutationOutcome).toBe("not-dispatched");
+  expect(privateProfileExchange(f)).toMatchObject({
+    mutationOutcome: "rejected",
+    result: { data: { outcome: "rejected", reason: "conflict", unchanged: true } },
+  });
 });
 
 it("rejects mixed-Chat private input after the bound Jira scope is revoked", async () => {
@@ -748,7 +910,10 @@ it("keeps protected input metadata private from a different local principal", as
     Object.assign(f.deps, { serverPrincipal: originalPrincipal });
   }
   await handleCancelJiraHumanInput(context({}, { requestId: input.requestId }), f.deps);
-  await pending;
+  await expect(pending).rejects.toMatchObject({
+    name: "JiraHumanInputCustodyError",
+    code: "cancelled",
+  });
   expect(f.requests.every((request) => request.method === "GET")).toBe(true);
 });
 it("refuses a stale protected revision without replacing the held input", async () => {
@@ -1173,7 +1338,7 @@ describe("combined Jira review admission parity", () => {
           const source = createPreparation(options);
           return {
             ...source,
-            current: (prepared, itemRef) => {
+            current: (prepared, itemRef): boolean => {
               checkedRefs.push(itemRef);
               return source.current(prepared, itemRef);
             },

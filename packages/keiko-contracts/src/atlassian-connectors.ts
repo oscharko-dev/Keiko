@@ -1018,6 +1018,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
   ...jiraActionValues(JIRA_PROPERTY_ACTIONS, "connector-write"),
   "set-issue-type-property": "connector-admin",
   "delete-issue-type-property": "connector-admin",
+  "set-user-property": "connector-admin",
+  "delete-user-property": "connector-admin",
   "set-app-monitoring": "connector-admin",
   "set-ipd-monitoring": "connector-admin",
   "start-jmx-metrics": "connector-admin",

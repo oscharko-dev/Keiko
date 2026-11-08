@@ -259,6 +259,8 @@ export interface ChatToolTurnOptions<Context extends ToolConsumerContext> {
   ) => Promise<{ readonly sourceDigest?: string } | undefined>;
   /** Release private per-call material after outcome retention, including pre-dispatch refusal. */
   readonly finalizeInvocation?: (actionId: string) => void;
+  /** Await private lifetime cleanup when this turn ends, retaining it across adopted retries. */
+  readonly finalizeTurn?: () => Promise<void>;
   readonly selectTools?: (
     identities: readonly string[],
   ) => Promise<ChatToolCatalogSelection<Context>>;
@@ -350,17 +352,21 @@ interface ActiveBatchProgress {
   readonly callId: string;
   publishedKey?: string;
 }
-/** A batch progress page that could not be persisted or published: a redacted server diagnostic. */
-function reportBatchProgressFailure(
+/** Turn-owned progress or cleanup failure: the existing body-free server diagnostic boundary. */
+function reportTurnFailure(
   options: Pick<ChatToolTurnOptions<ToolConsumerContext>, "deps" | "correlationId">,
   error: unknown,
+  operation:
+    | "chat.tool-turn.batch-progress"
+    | "chat.tool-turn.selection-release"
+    | "chat.tool-turn.finalize" = "chat.tool-turn.batch-progress",
 ): void {
   const { deps, correlationId } = options;
   emitServerDiagnostic(
     deps.diagnostics,
     serverDiagnosticFromError({
       correlationId,
-      operation: "chat.tool-turn.batch-progress",
+      operation,
       source: "chat-tool-turn",
       error,
       redact: (text): string => {
@@ -467,14 +473,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
         invocationId: string,
         snapshot: () => CatalogJsonObject,
       ): void => {
-        const active = this.activeDraftProgress;
-        requireDispatch(
-          active?.actionId === actionId && active.snapshot === undefined,
-          "invalid",
-          "recovery-required",
-        );
-        active.invocationId = invocationId;
-        active.snapshot = snapshot;
+        this.retainDraftProgress(actionId, invocationId, snapshot);
       },
       reportBatchProgress: (progress: ChatToolBatchProgress): void => {
         this.reportBatchProgress(progress);
@@ -498,6 +497,20 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       now: Date.now,
       deadlineAt: Date.parse(this.context.deadlineAt),
     });
+  }
+  private retainDraftProgress(
+    actionId: string,
+    invocationId: string,
+    snapshot: () => CatalogJsonObject,
+  ): void {
+    const active = this.activeDraftProgress;
+    requireDispatch(
+      active?.actionId === actionId && active.snapshot === undefined,
+      "invalid",
+      "recovery-required",
+    );
+    active.invocationId = invocationId;
+    active.snapshot = snapshot;
   }
   private async callNestedModel(
     request: GatewayCallRequest,
@@ -622,6 +635,19 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       );
     }
     await Promise.all([pending?.close(), selected?.close(), prepared?.close()]);
+  }
+  private async finalizeTurn(): Promise<void> {
+    try {
+      await this.releaseToolSelection();
+    } catch (error) {
+      reportTurnFailure(this.options, error, "chat.tool-turn.selection-release");
+    }
+    // Selection cleanup must not prevent private cleanup; neither may replace the retained outcome.
+    try {
+      await this.options.finalizeTurn?.();
+    } catch (error) {
+      reportTurnFailure(this.options, error, "chat.tool-turn.finalize");
+    }
   }
   private async settleToolSelection(requestId: string, succeeded: boolean): Promise<void> {
     const prepared = this.preparedCatalog;
@@ -854,14 +880,14 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       );
     } catch (error: unknown) {
       // A page that cannot be persisted is dropped; the batch and its next page carry on.
-      reportBatchProgressFailure(this.options, error);
+      reportTurnFailure(this.options, error);
       return;
     }
     active.publishedKey = key;
     this.batchPublication = this.batchPublication
       .then(() => this.publish())
       .catch((error: unknown) => {
-        reportBatchProgressFailure(this.options, error);
+        reportTurnFailure(this.options, error);
       });
   }
   /** Model calls left for nested work once the turn's own answer rounds are kept. */
@@ -1134,7 +1160,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     } finally {
       release();
       signal.removeEventListener("abort", cancel);
-      if (!keepSelection) await this.releaseToolSelection();
+      if (!keepSelection) await this.finalizeTurn();
     }
   }
 
@@ -1310,6 +1336,29 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     return this.endedAnswer !== undefined;
   }
 
+  /** Settled observations survive catalog cleanup; repair never reopens a tool or effect. */
+  public readOnlySynthesisRequest(request: GatewayCallRequest): GatewayCallRequest {
+    const callIds = new Set(
+      this.continuation
+        .filter((message) => message.role === "tool")
+        .map((message) => message.toolCallId),
+    );
+    const observations = this.settledExchanges
+      .filter(
+        (exchange) => callIds.has(exchange.call.id) && usableModelObservation(exchange, undefined),
+      )
+      .flatMap(gatewayMessagesForToolExchange);
+    const readOnly = {
+      ...request,
+      toolCatalog: undefined,
+      reasoningScope: `chat:${this.options.message.chatId}`,
+    };
+    return {
+      ...readOnly,
+      messages: [...request.messages, ...this.fittedContinuation(readOnly, [], observations)],
+    };
+  }
+
   private roundRequest(
     request: GatewayCallRequest,
     offered: ReturnType<CatalogToolBinder["offer"]>,
@@ -1317,15 +1366,14 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     const managed = this.managed;
     const definitions = offeredDefinitions(managed, this.toolDefinitions, offered);
     this.roundDefinitions = definitions;
+    const messages = [this.instruction, ...this.runtimeContext, ...request.messages];
     const round: GatewayCallRequest = {
       ...request,
       stream: false,
       reasoningScope: `chat:${this.options.message.chatId}`,
       messages: [
-        this.instruction,
-        ...this.runtimeContext,
-        ...request.messages,
-        ...this.fittedContinuation(request, definitions),
+        ...messages,
+        ...this.fittedContinuation({ ...request, messages }, definitions),
         ...(this.correction === undefined ? [] : [this.correction]),
       ],
       toolCatalog: {
@@ -1362,18 +1410,19 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   private fittedContinuation(
     request: GatewayCallRequest,
     tools: readonly ToolDefinition[],
+    continuation: readonly GatewayMessage[] = this.continuation,
   ): readonly GatewayMessage[] {
     const config = this.options.deps.gatewayConfig?.current();
     const capability =
       config === undefined ? undefined : findConfiguredCapability(config, request.modelId);
-    if (capability?.kind !== "chat") return this.continuation;
+    if (capability?.kind !== "chat") return continuation;
     const output = request.maxOutputTokens ?? capability.maxOutputTokens;
     const profile = deriveContextProfileFromCapability(capability);
     const fixed = countGatewayPromptTokens(
       {
         ...request,
         tools,
-        messages: [this.instruction, ...this.runtimeContext, ...request.messages],
+        messages: request.messages,
       },
       profile.tokenAccounting,
       {
@@ -1384,14 +1433,14 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       },
     );
     const budget = Math.floor((capability.contextWindow - output) * CONTINUATION_WINDOW_SHARE);
-    const fitted = fitToolContinuation(this.continuation, this.settledExchanges, budget - fixed);
+    const fitted = fitToolContinuation(continuation, this.settledExchanges, budget - fixed);
     if (fitted.elidedCount > this.elidedResults) {
       this.elidedResults = fitted.elidedCount;
       recordChatToolTurnContextFitted(processServerLogSink(), {
         correlationId: this.options.correlationId,
         messageId: this.options.message.id,
         elidedResultCount: fitted.elidedCount,
-        continuationMessageCount: this.continuation.length,
+        continuationMessageCount: continuation.length,
       });
     }
     return fitted.messages;
@@ -1809,6 +1858,7 @@ export type ChatToolTurnPort = Pick<
   | "answersAfterScopeChange"
   | "endedEarly"
   | "reportsToolAction"
+  | "readOnlySynthesisRequest"
   | "settleRetryFailure"
   | "bindEvidenceSources"
 >;

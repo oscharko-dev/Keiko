@@ -584,18 +584,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-contracts/src/atlassian-connectors.ts",
-      "owner": "canonicalHttpsBrowseTarget",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-contracts/src/atlassian-connectors.ts",
-      "owner": "isSafeAtlassianConnectorBaseUrl",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-contracts/src/code-task-auxiliary.ts",
       "owner": "isCanonicalUrlHostname",
       "kind": "unregistered-catch",

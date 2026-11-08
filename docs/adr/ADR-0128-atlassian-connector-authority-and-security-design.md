@@ -712,13 +712,15 @@ Memory retains its separate explicit-or-`governed-assist` default. This availabi
 itself grant a Chat read grant, mutation approval, connector scope or authority envelope.
 
 
-**Explicit instance administration (#4287, review 4503902861).** The one hundred thirty-seven source-defined administration writes—application/IPD monitoring, JMX exposure
-start/stop, screen-tab and screen-field layout changes, issue-type property set/delete, filter creation,
+**Explicit instance administration (#4287, review 4503902861).** The one hundred thirty-nine source-defined administration writes—application/IPD monitoring, JMX exposure
+start/stop, screen-tab and screen-field layout changes, issue-type and user property set/delete, filter creation,
 future-filter default sharing, filter permission addition/removal, project-category lifecycle, role/default/project-membership, permission-scheme/grant/attribute changes, issue-type/priority/workflow-scheme configuration, four closed instance settings, email-template upload/apply/revert, group lifecycle/membership, schema configuration, directory access/layout, maintenance requests, avatar effects, user lifecycle, configured reciprocal linking, project lifecycle changes, another-user password update, human-attested anonymization unlock and instance-wide sprint synchronization cleanup—use the separate connector class
 `connector-admin` and require `issue-tracker.admin`. Ordinary `issue-tracker.write` never admits
 these operations, including in Full access. They retain high risk and the same Workbench
 `connector-access` class, `internet` resource scope, supervised `connector-write` kind and existing
-approval/journal owners. The other entity-property writes retain ordinary write scope. Native
+approval/journal owners. User-property writes require this grant even when the selected user is the
+connected actor; selecting that identity does not replace administration authority. The other
+entity-property writes retain ordinary write scope. Native
 permissions are checked independently; possessing a local scope never asserts Jira permissions.
 New anonymous `anyone` permission grants are restricted to the reviewed read permissions
 `BROWSE_PROJECTS`, `VIEW_DEV_TOOLS` and `VIEW_READONLY_WORKFLOW`; all other new anonymous grants

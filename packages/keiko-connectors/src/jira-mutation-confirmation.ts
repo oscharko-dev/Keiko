@@ -291,16 +291,19 @@ export async function confirmJiraComment(
   visibility?: JiraCommentVisibility | null,
   binding?: JiraCommentBinding,
 ): Promise<JiraMutationAttempt> {
+  // Callers supply either the fresh POST acknowledgement or an independently bound update target.
+  // A failed readback cannot erase that identity or promote the attempted change to success.
+  const receipt = { issueKey, commentId };
   const response = await request(
     `issue/${encodeURIComponent(binding?.issueId ?? issueKey)}/comment/${encodeURIComponent(commentId)}`,
   );
-  if (!response.ok) return response;
-  if (response.status !== 200 || response.body === undefined) return MALFORMED;
+  if (!response.ok) return { ...response, receipt };
+  if (response.status !== 200 || response.body === undefined) return { ...MALFORMED, receipt };
   return response.body.id === commentId &&
     commentContentMatches(response.body, body, visibility) &&
     (binding === undefined || jiraCommentSelfMatches(response.body.self, commentId, binding))
-    ? { ok: true, receipt: { issueKey, commentId } }
-    : CONFLICT;
+    ? { ok: true, receipt }
+    : { ...CONFLICT, receipt };
 }
 function assignee(value: unknown): string | null | undefined {
   if (value === null) return null;

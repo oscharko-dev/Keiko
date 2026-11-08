@@ -381,6 +381,24 @@ it("writes Data Center plain text comments and requires the returned comment ide
     body: "Synthetic\ncomment",
   });
 });
+it("retains the acknowledged comment identity when readback admission is revoked", async () => {
+  const f = fixture();
+  const original = f.http.getMockImplementation();
+  if (original === undefined) throw new Error("Expected fixture");
+  f.http.mockImplementation(async (request) => {
+    const result = await original(request);
+    if (request.method === "POST") f.beforeEffect.mockReturnValue(false);
+    return result;
+  });
+  expect(await f.run("jira.comment", { issueKey: "SYN-1", body: "Synthetic comment" })).toEqual({
+    ok: false,
+    reason: "effect-denied",
+    receipt: { issueKey: "SYN-1", commentId: "10002" },
+  });
+  expect(
+    f.http.mock.calls.map(([request]) => [request.method, new URL(request.url).pathname]),
+  ).toEqual([["POST", "/context/rest/api/2/issue/SYN-1/comment"]]);
+});
 it.each(["jira.create", "jira.transition"] as const)(
   "refuses missing required fields for %s before any mutation",
   async (operation) => {
@@ -678,13 +696,18 @@ it.each([
 it("rechecks admission between fresh metadata and mutation dispatch", async () => {
   const f = fixture();
   f.beforeEffect.mockReturnValueOnce(true).mockReturnValue(false);
-  expect(await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "Approved" } })).toMatchObject({ ok: false, reason: "effect-denied" });
+  expect(
+    await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "Approved" } }),
+  ).toMatchObject({ ok: false, reason: "effect-denied" });
   expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);
 });
 it("does not access Jira after cancellation", async () => {
   const f = fixture();
   f.controller.abort();
-  expect(await f.run("jira.comment", { issueKey: "SYN-1", body: "Synthetic" })).toMatchObject({ ok: false, reason: "cancelled" });
+  expect(await f.run("jira.comment", { issueKey: "SYN-1", body: "Synthetic" })).toMatchObject({
+    ok: false,
+    reason: "cancelled",
+  });
   expect(f.http).not.toHaveBeenCalled();
 });
 it("does not route Data Center writes into a Cloud connection", async () => {
@@ -756,20 +779,35 @@ it.each(CONFIRMED_OPERATIONS)(
     const f = fixture();
     const original = f.http.getMockImplementation();
     if (original === undefined) throw new Error("Expected fixture");
-    f.http.mockImplementation((request) => {
+    const readbackPath =
+      operation === "jira.comment"
+        ? "/context/rest/api/2/issue/SYN-1/comment/10002"
+        : "/context/rest/api/2/issue/SYN-1";
+    const ackStatus = operation === "jira.create" || operation === "jira.comment" ? 201 : 204;
+    let acknowledged = false;
+    const deniedReadbacks: AtlassianHttpBodyResult[] = [];
+    f.http.mockImplementation(async (request) => {
       const path = new URL(request.url).pathname;
-      const afterWrite = f.http.mock.calls.some(([call]) => call.method !== "GET");
-      return afterWrite &&
-        request.method === "GET" &&
-        (path.endsWith("/issue/SYN-1") || path.endsWith("/comment/10002"))
-        ? Promise.resolve(response({}, 403))
-        : original(request);
+      if (acknowledged && request.method === "GET" && path === readbackPath) {
+        const denied = response({}, 403);
+        deniedReadbacks.push(denied);
+        return denied;
+      }
+      const result = await original(request);
+      if (request.method !== "GET" && result.kind === "response" && result.status === ackStatus)
+        acknowledged = true;
+      return result;
     });
     expect(await f.run(operation, args)).toEqual({
       ok: false,
       reason: "permission-denied",
-      httpStatus: 403,
+      // Issue observations use dispatchFailure's domain projection; comments retain HTTP facts.
+      ...(operation === "jira.comment"
+        ? { httpStatus: 403, receipt: { issueKey: "SYN-1", commentId: "10002" } }
+        : {}),
     });
+    expect(acknowledged).toBe(true);
+    expect(deniedReadbacks).toMatchObject([{ kind: "response", status: 403 }]);
     expect(f.http.mock.calls.filter(([request]) => request.method !== "GET")).toHaveLength(1);
   },
 );
@@ -799,7 +837,13 @@ it.each(CONFIRMED_OPERATIONS)(
         );
       return original(request);
     });
-    expect(await f.run(operation, args)).toEqual({ ok: false, reason: "conflict" });
+    expect(await f.run(operation, args)).toEqual({
+      ok: false,
+      reason: "conflict",
+      ...(operation === "jira.comment"
+        ? { receipt: { issueKey: "SYN-1", commentId: "10002" } }
+        : {}),
+    });
     expect(f.http.mock.calls.filter(([request]) => request.method !== "GET")).toHaveLength(1);
   },
 );
@@ -871,8 +915,11 @@ it("does not repeat an acknowledged edit when authority is lost before readback"
     .mockReturnValueOnce(true)
     .mockReturnValueOnce(true)
     .mockReturnValue(false);
-  expect(await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "Changed" } })).toMatchObject({
-    ok: false, reason: "effect-denied",
+  expect(
+    await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "Changed" } }),
+  ).toMatchObject({
+    ok: false,
+    reason: "effect-denied",
   });
   expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET", "GET", "PUT"]);
 });
@@ -916,7 +963,13 @@ it.each(["jira.create", "jira.comment"] as const)(
             fields: { summary: "Synthetic", customfield_10000: "Required" },
           }
         : { issueKey: "SYN-1", body: "Synthetic" };
-    expect(await f.run(operation, args)).toEqual({ ok: false, reason: "conflict" });
+    expect(await f.run(operation, args)).toEqual({
+      ok: false,
+      reason: "conflict",
+      ...(operation === "jira.comment"
+        ? { receipt: { issueKey: "SYN-1", commentId: "10002" } }
+        : {}),
+    });
     expect(f.http.mock.calls.filter(([request]) => request.method !== "GET")).toHaveLength(1);
   },
 );

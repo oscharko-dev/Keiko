@@ -1,5 +1,8 @@
 import type { JiraHumanInputView } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import { JiraHumanInputCustodyError, type JiraHumanInputCustody } from "./jira-human-input-custody.js";
+import {
+  JiraHumanInputCustodyError,
+  type JiraHumanInputCustody,
+} from "./jira-human-input-custody.js";
 import type { JiraHumanInputBinding } from "./jira-human-input-values.js";
 
 /** Server-internal descriptor, never model args/approval facts. The HTTP closure alone claims it. */
@@ -7,6 +10,22 @@ export interface JiraHumanInputSelection {
   readonly requestId: string;
   readonly revision: string;
   readonly binding: JiraHumanInputBinding;
+}
+function requireActiveInput(signal: AbortSignal): void {
+  if (signal.aborted) throw new JiraHumanInputCustodyError("cancelled");
+}
+function readySelection(
+  custody: JiraHumanInputCustody,
+  current: JiraHumanInputView,
+  binding: JiraHumanInputBinding,
+): JiraHumanInputSelection {
+  if (current.state !== "ready")
+    throw new JiraHumanInputCustodyError(
+      current.state === "expired" || current.state === "cancelled" ? current.state : "not-ready",
+    );
+  const original = custody.bindingFor(current.requestId, binding.principalDigest);
+  if (original === undefined) throw new JiraHumanInputCustodyError("binding-changed");
+  return { requestId: current.requestId, revision: current.revision, binding: original };
 }
 /** Existing Chat/Coding held call owns persistence and cancellation; this creates no new task. */
 export async function prepareJiraHumanInput(
@@ -20,21 +39,19 @@ export async function prepareJiraHumanInput(
   const prepared = custody.prepare(binding);
   try {
     await publish(prepared);
-    if (signal.aborted) throw new JiraHumanInputCustodyError("cancelled");
-    const current = prepared.state === "awaiting-input"
-      ? await custody.wait(prepared.requestId, binding, signal)
-      : custody.inspect(prepared.requestId, binding);
+    requireActiveInput(signal);
+    const current = await custody.wait(prepared.requestId, binding, signal, reportCleanupFailure);
     if (current === undefined) throw new JiraHumanInputCustodyError("not-ready");
-    if (current.state !== prepared.state || current.revision !== prepared.revision) await publish(current);
-    if (signal.aborted) throw new JiraHumanInputCustodyError("cancelled");
-    if (current.state !== "ready")
-      throw new JiraHumanInputCustodyError(current.state === "expired" || current.state === "cancelled" ? current.state : "not-ready");
-    const original = custody.bindingFor(current.requestId, binding.principalDigest);
-    if (original === undefined) throw new JiraHumanInputCustodyError("binding-changed");
-    return { requestId: current.requestId, revision: current.revision, binding: original };
+    if (current.state !== prepared.state || current.revision !== prepared.revision)
+      await publish(current);
+    requireActiveInput(signal);
+    return readySelection(custody, current, binding);
   } catch (error) {
-    try { custody.cancel(prepared.requestId, binding); }
-    catch (cleanupError) { reportCleanupFailure(cleanupError); }
+    try {
+      custody.cancel(prepared.requestId, binding);
+    } catch (cleanupError) {
+      reportCleanupFailure(cleanupError);
+    }
     throw error;
   }
 }

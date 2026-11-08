@@ -278,19 +278,33 @@ function nativeEntry(property, ast, verified) {
   );
   return entryFor(property.name.text, nativeTuple(property.initializer, ast, verified));
 }
-function nativeEffect(method, root, path) {
-  // The fixed POST observations already declared by the registry and ledger have read contracts. No other method/path may
-  // acquire a read disposition from its caller or an arbitrary registry tuple.
+const PROTECTED_POST_OBSERVATIONS = new Map([
+  [
+    "jira.validate-create-user-password",
+    { path: "/password/policy/createUser", policy: "bound-protected-password-policy" },
+  ],
+  [
+    "jira.validate-update-user-password",
+    { path: "/password/policy/updateUser", policy: "bound-protected-password-policy" },
+  ],
+  [
+    "jira.validate-license",
+    { path: "/licenseValidator", policy: "instance-admin-protected-license-validation" },
+  ],
+]);
+function nativeEffect(method, root, path, tool, permissionPolicy) {
+  // Two documented POST observations have an explicit read contract. Protected validation observes
+  // policy/license facts without changing the native account; its exact tool, route and protected
+  // permission contract must agree. No other method/path may acquire a read disposition.
   if (method === "GET") return "read";
+  const protectedObservation = PROTECTED_POST_OBSERVATIONS.get(tool);
+  const protectedRead =
+    protectedObservation !== undefined &&
+    protectedObservation.path === path &&
+    protectedObservation.policy === permissionPolicy;
   return root === "/rest/api/2" &&
     method === "POST" &&
-    new Set([
-      "/search",
-      "/worklog/list",
-      "/password/policy/createUser",
-      "/password/policy/updateUser",
-      "/licenseValidator",
-    ]).has(path)
+    (new Set(["/search", "/worklog/list"]).has(path) || protectedRead)
     ? "read"
     : "write";
 }
@@ -298,7 +312,7 @@ function entryFor(tool, tuple) {
   const [method, effect, path, permissionPolicy, root = "/rest/api/2"] = tuple;
   requireValid(
     new Set(["GET", "POST", "PUT", "DELETE"]).has(method) &&
-      effect === nativeEffect(method, root, path),
+      effect === nativeEffect(method, root, path, tool, permissionPolicy),
     "registry-native-effect",
   );
   requireValid(/^jira\.[a-z]+(?:-[a-z]+)*$/u.test(tool), "registry-native-tool");

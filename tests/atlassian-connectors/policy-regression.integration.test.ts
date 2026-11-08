@@ -33,6 +33,8 @@ import type {
 import {
   ATLASSIAN_CONNECTOR_ACTION_TYPES,
   ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK,
+  JIRA_MANAGED_ACTION_TYPES,
+  JIRA_MUTATION_OPERATIONS,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { RouteContext } from "../../packages/keiko-server/src/routes.js";
 import type { UiHandlerDeps } from "../../packages/keiko-server/src/deps.js";
@@ -2469,6 +2471,16 @@ const MANAGED_WRITES: ReadonlySet<AtlassianConnectorActionType> =
     "delete-version-remote-links",
     "upsert-version-remote-link",
     "upsert-version-remote-link-by-global-id",
+    "create-issue-link",
+    "delete-issue-link",
+    "upsert-remote-link",
+    "update-remote-link",
+    "delete-remote-link",
+    "delete-remote-link-by-global-id",
+    "delete-component",
+    "merge-version",
+    "move-version",
+    "remove-and-swap-version",
     "create-permission-scheme",
     "update-permission-scheme",
     "delete-permission-scheme",
@@ -2761,6 +2773,15 @@ const PRESENT_MATRIX: readonly Cell[] = MODES.flatMap((mode) =>
 );
 
 describe("legacy routes and managed admission — D4 matrix, scope present (Scope 6)", () => {
+  it("routes every managed mutation through admission unless the legacy action route owns its body", () => {
+    const expectedManaged = new Set(
+      JIRA_MUTATION_OPERATIONS.map((tool) => JIRA_MANAGED_ACTION_TYPES[tool]).filter(
+        (action) => !Object.hasOwn(WRITE_ACTION_BODIES, action),
+      ),
+    );
+    expect(MANAGED_WRITES).toEqual(expectedManaged);
+  });
+
   it.each(PRESENT_MATRIX)(
     "$mode / $actionType → $expected",
     async ({ mode, actionType, expected }) => {
@@ -2935,6 +2956,8 @@ describe("admin actions require the explicit grant independently of normal Jira 
     "stop-jmx-metrics",
     "set-issue-type-property",
     "delete-issue-type-property",
+    "set-user-property",
+    "delete-user-property",
     "create-filter",
     "set-filter-share-scope",
     "add-filter-permission",

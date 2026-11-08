@@ -48,6 +48,7 @@ import {
 } from "./atlassian/jiraChatCatalogConsumer.js";
 import type { JiraChatSourcePreparation } from "./atlassian/jiraChatRequirementBinding.js";
 import { createJiraChatHumanInput } from "./atlassian/jiraChatHumanInput.js";
+import { createJiraPrivateLifetime } from "./atlassian/httpPrivateIdentity.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import {
   combineChatCatalogs,
@@ -145,8 +146,12 @@ function sourcePreparationFor(options: Options): {
           ...baseContext,
           jira: {
             ...baseContext.jira,
-            humanInputFor: humanInput.selectionFor,
-            activeHumanInput: humanInput.currentSelection,
+            privateLifetime: createJiraPrivateLifetime(
+              baseContext.jira.signal,
+              options.correlationId,
+            ),
+            humanInputFor: (operation, digest) => humanInput.selectionFor(operation, digest),
+            activeHumanInput: () => humanInput.currentSelection(),
           },
         };
   const sourcePreparation =
@@ -160,9 +165,40 @@ function sourcePreparationFor(options: Options): {
     consumerPort: createChatSourcesConsumerPort(
       createJiraChatCatalogConsumerPort(
         sourcePreparation?.sourceDigestFor,
-        humanInput?.revisionFor,
+        humanInput === undefined
+          ? undefined
+          : (actionId, digest): string | undefined => humanInput.revisionFor(actionId, digest),
       ),
     ),
+  };
+}
+
+function sourceInvocationPorts(
+  source: JiraChatSourcePreparation | undefined,
+  humanInput: ReturnType<typeof createJiraChatHumanInput> | undefined,
+  context: ChatSourcesContext,
+): Pick<
+  ChatToolTurnOptions<ChatSourcesContext>,
+  "prepareInvocation" | "finalizeInvocation" | "finalizeTurn"
+> {
+  if (source === undefined) return {};
+  return {
+    prepareInvocation: async (
+      call,
+      actionId,
+      ports,
+    ): Promise<{ readonly sourceDigest?: string } | undefined> => {
+      const prepared = await source.prepareInvocation(call, actionId);
+      await humanInput?.prepare(call, actionId, ports);
+      return prepared;
+    },
+    finalizeInvocation: (actionId): void => {
+      humanInput?.finalize(actionId);
+    },
+    finalizeTurn: async (): Promise<void> => {
+      humanInput?.finish();
+      await context.jira.privateLifetime?.finish();
+    },
   };
 }
 
@@ -179,6 +215,25 @@ function sourceReviewPorts(
         },
       }
     : {};
+}
+
+function sourceSelectionPorts(
+  options: Options,
+  bind: (
+    selected: ReturnType<typeof combineChatCatalogs>,
+  ) => ChatToolTurnOptions<ChatSourcesContext>["bind"],
+): Pick<ChatToolTurnOptions<ChatSourcesContext>, "guidance" | "selectTools"> {
+  if (options.primary.kind !== "jira") return {};
+  const { deps, message, correlationId, mcp } = options;
+  return {
+    guidance: jiraTurnGuidance(
+      deps.jiraDraftStore,
+      message.chatId,
+      deps.activityLog,
+      correlationId,
+    ),
+    selectTools: selectedSourceCatalog(deps, message.chatId, mcp.managed, bind),
+  };
 }
 
 /** One binder, harness and model loop; source adapters keep their existing consent and effect owners. */
@@ -219,27 +274,8 @@ class ChatSourcesToolTurn extends ChatToolTurn<ChatSourcesContext> {
       managed,
       context: initialContext,
       budget: primary.options.authority.envelope.budget,
-      ...(sourcePreparation === undefined
-        ? {}
-        : {
-            prepareInvocation: async (call, actionId, ports) => {
-              const source = await sourcePreparation.prepareInvocation(call, actionId);
-              await humanInput?.prepare(call, actionId, ports);
-              return source;
-            },
-            finalizeInvocation: (actionId: string) => humanInput?.finalize(actionId),
-          }),
-      ...(primary.kind === "jira"
-        ? {
-            guidance: jiraTurnGuidance(
-              deps.jiraDraftStore,
-              message.chatId,
-              deps.activityLog,
-              correlationId,
-            ),
-            selectTools: selectedSourceCatalog(deps, message.chatId, mcp.managed, bind),
-          }
-        : {}),
+      ...sourceInvocationPorts(sourcePreparation, humanInput, initialContext),
+      ...sourceSelectionPorts(sourceOptions, bind),
       bind: bind(managed),
     });
     this.sourcePreparation = sourcePreparation;

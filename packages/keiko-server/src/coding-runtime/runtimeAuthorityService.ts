@@ -506,7 +506,9 @@ export function codingRuntimeConnectorScopesForSelection(
 export function codingRuntimeNetworkPolicyForMode(
   mode: CodingWorkbenchMode,
   researchEgressEnabled: boolean | undefined,
-  connectorScopes: readonly CodingWorkbenchConnectorScope[] = codingRuntimeConnectorScopesForMode(mode),
+  connectorScopes: readonly CodingWorkbenchConnectorScope[] = codingRuntimeConnectorScopesForMode(
+    mode,
+  ),
 ): CodingWorkbenchNetworkPolicy {
   // The connector scopes a mode carries follow deliveryScopeGranted (see
   // codingRuntimeConnectorScopesForMode), but the envelope contract
@@ -556,9 +558,13 @@ function narrowAuthorityToMode(
   const retainGovernedResearch = authority.networkPolicy.mode === "governed-egress";
   const allowedActionClasses = codingRuntimeActionClassesForMode(mode, retainGovernedResearch);
   const allowedConnectorScopes = codingRuntimeConnectorScopesForSelection(
-    mode, authority.connectorScopes.includes("issue-tracker.read"), authority.connectorScopes,
+    mode,
+    authority.connectorScopes.includes("issue-tracker.read"),
+    authority.connectorScopes,
   );
-  const connectorScopes = authority.connectorScopes.filter((value) => allowedConnectorScopes.includes(value));
+  const connectorScopes = authority.connectorScopes.filter((value) =>
+    allowedConnectorScopes.includes(value),
+  );
   return {
     ...authority,
     effectiveMode: mode,
@@ -1162,6 +1168,12 @@ export class CodingRuntimeAuthorityService {
    */
   public promptAllowanceExhausted(runId: string): boolean {
     return this.lastPromptRefusal(runId) === "prompt-allowance";
+  }
+
+  /** Server-private lifetime boundary already accepted at minting; never a new grant or TTL. */
+  public runtimeDeadline(runId: string): number | undefined {
+    const deadline = this.mintedRuntimeDeadline;
+    return deadline?.runId === runId ? deadline.deadlineMs : undefined;
   }
 
   /**

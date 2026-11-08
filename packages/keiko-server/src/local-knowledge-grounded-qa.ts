@@ -18,6 +18,11 @@ import {
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { createGroundedSynthesisCallBudget } from "./grounded-answer.js";
 import {
+  buildCitationRepairPrompt,
+  citationRepairContent,
+  fitsCitationRepairTextLimit,
+} from "./grounded-citation-repair.js";
+import {
   callPluralGroundedSynthesis,
   type GroundedSynthesisPurpose,
 } from "./grounded-plural-synthesis.js";
@@ -128,6 +133,7 @@ import {
 } from "./grounded-rerank-facade.js";
 import { buildHtmlManualCitationNavigationTarget } from "./html-manual-citation-navigation.js";
 import {
+  buildPackCitationIndex,
   entailmentUnavailableMarker,
   missingCitationMarkerFor,
   reconcileNumericCitations,
@@ -754,7 +760,8 @@ function renderConnectorEvidence(
 
 // The count of the references this prompt actually shows: a window-fitted prompt carries fewer than
 // retrieval found, and telling the model the retrieved total invites markers beyond the ones sent.
-function localKnowledgeRepairInstruction(assessmentAllowed: boolean): string {
+function localKnowledgeRepairInstruction(assessmentAllowed: boolean, original?: string): string {
+  if (original !== undefined) return buildCitationRepairPrompt(original, "numeric");
   const scope = assessmentAllowed ? "outside the <assessment> block " : "";
   return `The previous answer was rejected because it did not use valid inline [n] citations. Rewrite the answer now. Every factual sentence ${scope}must include at least one matching [n] marker from the supplied citations. Do not invent citations.`;
 }
@@ -773,6 +780,7 @@ function buildLocalKnowledgeMessages(
   redactExcerpt: (value: string) => string,
   limits: ReturnType<typeof currentGroundingLimits>,
   protectedSkill?: MarkdownSkillDocument,
+  repairOriginal?: string,
 ): {
   readonly messages: readonly { readonly role: "system" | "user"; readonly content: string }[];
   readonly numericEvidence: readonly NumericEntailmentEvidence[];
@@ -780,7 +788,9 @@ function buildLocalKnowledgeMessages(
   const rendered = buildReferenceLines(input, store, redactExcerpt, limits);
   const assessmentAllowed = input.query.ownAssessment === "allowed";
   const repairInstruction =
-    input.citationRepair === true ? ["", localKnowledgeRepairInstruction(assessmentAllowed)] : [];
+    input.citationRepair === true
+      ? ["", localKnowledgeRepairInstruction(assessmentAllowed, repairOriginal)]
+      : [];
   const messages = [
     {
       role: "system",
@@ -834,6 +844,8 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
   private readonly synthesis = createGroundedSynthesisCallBudget();
   private lastComplete = true;
   private lastInput: AnswerGeneratorInput | undefined;
+  /** The original of this generator's mixed answer, never another turn or persisted history. */
+  private lastAnswer: string | undefined;
 
   public constructor(
     private readonly model: ModelPort,
@@ -867,7 +879,50 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
     this.lastComplete = response.finishReason === "stop";
     const content = response.content.trim();
     assertUsableAssistantContent(content, this.modelId);
-    return content;
+    if (input.citationRepair !== true) this.lastAnswer = content;
+    const original = this.mixedRepairOriginal(input);
+    return original === undefined ? content : this.validatedRepair(original, content);
+  }
+
+  private mixedRepairOriginal(input: AnswerGeneratorInput): string | undefined {
+    return input.citationRepair === true && this.context.deps.chatToolTurn !== undefined
+      ? this.lastAnswer
+      : undefined;
+  }
+
+  private validatedRepair(original: string, candidate: string): string {
+    const markers = new Set(this.sentReferences.map((_reference, index) => index + 1));
+    try {
+      const repaired = citationRepairContent(
+        original,
+        candidate,
+        buildPackCitationIndex([]),
+        markers,
+      );
+      return repaired ?? this.retainRepairOriginal(original, "rejected-content-changed");
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      // Malformed annotation JSON is an unavailable optional repair, never a replacement answer.
+      return this.retainRepairOriginal(original, "failed");
+    }
+  }
+
+  private retainRepairOriginal(
+    original: string,
+    disposition: "rejected-content-changed" | "failed",
+  ): string {
+    const markers = new Set(this.sentReferences.map((_reference, index) => index + 1));
+    logCitationReconciliation(
+      {
+        answer: original,
+        referenceCount: this.sentReferences.length,
+        attachedIndices: [...reconcileNumericCitations(original, markers).citedMarkers],
+        refusal: false,
+      },
+      this.context.correlationId,
+      { citationRepairDisposition: disposition },
+    );
+    return original;
   }
 
   private async answerResponse(input: AnswerGeneratorInput): Promise<NormalizedResponse> {
@@ -950,6 +1005,8 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
     if (this.synthesis.remaining() <= 0) return false;
     const toolTurn = this.context.deps.chatToolTurn;
     if (toolTurn === undefined) return true;
+    if (this.lastAnswer === undefined || !fitsCitationRepairTextLimit(this.lastAnswer))
+      return false;
     return !toolTurn.endedEarly && this.repairFitsGrant();
   }
 
@@ -966,6 +1023,7 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
       this.redactExcerpt,
       this.limits,
       this.selectedSkill(),
+      this.lastAnswer,
     ).messages;
     // A repair sends the tool results again, which only the last measured prompt counts (S11).
     const promptTokens = Math.max(
@@ -992,6 +1050,22 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
     return id === undefined ? undefined : this.context.deps.store.markdownSkills.forTurn(id);
   }
 
+  private renderPrompt(
+    input: AnswerGeneratorInput,
+    count: number,
+    skill: MarkdownSkillDocument | undefined,
+  ): ReturnType<typeof buildLocalKnowledgeMessages> {
+    return buildLocalKnowledgeMessages(
+      input.query.answerQuestion ?? input.query.text,
+      { ...input, references: input.references.slice(0, count) },
+      this.store,
+      this.redactExcerpt,
+      this.limits,
+      skill,
+      this.mixedRepairOriginal(input),
+    );
+  }
+
   private callWithinWindow(
     input: AnswerGeneratorInput,
     retryFollows: (error: unknown) => boolean,
@@ -999,14 +1073,7 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
     const available = Math.min(input.references.length, this.limits.maxPromptReferences);
     const skill = this.selectedSkill();
     const render = (count: number): ReturnType<typeof buildLocalKnowledgeMessages> =>
-      buildLocalKnowledgeMessages(
-        input.query.answerQuestion ?? input.query.text,
-        { ...input, references: input.references.slice(0, count) },
-        this.store,
-        this.redactExcerpt,
-        this.limits,
-        skill,
-      );
+      this.renderPrompt(input, count, skill);
     const profile = currentContextProfileForModel(this.context.deps, this.modelId);
     const fitted = fitKnowledgePrompt(available, render, profile, {
       correlationId: this.context.correlationId,
