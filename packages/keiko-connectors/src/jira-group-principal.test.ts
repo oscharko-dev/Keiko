@@ -19,6 +19,14 @@ describe("supported exact native group principal binding", () => {
     expect(await bind(send, "R&D team")).toMatchObject({ ok: false, reason: "unavailable" });
     expect(send).toHaveBeenCalledTimes(1);
   });
+  it("explains a broad short name when the exact group falls outside a 100-row fuzzy prefix", async () => {
+    const send = request({ groups: Array.from({ length: 100 }, (_, index) => ({ name: `dev-team-${String(index)}` })), total: 101 });
+    const result = await bind(send, "dev");
+    expect(result).toMatchObject({ ok: false, reason: "unavailable", detail: { messages: [expect.stringContaining("too broad")] } });
+    expect(result?.detail?.messages?.[0]).toContain("at most 100");
+    expect(result?.detail?.messages?.[0]).toContain("make this assignment in Jira");
+    expect(send).toHaveBeenCalledExactlyOnceWith("groups/picker?query=dev&maxResults=100", "GET", undefined, "json");
+  });
   it.each([
     { groups: [{ name: "R&D team" }, { name: "R&D team" }], total: 2 },
     { groups: [{ name: "R&D team" }, {}], total: 2 },
