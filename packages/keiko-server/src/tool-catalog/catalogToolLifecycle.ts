@@ -13,6 +13,7 @@ import {
   toolLifecyclePhaseFor,
   type ToolLifecycleEvent,
   type ToolLifecyclePhase,
+  TOOL_PROVIDER_REASONS,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
 import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import {
@@ -59,10 +60,12 @@ const TERMINAL_OPTIONAL = [
   "outputBytes",
   "resultCount",
   "truncated",
+  "providerReason",
   "errorKind",
   "frames",
   "causeChain",
 ];
+const PROVIDER_REASONS: ReadonlySet<string> = new Set(TOOL_PROVIDER_REASONS);
 const DIGEST_FIELDS = new Set(["catalogRevision", "projectionDigest", "handlerSetDigest"]);
 const ID_FIELDS = new Set(["invocationId", "reservationId", "settlementId"]);
 const METRIC_FIELDS = new Set(["durationMs", "inputBytes", "outputBytes", "resultCount"]);
@@ -306,6 +309,17 @@ const TOOL_CATALOG_INVOCATION_SETTLED_OPERATION = defineActivityLogOperation({
     outputBytes: { type: "integer", dataClass: "count", required: false },
     resultCount: { type: "integer", dataClass: "count", required: false },
     truncated: { type: "boolean", dataClass: "closed-enum", required: false },
+    providerReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "budget-exhausted",
+        "selection-unavailable",
+        "selection-too-large",
+        "invalid-arguments",
+      ],
+    },
     frames: {
       type: "string-array",
       dataClass: "opaque-id",
@@ -432,6 +446,7 @@ function validStateField(key: string, value: CatalogJsonValue): boolean {
   if (key === "errorKind") return isErrorKind(value);
   if (key === "effectStarted" || key === "truncated") return typeof value === "boolean";
   if (key === "readiness") return typeof value === "string" && READINESS.has(value);
+  if (key === "providerReason") return typeof value === "string" && PROVIDER_REASONS.has(value);
   return typeof value === "string";
 }
 function optionalFields(phase: ToolLifecyclePhase): readonly string[] {
@@ -686,6 +701,7 @@ function settledFields(
     ...(event.outputBytes === undefined ? {} : { outputBytes: event.outputBytes }),
     ...(event.resultCount === undefined ? {} : { resultCount: event.resultCount }),
     ...(event.truncated === undefined ? {} : { truncated: event.truncated }),
+    ...(event.providerReason === undefined ? {} : { providerReason: event.providerReason }),
     ...(event.status === "failed" ? { frames: event.frames, causeChain: event.causeChain } : {}),
   };
 }

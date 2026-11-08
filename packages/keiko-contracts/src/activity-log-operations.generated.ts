@@ -45255,6 +45255,17 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: false,
       },
+      providerReason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "budget-exhausted",
+          "selection-unavailable",
+          "selection-too-large",
+          "invalid-arguments",
+        ],
+      },
       frames: {
         type: "string-array",
         dataClass: "opaque-id",

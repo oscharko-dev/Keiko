@@ -48434,6 +48434,12 @@
               "required": true
             },
             {
+              "name": "providerReason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "reason",
               "type": "string",
               "dataClass": "closed-enum",

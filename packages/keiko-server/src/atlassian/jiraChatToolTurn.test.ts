@@ -11,6 +11,7 @@ import {
 } from "../../../../tests/support/buffered-server-log.js";
 import {
   expectActivityLogProof,
+  expectRegisteredActivityLogLine,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
@@ -3735,6 +3736,43 @@ it("extends the curated Jira base after a settled describe round and preserves e
     },
   ]);
   expect(exchanges.every((entry) => entry.result?.status === "completed")).toBe(true);
+});
+
+it("records the closed too-large selection refusal on the settled tool-result line", async () => {
+  const logs = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink: logs, level: "info" }));
+  cleanups.push(() => {
+    resetServerLogger();
+    return Promise.resolve();
+  });
+  const f = fixture(false, undefined, true, false, false, undefined, true);
+  configure(f.deps, true, 32768);
+  // The demand model already selects the project read first; every other contract follows it.
+  const everything = jiraOperationContracts()
+    .map((entry) => entry.binding.identity)
+    .filter((identity) => identity !== "GET /rest/api/2/project");
+  demandSelectedModel(f, false, undefined, everything);
+  await handleSendDesktopChat(sendContext(f, "demand-too-large"), f.deps);
+  const exchange = demandExchanges(f).find((entry) => entry.call.name === "jira_describe");
+  expect(exchange?.result).toMatchObject({
+    status: "failed",
+    reason: "provider-reported-error",
+    data: { reason: "selection-too-large" },
+  });
+  const settled = logs.events.filter(
+    (event) =>
+      event.op === "tool-catalog.invocation-settled" &&
+      event.extra?.providerReason === "selection-too-large",
+  );
+  expect(settled).toHaveLength(1);
+  expect(settled[0]?.correlationId).toEqual(expect.any(String));
+  expectRegisteredActivityLogLine(
+    "tool-catalog.invocation-settled",
+    formatActivityLogProofLine(settled[0] ?? {}),
+  );
+  const line = JSON.stringify(settled[0]);
+  expect(line).not.toContain("jira_describe");
+  expect(line).not.toContain("GET /rest/api");
 });
 
 it("closes the newly prepared subset when retiring the preceding pending host fails", async () => {
