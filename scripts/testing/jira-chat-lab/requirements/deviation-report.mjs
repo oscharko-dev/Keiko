@@ -3,6 +3,10 @@
 // matching rule or field id, and the answer attributes the deviation to that issue without denying
 // it. Word occurrence alone proves nothing: "Summary, Parent and Label are correct" contains the
 // words of every seeded deviation.
+import {
+  createJiraReportTemplateChecker,
+  resolveJiraTemplateFieldIds,
+} from "@oscharko-dev/keiko-connectors";
 import { completedToolExchange } from "./tool-exchanges.mjs";
 const ISSUE_KEY = /RPT-\d+/g;
 
@@ -61,7 +65,7 @@ const STRUCTURED_IDS = {
 
 /** Whether a structured entry names the seeded deviation by its rule ids or its field ids. */
 function structurallyReported(code, entry, fieldIds, sectionCount) {
-  const ids = [...entry.ruleIds, ...entry.fieldIds].map(normalized);
+  const ids = [...entry.ruleIds, ...entry.fieldIds].map((id) => normalized(id));
   const mentions = (pattern) => ids.some((id) => pattern.test(id));
   const [kind, detail = ""] = code.split(":");
   if (kind === "section") {
@@ -142,19 +146,19 @@ const CLAUSE_BREAK = /[.;!?\n]+|\s+(?:aber|jedoch|während|whereas|but|however|a
 
 // A line that names no issue and ends in a colon, or a Markdown heading, introduces what follows.
 const LEAD = /^\s*(?:#{1,6}\s+\S.*|.*\S:[*_`\s]*)$/;
-const NAMES_ISSUE = new RegExp(ISSUE_KEY.source);
 
 /**
  * For each line of a list that a lead introduces, the index of that lead: a lead whose next
  * non-blank line names an issue covers every following line up to the first non-blank line that
  * names none. "**Abschnitt Abgrenzung fehlt:**" over "* RPT-6, RPT-12" attributes it to both.
  */
-function listLeads(lines) {
+function listLeads(lines, issueKey) {
+  const namesIssue = new RegExp(issueKey.source);
   const leads = new Map();
   let lead;
   for (const [index, line] of lines.entries()) {
     if (line.trim() === "") continue;
-    if (NAMES_ISSUE.test(line)) {
+    if (namesIssue.test(line)) {
       if (lead !== undefined) leads.set(index, lead);
     } else {
       lead = LEAD.test(line) ? index : undefined;
@@ -192,9 +196,9 @@ const clausesOf = (keyLines) =>
  * the issues of the list before it. The context is never credited as a description by itself, but
  * it can deny ("## No deviations found" over a list) or state that what follows are deviations.
  */
-function clausesByKey(answer) {
+function clausesByKey(answer, issueKey = ISSUE_KEY) {
   const lines = answer.split("\n");
-  const leads = listLeads(lines);
+  const leads = listLeads(lines, issueKey);
   const headings = enclosingHeadings(lines);
   const opening = new Set(leads.values());
   const segments = new Map();
@@ -202,7 +206,7 @@ function clausesByKey(answer) {
   let current = [];
   for (const [index, line] of lines.entries()) {
     if (opening.has(index)) continue;
-    const keys = line.match(ISSUE_KEY);
+    const keys = line.match(issueKey);
     if (keys) current = [...new Set(keys)];
     const attributed = leads.has(index) ? [lines[leads.get(index)], line] : [line];
     const framing = [...(leads.has(index) ? [lines[leads.get(index)]] : []), ...headings[index]];
@@ -279,10 +283,16 @@ function gaps(issue, structured, part, fieldIds) {
  * each of them is both reported by the tool for that issue and described in that issue's part of the
  * answer without negation.
  */
-export function gradeDeviationReport(answer, issues, structured, fieldIds = {}) {
+export function gradeDeviationReport(
+  answer,
+  issues,
+  structured,
+  fieldIds = {},
+  issueKey = ISSUE_KEY,
+) {
   const expected = issues.filter((issue) => issue.deviations.length > 0);
   const expectedKeys = new Set(expected.map((issue) => issue.key));
-  const parts = clausesByKey(answer);
+  const parts = clausesByKey(answer, issueKey);
   const reported = new Set([...parts.keys()].filter((key) => !issueDenied(key, parts.get(key))));
   const found = expected.filter((issue) => reported.has(issue.key) && structured.has(issue.key));
   const falseFindings = [...reported].filter((key) => !expectedKeys.has(key));
@@ -307,4 +317,545 @@ export function gradeDeviationReport(answer, issues, structured, fieldIds = {}) 
     undescribed,
     deviationCount: expected.reduce((sum, issue) => sum + issue.deviations.length, 0),
   };
+}
+
+// ---------- S11b: a whole large report against independent native pages ----------
+
+const LARGE_ISSUE_KEY = /\b[A-Z][A-Z0-9_]*-\d+\b/g;
+const sameStrings = (left, right) =>
+  Array.isArray(left) &&
+  Array.isArray(right) &&
+  left.length === right.length &&
+  new Set(left).size === left.length &&
+  left.every((value) => typeof value === "string" && right.includes(value));
+
+function largeTruthFields(truth) {
+  return (
+    typeof truth.fieldIds?.epicLink === "string" &&
+    truth.issues.length === truth.issueCount &&
+    sameStrings(truth.templateScope?.issueTypes, ["Epic", "Task", "Bug"])
+  );
+}
+
+/** The versioned seed is a review snapshot, never evidence that Jira still holds those values. */
+export function largeDeviationTruth(value) {
+  const truth = value?.large ?? value;
+  if (!isRecord(truth) || truth.seedVersion !== 2 || !Array.isArray(truth.issues)) return undefined;
+  if (typeof truth.project !== "string" || !/^[A-Z][A-Z0-9_]{0,9}$/u.test(truth.project))
+    return undefined;
+  return largeTruthFields(truth) ? truth : undefined;
+}
+
+function nativePageReceipt(page, offset, total) {
+  return (
+    page.startAt === offset &&
+    page.maxResults === 100 &&
+    page.total === total &&
+    Number.isSafeInteger(page.count) &&
+    page.count >= 1 &&
+    page.count <= 100
+  );
+}
+
+function completeNativePages(observed) {
+  if (
+    !Array.isArray(observed?.issues) ||
+    !Array.isArray(observed.pages) ||
+    observed.pages.length < 3
+  )
+    return false;
+  let offset = 0;
+  for (const page of observed.pages) {
+    if (!nativePageReceipt(page, offset, observed.issues.length)) return false;
+    offset += page.count;
+  }
+  return offset === observed.issues.length;
+}
+
+function nativeDeviations(issue, truth, epics) {
+  const { fields } = issue;
+  if (!truth.templateScope.issueTypes.includes(fields.issuetype.name)) return [];
+  if (!Array.isArray(fields.labels) || !Object.hasOwn(fields, truth.fieldIds.epicLink))
+    return undefined;
+  const codes = fields.labels.includes("anforderung") ? [] : ["label:anforderung"];
+  if (fields.issuetype.name === "Task" && !epics.has(fields[truth.fieldIds.epicLink]))
+    codes.push("parent");
+  return codes;
+}
+
+function sameNativeMetadata(expected, actual, project) {
+  if (!isRecord(expected) || !isRecord(actual?.fields)) return false;
+  const fields = actual.fields;
+  return (
+    actual.key === expected.key &&
+    actual.key.startsWith(`${project}-`) &&
+    fields.issuetype?.name === expected.type &&
+    fields.status?.name === expected.status
+  );
+}
+
+function sameNativeParent(expected, fields, truth) {
+  if (fields.issuetype.subtask === true) {
+    return typeof expected.parent === "string" && fields.parent?.key === expected.parent;
+  }
+  if (expected.parent !== undefined && fields.parent?.key !== expected.parent) return false;
+  if (truth.templateScope.issueTypes.includes(expected.type))
+    return fields[truth.fieldIds.epicLink] === (expected.epic ?? null);
+  return expected.epic === undefined || fields[truth.fieldIds.epicLink] === expected.epic;
+}
+
+function sameNativeIssue(expected, actual, truth, epics) {
+  if (!sameNativeMetadata(expected, actual, truth.project)) return false;
+  const fields = actual.fields;
+  if (!sameStrings(fields.labels, expected.labels)) return false;
+  if (!sameNativeParent(expected, fields, truth)) return false;
+  return sameStrings(nativeDeviations(actual, truth, epics), expected.deviations);
+}
+
+function observedLargeTruth(observed, truth) {
+  if (!completeNativePages(observed) || observed.issues.length !== truth.issueCount) return false;
+  const expected = new Map(truth.issues.map((issue) => [issue.key, issue]));
+  const actual = new Map(observed.issues.map((issue) => [issue.key, issue]));
+  if (expected.size !== truth.issueCount || actual.size !== truth.issueCount) return false;
+  const epics = new Set(
+    observed.issues
+      .filter((issue) => issue.fields?.issuetype?.name === "Epic")
+      .map((issue) => issue.key),
+  );
+  return observed.issues.every((issue) =>
+    sameNativeIssue(expected.get(issue.key), issue, truth, epics),
+  );
+}
+
+function completeReportIdentity(data, summary, truth) {
+  if (data?.outcome !== "succeeded" || data.status !== "complete") return false;
+  if (data.reportId !== summary.reportId || data.report?.digest !== summary.report.digest)
+    return false;
+  return completeReportPopulation(data.report.completeness, truth.issueCount);
+}
+
+const completeReportPopulation = (complete, count) =>
+  complete?.complete === true && complete.issuesRead === count && complete.issuesTotal === count;
+
+function reportSummary(exchanges, truth) {
+  return exchanges
+    .filter(completedReport)
+    .map((exchange) => exchange.result.data)
+    .find(
+      (data) =>
+        data?.report?.scope?.projectKey === truth.project && isRecord(data.report.compliance),
+    );
+}
+
+function readDeviationPage(data, call, summary, offset) {
+  if (data === summary) return { ...data.report.compliance.deviations, startAt: 0 };
+  const page = data.section;
+  if (page?.name !== "deviations" || call.arguments?.reportId !== summary.reportId)
+    return undefined;
+  if (call.arguments.section !== "deviations" || call.arguments.startAt !== offset)
+    return undefined;
+  return page;
+}
+
+function deviationPageBounds(page, state) {
+  if (
+    !isRecord(page) ||
+    !Array.isArray(page.items) ||
+    page.startAt !== state.offset ||
+    page.total !== state.total
+  )
+    return false;
+  const end = state.offset + page.items.length;
+  if (end > state.total || (end < state.total && page.items.length === 0)) return false;
+  if (page.nextStartAt !== (end < state.total ? end : undefined)) return false;
+  return true;
+}
+
+function appendDeviationPage(page, state) {
+  if (!deviationPageBounds(page, state)) return false;
+  for (const item of page.items) {
+    if (!isRecord(item) || typeof item.key !== "string" || state.entries.has(item.key))
+      return false;
+    if (!sameStrings(item.ruleIds, item.ruleIds) || !sameStrings(item.fieldIds, item.fieldIds))
+      return false;
+    state.entries.set(item.key, {
+      ruleIds: new Set(item.ruleIds),
+      fieldIds: new Set(item.fieldIds),
+      details: strings(item.details),
+    });
+  }
+  state.offset += page.items.length;
+  return true;
+}
+
+function templatePopulation(truth) {
+  const without = new Map();
+  for (const issue of truth.issues) {
+    if (!truth.templateScope.issueTypes.includes(issue.type))
+      without.set(issue.type, (without.get(issue.type) ?? 0) + 1);
+  }
+  const uncovered = [...without.values()].reduce((sum, count) => sum + count, 0);
+  return { checked: truth.issueCount - uncovered, uncovered, without };
+}
+
+function sameUncoveredTypes(rows, without) {
+  if (!Array.isArray(rows) || rows.length !== without.size) return false;
+  const names = new Set();
+  for (const row of rows) {
+    if (
+      !isRecord(row) ||
+      !without.has(row.typeName) ||
+      names.has(row.typeName) ||
+      row.count !== without.get(row.typeName)
+    )
+      return false;
+    names.add(row.typeName);
+  }
+  return true;
+}
+
+function completeComplianceScope(compliance, truth) {
+  const population = templatePopulation(truth);
+  if (compliance.checker !== "applied" || compliance.issuesChecked !== population.checked)
+    return false;
+  if (
+    compliance.issuesWithoutTemplate !== population.uncovered ||
+    compliance.issuesJudged !== truth.issueCount
+  )
+    return false;
+  if (population.uncovered > 0 && compliance.requiredFieldRules !== "applied") return false;
+  return sameUncoveredTypes(compliance.withoutTemplateByType, population.without);
+}
+
+function completeComplianceSummary(summary, truth) {
+  if (typeof summary?.reportId !== "string" || !/^[a-f0-9]{64}$/u.test(summary.report.digest ?? ""))
+    return undefined;
+  const compliance = summary.report.compliance;
+  const total = compliance.deviations?.total;
+  if (!Number.isSafeInteger(total) || total < 0) return undefined;
+  if (!completeComplianceScope(compliance, truth)) return undefined;
+  return { compliance, total };
+}
+
+const carriesDeviations = (data) =>
+  isRecord(data?.report?.compliance) || data?.section?.name === "deviations";
+
+function completeLargeDeviations(exchanges, truth) {
+  const summary = reportSummary(exchanges, truth);
+  const admitted = completeComplianceSummary(summary, truth);
+  if (admitted === undefined) return undefined;
+  const { compliance, total } = admitted;
+  const state = { total, offset: 0, entries: new Map() };
+  for (const exchange of exchanges.filter(completedReport)) {
+    const data = exchange.result.data;
+    if (!carriesDeviations(data)) continue;
+    if (!completeReportIdentity(data, summary, truth)) return undefined;
+    const page = readDeviationPage(data, exchange.call, summary, state.offset);
+    if (!appendDeviationPage(page, state)) return undefined;
+  }
+  if (state.offset !== total || state.entries.size !== total) return undefined;
+  return { entries: state.entries, compliance };
+}
+
+function exactLargeEntries(issues, entries, epicLink) {
+  return issues.every((issue) => {
+    const entry = entries.get(issue.key);
+    if (issue.deviations.length === 0) return entry === undefined;
+    if (entry === undefined) return false;
+    const rules = issue.deviations.map((code) =>
+      code === "parent" ? "parent-missing" : "label-missing",
+    );
+    const fields = issue.deviations.map((code) => (code === "parent" ? epicLink : "labels"));
+    return sameStrings([...entry.ruleIds], rules) && sameStrings([...entry.fieldIds], fields);
+  });
+}
+
+const largeUnverified = (detail, counts = {}) => ({ status: "unverified", detail, counts });
+const largeGradeStatus = (grade, exact, falseFindings) =>
+  grade.keysOk && grade.detailOk && exact && falseFindings === 0 ? "green" : "red";
+
+function templateGapsLabelled(answer, without) {
+  const rows = answer
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("VORLAGENLÜCKE;"));
+  const observed = new Map();
+  for (const row of rows) {
+    const cells = row.split(";");
+    if (cells.length !== 3 || observed.has(cells[1]) || !/^[1-9][0-9]*$/u.test(cells[2]))
+      return false;
+    observed.set(cells[1], Number(cells[2]));
+  }
+  return sameUncoveredTypes(
+    [...observed].map(([typeName, count]) => ({ typeName, count })),
+    without,
+  );
+}
+
+function exactLargeReport(report, grade, truth, answer) {
+  return (
+    report.compliance.issuesWithDeviations === grade.expected &&
+    report.compliance.deviationCount === grade.deviationCount &&
+    exactLargeEntries(truth.issues, report.entries, truth.fieldIds.epicLink) &&
+    templateGapsLabelled(answer, templatePopulation(truth).without)
+  );
+}
+
+function largeCoverageEvidence(observed, truth) {
+  const population = templatePopulation(truth);
+  return {
+    counts: {
+      issues: observed.issues.length,
+      pages: observed.pages.length,
+      templateCheckedIssues: population.checked,
+      issuesWithoutTemplate: population.uncovered,
+    },
+    detail: `${population.checked} template-checked issues; ${population.uncovered} issues without template`,
+  };
+}
+
+function gradeObservedLargeReport(report, truth, answer, coverage) {
+  const grade = gradeDeviationReport(
+    answer,
+    truth.issues,
+    report.entries,
+    truth.fieldIds,
+    LARGE_ISSUE_KEY,
+  );
+  const expectedKeys = new Set(
+    truth.issues.filter((issue) => issue.deviations.length > 0).map((issue) => issue.key),
+  );
+  const extras = [...report.entries.keys()].filter((key) => !expectedKeys.has(key));
+  const falseFindings = new Set([...grade.falseFindings, ...extras]).size;
+  const exact = exactLargeReport(report, grade, truth, answer);
+  return {
+    status: largeGradeStatus(grade, exact, falseFindings),
+    detail: `${grade.found}/${grade.expected} deviating issues; ${grade.deviationCount} deviations; ${falseFindings} false findings; ${coverage.counts.pages} independent native pages; ${coverage.detail}`,
+    counts: {
+      ...coverage.counts,
+      deviations: grade.deviationCount,
+      deviatingIssues: grade.expected,
+      falseFindings,
+    },
+  };
+}
+
+/** Shared S11b/limit-run oracle. The caller supplies this turn's answer and tool exchanges. */
+export function gradeLargeDeviationReport(exchanges, observed, value, answer) {
+  const truth = largeDeviationTruth(value);
+  if (truth === undefined) return largeUnverified("versioned large-project truth is unavailable");
+  if (!observedLargeTruth(observed, truth))
+    return largeUnverified("independent native pages or seed agreement are unavailable");
+  const coverage = largeCoverageEvidence(observed, truth);
+  const report = completeLargeDeviations(Array.isArray(exchanges) ? exchanges : [], truth);
+  if (report === undefined)
+    return largeUnverified(
+      `a complete, coherent report deviation sequence is unavailable; ${coverage.detail}`,
+      coverage.counts,
+    );
+  if (typeof answer !== "string")
+    return largeUnverified(
+      `this turn's readable report answer is unavailable; ${coverage.detail}`,
+      coverage.counts,
+    );
+  return gradeObservedLargeReport(report, truth, answer, coverage);
+}
+
+/** Parent type proof comes only from the complete independent JQL population. */
+function observedParentRequest(issues) {
+  const reads = new Map();
+  for (const issue of issues) {
+    const response = {
+      ok: true,
+      status: 200,
+      body: {
+        id: issue.id,
+        key: issue.key,
+        fields: { issuetype: issue.fields.issuetype },
+      },
+    };
+    for (const selector of [issue.id, issue.key])
+      reads.set("issue/" + encodeURIComponent(selector) + "?fields=issuetype", response);
+  }
+  return (path, options) => {
+    if (options?.method !== undefined && options.method !== "GET")
+      throw new TypeError("The independent oracle is read-only");
+    return Promise.resolve(reads.get(path) ?? { ok: false, reason: "unavailable" });
+  };
+}
+
+function issueFacts(issue, project) {
+  return {
+    key: issue.key,
+    projectKey: project,
+    issueTypeId: issue.fields.issuetype.id,
+    typeName: issue.fields.issuetype.name,
+    category: issue.fields.status.statusCategory.key,
+    fields: issue.fields,
+  };
+}
+
+/** One completion promise; each pure check settles before the next issue is evaluated. */
+function checkedNativeIssues(checker, issues, project) {
+  const request = observedParentRequest(issues);
+  const rows = [];
+  let index = 0;
+  return new Promise((resolve, reject) => {
+    const next = () => {
+      Promise.resolve()
+        .then(() => {
+          const issue = issues[index];
+          const facts = issueFacts(issue, project);
+          const covered = checker.covers(facts);
+          if (covered && checker.fieldIds.some((id) => !Object.hasOwn(issue.fields, id)))
+            throw new TypeError("Requested native rule evidence is unavailable");
+          return Promise.resolve(checker.check(facts, request)).then((violations) => {
+            if (violations === "unavailable")
+              throw new TypeError("Native rule evidence is unavailable");
+            rows.push({ issue, covered, violations });
+          });
+        })
+        .then(() => {
+          index += 1;
+          if (index === issues.length) resolve(rows);
+          else next();
+        }, reject);
+    };
+    if (issues.length === 0) resolve(rows);
+    else next();
+  });
+}
+
+function runtimeTemplateTruth(truth, rows) {
+  const covered = new Set(
+    rows.filter((row) => row.covered).map((row) => row.issue.fields.issuetype.name),
+  );
+  return { ...truth, templateScope: { ...truth.templateScope, issueTypes: [...covered] } };
+}
+
+function literalSeedProof(truth, rows) {
+  const expected = new Map(truth.issues.map((issue) => [issue.key, issue]));
+  return rows.every(({ issue, violations }) => {
+    const seeded = expected.get(issue.key)?.deviations;
+    const actual = literalNativeDefects(issue, truth);
+    return (
+      sameStrings(seeded, actual) &&
+      actual.every((code) =>
+        violations.some(
+          (item) => item.ruleId === (code === "parent" ? "parent-missing" : "label-missing"),
+        ),
+      )
+    );
+  });
+}
+
+function nativeTypeSelected(selector, issue) {
+  const type = issue.fields.issuetype;
+  return selector === type.id || selector.toLowerCase() === type.name.toLowerCase();
+}
+
+function literalNativeDefects(issue, truth) {
+  if (issue.fields.issuetype.subtask === true) return [];
+  const scope = truth.templateScope;
+  const labelRule = scope.labelsForTypes.some((selector) => nativeTypeSelected(selector, issue));
+  const codes =
+    labelRule && !issue.fields.labels.includes("anforderung") ? ["label:anforderung"] : [];
+  const parentRule = Object.entries(scope.parentForTypes).some(
+    ([selector, field]) =>
+      nativeTypeSelected(selector, issue) &&
+      resolveJiraTemplateFieldIds(field, truth.fieldCatalog).includes(truth.fieldIds.epicLink),
+  );
+  if (parentRule && !issue.fields[truth.fieldIds.epicLink]) codes.push("parent");
+  return codes;
+}
+
+function violationPattern(item) {
+  if (item.ruleId.startsWith("summary-")) return DEVIATION_WORDS.summary;
+  if (item.ruleId.startsWith("label-")) return DEVIATION_WORDS.label;
+  if (item.ruleId.startsWith("parent-")) return DEVIATION_WORDS.parent;
+  return new RegExp(escapeRegExp(item.subject ?? item.fieldId ?? item.ruleId), "iu");
+}
+
+function runtimeIssueAnswer(part, key, violations) {
+  if (part === undefined || issueDenied(key, part)) return false;
+  return violations.every((item) => {
+    const pattern = violationPattern(item);
+    if (part.context.some((line) => pattern.test(line) && deniesDeviation(line))) return false;
+    return part.clauses.some(
+      (line) => pattern.test(line) && VIOLATION_RE.test(line) && !deniesDeviation(line),
+    );
+  });
+}
+
+function exactRuntimeEntry(entry, violations) {
+  if (violations.length === 0) return entry === undefined;
+  if (entry === undefined) return false;
+  const rules = [...new Set(violations.map((item) => item.ruleId))];
+  const fields = [
+    ...new Set(violations.flatMap((item) => (item.fieldId === undefined ? [] : [item.fieldId]))),
+  ];
+  const details = new Set(
+    violations.map((item) =>
+      item.subject === undefined ? item.ruleId : item.ruleId + ": " + item.subject,
+    ),
+  );
+  return (
+    sameStrings([...entry.ruleIds], rules) &&
+    sameStrings([...entry.fieldIds], fields) &&
+    sameStrings(entry.details, [...details])
+  );
+}
+
+function gradeRuntimeRows(report, rows, truth, answer, coverage) {
+  const parts = clausesByKey(answer, LARGE_ISSUE_KEY);
+  const findings = rows.filter((row) => row.violations.length > 0);
+  const keys = new Set(findings.map((row) => row.issue.key));
+  const reportedKeys = [...parts]
+    .filter(([key, part]) => !issueDenied(key, part))
+    .map(([key]) => key);
+  const falseFindings = new Set(
+    [...reportedKeys, ...report.entries.keys()].filter((key) => !keys.has(key)),
+  ).size;
+  const deviationCount = findings.reduce((count, row) => count + row.violations.length, 0);
+  const exact = rows.every((row) =>
+    exactRuntimeEntry(report.entries.get(row.issue.key), row.violations),
+  );
+  const readable = findings.every((row) =>
+    runtimeIssueAnswer(parts.get(row.issue.key), row.issue.key, row.violations),
+  );
+  const totals =
+    report.compliance.issuesWithDeviations === findings.length &&
+    report.compliance.deviationCount === deviationCount;
+  const gaps = templateGapsLabelled(answer, templatePopulation(truth).without);
+  return {
+    status: exact && readable && totals && gaps && falseFindings === 0 ? "green" : "red",
+    detail:
+      "Independent full-rule findings: " + findings.length + "; deviations: " + deviationCount,
+    counts: {
+      ...coverage.counts,
+      deviations: deviationCount,
+      deviatingIssues: findings.length,
+      falseFindings,
+    },
+  };
+}
+
+/** Runtime projects use the same full checker as write/report admission, on independent native facts. */
+export async function gradeRuntimeDeviationReport(exchanges, observed, truth, answer) {
+  if (!completeNativePages(observed) || observed.issues.length !== truth.issueCount)
+    return largeUnverified("Independent runtime population is unavailable");
+  const checker = createJiraReportTemplateChecker(() => ({
+    templates: truth.templateScope.templates.map((item) => item.rules),
+    unreadable: 0,
+  })).bind(truth.fieldCatalog);
+  if (typeof checker !== "object" || checker === null)
+    return largeUnverified("Installed rule evidence is unavailable");
+  const rows = await checkedNativeIssues(checker, observed.issues, truth.project);
+  if (!literalSeedProof(truth, rows)) return largeUnverified("Literal seed defects changed");
+  const scoped = runtimeTemplateTruth(truth, rows);
+  const coverage = largeCoverageEvidence(observed, scoped);
+  const report = completeLargeDeviations(exchanges, scoped);
+  if (report === undefined)
+    return largeUnverified("Complete report rule evidence is unavailable", coverage.counts);
+  return gradeRuntimeRows(report, rows, scoped, answer, coverage);
 }
