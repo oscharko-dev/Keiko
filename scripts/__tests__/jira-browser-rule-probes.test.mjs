@@ -61,8 +61,10 @@ function refusal(template = "LIM7/Epic") {
       {
         call: { name: "jira_create", arguments: {} },
         result: {
-          toolRef: { canonicalId: "keiko.jira.create" },
+          toolRef: { canonicalId: "keiko.jira.create", contractVersion: 1 },
           status: "failed",
+          reason: "provider-reported-error",
+          effectStarted: false,
           data: {
             outcome: "rejected",
             reason: "field-validation",
