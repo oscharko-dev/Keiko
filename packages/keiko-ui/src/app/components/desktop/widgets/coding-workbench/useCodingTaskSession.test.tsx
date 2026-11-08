@@ -422,6 +422,35 @@ describe("coding task selection", () => {
     await waitFor(() => expect(read).toHaveBeenCalledWith("chat-next", expect.any(String)));
   });
 
+  // Review (#4271): the first status read can report the picked task's own settled run; that run
+  // is the task's, so the window keeps it visible instead of holding it as another task's.
+  it("keeps the picked task's own settled run visible when the first status read reports it", async () => {
+    const two = { ...detail, task: { ...detail.task, id: "chat-two", latestRunId: "run-two" } };
+    read.mockImplementation((id: string) =>
+      Promise.resolve(id === "chat-two" ? two : { ...detail, task: { ...detail.task, id } }),
+    );
+    const { result, rerender } = renderHook(
+      ({ run }: { readonly run: CodingWorkbenchRuntimeSnapshot | null }) =>
+        useCodingTaskSession({
+          snapshot: run,
+          active: run?.state === "running",
+          root: "/repo",
+          workspace: activeWorkspace(),
+          selection: "chat-two",
+        }),
+      { initialProps: { run: null as CodingWorkbenchRuntimeSnapshot | null } },
+    );
+    await waitFor(() => expect(result.current.conversationId).toBe("chat-two"));
+    rerender({ run: { ...snapshot("chat-two"), runId: "run-two" } });
+    await act(async () => Promise.resolve());
+    expect(result.current.conversationId).toBe("chat-two");
+    expect(result.current.visibleRun).toBe(true);
+    expect(reportClientDiagnostic).not.toHaveBeenCalledWith(
+      "[keiko] coding workbench interaction: history-run-held",
+      expect.anything(),
+    );
+  });
+
   // Audit (#4271): the window's own run can settle before a status read ever sees it active; it
   // is a run after the pick, so the window follows it like any other.
   it("follows a run started after the pick even when it is first seen settled", async () => {

@@ -108,7 +108,7 @@ export function useCodingTaskSession(options: SessionInput): CodingTaskSession {
     forkTarget,
   };
   const ignoredRun = useRef<string | undefined>(undefined);
-  const awaitingRun = useRef(false);
+  const awaitingRun = useRef<AwaitedRun>(undefined);
   const latest = useRef(input);
   latest.current = input;
   const controller = useTaskLoader(latest);
@@ -491,7 +491,7 @@ function useHistoryScope(
 function useNewTask(
   latest: { current: SessionInput },
   ignoredRun: { current: string | undefined },
-  awaitingRun: { current: boolean },
+  awaitingRun: { current: AwaitedRun },
   controller: TaskLoader,
 ): () => Promise<void> {
   const { sequence, setDetail, setError, setPending } = controller;
@@ -506,7 +506,7 @@ function useNewTask(
       });
     }
     ignoredRun.current = current.snapshot?.runId;
-    awaitingRun.current = current.snapshot === null;
+    awaitingRun.current = current.snapshot === null ? {} : undefined;
     sequence.current += 1;
     setDetail(null);
     setError(false);
@@ -544,7 +544,7 @@ function useSessionSelection(
   load: (id: string, activate: boolean) => Promise<void>,
   newTask: () => Promise<void>,
   ignoredRun: { current: string | undefined },
-  awaitingRun: { current: boolean },
+  awaitingRun: { current: AwaitedRun },
 ): void {
   const { selection, snapshot, active } = input;
   const statusRead = snapshot !== null;
@@ -564,7 +564,7 @@ function useSessionSelection(
     if (selection.startsWith("new:")) void newTask();
     else {
       ignoredRun.current = snapshot?.runId;
-      awaitingRun.current = !statusRead;
+      awaitingRun.current = statusRead ? undefined : { taskId: selection };
       void load(selection, true);
     }
   }, [
@@ -586,7 +586,7 @@ function useFollowedRun(
   input: SessionInput,
   load: (id: string, activate: boolean) => Promise<void>,
   ignoredRun: { current: string | undefined },
-  awaitingRun: { current: boolean },
+  awaitingRun: { current: AwaitedRun },
 ): void {
   const { snapshot, active } = input;
   const statusRead = snapshot !== null;
@@ -594,9 +594,10 @@ function useFollowedRun(
   useEffect(() => {
     const id = snapshot?.conversationId;
     // A status read without a run tells the window no other task's run is pending.
-    if (statusRead && snapshot?.runId === undefined) awaitingRun.current = false;
+    if (statusRead && snapshot?.runId === undefined) awaitingRun.current = undefined;
     if (id === undefined || snapshot?.runId === ignoredRun.current) return;
-    if (!followsRun(awaitingRun, ignoredRun, snapshot?.runId, active)) return;
+    const run = { conversationId: id, runId: snapshot?.runId };
+    if (!followsRun(awaitingRun, ignoredRun, run, active)) return;
     void load(id, false);
     window.dispatchEvent(new Event(CODING_HISTORY_CHANGED));
   }, [
@@ -630,23 +631,30 @@ function useRemountedSelection(): { current: string | undefined } {
 }
 
 /**
+ * Set while the window waits for its first status read (#4271): `taskId` is the task picked from
+ * Coding History, absent for New task. Undefined once the window follows every run.
+ */
+type AwaitedRun = { readonly taskId?: string } | undefined;
+
+/**
  * Whether the window follows the runtime's run (#4271). The runtime status names the process's
  * latest run, not this window's task. A task picked before the window ever read that status, as in
  * a window opened from Coding History, ignores the run the first status read reports when it has
  * already settled: it belongs to another task and must not replace the picked one. A run already
- * active, and every later run (the window's own start among them), is followed as before; so is
- * every run after a first status read that reported none.
+ * active, a settled run of the picked task itself, and every later run (the window's own start
+ * among them) is followed as before; so is every run after a first status read that reported none.
  */
 function followsRun(
-  awaitingRun: { current: boolean },
+  awaitingRun: { current: AwaitedRun },
   ignoredRun: { current: string | undefined },
-  runId: string | undefined,
+  run: { readonly conversationId: string; readonly runId: string | undefined },
   active: boolean,
 ): boolean {
-  if (!awaitingRun.current) return true;
-  awaitingRun.current = false;
-  if (active) return true;
-  ignoredRun.current = runId;
+  const awaited = awaitingRun.current;
+  if (awaited === undefined) return true;
+  awaitingRun.current = undefined;
+  if (active || awaited.taskId === run.conversationId) return true;
+  ignoredRun.current = run.runId;
   reportCodingWorkbenchInteraction({ interaction: "history-run-held" }, newClientCorrelationId());
   return false;
 }

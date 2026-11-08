@@ -547,9 +547,9 @@ Mode: Full access. Baseline: `initial`. Text: proposed.
 Create a branch named fix/quoted-csv from main. Make parseCsv in src/csv.ts handle RFC 4180 quoted fields, including escaped double quotes inside a quoted field, add regression tests in src/csv.test.ts and run npm test. Then commit with a conventional commit message and push the branch to origin. Do not push to main.
 ```
 
-The `head` tree already parses RFC 4180 quoted fields, so on `head+t7` the task asked for a change
-that exists and a model could rightly commit nothing (2026-11-08); `initial` still splits rows on
-every comma.
+The `head` tree already parses quoted fields with commas and escaped double quotes (not quoted line
+breaks), which is what the task asks for, so on `head+t7` a model could rightly commit nothing
+(2026-11-08); `initial` still splits rows on every comma.
 
 #### T18: Restructure files: move, rename, create a directory and delete the old file
 

@@ -220,6 +220,33 @@ describe("folder workspace selection (owner decision 2026-10-30)", () => {
     expect(service.getActive()).toBeUndefined();
   });
 
+  it("refuses to reselect a persisted folder ID once the folder was replaced (#4271)", () => {
+    const { service, instances, pointer, log } = fixture();
+    const first = service.selectFolder({ root, requestedBy: "test" });
+    service.clearActive();
+    renameSync(root, `${root}-original`);
+    mkdirSync(root);
+    expect(service.selectable?.(first.instance.workspaceId)).toBe(true);
+    expect(() =>
+      service.setActive({
+        workspaceId: first.instance.workspaceId,
+        requestedBy: "history",
+        acquireLock: false,
+        correlationId: "corr-stale-folder",
+      }),
+    ).toThrow(expect.objectContaining({ code: "WORKSPACE_NOT_FOUND" }));
+    expect(pointer.get()).toBeUndefined();
+    expect(log.events.at(-1)).toMatchObject({
+      op: "task-workspace.lifecycle",
+      correlationId: "corr-stale-folder",
+      errorKind: "unavailable",
+      extra: { operation: "activate", workspaceKind: "folder" },
+    });
+    expect(instances.listAll().map((instance) => instance.workspaceId)).toEqual([
+      first.instance.workspaceId,
+    ]);
+  });
+
   it("admits a run on the folder with the folder's own head and no Git read", () => {
     const { service } = fixture();
     const active = service.selectFolder({ root, requestedBy: "test" });

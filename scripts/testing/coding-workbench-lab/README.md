@@ -173,7 +173,8 @@ node scripts/testing/coding-workbench-lab/bump-set.mjs --work-dir ~/keiko-bump-l
   --model <coding model> [--only T1,T4] [--timeout-min 30]
 ```
 
-The work directory must lie outside the checkout. The set writes `verdicts.json` there and prints
+The work directory must lie outside the checkout and be empty (or absent): every task starts from a
+fresh fixture copy, so a rerun uses a new directory. The set writes `verdicts.json` there and prints
 one `PASS`/`FAIL` line per task; it exits 0 only when every task passed. Do not rebuild the
 packages (`npm run build:packages`, or a gate that builds them) while the set runs: the dev
 server restarts on a changed `dist` and ends the running task.

@@ -6,6 +6,7 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
   cpSync,
+  existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -13,7 +14,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import {
@@ -229,13 +230,8 @@ function awaitCodingModel(baseUrl, model) {
 }
 
 function oracleContext(task, run, events) {
-  const readAnswer = () => {
-    try {
-      return readFileSync(join(task.root, "answer.txt"), "utf8");
-    } catch {
-      return "";
-    }
-  };
+  // A missing answer file (the driver never wrote it) must fail the check, never read as empty.
+  const readAnswer = () => readFileSync(join(task.root, "answer.txt"), "utf8");
   return {
     baseline: task.baseline,
     git: (args) => git(task.repo, args),
@@ -243,7 +239,7 @@ function oracleContext(task, run, events) {
     exec: (command, args) =>
       spawnSync(command, args, { cwd: task.repo, stdio: "ignore", timeout: 900_000 }).status,
     filesContaining: (value) => filesContaining(task.repo, value),
-    answer: readAnswer(),
+    answer: readAnswer,
     events:
       run.runId === undefined
         ? []
@@ -366,14 +362,42 @@ function printTable(results) {
   console.log(`bump-set: ${String(passed)} of ${String(results.length)} passed`);
 }
 
+/**
+ * The work directory, created when absent. Every task needs a fresh fixture copy: a reused directory
+ * would merge old files into the copy and re-initialize the old `.git`, so a task could pass or fail
+ * on an earlier run's leftovers. Containment is checked on canonical paths, so a symbolic link into
+ * the checkout is refused and a sibling such as `<checkout>-lab` is not.
+ */
+export function freshWorkDir(path, repoRoot) {
+  const workDir = resolve(path);
+  const repo = realpathSync(repoRoot);
+  // Refuse before creating anything: the nearest existing ancestor, canonical, plus the rest.
+  requireOutside(canonicalPath(workDir), repo);
+  mkdirSync(workDir, { recursive: true });
+  const real = realpathSync(workDir);
+  requireOutside(real, repo);
+  if (readdirSync(real).length > 0)
+    throw new UsageError("--work-dir must be empty: every task needs a fresh copy");
+  return real;
+}
+
+function canonicalPath(path) {
+  if (existsSync(path)) return realpathSync(path);
+  const parent = dirname(path);
+  return parent === path ? path : join(canonicalPath(parent), basename(path));
+}
+
+function requireOutside(path, repo) {
+  const inside = relative(repo, path);
+  const outside = inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside);
+  if (inside === "" || !outside) throw new UsageError("--work-dir must be outside the checkout");
+}
+
 async function main() {
   const cli = parseCli({ usage: USAGE, options: OPTIONS });
   if (cli.help) return 0;
   if (cli.values["work-dir"] === undefined) throw new UsageError("pass --work-dir <empty dir>");
-  const workDir = resolve(cli.values["work-dir"]);
-  if (workDir.startsWith(REPO_ROOT))
-    throw new UsageError("--work-dir must be outside the checkout");
-  mkdirSync(workDir, { recursive: true });
+  const workDir = freshWorkDir(cli.values["work-dir"], REPO_ROOT);
   const options = {
     workDir,
     timeoutMin: cli.values["timeout-min"],

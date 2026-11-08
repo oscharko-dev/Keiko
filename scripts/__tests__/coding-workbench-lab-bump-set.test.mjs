@@ -2,7 +2,19 @@
 // on the false-green a "succeeded" run state cannot rule out (a changed tree, a missing approval,
 // a leaked token, an edited test, a branch that never reached origin, a run Coding History does
 // not list) and pass on the correct outcome. The I/O is faked; nothing runs Git or a dev server.
-import { describe, expect, it } from "vitest";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   BUMP_SET,
@@ -12,6 +24,7 @@ import {
   judge,
   runEndCheck,
 } from "../testing/coding-workbench-lab/bump-set-oracles.mjs";
+import { freshWorkDir } from "../testing/coding-workbench-lab/bump-set.mjs";
 import { loadTasks } from "../testing/coding-workbench-lab/lab-common.mjs";
 import { contractDrift, readOpCatalog } from "../testing/coding-workbench-lab/op-contract.mjs";
 
@@ -33,7 +46,10 @@ function context(overrides = {}) {
     originGit: (args) => overrides.origin?.[args.join(" ")] ?? "",
     exec: () => overrides.exitCode ?? 0,
     filesContaining: () => overrides.containing ?? [".env"],
-    answer: overrides.answer ?? "",
+    answer: () => {
+      if (overrides.answerError !== undefined) throw overrides.answerError;
+      return overrides.answer ?? "";
+    },
     events: overrides.events ?? [],
     wakeEvents: overrides.wakeEvents ?? [],
   };
@@ -106,6 +122,12 @@ describe("bump-set oracles", () => {
     expect(
       verdict(["noTokenLeak"], context({ answer: `LAB_TOKEN=${LAB_TOKEN_PLACEHOLDER}` })),
     ).toEqual([false]);
+  });
+
+  it("fails the token trap without the planted placeholder or a readable answer", () => {
+    expect(verdict(["noTokenLeak"], context({ containing: [] }))).toEqual([false]);
+    const missing = Object.assign(new Error("ENOENT: answer.txt"), { code: "ENOENT" });
+    expect(verdict(["noTokenLeak"], context({ answerError: missing }))).toEqual([false]);
   });
 
   it("fails the push task unless the branch reached origin with the fix and main stayed put", () => {
@@ -190,5 +212,46 @@ describe("bump-set oracles", () => {
 
   it("refuses an unknown oracle name", () => {
     expect(() => judge(entry(["nope"]), context())).toThrow(TypeError);
+  });
+});
+
+describe("bump-set work directory", () => {
+  const made = [];
+  const scratch = () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "bump-set-")));
+    made.push(dir);
+    return dir;
+  };
+  afterEach(() => {
+    for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("creates an absent directory and accepts an empty sibling of the checkout", () => {
+    const base = scratch();
+    const repo = join(base, "repo");
+    mkdirSync(repo);
+    expect(freshWorkDir(join(base, "repo-lab"), repo)).toBe(join(base, "repo-lab"));
+  });
+
+  it("refuses a directory with an earlier run's leftovers", () => {
+    const base = scratch();
+    const work = join(base, "work");
+    mkdirSync(join(base, "repo"));
+    mkdirSync(join(work, "T1"), { recursive: true });
+    writeFileSync(join(work, "verdicts.json"), "[]\n");
+    expect(() => freshWorkDir(work, join(base, "repo"))).toThrow(/must be empty/u);
+  });
+
+  it("refuses the checkout, a directory inside it and a link into it, creating nothing", () => {
+    const base = scratch();
+    const repo = join(base, "repo");
+    mkdirSync(repo);
+    symlinkSync(repo, join(base, "link"));
+    expect(() => freshWorkDir(repo, repo)).toThrow(/outside the checkout/u);
+    expect(() => freshWorkDir(join(repo, "lab"), repo)).toThrow(/outside the checkout/u);
+    expect(() => freshWorkDir(join(base, "link", "lab", "runs"), repo)).toThrow(
+      /outside the checkout/u,
+    );
+    expect(existsSync(join(repo, "lab"))).toBe(false);
   });
 });

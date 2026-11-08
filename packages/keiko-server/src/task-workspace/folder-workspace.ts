@@ -45,10 +45,28 @@ export interface FolderSelectionRequest {
   readonly root: string;
   readonly requestedBy: string;
   readonly correlationId?: string;
+  /** Reselecting a persisted record: the folder must still have the identity it was saved with. */
+  readonly expectedWorkspaceId?: string;
 }
 
 function digest(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+/**
+ * A persisted Local or folder ID names one directory identity. When the registered root now holds
+ * another one (a re-clone, a replaced `.git` or folder), reselecting the old ID must not switch or
+ * bind the replacement; the person selects the repository or folder again.
+ */
+export function requireUnchangedWorkspaceIdentity(
+  expectedWorkspaceId: string | undefined,
+  actualWorkspaceId: string,
+): void {
+  if (expectedWorkspaceId === undefined || expectedWorkspaceId === actualWorkspaceId) return;
+  throw new TaskWorkspaceError(
+    "WORKSPACE_NOT_FOUND",
+    "This repository or folder has changed since the task used it; select it again.",
+  );
 }
 
 // The directory's filesystem identity: the registered path plus its device and inode, so a folder
@@ -202,6 +220,7 @@ export function selectFolderWorkspace(
   let fromState: TaskWorkspaceLifecycleState | undefined;
   try {
     identity = requireFolderRoot(store, request.root);
+    requireUnchangedWorkspaceIdentity(request.expectedWorkspaceId, folderWorkspaceId(identity));
     fromState = instances.getById(folderWorkspaceId(identity))?.lifecycleState;
     const active = activateFolder(request, identity, instances, pointerStore, getActive);
     recordFolderSelection(deps, request, identity, { startedAt, fromState });
