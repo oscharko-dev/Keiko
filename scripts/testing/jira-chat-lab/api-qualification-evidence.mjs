@@ -33,7 +33,7 @@ function observedResponses(witness) {
     witness.responses.length > 0 &&
     witness.responses.every(
       (response) =>
-        response.truncated === false &&
+        (response.truncated === false || response.statusOnly === true) &&
         Number.isInteger(response.status) &&
         response.status >= 100 &&
         response.status < 600,
@@ -121,7 +121,7 @@ export function classifyQualification({
 }
 
 export function qualificationSummary(operations) {
-  const counts = { executable: 0, denied: 0, unavailable: 0, unknown: 0 };
+  const counts = { executable: 0, denied: 0, unavailable: 0, deferred: 0, unknown: 0 };
   for (const operation of operations) {
     if (!Object.hasOwn(counts, operation.runtimeAvailability))
       throw new TypeError("Unknown qualification disposition");
@@ -131,7 +131,18 @@ export function qualificationSummary(operations) {
 }
 
 /** A report covers one exact source, release and complete inventory; no cross-run pooling. */
-export function applyQualificationReport(ledger, report, sourceRevision) {
+export function isApprovedDeferred(row, decisions) {
+  const decision = decisions.get(row.identity);
+  return (
+    row.runtimeAvailability === "deferred" &&
+    decision !== undefined &&
+    qualificationDigest(row.ownerDecision) === qualificationDigest(decision) &&
+    Array.isArray(row.verificationReferences) &&
+    row.verificationReferences.length === 1 &&
+    row.verificationReferences[0] === decision.reference
+  );
+}
+export function applyQualificationReport(ledger, report, sourceRevision, decisions = new Map()) {
   if (
     report.schemaVersion !== 1 ||
     report.sourceRevision !== sourceRevision ||
@@ -146,7 +157,8 @@ export function applyQualificationReport(ledger, report, sourceRevision) {
     if (!proof || proof.runtimeAvailability === "unknown")
       throw new TypeError("Incomplete qualification cannot replace the operation ledger");
     if (
-      !new Set(["executable", "denied", "unavailable"]).has(proof.runtimeAvailability) ||
+      (!new Set(["executable", "denied", "unavailable"]).has(proof.runtimeAvailability) &&
+        !isApprovedDeferred(proof, decisions)) ||
       !Array.isArray(proof.verificationReferences) ||
       proof.verificationReferences.length === 0
     )
@@ -155,6 +167,9 @@ export function applyQualificationReport(ledger, report, sourceRevision) {
       ...row,
       runtimeAvailability: proof.runtimeAvailability,
       verificationReferences: [...proof.verificationReferences],
+      ...(proof.runtimeAvailability === "deferred"
+        ? { ownerDecision: { ...proof.ownerDecision } }
+        : {}),
     };
   });
   return { ...ledger, operations };

@@ -315,9 +315,11 @@ export const API_QUALIFICATION_AGILE_CASES = [
     (f) => f.agileFilterReview,
     async (c, _d, f) => {
       await actor(c, f);
+      assert.equal(f.agileFilterReview?.filterId, f.agileFilterId);
+      assert.equal(f.agileFilterReview.expectedOwnerKey, f.agileActorKey);
       const r = await labRequest(c.session, "GET", filterPath(f), basicAuth(c.session, c.actor));
       assert.equal(r.status, 404);
-      return { matched: false, assertionCount: 2, observedStatus: 404, deletionConfirmed: false };
+      return { matched: true, assertionCount: 4, observedStatus: 404, deletionConfirmed: false };
     },
     filter,
   ),

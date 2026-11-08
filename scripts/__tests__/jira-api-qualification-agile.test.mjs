@@ -7,6 +7,49 @@ import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog"
 import { jiraOperationForTool } from "../../packages/keiko-server/dist/atlassian/jiraManagedProvider.js";
 import { API_QUALIFICATION_AGILE_CASES } from "../testing/jira-chat-lab/api-qualification-agile-cases.mjs";
 import { DEFAULT_LAB_CONNECTION } from "../testing/jira-chat-lab/lab-client.mjs";
+it("qualifies the owner-approved unconfirmed filter deletion only after exact native prior presence", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "keiko-ac7-filter-delete-"));
+  mkdirSync(join(directory, "secrets"));
+  writeFileSync(join(directory, "secrets/admin-password"), "synthetic-admin", { mode: 0o600 });
+  let present = true;
+  const native = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, options) => {
+    expect(options.method).toBe("GET");
+    if (new URL(url).pathname === "/rest/api/2/myself")
+      return new globalThis.Response(JSON.stringify({ name: "keiko-admin", key: "admin-key" }), {
+        status: 200,
+      });
+    expect(new URL(url).pathname).toBe("/rest/api/2/filter/11");
+    return new globalThis.Response(
+      JSON.stringify(
+        present
+          ? {
+              id: "11",
+              name: "Synthetic filter",
+              jql: "project = KEIKO",
+              description: null,
+              owner: { key: "admin-key" },
+            }
+          : {},
+      ),
+      { status: present ? 200 : 404 },
+    );
+  });
+  const entry = API_QUALIFICATION_AGILE_CASES.find((row) => row.tool === "jira.delete-filter");
+  const ctx = { actor: "admin", session: { ...DEFAULT_LAB_CONNECTION, directory } };
+  const fixture = { agileFilterId: "11" };
+  try {
+    await entry.prepare(ctx, fixture);
+    present = false;
+    await expect(
+      entry.readback(ctx, { outcome: "succeeded-unconfirmed", reason: "unavailable" }, fixture),
+    ).resolves.toMatchObject({ matched: true, deletionConfirmed: false, observedStatus: 404 });
+    await expect(entry.readback(ctx, {}, { agileFilterId: "11" })).rejects.toThrow();
+    await expect(entry.readback(ctx, {}, { ...fixture, agileFilterId: "12" })).rejects.toThrow();
+  } finally {
+    native.mockRestore();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 it("admits unique typed Agile and saved-filter cases with explicit admin scope", () => {
   const fixture = {
     runId: "synthetic-run",

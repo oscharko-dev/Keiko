@@ -586,13 +586,19 @@ function liveStateDirectory(session, retainState, restoreState) {
   return root;
 }
 
-function decorateCredentialTransport(deps, decorate, session) {
+function decorateCredentialTransport(deps, decorate, session, decoratePrivate) {
   const credentials = deps.atlassianConnectorCredentials;
   assert.ok(credentials);
   const factory = credentials.httpBodyPortFactory.bind(credentials);
   const observed = (metadata, correlationId, lifecycle) =>
     sessionVerificationPort(session, factory(metadata, correlationId, lifecycle));
   credentials.httpBodyPortFactory = decorate === undefined ? observed : decorate(observed);
+  // The private session and avatar transport takes only the product's lifecycle hooks; an
+  // observer wraps them without changing a request, a response or the custody it belongs to.
+  const privateFactory = credentials.jiraPrivatePortFactory;
+  if (decoratePrivate !== undefined && privateFactory !== undefined)
+    credentials.jiraPrivatePortFactory = (metadata, context, options, lifecycle) =>
+      privateFactory(metadata, context, options, decoratePrivate(lifecycle));
 }
 
 function createLiveUiServer({ port, deps, root, browser, configureServer }) {
@@ -624,6 +630,7 @@ async function startLiveProduct({
   model,
   browser,
   decorateAtlassianHttp,
+  decoratePrivateLifecycle,
   configureServer,
   port,
 }) {
@@ -632,7 +639,7 @@ async function startLiveProduct({
   const deps = createLiveDeps(root, session, secret, retainState, restoring, model.env);
   let server;
   try {
-    decorateCredentialTransport(deps, decorateAtlassianHttp, session);
+    decorateCredentialTransport(deps, decorateAtlassianHttp, session, decoratePrivateLifecycle);
     await model.configure(deps);
     if (!deps.store.listProjects().some((project) => project.path === projectPath))
       deps.store.createProject(projectPath);
@@ -813,12 +820,19 @@ export async function withLiveChat({
 }
 
 /** Same paired server/vault/transport as the Chat lab, with no provider or model probe. */
-export async function withModelFreeJira({ session, run, stateReady, decorateAtlassianHttp }) {
+export async function withModelFreeJira({
+  session,
+  run,
+  stateReady,
+  decorateAtlassianHttp,
+  decoratePrivateLifecycle,
+}) {
   return withLabProduct({
     session,
     run,
     stateReady,
     decorateAtlassianHttp,
+    decoratePrivateLifecycle,
     modelId: undefined,
     retainState: true,
     browser: false,
@@ -847,6 +861,7 @@ async function runLabProduct({
   browser,
   restoreState,
   decorateAtlassianHttp,
+  decoratePrivateLifecycle,
   configureServer,
   prepareModel,
 }) {
@@ -868,6 +883,7 @@ async function runLabProduct({
       model,
       browser,
       decorateAtlassianHttp,
+      decoratePrivateLifecycle,
       configureServer,
     });
     const origin = `http://127.0.0.1:${product.port}`;
