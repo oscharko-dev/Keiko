@@ -21,8 +21,9 @@ import {
 import type { ToolDefinition } from "@oscharko-dev/keiko-contracts";
 import { buildUiHandlerDeps } from "../deps.js";
 import { createJiraChatCatalogRuntime } from "./jiraChatCatalogRuntime.js";
+import { jiraChatCatalogRoutes } from "./jiraChatCatalogConsumer.js";
 import { jiraMutationDeclarations } from "./jiraManagedMutationDescriptors.js";
-import { jiraOperationContracts } from "./jiraManagedProvider.js";
+import { jiraOperationDefinitions } from "./jiraOperationRegistry.js";
 import { KNOWLEDGE_DOCUMENTS_TOOL, KNOWLEDGE_REVIEW_TOOL } from "../requirementsToolName.js";
 
 const JIRA_MUTATION_DECLARATIONS = jiraMutationDeclarations();
@@ -144,9 +145,18 @@ function parameters(alias: string): CatalogJsonObject {
 }
 
 beforeAll(async () => {
-  const selected = await runtime.select(
-    jiraOperationContracts().map((entry) => entry.binding.identity),
+  const routes = jiraChatCatalogRoutes();
+  const definitions = jiraOperationDefinitions();
+  const identities = ORIGINAL_TOOL_ALIASES.filter((alias) => alias.startsWith("jira_")).map(
+    (alias) => {
+      const route = routes.find((entry) => entry.alias === alias);
+      const definition = definitions.find((entry) => entry.tool === route?.name);
+      if (definition === undefined)
+        throw new Error(`Missing selected Jira operation identity for ${alias}`);
+      return definition.identity;
+    },
   );
+  const selected = await runtime.select(identities);
   selectedDefinitions = gatewayToolDefinitions(selected.catalog, selected.projection.profile);
 });
 afterAll(async () => {
