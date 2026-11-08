@@ -24,8 +24,23 @@ export async function assertVerifiedPod(page, card, identity) {
   const response = await page.request.get("/api/atlassian-connectors/credentials");
   assert.equal(response.status(), 200);
   const { credentials } = await response.json();
-  const credential = credentials.find((item) => item.authRef === identity.authRef);
+  assert.ok(
+    typeof identity.authRef === "string" || typeof identity.podId === "string",
+    "Verification requires an existing credential or Pod identity",
+  );
+  const matches = credentials.filter(
+    (item) =>
+      (identity.authRef === undefined || item.authRef === identity.authRef) &&
+      (identity.podId === undefined || item.livePod?.podId === identity.podId),
+  );
+  assert.equal(matches.length, 1, "The observed Pod identity must be unambiguous");
+  const credential = matches[0];
   assert.ok(credential?.livePod, "The verified Jira Pod remains in canonical custody");
+  if (identity.displayName !== undefined)
+    assert.ok(
+      credential.displayName === identity.displayName,
+      "The verified Pod retains its label",
+    );
   assert.equal(credential.livePod.verificationStatus, "ok");
   assert.ok(credential.livePod.verificationRevision > 0);
   if (identity.livePod !== undefined) {

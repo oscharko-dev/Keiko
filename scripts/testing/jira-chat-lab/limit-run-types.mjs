@@ -24,15 +24,21 @@
  */
 
 /**
- * The orchestrator supplies one existing browser Chat and its ordinary turn owner.
+ * The orchestrator supplies three existing Chats on one signed-in browser page.
+ * `chat` is the document Chat with Knowledge and Jira; `reportChat` has only Jira;
+ * `deniedChat` has only the verified restricted Jira Pod. Each runs in Full access.
+ * A block sends only through `turn(chat, prompt, extra)` and never creates a Chat.
  * `intent.state` holds private component facts; `update(patch)` merges those facts,
  * and `record(name, value)` stores one fact through the existing privateJson owner.
  * Neither method replaces the orchestrator's run identity or completed-step list.
  * @typedef {LimitContext & {
  *   region: object,
  *   chat: object,
+ *   reportChat: object,
+ *   deniedChat: object,
  *   projectPath: string,
  *   turn: Function,
+ *   recovery?: { restartServer: (options: { signal?: AbortSignal }) => Promise<{ restarted: true, downtimeMs: number }> },
  *   read: Function,
  *   search: Function,
  *   truth: object,
@@ -44,5 +50,7 @@
 /**
  * @typedef {{ maybeInject: (ctx: LimitContext, progress01: number) => Promise<unknown> }} FaultPlan
  */
+
+/** @typedef {"bulk-epics" | "hierarchy" | "progress"} FaultScope */
 
 export {};
