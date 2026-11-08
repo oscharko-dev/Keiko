@@ -30,7 +30,7 @@
       }
     },
     "keiko-connectors": {
-      "files": 261,
+      "files": 263,
       "uncoveredFiles": 0,
       "uncoveredLines": 32,
       "totalLines": 1485,
@@ -186,7 +186,7 @@
       }
     },
     "keiko-memory-vault": {
-      "files": 23,
+      "files": 24,
       "uncoveredFiles": 0,
       "uncoveredLines": 79,
       "totalLines": 1066,
