@@ -166,7 +166,7 @@ describe("native Jira qualification evidence", () => {
   it("accounts for every actual state and refuses proposed policy decisions", () => {
     expect(
       qualificationSummary([{ runtimeAvailability: "denied" }, { runtimeAvailability: "unknown" }]),
-    ).toEqual({ executable: 0, denied: 1, unavailable: 0, unknown: 1 });
+    ).toEqual({ executable: 0, denied: 1, unavailable: 0, deferred: 0, unknown: 1 });
     expect(() => qualificationSummary([{ runtimeAvailability: "excluded-by-policy" }])).toThrow();
   });
 });

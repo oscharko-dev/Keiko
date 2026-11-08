@@ -15,19 +15,11 @@ import {
   requireLicense,
 } from "./lab-client.mjs";
 import { privateJson } from "./private-json.mjs";
-import {
-  API_QUALIFICATION_CASES,
-  observeQualificationFixtures,
-} from "./api-qualification-cases.mjs";
+import { observeQualificationFixtures } from "./api-qualification-cases.mjs";
 import { dispatchQualification, qualificationWitness } from "./api-qualification-runtime.mjs";
-import { API_QUALIFICATION_ISSUE_CASES } from "./api-qualification-issue-cases.mjs";
-import { API_QUALIFICATION_OBSERVATION_CASES } from "./api-qualification-observation-cases.mjs";
-import { API_QUALIFICATION_PROPERTY_CASES } from "./api-qualification-property-cases.mjs";
-import { API_QUALIFICATION_CONFIGURATION_CASES } from "./api-qualification-configuration-cases.mjs";
-import { API_QUALIFICATION_RELEASE_CASES } from "./api-qualification-release-cases.mjs";
-import { API_QUALIFICATION_ADMIN_CASES } from "./api-qualification-admin-cases.mjs";
-import { API_QUALIFICATION_AGILE_CASES } from "./api-qualification-agile-cases.mjs";
+import { API_QUALIFICATION_ALL_CASES } from "./api-qualification-case-list.mjs";
 import { requireQualificationSnapshot } from "./api-qualification-snapshot.mjs";
+import { decidedQualificationDeferrals, ownerDeferredRow } from "./api-qualification-policy.mjs";
 import {
   classifyQualification,
   qualificationDigest,
@@ -108,7 +100,7 @@ function caseEvidence(specification, attempted, observation, readback, failure, 
     sourceRevision: report.sourceRevision,
     release: report.release,
     imageDigest: report.imageDigest,
-    id: qualificationDigest(specification.identity).slice(0, 24),
+    id: specification.fixtureId ?? qualificationDigest(specification.identity).slice(0, 24),
     identity: specification.identity,
     tool: specification.tool,
     runtimeAvailability,
@@ -143,7 +135,7 @@ function caseEvidence(specification, attempted, observation, readback, failure, 
 }
 async function runCase(context, chat, specification, fixture, witness, directory, report) {
   await specification.prepare?.(context, fixture);
-  const id = qualificationDigest(specification.identity).slice(0, 24);
+  const id = specification.fixtureId ?? qualificationDigest(specification.identity).slice(0, 24);
   const pending = join(directory, `${id}.pending.json`);
   privateJson(
     pending,
@@ -180,6 +172,38 @@ async function runCase(context, chat, specification, fixture, witness, directory
   return evidence;
 }
 
+function attachFixtureDispatcher(
+  context,
+  chat,
+  specification,
+  fixture,
+  witness,
+  directory,
+  report,
+) {
+  context.qualificationFixture = async ({ tool, arguments: argumentsForFixture, readback }) => {
+    const operation = JSON.parse(readFileSync(ledgerPath, "utf8")).currentCapabilities[tool];
+    assert.ok(operation && operation.effect === "write");
+    assert.equal(context.actor, "admin", "Auxiliary effects use the existing explicit admin Chat");
+    assert.equal(specification.administration, true);
+    assert.ok(report.snapshotId, "Auxiliary fixture effects require the owned snapshot");
+    const fixtureCase = {
+      tool,
+      identity: operation.identity,
+      mutation: true,
+      fixtureId: `fixture-${randomUUID()}`,
+      arguments: () => argumentsForFixture,
+      readback,
+    };
+    const evidence = await runCase(context, chat, fixtureCase, fixture, witness, directory, report);
+    assert.equal(
+      evidence.runtimeAvailability,
+      "executable",
+      "An auxiliary fixture must have settled independently verified native evidence",
+    );
+    return evidence;
+  };
+}
 async function executeCases(context, specifications, report, directory, witness, priorFixture) {
   context.actor = "api";
   const fixture =
@@ -200,6 +224,7 @@ async function executeCases(context, specifications, report, directory, witness,
         await prepareModelFreeChat(context, context.actor, specification.administration === true),
       );
     const chat = chats.get(binding);
+    attachFixtureDispatcher(context, chat, specification, fixture, witness, directory, report);
     const evidence = await runCase(
       context,
       chat,
@@ -219,13 +244,15 @@ async function executeCases(context, specifications, report, directory, witness,
     privateJson(join(directory, report.file), report);
     if (specification.mutation && evidence.runtimeAvailability === "unknown")
       throw new TypeError("Reconcile the failed mutation before dispatching dependent cases");
+    if (evidence.runtimeAvailability === "executable")
+      await specification.cleanup?.(context, fixture);
   }
   return fixture;
 }
 
 function createReport(session, ledger, revision, runId) {
   const proposals = JSON.parse(readFileSync(join(repository, proposalPath), "utf8"));
-  assert.equal(proposals.status, "awaiting-owner-decision");
+  const decisions = decidedQualificationDeferrals(proposals, ledger);
   const identities = new Set(ledger.operations.map((row) => row.identity));
   for (const proposal of proposals.proposals)
     assert.ok(proposal.identities.every((identity) => identities.has(identity)));
@@ -246,11 +273,16 @@ function createReport(session, ledger, revision, runId) {
       identities: proposal.identities,
       reference: `${proposalPath}#${proposal.id}`,
     })),
-    operations: ledger.operations.map((row) => ({
-      identity: row.identity,
-      runtimeAvailability: "unknown",
-      verificationReferences: [],
-    })),
+    operations: ledger.operations.map((row) =>
+      decisions.has(row.identity)
+        ? ownerDeferredRow(row.identity, decisions.get(row.identity), {
+            runId,
+            sourceRevision: revision,
+            release: session.jiraVersion,
+            imageDigest: session.jiraImageDigest,
+          })
+        : { identity: row.identity, runtimeAvailability: "unknown", verificationReferences: [] },
+    ),
   };
 }
 async function observeRelease(session) {
@@ -293,16 +325,9 @@ export async function qualifyApi(directory, only, snapshotId) {
   const ledger = JSON.parse(readFileSync(ledgerPath, "utf8"));
   assert.equal(ledger.operations.length, 439);
   const revision = sourceRevision();
-  const selected = caseRows(ledger, [
-    ...API_QUALIFICATION_CASES,
-    ...API_QUALIFICATION_OBSERVATION_CASES,
-    ...API_QUALIFICATION_CONFIGURATION_CASES,
-    ...API_QUALIFICATION_ISSUE_CASES,
-    ...API_QUALIFICATION_PROPERTY_CASES,
-    ...API_QUALIFICATION_RELEASE_CASES,
-    ...API_QUALIFICATION_ADMIN_CASES,
-    ...API_QUALIFICATION_AGILE_CASES,
-  ]).filter((entry) => only === undefined || only.includes(entry.tool));
+  const selected = caseRows(ledger, API_QUALIFICATION_ALL_CASES).filter(
+    (entry) => only === undefined || only.includes(entry.tool),
+  );
   assert.ok(selected.length > 0);
   await observeRelease(session);
   const { report, output, pending } = prepareRun(session, ledger, revision);

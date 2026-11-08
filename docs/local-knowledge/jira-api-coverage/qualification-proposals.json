@@ -1,13 +1,15 @@
 {
   "schemaVersion": 1,
-  "status": "awaiting-owner-decision",
+  "status": "decided",
   "decisionOwner": "oscharko",
+  "decidedBy": "integrator",
+  "decidedAt": "2026-11-08",
   "proposals": [
     {
       "id": "cluster-effects-require-owned-multi-node-fixture",
       "proposedDisposition": "deferred",
+      "disposition": "deferred",
       "identities": [
-        "GET /rest/api/2/cluster/nodes",
         "PUT /rest/api/2/cluster/index-snapshot/{nodeId}",
         "DELETE /rest/api/2/cluster/node/{nodeId}",
         "PUT /rest/api/2/cluster/node/{nodeId}/offline",
@@ -16,7 +18,7 @@
         "POST /rest/api/2/cluster/zdu/retryUpgrade",
         "POST /rest/api/2/cluster/zdu/start"
       ],
-      "rationale": "The existing disposable laboratory has exactly one Jira service with CLUSTERED=false. The 10.3.26 qualification observed native HTTP405 for GET cluster/nodes. This proves neither missing Jira version/plugin nor successful node enumeration. The fixture supplies no second owned node, dead-node lifecycle or rolling-upgrade population. An invented node ID, absent task or validation error would not prove runtime unavailability or successful cluster effects.",
+      "rationale": "The existing disposable laboratory has no second owned node and no genuine ZDU states. HTTP405 or invented nodes do not prove availability or successful cluster effects. Only the seven cluster mutations are deferred; GET cluster/nodes requires a product call and an independent native comparison on the single-node fixture.",
       "requiredForQualification": "An owner-approved multi-node fixture within the existing laboratory, versioned node snapshots and independent observations of each requested cluster effect.",
       "sourceReferences": [
         "scripts/testing/jira-chat-lab/compose.yaml",
@@ -28,6 +30,7 @@
     {
       "id": "upgrade-run-requires-pending-native-upgrade",
       "proposedDisposition": "deferred",
+      "disposition": "deferred",
       "identities": ["POST /rest/api/2/upgrade"],
       "rationale": "A fresh version-bound Jira database does not supply a pending native upgrade. A no-work acknowledgement cannot establish execution and readback of upgrade tasks. Reusing another release's volume would violate the laboratory's release isolation.",
       "requiredForQualification": "An owner-approved, snapshot-backed pending-upgrade fixture and independent native task/result observations, without using another operator's data or crossing the release boundary implicitly.",
@@ -39,6 +42,7 @@
     {
       "id": "notification-needs-independent-delivery-observation",
       "proposedDisposition": "deferred",
+      "disposition": "deferred",
       "identities": ["POST /rest/api/2/issue/{issueIdOrKey}/notify"],
       "rationale": "The normal disposable setup disables outgoing email. The native notification request has no recipient-delivery readback; neither a successful acknowledgement nor a missing SMTP configuration proves delivery or a missing Jira capability.",
       "requiredForQualification": "An owner-approved synthetic mail sink integrated into the existing laboratory and an independent matching delivery observation. No real recipient or external mail service is selected by this proposal.",
@@ -50,9 +54,10 @@
     {
       "id": "filter-delete-needs-independent-complete-absence-proof",
       "proposedDisposition": "deferred",
+      "disposition": "qualify",
       "identities": ["DELETE /rest/api/2/filter/{id}"],
-      "rationale": "The current bound implementation deliberately retains filter deletion as acknowledged/unconfirmed. A selected filter GET returning 404 and absence from favourites do not independently prove deletion of an owned filter. The existing qualification oracle therefore records deletionConfirmed=false and cannot mark the identity executable, denied or version-unavailable. This proposal records that evidence limit; it does not approve an exemption or weaken the product confirmation rule.",
-      "requiredForQualification": "An owner-reviewed independent absence oracle covering the complete owned-filter population, or an explicit owner disposition for this identity. Preserve the settled receipt, same-owner observations and original unconfirmed outcome; never use favourites or a bare resource 404 as deletion proof.",
+      "rationale": "The integrator refused deferral. Qualify a native2xx with matching settled journal and receipt, while retaining succeeded-unconfirmed and reason unavailable. Independently confirm this exact owned filter exists before dispatch and observe native GET404 for the same ID afterwards. This qualifies the execution path without claiming a confirmed deletion or changing the product outcome.",
+      "requiredForQualification": "Prior independent same-owner presence, native2xx acknowledgement, matching settled journal and receipt, then GET404 for the exact prior ID. Keep deletionConfirmed:false and succeeded-unconfirmed; do not upgrade the product result.",
       "sourceReferences": [
         "packages/keiko-connectors/src/jira-managed-filter-mutations.ts",
         "packages/keiko-connectors/src/jira-managed-saved-configuration-mutations.test.ts",

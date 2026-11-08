@@ -5,6 +5,10 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { qualificationDigest } from "../testing/jira-chat-lab/api-qualification-evidence.mjs";
 import { writeQualificationLedger } from "../testing/jira-chat-lab/api-qualification-ledger.mjs";
+import {
+  decidedQualificationDeferrals,
+  ownerDeferredRow,
+} from "../testing/jira-chat-lab/api-qualification-policy.mjs";
 
 const roots = [];
 afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));
@@ -74,6 +78,39 @@ function save() {
   writeFileSync(f.ledgerPath, JSON.stringify(f.ledger), { mode: 0o600 });
   writeFileSync(f.reportPath, JSON.stringify(f.report), { mode: 0o600 });
 }
+it("publishes nine decided deferrals as policy evidence, never as passed native operations", async () => {
+  const policy = JSON.parse(
+    readFileSync(
+      new URL(
+        "../../docs/local-knowledge/jira-api-coverage/qualification-proposals.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  const decisions = decidedQualificationDeferrals(policy, f.ledger);
+  f.report.operations = f.report.operations.map((row) =>
+    decisions.has(row.identity)
+      ? ownerDeferredRow(row.identity, decisions.get(row.identity), f.report)
+      : row,
+  );
+  writeFileSync(join(f.root, "qualification-proposals.json"), JSON.stringify(policy));
+  save();
+  const result = await writeQualificationLedger(f);
+  expect(result.counts.deferred).toBe(9);
+  expect(result.counts.executable).toBe(f.ledger.operations.length - 9);
+  const archive = JSON.parse(readFileSync(join(f.root, result.evidenceFile), "utf8"));
+  const deferred = archive.operations.filter((row) => row.runtimeAvailability === "deferred");
+  expect(deferred).toHaveLength(9);
+  expect(deferred.every((row) => row.ownerDecision.decidedBy === "integrator")).toBe(true);
+  expect(
+    deferred.every(
+      (row) => row.native === undefined && row.receipt === undefined && row.readback === undefined,
+    ),
+  ).toBe(true);
+  const actual = JSON.parse(readFileSync(f.ledgerPath, "utf8"));
+  expect(actual.operations.filter((row) => row.runtimeAvailability === "deferred")).toHaveLength(9);
+});
 it("publishes 439 independently graded rows and body-free readback references from one complete run", async () => {
   const result = await writeQualificationLedger(f);
   const actual = JSON.parse(readFileSync(f.ledgerPath, "utf8"));
@@ -189,7 +226,13 @@ it("publishes proven Jira permission and version refusals without upgrading poli
   }
   save();
   const result = await writeQualificationLedger(f);
-  expect(result.counts).toEqual({ executable: 437, denied: 1, unavailable: 1, unknown: 0 });
+  expect(result.counts).toEqual({
+    executable: f.ledger.operations.length - 2,
+    denied: 1,
+    unavailable: 1,
+    deferred: 0,
+    unknown: 0,
+  });
 });
 it("refuses a native denial whose write journal is still dispatched", async () => {
   const row = f.report.operations[0];

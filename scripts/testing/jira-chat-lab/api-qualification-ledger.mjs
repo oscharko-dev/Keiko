@@ -11,7 +11,9 @@ import {
   classifyQualification,
   qualificationDigest,
   qualificationSummary,
+  isApprovedDeferred,
 } from "./api-qualification-evidence.mjs";
+import { decidedQualificationDeferrals } from "./api-qualification-policy.mjs";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
 const HEX = /^[a-f0-9]{64}$/u;
@@ -79,6 +81,13 @@ function archivedReadback(readback) {
   };
 }
 function archivedCase(row) {
+  if (row.runtimeAvailability === "deferred")
+    return {
+      id: row.id,
+      identity: row.identity,
+      runtimeAvailability: "deferred",
+      ownerDecision: { ...row.ownerDecision },
+    };
   return {
     id: row.id,
     identity: row.identity,
@@ -104,18 +113,32 @@ function archivedCase(row) {
     },
   };
 }
-function publication(ledger, report, sourceRevision) {
+function validateDeferred(report, row, decisions) {
+  requireEvidence(isApprovedDeferred(row, decisions));
+  requireEvidence(row.id === qualificationDigest(row.identity).slice(0, 24));
+  for (const field of ["runId", "sourceRevision", "release", "imageDigest"])
+    requireEvidence(row[field] === report[field]);
+  for (const field of ["tool", "dispatch", "receipt", "readback", "journal", "witness"])
+    requireEvidence(!Object.hasOwn(row, field));
+}
+function publication(ledger, report, sourceRevision, decisions) {
   const rows = new Map(report.operations.map((row) => [row.identity, row]));
   // The existing all-identity accounting check rejects duplicates, unknowns and owner-policy proposals.
-  applyQualificationReport(ledger, report, sourceRevision);
-  for (const operation of ledger.operations)
-    validateCase(ledger, report, operation, rows.get(operation.identity));
+  applyQualificationReport(ledger, report, sourceRevision, decisions);
+  for (const operation of ledger.operations) {
+    const row = rows.get(operation.identity);
+    if (row?.runtimeAvailability === "deferred") validateDeferred(report, row, decisions);
+    else validateCase(ledger, report, operation, row);
+  }
   const evidenceFile = `evidence/${report.file}`;
   const qualified = {
     ...report,
     operations: report.operations.map((row) => ({
       ...row,
-      verificationReferences: [`${evidenceFile}#${row.id}`],
+      verificationReferences:
+        row.runtimeAvailability === "deferred"
+          ? row.verificationReferences
+          : [`${evidenceFile}#${row.id}`],
     })),
   };
   const archive = {
@@ -133,7 +156,7 @@ function publication(ledger, report, sourceRevision) {
   return {
     evidenceFile,
     archive,
-    ledger: applyQualificationReport(ledger, qualified, sourceRevision),
+    ledger: applyQualificationReport(ledger, qualified, sourceRevision, decisions),
   };
 }
 async function formatted(path, value) {
@@ -150,7 +173,12 @@ export async function writeQualificationLedger({
   const ledger = JSON.parse(previous);
   const report = JSON.parse(readPrivateFile(reportPath));
   validateRun(ledger, report, sourceRevision, reportPath);
-  const result = publication(ledger, report, sourceRevision);
+  const policyPath = join(dirname(ledgerPath), "qualification-proposals.json");
+  const decisions = decidedQualificationDeferrals(
+    existsSync(policyPath) ? JSON.parse(readFileSync(policyPath, "utf8")) : undefined,
+    ledger,
+  );
+  const result = publication(ledger, report, sourceRevision, decisions);
   const evidencePath = join(dirname(ledgerPath), result.evidenceFile);
   const [archiveText, ledgerText] = await Promise.all([
     formatted(evidencePath, result.archive),

@@ -18,6 +18,7 @@ const mutation = (tool, args, readback, prepare = actor) => ({
   readback,
   prepare,
 });
+export { mutation as adminMutationCase, actor as observeAdminActor, select as nativeSnapshot };
 const name = (f, kind) => `Synthetic AC7 ${kind} ${f.runId}`;
 const actorArgs = (f) => ({ expectedActorKey: f.adminActorKey });
 const select = (value, fields) =>
