@@ -846,6 +846,40 @@ describe("jira.draft-batch (#4173)", () => {
       const covered = stagedItems(h).flatMap((item) => item.requirementIds as string[]);
       expect(new Set(covered).size).toBe(60);
     });
+
+    it("drafts the whole rest of the selection when the retry names part of the tail", async () => {
+      let now = 0;
+      const h = await harness(
+        (request) => {
+          now += 100_000;
+          return page(keysOf(request));
+        },
+        [{ capsuleId: "cap-a", text: specification(60).text }],
+      );
+      const first = await h.run(
+        { ...ARGS, create: true },
+        { budget: { nowMs: () => now, deadlineAtMs: 200_000 } },
+      );
+      const remaining = first.data.remainingRequirementIds as string[];
+      expect(remaining.length).toBeGreaterThan(2);
+      now = 0;
+
+      const retry = await h.run(
+        {
+          ...ARGS,
+          create: true,
+          requirements: {
+            documents: first.data.remainingDocuments as string[],
+            ids: remaining.slice(0, 2),
+          },
+        },
+        { budget: { nowMs: () => now, deadlineAtMs: 100_000_000 } },
+      );
+
+      expect(retry.data).toMatchObject({ outcome: "succeeded", draftId: DRAFT_ID, failedCount: 0 });
+      const covered = stagedItems(h).flatMap((item) => item.requirementIds as string[]);
+      expect(new Set(covered).size).toBe(60);
+    });
   });
 
   it("counts a documents filter that selects every requirement as the whole collection", async () => {

@@ -731,8 +731,16 @@ function collectWithRecovery(
   if (live !== undefined) {
     // The staged head still lives in the paused draft: the tail continues that draft, so the
     // draft that is approved holds the whole original selection (F27).
-    if (placementMatches(live, placement)) run.args = { ...args, draftId: paused.draftId };
-    return collected;
+    if (!placementMatches(live, placement)) return collected;
+    // Continue with the rest of the original selection, so a retry naming only part of the tail
+    // cannot leave the approved draft without the requirements it omitted.
+    run.args = { ...args, draftId: paused.draftId };
+    return collectRequirements(
+      deps,
+      context,
+      { ...args, filter: paused.filter, filtered: paused.filtered },
+      draftedRefs(live),
+    );
   }
   run.restarted = true;
   return collectRequirements(
