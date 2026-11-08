@@ -15,7 +15,7 @@ const FAULT_STEPS = new Set(["bulk-epics", "hierarchy", "progress"].map((scope) 
 const RECOVERED_FAULT_COUNTS = { injected: 2, recovered: 2, duplicates: 0, lost: 0 };
 const OWNERS = {
   runProjectSetup: "./browser-project-agile-journey.mjs",
-  installTemplates: "./requirements/templates.mjs",
+  installTemplates: "./templates.mjs",
   runRuleProbes: "./browser-rules-knowledge-journey.mjs",
   stageLastenheft: "./browser-rules-knowledge-setup.mjs",
   runBulkEpics: "./browser-epics-bulk.mjs",
