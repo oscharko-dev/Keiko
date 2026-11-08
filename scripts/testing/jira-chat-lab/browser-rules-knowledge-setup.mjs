@@ -8,12 +8,14 @@ import { expect } from "@playwright/test";
 import { writeCorpusDocuments } from "./requirements/corpus-documents.mjs";
 import { gradeTemplateListing, gradeTemplateValidation } from "./requirements/templates.mjs";
 
-function responseAfter(page, method, path, action) {
+/** The response an action causes; a failed action never leaves the response wait unobserved. */
+export async function responseAfter(page, method, path, action) {
   const pending = page.waitForResponse(
     (response) =>
       response.request().method() === method && new URL(response.url()).pathname === path,
   );
-  return action().then(() => pending);
+  const [response] = await Promise.all([pending, action()]);
+  return response;
 }
 
 async function skills(page, region) {
@@ -26,11 +28,15 @@ async function skills(page, region) {
 export async function uploadBrowserSkill(page, region, markdown, fileName, formal) {
   const dialog = await skills(page, region);
   const uploaded = await responseAfter(page, "POST", "/api/skills", () =>
-    dialog.getByLabel("Upload Markdown (.md, up to 128 KiB)", { exact: true }).setInputFiles({
-      name: fileName,
-      mimeType: "text/markdown",
-      buffer: Buffer.from(markdown),
-    }),
+    // The import control names its accepted files in its visible tooltip; its label reads "Import".
+    dialog
+      .getByTitle("Upload Markdown (.md, up to 128 KiB)", { exact: true })
+      .locator('input[type="file"]')
+      .setInputFiles({
+        name: fileName,
+        mimeType: "text/markdown",
+        buffer: Buffer.from(markdown),
+      }),
   );
   assert.equal(uploaded.status(), 201);
   const { skill } = await uploaded.json();

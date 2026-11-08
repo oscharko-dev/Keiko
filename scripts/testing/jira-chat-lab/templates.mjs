@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
-import { URL } from "node:url";
 import { resolveLimitBrowser } from "./limit-run-browser.mjs";
 import { withEnglishLimitUi } from "./limit-run-language.mjs";
-import { uploadBrowserSkill } from "./browser-rules-knowledge-setup.mjs";
+import { responseAfter, uploadBrowserSkill } from "./browser-rules-knowledge-setup.mjs";
 import { openLimitStep } from "./limit-run-step.mjs";
 import { projectAgileRead } from "./project-agile-oracles.mjs";
 import { STRUCTURE_RULES } from "./requirements/corpus.mjs";
@@ -87,14 +86,6 @@ async function storedTemplates(ctx, templates, expected) {
     stored.push({ ...definition, skill });
   }
   return stored;
-}
-
-function responseAfter(page, method, path, action) {
-  const pending = page.waitForResponse(
-    (response) =>
-      response.request().method() === method && new URL(response.url()).pathname === path,
-  );
-  return action().then(() => pending);
 }
 
 async function revalidateStoredTemplates(ctx, region, stored) {
