@@ -28,6 +28,7 @@ import {
   REVIEW_DIFF_LANGUAGES,
   REVIEW_DIFF_MAX_CHANGED_FILES,
   REVIEW_DIFF_MAX_TOTAL_PATCH_BYTES,
+  REVIEW_RUN_MAX_DIFF_PARTS,
   REVIEW_WORKTREE_DEFAULT_BLOB_LIMIT_BYTES,
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import { listGitReviewChanges, type GitReviewOperationContext } from "@oscharko-dev/keiko-git";
@@ -96,11 +97,18 @@ function validateTarget(input: ReviewDiffPackageInput): void {
 
 const KNOWN_LANGUAGES: ReadonlySet<string> = new Set(REVIEW_DIFF_LANGUAGES);
 
+function validatePartCount(parts = 1): void {
+  if (!Number.isSafeInteger(parts) || parts < 1 || parts > REVIEW_RUN_MAX_DIFF_PARTS) {
+    throw new TypeError("invalid review diff part count");
+  }
+}
+
 function validateConfig(config: ReviewDiffPackageConfig): void {
   const budget = config.budgetTokens;
   if (!Number.isSafeInteger(budget) || budget < 1 || budget > MAX_BUDGET_TOKENS) {
     throw new TypeError("invalid review diff budget");
   }
+  validatePartCount(config.maxParts);
   const excluded = config.excludedPaths ?? [];
   if (excluded.length > MAX_EXCLUDED_PATHS || excluded.some((path) => path.length === 0)) {
     throw new TypeError("invalid review diff exclusions");
@@ -216,6 +224,7 @@ async function buildPackage(
     ranks: languageRanks(priority),
     context: contextOptions(config),
     budgetTokens: config.budgetTokens,
+    maxParts: config.maxParts ?? 1,
     maxTotalPatchBytes: limits.maxTotalPatchBytes,
     count,
     coverage,
@@ -224,7 +233,14 @@ async function buildPackage(
   const result = coverage.build(config.budgetTokens, packed.usedTokens);
   return {
     ok: true,
-    package: { baseSha, headSha, text: packed.text, files: packed.files, coverage: result },
+    package: {
+      baseSha,
+      headSha,
+      text: packed.text,
+      parts: packed.parts,
+      files: packed.files,
+      coverage: result,
+    },
   };
 }
 

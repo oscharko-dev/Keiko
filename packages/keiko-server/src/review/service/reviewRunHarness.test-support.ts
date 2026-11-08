@@ -223,6 +223,8 @@ export interface HarnessOptions {
   readonly admit?: ReviewRunServiceDeps["models"]["admit"];
   /** Issue #4138: the readiness re-check before admission (default: none). */
   readonly ensureReady?: ReviewRunServiceDeps["models"]["ensureReady"];
+  /** Issue #4130: further files the topic branch adds before its head commit (a larger change). */
+  readonly topicFiles?: readonly { readonly path: string; readonly content: string }[] | undefined;
 }
 
 export interface ReviewRunHarness {
@@ -251,7 +253,10 @@ export interface ReviewRunHarness {
 }
 
 /** Builds the fixture: `main` at the base commit, `topic` at the head commit that changes it. */
-function createFixtureRepository(fixture: ReviewFixtureRoot): {
+function createFixtureRepository(
+  fixture: ReviewFixtureRoot,
+  topicFiles: HarnessOptions["topicFiles"] = [],
+): {
   readonly repo: string;
   readonly baseSha: string;
   readonly headSha: string;
@@ -261,6 +266,7 @@ function createFixtureRepository(fixture: ReviewFixtureRoot): {
   const baseSha = commitFile(repo, "src/total.ts", "export const placeholder = 0;\n", "base");
   git(repo, "checkout", "-q", "-b", "topic");
   commitFile(repo, "src/util.ts", "export const ONE = 1;\n", "util");
+  for (const file of topicFiles) commitFile(repo, file.path, file.content, file.path);
   const headSha = commitFile(repo, "src/total.ts", TOTAL_SOURCE, "head");
   git(repo, "checkout", "-q", "main");
   return { repo, baseSha, headSha };
@@ -353,7 +359,7 @@ function harnessParts(
   options: HarnessOptions,
 ): Omit<ReviewRunHarness, "service" | "deps" | "ctx" | "cleanup"> {
   const fixture = createFixtureRoot("keiko-review-run-");
-  const { repo, baseSha, headSha } = createFixtureRepository(fixture);
+  const { repo, baseSha, headSha } = createFixtureRepository(fixture, options.topicFiles);
   const log = captureActivityLog();
   const db = options.db ?? new DatabaseSync(":memory:");
   db.exec("PRAGMA foreign_keys = ON");

@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "fc76e24bdab75b666a53188f8735bac3476dc179eba0e8d86f7ecda49242f9ca"
+    "catalogDigest": "2ddb4e57b9ac30faae4e9cb62592166ef306bd4fcf67a2a417fed21340f5dfdf"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,9 +67,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 655,
-    "proofCount": 677,
-    "resolvedProofCount": 677,
+    "operationCount": 656,
+    "proofCount": 678,
+    "resolvedProofCount": 678,
     "failureClassCount": 399,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -704,6 +704,7 @@
         "review.pair-qualification.failed",
         "review.pair-qualification.started",
         "review.run.action-refused",
+        "review.run.part",
         "review.run.phase",
         "review.run.profile-refused",
         "review.run.refused",
@@ -2745,6 +2746,7 @@
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts",
       "packages/keiko-server/src/review/runtime/activity-log.test.ts"
     ],
+    "review.run.part.line": ["packages/keiko-server/src/review/service/activity-log.test.ts"],
     "review.run.phase.line": ["packages/keiko-server/src/review/service/activity-log.test.ts"],
     "review.run.profile-refused.line": [
       "packages/keiko-server/src/review/runtime/activity-log.test.ts"

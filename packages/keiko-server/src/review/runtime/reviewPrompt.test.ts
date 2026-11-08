@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import {
   REVIEW_RUN_MAX_CANDIDATE_REPORTS,
+  REVIEW_RUN_MAX_DIFF_PARTS,
   REVIEW_RUNTIME_TOOL_NAMES,
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 
@@ -151,6 +152,45 @@ describe("renderReviewTask", () => {
         nonce: "not-a-nonce",
       }),
     ).toEqual({ ok: false, reason: "invalid-input" });
+  });
+
+  it("names the part of a diff package with several parts, and nothing for a single part", () => {
+    const task = (part?: { readonly index: number; readonly count: number }): string => {
+      const rendered = renderReviewTask({
+        baseSha: BASE,
+        headSha: HEAD,
+        rules: { outcome: "absent" },
+        diffPackageText: "diff",
+        nonce: NONCE,
+        part,
+      });
+      return rendered.ok ? rendered.text : rendered.reason;
+    };
+    expect(task({ index: 2, count: 5 })).toContain(
+      `Head commit: ${HEAD}\n\nDiff package part 3 of 5. The change is too large for one review session`,
+    );
+    expect(task({ index: 0, count: 1 })).toBe(task());
+    expect(task()).not.toContain("Diff package part");
+  });
+
+  it("refuses a part outside the diff package's part count", () => {
+    for (const part of [
+      { index: -1, count: 2 },
+      { index: 2, count: 2 },
+      { index: 0, count: REVIEW_RUN_MAX_DIFF_PARTS + 1 },
+      { index: 0.5, count: 2 },
+      { index: 0, count: Number.NaN },
+    ]) {
+      expect(
+        renderReviewTask({
+          baseSha: BASE,
+          headSha: HEAD,
+          rules: { outcome: "absent" },
+          diffPackageText: "x",
+          part,
+        }),
+      ).toEqual({ ok: false, reason: "invalid-input" });
+    }
   });
 
   it("draws a fresh nonce for every task", () => {

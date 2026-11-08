@@ -8,6 +8,7 @@ import type {
   ReviewRunEstimate,
   ReviewTargetRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
+import { REVIEW_RUN_MAX_DIFF_PARTS } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import {
   listGitReviewChanges,
   resolveGitReviewCommit,
@@ -85,5 +86,6 @@ export async function estimateDryRun(
     resolved.changedLines,
     reviewDiffBudgetTokens(resolved.baseSha, resolved.headSha),
     store.medianDurationMs(),
+    REVIEW_RUN_MAX_DIFF_PARTS,
   );
 }

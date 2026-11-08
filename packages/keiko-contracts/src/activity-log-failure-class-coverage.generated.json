@@ -41434,12 +41434,16 @@
       "lifecycleTransitions": ["end", "failure", "start", "state"],
       "lifecycleOperations": {
         "start": ["review.run.started"],
-        "state": ["review.run.phase"],
+        "state": ["review.run.part", "review.run.phase"],
         "end": ["review.run.settled"],
         "failure": ["review.run.refused"],
         "loss": []
       },
       "causalEdges": [
+        {
+          "op": "review.run.part",
+          "mode": "correlation"
+        },
         {
           "op": "review.run.phase",
           "mode": "correlation"
@@ -41458,9 +41462,112 @@
         }
       ],
       "lossSignals": [],
-      "resourceSignals": ["review.run.phase", "review.run.settled", "review.run.started"],
+      "resourceSignals": [
+        "review.run.part",
+        "review.run.phase",
+        "review.run.settled",
+        "review.run.started"
+      ],
       "replayReferences": [],
       "operations": [
+        {
+          "op": "review.run.part",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "candidateCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "completionTokens",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "durationMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": true
+            },
+            {
+              "name": "fileCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "partCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "partNumber",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "promptTokens",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "runDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": true
+            },
+            {
+              "name": "runtimeRunId",
+              "type": "string",
+              "dataClass": "opaque-id",
+              "required": false
+            },
+            {
+              "name": "usedTokens",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "duration",
+            "loss-state",
+            "opaque-id"
+          ],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["review.run.part.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
         {
           "op": "review.run.phase",
           "owner": "keiko-server",
@@ -41507,6 +41614,12 @@
             },
             {
               "name": "includedFiles",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "partCount",
               "type": "integer",
               "dataClass": "count",
               "required": false

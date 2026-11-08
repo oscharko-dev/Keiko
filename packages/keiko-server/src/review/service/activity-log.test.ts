@@ -18,12 +18,14 @@ import {
   REVIEW_TARGET_KINDS,
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import {
+  REVIEW_RUN_LOG_PART_OUTCOMES,
   REVIEW_RUN_LOG_PHASES,
   REVIEW_RUN_LOG_REFUSAL_REASONS,
   REVIEW_RUN_LOG_RUNTIME_CLEANUP,
   REVIEW_RUN_LOG_SETTLEMENT_REASONS,
   REVIEW_RUN_LOG_SETTLEMENTS,
   REVIEW_RUN_LOG_TARGET_KINDS,
+  logReviewRunPart,
   logReviewRunPhase,
   logReviewRunRefused,
   logReviewRunSettled,
@@ -97,6 +99,7 @@ describe("review run Activity Log proofs", () => {
           binaryFiles: 0,
           budgetTokens: 13_000,
           usedTokens: 900,
+          partCount: 2,
         },
       });
     });
@@ -104,7 +107,51 @@ describe("review run Activity Log proofs", () => {
       phase: "reviewing",
       changedFiles: 4,
       unprocessedFiles: 1,
+      partCount: 2,
     });
+  });
+
+  it("proves review.run.part for each way a part's session ends (Issue #4130)", () => {
+    expect(REVIEW_RUN_LOG_PART_OUTCOMES).toEqual(["completed", "failed", "cancelled", "refused"]);
+    const part = {
+      runId: "review-run-1",
+      partNumber: 2,
+      partCount: 3,
+      fileCount: 5,
+      usedTokens: 12_000,
+      candidateCount: 1,
+      totals: TOTALS,
+    };
+    const completed = onlyLine((sink) => {
+      logReviewRunPart(sink, CORRELATION, {
+        ...part,
+        outcome: "completed",
+        runtimeRunId: "run-7f3c",
+      });
+    });
+    expect(expectActivityLogProof("review.run.part.line", completed)).toMatchObject({
+      level: "info",
+      partNumber: 2,
+      partCount: 3,
+      fileCount: 5,
+      outcome: "completed",
+      runtimeRunId: "run-7f3c",
+      promptTokens: 1200,
+      durationMs: 4_000,
+    });
+    const failed = onlyLine((sink) => {
+      logReviewRunPart(sink, CORRELATION, {
+        ...part,
+        outcome: "failed",
+        reason: "budget-exhausted",
+      });
+    });
+    expect(expectActivityLogProof("review.run.part.line", failed)).toMatchObject({
+      level: "warn",
+      outcome: "failed",
+      reason: "budget-exhausted",
+    });
+    expect(JSON.parse(failed)).not.toHaveProperty("runtimeRunId");
   });
 
   it("proves review.run.settled with settlement, verdict counts and role totals", () => {

@@ -40,6 +40,24 @@ const INCOMPLETE_PRIORITY: readonly ReviewIncompleteReason[] = [
   "files-unprocessed",
 ];
 
+/**
+ * How the Reviewer ended over every part's session (Issue #4130): cancelled when any session was
+ * cancelled, otherwise failed with the most consequential reason of the failed sessions, and
+ * completed only when every session completed. No session at all is no completed review.
+ */
+export function combineReviewerFacts(
+  facts: readonly ReviewerSettlementFact[],
+): ReviewerSettlementFact {
+  if (facts.some((fact) => fact.outcome === "cancelled")) return { outcome: "cancelled" };
+  const failed = new Set<ReviewIncompleteReason>();
+  for (const fact of facts) if (fact.outcome === "failed") failed.add(fact.reason);
+  const reason = INCOMPLETE_PRIORITY.find((candidate) => failed.has(candidate));
+  if (reason !== undefined) return { outcome: "failed", reason };
+  return facts.length > 0
+    ? { outcome: "completed" }
+    : { outcome: "failed", reason: "model-failed" };
+}
+
 function incompleteReasons(facts: ReviewSettlementFacts): Set<ReviewIncompleteReason> {
   const reasons = new Set<ReviewIncompleteReason>();
   if (facts.reviewer?.outcome === "failed") reasons.add(facts.reviewer.reason);

@@ -11,8 +11,13 @@ import type {
 import type { GitProcessRunner, GitReviewRunnerOptions } from "@oscharko-dev/keiko-git";
 
 export interface ReviewDiffPackageConfig {
-  /** The reviewer model's effective input budget for the diff content, in gateway tokens. */
+  /** The input budget of one part's diff content, in gateway tokens. */
   readonly budgetTokens: number;
+  /**
+   * The most parts the package is split into, each within `budgetTokens` (Issue #4130); default 1.
+   * At most `REVIEW_RUN_MAX_DIFF_PARTS`.
+   */
+  readonly maxParts?: number | undefined;
   /** The reviewer model's token accounting, exactly as the gateway applies it at admission. */
   readonly tokenAccounting?: ContextTokenAccounting | undefined;
   /** Languages reviewed first, in order; default: the base commit's dominant languages. */
@@ -58,11 +63,25 @@ export interface ReviewDiffPackageFile {
   readonly hunks: readonly PatchHunk[];
 }
 
+/** One part of the package: the content one Reviewer session reviews, within the part budget. */
+export interface ReviewDiffPackagePart {
+  readonly text: string;
+  /** The part text's token count as the gateway's estimator measures it. */
+  readonly usedTokens: number;
+  /** Files with at least one hunk, or a hunkless header, in this part. */
+  readonly fileCount: number;
+}
+
 export interface ReviewDiffPackage {
   readonly baseSha: string;
   readonly headSha: string;
-  /** The reviewer-facing content; its token count is `coverage.summary.usedTokens`. */
+  /**
+   * Every part's text in part order, joined by a line break. A Reviewer session never gets this
+   * whole text, only one part's; `coverage.summary.usedTokens` is the sum of the parts' counts.
+   */
   readonly text: string;
+  /** The parts in review order; empty only when nothing was included. */
+  readonly parts: readonly ReviewDiffPackagePart[];
   /** Included files in package order (the order of `text`). */
   readonly files: readonly ReviewDiffPackageFile[];
   readonly coverage: ReviewDiffCoverage;

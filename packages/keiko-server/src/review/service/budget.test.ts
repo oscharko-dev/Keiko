@@ -3,7 +3,10 @@
 
 import { describe, expect, it } from "vitest";
 import { countContextTokens } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
-import { REVIEW_RULES_FILE_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
+import {
+  REVIEW_RULES_FILE_MAX_BYTES,
+  REVIEW_RUN_MAX_DIFF_PARTS,
+} from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 
 import { REVIEW_TASK_MAX_BYTES, renderReviewTask } from "../runtime/reviewPrompt.js";
 import {
@@ -47,10 +50,23 @@ describe("reviewDiffBudgetTokens", () => {
         headSha: HEAD,
         rules: { outcome: "loaded", text: "r".repeat(REVIEW_RULES_FILE_MAX_BYTES) },
         diffPackageText: diff,
+        // #4130: the longest part line, which every part of the largest part count carries.
+        part: { index: REVIEW_RUN_MAX_DIFF_PARTS - 1, count: REVIEW_RUN_MAX_DIFF_PARTS },
       });
       expect(task.ok).toBe(true);
       if (task.ok) expect(task.byteCount).toBeLessThanOrEqual(REVIEW_TASK_MAX_BYTES);
     }
+  });
+
+  it("estimates a change larger than one part from every part it would fill", () => {
+    const budget = 15_000;
+    const one = estimateReviewRun(1_000_000, budget, null);
+    const parted = estimateReviewRun(1_000_000, budget, null, REVIEW_RUN_MAX_DIFF_PARTS);
+    const prompt = parted.estimatedInputTokens.reviewer - budget * REVIEW_RUN_MAX_DIFF_PARTS;
+    // The diff fills every part, and each part's session gets the system prompt once.
+    expect(prompt).toBe(REVIEW_RUN_MAX_DIFF_PARTS * (one.estimatedInputTokens.reviewer - budget));
+    const small = estimateReviewRun(10, budget, null, REVIEW_RUN_MAX_DIFF_PARTS);
+    expect(small).toEqual(estimateReviewRun(10, budget, null));
   });
 
   it("estimates from changed lines, bounded by the package budget", () => {

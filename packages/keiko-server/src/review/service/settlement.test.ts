@@ -8,7 +8,12 @@ import {
   type ReviewRunSettlement,
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 
-import { settleReviewRun, type ReviewSettlementFacts } from "./settlement.js";
+import {
+  combineReviewerFacts,
+  settleReviewRun,
+  type ReviewerSettlementFact,
+  type ReviewSettlementFacts,
+} from "./settlement.js";
 
 const CLEAN: ReviewSettlementFacts = {
   cancelled: false,
@@ -112,5 +117,43 @@ describe("settleReviewRun", () => {
       { interrupted: true },
     ];
     for (const facts of failing) expect(settle(facts).kind).not.toBe("complete");
+  });
+});
+
+describe("combineReviewerFacts (Issue #4130)", () => {
+  const completed: ReviewerSettlementFact = { outcome: "completed" };
+  const failed = (reason: "model-failed" | "budget-exhausted" | "deadline-exceeded") =>
+    ({ outcome: "failed", reason }) as const;
+
+  it("completes only when every part's session completed", () => {
+    expect(combineReviewerFacts([completed])).toEqual(completed);
+    expect(combineReviewerFacts([completed, completed, completed])).toEqual(completed);
+  });
+
+  it("fails with the most consequential reason of the failed sessions", () => {
+    expect(combineReviewerFacts([completed, failed("deadline-exceeded")])).toEqual(
+      failed("deadline-exceeded"),
+    );
+    expect(
+      combineReviewerFacts([failed("deadline-exceeded"), completed, failed("budget-exhausted")]),
+    ).toEqual(failed("budget-exhausted"));
+    expect(combineReviewerFacts([failed("budget-exhausted"), failed("model-failed")])).toEqual(
+      failed("model-failed"),
+    );
+  });
+
+  it("is cancelled when any session was cancelled, ahead of every failure", () => {
+    expect(
+      combineReviewerFacts([failed("model-failed"), { outcome: "cancelled" }, completed]),
+    ).toEqual({ outcome: "cancelled" });
+  });
+
+  it("never completes without a session", () => {
+    expect(combineReviewerFacts([])).toEqual(failed("model-failed"));
+  });
+
+  it("settles a run with one failed part incomplete, never complete", () => {
+    const reviewer = combineReviewerFacts([completed, failed("budget-exhausted"), completed]);
+    expect(settle({ reviewer })).toEqual({ kind: "incomplete", reason: "budget-exhausted" });
   });
 });

@@ -9,12 +9,14 @@
 // candidates at `REVIEW_RUN_MAX_CANDIDATE_REPORTS`.
 //
 // The review task (the first and only user turn) carries the review rules and the diff package as
-// fenced, labelled, nonce-bound data. Neither can close its own block or open another one.
+// fenced, labelled, nonce-bound data. Neither can close its own block or open another one. A diff
+// package with several parts gets one task per part (Issue #4130), which names the part.
 
 import { randomBytes } from "node:crypto";
 
 import {
   REVIEW_RUN_MAX_CANDIDATE_REPORTS,
+  REVIEW_RUN_MAX_DIFF_PARTS,
   type ReviewRulesFileOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 
@@ -85,8 +87,15 @@ export interface ReviewTaskInput {
   readonly headSha: string;
   readonly rules: ReviewTaskRules;
   readonly diffPackageText: string;
+  /** The part this task carries, when the diff package has more than one (zero-based index). */
+  readonly part?: ReviewTaskPart | undefined;
   /** Twelve lowercase hex digits; tests pin it, production draws it. */
   readonly nonce?: string | undefined;
+}
+
+export interface ReviewTaskPart {
+  readonly index: number;
+  readonly count: number;
 }
 
 export type ReviewTaskResult =
@@ -163,6 +172,23 @@ function dataBlock(
   ].join("\n");
 }
 
+function validPart(part: ReviewTaskPart | undefined): boolean {
+  if (part === undefined) return true;
+  const { index, count } = part;
+  if (!Number.isSafeInteger(index) || !Number.isSafeInteger(count)) return false;
+  return index >= 0 && index < count && count <= REVIEW_RUN_MAX_DIFF_PARTS;
+}
+
+/** The part line of a task whose diff package has several parts; nothing for a single part. */
+function partLines(part: ReviewTaskPart | undefined): string[] {
+  if (part === undefined || part.count < 2) return [];
+  return [
+    `Diff package part ${String(part.index + 1)} of ${String(part.count)}. The change is too ` +
+      "large for one review session, so each part is reviewed in its own session. Report " +
+      "findings about the changed code in this part; read other files only to understand it.",
+  ];
+}
+
 function rulesBlock(rules: ReviewTaskRules, nonce: string): string {
   if (rules.outcome === "loaded" && rules.text !== undefined && rules.text.length > 0) {
     return dataBlock("rules", nonce, rules.text);
@@ -180,11 +206,14 @@ export function renderReviewTask(input: ReviewTaskInput): ReviewTaskResult {
   if (!SHA_PATTERN.test(input.baseSha) || !SHA_PATTERN.test(input.headSha)) {
     return { ok: false, reason: "invalid-input" };
   }
-  if (!NONCE_PATTERN.test(nonce)) return { ok: false, reason: "invalid-input" };
+  if (!NONCE_PATTERN.test(nonce) || !validPart(input.part)) {
+    return { ok: false, reason: "invalid-input" };
+  }
   const text = [
     REVIEW_TASK_INSTRUCTION,
     `Base commit: ${input.baseSha}`,
     `Head commit: ${input.headSha}`,
+    ...partLines(input.part),
     rulesBlock(input.rules, nonce),
     dataBlock("diff-package", nonce, input.diffPackageText),
   ].join("\n\n");

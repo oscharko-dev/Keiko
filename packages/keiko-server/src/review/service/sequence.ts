@@ -1,12 +1,14 @@
 // The run sequence of one Keiko for Quality review (ADR-0182 D3-D6, Issue #4136):
 //   preparing         validate both role models, resolve and fetch the target (child 3), create the
 //                     review worktree (child 3), build the diff package (child 4);
-//   reviewing         one Reviewer run on the review runtime instance (child 5);
+//   reviewing         one Reviewer run on the review runtime instance (child 5) per diff package
+//                     part, in part order, each in its own session (#4130);
 //   counter-checking  one fresh read-only counter-check per candidate, in severity order;
 //   settling          settlement and presentation (pure), then the record (service.ts).
 // Each phase records what it learned in the run state; the first preparation failure, a
 // cancellation, or a missing building block ends the sequence and lets the run settle.
 
+import { REVIEW_RUN_MAX_DIFF_PARTS } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import {
   reviewDiffCoverageSettlement,
   reviewDiffPackageFailureSettlement,
@@ -31,12 +33,17 @@ import type {
   CounterCheckOutcome,
   CounterCheckRunBudget,
 } from "../counter-check/counterCheck.js";
-import type { ReviewDiffPackage } from "../diff-package/types.js";
+import type { ReviewDiffPackage, ReviewDiffPackagePart } from "../diff-package/types.js";
 import type { ReviewCandidateFinding } from "../runtime/findingIntake.js";
 import { ReviewHeadFileReader } from "../runtime/findingIntake.js";
 import type { ReviewRuntimeService } from "../runtime/instance.js";
 import type { ReviewServices } from "../services.js";
-import { logReviewRunPhase, type ReviewRunPackageCounts } from "./activity-log.js";
+import {
+  logReviewRunPart,
+  logReviewRunPhase,
+  type ReviewRunPackageCounts,
+  type ReviewRunPartLine,
+} from "./activity-log.js";
 import { reviewDiffBudgetTokens } from "./budget.js";
 import type { ReviewRunEventHub } from "./events.js";
 import {
@@ -52,7 +59,7 @@ import {
   type ReviewModelPort,
 } from "./models.js";
 import { counterCheckOrder } from "./presentation.js";
-import type { ReviewerSettlementFact } from "./settlement.js";
+import { combineReviewerFacts, type ReviewerSettlementFact } from "./settlement.js";
 import type { ReviewRunStore } from "./store.js";
 
 type PreparationSettlement = Exclude<
@@ -228,7 +235,8 @@ function coverageEntries(coverage: ReviewDiffCoverage): ReviewCoverageEntry[] {
   return entries;
 }
 
-function packageCounts(coverage: ReviewDiffCoverage): ReviewRunPackageCounts {
+function packageCounts(built: ReviewDiffPackage): ReviewRunPackageCounts {
+  const coverage = built.coverage;
   return {
     changedFiles: coverage.summary.changedFiles,
     includedFiles: coverage.included.length,
@@ -238,6 +246,7 @@ function packageCounts(coverage: ReviewDiffCoverage): ReviewRunPackageCounts {
     binaryFiles: coverage.binary.length,
     budgetTokens: coverage.summary.budgetTokens,
     usedTokens: coverage.summary.usedTokens,
+    partCount: built.parts.length,
   };
 }
 
@@ -251,7 +260,10 @@ async function buildPackage(
     repositoryRoot: ctx.repositoryRoot,
     baseSha: target.diffBaseSha,
     headSha: target.headSha,
-    config: { budgetTokens: reviewDiffBudgetTokens(target.diffBaseSha, target.headSha) },
+    config: {
+      budgetTokens: reviewDiffBudgetTokens(target.diffBaseSha, target.headSha),
+      maxParts: REVIEW_RUN_MAX_DIFF_PARTS,
+    },
     abortSignal: ctx.signal,
     correlationId: ctx.correlationId,
   });
@@ -301,7 +313,7 @@ export async function prepareReviewRun(
   if (!(await createWorktree(deps, ctx, state, target.headSha))) return undefined;
   const built = await buildPackage(deps, ctx, state, target);
   if (built !== undefined) {
-    enterPhase(deps, ctx, "reviewing", { packageCounts: packageCounts(built.coverage) });
+    enterPhase(deps, ctx, "reviewing", { packageCounts: packageCounts(built) });
   }
   return built;
 }
@@ -319,7 +331,129 @@ function reviewerTotals(
   return { promptTokens, completionTokens, durationMs };
 }
 
-/** The `reviewing` phase: one Reviewer run; collects its accepted candidates. */
+function addRoleTotals(left: ReviewRoleTotals, right: ReviewRoleTotals): ReviewRoleTotals {
+  return {
+    promptTokens: left.promptTokens + right.promptTokens,
+    completionTokens: left.completionTokens + right.completionTokens,
+    durationMs: left.durationMs + right.durationMs,
+  };
+}
+
+/** An unproven end of any part's runtime makes the run's cleanup unproven (#4136, #4130). */
+function combinedCleanup(
+  left: ReviewRuntimeCleanup | undefined,
+  right: ReviewRuntimeCleanup | undefined,
+): ReviewRuntimeCleanup | undefined {
+  if (left === "unproven" || right === "unproven") return "unproven";
+  return left ?? right;
+}
+
+/** The candidates of every part so far, each fingerprint once, in the order they were accepted. */
+function mergedCandidates(
+  earlier: readonly ReviewCandidateFinding[],
+  added: readonly ReviewCandidateFinding[],
+): readonly ReviewCandidateFinding[] {
+  const seen = new Set(earlier.map((candidate) => candidate.fingerprint));
+  const merged = [...earlier];
+  for (const candidate of added) {
+    if (seen.has(candidate.fingerprint)) continue;
+    seen.add(candidate.fingerprint);
+    merged.push(candidate);
+  }
+  return merged;
+}
+
+interface ReviewerPart {
+  readonly part: ReviewDiffPackagePart;
+  readonly index: number;
+  readonly count: number;
+  readonly target: ReviewRunTarget;
+  readonly worktreeRoot: string;
+}
+
+/** How one part's session ended: a settlement fact, or a refusal that settles the run on its own. */
+type ReviewerPartStep =
+  | { readonly kind: "fact"; readonly fact: ReviewerSettlementFact }
+  | { readonly kind: "stop"; readonly settlement: PreparationSettlement };
+
+type RuntimeResult = Awaited<ReturnType<ReviewRuntimeService["run"]>>;
+
+function partLine(
+  ctx: ReviewRunContext,
+  input: ReviewerPart,
+  result: RuntimeResult,
+  step: ReviewerPartStep,
+  totals: ReviewRoleTotals,
+): ReviewRunPartLine {
+  const base = {
+    runId: ctx.runId,
+    partNumber: input.index + 1,
+    partCount: input.count,
+    fileCount: input.part.fileCount,
+    usedTokens: input.part.usedTokens,
+    candidateCount: result.ok ? result.candidates.length : 0,
+    totals,
+    ...(result.ok && result.runtimeRunId !== undefined
+      ? { runtimeRunId: result.runtimeRunId }
+      : {}),
+  };
+  if (step.kind === "stop") return { ...base, outcome: "refused", reason: step.settlement.reason };
+  const fact = step.fact;
+  return fact.outcome === "failed"
+    ? { ...base, outcome: "failed", reason: fact.reason }
+    : { ...base, outcome: fact.outcome };
+}
+
+/** One part's Reviewer session: totals, rules digest, cleanup and candidates go into the state. */
+async function runReviewerPart(
+  deps: ReviewSequenceDeps,
+  runtime: Pick<ReviewRuntimeService, "run">,
+  ctx: ReviewRunContext,
+  state: ReviewRunState,
+  input: ReviewerPart,
+): Promise<ReviewerPartStep> {
+  const startedAt = deps.now();
+  const result = await runtime.run({
+    reviewRunId: ctx.runId,
+    repositoryRoot: ctx.repositoryRoot,
+    worktreeRoot: input.worktreeRoot,
+    baseSha: input.target.baseSha,
+    headSha: input.target.headSha,
+    modelId: ctx.reviewerModelId,
+    diffPackageText: input.part.text,
+    ...(input.count > 1 ? { diffPart: { index: input.index, count: input.count } } : {}),
+    correlationId: ctx.correlationId,
+    signal: ctx.signal,
+  });
+  const totals = reviewerTotals(result, deps.now() - startedAt);
+  state.reviewerTotals = addRoleTotals(state.reviewerTotals, totals);
+  const step = partStep(deps, ctx, state, result);
+  logReviewRunPart(deps.activityLog, ctx.correlationId, partLine(ctx, input, result, step, totals));
+  return step;
+}
+
+function partStep(
+  deps: ReviewSequenceDeps,
+  ctx: ReviewRunContext,
+  state: ReviewRunState,
+  result: RuntimeResult,
+): ReviewerPartStep {
+  if (!result.ok) return { kind: "stop", settlement: runtimeRefusalSettlement(result.reason) };
+  if (result.rulesDigest !== undefined) deps.store.setRulesDigest(ctx.runId, result.rulesDigest);
+  state.runtimeCleanup = combinedCleanup(state.runtimeCleanup, result.runtimeCleanup);
+  const fact = reviewerOutcomeFact(result);
+  if ("kind" in fact) return { kind: "stop", settlement: fact };
+  state.candidates = mergedCandidates(state.candidates, result.candidates);
+  deps.events.update(ctx.runId, { counts: { candidates: state.candidates.length } });
+  return { kind: "fact", fact };
+}
+
+/**
+ * The `reviewing` phase: one Reviewer session per diff package part, in part order, each bounded by
+ * the run budgets on its own (#4130). A refusal of the first part settles the run on its own, as
+ * before; a later part's refusal (the runtime became unavailable) is a failed Reviewer, and no
+ * further part starts. A failed session leaves the next parts to run. A cancellation ends the phase.
+ */
 export async function runReviewer(
   deps: ReviewSequenceDeps,
   ctx: ReviewRunContext,
@@ -328,31 +462,56 @@ export async function runReviewer(
 ): Promise<boolean> {
   const target = state.target;
   const worktreeRoot = state.worktreeRoot;
-  if (deps.reviewRuntime === undefined || target === undefined || worktreeRoot === undefined) {
+  const runtime = deps.reviewRuntime;
+  if (runtime === undefined || target === undefined || worktreeRoot === undefined) {
     return stopWith(state, { kind: "skipped", reason: "model-unavailable" });
   }
-  const startedAt = deps.now();
-  const result = await deps.reviewRuntime.run({
-    reviewRunId: ctx.runId,
-    repositoryRoot: ctx.repositoryRoot,
+  if (diffPackage.parts.length === 0) {
+    return stopWith(state, { kind: "skipped", reason: "no-reviewable-changes" });
+  }
+  const facts = await reviewParts(deps, runtime, ctx, state, {
+    parts: diffPackage.parts,
+    target,
     worktreeRoot,
-    baseSha: target.baseSha,
-    headSha: target.headSha,
-    modelId: ctx.reviewerModelId,
-    diffPackageText: diffPackage.text,
-    correlationId: ctx.correlationId,
-    signal: ctx.signal,
   });
-  state.reviewerTotals = reviewerTotals(result, deps.now() - startedAt);
-  if (!result.ok) return stopWith(state, runtimeRefusalSettlement(result.reason));
-  if (result.rulesDigest !== undefined) deps.store.setRulesDigest(ctx.runId, result.rulesDigest);
-  state.runtimeCleanup = result.runtimeCleanup;
-  const fact = reviewerOutcomeFact(result);
-  if ("kind" in fact) return stopWith(state, fact);
+  if ("kind" in facts) return stopWith(state, facts);
+  const fact = combineReviewerFacts(facts);
   state.reviewer = fact;
-  state.candidates = result.candidates;
-  deps.events.update(ctx.runId, { counts: { candidates: result.candidates.length } });
   return fact.outcome === "completed" || fact.outcome === "failed";
+}
+
+/** Each part's session in order: their facts, or the first part's refusal that settles the run. */
+async function reviewParts(
+  deps: ReviewSequenceDeps,
+  runtime: Pick<ReviewRuntimeService, "run">,
+  ctx: ReviewRunContext,
+  state: ReviewRunState,
+  input: {
+    readonly parts: readonly ReviewDiffPackagePart[];
+    readonly target: ReviewRunTarget;
+    readonly worktreeRoot: string;
+  },
+): Promise<ReviewerSettlementFact[] | PreparationSettlement> {
+  const facts: ReviewerSettlementFact[] = [];
+  const count = input.parts.length;
+  for (const [index, part] of input.parts.entries()) {
+    if (index > 0 && ctx.signal.aborted) return [...facts, { outcome: "cancelled" }];
+    const { target, worktreeRoot } = input;
+    const step = await runReviewerPart(deps, runtime, ctx, state, {
+      part,
+      index,
+      count,
+      target,
+      worktreeRoot,
+    });
+    if (step.kind === "stop") {
+      if (index === 0) return step.settlement;
+      return [...facts, { outcome: "failed", reason: "model-failed" }];
+    }
+    facts.push(step.fact);
+    if (step.fact.outcome === "cancelled") return facts;
+  }
+  return facts;
 }
 
 interface RunCounterCheckBudget extends CounterCheckRunBudget {
@@ -373,14 +532,6 @@ function runBudget(limit: number): RunCounterCheckBudget {
       return true;
     },
     exhausted: () => refused,
-  };
-}
-
-function addTotals(left: ReviewRoleTotals, outcome: CounterCheckOutcome): ReviewRoleTotals {
-  return {
-    promptTokens: left.promptTokens + outcome.promptTokens,
-    completionTokens: left.completionTokens + outcome.completionTokens,
-    durationMs: left.durationMs + outcome.durationMs,
   };
 }
 
@@ -424,7 +575,7 @@ export async function counterCheckCandidates(
     });
     state.outcomes.set(candidate.fingerprint, outcome);
     state.counterCheckEffects.push(outcome.effect);
-    state.counterCheckerTotals = addTotals(state.counterCheckerTotals, outcome);
+    state.counterCheckerTotals = addRoleTotals(state.counterCheckerTotals, outcome);
     deps.events.update(ctx.runId, { counts: { counterChecked: state.outcomes.size } });
   }
 }
