@@ -11,6 +11,7 @@ import type {
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { sha256Hex } from "./hooks/canonical-voice-hasher-runtime";
 import { jiraToolOutcomeView, JIRA_OUTCOME_ITEMS_SHOWN } from "./jira-tool-outcome";
+import { isKnownJiraToolAlias } from "./jira-tool-presentation";
 
 const FAILURE_KEYS: Readonly<Record<string, ClientJiraResultFailure>> = {
   "chat.jira.outcome.failure.auth": "auth",
@@ -26,6 +27,19 @@ const FAILURE_KEYS: Readonly<Record<string, ClientJiraResultFailure>> = {
 };
 type Counts = Omit<ClientJiraResultPresentation, "messageDigest" | "restored">;
 function presentationCounts(exchange: ChatToolExchange): Counts {
+  if (!isKnownJiraToolAlias(exchange.call.name)) {
+    // The fallback renders no payload facts. These count presentation, not native rows.
+    return {
+      exchangeCount: 1,
+      itemCount: 0,
+      shownCount: 0,
+      returnedCount: 0,
+      unreadableCount: 1,
+      problemCount: 0,
+      ruleCount: 0,
+      failure: "unavailable",
+    };
+  }
   const view = jiraToolOutcomeView(exchange);
   return {
     exchangeCount: 1,
@@ -43,12 +57,11 @@ interface ObservedPresentation {
   readonly states: Set<string>;
   live: boolean;
 }
-function isReadableResult(exchange: ChatToolExchange): boolean {
-  return (
-    exchange.call.name.startsWith("jira_") &&
-    exchange.call.name !== "jira_report" &&
-    (exchange.result !== undefined || exchange.draftProgress !== undefined)
-  );
+function hasPresentedResult(exchange: ChatToolExchange): boolean {
+  if (exchange.call.name === "jira_report") return false;
+  if (isKnownJiraToolAlias(exchange.call.name))
+    return exchange.result !== undefined || exchange.draftProgress !== undefined;
+  return (exchange.result?.data ?? exchange.draftProgress) != null;
 }
 
 /** One counted line per distinct live state. Restored terminal history is never replayed. */
@@ -69,7 +82,7 @@ export function useJiraResultEvidence(
     const previous = observed.current;
     if (turnState === "pending") previous.live = true;
     const restored = !previous.live;
-    const changed = transcript.exchanges.filter(isReadableResult).flatMap((exchange) => {
+    const changed = transcript.exchanges.filter(hasPresentedResult).flatMap((exchange) => {
       const counts = presentationCounts(exchange);
       const state = JSON.stringify([
         exchange.call.id,

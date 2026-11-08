@@ -1,11 +1,12 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatToolExchange, ChatToolTranscript } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
+import * as diagnostics from "@/lib/client-diagnostics";
 import { JiraChatTools } from "./JiraChatTools";
 
 const OPAQUE = {
@@ -77,5 +78,53 @@ describe.each(["en", "de"] as const)("closed result fallback in %s", (locale) =>
     expect(screen.getByText(unavailable)).toBeVisible();
     expect(screen.queryByText(locale === "en" ? "Completed" : "Abgeschlossen")).toBeNull();
     expect(document.querySelector("pre, a, button")).toBeNull();
+  });
+
+  it.each(["knowledge_requirements", "knowledge_documents", "knowledge_review", "mcp_foreign_tool", "jira_future_tool"])(
+    "records only unavailable presentation facts for live %s and does not replay them on reload", (name) => {
+      const report = vi.spyOn(diagnostics, "reportClientDiagnostic");
+      const transcript = restored(result(name));
+      const events = () => report.mock.calls.flatMap(([, meta]) =>
+        meta?.jiraResultPresentation === undefined ? [] : [meta.jiraResultPresentation]);
+      const show = (turnState: "pending" | "completed") => (
+        <I18nProvider><JiraChatTools transcript={transcript} turnState={turnState}
+          messageId="private-fallback-parent" /></I18nProvider>
+      );
+      try {
+        const live = render(show("pending"));
+        expect(events()).toEqual([{
+          messageDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+          exchangeCount: 1, itemCount: 0, shownCount: 0, returnedCount: 0,
+          unreadableCount: 1, problemCount: 0, ruleCount: 0,
+          failure: "unavailable", restored: false,
+        }]);
+        live.rerender(show("pending"));
+        live.rerender(show("completed"));
+        expect(events()).toHaveLength(1);
+        live.unmount();
+        render(show("completed"));
+        expect(events()).toHaveLength(1);
+        const recorded = JSON.stringify(report.mock.calls);
+        expect(recorded).not.toContain(name);
+        expect(recorded).not.toMatch(/private-fallback-parent|fallback-result|SYN-7|untrusted|Opaque|Unvalidated|browseUrl|password|license/u);
+      } finally {
+        report.mockRestore();
+      }
+    },
+  );
+
+  it("does not claim a fallback presentation when there is no result body to render", () => {
+    const report = vi.spyOn(diagnostics, "reportClientDiagnostic");
+    const exchange = result("mcp_foreign_tool");
+    if (exchange.result === undefined) throw new TypeError("Missing result fixture");
+    try {
+      render(<I18nProvider><JiraChatTools messageId="private-fallback-parent" turnState="pending"
+        transcript={{ schemaVersion: 1, exchanges: [{ ...exchange, result: { ...exchange.result, data: null } }] }}
+      /></I18nProvider>);
+      expect(screen.queryByText(unavailable)).toBeNull();
+      expect(report.mock.calls.some(([, meta]) => meta?.jiraResultPresentation !== undefined)).toBe(false);
+    } finally {
+      report.mockRestore();
+    }
   });
 });
