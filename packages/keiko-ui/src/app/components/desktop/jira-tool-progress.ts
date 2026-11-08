@@ -173,6 +173,8 @@ export interface RequirementsReadView {
   readonly cuts: readonly { readonly key: WidgetMessageKey; readonly count: number }[];
   /** True when the card tells more than the progress step: several calls, or an unfinished read. */
   readonly informative: boolean;
+  /** The number of calls (pages) the card consolidates. */
+  readonly pageCount: number;
 }
 
 /** Only the units view of a settled read counts units; other views have their own meaning. */
@@ -231,6 +233,7 @@ function requirementsReadView(group: readonly Record<string, unknown>[]): Requir
     complete,
     cuts: cuts.length === 0 && named ? [{ key: "chat.requirements.partial", count: 0 }] : cuts,
     informative: group.length > 1 || !complete,
+    pageCount: group.length,
   };
 }
 
@@ -244,27 +247,36 @@ export interface RequirementsReadGroups {
   readonly cards: ReadonlyMap<string, RequirementsReadView>;
   /** Every call id that belongs to a consolidated read, shown or not. */
   readonly members: ReadonlySet<string>;
+  /** Later pages of a consolidated read: the first page's card already counts them. */
+  readonly folded: ReadonlySet<string>;
 }
 
 /** Counts what a turn read across the pages of each filter, once per distinct unit reference. */
 export function requirementsReadGroups(
   exchanges: readonly ChatToolExchange[],
 ): RequirementsReadGroups {
-  const groups = new Map<string, { first: string; data: Record<string, unknown>[] }>();
+  const groups = new Map<
+    string,
+    { first: string; ids: string[]; data: Record<string, unknown>[] }
+  >();
   const members = new Set<string>();
   for (const exchange of exchanges) {
     const data = unitsData(exchange);
     if (data === undefined) continue;
     members.add(exchange.call.id);
     const key = groupKey(exchange);
-    const group = groups.get(key) ?? { first: exchange.call.id, data: [] };
+    const group = groups.get(key) ?? { first: exchange.call.id, ids: [], data: [] };
+    group.ids.push(exchange.call.id);
     group.data.push(data);
     groups.set(key, group);
   }
   const cards = new Map<string, RequirementsReadView>();
+  const folded = new Set<string>();
   for (const group of groups.values()) {
     const view = requirementsReadView(group.data);
-    if (view.informative) cards.set(group.first, view);
+    if (!view.informative) continue;
+    cards.set(group.first, view);
+    for (const id of group.ids) if (id !== group.first) folded.add(id);
   }
-  return { cards, members };
+  return { cards, members, folded };
 }

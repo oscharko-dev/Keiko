@@ -518,10 +518,11 @@ function visibleToolCards(
   const reads = requirementsReadGroups(all);
   const exchanges = all.filter(
     (exchange) =>
-      exchange.approval !== undefined ||
-      exchange.humanInput !== undefined ||
-      reads.cards.has(exchange.call.id) ||
-      toolCardHasContent(exchange, turnState),
+      !reads.folded.has(exchange.call.id) &&
+      (exchange.approval !== undefined ||
+        exchange.humanInput !== undefined ||
+        reads.cards.has(exchange.call.id) ||
+        toolCardHasContent(exchange, turnState)),
   );
   const notice =
     turnState !== "pending" && knowledgeCoverageIssues(knowledgeTurnCoverage(all)).length > 0;
@@ -583,7 +584,9 @@ function ToolExchangeCards({
 }): ReactNode {
   const t = useTranslate();
   const read = reads.cards.get(exchange.call.id);
-  if (read !== undefined)
+  // A single page keeps its readable Knowledge card; several pages read as one counted card.
+  const singleReadable = read?.pageCount === 1 && knowledgeToolOutcomeView(exchange) !== undefined;
+  if (read !== undefined && !singleReadable)
     return <RequirementsReadCard view={read} label={t("chat.requirements.tool")} />;
   return (
     <div className={styles.cmpExchange}>
