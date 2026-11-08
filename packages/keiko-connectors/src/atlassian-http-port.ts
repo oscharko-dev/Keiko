@@ -59,7 +59,8 @@ export interface AtlassianHttpUpload {
 }
 
 export interface AtlassianHttpBodyRequest {
-  // GET for reads; POST/PUT/DELETE for governed writes. GET and DELETE carry no request body.
+  // The fixed operation contract determines effects; POST search/worklog selection are reads.
+  // GET and DELETE carry no request body.
   readonly method: "GET" | "POST" | "PUT" | "DELETE";
   // Absolute https URL on the connector's configured base URL (same allowlist re-check as the
   // body-less channel).
@@ -73,6 +74,8 @@ export interface AtlassianHttpBodyRequest {
   readonly bodyJson?: string | undefined;
   // Bounded multipart upload for POST (#4176), bounded by ATLASSIAN_HTTP_UPLOAD_MAX_BYTES.
   readonly upload?: AtlassianHttpUpload | undefined;
+  /** Server-owned opt-in for the two documented experimental sprint-unmap PUT identities only. */
+  readonly jiraExperimental?: true | undefined;
   // Run-level cancellation (ADR-0128 D5): the adapter composes this with its own timeout so an
   // aborted sync run tears down the in-flight request instead of waiting it out.
   readonly signal?: AbortSignal | undefined;

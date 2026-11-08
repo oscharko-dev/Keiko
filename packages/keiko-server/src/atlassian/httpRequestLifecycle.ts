@@ -51,6 +51,19 @@ function requestBodyHeaders(request: RequestSnapshot): Record<string, string> {
     ? { "content-type": "application/json" }
     : {};
 }
+function experimentalJiraUrl(url: URL): boolean {
+  return url.protocol === "https:" && url.search === "" && url.hash === "" &&
+    url.username === "" && url.password === "" &&
+    /\/rest\/agile\/1\.0\/sprint\/(?:unmap|unmap-all)$/u.test(url.pathname);
+}
+function experimentalJiraHeaders(value: unknown, request: RequestSnapshot): Record<string, string> {
+  if (value === undefined) return {};
+  if (value !== true || request.method !== "PUT" || !URL.canParse(request.url))
+    throw new AtlassianCredentialCustodyError("invalid-input", ["Unsupported experimental Jira request"]);
+  if (!experimentalJiraUrl(new URL(request.url)))
+    throw new AtlassianCredentialCustodyError("invalid-input", ["Unsupported experimental Jira target"]);
+  return { "X-ExperimentalApi": "true" };
+}
 
 export function atlassianHttpRequestLifecycle(
   options: AtlassianHttpLifecycleOptions & {
@@ -61,6 +74,11 @@ export function atlassianHttpRequestLifecycle(
   request: RequestSnapshot,
 ): RequestLifecycle {
   const { credentials, authRef, beforeDispatch, onResponse, correlationId } = options;
+  // Validate the closed opt-in before admission callbacks can mark a native effect dispatched.
+  const headers = {
+    ...requestBodyHeaders(request),
+    ...experimentalJiraHeaders("jiraExperimental" in request ? request.jiraExperimental : undefined, request),
+  };
   let failure: { readonly error: unknown } | undefined;
   function run<T>(callback: () => T): T {
     try {
@@ -78,7 +96,7 @@ export function atlassianHttpRequestLifecycle(
         return new Headers({
           authorization: atlassianAuthorizationHeaderValue(credential),
           accept: "application/json",
-          ...requestBodyHeaders(request),
+          ...headers,
         });
       }),
     observe: async (response: Response): Promise<void> => {

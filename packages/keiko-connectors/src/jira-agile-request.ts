@@ -14,6 +14,23 @@ export function jiraAgileRequest(
 ): JiraMutationRequest {
   return jiraAgileRequests(connection, context).agile;
 }
+/** The two native experimental cleanup routes have one fixed, server-owned opt-in. */
+export function jiraExperimentalAgileRequest(
+  connection: JiraManagedConnection,
+  context: ManagedMcpInvocationContext,
+): JiraMutationRequest {
+  const signal = AbortSignal.any([
+    context.signal,
+    AbortSignal.timeout(ATLASSIAN_WRITE_ACTION_TOTAL_TIMEOUT_MS),
+  ]);
+  const request = fixedRequest(connection, context, signal, "/rest/agile/1.0/", false, true);
+  return (path, method = "GET", body, expect = "json", upload) => {
+    if (method !== "PUT" || upload !== undefined ||
+      (path !== "sprint/unmap" && path !== "sprint/unmap-all"))
+      return Promise.resolve({ ok: false, reason: "unavailable" });
+    return request(path, method, body, expect);
+  };
+}
 export interface JiraAgileRequestPhase {
   readonly agile: JiraMutationRequest;
   readonly issue: JiraMutationRequest;
@@ -55,6 +72,7 @@ function fixedRequest(
   signal: AbortSignal,
   root: "/rest/agile/1.0/" | "/rest/api/2/",
   readOnly: boolean,
+  jiraExperimental?: true,
 ): JiraMutationRequest {
   const endpoints = atlassianApiEndpointsFor(connection.baseUrl, root);
   return (path, method = "GET", body, expect = "json") =>
@@ -72,6 +90,7 @@ function fixedRequest(
             method,
             url: atlassianApiUrl(endpoints, path),
             ...(body === undefined ? {} : { bodyJson: JSON.stringify(body) }),
+            ...(jiraExperimental === undefined ? {} : { jiraExperimental }),
             expect,
           },
         );

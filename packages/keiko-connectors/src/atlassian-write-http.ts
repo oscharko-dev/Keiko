@@ -58,6 +58,8 @@ export interface AtlassianWriteHttpRequest {
   readonly bodyJson?: string | undefined;
   // One governed multipart upload (POST only, #4176); never combined with `bodyJson`.
   readonly upload?: AtlassianHttpUpload | undefined;
+  /** Closed native opt-in; never a caller-provided header map. */
+  readonly jiraExperimental?: true | undefined;
   // Closed JSON response shapes, or status only; every JSON mode shares the same byte cap.
   readonly expect: "json" | "json-array" | "json-object-or-array" | "json-scalar" | "none";
 }
@@ -201,6 +203,7 @@ async function issueOnce(
     maxBodyBytes: ATLASSIAN_WRITE_RESPONSE_MAX_BYTES,
     ...(request.bodyJson === undefined ? {} : { bodyJson: request.bodyJson }),
     ...(request.upload === undefined ? {} : { upload: request.upload }),
+    ...(request.jiraExperimental === undefined ? {} : { jiraExperimental: request.jiraExperimental }),
     // KEIKO-0318: thread the caller's cancellation into the transport call itself so an abort
     // tears down the in-flight request (AtlassianHttpBodyRequest.signal) instead of only being
     // observed between attempts — the between-attempt checks alone only stopped a LATER retry.
