@@ -15,8 +15,19 @@ import { buildCorpus, STRUCTURE_RULES } from "../testing/jira-chat-lab/requireme
 
 const old = { id: "1", key: "REQ-1", fields: { summary: "Existing", labels: [] } };
 const exchange = (operation, data, args = {}, status = "completed") => ({
-  call: { name: operation.replaceAll(/[.-]/gu, "_"), arguments: args },
-  result: { toolRef: { canonicalId: `keiko.${operation}` }, status, data },
+  call: { id: "synthetic-call", name: operation.replaceAll(/[.-]/gu, "_"), arguments: args },
+  result: {
+    schemaVersion: 1,
+    invocationId: "synthetic-invocation",
+    toolRef: { canonicalId: `keiko.${operation}`, contractVersion: 1 },
+    projectionDigest: null,
+    effectStarted: false,
+    metrics: { inputBytes: 0, outputBytes: 0, resultCount: 1, durationMs: 0 },
+    status,
+    reason: status === "completed" ? "none" : "provider-reported-error",
+    page: status === "completed" ? { truncated: false, reason: "none", cursor: null } : null,
+    data,
+  },
 });
 const refusal = () =>
   exchange(
@@ -101,6 +112,36 @@ describe("formal-rule evidence from normal UI turns", () => {
     ).toBe(false);
     expect(
       gradeRuleRefusal({ ...evidence, exchanges: [{ ...refusal(), effectStarted: true }] }),
+    ).toBe(false);
+  });
+
+  it("rejects a formal refusal whose actual result receipt says an effect started", () => {
+    const refused = refusal();
+    const started = { ...refused, result: { ...refused.result, effectStarted: true } };
+    expect(
+      gradeRuleRefusal({ before: [old], after: [old], template: "REQ/Epic", exchanges: [started] }),
+    ).toBe(false);
+  });
+
+  it("does not infer native non-effect from a missing result receipt flag", () => {
+    const refused = refusal();
+    const { effectStarted, ...result } = refused.result;
+    expect(effectStarted).toBe(false);
+    expect(
+      gradeRuleRefusal({
+        before: [old],
+        after: [old],
+        template: "REQ/Epic",
+        exchanges: [{ ...refused, result }],
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects failed data outside the provider-reported-error envelope arm", () => {
+    const refused = refusal();
+    const invalid = { ...refused, result: { ...refused.result, reason: "none" } };
+    expect(
+      gradeRuleRefusal({ before: [old], after: [old], template: "REQ/Epic", exchanges: [invalid] }),
     ).toBe(false);
   });
 

@@ -840,17 +840,22 @@ function gradeRuntimeRows(report, rows, truth, answer, coverage) {
   };
 }
 
-/** Runtime projects use the same full checker as write/report admission, on independent native facts. */
-export async function gradeRuntimeDeviationReport(exchanges, observed, truth, answer) {
-  if (!completeNativePages(observed) || observed.issues.length !== truth.issueCount)
-    return largeUnverified("Independent runtime population is unavailable");
+/** Reuse the report/write rule owner on a complete, independently observed native population. */
+export function checkNativeIssueTemplates(issues, truth) {
   const checker = createJiraReportTemplateChecker(() => ({
     templates: truth.templateScope.templates.map((item) => item.rules),
     unreadable: 0,
   })).bind(truth.fieldCatalog);
-  if (typeof checker !== "object" || checker === null)
-    return largeUnverified("Installed rule evidence is unavailable");
-  const rows = await checkedNativeIssues(checker, observed.issues, truth.project);
+  if (typeof checker !== "object" || checker === null) return undefined;
+  return checkedNativeIssues(checker, issues, truth.project);
+}
+
+/** Runtime projects use the same full checker as write/report admission, on independent native facts. */
+export async function gradeRuntimeDeviationReport(exchanges, observed, truth, answer) {
+  if (!completeNativePages(observed) || observed.issues.length !== truth.issueCount)
+    return largeUnverified("Independent runtime population is unavailable");
+  const rows = await checkNativeIssueTemplates(observed.issues, truth);
+  if (rows === undefined) return largeUnverified("Installed rule evidence is unavailable");
   if (!literalSeedProof(truth, rows)) return largeUnverified("Literal seed defects changed");
   const scoped = runtimeTemplateTruth(truth, rows);
   const coverage = largeCoverageEvidence(observed, scoped);

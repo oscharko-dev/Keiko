@@ -264,7 +264,8 @@ async function finishFaultPlan(ctx, results, scope, plan) {
 }
 
 function bulkSeeds(ctx) {
-  const seeded = ctx.intent.state.bulkEpics?.seeded;
+  const state = ctx.intent.state;
+  const seeded = state.bulkEpics?.seeded;
   assert.ok(
     Array.isArray(seeded) && seeded.length >= 37 && seeded.length <= 55,
     "Ten to fifteen percent of 370 requirements need concrete rule-violation probes",
@@ -274,6 +275,16 @@ function bulkSeeds(ctx) {
     assert.ok(typeof entry.requirementId === "string" && entry.requirementId.length > 0);
     assert.ok(typeof entry.ruleId === "string" && entry.ruleId.length > 0);
   }
+  if (state["ac1-bulk-refusals"] === undefined && Array.isArray(state.bulkEpics?.refusals))
+    ctx.intent.record("ac1-bulk-refusals", {
+      projectKey: ctx.projectKey,
+      chatId: ctx.chat.id,
+      refusals: state.bulkEpics.refusals.map(({ requirementId, ruleId, clientTurnId }) => ({
+        requirementId,
+        ruleId,
+        clientTurnId,
+      })),
+    });
   return seeded;
 }
 

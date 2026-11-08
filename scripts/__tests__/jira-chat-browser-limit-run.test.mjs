@@ -297,6 +297,14 @@ function fixture() {
   );
   const plans = [];
   const faultResults = new Map();
+  const seeded = Array.from({ length: 46 }, (_, index) => ({
+    requirementId: `REQ-FA-${String(index + 1).padStart(3, "0")}`,
+    ruleId: "summary-pattern",
+  }));
+  const refusals = seeded.map((seed, index) => ({
+    ...seed,
+    clientTurnId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+  }));
   blocks.createFaultPlan.mockImplementation((options) => {
     const plan = {
       maybeInject: vi.fn(async () =>
@@ -314,10 +322,8 @@ function fixture() {
     calls.push({ name: "runBulkEpics", context, options });
     intent.update({
       bulkEpics: {
-        seeded: Array.from({ length: 46 }, (_, index) => ({
-          requirementId: `REQ-FA-${String(index + 1).padStart(3, "0")}`,
-          ruleId: "summary-pattern",
-        })),
+        seeded,
+        refusals,
       },
     });
     return result("ac2-bulk-epics");
@@ -328,8 +334,68 @@ function fixture() {
     privateJson(evidenceFile, { total: 1007, statuses: { todo: 1007 } }, true);
     return { ...result("progress-simulation"), evidenceFile };
   });
-  return { ctx, blocks, calls, plans, faultResults, controller };
+  return { ctx, blocks, calls, plans, faultResults, controller, seeded, refusals };
 }
+
+it("hands actual observed bulk turn anchors to the verifier's own slot before its call", async () => {
+  const f = fixture();
+  const expected = { projectKey: "LIM7", chatId: "document-chat", refusals: f.refusals };
+  f.blocks.gradeBulkRefusals.mockImplementation((ctx, options) => {
+    expect(options).toEqual({ seeded: f.seeded });
+    expect(ctx.intent.state["ac1-bulk-refusals"]).toEqual(expected);
+    expect(JSON.parse(readFileSync(ctx.intent.path, "utf8")).data["ac1-bulk-refusals"]).toEqual(
+      expected,
+    );
+    return Promise.resolve(result("ac1-bulk-refusals"));
+  });
+  await expect(runBrowserLimitRun(f.ctx, {}, f.blocks)).resolves.toMatchObject({ status: "green" });
+  expect(f.blocks.gradeBulkRefusals).toHaveBeenCalledExactlyOnceWith(f.ctx, { seeded: f.seeded });
+  expect(f.ctx.intent.state.bulkEpics).toEqual({ seeded: f.seeded, refusals: f.refusals });
+});
+
+it("does not manufacture refusal proof from seeded expectations without actual turn anchors", async () => {
+  const f = fixture();
+  f.blocks.runBulkEpics.mockImplementation((ctx) => {
+    ctx.intent.record("bulkEpics", { seeded: f.seeded });
+    return Promise.resolve(result("ac2-bulk-epics"));
+  });
+  f.blocks.gradeBulkRefusals.mockImplementation((ctx, options) => {
+    expect(options).toEqual({ seeded: f.seeded });
+    expect(ctx.intent.state["ac1-bulk-refusals"]?.refusals).toBeUndefined();
+    return Promise.resolve({ ...result("ac1-bulk-refusals"), status: "unverified" });
+  });
+  await expect(runBrowserLimitRun(f.ctx, {}, f.blocks)).rejects.toThrow("incomplete");
+  expect(f.blocks.gradeBulkRefusals).toHaveBeenCalledOnce();
+  expect(f.blocks.runHierarchyBulk).not.toHaveBeenCalled();
+});
+
+it("preserves the resumed verifier-owned slot even when the bulk source has newer anchors", async () => {
+  const f = fixture();
+  const saved = {
+    projectKey: "LIM7",
+    chatId: "document-chat",
+    refusals: [
+      { requirementId: "REQ-FA-001", ruleId: "summary-pattern", clientTurnId: "previous-turn" },
+    ],
+    binding: "previous-binding",
+    proofs: [{ invocationId: "previous-invocation" }],
+    result: { ...result("ac1-bulk-refusals"), status: "unverified" },
+  };
+  f.ctx.intent.record("ac1-bulk-refusals", saved);
+  const record = vi.spyOn(f.ctx.intent, "record");
+  f.blocks.gradeBulkRefusals.mockImplementation((ctx, options) => {
+    expect(options).toEqual({ seeded: f.seeded });
+    expect(ctx.intent.state["ac1-bulk-refusals"]).toEqual(saved);
+    return Promise.resolve(saved.result);
+  });
+  await expect(runBrowserLimitRun(f.ctx, {}, f.blocks)).rejects.toThrow("incomplete");
+  expect(record.mock.calls.filter(([name]) => name === "ac1-bulk-refusals")).toEqual([]);
+  expect(f.ctx.intent.state["ac1-bulk-refusals"]).toEqual(saved);
+  expect(JSON.parse(readFileSync(f.ctx.intent.path, "utf8")).data["ac1-bulk-refusals"]).toEqual(
+    saved,
+  );
+  expect(f.blocks.runHierarchyBulk).not.toHaveBeenCalled();
+});
 
 it("composes the exact owners once in plan order, with bilingual reload checks after epics, sprint and report", async () => {
   const f = fixture();
