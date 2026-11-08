@@ -1,6 +1,10 @@
 import { expect, test, type Page, type Locator } from "@playwright/test";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
-import type { ChatMessage, ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type {
+  ChatMessage,
+  ChatToolBatchProgress,
+  ChatToolExchange,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import { parseJiraDraftReference } from "@oscharko-dev/keiko-connectors";
 import { join } from "node:path";
 import { jiraAccessibilityJourney } from "./support/jira-chat-4081-accessibility.js";
@@ -15,6 +19,23 @@ import {
   selectAskForApproval,
   send,
 } from "./support/jira-chat-4081.js";
+
+function settledBatchResult(
+  progress: ChatToolBatchProgress,
+): NonNullable<ChatToolExchange["result"]> {
+  return {
+    schemaVersion: 1,
+    invocationId: "batch-progress-fixture",
+    toolRef: null,
+    projectionDigest: null,
+    effectStarted: true,
+    metrics: { inputBytes: 0, outputBytes: 0, resultCount: 370, durationMs: 0 },
+    status: "completed",
+    reason: "none",
+    page: { truncated: false, reason: "none", cursor: null },
+    data: { ...progress, outcome: "succeeded" },
+  };
+}
 
 function completedBatchMessage(resumed: boolean): ChatMessage {
   const progress = {
@@ -32,6 +53,7 @@ function completedBatchMessage(resumed: boolean): ChatMessage {
       arguments: resumed ? { create: true } : { requirements: "synthetic" },
     },
     batchProgress: progress,
+    result: settledBatchResult(progress),
   };
   return {
     id: "batch-progress-message",
