@@ -113,6 +113,14 @@ function triStateLabel(
 function boardItem(tool: string, source: Source): JiraAgileDetails | undefined {
   return tool === "jira_board_projects" ? project(source) : jiraVersionSummaryDetails(source);
 }
+function boardItems(tool: string, data: Source): JiraAgileDetails[] {
+  if (tool !== "jira_board_projects" && tool !== "jira_board_versions") return [];
+  return (Array.isArray(data.items) ? data.items : [data]).flatMap((value: unknown) => {
+    const source = record(value);
+    const item = source === undefined ? undefined : boardItem(tool, source);
+    return item === undefined ? [] : [item];
+  });
+}
 /** Visible native populations and raw estimate values are observations, never board-wide completeness or units. */
 export function jiraAgileContextDetails(tool: string, data: Source): readonly JiraAgileDetails[] {
   if (!JIRA_AGILE_CONTEXT_TOOLS.has(tool)) return [];
@@ -121,13 +129,6 @@ export function jiraAgileContextDetails(tool: string, data: Source): readonly Ji
     return item === undefined ? [] : [item];
   }
   const head = context(data);
-  const items =
-    tool === "jira_board_projects" || tool === "jira_board_versions"
-      ? (Array.isArray(data.items) ? data.items : [data]).flatMap((value: unknown) => {
-          const source = record(value);
-          const item = source === undefined ? undefined : boardItem(tool, source);
-          return item === undefined ? [] : [item];
-        })
-      : [];
+  const items = boardItems(tool, data);
   return [...(head === undefined ? [] : [head]), ...items];
 }
