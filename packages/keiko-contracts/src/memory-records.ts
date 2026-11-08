@@ -189,3 +189,12 @@ export interface MemoryEdge {
   readonly confidence?: number;
   readonly provenanceSummary?: string;
 }
+
+// Keiko's own record tag (#4228): the person unpinned the fact, so it stays out of the standing
+// profile until pinned again. It is not the person's label; surfaces hide it and edits keep it.
+export const PROFILE_EXCLUDED_MEMORY_TAG = "profile:excluded";
+
+/** The tags a person sees and edits: Keiko's own tags are left out. */
+export function personMemoryTags(tags: readonly string[]): readonly string[] {
+  return tags.filter((tag) => tag !== PROFILE_EXCLUDED_MEMORY_TAG);
+}

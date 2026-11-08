@@ -11,14 +11,19 @@
 //
 // Pure: no IO and no clock. The caller supplies the candidates, their confirmation counts and nowMs.
 
-import type { MemoryId, MemoryRecord, MemoryType } from "@oscharko-dev/keiko-contracts/memory";
+import {
+  PROFILE_EXCLUDED_MEMORY_TAG,
+  type MemoryId,
+  type MemoryRecord,
+  type MemoryType,
+} from "@oscharko-dev/keiko-contracts/memory";
 
 import { clipToTokenBudget, estimateTokens } from "./context.js";
 import { isMemorySuppressed } from "./suppression.js";
 import { DEFAULT_STALE_CONFIDENCE_THRESHOLD } from "./types.js";
 
 /** Tag that keeps a fact out of the standing profile until the person pins it again. */
-export const PROFILE_EXCLUDED_TAG = "profile:excluded";
+export const PROFILE_EXCLUDED_TAG = PROFILE_EXCLUDED_MEMORY_TAG;
 
 // Record types that describe how the person works: language, format, way of working, standing
 // constraints. Other facts about the person enter only when pinned: the learner does not mark which

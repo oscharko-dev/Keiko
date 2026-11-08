@@ -16,6 +16,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import Link from "next/link";
 import type { MemoryRecord, MemoryId } from "@oscharko-dev/keiko-contracts";
+import { personMemoryTags } from "@oscharko-dev/keiko-contracts/runtime/memory";
 import { fetchMemory, type MemoryDetailResponse } from "@/lib/memory-api";
 
 import { formatError } from "./format-error";
@@ -433,7 +434,7 @@ export function MemoryDetail({
 
       <section aria-label={t("memoria.tags")} className="mc-section">
         <h2 className="lk-section-head">{t("memoria.tags")}</h2>
-        <TagsList tags={record.tags} t={t} />
+        <TagsList tags={personMemoryTags(record.tags)} t={t} />
       </section>
 
       <section aria-label={t("memoria.actions")} className="mc-section">

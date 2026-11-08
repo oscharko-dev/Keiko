@@ -67,7 +67,9 @@ import {
   MEMORY_STATUSES,
   MEMORY_TYPES,
   MEMORY_SENSITIVITIES,
+  PROFILE_EXCLUDED_MEMORY_TAG,
   isMemoryRecord,
+  personMemoryTags,
   validateMemoryScope,
   validateMemoryAcceptance,
 } from "@oscharko-dev/keiko-contracts/runtime/memory";
@@ -368,7 +370,7 @@ function memoryMatchesQuery(record: MemoryRecord, query: string | undefined): bo
   if (query === undefined) return true;
   const haystack = [
     record.body,
-    ...record.tags,
+    ...personMemoryTags(record.tags),
     record.type,
     record.status,
     record.scope.kind,
@@ -914,7 +916,11 @@ function buildEditPatch(input: EditInput, existing: MemoryRecord): Record<string
   const bodyEdited = typeof newBody === "string" && newBody.trim().length > 0;
   if (bodyEdited) patch.body = newBody.trim();
   if (Array.isArray(tags)) {
-    patch.tags = tags.filter((t): t is string => typeof t === "string");
+    // The person edits their own tags; Keiko's profile exclusion stays as it was (#4228).
+    const own = personMemoryTags(tags.filter((t): t is string => typeof t === "string"));
+    patch.tags = existing.tags.includes(PROFILE_EXCLUDED_MEMORY_TAG)
+      ? [...own, PROFILE_EXCLUDED_MEMORY_TAG]
+      : own;
   }
   const provenance = isMemorySensitivity(sensitivity)
     ? { ...existing.provenance, sensitivity }
@@ -1031,7 +1037,12 @@ export function handlePinMemory(ctx: RouteContext, deps: UiHandlerDeps): RouteRe
       reviewerId: reviewerIdForMemoryMutation(deps),
       nowMs: Date.now(),
     });
-    const updated = vault.updateMemory(id as MemoryId, { pinned: true }, Date.now());
+    // Pinning also lifts an earlier removal from the standing profile (#4228).
+    const updated = vault.updateMemory(
+      id as MemoryId,
+      { pinned: true, tags: personMemoryTags(record.tags) },
+      Date.now(),
+    );
     return { status: 200, body: { memory: redactMemory(deps, updated) } };
   } catch (err) {
     if (err instanceof GovernanceError) {
@@ -1074,7 +1085,12 @@ export function handleUnpinMemory(ctx: RouteContext, deps: UiHandlerDeps): Route
       reviewerId: reviewerIdForMemoryMutation(deps),
       nowMs: Date.now(),
     });
-    const updated = vault.updateMemory(id as MemoryId, { pinned: false }, Date.now());
+    // Unpinning takes the fact out of the standing profile until it is pinned again (#4228).
+    const updated = vault.updateMemory(
+      id as MemoryId,
+      { pinned: false, tags: [...personMemoryTags(record.tags), PROFILE_EXCLUDED_MEMORY_TAG] },
+      Date.now(),
+    );
     return { status: 200, body: { memory: redactMemory(deps, updated) } };
   } catch (err) {
     if (err instanceof GovernanceError) {

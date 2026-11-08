@@ -16,7 +16,10 @@ import {
   type MemoryVaultStore,
 } from "@oscharko-dev/keiko-memory-vault";
 import { runConsolidation } from "@oscharko-dev/keiko-memory-consolidation";
-import { MEMORY_STATUS_TRANSITIONS } from "@oscharko-dev/keiko-contracts/runtime/memory";
+import {
+  MEMORY_STATUS_TRANSITIONS,
+  PROFILE_EXCLUDED_MEMORY_TAG,
+} from "@oscharko-dev/keiko-contracts/runtime/memory";
 import type {
   MemoryAuditEvent,
   MemoryConversationId,
@@ -51,6 +54,7 @@ import {
   handleResolveMemoryConflict,
   handleUnpinMemory,
 } from "./memory-handlers.js";
+import { standingProfileForUser } from "./memory-profile.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
@@ -829,6 +833,47 @@ describe("memory handlers", () => {
     expect(errorField.message).toContain("idempotent-noop");
     expect(errorField.message).not.toContain("GovernanceError(");
     expect(errorField.message).not.toContain(idValue);
+  });
+
+  it("takes an unpinned fact out of the standing profile until it is pinned again (#4228)", async () => {
+    const vault = makeVault();
+    const deps = makeDeps({ memoryVault: vault });
+    const person = userId("local-operator");
+    vault.insertMemory(
+      makeMemory("memory-profile-pin", "Bevorzugt Tabellen.", {
+        scope: { kind: "user", userId: person },
+        pinned: true,
+        tags: ["format"],
+      }),
+    );
+    const id = memoryId("memory-profile-pin");
+    const inProfile = (): boolean =>
+      standingProfileForUser(vault, person, Date.now()).entries.some((entry) => entry.id === id);
+    const route = (action: string): RouteContext =>
+      makeCtx(`/api/memory/${id}/${action}`, {}, { id });
+    expect(inProfile()).toBe(true);
+
+    expect(handleUnpinMemory(route("unpin"), deps).status).toBe(200);
+    expect(inProfile()).toBe(false);
+    // The person edits their own tags; the removal from the profile survives the edit.
+    const edited = await handleEditMemory(
+      makeCtx(`/api/memory/${id}`, { tags: ["format", PROFILE_EXCLUDED_MEMORY_TAG] }, { id }),
+      deps,
+    );
+    expect(edited.status).toBe(200);
+    expect(vault.getMemory(id)?.tags).toEqual(["format", PROFILE_EXCLUDED_MEMORY_TAG]);
+    expect(inProfile()).toBe(false);
+
+    expect(handlePinMemory(route("pin"), deps).status).toBe(200);
+    expect(vault.getMemory(id)?.tags).toEqual(["format"]);
+    expect(inProfile()).toBe(true);
+    // A person cannot set Keiko's own tag through an edit.
+    await handleEditMemory(
+      makeCtx(`/api/memory/${id}`, { tags: [PROFILE_EXCLUDED_MEMORY_TAG] }, { id }),
+      deps,
+    );
+    expect(vault.getMemory(id)?.tags).toEqual([]);
+    expect(inProfile()).toBe(true);
   });
 
   it("re-embeds a memory when editing its body", async () => {
