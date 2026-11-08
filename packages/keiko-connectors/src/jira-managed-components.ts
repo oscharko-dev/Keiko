@@ -153,11 +153,13 @@ function pageNumber(
   min: number,
   max: number,
 ): number | undefined {
-  return value === undefined
-    ? fallback
-    : typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max
-      ? value
-      : undefined;
+  if (value === undefined) {
+    return fallback;
+  }
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max) {
+    return value;
+  }
+  return undefined;
 }
 function listInput(args: CatalogJsonObject):
   | {
@@ -258,12 +260,13 @@ function mutationInput(
 }
 function holds(component: ComponentView, fields: Readonly<Record<string, unknown>>): boolean {
   return Object.entries(fields).every(([key, value]) =>
-    jiraReadbackValueMatches(
-      key === "description" ? "clearable-text" : key === "leadUserName" ? "user-name" : "exact",
-      component[key],
-      value,
-    ),
+    jiraReadbackValueMatches(componentReadbackKind(key), component[key], value),
   );
+}
+function componentReadbackKind(key: string): Parameters<typeof jiraReadbackValueMatches>[0] {
+  if (key === "description") return "clearable-text";
+  if (key === "leadUserName") return "user-name";
+  return "exact";
 }
 async function confirm(
   request: JiraMutationRequest,
@@ -320,11 +323,15 @@ async function updateComponent(
     };
   if (check) return { ok: true, receipt: {} };
   const result = await request(`component/${prior.component.id}`, "PUT", input.fields);
-  const failure = !result.ok
-    ? dispatchFailure(result)
-    : result.status === 200
-      ? undefined
-      : MALFORMED;
+  let failure: Failure | undefined;
+  if (!result.ok) {
+    failure = dispatchFailure(result);
+  } else if (result.status === 200) {
+    failure = undefined;
+  } else {
+    failure = MALFORMED;
+  }
+
   return confirm(request, identity, input.fields, failure);
 }
 /** One native attempt only; custody, authority, logging and durable no-replay stay with the caller. */

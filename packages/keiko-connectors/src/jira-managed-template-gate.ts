@@ -187,7 +187,8 @@ export async function readJiraCreateTemplateIdentity(
   const type = await request(`issuetype/${issueTypeId}`);
   if (!type.ok) return type;
   const name = type.body?.name;
-  if (type.status !== 200 || type.body?.id !== issueTypeId || !nativeTypeName(name)) return MALFORMED;
+  if (type.status !== 200 || type.body?.id !== issueTypeId || !nativeTypeName(name))
+    return MALFORMED;
   return { projectKey, issueType: { id: issueTypeId, name }, prior: {} };
 }
 
@@ -220,7 +221,8 @@ async function issueIdentity(
   const type = asRecord(issue.fields.issuetype);
   const name = type?.name;
   const id = type?.id;
-  if (!isSafeAtlassianIdentifier(project) || !nativeTypeName(name) || !numericId(id)) return MALFORMED;
+  if (!isSafeAtlassianIdentifier(project) || !nativeTypeName(name) || !numericId(id))
+    return MALFORMED;
   return {
     issueId: issue.id,
     projectKey: project,
@@ -271,6 +273,7 @@ function subjectOf(
   if (input.operation !== "create" || input.validated.update.labels !== undefined) {
     fields.labels = appliedLabels(fields.labels, input.validated.update);
   }
+  const linkFields = input.plannedIssueLinks === undefined ? identity.prior : fields;
   return {
     operation: input.operation,
     projectKey: identity.projectKey,
@@ -278,9 +281,7 @@ function subjectOf(
     ...(input.transition === undefined ? {} : { transition: input.transition }),
     fields,
     linkTypes: [
-      ...(input.operation === "create" ? [] : jiraIssueLinkTypeNames(
-        input.plannedIssueLinks === undefined ? identity.prior : fields,
-      )),
+      ...(input.operation === "create" ? [] : jiraIssueLinkTypeNames(linkFields)),
       ...primaryLinks.map((link) => link.type),
     ],
   };
@@ -307,7 +308,9 @@ export async function readJiraFieldCatalog(
   const items = await readFieldCatalogValues(request);
   return items === undefined ? undefined : fieldCatalogValues(items);
 }
-async function readFieldCatalogValues(request: JiraMutationRequest): Promise<readonly unknown[] | undefined> {
+async function readFieldCatalogValues(
+  request: JiraMutationRequest,
+): Promise<readonly unknown[] | undefined> {
   const response = await request("field", "GET", undefined, "json-array");
   const items = response.ok && response.status === 200 ? response.items : undefined;
   if (items === undefined || items.length > CATALOG_MAX) return undefined;
@@ -322,13 +325,28 @@ function fieldCatalogValues(items: readonly unknown[]): readonly JiraFieldCatalo
   });
 }
 
-interface BulkReferenceRule { readonly template: JiraIssueTemplate; readonly reference: string }
+interface BulkReferenceRule {
+  readonly template: JiraIssueTemplate;
+  readonly reference: string;
+}
 type BulkReferenceKind = "component" | "version" | "sprint";
-function bulkReferenceRules(templates: readonly JiraIssueTemplate[], projectKey: string | undefined): readonly BulkReferenceRule[] {
-  return templates.filter((template) => (projectKey === undefined || template.project.trim().toLowerCase() === projectKey.trim().toLowerCase()) &&
-    template.activations.some((activation) => activation.kind === "edit"))
-    .flatMap((template) => [...template.requiredFields, ...(template.parent.field === undefined ? [] : [template.parent.field])]
-      .map((reference) => ({ template, reference })));
+function bulkReferenceRules(
+  templates: readonly JiraIssueTemplate[],
+  projectKey: string | undefined,
+): readonly BulkReferenceRule[] {
+  return templates
+    .filter(
+      (template) =>
+        (projectKey === undefined ||
+          template.project.trim().toLowerCase() === projectKey.trim().toLowerCase()) &&
+        template.activations.some((activation) => activation.kind === "edit"),
+    )
+    .flatMap((template) =>
+      [
+        ...template.requiredFields,
+        ...(template.parent.field === undefined ? [] : [template.parent.field]),
+      ].map((reference) => ({ template, reference })),
+    );
 }
 /** A known non-version custom field stays outside version impact. Opaque/plugin or malformed
  * metadata cannot establish that boundary, so it stays potentially affected. The existing metadata
@@ -337,7 +355,9 @@ function mayHoldVersion(id: string, values: readonly unknown[]): boolean {
   const matches = values.map(asRecord).filter((value) => value?.id === id);
   if (matches.length !== 1) return true;
   const raw = matches[0];
-  const parsed = parseJiraFieldMetadata([{ fieldId: id, name: raw?.name, schema: raw?.schema, required: false, operations: [] }]);
+  const parsed = parseJiraFieldMetadata([
+    { fieldId: id, name: raw?.name, schema: raw?.schema, required: false, operations: [] },
+  ]);
   if (!parsed.ok) return true;
   const kind = parsed.fields[0]?.kind;
   return kind === undefined || kind === "opaque" || kind === "unsupported";
@@ -349,7 +369,11 @@ function mayHoldSprint(id: string, values: readonly unknown[]): boolean {
   // As with version references, opaque/malformed custom fields cannot prove disjoint impact.
   return mayHoldVersion(id, values);
 }
-function bulkFieldAffected(id: string, kind: BulkReferenceKind, values: readonly unknown[]): boolean {
+function bulkFieldAffected(
+  id: string,
+  kind: BulkReferenceKind,
+  values: readonly unknown[],
+): boolean {
   if (kind === "component") return id === "components";
   if (kind === "sprint") return sprintFieldAffected(id, values);
   if (id === "fixVersions" || id === "versions") return true;
@@ -360,10 +384,21 @@ function sprintFieldAffected(id: string, values: readonly unknown[]): boolean {
   return id.startsWith("customfield_") && mayHoldSprint(id, values);
 }
 function bulkReferenceViolation(rule: BulkReferenceRule): JiraTemplateViolation {
-  return { ruleId: "template-unreadable", template: jiraIssueTemplateLabel(rule.template), subject: `Bulk issue-field impact: ${rule.reference}`.slice(0, 120) };
+  return {
+    ruleId: "template-unreadable",
+    template: jiraIssueTemplateLabel(rule.template),
+    subject: `Bulk issue-field impact: ${rule.reference}`.slice(0, 120),
+  };
 }
-function bulkReferenceViolations(rules: readonly BulkReferenceRule[], kind: BulkReferenceKind, values: readonly unknown[] | undefined): readonly JiraTemplateViolation[] {
-  const catalog = values === undefined ? JIRA_TEMPLATE_SYSTEM_FIELDS : [...JIRA_TEMPLATE_SYSTEM_FIELDS, ...fieldCatalogValues(values)];
+function bulkReferenceViolations(
+  rules: readonly BulkReferenceRule[],
+  kind: BulkReferenceKind,
+  values: readonly unknown[] | undefined,
+): readonly JiraTemplateViolation[] {
+  const catalog =
+    values === undefined
+      ? JIRA_TEMPLATE_SYSTEM_FIELDS
+      : [...JIRA_TEMPLATE_SYSTEM_FIELDS, ...fieldCatalogValues(values)];
   const violations: JiraTemplateViolation[] = [];
   for (const rule of rules) {
     const ids = resolveJiraTemplateFieldIds(rule.reference, catalog);
@@ -390,7 +425,10 @@ export async function gateJiraBulkReferenceChange(input: {
   if (set.unreadable > 0) return unreadableRefusal(set.unreadableNames);
   const rules = bulkReferenceRules(set.templates, input.projectKey);
   if (rules.length === 0) return OK;
-  const unresolved = rules.some(({ reference }) => resolveJiraTemplateFieldIds(reference, JIRA_TEMPLATE_SYSTEM_FIELDS).length === 0);
+  const unresolved = rules.some(
+    ({ reference }) =>
+      resolveJiraTemplateFieldIds(reference, JIRA_TEMPLATE_SYSTEM_FIELDS).length === 0,
+  );
   const values = unresolved ? await readFieldCatalogValues(input.request) : [];
   const violations = bulkReferenceViolations(rules, input.kind, values);
   return violations.length === 0 ? OK : { ok: false, reason: "field-validation", violations };
@@ -398,10 +436,17 @@ export async function gateJiraBulkReferenceChange(input: {
 
 export type JiraSchemaRuleImpact =
   | { readonly kind: "issue-deletion" }
-  | { readonly kind: "issue-type"; readonly types: readonly { readonly id: string; readonly name: string }[] }
+  | {
+      readonly kind: "issue-type";
+      readonly types: readonly { readonly id: string; readonly name: string }[];
+    }
   | { readonly kind: "custom-fields"; readonly fields: readonly JiraFieldCatalogEntry[] }
   | { readonly kind: "link-type"; readonly names: readonly string[] };
-function schemaRuleAffected(template: JiraIssueTemplate, impact: Exclude<JiraSchemaRuleImpact, { readonly kind: "issue-deletion" }>, catalog: readonly JiraFieldCatalogEntry[]): boolean {
+function schemaRuleAffected(
+  template: JiraIssueTemplate,
+  impact: Exclude<JiraSchemaRuleImpact, { readonly kind: "issue-deletion" }>,
+  catalog: readonly JiraFieldCatalogEntry[],
+): boolean {
   if (impact.kind === "issue-type") return typeSchemaRuleAffected(template, impact.types);
   if (impact.kind === "link-type") return linkSchemaRuleAffected(template, impact.names);
   return references([template]).some((reference) => {
@@ -409,13 +454,23 @@ function schemaRuleAffected(template: JiraIssueTemplate, impact: Exclude<JiraSch
     return ids.length === 0 || ids.some((id) => impact.fields.some((field) => field.id === id));
   });
 }
-function typeSchemaRuleAffected(template: JiraIssueTemplate, types: readonly { readonly id: string; readonly name: string }[]): boolean {
+function typeSchemaRuleAffected(
+  template: JiraIssueTemplate,
+  types: readonly { readonly id: string; readonly name: string }[],
+): boolean {
   return [template.issueType, ...(template.parent.issueTypes ?? [])].some((reference) =>
-    types.some((type) => sameType(reference, type.id) || sameType(reference, type.name)));
+    types.some((type) => sameType(reference, type.id) || sameType(reference, type.name)),
+  );
 }
 function linkSchemaRuleAffected(template: JiraIssueTemplate, names: readonly string[]): boolean {
-  if (template.parent.link !== undefined && names.some((name) => sameType(template.parent.link ?? "", name))) return true;
-  return references([template]).some((reference) => sameType(reference, "issuelinks") || sameType(reference, "Issue Links"));
+  if (
+    template.parent.link !== undefined &&
+    names.some((name) => sameType(template.parent.link ?? "", name))
+  )
+    return true;
+  return references([template]).some(
+    (reference) => sameType(reference, "issuelinks") || sameType(reference, "Issue Links"),
+  );
 }
 function mayReferenceDeletedIssue(id: string, values: readonly unknown[]): boolean {
   if (id === "parent" || id === "issuelinks" || id === "subtasks") return true;
@@ -423,10 +478,18 @@ function mayReferenceDeletedIssue(id: string, values: readonly unknown[]): boole
   const matches = values.map(asRecord).filter((value) => value?.id === id);
   if (matches.length !== 1) return true;
   const raw = matches[0];
-  const parsed = parseJiraFieldMetadata([{ fieldId: id, name: raw?.name, schema: raw?.schema, required: false, operations: [] }]);
+  const parsed = parseJiraFieldMetadata([
+    { fieldId: id, name: raw?.name, schema: raw?.schema, required: false, operations: [] },
+  ]);
   if (!parsed.ok) return true;
   const kind = parsed.fields[0]?.kind;
-  return kind === undefined || kind === "issue" || kind === "links" || kind === "opaque" || kind === "unsupported";
+  return (
+    kind === undefined ||
+    kind === "issue" ||
+    kind === "links" ||
+    kind === "opaque" ||
+    kind === "unsupported"
+  );
 }
 function deletionRuleAffected(template: JiraIssueTemplate, values: readonly unknown[]): boolean {
   if (template.parent.link !== undefined) return true;
@@ -436,24 +499,37 @@ function deletionRuleAffected(template: JiraIssueTemplate, values: readonly unkn
     return ids.length === 0 || ids.some((id) => mayReferenceDeletedIssue(id, values));
   });
 }
-function schemaImpactResult(affected: readonly JiraIssueTemplate[], subject = "Schema changes require complete governed issue migration"): JiraTemplateGateResult {
-  return affected.length === 0 ? OK : {
-    ok: false, reason: "field-validation",
-    violations: affected.slice(0, JIRA_TEMPLATE_VIOLATIONS_MAX).map((template) => ({
-      ruleId: "template-unreadable", template: jiraIssueTemplateLabel(template),
-      subject,
-    })),
-  };
+function schemaImpactResult(
+  affected: readonly JiraIssueTemplate[],
+  subject = "Schema changes require complete governed issue migration",
+): JiraTemplateGateResult {
+  return affected.length === 0
+    ? OK
+    : {
+        ok: false,
+        reason: "field-validation",
+        violations: affected.slice(0, JIRA_TEMPLATE_VIOLATIONS_MAX).map((template) => ({
+          ruleId: "template-unreadable",
+          template: jiraIssueTemplateLabel(template),
+          subject,
+        })),
+      };
 }
 /** Deletion can remove inbound references from other, permission-hidden issues. The deleted
  * object's own content is not a surviving post-state. Native scalar metadata can prove that a
  * required field is unrelated; unknown/plugin issue references cannot prove population coverage. */
-async function issueDeletionImpact(request: JiraMutationRequest, templates: readonly JiraIssueTemplate[]): Promise<JiraTemplateGateResult> {
-  const unresolved = references(templates).some((reference) =>
-    resolveJiraTemplateFieldIds(reference, JIRA_TEMPLATE_SYSTEM_FIELDS).length === 0);
+async function issueDeletionImpact(
+  request: JiraMutationRequest,
+  templates: readonly JiraIssueTemplate[],
+): Promise<JiraTemplateGateResult> {
+  const unresolved = references(templates).some(
+    (reference) => resolveJiraTemplateFieldIds(reference, JIRA_TEMPLATE_SYSTEM_FIELDS).length === 0,
+  );
   const values = unresolved ? await readFieldCatalogValues(request) : [];
-  return schemaImpactResult(templates.filter((template) => deletionRuleAffected(template, values ?? [])),
-    "Issue deletion requires complete evidence for surviving issue references");
+  return schemaImpactResult(
+    templates.filter((template) => deletionRuleAffected(template, values ?? [])),
+    "Issue deletion requires complete evidence for surviving issue references",
+  );
 }
 /** Schema deletion and type renaming can change values or the selection of saved formal rules
  * for a population Jira does not expose completely. Consider every declared activation and all
@@ -471,10 +547,14 @@ export async function gateJiraSchemaRuleImpact(input: {
   if (set.templates.length === 0) return OK;
   const impact = input.impact;
   if (impact.kind === "issue-deletion") return issueDeletionImpact(input.request, set.templates);
-  const catalog = impact.kind === "custom-fields"
-    ? await readJiraFieldCatalog(input.request) : JIRA_TEMPLATE_SYSTEM_FIELDS;
+  const catalog =
+    impact.kind === "custom-fields"
+      ? await readJiraFieldCatalog(input.request)
+      : JIRA_TEMPLATE_SYSTEM_FIELDS;
   if (catalog === undefined) return unreadableRefusal(["native field catalog for schema impact"]);
-  const affected = set.templates.filter((template) => schemaRuleAffected(template, impact, catalog));
+  const affected = set.templates.filter((template) =>
+    schemaRuleAffected(template, impact, catalog),
+  );
   return schemaImpactResult(affected);
 }
 
@@ -524,12 +604,15 @@ function evidenceFields(
   catalog: readonly JiraFieldCatalogEntry[],
 ): readonly string[] {
   const labels = template.labels;
-  const checksLabels = labels.required.length > 0 || labels.minCount !== undefined || labels.pattern !== undefined;
+  const checksLabels =
+    labels.required.length > 0 || labels.minCount !== undefined || labels.pattern !== undefined;
   return [
     ...(Object.keys(template.summary).length === 0 ? [] : ["summary"]),
     ...(template.requiredSections.length === 0 ? [] : ["description"]),
     ...(checksLabels ? ["labels"] : []),
-    ...references([template]).flatMap((reference) => resolveJiraTemplateFieldIds(reference, catalog)),
+    ...references([template]).flatMap((reference) =>
+      resolveJiraTemplateFieldIds(reference, catalog),
+    ),
   ];
 }
 function readableParent(value: unknown): boolean {
@@ -557,9 +640,16 @@ function evidenceViolations(
   // Creation has no prior issue; absent submitted fields are judged by the ordinary missing-value
   // rules. For existing issues, absence is unreadable evidence, never a fabricated empty value.
   if (subject.operation === "create") return [];
-  return templates.flatMap((template) => [...new Set(evidenceFields(template, catalog))]
-    .filter((id) => !readableEvidence(subject.fields, id))
-    .map((id): JiraTemplateViolation => ({ ruleId: "template-unreadable", subject: id, template: jiraIssueTemplateLabel(template) })))
+  return templates
+    .flatMap((template) =>
+      [...new Set(evidenceFields(template, catalog))]
+        .filter((id) => !readableEvidence(subject.fields, id))
+        .map((id): JiraTemplateViolation => ({
+          ruleId: "template-unreadable",
+          subject: id,
+          template: jiraIssueTemplateLabel(template),
+        })),
+    )
     .slice(0, JIRA_TEMPLATE_VIOLATIONS_MAX);
 }
 
@@ -580,7 +670,9 @@ export async function gateJiraMutationByTemplates(
     input.operation === "create"
       ? await createIdentity(input.request, input.target)
       : await issueIdentity(input.request, input.target.issueKey);
-  return "ok" in first ? identityRefusal(first, candidates) : checkCandidates(input, candidates, first);
+  return "ok" in first
+    ? identityRefusal(first, candidates)
+    : checkCandidates(input, candidates, first);
 }
 
 function sameType(left: string, right: string): boolean {
@@ -619,15 +711,15 @@ async function checkCandidates(
   // Only the link that rides on the request itself exists in the state this write leaves.
   const primary = planJiraIssueLinks(ordered, identity.prior.issuelinks).inline;
   const subject = await bindJiraTemplateParentTypes(
-    input.request, subjectOf(input, identity, primary), matching, catalog,
-  );
-  const unreadable = evidenceViolations(subject, matching, catalog);
-  if (unreadable.length > 0) return { ok: false, reason: "field-validation", violations: unreadable };
-  const violations = checkJiraIssueTemplates(
+    input.request,
+    subjectOf(input, identity, primary),
     matching,
-    subject,
     catalog,
   );
+  const unreadable = evidenceViolations(subject, matching, catalog);
+  if (unreadable.length > 0)
+    return { ok: false, reason: "field-validation", violations: unreadable };
+  const violations = checkJiraIssueTemplates(matching, subject, catalog);
   if (violations.length > 0) return { ok: false, reason: "field-validation", violations };
   return ordered.length === 0 ? OK : { ok: true, links: ordered };
 }

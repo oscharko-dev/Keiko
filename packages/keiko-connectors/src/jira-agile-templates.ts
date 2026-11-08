@@ -40,7 +40,7 @@ function resolvedField(items: readonly unknown[], key: string): JiraFieldMetadat
   if (
     field === undefined ||
     typeof field.id !== "string" ||
-    !/^customfield_[0-9]{1,32}$/u.test(field.id) ||
+    !/^customfield_\d{1,32}$/u.test(field.id) ||
     !agileText(field.name)
   )
     return undefined;

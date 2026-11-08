@@ -44,11 +44,15 @@ function linkedProjection(operation: string, baseUrl: string, project: Projectio
   return (value): CatalogJsonObject | undefined => {
     const item = project(value);
     if (item === undefined) return undefined;
-    const browseUrl = BOARD_LINK_READS.has(operation)
-      ? jiraBoardBrowseUrl(baseUrl, item.id)
-      : EPIC_LINK_READS.has(operation)
-        ? jiraBrowseUrl(baseUrl, item.key)
-        : undefined;
+    let browseUrl: string | undefined;
+    if (BOARD_LINK_READS.has(operation)) {
+      browseUrl = jiraBoardBrowseUrl(baseUrl, item.id);
+    } else if (EPIC_LINK_READS.has(operation)) {
+      browseUrl = jiraBrowseUrl(baseUrl, item.key);
+    } else {
+      browseUrl = undefined;
+    }
+
     const boardBrowseUrl =
       operation === "jira.sprint" || operation === "jira.sprints"
         ? jiraBoardBrowseUrl(baseUrl, item.originBoardId)
@@ -84,16 +88,18 @@ function entityRoute(name: string, args: CatalogJsonObject): ReadRoute | undefin
 }
 function otherEntityRoute(name: string, args: CatalogJsonObject): ReadRoute | undefined {
   const sprintId = agileInputId(args.sprintId);
-  if (name === "jira.sprint" || name === "jira.sprint-issues")
-    return sprintId === undefined
-      ? undefined
-      : {
-          path: `sprint/${sprintId}${name.endsWith("issues") ? "/issue" : ""}`,
-          keys: ["sprintId"],
-          project: reviewedSprint,
-          mode: name.endsWith("issues") ? "issues" : "single",
-          identity: sprintId,
-        };
+  if (name === "jira.sprint" || name === "jira.sprint-issues") {
+    if (sprintId === undefined) {
+      return undefined;
+    }
+    return {
+      path: `sprint/${sprintId}${name.endsWith("issues") ? "/issue" : ""}`,
+      keys: ["sprintId"],
+      project: reviewedSprint,
+      mode: name.endsWith("issues") ? "issues" : "single",
+      identity: sprintId,
+    };
+  }
   const epic =
     agileInputId(args.epicIdOrKey) ??
     (agileIssueKey(args.epicIdOrKey) ? args.epicIdOrKey : undefined);
@@ -132,11 +138,13 @@ function epicRoute(name: string, epic: string): ReadRoute | undefined {
   };
 }
 function paging(value: unknown, fallback: number, min: number, max: number): number | undefined {
-  return value === undefined
-    ? fallback
-    : typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max
-      ? value
-      : undefined;
+  if (value === undefined) {
+    return fallback;
+  }
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max) {
+    return value;
+  }
+  return undefined;
 }
 function textFilters(args: CatalogJsonObject, query: URLSearchParams): boolean {
   for (const key of ["name", "projectKeyOrId"] as const) {

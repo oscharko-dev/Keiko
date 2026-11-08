@@ -1,6 +1,9 @@
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import type { JiraMutationAttempt, JiraMutationReceipt } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type {
+  JiraMutationAttempt,
+  JiraMutationReceipt,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { canonicalise } from "@oscharko-dev/keiko-security";
 import { asRecord } from "./atlassian-sync-classify.js";
 import { projectJiraAnonymizationTaskSnapshot } from "./jira-managed-anonymization-reads.js";
@@ -13,37 +16,75 @@ export interface JiraAnonymizationUnlockReceipt extends JiraMutationReceipt {
   readonly executingNode: string;
   readonly anonymizationSubmittedTime: string;
 }
-export type UnlockAttempt = Omit<Extract<JiraMutationAttempt, { ok: false }>, "receipt"> & {
+export type UnlockFailure = Omit<Extract<JiraMutationAttempt, { ok: false }>, "receipt"> & {
   readonly receipt?: JiraAnonymizationUnlockReceipt;
-} | { readonly ok: true; readonly receipt: JiraAnonymizationUnlockReceipt };
-export interface UnlockInput { readonly actor: string; readonly expectedTask: CatalogJsonObject }
+};
+export type UnlockAttempt =
+  UnlockFailure | { readonly ok: true; readonly receipt: JiraAnonymizationUnlockReceipt };
+export interface UnlockInput {
+  readonly actor: string;
+  readonly expectedTask: CatalogJsonObject;
+}
 const MAX = TOOL_CATALOG_LIMITS.maxArrayItems;
-const KEYS = new Set(["executingNode", "userKey", "submittedTime", "status", "operations", "isRerun", "currentProgress",
-  "userName", "fullName", "currentSubTask", "startTime", "finishTime", "errors", "warnings"]);
+const KEYS = new Set([
+  "executingNode",
+  "userKey",
+  "submittedTime",
+  "status",
+  "operations",
+  "isRerun",
+  "currentProgress",
+  "userName",
+  "fullName",
+  "currentSubTask",
+  "startTime",
+  "finishTime",
+  "errors",
+  "warnings",
+]);
 function messages(value: unknown): value is readonly string[] {
-  return Array.isArray(value) && value.length <= MAX && value.every((message) => savedText(message, 4096, true));
+  return (
+    Array.isArray(value) &&
+    value.length <= MAX &&
+    value.every((message) => savedText(message, 4096, true))
+  );
 }
 function diagnosticFields(value: unknown): Record<string, string> | undefined {
   if (!Array.isArray(value) || value.length > MAX) return undefined;
   const entries: [string, string][] = [];
   for (const item of value) {
     const raw = asRecord(item);
-    if (raw === undefined || !savedExactKeys(raw, new Set(["field", "message"])) ||
-        !savedText(raw.field, 255) || !savedText(raw.message, 4096, true)) return undefined;
+    if (
+      raw === undefined ||
+      !savedExactKeys(raw, new Set(["field", "message"])) ||
+      !savedText(raw.field, 255) ||
+      !savedText(raw.message, 4096, true)
+    )
+      return undefined;
     entries.push([raw.field, raw.message]);
   }
-  return new Set(entries.map(([key]) => key)).size === entries.length ? Object.fromEntries(entries) : undefined;
+  return new Set(entries.map(([key]) => key)).size === entries.length
+    ? Object.fromEntries(entries)
+    : undefined;
 }
-function diagnosticGroup(value: unknown): { operation: string; native: Record<string, unknown> } | undefined {
+function diagnosticGroup(
+  value: unknown,
+): { operation: string; native: Record<string, unknown> } | undefined {
   const raw = asRecord(value);
-  if (raw === undefined || !savedExactKeys(raw, new Set(["operation", "messages", "fields"])) || !savedText(raw.operation, 255)) return undefined;
+  if (
+    raw === undefined ||
+    !savedExactKeys(raw, new Set(["operation", "messages", "fields"])) ||
+    !savedText(raw.operation, 255)
+  )
+    return undefined;
   const native: Record<string, unknown> = {};
   if (Object.hasOwn(raw, "messages")) {
     if (!messages(raw.messages)) return undefined;
     native.errorMessages = raw.messages;
   }
   if (Object.hasOwn(raw, "fields")) {
-    const fields = diagnosticFields(raw.fields); if (fields === undefined) return undefined;
+    const fields = diagnosticFields(raw.fields);
+    if (fields === undefined) return undefined;
     native.errors = fields;
   }
   return { operation: raw.operation, native };
@@ -55,10 +96,13 @@ function nativeDiagnostics(value: unknown): Record<string, unknown> | null | und
   if (!Array.isArray(value) || value.length > MAX) return undefined;
   const entries: [string, Record<string, unknown>][] = [];
   for (const item of value) {
-    const group = diagnosticGroup(item); if (group === undefined) return undefined;
+    const group = diagnosticGroup(item);
+    if (group === undefined) return undefined;
     entries.push([group.operation, group.native]);
   }
-  return new Set(entries.map(([key]) => key)).size === entries.length ? Object.fromEntries(entries) : undefined;
+  return new Set(entries.map(([key]) => key)).size === entries.length
+    ? Object.fromEntries(entries)
+    : undefined;
 }
 export function jiraAnonymizationTaskInput(value: unknown): CatalogJsonObject | undefined {
   const raw = asRecord(value);
@@ -69,14 +113,21 @@ export function jiraAnonymizationTaskInput(value: unknown): CatalogJsonObject | 
     // The input is catalog JSON, but this pure boundary also refuses direct non-JSON callers.
     const groups = raw[key];
     if (groups !== null && !Array.isArray(groups)) return undefined;
-    const decoded = nativeDiagnostics(groups); if (decoded === undefined) return undefined;
+    const decoded = nativeDiagnostics(groups);
+    if (decoded === undefined) return undefined;
     native[key] = decoded;
   }
   const snapshot = projectJiraAnonymizationTaskSnapshot(native);
-  return snapshot !== undefined && canonicalise(snapshot) === canonicalise(raw) ? snapshot : undefined;
+  return snapshot !== undefined && canonicalise(snapshot) === canonicalise(raw)
+    ? snapshot
+    : undefined;
 }
 export function anonymizationUnlockInput(args: CatalogJsonObject): UnlockInput | undefined {
-  if (!savedExactKeys(args, new Set(["expectedActorKey", "expectedTask"])) || !savedName(args.expectedActorKey)) return undefined;
+  if (
+    !savedExactKeys(args, new Set(["expectedActorKey", "expectedTask"])) ||
+    !savedName(args.expectedActorKey)
+  )
+    return undefined;
   const expectedTask = jiraAnonymizationTaskInput(args.expectedTask);
   return expectedTask === undefined ? undefined : { actor: args.expectedActorKey, expectedTask };
 }

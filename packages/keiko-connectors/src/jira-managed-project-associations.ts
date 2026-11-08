@@ -58,7 +58,9 @@ function selection(name: AssociationRead, args: CatalogJsonObject): Selection | 
     ? { project: args.projectIdOrKey, startAt, maxResults }
     : undefined;
 }
-export function jiraPrioritySchemeProjection(body: Record<string, unknown>): CatalogJsonObject | undefined {
+export function jiraPrioritySchemeProjection(
+  body: Record<string, unknown>,
+): CatalogJsonObject | undefined {
   const named = jiraSecurityLevelProjection(body);
   if (named === undefined) return undefined;
   const optional: Record<string, CatalogJsonValue> = {};
@@ -119,12 +121,15 @@ function association(
           maxResults: selected.maxResults,
         });
   }
-  const item =
-    name === "jira.project-permission-scheme"
-      ? jiraPermissionSchemeProjection(body)
-      : name === "jira.project-issue-security-scheme"
-        ? jiraSecuritySchemeProjection(body)
-        : jiraPrioritySchemeProjection(body);
+  let item: Readonly<Record<string, CatalogJsonValue>> | undefined;
+  if (name === "jira.project-permission-scheme") {
+    item = jiraPermissionSchemeProjection(body);
+  } else if (name === "jira.project-issue-security-scheme") {
+    item = jiraSecuritySchemeProjection(body);
+  } else {
+    item = jiraPrioritySchemeProjection(body);
+  }
+
   return item === undefined
     ? jiraReadFailure("malformed-payload")
     : { data: { outcome: "succeeded", ...item } };
@@ -141,9 +146,11 @@ export async function executeJiraProjectAssociationRead(
 ): Promise<ManagedMcpToolResult> {
   const selected = selection(name, args);
   if (selected === undefined) return jiraReadFailure("invalid-input");
-  const read = name === "jira.project-priority-scheme"
-    ? priorityRead
-    : (projectId: string) => request(`project/${projectId}/${SUFFIX[name]}`, "GET", undefined, "json");
+  const read =
+    name === "jira.project-priority-scheme"
+      ? priorityRead
+      : (projectId: string) =>
+          request(`project/${projectId}/${SUFFIX[name]}`, "GET", undefined, "json");
   if (read === undefined) return jiraReadFailure("unavailable");
   const current = await readJiraBoundProject(request, selected.project);
   if (!current.ok) return jiraReadFailure(current.reason, current.detail);

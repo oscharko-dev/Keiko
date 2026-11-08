@@ -55,10 +55,10 @@ interface Binding {
 const MALFORMED: Failure = { ok: false, reason: "malformed-payload" };
 const CONFLICT: Failure = { ok: false, reason: "conflict" };
 export function isJiraParticipationRead(name: string): name is Read {
-  return JIRA_PARTICIPATION_READS.some((value) => value === name);
+  return (JIRA_PARTICIPATION_READS as readonly string[]).includes(name);
 }
 export function isJiraParticipationMutation(name: string): name is Write {
-  return JIRA_PARTICIPATION_WRITES.some((value) => value === name);
+  return (JIRA_PARTICIPATION_WRITES as readonly string[]).includes(name);
 }
 function integer(value: unknown, min: number, max: number): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max;

@@ -37,14 +37,16 @@ function optionalText(
   for (const field of fields) {
     const value = raw[field];
     if (value === undefined || value === null) continue;
-    if (!jiraNativeText(value, TEXT_LIMITS[field] ?? 255, field === "description")) return undefined;
+    if (!jiraNativeText(value, TEXT_LIMITS[field] ?? 255, field === "description"))
+      return undefined;
     result[field] = value;
   }
   return result;
 }
 function named(raw: Record<string, unknown>): CatalogJsonObject | undefined {
   return jiraNativeId(raw.id) && jiraNativeText(raw.name, 255)
-    ? { id: raw.id, name: raw.name } : undefined;
+    ? { id: raw.id, name: raw.name }
+    : undefined;
 }
 function category(raw: Record<string, unknown>): CatalogJsonObject | undefined {
   const id = jiraNativeNumericId(raw.id);
@@ -75,22 +77,32 @@ function issueTypeExtras(raw: Record<string, unknown>): CatalogJsonObject | unde
 function statuses(raw: Record<string, unknown>): CatalogJsonObject | undefined {
   if (raw.statuses === undefined || raw.statuses === null) return {};
   const values = asArray(raw.statuses);
-  const projected = values === undefined ? undefined : projectJiraCollection(
-    values, TOOL_CATALOG_LIMITS.maxArrayItems,
-    (value) => jiraCoreMetadataProjection("status", value), "id",
-  );
+  const projected =
+    values === undefined
+      ? undefined
+      : projectJiraCollection(
+          values,
+          TOOL_CATALOG_LIMITS.maxArrayItems,
+          (value) => jiraCoreMetadataProjection("status", value),
+          "id",
+        );
   return projected === undefined ? undefined : { statuses: projected };
 }
-function extras(kind: JiraCoreMetadataKind, raw: Record<string, unknown>): CatalogJsonObject | undefined {
+function extras(
+  kind: JiraCoreMetadataKind,
+  raw: Record<string, unknown>,
+): CatalogJsonObject | undefined {
   if (kind === "issue-type") return issueTypeReviewExtras(raw);
   if (kind === "project-statuses") {
     // This DTO has no avatarId; retain only its documented subtask classification.
     const classification = issueTypeExtras({ subtask: raw.subtask });
     const grouped = statuses(raw);
     return classification === undefined || grouped === undefined
-      ? undefined : { ...classification, ...grouped };
+      ? undefined
+      : { ...classification, ...grouped };
   }
-  if (kind !== "status" || raw.statusCategory === undefined || raw.statusCategory === null) return {};
+  if (kind !== "status" || raw.statusCategory === undefined || raw.statusCategory === null)
+    return {};
   const value = asRecord(raw.statusCategory);
   const projected = value === undefined ? undefined : category(value);
   return projected === undefined ? undefined : { statusCategory: projected };
@@ -99,7 +111,9 @@ function issueTypeReviewExtras(raw: Record<string, unknown>): CatalogJsonObject 
   const ordinary = issueTypeExtras(raw);
   if (ordinary === undefined) return undefined;
   const reviewSnapshot = jiraIssueTypeReviewSnapshot(raw);
-  return reviewSnapshot === undefined ? ordinary : { ...ordinary, reviewSnapshot: { ...reviewSnapshot } };
+  return reviewSnapshot === undefined
+    ? ordinary
+    : { ...ordinary, reviewSnapshot: { ...reviewSnapshot } };
 }
 
 /** Closed native metadata fields only; URLs, icons and arbitrary expansions are never projected. */
@@ -112,13 +126,20 @@ export function jiraCoreMetadataProjection(
   if (kind === "status-category") return category(raw);
   if (kind === "project-type") return projectType(raw);
   const base = named(raw);
-  const fields = kind === "project-statuses" ? []
-    : kind === "priority" || kind === "status" ? ["description", "statusColor"]
-      : ["description"];
+  let fields: string[];
+  if (kind === "project-statuses") {
+    fields = [];
+  } else if (kind === "priority" || kind === "status") {
+    fields = ["description", "statusColor"];
+  } else {
+    fields = ["description"];
+  }
+
   const text = optionalText(raw, fields);
   const extra = extras(kind, raw);
   return base === undefined || text === undefined || extra === undefined
-    ? undefined : { ...base, ...text, ...extra };
+    ? undefined
+    : { ...base, ...text, ...extra };
 }
 
 /** Preserve budget refusal separately from malformed native field types. */
@@ -127,11 +148,16 @@ export function jiraCoreMetadataExceedsBounds(kind: JiraCoreMetadataKind, value:
   if (raw === undefined) return false;
   for (const [field, limit] of Object.entries(TEXT_LIMITS)) {
     const text = raw[field];
-    if (typeof text === "string" && (text.length > limit || !jiraProjectionTextFits(text))) return true;
+    if (typeof text === "string" && (text.length > limit || !jiraProjectionTextFits(text)))
+      return true;
   }
-  if (kind === "status") return jiraCoreMetadataExceedsBounds("status-category", raw.statusCategory);
+  if (kind === "status")
+    return jiraCoreMetadataExceedsBounds("status-category", raw.statusCategory);
   if (kind !== "project-statuses") return false;
   const values = asArray(raw.statuses);
-  return values !== undefined && (values.length > TOOL_CATALOG_LIMITS.maxArrayItems ||
-    values.some((entry) => jiraCoreMetadataExceedsBounds("status", entry)));
+  return (
+    values !== undefined &&
+    (values.length > TOOL_CATALOG_LIMITS.maxArrayItems ||
+      values.some((entry) => jiraCoreMetadataExceedsBounds("status", entry)))
+  );
 }

@@ -51,7 +51,10 @@ function transport(
       answer.status === 200
     ) {
       const body = JSON.parse(answer.bodyText) as { values: unknown[] };
-      const values = [...body.values, ...(options.screenFields ?? [])];
+      const values = [
+        ...body.values.filter((value) => record(value).fieldId !== "timetracking"),
+        ...(options.screenFields ?? [SCREEN_FIELD]),
+      ];
       return response({ values, isLast: true, total: values.length });
     }
     return answer;
@@ -120,7 +123,9 @@ describe("project estimate discovery (#4321 C4)", () => {
   });
 
   it("prefers board configuration to a different Story Points field on the screens", async () => {
-    const h = await run({ screenFields: [{ ...SCREEN_FIELD, fieldId: "customfield_10999" }] });
+    const h = await run({
+      screenFields: [SCREEN_FIELD, { ...SCREEN_FIELD, fieldId: "customfield_10999" }],
+    });
     expect(h.report.scope).toMatchObject({
       estimateFieldId: POINTS,
       estimateSource: "board-configuration",
@@ -159,9 +164,9 @@ describe("project estimate discovery (#4321 C4)", () => {
   });
 
   it.each([
-    { boards: [] },
+    { boards: [], screenFields: [] },
     { boards: [], screenFields: [{ ...SCREEN_FIELD, schema: { type: "string" } }] },
-    { configurations: { "7": { estimation: { type: "issueCount" } } } },
+    { configurations: { "7": { estimation: { type: "issueCount" } } }, screenFields: [] },
   ])(
     "never turns a globally named field or an issue-count board into a project estimate (%j)",
     async (options) => {
@@ -192,16 +197,24 @@ describe("project estimate discovery (#4321 C4)", () => {
       configurations: {
         "8": { estimation: { type: "field", field: { fieldId: "timeoriginalestimate" } } },
       },
-      screenFields: [SCREEN_FIELD],
+      screenFields: [SCREEN_FIELD, { fieldId: "timetracking", name: "Time Tracking" }],
     });
-    expect(h.report.scope).toMatchObject({ estimateUnavailableReason: "ambiguous-field" });
-    expect(record(record(h.report.progress).project).estimate).toBeNull();
+    expect(h.report.scope).toMatchObject({
+      estimateFieldId: POINTS,
+      estimateSource: "project-screen",
+    });
+    expect(record(record(h.report.progress).project).estimate).toEqual({
+      total: 16,
+      done: 8,
+      remaining: 8,
+      unestimated: 1,
+    });
   });
 
   it.each([{}, { id: "../7" }, { id: -1 }, { id: 1.5 }])(
     "never dispatches a configuration request for malformed board identity %j",
     async (board) => {
-      const h = await run({ boards: [board] });
+      const h = await run({ boards: [board], screenFields: [] });
       expect(h.report.scope).toMatchObject({ estimateUnavailableReason: "metadata-unavailable" });
       expect(h.requests.some((request) => request.endsWith("/configuration"))).toBe(false);
       expect(record(record(h.report.progress).project).estimate).toBeNull();
@@ -213,6 +226,7 @@ describe("project estimate discovery (#4321 C4)", () => {
     async (fieldId) => {
       const h = await run({
         configurations: { "7": { estimation: { type: "field", field: { fieldId } } } },
+        screenFields: [],
       });
       expect(h.report.scope).toMatchObject({ estimateUnavailableReason: "metadata-unavailable" });
       expect(record(record(h.report.progress).project).estimate).toBeNull();
@@ -227,23 +241,28 @@ describe("project estimate discovery (#4321 C4)", () => {
     expect(h.report.scope).toMatchObject({ estimateUnavailableReason: "ambiguous-field" });
   });
 
-  it("keeps a partially read board configuration unavailable instead of overriding it with screen metadata", async () => {
+  it("falls back to independently read screen metadata when board configuration is incomplete", async () => {
     const h = await run({
       boards: [{ id: 7 }, { id: 8 }],
       screenFields: [SCREEN_FIELD],
       configurations: { "8": { estimation: { type: "field", field: { fieldId: "../private" } } } },
     });
     expect(h.report.scope).toMatchObject({
-      estimateSource: "unavailable",
-      estimateUnavailableReason: "metadata-unavailable",
+      estimateFieldId: POINTS,
+      estimateSource: "project-screen",
     });
-    expect(record(record(h.report.progress).project).estimate).toBeNull();
+    expect(record(record(h.report.progress).project).estimate).toEqual({
+      total: 16,
+      done: 8,
+      remaining: 8,
+      unestimated: 1,
+    });
   });
 
   it.each([403, 500])(
     "discloses unreadable board metadata when no screen fallback exists (%s)",
     async (boardStatus) => {
-      const h = await run({ boardStatus });
+      const h = await run({ boardStatus, screenFields: [] });
       expect(h.report.scope).toMatchObject({
         estimateSource: "unavailable",
         estimateUnavailableReason: "metadata-unavailable",
@@ -255,10 +274,19 @@ describe("project estimate discovery (#4321 C4)", () => {
     },
   );
 
-  it("requires a project or an explicit field for a JQL-only report", async () => {
+  it("preserves dev time tracking for a JQL-only report", async () => {
     const h = await run({}, { jql: "project = REP" });
-    expect(h.report.scope).toMatchObject({ estimateUnavailableReason: "project-not-specified" });
-    expect(record(record(h.report.progress).project).estimate).toBeNull();
+    expect(h.report.scope).toMatchObject({
+      estimateFieldId: "timeoriginalestimate",
+      estimateUnit: "seconds",
+      estimateSource: "time-tracking",
+    });
+    expect(record(record(h.report.progress).project).estimate).toEqual({
+      total: 0,
+      done: 0,
+      remaining: 0,
+      unestimated: 4,
+    });
     expect(h.requests.some((request) => request.includes("/agile/"))).toBe(false);
   });
 

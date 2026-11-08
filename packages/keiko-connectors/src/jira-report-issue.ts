@@ -353,7 +353,7 @@ export async function parseJiraReportIssue(
       ...(checkerUnavailable ? [] : checked),
     ]),
     templateJudged: templateJudged(plan.checker, facts, checkerUnavailable),
-    requiredJudged: plan.requiredByType.has(typeId),
+    requiredJudged: (plan.requiredByType.get(typeId)?.length ?? 0) > 0,
     requirementIds: referencedRequirements(summary, labels, fields, plan),
     labels,
   };

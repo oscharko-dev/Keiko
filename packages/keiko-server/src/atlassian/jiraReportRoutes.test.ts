@@ -190,7 +190,13 @@ describe("Jira report export route", () => {
 });
 
 describe("Jira report activity", () => {
-  it.each(["explicit-field", "board-configuration", "project-screen", "unavailable"] as const)(
+  it.each([
+    "explicit-field",
+    "board-configuration",
+    "project-screen",
+    "time-tracking",
+    "unavailable",
+  ] as const)(
     "retains the closed estimate source %s through the registered writer and analyzer",
     (estimateSource) => {
       const logs = createBufferedServerLogSink();

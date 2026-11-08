@@ -2,6 +2,7 @@ import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/
 import { atlassianApiEndpointsFor, atlassianApiUrl } from "./atlassian-sync-classify.js";
 import {
   ATLASSIAN_WRITE_ACTION_TOTAL_TIMEOUT_MS,
+  type AtlassianWriteHttpRequest,
 } from "./atlassian-write-http.js";
 import { executeAdmittedJiraRequest } from "./jira-request-admission.js";
 import type { JiraManagedConnection } from "./jira-managed-connection.js";
@@ -24,9 +25,12 @@ export function jiraExperimentalAgileRequest(
     AbortSignal.timeout(ATLASSIAN_WRITE_ACTION_TOTAL_TIMEOUT_MS),
   ]);
   const request = fixedRequest(connection, context, signal, "/rest/agile/1.0/", false, true);
-  return (path, method = "GET", body, expect = "json", upload) => {
-    if (method !== "PUT" || upload !== undefined ||
-      (path !== "sprint/unmap" && path !== "sprint/unmap-all"))
+  return (path, method, body, expect, upload) => {
+    if (
+      method !== "PUT" ||
+      upload !== undefined ||
+      (path !== "sprint/unmap" && path !== "sprint/unmap-all")
+    )
       return Promise.resolve({ ok: false, reason: "unavailable" });
     return request(path, method, body, expect);
   };
@@ -75,17 +79,24 @@ function fixedRequest(
   jiraExperimental?: true,
 ): JiraMutationRequest {
   const endpoints = atlassianApiEndpointsFor(connection.baseUrl, root);
-  return (path, method = "GET", body, expect = "json") =>
-    readOnly && method !== "GET"
-      ? Promise.resolve({ ok: false, reason: "unavailable" })
-      : executeAdmittedJiraRequest(
-          connection, context, signal,
-          {
-            method,
-            url: atlassianApiUrl(endpoints, path),
-            ...(body === undefined ? {} : { bodyJson: JSON.stringify(body) }),
-            ...(jiraExperimental === undefined ? {} : { jiraExperimental }),
-            expect,
-          },
-        );
+  return (path, selectedMethod, body, selectedExpect) => {
+    const { method, expect } = requestDefaults(selectedMethod, selectedExpect);
+    if (readOnly && method !== "GET") {
+      return Promise.resolve({ ok: false, reason: "unavailable" });
+    }
+    return executeAdmittedJiraRequest(connection, context, signal, {
+      method,
+      url: atlassianApiUrl(endpoints, path),
+      ...(body === undefined ? {} : { bodyJson: JSON.stringify(body) }),
+      ...(jiraExperimental === undefined ? {} : { jiraExperimental }),
+      expect,
+    });
+  };
+}
+
+function requestDefaults(
+  method: AtlassianWriteHttpRequest["method"] = "GET",
+  expect: AtlassianWriteHttpRequest["expect"] = "json",
+): Pick<AtlassianWriteHttpRequest, "method" | "expect"> {
+  return { method, expect };
 }

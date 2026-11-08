@@ -6,7 +6,11 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { asRecord } from "./atlassian-sync-classify.js";
-import { executeJiraSelectedRead, selectJiraReadPage, type JiraReadResponse } from "./jira-managed-read-request.js";
+import {
+  executeJiraSelectedRead,
+  selectJiraReadPage,
+  type JiraReadResponse,
+} from "./jira-managed-read-request.js";
 import { jiraNativeId, jiraNativeText } from "./jira-native-values.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { boundJiraReadResult } from "./jira-managed-issue-reads.js";
@@ -74,9 +78,10 @@ function selection(name: SavedViewRead, args: CatalogJsonObject): Selection | un
   const { startAt, maxResults } = page;
   const target = route(name, args);
   if (target === undefined) return undefined;
-  const path = name === "jira.dashboards"
-    ? `${target.path}?startAt=${String(startAt)}&maxResults=${String(maxResults)}`
-    : target.path;
+  const path =
+    name === "jira.dashboards"
+      ? `${target.path}?startAt=${String(startAt)}&maxResults=${String(maxResults)}`
+      : target.path;
   return { ...target, path, startAt, maxResults };
 }
 function dashboard(value: unknown): CatalogJsonObject | undefined {
@@ -101,7 +106,10 @@ const TARGET_FIELDS = [
 ] as const;
 function targetField(field: string, value: unknown): string | undefined {
   if (field === "projectId" || field === "roleId") return wireId(value);
-  return jiraNativeText(value, field === "projectKey" ? 128 : 255) ? value : undefined;
+  if (jiraNativeText(value, field === "projectKey" ? 128 : 255)) {
+    return value;
+  }
+  return undefined;
 }
 function permissionTargets(raw: Record<string, unknown>): CatalogJsonObject | undefined {
   const result: Record<string, CatalogJsonValue> = {};
@@ -129,19 +137,27 @@ export function projectJiraFilterPermission(value: unknown): CatalogJsonObject |
   return fields === undefined ? undefined : { id, type: raw.type, ...fields };
 }
 /** The native endpoint returns a complete, unpaged permission list; never silently truncate it. */
-export function projectJiraFilterPermissions(items: readonly unknown[]): readonly CatalogJsonObject[] | undefined {
-  return projectJiraCollection(items, TOOL_CATALOG_LIMITS.maxArrayItems, projectJiraFilterPermission, "id");
+export function projectJiraFilterPermissions(
+  items: readonly unknown[],
+): readonly CatalogJsonObject[] | undefined {
+  return projectJiraCollection(
+    items,
+    TOOL_CATALOG_LIMITS.maxArrayItems,
+    projectJiraFilterPermission,
+    "id",
+  );
 }
 function single(item: CatalogJsonObject | undefined, selected: Selection): ManagedMcpToolResult {
-  return item === undefined || item.id !== selected.identity
-    ? jiraReadFailure("malformed-payload")
-    : boundJiraReadResult({
-        data: {
-          outcome: "succeeded",
-          items: [item],
-          ...(selected.filterId === undefined ? {} : { filterId: selected.filterId }),
-        },
-      });
+  if (item === undefined || item.id !== selected.identity) {
+    return jiraReadFailure("malformed-payload");
+  }
+  return boundJiraReadResult({
+    data: {
+      outcome: "succeeded",
+      items: [item],
+      ...(selected.filterId === undefined ? {} : { filterId: selected.filterId }),
+    },
+  });
 }
 function dashboardPage(
   body: Record<string, unknown> | undefined,
@@ -196,7 +212,9 @@ function savedViewResult(
       : jiraReadFailure("malformed-payload");
   }
   return single(
-    name === "jira.dashboard" ? dashboard(response.body) : projectJiraFilterPermission(response.body),
+    name === "jira.dashboard"
+      ? dashboard(response.body)
+      : projectJiraFilterPermission(response.body),
     selected,
   );
 }
@@ -206,7 +224,10 @@ export function executeJiraSavedViewRead(
   args: CatalogJsonObject,
   request: JiraMutationRequest,
 ): Promise<ManagedMcpToolResult> {
-  return executeJiraSelectedRead(selection(name, args), request,
+  return executeJiraSelectedRead(
+    selection(name, args),
+    request,
     name === "jira.filter-permissions" ? "json-array" : "json",
-    (response, selected) => savedViewResult(name, response, selected));
+    (response, selected) => savedViewResult(name, response, selected),
+  );
 }

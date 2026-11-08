@@ -42,7 +42,13 @@ function filterProjection(value: unknown): CatalogJsonObject | undefined {
   )
     return undefined;
   const description = raw.description ?? null;
-  if (description !== null && (typeof description !== "string" || description.length > 32768 || /\p{Surrogate}/u.test(description))) return undefined;
+  if (
+    description !== null &&
+    (typeof description !== "string" ||
+      description.length > 32768 ||
+      /\p{Surrogate}/u.test(description))
+  )
+    return undefined;
   const permissions = asArray(raw.sharePermissions);
   const result: Record<string, CatalogJsonValue> = {
     id,
@@ -58,11 +64,13 @@ function filterProjection(value: unknown): CatalogJsonObject | undefined {
   return result;
 }
 function pageNumber(value: unknown, fallback: number, max: number, min = 0): number | undefined {
-  return value === undefined
-    ? fallback
-    : typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max
-      ? value
-      : undefined;
+  if (value === undefined) {
+    return fallback;
+  }
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max) {
+    return value;
+  }
+  return undefined;
 }
 interface FilterSelection {
   readonly path: string;

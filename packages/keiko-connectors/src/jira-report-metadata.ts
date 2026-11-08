@@ -44,8 +44,8 @@ function catalogOf(items: readonly unknown[]): readonly JiraReportFieldCatalogEn
   if (items.length > CATALOG_MAX) return undefined;
   return items.flatMap((item): readonly JiraReportFieldCatalogEntry[] => {
     const record = asRecord(item);
-    return typeof record?.id === "string" && typeof record.name === "string"
-      ? [{ id: record.id, name: record.name }]
+    return typeof record?.id === "string" && FIELD_ID.test(record.id)
+      ? [{ id: record.id, name: typeof record.name === "string" ? record.name : record.id }]
       : [];
   });
 }
@@ -77,17 +77,16 @@ export interface JiraReportRequiredFields {
   readonly state: "applied" | "partial" | "unavailable";
   readonly reason?: JiraReportFailure;
   readonly byType: ReadonlyMap<string, readonly string[]>;
-  /** Numeric Story Points fields actually present on this project's create screens. */
+  /** Numeric estimate candidates actually present on this project's create screens. */
   readonly estimateFields?: readonly JiraReportFieldCatalogEntry[];
+  readonly timeTracking?: boolean;
 }
 
 function screenEstimateField(value: unknown): readonly JiraReportFieldCatalogEntry[] {
   const field = asRecord(value);
   if (typeof field?.fieldId !== "string" || !FIELD_ID.test(field.fieldId)) return [];
   if (typeof field.name !== "string" || asRecord(field.schema)?.type !== "number") return [];
-  return /^story[ -]points(?: estimate)?$/iu.test(field.name.trim())
-    ? [{ id: field.fieldId, name: field.name.trim() }]
-    : [];
+  return [{ id: field.fieldId, name: field.name.trim() }];
 }
 
 function requiredIds(values: readonly unknown[]): readonly string[] {
@@ -159,6 +158,7 @@ type TypeRequirements =
   | {
       readonly fields: readonly string[];
       readonly estimateFields: readonly JiraReportFieldCatalogEntry[];
+      readonly timeTracking: boolean;
     }
   | { readonly reason: JiraReportFailure };
 async function typeRequirements(
@@ -174,7 +174,11 @@ async function typeRequirements(
     values,
   );
   return reason === undefined
-    ? { fields: requiredIds(values), estimateFields: values.flatMap(screenEstimateField) }
+    ? {
+        fields: requiredIds(values),
+        estimateFields: values.flatMap(screenEstimateField),
+        timeTracking: values.some((value) => asRecord(value)?.fieldId === "timetracking"),
+      }
     : { reason };
 }
 
@@ -213,5 +217,12 @@ export async function loadRequiredFields(
   });
   const state = requiredState(byType.size, ids.length);
   const estimateFields = loaded.flatMap((item) => ("fields" in item ? item.estimateFields : []));
-  return { state, ...(reason === undefined ? {} : { reason }), byType, estimateFields };
+  const timeTracking = loaded.some((item) => "fields" in item && item.timeTracking);
+  return {
+    state,
+    ...(reason === undefined ? {} : { reason }),
+    byType,
+    estimateFields,
+    timeTracking,
+  };
 }

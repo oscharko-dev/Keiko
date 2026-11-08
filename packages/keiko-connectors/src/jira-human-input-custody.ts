@@ -143,7 +143,9 @@ function load(
   return record;
 }
 function changed(owner: Owner, requestId: string): void {
-  for (const notify of [...(owner.listeners.get(requestId) ?? [])]) notify();
+  // Listeners may change subscriptions during delivery; notify the initial set once.
+  const notifications = [...(owner.listeners.get(requestId) ?? [])];
+  for (const notify of notifications) notify();
 }
 function expectedSerialized(
   owner: Owner,

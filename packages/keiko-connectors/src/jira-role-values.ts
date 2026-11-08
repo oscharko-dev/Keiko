@@ -1,18 +1,34 @@
-import { TOOL_CATALOG_LIMITS, type CatalogJsonObject, type CatalogJsonValue } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  TOOL_CATALOG_LIMITS,
+  type CatalogJsonObject,
+  type CatalogJsonValue,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import { jiraSecurityLevelProjection } from "./jira-managed-access-schemes.js";
 import { projectJiraOptionalFields } from "./jira-managed-metadata.js";
 import { jiraNativeId, jiraNativeNumericId, jiraNativeText } from "./jira-native-values.js";
 import { savedName, savedText } from "./jira-saved-configuration-values.js";
 
-export interface RoleSnapshot { readonly id: string; readonly name: string; readonly description: string | null }
-export interface RoleActor { readonly id: string; readonly type: "atlassian-user-role-actor" | "atlassian-group-role-actor"; readonly name: string }
+export interface RoleSnapshot {
+  readonly id: string;
+  readonly name: string;
+  readonly description: string | null;
+}
+export interface RoleActor {
+  readonly id: string;
+  readonly type: "atlassian-user-role-actor" | "atlassian-group-role-actor";
+  readonly name: string;
+}
 export function rolePrincipalText(value: unknown): value is string {
   return savedText(value, 255) && !/\p{Cc}/u.test(value);
 }
-function actorDetail(value: unknown, key: "id" | "type" | "displayName"): CatalogJsonValue | undefined {
-  if (key === "id") return jiraNativeNumericId(value);
-  return jiraNativeText(value, key === "type" ? 128 : 255) ? value : undefined;
+function actorDetail(
+  value: unknown,
+  key: "id" | "type" | "displayName",
+): CatalogJsonValue | undefined {
+  const max = key === "type" ? 128 : 255;
+  const text = jiraNativeText(value, max) ? value : undefined;
+  return key === "id" ? jiraNativeNumericId(value) : text;
 }
 function actor(value: unknown): CatalogJsonObject | undefined {
   const raw = asRecord(value);
@@ -49,16 +65,24 @@ export function jiraRoleSummary(value: unknown): CatalogJsonObject | undefined {
 export function jiraRoleReviewSnapshot(value: unknown): RoleSnapshot | undefined {
   const raw = asRecord(value);
   const projected = jiraRoleSummary(value);
-  if (raw === undefined || projected === undefined || !jiraNativeId(projected.id) || !savedName(projected.name)) return undefined;
+  if (
+    raw === undefined ||
+    projected === undefined ||
+    !jiraNativeId(projected.id) ||
+    !savedName(projected.name)
+  )
+    return undefined;
   if (!Object.hasOwn(raw, "description")) return undefined;
   const description = raw.description;
   return description === null || savedText(description, 32768, true)
-    ? { id: projected.id, name: projected.name, description } : undefined;
+    ? { id: projected.id, name: projected.name, description }
+    : undefined;
 }
 function roleActor(value: CatalogJsonObject): RoleActor | undefined {
   if (!jiraNativeId(value.id) || !rolePrincipalText(value.name)) return undefined;
   return value.type === "atlassian-user-role-actor" || value.type === "atlassian-group-role-actor"
-    ? { id: value.id, name: value.name, type: value.type } : undefined;
+    ? { id: value.id, name: value.name, type: value.type }
+    : undefined;
 }
 export function jiraRoleReviewActors(value: unknown): readonly RoleActor[] | undefined {
   const projected = jiraRoleActors(value);
@@ -70,7 +94,8 @@ export function jiraRoleReviewActors(value: unknown): readonly RoleActor[] | und
     if (actor === undefined) return undefined;
     const key = JSON.stringify([actor.type, actor.name]);
     if (names.has(key)) return undefined;
-    names.add(key); result.push(actor);
+    names.add(key);
+    result.push(actor);
   }
   return result;
 }

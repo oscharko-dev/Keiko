@@ -71,11 +71,14 @@ function parseFields(args: CatalogJsonObject): WorklogFields | undefined {
       : {}),
   };
 }
-function requiredFields(create: boolean, fields: WorklogFields, worklogId: unknown): boolean {
-  return create
-    ? fields.started !== undefined && fields.timeSpentSeconds !== undefined
-    : jiraNativeId(worklogId) && Object.keys(fields).length > 0;
-}
+const REQUIRED_FIELDS: Readonly<
+  Record<Operation, (fields: WorklogFields, worklogId: unknown) => boolean>
+> = {
+  "jira.create-worklog": (fields) =>
+    fields.started !== undefined && fields.timeSpentSeconds !== undefined,
+  "jira.update-worklog": (fields, worklogId) =>
+    jiraNativeId(worklogId) && Object.keys(fields).length > 0,
+};
 function input(operation: Operation, args: CatalogJsonObject): Input | undefined {
   const create = operation === "jira.create-worklog";
   if (
@@ -92,7 +95,7 @@ function input(operation: Operation, args: CatalogJsonObject): Input | undefined
     fields === undefined ||
     visibility === undefined ||
     (Object.hasOwn(args, "visibility") && visibility === null) ||
-    !requiredFields(create, fields, args.worklogId)
+    !REQUIRED_FIELDS[operation](fields, args.worklogId)
   )
     return undefined;
   return {
@@ -158,14 +161,11 @@ async function confirm(
 ): Promise<JiraMutationAttempt> {
   try {
     const read = await readJiraBoundWorklog(request, receipt.issueId, receipt.worklogId);
-    return {
-      ...(read.ok
-        ? matchesJiraWorklog(read.worklog, desired, visibility)
-          ? { ok: true }
-          : CONFLICT
-        : read),
-      receipt,
-    };
+    if (!read.ok) return { ...read, receipt };
+    const outcome = matchesJiraWorklog(read.worklog, desired, visibility)
+      ? { ok: true as const }
+      : CONFLICT;
+    return { ...outcome, receipt };
   } catch (error) {
     throw new JiraAcknowledgedMutationError(error, receipt);
   }

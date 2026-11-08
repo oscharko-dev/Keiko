@@ -2,7 +2,7 @@ const UNRESERVED = /^[A-Za-z0-9._~-]$/u;
 
 function decodedUnreservedPath(path: string): string {
   return path.replaceAll(/%[0-9a-f]{2}/giu, (encoded) => {
-    const decoded = String.fromCharCode(Number.parseInt(encoded.slice(1), 16));
+    const decoded = String.fromCodePoint(Number.parseInt(encoded.slice(1), 16));
     return UNRESERVED.test(decoded) ? decoded : encoded;
   });
 }

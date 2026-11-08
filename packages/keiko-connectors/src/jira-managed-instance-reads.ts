@@ -8,7 +8,11 @@ import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import { jiraDirectoryNumber, jiraDirectoryUser } from "./jira-directory-values.js";
 import { boundJiraReadResult } from "./jira-managed-issue-reads.js";
-import { jiraReadFailure, localJiraPage, projectJiraOptionalFields } from "./jira-managed-metadata.js";
+import {
+  jiraReadFailure,
+  localJiraPage,
+  projectJiraOptionalFields,
+} from "./jira-managed-metadata.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { executeJiraSelectedRead, type JiraReadResponse } from "./jira-managed-read-request.js";
 import { jiraNativeText } from "./jira-native-values.js";
@@ -51,20 +55,34 @@ function buildNumber(value: unknown): string | undefined {
 }
 function releaseNumbers(value: unknown): readonly number[] | undefined {
   const parts = asArray(value);
-  return parts !== undefined && parts.length > 0 &&
+  return parts !== undefined &&
+    parts.length > 0 &&
     parts.length <= TOOL_CATALOG_LIMITS.maxArrayItems &&
-    parts.every((part): part is number =>
-      typeof part === "number" && Number.isSafeInteger(part) && part >= 0)
+    parts.every(
+      (part): part is number => typeof part === "number" && Number.isSafeInteger(part) && part >= 0,
+    )
     ? parts
     : undefined;
 }
 function serverInfo(body: Record<string, unknown>): CatalogJsonObject | undefined {
   if (!jiraNativeText(body.version, 128)) return undefined;
-  const text = projectJiraOptionalFields(body, ["serverTitle", "buildPartnerName", "deploymentType"],
-    (value) => jiraNativeText(value, 255) ? value : undefined);
-  const builds = projectJiraOptionalFields(body, ["buildNumber", "databaseBuildNumber"], buildNumber);
+  const text = projectJiraOptionalFields(
+    body,
+    ["serverTitle", "buildPartnerName", "deploymentType"],
+    (value) => (jiraNativeText(value, 255) ? value : undefined),
+  );
+  const builds = projectJiraOptionalFields(
+    body,
+    ["buildNumber", "databaseBuildNumber"],
+    buildNumber,
+  );
   if (text === undefined || builds === undefined) return undefined;
-  const item: Record<string, CatalogJsonValue> = { version: body.version, ...text, ...builds, ...jiraInstanceBaseUrlObservation(body.baseUrl) };
+  const item: Record<string, CatalogJsonValue> = {
+    version: body.version,
+    ...text,
+    ...builds,
+    ...jiraInstanceBaseUrlObservation(body.baseUrl),
+  };
   if (body.versionNumbers !== undefined && body.versionNumbers !== null) {
     const parts = releaseNumbers(body.versionNumbers);
     if (parts === undefined) return undefined;
@@ -89,20 +107,32 @@ const TIME_CHOICES: Readonly<Record<"defaultUnit" | "timeFormat", ReadonlySet<st
   timeFormat: new Set(["pretty", "days", "hours"]),
 };
 function workingTime(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 &&
-    value <= Number.MAX_SAFE_INTEGER ? value : undefined;
+  return typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= 0 &&
+    value <= Number.MAX_SAFE_INTEGER
+    ? value
+    : undefined;
 }
 function timeTracking(value: unknown): CatalogJsonObject | undefined {
   const raw = asRecord(value);
   if (raw === undefined) return undefined;
-  const numbers = projectJiraOptionalFields(raw, ["workingHoursPerDay", "workingDaysPerWeek"], workingTime);
-  const choices = projectJiraOptionalFields(raw, ["defaultUnit", "timeFormat"] as const,
-    (entry, key) => typeof entry === "string" && TIME_CHOICES[key].has(entry) ? entry : undefined);
+  const numbers = projectJiraOptionalFields(
+    raw,
+    ["workingHoursPerDay", "workingDaysPerWeek"],
+    workingTime,
+  );
+  const choices = projectJiraOptionalFields(
+    raw,
+    ["defaultUnit", "timeFormat"] as const,
+    (entry, key) => (typeof entry === "string" && TIME_CHOICES[key].has(entry) ? entry : undefined),
+  );
   return numbers === undefined || choices === undefined ? undefined : { ...numbers, ...choices };
 }
 function configuration(body: Record<string, unknown>): CatalogJsonObject | undefined {
-  const item = projectJiraOptionalFields(body, FEATURES,
-    (value) => typeof value === "boolean" ? value : undefined);
+  const item = projectJiraOptionalFields(body, FEATURES, (value) =>
+    typeof value === "boolean" ? value : undefined,
+  );
   if (item === undefined) return undefined;
   if (body.timeTrackingConfiguration !== undefined && body.timeTrackingConfiguration !== null) {
     const tracking = timeTracking(body.timeTrackingConfiguration);
@@ -113,11 +143,23 @@ function configuration(body: Record<string, unknown>): CatalogJsonObject | undef
 function permissionDefinition(key: string, value: unknown): CatalogJsonObject | undefined {
   const raw = asRecord(value);
   if (!jiraNativeText(key, 255) || raw === undefined) return undefined;
-  if (raw.type !== undefined && raw.type !== null && raw.type !== "GLOBAL" && raw.type !== "PROJECT")
+  if (
+    raw.type !== undefined &&
+    raw.type !== null &&
+    raw.type !== "GLOBAL" &&
+    raw.type !== "PROJECT"
+  )
     return undefined;
-  const fields = projectJiraOptionalFields(raw, ["id", "key", "name", "type", "description"],
-    (entry, field) => jiraNativeText(entry, field === "description" ? 32768 : 255, field === "description")
-      ? entry : undefined);
+  const fields = projectJiraOptionalFields(
+    raw,
+    ["id", "key", "name", "type", "description"],
+    (entry, field) => {
+      if (jiraNativeText(entry, field === "description" ? 32768 : 255, field === "description")) {
+        return entry;
+      }
+      return undefined;
+    },
+  );
   if (fields === undefined) return undefined;
   const { key: nativeKey, ...metadata } = fields;
   // havePermission is deliberately absent: this endpoint describes definitions, not actor rights.
@@ -145,12 +187,15 @@ function projectResponse(
   const body = asRecord(response.body);
   if (body === undefined) return jiraReadFailure("malformed-payload");
   if (name === "jira.permission-definitions") return permissions(body, selected);
-  const item =
-    name === "jira.server-info"
-      ? serverInfo(body)
-      : name === "jira.myself"
-        ? jiraDirectoryUser(body)
-        : configuration(body);
+  let item: Readonly<Record<string, CatalogJsonValue>> | undefined;
+  if (name === "jira.server-info") {
+    item = serverInfo(body);
+  } else if (name === "jira.myself") {
+    item = jiraDirectoryUser(body);
+  } else {
+    item = configuration(body);
+  }
+
   return item === undefined
     ? jiraReadFailure("malformed-payload")
     : boundJiraReadResult({ data: { outcome: "succeeded", ...item } });
@@ -164,10 +209,7 @@ export function executeJiraInstanceRead(
   args: CatalogJsonObject,
   request: JiraMutationRequest,
 ): Promise<ManagedMcpToolResult> {
-  return executeJiraSelectedRead(
-    selection(name, args),
-    request,
-    "json",
-    (response, selected) => projectResponse(name, response, selected),
+  return executeJiraSelectedRead(selection(name, args), request, "json", (response, selected) =>
+    projectResponse(name, response, selected),
   );
 }

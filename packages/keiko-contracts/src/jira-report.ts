@@ -75,6 +75,7 @@ export const JIRA_REPORT_ESTIMATE_SOURCES = [
   "explicit-field",
   "board-configuration",
   "project-screen",
+  "time-tracking",
   "unavailable",
 ] as const;
 export type JiraReportEstimateSource = (typeof JIRA_REPORT_ESTIMATE_SOURCES)[number];

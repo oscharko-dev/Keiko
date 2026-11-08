@@ -1,4 +1,7 @@
-import { jiraOptionSchemeReview, jiraOptionSchemeReviewFields } from "./jira-option-scheme-review.js";
+import {
+  jiraOptionSchemeReview,
+  jiraOptionSchemeReviewFields,
+} from "./jira-option-scheme-review.js";
 import {
   JIRA_READ_TOOL_FAMILIES,
   isSafeAtlassianIdentifier,
@@ -33,7 +36,7 @@ const FIELDS: Readonly<Record<Read, readonly string[]>> = {
   "jira.issue-type-scheme-projects": ["schemeId", "startAt", "maxResults"],
 };
 export function isJiraIssueTypeSchemeRead(name: string): name is Read {
-  return JIRA_ISSUE_TYPE_SCHEME_READS.some((value) => value === name);
+  return (JIRA_ISSUE_TYPE_SCHEME_READS as readonly string[]).includes(name);
 }
 function expansion(args: CatalogJsonObject): string | undefined {
   const tokens: string[] = [];
@@ -63,14 +66,15 @@ function selection(name: Read, args: CatalogJsonObject): Selection | undefined {
       ? undefined
       : { path: `issuetypescheme${query}`, startAt, maxResults };
   }
-  return jiraNativeId(args.schemeId)
-    ? {
-        path: `issuetypescheme/${args.schemeId}${name === "jira.issue-type-scheme-projects" ? "/associations" : ""}`,
-        schemeId: args.schemeId,
-        startAt,
-        maxResults,
-      }
-    : undefined;
+  if (jiraNativeId(args.schemeId)) {
+    return {
+      path: `issuetypescheme/${args.schemeId}${name === "jira.issue-type-scheme-projects" ? "/associations" : ""}`,
+      schemeId: args.schemeId,
+      startAt,
+      maxResults,
+    };
+  }
+  return undefined;
 }
 function details(
   raw: Record<string, unknown>,
@@ -121,7 +125,13 @@ function scheme(value: unknown): CatalogJsonObject | undefined {
   const metadata = schemeMetadata(raw);
   if (optional === undefined || metadata === undefined) return undefined;
   const projected = { id: raw.id, name: raw.name, ...optional, ...metadata };
-  return { ...projected, ...jiraOptionSchemeReviewFields("issue-type", jiraOptionSchemeReview("issue-type", raw, projected)) };
+  return {
+    ...projected,
+    ...jiraOptionSchemeReviewFields(
+      "issue-type",
+      jiraOptionSchemeReview("issue-type", raw, projected),
+    ),
+  };
 }
 function project(value: unknown): CatalogJsonObject | undefined {
   const raw = asRecord(value);

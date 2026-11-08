@@ -237,8 +237,10 @@ function createMetaFields(
   mixedCase: boolean,
   nothingRequired: boolean,
 ): readonly unknown[] {
-  if (nothingRequired) return [{ fieldId: "summary", required: true, hasDefaultValue: false }];
+  const timeTracking = { fieldId: "timetracking", name: "Time Tracking", required: false };
+  if (nothingRequired) return [timeTracking];
   return [
+    timeTracking,
     { fieldId: "summary", required: true, hasDefaultValue: false },
     { fieldId: "issuetype", required: true, hasDefaultValue: false },
     { fieldId: "reporter", required: true, hasDefaultValue: true },

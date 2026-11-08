@@ -1,4 +1,8 @@
-import { jiraProjectReview, jiraProjectReviewFields, type JiraProjectReview } from "./jira-project-review.js";
+import {
+  jiraProjectReview,
+  jiraProjectReviewFields,
+  type JiraProjectReview,
+} from "./jira-project-review.js";
 import {
   JIRA_READ_TOOL_FAMILIES,
   isSafeAtlassianIdentifier,
@@ -129,7 +133,10 @@ function receipt(project: ProjectView): ProjectReceipt {
     projectName: project.projectName,
   };
 }
-export async function readJiraBoundProject(request: JiraMutationRequest, target: string): Promise<ProjectReadback> {
+export async function readJiraBoundProject(
+  request: JiraMutationRequest,
+  target: string,
+): Promise<ProjectReadback> {
   const result = await request(`project/${encodeURIComponent(target)}`);
   if (!result.ok) return dispatchFailure(result);
   const project = result.status === 200 ? projectView(result.body) : undefined;
@@ -198,12 +205,15 @@ function readArgument(
   name: ProjectRead,
   args: CatalogJsonObject,
 ): { readonly target: string | undefined } | undefined {
-  const key =
-    name === "jira.project-type"
-      ? "projectTypeKey"
-      : name === "jira.validate-project-key"
-        ? "key"
-        : "projectIdOrKey";
+  let key: "key" | "projectTypeKey" | "projectIdOrKey";
+  if (name === "jira.project-type") {
+    key = "projectTypeKey";
+  } else if (name === "jira.validate-project-key") {
+    key = "key";
+  } else {
+    key = "projectIdOrKey";
+  }
+
   if (!Object.keys(args).every((field) => field === key)) return undefined;
   const target = args[key];
   if (name === "jira.project-permissions" && target === undefined) return { target };
@@ -255,24 +265,27 @@ async function typeResult(
   key: string,
 ): Promise<ManagedMcpToolResult> {
   const result = await readJiraAccessibleProjectType(request, key);
-  return result.ok
-    ? {
-        data: {
-          outcome: "succeeded",
-          projectTypeKey: key,
-          ...(result.name === undefined ? {} : { name: result.name }),
-        },
-      }
-    : jiraReadFailure(result.reason, result.detail);
+  if (result.ok) {
+    return {
+      data: {
+        outcome: "succeeded",
+        projectTypeKey: key,
+        ...(result.name === undefined ? {} : { name: result.name }),
+      },
+    };
+  }
+  return jiraReadFailure(result.reason, result.detail);
 }
 async function permissionResult(
   request: JiraMutationRequest,
   target: string | undefined,
 ): Promise<ManagedMcpToolResult> {
-  const query =
-    target === undefined
-      ? ""
-      : `?${new URLSearchParams({ [projectId(target) ? "projectId" : "projectKey"]: target }).toString()}`;
+  let query: string;
+  if (target === undefined) {
+    query = "";
+  } else {
+    query = `?${new URLSearchParams({ [projectId(target) ? "projectId" : "projectKey"]: target }).toString()}`;
+  }
   const result = await request(`mypermissions${query}`);
   if (!result.ok) return jiraReadFailure(result.reason, result.remote);
   const values = result.status === 200 ? asRecord(result.body?.permissions) : undefined;
@@ -338,18 +351,24 @@ function updateInput(
 function holds(project: ProjectView, fields: Readonly<Record<string, unknown>>): boolean {
   return Object.entries(fields).every(([field, expected]) => {
     if (project.invalidMetadataFields.has(field)) return false;
-    const actual: unknown =
-      field === "key"
-        ? project.projectKey
-        : field === "name"
-          ? project.projectName
-          : Reflect.get(project, field);
-    const kind =
-      field === "lead"
-        ? "user-name"
-        : field === "description" || field === "url"
-          ? "clearable-text"
-          : "exact";
+    let actual: unknown;
+    if (field === "key") {
+      actual = project.projectKey;
+    } else if (field === "name") {
+      actual = project.projectName;
+    } else {
+      actual = Reflect.get(project, field);
+    }
+
+    let kind: "exact" | "clearable-text" | "user-name";
+    if (field === "lead") {
+      kind = "user-name";
+    } else if (field === "description" || field === "url") {
+      kind = "clearable-text";
+    } else {
+      kind = "exact";
+    }
+
     return jiraReadbackValueMatches(kind, actual, expected);
   });
 }

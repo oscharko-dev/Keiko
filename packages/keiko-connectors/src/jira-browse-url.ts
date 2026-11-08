@@ -31,7 +31,7 @@ export function jiraFilterBrowseUrl(baseUrl: string, filterId: unknown): string 
 export function jiraBoardBrowseUrl(baseUrl: string, boardId: unknown): string | undefined {
   if (
     typeof boardId !== "string" ||
-    !/^[1-9][0-9]{0,15}$/u.test(boardId) ||
+    !/^[1-9]\d{0,15}$/u.test(boardId) ||
     !Number.isSafeInteger(Number(boardId))
   )
     return undefined;

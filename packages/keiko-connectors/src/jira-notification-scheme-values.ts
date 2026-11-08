@@ -1,6 +1,4 @@
-import {
-  isSafeAtlassianIdentifier,
-} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { isSafeAtlassianIdentifier } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   TOOL_CATALOG_LIMITS,
   type CatalogJsonObject,
@@ -12,9 +10,18 @@ import { jiraNativeNumericId, jiraNativeText } from "./jira-native-values.js";
 
 // The retained 11.3 NotificationType enum and notification REST DTOs own these wire names.
 const RECIPIENT_TYPES: ReadonlySet<string> = new Set([
-  "CurrentAssignee", "Reporter", "CurrentUser", "ProjectLead", "ComponentLead",
-  "AllWatchers", "User", "Group", "EmailAddress", "UserCustomField",
-  "GroupCustomField", "ProjectRole",
+  "CurrentAssignee",
+  "Reporter",
+  "CurrentUser",
+  "ProjectLead",
+  "ComponentLead",
+  "AllWatchers",
+  "User",
+  "Group",
+  "EmailAddress",
+  "UserCustomField",
+  "GroupCustomField",
+  "ProjectRole",
 ]);
 const MAX = TOOL_CATALOG_LIMITS.maxArrayItems;
 
@@ -79,7 +86,8 @@ function identityDetails(value: unknown, kind: IdentityKind): CatalogJsonObject 
   const id = identity(raw, kind);
   const flags = kind === "user" ? userActive(raw) : {};
   return text === undefined || id === undefined || flags === undefined
-    ? undefined : { ...text, ...id, ...flags };
+    ? undefined
+    : { ...text, ...id, ...flags };
 }
 
 function expandedRecipient(
@@ -101,8 +109,13 @@ function expandedRecipient(
 function notification(value: unknown): CatalogJsonObject | undefined {
   const raw = asRecord(value);
   const id = jiraNativeNumericId(raw?.id);
-  if (raw === undefined || id === undefined || typeof raw.notificationType !== "string" ||
-    !RECIPIENT_TYPES.has(raw.notificationType)) return undefined;
+  if (
+    raw === undefined ||
+    id === undefined ||
+    typeof raw.notificationType !== "string" ||
+    !RECIPIENT_TYPES.has(raw.notificationType)
+  )
+    return undefined;
   const fields: Record<string, number> = { parameter: 1024 };
   if (raw.notificationType === "EmailAddress") fields.emailAddress = 320;
   const text = optionalText(raw, fields);
@@ -127,12 +140,14 @@ function event(value: unknown): CatalogJsonObject | undefined {
   if (first === undefined) return undefined;
   const templateEvents: CatalogJsonObject[] = [];
   let next = first.raw.templateEvent;
-  for (let depth = 1; next !== undefined && next !== null; depth += 1) {
+  let depth = 1;
+  while (next !== undefined && next !== null) {
     if (depth >= 8) return undefined;
     const template = eventValue(next);
     if (template === undefined) return undefined;
     templateEvents.push(template.data);
     next = template.raw.templateEvent;
+    depth += 1;
   }
   return {
     ...first.data,
@@ -151,7 +166,10 @@ function schemeEvent(value: unknown): CatalogJsonObject | undefined {
 }
 
 /** Project the documented DTOs, never their self/avatar/HTML fields or arbitrary nested objects. */
-export function jiraNotificationScheme(value: unknown, includeEvents: boolean): CatalogJsonObject | undefined {
+export function jiraNotificationScheme(
+  value: unknown,
+  includeEvents: boolean,
+): CatalogJsonObject | undefined {
   const raw = asRecord(value);
   const id = jiraNativeNumericId(raw?.id);
   if (raw === undefined || id === undefined || !jiraNativeText(raw.name, 255)) return undefined;

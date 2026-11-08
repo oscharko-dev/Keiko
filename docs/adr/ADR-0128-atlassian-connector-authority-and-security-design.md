@@ -1600,19 +1600,22 @@ field list was not read, makes the report incomplete with reason `template-unrea
 compliance `checker: unavailable` instead of zero deviations), and coverage of declared `requirementIds`
 (a requirement is covered by an issue naming its identifier in summary, labels or description;
 items traced through the covering issue's descendants and, for a container, its linked issues).
-**Estimate field selection (#4321 C4, 2026-11-08).** An explicit `estimateFieldId` wins. Otherwise,
-the report reads every board of the named project and its Agile estimation configuration. One
-consistent configured field supplies the estimates; conflicting board fields are unavailable,
-never selected arbitrarily. When no board field can be established, the existing project create
-metadata supplies a numeric Story Points field actually present on the project's screens. A
-global field name alone does not establish project applicability. Conflicting screen fields,
-missing configuration, unreadable metadata or a JQL-only scope without a project produce a
-closed unavailability reason and `estimate: null`, never invented zero totals or an invented
-unestimated-issue count. Original time estimates are seconds only when explicitly selected or
-configured by the board. The summary and card name the selected field; model figures, exports
-and the report comment disclose unavailable estimates. The existing `atlassian.jira-report` line
-records `estimateSource` (`explicit-field`, `board-configuration`, `project-screen`, `unavailable`)
-and an optional closed `estimateUnavailableReason`, with no field id or display name.
+**Estimate field selection (#4321 C4, 2026-11-08).** An explicit `estimateFieldId` wins.
+Otherwise, a project report reads its Agile board configurations with the existing item bound
+and worker-pool concurrency bound. A board field is eligible only when the project's create
+screens expose that numeric field; `timeoriginalestimate` requires `timetracking` on the screens.
+One consistent eligible board field wins. If the boards have no consistent usable field or their
+configuration cannot be read, the report selects a unique numeric Story Points field from the
+project's screens, then screen-backed `timetracking` as `timeoriginalestimate` in seconds.
+A global field name alone does not establish applicability. Without an applicable field, or when
+the board inventory exceeds its bound, the report records a closed unavailability reason and
+`estimate: null`, never invented zero totals or an invented unestimated-issue count. Cancellation
+and denied effect admission still stop the read. A JQL-only scope without a project preserves the
+original-time-estimate default in seconds. The summary and card name the selected field; model
+figures, exports and the report comment disclose unavailable estimates. The existing
+`atlassian.jira-report` line records `estimateSource` (`explicit-field`, `board-configuration`,
+`project-screen`, `time-tracking`, `unavailable`) and an optional closed
+`estimateUnavailableReason`, with no field id or display name.
 
 `requirementsFromPods: true` makes Keiko list the requirement identifiers of the Chat's
 Knowledge Pods itself (the read `knowledge.requirements` serves; stable derived `DRV-` handles are
@@ -1625,9 +1628,8 @@ yourself); no report is started.
 The model supplies scope and options only and narrates the result; the digest of the report
 excludes read timing so the same Jira data always yields the same digest.
 
-Estimates are seconds of original time estimate unless the caller names a numeric field
-(`estimateFieldId`), whose own unit applies; the report, its exports and the tool description state
-the unit. Overdue is judged on an explicit UTC date (`asOf`, default the day of the first call),
+Estimates use the selected field's unit: original time estimates are seconds, while numeric
+custom fields keep their own unit. The report, exports and tool description state the unit. Overdue is judged on an explicit UTC date (`asOf`, default the day of the first call),
 recorded in the report and in the digest, which also covers a hash of every export row. Lists sort
 by Unicode code point, never by locale.
 

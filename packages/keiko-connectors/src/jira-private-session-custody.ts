@@ -232,7 +232,7 @@ class PrivateSessionAccess {
     this.serialized = deps.vault.get(this.reference);
     let record = this.serialized === undefined ? empty(binding) : parsed(this.serialized);
     if (record === undefined || jiraPrivateSessionReference(record.binding) !== this.reference)
-      return fail("binding-changed");
+      fail("binding-changed");
     // An interrupted kernel lease is not permission to replay its session operation.
     if (record.leaseId !== undefined || record.binding.expiresAt <= (deps.now ?? Date.now)())
       record = empty(binding);
@@ -299,7 +299,8 @@ class PrivateSessionAccess {
       candidate === undefined ? undefined : parseJiraAvatarTemporarySnapshot(candidate);
     if (candidate !== undefined && snapshot?.actorKey !== this.binding.actorUserKey)
       return fail("invalid-input");
-    const { temporary: _previous, ...retained } = value;
+    const retained = { ...value };
+    Reflect.deleteProperty(retained, "temporary");
     this.save({ ...retained, ...(snapshot === undefined ? {} : { temporary: snapshot }) });
   }
   private finish(): void {
@@ -308,7 +309,8 @@ class PrivateSessionAccess {
     // Do not overwrite another record on a failed callback. The marker survives ambiguity.
     const value = this.retained();
     if (value === undefined) return;
-    const { leaseId: _lease, ...retained } = value;
+    const retained = { ...value };
+    Reflect.deleteProperty(retained, "leaseId");
     this.save(retained);
   }
   ports(): JiraPrivateSessionAccess & { readonly finish: () => void } {

@@ -19,7 +19,9 @@ import {
 export const JIRA_APPLICATION_SETTINGS_READS = JIRA_READ_TOOL_FAMILIES.applicationSettings;
 type SettingsRead = (typeof JIRA_APPLICATION_SETTINGS_READS)[number];
 type ValueKind = "string" | "boolean" | "integer";
-type Projection = { readonly item: CatalogJsonObject } | { readonly reason: "malformed-payload" | "bounds-exceeded" };
+type Projection =
+  | { readonly item: CatalogJsonObject }
+  | { readonly reason: "malformed-payload" | "bounds-exceeded" };
 interface Selection {
   readonly path: string;
   readonly scope: "application-properties" | "advanced-settings" | "current-user-preference";
@@ -53,10 +55,14 @@ function oneKey(args: CatalogJsonObject): string | undefined {
 function applicationSelection(args: CatalogJsonObject): Selection | undefined {
   if (Object.hasOwn(args, "key")) {
     const key = oneKey(args);
-    return key === undefined ? undefined : {
-      path: `application-properties?${new URLSearchParams({ key }).toString()}`,
-      scope: "application-properties", mode: "one", key,
-    };
+    return key === undefined
+      ? undefined
+      : {
+          path: `application-properties?${new URLSearchParams({ key }).toString()}`,
+          scope: "application-properties",
+          mode: "one",
+          key,
+        };
   }
   const page = selectJiraReadPage(args, APPLICATION_ARGS);
   const permissionLevel = args.permissionLevel;
@@ -64,25 +70,39 @@ function applicationSelection(args: CatalogJsonObject): Selection | undefined {
     return undefined;
   return {
     path: `application-properties?${new URLSearchParams({ permissionLevel }).toString()}`,
-    scope: "application-properties", mode: "list", permissionLevel, page,
+    scope: "application-properties",
+    mode: "list",
+    permissionLevel,
+    page,
   };
 }
 function selection(name: SettingsRead, args: CatalogJsonObject): Selection | undefined {
   if (name === "jira.application-properties") return applicationSelection(args);
   if (name === "jira.advanced-settings") {
     const page = selectJiraReadPage(args, PAGE_ARGS);
-    return page === undefined ? undefined : {
-      path: "application-properties/advanced-settings", scope: "advanced-settings", mode: "list", page,
-    };
+    return page === undefined
+      ? undefined
+      : {
+          path: "application-properties/advanced-settings",
+          scope: "advanced-settings",
+          mode: "list",
+          page,
+        };
   }
   const key = oneKey(args);
-  return key === undefined ? undefined : {
-    path: `mypreferences?${new URLSearchParams({ key }).toString()}`,
-    scope: "current-user-preference", mode: "preference", key,
-  };
+  return key === undefined
+    ? undefined
+    : {
+        path: `mypreferences?${new URLSearchParams({ key }).toString()}`,
+        scope: "current-user-preference",
+        mode: "preference",
+        key,
+      };
 }
 function valueKind(key: string, preference: boolean): ValueKind | undefined {
-  const kinds: Readonly<Record<string, ValueKind>> = preference ? JIRA_NONSECRET_PREFERENCE_KINDS : JIRA_NONSECRET_APPLICATION_KINDS;
+  const kinds: Readonly<Record<string, ValueKind>> = preference
+    ? JIRA_NONSECRET_PREFERENCE_KINDS
+    : JIRA_NONSECRET_APPLICATION_KINDS;
   return Object.hasOwn(kinds, key) ? kinds[key] : undefined;
 }
 function integerValue(key: string, value: string): Projection {
@@ -101,8 +121,7 @@ function observedValue(key: string, value: string, kind: ValueKind): Projection 
 function projectValue(key: string, raw: unknown, kind: ValueKind): Projection {
   if (raw === undefined || raw === null)
     return { item: { key, valueState: "unknown", valueType: kind } };
-  if (typeof raw !== "string" || /\p{Surrogate}/u.test(raw))
-    return { reason: "malformed-payload" };
+  if (typeof raw !== "string" || /\p{Surrogate}/u.test(raw)) return { reason: "malformed-payload" };
   if (raw.length > VALUE_MAX_CHARS) return { reason: "bounds-exceeded" };
   return observedValue(key, raw, kind);
 }
@@ -116,7 +135,9 @@ export function projectJiraPreferenceValue(key: string, raw: unknown): Projectio
 /** Exact nonsecret application keys share the existing native-string value semantics. */
 export function projectJiraApplicationValue(key: string, raw: unknown): Projection {
   const kind = valueKind(key, false);
-  return kind === undefined ? { item: { key, valueState: "withheld" } } : projectValue(key, raw, kind);
+  return kind === undefined
+    ? { item: { key, valueState: "withheld" } }
+    : projectValue(key, raw, kind);
 }
 function property(value: unknown): Projection {
   const raw = asRecord(value);
@@ -129,7 +150,9 @@ function property(value: unknown): Projection {
 function scopeFields(selected: Selection): CatalogJsonObject {
   return {
     settingsScope: selected.scope,
-    ...(selected.permissionLevel === undefined ? {} : { permissionLevel: selected.permissionLevel }),
+    ...(selected.permissionLevel === undefined
+      ? {}
+      : { permissionLevel: selected.permissionLevel }),
   };
 }
 function singleProperty(response: JiraReadResponse, selected: Selection): ManagedMcpToolResult {
@@ -139,11 +162,14 @@ function singleProperty(response: JiraReadResponse, selected: Selection): Manage
   const projected = property(response.items === undefined ? response.body : response.items[0]);
   if ("reason" in projected) return jiraReadFailure(projected.reason);
   if (projected.item.key !== selected.key) return jiraReadFailure("malformed-payload");
-  return boundJiraReadResult({ data: { outcome: "succeeded", ...scopeFields(selected), ...projected.item } });
+  return boundJiraReadResult({
+    data: { outcome: "succeeded", ...scopeFields(selected), ...projected.item },
+  });
 }
 function propertyList(response: JiraReadResponse, selected: Selection): ManagedMcpToolResult {
   const values = response.items;
-  if (values === undefined || selected.page === undefined) return jiraReadFailure("malformed-payload");
+  if (values === undefined || selected.page === undefined)
+    return jiraReadFailure("malformed-payload");
   if (values.length > TOOL_CATALOG_LIMITS.maxArrayItems) return jiraReadFailure("bounds-exceeded");
   const items: CatalogJsonObject[] = [];
   const keys = new Set<string>();
@@ -163,7 +189,9 @@ function preference(response: JiraReadResponse, selected: Selection): ManagedMcp
   if (key === undefined) return jiraReadFailure("malformed-payload");
   const projected = projectJiraPreferenceValue(key, response.scalar);
   if ("reason" in projected) return jiraReadFailure(projected.reason);
-  return boundJiraReadResult({ data: { outcome: "succeeded", ...scopeFields(selected), ...projected.item } });
+  return boundJiraReadResult({
+    data: { outcome: "succeeded", ...scopeFields(selected), ...projected.item },
+  });
 }
 function projectResponse(response: JiraReadResponse, selected: Selection): ManagedMcpToolResult {
   if (selected.mode === "one") return singleProperty(response, selected);
@@ -171,7 +199,7 @@ function projectResponse(response: JiraReadResponse, selected: Selection): Manag
   return propertyList(response, selected);
 }
 export function isJiraApplicationSettingsRead(name: string): name is SettingsRead {
-  return JIRA_APPLICATION_SETTINGS_READS.some((candidate) => candidate === name);
+  return (JIRA_APPLICATION_SETTINGS_READS as readonly string[]).includes(name);
 }
 /** Read only; remote permission levels are filter metadata, never authority or proof of editability. */
 export function executeJiraApplicationSettingsRead(
@@ -180,7 +208,14 @@ export function executeJiraApplicationSettingsRead(
   request: JiraMutationRequest,
 ): Promise<ManagedMcpToolResult> {
   const selected = selection(name, args);
-  const expect = selected?.mode === "preference" ? "json-scalar"
-    : selected?.mode === "one" ? "json-object-or-array" : "json-array";
+  let expect: "json-scalar" | "json-object-or-array" | "json-array";
+  if (selected?.mode === "preference") {
+    expect = "json-scalar";
+  } else if (selected?.mode === "one") {
+    expect = "json-object-or-array";
+  } else {
+    expect = "json-array";
+  }
+
   return executeJiraSelectedRead(selected, request, expect, projectResponse);
 }

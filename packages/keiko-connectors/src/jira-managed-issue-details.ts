@@ -28,11 +28,13 @@ interface Selection {
   readonly maxResults: number;
 }
 function page(value: unknown, fallback: number, min: number, max: number): number | undefined {
-  return value === undefined
-    ? fallback
-    : typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max
-      ? value
-      : undefined;
+  if (value === undefined) {
+    return fallback;
+  }
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max) {
+    return value;
+  }
+  return undefined;
 }
 function selection(name: DetailRead, args: CatalogJsonObject): Selection | undefined {
   const collection = name === "jira.link-types" || name === "jira.worklogs";
@@ -113,7 +115,10 @@ interface IssueBinding {
   readonly id: string;
   readonly key: string;
 }
-export function jiraWorklogProjection(value: unknown, issue: IssueBinding): CatalogJsonObject | undefined {
+export function jiraWorklogProjection(
+  value: unknown,
+  issue: IssueBinding,
+): CatalogJsonObject | undefined {
   const raw = asRecord(value);
   if (
     !raw ||
@@ -147,7 +152,12 @@ async function readLink(
   if (name === "jira.issue-link") return single(issueLink(response.body, selected.target ?? ""));
   const raw = response.body?.issueLinkTypes;
   if (!Array.isArray(raw)) return jiraReadFailure("malformed-payload");
-  const items = projectJiraCollection(raw, TOOL_CATALOG_LIMITS.maxArrayItems, jiraIssueLinkTypeProjection, "id");
+  const items = projectJiraCollection(
+    raw,
+    TOOL_CATALOG_LIMITS.maxArrayItems,
+    jiraIssueLinkTypeProjection,
+    "id",
+  );
   return items === undefined
     ? jiraReadFailure("malformed-payload")
     : boundJiraReadResult(localJiraPage(items, selected.startAt, selected.maxResults));
@@ -155,7 +165,10 @@ async function readLink(
 type BoundIssue =
   | { readonly ok: true; readonly issue: IssueBinding }
   | { readonly ok: false; readonly result: ManagedMcpToolResult };
-export async function resolveJiraWorklogIssue(request: JiraMutationRequest, target: string): Promise<BoundIssue> {
+export async function resolveJiraWorklogIssue(
+  request: JiraMutationRequest,
+  target: string,
+): Promise<BoundIssue> {
   const response = await request(`issue/${encodeURIComponent(target)}?fields=summary`);
   if (!response.ok) return { ok: false, result: jiraReadFailure(response.reason, response.remote) };
   const raw = response.body;
@@ -241,7 +254,9 @@ async function readWorklog(
   if (!response.ok) return jiraReadFailure(response.reason, response.remote);
   if (response.status !== 200) return jiraReadFailure("malformed-payload");
   return single(
-    response.body?.id === selected.worklogId ? jiraWorklogProjection(response.body, bound.issue) : undefined,
+    response.body?.id === selected.worklogId
+      ? jiraWorklogProjection(response.body, bound.issue)
+      : undefined,
   );
 }
 /** Closed DC reads over the existing credential/authority-owned request, with complete collection accounting. */
@@ -257,5 +272,5 @@ export async function executeJiraIssueDetailRead(
     : readWorklog(selected, request);
 }
 export function isJiraIssueDetailRead(value: string): value is DetailRead {
-  return JIRA_ISSUE_DETAIL_READS.some((name) => name === value);
+  return (JIRA_ISSUE_DETAIL_READS as readonly string[]).includes(value);
 }

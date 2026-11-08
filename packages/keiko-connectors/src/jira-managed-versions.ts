@@ -56,7 +56,7 @@ const LIST_MAX = 1000;
 
 /** VersionBean.id is a decimal string; preserve it without a floating-point conversion. */
 function versionId(value: unknown): value is string {
-  if (typeof value !== "string" || !/^[1-9][0-9]{0,18}$/u.test(value)) return false;
+  if (typeof value !== "string" || !/^[1-9]\d{0,18}$/u.test(value)) return false;
   return BigInt(value) < 9223372036854775808n;
 }
 /** VersionBean.projectId is an int64 JSON number; never round a caller's identifier. */
@@ -101,22 +101,17 @@ function versionMetadata(raw: Record<string, unknown>): CatalogJsonObject | unde
 /** Shared native metadata projection; a project-scoped collection may omit per-item projectId. */
 export function jiraVersionSummary(value: unknown): VersionSummary | undefined {
   const raw = asRecord(value);
-  if (
-    raw === undefined ||
-    !versionId(raw.id) ||
-    !validText(raw.name, false)
-  )
-    return undefined;
+  if (raw === undefined || !versionId(raw.id) || !validText(raw.name, false)) return undefined;
   const metadata = versionMetadata(raw);
-  return metadata === undefined
-    ? undefined
-    : { ...metadata, versionId: raw.id, name: raw.name };
+  return metadata === undefined ? undefined : { ...metadata, versionId: raw.id, name: raw.name };
 }
 function versionView(value: unknown): VersionView | undefined {
   const projectId = asRecord(value)?.projectId;
   const summary = jiraVersionSummary(value);
-  return summary === undefined || typeof projectId !== "number" ||
-    !Number.isSafeInteger(projectId) || projectId <= 0
+  return summary === undefined ||
+    typeof projectId !== "number" ||
+    !Number.isSafeInteger(projectId) ||
+    projectId <= 0
     ? undefined
     : { ...summary, projectId: String(projectId) };
 }
@@ -135,7 +130,7 @@ async function readProjectId(
   if (!result.ok) return dispatchFailure(result);
   const id = result.body?.id;
   if (result.status !== 200 || !versionId(id) || projectNumber(id) === undefined) return MALFORMED;
-  const matchesTarget = /^[0-9]+$/u.test(target)
+  const matchesTarget = /^\d+$/u.test(target)
     ? id === target
     : typeof result.body?.key === "string" &&
       result.body.key.toUpperCase() === target.toUpperCase();

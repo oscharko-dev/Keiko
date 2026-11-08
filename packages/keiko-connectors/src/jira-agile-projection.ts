@@ -11,7 +11,7 @@ const SPRINT_STATES: ReadonlySet<unknown> = new Set(["future", "active", "closed
 export function agileId(value: unknown): string | undefined {
   if (typeof value === "number")
     return Number.isSafeInteger(value) && value > 0 ? String(value) : undefined;
-  if (typeof value !== "string" || !/^[1-9][0-9]{0,15}$/u.test(value)) return undefined;
+  if (typeof value !== "string" || !/^[1-9]\d{0,15}$/u.test(value)) return undefined;
   return Number.isSafeInteger(Number(value)) ? value : undefined;
 }
 export function agileText(value: unknown, max = 255, empty = false): value is string {
@@ -23,7 +23,7 @@ export function agileText(value: unknown, max = 255, empty = false): value is st
   );
 }
 export function agileIssueKey(value: unknown): value is string {
-  return typeof value === "string" && /^[A-Z][A-Z0-9_]{0,31}-[1-9][0-9]{0,15}$/u.test(value);
+  return typeof value === "string" && /^[A-Z][A-Z0-9_]{0,31}-[1-9]\d{0,15}$/u.test(value);
 }
 export function agileDate(value: unknown): value is string {
   return (
@@ -126,7 +126,7 @@ function column(value: unknown): CatalogJsonObject | undefined {
   if (raw === undefined || !agileText(raw.name) || statuses === undefined || statuses.length > 100)
     return undefined;
   const ids = statuses.map((status) => agileId(asRecord(status)?.id));
-  if (ids.some((id) => id === undefined)) return undefined;
+  if (ids.includes(undefined)) return undefined;
   const result: Record<string, CatalogJsonValue> = {
     name: raw.name,
     statusIds: ids.filter((id) => id !== undefined),
@@ -138,7 +138,7 @@ function configurationColumns(value: unknown): readonly CatalogJsonObject[] | un
   const columns = asArray(asRecord(value)?.columns);
   if (columns === undefined || columns.length > 100) return undefined;
   const projected = columns.map(column);
-  return projected.some((entry) => entry === undefined)
+  return projected.includes(undefined)
     ? undefined
     : projected.filter((entry) => entry !== undefined);
 }

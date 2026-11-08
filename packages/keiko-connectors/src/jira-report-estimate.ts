@@ -1,7 +1,9 @@
 import {
   JIRA_FIELD_ID_PATTERN,
+  DEFAULT_ATLASSIAN_SYNC_BOUNDS,
   type JiraReportEstimateUnavailableReason,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { mapWithConcurrency } from "@oscharko-dev/keiko-contracts/runtime/bounded-concurrency";
 import { asRecord } from "./atlassian-sync-classify.js";
 import type { JiraReportHttp } from "./jira-report-http.js";
 import {
@@ -67,6 +69,17 @@ interface BoardFields {
   readonly fields: readonly JiraReportFieldCatalogEntry[];
   readonly failure?: JiraReportFailure;
 }
+async function boardConfiguration(http: JiraReportHttp, board: unknown): Promise<BoardFields> {
+  const id = boardId(board);
+  if (id === undefined) return { fields: [], failure: "malformed-payload" };
+  const outcome = await http.getAgileRecord(`board/${id}/configuration`);
+  if (!outcome.ok) return { fields: [], failure: outcome.reason };
+  const field = configuredField(outcome.body);
+  if (field !== undefined) return { fields: [field] };
+  return boardWithoutEstimate(outcome.body)
+    ? { fields: [] }
+    : { fields: [], failure: "malformed-payload" };
+}
 async function boardFields(http: JiraReportHttp, project: string): Promise<BoardFields> {
   const boards: unknown[] = [];
   const reason = await collectJiraReportMetadataPages(
@@ -74,43 +87,53 @@ async function boardFields(http: JiraReportHttp, project: string): Promise<Board
     `board?projectKeyOrId=${encodeURIComponent(project)}`,
     0,
     boards,
-    5000,
+    DEFAULT_ATLASSIAN_SYNC_BOUNDS.maxItems,
   );
   if (reason !== undefined) return { fields: [], failure: reason };
-  const fields: JiraReportFieldCatalogEntry[] = [];
-  for (const board of boards) {
-    const id = boardId(board);
-    if (id === undefined) return { fields, failure: "malformed-payload" };
-    const outcome = await http.getAgileRecord(`board/${id}/configuration`);
-    if (!outcome.ok) return { fields, failure: outcome.reason };
-    const field = configuredField(outcome.body);
-    if (field !== undefined) fields.push(field);
-    else if (!boardWithoutEstimate(outcome.body)) return { fields, failure: "malformed-payload" };
-  }
-  return { fields };
+  const observed = await mapWithConcurrency(
+    boards,
+    DEFAULT_ATLASSIAN_SYNC_BOUNDS.maxConcurrency,
+    (board) => boardConfiguration(http, board),
+  );
+  const failure = observed.find((item) => item.failure !== undefined)?.failure;
+  return {
+    fields: observed.flatMap((item) => item.fields),
+    ...(failure === undefined ? {} : { failure }),
+  };
 }
 function unique(
   fields: readonly JiraReportFieldCatalogEntry[],
 ): readonly JiraReportFieldCatalogEntry[] {
   return [...new Map(fields.map((field) => [field.id, field])).values()];
 }
+function timeTracking(): Selection {
+  return selected({ id: "timeoriginalestimate", name: "Original time estimate" }, "time-tracking");
+}
 function fromScreens(required: JiraReportRequiredFields, boards: BoardFields): Selection {
-  const fields = unique(required.estimateFields ?? []);
   if (required.state !== "applied") return unavailable("metadata-unavailable");
-  if (fields.length > 1) return unavailable("ambiguous-field");
-  const first = fields[0];
+  const fields = unique(required.estimateFields ?? []).filter((field) =>
+    /^story[ -]points(?: estimate)?$/iu.test(field.name),
+  );
+  const first = fields.length === 1 ? fields[0] : undefined;
   if (first !== undefined) return selected(first, "project-screen");
+  if (required.timeTracking === true) return timeTracking();
+  if (fields.length > 1) return unavailable("ambiguous-field");
   return unavailable(
     boards.failure === undefined || boards.failure === "not-found"
       ? "field-not-found"
       : "metadata-unavailable",
   );
 }
+function onScreens(
+  field: JiraReportFieldCatalogEntry,
+  required: JiraReportRequiredFields,
+): boolean {
+  if (field.id === "timeoriginalestimate") return required.timeTracking === true;
+  return (required.estimateFields ?? []).some((candidate) => candidate.id === field.id);
+}
 function fromBoards(boards: BoardFields, required: JiraReportRequiredFields): Selection {
-  const fields = unique(boards.fields);
-  if (fields.length > 1) return unavailable("ambiguous-field");
-  if (boards.failure !== undefined && fields.length > 0) return unavailable("metadata-unavailable");
-  const first = fields[0];
+  const fields = unique(boards.fields).filter((field) => onScreens(field, required));
+  const first = boards.failure === undefined && fields.length === 1 ? fields[0] : undefined;
   return first === undefined
     ? fromScreens(required, boards)
     : selected(first, "board-configuration");
@@ -129,9 +152,10 @@ export async function resolveJiraReportEstimate(
       { id: explicit, name: catalog?.find((item) => item.id === explicit)?.name ?? explicit },
       "explicit-field",
     );
-  if (request.projectKey === undefined) return unavailable("project-not-specified");
+  if (request.projectKey === undefined) return timeTracking();
   const boards = await boardFields(http, request.projectKey);
   if (boards.failure === "cancelled" || boards.failure === "effect-denied")
     return unavailable("metadata-unavailable", boards.failure);
+  if (boards.failure === "bounds-exceeded") return unavailable("metadata-unavailable");
   return fromBoards(boards, required);
 }

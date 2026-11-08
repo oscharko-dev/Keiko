@@ -63,16 +63,29 @@ function selection(name: UserRead, args: CatalogJsonObject): Selection | undefin
   const maxResults = jiraDirectoryNumber(args.maxResults, 25, 100, 1);
   if (maxResults === undefined) return undefined;
   const query = new URLSearchParams({ maxResults: String(maxResults) });
-  if (name === "jira.user-directory") {
-    if (args.cursor !== undefined && !jiraDirectoryCursor(args.cursor)) return undefined;
-    if (typeof args.cursor === "string") query.set("cursor", args.cursor);
-    return {
-      path: `user/list?${query.toString()}`,
-      maxResults,
-      startAt: 0,
-      ...(typeof args.cursor === "string" ? { cursor: args.cursor } : {}),
-    };
-  }
+  if (name === "jira.user-directory") return directorySelection(args, query, maxResults);
+  return searchSelection(name, args, query, maxResults);
+}
+function directorySelection(
+  args: CatalogJsonObject,
+  query: URLSearchParams,
+  maxResults: number,
+): Selection | undefined {
+  if (args.cursor !== undefined && !jiraDirectoryCursor(args.cursor)) return undefined;
+  if (typeof args.cursor === "string") query.set("cursor", args.cursor);
+  return {
+    path: `user/list?${query.toString()}`,
+    maxResults,
+    startAt: 0,
+    ...(typeof args.cursor === "string" ? { cursor: args.cursor } : {}),
+  };
+}
+function searchSelection(
+  name: UserRead,
+  args: CatalogJsonObject,
+  query: URLSearchParams,
+  maxResults: number,
+): Selection | undefined {
   if (args.query !== undefined && !jiraNativeText(args.query, 255, true)) return undefined;
   if (typeof args.query === "string")
     query.set(name === "jira.users" ? "username" : "query", args.query);
@@ -115,8 +128,7 @@ function directory(body: Record<string, unknown>, selected: Selection): ManagedM
     (body.nextCursor !== undefined &&
       body.nextCursor !== null &&
       !jiraDirectoryCursor(body.nextCursor)) ||
-    (!body.isLast &&
-      (!jiraDirectoryCursor(body.nextCursor) || body.nextCursor === selected.cursor))
+    (!body.isLast && (!jiraDirectoryCursor(body.nextCursor) || body.nextCursor === selected.cursor))
   )
     return jiraReadFailure("malformed-payload");
   // A cursor resumes after the entire native page. Never fit a prefix and skip its remainder.

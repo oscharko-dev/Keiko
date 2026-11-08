@@ -9,7 +9,7 @@ import {
   TOOL_CATALOG_LIMITS,
   type CatalogJsonObject,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import { jiraIssueTypeReviewSnapshot, type IssueTypeSnapshot } from "./jira-issue-type-values.js";
+
 import { jiraTerminologyProjection } from "./jira-configuration-values.js";
 import { jiraFieldDirectoryProjection } from "./jira-managed-field-directory.js";
 import { jiraIssueLinkTypeProjection } from "./jira-managed-issue-details.js";
@@ -18,7 +18,7 @@ import { savedExactKeys, savedName, savedText } from "./jira-saved-configuration
 
 export { JIRA_SCHEMA_MUTATIONS, type JiraSchemaMutation };
 export function isJiraSchemaMutation(name: string): name is JiraSchemaMutation {
-  return JIRA_SCHEMA_MUTATIONS.some((operation) => operation === name);
+  return (JIRA_SCHEMA_MUTATIONS as readonly string[]).includes(name);
 }
 export type JiraSchemaMutationReceipt = JiraMutationReceipt;
 export type SchemaFailure = Extract<JiraMutationAttempt, { readonly ok: false }>;
@@ -69,8 +69,8 @@ export function schemaArgs(
   );
 }
 export const sameSchemaValue = isDeepStrictEqual;
-export type { IssueTypeSnapshot };
-export const schemaIssueTypeSnapshot = jiraIssueTypeReviewSnapshot;
+export type { IssueTypeSnapshot } from "./jira-issue-type-values.js";
+export { jiraIssueTypeReviewSnapshot as schemaIssueTypeSnapshot } from "./jira-issue-type-values.js";
 export interface LinkTypeSnapshot {
   readonly id: string;
   readonly name: string;

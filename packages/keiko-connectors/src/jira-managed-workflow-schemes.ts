@@ -1,3 +1,4 @@
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
   CatalogJsonObject,
@@ -10,7 +11,10 @@ import { boundJiraReadResult } from "./jira-managed-issue-reads.js";
 import { jiraReadFailure, localJiraPage } from "./jira-managed-metadata.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { jiraNativeId, jiraNativeText } from "./jira-native-values.js";
-import { jiraWorkflowSchemeMappings as mappings, jiraWorkflowSchemeReviewSnapshot } from "./jira-workflow-scheme-values.js";
+import {
+  jiraWorkflowSchemeMappings as mappings,
+  jiraWorkflowSchemeReviewSnapshot,
+} from "./jira-workflow-scheme-values.js";
 
 const OPERATIONS = {
   "jira.workflow-scheme": { kind: "scheme", draft: false },
@@ -124,7 +128,7 @@ function schemeMappings(raw: Record<string, unknown>): readonly CatalogJsonObjec
   const current = mappings(raw.issueTypeMappings ?? {});
   const original = mappings(raw.originalIssueTypeMappings ?? {});
   if (current === undefined || original === undefined) return undefined;
-  const keys = [...new Set([...current.keys(), ...original.keys()])].sort();
+  const keys = [...new Set([...current.keys(), ...original.keys()])].sort(compareStrings);
   if (keys.length > MAX_NATIVE) return undefined;
   return keys.map((issueTypeId) => {
     const workflow = current.get(issueTypeId);
@@ -212,7 +216,7 @@ function workflowMapping(value: unknown): CatalogJsonObject | undefined {
 function workflowsResult(values: readonly unknown[], selected: Selection): ManagedMcpToolResult {
   if (values.length > MAX_NATIVE) return jiraReadFailure("bounds-exceeded");
   const projected = values.map(workflowMapping);
-  if (projected.some((item) => item === undefined)) return jiraReadFailure("malformed-payload");
+  if (projected.includes(undefined)) return jiraReadFailure("malformed-payload");
   const items = projected.filter((item) => item !== undefined);
   if (
     new Set(items.map((item) => item.workflow)).size !== items.length ||

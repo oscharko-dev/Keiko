@@ -50,12 +50,15 @@ function selection(name: AttachmentRead, args: CatalogJsonObject): Selection | u
   const { startAt, maxResults } = page;
   if (name === "jira.attachment-settings") return { path: "attachment/meta", startAt, maxResults };
   if (!jiraNativeId(args.attachmentId)) return undefined;
-  const suffix =
-    name === "jira.attachment-archive"
-      ? "/expand/raw"
-      : name === "jira.attachment-archive-summary"
-        ? "/expand/human"
-        : "";
+  let suffix: "" | "/expand/raw" | "/expand/human";
+  if (name === "jira.attachment-archive") {
+    suffix = "/expand/raw";
+  } else if (name === "jira.attachment-archive-summary") {
+    suffix = "/expand/human";
+  } else {
+    suffix = "";
+  }
+
   return {
     path: `attachment/${args.attachmentId}${suffix}`,
     attachmentId: args.attachmentId,
@@ -94,9 +97,10 @@ function entry(value: unknown): (CatalogJsonObject & { readonly entryIndex: numb
   if (raw === undefined || !integer(raw.entryIndex) || (size !== undefined && !integer(size)))
     return undefined;
   const metadata = optionalText(raw, { name: 1024, mediaType: 255, abbreviatedName: 1024 });
-  return metadata === undefined
-    ? undefined
-    : { entryIndex: raw.entryIndex, ...(size === undefined ? {} : { size }), ...metadata };
+  if (metadata === undefined) {
+    return undefined;
+  }
+  return { entryIndex: raw.entryIndex, ...(size === undefined ? {} : { size }), ...metadata };
 }
 function archiveEntries(
   entries: readonly unknown[],
@@ -150,13 +154,14 @@ function summary(raw: Record<string, unknown>, selected: Selection): CatalogJson
   )
     return undefined;
   const metadata = optionalText(raw, { name: 1024, mediaType: 255 });
-  return metadata === undefined
-    ? undefined
-    : {
-        attachmentId: String(raw.id),
-        ...metadata,
-        ...(total === undefined ? {} : { totalEntryCount: total }),
-      };
+  if (metadata === undefined) {
+    return undefined;
+  }
+  return {
+    attachmentId: String(raw.id),
+    ...metadata,
+    ...(total === undefined ? {} : { totalEntryCount: total }),
+  };
 }
 export function isJiraAttachmentRead(name: string): name is AttachmentRead {
   return READS.has(name);
@@ -174,12 +179,15 @@ export async function executeJiraAttachmentRead(
   if (response.status !== 200 || response.body === undefined)
     return jiraReadFailure("malformed-payload");
   if (name === "jira.attachment-archive") return archive(response.body, selected);
-  const data =
-    name === "jira.attachment-settings"
-      ? jiraAttachmentSettings(response.body)
-      : name === "jira.attachment"
-        ? attachment(response.body, selected)
-        : summary(response.body, selected);
+  let data: CatalogJsonObject | undefined;
+  if (name === "jira.attachment-settings") {
+    data = jiraAttachmentSettings(response.body);
+  } else if (name === "jira.attachment") {
+    data = attachment(response.body, selected);
+  } else {
+    data = summary(response.body, selected);
+  }
+
   return data === undefined
     ? jiraReadFailure("malformed-payload")
     : boundJiraReadResult({ data: { outcome: "succeeded", ...data } });

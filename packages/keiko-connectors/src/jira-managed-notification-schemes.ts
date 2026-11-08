@@ -6,7 +6,11 @@ import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/go
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { boundJiraReadResult } from "./jira-managed-issue-reads.js";
-import { jiraMetadataPageLast, jiraReadFailure, projectJiraCollection } from "./jira-managed-metadata.js";
+import {
+  jiraMetadataPageLast,
+  jiraReadFailure,
+  projectJiraCollection,
+} from "./jira-managed-metadata.js";
 import { readJiraBoundProject } from "./jira-managed-projects.js";
 import { jiraNativeId } from "./jira-native-values.js";
 import { jiraNotificationScheme } from "./jira-notification-scheme-values.js";
@@ -26,7 +30,7 @@ const INPUT_FIELDS: Readonly<Record<Operation, readonly string[]>> = {
 };
 
 export function isJiraNotificationSchemeRead(name: string): name is Operation {
-  return JIRA_NOTIFICATION_SCHEME_READS.some((candidate) => candidate === name);
+  return (JIRA_NOTIFICATION_SCHEME_READS as readonly string[]).includes(name);
 }
 function integer(value: unknown, min: number, max: number): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max;
@@ -34,7 +38,8 @@ function integer(value: unknown, min: number, max: number): value is number {
 function targetValid(operation: Operation, args: CatalogJsonObject): boolean {
   if (operation === "jira.notification-schemes") return true;
   return operation === "jira.notification-scheme"
-    ? jiraNativeId(args.schemeId) : isSafeAtlassianIdentifier(args.projectIdOrKey);
+    ? jiraNativeId(args.schemeId)
+    : isSafeAtlassianIdentifier(args.projectIdOrKey);
 }
 function selected(operation: Operation, args: CatalogJsonObject): Selection | undefined {
   const allowed = new Set(INPUT_FIELDS[operation]);
@@ -64,30 +69,57 @@ async function single(
 ): Promise<ManagedMcpToolResult> {
   const response = await request(path + query(selection, false));
   if (!response.ok) return jiraReadFailure(response.reason, response.remote);
-  const scheme = response.status === 200 ? jiraNotificationScheme(response.body, selection.includeEvents) : undefined;
+  const scheme =
+    response.status === 200
+      ? jiraNotificationScheme(response.body, selection.includeEvents)
+      : undefined;
   if (scheme === undefined) return jiraReadFailure("malformed-payload");
   if (expectedId !== undefined && scheme.id !== expectedId) return jiraReadFailure("conflict");
-  return boundJiraReadResult({ data: { outcome: "succeeded", ...context, eventsRequested: selection.includeEvents, items: [scheme] } });
+  return boundJiraReadResult({
+    data: {
+      outcome: "succeeded",
+      ...context,
+      eventsRequested: selection.includeEvents,
+      items: [scheme],
+    },
+  });
 }
-async function list(selection: Selection, request: JiraMutationRequest): Promise<ManagedMcpToolResult> {
+async function list(
+  selection: Selection,
+  request: JiraMutationRequest,
+): Promise<ManagedMcpToolResult> {
   const response = await request("notificationscheme" + query(selection, true));
   if (!response.ok) return jiraReadFailure(response.reason, response.remote);
   const body = response.body;
   if (response.status !== 200 || body === undefined || !Array.isArray(body.values))
     return jiraReadFailure("malformed-payload");
   if (body.values.length > selection.maxResults) return jiraReadFailure("bounds-exceeded");
-  const items = projectJiraCollection(body.values, 50,
-    (value) => jiraNotificationScheme(value, selection.includeEvents), "id");
+  const items = projectJiraCollection(
+    body.values,
+    50,
+    (value) => jiraNotificationScheme(value, selection.includeEvents),
+    "id",
+  );
   if (items === undefined) return jiraReadFailure("malformed-payload");
   const envelope = body.total === null ? { ...body, total: undefined } : body;
-  const last = jiraMetadataPageLast(envelope, items.length, selection.startAt, selection.maxResults);
+  const last = jiraMetadataPageLast(
+    envelope,
+    items.length,
+    selection.startAt,
+    selection.maxResults,
+  );
   if (last === undefined) return jiraReadFailure("malformed-payload");
-  return boundJiraReadResult({ data: {
-    outcome: "succeeded", items, startAt: selection.startAt, isLast: last,
-    eventsRequested: selection.includeEvents,
-    ...(typeof body.total === "number" ? { total: body.total } : {}),
-    ...(last ? {} : { nextStartAt: selection.startAt + items.length }),
-  } });
+  return boundJiraReadResult({
+    data: {
+      outcome: "succeeded",
+      items,
+      startAt: selection.startAt,
+      isLast: last,
+      eventsRequested: selection.includeEvents,
+      ...(typeof body.total === "number" ? { total: body.total } : {}),
+      ...(last ? {} : { nextStartAt: selection.startAt + items.length }),
+    },
+  });
 }
 /** Scheme visibility follows Jira actor permissions; no notification or subscription is changed. */
 export async function executeJiraNotificationSchemeRead(
@@ -99,10 +131,20 @@ export async function executeJiraNotificationSchemeRead(
   if (selection === undefined) return jiraReadFailure("invalid-input");
   if (operation === "jira.notification-schemes") return list(selection, request);
   if (operation === "jira.notification-scheme")
-    return single(`notificationscheme/${String(args.schemeId)}`, selection, request, String(args.schemeId));
+    return single(
+      `notificationscheme/${String(args.schemeId)}`,
+      selection,
+      request,
+      String(args.schemeId),
+    );
   const project = await readJiraBoundProject(request, String(args.projectIdOrKey));
   if (!project.ok) return jiraReadFailure(project.reason, project.detail);
   if (!jiraNativeId(project.project.projectId)) return jiraReadFailure("malformed-payload");
-  return single(`project/${project.project.projectId}/notificationscheme`, selection, request, undefined,
-    { projectId: project.project.projectId, projectKey: project.project.projectKey });
+  return single(
+    `project/${project.project.projectId}/notificationscheme`,
+    selection,
+    request,
+    undefined,
+    { projectId: project.project.projectId, projectKey: project.project.projectKey },
+  );
 }

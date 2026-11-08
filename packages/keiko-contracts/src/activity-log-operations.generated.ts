@@ -1486,7 +1486,13 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["explicit-field", "board-configuration", "project-screen", "unavailable"],
+        values: [
+          "explicit-field",
+          "board-configuration",
+          "project-screen",
+          "time-tracking",
+          "unavailable",
+        ],
       },
       estimateUnavailableReason: {
         type: "string",

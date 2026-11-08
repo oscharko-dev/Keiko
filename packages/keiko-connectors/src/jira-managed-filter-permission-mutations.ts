@@ -181,12 +181,16 @@ function acknowledgedPermission(
 ): string | undefined {
   if (target === undefined) return undefined;
   const single = projectJiraFilterPermission(response.body);
-  const permissions =
-    response.items === undefined
-      ? single === undefined
-        ? []
-        : [single]
-      : projectJiraFilterPermissions(response.items);
+  let permissions: readonly CatalogJsonObject[] | undefined;
+  if (response.items === undefined) {
+    if (single === undefined) {
+      permissions = [];
+    } else {
+      permissions = [single];
+    }
+  } else {
+    permissions = projectJiraFilterPermissions(response.items);
+  }
   if (permissions === undefined) return undefined;
   const matches = permissions.filter((permission) => filterPermissionMatches(permission, target));
   const id = matches.length === 1 ? matches[0]?.id : undefined;
@@ -197,7 +201,9 @@ async function write(
   selected: Input,
   receipt: JiraSavedConfigurationReceipt,
 ): Promise<JiraSavedConfigurationAttempt> {
-  const path = `filter/${selected.filterId}/permission${selected.permissionId === undefined ? "" : `/${selected.permissionId}`}`;
+  const permission =
+    selected.permissionId === undefined ? "permission" : `permission/${selected.permissionId}`;
+  const path = `filter/${selected.filterId}/${permission}`;
   const response = await request(
     path,
     selected.target === undefined ? "DELETE" : "POST",

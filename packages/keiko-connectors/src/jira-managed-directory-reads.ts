@@ -68,6 +68,14 @@ function selection(name: DirectoryRead, args: CatalogJsonObject): Selection | un
     if (typeof args.query === "string") query.set("query", args.query);
     return { path: `groups/picker?${query.toString()}`, startAt, maxResults };
   }
+  return groupMemberSelection(args, query, startAt, maxResults);
+}
+function groupMemberSelection(
+  args: CatalogJsonObject,
+  query: URLSearchParams,
+  startAt: number,
+  maxResults: number,
+): Selection | undefined {
   if (!jiraNativeText(args.groupName, 255)) return undefined;
   query.set("groupname", args.groupName);
   query.set("startAt", String(startAt));
@@ -91,6 +99,15 @@ export function projectJiraApplicationRole(value: unknown): CatalogJsonObject | 
     if (!jiraNativeText(raw[key], key === "name" ? 255 : 1024)) return undefined;
     result[key] = raw[key];
   }
+  const groups = applicationRoleGroups(raw);
+  const flags = applicationRoleFlags(raw);
+  const seats = applicationRoleSeats(raw);
+  if (groups === undefined || flags === undefined || seats === undefined) return undefined;
+  Object.assign(result, groups, flags, seats);
+  return result;
+}
+function applicationRoleGroups(raw: Record<string, unknown>): CatalogJsonObject | undefined {
+  const result: Record<string, CatalogJsonValue> = {};
   for (const key of ["groups", "defaultGroups"] as const) {
     if (raw[key] === undefined || raw[key] === null) continue;
     const values = asArray(raw[key]);
@@ -103,11 +120,19 @@ export function projectJiraApplicationRole(value: unknown): CatalogJsonObject | 
       return undefined;
     result[key] = values;
   }
+  return result;
+}
+function applicationRoleFlags(raw: Record<string, unknown>): CatalogJsonObject | undefined {
+  const result: Record<string, CatalogJsonValue> = {};
   for (const key of ["defined", "hasUnlimitedSeats", "platform", "selectedByDefault"] as const) {
     if (raw[key] === undefined || raw[key] === null) continue;
     if (typeof raw[key] !== "boolean") return undefined;
     result[key] = raw[key];
   }
+  return result;
+}
+function applicationRoleSeats(raw: Record<string, unknown>): CatalogJsonObject | undefined {
+  const result: Record<string, CatalogJsonValue> = {};
   for (const key of ["numberOfSeats", "remainingSeats", "userCount"] as const) {
     const number = raw[key];
     if (number === undefined || number === null) continue;
@@ -158,7 +183,8 @@ function projectResponse(
   if (name === "jira.application-roles") {
     const values = response.items;
     if (values === undefined) return jiraReadFailure("malformed-payload");
-    if (values.length > TOOL_CATALOG_LIMITS.maxArrayItems) return jiraReadFailure("bounds-exceeded");
+    if (values.length > TOOL_CATALOG_LIMITS.maxArrayItems)
+      return jiraReadFailure("bounds-exceeded");
     const items = roles(values);
     return items === undefined
       ? jiraReadFailure("malformed-payload")
@@ -179,14 +205,15 @@ function projectResponse(
     selected.startAt,
     selected.maxResults,
   );
-  return page.isError
-    ? page
-    : boundJiraReadResult({
-        data: {
-          ...page.data,
-          ...(selected.groupName === undefined ? {} : { groupName: selected.groupName }),
-        },
-      });
+  if (page.isError) {
+    return page;
+  }
+  return boundJiraReadResult({
+    data: {
+      ...page.data,
+      ...(selected.groupName === undefined ? {} : { groupName: selected.groupName }),
+    },
+  });
 }
 export function isJiraDirectoryRead(name: string): name is DirectoryRead {
   return READS.has(name);
