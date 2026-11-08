@@ -1,6 +1,7 @@
 // Only disposable synthetic property keys are written; values are read through a separate client.
 import assert from "node:assert/strict";
 import { basicAuth, labRequest } from "./lab-client.mjs";
+import { readCase } from "./api-qualification-cases.mjs";
 
 const propertyKey = (fixture) => `keiko-ac7-${fixture.runId}`;
 const value = (fixture) => `Synthetic AC7 ${fixture.runId}`;
@@ -62,7 +63,7 @@ function propertyReadback(entity, present, read) {
     }
     if (read) {
       assert.equal(data.propertyKey, selected);
-      assert.deepEqual(data.valueNodes, nodes(fixture));
+      assert.deepEqual(data.items, nodes(fixture));
     } else assert.equal(data.propertyPresent, present);
     return { matched: true, assertionCount: present ? (read ? 9 : 8) : 6 };
   };
@@ -79,6 +80,22 @@ function propertyCases(entity) {
       arguments: (f) => ({ ...selection(f), expectAbsent: true, valueNodes: nodes(f) }),
       readback: propertyReadback(entity, true, false),
     },
+    ...(entity.includeKeys
+      ? [
+          {
+            ...scope,
+            ...readCase(
+              `jira.${entity.name}-property-keys`,
+              (f) => entity.root(f) + entity.query,
+              ["key"],
+              {
+                args: (f) => ({ ...entity.arguments(f), maxResults: 100 }),
+                nativeRoot: "keys",
+              },
+            ),
+          },
+        ]
+      : []),
     {
       ...scope,
       tool: `jira.${entity.name}-property`,
@@ -96,3 +113,11 @@ function propertyCases(entity) {
 }
 
 export const API_QUALIFICATION_PROPERTY_CASES = entities.flatMap(propertyCases);
+export const API_QUALIFICATION_COMMENT_PROPERTY_CASES = propertyCases({
+  name: "comment",
+  includeKeys: true,
+  arguments: (f) => ({ issueIdOrKey: f.createdIssueKey, commentId: f.commentId }),
+  parent: (f) => `/rest/api/2/issue/${f.createdIssueKey}/comment/${f.commentId}`,
+  root: (f) => `/rest/api/2/comment/${f.commentId}/properties`,
+  query: "",
+});

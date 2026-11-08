@@ -1,6 +1,8 @@
 // Issue effects are sent only by the governed catalog; these reads are independent oracles.
 import assert from "node:assert/strict";
 import { basicAuth, labRequest } from "./lab-client.mjs";
+import { readCase } from "./api-qualification-cases.mjs";
+import { API_QUALIFICATION_COMMENT_PROPERTY_CASES } from "./api-qualification-property-cases.mjs";
 
 async function read(context, path) {
   const response = await labRequest(
@@ -18,7 +20,14 @@ const key = (fixture) => {
   return fixture.createdIssueKey;
 };
 const proof = (assertionCount) => ({ matched: true, assertionCount });
-const mutation = (tool, args, readback) => ({ tool, mutation: true, arguments: args, readback });
+const mutation = (tool, args, readback, scope = {}) => ({
+  ...scope,
+  tool,
+  mutation: true,
+  arguments: args,
+  readback,
+});
+const admin = { actor: "admin", administration: true };
 const COMMENT = "Synthetic AC7 qualification comment";
 const UPDATED_COMMENT = "Synthetic AC7 qualification comment updated";
 const STARTED = "2026-11-08T08:00:00.000+0000";
@@ -66,6 +75,35 @@ export const API_QUALIFICATION_ISSUE_CASES = [
       return proof(2);
     },
   ),
+  {
+    ...mutation(
+      "jira.transition",
+      (f) => ({ issueKey: key(f), transitionId: f.transitionId }),
+      async (context, _data, f) => {
+        const actual = await read(context, issuePath(f));
+        assert.equal(actual.key, key(f));
+        assert.equal(actual.fields.status.id, f.transitionStatusId);
+        return proof(2);
+      },
+    ),
+    prepare: async (context, f) => {
+      const actual = await read(context, issuePath(f));
+      const transitions = await read(
+        context,
+        `${issuePath(f)}/transitions?expand=transitions.fields`,
+      );
+      const selected = transitions.transitions.find(
+        (entry) =>
+          entry.to.id !== actual.fields.status.id &&
+          !Object.values(entry.fields ?? {}).some(
+            (field) => field.required === true && !field.hasDefaultValue,
+          ),
+      );
+      assert.ok(selected, "A real transition without unsupplied required fields is required");
+      f.transitionId = selected.id;
+      f.transitionStatusId = selected.to.id;
+    },
+  },
   mutation(
     "jira.comment",
     (f) => ({ issueKey: key(f), body: COMMENT }),
@@ -88,6 +126,11 @@ export const API_QUALIFICATION_ISSUE_CASES = [
       return proof(2);
     },
   ),
+  readCase("jira.get-comment", (f) => `${issuePath(f)}/comment/${f.commentId}`, ["id", "body"], {
+    args: (f) => ({ issueKey: key(f), commentId: f.commentId }),
+    nativeRoot: "single",
+  }),
+  ...API_QUALIFICATION_COMMENT_PROPERTY_CASES,
   mutation(
     "jira.delete-comment",
     (f) => ({ issueKey: key(f), commentId: f.commentId, expectedBody: UPDATED_COMMENT }),
@@ -108,20 +151,41 @@ export const API_QUALIFICATION_ISSUE_CASES = [
     (f) => ({ issueKey: key(f) }),
     async (context, _data, f) => {
       const actual = await read(context, `${issuePath(f)}/watchers`);
+      const actor = await read(context, "/rest/api/2/myself");
       assert.equal(actual.isWatching, true);
-      assert.equal(actual.watchers.filter((user) => user.key === f.actorKey).length, 1);
+      assert.equal(actual.watchers.filter((user) => user.key === actor.key).length, 1);
       return proof(2);
     },
+    admin,
   ),
   mutation(
     "jira.unwatch",
     (f) => ({ issueKey: key(f) }),
     async (context, _data, f) => {
       const actual = await read(context, `${issuePath(f)}/watchers`);
+      const actor = await read(context, "/rest/api/2/myself");
       assert.equal(actual.isWatching, false);
-      assert.equal(actual.watchers.filter((user) => user.key === f.actorKey).length, 0);
+      assert.equal(actual.watchers.filter((user) => user.key === actor.key).length, 0);
       return proof(2);
     },
+    admin,
+  ),
+  ...[true, false].map((present) =>
+    mutation(
+      present ? "jira.vote" : "jira.unvote",
+      (f) => ({ issueKey: key(f) }),
+      async (context, _data, f) => {
+        const actual = await read(context, `${issuePath(f)}/votes`);
+        const actor = await read(context, "/rest/api/2/myself");
+        assert.equal(actual.hasVoted, present);
+        assert.equal(
+          actual.voters.filter((user) => user.key === actor.key).length,
+          present ? 1 : 0,
+        );
+        return proof(2);
+      },
+      admin,
+    ),
   ),
   mutation(
     "jira.create-worklog",
@@ -149,6 +213,28 @@ export const API_QUALIFICATION_ISSUE_CASES = [
       return proof(4);
     },
   ),
+  readCase(
+    "jira.worklog",
+    (f) => `${issuePath(f)}/worklog/${f.worklogId}`,
+    ["id", "timeSpentSeconds", "comment"],
+    {
+      args: (f) => ({ issueKey: key(f), worklogId: f.worklogId }),
+      nativeRoot: "single",
+    },
+  ),
+  {
+    tool: "jira.worklogs-by-id",
+    arguments: (f) => ({ worklogIds: [f.worklogId] }),
+    readback: async (context, data, f) => {
+      const actual = await read(context, `${issuePath(f)}/worklog/${f.worklogId}`);
+      assert.equal(data.returnedCount, 1);
+      assert.equal(data.items.length, 1);
+      assert.equal(data.items[0].id, actual.id);
+      assert.equal(data.items[0].timeSpentSeconds, actual.timeSpentSeconds);
+      assert.deepEqual(data.unreturnedWorklogIds, []);
+      return proof(5);
+    },
+  },
   mutation(
     "jira.delete-worklog",
     (f) => ({
