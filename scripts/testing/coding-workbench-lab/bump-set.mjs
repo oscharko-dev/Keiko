@@ -22,7 +22,7 @@ import {
   resolveLogDirectory,
   selectRunEvents,
 } from "./activity-log-events.mjs";
-import { BUMP_SET, historyCheck, judge } from "./bump-set-oracles.mjs";
+import { BUMP_SET, driverCheck, historyCheck, judge } from "./bump-set-oracles.mjs";
 import {
   errorMessage,
   labBaseUrl,
@@ -63,16 +63,9 @@ const GIT_ID = [
   "commit.gpgsign=false",
 ];
 
+/** A failed read throws, so an oracle never mistakes a broken repository for an unchanged one. */
 function git(cwd, args) {
-  try {
-    return execFileSync("git", args, {
-      cwd,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-  } catch {
-    return "";
-  }
+  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 }
 
 function mustRun(cwd, command, args) {
@@ -193,15 +186,17 @@ async function readCodingModel(baseUrl, model) {
   };
 }
 
-async function awaitCodingModel(baseUrl, model) {
-  if (model === undefined) return;
-  const deadline = Date.now() + MODEL_READY_WAIT_MS;
-  for (;;) {
-    const { ready, state } = await readCodingModel(baseUrl, model);
-    if (ready) return;
-    if (Date.now() >= deadline) throw new Error(`the coding model is not ready (${state})`);
-    await sleep(5000);
-  }
+async function pollCodingModel(baseUrl, model, deadline) {
+  const { ready, state } = await readCodingModel(baseUrl, model);
+  if (ready) return;
+  if (Date.now() >= deadline) throw new Error(`the coding model is not ready (${state})`);
+  await sleep(5000);
+  return pollCodingModel(baseUrl, model, deadline);
+}
+
+function awaitCodingModel(baseUrl, model) {
+  if (model === undefined) return Promise.resolve();
+  return pollCodingModel(baseUrl, model, Date.now() + MODEL_READY_WAIT_MS);
 }
 
 function oracleContext(task, run, events) {
@@ -255,6 +250,7 @@ async function judgeEntry(entry, options, cache) {
     run.runId === undefined
       ? [{ name: "run", ok: false, reason: "no run started" }]
       : judge(entry, oracleContext(task, run, events));
+  checks.unshift({ name: "driver", ...driverCheck(run.exitCode) });
   checks.push({ name: "history", ...historyCheck(history) });
   return {
     id: entry.id,

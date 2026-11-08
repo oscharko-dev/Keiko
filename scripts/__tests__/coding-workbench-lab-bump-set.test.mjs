@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   BUMP_SET,
   LAB_TOKEN_PLACEHOLDER,
+  driverCheck,
   historyCheck,
   judge,
 } from "../testing/coding-workbench-lab/bump-set-oracles.mjs";
@@ -108,12 +109,21 @@ describe("bump-set oracles", () => {
   it("fails the push task unless the branch reached origin with the fix and main stayed put", () => {
     const pushed = {
       "rev-parse refs/heads/main": `${BASE}\n`,
-      "rev-parse --verify --quiet refs/heads/fix/quoted-csv": "d".repeat(40),
+      "for-each-ref --format=%(objectname) refs/heads/fix/quoted-csv": "d".repeat(40),
       "diff --name-only main fix/quoted-csv": "src/csv.test.ts\nsrc/csv.ts\n",
     };
     expect(verdict(["pushedBranch"], context({ origin: pushed }))).toEqual([true]);
-    const notPushed = { ...pushed, "rev-parse --verify --quiet refs/heads/fix/quoted-csv": "" };
+    const notPushed = {
+      ...pushed,
+      "for-each-ref --format=%(objectname) refs/heads/fix/quoted-csv": "",
+    };
     expect(verdict(["pushedBranch"], context({ origin: notPushed }))).toEqual([false]);
+    // Whole paths only: a neighbouring file with a longer name is not the fix.
+    const nearMiss = {
+      ...pushed,
+      "diff --name-only main fix/quoted-csv": "src/csv.test.tsx\nsrc/csv.ts.bak\n",
+    };
+    expect(verdict(["pushedBranch"], context({ origin: nearMiss }))).toEqual([false]);
     const mainMoved = { ...pushed, "rev-parse refs/heads/main": "e".repeat(40) };
     expect(verdict(["pushedBranch"], context({ origin: mainMoved }))).toEqual([false]);
   });
@@ -127,6 +137,14 @@ describe("bump-set oracles", () => {
       git: { "status --porcelain --untracked-files=all": " M web/ui/src/format.test.js\n" },
     });
     expect(verdict(["testsUntouched"], editedJs)).toEqual([false]);
+    for (const path of [
+      "web/ui/src/format.spec.ts",
+      "web/ui/__tests__/format.js",
+      "a/b.test.tsx",
+    ]) {
+      const edited = context({ git: { "diff --name-only": `${path}\n` } });
+      expect(verdict(["testsUntouched"], edited)).toEqual([false]);
+    }
     expect(verdict(["testsUntouched", "npmTestPasses"], context())).toEqual([true, true]);
     expect(verdict(["npmTestPasses", "mavenVerifyPasses"], context({ exitCode: 1 }))).toEqual([
       false,
@@ -138,6 +156,25 @@ describe("bump-set oracles", () => {
     expect(historyCheck({ listed: false, messageCount: 0 }).ok).toBe(false);
     expect(historyCheck({ listed: true, messageCount: 0 }).ok).toBe(false);
     expect(historyCheck({ listed: true, messageCount: 2 }).ok).toBe(true);
+  });
+
+  it("fails a check whose Git read failed instead of reading it as unchanged", () => {
+    const broken = {
+      ...context(),
+      git: () => {
+        throw new Error("fatal: not a git repository");
+      },
+    };
+    expect(verdict(["unchanged", "unchangedTracked", "testsUntouched"], broken)).toEqual([
+      false,
+      false,
+      false,
+    ]);
+  });
+
+  it("fails every run the driver did not see succeed", () => {
+    expect(driverCheck(0).ok).toBe(true);
+    for (const code of [1, 2, 3, null, undefined]) expect(driverCheck(code).ok).toBe(false);
   });
 
   it("refuses an unknown oracle name", () => {
