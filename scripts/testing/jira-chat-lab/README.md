@@ -181,9 +181,22 @@ checks the selected image ID/repository digest and owned listener bindings. Norm
 production verification must independently observe the exact saved native Jira
 version; an image tag alone is insufficient.
 
-No additional 10.4/11.2/11.3 image digest or live compatibility is established by this
-parameterization. Obtain and verify each exact pin separately before a serial live
-run. Session isolation does not replace the coordinated machine/Gateway window.
+Parameterization does not establish live compatibility. Session isolation does not
+replace the coordinated machine/Gateway window.
+
+Official Registry metadata was read on 2026-11-08 without pulling image layers or
+starting containers. The following `linux/arm64` child-manifest bytes matched their
+immutable digest, preserving the default laboratory's platform. These are prepared
+image selections, not evidence that Jira or any operation ran successfully:
+
+| Exact release / official manifest | ARM64 SHA-256 (without prefix for `init`) |
+| --- | --- |
+| [10.4.0](https://registry-1.docker.io/v2/atlassian/jira-software/manifests/sha256:56e6ea7ef5915b8c1f01e8161b17409fc0a32267e4425543ace0c888d49ff6a2) | `56e6ea7ef5915b8c1f01e8161b17409fc0a32267e4425543ace0c888d49ff6a2` |
+| [11.2.1](https://registry-1.docker.io/v2/atlassian/jira-software/manifests/sha256:8c61da4dbb35444793a080b63c75639886688c2fb253c3ba88f7d77826f32d83) | `8c61da4dbb35444793a080b63c75639886688c2fb253c3ba88f7d77826f32d83` |
+| [11.3.13](https://registry-1.docker.io/v2/atlassian/jira-software/manifests/sha256:68d5536e2e1278d3fd94060dd9dcecfaf776c17ab6b78919afc7ea516e187ad3) | `68d5536e2e1278d3fd94060dd9dcecfaf776c17ab6b78919afc7ea516e187ad3` |
+
+The existing 10.3.26 digest remains available and unchanged. Its current tag points
+at a different index; that moving tag is never substituted for the saved pin.
 The direct connection probe additionally accepts the private session directory:
 
 `verify-connection.mjs <private-PAT-file> <private-TLS-directory> [private-session-directory]`
