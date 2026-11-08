@@ -91,11 +91,11 @@ export interface JiraChatDraftExecution {
   /** The immutable source payload covered by this write's source digest. */
   readonly preparedTraces?: ReadonlyMap<string, ItemTrace>;
   /**
-   * Whether an untraced draft must stay refused while the Chat's Pods hold requirements.
-   * Repeated calls never acknowledge the missing trace. The runtime omits this check only for
-   * the exact draft a human has actually approved through the existing review owner.
+   * Reports the untraced-draft refusal while the Chat's Pods hold requirements; its return value
+   * never decides admission. The runtime omits this notification only for the exact draft a human
+   * has actually approved through the existing review owner. Repetition never acknowledges it.
    */
-  readonly adviseUntraced?: ((refs: readonly string[]) => boolean) | undefined;
+  readonly adviseUntraced?: ((refs: readonly string[]) => void) | undefined;
   /** Body-free progress and end-of-run counts for the Activity Log. */
   readonly activity?: ((activity: JiraDraftActivity) => void) | undefined;
   readonly now?: (() => number) | undefined;
@@ -855,7 +855,8 @@ function advisesUntraced(
 ): boolean {
   if (input.adviseUntraced === undefined || session === undefined) return false;
   if (!untracedRun(draft, excluded) || session.unitCount() === 0) return false;
-  return input.adviseUntraced(draft.items.map((item) => item.ref));
+  input.adviseUntraced(draft.items.map((item) => item.ref));
+  return true;
 }
 
 /**
@@ -865,15 +866,17 @@ function advisesUntraced(
 export function jiraDraftUntracedAdvice(
   draftArguments: CatalogJsonObject,
   openTrace: () => TraceSession,
-  adviseUntraced: (refs: readonly string[]) => boolean,
+  adviseUntraced: (refs: readonly string[]) => void,
 ): CatalogJsonObject | undefined {
   const draft = parseJiraDraft(draftArguments);
   if (draft === undefined || !untracedRun(draft, new Set())) return undefined;
   const session = openTrace();
   try {
-    return session.unitCount() > 0 && adviseUntraced(draft.items.map((item) => item.ref))
-      ? untracedDraft().data
-      : undefined;
+    if (session.unitCount() > 0) {
+      adviseUntraced(draft.items.map((item) => item.ref));
+      return untracedDraft().data;
+    }
+    return undefined;
   } finally {
     session.close();
   }

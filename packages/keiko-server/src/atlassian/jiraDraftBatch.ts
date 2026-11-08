@@ -358,6 +358,10 @@ function collectOutlineStep(
   else pending.push({ chunk: unassigned, retried: true });
 }
 
+function remainingOutlineGroups(chunks: readonly OutlineChunk[]): readonly OutlineGroup[] {
+  return chunks.flatMap((item) => item.chunk.map((requirement) => singleGroup(requirement)));
+}
+
 function groupedEntries(
   state: BatchState,
   ports: DraftBatchPorts,
@@ -382,11 +386,7 @@ function groupedEntries(
       }
       if (!fitsDeadline(state, ports)) {
         state.stopReason = "deadline";
-        groups.push(
-          ...[chunk, ...pending].flatMap((item) =>
-            item.chunk.map((requirement) => singleGroup(requirement)),
-          ),
-        );
+        groups.push(...remainingOutlineGroups([chunk, ...pending]));
         complete();
         return;
       }
