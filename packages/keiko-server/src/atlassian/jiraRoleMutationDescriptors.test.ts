@@ -46,7 +46,7 @@ describe("closed native role administration descriptors", () => {
       anyOf: [{ required: ["name"] }, { required: ["description"] }],
     });
     expect(declaration("jira.replace-role")?.descriptor.inputSchema).toMatchObject({
-      required: expect.arrayContaining(["name", "description"]),
+      required: expect.arrayContaining(["name", "description"]) as unknown,
     });
   });
   it("keeps default and project membership scopes explicit", () => {
@@ -54,7 +54,7 @@ describe("closed native role administration descriptors", () => {
       "role defaults",
     );
     expect(declaration("jira.set-project-role-actors")?.descriptor.inputSchema).toMatchObject({
-      required: expect.arrayContaining(["projectIdOrKey", "principals"]),
+      required: expect.arrayContaining(["projectIdOrKey", "principals"]) as unknown,
     });
     expect(declaration("jira.delete-role")?.descriptor.description).toContain(
       "always remains unconfirmed",

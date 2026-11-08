@@ -11,7 +11,7 @@ import {
   admitJiraEmailTemplateParts,
 } from "./jiraAttachmentContentPolicy.js";
 
-const OPTIONS = { secrets: [], now: () => 0 };
+const OPTIONS = { secrets: [], now: (): number => 0 };
 it("projects only complete sorted metadata through the credential floor", async () => {
   const { bytes, pack } = emailTemplateFixture();
   expect(await inspect(bytes, OPTIONS)).toEqual({ ok: true, value: pack });
@@ -91,7 +91,7 @@ it("preserves zero-byte files and explicit empty directory entries truthfully", 
 it("refuses a compressed configured credential and container metadata credentials", async () => {
   const secret = ["synthetic", "configured", "value", "only"].join("-");
   const body = zipTextEntries([{ name: "a.vm", content: secret }]);
-  const options = { secrets: [secret], now: () => 0 };
+  const options = { secrets: [secret], now: (): number => 0 };
   expect(await inspect(body, options)).toMatchObject({
     ok: false,
     contentRefusal: "contains-credential",
@@ -138,10 +138,10 @@ it("lets cancellation interrupt a valid multi-part pack during the existing cont
     ["second.vm", second],
   ]);
   const values = parts.values.bind(parts);
-  parts.values = () => {
+  parts.values = (): MapIterator<Uint8Array> => {
     const iterator = values();
     const next = iterator.next.bind(iterator);
-    iterator.next = () => {
+    iterator.next = (): IteratorResult<Uint8Array, undefined> => {
       const part = next();
       if (!part.done) {
         visited++;
@@ -164,10 +164,10 @@ it("shares the original deadline with content scanning instead of starting a new
   let current = 0;
   const parts = new Map([["safe.vm", new TextEncoder().encode("safe text")]]);
   const values = parts.values.bind(parts);
-  parts.values = () => {
+  parts.values = (): MapIterator<Uint8Array<ArrayBuffer>> => {
     const iterator = values();
     const next = iterator.next.bind(iterator);
-    iterator.next = () => {
+    iterator.next = (): IteratorResult<Uint8Array<ArrayBuffer>, undefined> => {
       current = 15000;
       return next();
     };

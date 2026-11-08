@@ -5,6 +5,7 @@ import {
   type AtlassianCredentialExecutionResolver,
   type AtlassianHttpBodyRequest,
   type AtlassianHttpRequest,
+  type JiraHumanInputHttpRequest,
 } from "@oscharko-dev/keiko-connectors";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { directoryAccessHeaders } from "./httpDirectoryAccess.js";
@@ -59,7 +60,7 @@ function reportObservationFailure(correlationId: string, error: unknown): void {
 }
 
 /** A JSON body is declared as such; a governed upload also carries Jira's XSRF opt-out (#4176). */
-function requestBodyHeaders(request: RequestSnapshot): Record<string, string> {
+function nativeBodyHeaders(request: RequestSnapshot): Record<string, string> | undefined {
   const identity = "maxBodyBytes" in request ? identityExperimentalHeaders(request) : undefined;
   if (identity !== undefined) return identity;
   const directory = "maxBodyBytes" in request ? directoryAccessHeaders(request) : undefined;
@@ -73,7 +74,11 @@ function requestBodyHeaders(request: RequestSnapshot): Record<string, string> {
     "jiraPermissionAttribute" in request ? request.jiraPermissionAttribute : undefined,
     request,
   );
-  if (permissionAttribute !== undefined) return permissionAttribute;
+  return permissionAttribute;
+}
+function requestBodyHeaders(request: RequestSnapshot): Record<string, string> {
+  const native = nativeBodyHeaders(request);
+  if (native !== undefined) return native;
   if ("upload" in request && request.upload !== undefined)
     return { "content-type": request.upload.contentType, "x-atlassian-token": "no-check" };
   return "bodyJson" in request && request.bodyJson !== undefined
@@ -188,17 +193,73 @@ function experimentalJiraHeaders(value: unknown, request: RequestSnapshot): Reco
   return { "X-ExperimentalApi": "true" };
 }
 
+type RequestLifecycleOptions = AtlassianHttpLifecycleOptions & {
+  readonly credentials: AtlassianCredentialExecutionResolver;
+  readonly authRef: string;
+  readonly correlationId: string;
+  readonly privateAuthentication?: JiraPrivateAuthentication;
+  readonly onHumanInputConsumed?: (view: JiraHumanInputView) => void;
+};
+interface HeaderPreparation {
+  readonly options: RequestLifecycleOptions;
+  readonly credentials: AtlassianCredentialExecutionResolver;
+  readonly authRef: string;
+  readonly beforeDispatch: AtlassianHttpLifecycleOptions["beforeDispatch"];
+}
+function humanInputHeaders(input: JiraHumanInputHttpRequest | undefined): Record<string, string> {
+  return input !== undefined &&
+    input.selection.binding.operation !== "jira.unlock-user-anonymization"
+    ? {
+        "content-type": "application/json",
+        ...(input.selection.binding.operation === "jira.update-user-password"
+          ? { "X-ExperimentalApi": "true" }
+          : {}),
+      }
+    : {};
+}
+function prepareRequestHeaders(
+  context: HeaderPreparation,
+  request: RequestSnapshot,
+  headers: Readonly<Record<string, string>>,
+): Headers {
+  const { options, credentials, authRef, beforeDispatch } = context;
+  if (beforeDispatch !== undefined) requireConfirmation(beforeDispatch(request));
+  const input = "jiraHumanInput" in request ? request.jiraHumanInput : undefined;
+  if (
+    input?.selection.binding.operation === "jira.unlock-user-anonymization" &&
+    claimHttpHumanInput(credentials, input, options.onHumanInputConsumed)
+      .ownerShutdownConfirmation !== "confirmed"
+  )
+    throw new AtlassianCredentialCustodyError("invalid-input", [
+      "Missing human owner-shutdown attestation",
+    ]);
+  const privateAuth = options.privateAuthentication;
+  if (privateAuth?.kind === "anonymous")
+    return new Headers({
+      accept: "application/json",
+      ...headers,
+      "content-type": "application/json",
+    });
+  if (privateAuth?.kind === "session")
+    return new Headers({
+      cookie: privateAuth.cookie(),
+      accept: "application/json",
+      ...headers,
+    });
+  const credential = credentials.resolveForExecution(authRef);
+  return new Headers({
+    authorization: atlassianAuthorizationHeaderValue(credential),
+    accept: "application/json",
+    ...humanInputHeaders(input),
+    ...headers,
+  });
+}
 export function atlassianHttpRequestLifecycle(
-  options: AtlassianHttpLifecycleOptions & {
-    readonly credentials: AtlassianCredentialExecutionResolver;
-    readonly authRef: string;
-    readonly correlationId: string;
-    readonly privateAuthentication?: JiraPrivateAuthentication;
-    readonly onHumanInputConsumed?: (view: JiraHumanInputView) => void;
-  },
+  options: RequestLifecycleOptions,
   request: RequestSnapshot,
 ): RequestLifecycle {
   const { credentials, authRef, beforeDispatch, onResponse, correlationId } = options;
+  const preparation = { options, credentials, authRef, beforeDispatch };
   // Validate the closed opt-in before admission callbacks can mark a native effect dispatched.
   const headers = {
     ...requestBodyHeaders(request),
@@ -217,47 +278,7 @@ export function atlassianHttpRequestLifecycle(
     }
   }
   return {
-    prepareHeaders: (): Headers =>
-      run(() => {
-        if (beforeDispatch !== undefined) requireConfirmation(beforeDispatch(request));
-        const input = "jiraHumanInput" in request ? request.jiraHumanInput : undefined;
-        if (
-          input?.selection.binding.operation === "jira.unlock-user-anonymization" &&
-          claimHttpHumanInput(credentials, input, options.onHumanInputConsumed)
-            .ownerShutdownConfirmation !== "confirmed"
-        )
-          throw new AtlassianCredentialCustodyError("invalid-input", [
-            "Missing human owner-shutdown attestation",
-          ]);
-        const privateAuth = options.privateAuthentication;
-        if (privateAuth?.kind === "anonymous")
-          return new Headers({
-            accept: "application/json",
-            ...headers,
-            "content-type": "application/json",
-          });
-        if (privateAuth?.kind === "session")
-          return new Headers({
-            cookie: privateAuth.cookie(),
-            accept: "application/json",
-            ...headers,
-          });
-        const credential = credentials.resolveForExecution(authRef);
-        return new Headers({
-          authorization: atlassianAuthorizationHeaderValue(credential),
-          accept: "application/json",
-          ...(input !== undefined &&
-          input.selection.binding.operation !== "jira.unlock-user-anonymization"
-            ? {
-                "content-type": "application/json",
-                ...(input.selection.binding.operation === "jira.update-user-password"
-                  ? { "X-ExperimentalApi": "true" }
-                  : {}),
-              }
-            : {}),
-          ...headers,
-        });
-      }),
+    prepareHeaders: (): Headers => run(() => prepareRequestHeaders(preparation, request, headers)),
     observe: async (response: Response): Promise<void> => {
       try {
         if (onResponse !== undefined)

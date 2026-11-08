@@ -89,7 +89,7 @@ describe("strict identity and avatar receipts", () => {
     "rejects hostile original own-property evidence for $name",
     ({ name, receipt }) => {
       let reads = 0;
-      const inherited: JiraMutationReceipt = Object.create(receipt);
+      const inherited: JiraMutationReceipt = Object.create(receipt) as JiraMutationReceipt;
       const getter = Object.defineProperty({ ...receipt }, "actorUserKey", {
         enumerable: true,
         get: () => {

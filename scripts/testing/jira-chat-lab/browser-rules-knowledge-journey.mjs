@@ -163,6 +163,15 @@ async function correctedChild(opened, context, turn, issueType, parentKey) {
   return newNativeIssues(before, after);
 }
 
+function formalSubtaskTemplate() {
+  return templateMarkdown({
+    project: "REQ",
+    issueType: "Sub-task",
+    rule: STRUCTURE_RULES.Task,
+    parentField: "parent",
+    parentIssueTypes: ["Task"],
+  });
+}
 async function formalRules(opened, context, turn) {
   const skills = [];
   for (const issueType of ["Epic", "Task", "Bug"]) {
@@ -189,13 +198,7 @@ async function formalRules(opened, context, turn) {
   const epics = await correctedEpic(opened, context, turn);
   const tasks = await correctedChild(opened, context, turn, "Task", epics[0].key);
   const bugs = await correctedChild(opened, context, turn, "Bug", epics[0].key);
-  const subtaskMarkdown = templateMarkdown({
-    project: "REQ",
-    issueType: "Sub-task",
-    rule: STRUCTURE_RULES.Task,
-    parentField: "parent",
-    parentIssueTypes: ["Task"],
-  });
+  const subtaskMarkdown = formalSubtaskTemplate();
   skills.push(
     await uploadBrowserSkill(
       opened.page,

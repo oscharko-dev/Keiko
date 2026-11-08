@@ -526,8 +526,7 @@ function independentPrimary(scenario: Scenario): Scenario["expectedPrimary"] {
         path: selected.path.replace(/^\//u, ""),
       };
 }
-function agileRead(path: string, state: MutationRemoteState): AtlassianHttpBodyResult {
-  const page = { startAt: 2, maxResults: 5, total: 3, isLast: true };
+function agilePropertyRead(path: string): AtlassianHttpBodyResult | undefined {
   if (path.endsWith("/board/7/properties") || path.endsWith("/sprint/9/properties"))
     return response({
       keys: [{ key: "view ~settings", self: "https://untrusted.invalid/property" }],
@@ -537,6 +536,17 @@ function agileRead(path: string, state: MutationRemoteState): AtlassianHttpBodyR
     path.endsWith("/sprint/9/properties/view%20~settings")
   )
     return response({ key: "view ~settings", value: { "a/b~c": [false, null, {}] } });
+  return undefined;
+}
+function agileDetailRead(
+  path: string,
+  page: {
+    readonly startAt: number;
+    readonly maxResults: number;
+    readonly total: number;
+    readonly isLast: boolean;
+  },
+): AtlassianHttpBodyResult | undefined {
   if (path.endsWith("/board/7/project"))
     return response({
       ...page,
@@ -569,6 +579,14 @@ function agileRead(path: string, state: MutationRemoteState): AtlassianHttpBodyR
         duedate: "2026-11-07",
       },
     });
+  return undefined;
+}
+function agileRead(path: string, state: MutationRemoteState): AtlassianHttpBodyResult {
+  const page = { startAt: 2, maxResults: 5, total: 3, isLast: true };
+  const property = agilePropertyRead(path);
+  if (property !== undefined) return property;
+  const detail = agileDetailRead(path, page);
+  if (detail !== undefined) return detail;
   if (path.endsWith("/board")) return response({ ...page, values: [state.board] });
   if (path.endsWith("/board/7/epic")) return response({ ...page, values: [state.epic] });
   if (path.endsWith("/board/7/sprint")) return response({ ...page, values: [state.sprint] });
@@ -667,10 +685,12 @@ describe("native Agile registry and actual connector transport agreement", () =>
       baseUrl: "https://jira.example.invalid/context",
       http: remote(),
     });
-    expect(() => assertNativeJiraPrimary(observed, scenario)).not.toThrow();
-    expect(() =>
-      assertNativeJiraPrimary(observed, { tool: scenario.tool, args: scenario.args }),
-    ).toThrow("Missing independent native primary expectation");
+    expect(() => {
+      assertNativeJiraPrimary(observed, scenario);
+    }).not.toThrow();
+    expect(() => {
+      assertNativeJiraPrimary(observed, { tool: scenario.tool, args: scenario.args });
+    }).toThrow("Missing independent native primary expectation");
     for (const path of [
       "/context/rest/agile/1.0/board/8",
       "/context/rest/api/2/board/7",
@@ -684,14 +704,16 @@ describe("native Agile registry and actual connector transport agreement", () =>
           url: `https://jira.example.invalid${path}`,
         })),
       };
-      expect(() => assertNativeJiraPrimary(drifted, scenario)).toThrow();
+      expect(() => {
+        assertNativeJiraPrimary(drifted, scenario);
+      }).toThrow();
     }
-    expect(() =>
+    expect(() => {
       assertNativeJiraPrimary(
         { ...observed, definition: { ...observed.definition, method: "POST" } },
         scenario,
-      ),
-    ).toThrow();
+      );
+    }).toThrow();
   });
   it.each(SCENARIOS)(
     "pins $tool's method, root, path parameters and complete query on the wire",
@@ -838,12 +860,13 @@ describe("native Agile registry and actual connector transport agreement", () =>
         {
           deployment: "data-center",
           baseUrl: "https://jira.example.invalid/context",
-          http: async (request) => {
-            const result =
-              request.method === "GET" ? fixture.read(request) : fixture.write(request);
-            if (result === undefined) throw new TypeError("Unexpected board setting route");
-            return result;
-          },
+          http: (request): Promise<AtlassianHttpBodyResult> =>
+            new Promise((resolve) => {
+              const result =
+                request.method === "GET" ? fixture.read(request) : fixture.write(request);
+              if (result === undefined) throw new TypeError("Unexpected board setting route");
+              resolve(result);
+            }),
         },
       );
       expect(observed.requests.find(({ method }) => method === "PUT")?.bodyJson).toBe(
@@ -940,7 +963,9 @@ describe("native Agile registry and actual connector transport agreement", () =>
     expect(observed.result.data).toMatchObject({
       boardId: "7",
       propertyKey: "view ~settings",
-      items: expect.arrayContaining([{ path: "/a~1b~0c/0", kind: "boolean", booleanValue: false }]),
+      items: expect.arrayContaining([
+        { path: "/a~1b~0c/0", kind: "boolean", booleanValue: false },
+      ]) as unknown,
     });
     expect(JSON.stringify(observed.result.data)).not.toContain("untrusted.invalid");
   });

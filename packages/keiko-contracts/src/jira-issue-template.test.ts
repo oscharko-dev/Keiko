@@ -42,7 +42,7 @@ describe("parseJiraIssueTemplate", () => {
     ["parentField: parent", 'parentIssueTypes: [" "]'],
     [
       "parentField: parent",
-      `parentIssueTypes: [${Array.from({ length: 51 }, (_, index) => `Type${index}`).join(", ")}]`,
+      `parentIssueTypes: [${Array.from({ length: 51 }, (_, index) => `Type${String(index)}`).join(", ")}]`,
     ],
   ])("refuses an unbound, empty, malformed or over-bound parent-type clause: %j", (...lines) => {
     expect(failure(template([...VALID, ...lines]))).toEqual(

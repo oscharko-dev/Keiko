@@ -41,29 +41,18 @@ function text(value: unknown, max = 255): value is string {
     !/[\p{Cc}\p{Surrogate}]/u.test(value)
   );
 }
-function user(request: AtlassianHttpBodyRequest, url: URL): boolean {
-  if (request.jiraIdentityExperimental !== true || !url.pathname.endsWith("/rest/api/2/user"))
-    return false;
-  if (request.method === "POST") {
-    const body = jsonObject(request.bodyJson);
-    return (
-      url.search === "" &&
-      body !== undefined &&
-      Object.keys(body).length === 3 &&
-      text(body.name) &&
-      text(body.displayName) &&
-      text(body.emailAddress, 254)
-    );
-  }
-  if (
-    url.searchParams.getAll("key").length !== 1 ||
-    [...url.searchParams.keys()].length !== 1 ||
-    !text(url.searchParams.get("key")) ||
-    `?${url.searchParams.toString()}` !== url.search
-  )
-    return false;
-  if (request.method === "DELETE") return request.bodyJson === undefined;
-  if (request.method !== "PUT") return false;
+function createUser(request: AtlassianHttpBodyRequest, url: URL): boolean {
+  const body = jsonObject(request.bodyJson);
+  return (
+    url.search === "" &&
+    body !== undefined &&
+    Object.keys(body).length === 3 &&
+    text(body.name) &&
+    text(body.displayName) &&
+    text(body.emailAddress, 254)
+  );
+}
+function updateUser(request: AtlassianHttpBodyRequest): boolean {
   const body = jsonObject(request.bodyJson);
   return (
     body !== undefined &&
@@ -73,16 +62,22 @@ function user(request: AtlassianHttpBodyRequest, url: URL): boolean {
     (!Object.hasOwn(body, "active") || typeof body.active === "boolean")
   );
 }
-function priority(request: AtlassianHttpBodyRequest, url: URL): boolean {
-  if (request.jiraProjectPriority !== true || url.search !== "") return false;
-  const match =
-    /\/rest\/api\/2\/project\/([1-9]\d{0,18})\/priorityscheme(?:\/([1-9]\d{0,18}))?$/u.exec(
-      url.pathname,
-    );
-  if (!jiraNativeId(match?.[1])) return false;
-  if (request.method === "DELETE")
-    return jiraNativeId(match?.[2]) && request.bodyJson === undefined;
-  if (match?.[2] !== undefined) return false;
+function user(request: AtlassianHttpBodyRequest, url: URL): boolean {
+  if (request.jiraIdentityExperimental !== true || !url.pathname.endsWith("/rest/api/2/user"))
+    return false;
+  if (request.method === "POST") return createUser(request, url);
+  if (
+    url.searchParams.getAll("key").length !== 1 ||
+    [...url.searchParams.keys()].length !== 1 ||
+    !text(url.searchParams.get("key")) ||
+    `?${url.searchParams.toString()}` !== url.search
+  )
+    return false;
+  if (request.method === "DELETE") return request.bodyJson === undefined;
+  if (request.method !== "PUT") return false;
+  return updateUser(request);
+}
+function readOrUpdatePriority(request: AtlassianHttpBodyRequest): boolean {
   if (request.method === "GET") return request.bodyJson === undefined;
   const body = jsonObject(request.bodyJson);
   return (
@@ -94,14 +89,19 @@ function priority(request: AtlassianHttpBodyRequest, url: URL): boolean {
     body.id > 0
   );
 }
-/** Closed flag, native method/query/body and media are checked before custody/admission. */
-export function identityExperimentalHeaders(
-  request: AtlassianHttpBodyRequest,
-): Record<string, string> | undefined {
-  if (!selected(request)) return undefined;
-  if (!compatible(request) || !URL.canParse(request.url)) refuse();
-  const url = new URL(request.url);
-  if (
+function priority(request: AtlassianHttpBodyRequest, url: URL): boolean {
+  if (request.jiraProjectPriority !== true || url.search !== "") return false;
+  const match =
+    /\/rest\/api\/2\/project\/([1-9]\d{0,18})\/priorityscheme(?:\/([1-9]\d{0,18}))?$/u.exec(
+      url.pathname,
+    );
+  if (!jiraNativeId(match?.[1])) return false;
+  if (request.method === "DELETE") return jiraNativeId(match[2]) && request.bodyJson === undefined;
+  if (match[2] !== undefined) return false;
+  return readOrUpdatePriority(request);
+}
+function canonicalIdentityUrl(request: AtlassianHttpBodyRequest, url: URL): boolean {
+  return !(
     url.protocol !== "https:" ||
     url.username !== "" ||
     url.password !== "" ||
@@ -109,8 +109,16 @@ export function identityExperimentalHeaders(
     url.toString() !== request.url ||
     /[\p{Cc}\\]/u.test(request.url) ||
     /%(?:2e|2f|5c|25)/iu.test(url.pathname)
-  )
-    refuse();
+  );
+}
+/** Closed flag, native method/query/body and media are checked before custody/admission. */
+export function identityExperimentalHeaders(
+  request: AtlassianHttpBodyRequest,
+): Record<string, string> | undefined {
+  if (!selected(request)) return undefined;
+  if (!compatible(request) || !URL.canParse(request.url)) refuse();
+  const url = new URL(request.url);
+  if (!canonicalIdentityUrl(request, url)) refuse();
   if (
     !(request.jiraIdentityExperimental !== undefined ? user(request, url) : priority(request, url))
   )

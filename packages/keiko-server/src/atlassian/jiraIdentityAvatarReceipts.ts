@@ -105,6 +105,12 @@ const TRUE_KEYS: ReadonlySet<PropertyKey> = new Set([
   "anonymizationRequested",
   "anonymizationRerunRequested",
 ]);
+function uploadValue(key: PropertyKey, value: unknown): boolean | undefined {
+  if (key === "uploadSha256") return receiptDigest(value);
+  if (key === "uploadBytes") return receiptInteger(value, 1, JIRA_ATTACHMENT_MAX_BYTES);
+  if (key === "temporaryCrop") return crop(value);
+  return undefined;
+}
 function fieldValue(
   key: PropertyKey,
   value: unknown,
@@ -114,10 +120,7 @@ function fieldValue(
   if (TRUE_KEYS.has(key)) return value === true;
   if (key === "projectKey") return isSafeAtlassianIdentifier(value);
   if (key === "avatarType") return value === "user" || value === "project" || value === "issuetype";
-  if (key === "uploadSha256") return receiptDigest(value);
-  if (key === "uploadBytes") return receiptInteger(value, 1, JIRA_ATTACHMENT_MAX_BYTES);
-  if (key === "temporaryCrop") return crop(value);
-  return stateValue(key, value, operation) ?? receiptNativeId(value);
+  return uploadValue(key, value) ?? stateValue(key, value, operation) ?? receiptNativeId(value);
 }
 function stateValue(
   key: PropertyKey,

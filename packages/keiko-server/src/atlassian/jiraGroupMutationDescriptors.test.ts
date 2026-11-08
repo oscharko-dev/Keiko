@@ -49,7 +49,7 @@ describe("closed administration group declarations", () => {
       required: expect.arrayContaining([
         "expectedObservedMembership",
         "acceptGlobalPermissionChange",
-      ]),
+      ]) as unknown,
     });
   });
   it("exposes no arbitrary group or identity proxy", () => {

@@ -194,11 +194,8 @@ async function createProject(environment, actor, denied) {
   });
 }
 
-async function createBoard(environment) {
-  const { context, group } = environment;
-  const jql = `project = ${group.project.key} ORDER BY Rank ASC`;
-  const filterName = `${group.name} filter`;
-  group.filter = await step(environment, {
+function boardFilterStep(context, jql, filterName) {
+  return {
     name: "board-filter",
     operation: "jira.create-filter",
     reviewText: [filterName],
@@ -219,7 +216,60 @@ async function createBoard(environment) {
       assert.deepEqual(native.sharePermissions, []);
       return { id: String(native.id), name: native.name };
     },
-  });
+  };
+}
+
+function futureSprintStep(group, name, list) {
+  return {
+    name: "sprint-create",
+    operation: "jira.sprint-create",
+    reviewText: [name, group.board.id],
+    prompt: `Select Scrum board ${group.board.id} by reading its actual configuration, then create exactly one future sprint named "${name}" on it. Do not start it yet and do not retry creation.`,
+    wire: {
+      method: "POST",
+      path: "/rest/agile/1.0/sprint",
+      admit: (body) => body?.name === name && String(body.originBoardId) === group.board.id,
+    },
+    verify: async (turn) => {
+      const result = completedOperation(turn, "jira.sprint-create");
+      const matches = (await list()).filter((sprint) => sprint.name === name);
+      assert.equal(matches.length, 1);
+      assert.equal(String(matches[0].id), result.sprintId);
+      assert.equal(matches[0].state, "future");
+      return { id: result.sprintId, name };
+    },
+  };
+}
+
+function sprintMembershipStep(environment, context, group) {
+  return {
+    name: "sprint-membership",
+    operation: "jira.sprint-move-issues",
+    reviewText: [group.task.key],
+    prompt: `Move only Task ${group.task.key} into future sprint ${group.sprint.id}. Preserve its Epic relation and verify the actual sprint membership. Do not move any other issue.`,
+    wire: {
+      method: "POST",
+      path: `/rest/agile/1.0/sprint/${group.sprint.id}/issue`,
+      admit: (body) => JSON.stringify(body?.issues) === JSON.stringify([group.task.key]),
+    },
+    verify: async (turn) => {
+      completedOperation(turn, "jira.sprint-move-issues");
+      const members = await sprintMembership(environment);
+      epicRelation(
+        await issueRead(context, group.task.key),
+        group.epic,
+        await projectAgileRead(context.session, "/rest/api/2/field"),
+      );
+      return { members };
+    },
+  };
+}
+
+async function createBoard(environment) {
+  const { context, group } = environment;
+  const jql = `project = ${group.project.key} ORDER BY Rank ASC`;
+  const filterName = `${group.name} filter`;
+  group.filter = await step(environment, boardFilterStep(context, jql, filterName));
   const name = `${group.name} board`;
   const list = () =>
     nativePages(
@@ -324,47 +374,9 @@ async function sprintLifecycle(environment) {
     (await list()).some((sprint) => sprint.name === name),
     false,
   );
-  group.sprint = await step(environment, {
-    name: "sprint-create",
-    operation: "jira.sprint-create",
-    reviewText: [name, group.board.id],
-    prompt: `Select Scrum board ${group.board.id} by reading its actual configuration, then create exactly one future sprint named "${name}" on it. Do not start it yet and do not retry creation.`,
-    wire: {
-      method: "POST",
-      path: "/rest/agile/1.0/sprint",
-      admit: (body) => body?.name === name && String(body.originBoardId) === group.board.id,
-    },
-    verify: async (turn) => {
-      const result = completedOperation(turn, "jira.sprint-create");
-      const matches = (await list()).filter((sprint) => sprint.name === name);
-      assert.equal(matches.length, 1);
-      assert.equal(String(matches[0].id), result.sprintId);
-      assert.equal(matches[0].state, "future");
-      return { id: result.sprintId, name };
-    },
-  });
+  group.sprint = await step(environment, futureSprintStep(group, name, list));
   await constraint(environment, "future-cannot-close", "closed", "future");
-  await step(environment, {
-    name: "sprint-membership",
-    operation: "jira.sprint-move-issues",
-    reviewText: [group.task.key],
-    prompt: `Move only Task ${group.task.key} into future sprint ${group.sprint.id}. Preserve its Epic relation and verify the actual sprint membership. Do not move any other issue.`,
-    wire: {
-      method: "POST",
-      path: `/rest/agile/1.0/sprint/${group.sprint.id}/issue`,
-      admit: (body) => JSON.stringify(body?.issues) === JSON.stringify([group.task.key]),
-    },
-    verify: async (turn) => {
-      completedOperation(turn, "jira.sprint-move-issues");
-      const members = await sprintMembership(environment);
-      epicRelation(
-        await issueRead(context, group.task.key),
-        group.epic,
-        await projectAgileRead(context.session, "/rest/api/2/field"),
-      );
-      return { members };
-    },
-  });
+  await step(environment, sprintMembershipStep(environment, context, group));
   const startDate = new Date().toISOString();
   const endDate = new Date(Date.now() + 7 * 86400000).toISOString();
   for (const state of ["active", "closed"]) {

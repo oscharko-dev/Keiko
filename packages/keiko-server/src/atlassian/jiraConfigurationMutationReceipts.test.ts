@@ -119,7 +119,7 @@ describe("screen, board and sprint configuration receipts", () => {
       const missing = { ...receipt };
       Reflect.deleteProperty(missing, key);
       refused(missing, operation);
-      Object.setPrototypeOf(missing, { [key]: Reflect.get(receipt, key) });
+      Object.setPrototypeOf(missing, { [key]: Reflect.get(receipt, key) as unknown });
       refused(missing, operation);
       const hidden = { ...receipt };
       Object.defineProperty(hidden, key, { value: Reflect.get(receipt, key), enumerable: false });

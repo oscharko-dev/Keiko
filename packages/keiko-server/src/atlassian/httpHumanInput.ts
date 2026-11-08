@@ -47,7 +47,15 @@ function refuse(): never {
     "Invalid private Jira input request",
   ]);
 }
-function nativeFields(purpose: JiraHumanInputPurpose, value: CatalogJsonObject): CatalogJsonObject {
+function nativeFieldText(key: string, value: unknown): value is string {
+  return !(
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > (key === "emailAddress" ? 254 : 255) ||
+    /[\p{Cc}\p{Surrogate}]/u.test(value)
+  );
+}
+function nativeFields(purpose: JiraHumanInputPurpose, value: unknown): CatalogJsonObject {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return refuse();
   const expected = FIELDS[purpose];
   const keys = Reflect.ownKeys(value);
@@ -60,25 +68,19 @@ function nativeFields(purpose: JiraHumanInputPurpose, value: CatalogJsonObject):
   for (const key of expected) {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     const text: unknown = descriptor?.value;
-    if (
-      typeof text !== "string" ||
-      text.length === 0 ||
-      text.length > (key === "emailAddress" ? 254 : 255) ||
-      /[\p{Cc}\p{Surrogate}]/u.test(text)
-    )
-      return refuse();
+    if (!nativeFieldText(key, text)) return refuse();
     fields[key] = text;
   }
   return Object.freeze(fields);
+}
+function passwordUserQuery(value: unknown): string {
+  return `?${new URLSearchParams({ key: String(value) }).toString()}`;
 }
 export function humanInputRoute(
   purpose: JiraHumanInputPurpose,
   fields: CatalogJsonObject,
 ): { readonly path: string; readonly method: "POST" | "PUT" | "DELETE" } {
-  const query =
-    purpose === "update-user-password"
-      ? `?${new URLSearchParams({ key: String(fields.userKey) }).toString()}`
-      : "";
+  const query = purpose === "update-user-password" ? passwordUserQuery(fields.userKey) : "";
   return {
     path: `${PATHS[purpose]}${query}`,
     method:
@@ -89,8 +91,13 @@ export function humanInputRoute(
           : "POST",
   };
 }
+function selectedBinding(
+  selection: JiraHumanInputHttpRequest["selection"] | undefined,
+): ReturnType<typeof copyHumanInputBinding> {
+  return copyHumanInputBinding(selection?.binding);
+}
 export function ownedHumanInput(value: JiraHumanInputHttpRequest): JiraHumanInputHttpRequest {
-  const binding = copyHumanInputBinding(value.selection?.binding);
+  const binding = selectedBinding(value.selection);
   if (binding === undefined) return refuse();
   const purpose = JIRA_HUMAN_INPUT_PURPOSES.find(
     (candidate) => `jira.${candidate}` === binding.operation,
@@ -119,13 +126,8 @@ export function humanInputPurpose(
   if (operation === undefined) return undefined;
   return JIRA_HUMAN_INPUT_PURPOSES.find((purpose) => `jira.${purpose}` === operation);
 }
-export function assertHumanInputTarget(
-  base: URL,
-  request: AtlassianHttpBodyRequest,
-  authRef: string,
-): void {
-  if (request.jiraHumanInput === undefined) return;
-  if (
+function compatibleHumanInput(request: AtlassianHttpBodyRequest): boolean {
+  return !(
     request.bodyJson !== undefined ||
     request.upload !== undefined ||
     request.jiraExperimental !== undefined ||
@@ -136,8 +138,15 @@ export function assertHumanInputTarget(
     request.jiraUserColumns !== undefined ||
     request.jiraIdentityExperimental !== undefined ||
     request.jiraProjectPriority !== undefined
-  )
-    return refuse();
+  );
+}
+export function assertHumanInputTarget(
+  base: URL,
+  request: AtlassianHttpBodyRequest,
+  authRef: string,
+): void {
+  if (request.jiraHumanInput === undefined) return;
+  if (!compatibleHumanInput(request)) return refuse();
   const owned = ownedHumanInput(request.jiraHumanInput);
   const purpose = humanInputPurpose({ ...request, jiraHumanInput: owned });
   if (purpose === undefined || owned.selection.binding.authRef !== authRef) return refuse();
@@ -147,6 +156,9 @@ export function assertHumanInputTarget(
     request.url !== `${base.origin}${base.pathname.replace(/\/$/u, "")}${route.path}`
   )
     return refuse();
+}
+function oldPasswordField(values: JiraHumanInputValues): { readonly oldPassword?: string } {
+  return values.oldPassword === undefined ? {} : { oldPassword: values.oldPassword };
 }
 export function privateHumanBody(
   request: JiraHumanInputHttpRequest,
@@ -166,7 +178,7 @@ export function privateHumanBody(
       return JSON.stringify({
         ...fields,
         newPassword: values.newPassword,
-        ...(values.oldPassword === undefined ? {} : { oldPassword: values.oldPassword }),
+        ...oldPasswordField(values),
       });
     case "jira.validate-license":
       return typeof values.license === "string" ? JSON.stringify(values.license) : refuse();
@@ -200,6 +212,39 @@ export function claimHttpHumanInput(
   );
   return parseHumanInputValues(binding.operation, values) ?? refuse();
 }
+function passwordPolicyResponse(items: readonly unknown[] | undefined): string {
+  return items !== undefined &&
+    items.length <= TOOL_CATALOG_LIMITS.maxArrayItems &&
+    items.every((item) => typeof item === "string")
+    ? JSON.stringify({ accepted: items.length === 0, violationCount: items.length })
+    : "";
+}
+function licenseValidationResponse(value: unknown): string {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    !("errors" in value) ||
+    value.errors === null ||
+    typeof value.errors !== "object" ||
+    Array.isArray(value.errors)
+  )
+    return "";
+  const errors = Object.values(value.errors);
+  return errors.length <= TOOL_CATALOG_LIMITS.maxArrayItems &&
+    errors.every((item) => typeof item === "string")
+    ? JSON.stringify({ accepted: errors.length === 0, violationCount: errors.length })
+    : "";
+}
+function captureLoginCookie(
+  value: unknown,
+  status: number,
+  onLoginCookie: ((cookie: JiraPrivateCookie) => void) | undefined,
+): void {
+  if (status === 200 && value !== null && typeof value === "object" && "session" in value) {
+    const cookie = jiraPrivateCookie(value.session);
+    if (cookie !== undefined) onLoginCookie?.(cookie);
+  }
+}
 /** Native diagnostics may reflect the submitted password/license. Never return that raw body. */
 export function privateHumanResponse(
   purpose: JiraHumanInputPurpose,
@@ -212,37 +257,9 @@ export function privateHumanResponse(
   const parsed = parseJsonObjectOrArray(text);
   if (parsed === undefined) return "";
   if (purpose === "validate-create-user-password" || purpose === "validate-update-user-password")
-    return parsed.items !== undefined &&
-      parsed.items.length <= TOOL_CATALOG_LIMITS.maxArrayItems &&
-      parsed.items.every((item) => typeof item === "string")
-      ? JSON.stringify({ accepted: parsed.items.length === 0, violationCount: parsed.items.length })
-      : "";
+    return passwordPolicyResponse(parsed.items);
   const value = parsed.body;
-  if (purpose === "validate-license") {
-    if (
-      value === null ||
-      typeof value !== "object" ||
-      !("errors" in value) ||
-      value.errors === null ||
-      typeof value.errors !== "object" ||
-      Array.isArray(value.errors)
-    )
-      return "";
-    const errors = Object.values(value.errors);
-    return errors.length <= TOOL_CATALOG_LIMITS.maxArrayItems &&
-      errors.every((item) => typeof item === "string")
-      ? JSON.stringify({ accepted: errors.length === 0, violationCount: errors.length })
-      : "";
-  }
-  if (
-    purpose === "login" &&
-    status === 200 &&
-    value !== null &&
-    typeof value === "object" &&
-    "session" in value
-  ) {
-    const cookie = jiraPrivateCookie(value.session);
-    if (cookie !== undefined) onLoginCookie?.(cookie);
-  }
+  if (purpose === "validate-license") return licenseValidationResponse(value);
+  if (purpose === "login") captureLoginCookie(value, status, onLoginCookie);
   return "";
 }

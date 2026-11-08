@@ -62,6 +62,21 @@ async function actorFor(session, tokenFile, administer, requirePrivateSharing = 
   return { key: actor.key, name: actor.name };
 }
 
+function reconciliationProjection(group, projects, issues, boards, sprints) {
+  return {
+    groupId: group.id,
+    phase: group.current?.phase,
+    projects,
+    issues: issues.map(({ id, key, fields }) => ({ id, key, summary: fields.summary })),
+    boards: boards.map(({ id, name }) => ({ id, name })),
+    sprints: sprints.map(({ id, name, state, originBoardId }) => ({
+      id,
+      name,
+      state,
+      originBoardId,
+    })),
+  };
+}
 async function reconcile(session, pendingPath, actor) {
   const group = JSON.parse(readPrivateFile(pendingPath));
   assert.equal(group.kind, "project-agile-browser-v1");
@@ -96,19 +111,7 @@ async function reconcile(session, pendingPath, actor) {
   }
   privateJson(
     join(session.directory, `project-agile-reconciliation-${randomUUID()}.json`),
-    {
-      groupId: group.id,
-      phase: group.current?.phase,
-      projects,
-      issues: issues.map(({ id, key, fields }) => ({ id, key, summary: fields.summary })),
-      boards: boards.map(({ id, name }) => ({ id, name })),
-      sprints: sprints.map(({ id, name, state, originBoardId }) => ({
-        id,
-        name,
-        state,
-        originBoardId,
-      })),
-    },
+    reconciliationProjection(group, projects, issues, boards, sprints),
     true,
   );
   // The unresolved marker is deliberately retained. Reconciliation never resumes or cleans up writes.
@@ -117,6 +120,40 @@ async function reconcile(session, pendingPath, actor) {
   );
 }
 
+function qualificationGroup(selected, permittedActor) {
+  const id = randomUUID();
+  const suffix = id.replaceAll("-", "").slice(0, 8).toUpperCase();
+  const group = {
+    kind: "project-agile-browser-v1",
+    id,
+    key: `ZQ${suffix}`,
+    deniedKey: `ZD${suffix}`,
+    name: `Synthetic acceptance ${suffix}`,
+    actorKey: permittedActor.key,
+    modelId: selected.modelId,
+    results: [],
+  };
+  return { id, group };
+}
+function finishQualification(session, pendingPath, id, group) {
+  assert.equal(group.results.length, 12);
+  assert.equal(group.reloadObserved, true);
+  privateJson(join(session.directory, `project-agile-browser-${id}.json`), group, true);
+  rmSync(pendingPath);
+  console.log(
+    JSON.stringify({
+      qualification: "jira-project-agile-browser",
+      phase: "completed",
+      cases: group.results.length,
+    }),
+  );
+}
+function assertQualificationLicense(remaining) {
+  assert.ok(
+    remaining >= 1800,
+    "Thirty minutes of the current license are required; no automatic restart",
+  );
+}
 async function main() {
   const selected = projectAgileArguments(process.argv.slice(2));
   const session = loadSession(selected.directory);
@@ -133,28 +170,14 @@ async function main() {
   };
   if (selected.reconcile) return reconcile(oracleSession, pendingPath, permittedActor);
   // This read never restarts Jira. Root owns the shared Jira/Gateway window, including Claude2.
-  assert.ok(
-    (await requireLicense(session)) >= 1800,
-    "Thirty minutes of the current license are required; no automatic restart",
-  );
+  assertQualificationLicense(await requireLicense(session));
   const inputs = {
     ...selected,
     permittedActor,
     deniedActor: await actorFor(session, selected.deniedToken, false),
   };
   assert.notEqual(inputs.permittedActor.key, inputs.deniedActor.key);
-  const id = randomUUID();
-  const suffix = id.replaceAll("-", "").slice(0, 8).toUpperCase();
-  const group = {
-    kind: "project-agile-browser-v1",
-    id,
-    key: `ZQ${suffix}`,
-    deniedKey: `ZD${suffix}`,
-    name: `Synthetic acceptance ${suffix}`,
-    actorKey: permittedActor.key,
-    modelId: selected.modelId,
-    results: [],
-  };
+  const { id, group } = qualificationGroup(selected, permittedActor);
   privateJson(pendingPath, group, true);
   const persist = () => privateJson(pendingPath, group);
   const witness = projectAgileWitness(session);
@@ -180,17 +203,7 @@ async function main() {
         persist,
       ),
   });
-  assert.equal(group.results.length, 12);
-  assert.equal(group.reloadObserved, true);
-  privateJson(join(session.directory, `project-agile-browser-${id}.json`), group, true);
-  rmSync(pendingPath);
-  console.log(
-    JSON.stringify({
-      qualification: "jira-project-agile-browser",
-      phase: "completed",
-      cases: group.results.length,
-    }),
-  );
+  finishQualification(session, pendingPath, id, group);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

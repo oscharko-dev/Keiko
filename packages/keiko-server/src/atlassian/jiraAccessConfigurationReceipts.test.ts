@@ -93,14 +93,14 @@ describe("exact role and permission configuration receipt boundaries", () => {
         const hidden = { ...receipt };
         Object.defineProperty(hidden, key, { value: Reflect.get(receipt, key), enumerable: false });
         refused(hidden, operation);
-        const getter = vi.fn(() => Reflect.get(receipt, key));
+        const getter = vi.fn(() => Reflect.get(receipt, key) as unknown);
         const accessor = { ...receipt };
         Object.defineProperty(accessor, key, { get: getter, enumerable: true });
         refused(accessor, operation);
         expect(getter).not.toHaveBeenCalled();
         const inherited = { ...receipt };
         Reflect.deleteProperty(inherited, key);
-        Object.setPrototypeOf(inherited, { [key]: Reflect.get(receipt, key) });
+        Object.setPrototypeOf(inherited, { [key]: Reflect.get(receipt, key) as unknown });
         refused(inherited, operation);
       }
     },
@@ -257,7 +257,10 @@ describe("exact role and permission configuration receipt boundaries", () => {
         Array.from({ length: 51 }, (_, index) => String(index)),
       ])
         refused(changed(receipt, key, value), "jira.add-role-default-actors");
-    const large = Array.from({ length: 50 }, (_, index) => `${index}${"\u754c".repeat(250)}`);
+    const large = Array.from(
+      { length: 50 },
+      (_, index) => `${String(index)}${"\u754c".repeat(250)}`,
+    );
     refused({ ...receipt, actorUserKeys: large }, "jira.add-role-default-actors");
     refused({ ...receipt, userKey: "bad\ud800" }, "jira.add-role-default-actors");
   });

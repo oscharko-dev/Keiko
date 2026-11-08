@@ -465,6 +465,18 @@ function validateWriteApprovalSubject(value: Record<string, unknown>, errors: st
       errors.push("chatWriteApproval.operation is invalid");
   }
 }
+function uploadWriteApproval(value: Record<string, unknown>): boolean {
+  return (
+    value.operation === "jira.upload-email-template-pack" ||
+    (typeof value.operation === "string" && isJiraAvatarUploadOperation(value.operation))
+  );
+}
+function validateWriteApprovalAttachment(value: Record<string, unknown>, errors: string[]): void {
+  if (!isJiraAttachmentPreview(value.attachment))
+    errors.push("chatWriteApproval.attachment is invalid");
+  if (value.operation !== "jira.attach" && !uploadWriteApproval(value))
+    errors.push("chatWriteApproval.operation is invalid");
+}
 function validateWriteApprovalKeys(
   value: Record<string, unknown>,
   mcp: boolean,
@@ -476,11 +488,7 @@ function validateWriteApprovalKeys(
   }
   const excluded = Object.hasOwn(value, "excludedItemRefs");
   const attached = Object.hasOwn(value, "attachment");
-  if (
-    !attached &&
-    (value.operation === "jira.upload-email-template-pack" ||
-      (typeof value.operation === "string" && isJiraAvatarUploadOperation(value.operation)))
-  )
+  if (!attached && uploadWriteApproval(value))
     errors.push("chatWriteApproval.attachment is required");
   validateKeys(
     value,
@@ -496,16 +504,7 @@ function validateWriteApprovalKeys(
     validateExcludedItemRefs(value.excludedItemRefs, "chatWriteApproval.excludedItemRefs", errors);
     if (value.operation !== "jira.draft") errors.push("chatWriteApproval.operation is invalid");
   }
-  if (attached) {
-    if (!isJiraAttachmentPreview(value.attachment))
-      errors.push("chatWriteApproval.attachment is invalid");
-    if (
-      value.operation !== "jira.attach" &&
-      value.operation !== "jira.upload-email-template-pack" &&
-      !(typeof value.operation === "string" && isJiraAvatarUploadOperation(value.operation))
-    )
-      errors.push("chatWriteApproval.operation is invalid");
-  }
+  if (attached) validateWriteApprovalAttachment(value, errors);
 }
 export function validateChatToolWriteApprovalView(
   value: unknown,

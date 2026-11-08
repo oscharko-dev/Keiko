@@ -13,7 +13,13 @@ import {
   createGatewayAtlassianHttpBodyPort,
   type CreateAtlassianHttpPortOptions,
 } from "./httpPort.js";
+import { privateAvatarMediaType } from "./httpAvatarSession.js";
 
+function ownedAvatarPath(target: JiraAvatarTarget): string | undefined {
+  return target.kind === "project" || target.kind === "issuetype"
+    ? `universal_avatar/type/${target.kind}/owner/${target.id}/temp`
+    : undefined;
+}
 function uploadPath(operation: JiraAvatarMutation, target: JiraAvatarTarget): string | undefined {
   switch (operation) {
     case "jira.upload-temporary-avatar":
@@ -23,9 +29,7 @@ function uploadPath(operation: JiraAvatarMutation, target: JiraAvatarTarget): st
     case "jira.upload-project-avatar":
       return target.kind === "project" ? `project/${target.id}/avatar/temporary` : undefined;
     case "jira.upload-owned-avatar":
-      return target.kind === "project" || target.kind === "issuetype"
-        ? `universal_avatar/type/${target.kind}/owner/${target.id}/temp`
-        : undefined;
+      return ownedAvatarPath(target);
     case "jira.upload-user-avatar":
       return target.kind === "user" ? "user/avatar/temporary" : undefined;
     default:
@@ -52,7 +56,7 @@ export function privateAvatarSession(
     request: createJiraReadRequest({ deployment: "data-center", baseUrl: base, http }, context),
     temporary: session.temporary,
     rememberTemporary: session.rememberTemporary,
-    upload: (operation, target, file, mimeType, bytes) => {
+    upload: (operation, target, file, mimeType, bytes): ReturnType<JiraAvatarSession["upload"]> => {
       const path = uploadPath(operation, target);
       const owned = new Uint8Array(bytes);
       if (
@@ -60,7 +64,7 @@ export function privateAvatarSession(
         !isJiraAttachmentPreview(file) ||
         owned.byteLength !== file.sizeBytes ||
         createHash("sha256").update(owned).digest("hex") !== file.sha256 ||
-        (mimeType !== "image/png" && mimeType !== "image/jpeg")
+        !privateAvatarMediaType({ contentType: mimeType })
       )
         return Promise.resolve({ ok: false, reason: "field-validation" });
       const query = new URLSearchParams();

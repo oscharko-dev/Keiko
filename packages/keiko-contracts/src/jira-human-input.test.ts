@@ -56,7 +56,7 @@ describe("bounded persisted Jira human-input views", () => {
     Object.defineProperty(changed, "targetUsername", { get: getter, enumerable: true });
     expect(isJiraHumanInputView({ ...view, review: changed })).toBe(false);
     expect(getter).not.toHaveBeenCalled();
-    expect(isJiraHumanInputView({ ...view, review: Object.create(review) })).toBe(false);
+    expect(isJiraHumanInputView({ ...view, review: Object.create(review) as unknown })).toBe(false);
     const symbol = { ...review };
     Object.defineProperty(symbol, Symbol("private"), { value: "hidden" });
     expect(isJiraHumanInputView({ ...view, review: symbol })).toBe(false);

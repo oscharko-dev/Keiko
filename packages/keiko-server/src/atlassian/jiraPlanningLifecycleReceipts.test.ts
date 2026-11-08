@@ -109,12 +109,12 @@ describe("Agile planning, version link and category exact receipts", () => {
         const missing = { ...receipt };
         Reflect.deleteProperty(missing, key);
         refused(missing, operation);
-        Object.setPrototypeOf(missing, { [key]: Reflect.get(receipt, key) });
+        Object.setPrototypeOf(missing, { [key]: Reflect.get(receipt, key) as unknown });
         refused(missing, operation);
         const hidden = { ...receipt };
         Object.defineProperty(hidden, key, { value: Reflect.get(receipt, key), enumerable: false });
         refused(hidden, operation);
-        const getter = vi.fn(() => Reflect.get(receipt, key));
+        const getter = vi.fn(() => Reflect.get(receipt, key) as unknown);
         const accessor = { ...receipt };
         Object.defineProperty(accessor, key, { get: getter, enumerable: true });
         refused(accessor, operation);
@@ -223,7 +223,7 @@ describe("Agile planning, version link and category exact receipts", () => {
     ).toBe(true);
     for (const globalId of ["path/segment", "\\", "%2F", ".", "..", "line\n", "bad\ud800"])
       refused({ ...base, globalId }, "jira.upsert-version-remote-link-by-global-id");
-    const large = Array.from({ length: 20 }, (_, i) => `${i}:${"é".repeat(1000)}`);
+    const large = Array.from({ length: 20 }, (_, i) => `${String(i)}:${"é".repeat(1000)}`);
     refused(
       {
         versionId: "81",

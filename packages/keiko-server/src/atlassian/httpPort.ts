@@ -52,7 +52,7 @@ import {
   privateHumanBody,
   privateHumanResponse,
 } from "./httpHumanInput.js";
-import { assertPrivateSessionRequest } from "./httpAvatarSession.js";
+import { assertPrivateSessionRequest, privateAvatarMediaType } from "./httpAvatarSession.js";
 import {
   isSafeAtlassianConnectorBaseUrl,
   canonicalAtlassianConnectorBaseUrl,
@@ -370,13 +370,19 @@ interface BoundedBodyRead {
   readonly truncated: boolean;
 }
 
-function bodyCollector(binary: boolean, cap: number) {
+function bodyCollector(
+  binary: boolean,
+  cap: number,
+): {
+  append: (chunk: Uint8Array) => void;
+  finish: (bodyBytes: number, truncated: boolean) => BoundedBodyRead;
+} {
   const decoder = new TextDecoder("utf-8", { fatal: false });
   let archive: Uint8Array<ArrayBuffer> | undefined;
   let offset = 0;
   let text = "";
   return {
-    append: (chunk: Uint8Array) => {
+    append: (chunk: Uint8Array): void => {
       if (!binary) {
         text += decoder.decode(chunk, { stream: true });
         return;
@@ -461,6 +467,16 @@ function composeBodyRequestSignal(request: AtlassianHttpBodyRequest): AbortSigna
 // error and fails closed on the same custody failure surface as an invalid URL.
 // A governed upload (#4176) is one multipart POST, bounded, never combined with a JSON body.
 const MULTIPART_CONTENT_TYPE = /^multipart\/form-data; boundary=[A-Za-z0-9_-]{1,70}$/u;
+function validUploadMedia(
+  request: AtlassianHttpBodyRequest,
+  upload: NonNullable<AtlassianHttpBodyRequest["upload"]>,
+): boolean {
+  return request.jiraEmailTemplateArchive === true
+    ? upload.contentType === "application/zip"
+    : request.jiraAvatarImage === true
+      ? privateAvatarMediaType(upload)
+      : MULTIPART_CONTENT_TYPE.test(upload.contentType);
+}
 function assertValidUpload(request: AtlassianHttpBodyRequest): void {
   const upload = request.upload;
   if (upload === undefined) return;
@@ -469,11 +485,7 @@ function assertValidUpload(request: AtlassianHttpBodyRequest): void {
     request.bodyJson !== undefined ||
     !(upload.bytes instanceof Uint8Array) ||
     !(upload.bytes.buffer instanceof ArrayBuffer) ||
-    !(request.jiraEmailTemplateArchive === true
-      ? upload.contentType === "application/zip"
-      : request.jiraAvatarImage === true
-        ? upload.contentType === "image/png" || upload.contentType === "image/jpeg"
-        : MULTIPART_CONTENT_TYPE.test(upload.contentType)) ||
+    !validUploadMedia(request, upload) ||
     exceedsBodyByteCeiling(upload.bytes.byteLength, ATLASSIAN_HTTP_UPLOAD_MAX_BYTES)
   ) {
     throw new AtlassianCredentialCustodyError("invalid-input", [
@@ -482,6 +494,21 @@ function assertValidUpload(request: AtlassianHttpBodyRequest): void {
   }
 }
 
+function emailTemplateTargetMatches(
+  request: AtlassianHttpBodyRequest,
+  target: URL,
+  path: string,
+  selection: unknown,
+): boolean {
+  return !(
+    selection !== true ||
+    target.pathname !== path ||
+    target.search !== "" ||
+    !Number.isSafeInteger(request.maxBodyBytes) ||
+    request.maxBodyBytes < 1 ||
+    request.maxBodyBytes > JIRA_ATTACHMENT_MAX_BYTES
+  );
+}
 function assertEmailTemplateTarget(
   base: URL,
   target: URL,
@@ -489,25 +516,23 @@ function assertEmailTemplateTarget(
 ): void {
   if (request.jiraEmailTemplateArchive === undefined) return;
   const path = `${base.pathname.replace(/\/$/u, "")}/rest/api/2/email-templates`;
-  if (
-    request.jiraEmailTemplateArchive !== true ||
-    target.pathname !== path ||
-    target.search !== "" ||
-    !Number.isSafeInteger(request.maxBodyBytes) ||
-    request.maxBodyBytes < 1 ||
-    request.maxBodyBytes > JIRA_ATTACHMENT_MAX_BYTES
-  )
+  if (!emailTemplateTargetMatches(request, target, path, request.jiraEmailTemplateArchive))
     throw new AtlassianCredentialCustodyError("invalid-input", [
       "Unsupported email-template archive target or byte bound",
     ]);
 }
 
+function applicationRoleObject(request: {
+  readonly jiraApplicationRole?: unknown;
+}): request is { readonly jiraApplicationRole: object } {
+  return typeof request.jiraApplicationRole === "object" && request.jiraApplicationRole !== null;
+}
 function ownedBodyRequest(
   request: Readonly<AtlassianHttpBodyRequest>,
 ): Readonly<AtlassianHttpBodyRequest> {
   if (request.jiraHumanInput !== undefined)
     return Object.freeze({ ...request, jiraHumanInput: ownedHumanInput(request.jiraHumanInput) });
-  if (typeof request.jiraApplicationRole === "object" && request.jiraApplicationRole !== null)
+  if (applicationRoleObject(request))
     return Object.freeze({
       ...request,
       jiraApplicationRole: Object.freeze({ ...request.jiraApplicationRole }),
@@ -553,7 +578,7 @@ function requestBody(
   if (input?.selection.binding.operation === "jira.unlock-user-anonymization") return {};
   if (input !== undefined)
     return {
-      prepareBody: () => {
+      prepareBody: (): string => {
         const values = claimHttpHumanInput(
           options.credentials,
           input,
@@ -579,7 +604,7 @@ function observePrivateCookie(authentication: JiraPrivateAuthentication | undefi
     value: () => value,
     authentication: {
       ...authentication,
-      cookie: () => {
+      cookie: (): string => {
         const header = authentication.cookie();
         const separator = header.indexOf("=");
         const cookie = jiraPrivateCookie({
@@ -617,46 +642,101 @@ function privateCookieBody(
   }
 }
 
-export function createGatewayAtlassianHttpBodyPort(
+function assertPrivateLogin(
+  options: CreateAtlassianHttpPortOptions,
+  snapshot: AtlassianHttpBodyRequest,
+): void {
+  if (
+    options.privateAuthentication?.kind === "anonymous" &&
+    humanInputPurpose(snapshot) !== "login"
+  )
+    throw new AtlassianCredentialCustodyError("invalid-input", [
+      "Anonymous Jira transport is reserved for private login",
+    ]);
+  if (
+    humanInputPurpose(snapshot) === "login" &&
+    options.privateAuthentication?.kind !== "anonymous"
+  )
+    throw new AtlassianCredentialCustodyError("invalid-input", [
+      "Jira login requires private anonymous transport",
+    ]);
+}
+function admitBodyRequest(
+  base: URL,
+  options: CreateAtlassianHttpPortOptions,
+  input: AtlassianHttpBodyRequest,
+): { readonly request: Readonly<AtlassianHttpBodyRequest>; readonly target: URL } {
+  const snapshot = Object.freeze({ ...input });
+  const target = assertAllowlistedTarget(base, snapshot.url);
+  assertEmailTemplateTarget(base, target, snapshot);
+  assertDirectoryAccessTarget(base, target, snapshot);
+  assertIdentityExperimentalTarget(base, target, snapshot);
+  assertHumanInputTarget(base, snapshot, options.authRef);
+  assertPrivateSessionRequest(base, snapshot, options.privateAuthentication);
+  assertPrivateLogin(options, snapshot);
+  assertValidRequestBody(snapshot);
+  return { request: ownedBodyRequest(snapshot), target };
+}
+function bodyRequestLifecycle(
+  options: CreateAtlassianHttpPortOptions,
+  request: AtlassianHttpBodyRequest,
+  privateCookie: ReturnType<typeof observePrivateCookie>,
+): ReturnType<typeof atlassianHttpRequestLifecycle> {
+  return atlassianHttpRequestLifecycle(
+    {
+      ...options,
+      ...(privateCookie.authentication === undefined
+        ? {}
+        : { privateAuthentication: privateCookie.authentication }),
+      correlationId: options.correlationId ?? UNKNOWN_CORRELATION_ID,
+    },
+    request,
+  );
+}
+async function projectBodyResponse(
+  options: CreateAtlassianHttpPortOptions,
+  request: AtlassianHttpBodyRequest,
+  response: Response,
+  privateCookie: ReturnType<typeof observePrivateCookie>,
+): Promise<AtlassianHttpBodyResult> {
+  const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"), Date.now());
+  const observedBody = await readResponseBody(response, request);
+  const body =
+    options.privateAuthentication?.kind === "session"
+      ? privateCookieBody(observedBody, response.status, privateCookie.value())
+      : observedBody;
+  const purpose = humanInputPurpose(request);
+  const bodyText =
+    purpose === undefined
+      ? body.bodyText
+      : privateHumanResponse(
+          purpose,
+          response.status,
+          body.bodyText,
+          body.truncated,
+          options.onJiraLoginCookie,
+        );
+  const applicationRoleVersion = applicationRoleResponseVersion(request, response);
+  return {
+    kind: "response",
+    status: response.status,
+    bodyText,
+    ...(body.archiveBytes === undefined ? {} : { archiveBytes: body.archiveBytes }),
+    ...(applicationRoleVersion === undefined ? {} : { applicationRoleVersion }),
+    bodyBytes: body.bodyBytes,
+    truncated: body.truncated,
+    ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+  };
+}
+function bodyRequestPort(
+  base: URL,
   options: CreateAtlassianHttpPortOptions,
 ): AtlassianHttpBodyPort {
-  const base = atlassianPortBaseUrl(options.baseUrl);
   return async (input: AtlassianHttpBodyRequest): Promise<AtlassianHttpBodyResult> => {
-    const snapshot = Object.freeze({ ...input });
-    const target = assertAllowlistedTarget(base, snapshot.url);
-    assertEmailTemplateTarget(base, target, snapshot);
-    assertDirectoryAccessTarget(base, target, snapshot);
-    assertIdentityExperimentalTarget(base, target, snapshot);
-    assertHumanInputTarget(base, snapshot, options.authRef);
-    assertPrivateSessionRequest(base, snapshot, options.privateAuthentication);
-    if (
-      options.privateAuthentication?.kind === "anonymous" &&
-      humanInputPurpose(snapshot) !== "login"
-    )
-      throw new AtlassianCredentialCustodyError("invalid-input", [
-        "Anonymous Jira transport is reserved for private login",
-      ]);
-    if (
-      humanInputPurpose(snapshot) === "login" &&
-      options.privateAuthentication?.kind !== "anonymous"
-    )
-      throw new AtlassianCredentialCustodyError("invalid-input", [
-        "Jira login requires private anonymous transport",
-      ]);
-    assertValidRequestBody(snapshot);
-    const request = ownedBodyRequest(snapshot);
+    const { request, target } = admitBodyRequest(base, options, input);
     const signal = composeBodyRequestSignal(request);
     const privateCookie = observePrivateCookie(options.privateAuthentication);
-    const lifecycle = atlassianHttpRequestLifecycle(
-      {
-        ...options,
-        ...(privateCookie.authentication === undefined
-          ? {}
-          : { privateAuthentication: privateCookie.authentication }),
-        correlationId: options.correlationId ?? UNKNOWN_CORRELATION_ID,
-      },
-      request,
-    );
+    const lifecycle = bodyRequestLifecycle(options, request, privateCookie);
     try {
       const egress = await connectorEgressConfig(options, base, signal);
       if (egress === undefined) return { kind: "network-error" };
@@ -673,34 +753,7 @@ export function createGatewayAtlassianHttpBodyPort(
       });
       const response = await authenticatedReadResponse(request.method, upstream);
       await lifecycle.observe(response);
-      const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"), Date.now());
-      const observedBody = await readResponseBody(response, request);
-      const body =
-        options.privateAuthentication?.kind === "session"
-          ? privateCookieBody(observedBody, response.status, privateCookie.value())
-          : observedBody;
-      const purpose = humanInputPurpose(request);
-      const bodyText =
-        purpose === undefined
-          ? body.bodyText
-          : privateHumanResponse(
-              purpose,
-              response.status,
-              body.bodyText,
-              body.truncated,
-              options.onJiraLoginCookie,
-            );
-      const applicationRoleVersion = applicationRoleResponseVersion(request, response);
-      return {
-        kind: "response",
-        status: response.status,
-        bodyText,
-        ...(body.archiveBytes === undefined ? {} : { archiveBytes: body.archiveBytes }),
-        ...(applicationRoleVersion === undefined ? {} : { applicationRoleVersion }),
-        bodyBytes: body.bodyBytes,
-        truncated: body.truncated,
-        ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
-      };
+      return await projectBodyResponse(options, request, response, privateCookie);
     } catch (error) {
       lifecycle.rethrowFailure();
       if (
@@ -712,4 +765,11 @@ export function createGatewayAtlassianHttpBodyPort(
       return classifyTransportError(error);
     }
   };
+}
+
+export function createGatewayAtlassianHttpBodyPort(
+  options: CreateAtlassianHttpPortOptions,
+): AtlassianHttpBodyPort {
+  const base = atlassianPortBaseUrl(options.baseUrl);
+  return bodyRequestPort(base, options);
 }

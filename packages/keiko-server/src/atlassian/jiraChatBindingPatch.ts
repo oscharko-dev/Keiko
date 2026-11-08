@@ -43,6 +43,19 @@ function requestedMcpServers(value: unknown): readonly string[] | null | undefin
     throw invalidRequest("The MCP server selection is invalid.");
   return value;
 }
+function hasChatPatchSelection(
+  podId: string | null | undefined,
+  mode: CodingWorkbenchMode | undefined,
+  mcpServers: readonly string[] | null | undefined,
+  administration: boolean | undefined,
+): boolean {
+  return (
+    podId !== undefined ||
+    mode !== undefined ||
+    mcpServers !== undefined ||
+    administration !== undefined
+  );
+}
 
 function parseJiraChatPatchFields(
   body: Record<string, unknown>,
@@ -54,13 +67,7 @@ function parseJiraChatPatchFields(
   const mode = requestedMode(body.toolMode);
   const mcpServers = requestedMcpServers(body.mcpServers);
   const jiraAdministrationEnabled = requestedAdministration(body.jiraAdministrationEnabled);
-  if (
-    podId === undefined &&
-    mode === undefined &&
-    mcpServers === undefined &&
-    jiraAdministrationEnabled === undefined
-  )
-    return {};
+  if (!hasChatPatchSelection(podId, mode, mcpServers, jiraAdministrationEnabled)) return {};
   if (expectedIdentity === undefined)
     throw invalidRequest("A current chat scope identity is required.");
   return {

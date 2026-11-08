@@ -113,7 +113,9 @@ describe("scheme and instance configuration receipt evidence", () => {
           { ok: false, reason: "timeout", receipt },
           operation,
         );
-        const stored = JSON.parse(JSON.stringify(jiraAttemptToolResult(outcome, retained)));
+        const stored = JSON.parse(
+          JSON.stringify(jiraAttemptToolResult(outcome, retained)),
+        ) as unknown;
         expect(stored).toMatchObject({ isError: true, data: { outcome, ...receipt } });
       }
     },
@@ -135,14 +137,14 @@ describe("scheme and instance configuration receipt evidence", () => {
         const hidden = { ...receipt };
         Object.defineProperty(hidden, key, { value: Reflect.get(receipt, key), enumerable: false });
         refused(hidden, operation);
-        const getter = vi.fn(() => Reflect.get(receipt, key));
+        const getter = vi.fn(() => Reflect.get(receipt, key) as unknown);
         const accessor = { ...receipt };
         Object.defineProperty(accessor, key, { get: getter, enumerable: true });
         refused(accessor, operation);
         expect(getter).not.toHaveBeenCalled();
         const inherited = { ...receipt };
         Reflect.deleteProperty(inherited, key);
-        Object.setPrototypeOf(inherited, { [key]: Reflect.get(receipt, key) });
+        Object.setPrototypeOf(inherited, { [key]: Reflect.get(receipt, key) as unknown });
         refused(inherited, operation);
       }
     },

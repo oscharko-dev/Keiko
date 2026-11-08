@@ -44,16 +44,19 @@ export function gradeRuleRefusal({ exchanges, before, after, template, ruleId })
   );
 }
 
+function correctedParentFields(issue, issueType, parentKey, epicLinkFieldId) {
+  if (issueType === "Sub-task")
+    return issue.fields.issuetype.subtask === true && issue.fields.parent?.key === parentKey;
+  if (issue.fields[epicLinkFieldId] !== parentKey) return false;
+  return issueType !== "Bug" || typeof issue.fields.priority?.id === "string";
+}
 function correctedFields(issue, { requirementId, issueType, parentKey, epicLinkFieldId }) {
   if (issue.fields.issuetype?.name !== issueType) return false;
   if (issueType === "Epic") return epicConforms(issue, requirementId);
   if (!issue.fields.summary.startsWith(`[${requirementId}]`)) return false;
   const rule = issueType === "Sub-task" ? STRUCTURE_RULES.Task : STRUCTURE_RULES[issueType];
   if (!sectionsPresent(issue.fields.description, rule.sections)) return false;
-  if (issueType === "Sub-task")
-    return issue.fields.issuetype.subtask === true && issue.fields.parent?.key === parentKey;
-  if (issue.fields[epicLinkFieldId] !== parentKey) return false;
-  return issueType !== "Bug" || typeof issue.fields.priority?.id === "string";
+  return correctedParentFields(issue, issueType, parentKey, epicLinkFieldId);
 }
 
 export function gradeCorrectedCreate({

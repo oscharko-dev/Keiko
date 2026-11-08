@@ -73,25 +73,31 @@ const VIEW_STATES: ReadonlySet<unknown> = new Set<JiraHumanInputState>([
   "cancelled",
   "expired",
 ]);
+function validViewKeys(value: object, keys: readonly PropertyKey[]): boolean {
+  return (
+    keys.length === VIEW_KEYS.size + (Object.hasOwn(value, "review") ? 1 : 0) &&
+    !keys.some((key) => typeof key !== "string" || (!VIEW_KEYS.has(key) && key !== "review"))
+  );
+}
+function copyReviewField(value: object, result: Record<string, unknown>): boolean {
+  if (Object.hasOwn(value, "review")) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, "review");
+    if (descriptor?.enumerable !== true || !("value" in descriptor)) return false;
+    result.review = descriptor.value;
+  }
+  return true;
+}
 function viewRecord(value: unknown): Record<string, unknown> | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
   const keys = Reflect.ownKeys(value);
-  if (
-    keys.length !== VIEW_KEYS.size + (Object.hasOwn(value, "review") ? 1 : 0) ||
-    keys.some((key) => typeof key !== "string" || (!VIEW_KEYS.has(key) && key !== "review"))
-  )
-    return undefined;
+  if (!validViewKeys(value, keys)) return undefined;
   const result: Record<string, unknown> = {};
   for (const key of VIEW_KEYS) {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     if (descriptor === undefined || !("value" in descriptor)) return undefined;
     result[key] = descriptor.value;
   }
-  if (Object.hasOwn(value, "review")) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, "review");
-    if (descriptor?.enumerable !== true || !("value" in descriptor)) return undefined;
-    result.review = descriptor.value;
-  }
+  if (!copyReviewField(value, result)) return undefined;
   return result;
 }
 function exactFields(value: unknown, expected: readonly JiraHumanInputField[]): boolean {
@@ -105,6 +111,17 @@ function exactFields(value: unknown, expected: readonly JiraHumanInputField[]): 
     (field, index) => Object.getOwnPropertyDescriptor(value, String(index))?.value === field,
   );
 }
+function positiveExpiry(value: unknown): boolean {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+function viewIdentity(raw: Record<string, unknown>): boolean {
+  return (
+    typeof raw.requestId === "string" &&
+    /^jhi_[a-f0-9]{64}$/u.test(raw.requestId) &&
+    typeof raw.revision === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(raw.revision)
+  );
+}
 /** Historical validity only: expiry is checked against the current clock by the private owner. */
 export function isJiraHumanInputView(value: unknown): value is JiraHumanInputView {
   const raw = viewRecord(value);
@@ -113,13 +130,8 @@ export function isJiraHumanInputView(value: unknown): value is JiraHumanInputVie
   if (
     purpose === undefined ||
     !VIEW_STATES.has(raw.state) ||
-    typeof raw.expiresAt !== "number" ||
-    !Number.isSafeInteger(raw.expiresAt) ||
-    raw.expiresAt <= 0 ||
-    typeof raw.requestId !== "string" ||
-    !/^jhi_[a-f0-9]{64}$/u.test(raw.requestId) ||
-    typeof raw.revision !== "string" ||
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(raw.revision)
+    !positiveExpiry(raw.expiresAt) ||
+    !viewIdentity(raw)
   )
     return false;
   const fields = JIRA_HUMAN_INPUT_FIELD_SETS[purpose];

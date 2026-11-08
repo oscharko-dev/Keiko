@@ -18,7 +18,15 @@ const REQUEST: AtlassianHttpBodyRequest = {
   maxBodyBytes: 64,
   jiraEmailTemplateArchive: true,
 };
-function lifecycleOptions() {
+function lifecycleOptions(): {
+  authRef: string;
+  correlationId: string;
+  beforeDispatch: import("vitest").Mock<() => boolean>;
+  onResponse: import("vitest").Mock<() => boolean>;
+  credentials: {
+    resolveForExecution: import("vitest").Mock<() => { scheme: "bearer-pat"; apiToken: string }>;
+  };
+} {
   return {
     authRef: "synthetic-email-template-reference",
     correlationId: "email-template",
@@ -35,7 +43,17 @@ function lifecycleOptions() {
 function fixture(
   response: () => Response = () =>
     new Response(new Uint8Array(BYTES), { headers: { "content-type": "application/zip" } }),
-) {
+): {
+  fetchImpl: import("vitest").Mock<typeof fetch>;
+  port: import("@oscharko-dev/keiko-connectors").AtlassianHttpBodyPort;
+  authRef: string;
+  correlationId: string;
+  beforeDispatch: import("vitest").Mock<() => boolean>;
+  onResponse: import("vitest").Mock<() => boolean>;
+  credentials: {
+    resolveForExecution: import("vitest").Mock<() => { scheme: "bearer-pat"; apiToken: string }>;
+  };
+} {
   const options = lifecycleOptions();
   const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(response()));
   return {
@@ -72,7 +90,7 @@ describe("fixed email-template archive HTTP transport", () => {
       () =>
         new Response(
           new ReadableStream<Uint8Array>({
-            start(controller) {
+            start(controller): void {
               controller.enqueue(new Uint8Array([0x50, 0x4b, 0xff, 0x80, 1, 2]));
             },
             cancel: cancelled,
@@ -101,7 +119,7 @@ describe("fixed email-template archive HTTP transport", () => {
       () =>
         new Response(
           new ReadableStream<Uint8Array>({
-            pull(controller) {
+            pull(controller): void {
               controller.error(new Error("Synthetic incomplete ZIP stream"));
             },
           }),

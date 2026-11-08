@@ -89,8 +89,11 @@ export function reviewWorkflowExchange(exchange, operations) {
   assert.equal(typeof exchange.approval.actionDigest, "string");
 }
 
+function workflowExchanges(user) {
+  return user?.toolTranscript?.exchanges ?? [];
+}
 async function decidePending(region, user, options, decisions) {
-  for (const exchange of user?.toolTranscript?.exchanges ?? []) {
+  for (const exchange of workflowExchanges(user)) {
     if (exchange.approval?.state !== "pending" || decisions.has(exchange.approval.approvalId))
       continue;
     reviewWorkflowExchange(exchange, options.operations);
@@ -117,6 +120,20 @@ async function decidePending(region, user, options, decisions) {
   }
 }
 
+function completedWorkflowTurn(observed, user, previousIds, body, decisions) {
+  const fresh = observed.messages.filter((message) => !previousIds.has(message.id));
+  return {
+    messages: observed.messages,
+    user,
+    exchanges: user.toolTranscript?.exchanges ?? [],
+    answer: fresh
+      .filter((message) => message.role === "assistant")
+      .map((message) => message.content)
+      .join("\n"),
+    clientTurnId: body.clientTurnId,
+    decisions: decisions.size,
+  };
+}
 /** A visible composer submission and visible exact approvals; observation alone uses the Chat API. */
 export async function sendBrowserTurn(page, region, context, chatId, prompt, options = {}) {
   const before = await workflowHistory(context, chatId);
@@ -151,18 +168,7 @@ export async function sendBrowserTurn(page, region, context, chatId, prompt, opt
     );
     if (new Set(["completed", "failed", "cancelled"]).has(user?.turnState)) {
       if (options.allowFailure !== true) assert.equal(user.turnState, "completed");
-      const fresh = observed.messages.filter((message) => !previousIds.has(message.id));
-      return {
-        messages: observed.messages,
-        user,
-        exchanges: user.toolTranscript?.exchanges ?? [],
-        answer: fresh
-          .filter((message) => message.role === "assistant")
-          .map((message) => message.content)
-          .join("\n"),
-        clientTurnId: body.clientTurnId,
-        decisions: decisions.size,
-      };
+      return completedWorkflowTurn(observed, user, previousIds, body, decisions);
     }
     await new Promise((resolve) => globalThis.setTimeout(resolve, 300));
   }

@@ -402,6 +402,12 @@ function writeResult(definition: WriteDefinition): CatalogJsonObject {
     ["outcome"],
   );
 }
+function readInputSchema(definition: ReadDefinition): CatalogJsonObject {
+  return object(
+    { ...(definition.paged ? PAGING : {}), ...definition.parameters },
+    definition.required,
+  );
+}
 function declaration(
   name: string,
   definition: ReadDefinition | WriteDefinition,
@@ -414,12 +420,7 @@ function declaration(
     descriptor: createToolDescriptor({
       toolRef: createToolRef(`keiko.${name.replaceAll("-", ".")}`, 1),
       description: definition.description,
-      inputSchema: write
-        ? definition.input
-        : object(
-            { ...(definition.paged ? PAGING : {}), ...definition.parameters },
-            definition.required,
-          ),
+      inputSchema: write ? definition.input : readInputSchema(definition),
       resultSchema:
         name === "jira.sprint" || Object.hasOwn(JIRA_FILTER_READ_DEFINITIONS, name)
           ? compileExternalCatalogSchema(result)

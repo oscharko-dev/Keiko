@@ -141,7 +141,7 @@ describe("strict system action receipt families", () => {
     ({ name, receipt }) => {
       let reads = 0;
       const field = JIRA_SYSTEM_ACTION_RECEIPTS[name][0];
-      const inherited: JiraMutationReceipt = Object.create(receipt);
+      const inherited: JiraMutationReceipt = Object.create(receipt) as JiraMutationReceipt;
       expect(validJiraSystemActionReceipt(inherited, name)).toBe(false);
       for (const replacement of [
         Object.defineProperty({ ...receipt }, field, {

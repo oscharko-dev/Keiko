@@ -204,7 +204,16 @@ describe("paired coding history routes", () => {
 });
 
 describe("live private input is a current native history projection", () => {
-  function heldInput() {
+  function heldInput(): {
+    owner: import("../store/codingHistory.js").CodingHistoryStore;
+    turn: { readonly chatId: string; readonly userMessageId: string; readonly turnRef: string };
+    privateState: import("../../../../tests/support/jira-private-custody-fixture.js").PrivateJiraCustodyFixture;
+    binding: JiraHumanInputBinding;
+    view: import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors").JiraHumanInputView;
+    pending: PendingCodingJiraInput;
+    responseMessage: () => import("@oscharko-dev/keiko-contracts/bff-wire").ChatMessage | undefined;
+    release: () => void;
+  } {
     const owner = store.codingHistory;
     if (owner === undefined) throw new TypeError("Missing native history");
     const principal = sha256Hex("operator");
@@ -255,7 +264,9 @@ describe("live private input is a current native history projection", () => {
       selection: undefined,
       current: () =>
         active && owner.nativeTurn("private-history-run")?.userMessageId === turn.userMessageId,
-      publish: (next) => transcript.humanInput(started, next, "history-route-test"),
+      publish: (next) => {
+        transcript.humanInput(started, next, "history-route-test");
+      },
       release: () => undefined,
     };
     Object.assign(deps, {
@@ -265,7 +276,8 @@ describe("live private input is a current native history projection", () => {
       codingJiraInputContext: (selected: JiraHumanInputBinding, requestId: string) =>
         currentCodingJiraInput(pending, selected, requestId),
     });
-    const responseMessage = () => {
+    const responseMessage = ():
+      import("@oscharko-dev/keiko-contracts/bff-wire").ChatMessage | undefined => {
       const result = readCodingHistory(context(), deps);
       expect(result.status).toBe(200);
       const detail = result.body as CodingHistoryDetail;
@@ -279,7 +291,7 @@ describe("live private input is a current native history projection", () => {
       view,
       pending,
       responseMessage,
-      release: () => {
+      release: (): void => {
         active = false;
       },
     };

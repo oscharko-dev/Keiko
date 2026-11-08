@@ -11,7 +11,12 @@ const tools = [
   },
 ];
 const result = { outcome: "succeeded", items: [{ tool: "jira.issue" }], selectedFor: "next-round" };
-function fixture() {
+function fixture(): {
+  usage: import("./codingRuntimeContextUsage.js").CodingRuntimeContextUsageRegistry;
+  promptFits: import("vitest").Mock<(promptTokens: number) => boolean>;
+  observe: (inputTokens: number) => void;
+  fits: () => boolean | undefined;
+} {
   const usage = createCodingRuntimeContextUsageRegistry();
   const promptFits = vi.fn<(promptTokens: number) => boolean>(() => true);
   let sequence = 0;
@@ -24,7 +29,7 @@ function fixture() {
       updatedAt: "2026-11-08T05:00:00.000Z",
     });
   };
-  const fits = () =>
+  const fits = (): boolean | undefined =>
     codingJiraCatalogFits({ tools, result, geometry, promptFits, usage: usage.read("run") });
   return { usage, promptFits, observe, fits };
 }

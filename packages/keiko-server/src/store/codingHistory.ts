@@ -767,8 +767,7 @@ function nativeToolTranscript(
   const requireBound = (): void => {
     const current = nativeTurn(db, runId);
     if (
-      current === undefined ||
-      current.chatId !== bound.chatId ||
+      current?.chatId !== bound.chatId ||
       current.userMessageId !== bound.userMessageId ||
       current.turnRef !== bound.turnRef
     )
@@ -780,16 +779,17 @@ function nativeToolTranscript(
   };
   requireBound();
   return {
-    occupancy: () => {
+    occupancy: (): ReturnType<typeof chatToolTranscriptOccupancy> => {
       requireBound();
       return chatToolTranscriptOccupancy(db, bound.userMessageId);
     },
-    capture: (update, correlationId) =>
+    capture: (update, correlationId): void => {
       withImmediateTransaction(db, () => {
         requireBound();
         store.updateChatToolTranscript(bound.userMessageId, update, correlationId);
-      }),
-    humanInput: (started, view, correlationId) =>
+      });
+    },
+    humanInput: (started, view, correlationId): void => {
       withImmediateTransaction(db, () => {
         requireBound();
         if (!started.call.id.startsWith("mcp-"))
@@ -800,10 +800,27 @@ function nativeToolTranscript(
           { kind: "human-input", callId: started.call.id, view },
           correlationId,
         );
-      }),
+      });
+    },
   };
 }
 
+function messagesBeforeRun(
+  db: DatabaseSync,
+  store: UiStore,
+  id: string,
+  runId: string,
+): readonly ChatMessage[] {
+  const ids = new Set(
+    db
+      .prepare("SELECT message_id FROM coding_history_message_bindings WHERE run_id = ?")
+      .all(runId)
+      .map((row) => row.message_id),
+  );
+  const repeated = repeatedIntentMessageIds(db, id);
+  const listed = store.listMessages(id, 200);
+  return listed.filter((message) => !ids.has(message.id) && !repeated.has(message.id));
+}
 export function createCodingHistoryStore(
   db: DatabaseSync,
   store: UiStore,
@@ -823,17 +840,7 @@ export function createCodingHistoryStore(
         )
         .all(operator)
         .map((row) => requireTask(db, store, String(row.chat_id))),
-    messagesBeforeRun: (id, runId): readonly ChatMessage[] => {
-      const ids = new Set(
-        db
-          .prepare("SELECT message_id FROM coding_history_message_bindings WHERE run_id = ?")
-          .all(runId)
-          .map((row) => row.message_id),
-      );
-      const repeated = repeatedIntentMessageIds(db, id);
-      const listed = store.listMessages(id, 200);
-      return listed.filter((message) => !ids.has(message.id) && !repeated.has(message.id));
-    },
+    messagesBeforeRun: (id, runId) => messagesBeforeRun(db, store, id, runId),
     detail: (id, operator) => readDetail(db, store, id, operator),
     forRun: (runId): CodingHistoryTask | undefined => {
       const row = db.prepare("SELECT chat_id FROM coding_history_runs WHERE run_id = ?").get(runId);

@@ -116,7 +116,14 @@ function dispatchedFrom(
   return latest.phase !== "prepared";
 }
 
-function envelopeIdentity(snapshot: CaptureSnapshot, dispatched: boolean, outputBytes: number) {
+function envelopeIdentity(
+  snapshot: CaptureSnapshot,
+  dispatched: boolean,
+  outputBytes: number,
+): Pick<
+  ToolResultEnvelope,
+  "schemaVersion" | "invocationId" | "toolRef" | "projectionDigest" | "effectStarted" | "metrics"
+> {
   return {
     schemaVersion: 1,
     invocationId: snapshot.invocationId,
@@ -156,18 +163,25 @@ function persistCaptured(
   snapshot.releaseReservation();
 }
 
+function matchesProviderCapture(
+  snapshot: CaptureSnapshot,
+  candidate: ManagedMcpToolResult,
+  dispatched: boolean,
+  isError: boolean,
+): boolean {
+  return !(
+    canonicalise(candidate.data.operationBinding) !== canonicalise(snapshot.operationBinding) ||
+    (candidate.data.outcome === "succeeded") === isError ||
+    (!isError && snapshot.mutation && !dispatched)
+  );
+}
 function providerEnvelope(
   snapshot: CaptureSnapshot,
   candidate: ManagedMcpToolResult,
   dispatched: boolean,
 ): ToolResultEnvelope {
   const isError = candidate.isError === true;
-  if (
-    canonicalise(candidate.data.operationBinding) !== canonicalise(snapshot.operationBinding) ||
-    (candidate.data.outcome === "succeeded") === isError ||
-    (!isError && snapshot.mutation && !dispatched)
-  )
-    throw journalConflict();
+  if (!matchesProviderCapture(snapshot, candidate, dispatched, isError)) throw journalConflict();
   const identity = envelopeIdentity(
     snapshot,
     dispatched,
@@ -194,7 +208,7 @@ function captureCallbacks(snapshot: CaptureSnapshot): CodingJiraCapture {
   let localFailure = false;
   return {
     releaseReservation: snapshot.releaseReservation,
-    retainProviderResult: (candidate) => {
+    retainProviderResult: (candidate): ManagedMcpToolResult => {
       if (localFailure) throw journalConflict();
       if (retained !== undefined) {
         if (canonicalise(candidate) !== canonicalise(retained)) throw journalConflict();
@@ -214,14 +228,14 @@ function captureCallbacks(snapshot: CaptureSnapshot): CodingJiraCapture {
       });
       return retained;
     },
-    retainLocalFailure: (reason) => {
+    retainLocalFailure: (reason): void => {
       requireScopeFailure(reason);
       if (retained !== undefined) throw journalConflict();
       if (localFailure) return;
       persistLocalFailure(snapshot, "denied", "effect-denied");
       localFailure = true;
     },
-    retainRelayFailure: (failure) => {
+    retainRelayFailure: (failure): void => {
       if (snapshot.mutation) throw journalConflict();
       const [status, reason] = relayFailureResult(failure);
       // Provider evidence and the earlier explicit scope refusal are already durable. A later
@@ -233,7 +247,9 @@ function captureCallbacks(snapshot: CaptureSnapshot): CodingJiraCapture {
   };
 }
 
-function resultSnapshot(contract: JiraOperationContract) {
+function resultSnapshot(
+  contract: JiraOperationContract,
+): Pick<CaptureSnapshot, "alias" | "startedAt" | "operationBinding" | "binding"> {
   const alias = contract.declaration.name.replace(/[.-]/gu, "_");
   const startedAt = Date.now();
   const projection = managedCatalogProjection(

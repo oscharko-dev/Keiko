@@ -602,15 +602,17 @@ function isCanonicalDeepFreeze(expression, context) {
   );
 }
 
-function isGlobalObjectFreeze(expression, checker) {
+function objectFreezeAccess(expression) {
   if (!ts.isPropertyAccessExpression(expression) || expression.questionDotToken !== undefined)
     return false;
-  if (
-    !ts.isIdentifier(expression.expression) ||
-    expression.expression.text !== "Object" ||
-    expression.name.text !== "freeze"
-  )
-    return false;
+  return (
+    ts.isIdentifier(expression.expression) &&
+    expression.expression.text === "Object" &&
+    expression.name.text === "freeze"
+  );
+}
+function isGlobalObjectFreeze(expression, checker) {
+  if (!objectFreezeAccess(expression)) return false;
   const library = join(dirname(ts.getDefaultLibFilePath({})), "lib.es5.d.ts").replaceAll("\\", "/");
   const globals = directSymbol(checker, expression.expression)?.declarations ?? [];
   const functions = directSymbol(checker, expression.name)?.declarations ?? [];
@@ -651,16 +653,17 @@ function literalRegistryFreeze(value, context, seen) {
   return literalRegistryValue(value.arguments[0], { ...context, literalOnly: true }, seen);
 }
 
+function literalRegistryTree(value, context, seen) {
+  if (ts.isArrayLiteralExpression(value)) return literalRegistryArray(value, context, seen);
+  return ts.isObjectLiteralExpression(value)
+    ? literalRegistryObject(value, context, seen)
+    : undefined;
+}
 function literalRegistryValue(expression, context, seen = new Set()) {
   const value = unwrapExpression(expression);
   const primitive = literalPrimitive(value);
   if (primitive !== undefined) return primitive.value;
-  if (context.literalOnly === true) {
-    if (ts.isArrayLiteralExpression(value)) return literalRegistryArray(value, context, seen);
-    return ts.isObjectLiteralExpression(value)
-      ? literalRegistryObject(value, context, seen)
-      : undefined;
-  }
+  if (context.literalOnly === true) return literalRegistryTree(value, context, seen);
   if (ts.isIdentifier(value)) return literalRegistryIdentifier(value, context, seen);
   if (ts.isArrayLiteralExpression(value)) return literalRegistryArray(value, context, seen);
   if (ts.isPropertyAccessExpression(value)) return literalRegistryProperty(value, context, seen);

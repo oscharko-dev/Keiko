@@ -30,7 +30,11 @@ const binding: JiraHumanInputBinding = {
   actorUsername: "actor-name",
   expiresAt: 12345,
 };
-function fixture() {
+function fixture(): {
+  pending: PendingCodingJiraInput;
+  publish: ReturnType<typeof vi.fn>;
+  revoke: () => void;
+} {
   let current = true;
   const publish = vi.fn();
   const pending: PendingCodingJiraInput = {
@@ -45,7 +49,7 @@ function fixture() {
   return {
     pending,
     publish,
-    revoke: () => {
+    revoke: (): void => {
       current = false;
     },
   };
@@ -97,7 +101,20 @@ describe("current Coding input references carry no authority of their own", () =
 
 // The private custody and the ordinary Coding History owners are real here; the only remote
 // boundary is a synthetic native /myself response. No OpenCode question receives human values.
-function heldInputFixture(operation = "jira.login") {
+function heldInputFixture(operation = "jira.login"): {
+  privateState: import("../../../../tests/support/jira-private-custody-fixture.js").PrivateJiraCustodyFixture;
+  store: UiStore;
+  history: import("../store/codingHistory.js").CodingHistoryStore;
+  task: import("@oscharko-dev/keiko-contracts/bff-wire").CodingHistoryTask;
+  input: Parameters<typeof prepareCodingJiraHumanInput>[0];
+  inputs: Map<string, PendingCodingJiraInput>;
+  requested: Promise<JiraHumanInputView>;
+  http: import("vitest").Mock<AtlassianHttpBodyPort>;
+  controller: AbortController;
+  refreshHistory: import("vitest").Mock<(runId: string) => Promise<void>>;
+  notifications: string[];
+  revoke: () => void;
+} {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(1_800_000_000_000);
   const privateState = privateJiraCustodyFixture();
@@ -139,29 +156,35 @@ function heldInputFixture(operation = "jira.login") {
     const owner = nativeTranscript(runId, turn);
     return {
       ...owner,
-      humanInput: (started, view, correlationId) => {
+      humanInput: (started, view, correlationId): void => {
         owner.humanInput(started, view, correlationId);
         if (view.state === "awaiting-input") publishRequested?.(view);
       },
     };
   });
-  const http = vi.fn<AtlassianHttpBodyPort>(async () =>
-    response({
-      key: "actor-key",
-      name: "Native Actor",
-      displayName: "Current Name",
-      active: true,
-    }),
+  const http = vi.fn<AtlassianHttpBodyPort>(() =>
+    Promise.resolve(
+      response({
+        key: "actor-key",
+        name: "Native Actor",
+        displayName: "Current Name",
+        active: true,
+      }),
+    ),
   );
   const notifications: string[] = [];
-  const refreshHistory = vi.fn(async (runId: string) => {
-    const turn = history.nativeTurn(runId);
-    const message = history
-      .detail(task.id, "a".repeat(64))
-      ?.messages.find((row) => row.id === turn?.userMessageId);
-    expect(message?.toolTranscript?.exchanges[0]?.humanInput).toBeDefined();
-    notifications.push(runId);
-  });
+  const refreshHistory = vi.fn(
+    (runId: string): Promise<void> =>
+      new Promise((resolve) => {
+        const turn = history.nativeTurn(runId);
+        const message = history
+          .detail(task.id, "a".repeat(64))
+          ?.messages.find((row) => row.id === turn?.userMessageId);
+        expect(message?.toolTranscript?.exchanges[0]?.humanInput).toBeDefined();
+        notifications.push(runId);
+        resolve();
+      }),
+  );
   const input: Parameters<typeof prepareCodingJiraHumanInput>[0] = {
     deps: {
       store,
@@ -195,7 +218,7 @@ function heldInputFixture(operation = "jira.login") {
     controller,
     refreshHistory,
     notifications,
-    revoke: () => {
+    revoke: (): void => {
       active = false;
     },
   };
@@ -263,7 +286,8 @@ describe("Coding protected input on the existing native invocation and history",
     if (pending === undefined) throw new TypeError("Missing held invocation");
     const turn = f.history.nativeTurn("input-run");
     if (turn === undefined) throw new TypeError("Missing native turn");
-    const transcript = () =>
+    const transcript = ():
+      import("@oscharko-dev/keiko-contracts/bff-wire").ChatToolTranscript | undefined =>
       f.history
         .detail(turn.chatId, "a".repeat(64))
         ?.messages.find((message) => message.id === turn.userMessageId)?.toolTranscript;
@@ -346,7 +370,9 @@ describe("Coding protected input on the existing native invocation and history",
     if (pending === undefined) throw new TypeError("Missing held invocation");
     f.refreshHistory.mockClear();
     f.history.bindNativeTurn("input-run", "msg_next_input", "A later native turn");
-    expect(() => pending.publish(view)).toThrow();
+    expect(() => {
+      pending.publish(view);
+    }).toThrow();
     expect(f.refreshHistory).not.toHaveBeenCalled();
     f.controller.abort();
     await expect(preparation).rejects.toMatchObject({ reason: "aborted" });

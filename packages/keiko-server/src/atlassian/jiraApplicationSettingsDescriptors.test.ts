@@ -6,7 +6,9 @@ import {
   jiraApplicationSettingsDeclarationForTool,
 } from "./jiraApplicationSettingsDescriptors.js";
 
-function declaration(name: string) {
+function declaration(
+  name: string,
+): import("@oscharko-dev/keiko-contracts/runtime/managed-mcp").ManagedMcpToolDeclaration {
   const value = jiraApplicationSettingsDeclarationForTool(name);
   if (value === undefined) throw new TypeError("Missing application settings declaration");
   return value;

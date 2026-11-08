@@ -53,6 +53,19 @@ function assertLeaseScope(scope: unknown): asserts scope is "record" | "collecti
   if (scope !== "record" && scope !== "collection")
     throw new TypeError("Invalid secret vault lease scope");
 }
+function acquirePrivateLease(
+  storePath: string,
+  reference: string,
+  scope: "record" | "collection",
+): (() => void) | undefined {
+  if (typeof reference !== "string" || reference.length === 0 || reference.length > 512)
+    throw new TypeError("Invalid secret vault lease reference");
+  assertLeaseScope(scope);
+  // A fixed 256 stripes per scope bounds stable lock inodes over the lifetime of the vault.
+  // Hash collisions conservatively report busy; no owner is displaced or lock file unlinked.
+  const stripe = createHash("sha256").update(reference).digest("hex").slice(0, 2);
+  return acquire(storePath, `lease:${scope}:${stripe}`);
+}
 /** One owner for every writer and CAS, including separate BFFs using the same vault path. */
 export function serializedSecretVault(
   storePath: string,
@@ -66,12 +79,24 @@ export function serializedSecretVault(
     get: raw.get,
     has: raw.has,
     list: raw.list,
-    set: (reference, value) => guarded(() => raw.set(reference, value)),
+    set: (reference, value): void => {
+      guarded(() => {
+        raw.set(reference, value);
+      });
+    },
     // Batch writes take the guard inside their own logging wrapper, so a refusal is still recorded
     // as the operation's failure event.
     setMany: raw.setMany,
-    replaceAll: (entries) => guarded(() => raw.replaceAll(entries)),
-    delete: (reference) => guarded(() => raw.delete(reference)),
+    replaceAll: (entries): void => {
+      guarded(() => {
+        raw.replaceAll(entries);
+      });
+    },
+    delete: (reference): void => {
+      guarded(() => {
+        raw.delete(reference);
+      });
+    },
     deleteMany: raw.deleteMany,
     compareAndSet: (reference, expected, next) =>
       guarded(() => {
@@ -83,14 +108,6 @@ export function serializedSecretVault(
     acquireLease: (
       reference,
       scope: "record" | "collection" = "record",
-    ): (() => void) | undefined => {
-      if (typeof reference !== "string" || reference.length === 0 || reference.length > 512)
-        throw new TypeError("Invalid secret vault lease reference");
-      assertLeaseScope(scope);
-      // A fixed 256 stripes per scope bounds stable lock inodes over the lifetime of the vault.
-      // Hash collisions conservatively report busy; no owner is displaced or lock file unlinked.
-      const stripe = createHash("sha256").update(reference).digest("hex").slice(0, 2);
-      return acquire(storePath, `lease:${scope}:${stripe}`);
-    },
+    ): (() => void) | undefined => acquirePrivateLease(storePath, reference, scope),
   };
 }

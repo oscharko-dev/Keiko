@@ -16,7 +16,12 @@ const PRIORITY: AtlassianHttpBodyRequest = {
   jiraProjectPriority: true,
   bodyJson: '{"id":9}',
 };
-function fixture() {
+function fixture(): {
+  resolveForExecution: import("vitest").Mock<() => { scheme: "bearer-pat"; apiToken: string }>;
+  beforeDispatch: import("vitest").Mock<() => boolean>;
+  fetchImpl: import("vitest").Mock<typeof fetch>;
+  port: import("@oscharko-dev/keiko-connectors").AtlassianHttpBodyPort;
+} {
   const resolveForExecution = vi.fn(() => ({
     scheme: "bearer-pat" as const,
     apiToken: "synthetic-admitted-pat",
@@ -36,20 +41,38 @@ function fixture() {
     }),
   };
 }
+function observedTarget(value: unknown): string {
+  return String(value);
+}
+function projectReadResponse(input: unknown, suffix: string, status: number): Response {
+  const url = observedTarget(input);
+  if (url === `${BASE}/rest/api/2/project/syn`)
+    return Response.json({ id: "9007199254740993", key: "SYN", name: "Synthetic project" });
+  if (url === `${BASE}/rest/api/2/project/9007199254740993/${suffix}`)
+    return Response.json({ id: 9, name: "Synthetic scheme" }, { status });
+  throw new TypeError("Unexpected native project association request");
+}
 function projectReadFixture(
   name: "jira.project-priority-scheme" | "jira.project-permission-scheme",
   suffix: "priorityscheme" | "permissionscheme",
   status = 200,
-) {
+): {
+  beforeEffect: import("vitest").Mock<() => boolean>;
+  run: () => Promise<
+    import("@oscharko-dev/keiko-contracts/runtime/managed-mcp").ManagedMcpToolResult
+  >;
+  resolveForExecution: import("vitest").Mock<() => { scheme: "bearer-pat"; apiToken: string }>;
+  beforeDispatch: import("vitest").Mock<() => boolean>;
+  fetchImpl: import("vitest").Mock<typeof fetch>;
+  port: import("@oscharko-dev/keiko-connectors").AtlassianHttpBodyPort;
+} {
   const f = fixture();
-  f.fetchImpl.mockImplementation(async (input) => {
-    const url = String(input);
-    if (url === `${BASE}/rest/api/2/project/syn`)
-      return Response.json({ id: "9007199254740993", key: "SYN", name: "Synthetic project" });
-    if (url === `${BASE}/rest/api/2/project/9007199254740993/${suffix}`)
-      return Response.json({ id: 9, name: "Synthetic scheme" }, { status });
-    throw new TypeError("Unexpected native project association request");
-  });
+  f.fetchImpl.mockImplementation(
+    (input): Promise<Response> =>
+      new Promise((resolve) => {
+        resolve(projectReadResponse(input, suffix, status));
+      }),
+  );
   const provider = createJiraProviderForCatalog(
     () => ({ deployment: "data-center", baseUrl: BASE, http: f.port }),
     [name],
@@ -60,7 +83,9 @@ function projectReadFixture(
   return {
     ...f,
     beforeEffect,
-    run: () =>
+    run: (): Promise<
+      import("@oscharko-dev/keiko-contracts/runtime/managed-mcp").ManagedMcpToolResult
+    > =>
       tool.execute(
         { projectIdOrKey: "syn" },
         {
@@ -91,7 +116,7 @@ describe("closed native user/project experimental HTTP flags", () => {
       });
       expect(
         f.fetchImpl.mock.calls.map(([url, init]) => [
-          String(url),
+          observedTarget(url),
           init?.method,
           new Headers(init?.headers).get("X-ExperimentalApi"),
           init?.body,
@@ -113,7 +138,9 @@ describe("closed native user/project experimental HTTP flags", () => {
     });
     expect(f.fetchImpl).toHaveBeenCalledTimes(2);
     const primary = f.fetchImpl.mock.calls[1];
-    expect(String(primary?.[0])).toBe(`${BASE}/rest/api/2/project/9007199254740993/priorityscheme`);
+    expect(observedTarget(primary?.[0])).toBe(
+      `${BASE}/rest/api/2/project/9007199254740993/priorityscheme`,
+    );
     expect(new Headers(primary?.[1]?.headers).get("X-ExperimentalApi")).toBe("true");
   });
   it("rechecks admission before the priority GET without materialising further credentials", async () => {

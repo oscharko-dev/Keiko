@@ -16,7 +16,7 @@ export function jiraAvatarInspection(
   signal: AbortSignal,
 ): Pick<AvatarAdmission, "inspectImage"> {
   return {
-    inspectImage: async (bytes) => {
+    inspectImage: async (bytes): ReturnType<NonNullable<AvatarAdmission["inspectImage"]>> => {
       const admitted = await admitJiraAvatarImage({
         bytes,
         name: "avatar-image",
@@ -51,7 +51,7 @@ export function jiraChatAvatarComposition(
 ): Pick<AvatarAdmission, "inspectImage" | "sourceFor"> {
   return {
     ...jiraAvatarInspection(deps, options.signal),
-    sourceFor: (check) => {
+    sourceFor: (check): ReturnType<NonNullable<AvatarAdmission["sourceFor"]>> => {
       if (check) return jiraChatAvatarPreviewSource(deps, options);
       return async (request) => {
         if (request.purpose !== "jira-avatar-image")
