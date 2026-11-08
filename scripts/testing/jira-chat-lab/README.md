@@ -183,12 +183,12 @@ above is separate from the epic's 439-identity accounting.
 The AC1/AC2/AC4 source journey uses ordinary skill upload, validation and selection,
 Pod creation and connection, source selection, indexing, the composer and exact
 approvals. Supply the actual configured chat and embedding model identifiers and
-an existing seeded `REQ` board:
+an existing seeded board and its project key:
 
 ```sh
 KEIKO_JIRA_LAB_GATEWAY_CONFIG=/absolute/private/keiko.config.json \
   npm run jira:lab:browser-rules-knowledge -- /absolute/private/session actual-model-id \
-  actual-embedding-model-id existing-REQ-board-id
+  actual-embedding-model-id existing-board-id LIM7
 ```
 
 The group checks refused and corrected Epic writes in all three modes; Task, Bug
@@ -204,6 +204,18 @@ board backlog rows are evaluated separately. Keys and links must survive reload.
 An exclusive persisted intent prevents replay after an interrupted run; this group
 does not reset or clean up Jira. These authored sources still require current-head
 live execution and do not establish acceptance by themselves.
+
+The limit-run orchestrator reuses `installTemplates(ctx)` from `templates.mjs`
+and `runRuleProbes(ctx, { modes })` from `browser-rules-knowledge-journey.mjs`.
+Both take the runtime project from `ctx.projectKey` and use the existing signed-in
+Chat in `ctx.page`; they do not start another Keiko or Jira instance. Template
+installation uses the ordinary Skills controls and independent native project and
+field metadata. The probes require all three autonomy modes and verify the scoped
+formal refusal, zero approvals and unchanged native issues. Private step journals
+under `ctx.sessionDir` resume through `ctx.intent`: an interrupted pending step
+returns `unverified` without replay, while a completed step is independently
+reverified. The legacy CLI still defaults to `REQ` when its optional project key
+is omitted.
 
 ## Complete paginated search through ordinary Chat
 

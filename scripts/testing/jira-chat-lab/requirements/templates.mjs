@@ -12,6 +12,14 @@ import { toolExchangeOf, completedToolExchange } from "./tool-exchanges.mjs";
 const isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 const sameSet = (left, right) => left.size === right.size && [...left].every((id) => right.has(id));
 
+/** Runtime runs require an explicit key; the reusable Markdown builders retain their inputs. */
+export function runtimeTemplateProjectKey(projectKey) {
+  if (typeof projectKey !== "string" || !/^[A-Z][A-Z0-9_]{1,31}$/u.test(projectKey)) {
+    throw new TypeError("Invalid runtime template project key");
+  }
+  return projectKey;
+}
+
 /** The summary every epic of the lab starts with: `[LH-001] <title>`. */
 export const EPIC_SUMMARY_PATTERN = String.raw`^\[LH-\d{3}\] \S`;
 
@@ -42,7 +50,9 @@ export function templateMarkdown({
       ? [`requiredLabels: [${rule.labels.map((label) => quoted(label)).join(", ")}]`]
       : []),
     ...(parentField === undefined ? [] : [`parentField: ${quoted(parentField)}`]),
-    ...(parentIssueTypes === undefined ? [] : [`parentIssueTypes: [${parentIssueTypes.map(quoted).join(", ")}]`]),
+    ...(parentIssueTypes === undefined
+      ? []
+      : [`parentIssueTypes: [${parentIssueTypes.map(quoted).join(", ")}]`]),
     ...(requiredFields.length > 0
       ? [`requiredFields: [${requiredFields.map((field) => quoted(field)).join(", ")}]`]
       : []),
