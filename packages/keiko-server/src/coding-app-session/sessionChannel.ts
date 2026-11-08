@@ -1,3 +1,4 @@
+import type { SessionProofObservation, SessionProofRefusalReason } from "./sessionRegistry.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 // The authenticated local app-session channel primitive (ADR-0141 D2, D3, D6).
 //
@@ -57,15 +58,24 @@ export type CodingAppSessionRotateResult =
     }
   | { readonly rotated: false; readonly status?: "deferred" };
 
+export type CodingAppSessionRepairFailureReason =
+  SessionProofRefusalReason | "lifetime-insufficient" | "proof-unavailable";
+
 export type CodingAppSessionEnsureResult =
   | { readonly status: "active"; readonly maxAgeSeconds: number }
-  | { readonly status: "unavailable" };
+  | { readonly status: "unavailable"; readonly reason?: CodingAppSessionRepairFailureReason };
 
 export interface CodingAppSessionChannel {
   readonly browserApproval?: BrowserApprovalService | undefined;
   readonly pair: (attestation: unknown) => CodingAppSessionPairResult;
-  readonly ensureLocalSession: (cookieToken: string | undefined) => CodingAppSessionEnsureResult;
-  readonly snapshot: (cookieToken: string | undefined) => CodingAppSessionChannelSnapshot;
+  readonly ensureLocalSession: (
+    cookieToken: string | undefined,
+    observation?: SessionProofObservation,
+  ) => CodingAppSessionEnsureResult;
+  readonly snapshot: (
+    cookieToken: string | undefined,
+    observation?: SessionProofObservation,
+  ) => CodingAppSessionChannelSnapshot;
   readonly rotate: (
     cookieToken: string | undefined,
     correlationId?: string,
@@ -74,7 +84,10 @@ export interface CodingAppSessionChannel {
    * Revoke the session behind a presented cookie: true when one was revoked, false for an absent,
    * invalid, revoked or expired presentation, which leaves nothing to revoke.
    */
-  readonly signOut: (cookieToken: string | undefined) => boolean;
+  readonly signOut: (
+    cookieToken: string | undefined,
+    observation?: SessionProofObservation,
+  ) => boolean;
   readonly sessionCount: () => number;
   /**
    * Verify a presented cookie token into its live session, or `undefined` for every invalid,
@@ -82,16 +95,28 @@ export interface CodingAppSessionChannel {
    * (and the later W1.6–W1.9 content surfaces) enforce content-bearing reads with (#2478); a
    * successful verification refreshes the session's inactivity window.
    */
-  readonly verifySession: (cookieToken: string | undefined) => AppSession | undefined;
+  readonly verifySession: (
+    cookieToken: string | undefined,
+    observation?: SessionProofObservation,
+  ) => AppSession | undefined;
   /** Explicit request activity protects only idle expiry and returns idempotent cleanup. */
-  readonly beginOperation: (cookieToken: string | undefined) => (() => void) | undefined;
-  readonly inspectOperationCount?: (cookieToken: string | undefined) => number | undefined;
+  readonly beginOperation: (
+    cookieToken: string | undefined,
+    observation?: SessionProofObservation,
+  ) => (() => void) | undefined;
+  readonly inspectOperationCount?: (
+    cookieToken: string | undefined,
+    observation?: SessionProofObservation,
+  ) => number | undefined;
   /** Non-touching: whether an issued session id still names a live session; never refreshes it. */
   readonly isSessionLive?: (sessionId: string) => boolean;
   readonly subscribe: (
     cookieToken: string | undefined,
     listener: (snapshot: CodingAppSessionChannelSnapshot) => boolean,
-    options?: { readonly deferAdmissionReleaseOnBackpressure?: boolean },
+    options?: {
+      readonly deferAdmissionReleaseOnBackpressure?: boolean;
+      readonly observation?: SessionProofObservation;
+    },
   ) => {
     readonly snapshot: CodingAppSessionChannelSnapshot;
     readonly live: boolean;
@@ -164,8 +189,9 @@ function subscribeToContent(
   admission: LiveSubscriptionAdmission,
   diagnostics: ServerDiagnosticSink | undefined,
   deferAdmissionReleaseOnBackpressure: boolean,
+  observation: SessionProofObservation,
 ): ReturnType<CodingAppSessionChannel["subscribe"]> {
-  const session = registry.verify(cookieToken);
+  const session = registry.verify(cookieToken, observation);
   const snapshot =
     session === undefined
       ? contentFreeCodingAppSessionChannelSnapshot()
@@ -181,7 +207,8 @@ function subscribeToContent(
     listener,
     admission,
     diagnostics,
-    correlationId: session.sessionId,
+    correlationId: observation.correlationId ?? UNKNOWN_CORRELATION_ID,
+    observation,
     deferAdmissionReleaseOnBackpressure,
   });
 }
@@ -309,6 +336,7 @@ function makePublish(
 }
 
 interface LiveSubscriptionInput {
+  readonly observation: SessionProofObservation;
   readonly registry: SessionRegistry;
   readonly contentSource: CodingAppSessionContentSource;
   readonly cookieToken: string | undefined;
@@ -365,7 +393,7 @@ function liveSubscription(
   const stop = (): void => {
     stopLiveSource(lifecycle);
   };
-  const validity = (): boolean => registry.inspect(cookieToken) !== undefined;
+  const validity = (): boolean => registry.inspect(cookieToken, input.observation) !== undefined;
   const { publish, reportBackpressure } = livePublisher(input, lifecycle, detach, validity);
   const sourceSubscription = contentSource.subscribeContent?.(publish);
   if (!sourceSubscription?.admitted)
@@ -412,10 +440,19 @@ function pairSession(
 function ensureLocalSession(
   registry: SessionRegistry,
   cookieToken: string | undefined,
+  observation: SessionProofObservation = {},
 ): CodingAppSessionEnsureResult {
-  const remainingMs = registry.verifyForCookieRepair(cookieToken);
-  return remainingMs === undefined || remainingMs < 1_000
-    ? { status: "unavailable" }
+  let reason: CodingAppSessionRepairFailureReason = "proof-unavailable";
+  const remainingMs = registry.verifyForCookieRepair(cookieToken, {
+    ...observation,
+    onRefusal: (observed) => {
+      reason = observed;
+      observation.onRefusal?.(observed);
+    },
+  });
+  if (remainingMs === undefined) return { status: "unavailable", reason };
+  return remainingMs < 1_000
+    ? { status: "unavailable", reason: "lifetime-insufficient" }
     : { status: "active", maxAgeSeconds: Math.floor(remainingMs / 1000) };
 }
 
@@ -424,15 +461,23 @@ function rotateSession(
   cookieToken: string | undefined,
   correlationId: string,
 ): CodingAppSessionRotateResult {
-  if (ensureLocalSession(registry, cookieToken).status === "unavailable") return { rotated: false };
-  const session = registry.verify(cookieToken);
+  if (
+    ensureLocalSession(registry, cookieToken, { correlationId, purpose: "rotation" }).status ===
+    "unavailable"
+  )
+    return { rotated: false };
+  const session = registry.verify(cookieToken, { correlationId, purpose: "rotation" });
   if (session === undefined) return { rotated: false };
   const mint = registry.rotate(session.sessionId, { onlyIfIdle: true, correlationId });
   if (mint === undefined)
-    return (registry.inspectOperationCount(cookieToken) ?? 0) > 0
+    return (registry.inspectOperationCount(cookieToken, { correlationId, purpose: "rotation" }) ??
+      0) > 0
       ? { rotated: false, status: "deferred" }
       : { rotated: false };
-  const remainingMs = registry.verifyForCookieRepair(mint.cookieToken);
+  const remainingMs = registry.verifyForCookieRepair(mint.cookieToken, {
+    correlationId,
+    purpose: "rotation",
+  });
   if (remainingMs === undefined || remainingMs < 1_000) {
     registry.revoke(mint.session.sessionId);
     return { rotated: false };
@@ -454,30 +499,30 @@ export function createCodingAppSessionChannel(
     browserApproval: deps.browserApproval,
     pair: (attestation: unknown): CodingAppSessionPairResult =>
       pairSession(registry, pairingPort, attestation),
-    ensureLocalSession: (cookieToken: string | undefined): CodingAppSessionEnsureResult => {
-      return ensureLocalSession(registry, cookieToken);
+    ensureLocalSession: (cookieToken, observation): CodingAppSessionEnsureResult => {
+      return ensureLocalSession(registry, cookieToken, observation);
     },
-    snapshot: (cookieToken: string | undefined): CodingAppSessionChannelSnapshot => {
-      const session = registry.verify(cookieToken);
+    snapshot: (cookieToken, observation): CodingAppSessionChannelSnapshot => {
+      const session = registry.verify(cookieToken, observation);
       if (session === undefined) return contentFreeCodingAppSessionChannelSnapshot();
       return projectContent(session, contentSource);
     },
     rotate: (cookieToken, correlationId = UNKNOWN_CORRELATION_ID): CodingAppSessionRotateResult =>
       rotateSession(registry, cookieToken, correlationId),
-    signOut: (cookieToken: string | undefined): boolean => {
-      const session = registry.verify(cookieToken);
+    signOut: (cookieToken, observation): boolean => {
+      const session = registry.verify(cookieToken, observation);
       if (session === undefined) return false;
       registry.revoke(session.sessionId);
       return true;
     },
     sessionCount: (): number => registry.sessionCount(),
-    verifySession: (cookieToken: string | undefined): AppSession | undefined =>
-      registry.verify(cookieToken),
-    inspectOperationCount: (cookieToken: string | undefined): number | undefined =>
-      registry.inspectOperationCount(cookieToken),
+    verifySession: (cookieToken, observation): AppSession | undefined =>
+      registry.verify(cookieToken, observation),
+    inspectOperationCount: (cookieToken, observation): number | undefined =>
+      registry.inspectOperationCount(cookieToken, observation),
     isSessionLive: (sessionId: string): boolean => registry.inspectSession(sessionId) !== undefined,
-    beginOperation: (cookieToken: string | undefined): (() => void) | undefined =>
-      registry.beginOperation(cookieToken),
+    beginOperation: (cookieToken, observation): (() => void) | undefined =>
+      registry.beginOperation(cookieToken, observation),
     subscribe: (cookieToken, listener, options) =>
       subscribeToContent(
         registry,
@@ -487,6 +532,7 @@ export function createCodingAppSessionChannel(
         admission,
         diagnostics,
         options?.deferAdmissionReleaseOnBackpressure ?? false,
+        options?.observation ?? {},
       ),
   };
 }

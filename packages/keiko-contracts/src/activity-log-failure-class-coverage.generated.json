@@ -8642,7 +8642,11 @@
           "coding-app-session.local-session.confirmed",
           "coding-app-session.paired"
         ],
-        "failure": ["coding-app-session.local-session.denied"],
+        "failure": [
+          "coding-app-session.local-session.denied",
+          "coding-app-session.local-session.refused",
+          "coding-app-session.proof.refused"
+        ],
         "loss": []
       },
       "causalEdges": [
@@ -8667,11 +8671,19 @@
           "mode": "correlation"
         },
         {
+          "op": "coding-app-session.local-session.refused",
+          "mode": "correlation"
+        },
+        {
           "op": "coding-app-session.operation.state",
           "mode": "correlation"
         },
         {
           "op": "coding-app-session.paired",
+          "mode": "correlation"
+        },
+        {
+          "op": "coding-app-session.proof.refused",
           "mode": "correlation"
         }
       ],
@@ -8861,6 +8873,48 @@
           "missingObligations": []
         },
         {
+          "op": "coding-app-session.local-session.refused",
+          "owner": "keiko-server",
+          "category": "http",
+          "lifecycle": "failure",
+          "causal": "correlation",
+          "analyzerProjection": "failure-cluster",
+          "safeContextFields": [
+            {
+              "name": "count",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "distinctProofCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "presentedProofCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["coding-app-session.local-session.refused.reason"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
           "op": "coding-app-session.operation.state",
           "owner": "keiko-server",
           "category": "diagnostic",
@@ -8947,6 +9001,60 @@
             "causeChain": false
           },
           "proofIds": ["coding-app-session.paired.request"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "coding-app-session.proof.refused",
+          "owner": "keiko-server",
+          "category": "http",
+          "lifecycle": "failure",
+          "causal": "correlation",
+          "analyzerProjection": "failure-cluster",
+          "safeContextFields": [
+            {
+              "name": "distinctProofCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "presentedProofCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "purpose",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "registered",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "sessionCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["coding-app-session.proof.refused.reason"],
           "replayReferences": [],
           "missingObligations": []
         }

@@ -22,7 +22,7 @@ import {
   DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
-import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { UNKNOWN_CORRELATION_ID, resolveCorrelationId } from "../correlation.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "../process-log-sink.js";
 import { STREAMING } from "../route-outcome.js";
@@ -40,9 +40,13 @@ import {
   APP_SESSION_COOKIE_MAX_AGE_SECONDS,
   clearSessionCookies,
   readSessionCookie,
+  readSessionCookieObservation,
   requestIsSecure,
   serializeSessionCookies,
 } from "./sessionCookie.js";
+
+import { SESSION_PROOF_REFUSAL_REASONS } from "./sessionRegistry.js";
+import type { CodingAppSessionRepairFailureReason } from "./sessionChannel.js";
 
 const MAX_PAIRING_BODY_BYTES = 8 * 1_024;
 export { CODING_APP_SESSION_STREAM_DRAIN_TIMEOUT_MS };
@@ -151,6 +155,53 @@ const LOCAL_SESSION_DENIED_OPERATION = defineActivityLogOperation({
   proofIds: ["coding-app-session.local-session.denied.request"],
   releaseImpact: "patch",
 });
+
+const LOCAL_SESSION_REFUSED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-app-session.local-session.refused",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "coding-app-session.codingAppSessionRoutes.localSessionRefused",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        ...SESSION_PROOF_REFUSAL_REASONS,
+        "lifetime-insufficient",
+        "proof-unavailable",
+        "channel-unavailable",
+      ],
+    },
+    count: { type: "integer", dataClass: "count", required: true },
+    presentedProofCount: { type: "integer", dataClass: "count", required: true },
+    distinctProofCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-app-session-pairing"],
+  proofIds: ["coding-app-session.local-session.refused.reason"],
+  releaseImpact: "patch",
+});
+
+function localSessionRefused(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  reason: CodingAppSessionRepairFailureReason | "channel-unavailable",
+): RouteResult {
+  const { presentedProofCount, distinctProofCount } = readSessionCookieObservation(ctx.req);
+  appSessionActivity(deps).write(
+    activityLogEvent(
+      LOCAL_SESSION_REFUSED_OPERATION,
+      { level: "info", correlationId: ctx.correlationId ?? resolveCorrelationId(ctx.req) },
+      { reason, count: 1, presentedProofCount, distinctProofCount },
+    ),
+  );
+  return localSessionDenied(ctx, deps);
+}
 
 function localSessionDenied(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   resolveCodingAppSessionDenialWindows(deps).recordLocalSessionDenial(Date.now(), (count) => {
@@ -362,10 +413,20 @@ export function handleCodingAppSessionLocalSession(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): RouteResult {
-  const cookieToken = readSessionCookie(ctx.req);
-  const result = deps.codingAppSessionChannel?.ensureLocalSession(cookieToken);
+  const { cookieToken, ...observation } = readSessionCookieObservation(ctx.req);
+  const result = deps.codingAppSessionChannel?.ensureLocalSession(cookieToken, {
+    ...observation,
+    correlationId: ctx.correlationId ?? resolveCorrelationId(ctx.req),
+    purpose: "repair",
+  });
   if (result?.status !== "active" || cookieToken === undefined)
-    return localSessionDenied(ctx, deps);
+    return localSessionRefused(
+      ctx,
+      deps,
+      result?.status === "unavailable"
+        ? (result.reason ?? "proof-unavailable")
+        : "channel-unavailable",
+    );
   const maxAgeSeconds = Math.min(APP_SESSION_COOKIE_MAX_AGE_SECONDS, result.maxAgeSeconds);
   const headers = issuedCookie(ctx.req, cookieToken, maxAgeSeconds);
   appSessionActivity(deps).write(
@@ -385,7 +446,7 @@ function currentSnapshot(
   const channel = deps.codingAppSessionChannel;
   return channel === undefined
     ? contentFreeCodingAppSessionChannelSnapshot()
-    : channel.snapshot(readSessionCookie(req));
+    : channel.snapshot(readSessionCookie(req), { correlationId: resolveCorrelationId(req) });
 }
 
 /** GET /channel — authenticated snapshot read; content-free for an unpaired caller (fail closed). */
@@ -510,6 +571,10 @@ export function openCodingAppSessionStream(
   });
   const subscription = channel.subscribe(cookieToken, writer.publish, {
     deferAdmissionReleaseOnBackpressure: true,
+    observation: {
+      correlationId: correlationId ?? resolveCorrelationId(req),
+      purpose: "inspection",
+    },
   });
   reportStall = subscription.reportBackpressure;
   if (writer.isClosing() || !writer.writeInitial(subscription.snapshot) || !subscription.live) {
@@ -560,7 +625,11 @@ export function handleCodingAppSessionSignOut(ctx: RouteContext, deps: UiHandler
   // Only a sign-out that revoked a session is logged, as only a rotation that rotated one is: an
   // absent or unknown cookie, or a repeated sign-out from a stale tab, revoked nothing, and the
   // response is the same either way (PR #3452 review).
-  if (deps.codingAppSessionChannel?.signOut(readSessionCookie(ctx.req)) === true) {
+  if (
+    deps.codingAppSessionChannel?.signOut(readSessionCookie(ctx.req), {
+      correlationId: ctx.correlationId ?? resolveCorrelationId(ctx.req),
+    }) === true
+  ) {
     appSessionActivity(deps).write(
       activityLogEvent(
         CODING_APP_SESSION_SIGNED_OUT_OPERATION,

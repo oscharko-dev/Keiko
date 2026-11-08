@@ -339,6 +339,14 @@ it("records deferred rotation and observed expiry without session identities or 
       completeness: "complete",
       loss: "none",
     },
+    {
+      reason: "inactivity",
+      purpose: "inspection",
+      registered: true,
+      sessionCount: 0,
+      completeness: "complete",
+      loss: "none",
+    },
   ]);
   expectActivityLogProof(
     "coding-app-session.rotation.state.observation",

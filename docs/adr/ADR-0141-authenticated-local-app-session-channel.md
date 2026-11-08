@@ -343,7 +343,15 @@ A refused `local-session` cookie repair returns HTTP 401 with the closed `unavai
 no cookie. The browser records it as a failed repair and never treats it as confirmation. The
 existing Activity Log records `coding-app-session.local-session.denied` with the single closed
 reason `authority-unavailable` and the aggregate `count`, at warning level when the pairing-denial threshold is reached, at most once per minute per composed server. It contains no
-identity, cookie or caller-provided content. Pairing acknowledgement semantics remain unchanged.
+identity, cookie or caller-provided content. Every failed repair also records
+`coding-app-session.local-session.refused` for its request, with count one and a closed reason.
+`coding-app-session.proof.refused` records refused proofs while sessions remain registered,
+distinguishing missing/malformed proofs, an unregistered session, a secret mismatch and the
+existing expiry reasons. These lines carry only the request correlation, closed purpose,
+registered flag and counts (including presented/distinct cookie counts where available).
+They expose no bearer, session identity or personal content. Repeated observations of the same
+HTTP request reuse its canonical generated correlation. These diagnostics do not widen authority
+or refresh rejected proofs. Pairing acknowledgement semantics remain unchanged.
 
 Explicit normal Chat sends verify an optionally presented existing session so active conversation
 refreshes the inactivity window. Ordinary Chat does not require a launcher session, and verification

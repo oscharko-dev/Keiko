@@ -29,6 +29,25 @@ export interface AppSession {
   readonly rotationCount: number;
 }
 
+export const SESSION_PROOF_REFUSAL_REASONS = [
+  "approval",
+  "inactivity",
+  "invalid-clock",
+  "lifetime",
+  "proof-malformed",
+  "proof-missing",
+  "secret-mismatch",
+  "session-unregistered",
+] as const;
+export type SessionProofRefusalReason = (typeof SESSION_PROOF_REFUSAL_REASONS)[number];
+export interface SessionProofObservation {
+  readonly correlationId?: string;
+  readonly purpose?: "verification" | "inspection" | "repair" | "operation" | "rotation";
+  readonly presentedProofCount?: number;
+  readonly distinctProofCount?: number;
+  readonly onRefusal?: (reason: SessionProofRefusalReason) => void;
+}
+
 /** The result of issuing or rotating a session: the descriptor plus the cookie value to set. */
 export interface SessionMint {
   readonly session: AppSession;
@@ -45,17 +64,32 @@ export interface SessionRegistry {
     principalLabel: string,
     approval: SessionApprovalBinding,
   ) => SessionMint;
-  readonly verify: (cookieToken: string | undefined) => AppSession | undefined;
+  readonly verify: (
+    cookieToken: string | undefined,
+    observation?: SessionProofObservation,
+  ) => AppSession | undefined;
   /** Non-touching validity check for persistent server streams; never refreshes idle expiry. */
-  readonly inspect: (cookieToken: string | undefined) => AppSession | undefined;
+  readonly inspect: (
+    cookieToken: string | undefined,
+    observation?: SessionProofObservation,
+  ) => AppSession | undefined;
   /** Owner-only non-touching lookup for management of an already issued session. */
   readonly inspectSession: (sessionId: string) => AppSession | undefined;
   /** Confirm existing authority and return its remaining absolute cookie lifetime. */
-  readonly verifyForCookieRepair: (cookieToken: string | undefined) => number | undefined;
+  readonly verifyForCookieRepair: (
+    cookieToken: string | undefined,
+    observation?: SessionProofObservation,
+  ) => number | undefined;
   /** Non-touching count for body-free operation lifecycle evidence. */
-  readonly inspectOperationCount: (cookieToken: string | undefined) => number | undefined;
+  readonly inspectOperationCount: (
+    cookieToken: string | undefined,
+    observation?: SessionProofObservation,
+  ) => number | undefined;
   /** Protect a valid session from idle expiry only while an explicit operation remains active. */
-  readonly beginOperation: (cookieToken: string | undefined) => (() => void) | undefined;
+  readonly beginOperation: (
+    cookieToken: string | undefined,
+    observation?: SessionProofObservation,
+  ) => (() => void) | undefined;
   /** Approval retries defer atomically while a browser operation still owns its current bearer. */
   readonly rotate: (
     sessionId: string,
@@ -183,6 +217,77 @@ function recordRotation(
       { activeOperationCount, reason: "active-operation" },
     ),
   );
+}
+
+const PROOF_REFUSED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-app-session.proof.refused",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "coding-app-session.sessionRegistry.recordProofRefusal",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: SESSION_PROOF_REFUSAL_REASONS,
+    },
+    purpose: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["verification", "inspection", "repair", "operation", "rotation"],
+    },
+    registered: { type: "boolean", dataClass: "closed-enum", required: true },
+    sessionCount: { type: "integer", dataClass: "count", required: true },
+    presentedProofCount: { type: "integer", dataClass: "count", required: false },
+    distinctProofCount: { type: "integer", dataClass: "count", required: false },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-app-session-pairing"],
+  proofIds: ["coding-app-session.proof.refused.reason"],
+  releaseImpact: "patch",
+});
+function recordProofRefusal(
+  state: RegistryState,
+  reason: SessionProofRefusalReason,
+  registered: boolean,
+  observation: SessionProofObservation,
+): void {
+  observation.onRefusal?.(reason);
+  if (!registered && state.sessions.size === 0) return;
+  state.activityLog?.write(
+    activityLogEvent(
+      PROOF_REFUSED_OPERATION,
+      { level: "info", correlationId: observation.correlationId ?? UNKNOWN_CORRELATION_ID },
+      {
+        reason,
+        registered,
+        sessionCount: state.sessions.size,
+        purpose: observation.purpose ?? "verification",
+        ...(observation.presentedProofCount === undefined
+          ? {}
+          : { presentedProofCount: observation.presentedProofCount }),
+        ...(observation.distinctProofCount === undefined
+          ? {}
+          : { distinctProofCount: observation.distinctProofCount }),
+      },
+    ),
+  );
+}
+function observedExpiryReason(
+  state: RegistryState,
+  stored: StoredSession,
+  nowMs: number,
+): SessionProofRefusalReason {
+  return stored.approval !== undefined &&
+    Number.isSafeInteger(nowMs) &&
+    nowMs >= stored.approval.expiresAtMs
+    ? "approval"
+    : expiryReason(state, stored, nowMs);
 }
 
 type ExpiryReason = "approval" | "lifetime" | "inactivity" | "invalid-clock";
@@ -348,18 +453,33 @@ function verifySession(
   state: RegistryState,
   cookieToken: string | undefined,
   touch: boolean,
+  observation: SessionProofObservation = {},
 ): AppSession | undefined {
-  if (cookieToken === undefined) return undefined;
-  const parsed = parseCookieToken(cookieToken);
-  if (parsed === undefined) return undefined;
-  const stored = state.sessions.get(parsed.sessionId);
-  if (stored === undefined) return undefined;
-  const nowMs = state.now();
-  if (isExpired(state, stored, nowMs)) {
-    expireStoredSession(state, stored, nowMs);
+  if (cookieToken === undefined) {
+    recordProofRefusal(state, "proof-missing", false, observation);
     return undefined;
   }
-  if (!timingSafeEqual(saltedHash(state.salt, parsed.secret), stored.secretHash)) return undefined;
+  const parsed = parseCookieToken(cookieToken);
+  if (parsed === undefined) {
+    recordProofRefusal(state, "proof-malformed", false, observation);
+    return undefined;
+  }
+  const stored = state.sessions.get(parsed.sessionId);
+  if (stored === undefined) {
+    recordProofRefusal(state, "session-unregistered", false, observation);
+    return undefined;
+  }
+  const nowMs = state.now();
+  if (isExpired(state, stored, nowMs)) {
+    const reason = observedExpiryReason(state, stored, nowMs);
+    expireStoredSession(state, stored, nowMs);
+    recordProofRefusal(state, reason, true, observation);
+    return undefined;
+  }
+  if (!timingSafeEqual(saltedHash(state.salt, parsed.secret), stored.secretHash)) {
+    recordProofRefusal(state, "secret-mismatch", true, observation);
+    return undefined;
+  }
   if (touch) stored.lastSeenAtMs = nowMs;
   return describe(stored);
 }
@@ -367,14 +487,23 @@ function verifySession(
 function verifyForCookieRepair(
   state: RegistryState,
   cookieToken: string | undefined,
+  observation: SessionProofObservation = {},
 ): number | undefined {
-  const verified = verifySession(state, cookieToken, true);
+  const verified = verifySession(state, cookieToken, true, {
+    ...observation,
+    purpose: observation.purpose ?? "repair",
+  });
   if (verified === undefined) return undefined;
   const nowMs = state.now();
   const stored = state.sessions.get(verified.sessionId);
-  if (stored === undefined) return undefined;
+  if (stored === undefined) {
+    recordProofRefusal(state, "session-unregistered", false, observation);
+    return undefined;
+  }
   if (isExpired(state, stored, nowMs)) {
+    const reason = observedExpiryReason(state, stored, nowMs);
     expireStoredSession(state, stored, nowMs);
+    recordProofRefusal(state, reason, true, observation);
     return undefined;
   }
   const remaining = state.absoluteTtlMs - (nowMs - verified.issuedAtMs);
@@ -428,8 +557,9 @@ function rotateSession(
 function beginSessionOperation(
   state: RegistryState,
   cookieToken: string | undefined,
+  observation: SessionProofObservation = {},
 ): (() => void) | undefined {
-  const session = verifySession(state, cookieToken, true);
+  const session = verifySession(state, cookieToken, true, { ...observation, purpose: "operation" });
   if (session === undefined) return undefined;
   const stored = state.sessions.get(session.sessionId);
   if (stored === undefined) return undefined;
@@ -450,8 +580,8 @@ function beginSessionOperation(
   };
 }
 
-export function createSessionRegistry(deps: SessionRegistryDeps = {}): SessionRegistry {
-  const state: RegistryState = {
+function createRegistryState(deps: SessionRegistryDeps): RegistryState {
+  return {
     sessions: new Map<string, StoredSession>(),
     activityLog: deps.activityLog,
     observeApprovalExpiry: deps.observeApprovalExpiry,
@@ -463,26 +593,36 @@ export function createSessionRegistry(deps: SessionRegistryDeps = {}): SessionRe
     mintSessionId: deps.mintSessionId ?? defaultSessionId,
     mintSecret: deps.mintSecret ?? defaultSecret,
   };
+}
+
+export function createSessionRegistry(deps: SessionRegistryDeps = {}): SessionRegistry {
+  const state = createRegistryState(deps);
   return {
     mint: (principalLabel: string): SessionMint => mintSession(state, principalLabel),
     mintForApproval: (principalLabel, approval): SessionMint =>
       mintSession(state, principalLabel, approval),
-    verify: (cookieToken: string | undefined): AppSession | undefined =>
-      verifySession(state, cookieToken, true),
-    inspect: (cookieToken: string | undefined): AppSession | undefined =>
-      verifySession(state, cookieToken, false),
+    verify: (cookieToken, observation): AppSession | undefined =>
+      verifySession(state, cookieToken, true, observation),
+    inspect: (cookieToken, observation): AppSession | undefined =>
+      verifySession(state, cookieToken, false, {
+        ...observation,
+        purpose: observation?.purpose ?? "inspection",
+      }),
     inspectSession: (sessionId: string): AppSession | undefined =>
       inspectOwnedSession(state, sessionId),
-    inspectOperationCount: (cookieToken: string | undefined): number | undefined => {
-      const session = verifySession(state, cookieToken, false);
+    inspectOperationCount: (cookieToken, observation): number | undefined => {
+      const session = verifySession(state, cookieToken, false, {
+        ...observation,
+        purpose: observation?.purpose ?? "inspection",
+      });
       return session === undefined
         ? undefined
         : state.sessions.get(session.sessionId)?.activeOperationCount;
     },
-    verifyForCookieRepair: (cookieToken: string | undefined): number | undefined =>
-      verifyForCookieRepair(state, cookieToken),
-    beginOperation: (cookieToken: string | undefined): (() => void) | undefined =>
-      beginSessionOperation(state, cookieToken),
+    verifyForCookieRepair: (cookieToken, observation): number | undefined =>
+      verifyForCookieRepair(state, cookieToken, observation),
+    beginOperation: (cookieToken, observation): (() => void) | undefined =>
+      beginSessionOperation(state, cookieToken, observation),
     rotate: (sessionId, options): SessionMint | undefined =>
       rotateSession(
         state,

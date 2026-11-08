@@ -104,6 +104,7 @@ async function handleRequest(ctx: RouteContext, deps: UiHandlerDeps): Promise<Ro
 function handleInspect(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const snapshot = deps.codingAppSessionChannel?.browserApproval?.snapshot(
     readSessionCookie(ctx.req),
+    { correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID, purpose: "inspection" },
   );
   recordApproval(
     ctx,
@@ -123,8 +124,9 @@ async function handleApprove(ctx: RouteContext, deps: UiHandlerDeps): Promise<Ro
   const body = await readPairingBody(ctx.req);
   const accepted =
     requestOrigin(ctx) !== undefined &&
-    deps.codingAppSessionChannel?.browserApproval?.approve(readSessionCookie(ctx.req), body) ===
-      true;
+    deps.codingAppSessionChannel?.browserApproval?.approve(readSessionCookie(ctx.req), body, {
+      correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+    }) === true;
   recordApproval(ctx, deps, "approve", accepted ? "accepted" : "unavailable");
   return {
     status: 200,
@@ -179,8 +181,9 @@ async function handleRevoke(ctx: RouteContext, deps: UiHandlerDeps): Promise<Rou
   const accepted =
     requestOrigin(ctx) !== undefined &&
     isBrowserApprovalId(body) &&
-    deps.codingAppSessionChannel?.browserApproval?.revoke(readSessionCookie(ctx.req), body) ===
-      true;
+    deps.codingAppSessionChannel?.browserApproval?.revoke(readSessionCookie(ctx.req), body, {
+      correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+    }) === true;
   recordApproval(ctx, deps, "revoke", accepted ? "accepted" : "unavailable");
   return {
     status: 200,
