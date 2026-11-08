@@ -677,6 +677,7 @@ export function withLocalCheckout(
       managed.list(repositoryRoot).filter((instance) => instance.executionLocation !== "local"),
     listAll: (): readonly WorkspaceInstance[] =>
       managed.listAll().filter((instance) => instance.executionLocation !== "local"),
+    selectable: (workspaceId): boolean => instances.getById(workspaceId) !== undefined,
     getActive,
     setActive: (request): Promise<ActiveWorkspaceView> =>
       setActiveWithLocal(request, managed, store, instances, pointerStore, getActive, activityLog),

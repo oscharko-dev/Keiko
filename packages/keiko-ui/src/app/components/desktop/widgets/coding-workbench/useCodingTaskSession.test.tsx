@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodingHistoryDetail } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -670,6 +671,45 @@ describe("pending history activation scope", () => {
     expect(workspace.switchTo).not.toHaveBeenCalled();
     expect(result.current.detail).toBeNull();
     expect(result.current.pending).toBe(false);
+  });
+
+  // #4271: React mounts a new window twice in development (StrictMode); the remount discarded the
+  // pick's read as stale and never read it again, so the window stayed on "Loading task…".
+  it("opens a task picked from Coding History when the window mounts twice", async () => {
+    const workspace = activeWorkspace();
+    const handled = vi.fn();
+    const { result } = renderHook(
+      () =>
+        useCodingTaskSession({
+          snapshot: null,
+          active: false,
+          root: "/repo",
+          workspace,
+          selection: "chat-one",
+          onSelectionHandled: handled,
+        }),
+      { wrapper: StrictMode },
+    );
+    await waitFor(() => expect(result.current.conversationId).toBe("chat-one"));
+    expect(result.current.pending).toBe(false);
+    expect(workspace.switchTo).toHaveBeenCalledWith("ws-one");
+  });
+
+  it("requests one new workspace for New task when the window mounts twice", async () => {
+    const workspace = activeWorkspace();
+    const { result } = renderHook(
+      () =>
+        useCodingTaskSession({
+          snapshot: null,
+          active: false,
+          root: "/repo",
+          workspace,
+          selection: "new:1",
+        }),
+      { wrapper: StrictMode },
+    );
+    await waitFor(() => expect(result.current.pending).toBe(false));
+    expect(workspace.provision).toHaveBeenCalledOnce();
   });
 
   it("does not switch the global workspace after the workbench unmounts", async () => {

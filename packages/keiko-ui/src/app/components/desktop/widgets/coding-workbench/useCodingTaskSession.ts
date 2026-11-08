@@ -551,6 +551,15 @@ function useSessionSelection(
   const selectionHandled = useRef(input.onSelectionHandled);
   selectionHandled.current = input.onSelectionHandled;
   const lastSelection = useRef<string | undefined>(undefined);
+  // #4271: an unmount discards the read of a picked task as stale. When React mounts the window
+  // again (development StrictMode, a preserved subtree), the pick is read anew instead of leaving
+  // the window on "Loading task…". A New task pick is not repeated: it provisions a workspace.
+  useEffect(
+    () => (): void => {
+      if (lastSelection.current?.startsWith("new:") !== true) lastSelection.current = undefined;
+    },
+    [],
+  );
   useEffect(() => {
     // #3631: the host consumes a selection by clearing it, so picking the same task again is a new
     // pick — a failed activation can be retried from Coding History without choosing another task.

@@ -255,6 +255,10 @@ export interface WorkspaceLifecycleService {
   // selected folder hid every other repository's workspaces (a paused one could not be resumed
   // after a reload; observed live, 2026-09-03).
   readonly listAll: () => readonly WorkspaceInstance[];
+  // Whether `setActive` can select this persisted workspace. The inventory above leaves out Local
+  // checkouts and folders, which `setActive` still reselects in place: a Coding History task of
+  // another checkout reopens through it (#4271). Absent, the inventory decides.
+  readonly selectable?: ((workspaceId: string) => boolean) | undefined;
   // Current active instance + derived binding + pointer, or undefined in unbound mode.
   // The request's correlation id, so a refused or unprovable binding on the read path joins the
   // request timeline; a proof that cannot run throws the classified IDENTITY_PROOF_FAILED (#3376).
