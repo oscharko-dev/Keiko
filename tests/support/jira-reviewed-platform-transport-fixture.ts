@@ -14,7 +14,7 @@ interface NativeCase {
   readonly path: string;
   readonly method: "POST" | "PUT" | "DELETE";
   readonly body: Parameters<JiraMutationRequest>[2];
-  readonly acknowledgement: "json" | "none";
+  readonly acknowledgement: "json" | "json-array" | "none";
   readonly bodyText?: "true" | "false";
 }
 /** Only a bridge to independent synthetic native state, never a product dispatcher.

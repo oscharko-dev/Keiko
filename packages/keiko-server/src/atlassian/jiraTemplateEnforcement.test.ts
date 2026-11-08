@@ -12,6 +12,11 @@ import { PERMISSION_SCHEME_MUTATION_CASES } from "../../../../tests/support/jira
 import { OPTION_SCHEME_MUTATION_CASES } from "../../../../tests/support/jira-option-scheme-fixture.js";
 import { WORKFLOW_SCHEME_MUTATION_FIXTURE_CASES } from "../../../../tests/support/jira-workflow-scheme-mutation-fixture.js";
 import { INSTANCE_SETTING_FIXTURE_CASES } from "../../../../tests/support/jira-instance-setting-mutation-fixture.js";
+import { GROUP_MUTATION_FIXTURE_CASES } from "../../../../tests/support/jira-group-mutation-fixture.js";
+import { ISSUE_ACTION_FIXTURE_CASES } from "../../../../tests/support/jira-issue-action-fixture.js";
+import { MAINTENANCE_MUTATION_FIXTURE_CASES } from "../../../../tests/support/jira-maintenance-mutation-fixture.js";
+import { DIRECTORY_ACCESS_FIXTURE_CASES } from "../../../../tests/support/jira-directory-access-fixture.js";
+import { SCHEMA_MUTATION_FIXTURE_CASES } from "../../../../tests/support/jira-schema-mutation-fixture.js";
 import {
   JIRA_FIELD_VALIDATION_FAILURES,
   JIRA_MUTATION_OPERATIONS,
@@ -20,6 +25,11 @@ import {
   JIRA_WORKFLOW_SCHEME_MUTATIONS,
   JIRA_INSTANCE_SETTING_MUTATIONS,
   JIRA_EMAIL_TEMPLATE_MUTATIONS,
+  JIRA_GROUP_MUTATIONS,
+  JIRA_ISSUE_ACTION_MUTATIONS,
+  JIRA_MAINTENANCE_MUTATIONS,
+  JIRA_SCHEMA_MUTATIONS,
+  JIRA_DIRECTORY_ACCESS_MUTATIONS,
   JIRA_TEMPLATE_RULE_IDS,
   parseJiraIssueTemplate,
   type JiraMutationAttempt,
@@ -229,6 +239,25 @@ describe("the model-facing refusal", () => {
     })));
     expect(sink.lines().join()).not.toMatch(/schemeId|workflowName|projectIds|columnIds|baseUrl|uploadSha256|manifest|jira\.option|synthetic-actor/u);
   });
+  it("records system/directory/schema refusals without raw targets, recipients or configuration", () => {
+    const sink = logs();
+    const operations = [...JIRA_GROUP_MUTATIONS, ...JIRA_ISSUE_ACTION_MUTATIONS, ...JIRA_MAINTENANCE_MUTATIONS, ...JIRA_SCHEMA_MUTATIONS, ...JIRA_DIRECTORY_ACCESS_MUTATIONS];
+    for (const operation of operations) recordJiraFieldRefusal("system-refusal", { operation, refusedCount: 1, validations: ["invalid-field"] });
+    expect(sink.events.map((event) => event.extra)).toEqual(operations.map((operation) => ({
+      operation: "jira-write", operationDigest: createHash("sha256").update(operation).digest("hex"),
+      refusedCount: 1, validations: ["invalid-field"], completeness: "complete", loss: "none",
+    })));
+    expect(sink.lines().join()).not.toMatch(/actorUserKey|groupName|nodeId|reindexRequestIds|recipientUserKeys|fieldIds|linkTypeIds|columnIds|synthetic-actor/u);
+  });
+  it("admits the five modeled schema impacts into the existing body-free template log", () => {
+    const sink = logs();
+    const operations = ["jira.delete-custom-fields", "jira.delete-issue-type", "jira.update-issue-type", "jira.delete-link-type", "jira.update-link-type"] as const;
+    for (const operation of operations)
+      recordJiraTemplateRefusal("schema-rule-refusal", { operation, stage: "dispatch", violations: [VIOLATION] });
+    expect(sink.events.map((event) => event.extra?.operation)).toEqual(operations);
+    expect(sink.events.map((event) => event.extra?.ruleIds)).toEqual(operations.map(() => [VIOLATION.ruleId]));
+    expect(sink.lines().join()).not.toMatch(/fieldIds|issueTypeId|replacementIssueTypeId|linkTypeId|Acceptance criteria|SYN\/Story/u);
+  });
 });
 
 function journalFixture(): {
@@ -433,6 +462,13 @@ describe("the template marker", () => {
 });
 
 describe("the dry run before approval", () => {
+  it.each([...JIRA_GROUP_MUTATIONS, ...JIRA_ISSUE_ACTION_MUTATIONS, ...JIRA_MAINTENANCE_MUTATIONS, ...JIRA_SCHEMA_MUTATIONS, ...JIRA_DIRECTORY_ACCESS_MUTATIONS])(
+    "refuses missing reviewed %s input before HTTP and approval", async (operation) => {
+      const f = preflight(TEMPLATE, {}, operation);
+      expect(await f.run()).toMatchObject({ outcome: "rejected", reason: "field-validation" });
+      expect(f.http).not.toHaveBeenCalled();
+    },
+  );
   it.each([...JIRA_OPTION_SCHEME_MUTATIONS, ...JIRA_WORKFLOW_SCHEME_MUTATIONS, ...JIRA_INSTANCE_SETTING_MUTATIONS, ...JIRA_EMAIL_TEMPLATE_MUTATIONS])(
     "refuses incomplete reviewed %s inputs before HTTP or approval", async (operation) => {
       const f = preflight(TEMPLATE, {}, operation);
@@ -441,6 +477,11 @@ describe("the dry run before approval", () => {
     },
   );
   it.each([
+    ...GROUP_MUTATION_FIXTURE_CASES.map(({ name, args }) => ({ tool: name, args })),
+    ...ISSUE_ACTION_FIXTURE_CASES.map(({ name, args }) => ({ tool: name, args })),
+    ...MAINTENANCE_MUTATION_FIXTURE_CASES.map(({ name, args }) => ({ tool: name, args })),
+    ...DIRECTORY_ACCESS_FIXTURE_CASES.map(({ name, args }) => ({ tool: name, args })),
+    ...SCHEMA_MUTATION_FIXTURE_CASES.map(({ name, args }) => ({ tool: name, args })),
     ...OPTION_SCHEME_MUTATION_CASES.map(({ tool, args }) => ({ tool, args })),
     ...WORKFLOW_SCHEME_MUTATION_FIXTURE_CASES.map(({ name, args }) => ({ tool: name, args })),
     ...INSTANCE_SETTING_FIXTURE_CASES.map(({ name, args }) => ({ tool: name, args })),

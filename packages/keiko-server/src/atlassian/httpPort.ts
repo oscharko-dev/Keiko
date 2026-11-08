@@ -31,6 +31,7 @@ import {
   type AtlassianHttpResult,
 } from "@oscharko-dev/keiko-connectors";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { applicationRoleResponseVersion, assertDirectoryAccessTarget } from "./httpDirectoryAccess.js";
 import {
   isSafeAtlassianConnectorBaseUrl,
   canonicalAtlassianConnectorBaseUrl,
@@ -326,8 +327,9 @@ export function createGatewayAtlassianHttpPort(
 // Identical trust posture to the body-less channel above (same allowlist re-check, same
 // credential materialisation rule, same redirect fail-closed transport), plus a STREAMED body
 // read that stops at the per-request cap — the payload is never buffered past `maxBodyBytes`,
-// even transiently. The only header ever surfaced is `Retry-After`, parsed into a bounded
-// millisecond number for the ADR-0128 D3 backoff; raw header text never crosses the port. A
+// even transiently. Retry-After is parsed into a bounded delay. A bounded strong native ETag
+// crosses only the fixed applicationrole CAS port; no generic header map, token result or
+// diagnostic value is exposed. A
 // run-cancellation abort classifies as `timeout` here — the sync lane re-checks its own signal
 // immediately afterwards, so the run still terminates as cancelled. The governed write lane
 // (#2244) sends bounded JSON request bodies over POST/PUT through this same channel; the body is
@@ -447,6 +449,8 @@ function assertEmailTemplateTarget(base: URL, target: URL, request: AtlassianHtt
 }
 
 function ownedBodyRequest(request: Readonly<AtlassianHttpBodyRequest>): Readonly<AtlassianHttpBodyRequest> {
+  if (typeof request.jiraApplicationRole === "object" && request.jiraApplicationRole !== null)
+    return Object.freeze({ ...request, jiraApplicationRole: Object.freeze({ ...request.jiraApplicationRole }) });
   if (request.jiraEmailTemplateArchive !== true || request.upload === undefined) return request;
   // Admission/egress can await: retain our own bytes before either callback can run.
   return Object.freeze({ ...request, upload: Object.freeze({
@@ -484,6 +488,7 @@ export function createGatewayAtlassianHttpBodyPort(
     const snapshot = Object.freeze({ ...input });
     const target = assertAllowlistedTarget(base, snapshot.url);
     assertEmailTemplateTarget(base, target, snapshot);
+    assertDirectoryAccessTarget(base, target, snapshot);
     assertValidRequestBody(snapshot);
     const request = ownedBodyRequest(snapshot);
     const signal = composeBodyRequestSignal(request);
@@ -509,11 +514,13 @@ export function createGatewayAtlassianHttpBodyPort(
       await lifecycle.observe(response);
       const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"), Date.now());
       const body = await readResponseBody(response, request);
+      const applicationRoleVersion = applicationRoleResponseVersion(request, response);
       return {
         kind: "response",
         status: response.status,
         bodyText: body.bodyText,
         ...(body.archiveBytes === undefined ? {} : { archiveBytes: body.archiveBytes }),
+        ...(applicationRoleVersion === undefined ? {} : { applicationRoleVersion }),
         bodyBytes: body.bodyBytes,
         truncated: body.truncated,
         ...(retryAfterMs === undefined ? {} : { retryAfterMs }),

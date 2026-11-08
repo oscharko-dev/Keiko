@@ -72,6 +72,7 @@ import { JIRA_PLANNING_MUTATION_TOOLS } from "./jira-planning-mutation-presentat
 import { JIRA_ACCESS_CONFIGURATION_TOOLS } from "./jira-access-configuration-presentation";
 import { JIRA_SCHEME_ADMINISTRATION_TOOLS } from "./jira-scheme-administration-presentation";
 import { JIRA_INSTANCE_ADMINISTRATION_TOOLS } from "./jira-instance-administration-presentation";
+import { JIRA_SYSTEM_ACTION_TOOLS } from "./jira-system-action-receipt";
 import {
   jiraToolOutcomeView,
   JIRA_OUTCOME_ITEMS_SHOWN,
@@ -317,6 +318,7 @@ function resultCardSemantics(exchange: ChatToolExchange): {
     JIRA_ACCESS_CONFIGURATION_TOOLS,
     JIRA_SCHEME_ADMINISTRATION_TOOLS,
     JIRA_INSTANCE_ADMINISTRATION_TOOLS,
+    JIRA_SYSTEM_ACTION_TOOLS,
     JIRA_REMOTE_VERSION_LINK_TOOLS,
     JIRA_WORKLOG_FEED_TOOLS,
     JIRA_ACCOUNT_DIAGNOSTIC_TOOLS,

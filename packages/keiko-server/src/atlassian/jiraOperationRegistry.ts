@@ -19,6 +19,26 @@ type CompositeTool = "jira.report" | "jira.draft-stage" | "jira.draft";
 type NativeTool = Exclude<JiraOperationTool, CompositeTool>;
 type JiraOperationEffect = "remote-read" | "remote-write" | "local-report" | "local-draft";
 type JiraPermissionPolicy =
+  | "instance-admin-group-create-and-readback"
+  | "instance-admin-group-delete-unconfirmed"
+  | "instance-admin-group-membership-unconfirmed"
+  | "comment-pin-and-readback"
+  | "issue-notification-unconfirmed"
+  | "instance-admin-maintenance-request-unconfirmed"
+  | "instance-admin-custom-field-create-unconfirmed"
+  | "instance-admin-custom-field-delete-unconfirmed"
+  | "instance-admin-issue-type-create-unconfirmed"
+  | "instance-admin-issue-type-update-and-readback"
+  | "instance-admin-issue-type-delete-and-migration-unconfirmed"
+  | "instance-admin-link-type-create-and-readback"
+  | "instance-admin-link-type-update-and-readback"
+  | "instance-admin-link-type-delete-unconfirmed"
+  | "instance-admin-link-type-order-unconfirmed"
+  | "instance-admin-terminology-and-readback"
+  | "instance-admin-application-role-cas-unconfirmed"
+  | "instance-admin-user-application-unconfirmed"
+  | "instance-admin-user-columns-and-readback"
+  | "instance-admin-user-columns-reset-unconfirmed"
   | "instance-admin-issue-type-scheme-config-and-readback"
   | "instance-admin-issue-type-scheme-delete-unconfirmed"
   | "instance-admin-issue-type-scheme-projects-unconfirmed"
@@ -246,6 +266,111 @@ function writes<const K extends NativeTool>(
   return result as NativeGroup<K>;
 }
 const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
+  ...writes("instance-admin-group-create-and-readback", {
+    "jira.create-group": ["POST", "/group"],
+  }),
+  ...writes("instance-admin-group-delete-unconfirmed", {
+    "jira.delete-group": ["DELETE", "/group"],
+  }),
+  ...writes("instance-admin-group-membership-unconfirmed", {
+    "jira.add-group-user": ["POST", "/group/user"],
+  }),
+  ...writes("instance-admin-group-membership-unconfirmed", {
+    "jira.remove-group-user": ["DELETE", "/group/user"],
+  }),
+  ...writes("comment-pin-and-readback", {
+    "jira.pin-comment": ["PUT", "/issue/{issueIdOrKey}/comment/{id}/pin"],
+  }),
+  ...writes("issue-notification-unconfirmed", {
+    "jira.notify-issue": ["POST", "/issue/{issueIdOrKey}/notify"],
+  }),
+  ...writes("instance-admin-maintenance-request-unconfirmed", {
+    "jira.request-cluster-index-snapshot": ["PUT", "/cluster/index-snapshot/{nodeId}"],
+  }),
+  ...writes("instance-admin-maintenance-request-unconfirmed", {
+    "jira.delete-cluster-node": ["DELETE", "/cluster/node/{nodeId}"],
+  }),
+  ...writes("instance-admin-maintenance-request-unconfirmed", {
+    "jira.mark-cluster-node-offline": ["PUT", "/cluster/node/{nodeId}/offline"],
+  }),
+  ...writes("instance-admin-maintenance-request-unconfirmed", {
+    "jira.approve-cluster-upgrade": ["POST", "/cluster/zdu/approve"],
+  }),
+  ...writes("instance-admin-maintenance-request-unconfirmed", {
+    "jira.cancel-cluster-upgrade": ["POST", "/cluster/zdu/cancel"],
+  }),
+  ...writes("instance-admin-maintenance-request-unconfirmed", {
+    "jira.retry-cluster-upgrade": ["POST", "/cluster/zdu/retryUpgrade"],
+  }),
+  ...writes("instance-admin-maintenance-request-unconfirmed", {
+    "jira.start-cluster-upgrade": ["POST", "/cluster/zdu/start"],
+  }),
+  ...writes("instance-admin-maintenance-request-unconfirmed", {
+    "jira.create-index-snapshot": ["POST", "/index-snapshot"],
+  }),
+  ...writes("instance-admin-maintenance-request-unconfirmed", {
+    "jira.start-reindex": ["POST", "/reindex"],
+  }),
+  ...writes("instance-admin-maintenance-request-unconfirmed", {
+    "jira.reindex-issues": ["POST", "/reindex/issue"],
+  }),
+  ...writes("instance-admin-maintenance-request-unconfirmed", {
+    "jira.process-reindex-requests": ["POST", "/reindex/request"],
+  }),
+  ...writes("instance-admin-maintenance-request-unconfirmed", {
+    "jira.run-upgrade": ["POST", "/upgrade"],
+  }),
+  ...writes("instance-admin-custom-field-create-unconfirmed", {
+    "jira.create-custom-field": ["POST", "/field"],
+  }),
+  ...writes("instance-admin-custom-field-delete-unconfirmed", {
+    "jira.delete-custom-fields": ["DELETE", "/customFields"],
+  }),
+  ...writes("instance-admin-issue-type-create-unconfirmed", {
+    "jira.create-issue-type": ["POST", "/issuetype"],
+  }),
+  ...writes("instance-admin-issue-type-update-and-readback", {
+    "jira.update-issue-type": ["PUT", "/issuetype/{id}"],
+  }),
+  ...writes("instance-admin-issue-type-delete-and-migration-unconfirmed", {
+    "jira.delete-issue-type": ["DELETE", "/issuetype/{id}"],
+  }),
+  ...writes("instance-admin-link-type-create-and-readback", {
+    "jira.create-link-type": ["POST", "/issueLinkType"],
+  }),
+  ...writes("instance-admin-link-type-update-and-readback", {
+    "jira.update-link-type": ["PUT", "/issueLinkType/{issueLinkTypeId}"],
+  }),
+  ...writes("instance-admin-link-type-delete-unconfirmed", {
+    "jira.delete-link-type": ["DELETE", "/issueLinkType/{issueLinkTypeId}"],
+  }),
+  ...writes("instance-admin-link-type-order-unconfirmed", {
+    "jira.reset-link-type-order": ["PUT", "/issueLinkType/order"],
+  }),
+  ...writes("instance-admin-link-type-order-unconfirmed", {
+    "jira.move-link-type": ["PUT", "/issueLinkType/{issueLinkTypeId}/order"],
+  }),
+  ...writes("instance-admin-terminology-and-readback", {
+    "jira.set-terminology": ["POST", "/terminology/entries"],
+  }),
+  ...writes("instance-admin-application-role-cas-unconfirmed", {
+    "jira.set-application-role": ["PUT", "/applicationrole/{key}"],
+  }),
+  ...writes("instance-admin-application-role-cas-unconfirmed", {
+    "jira.set-application-roles": ["PUT", "/applicationrole"],
+  }),
+  ...writes("instance-admin-user-application-unconfirmed", {
+    "jira.add-user-application": ["POST", "/user/application"],
+  }),
+  ...writes("instance-admin-user-application-unconfirmed", {
+    "jira.remove-user-application": ["DELETE", "/user/application"],
+  }),
+  ...writes("instance-admin-user-columns-and-readback", {
+    "jira.set-user-columns": ["PUT", "/user/columns"],
+  }),
+  ...writes("instance-admin-user-columns-reset-unconfirmed", {
+    "jira.reset-user-columns": ["DELETE", "/user/columns"],
+  }),
   ...writes("instance-admin-issue-type-scheme-config-and-readback", {
     "jira.create-issue-type-scheme": ["POST", "/issuetypescheme"],
   }),

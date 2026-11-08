@@ -46,6 +46,10 @@ import {
   JIRA_SCHEME_INSTANCE_RECEIPTS, isJiraSchemeInstanceOperation,
   validJiraSchemeInstanceReceipt, canConfirmJiraSchemeInstance,
 } from "./jiraSchemeInstanceReceipts.js";
+import {
+  JIRA_SYSTEM_ACTION_RECEIPTS, isJiraSystemActionOperation,
+  validJiraSystemActionReceipt, canConfirmJiraSystemAction,
+} from "./jiraSystemActionReceipts.js";
 
 /**
  * The shared projection of a Jira mutation attempt onto the managed tool result. Ordinary Chat and
@@ -123,6 +127,7 @@ type CollaborationOperation = keyof typeof COLLABORATION_RECEIPTS;
 const REQUIRED_RECEIPTS: Readonly<
   Record<JiraMutationOperation, readonly (keyof JiraMutationReceipt)[]>
 > = {
+  ...JIRA_SYSTEM_ACTION_RECEIPTS,
   ...JIRA_SCHEME_INSTANCE_RECEIPTS,
   ...JIRA_ACCESS_CONFIGURATION_RECEIPTS,
   ...JIRA_PLANNING_LIFECYCLE_RECEIPTS,
@@ -345,6 +350,7 @@ function validProjectReceipt(receipt: JiraMutationReceipt): boolean {
   });
 }
 function specificIdentities(receipt: JiraMutationReceipt, operation: JiraMutationOperation): boolean | undefined {
+  if (isJiraSystemActionOperation(operation)) return validJiraSystemActionReceipt(receipt, operation);
   if (isJiraSchemeInstanceOperation(operation)) return validJiraSchemeInstanceReceipt(receipt, operation);
   if (isJiraAccessConfigurationOperation(operation)) return validJiraAccessConfigurationReceipt(receipt, operation);
   if (isJiraPlanningLifecycleOperation(operation)) return validJiraPlanningLifecycleReceipt(receipt, operation);
@@ -391,10 +397,11 @@ function partialIdentity(receipt: JiraMutationReceipt, operation: JiraMutationOp
   );
 }
 function exactReceiptFamily(operation: JiraMutationOperation): boolean {
-  return isJiraSchemeInstanceOperation(operation) || isJiraAccessConfigurationOperation(operation) || isJiraPlanningLifecycleOperation(operation) || isJiraConfigurationReceiptOperation(operation) ||
+  return isJiraSystemActionOperation(operation) || isJiraSchemeInstanceOperation(operation) || isJiraAccessConfigurationOperation(operation) || isJiraPlanningLifecycleOperation(operation) || isJiraConfigurationReceiptOperation(operation) ||
     isJiraRelationLifecycleOperation(operation) || isJiraSavedConfigurationOperation(operation);
 }
-const RECEIPT_ARRAY_KEYS = ["issueKeys", "replacementVersionIds", "sprintIds", "issueIds", "globalIds", "actorUserKeys", "actorGroupNames", "projectIds", "projectKeys", "columnIds"] as const;
+const RECEIPT_ARRAY_KEYS = ["issueKeys", "replacementVersionIds", "sprintIds", "issueIds", "globalIds", "actorUserKeys", "actorGroupNames", "projectIds", "projectKeys", "columnIds",
+  "reindexRequestIds", "recipientUserKeys", "applicationRoleKeys", "fieldIds", "linkTypeIds"] as const;
 function ownReceiptArray(receipt: JiraMutationReceipt, key: (typeof RECEIPT_ARRAY_KEYS)[number]): readonly string[] | undefined {
   const own = Object.getOwnPropertyDescriptor(receipt, key);
   return own !== undefined && "value" in own ? receipt[key] : undefined;
@@ -405,6 +412,9 @@ function snapshotReceipt(receipt: JiraMutationReceipt): JiraMutationReceipt {
     const values = ownReceiptArray(receipt, key);
     if (values !== undefined) snapshot[key] = Object.freeze([...values]);
   }
+  const names = Object.getOwnPropertyDescriptor(receipt, "terminologyNames");
+  if (names !== undefined && "value" in names && receipt.terminologyNames !== undefined)
+    snapshot.terminologyNames = Object.freeze([...receipt.terminologyNames]);
   return Object.freeze(snapshot);
 }
 
@@ -477,11 +487,11 @@ function validOriginalReceipt(receipt: JiraMutationReceipt, operation: JiraMutat
   return specificIdentities(receipt, operation) ?? true;
 }
 function canConfirmOperation(operation: JiraMutationOperation): boolean {
-  return canConfirmJiraSavedConfiguration(operation) && canConfirmJiraRelationLifecycle(operation) &&
+  return canConfirmJiraSystemAction(operation) && canConfirmJiraSavedConfiguration(operation) && canConfirmJiraRelationLifecycle(operation) &&
     canConfirmJiraConfiguration(operation) && canConfirmJiraPlanningLifecycle(operation) && canConfirmJiraAccessConfiguration(operation) && canConfirmJiraSchemeInstance(operation);
 }
 function retainMissingAcknowledgement(operation: JiraMutationOperation): boolean {
-  return isJiraRelationLifecycleOperation(operation) || isJiraAccessConfigurationOperation(operation) || isJiraSchemeInstanceOperation(operation);
+  return isJiraSystemActionOperation(operation) || isJiraRelationLifecycleOperation(operation) || isJiraAccessConfigurationOperation(operation) || isJiraSchemeInstanceOperation(operation);
 }
 
 /** An attempt is a success only with the validated identities its operation must return. */

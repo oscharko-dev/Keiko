@@ -395,6 +395,50 @@ export async function gateJiraBulkReferenceChange(input: {
   return violations.length === 0 ? OK : { ok: false, reason: "field-validation", violations };
 }
 
+export type JiraSchemaRuleImpact =
+  | { readonly kind: "issue-type"; readonly types: readonly { readonly id: string; readonly name: string }[] }
+  | { readonly kind: "custom-fields"; readonly fields: readonly JiraFieldCatalogEntry[] }
+  | { readonly kind: "link-type"; readonly names: readonly string[] };
+function schemaRuleAffected(template: JiraIssueTemplate, impact: JiraSchemaRuleImpact, catalog: readonly JiraFieldCatalogEntry[]): boolean {
+  if (impact.kind === "issue-type") return impact.types.some((type) =>
+    sameType(template.issueType, type.id) || sameType(template.issueType, type.name));
+  if (impact.kind === "link-type") return linkSchemaRuleAffected(template, impact.names);
+  return references([template]).some((reference) => {
+    const ids = resolveJiraTemplateFieldIds(reference, catalog);
+    return ids.length === 0 || ids.some((id) => impact.fields.some((field) => field.id === id));
+  });
+}
+function linkSchemaRuleAffected(template: JiraIssueTemplate, names: readonly string[]): boolean {
+  if (template.parent.link !== undefined && names.some((name) => sameType(template.parent.link ?? "", name))) return true;
+  return references([template]).some((reference) => sameType(reference, "issuelinks") || sameType(reference, "Issue Links"));
+}
+/** Schema deletion and type renaming can change values or the selection of saved formal rules
+ * for a population Jira does not expose completely. Consider every declared activation and all
+ * rules of an affected type, including summary, labels, sections and parent rules. No JQL prefix,
+ * visible count or compatible migration alternative proves the hidden population's post-state.
+ * Only parsed formal records enter this owner; prose skills and layout/terminology do not. */
+export async function gateJiraSchemaRuleImpact(input: {
+  readonly request: JiraMutationRequest;
+  readonly source: JiraIssueTemplateSource | undefined;
+  readonly impact: JiraSchemaRuleImpact;
+}): Promise<JiraTemplateGateResult> {
+  const set = input.source?.();
+  if (set === undefined) return OK;
+  if (set.unreadable > 0) return unreadableRefusal(set.unreadableNames);
+  if (set.templates.length === 0) return OK;
+  const catalog = input.impact.kind === "custom-fields"
+    ? await readJiraFieldCatalog(input.request) : JIRA_TEMPLATE_SYSTEM_FIELDS;
+  if (catalog === undefined) return unreadableRefusal(["native field catalog for schema impact"]);
+  const affected = set.templates.filter((template) => schemaRuleAffected(template, input.impact, catalog));
+  return affected.length === 0 ? OK : {
+    ok: false, reason: "field-validation",
+    violations: affected.slice(0, JIRA_TEMPLATE_VIOLATIONS_MAX).map((template) => ({
+      ruleId: "template-unreadable", template: jiraIssueTemplateLabel(template),
+      subject: "Schema changes require complete governed issue migration",
+    })),
+  };
+}
+
 /** Operation metadata first; the instance field list only when a reference stays unresolved. */
 async function completeCatalog(
   input: JiraTemplateGateInput,

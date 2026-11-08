@@ -71,9 +71,21 @@ describe("closed native issue and project metadata reads", () => {
     const result = await executeJiraCoreMetadataRead("jira.issue-type", { issueTypeId: "1" }, requestFor(single({ id: "1", name: "Bug", subtask: null, avatarId: null })));
     expect(result.data).toEqual({ outcome: "succeeded", id: "1", name: "Bug" });
   });
+  it.each([null, ""])("exposes the exact shared review snapshot for observed description %j", async (description) => {
+    const native = { id: "1", name: "Bug", subtask: false, description, avatarId: "9223372036854775807" };
+    const result = await executeJiraCoreMetadataRead("jira.issue-type", { issueTypeId: "1" }, requestFor(single(native)));
+    expect(result.data.reviewSnapshot).toEqual(native);
+    expect(Object.hasOwn(result.data, "description")).toBe(description !== null);
+  });
+  it("keeps ordinary metadata readable while an incomplete review snapshot stays unavailable", async () => {
+    const result = await executeJiraCoreMetadataRead("jira.issue-type", { issueTypeId: "1" }, requestFor(single({ id: "1", name: "Bug", subtask: false })));
+    expect(result.data).toEqual({ outcome: "succeeded", id: "1", name: "Bug", subtask: false });
+    expect(Object.hasOwn(result.data, "reviewSnapshot")).toBe(false);
+  });
   it("projects exact avatar identity and strips icon URLs/expansions", async () => {
     const result = await executeJiraCoreMetadataRead("jira.issue-type", { issueTypeId: "1" }, requestFor(single({ ...ISSUE_TYPE, avatarId: "9223372036854775807", self: "https://untrusted.invalid/type", iconUrl: "https://untrusted.invalid/icon", fields: { secret: "unprojected" } })));
-    expect(result.data).toEqual({ outcome: "succeeded", ...ISSUE_TYPE, avatarId: "9223372036854775807" });
+    const observed = { ...ISSUE_TYPE, avatarId: "9223372036854775807" };
+    expect(result.data).toEqual({ outcome: "succeeded", ...observed, reviewSnapshot: observed });
   });
   it("returns only the observed bound resolution identity", async () => {
     const result = await executeJiraCoreMetadataRead("jira.resolution", { resolutionId: "3" }, requestFor(single({ id: "3", name: "Fixed", description: "", self: "https://untrusted.invalid/resolution/999" })));

@@ -82,7 +82,7 @@ function selection(name: DirectoryRead, args: CatalogJsonObject): Selection | un
     maxResults,
   };
 }
-function role(value: unknown): CatalogJsonObject | undefined {
+export function projectJiraApplicationRole(value: unknown): CatalogJsonObject | undefined {
   const raw = asRecord(value);
   if (raw === undefined || !isSafeAtlassianIdentifier(raw.key)) return undefined;
   const result: Record<string, CatalogJsonValue> = { key: raw.key };
@@ -126,7 +126,7 @@ function roles(values: readonly unknown[]): readonly CatalogJsonObject[] | undef
   const items: CatalogJsonObject[] = [];
   const keys = new Set<string>();
   for (const value of values) {
-    const item = role(value);
+    const item = projectJiraApplicationRole(value);
     if (item === undefined || typeof item.key !== "string" || keys.has(item.key)) return undefined;
     keys.add(item.key);
     items.push(item);
@@ -167,7 +167,7 @@ function projectResponse(
   const body = response.body;
   if (body === undefined) return jiraReadFailure("malformed-payload");
   if (name === "jira.application-role") {
-    const item = role(body);
+    const item = projectJiraApplicationRole(body);
     return item === undefined || item.key !== selected.applicationRoleKey
       ? jiraReadFailure("malformed-payload")
       : boundJiraReadResult({ data: { outcome: "succeeded", ...item } });

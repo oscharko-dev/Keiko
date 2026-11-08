@@ -165,7 +165,7 @@ factory, never a raw token resolver. Every metadata and confirmation read rechec
 authority and the Chat read grant. The exact action approval is claimed atomically inside
 the durable journal's dispatch boundary, immediately before the first mutating HTTP request;
 metadata reads and duplicate deliveries cannot consume or reapply that claim. Full access
-uses the same boundary with its currently validated allowed disposition. The seventy-three global
+uses the same boundary with its currently validated allowed disposition. The one hundred six global
 administration writes additionally require the explicitly selected `issue-tracker.admin` scope
 defined in ADR-0128 D4. A Chat scope change advances the existing binding generation and revokes
 earlier approvals; neither schema selection nor Full access supplies administration authority.
@@ -177,6 +177,15 @@ authority: private immutable snapshots in allowed mode and reviewed snapshots wh
 required. Global template replacement, base-URL consequences and scheme-wide effects cannot be
 confirmed from partial configuration readbacks. Exact draft configuration never means publication;
 no alternative transport, approval store or replay owner is introduced.
+
+The next native directory/schema/maintenance/issue actions retain the same owners and append
+forward-only V76. Native role CAS, fixed named-user forms and scoped experimental requests are
+private transport choices, never model headers or alternate dispatch. Known actor and target
+identities are distinct. Existing formal rules judge actual schema/type/link impact; group and
+maintenance observations do not invent direct membership, complete populations or deployment.
+Only seven of the35 actions can confirm bounded configuration; twenty-eight remain unconfirmed.
+The existing identity-observation owner handles only exact documented permission/WebSudo401
+methods/paths after a current positive identity probe, preserving actual denial and no retry.
 
 HTTP acknowledgement is recorded before parsing a response or evaluating late cancellation.
 The fixed Jira request owners share one private admission wrapper over the existing bounded HTTP

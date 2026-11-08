@@ -300,6 +300,30 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.add-group-user": {
+      "identity": "POST /rest/api/2/group/user",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-group-membership-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Exact actor/native-name group creation/deletion and user membership changes. User key and native username bind independently. Supported fuzzy group search requires exact observed native names; an unreturned bounded result is unavailable, never absent, with explicit broad-name/manual-Jira guidance. Native member reads include subgroup and inactive members, use complete bounded pages with stable total facts and unique key/name identities, and never establish a direct assignment. Observed true is not an add no-op. Only complete observed absence can establish a no-effect removal. Native restriction transfer binds a different selected group. Creation confirms group existence only after exact ACK name and fresh presence. Every deletion/membership effect remains acknowledged/unconfirmed for aggregate permissions, restrictions, directory and application consequences. No invented direct-member or global population proof. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-group-mutations.ts",
+        "packages/keiko-connectors/src/jira-group-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-group-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-group-principal.ts",
+        "packages/keiko-server/src/atlassian/jiraGroupMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-group-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraGroupMutationDescriptors.test.ts",
+        "packages/keiko-connectors/src/jira-group-principal.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.add-issue-type-scheme-projects": {
       "identity": "POST /rest/api/2/issuetypescheme/{schemeId}/associations",
       "effect": "write",
@@ -424,6 +448,32 @@
         "packages/keiko-server/src/store/jiraConfigurationMutationMigration.test.ts",
         "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.add-user-application": {
+      "identity": "POST /rest/api/2/user/application",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-user-application-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Six closed admin/high access/layout mutations retain the existing authority/approval/journal owners. Role configuration binds exact selected groups/default groups and uses fresh native collection ETag with actual If-Match CAS; bulk body is a native list, omitted roles are untouched. Version tokens are bounded private native metadata, never model/receipt/log fields. Native412 becomes conflict only in the exact role port, without retry. User application changes use exact query-only native username/applicationKey and a fixed scoped experimental header; missing UserBean role data is not membership absence. Named user columns use fixed form-urlencoded username and complete ordered repeated columns, independently binding user key/name. Only set-user-columns may confirm exact same-user layout; role changes, application changes and reset stay unconfirmed for effective-access or default-provenance consequences. actorUserKey is the admin, userKey/username are targets only where relevant. No generic header, media, target, secret or approval surface is introduced. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-directory-access-mutations.ts",
+        "packages/keiko-connectors/src/jira-directory-access-values.ts",
+        "packages/keiko-connectors/src/jira-directory-access-observations.ts",
+        "packages/keiko-connectors/src/jira-directory-access-request.ts",
+        "packages/keiko-server/src/atlassian/httpDirectoryAccess.ts",
+        "packages/keiko-server/src/atlassian/jiraDirectoryAccessMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-directory-access-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-directory-access-request.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.directory-access.test.ts",
+        "packages/keiko-server/src/atlassian/jiraDirectoryAccessMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
@@ -619,6 +669,28 @@
         "packages/keiko-server/src/atlassian/jiraEmailTemplateDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/httpPort.email-template.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.approve-cluster-upgrade": {
+      "identity": "POST /rest/api/2/cluster/zdu/approve",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-maintenance-request-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Twelve closed native maintenance requests require explicit actor/admin authority and confirmUnverifiedEffect. Bind complete observed node/state, cluster upgrade state, snapshot-running or latest/no-prior reindex/upgrade state before one fixed effect. Offline requires ACTIVE/alive:false; node deletion requires OFFLINE. Native state codes remain literal and native409 owns transition eligibility. Reindex flags are actual Booleans; selected issues are unique independently read ID/key pairs. Only documented unselected resource statuses admit no-prior task/result or running semantics. Pending request processing reads a native ACK array, retains exact safe IDs only, and does not infer missing rows or job correlation. All twelve stay acknowledged/unconfirmed: no index-content, complete migration/task population, cluster effect, deletion or completion is proved. Opaque native upgrade is explicitly system maintenance, not a fabricated per-issue field plan or saved-rule compliance statement. No returned URL/path is followed or logged. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-maintenance-mutations.ts",
+        "packages/keiko-connectors/src/jira-maintenance-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-maintenance-mutation-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-maintenance-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
@@ -1050,6 +1122,28 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.cancel-cluster-upgrade": {
+      "identity": "POST /rest/api/2/cluster/zdu/cancel",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-maintenance-request-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Twelve closed native maintenance requests require explicit actor/admin authority and confirmUnverifiedEffect. Bind complete observed node/state, cluster upgrade state, snapshot-running or latest/no-prior reindex/upgrade state before one fixed effect. Offline requires ACTIVE/alive:false; node deletion requires OFFLINE. Native state codes remain literal and native409 owns transition eligibility. Reindex flags are actual Booleans; selected issues are unique independently read ID/key pairs. Only documented unselected resource statuses admit no-prior task/result or running semantics. Pending request processing reads a native ACK array, retains exact safe IDs only, and does not infer missing rows or job correlation. All twelve stay acknowledged/unconfirmed: no index-content, complete migration/task population, cluster effect, deletion or completion is proved. Opaque native upgrade is explicitly system maintenance, not a fabricated per-issue field plan or saved-rule compliance statement. No returned URL/path is followed or logged. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-maintenance-mutations.ts",
+        "packages/keiko-connectors/src/jira-maintenance-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-maintenance-mutation-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-maintenance-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.clear-issue-type-scheme-projects": {
       "identity": "DELETE /rest/api/2/issuetypescheme/{schemeId}/associations",
       "effect": "write",
@@ -1277,6 +1371,31 @@
         "packages/keiko-connectors/src/jira-managed-components.test.ts"
       ]
     },
+    "jira.create-custom-field": {
+      "identity": "POST /rest/api/2/field",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-custom-field-create-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Eleven closed actor/admin schema calls share pure native metadata projections and existing formal-rule admission. Issue-type review preserves explicit nullable description, native subtype and exact observed identity. Known type migration/rename evaluates source/target rule selection across all activations; actual custom-field or named link-type removal/rename checks affected required/parent/link references, never prose skills or a fabricated visible population. Custom-field contexts are explicit nonempty typed project/type IDs with safe native numeric project serialization. Bulk field deletion has a native50-field cap and possible partial success. Issue-type alternative ID is a query parameter; terminology is a JSON collection with explicitly reviewed native lowercase/trimmed desired spelling. Native link positions are one-based. Seven create/delete/order effects remain unconfirmed for hidden context/plugin/default-scheme/migration/global consequences. Four actions may confirm exact configuration only. New IDs come solely from readable native ACKs; missing IDs are never recovered by name search or replay. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-schema-mutations.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.ts",
+        "packages/keiko-server/src/atlassian/jiraSchemaMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-schema-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSchemaMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.create-fields": {
       "identity": "GET /rest/api/2/issue/createmeta/{projectIdOrKey}/issuetypes/{issueTypeId}",
       "effect": "read",
@@ -1314,6 +1433,52 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.create-group": {
+      "identity": "POST /rest/api/2/group",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-group-create-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Exact actor/native-name group creation/deletion and user membership changes. User key and native username bind independently. Supported fuzzy group search requires exact observed native names; an unreturned bounded result is unavailable, never absent, with explicit broad-name/manual-Jira guidance. Native member reads include subgroup and inactive members, use complete bounded pages with stable total facts and unique key/name identities, and never establish a direct assignment. Observed true is not an add no-op. Only complete observed absence can establish a no-effect removal. Native restriction transfer binds a different selected group. Creation confirms group existence only after exact ACK name and fresh presence. Every deletion/membership effect remains acknowledged/unconfirmed for aggregate permissions, restrictions, directory and application consequences. No invented direct-member or global population proof. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-group-mutations.ts",
+        "packages/keiko-connectors/src/jira-group-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-group-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-group-principal.ts",
+        "packages/keiko-server/src/atlassian/jiraGroupMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-group-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraGroupMutationDescriptors.test.ts",
+        "packages/keiko-connectors/src/jira-group-principal.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.create-index-snapshot": {
+      "identity": "POST /rest/api/2/index-snapshot",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-maintenance-request-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Twelve closed native maintenance requests require explicit actor/admin authority and confirmUnverifiedEffect. Bind complete observed node/state, cluster upgrade state, snapshot-running or latest/no-prior reindex/upgrade state before one fixed effect. Offline requires ACTIVE/alive:false; node deletion requires OFFLINE. Native state codes remain literal and native409 owns transition eligibility. Reindex flags are actual Booleans; selected issues are unique independently read ID/key pairs. Only documented unselected resource statuses admit no-prior task/result or running semantics. Pending request processing reads a native ACK array, retains exact safe IDs only, and does not infer missing rows or job correlation. All twelve stay acknowledged/unconfirmed: no index-content, complete migration/task population, cluster effect, deletion or completion is proved. Opaque native upgrade is explicitly system maintenance, not a fabricated per-issue field plan or saved-rule compliance statement. No returned URL/path is followed or logged. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-maintenance-mutations.ts",
+        "packages/keiko-connectors/src/jira-maintenance-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-maintenance-mutation-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-maintenance-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.create-issue-link": {
       "identity": "POST /rest/api/2/issueLink",
       "effect": "write",
@@ -1338,6 +1503,31 @@
         "packages/keiko-server/src/atlassian/jiraLinkMutationDescriptors.test.ts"
       ]
     },
+    "jira.create-issue-type": {
+      "identity": "POST /rest/api/2/issuetype",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-issue-type-create-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Eleven closed actor/admin schema calls share pure native metadata projections and existing formal-rule admission. Issue-type review preserves explicit nullable description, native subtype and exact observed identity. Known type migration/rename evaluates source/target rule selection across all activations; actual custom-field or named link-type removal/rename checks affected required/parent/link references, never prose skills or a fabricated visible population. Custom-field contexts are explicit nonempty typed project/type IDs with safe native numeric project serialization. Bulk field deletion has a native50-field cap and possible partial success. Issue-type alternative ID is a query parameter; terminology is a JSON collection with explicitly reviewed native lowercase/trimmed desired spelling. Native link positions are one-based. Seven create/delete/order effects remain unconfirmed for hidden context/plugin/default-scheme/migration/global consequences. Four actions may confirm exact configuration only. New IDs come solely from readable native ACKs; missing IDs are never recovered by name search or replay. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-schema-mutations.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.ts",
+        "packages/keiko-server/src/atlassian/jiraSchemaMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-schema-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSchemaMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.create-issue-type-scheme": {
       "identity": "POST /rest/api/2/issuetypescheme",
       "effect": "write",
@@ -1357,6 +1547,31 @@
         "packages/keiko-connectors/src/jira-option-scheme-review.test.ts",
         "packages/keiko-server/src/atlassian/jiraOptionSchemeMutationDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.create-link-type": {
+      "identity": "POST /rest/api/2/issueLinkType",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-link-type-create-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Eleven closed actor/admin schema calls share pure native metadata projections and existing formal-rule admission. Issue-type review preserves explicit nullable description, native subtype and exact observed identity. Known type migration/rename evaluates source/target rule selection across all activations; actual custom-field or named link-type removal/rename checks affected required/parent/link references, never prose skills or a fabricated visible population. Custom-field contexts are explicit nonempty typed project/type IDs with safe native numeric project serialization. Bulk field deletion has a native50-field cap and possible partial success. Issue-type alternative ID is a query parameter; terminology is a JSON collection with explicitly reviewed native lowercase/trimmed desired spelling. Native link positions are one-based. Seven create/delete/order effects remain unconfirmed for hidden context/plugin/default-scheme/migration/global consequences. Four actions may confirm exact configuration only. New IDs come solely from readable native ACKs; missing IDs are never recovered by name search or replay. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-schema-mutations.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.ts",
+        "packages/keiko-server/src/atlassian/jiraSchemaMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-schema-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSchemaMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
@@ -1797,6 +2012,28 @@
         "packages/keiko-server/src/atlassian/jiraAgileOperationTransport.test.ts"
       ]
     },
+    "jira.delete-cluster-node": {
+      "identity": "DELETE /rest/api/2/cluster/node/{nodeId}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-maintenance-request-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Twelve closed native maintenance requests require explicit actor/admin authority and confirmUnverifiedEffect. Bind complete observed node/state, cluster upgrade state, snapshot-running or latest/no-prior reindex/upgrade state before one fixed effect. Offline requires ACTIVE/alive:false; node deletion requires OFFLINE. Native state codes remain literal and native409 owns transition eligibility. Reindex flags are actual Booleans; selected issues are unique independently read ID/key pairs. Only documented unselected resource statuses admit no-prior task/result or running semantics. Pending request processing reads a native ACK array, retains exact safe IDs only, and does not infer missing rows or job correlation. All twelve stay acknowledged/unconfirmed: no index-content, complete migration/task population, cluster effect, deletion or completion is proved. Opaque native upgrade is explicitly system maintenance, not a fabricated per-issue field plan or saved-rule compliance statement. No returned URL/path is followed or logged. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-maintenance-mutations.ts",
+        "packages/keiko-connectors/src/jira-maintenance-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-maintenance-mutation-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-maintenance-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.delete-comment": {
       "identity": "DELETE /rest/api/2/issue/{issueIdOrKey}/comment/{id}",
       "effect": "write",
@@ -1862,6 +2099,31 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts",
         "packages/keiko-connectors/src/jira-managed-release-lifecycle.test.ts",
         "packages/keiko-server/src/atlassian/jiraReleaseLifecycleDescriptors.test.ts"
+      ]
+    },
+    "jira.delete-custom-fields": {
+      "identity": "DELETE /rest/api/2/customFields",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-custom-field-delete-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Eleven closed actor/admin schema calls share pure native metadata projections and existing formal-rule admission. Issue-type review preserves explicit nullable description, native subtype and exact observed identity. Known type migration/rename evaluates source/target rule selection across all activations; actual custom-field or named link-type removal/rename checks affected required/parent/link references, never prose skills or a fabricated visible population. Custom-field contexts are explicit nonempty typed project/type IDs with safe native numeric project serialization. Bulk field deletion has a native50-field cap and possible partial success. Issue-type alternative ID is a query parameter; terminology is a JSON collection with explicitly reviewed native lowercase/trimmed desired spelling. Native link positions are one-based. Seven create/delete/order effects remain unconfirmed for hidden context/plugin/default-scheme/migration/global consequences. Four actions may confirm exact configuration only. New IDs come solely from readable native ACKs; missing IDs are never recovered by name search or replay. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-schema-mutations.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.ts",
+        "packages/keiko-server/src/atlassian/jiraSchemaMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-schema-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSchemaMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
     "jira.delete-dashboard-item-property": {
@@ -1939,6 +2201,30 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.delete-group": {
+      "identity": "DELETE /rest/api/2/group",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-group-delete-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Exact actor/native-name group creation/deletion and user membership changes. User key and native username bind independently. Supported fuzzy group search requires exact observed native names; an unreturned bounded result is unavailable, never absent, with explicit broad-name/manual-Jira guidance. Native member reads include subgroup and inactive members, use complete bounded pages with stable total facts and unique key/name identities, and never establish a direct assignment. Observed true is not an add no-op. Only complete observed absence can establish a no-effect removal. Native restriction transfer binds a different selected group. Creation confirms group existence only after exact ACK name and fresh presence. Every deletion/membership effect remains acknowledged/unconfirmed for aggregate permissions, restrictions, directory and application consequences. No invented direct-member or global population proof. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-group-mutations.ts",
+        "packages/keiko-connectors/src/jira-group-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-group-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-group-principal.ts",
+        "packages/keiko-server/src/atlassian/jiraGroupMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-group-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraGroupMutationDescriptors.test.ts",
+        "packages/keiko-connectors/src/jira-group-principal.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.delete-issue-link": {
       "identity": "DELETE /rest/api/2/issueLink/{linkId}",
       "effect": "write",
@@ -1988,6 +2274,31 @@
         "packages/keiko-server/src/store/jiraEntityPropertyMigration.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"
+      ]
+    },
+    "jira.delete-issue-type": {
+      "identity": "DELETE /rest/api/2/issuetype/{id}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-issue-type-delete-and-migration-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Eleven closed actor/admin schema calls share pure native metadata projections and existing formal-rule admission. Issue-type review preserves explicit nullable description, native subtype and exact observed identity. Known type migration/rename evaluates source/target rule selection across all activations; actual custom-field or named link-type removal/rename checks affected required/parent/link references, never prose skills or a fabricated visible population. Custom-field contexts are explicit nonempty typed project/type IDs with safe native numeric project serialization. Bulk field deletion has a native50-field cap and possible partial success. Issue-type alternative ID is a query parameter; terminology is a JSON collection with explicitly reviewed native lowercase/trimmed desired spelling. Native link positions are one-based. Seven create/delete/order effects remain unconfirmed for hidden context/plugin/default-scheme/migration/global consequences. Four actions may confirm exact configuration only. New IDs come solely from readable native ACKs; missing IDs are never recovered by name search or replay. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-schema-mutations.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.ts",
+        "packages/keiko-server/src/atlassian/jiraSchemaMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-schema-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSchemaMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
     "jira.delete-issue-type-property": {
@@ -2041,6 +2352,31 @@
         "packages/keiko-connectors/src/jira-option-scheme-review.test.ts",
         "packages/keiko-server/src/atlassian/jiraOptionSchemeMutationDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.delete-link-type": {
+      "identity": "DELETE /rest/api/2/issueLinkType/{issueLinkTypeId}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-link-type-delete-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Eleven closed actor/admin schema calls share pure native metadata projections and existing formal-rule admission. Issue-type review preserves explicit nullable description, native subtype and exact observed identity. Known type migration/rename evaluates source/target rule selection across all activations; actual custom-field or named link-type removal/rename checks affected required/parent/link references, never prose skills or a fabricated visible population. Custom-field contexts are explicit nonempty typed project/type IDs with safe native numeric project serialization. Bulk field deletion has a native50-field cap and possible partial success. Issue-type alternative ID is a query parameter; terminology is a JSON collection with explicitly reviewed native lowercase/trimmed desired spelling. Native link positions are one-based. Seven create/delete/order effects remain unconfirmed for hidden context/plugin/default-scheme/migration/global consequences. Four actions may confirm exact configuration only. New IDs come solely from readable native ACKs; missing IDs are never recovered by name search or replay. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-schema-mutations.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.ts",
+        "packages/keiko-server/src/atlassian/jiraSchemaMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-schema-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSchemaMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
@@ -3650,6 +3986,28 @@
         "packages/keiko-connectors/src/jira-managed-issue-details.test.ts"
       ]
     },
+    "jira.mark-cluster-node-offline": {
+      "identity": "PUT /rest/api/2/cluster/node/{nodeId}/offline",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-maintenance-request-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Twelve closed native maintenance requests require explicit actor/admin authority and confirmUnverifiedEffect. Bind complete observed node/state, cluster upgrade state, snapshot-running or latest/no-prior reindex/upgrade state before one fixed effect. Offline requires ACTIVE/alive:false; node deletion requires OFFLINE. Native state codes remain literal and native409 owns transition eligibility. Reindex flags are actual Booleans; selected issues are unique independently read ID/key pairs. Only documented unselected resource statuses admit no-prior task/result or running semantics. Pending request processing reads a native ACK array, retains exact safe IDs only, and does not infer missing rows or job correlation. All twelve stay acknowledged/unconfirmed: no index-content, complete migration/task population, cluster effect, deletion or completion is proved. Opaque native upgrade is explicitly system maintenance, not a fabricated per-issue field plan or saved-rule compliance statement. No returned URL/path is followed or logged. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-maintenance-mutations.ts",
+        "packages/keiko-connectors/src/jira-maintenance-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-maintenance-mutation-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-maintenance-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.merge-version": {
       "identity": "PUT /rest/api/2/version/{id}/mergeto/{moveIssuesTo}",
       "effect": "write",
@@ -3671,6 +4029,31 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts",
         "packages/keiko-connectors/src/jira-managed-release-lifecycle.test.ts",
         "packages/keiko-server/src/atlassian/jiraReleaseLifecycleDescriptors.test.ts"
+      ]
+    },
+    "jira.move-link-type": {
+      "identity": "PUT /rest/api/2/issueLinkType/{issueLinkTypeId}/order",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-link-type-order-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Eleven closed actor/admin schema calls share pure native metadata projections and existing formal-rule admission. Issue-type review preserves explicit nullable description, native subtype and exact observed identity. Known type migration/rename evaluates source/target rule selection across all activations; actual custom-field or named link-type removal/rename checks affected required/parent/link references, never prose skills or a fabricated visible population. Custom-field contexts are explicit nonempty typed project/type IDs with safe native numeric project serialization. Bulk field deletion has a native50-field cap and possible partial success. Issue-type alternative ID is a query parameter; terminology is a JSON collection with explicitly reviewed native lowercase/trimmed desired spelling. Native link positions are one-based. Seven create/delete/order effects remain unconfirmed for hidden context/plugin/default-scheme/migration/global consequences. Four actions may confirm exact configuration only. New IDs come solely from readable native ACKs; missing IDs are never recovered by name search or replay. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-schema-mutations.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.ts",
+        "packages/keiko-server/src/atlassian/jiraSchemaMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-schema-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSchemaMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
     "jira.move-screen-tab": {
@@ -3840,6 +4223,28 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.notify-issue": {
+      "identity": "POST /rest/api/2/issue/{issueIdOrKey}/notify",
+      "effect": "write",
+      "permissionPolicy": "issue-notification-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Exact actor and immutable canonical issue ID/key context. Pin uses the existing same-parent comment/self, text and visibility owners, one raw JSON Boolean true, and complete native pinned-entry readback; explicit already-pinned evidence is a no-effect conflict. Pin confirmation requires the same issue/comment/text/visibility and actor. Notifications require explicit email-send acceptance, plain text/one-line subject and unique bounded exact users; key/username bind independently and wire uses documented native username recipients. HTML, raw recipient addresses and dynamic expansion are not exposed. A notification ACK always remains unconfirmed for queue/delivery/filter consequences; no delivery API or safe resend is invented. Private receipts contain exact context, selected user keys and payload digest, not message bodies or usernames. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-issue-action-mutations.ts",
+        "packages/keiko-connectors/src/jira-issue-action-values.ts",
+        "packages/keiko-connectors/src/jira-issue-action-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraIssueActionMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-issue-action-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIssueActionMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.password-policy": {
       "identity": "GET /rest/api/2/password/policy",
       "effect": "read",
@@ -3989,6 +4394,28 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.pin-comment": {
+      "identity": "PUT /rest/api/2/issue/{issueIdOrKey}/comment/{id}/pin",
+      "effect": "write",
+      "permissionPolicy": "comment-pin-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Exact actor and immutable canonical issue ID/key context. Pin uses the existing same-parent comment/self, text and visibility owners, one raw JSON Boolean true, and complete native pinned-entry readback; explicit already-pinned evidence is a no-effect conflict. Pin confirmation requires the same issue/comment/text/visibility and actor. Notifications require explicit email-send acceptance, plain text/one-line subject and unique bounded exact users; key/username bind independently and wire uses documented native username recipients. HTML, raw recipient addresses and dynamic expansion are not exposed. A notification ACK always remains unconfirmed for queue/delivery/filter consequences; no delivery API or safe resend is invented. Private receipts contain exact context, selected user keys and payload digest, not message bodies or usernames. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-issue-action-mutations.ts",
+        "packages/keiko-connectors/src/jira-issue-action-values.ts",
+        "packages/keiko-connectors/src/jira-issue-action-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraIssueActionMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-issue-action-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIssueActionMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.pinned-comments": {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/pinned-comments",
       "effect": "read",
@@ -4114,6 +4541,28 @@
         "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
         "packages/keiko-server/src/atlassian/jiraRoleDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.process-reindex-requests": {
+      "identity": "POST /rest/api/2/reindex/request",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-maintenance-request-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Twelve closed native maintenance requests require explicit actor/admin authority and confirmUnverifiedEffect. Bind complete observed node/state, cluster upgrade state, snapshot-running or latest/no-prior reindex/upgrade state before one fixed effect. Offline requires ACTIVE/alive:false; node deletion requires OFFLINE. Native state codes remain literal and native409 owns transition eligibility. Reindex flags are actual Booleans; selected issues are unique independently read ID/key pairs. Only documented unselected resource statuses admit no-prior task/result or running semantics. Pending request processing reads a native ACK array, retains exact safe IDs only, and does not infer missing rows or job correlation. All twelve stay acknowledged/unconfirmed: no index-content, complete migration/task population, cluster effect, deletion or completion is proved. Opaque native upgrade is explicitly system maintenance, not a fabricated per-issue field plan or saved-rule compliance statement. No returned URL/path is followed or logged. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-maintenance-mutations.ts",
+        "packages/keiko-connectors/src/jira-maintenance-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-maintenance-mutation-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-maintenance-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
@@ -4602,6 +5051,28 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.reindex-issues": {
+      "identity": "POST /rest/api/2/reindex/issue",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-maintenance-request-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Twelve closed native maintenance requests require explicit actor/admin authority and confirmUnverifiedEffect. Bind complete observed node/state, cluster upgrade state, snapshot-running or latest/no-prior reindex/upgrade state before one fixed effect. Offline requires ACTIVE/alive:false; node deletion requires OFFLINE. Native state codes remain literal and native409 owns transition eligibility. Reindex flags are actual Booleans; selected issues are unique independently read ID/key pairs. Only documented unselected resource statuses admit no-prior task/result or running semantics. Pending request processing reads a native ACK array, retains exact safe IDs only, and does not infer missing rows or job correlation. All twelve stay acknowledged/unconfirmed: no index-content, complete migration/task population, cluster effect, deletion or completion is proved. Opaque native upgrade is explicitly system maintenance, not a fabricated per-issue field plan or saved-rule compliance statement. No returned URL/path is followed or logged. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-maintenance-mutations.ts",
+        "packages/keiko-connectors/src/jira-maintenance-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-maintenance-mutation-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-maintenance-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.reindex-progress": {
       "identity": "GET /rest/api/2/reindex/progress",
       "effect": "read",
@@ -4771,6 +5242,30 @@
         "packages/keiko-server/src/atlassian/jiraReleaseLifecycleDescriptors.test.ts"
       ]
     },
+    "jira.remove-group-user": {
+      "identity": "DELETE /rest/api/2/group/user",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-group-membership-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Exact actor/native-name group creation/deletion and user membership changes. User key and native username bind independently. Supported fuzzy group search requires exact observed native names; an unreturned bounded result is unavailable, never absent, with explicit broad-name/manual-Jira guidance. Native member reads include subgroup and inactive members, use complete bounded pages with stable total facts and unique key/name identities, and never establish a direct assignment. Observed true is not an add no-op. Only complete observed absence can establish a no-effect removal. Native restriction transfer binds a different selected group. Creation confirms group existence only after exact ACK name and fresh presence. Every deletion/membership effect remains acknowledged/unconfirmed for aggregate permissions, restrictions, directory and application consequences. No invented direct-member or global population proof. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-group-mutations.ts",
+        "packages/keiko-connectors/src/jira-group-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-group-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-group-principal.ts",
+        "packages/keiko-server/src/atlassian/jiraGroupMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-group-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraGroupMutationDescriptors.test.ts",
+        "packages/keiko-connectors/src/jira-group-principal.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.remove-issue-type-scheme-project": {
       "identity": "DELETE /rest/api/2/issuetypescheme/{schemeId}/associations/{projIdOrKey}",
       "effect": "write",
@@ -4815,6 +5310,32 @@
         "packages/keiko-server/src/store/jiraConfigurationMutationMigration.test.ts",
         "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.remove-user-application": {
+      "identity": "DELETE /rest/api/2/user/application",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-user-application-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Six closed admin/high access/layout mutations retain the existing authority/approval/journal owners. Role configuration binds exact selected groups/default groups and uses fresh native collection ETag with actual If-Match CAS; bulk body is a native list, omitted roles are untouched. Version tokens are bounded private native metadata, never model/receipt/log fields. Native412 becomes conflict only in the exact role port, without retry. User application changes use exact query-only native username/applicationKey and a fixed scoped experimental header; missing UserBean role data is not membership absence. Named user columns use fixed form-urlencoded username and complete ordered repeated columns, independently binding user key/name. Only set-user-columns may confirm exact same-user layout; role changes, application changes and reset stay unconfirmed for effective-access or default-provenance consequences. actorUserKey is the admin, userKey/username are targets only where relevant. No generic header, media, target, secret or approval surface is introduced. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-directory-access-mutations.ts",
+        "packages/keiko-connectors/src/jira-directory-access-values.ts",
+        "packages/keiko-connectors/src/jira-directory-access-observations.ts",
+        "packages/keiko-connectors/src/jira-directory-access-request.ts",
+        "packages/keiko-server/src/atlassian/httpDirectoryAccess.ts",
+        "packages/keiko-server/src/atlassian/jiraDirectoryAccessMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-directory-access-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-directory-access-request.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.directory-access.test.ts",
+        "packages/keiko-server/src/atlassian/jiraDirectoryAccessMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
@@ -4900,6 +5421,28 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.request-cluster-index-snapshot": {
+      "identity": "PUT /rest/api/2/cluster/index-snapshot/{nodeId}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-maintenance-request-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Twelve closed native maintenance requests require explicit actor/admin authority and confirmUnverifiedEffect. Bind complete observed node/state, cluster upgrade state, snapshot-running or latest/no-prior reindex/upgrade state before one fixed effect. Offline requires ACTIVE/alive:false; node deletion requires OFFLINE. Native state codes remain literal and native409 owns transition eligibility. Reindex flags are actual Booleans; selected issues are unique independently read ID/key pairs. Only documented unselected resource statuses admit no-prior task/result or running semantics. Pending request processing reads a native ACK array, retains exact safe IDs only, and does not infer missing rows or job correlation. All twelve stay acknowledged/unconfirmed: no index-content, complete migration/task population, cluster effect, deletion or completion is proved. Opaque native upgrade is explicitly system maintenance, not a fabricated per-issue field plan or saved-rule compliance statement. No returned URL/path is followed or logged. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-maintenance-mutations.ts",
+        "packages/keiko-connectors/src/jira-maintenance-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-maintenance-mutation-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-maintenance-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.reset-filter-columns": {
       "identity": "DELETE /rest/api/2/filter/{id}/columns",
       "effect": "write",
@@ -4921,6 +5464,57 @@
         "packages/keiko-server/src/store/jiraSavedConfigurationMigration.test.ts",
         "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.reset-link-type-order": {
+      "identity": "PUT /rest/api/2/issueLinkType/order",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-link-type-order-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Eleven closed actor/admin schema calls share pure native metadata projections and existing formal-rule admission. Issue-type review preserves explicit nullable description, native subtype and exact observed identity. Known type migration/rename evaluates source/target rule selection across all activations; actual custom-field or named link-type removal/rename checks affected required/parent/link references, never prose skills or a fabricated visible population. Custom-field contexts are explicit nonempty typed project/type IDs with safe native numeric project serialization. Bulk field deletion has a native50-field cap and possible partial success. Issue-type alternative ID is a query parameter; terminology is a JSON collection with explicitly reviewed native lowercase/trimmed desired spelling. Native link positions are one-based. Seven create/delete/order effects remain unconfirmed for hidden context/plugin/default-scheme/migration/global consequences. Four actions may confirm exact configuration only. New IDs come solely from readable native ACKs; missing IDs are never recovered by name search or replay. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-schema-mutations.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.ts",
+        "packages/keiko-server/src/atlassian/jiraSchemaMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-schema-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSchemaMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.reset-user-columns": {
+      "identity": "DELETE /rest/api/2/user/columns",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-user-columns-reset-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Six closed admin/high access/layout mutations retain the existing authority/approval/journal owners. Role configuration binds exact selected groups/default groups and uses fresh native collection ETag with actual If-Match CAS; bulk body is a native list, omitted roles are untouched. Version tokens are bounded private native metadata, never model/receipt/log fields. Native412 becomes conflict only in the exact role port, without retry. User application changes use exact query-only native username/applicationKey and a fixed scoped experimental header; missing UserBean role data is not membership absence. Named user columns use fixed form-urlencoded username and complete ordered repeated columns, independently binding user key/name. Only set-user-columns may confirm exact same-user layout; role changes, application changes and reset stay unconfirmed for effective-access or default-provenance consequences. actorUserKey is the admin, userKey/username are targets only where relevant. No generic header, media, target, secret or approval surface is introduced. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-directory-access-mutations.ts",
+        "packages/keiko-connectors/src/jira-directory-access-values.ts",
+        "packages/keiko-connectors/src/jira-directory-access-observations.ts",
+        "packages/keiko-connectors/src/jira-directory-access-request.ts",
+        "packages/keiko-server/src/atlassian/httpDirectoryAccess.ts",
+        "packages/keiko-server/src/atlassian/jiraDirectoryAccessMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-directory-access-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-directory-access-request.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.directory-access.test.ts",
+        "packages/keiko-server/src/atlassian/jiraDirectoryAccessMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
@@ -4984,6 +5578,28 @@
         "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
         "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.retry-cluster-upgrade": {
+      "identity": "POST /rest/api/2/cluster/zdu/retryUpgrade",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-maintenance-request-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Twelve closed native maintenance requests require explicit actor/admin authority and confirmUnverifiedEffect. Bind complete observed node/state, cluster upgrade state, snapshot-running or latest/no-prior reindex/upgrade state before one fixed effect. Offline requires ACTIVE/alive:false; node deletion requires OFFLINE. Native state codes remain literal and native409 owns transition eligibility. Reindex flags are actual Booleans; selected issues are unique independently read ID/key pairs. Only documented unselected resource statuses admit no-prior task/result or running semantics. Pending request processing reads a native ACK array, retains exact safe IDs only, and does not infer missing rows or job correlation. All twelve stay acknowledged/unconfirmed: no index-content, complete migration/task population, cluster effect, deletion or completion is proved. Opaque native upgrade is explicitly system maintenance, not a fabricated per-issue field plan or saved-rule compliance statement. No returned URL/path is followed or logged. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-maintenance-mutations.ts",
+        "packages/keiko-connectors/src/jira-maintenance-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-maintenance-mutation-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-maintenance-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
@@ -5072,6 +5688,28 @@
         "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
         "packages/keiko-server/src/atlassian/jiraRoleDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.run-upgrade": {
+      "identity": "POST /rest/api/2/upgrade",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-maintenance-request-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Twelve closed native maintenance requests require explicit actor/admin authority and confirmUnverifiedEffect. Bind complete observed node/state, cluster upgrade state, snapshot-running or latest/no-prior reindex/upgrade state before one fixed effect. Offline requires ACTIVE/alive:false; node deletion requires OFFLINE. Native state codes remain literal and native409 owns transition eligibility. Reindex flags are actual Booleans; selected issues are unique independently read ID/key pairs. Only documented unselected resource statuses admit no-prior task/result or running semantics. Pending request processing reads a native ACK array, retains exact safe IDs only, and does not infer missing rows or job correlation. All twelve stay acknowledged/unconfirmed: no index-content, complete migration/task population, cluster effect, deletion or completion is proved. Opaque native upgrade is explicitly system maintenance, not a fabricated per-issue field plan or saved-rule compliance statement. No returned URL/path is followed or logged. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-maintenance-mutations.ts",
+        "packages/keiko-connectors/src/jira-maintenance-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-maintenance-mutation-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-maintenance-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
@@ -5326,6 +5964,58 @@
         "packages/keiko-connectors/src/jira-managed-instance-setting-mutations.test.ts",
         "packages/keiko-server/src/atlassian/jiraInstanceSettingMutationDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.set-application-role": {
+      "identity": "PUT /rest/api/2/applicationrole/{key}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-application-role-cas-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Six closed admin/high access/layout mutations retain the existing authority/approval/journal owners. Role configuration binds exact selected groups/default groups and uses fresh native collection ETag with actual If-Match CAS; bulk body is a native list, omitted roles are untouched. Version tokens are bounded private native metadata, never model/receipt/log fields. Native412 becomes conflict only in the exact role port, without retry. User application changes use exact query-only native username/applicationKey and a fixed scoped experimental header; missing UserBean role data is not membership absence. Named user columns use fixed form-urlencoded username and complete ordered repeated columns, independently binding user key/name. Only set-user-columns may confirm exact same-user layout; role changes, application changes and reset stay unconfirmed for effective-access or default-provenance consequences. actorUserKey is the admin, userKey/username are targets only where relevant. No generic header, media, target, secret or approval surface is introduced. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-directory-access-mutations.ts",
+        "packages/keiko-connectors/src/jira-directory-access-values.ts",
+        "packages/keiko-connectors/src/jira-directory-access-observations.ts",
+        "packages/keiko-connectors/src/jira-directory-access-request.ts",
+        "packages/keiko-server/src/atlassian/httpDirectoryAccess.ts",
+        "packages/keiko-server/src/atlassian/jiraDirectoryAccessMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-directory-access-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-directory-access-request.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.directory-access.test.ts",
+        "packages/keiko-server/src/atlassian/jiraDirectoryAccessMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.set-application-roles": {
+      "identity": "PUT /rest/api/2/applicationrole",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-application-role-cas-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Six closed admin/high access/layout mutations retain the existing authority/approval/journal owners. Role configuration binds exact selected groups/default groups and uses fresh native collection ETag with actual If-Match CAS; bulk body is a native list, omitted roles are untouched. Version tokens are bounded private native metadata, never model/receipt/log fields. Native412 becomes conflict only in the exact role port, without retry. User application changes use exact query-only native username/applicationKey and a fixed scoped experimental header; missing UserBean role data is not membership absence. Named user columns use fixed form-urlencoded username and complete ordered repeated columns, independently binding user key/name. Only set-user-columns may confirm exact same-user layout; role changes, application changes and reset stay unconfirmed for effective-access or default-provenance consequences. actorUserKey is the admin, userKey/username are targets only where relevant. No generic header, media, target, secret or approval surface is introduced. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-directory-access-mutations.ts",
+        "packages/keiko-connectors/src/jira-directory-access-values.ts",
+        "packages/keiko-connectors/src/jira-directory-access-observations.ts",
+        "packages/keiko-connectors/src/jira-directory-access-request.ts",
+        "packages/keiko-server/src/atlassian/httpDirectoryAccess.ts",
+        "packages/keiko-server/src/atlassian/jiraDirectoryAccessMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-directory-access-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-directory-access-request.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.directory-access.test.ts",
+        "packages/keiko-server/src/atlassian/jiraDirectoryAccessMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
@@ -5826,6 +6516,57 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.set-terminology": {
+      "identity": "POST /rest/api/2/terminology/entries",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-terminology-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Eleven closed actor/admin schema calls share pure native metadata projections and existing formal-rule admission. Issue-type review preserves explicit nullable description, native subtype and exact observed identity. Known type migration/rename evaluates source/target rule selection across all activations; actual custom-field or named link-type removal/rename checks affected required/parent/link references, never prose skills or a fabricated visible population. Custom-field contexts are explicit nonempty typed project/type IDs with safe native numeric project serialization. Bulk field deletion has a native50-field cap and possible partial success. Issue-type alternative ID is a query parameter; terminology is a JSON collection with explicitly reviewed native lowercase/trimmed desired spelling. Native link positions are one-based. Seven create/delete/order effects remain unconfirmed for hidden context/plugin/default-scheme/migration/global consequences. Four actions may confirm exact configuration only. New IDs come solely from readable native ACKs; missing IDs are never recovered by name search or replay. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-schema-mutations.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.ts",
+        "packages/keiko-server/src/atlassian/jiraSchemaMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-schema-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSchemaMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.set-user-columns": {
+      "identity": "PUT /rest/api/2/user/columns",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-user-columns-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Six closed admin/high access/layout mutations retain the existing authority/approval/journal owners. Role configuration binds exact selected groups/default groups and uses fresh native collection ETag with actual If-Match CAS; bulk body is a native list, omitted roles are untouched. Version tokens are bounded private native metadata, never model/receipt/log fields. Native412 becomes conflict only in the exact role port, without retry. User application changes use exact query-only native username/applicationKey and a fixed scoped experimental header; missing UserBean role data is not membership absence. Named user columns use fixed form-urlencoded username and complete ordered repeated columns, independently binding user key/name. Only set-user-columns may confirm exact same-user layout; role changes, application changes and reset stay unconfirmed for effective-access or default-provenance consequences. actorUserKey is the admin, userKey/username are targets only where relevant. No generic header, media, target, secret or approval surface is introduced. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-directory-access-mutations.ts",
+        "packages/keiko-connectors/src/jira-directory-access-values.ts",
+        "packages/keiko-connectors/src/jira-directory-access-observations.ts",
+        "packages/keiko-connectors/src/jira-directory-access-request.ts",
+        "packages/keiko-server/src/atlassian/httpDirectoryAccess.ts",
+        "packages/keiko-server/src/atlassian/jiraDirectoryAccessMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-directory-access-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-directory-access-request.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.directory-access.test.ts",
+        "packages/keiko-server/src/atlassian/jiraDirectoryAccessMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.set-user-property": {
       "identity": "PUT /rest/api/2/user/properties/{propertyKey}",
       "effect": "write",
@@ -6113,6 +6854,28 @@
         "packages/keiko-connectors/src/jira-agile-reads.test.ts"
       ]
     },
+    "jira.start-cluster-upgrade": {
+      "identity": "POST /rest/api/2/cluster/zdu/start",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-maintenance-request-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Twelve closed native maintenance requests require explicit actor/admin authority and confirmUnverifiedEffect. Bind complete observed node/state, cluster upgrade state, snapshot-running or latest/no-prior reindex/upgrade state before one fixed effect. Offline requires ACTIVE/alive:false; node deletion requires OFFLINE. Native state codes remain literal and native409 owns transition eligibility. Reindex flags are actual Booleans; selected issues are unique independently read ID/key pairs. Only documented unselected resource statuses admit no-prior task/result or running semantics. Pending request processing reads a native ACK array, retains exact safe IDs only, and does not infer missing rows or job correlation. All twelve stay acknowledged/unconfirmed: no index-content, complete migration/task population, cluster effect, deletion or completion is proved. Opaque native upgrade is explicitly system maintenance, not a fabricated per-issue field plan or saved-rule compliance statement. No returned URL/path is followed or logged. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-maintenance-mutations.ts",
+        "packages/keiko-connectors/src/jira-maintenance-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-maintenance-mutation-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-maintenance-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.start-jmx-metrics": {
       "identity": "POST /rest/api/2/monitoring/jmx/startExposing",
       "effect": "write",
@@ -6136,6 +6899,28 @@
         "packages/keiko-server/src/store/jiraMonitoringMigration.test.ts",
         "packages/keiko-server/src/store/jiraOperationMigration.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.start-reindex": {
+      "identity": "POST /rest/api/2/reindex",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-maintenance-request-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Twelve closed native maintenance requests require explicit actor/admin authority and confirmUnverifiedEffect. Bind complete observed node/state, cluster upgrade state, snapshot-running or latest/no-prior reindex/upgrade state before one fixed effect. Offline requires ACTIVE/alive:false; node deletion requires OFFLINE. Native state codes remain literal and native409 owns transition eligibility. Reindex flags are actual Booleans; selected issues are unique independently read ID/key pairs. Only documented unselected resource statuses admit no-prior task/result or running semantics. Pending request processing reads a native ACK array, retains exact safe IDs only, and does not infer missing rows or job correlation. All twelve stay acknowledged/unconfirmed: no index-content, complete migration/task population, cluster effect, deletion or completion is proved. Opaque native upgrade is explicitly system maintenance, not a fabricated per-issue field plan or saved-rule compliance statement. No returned URL/path is followed or logged. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-maintenance-mutations.ts",
+        "packages/keiko-connectors/src/jira-maintenance-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-maintenance-mutation-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-maintenance-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
@@ -6584,6 +7369,31 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.update-issue-type": {
+      "identity": "PUT /rest/api/2/issuetype/{id}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-issue-type-update-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Eleven closed actor/admin schema calls share pure native metadata projections and existing formal-rule admission. Issue-type review preserves explicit nullable description, native subtype and exact observed identity. Known type migration/rename evaluates source/target rule selection across all activations; actual custom-field or named link-type removal/rename checks affected required/parent/link references, never prose skills or a fabricated visible population. Custom-field contexts are explicit nonempty typed project/type IDs with safe native numeric project serialization. Bulk field deletion has a native50-field cap and possible partial success. Issue-type alternative ID is a query parameter; terminology is a JSON collection with explicitly reviewed native lowercase/trimmed desired spelling. Native link positions are one-based. Seven create/delete/order effects remain unconfirmed for hidden context/plugin/default-scheme/migration/global consequences. Four actions may confirm exact configuration only. New IDs come solely from readable native ACKs; missing IDs are never recovered by name search or replay. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-schema-mutations.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.ts",
+        "packages/keiko-server/src/atlassian/jiraSchemaMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-schema-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSchemaMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.update-issue-type-scheme": {
       "identity": "PUT /rest/api/2/issuetypescheme/{schemeId}",
       "effect": "write",
@@ -6603,6 +7413,31 @@
         "packages/keiko-connectors/src/jira-option-scheme-review.test.ts",
         "packages/keiko-server/src/atlassian/jiraOptionSchemeMutationDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.update-link-type": {
+      "identity": "PUT /rest/api/2/issueLinkType/{issueLinkTypeId}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-link-type-update-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Eleven closed actor/admin schema calls share pure native metadata projections and existing formal-rule admission. Issue-type review preserves explicit nullable description, native subtype and exact observed identity. Known type migration/rename evaluates source/target rule selection across all activations; actual custom-field or named link-type removal/rename checks affected required/parent/link references, never prose skills or a fabricated visible population. Custom-field contexts are explicit nonempty typed project/type IDs with safe native numeric project serialization. Bulk field deletion has a native50-field cap and possible partial success. Issue-type alternative ID is a query parameter; terminology is a JSON collection with explicitly reviewed native lowercase/trimmed desired spelling. Native link positions are one-based. Seven create/delete/order effects remain unconfirmed for hidden context/plugin/default-scheme/migration/global consequences. Four actions may confirm exact configuration only. New IDs come solely from readable native ACKs; missing IDs are never recovered by name search or replay. Full input/receipt bounds precede effects. Existing intent, admission, ACK and recovery owners prevent duplicate replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-schema-mutations.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-schema-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.ts",
+        "packages/keiko-server/src/atlassian/jiraSchemaMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-schema-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSchemaMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
@@ -7477,8 +8312,8 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "d9066c8d26df99ace69c0186ae3ff75f40c69dabb63522a2c94a805d1df93303",
-    "nativeOperationCount": 359
+    "sha256": "e761026fbc976887e963e5ce84d8e74b12a102fbdda8f539922f001c032ffb65",
+    "nativeOperationCount": 394
   },
   "operations": [
     {
@@ -9324,10 +10159,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.set-application-roles"
+      ]
     },
     {
       "identity": "GET /rest/api/2/applicationrole/{key}",
@@ -9394,10 +10231,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.set-application-role"
+      ]
     },
     {
       "identity": "GET /rest/api/2/attachment/meta",
@@ -9698,10 +10537,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.request-cluster-index-snapshot"
+      ]
     },
     {
       "identity": "DELETE /rest/api/2/cluster/node/{nodeId}",
@@ -9732,10 +10573,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.delete-cluster-node"
+      ]
     },
     {
       "identity": "PUT /rest/api/2/cluster/node/{nodeId}/offline",
@@ -9766,10 +10609,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.mark-cluster-node-offline"
+      ]
     },
     {
       "identity": "GET /rest/api/2/cluster/nodes",
@@ -9836,10 +10681,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.approve-cluster-upgrade"
+      ]
     },
     {
       "identity": "POST /rest/api/2/cluster/zdu/cancel",
@@ -9870,10 +10717,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.cancel-cluster-upgrade"
+      ]
     },
     {
       "identity": "POST /rest/api/2/cluster/zdu/retryUpgrade",
@@ -9904,10 +10753,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.retry-cluster-upgrade"
+      ]
     },
     {
       "identity": "POST /rest/api/2/cluster/zdu/start",
@@ -9938,10 +10789,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.start-cluster-upgrade"
+      ]
     },
     {
       "identity": "GET /rest/api/2/cluster/zdu/state",
@@ -10446,10 +11299,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.delete-custom-fields"
+      ]
     },
     {
       "identity": "GET /rest/api/2/customFields",
@@ -10984,10 +11839,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.create-custom-field"
+      ]
     },
     {
       "identity": "POST /rest/api/2/filter",
@@ -11522,10 +12379,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.delete-group"
+      ]
     },
     {
       "identity": "POST /rest/api/2/group",
@@ -11556,10 +12415,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.create-group"
+      ]
     },
     {
       "identity": "GET /rest/api/2/group/member",
@@ -11626,10 +12487,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.remove-group-user"
+      ]
     },
     {
       "identity": "POST /rest/api/2/group/user",
@@ -11660,10 +12523,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.add-group-user"
+      ]
     },
     {
       "identity": "GET /rest/api/2/groups/picker",
@@ -11800,10 +12665,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.create-index-snapshot"
+      ]
     },
     {
       "identity": "GET /rest/api/2/index-snapshot/isRunning",
@@ -12554,10 +13421,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.pin-comment"
+      ]
     },
     {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/editmeta",
@@ -12626,10 +13495,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.notify-issue"
+      ]
     },
     {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/pinned-comments",
@@ -13816,10 +14687,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.create-link-type"
+      ]
     },
     {
       "identity": "PUT /rest/api/2/issueLinkType/order",
@@ -13846,10 +14719,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.reset-link-type-order"
+      ]
     },
     {
       "identity": "DELETE /rest/api/2/issueLinkType/{issueLinkTypeId}",
@@ -13880,10 +14755,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.delete-link-type"
+      ]
     },
     {
       "identity": "GET /rest/api/2/issueLinkType/{issueLinkTypeId}",
@@ -13950,10 +14827,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.update-link-type"
+      ]
     },
     {
       "identity": "PUT /rest/api/2/issueLinkType/{issueLinkTypeId}/order",
@@ -13980,10 +14859,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.move-link-type"
+      ]
     },
     {
       "identity": "GET /rest/api/2/issuesecurityschemes",
@@ -14120,10 +15001,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.create-issue-type"
+      ]
     },
     {
       "identity": "GET /rest/api/2/issuetype/page",
@@ -14186,10 +15069,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.delete-issue-type"
+      ]
     },
     {
       "identity": "GET /rest/api/2/issuetype/{id}",
@@ -14252,10 +15137,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.update-issue-type"
+      ]
     },
     {
       "identity": "GET /rest/api/2/issuetype/{id}/alternatives",
@@ -18126,10 +19013,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.start-reindex"
+      ]
     },
     {
       "identity": "POST /rest/api/2/reindex/issue",
@@ -18160,10 +19049,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.reindex-issues"
+      ]
     },
     {
       "identity": "GET /rest/api/2/reindex/progress",
@@ -18230,10 +19121,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.process-reindex-requests"
+      ]
     },
     {
       "identity": "GET /rest/api/2/reindex/request/bulk",
@@ -19789,10 +20682,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.set-terminology"
+      ]
     },
     {
       "identity": "GET /rest/api/2/terminology/entries/{originalName}",
@@ -20031,10 +20926,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.run-upgrade"
+      ]
     },
     {
       "identity": "DELETE /rest/api/2/user",
@@ -20449,10 +21346,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.remove-user-application"
+      ]
     },
     {
       "identity": "POST /rest/api/2/user/application",
@@ -20483,10 +21382,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.add-user-application"
+      ]
     },
     {
       "identity": "GET /rest/api/2/user/assignable/multiProjectSearch",
@@ -20763,10 +21664,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.reset-user-columns"
+      ]
     },
     {
       "identity": "GET /rest/api/2/user/columns",
@@ -20833,10 +21736,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.set-user-columns"
+      ]
     },
     {
       "identity": "GET /rest/api/2/user/duplicated/count",

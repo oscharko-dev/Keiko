@@ -59,7 +59,7 @@ function snapshotFor(kind: Kind, source: Source): Source | undefined {
   if (source.draft !== undefined && source.draft !== snapshot.draft) return undefined;
   return workflowSnapshot(snapshot) ? snapshot : undefined;
 }
-function nullableFacts(label: WidgetMessageKey, value: unknown): JiraAgileDetails {
+export function jiraNullableReviewFacts(label: WidgetMessageKey, value: unknown): JiraAgileDetails {
   if (value === null) return { facts: [], labels: [label, "chat.jira.structural.nativeNotProvided"] };
   if (value === "") return { facts: [], labels: [label, "chat.jira.propertyMutation.emptyText"] };
   if (typeof value !== "string") return { facts: [], labels: [] };
@@ -69,7 +69,7 @@ function nullableFacts(label: WidgetMessageKey, value: unknown): JiraAgileDetail
 function optionFacts(kind: Kind, snapshot: Source): JiraAgileDetails {
   const ids = kind === "issue-type" ? snapshot.issueTypeIds : snapshot.optionIds;
   const selected = kind === "issue-type" ? snapshot.defaultIssueTypeId : snapshot.defaultOptionId;
-  const defaultFact = nullableFacts(kind === "issue-type" ? "chat.jira.schemeWrite.defaultIssueType" : "chat.jira.association.defaultPriorityId", selected);
+  const defaultFact = jiraNullableReviewFacts(kind === "issue-type" ? "chat.jira.schemeWrite.defaultIssueType" : "chat.jira.association.defaultPriorityId", selected);
   const label = kind === "issue-type" ? "chat.jira.schemeWrite.issueTypeOrder" : "chat.jira.schemeWrite.priorityOrder";
   const facts: JiraOutcomeFact[] = idList(ids) ? ids.map((id, index) => ({ label, value: `${String(index + 1)}: ${id}` })) : [];
   if (typeof snapshot.defaultScheme === "boolean") facts.push({ label: "chat.jira.schemeWrite.defaultScheme", value: String(snapshot.defaultScheme) });
@@ -81,8 +81,8 @@ function mappingFacts(value: unknown, original: boolean): JiraOutcomeFact[] {
     ...value.map((row) => ({ label: original ? "chat.jira.schemeWrite.originalMapping" : "chat.jira.schemeWrite.mapping", value: `${String(row.issueTypeId)} → ${String(row.workflow)}` } satisfies JiraOutcomeFact))];
 }
 function workflowFacts(snapshot: Source): JiraAgileDetails {
-  const current = nullableFacts("chat.jira.schemeWrite.configuredDefault", snapshot.defaultWorkflow);
-  const original = nullableFacts("chat.jira.fact.originalDefaultWorkflow", snapshot.originalDefaultWorkflow);
+  const current = jiraNullableReviewFacts("chat.jira.schemeWrite.configuredDefault", snapshot.defaultWorkflow);
+  const original = jiraNullableReviewFacts("chat.jira.fact.originalDefaultWorkflow", snapshot.originalDefaultWorkflow);
   return { facts: [...current.facts, ...original.facts, ...mappingFacts(snapshot.mappings, false), ...mappingFacts(snapshot.originalMappings, true)],
     labels: [...current.labels, ...original.labels, snapshot.draft === true ? "chat.jira.schemeWrite.draftOnly" : "chat.jira.schemeWrite.baseOnly", "chat.jira.schemeWrite.configuredNotEffective"] };
 }
@@ -91,7 +91,7 @@ export function jiraSchemeReviewDetails(kind: Kind, source: Source): JiraAgileDe
   if (identity(source.id) === undefined) return { facts: [], labels: [] };
   const snapshot = snapshotFor(kind, source);
   if (snapshot === undefined) return { facts: [], labels: ["chat.jira.schemeWrite.reviewUnavailable"] };
-  const description = nullableFacts("chat.jira.structural.nativeDescription", snapshot.description);
+  const description = jiraNullableReviewFacts("chat.jira.structural.nativeDescription", snapshot.description);
   const values = kind === "workflow" ? workflowFacts(snapshot) : optionFacts(kind, snapshot);
   return { facts: [...fact("chat.jira.access.schemeId", snapshot.id), ...description.facts, ...values.facts],
     labels: ["chat.jira.schemeWrite.reviewAvailable", ...description.labels, ...values.labels] };

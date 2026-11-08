@@ -81,3 +81,15 @@ it.each([
 ] as const)("binds %s to the exact read-only native identity", (name, path) => {
   expect(jiraOperationForTool(name)?.definition).toMatchObject({ kind: "native", method: "GET", apiRoot: "/rest/api/2", pathTemplate: path, effects: ["remote-read"] });
 });
+
+it("keeps documented no-prior-task separate from selected identities and unavailable metrics", () => {
+  const actual = jiraJobObservationDeclarationForTool("jira.reindex-status");
+  if (actual === undefined) throw new TypeError("Missing reindex observation declaration");
+  const value = { outcome: "succeeded", taskSelection: "active-or-latest", taskState: "no-prior-task" };
+  expect(describeCatalogSchemaMismatch(actual.descriptor.resultSchema, value)).toBeUndefined();
+  expect(describeCatalogSchemaMismatch(actual.descriptor.resultSchema, { ...value, currentProgress: 0 })).toBeDefined();
+  expect(describeCatalogSchemaMismatch(actual.descriptor.resultSchema, { ...value, success: false })).toBeDefined();
+  expect(describeCatalogSchemaMismatch(actual.descriptor.resultSchema, { ...value, selectedTaskId: "7" })).toBeDefined();
+  expect(describeCatalogSchemaMismatch(actual.descriptor.resultSchema, { ...value, taskSelection: "selected-task" })).toBeDefined();
+  expect(describeCatalogSchemaMismatch(actual.descriptor.resultSchema, { ...value, outcome: "failed" })).toBeDefined();
+});

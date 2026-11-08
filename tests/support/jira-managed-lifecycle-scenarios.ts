@@ -1,3 +1,4 @@
+import { systemAdministrationTransportController } from "./jira-system-administration-transport-fixture.js";
 import { permissionRoleTransportController } from "./jira-permission-role-transport-fixture.js";
 import { schemeSettingTransportController } from "./jira-scheme-setting-transport-fixture.js";
 import { emailTemplateTransportController } from "./jira-email-template-transport-fixture.js";
@@ -76,7 +77,7 @@ interface Controller {
 }
 const API_ROOT = "/context/rest/api/2";
 function controller(operation: string | undefined): Controller | undefined {
-  const next = schemeSettingTransportController(operation, ACTOR) ?? emailTemplateTransportController(operation, ACTOR);
+  const next = systemAdministrationTransportController(operation, ACTOR) ?? schemeSettingTransportController(operation, ACTOR) ?? emailTemplateTransportController(operation, ACTOR);
   if (next !== undefined) return next;
   const permissionRole = permissionRoleTransportController(operation, ACTOR);
   if (permissionRole !== undefined) return permissionRole;
@@ -96,6 +97,7 @@ export function lifecycleRemoteFixture(operation: string | undefined): {
   const selected = controller(operation);
   return {
     read: async (url) => selected?.read({ method: "GET", url, timeoutMs: 1000, maxBodyBytes: 262144,
+      ...(new URL(url).pathname === "/context/rest/api/2/applicationrole" && (operation === "jira.set-application-role" || operation === "jira.set-application-roles") ? { jiraApplicationRole: "version" } : {}),
       ...(new URL(url).pathname === "/context/rest/api/2/email-templates" ? { jiraEmailTemplateArchive: true } : {}),
     }),
     async write(request) {
@@ -105,11 +107,28 @@ export function lifecycleRemoteFixture(operation: string | undefined): {
       const archive = request.headers.get("content-type") === "application/zip";
       const bodyJson = archive ? "" : await request.clone().text();
       return selected.write({ method, url: request.url, timeoutMs: 1000, maxBodyBytes: 262144,
-        ...(request.headers.get("x-experimentalapi") === "true" ? { jiraExperimental: true } : {}),
+        ...directoryRequestFlags(request),
         ...(request.headers.get("content-type") === "text/plain" ? { jiraPermissionAttribute: true } : {}),
         ...(archive ? { jiraEmailTemplateArchive: true, upload: { contentType: "application/zip", bytes: new Uint8Array(await request.clone().arrayBuffer()) } } : {}),
         ...(bodyJson === "" ? {} : { bodyJson }) });
     },
     snapshot: () => selected?.snapshot(),
+  };
+}
+
+/** Reconstruct only flags backed by native headers/media on their fixed routes. The controller
+ * asserts these flags, so missing/misrouted gateway headers cannot be hidden by the fixture. */
+function directoryRequestFlags(request: Request): Pick<AtlassianHttpBodyRequest,
+  "jiraApplicationRole" | "jiraUserApplication" | "jiraUserColumns" | "jiraExperimental"> {
+  const path = new URL(request.url).pathname;
+  const experimental = request.headers.get("x-experimentalapi") === "true";
+  const ifMatch = request.headers.get("if-match");
+  return {
+    ...(experimental && path === "/context/rest/api/2/user/application" ? { jiraUserApplication: true } : {}),
+    ...(experimental && path !== "/context/rest/api/2/user/application" ? { jiraExperimental: true } : {}),
+    ...(request.method === "PUT" && (path === "/context/rest/api/2/applicationrole" || path === "/context/rest/api/2/applicationrole/jira-software") && ifMatch !== null
+      ? { jiraApplicationRole: { ifMatch } } : {}),
+    ...(request.method === "PUT" && path === "/context/rest/api/2/user/columns" && request.headers.get("content-type") === "application/x-www-form-urlencoded"
+      ? { jiraUserColumns: true } : {}),
   };
 }

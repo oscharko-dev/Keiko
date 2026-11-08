@@ -36,7 +36,7 @@ function schema(value: unknown): CatalogJsonObject | undefined {
   }
   return result;
 }
-function field(value: unknown): CatalogJsonObject | undefined {
+export function jiraFieldDirectoryProjection(value: unknown): CatalogJsonObject | undefined {
   const raw = asRecord(value);
   if (raw === undefined || !isJiraFieldId(raw.id) || !jiraNativeText(raw.name, 255)) return undefined;
   const result: Record<string, CatalogJsonValue> = { id: raw.id, name: raw.name };
@@ -105,7 +105,7 @@ function projectResponse(response: JiraReadResponse, selected: Selection): Manag
     const names = asArray(asRecord(value)?.clauseNames);
     return names !== undefined && names.length > TOOL_CATALOG_LIMITS.maxArrayItems;
   })) return jiraReadFailure("bounds-exceeded");
-  const items = projectJiraCollection(values, TOOL_CATALOG_LIMITS.maxArrayItems, field, "id");
+  const items = projectJiraCollection(values, TOOL_CATALOG_LIMITS.maxArrayItems, jiraFieldDirectoryProjection, "id");
   return items === undefined ? jiraReadFailure("malformed-payload") : boundJiraReadResult(localJiraPage(items, selected.startAt, selected.maxResults));
 }
 export function isJiraFieldDirectoryRead(name: string): name is FieldRead { return READS.has(name); }

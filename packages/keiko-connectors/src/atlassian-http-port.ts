@@ -41,8 +41,9 @@ export type AtlassianHttpPort = (request: AtlassianHttpRequest) => Promise<Atlas
 // created-id/version/transition-list payloads under a small response cap). The result stays
 // credential-blind and header-blind: a decoded UTF-8 body (JSON from the connector's own
 // allowlisted host), the byte count actually read, a truncation flag, and — for 429/5xx backoff
-// only — the `Retry-After` header parsed into a non-negative millisecond number. No raw header
-// text, no upstream error message.
+// only — the `Retry-After` header parsed into a non-negative millisecond number. The sole private
+// version exception is a bounded strong applicationrole ETag under its fixed CAS request flag;
+// it never enters tool results or logs. No generic response header map is exposed.
 
 // Hard ceiling on one serialized JSON request body (ADR-0128 D3 bounded egress). The composers
 // bound their output well below this; the executors enforce it as a typed `bounds-exceeded`
@@ -53,6 +54,11 @@ export const ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES = 1_000_000;
 // admitted and bounded. The adapter accepts it only on POST, only with a multipart content type, and
 // adds the transport header Jira requires for it; it is mutually exclusive with `bodyJson`.
 export const ATLASSIAN_HTTP_UPLOAD_MAX_BYTES = 24 * 1024 * 1024;
+/** Private native collection version. Never a tool argument, receipt or diagnostic field. */
+export function isAtlassianApplicationRoleVersion(value: unknown): value is string {
+  return typeof value === "string" && /^"[\x21\x23-\x5b\x5d-\x7e]{1,254}"$/u.test(value);
+}
+export type AtlassianApplicationRoleRequest = "version" | { readonly ifMatch: string };
 export interface AtlassianHttpUpload {
   readonly contentType: string;
   readonly bytes: Uint8Array<ArrayBuffer>;
@@ -80,6 +86,12 @@ export interface AtlassianHttpBodyRequest {
   readonly jiraPermissionAttribute?: true | undefined;
   /** Fixed email-template ZIP GET/POST only; never an arbitrary binary response or upload. */
   readonly jiraEmailTemplateArchive?: true | undefined;
+  /** Fixed applicationrole GET version / PUT native CAS only. */
+  readonly jiraApplicationRole?: AtlassianApplicationRoleRequest | undefined;
+  /** Fixed query-only experimental user/application POST/DELETE only. */
+  readonly jiraUserApplication?: true | undefined;
+  /** Fixed user/columns PUT form, with a bound username and ordered repeated columns. */
+  readonly jiraUserColumns?: true | undefined;
   // Run-level cancellation (ADR-0128 D5): the adapter composes this with its own timeout so an
   // aborted sync run tears down the in-flight request instead of waiting it out.
   readonly signal?: AbortSignal | undefined;
@@ -97,6 +109,8 @@ export type AtlassianHttpBodyResult =
       readonly bodyText: string;
       /** Exact bytes only for an admitted successful email-template ZIP download. */
       readonly archiveBytes?: Uint8Array<ArrayBuffer>;
+      /** Strong bounded ETag only for an explicitly admitted applicationrole collection GET. */
+      readonly applicationRoleVersion?: string;
       // Bytes actually read from the stream (≤ maxBodyBytes).
       readonly bodyBytes: number;
       readonly truncated: boolean;

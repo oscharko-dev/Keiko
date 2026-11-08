@@ -32,11 +32,13 @@ export {
   type AtlassianHttpUpload,
   type AtlassianHttpBodyPort,
   type AtlassianHttpBodyRequest,
+  isAtlassianApplicationRoleVersion,
   type AtlassianHttpBodyResult,
   type AtlassianHttpPort,
   type AtlassianHttpRequest,
   type AtlassianHttpResult,
 } from "./atlassian-http-port.js";
+export { maintenancePathNode } from "./jira-maintenance-mutation-values.js";
 export {
   ATLASSIAN_SYNC_ITEM_MAX_BYTES,
   ATLASSIAN_SYNC_PAGINATED_FETCH_TIMEOUT_MS,

@@ -48,11 +48,19 @@ function read(description: string, input: CatalogJsonObject, result: CatalogJson
   return { description, input, result: jiraNativeReadResult(result), risk: "read", maxResultCount };
 }
 export const JIRA_JOB_OBSERVATION_READ_DEFINITIONS = {
-  "jira.reindex-status": read(
-    "Observe the active reindex task or, when none is active, the latest task, optionally requesting one exact task ID. The returned native bean has no task identity: selectedTaskId records requested context only. Preserve supplied progress, subtask, times, type and success without converting progress to a percentage or inferring completion from missing values. Native not-found remains a refusal. No task is started, resumed or scheduled.",
-    object({ taskId: ID }),
-    { ...REINDEX_FIELDS, ...TASK_CONTEXT },
-  ),
+  "jira.reindex-status": {
+    ...read(
+      "Observe the active reindex task or, when none is active, the latest task, optionally requesting one exact task ID. The returned native bean has no task identity: selectedTaskId records requested context only. Preserve supplied progress, subtask, times, type and success without converting progress to a percentage or inferring completion from missing values. Only the documented unselected GET/reindex404 means no-prior-task, with no invented task identity, progress, success or zero metrics. A selected taskId404 remains a refusal. No task is started, resumed or scheduled.",
+      object({ taskId: ID }), {},
+    ),
+    result: { anyOf: [
+      jiraNativeReadResult({ ...REINDEX_FIELDS, ...TASK_CONTEXT }),
+      { ...jiraNativeReadResult({ taskSelection: { type: "string", enum: ["active-or-latest"] }, taskState: { type: "string", enum: ["no-prior-task"] } }),
+        required: ["outcome", "taskSelection", "taskState"],
+        allOf: [{ properties: { outcome: { type: "string", enum: ["succeeded"] } } }],
+      },
+    ] },
+  },
   "jira.reindex-progress": read(
     "Read one on-demand observation from the native reindex progress endpoint, optionally for an exact requested task ID. Without a selector Jira chooses its active-or-latest task. Keep supplied progress and outcome facts separate from Keiko read success; unknown values stay unknown. No polling loop, reindex start, retry job or cancellation effect is created.",
     object({ taskId: ID }),

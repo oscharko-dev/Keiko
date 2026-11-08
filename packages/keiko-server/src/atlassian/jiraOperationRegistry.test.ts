@@ -125,11 +125,52 @@ describe("server-owned Jira operation contracts", () => {
       permissionPolicy: "instance-admin-email-template-archive-observation",
     });
   });
+  it.each([
+    { tool: "jira.create-group", identity: "POST /rest/api/2/group", permissionPolicy: "instance-admin-group-create-and-readback" },
+    { tool: "jira.delete-group", identity: "DELETE /rest/api/2/group", permissionPolicy: "instance-admin-group-delete-unconfirmed" },
+    { tool: "jira.add-group-user", identity: "POST /rest/api/2/group/user", permissionPolicy: "instance-admin-group-membership-unconfirmed" },
+    { tool: "jira.remove-group-user", identity: "DELETE /rest/api/2/group/user", permissionPolicy: "instance-admin-group-membership-unconfirmed" },
+    { tool: "jira.pin-comment", identity: "PUT /rest/api/2/issue/{issueIdOrKey}/comment/{id}/pin", permissionPolicy: "comment-pin-and-readback" },
+    { tool: "jira.notify-issue", identity: "POST /rest/api/2/issue/{issueIdOrKey}/notify", permissionPolicy: "issue-notification-unconfirmed" },
+    { tool: "jira.request-cluster-index-snapshot", identity: "PUT /rest/api/2/cluster/index-snapshot/{nodeId}", permissionPolicy: "instance-admin-maintenance-request-unconfirmed" },
+    { tool: "jira.delete-cluster-node", identity: "DELETE /rest/api/2/cluster/node/{nodeId}", permissionPolicy: "instance-admin-maintenance-request-unconfirmed" },
+    { tool: "jira.mark-cluster-node-offline", identity: "PUT /rest/api/2/cluster/node/{nodeId}/offline", permissionPolicy: "instance-admin-maintenance-request-unconfirmed" },
+    { tool: "jira.approve-cluster-upgrade", identity: "POST /rest/api/2/cluster/zdu/approve", permissionPolicy: "instance-admin-maintenance-request-unconfirmed" },
+    { tool: "jira.cancel-cluster-upgrade", identity: "POST /rest/api/2/cluster/zdu/cancel", permissionPolicy: "instance-admin-maintenance-request-unconfirmed" },
+    { tool: "jira.retry-cluster-upgrade", identity: "POST /rest/api/2/cluster/zdu/retryUpgrade", permissionPolicy: "instance-admin-maintenance-request-unconfirmed" },
+    { tool: "jira.start-cluster-upgrade", identity: "POST /rest/api/2/cluster/zdu/start", permissionPolicy: "instance-admin-maintenance-request-unconfirmed" },
+    { tool: "jira.create-index-snapshot", identity: "POST /rest/api/2/index-snapshot", permissionPolicy: "instance-admin-maintenance-request-unconfirmed" },
+    { tool: "jira.start-reindex", identity: "POST /rest/api/2/reindex", permissionPolicy: "instance-admin-maintenance-request-unconfirmed" },
+    { tool: "jira.reindex-issues", identity: "POST /rest/api/2/reindex/issue", permissionPolicy: "instance-admin-maintenance-request-unconfirmed" },
+    { tool: "jira.process-reindex-requests", identity: "POST /rest/api/2/reindex/request", permissionPolicy: "instance-admin-maintenance-request-unconfirmed" },
+    { tool: "jira.run-upgrade", identity: "POST /rest/api/2/upgrade", permissionPolicy: "instance-admin-maintenance-request-unconfirmed" },
+    { tool: "jira.create-custom-field", identity: "POST /rest/api/2/field", permissionPolicy: "instance-admin-custom-field-create-unconfirmed" },
+    { tool: "jira.delete-custom-fields", identity: "DELETE /rest/api/2/customFields", permissionPolicy: "instance-admin-custom-field-delete-unconfirmed" },
+    { tool: "jira.create-issue-type", identity: "POST /rest/api/2/issuetype", permissionPolicy: "instance-admin-issue-type-create-unconfirmed" },
+    { tool: "jira.update-issue-type", identity: "PUT /rest/api/2/issuetype/{id}", permissionPolicy: "instance-admin-issue-type-update-and-readback" },
+    { tool: "jira.delete-issue-type", identity: "DELETE /rest/api/2/issuetype/{id}", permissionPolicy: "instance-admin-issue-type-delete-and-migration-unconfirmed" },
+    { tool: "jira.create-link-type", identity: "POST /rest/api/2/issueLinkType", permissionPolicy: "instance-admin-link-type-create-and-readback" },
+    { tool: "jira.update-link-type", identity: "PUT /rest/api/2/issueLinkType/{issueLinkTypeId}", permissionPolicy: "instance-admin-link-type-update-and-readback" },
+    { tool: "jira.delete-link-type", identity: "DELETE /rest/api/2/issueLinkType/{issueLinkTypeId}", permissionPolicy: "instance-admin-link-type-delete-unconfirmed" },
+    { tool: "jira.reset-link-type-order", identity: "PUT /rest/api/2/issueLinkType/order", permissionPolicy: "instance-admin-link-type-order-unconfirmed" },
+    { tool: "jira.move-link-type", identity: "PUT /rest/api/2/issueLinkType/{issueLinkTypeId}/order", permissionPolicy: "instance-admin-link-type-order-unconfirmed" },
+    { tool: "jira.set-terminology", identity: "POST /rest/api/2/terminology/entries", permissionPolicy: "instance-admin-terminology-and-readback" },
+    { tool: "jira.set-application-role", identity: "PUT /rest/api/2/applicationrole/{key}", permissionPolicy: "instance-admin-application-role-cas-unconfirmed" },
+    { tool: "jira.set-application-roles", identity: "PUT /rest/api/2/applicationrole", permissionPolicy: "instance-admin-application-role-cas-unconfirmed" },
+    { tool: "jira.add-user-application", identity: "POST /rest/api/2/user/application", permissionPolicy: "instance-admin-user-application-unconfirmed" },
+    { tool: "jira.remove-user-application", identity: "DELETE /rest/api/2/user/application", permissionPolicy: "instance-admin-user-application-unconfirmed" },
+    { tool: "jira.set-user-columns", identity: "PUT /rest/api/2/user/columns", permissionPolicy: "instance-admin-user-columns-and-readback" },
+    { tool: "jira.reset-user-columns", identity: "DELETE /rest/api/2/user/columns", permissionPolicy: "instance-admin-user-columns-reset-unconfirmed" },
+  ] as const)("binds directory/schema/maintenance/action $tool to its independent native identity", ({ tool, identity, permissionPolicy }) => {
+    expect(jiraOperationForTool(tool)?.definition).toMatchObject({
+      kind: "native", identity, permissionPolicy, effects: ["remote-write"],
+    });
+  });
   it("binds every administration write to an explicit instance-admin permission contract", () => {
     const admin = jiraOperationContracts().filter((entry) =>
       jiraRequiredConnectorScope(entry.definition.tool) === "issue-tracker.admin" &&
       entry.definition.effects.includes("remote-write"));
-    expect(admin).toHaveLength(73);
+    expect(admin).toHaveLength(106);
     for (const contract of admin) {
       expect(contract.definition.permissionPolicy).toMatch(/^instance-admin-/);
       expect(contract.definition.effects).toContain("remote-write");
@@ -180,7 +221,7 @@ describe("server-owned Jira operation contracts", () => {
   });
   it("keeps executable native operations distinct from local compositions", () => {
     const entries = jiraOperationContracts();
-    expect(entries.filter((entry) => entry.definition.kind === "native")).toHaveLength(359);
+    expect(entries.filter((entry) => entry.definition.kind === "native")).toHaveLength(394);
     expect(entries.filter((entry) => entry.definition.kind === "composite")).toHaveLength(3);
     expect(jiraOperationForTool("jira.discover")).toBeUndefined();
     expect(jiraOperationForTool("DELETE /rest/api/2/project")).toBeUndefined();

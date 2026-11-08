@@ -24,6 +24,18 @@ it("does not infer active-or-latest selection from an older result without selec
   expect(details("jira_reindex_status", { outcome: "succeeded" })[0]?.labels).not.toContain("chat.jira.jobs.activeOrLatest");
 });
 
+it("renders an explicit unselected no-prior-task observation without invented task metrics", () => {
+  expect(details("jira_reindex_status", { outcome: "succeeded", taskSelection: "active-or-latest", taskState: "no-prior-task" })).toEqual([
+    { facts: [], labels: ["chat.jira.jobs.observation", "chat.jira.jobs.activeOrLatest", "chat.jira.jobs.noPriorTask"] },
+  ]);
+});
+
+it.each(["jira_reindex_status", "jira_reindex_progress"])("does not reinterpret a selected task refusal for %s as no prior task", (tool) => {
+  expect(details(tool, { outcome: "failed", reason: "not-found", taskSelection: "selected-task", selectedTaskId: "7" })).toEqual([]);
+  expect(details(tool, { outcome: "succeeded", taskSelection: "selected-task", selectedTaskId: "7", taskState: "no-prior-task" })[0]?.labels)
+    .not.toContain("chat.jira.jobs.noPriorTask");
+});
+
 it("keeps unreturned selected requests distinct from absent tasks and a paged row count", () => {
   const cards = details("jira_reindex_requests", {
     outcome: "succeeded", total: 2, requestedRequestIds: ["7", "8", "9"], unreturnedRequestIds: ["8"],

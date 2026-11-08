@@ -7,6 +7,8 @@ import {
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import type { JiraIssueTemplateSet } from "./jira-managed-template-gate.js";
+import { gateJiraSchemaRuleImpact } from "./jira-managed-template-gate.js";
+import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import {
   checkJiraManagedMutationTemplates,
   executeJiraManagedMutation,
@@ -60,6 +62,36 @@ function template(frontMatter: readonly string[], body = SECTIONS): JiraIssueTem
   return result.template;
 }
 const ALL_POINTS = ["activateOn: [create, edit, transition:Ready]"];
+
+describe("schema impacts on saved formal rules", () => {
+  const request = (): ReturnType<typeof vi.fn<JiraMutationRequest>> => vi.fn<JiraMutationRequest>().mockResolvedValue({ ok: true, status: 200, body: undefined,
+    items: [{ id: "summary", name: "Summary" }, { id: "customfield_10016", name: "Story Points" }, { id: "customfield_10017", name: "Other" }] });
+  it.each(["create", "edit", "transition:Ready"])("does not limit type-selection migration checks to edit: %s", async (activation) => {
+    const rule = template([`activateOn: [${activation}]`, "summaryMinLength: 8"]);
+    expect(await gateJiraSchemaRuleImpact({ request: request(), source: () => ({ templates: [rule], unreadable: 0 }),
+      impact: { kind: "issue-type", types: [{ id: "7", name: "Story" }] } })).toMatchObject({ ok: false, violations: [{ ruleId: "template-unreadable" }] });
+  });
+  it("includes a migration target's rule selection and leaves unrelated types alone", async () => {
+    const source = () => ({ templates: [template(["activateOn: [transition:Ready]"])], unreadable: 0 });
+    const types = [{ id: "1", name: "Task" }, { id: "7", name: "Story" }];
+    expect(await gateJiraSchemaRuleImpact({ request: request(), source, impact: { kind: "issue-type", types } })).toMatchObject({ ok: false });
+    expect(await gateJiraSchemaRuleImpact({ request: request(), source, impact: { kind: "issue-type", types: [{ id: "1", name: "Task" }] } })).toEqual({ ok: true });
+  });
+  it.each(["requiredFields: [Story Points]", "parentField: Story Points"])("recognizes deleted custom-field references in %s", async (line) => {
+    const source = () => ({ templates: [template(["activateOn: [create]", line])], unreadable: 0 });
+    expect(await gateJiraSchemaRuleImpact({ request: request(), source, impact: { kind: "custom-fields", fields: [{ id: "customfield_10016", name: "Story Points" }] } })).toMatchObject({ ok: false });
+    expect(await gateJiraSchemaRuleImpact({ request: request(), source, impact: { kind: "custom-fields", fields: [{ id: "customfield_10017", name: "Other" }] } })).toEqual({ ok: true });
+  });
+  it("refuses required parent-link removal without broadening a prose skill into enforcement", async () => {
+    const impact = { kind: "link-type" as const, names: ["Blocks", "blocks", "is blocked by"] };
+    expect(await gateJiraSchemaRuleImpact({ request: request(), impact, source: () => ({ templates: [template(["activateOn: [create]", "parentLink: Blocks"])], unreadable: 0 }) })).toMatchObject({ ok: false });
+    expect(await gateJiraSchemaRuleImpact({ request: request(), impact, source: () => ({ templates: [], unreadable: 0 }) })).toEqual({ ok: true });
+  });
+  it("does not downgrade unreadable saved rules to an empty rule set", async () => {
+    expect(await gateJiraSchemaRuleImpact({ request: request(), impact: { kind: "issue-type", types: [{ id: "7", name: "Story" }] },
+      source: () => ({ templates: [], unreadable: 1, unreadableNames: ["Synthetic formal record"] }) })).toMatchObject({ ok: false, violations: [{ ruleId: "template-unreadable" }] });
+  });
+});
 
 interface ReadRoute {
   readonly suffix?: string;

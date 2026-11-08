@@ -701,9 +701,9 @@ Memory retains its separate explicit-or-`governed-assist` default. This availabi
 itself grant a Chat read grant, mutation approval, connector scope or authority envelope.
 
 
-**Explicit instance administration (#4287, review 4503902861).** The seventy-three implemented administration writes—application/IPD monitoring, JMX exposure
+**Explicit instance administration (#4287, review 4503902861).** The one hundred six implemented administration writes—application/IPD monitoring, JMX exposure
 start/stop, screen-tab and screen-field layout changes, issue-type property set/delete, filter creation,
-future-filter default sharing, filter permission addition/removal, project-category lifecycle, role/default/project-membership, permission-scheme/grant/attribute changes, issue-type/priority/workflow-scheme configuration, four closed instance settings, email-template upload/apply/revert and instance-wide sprint synchronization cleanup—use the separate connector class
+future-filter default sharing, filter permission addition/removal, project-category lifecycle, role/default/project-membership, permission-scheme/grant/attribute changes, issue-type/priority/workflow-scheme configuration, four closed instance settings, email-template upload/apply/revert, group lifecycle/membership, schema configuration, directory access/layout, maintenance requests and instance-wide sprint synchronization cleanup—use the separate connector class
 `connector-admin` and require `issue-tracker.admin`. Ordinary `issue-tracker.write` never admits
 these operations, including in Full access. They retain high risk and the same Workbench
 `connector-access` class, `internet` resource scope, supervised `connector-write` kind and existing
@@ -759,6 +759,29 @@ opt-in before dispatch admission or credential materialisation. Ordinary seriali
 their JSON media type. This transport contract remains inside the existing authority, custody,
 timeouts and method-aware retry owner; the operation's local administration and native permissions
 remain independently required.
+
+Group changes bind exact native names and independent user key/username identities. Complete native
+membership includes subgroups and cannot establish direct assignment. Fuzzy lookup omissions stay
+unavailable with explicit bounded-search/Jira remediation. Notification acknowledgement never proves
+delivery or permits replay; exact pin confirmation reuses the same-parent comment/pinned owners.
+These two issue actions retain ordinary write scope (pin medium, notification high).
+
+Schema mutation reuses the existing formal owner for known field/type/link effects. Type rename
+can alter saved rule selection and is assessed across all relevant activations. A partial native
+field deletion or hidden migration/order population is not complete success; native null and
+omitted review data stay distinct. No blanket layout/prose enforcement is invented.
+
+Role configuration uses native collection strong ETag and If-Match, with no model token/header
+selector. Native412 is a conflict only in that fixed port and is never automatically retried.
+Exact application-access POST/DELETE uses the documented scoped experimental flag; named-user
+columns use a fixed form port preserving complete order/repetitions. Admin actor and target user
+identities remain separate. Five directory effects remain unconfirmed for global access/default
+provenance; only exact observed same-user column configuration may confirm.
+
+Maintenance requests bind native observed prerequisites, typed flags and exact issue/node
+selection, then perform one fixed effect. Every maintenance ACK remains unconfirmed for global
+cluster/index/migration completion. Opaque upgrade execution has no exposed per-issue field plan;
+it never claims saved-rule compliance or unchanged issue values. No background follow-up is added.
 
 Issue-type/priority schemes bind complete configured order/defaults and canonical project identities.
 Association and deletion acknowledgements do not prove aggregate issue consequences. Workflow

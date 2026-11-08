@@ -1,5 +1,6 @@
 import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
 import type { JiraAgileDetails, JiraOutcomeFact } from "./jira-agile-presentation";
+import { jiraIssueTypeReviewDetails } from "./jira-schema-review-presentation";
 
 import {
   jiraPresentationFact as fact,
@@ -74,8 +75,10 @@ function extraDetails(tool: string, source: Source): {
   readonly labels: readonly WidgetMessageKey[];
 } {
   if (tool === "jira_project_statuses") return { facts: [], labels: [subtypeLabel(source)] };
-  if (ISSUE_TYPES.has(tool))
-    return { facts: fact("chat.jira.fact.avatarId", source.avatarId), labels: [subtypeLabel(source)] };
+  if (ISSUE_TYPES.has(tool)) {
+    const review = jiraIssueTypeReviewDetails(source);
+    return { facts: [...fact("chat.jira.fact.avatarId", source.avatarId), ...review.facts], labels: [subtypeLabel(source), ...review.labels] };
+  }
   if (STATUSES.has(tool)) return statusDetails(source);
   if (STATUS_CATEGORIES.has(tool))
     return { facts: categoryFacts(source).filter(({ label }) => label !== "chat.jira.core.statusCategoryId"), labels: [] };

@@ -30,18 +30,19 @@ function selected(operation: string | undefined): string | undefined {
   const tool = operation?.replace(/[.-]/gu, "_");
   return tool !== undefined && (JIRA_SCHEME_ADMINISTRATION_TOOLS.has(tool) || JIRA_INSTANCE_ADMINISTRATION_WRITE_TOOLS.has(tool)) ? tool : undefined;
 }
-function memberLabel(key: string, t: OptionalWidgetTranslate): string {
-  const label = Object.hasOwn(MEMBER_LABELS, key) ? MEMBER_LABELS[key] : undefined;
+function memberLabel(key: string, t: OptionalWidgetTranslate, labels: Readonly<Record<string, WidgetMessageKey>>): string {
+  const label = Object.hasOwn(labels, key) ? labels[key] : Object.hasOwn(MEMBER_LABELS, key) ? MEMBER_LABELS[key] : undefined;
   return label === undefined ? key : t(label);
 }
-function reviewedValue(key: string, value: unknown, t: OptionalWidgetTranslate, reviewed: boolean): JiraDraftValue {
+export function jiraAdministrativeReviewedValue(key: string, value: unknown, t: OptionalWidgetTranslate, reviewed: boolean,
+  labels: Readonly<Record<string, WidgetMessageKey>> = MEMBER_LABELS): JiraDraftValue {
   if (Array.isArray(value)) {
     if (value.length === 0) return literal(t("chat.jira.adminReview.emptyList"));
-    return { kind: "list", items: value.map((item: unknown, index) => ({ position: index + 1, value: reviewedValue(key, item, t, reviewed) })) };
+    return { kind: "list", items: value.map((item: unknown, index) => ({ position: index + 1, value: jiraAdministrativeReviewedValue(key, item, t, reviewed, labels) })) };
   }
   const source = record(value);
   if (source !== undefined) return { kind: "group", members: Object.entries(source).map(([field, item]) => ({
-    name: memberLabel(field, t), value: reviewedValue(field, item, t, reviewed),
+    name: memberLabel(field, t, labels), value: jiraAdministrativeReviewedValue(field, item, t, reviewed, labels),
   })) };
   if (key === "defaultWorkflow" && value === null && !reviewed) return literal(t("chat.jira.schemeWrite.removeConfiguredDefault"));
   return scalar(value, t);
@@ -49,7 +50,7 @@ function reviewedValue(key: string, value: unknown, t: OptionalWidgetTranslate, 
 export function jiraAdministrativeMutationFacts(operation: string | undefined, key: string, value: unknown, t: OptionalWidgetTranslate): readonly JiraDraftField[] | undefined {
   const label = Object.hasOwn(LABELS, key) ? LABELS[key] : undefined;
   if (selected(operation) === undefined || label === undefined) return undefined;
-  return [{ id: t(label), value: reviewedValue(key, value, t, key.startsWith("expected")) }];
+  return [{ id: t(label), value: jiraAdministrativeReviewedValue(key, value, t, key.startsWith("expected")) }];
 }
 function schemeLabels(tool: string, args: unknown): WidgetMessageKey[] {
   const labels: WidgetMessageKey[] = ["chat.jira.schemeWrite.configurationOnly"];

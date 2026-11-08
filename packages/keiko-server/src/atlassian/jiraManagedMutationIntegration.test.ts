@@ -1,3 +1,4 @@
+import { expectedSystemAdministrationOutcome, SYSTEM_ADMINISTRATION_EXPECTED_OUTCOMES } from "../../../../tests/support/jira-managed-system-administration-scenarios.js";
 import { expectedSchemeSettingOutcome, SCHEME_SETTING_EXPECTED_OUTCOMES } from "../../../../tests/support/jira-managed-scheme-setting-scenarios.js";
 import { emailTemplateFixtureAdmission } from "../../../../tests/support/jira-email-template-transport-fixture.js";
 import { expectedPermissionRoleOutcome, PERMISSION_ROLE_EXPECTED_OUTCOMES } from "../../../../tests/support/jira-managed-permission-role-scenarios.js";
@@ -217,14 +218,16 @@ async function fixtureReadResult(
 }
 async function assertNativeRequestHeaders(request: Request, path: string): Promise<void> {
   expect(request.headers.get("authorization")).toBe(["Bearer", "synthetic-test-pat"].join(" "));
-  const experimental = request.method === "PUT" &&
-    (path === "/context/rest/agile/1.0/sprint/unmap" || path === "/context/rest/agile/1.0/sprint/unmap-all");
+  const experimental = (request.method === "PUT" &&
+    (path === "/context/rest/agile/1.0/sprint/unmap" || path === "/context/rest/agile/1.0/sprint/unmap-all")) ||
+    ((request.method === "POST" || request.method === "DELETE") && path === "/context/rest/api/2/user/application");
   expect(request.headers.get("x-experimentalapi")).toBe(experimental ? "true" : null);
   if (path === "/context/rest/api/2/email-templates") {
     expect(request.headers.get("x-atlassian-token")).toBeNull();
     if (request.method === "GET") expect(request.headers.get("accept")).toBe("application/zip");
     else expect(request.headers.get("content-type")).toBe("application/zip");
   }
+  await assertDirectoryRequestHeaders(request, path);
   const attribute = request.method === "PUT" &&
     path === "/context/rest/api/2/permissionscheme/7/attribute/ADMINISTER_PROJECTS.extended.enabled";
   if (!attribute) {
@@ -233,6 +236,19 @@ async function assertNativeRequestHeaders(request: Request, path: string): Promi
   }
   expect(request.headers.get("content-type")).toBe("text/plain");
   expect(await request.clone().text()).toBe("false");
+}
+async function assertDirectoryRequestHeaders(request: Request, path: string): Promise<void> {
+  const role = request.method === "PUT" && (path === "/context/rest/api/2/applicationrole" || path === "/context/rest/api/2/applicationrole/jira-software");
+  expect(request.headers.get("if-match")).toBe(role ? '"native-role-version"' : null);
+  if (role) expect(request.headers.get("content-type")).toBe("application/json");
+  if (path === "/context/rest/api/2/user/application" && request.method !== "GET") {
+    expect(await request.clone().text()).toBe("");
+    expect(request.headers.get("content-type")).toBeNull();
+  }
+  if (request.method === "PUT" && path === "/context/rest/api/2/user/columns") {
+    expect(request.headers.get("content-type")).toBe("application/x-www-form-urlencoded");
+    expect(await request.clone().text()).toBe("username=Target+User&columns=status&columns=summary&columns=status");
+  }
 }
 function remote(
   mode: RemoteMode,
@@ -269,7 +285,9 @@ function remote(
       if (result.kind !== "response") throw new Error("Expected synthetic HTTP response");
       return new Response(result.status === 204 ? null : result.archiveBytes ?? result.bodyText, {
         status: result.status,
-        headers: { "content-type": result.archiveBytes === undefined ? "application/json" : "application/zip" },
+        headers: { "content-type": result.archiveBytes === undefined ? "application/json" : "application/zip",
+          ...(result.applicationRoleVersion === undefined ? {} : { etag: result.applicationRoleVersion }),
+        },
       });
     },
   };
@@ -555,7 +573,7 @@ it.each(SINGLE_MUTATIONS)(
   "executes %s through the real gateway/binder/SDK and durable journal",
   async (operation) => {
     const f = await fixture("confirmed", undefined, operation, reviewedAuthority(operation));
-    const expectedOutcome = expectedSchemeSettingOutcome(operation) ?? expectedPermissionRoleOutcome(operation) ?? expectedPlanningOutcome(operation) ?? expectedConfigurationOutcome(operation) ?? expectedLifecycleOutcome(operation) ?? expectedSavedConfigurationOutcome(operation) ?? "succeeded";
+    const expectedOutcome = expectedSystemAdministrationOutcome(operation) ?? expectedSchemeSettingOutcome(operation) ?? expectedPermissionRoleOutcome(operation) ?? expectedPlanningOutcome(operation) ?? expectedConfigurationOutcome(operation) ?? expectedLifecycleOutcome(operation) ?? expectedSavedConfigurationOutcome(operation) ?? "succeeded";
     expect(await f.invoke(operation)).toMatchObject({
       kind: "settled",
       result: {
@@ -945,4 +963,38 @@ it.each(ADMIN_MUTATIONS)("does not grant %s administration from ordinary issue s
   expect(f.writes()).toBe(0);
   expect(f.journal.find(f.intent().invocationId)).toBeUndefined();
   expect(f.state).toEqual(before);
+});
+
+it("keeps each of the 35 new administrative/issue outcomes explicit through gateway replay", () => {
+  expect(Object.keys(SYSTEM_ADMINISTRATION_EXPECTED_OUTCOMES)).toHaveLength(35);
+  expect(Object.entries(SYSTEM_ADMINISTRATION_EXPECTED_OUTCOMES).filter(([, outcome]) => outcome === "succeeded-unconfirmed").map(([name]) => name).sort()).toEqual([
+    "jira.add-group-user",
+    "jira.add-user-application",
+    "jira.approve-cluster-upgrade",
+    "jira.cancel-cluster-upgrade",
+    "jira.create-custom-field",
+    "jira.create-index-snapshot",
+    "jira.create-issue-type",
+    "jira.delete-cluster-node",
+    "jira.delete-custom-fields",
+    "jira.delete-group",
+    "jira.delete-issue-type",
+    "jira.delete-link-type",
+    "jira.mark-cluster-node-offline",
+    "jira.move-link-type",
+    "jira.notify-issue",
+    "jira.process-reindex-requests",
+    "jira.reindex-issues",
+    "jira.remove-group-user",
+    "jira.remove-user-application",
+    "jira.request-cluster-index-snapshot",
+    "jira.reset-link-type-order",
+    "jira.reset-user-columns",
+    "jira.retry-cluster-upgrade",
+    "jira.run-upgrade",
+    "jira.set-application-role",
+    "jira.set-application-roles",
+    "jira.start-cluster-upgrade",
+    "jira.start-reindex",
+  ]);
 });

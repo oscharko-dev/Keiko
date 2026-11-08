@@ -39,6 +39,12 @@ function progress(source: Source): JiraAgileDetails {
     labels,
   };
 }
+function reindexStatus(source: Source): JiraAgileDetails {
+  if (source.taskSelection === "active-or-latest" && source.taskState === "no-prior-task") {
+    return { facts: [], labels: ["chat.jira.jobs.observation", "chat.jira.jobs.activeOrLatest", "chat.jira.jobs.noPriorTask"] };
+  }
+  return progress(source);
+}
 function request(source: Source): JiraAgileDetails {
   const labels: WidgetMessageKey[] = ["chat.jira.jobs.observation"];
   if (text(source.status) === undefined) labels.push("chat.jira.jobs.statusUnknown");
@@ -110,7 +116,8 @@ function metrics(data: Source): JiraAgileDetails {
 export function jiraJobObservationDetails(tool: string, data: Source): readonly JiraAgileDetails[] {
   if (!JIRA_JOB_OBSERVATION_TOOLS.has(tool) || data.outcome === "failed") return [];
   switch (tool) {
-    case "jira_reindex_status": case "jira_reindex_progress": return [progress(data)];
+    case "jira_reindex_status": return [reindexStatus(data)];
+    case "jira_reindex_progress": return [progress(data)];
     case "jira_reindex_request": return [request(data)];
     case "jira_reindex_requests": return requests(data);
     case "jira_upgrade_result": return [upgrade(data)];

@@ -12,6 +12,13 @@ const STATUS = { id: "5", name: "Synthetic status", statusCategory: CATEGORY };
 const PROJECT_CATEGORY = { id: "6", name: "Synthetic project category" };
 const PROJECT_TYPE = { key: "software", formattedKey: "Software", descriptionI18nKey: "type.software", color: "#ffffff" };
 const page = (item: CatalogJsonObject) => ({ items: [item], startAt: 0, total: 1 });
+it("admits strict optional issue-type review facts without inventing missing description", () => {
+  const declaration = jiraCoreMetadataDeclarationForTool("jira.issue-type"); if (declaration === undefined) throw new TypeError("Missing declaration");
+  const snapshot = { ...ISSUE_TYPE, description: null };
+  expect(describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, { outcome: "succeeded", ...ISSUE_TYPE, reviewSnapshot: snapshot })).toBeUndefined();
+  expect(describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, { outcome: "succeeded", ...ISSUE_TYPE, reviewSnapshot: ISSUE_TYPE })).toBeDefined();
+  expect(describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, { outcome: "succeeded", ...ISSUE_TYPE })).toBeUndefined();
+});
 it.each([
   ["jira.global-issue-types", {}, page(ISSUE_TYPE)],
   ["jira.issue-type", { issueTypeId: "1" }, ISSUE_TYPE],

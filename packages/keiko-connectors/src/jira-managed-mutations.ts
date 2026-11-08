@@ -1,3 +1,9 @@
+import { executeJiraDirectoryAccessMutation, isJiraDirectoryAccessMutation } from "./jira-managed-directory-access-mutations.js";
+import { executeJiraMaintenanceMutation, isJiraMaintenanceMutation } from "./jira-managed-maintenance-mutations.js";
+import { executeJiraSchemaMutation, isJiraSchemaMutation } from "./jira-managed-schema-mutations.js";
+import { executeJiraGroupMutation, isJiraGroupMutation } from "./jira-managed-group-mutations.js";
+import { executeJiraIssueActionMutation, isJiraIssueActionMutation } from "./jira-managed-issue-action-mutations.js";
+import { jiraDirectoryAccessRequests } from "./jira-directory-access-request.js";
 import { executeJiraPermissionSchemeMutation, isJiraPermissionSchemeMutation } from "./jira-managed-permission-scheme-mutations.js";
 import { executeJiraRoleMutation, isJiraRoleMutation } from "./jira-managed-role-mutations.js";
 import { executeJiraOptionSchemeMutation, isJiraOptionSchemeMutation } from "./jira-managed-option-scheme-mutations.js";
@@ -1455,6 +1461,22 @@ function permissionRoleMutation(
   if (isJiraRoleMutation(operation)) return executeJiraRoleMutation(operation, args, request, check);
   return undefined;
 }
+function systemAdministrationMutation(
+  operation: JiraMutationOperation,
+  args: CatalogJsonObject,
+  request: JiraMutationRequest,
+  connection: JiraManagedConnection,
+  context: ManagedMcpInvocationContext,
+  check: boolean,
+): Promise<JiraMutationAttempt> | undefined {
+  if (isJiraDirectoryAccessMutation(operation))
+    return executeJiraDirectoryAccessMutation(operation, args, request, jiraDirectoryAccessRequests(connection, context), check);
+  if (isJiraMaintenanceMutation(operation)) return executeJiraMaintenanceMutation(operation, args, request, check);
+  if (isJiraSchemaMutation(operation)) return executeJiraSchemaMutation(operation, args, request, check, connection.issueTemplates);
+  if (isJiraGroupMutation(operation)) return executeJiraGroupMutation(operation, args, request, check);
+  if (isJiraIssueActionMutation(operation)) return executeJiraIssueActionMutation(operation, args, request, check, connection.baseUrl);
+  return undefined;
+}
 function dedicatedMutation(
   operation: JiraMutationOperation,
   source: CatalogJsonObject,
@@ -1464,7 +1486,8 @@ function dedicatedMutation(
 ): Promise<JiraMutationAttempt> | undefined {
   const args = structuredClone(source);
   const request = requestFor(connection, context);
-  const specialized = instanceConfigurationMutation(operation, args, request, connection, context, check)
+  const specialized = systemAdministrationMutation(operation, args, request, connection, context, check)
+    ?? instanceConfigurationMutation(operation, args, request, connection, context, check)
     ?? permissionRoleMutation(operation, args, request, connection, context, check)
     ?? configurationMutation(operation, args, request, context, connection, check)
     ?? deletionMutation(operation, args, request, connection, check)
@@ -1597,7 +1620,8 @@ function isReviewedConfigurationMutation(operation: JiraMutationOperation): bool
     isJiraBoardConfigurationMutation, isJiraSprintLifecycleMutation, isJiraAgilePlanningMutation,
     isJiraMonitoringMutation, isJiraPermissionSchemeMutation, isJiraRoleMutation,
     isJiraOptionSchemeMutation, isJiraWorkflowSchemeMutation, isJiraInstanceSettingMutation,
-    isJiraEmailTemplateMutation].some((accepts) => accepts(operation));
+    isJiraEmailTemplateMutation, isJiraDirectoryAccessMutation, isJiraMaintenanceMutation,
+    isJiraSchemaMutation, isJiraGroupMutation, isJiraIssueActionMutation].some((accepts) => accepts(operation));
 }
 function requiresSuccessfulPreflight(operation: JiraMutationOperation): boolean {
   return (

@@ -42,6 +42,7 @@ import { JIRA_PLANNING_MUTATION_TOOLS, jiraPlanningIdentityComplete, jiraPlannin
 import { JIRA_ACCESS_CONFIGURATION_TOOLS, jiraAccessConfigurationIdentityComplete, jiraAccessConfirmationUnavailable, jiraAccessActorNoopSupported } from "./jira-access-configuration-presentation";
 import { JIRA_SCHEME_ADMINISTRATION_TOOLS, jiraSchemeAdministrationIdentityComplete, jiraSchemeConfirmationUnavailable, jiraSchemeNoopSupported } from "./jira-scheme-administration-presentation";
 import { JIRA_INSTANCE_ADMINISTRATION_WRITE_TOOLS, JIRA_INSTANCE_SETTING_WRITE_TOOLS, jiraInstanceAdministrationIdentityComplete, jiraInstanceConfirmationUnavailable } from "./jira-instance-administration-presentation";
+import { JIRA_SYSTEM_ACTION_TOOLS, jiraSystemActionIdentityComplete, jiraSystemConfirmationUnavailable, jiraSystemNoopSupported } from "./jira-system-action-receipt";
 const LOCALLY_PAGED_TOOLS = new Set([
   ...JIRA_REMOTE_VERSION_LINK_TOOLS,
   ...JIRA_ACCOUNT_DIAGNOSTIC_TOOLS,
@@ -232,25 +233,30 @@ function isMutation(exchange: ChatToolExchange): boolean {
     (name) => name.replace(/[.-]/gu, "_") === exchange.call.name,
   );
 }
+const MUTATION_IDENTITY_PRESENTERS = [
+  [JIRA_SYSTEM_ACTION_TOOLS, jiraSystemActionIdentityComplete],
+  [JIRA_SCHEME_ADMINISTRATION_TOOLS, jiraSchemeAdministrationIdentityComplete],
+  [JIRA_INSTANCE_ADMINISTRATION_WRITE_TOOLS, jiraInstanceAdministrationIdentityComplete],
+  [JIRA_ACCESS_CONFIGURATION_TOOLS, jiraAccessConfigurationIdentityComplete],
+  [JIRA_PROPERTY_MUTATION_TOOLS, jiraPropertyMutationIdentityComplete],
+  [JIRA_RELEASE_LIFECYCLE_TOOLS, jiraReleaseLifecycleIdentityComplete],
+  [JIRA_LINK_MUTATION_TOOLS, jiraLinkMutationIdentityComplete],
+  [JIRA_CONFIGURATION_MUTATION_TOOLS, jiraConfigurationMutationIdentityComplete],
+  [JIRA_PLANNING_MUTATION_TOOLS, jiraPlanningIdentityComplete],
+  [JIRA_SAVED_CONFIGURATION_WRITE_TOOLS, jiraSavedConfigurationIdentityComplete],
+] as const;
 function mutationIdentityMissing(exchange: ChatToolExchange): boolean {
-  const data = plainRecord(exchange.result?.data) ?? {};
-  if (JIRA_SCHEME_ADMINISTRATION_TOOLS.has(exchange.call.name)) return !jiraSchemeAdministrationIdentityComplete(exchange.call.name, data);
-  if (JIRA_INSTANCE_ADMINISTRATION_WRITE_TOOLS.has(exchange.call.name)) return !jiraInstanceAdministrationIdentityComplete(exchange.call.name, data);
-  if (JIRA_ACCESS_CONFIGURATION_TOOLS.has(exchange.call.name)) return !jiraAccessConfigurationIdentityComplete(exchange.call.name, data);
-  if (JIRA_PROPERTY_MUTATION_TOOLS.has(exchange.call.name)) return !jiraPropertyMutationIdentityComplete(exchange.call.name, data);
-  if (JIRA_RELEASE_LIFECYCLE_TOOLS.has(exchange.call.name)) return !jiraReleaseLifecycleIdentityComplete(exchange.call.name, data);
-  if (JIRA_LINK_MUTATION_TOOLS.has(exchange.call.name)) return !jiraLinkMutationIdentityComplete(exchange.call.name, data);
-  if (JIRA_CONFIGURATION_MUTATION_TOOLS.has(exchange.call.name)) return !jiraConfigurationMutationIdentityComplete(exchange.call.name, data);
-  if (JIRA_PLANNING_MUTATION_TOOLS.has(exchange.call.name)) return !jiraPlanningIdentityComplete(exchange.call.name, data);
-  return JIRA_SAVED_CONFIGURATION_WRITE_TOOLS.has(exchange.call.name) && !jiraSavedConfigurationIdentityComplete(exchange.call.name, data);
+  const presenter = MUTATION_IDENTITY_PRESENTERS.find(([tools]) => tools.has(exchange.call.name));
+  return presenter !== undefined && !presenter[1](exchange.call.name, plainRecord(exchange.result?.data) ?? {});
 }
 function mutationConfirmationUnavailable(tool: string, args?: unknown): boolean {
-  return jiraSavedConfigurationDeletionUnconfirmed(tool) || jiraReleaseReferenceEffectsUnconfirmed(tool) || jiraConfigurationConfirmationUnavailable(tool) || jiraPlanningConfirmationUnavailable(tool) || jiraAccessConfirmationUnavailable(tool) || jiraSchemeConfirmationUnavailable(tool, args) || jiraInstanceConfirmationUnavailable(tool);
+  return jiraSystemConfirmationUnavailable(tool) || jiraSavedConfigurationDeletionUnconfirmed(tool) || jiraReleaseReferenceEffectsUnconfirmed(tool) || jiraConfigurationConfirmationUnavailable(tool) || jiraPlanningConfirmationUnavailable(tool) || jiraAccessConfirmationUnavailable(tool) || jiraSchemeConfirmationUnavailable(tool, args) || jiraInstanceConfirmationUnavailable(tool);
 }
 function unconfirmedNoopSupported(tool: string): boolean {
   return jiraAccessActorNoopSupported(tool) || jiraSchemeNoopSupported(tool) || JIRA_INSTANCE_SETTING_WRITE_TOOLS.has(tool);
 }
 function mutationNoopUnsupported(exchange: ChatToolExchange): boolean {
+  if (JIRA_SYSTEM_ACTION_TOOLS.has(exchange.call.name)) return !jiraSystemNoopSupported(exchange.call.name);
   if (JIRA_SCHEME_ADMINISTRATION_TOOLS.has(exchange.call.name)) return !jiraSchemeNoopSupported(exchange.call.name);
   return mutationConfirmationUnavailable(exchange.call.name, exchange.call.arguments) && !unconfirmedNoopSupported(exchange.call.name);
 }

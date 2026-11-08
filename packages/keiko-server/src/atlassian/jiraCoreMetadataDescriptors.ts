@@ -19,7 +19,8 @@ const BOOL = { type: "boolean" };
 const DESCRIPTION = text(32768);
 const COLOR = { ...text(128), minLength: 1 };
 const NAMED_FIELDS = { id: ID, name: NAME, description: DESCRIPTION };
-const ISSUE_TYPE_FIELDS = { ...NAMED_FIELDS, subtask: BOOL, avatarId: ID };
+export const jiraIssueTypeReviewSnapshotSchema = object({ id: ID, name: NAME, description: { anyOf: [DESCRIPTION, { type: "null" }] }, subtask: BOOL, avatarId: ID }, ["id", "name", "description", "subtask"]);
+const ISSUE_TYPE_FIELDS = { ...NAMED_FIELDS, subtask: BOOL, avatarId: ID, reviewSnapshot: jiraIssueTypeReviewSnapshotSchema };
 const ISSUE_TYPE = object(ISSUE_TYPE_FIELDS, ["id", "name"]);
 const PRIORITY_FIELDS = { ...NAMED_FIELDS, statusColor: COLOR };
 const PRIORITY = object(PRIORITY_FIELDS, ["id", "name"]);
@@ -73,7 +74,7 @@ export const JIRA_CORE_METADATA_READ_DEFINITIONS = {
     page(ISSUE_TYPE, true),
   ),
   "jira.issue-type": read(
-    "Inspect one exact native issue type by its decimal string ID. Return observed metadata without inventing optional subtask/avatar facts or changing a type, screen, workflow or project association.",
+    "Inspect one exact native issue type by its decimal string ID. Return observed metadata without inventing optional subtask/avatar facts or changing a type, screen, workflow or project association. Optional reviewSnapshot uses the same strict projector as mutation admission: description:null or empty is observed, omitted description means the snapshot is unavailable. Ordinary metadata remains readable.",
     object({ issueTypeId: ID }, ["issueTypeId"]),
     ISSUE_TYPE_FIELDS,
     1,

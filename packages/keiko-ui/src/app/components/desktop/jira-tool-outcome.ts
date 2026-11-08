@@ -68,6 +68,8 @@ import { JIRA_PLANNING_MUTATION_TOOLS, jiraPlanningMutationDetails } from "./jir
 import { JIRA_ACCESS_CONFIGURATION_TOOLS, jiraAccessConfigurationDetails } from "./jira-access-configuration-presentation";
 import { JIRA_SCHEME_ADMINISTRATION_TOOLS, jiraSchemeAdministrationDetails } from "./jira-scheme-administration-presentation";
 import { JIRA_INSTANCE_ADMINISTRATION_TOOLS, JIRA_INSTANCE_ADMINISTRATION_WRITE_TOOLS, jiraInstanceAdministrationDetails } from "./jira-instance-administration-presentation";
+import { JIRA_SYSTEM_ACTION_TOOLS } from "./jira-system-action-receipt";
+import { jiraSystemActionDetails } from "./jira-system-action-presentation";
 import { JIRA_SPRINT_REVIEW_TOOLS, jiraSprintReviewDetails } from "./jira-sprint-review-presentation";
 import { JIRA_PROPERTY_TOOLS, jiraPropertyDetails } from "./jira-property-presentation";
 import { JIRA_MONITORING_WRITE_TOOLS, jiraMonitoringDetails } from "./jira-monitoring-presentation";
@@ -274,7 +276,7 @@ function outcomeHref(
   key: string | undefined,
   projectKey: string | undefined,
 ): string | undefined {
-  if (tool === "jira_board_create" || JIRA_SPRINT_TOOLS.has(tool)) return undefined;
+  if (tool === "jira_board_create" || JIRA_SPRINT_TOOLS.has(tool) || JIRA_SYSTEM_ACTION_TOOLS.has(tool)) return undefined;
   if (BOARD_READ_TOOLS.has(tool)) return boardLink(source.browseUrl, source.boardId ?? source.id);
   return projectKey === undefined
     ? issueLink(source.browseUrl, key)
@@ -288,6 +290,7 @@ function boardContextLink(tool: string, source: UnknownRecord): string | undefin
 }
 type ConfigurationPresenter = (tool: string, source: UnknownRecord, args?: unknown) => readonly JiraAgileDetails[];
 const CONFIGURATION_PRESENTERS: readonly (readonly [ReadonlySet<string>, ConfigurationPresenter])[] = [
+  [JIRA_SYSTEM_ACTION_TOOLS, jiraSystemActionDetails],
   [JIRA_SCHEME_ADMINISTRATION_TOOLS, jiraSchemeAdministrationDetails],
   [JIRA_INSTANCE_ADMINISTRATION_TOOLS, jiraInstanceAdministrationDetails],
   [JIRA_IDENTITY_OBSERVATION_TOOLS, jiraIdentityObservationDetails],
@@ -561,7 +564,8 @@ export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcome
   const data =
     [JIRA_PARTICIPATION_TOOLS, JIRA_MONITORING_WRITE_TOOLS, JIRA_PROPERTY_MUTATION_TOOLS, JIRA_SAVED_CONFIGURATION_WRITE_TOOLS,
       JIRA_RELEASE_LIFECYCLE_TOOLS, JIRA_LINK_MUTATION_TOOLS, JIRA_CONFIGURATION_MUTATION_TOOLS, JIRA_PLANNING_MUTATION_TOOLS,
-      JIRA_ACCESS_CONFIGURATION_TOOLS, JIRA_SCHEME_ADMINISTRATION_TOOLS, JIRA_INSTANCE_ADMINISTRATION_WRITE_TOOLS].some((tools) => tools.has(exchange.call.name)) && exchange.mutationOutcome !== undefined
+      JIRA_ACCESS_CONFIGURATION_TOOLS, JIRA_SCHEME_ADMINISTRATION_TOOLS, JIRA_INSTANCE_ADMINISTRATION_WRITE_TOOLS,
+      JIRA_SYSTEM_ACTION_TOOLS].some((tools) => tools.has(exchange.call.name)) && exchange.mutationOutcome !== undefined
       ? { ...stored, outcome: exchange.mutationOutcome }
       : stored;
   return {

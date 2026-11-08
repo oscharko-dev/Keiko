@@ -2,6 +2,61 @@ import type { AtlassianConnectorWriteFailureReason } from "./atlassian-connector
 import type { JiraTemplateViolation } from "./jira-issue-template.js";
 import { compareStrings } from "./comparators.js";
 
+export const JIRA_GROUP_MUTATIONS = Object.freeze([
+  "jira.create-group",
+  "jira.delete-group",
+  "jira.add-group-user",
+  "jira.remove-group-user",
+] as const);
+export type JiraGroupMutation = (typeof JIRA_GROUP_MUTATIONS)[number];
+
+export const JIRA_ISSUE_ACTION_MUTATIONS = Object.freeze([
+  "jira.pin-comment",
+  "jira.notify-issue",
+] as const);
+export type JiraIssueActionMutation = (typeof JIRA_ISSUE_ACTION_MUTATIONS)[number];
+
+export const JIRA_MAINTENANCE_MUTATIONS = Object.freeze([
+  "jira.request-cluster-index-snapshot",
+  "jira.delete-cluster-node",
+  "jira.mark-cluster-node-offline",
+  "jira.approve-cluster-upgrade",
+  "jira.cancel-cluster-upgrade",
+  "jira.retry-cluster-upgrade",
+  "jira.start-cluster-upgrade",
+  "jira.create-index-snapshot",
+  "jira.start-reindex",
+  "jira.reindex-issues",
+  "jira.process-reindex-requests",
+  "jira.run-upgrade",
+] as const);
+export type JiraMaintenanceMutation = (typeof JIRA_MAINTENANCE_MUTATIONS)[number];
+
+export const JIRA_SCHEMA_MUTATIONS = Object.freeze([
+  "jira.create-custom-field",
+  "jira.delete-custom-fields",
+  "jira.create-issue-type",
+  "jira.update-issue-type",
+  "jira.delete-issue-type",
+  "jira.create-link-type",
+  "jira.update-link-type",
+  "jira.delete-link-type",
+  "jira.reset-link-type-order",
+  "jira.move-link-type",
+  "jira.set-terminology",
+] as const);
+export type JiraSchemaMutation = (typeof JIRA_SCHEMA_MUTATIONS)[number];
+
+export const JIRA_DIRECTORY_ACCESS_MUTATIONS = Object.freeze([
+  "jira.set-application-role",
+  "jira.set-application-roles",
+  "jira.add-user-application",
+  "jira.remove-user-application",
+  "jira.set-user-columns",
+  "jira.reset-user-columns",
+] as const);
+export type JiraDirectoryAccessMutation = (typeof JIRA_DIRECTORY_ACCESS_MUTATIONS)[number];
+
 /** One immutable identity source for the uniform entity-property mutation family. */
 export const JIRA_ENTITY_PROPERTY_MUTATIONS = Object.freeze([
   "jira.set-board-property", "jira.delete-board-property",
@@ -129,6 +184,11 @@ export type JiraProjectCategoryMutation = (typeof JIRA_PROJECT_CATEGORY_MUTATION
 
 /** Remote effects remain separate from the enclosing MCP/catalog terminal status. */
 export const JIRA_MUTATION_OPERATIONS = [
+  ...JIRA_GROUP_MUTATIONS,
+  ...JIRA_ISSUE_ACTION_MUTATIONS,
+  ...JIRA_MAINTENANCE_MUTATIONS,
+  ...JIRA_SCHEMA_MUTATIONS,
+  ...JIRA_DIRECTORY_ACCESS_MUTATIONS,
   ...JIRA_OPTION_SCHEME_MUTATIONS,
   ...JIRA_WORKFLOW_SCHEME_MUTATIONS,
   ...JIRA_INSTANCE_SETTING_MUTATIONS,
@@ -301,6 +361,26 @@ export type JiraMutationResultState = (typeof JIRA_MUTATION_RESULT_STATES)[numbe
 /** Validated Jira identities and closed state facts; never remote bodies or headers.
  * Monitoring booleans on unknown/unconfirmed writes are requested targets, not success evidence. */
 export interface JiraMutationReceipt {
+  readonly actorUserKey?: string;
+  readonly applicationRoleKeys?: readonly string[];
+  readonly applicationAccessRequested?: boolean;
+  readonly columnsResetRequested?: true;
+  readonly replacementIssueTypeId?: string;
+  readonly issueTypePresent?: boolean;
+  readonly fieldIds?: readonly string[];
+  readonly linkTypeIds?: readonly string[];
+  readonly linkTypePresent?: boolean;
+  readonly terminologyNames?: readonly ("epic" | "sprint")[];
+  readonly groupName?: string;
+  readonly groupPresent?: boolean;
+  readonly targetUserKey?: string;
+  readonly requestedDirectMembership?: boolean;
+  readonly swapGroupName?: string;
+  readonly commentPinned?: true;
+  readonly notificationDigest?: string;
+  readonly recipientUserKeys?: readonly string[];
+  readonly nodeId?: string;
+  readonly reindexRequestIds?: readonly string[];
   readonly projectIds?: readonly string[];
   readonly projectKeys?: readonly string[];
   readonly associationChange?: "add" | "replace" | "clear" | "remove";

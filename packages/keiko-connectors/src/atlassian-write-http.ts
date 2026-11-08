@@ -28,6 +28,8 @@ import {
 import {
   ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES,
   ATLASSIAN_HTTP_UPLOAD_MAX_BYTES,
+  isAtlassianApplicationRoleVersion,
+  type AtlassianApplicationRoleRequest,
   type AtlassianHttpBodyPort,
   type AtlassianHttpBodyResult,
   type AtlassianHttpUpload,
@@ -65,6 +67,9 @@ export interface AtlassianWriteHttpRequest {
   readonly jiraPermissionAttribute?: true | undefined;
   /** Fixed email-template ZIP GET/POST; the server independently verifies method/path/media. */
   readonly jiraEmailTemplateArchive?: true | undefined;
+  readonly jiraApplicationRole?: AtlassianApplicationRoleRequest | undefined;
+  readonly jiraUserApplication?: true | undefined;
+  readonly jiraUserColumns?: true | undefined;
   // Closed JSON response shapes, or status only; every JSON mode shares the same byte cap.
   readonly expect: "json" | "json-array" | "json-object-or-array" | "json-scalar" | "none" | "jira-email-template-zip";
 }
@@ -90,6 +95,7 @@ export type AtlassianWriteHttpOutcome =
       readonly scalar?: string | number | boolean | null;
       /** Private fixed-route archive bytes; never a model result, diagnostic or raw header. */
       readonly bytes?: Uint8Array<ArrayBuffer>;
+      readonly applicationRoleVersion?: string;
     }
   | {
       readonly ok: false;
@@ -223,6 +229,9 @@ async function issueOnce(
     ...(request.jiraExperimental === undefined ? {} : { jiraExperimental: request.jiraExperimental }),
     ...(request.jiraPermissionAttribute === undefined ? {} : { jiraPermissionAttribute: request.jiraPermissionAttribute }),
     ...(request.jiraEmailTemplateArchive === undefined ? {} : { jiraEmailTemplateArchive: request.jiraEmailTemplateArchive }),
+    ...(request.jiraApplicationRole === undefined ? {} : { jiraApplicationRole: request.jiraApplicationRole }),
+    ...(request.jiraUserApplication === undefined ? {} : { jiraUserApplication: request.jiraUserApplication }),
+    ...(request.jiraUserColumns === undefined ? {} : { jiraUserColumns: request.jiraUserColumns }),
     // KEIKO-0318: thread the caller's cancellation into the transport call itself so an abort
     // tears down the in-flight request (AtlassianHttpBodyRequest.signal) instead of only being
     // observed between attempts — the between-attempt checks alone only stopped a LATER retry.
@@ -363,5 +372,9 @@ export async function executeAtlassianWriteRequest(
   );
   const result = await driveRetryLoop(deps, request, initial, deadlineAt, now, isAborted, sleep);
   if (result.kind !== "response") return classifyTransport(result);
-  return classifyResponse(result, request.expect);
+  const classified = classifyResponse(result, request.expect);
+  if (request.jiraApplicationRole === "version" && classified.ok &&
+      isAtlassianApplicationRoleVersion(result.applicationRoleVersion))
+    return { ...classified, applicationRoleVersion: result.applicationRoleVersion };
+  return classified;
 }

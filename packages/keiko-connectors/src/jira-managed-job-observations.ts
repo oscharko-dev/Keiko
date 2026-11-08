@@ -131,8 +131,11 @@ function responseMode(selected: Selection): "json" | "json-array" | "json-scalar
 }
 function failedResponse(
   name: JobRead,
+  selected: Selection,
   response: Extract<AtlassianWriteHttpOutcome, { readonly ok: false }>,
 ): ManagedMcpToolResult {
+  if (name === "jira.reindex-status" && selected.path === "reindex" && response.reason === "not-found" && response.httpStatus === 404)
+    return { data: { outcome: "succeeded", taskSelection: "active-or-latest", taskState: "no-prior-task" } };
   if (name === "jira.upgrade-result") {
     if (response.httpStatus === 303) return { data: { outcome: "succeeded", upgradeState: "running" } };
     if (response.httpStatus === 404) return { data: { outcome: "succeeded", upgradeState: "no-prior-result" } };
@@ -146,7 +149,7 @@ export async function executeJiraJobObservationRead(
   const selected = selection(name, args);
   if (selected === undefined) return jiraReadFailure("invalid-input");
   const response = await request(selected.path, "GET", undefined, responseMode(selected));
-  if (!response.ok) return failedResponse(name, response);
+  if (!response.ok) return failedResponse(name, selected, response);
   if (response.status !== 200) return jiraReadFailure("malformed-payload");
   return selected.mode === "requests" || selected.mode === "snapshots"
     ? collection(response, selected) : single(response, selected);

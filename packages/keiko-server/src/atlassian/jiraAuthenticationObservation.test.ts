@@ -581,6 +581,19 @@ it("spends only the tab-write's subsecond remaining deadline on identity IO", as
 
 
 const DOCUMENTED_NATIVE_WRITE_401 = [
+  { method: "PUT", path: "applicationrole" },
+  { method: "PUT", path: "applicationrole/jira-software" },
+  { method: "DELETE", path: "user/columns?username=synthetic-user" },
+  { method: "PUT", path: "cluster/index-snapshot/node-1" },
+  { method: "DELETE", path: "cluster/node/node-1" },
+  { method: "PUT", path: "cluster/node/node-1/offline" },
+  { method: "PUT", path: "cluster/node/node-%C3%A4/offline" },
+  { method: "POST", path: "cluster/zdu/approve" },
+  { method: "POST", path: "cluster/zdu/cancel" },
+  { method: "POST", path: "cluster/zdu/retryUpgrade" },
+  { method: "POST", path: "cluster/zdu/start" },
+  { method: "POST", path: "index-snapshot" },
+  { method: "POST", path: "reindex/request" },
   { method: "POST", path: "/workflowscheme" },
   { method: "PUT", path: "/workflowscheme/1" },
   { method: "DELETE", path: "/workflowscheme/1" },

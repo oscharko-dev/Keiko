@@ -7,6 +7,7 @@ import {
   type AtlassianHttpRequest,
 } from "@oscharko-dev/keiko-connectors";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
+import { directoryAccessHeaders } from "./httpDirectoryAccess.js";
 
 type RequestSnapshot = Readonly<AtlassianHttpRequest | AtlassianHttpBodyRequest>;
 
@@ -46,6 +47,8 @@ function reportObservationFailure(correlationId: string, error: unknown): void {
 
 /** A JSON body is declared as such; a governed upload also carries Jira's XSRF opt-out (#4176). */
 function requestBodyHeaders(request: RequestSnapshot): Record<string, string> {
+  const directory = "maxBodyBytes" in request ? directoryAccessHeaders(request) : undefined;
+  if (directory !== undefined) return directory;
   const archive = emailTemplateHeaders(
     "jiraEmailTemplateArchive" in request ? request.jiraEmailTemplateArchive : undefined, request,
   );

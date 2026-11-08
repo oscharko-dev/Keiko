@@ -1,3 +1,8 @@
+import { jiraDirectoryAccessMutationDeclarationForTool, type JIRA_DIRECTORY_ACCESS_WRITE_DEFINITIONS } from "./jiraDirectoryAccessMutationDescriptors.js";
+import { jiraMaintenanceMutationDeclarationForTool, type JIRA_MAINTENANCE_WRITE_DEFINITIONS } from "./jiraMaintenanceMutationDescriptors.js";
+import { jiraSchemaMutationDeclarationForTool, type JIRA_SCHEMA_WRITE_DEFINITIONS } from "./jiraSchemaMutationDescriptors.js";
+import { jiraGroupMutationDeclarationForTool, type JIRA_GROUP_WRITE_DEFINITIONS } from "./jiraGroupMutationDescriptors.js";
+import { jiraIssueActionMutationDeclarationForTool, type JIRA_ISSUE_ACTION_WRITE_DEFINITIONS } from "./jiraIssueActionMutationDescriptors.js";
 import { jiraOptionSchemeMutationDeclarationForTool, type JIRA_OPTION_SCHEME_WRITE_DEFINITIONS } from "./jiraOptionSchemeMutationDescriptors.js";
 import { jiraWorkflowSchemeMutationDeclarationForTool, type JIRA_WORKFLOW_SCHEME_WRITE_DEFINITIONS } from "./jiraWorkflowSchemeMutationDescriptors.js";
 import { jiraInstanceSettingMutationDeclarationForTool, type JIRA_INSTANCE_SETTING_WRITE_DEFINITIONS } from "./jiraInstanceSettingMutationDescriptors.js";
@@ -449,6 +454,11 @@ type CoreMutationToolName = Exclude<
   JiraMutationOperation,
   Extract<
     JiraMutationOperation,
+    | keyof typeof JIRA_DIRECTORY_ACCESS_WRITE_DEFINITIONS
+    | keyof typeof JIRA_MAINTENANCE_WRITE_DEFINITIONS
+    | keyof typeof JIRA_SCHEMA_WRITE_DEFINITIONS
+    | keyof typeof JIRA_GROUP_WRITE_DEFINITIONS
+    | keyof typeof JIRA_ISSUE_ACTION_WRITE_DEFINITIONS
     | keyof typeof JIRA_OPTION_SCHEME_WRITE_DEFINITIONS
     | keyof typeof JIRA_WORKFLOW_SCHEME_WRITE_DEFINITIONS
     | keyof typeof JIRA_INSTANCE_SETTING_WRITE_DEFINITIONS
@@ -641,6 +651,11 @@ function isCoreMutationTool(name: JiraMutationOperation): name is CoreMutationTo
 }
 export function jiraMutationDeclaration(name: JiraMutationOperation): ManagedMcpToolDeclaration {
   for (const producer of [
+    jiraDirectoryAccessMutationDeclarationForTool,
+    jiraMaintenanceMutationDeclarationForTool,
+    jiraSchemaMutationDeclarationForTool,
+    jiraGroupMutationDeclarationForTool,
+    jiraIssueActionMutationDeclarationForTool,
     jiraOptionSchemeMutationDeclarationForTool,
     jiraWorkflowSchemeMutationDeclarationForTool,
     jiraInstanceSettingMutationDeclarationForTool,

@@ -1,3 +1,9 @@
+import { systemAdministrationTransportController } from "../../../../tests/support/jira-system-administration-transport-fixture.js";
+import { DIRECTORY_ACCESS_FIXTURE_CASES as DIRECTORY_CASES } from "../../../../tests/support/jira-directory-access-fixture.js";
+import { MAINTENANCE_MUTATION_FIXTURE_CASES as MAINTENANCE_CASES } from "../../../../tests/support/jira-maintenance-mutation-fixture.js";
+import { SCHEMA_MUTATION_FIXTURE_CASES as SCHEMA_CASES } from "../../../../tests/support/jira-schema-mutation-fixture.js";
+import { GROUP_MUTATION_FIXTURE_CASES as GROUP_CASES } from "../../../../tests/support/jira-group-mutation-fixture.js";
+import { ISSUE_ACTION_FIXTURE_CASES as ISSUE_CASES } from "../../../../tests/support/jira-issue-action-fixture.js";
 import { PERMISSION_SCHEME_MUTATION_CASES as PERMISSION_CASES } from "../../../../tests/support/jira-permission-scheme-mutation-fixture.js";
 import { ROLE_MUTATION_FIXTURE_CASES as ROLE_CASES } from "../../../../tests/support/jira-role-mutation-fixture.js";
 import { permissionRoleTransportController } from "../../../../tests/support/jira-permission-role-transport-fixture.js";
@@ -56,6 +62,42 @@ const CREATE = {
 };
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
+  { tool: "jira.set-application-role", args: DIRECTORY_CASES[0].args, parameters: { key: "jira-software" }, expectedReceipt: DIRECTORY_CASES[0].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.set-application-roles", args: DIRECTORY_CASES[1].args, expectedReceipt: DIRECTORY_CASES[1].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.add-user-application", args: DIRECTORY_CASES[2].args, query: { username: "Target User", applicationKey: "jira-software" }, expectedReceipt: DIRECTORY_CASES[2].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.remove-user-application", args: DIRECTORY_CASES[3].args, query: { username: "Target User", applicationKey: "jira-software" }, expectedReceipt: DIRECTORY_CASES[3].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.set-user-columns", args: DIRECTORY_CASES[4].args, expectedReceipt: DIRECTORY_CASES[4].receipt },
+  { tool: "jira.reset-user-columns", args: DIRECTORY_CASES[5].args, query: { username: "Target User" }, expectedReceipt: DIRECTORY_CASES[5].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.request-cluster-index-snapshot", args: MAINTENANCE_CASES[0].args, parameters: { nodeId: "node-a" }, expectedReceipt: MAINTENANCE_CASES[0].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.delete-cluster-node", args: MAINTENANCE_CASES[1].args, parameters: { nodeId: "node-a" }, expectedReceipt: MAINTENANCE_CASES[1].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.mark-cluster-node-offline", args: MAINTENANCE_CASES[2].args, parameters: { nodeId: "node-a" }, expectedReceipt: MAINTENANCE_CASES[2].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.approve-cluster-upgrade", args: MAINTENANCE_CASES[3].args, expectedReceipt: MAINTENANCE_CASES[3].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.cancel-cluster-upgrade", args: MAINTENANCE_CASES[4].args, expectedReceipt: MAINTENANCE_CASES[4].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.retry-cluster-upgrade", args: MAINTENANCE_CASES[5].args, expectedReceipt: MAINTENANCE_CASES[5].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.start-cluster-upgrade", args: MAINTENANCE_CASES[6].args, expectedReceipt: MAINTENANCE_CASES[6].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.create-index-snapshot", args: MAINTENANCE_CASES[7].args, expectedReceipt: MAINTENANCE_CASES[7].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.start-reindex", args: MAINTENANCE_CASES[8].args, query: { type: "BACKGROUND_PREFERRED", indexComments: "false", indexChangeHistory: "true", indexWorklogs: "false" }, expectedReceipt: MAINTENANCE_CASES[8].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.reindex-issues", args: MAINTENANCE_CASES[9].args, query: { issueId: "9223372036854775807", indexComments: "false", indexChangeHistory: "true", indexWorklogs: "false" }, expectedReceipt: MAINTENANCE_CASES[9].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.process-reindex-requests", args: MAINTENANCE_CASES[10].args, expectedReceipt: MAINTENANCE_CASES[10].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.run-upgrade", args: MAINTENANCE_CASES[11].args, expectedReceipt: MAINTENANCE_CASES[11].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.create-custom-field", args: SCHEMA_CASES[0].args, expectedReceipt: SCHEMA_CASES[0].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.delete-custom-fields", args: SCHEMA_CASES[1].args, query: { ids: "customfield_12" }, expectedReceipt: SCHEMA_CASES[1].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.create-issue-type", args: SCHEMA_CASES[2].args, expectedReceipt: SCHEMA_CASES[2].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.update-issue-type", args: SCHEMA_CASES[3].args, parameters: { id: "1" }, expectedReceipt: SCHEMA_CASES[3].receipt },
+  { tool: "jira.delete-issue-type", args: SCHEMA_CASES[4].args, parameters: { id: "1" }, query: { alternativeIssueTypeId: "2" }, expectedReceipt: SCHEMA_CASES[4].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.create-link-type", args: SCHEMA_CASES[5].args, expectedReceipt: SCHEMA_CASES[5].receipt },
+  { tool: "jira.update-link-type", args: SCHEMA_CASES[6].args, parameters: { issueLinkTypeId: "7" }, expectedReceipt: SCHEMA_CASES[6].receipt },
+  { tool: "jira.delete-link-type", args: SCHEMA_CASES[7].args, parameters: { issueLinkTypeId: "7" }, expectedReceipt: SCHEMA_CASES[7].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.reset-link-type-order", args: SCHEMA_CASES[8].args, expectedReceipt: SCHEMA_CASES[8].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.move-link-type", args: SCHEMA_CASES[9].args, parameters: { issueLinkTypeId: "8" }, expectedReceipt: SCHEMA_CASES[9].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.set-terminology", args: SCHEMA_CASES[10].args, expectedReceipt: SCHEMA_CASES[10].receipt },
+  { tool: "jira.create-group", args: GROUP_CASES[0].args, expectedReceipt: GROUP_CASES[0].receipt },
+  { tool: "jira.delete-group", args: GROUP_CASES[1].args, query: { groupname: "R&D team", swapGroup: "Replacement" }, expectedReceipt: GROUP_CASES[1].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.add-group-user", args: GROUP_CASES[2].args, query: { groupname: "R&D team" }, expectedReceipt: GROUP_CASES[2].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.remove-group-user", args: GROUP_CASES[3].args, query: { groupname: "R&D team", username: "Target User" }, expectedReceipt: GROUP_CASES[3].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.pin-comment", args: ISSUE_CASES[0].args, parameters: { issueIdOrKey: "10001", id: "9007199254740993" }, expectedReceipt: ISSUE_CASES[0].receipt },
+  { tool: "jira.notify-issue", args: ISSUE_CASES[1].args, parameters: { issueIdOrKey: "10001" }, expectedReceipt: ISSUE_CASES[1].receipt, expectedOutcome: "succeeded-unconfirmed" },
+
   { tool: "jira.create-issue-type-scheme", args: OPTION_CASES[0].args, expectedReceipt: OPTION_CASES[0].receipt },
   { tool: "jira.update-issue-type-scheme", args: OPTION_CASES[1].args, parameters: { schemeId: "7" }, expectedReceipt: OPTION_CASES[1].receipt },
   { tool: "jira.delete-issue-type-scheme", args: OPTION_CASES[2].args, parameters: { schemeId: "7" }, expectedReceipt: OPTION_CASES[2].receipt, expectedOutcome: "succeeded-unconfirmed" },
@@ -1532,7 +1574,7 @@ function lifecycleRemote(tool: string | undefined): ReturnType<typeof vi.fn<Atla
   const related = selectedLink === undefined
     ? (release ? releaseLifecycleTransportFixture("/context/rest/api/2") : undefined)
     : linkMutationTransportFixture("/context/rest/api/2", selectedLink);
-  const fixture = schemeSettingTransportController(tool) ?? emailTemplateTransportController(tool)
+  const fixture = systemAdministrationTransportController(tool) ?? schemeSettingTransportController(tool) ?? emailTemplateTransportController(tool)
     ?? permissionRoleTransportController(tool) ?? reviewedPlatformFixture(tool)
     ?? (selectedScreen === undefined ? related : screenConfigurationTransportFixture("/context/rest/api/2", selectedScreen));
   if (fixture === undefined) return undefined;
@@ -1600,7 +1642,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(313);
+    expect(native).toHaveLength(348);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),
@@ -2025,4 +2067,44 @@ describe("native Jira registry and real connector transport agreement", () => {
       });
     },
   );
+});
+
+async function systemScenario(tool: Scenario["tool"]): Promise<Observation> {
+  const scenario = SCENARIOS.find((item) => item.tool === tool);
+  if (scenario === undefined) throw new TypeError("Missing administrative native scenario");
+  const observed = await observe(scenario); assertPrimary(observed, scenario); return observed;
+}
+it.each(["jira.set-application-role", "jira.set-application-roles"] as const)("keeps the native CAS version private for %s", async (tool) => {
+  const observed = await systemScenario(tool);
+  const writes = observed.requests.filter((request) => request.method === "PUT");
+  expect(writes).toHaveLength(1);
+  expect(writes[0]?.jiraApplicationRole).toEqual({ ifMatch: '"native-role-version"' });
+  expect(JSON.stringify(observed.result)).not.toContain("native-role-version");
+  expect(observed.result.data).toMatchObject({ outcome: "succeeded-unconfirmed", applicationRoleKeys: ["jira-software"] });
+});
+it("preserves the exact named-user form, ordered duplicate columns and independent readback", async () => {
+  const observed = await systemScenario("jira.set-user-columns");
+  const write = observed.requests.find((request) => request.method === "PUT");
+  expect(write).toMatchObject({ jiraUserColumns: true, bodyJson: "username=Target+User&columns=status&columns=summary&columns=status" });
+  expect(observed.requests.filter((request) => request.method !== "GET")).toHaveLength(1);
+  expect(observed.requests.at(-1)?.method).toBe("GET");
+  expect(observed.result.data).toMatchObject({ outcome: "succeeded", columnIds: ["status", "summary", "status"] });
+});
+it.each(["jira.add-user-application", "jira.remove-user-application"] as const)("uses the fixed experimental query-only request for %s", async (tool) => {
+  const observed = await systemScenario(tool);
+  const writes = observed.requests.filter((request) => request.method !== "GET");
+  expect(writes).toHaveLength(1);
+  expect(writes[0]?.jiraUserApplication).toBe(true);
+  expect(writes[0]?.jiraExperimental).toBeUndefined();
+  expect(writes[0]?.bodyJson).toBeUndefined();
+  expect(observed.result.data).toMatchObject({ outcome: "succeeded-unconfirmed", applicationAccessRequested: tool === "jira.add-user-application" });
+});
+it("retains repeated exact reindex issue IDs and array ACK IDs without declaring job completion", async () => {
+  const issues = await systemScenario("jira.reindex-issues");
+  const write = issues.requests.find((request) => request.method === "POST");
+  if (write === undefined) throw new TypeError("Missing reindex request");
+  expect(new URL(write.url).searchParams.getAll("issueId")).toEqual(["10001", "9223372036854775807"]);
+  expect(write.bodyJson).toBeUndefined();
+  const requests = await systemScenario("jira.process-reindex-requests");
+  expect(requests.result.data).toMatchObject({ outcome: "succeeded-unconfirmed", reindexRequestIds: ["7", "9223372036854775807"] });
 });

@@ -35,6 +35,16 @@ import {
 import { JIRA_READ_TOOL_FAMILIES } from "./jira-read-tools.js";
 import { JIRA_MANAGED_READ_TOOLS, type JiraManagedReadToolName } from "./jira-tool-fields.js";
 import {
+  JIRA_GROUP_MUTATIONS,
+  type JiraGroupMutation,
+  JIRA_ISSUE_ACTION_MUTATIONS,
+  type JiraIssueActionMutation,
+  JIRA_MAINTENANCE_MUTATIONS,
+  type JiraMaintenanceMutation,
+  JIRA_SCHEMA_MUTATIONS,
+  type JiraSchemaMutation,
+  JIRA_DIRECTORY_ACCESS_MUTATIONS,
+  type JiraDirectoryAccessMutation,
   JIRA_OPTION_SCHEME_MUTATIONS,
   type JiraOptionSchemeMutation,
   JIRA_WORKFLOW_SCHEME_MUTATIONS,
@@ -125,6 +135,18 @@ function accessConfigurationAction(name: JiraAccessConfigurationMutation): JiraA
 const JIRA_ACCESS_CONFIGURATION_ACTIONS = Object.freeze([
   ...JIRA_PERMISSION_SCHEME_MUTATIONS, ...JIRA_ROLE_MUTATIONS,
 ].map(accessConfigurationAction));
+
+type JiraDirectorySchemaOrMaintenanceMutation = JiraGroupMutation | JiraMaintenanceMutation | JiraSchemaMutation | JiraDirectoryAccessMutation;
+type JiraDirectorySchemaOrMaintenanceAction = JiraDirectorySchemaOrMaintenanceMutation extends `jira.${infer Action}` ? Action : never;
+type JiraIssueAction = JiraIssueActionMutation extends `jira.${infer Action}` ? Action : never;
+function directorySchemaOrMaintenanceAction(name: JiraDirectorySchemaOrMaintenanceMutation): JiraDirectorySchemaOrMaintenanceAction {
+  return name.slice(5) as JiraDirectorySchemaOrMaintenanceAction;
+}
+function issueAction(name: JiraIssueActionMutation): JiraIssueAction { return name.slice(5) as JiraIssueAction; }
+const JIRA_DIRECTORY_SCHEMA_MAINTENANCE_ACTIONS = Object.freeze([
+  ...JIRA_GROUP_MUTATIONS, ...JIRA_MAINTENANCE_MUTATIONS, ...JIRA_SCHEMA_MUTATIONS, ...JIRA_DIRECTORY_ACCESS_MUTATIONS,
+].map(directorySchemaOrMaintenanceAction));
+const JIRA_ISSUE_ACTIONS = Object.freeze(JIRA_ISSUE_ACTION_MUTATIONS.map(issueAction));
 
 type JiraSchemeRuntimeOrEmailMutation = JiraOptionSchemeMutation | JiraWorkflowSchemeMutation | JiraInstanceSettingMutation | JiraEmailTemplateMutation;
 type JiraSchemeRuntimeOrEmailAction = JiraSchemeRuntimeOrEmailMutation extends `jira.${infer Action}` ? Action : never;
@@ -696,6 +718,8 @@ export type AtlassianConnectorActionType =
   | JiraPlanningVersionOrCategoryAction
   | JiraAccessConfigurationAction
   | JiraSchemeRuntimeOrEmailAction
+  | JiraDirectorySchemaOrMaintenanceAction
+  | JiraIssueAction
   | "set-app-monitoring"
   | "set-ipd-monitoring"
   | "start-jmx-metrics"
@@ -740,6 +764,8 @@ export type AtlassianConnectorActionType =
 
 export const ATLASSIAN_CONNECTOR_ACTION_TYPES: readonly AtlassianConnectorActionType[] =
   Object.freeze([
+    ...JIRA_DIRECTORY_SCHEMA_MAINTENANCE_ACTIONS,
+    ...JIRA_ISSUE_ACTIONS,
     ...JIRA_SCHEME_RUNTIME_EMAIL_ACTIONS,
     ...JIRA_ACCESS_CONFIGURATION_ACTIONS,
     ...JIRA_PLANNING_VERSION_CATEGORY_ACTIONS,
@@ -798,6 +824,41 @@ export const JIRA_REQUIREMENT_REFERENCE_CHARS_MAX = 120;
 export const JIRA_MANAGED_ACTION_TYPES: Readonly<
   Record<JiraManagedReadToolName | JiraMutationOperation, AtlassianConnectorActionType>
 > = Object.freeze({
+  "jira.create-group": "create-group",
+  "jira.delete-group": "delete-group",
+  "jira.add-group-user": "add-group-user",
+  "jira.remove-group-user": "remove-group-user",
+  "jira.pin-comment": "pin-comment",
+  "jira.notify-issue": "notify-issue",
+  "jira.request-cluster-index-snapshot": "request-cluster-index-snapshot",
+  "jira.delete-cluster-node": "delete-cluster-node",
+  "jira.mark-cluster-node-offline": "mark-cluster-node-offline",
+  "jira.approve-cluster-upgrade": "approve-cluster-upgrade",
+  "jira.cancel-cluster-upgrade": "cancel-cluster-upgrade",
+  "jira.retry-cluster-upgrade": "retry-cluster-upgrade",
+  "jira.start-cluster-upgrade": "start-cluster-upgrade",
+  "jira.create-index-snapshot": "create-index-snapshot",
+  "jira.start-reindex": "start-reindex",
+  "jira.reindex-issues": "reindex-issues",
+  "jira.process-reindex-requests": "process-reindex-requests",
+  "jira.run-upgrade": "run-upgrade",
+  "jira.create-custom-field": "create-custom-field",
+  "jira.delete-custom-fields": "delete-custom-fields",
+  "jira.create-issue-type": "create-issue-type",
+  "jira.update-issue-type": "update-issue-type",
+  "jira.delete-issue-type": "delete-issue-type",
+  "jira.create-link-type": "create-link-type",
+  "jira.update-link-type": "update-link-type",
+  "jira.delete-link-type": "delete-link-type",
+  "jira.reset-link-type-order": "reset-link-type-order",
+  "jira.move-link-type": "move-link-type",
+  "jira.set-terminology": "set-terminology",
+  "jira.set-application-role": "set-application-role",
+  "jira.set-application-roles": "set-application-roles",
+  "jira.add-user-application": "add-user-application",
+  "jira.remove-user-application": "remove-user-application",
+  "jira.set-user-columns": "set-user-columns",
+  "jira.reset-user-columns": "reset-user-columns",
   "jira.create-issue-type-scheme": "create-issue-type-scheme",
   "jira.update-issue-type-scheme": "update-issue-type-scheme",
   "jira.delete-issue-type-scheme": "delete-issue-type-scheme",
@@ -968,6 +1029,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASSES: readonly AtlassianConnectorActi
 export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
   Record<AtlassianConnectorActionType, AtlassianConnectorActionClass>
 > = Object.freeze({
+  ...jiraActionValues(JIRA_DIRECTORY_SCHEMA_MAINTENANCE_ACTIONS, "connector-admin"),
+  ...jiraActionValues(JIRA_ISSUE_ACTIONS, "connector-write"),
   ...jiraActionValues(JIRA_SCHEME_RUNTIME_EMAIL_ACTIONS, "connector-admin"),
   ...jiraActionValues(JIRA_ACCESS_CONFIGURATION_ACTIONS, "connector-admin"),
   ...jiraActionValues(JIRA_PLANNING_VERSION_CATEGORY_ACTIONS, "connector-write"),
@@ -1029,6 +1092,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
 export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
   Record<AtlassianConnectorActionType, AtlassianConnectorProvider>
 > = Object.freeze({
+  ...jiraActionValues(JIRA_DIRECTORY_SCHEMA_MAINTENANCE_ACTIONS, "jira"),
+  ...jiraActionValues(JIRA_ISSUE_ACTIONS, "jira"),
   ...jiraActionValues(JIRA_SCHEME_RUNTIME_EMAIL_ACTIONS, "jira"),
   ...jiraActionValues(JIRA_ACCESS_CONFIGURATION_ACTIONS, "jira"),
   ...jiraActionValues(JIRA_PLANNING_VERSION_CATEGORY_ACTIONS, "jira"),
@@ -1083,6 +1148,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
 export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchConnectorScope>
 > = Object.freeze({
+  ...jiraActionValues(JIRA_DIRECTORY_SCHEMA_MAINTENANCE_ACTIONS, "issue-tracker.admin"),
+  ...jiraActionValues(JIRA_ISSUE_ACTIONS, "issue-tracker.write"),
   ...jiraActionValues(JIRA_SCHEME_RUNTIME_EMAIL_ACTIONS, "issue-tracker.admin"),
   ...jiraActionValues(JIRA_ACCESS_CONFIGURATION_ACTIONS, "issue-tracker.admin"),
   ...jiraActionValues(JIRA_PLANNING_VERSION_CATEGORY_ACTIONS, "issue-tracker.write"),
@@ -1154,6 +1221,9 @@ export function jiraRequiredConnectorScope(
 export const ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchApprovalRisk>
 > = Object.freeze({
+  ...jiraActionValues(JIRA_DIRECTORY_SCHEMA_MAINTENANCE_ACTIONS, "high"),
+  ...jiraActionValues(JIRA_ISSUE_ACTIONS, "high"),
+  "pin-comment": "medium",
   ...jiraActionValues(JIRA_SCHEME_RUNTIME_EMAIL_ACTIONS, "high"),
   ...jiraActionValues(JIRA_ACCESS_CONFIGURATION_ACTIONS, "high"),
   ...jiraActionValues(JIRA_PLANNING_VERSION_CATEGORY_ACTIONS, "high"),
@@ -2101,6 +2171,16 @@ export {
   isJiraDraftRef,
   type JiraDraftItemState,
   JIRA_MUTATION_OPERATIONS,
+  JIRA_GROUP_MUTATIONS,
+  type JiraGroupMutation,
+  JIRA_ISSUE_ACTION_MUTATIONS,
+  type JiraIssueActionMutation,
+  JIRA_MAINTENANCE_MUTATIONS,
+  type JiraMaintenanceMutation,
+  JIRA_SCHEMA_MUTATIONS,
+  type JiraSchemaMutation,
+  JIRA_DIRECTORY_ACCESS_MUTATIONS,
+  type JiraDirectoryAccessMutation,
   JIRA_OPTION_SCHEME_MUTATIONS,
   type JiraOptionSchemeMutation,
   JIRA_WORKFLOW_SCHEME_MUTATIONS,

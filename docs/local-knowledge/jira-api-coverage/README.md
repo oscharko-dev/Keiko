@@ -123,10 +123,10 @@ to Chat or Coding, grant authority, or bypass those owners.
 
 ## Current constrained implementation snapshot
 
-The current registry supplies **359 native identities: 213 reads and 146 writes**. Each is mapped to
+The current registry supplies **394 native identities: 213 reads and 181 writes**. Each is mapped to
 its exact published method/path identity and remains `partial`: the closed typed operation exposes
 only the documented supported fields and behavior, rather than the entire upstream API contract.
-The other **80 operations remain `not-implemented`**. No row is marked fully implemented,
+The other **45 operations remain `not-implemented`**. No row is marked fully implemented,
 executable, owner-deferred or excluded by this snapshot. All 439 source/version IDs, cluster
 assignments, dependencies and qualification fields are retained.
 
@@ -154,8 +154,8 @@ Two further native observations bind a permission-scheme attribute and read the 
 
 Three remote-version-link readers bind native versions where selected, decode only the documented JSON-encoded native link once and reuse the complete typed-value owner. Two worklog change feeds preserve exact native time windows and cursors without totals, synthetic offsets, skipped prefixes or implied all-history coverage. Native permission/retention limits and the excluded latest minute remain explicit. All five new wire/policy/schema and readable EN/DE result regression sources remain unexecuted.
 
-Seventy-three administration writes (four monitoring changes, nine screen/tab layout changes, two
-global issue-type property mutations, four filter creation/sharing changes, three project-category changes, six permission-scheme/grant/attribute changes, nine role/default/project-membership changes, ten issue-type/priority-scheme changes, eighteen workflow-scheme/base/draft configuration changes, four instance-setting changes, three email-template effects and one instance-wide sprint cleanup) require the explicit `issue-tracker.admin` grant. Ordinary
+One hundred six administration writes (four monitoring changes, nine screen/tab layout changes, two
+global issue-type property mutations, four filter creation/sharing changes, three project-category changes, six permission-scheme/grant/attribute changes, nine role/default/project-membership changes, ten issue-type/priority-scheme changes, eighteen workflow-scheme/base/draft configuration changes, four instance-setting changes, three email-template effects, four group lifecycle/membership changes, twelve maintenance requests, eleven schema changes, six directory-access/layout changes and one instance-wide sprint cleanup) require the explicit `issue-tracker.admin` grant. Ordinary
 Jira write access, a selected credential and Full access mode do not supply that grant. Coding binds
 the human's selected scope into its start confirmation and real Authority Envelope, and rechecks the
 current exact action scope before native dispatch. Most metadata reads retain `issue-tracker.read`; three anonymization observations and the email-template archive observation require explicit administration while retaining read effects and low risk.
@@ -472,3 +472,38 @@ lacks a stable readable identity/CAS and active export cannot prove all email co
 All added wire, schema, policy, receipt, migration, EN/DE, reload and accessibility regression
 sources remain unexecuted. This snapshot has 312 Platform, 46 Agile and one authentication
 identity. All 439 runtime states and verification references remain unqualified; AC1–AC9 remain open.
+
+Thirty-five further identities add four group changes, pinning/notification requests, twelve
+maintenance requests, eleven schema changes and six directory-access/layout changes. Exactly
+twenty-eight new effects remain acknowledged/unconfirmed. Seven may confirm their independently
+read exact configuration only; no metadata read proves complete global access, delivery, indexing
+or migration effects. Forward-only V76 preserves V75 and earlier journal SQL and rows.
+
+Group and user namespaces stay exact. Native membership includes subgroups and is never presented
+as a direct assignment. Fuzzy search omissions remain unavailable, with a bounded-search and Jira
+remediation message. Pinning preserves the reviewed same-parent comment and native pinned list.
+Notification success never asserts delivery or permits an automatic resend. All recipient payloads
+remain outside receipts/logs; private receipt digests and selected keys describe requested context.
+
+Schema changes reuse the existing formal owner for actual custom-field, issue-type and link-type
+impact, including type-name changes that alter saved rule selection. Null is distinct from missing
+review evidence. Native partial field deletion, default-scheme addition and ordering limitations stay
+explicit. Configuration calls do not create rules from prose or fabricate a complete JQL population.
+
+Role changes use native strong ETag/If-Match CAS through fixed private ports. User-application
+requests are exact bodyless experimental routes; named-user columns use the documented fixed
+form overload with order/repetitions. Version tokens are never model arguments, results or logs.
+Admin actor identity remains separate from a selected target user's key/name.
+
+Maintenance operations bind observed native prerequisites and remain unconfirmed after ACK.
+Unselected reindex404 now renders no-prior-task without invented identity, progress or zero metrics;
+selected task404 remains a failure. Opaque upgrade maintenance supplies no per-issue migration or
+saved-rule-compliance proof. Exact documented permission/WebSudo401 responses use the existing
+current-generation identity observation rather than revoking a healthy credential; the denied
+operation remains denied, with no retry or generic status exception.
+
+This source snapshot has 347 Platform, 46 Agile and one authentication identity. Forty-five
+identity/avatar/project/issue operations still require implementation, and every one of the439
+runtime qualifications remains unknown with no fabricated verification or owner exclusions.
+All added schema/transport/receipt/migration/preflight/policy/EN-DE/reload/accessibility regression
+sources and final generated artifacts remain pending execution in the permitted final window.

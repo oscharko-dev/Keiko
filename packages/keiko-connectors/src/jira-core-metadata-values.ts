@@ -8,6 +8,7 @@ import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import { jiraProjectionTextFits } from "./jira-managed-field-reads.js";
 import { projectJiraCollection } from "./jira-managed-metadata.js";
 import { jiraNativeId, jiraNativeNumericId, jiraNativeText } from "./jira-native-values.js";
+import { jiraIssueTypeReviewSnapshot } from "./jira-issue-type-values.js";
 
 export type JiraCoreMetadataKind =
   | "issue-type"
@@ -81,7 +82,7 @@ function statuses(raw: Record<string, unknown>): CatalogJsonObject | undefined {
   return projected === undefined ? undefined : { statuses: projected };
 }
 function extras(kind: JiraCoreMetadataKind, raw: Record<string, unknown>): CatalogJsonObject | undefined {
-  if (kind === "issue-type") return issueTypeExtras(raw);
+  if (kind === "issue-type") return issueTypeReviewExtras(raw);
   if (kind === "project-statuses") {
     // This DTO has no avatarId; retain only its documented subtask classification.
     const classification = issueTypeExtras({ subtask: raw.subtask });
@@ -93,6 +94,12 @@ function extras(kind: JiraCoreMetadataKind, raw: Record<string, unknown>): Catal
   const value = asRecord(raw.statusCategory);
   const projected = value === undefined ? undefined : category(value);
   return projected === undefined ? undefined : { statusCategory: projected };
+}
+function issueTypeReviewExtras(raw: Record<string, unknown>): CatalogJsonObject | undefined {
+  const ordinary = issueTypeExtras(raw);
+  if (ordinary === undefined) return undefined;
+  const reviewSnapshot = jiraIssueTypeReviewSnapshot(raw);
+  return reviewSnapshot === undefined ? ordinary : { ...ordinary, reviewSnapshot: { ...reviewSnapshot } };
 }
 
 /** Closed native metadata fields only; URLs, icons and arbitrary expansions are never projected. */

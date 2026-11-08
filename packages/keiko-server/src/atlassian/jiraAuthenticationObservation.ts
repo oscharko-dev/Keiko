@@ -1,3 +1,4 @@
+import { maintenancePathNode } from "@oscharko-dev/keiko-connectors";
 import type {
   AtlassianCredentialMetadata,
   AtlassianHttpBodyRequest,
@@ -56,6 +57,18 @@ function ambiguousIssueLinkWrite(method: Request["method"], parts: readonly stri
 // A current same-generation positive identity probe preserves the refusal without revoking a
 // valid credential; it never grants permission, retries a write or borrows another route's facts.
 const AMBIGUOUS_NATIVE_WRITES: readonly (readonly [Request["method"], readonly string[]])[] = [
+  ["PUT", ["applicationrole"]],
+  ["PUT", ["applicationrole", "$segment"]],
+  ["DELETE", ["user", "columns"]],
+  ["PUT", ["cluster", "index-snapshot", "$node"]],
+  ["DELETE", ["cluster", "node", "$node"]],
+  ["PUT", ["cluster", "node", "$node", "offline"]],
+  ["POST", ["cluster", "zdu", "approve"]],
+  ["POST", ["cluster", "zdu", "cancel"]],
+  ["POST", ["cluster", "zdu", "retryUpgrade"]],
+  ["POST", ["cluster", "zdu", "start"]],
+  ["POST", ["index-snapshot"]],
+  ["POST", ["reindex", "request"]],
   ["POST", ["workflowscheme"]],
   ["PUT", ["workflowscheme", "$id"]],
   ["DELETE", ["workflowscheme", "$id"]],
@@ -91,8 +104,12 @@ function nativeTextSegment(value: string): boolean {
       !/[\\/%?#\p{Cc}\p{Surrogate}]/u.test(decoded);
   } catch { return false; }
 }
+function nativeNodeSegment(value: string): boolean {
+  try { return maintenancePathNode(decodeURIComponent(value)); } catch { return false; }
+}
 function nativeWriteSegment(expected: string, actual: string): boolean {
   switch (expected) {
+    case "$node": return nativeNodeSegment(actual);
     case "$id": return /^[1-9]\d{0,18}$/u.test(actual) && BigInt(actual) <= 9223372036854775807n;
     case "$segment": return nativeTextSegment(actual);
     case "$boolean": return actual === "true" || actual === "false";

@@ -194,3 +194,21 @@ it("recognizes only the closed on-demand diagnostic identities", () => {
   expect(isJiraJobObservationRead("constructor")).toBe(false);
   expect(isJiraJobObservationRead("jira.reindex-start")).toBe(false);
 });
+
+// Only the documented unselected current/latest resource has this absence meaning.
+it("labels no previous reindex task without inventing progress, completion or zero counts", async () => {
+  const request = vi.fn<JiraMutationRequest>().mockResolvedValue({ ok: false, reason: "not-found", httpStatus: 404 });
+  expect(await read("jira.reindex-status", {}, request)).toEqual({ data: { outcome: "succeeded", taskSelection: "active-or-latest", taskState: "no-prior-task" } });
+  expect(request).toHaveBeenCalledExactlyOnceWith("reindex", "GET", undefined, "json");
+});
+it.each([
+  { name: "jira.reindex-status", args: { taskId: "7" } },
+  { name: "jira.reindex-progress", args: {} },
+  { name: "jira.reindex-progress", args: { taskId: "7" } },
+] as const)("does not borrow no-prior-task semantics for $name %#", async ({ name, args }) => {
+  const request = vi.fn<JiraMutationRequest>().mockResolvedValue({ ok: false, reason: "not-found", httpStatus: 404 });
+  const result = await read(name, args, request);
+  expect(result.isError).toBe(true);
+  expect(result.data).not.toHaveProperty("taskState");
+  expect(request).toHaveBeenCalledTimes(1);
+});
