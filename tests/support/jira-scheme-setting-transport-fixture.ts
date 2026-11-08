@@ -13,6 +13,7 @@ const WORKFLOW_READS = new Set([
   "myself", "workflowscheme/37", "workflowscheme/37?returnDraftIfExists=true",
   "workflowscheme/37?returnDraftIfExists=false", "workflowscheme/37/draft",
   "workflowscheme/9223372036854775807", "issuetype/1", "issuetype/2",
+  "workflowscheme/9223372036854775807?returnDraftIfExists=true",
   "workflow?workflowName=Default", "workflow?workflowName=Flow",
   "workflow?workflowName=Second", "workflow?workflowName=Next",
 ]);
