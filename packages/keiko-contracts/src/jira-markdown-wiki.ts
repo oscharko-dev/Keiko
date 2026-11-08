@@ -301,6 +301,11 @@ function hasMarkdownLink(text: string): boolean {
   return false;
 }
 
+/** Whether a line of the text, after its leading whitespace, opens a wiki table header (`||`). */
+function startsTableHeaderLine(text: string): boolean {
+  return text.split(/\r\n|[\n\r\u2028\u2029]/u).some((line) => line.trimStart().startsWith("||"));
+}
+
 /**
  * Constructs only Markdown writes: `**strong**`, `[text](url)` and fences. A native wiki text uses
  * none of them, while `#` lists, `hN.` headings, `[text|url]` links and macros are wiki's own.
@@ -313,7 +318,7 @@ export function readsAsMarkdownOnly(text: string): boolean {
   const wiki =
     /^h[1-6]\.\s/mu.test(text) ||
     /\{(?:code|noformat|panel|quote|color)[:}]/u.test(text) ||
-    /^[^\S\r\n]*\|\|/mu.test(text) ||
+    startsTableHeaderLine(text) ||
     /\[[^[\]|\n]+\|[^[\]\n]+\]/u.test(text) ||
     // Consecutive `# ` lines are a wiki numbered list; Markdown has one title per text.
     /^#[ \t].*\r?\n#[ \t]/mu.test(text);

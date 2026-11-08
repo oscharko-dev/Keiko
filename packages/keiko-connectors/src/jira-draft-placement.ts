@@ -12,7 +12,7 @@ const NUMERIC_ID = /^\d{1,32}$/u;
  * One rule for the tool schema and the parser. A key Jira does not know ("1AB", "_AB") is then
  * answered as an unknown project, with the retry hint, instead of as malformed input.
  */
-export const JIRA_PROJECT_REFERENCE_PATTERN = "^\\w{1,32}$";
+export const JIRA_PROJECT_REFERENCE_PATTERN = String.raw`^\w{1,32}$`;
 const PROJECT_REFERENCE = new RegExp(JIRA_PROJECT_REFERENCE_PATTERN, "u");
 const TYPE_NAME_CHARS_MAX = 120;
 const TYPES_SCANNED_MAX = 200;
