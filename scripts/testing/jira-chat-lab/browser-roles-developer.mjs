@@ -73,6 +73,38 @@ function assign(environment, meta) {
     },
   );
 }
+async function completionResolution(environment, target) {
+  const field = target.fields?.resolution;
+  if (field) {
+    const values = field.allowedValues;
+    requireRoleFact(Array.isArray(values) && values.length > 0);
+    const fixed = values.filter((value) => value.name === "Fixed");
+    requireRoleFact(fixed.length <= 1);
+    const selected = fixed[0] ?? values[0];
+    requireRoleFact(typeof selected.name === "string" && selected.name.length > 0);
+    return { id: nativeId(selected.id), name: selected.name };
+  }
+  const catalog = await roleRead(environment, "/rest/api/2/resolution");
+  requireRoleFact(Array.isArray(catalog));
+  return { catalog };
+}
+function completionPrompt(selected, target, resolution) {
+  const prefix = `Schließe ${selected.key} mit Status "${target.to.name}"`;
+  if (resolution.id !== undefined)
+    return `${prefix} und Resolution "${resolution.name}" ab. Nutze genau einen Statuswechsel.`;
+  return `${prefix} und gesetzter Resolution ab. Nutze genau einen Statuswechsel.`;
+}
+function verifyCompletionResolution(actual, selected) {
+  const id = nativeId(actual?.id);
+  if (selected.id !== undefined) {
+    requireRoleFact(id === selected.id);
+    return;
+  }
+  const matches = selected.catalog.filter((value) => nativeId(value?.id) === id);
+  requireRoleFact(
+    matches.length === 1 && typeof matches[0].name === "string" && actual.name === matches[0].name,
+  );
+}
 async function transition(environment, meta, done) {
   const selected = story(environment);
   const available = await roleRead(
@@ -80,22 +112,12 @@ async function transition(environment, meta, done) {
     `/rest/api/2/issue/${selected.key}/transitions?expand=transitions.fields`,
   );
   const target = chosenTransition(available, done);
-  let resolution;
-  if (done) {
-    const values =
-      target.fields?.resolution?.allowedValues ??
-      (await roleRead(environment, "/rest/api/2/resolution"));
-    requireRoleFact(Array.isArray(values));
-    const fixed = values.filter((value) => value.name === "Fixed");
-    requireRoleFact(fixed.length === 1);
-    resolution = fixed[0];
-  }
-  const fields =
-    done && target.fields?.resolution ? { resolution: { id: nativeId(resolution.id) } } : {};
+  const resolution = done ? await completionResolution(environment, target) : undefined;
+  const fields = resolution?.id === undefined ? {} : { resolution: { id: resolution.id } };
   return definition(
     meta,
     done
-      ? `Schließe ${selected.key} mit Status "${target.to.name}" und Resolution "${resolution.name}" ab. Nutze genau einen Statuswechsel.`
+      ? completionPrompt(selected, target, resolution)
       : `Move ${selected.key} to "${target.to.name}" so that implementation is in progress.`,
     [
       {
@@ -112,7 +134,7 @@ async function transition(environment, meta, done) {
         nativeId(after.fields.status.id) === nativeId(target.to.id) &&
           after.fields.status.statusCategory.key === (done ? "done" : "indeterminate"),
       );
-      if (done) requireRoleFact(nativeId(after.fields.resolution?.id) === nativeId(resolution.id));
+      if (done) verifyCompletionResolution(after.fields.resolution, resolution);
       return effectProof(turn, meta.operations, { transitioned: 1, resolved: done ? 1 : 0 });
     },
   );

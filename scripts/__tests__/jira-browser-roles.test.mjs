@@ -338,3 +338,102 @@ function replaceCreatedIdentity(world, plans, id) {
     };
   }
 }
+
+function completionScenario({ offered, fields, resolutions, actual }) {
+  const scenario = createEnvironment("Dev8");
+  const { environment, world, plans } = scenario;
+  const read = environment.read;
+  environment.read = async (path) => {
+    if (path === "/rest/api/2/resolution") return structuredClone(resolutions);
+    const value = await read(path);
+    if (path === "/rest/api/2/issue/SYN-4/transitions?expand=transitions.fields") {
+      const target = value.transitions.find(({ id }) => id === "41");
+      target.fields = offered ? { resolution: { allowedValues: offered } } : {};
+    }
+    return value;
+  };
+  plans[0].body.fields = fields;
+  const apply = plans[0].apply;
+  plans[0].apply = () => {
+    apply();
+    world.issue("202").fields.resolution = structuredClone(actual);
+  };
+  return scenario;
+}
+
+describe("Dev8 native completion resolution", () => {
+  const fixed = { id: "1", name: "Fixed" };
+  const done = { id: "2", name: "Done" };
+  it("accepts a native Done postfunction without inserting a resolution field or asking for Fixed", async () => {
+    const { environment, plans } = completionScenario({
+      fields: {},
+      resolutions: [fixed, done],
+      actual: done,
+    });
+    const definition = await buildRoleStep(environment, "developer", "Dev8");
+    expect(definition.prompt).not.toContain('Resolution "Fixed"');
+    expect(definition.prompt).toContain("gesetzter Resolution");
+    expect(
+      definition.wire[0].admit({
+        fields: { resolution: { id: "1" } },
+        update: {},
+        transition: { id: "41" },
+      }),
+    ).toBe(false);
+    const proof = await step(environment, environment.group, definition);
+    expect(proof.status).toBe("verified");
+    expect(plans).toHaveLength(1);
+    expect(plans[0].body).toEqual({ fields: {}, update: {}, transition: { id: "41" } });
+    expect(environment.witness.snapshot().forwarded).toBe(1);
+  });
+  it("pins a non-Fixed resolution that the actual transition offers", async () => {
+    const { environment } = completionScenario({
+      offered: [done],
+      fields: { resolution: { id: "2" } },
+      resolutions: [fixed, done],
+      actual: done,
+    });
+    const definition = await buildRoleStep(environment, "developer", "Dev8");
+    expect(definition.prompt).toContain('Resolution "Done"');
+    expect(
+      definition.wire[0].admit({
+        fields: { resolution: { id: "1" } },
+        update: {},
+        transition: { id: "41" },
+      }),
+    ).toBe(false);
+    const proof = await step(environment, environment.group, definition);
+    expect(proof.status).toBe("verified");
+    expect(environment.witness.snapshot().forwarded).toBe(1);
+  });
+  it.each([null, { id: "999", name: "Done" }, { id: "2", name: "Foreign" }])(
+    "rejects an absent or uncatalogued native postfunction resolution %j",
+    async (actual) => {
+      const { environment } = completionScenario({
+        fields: {},
+        resolutions: [fixed, done],
+        actual,
+      });
+      const definition = await buildRoleStep(environment, "developer", "Dev8");
+      await expect(step(environment, environment.group, definition)).rejects.toMatchObject({
+        code: "native-state-mismatch",
+        stage: "readback",
+      });
+      expect(environment.witness.snapshot().forwarded).toBe(1);
+    },
+  );
+  it("rejects another catalogued resolution when an offered exact ID was requested", async () => {
+    const { environment } = completionScenario({
+      offered: [done],
+      fields: { resolution: { id: "2" } },
+      resolutions: [fixed, done],
+      actual: fixed,
+    });
+    const definition = await buildRoleStep(environment, "developer", "Dev8");
+    await expect(step(environment, environment.group, definition)).rejects.toMatchObject({
+      code: "native-state-mismatch",
+      stage: "readback",
+    });
+    expect(environment.witness.snapshot().forwarded).toBe(1);
+  });
+});
