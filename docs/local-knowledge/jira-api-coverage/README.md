@@ -123,10 +123,10 @@ to Chat or Coding, grant authority, or bypass those owners.
 
 ## Current constrained implementation snapshot
 
-The current registry supplies **323 native identities: 212 reads and 111 writes**. Each is mapped to
+The current registry supplies **359 native identities: 213 reads and 146 writes**. Each is mapped to
 its exact published method/path identity and remains `partial`: the closed typed operation exposes
 only the documented supported fields and behavior, rather than the entire upstream API contract.
-The other **116 operations remain `not-implemented`**. No row is marked fully implemented,
+The other **80 operations remain `not-implemented`**. No row is marked fully implemented,
 executable, owner-deferred or excluded by this snapshot. All 439 source/version IDs, cluster
 assignments, dependencies and qualification fields are retained.
 
@@ -137,8 +137,8 @@ worklog create/update with connected-user watching/voting; fourteen C9 workflow-
 and screen reads; three reviewed comment/attachment/worklog deletions; and eight C10 user, group and
 application-role reads; ten permission/security/notification configuration reads; and five additional
 project scheme/accessible-security associations; twenty core issue/project metadata reads; four instance/current-actor observations; seven role/priority-scheme reads; four release-count/project-version-page reads; seven scoped directory/field reads; two JQL metadata/suggestion reads; nine additional Agile context reads; seven configuration metadata reads; three scalar runtime-setting observations; four maintenance-status observations; seven resource-page/link-type/accessibility/column-layout reads; nine additional job/monitoring observations; sixteen entity-property reads; three reviewed screen-tab writes; six additional issue-context reads; four governed monitoring changes; and sixteen reviewed entity-property set/delete operations. The three existing
-report/draft composites remain compositions, not extra native API identities. Remaining ranking, other estimate-adjustment modes and destructive operations, administration and
-other inventory gaps stay open. A registered declaration is not evidence that
+report/draft composites remain compositions, not extra native API identities. Other destructive operations, account/session effects, avatar uploads and remaining administration
+stay open. A registered declaration is not evidence that
 Jira grants the current person permission or that a particular installation supports the operation.
 
 Four account diagnostics add password requirement messages, cached duplicate-account count/list and current-HTTP-context stored search errors. Native204 is an explicit absent search error only at that documented route; missing200 content is unavailable. Duplicate observations never flush caches, infer a complete directory audit or grant password acceptance. Three application/preference reads expose strict values only for closed documented nonsecret keys; unknown keys retain metadata with withheld values. Defaults, examples and allowed values never leave that projection, and permissionLevel is a native filter rather than a grant. All new regression, wire, EN/DE, reload and accessibility sources are unexecuted.
@@ -150,15 +150,15 @@ and duplicate accounts. The projections follow the primary
 and [duplicate mapping factory](https://docs.atlassian.com/software/jira/docs/api/11.3.3/com/atlassian/jira/rest/v2/issue/users/DuplicatedUsersMapBeanFactory.html).
 The pinned source bytes and original operation identities remain unchanged.
 
-Two further native observations bind a permission-scheme attribute and read the documented EmailTypes notification/template metadata. Attribute keys must match after independently binding the scheme; missing and empty values remain distinct. Notification formats with repeated event IDs are retained, recipient email is omitted and template names never become file links. No email is sent or template pack exported. New native-wire, schema and EN/DE reload/accessibility regression sources remain unexecuted.
+Two further native observations bind a permission-scheme attribute and read the documented EmailTypes notification/template metadata. Attribute keys must match after independently binding the scheme; missing and empty values remain distinct. Notification formats with repeated event IDs are retained, recipient email is omitted and template names never become file links. These two metadata readers neither send email nor export a template pack. New native-wire, schema and EN/DE reload/accessibility regression sources remain unexecuted.
 
 Three remote-version-link readers bind native versions where selected, decode only the documented JSON-encoded native link once and reuse the complete typed-value owner. Two worklog change feeds preserve exact native time windows and cursors without totals, synthetic offsets, skipped prefixes or implied all-history coverage. Native permission/retention limits and the excluded latest minute remain explicit. All five new wire/policy/schema and readable EN/DE result regression sources remain unexecuted.
 
-Thirty-eight administration writes (four monitoring changes, nine screen/tab layout changes, two
-global issue-type property mutations, four filter creation/sharing changes, three project-category changes, six permission-scheme/grant/attribute changes, nine role/default/project-membership changes and one instance-wide sprint cleanup) require the explicit `issue-tracker.admin` grant. Ordinary
+Seventy-three administration writes (four monitoring changes, nine screen/tab layout changes, two
+global issue-type property mutations, four filter creation/sharing changes, three project-category changes, six permission-scheme/grant/attribute changes, nine role/default/project-membership changes, ten issue-type/priority-scheme changes, eighteen workflow-scheme/base/draft configuration changes, four instance-setting changes, three email-template effects and one instance-wide sprint cleanup) require the explicit `issue-tracker.admin` grant. Ordinary
 Jira write access, a selected credential and Full access mode do not supply that grant. Coding binds
 the human's selected scope into its start confirmation and real Authority Envelope, and rechecks the
-current exact action scope before native dispatch. Metadata reads retain `issue-tracker.read`.
+current exact action scope before native dispatch. Most metadata reads retain `issue-tracker.read`; three anonymization observations and the email-template archive observation require explicit administration while retaining read effects and low risk.
 This authority repair changes no native identity or qualification status; its source regressions,
 ledger reconciliation and generated log contracts remain pending the deferred final validation.
 Coding mutation results now use the existing run/turn-bound History and transcript owner to retain validated success/error payloads and known receipts before recovery. Private immutable descriptor, operation and original-argument bindings survive display redaction and registry changes. Existing transcript byte/call reservations are admitted before native dispatch; unavailable capacity or unreadable stored state refuses the write. Generic Chat APIs remain isolated from Coding rows. Local scope denial is stored without fabricating a native Jira permission response, and a valid provider receipt takes precedence after post-dispatch scope loss. Error results never acknowledge a write; the existing journal remains authoritative for unknown/unconfirmed/succeeded history and no replay. The existing result cards render those exchanges in EN/DE after reload even when user text is already in the timeline. Validated native reads now share the same immutable result projection, capacity owner and run/turn-bound atomic transcript capture, without creating mutation rows, acknowledgements or recovery barriers. Success, failure and local scope denial remain readable after reload. Cancellation, changed turns or released reservations refuse late capture. AC9 acceptance and every confirming run remain open.
@@ -445,3 +445,30 @@ Eleven planning/version-link/project-category operations extend the same native 
 
 
 Fifteen access-configuration mutations extend existing role and permission readers/binders. All require explicit administration and independent native permissions. Permission-scheme replacements distinguish omitted grants from explicit[], use exact holder namespaces and native acknowledged IDs, and confirm full same-parent configuration rather than effective user access. The attribute port preserves its native text/plain Boolean contract without opening generic headers or text bodies. Role POST partial updates and PUT full replacements remain distinct. Users bind by stable key and native username, groups by native group name; observed assignment IDs/namespaces are mandatory. Default actors remain separate from project membership. Native actors-only default envelopes never invent role metadata, and missing descriptions or actor types remain unavailable. Role deletion, five actor changes and permission-scheme deletion always remain acknowledged/unconfirmed because full aggregate security consequences are not proven. V74 preserves V73 and prior SQL. New native-wire/policy/receipt/migration/preflight/EN-DE/reload/accessibility regression sources are authored and unexecuted. Current source scope is276Platform +46Agile +1authentication identity;116 implementations and all439 runtime qualifications remain open.
+
+Thirty-six further constrained identities add ten issue-type/priority-scheme mutations, eighteen
+workflow-scheme/base/draft mutations, four instance settings and four email-template operations.
+Scheme project associations and deletions do not claim complete global effects. Base workflow
+mapping changes fix `updateDraftIfNeeded:false` and remain unconfirmed; existing drafts require the
+reviewed draft and unchanged parent, and no draft is claimed as deployed. Nullable configured
+defaults remain distinct from effective fallbacks. Native in-use/admin/WebSudo constraints remain
+independent. These configuration calls neither invent migrations nor activate prose skills as rules.
+
+The four instance edits bind exact actor and prior configuration. Application values use the
+native string contract for four nonsecret keys, including actual Boolean false. Global columns
+retain order and repeats through the primary documented JSON overload. Base-URL metadata is
+comparison-only; a successful request never changes the selected connection destination and
+remains unconfirmed for global consequences. Read-only confirmation means observed enabled
+configuration only. Full target receipts are bounded before any native request.
+
+The E-mail pack reader requires administration and returns only bounded manifest metadata/hashes;
+Jira itself documents a temporary export ZIP. The fixed ZIP port reuses the existing custody,
+admission, byte, cancellation and acknowledgement owners. Upload binds a server-minted snapshot
+in allowed mode or the existing reviewed snapshot in required mode, with no extra mandatory
+approval in an allowed mode. The shared bounded archive reader and credential floor reject
+unsafe entries and unsupported representations; ordinary archive attachments remain refused.
+Upload, apply and revert always remain acknowledged/unconfirmed because native staged selection
+lacks a stable readable identity/CAS and active export cannot prove all email consequences.
+All added wire, schema, policy, receipt, migration, EN/DE, reload and accessibility regression
+sources remain unexecuted. This snapshot has 312 Platform, 46 Agile and one authentication
+identity. All 439 runtime states and verification references remain unqualified; AC1–AC9 remain open.

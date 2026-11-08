@@ -1,3 +1,4 @@
+import { jiraOptionSchemeReview, jiraOptionSchemeReviewFields } from "./jira-option-scheme-review.js";
 import { JIRA_READ_TOOL_FAMILIES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { TOOL_CATALOG_LIMITS, type CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
@@ -32,7 +33,10 @@ function exceedsBounds(value: unknown): boolean {
 }
 function project(value: unknown): CatalogJsonObject | undefined {
   const raw = asRecord(value);
-  return raw === undefined ? undefined : jiraPrioritySchemeProjection(raw);
+  if (raw === undefined) return undefined;
+  const projected = jiraPrioritySchemeProjection(raw);
+  return projected === undefined ? undefined
+    : { ...projected, ...jiraOptionSchemeReviewFields("priority", jiraOptionSchemeReview("priority", raw, projected)) };
 }
 function single(body: Record<string, unknown>, schemeId: string): ManagedMcpToolResult {
   if (exceedsBounds(body)) return jiraReadFailure("bounds-exceeded");

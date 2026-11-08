@@ -1,5 +1,6 @@
 import { createManagedChatCatalogRuntime } from "../tool-catalog/managedChatCatalogRuntime.js";
 import { randomUUID } from "node:crypto";
+import { jiraChatEmailTemplateComposition } from "./jiraEmailTemplateComposition.js";
 import {
   createJiraDraftStore,
   createJiraReportStore,
@@ -398,8 +399,9 @@ function attachmentReview(
   deps: UiHandlerDeps,
   envelope: Extract<ReturnType<typeof resolveCurrentJiraChatAuthority>, { ok: true }>["envelope"],
   context: CatalogHandlerContext<JiraChatCatalogConsumer>,
+  operation: "jira.attach" | "jira.upload-email-template-pack" = "jira.attach",
 ): JiraChatAttachmentReview {
-  const policy = decideAtlassianEnvelopeAction(JIRA_MANAGED_ACTION_TYPES["jira.attach"], envelope);
+  const policy = decideAtlassianEnvelopeAction(JIRA_MANAGED_ACTION_TYPES[operation], envelope);
   const actionId = context.mutationGuard.write?.action.actionId;
   const approval =
     actionId === undefined
@@ -434,6 +436,12 @@ function connection(
       beforeDispatch: () => context.beforeEffect(),
     }),
     issueTemplates: jiraIssueTemplateSource(deps.store),
+    emailTemplates: jiraChatEmailTemplateComposition(deps, {
+      chatId: context.chatId,
+      correlationId: context.correlationId,
+      signal: context.signal,
+      review: () => attachmentReview(deps, current.envelope, context, "jira.upload-email-template-pack"),
+    }),
     attachmentSource: jiraChatAttachmentSource(deps, {
       chatId: context.chatId,
       correlationId: context.correlationId,

@@ -31,6 +31,8 @@ const SERVER_FIELDS = {
   deploymentType: NAME,
   buildNumber: BUILD_NUMBER,
   databaseBuildNumber: BUILD_NUMBER,
+  configuredBaseUrlState: { type: "string", enum: ["observed", "unavailable"] },
+  configuredBaseUrl: { ...text(2048), minLength: 1, description: "Comparison-only observed configuration. Never follow, render as a navigation link or use as the trusted connection URL." },
 };
 const WORKING_TIME = { type: "number", minimum: 0, maximum: Number.MAX_SAFE_INTEGER };
 const CONFIGURATION_FIELDS = {
@@ -67,7 +69,7 @@ function read(
 
 export const JIRA_INSTANCE_READ_DEFINITIONS = {
   "jira.server-info": read(
-    "Read observed Jira version, deployment and build metadata. These facts do not verify stored credentials, qualify a release, assert API availability or update compatibility state. Keep exact numeric build identities as strings; omit remote base URLs, health-check bodies, clocks and SCM details.",
+    "Read observed Jira version, deployment and build metadata. These facts do not verify stored credentials, qualify a release, assert API availability or update compatibility state. Keep exact numeric build identities as strings. A safe configuredBaseUrl is comparison-only plain text, with configuredBaseUrlState observed/unavailable; HTTP may be native metadata behind a proxy, never a trusted request or navigation destination. Withhold URL credentials, query, fragment and malformed values. Omit health-check bodies, clocks and SCM details.",
     object({}),
     SERVER_FIELDS,
   ),

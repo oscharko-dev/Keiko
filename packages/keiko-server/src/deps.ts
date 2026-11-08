@@ -29,6 +29,7 @@ import {
 } from "./atlassian/jiraChatCatalogRuntime.js";
 import { createNativeHistoryCapture } from "./coding-runtime/codingRuntimeHistory.js";
 import { createCodingJiraPods, type CodingJiraPods } from "./coding-runtime/codingJiraPodMcp.js";
+import { jiraEmailTemplateInspection } from "./atlassian/jiraEmailTemplateComposition.js";
 import {
   createStateCodingSessionContinuity,
   KEIKO_CODING_SESSION_RETENTION_ENV,
@@ -5092,7 +5093,7 @@ function installCodingJiraPods(
   pods: CodingJiraPods | undefined,
 ): UiHandlerDeps {
   if (pods === undefined) return deps;
-  pods.attach(deps);
+  pods.attach({ ...deps, emailTemplateInspection: (signal) => jiraEmailTemplateInspection(deps, signal) });
   const previousDispose = deps.dispose;
   return Object.assign(deps, {
     dispose: async (): Promise<void> => {

@@ -10,18 +10,18 @@ describe("global native priority scheme configuration", () => {
   it("preserves the native schemes/total envelope and requests only published page coordinates", async () => {
     const request = requestFor({ schemes: [SCHEME], startAt: 2, maxResults: 1, total: 4 });
     const result = await executeJiraPrioritySchemeRead("jira.priority-schemes", { startAt: 2, maxResults: 1 }, request);
-    expect(result.data).toEqual({ outcome: "succeeded", items: [{ ...SCHEME, id: "7" }], startAt: 2, total: 4, nextStartAt: 3 });
+    expect(result.data).toEqual({ outcome: "succeeded", items: [{ ...SCHEME, id: "7", reviewSnapshotAvailable: true, reviewSnapshot: { ...SCHEME, id: "7" } }], startAt: 2, total: 4, nextStartAt: 3 });
     expect(request).toHaveBeenCalledExactlyOnceWith("priorityschemes?startAt=2&maxResults=1", "GET", undefined, "json");
   });
   it("reads one exact scheme without expanding project associations", async () => {
     const request = requestFor({ ...SCHEME, projectKeys: ["OTHER"], self: "https://untrusted.invalid/scheme" });
     const result = await executeJiraPrioritySchemeRead("jira.priority-scheme", { schemeId: "7" }, request);
-    expect(result.data).toEqual({ outcome: "succeeded", ...SCHEME, id: "7" });
+    expect(result.data).toEqual({ outcome: "succeeded", ...SCHEME, id: "7", reviewSnapshotAvailable: true, reviewSnapshot: { ...SCHEME, id: "7" } });
     expect(request).toHaveBeenCalledExactlyOnceWith("priorityschemes/7", "GET", undefined, "json");
   });
   it("preserves unknown defaults/options rather than empty or false values", async () => {
     const result = await executeJiraPrioritySchemeRead("jira.priority-scheme", { schemeId: "7" }, requestFor({ id: 7, name: "Delivery", defaultScheme: null, optionIds: null }));
-    expect(result.data).toEqual({ outcome: "succeeded", id: "7", name: "Delivery" });
+    expect(result.data).toEqual({ outcome: "succeeded", id: "7", name: "Delivery", reviewSnapshotAvailable: false });
   });
   it("retains a native empty terminal page", async () => {
     const result = await executeJiraPrioritySchemeRead("jira.priority-schemes", {}, requestFor({ schemes: [], startAt: 0, maxResults: 25, total: 0 }));

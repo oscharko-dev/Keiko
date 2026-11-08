@@ -53,6 +53,54 @@ export const JIRA_SPRINT_LIFECYCLE_MUTATIONS = Object.freeze([
 ] as const);
 export type JiraSprintLifecycleMutation = (typeof JIRA_SPRINT_LIFECYCLE_MUTATIONS)[number];
 
+export const JIRA_OPTION_SCHEME_MUTATIONS = Object.freeze([
+  "jira.create-issue-type-scheme",
+  "jira.update-issue-type-scheme",
+  "jira.delete-issue-type-scheme",
+  "jira.add-issue-type-scheme-projects",
+  "jira.set-issue-type-scheme-projects",
+  "jira.clear-issue-type-scheme-projects",
+  "jira.remove-issue-type-scheme-project",
+  "jira.create-priority-scheme",
+  "jira.update-priority-scheme",
+  "jira.delete-priority-scheme",
+] as const);
+export type JiraOptionSchemeMutation = (typeof JIRA_OPTION_SCHEME_MUTATIONS)[number];
+export const JIRA_WORKFLOW_SCHEME_MUTATIONS = Object.freeze([
+  "jira.create-workflow-scheme",
+  "jira.update-workflow-scheme",
+  "jira.delete-workflow-scheme",
+  "jira.create-workflow-scheme-draft",
+  "jira.update-workflow-scheme-draft",
+  "jira.delete-workflow-scheme-draft",
+  "jira.set-workflow-scheme-default",
+  "jira.delete-workflow-scheme-default",
+  "jira.set-workflow-scheme-draft-default",
+  "jira.delete-workflow-scheme-draft-default",
+  "jira.set-workflow-scheme-issue-type",
+  "jira.delete-workflow-scheme-issue-type",
+  "jira.set-workflow-scheme-draft-issue-type",
+  "jira.delete-workflow-scheme-draft-issue-type",
+  "jira.set-workflow-scheme-workflow",
+  "jira.delete-workflow-scheme-workflow",
+  "jira.set-workflow-scheme-draft-workflow",
+  "jira.delete-workflow-scheme-draft-workflow",
+] as const);
+export type JiraWorkflowSchemeMutation = (typeof JIRA_WORKFLOW_SCHEME_MUTATIONS)[number];
+export const JIRA_INSTANCE_SETTING_MUTATIONS = Object.freeze([
+  "jira.set-application-property",
+  "jira.set-system-columns",
+  "jira.set-instance-base-url",
+  "jira.set-read-only-mode",
+] as const);
+export type JiraInstanceSettingMutation = (typeof JIRA_INSTANCE_SETTING_MUTATIONS)[number];
+export const JIRA_EMAIL_TEMPLATE_MUTATIONS = Object.freeze([
+  "jira.upload-email-template-pack",
+  "jira.apply-email-template-pack",
+  "jira.revert-email-template-pack",
+] as const);
+export type JiraEmailTemplateMutation = (typeof JIRA_EMAIL_TEMPLATE_MUTATIONS)[number];
+
 export const JIRA_PERMISSION_SCHEME_MUTATIONS = Object.freeze([
   "jira.create-permission-scheme", "jira.update-permission-scheme", "jira.delete-permission-scheme",
   "jira.add-permission-grant", "jira.delete-permission-grant", "jira.set-permission-scheme-attribute",
@@ -81,6 +129,10 @@ export type JiraProjectCategoryMutation = (typeof JIRA_PROJECT_CATEGORY_MUTATION
 
 /** Remote effects remain separate from the enclosing MCP/catalog terminal status. */
 export const JIRA_MUTATION_OPERATIONS = [
+  ...JIRA_OPTION_SCHEME_MUTATIONS,
+  ...JIRA_WORKFLOW_SCHEME_MUTATIONS,
+  ...JIRA_INSTANCE_SETTING_MUTATIONS,
+  ...JIRA_EMAIL_TEMPLATE_MUTATIONS,
   ...JIRA_PERMISSION_SCHEME_MUTATIONS,
   ...JIRA_ROLE_MUTATIONS,
   ...JIRA_AGILE_PLANNING_MUTATIONS,
@@ -249,6 +301,22 @@ export type JiraMutationResultState = (typeof JIRA_MUTATION_RESULT_STATES)[numbe
 /** Validated Jira identities and closed state facts; never remote bodies or headers.
  * Monitoring booleans on unknown/unconfirmed writes are requested targets, not success evidence. */
 export interface JiraMutationReceipt {
+  readonly projectIds?: readonly string[];
+  readonly projectKeys?: readonly string[];
+  readonly associationChange?: "add" | "replace" | "clear" | "remove";
+  readonly draftSchemeId?: string;
+  readonly workflowSchemeScope?: "scheme" | "draft";
+  readonly workflowName?: string;
+  readonly mappingPresent?: boolean;
+  readonly valueDigest?: string;
+  readonly columnIds?: readonly string[];
+  readonly baseUrlDigest?: string;
+  readonly readOnlyEnabled?: boolean;
+  readonly emailTemplateAction?: "upload" | "apply" | "revert";
+  readonly uploadSha256?: string;
+  readonly uploadBytes?: number;
+  readonly priorManifestSha256?: string;
+  readonly observedManifestSha256?: string;
   readonly roleId?: string;
   readonly rolePresent?: boolean;
   readonly swapRoleId?: string;

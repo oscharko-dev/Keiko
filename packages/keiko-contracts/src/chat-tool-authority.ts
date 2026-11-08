@@ -484,7 +484,8 @@ function validateWriteApprovalKeys(
   if (attached) {
     if (!isJiraAttachmentPreview(value.attachment))
       errors.push("chatWriteApproval.attachment is invalid");
-    if (value.operation !== "jira.attach") errors.push("chatWriteApproval.operation is invalid");
+    if (value.operation !== "jira.attach" && value.operation !== "jira.upload-email-template-pack")
+      errors.push("chatWriteApproval.operation is invalid");
   }
 }
 export function validateChatToolWriteApprovalView(

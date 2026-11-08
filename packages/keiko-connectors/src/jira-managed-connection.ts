@@ -2,6 +2,7 @@ import type { AtlassianConnectorDeployment } from "@oscharko-dev/keiko-contracts
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import type { JiraIssueTemplateSource } from "./jira-managed-template-gate.js";
 import type { JiraAttachmentSource } from "./jira-attachments.js";
+import type { JiraEmailTemplatePorts } from "./jira-email-template-values.js";
 
 /** Resolved by the composing owner, never from model arguments. */
 export interface JiraManagedConnection {
@@ -23,4 +24,9 @@ export interface JiraManagedConnection {
   }) => void;
   /** The only way `jira.attach` obtains bytes: a source the composing owner already governs. */
   readonly attachmentSource?: JiraAttachmentSource;
+  /** Private archive admission. `check` is the executor's phase, never a tool argument. */
+  readonly emailTemplates?: {
+    readonly inspect: JiraEmailTemplatePorts["inspect"];
+    readonly sourceFor?: (check: boolean) => JiraAttachmentSource;
+  };
 }

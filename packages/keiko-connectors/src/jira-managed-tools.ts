@@ -2,6 +2,8 @@ import { executeJiraSearchPostRead, isJiraSearchPostRead } from "./jira-managed-
 import { executeJiraWorklogsByIdRead, isJiraWorklogsByIdRead } from "./jira-managed-worklogs-by-id.js";
 import { executeJiraAnonymizationRead, isJiraAnonymizationRead } from "./jira-managed-anonymization-reads.js";
 import { executeJiraSessionRead, isJiraSessionRead } from "./jira-managed-session-read.js";
+import { executeJiraEmailTemplateRead } from "./jira-managed-email-templates.js";
+import { jiraManagedEmailTemplatePorts } from "./jira-managed-email-template-ports.js";
 import {
   executeJiraIssueTypeSchemeRead,
   isJiraIssueTypeSchemeRead,
@@ -363,6 +365,7 @@ async function read<Context extends ManagedMcpInvocationContext>(
 }
 
 type NativeDetailRead =
+  | "jira.email-template-pack"
   | "jira.search-post"
   | "jira.worklogs-by-id"
   | "jira.current-session"
@@ -403,6 +406,7 @@ type NativeDetailRead =
   | Parameters<typeof executeJiraFieldDirectoryRead>[0]
   | Parameters<typeof executeJiraJqlMetadataRead>[0];
 function isNativeDetailRead(name: string): name is NativeDetailRead {
+  if (name === "jira.email-template-pack") return true;
   return [
     isJiraSearchPostRead, isJiraWorklogsByIdRead, isJiraAnonymizationRead, isJiraSessionRead,
     isJiraRemoteVersionLinkRead,
@@ -522,6 +526,10 @@ function selectedObservationRead(
   connection: JiraManagedConnection,
   request: ReturnType<typeof requestFor>,
 ): Promise<ManagedMcpToolResult> | undefined {
+  if (name === "jira.email-template-pack") {
+    const ports = jiraManagedEmailTemplatePorts(connection, context, request, true);
+    return ports === undefined ? Promise.resolve(failure("unavailable")) : executeJiraEmailTemplateRead(args, ports);
+  }
   if (isJiraSearchPostRead(name)) return executeJiraSearchPostRead(args, request, connection.baseUrl);
   if (isJiraWorklogsByIdRead(name)) return executeJiraWorklogsByIdRead(args, request);
   if (isJiraAnonymizationRead(name)) return executeJiraAnonymizationRead(name, args, request);

@@ -75,11 +75,61 @@ describe("server-owned Jira operation contracts", () => {
       kind: "native", identity, permissionPolicy, effects: ["remote-write"],
     });
   });
+  it.each([
+    { tool: "jira.create-issue-type-scheme", identity: "POST /rest/api/2/issuetypescheme", permissionPolicy: "instance-admin-issue-type-scheme-config-and-readback" },
+    { tool: "jira.update-issue-type-scheme", identity: "PUT /rest/api/2/issuetypescheme/{schemeId}", permissionPolicy: "instance-admin-issue-type-scheme-config-and-readback" },
+    { tool: "jira.delete-issue-type-scheme", identity: "DELETE /rest/api/2/issuetypescheme/{schemeId}", permissionPolicy: "instance-admin-issue-type-scheme-delete-unconfirmed" },
+    { tool: "jira.add-issue-type-scheme-projects", identity: "POST /rest/api/2/issuetypescheme/{schemeId}/associations", permissionPolicy: "instance-admin-issue-type-scheme-projects-unconfirmed" },
+    { tool: "jira.set-issue-type-scheme-projects", identity: "PUT /rest/api/2/issuetypescheme/{schemeId}/associations", permissionPolicy: "instance-admin-issue-type-scheme-projects-unconfirmed" },
+    { tool: "jira.clear-issue-type-scheme-projects", identity: "DELETE /rest/api/2/issuetypescheme/{schemeId}/associations", permissionPolicy: "instance-admin-issue-type-scheme-projects-unconfirmed" },
+    { tool: "jira.remove-issue-type-scheme-project", identity: "DELETE /rest/api/2/issuetypescheme/{schemeId}/associations/{projIdOrKey}", permissionPolicy: "instance-admin-issue-type-scheme-projects-unconfirmed" },
+    { tool: "jira.create-priority-scheme", identity: "POST /rest/api/2/priorityschemes", permissionPolicy: "instance-admin-priority-scheme-config-and-readback" },
+    { tool: "jira.update-priority-scheme", identity: "PUT /rest/api/2/priorityschemes/{schemeId}", permissionPolicy: "instance-admin-priority-scheme-config-and-readback" },
+    { tool: "jira.delete-priority-scheme", identity: "DELETE /rest/api/2/priorityschemes/{schemeId}", permissionPolicy: "instance-admin-priority-scheme-delete-unconfirmed" },
+    { tool: "jira.create-workflow-scheme", identity: "POST /rest/api/2/workflowscheme", permissionPolicy: "instance-admin-workflow-scheme-config-and-readback" },
+    { tool: "jira.update-workflow-scheme", identity: "PUT /rest/api/2/workflowscheme/{id}", permissionPolicy: "instance-admin-workflow-scheme-update-and-scope-uncertainty" },
+    { tool: "jira.delete-workflow-scheme", identity: "DELETE /rest/api/2/workflowscheme/{id}", permissionPolicy: "instance-admin-workflow-scheme-delete-unconfirmed" },
+    { tool: "jira.create-workflow-scheme-draft", identity: "POST /rest/api/2/workflowscheme/{id}/createdraft", permissionPolicy: "instance-admin-workflow-draft-config-and-readback" },
+    { tool: "jira.update-workflow-scheme-draft", identity: "PUT /rest/api/2/workflowscheme/{id}/draft", permissionPolicy: "instance-admin-workflow-draft-config-and-readback" },
+    { tool: "jira.delete-workflow-scheme-draft", identity: "DELETE /rest/api/2/workflowscheme/{id}/draft", permissionPolicy: "instance-admin-workflow-draft-delete-and-parent-readback" },
+    { tool: "jira.set-workflow-scheme-default", identity: "PUT /rest/api/2/workflowscheme/{id}/default", permissionPolicy: "instance-admin-workflow-scheme-mapping-unconfirmed" },
+    { tool: "jira.delete-workflow-scheme-default", identity: "DELETE /rest/api/2/workflowscheme/{id}/default", permissionPolicy: "instance-admin-workflow-scheme-mapping-unconfirmed" },
+    { tool: "jira.set-workflow-scheme-draft-default", identity: "PUT /rest/api/2/workflowscheme/{id}/draft/default", permissionPolicy: "instance-admin-workflow-draft-config-and-readback" },
+    { tool: "jira.delete-workflow-scheme-draft-default", identity: "DELETE /rest/api/2/workflowscheme/{id}/draft/default", permissionPolicy: "instance-admin-workflow-draft-config-and-readback" },
+    { tool: "jira.set-workflow-scheme-issue-type", identity: "PUT /rest/api/2/workflowscheme/{id}/issuetype/{issueType}", permissionPolicy: "instance-admin-workflow-scheme-mapping-unconfirmed" },
+    { tool: "jira.delete-workflow-scheme-issue-type", identity: "DELETE /rest/api/2/workflowscheme/{id}/issuetype/{issueType}", permissionPolicy: "instance-admin-workflow-scheme-mapping-unconfirmed" },
+    { tool: "jira.set-workflow-scheme-draft-issue-type", identity: "PUT /rest/api/2/workflowscheme/{id}/draft/issuetype/{issueType}", permissionPolicy: "instance-admin-workflow-draft-config-and-readback" },
+    { tool: "jira.delete-workflow-scheme-draft-issue-type", identity: "DELETE /rest/api/2/workflowscheme/{id}/draft/issuetype/{issueType}", permissionPolicy: "instance-admin-workflow-draft-config-and-readback" },
+    { tool: "jira.set-workflow-scheme-workflow", identity: "PUT /rest/api/2/workflowscheme/{id}/workflow", permissionPolicy: "instance-admin-workflow-scheme-mapping-unconfirmed" },
+    { tool: "jira.delete-workflow-scheme-workflow", identity: "DELETE /rest/api/2/workflowscheme/{id}/workflow", permissionPolicy: "instance-admin-workflow-scheme-mapping-unconfirmed" },
+    { tool: "jira.set-workflow-scheme-draft-workflow", identity: "PUT /rest/api/2/workflowscheme/{id}/draft/workflow", permissionPolicy: "instance-admin-workflow-draft-config-and-readback" },
+    { tool: "jira.delete-workflow-scheme-draft-workflow", identity: "DELETE /rest/api/2/workflowscheme/{id}/draft/workflow", permissionPolicy: "instance-admin-workflow-draft-config-and-readback" },
+    { tool: "jira.set-application-property", identity: "PUT /rest/api/2/application-properties/{id}", permissionPolicy: "instance-admin-application-property-and-readback" },
+    { tool: "jira.set-system-columns", identity: "PUT /rest/api/2/settings/columns", permissionPolicy: "instance-admin-system-columns-and-readback" },
+    { tool: "jira.set-instance-base-url", identity: "PUT /rest/api/2/settings/baseUrl", permissionPolicy: "instance-admin-base-url-config-unconfirmed" },
+    { tool: "jira.set-read-only-mode", identity: "PUT /rest/api/2/readonly-mode", permissionPolicy: "instance-admin-read-only-config-and-readback" },
+    { tool: "jira.upload-email-template-pack", identity: "POST /rest/api/2/email-templates", permissionPolicy: "instance-admin-email-template-upload-unconfirmed" },
+    { tool: "jira.apply-email-template-pack", identity: "POST /rest/api/2/email-templates/apply", permissionPolicy: "instance-admin-email-template-apply-unconfirmed" },
+    { tool: "jira.revert-email-template-pack", identity: "POST /rest/api/2/email-templates/revert", permissionPolicy: "instance-admin-email-template-revert-unconfirmed" },
+  ] as const)("binds schema/runtime/mail $tool to its independent native identity", ({ tool, identity, permissionPolicy }) => {
+    expect(jiraOperationForTool(tool)?.definition).toMatchObject({
+      kind: "native", identity, permissionPolicy, effects: ["remote-write"],
+    });
+  });
+  it("keeps native template export under explicit administration read authority", () => {
+    const contract = jiraOperationForTool("jira.email-template-pack");
+    expect(jiraRequiredConnectorScope("jira.email-template-pack")).toBe("issue-tracker.admin");
+    expect(contract?.declaration.risk).toBe("read");
+    expect(contract?.definition).toMatchObject({
+      identity: "GET /rest/api/2/email-templates", effects: ["remote-read"],
+      permissionPolicy: "instance-admin-email-template-archive-observation",
+    });
+  });
   it("binds every administration write to an explicit instance-admin permission contract", () => {
     const admin = jiraOperationContracts().filter((entry) =>
       jiraRequiredConnectorScope(entry.definition.tool) === "issue-tracker.admin" &&
       entry.definition.effects.includes("remote-write"));
-    expect(admin).toHaveLength(38);
+    expect(admin).toHaveLength(73);
     for (const contract of admin) {
       expect(contract.definition.permissionPolicy).toMatch(/^instance-admin-/);
       expect(contract.definition.effects).toContain("remote-write");
@@ -88,7 +138,7 @@ describe("server-owned Jira operation contracts", () => {
     expect(jiraOperationForTool("jira.set-issue-property")?.definition.permissionPolicy)
       .toBe("entity-property-and-readback");
   });
-  it("keeps three explicit admin observations read-only and two POST observations outside mutation authority", () => {
+  it("keeps admin diagnostic observations read-only and two POST observations outside mutation authority", () => {
     for (const tool of ["jira.anonymization-validation", "jira.anonymization-rerun-validation", "jira.anonymization-progress"] as const) {
       const contract = jiraOperationForTool(tool);
       expect(jiraRequiredConnectorScope(tool)).toBe("issue-tracker.admin");
@@ -130,7 +180,7 @@ describe("server-owned Jira operation contracts", () => {
   });
   it("keeps executable native operations distinct from local compositions", () => {
     const entries = jiraOperationContracts();
-    expect(entries.filter((entry) => entry.definition.kind === "native")).toHaveLength(323);
+    expect(entries.filter((entry) => entry.definition.kind === "native")).toHaveLength(359);
     expect(entries.filter((entry) => entry.definition.kind === "composite")).toHaveLength(3);
     expect(jiraOperationForTool("jira.discover")).toBeUndefined();
     expect(jiraOperationForTool("DELETE /rest/api/2/project")).toBeUndefined();

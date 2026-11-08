@@ -9,10 +9,17 @@ import { VERSION_LINK_MUTATION_CASES } from "../../../../tests/support/jira-vers
 import { PROJECT_CATEGORY_FIXTURE_CASES } from "../../../../tests/support/jira-project-category-fixture.js";
 import { ROLE_MUTATION_FIXTURE_CASES } from "../../../../tests/support/jira-role-mutation-fixture.js";
 import { PERMISSION_SCHEME_MUTATION_CASES } from "../../../../tests/support/jira-permission-scheme-mutation-fixture.js";
+import { OPTION_SCHEME_MUTATION_CASES } from "../../../../tests/support/jira-option-scheme-fixture.js";
+import { WORKFLOW_SCHEME_MUTATION_FIXTURE_CASES } from "../../../../tests/support/jira-workflow-scheme-mutation-fixture.js";
+import { INSTANCE_SETTING_FIXTURE_CASES } from "../../../../tests/support/jira-instance-setting-mutation-fixture.js";
 import {
   JIRA_FIELD_VALIDATION_FAILURES,
   JIRA_MUTATION_OPERATIONS,
   JIRA_ENTITY_PROPERTY_MUTATIONS,
+  JIRA_OPTION_SCHEME_MUTATIONS,
+  JIRA_WORKFLOW_SCHEME_MUTATIONS,
+  JIRA_INSTANCE_SETTING_MUTATIONS,
+  JIRA_EMAIL_TEMPLATE_MUTATIONS,
   JIRA_TEMPLATE_RULE_IDS,
   parseJiraIssueTemplate,
   type JiraMutationAttempt,
@@ -211,6 +218,16 @@ describe("the model-facing refusal", () => {
       refusedCount: 1, validations: ["invalid-field"], completeness: "complete", loss: "none",
     })));
     expect(sink.lines().join()).not.toMatch(/actorUserKeys|actorGroupNames|principals|roleId|schemeId|attributeKey|synthetic-actor/u);
+  });
+  it("uses the same body-free field refusal owner for scheme, instance and email changes", () => {
+    const sink = logs();
+    const operations = [...JIRA_OPTION_SCHEME_MUTATIONS, ...JIRA_WORKFLOW_SCHEME_MUTATIONS, ...JIRA_INSTANCE_SETTING_MUTATIONS, ...JIRA_EMAIL_TEMPLATE_MUTATIONS];
+    for (const operation of operations) recordJiraFieldRefusal("configuration-refusal", { operation, refusedCount: 1, validations: ["invalid-field"] });
+    expect(sink.events.map((event) => event.extra)).toEqual(operations.map((operation) => ({
+      operation: "jira-write", operationDigest: createHash("sha256").update(operation).digest("hex"),
+      refusedCount: 1, validations: ["invalid-field"], completeness: "complete", loss: "none",
+    })));
+    expect(sink.lines().join()).not.toMatch(/schemeId|workflowName|projectIds|columnIds|baseUrl|uploadSha256|manifest|jira\.option|synthetic-actor/u);
   });
 });
 
@@ -416,7 +433,17 @@ describe("the template marker", () => {
 });
 
 describe("the dry run before approval", () => {
+  it.each([...JIRA_OPTION_SCHEME_MUTATIONS, ...JIRA_WORKFLOW_SCHEME_MUTATIONS, ...JIRA_INSTANCE_SETTING_MUTATIONS, ...JIRA_EMAIL_TEMPLATE_MUTATIONS])(
+    "refuses incomplete reviewed %s inputs before HTTP or approval", async (operation) => {
+      const f = preflight(TEMPLATE, {}, operation);
+      expect(await f.run()).toMatchObject({ outcome: "rejected", reason: "field-validation" });
+      expect(f.http).not.toHaveBeenCalled();
+    },
+  );
   it.each([
+    ...OPTION_SCHEME_MUTATION_CASES.map(({ tool, args }) => ({ tool, args })),
+    ...WORKFLOW_SCHEME_MUTATION_FIXTURE_CASES.map(({ name, args }) => ({ tool: name, args })),
+    ...INSTANCE_SETTING_FIXTURE_CASES.map(({ name, args }) => ({ tool: name, args })),
     ...SCREEN_CONFIGURATION_FIXTURE_CASES.map(({ tool, args }) => ({ tool, args })),
     ...BOARD_CONFIGURATION_FIXTURE_CASES.map(({ tool, args }) => ({ tool, args })),
     ...SPRINT_LIFECYCLE_FIXTURE_CASES.map(({ name, args }) => ({ tool: name, args })),

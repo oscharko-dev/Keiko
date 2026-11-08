@@ -35,6 +35,7 @@ it("projects server observations without following URLs or changing verification
     outcome: "succeeded",
     ...SERVER,
     buildNumber: "11030013",
+    configuredBaseUrlState: "observed", configuredBaseUrl: "https://untrusted.invalid/other",
   });
   expect(port).toHaveBeenCalledExactlyOnceWith("serverInfo", "GET", undefined, "json");
 });
@@ -43,13 +44,27 @@ it("retains exact string build identifiers above JavaScript's safe integer range
   expect((await executeJiraInstanceRead("jira.server-info", {}, port)).data).toEqual({
     outcome: "succeeded", version: "11.4-SNAPSHOT",
     buildNumber: "9007199254740993", databaseBuildNumber: "0",
+    configuredBaseUrlState: "unavailable",
   });
 });
 it("preserves version observations without claiming compatibility or health", async () => {
   const port = request({ version: "11.4-SNAPSHOT", versionNumbers: [11, 4, 0] });
   expect((await executeJiraInstanceRead("jira.server-info", {}, port)).data).toEqual({
     outcome: "succeeded", version: "11.4-SNAPSHOT", versionNumbers: [11, 4, 0],
+    configuredBaseUrlState: "unavailable",
   });
+});
+it.each([undefined, null, "", "not a URL", "https://user:password@remote.invalid", "https://remote.invalid?", "https://remote.invalid#", "https://remote.invalid\\path", "https://remote.invalid/\ud800"])("withholds unsafe/unavailable configured base metadata %j without routing to it", async (baseUrl) => {
+  const port = request({ ...SERVER, baseUrl });
+  const result = await executeJiraInstanceRead("jira.server-info", {}, port);
+  expect(result.data).toMatchObject({ outcome: "succeeded", configuredBaseUrlState: "unavailable" });
+  expect(result.data).not.toHaveProperty("configuredBaseUrl");
+  expect(port).toHaveBeenCalledExactlyOnceWith("serverInfo", "GET", undefined, "json");
+});
+it("retains a native HTTP configured base only as a comparison fact", async () => {
+  const port = request({ ...SERVER, baseUrl: "http://proxy.synthetic.invalid/jira" });
+  expect((await executeJiraInstanceRead("jira.server-info", {}, port)).data).toMatchObject({ configuredBaseUrlState: "observed", configuredBaseUrl: "http://proxy.synthetic.invalid/jira" });
+  expect(port).toHaveBeenCalledExactlyOnceWith("serverInfo", "GET", undefined, "json");
 });
 it.each([
   { version: "" },

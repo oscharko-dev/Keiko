@@ -1,3 +1,5 @@
+import { expectedSchemeSettingOutcome, SCHEME_SETTING_EXPECTED_OUTCOMES } from "../../../../tests/support/jira-managed-scheme-setting-scenarios.js";
+import { emailTemplateFixtureAdmission } from "../../../../tests/support/jira-email-template-transport-fixture.js";
 import { expectedPermissionRoleOutcome, PERMISSION_ROLE_EXPECTED_OUTCOMES } from "../../../../tests/support/jira-managed-permission-role-scenarios.js";
 import { DatabaseSync } from "node:sqlite";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -202,9 +204,15 @@ async function fixtureReadResult(
   state: MutationRemoteState,
   writes: number,
   lifecycle: ReturnType<typeof lifecycleRemoteFixture>,
+  operation: JiraMutationOperation | undefined,
 ): Promise<ReturnType<typeof fixtureRead>> {
   if (mode === "readback-denied" && writes > 0) return response({}, 403);
   const path = new URL(url).pathname;
+  if (operation === "jira.set-instance-base-url" && path.endsWith("/serverInfo")) {
+    const observed = await lifecycle.read(url);
+    if (observed === undefined) throw new TypeError("Missing independent configured URL observation");
+    return observed;
+  }
   return verificationProbe(path) ?? await lifecycle.read(url) ?? nativeRead(path, state) ?? fixtureRead(path, state);
 }
 async function assertNativeRequestHeaders(request: Request, path: string): Promise<void> {
@@ -212,6 +220,11 @@ async function assertNativeRequestHeaders(request: Request, path: string): Promi
   const experimental = request.method === "PUT" &&
     (path === "/context/rest/agile/1.0/sprint/unmap" || path === "/context/rest/agile/1.0/sprint/unmap-all");
   expect(request.headers.get("x-experimentalapi")).toBe(experimental ? "true" : null);
+  if (path === "/context/rest/api/2/email-templates") {
+    expect(request.headers.get("x-atlassian-token")).toBeNull();
+    if (request.method === "GET") expect(request.headers.get("accept")).toBe("application/zip");
+    else expect(request.headers.get("content-type")).toBe("application/zip");
+  }
   const attribute = request.method === "PUT" &&
     path === "/context/rest/api/2/permissionscheme/7/attribute/ADMINISTER_PROJECTS.extended.enabled";
   if (!attribute) {
@@ -249,14 +262,14 @@ function remote(
       if (refusal !== undefined) return refusal;
       const result =
         request.method === "GET"
-          ? await fixtureReadResult(mode, request.url, state, writes, lifecycle)
+          ? await fixtureReadResult(mode, request.url, state, writes, lifecycle, initialOperation)
           : await fixtureWriteResult(request, path, state, lifecycle);
       if (request.method !== "GET" && mode === "lost-response")
         throw new TypeError("Synthetic connection loss after commit");
       if (result.kind !== "response") throw new Error("Expected synthetic HTTP response");
-      return new Response(result.status === 204 ? null : result.bodyText, {
+      return new Response(result.status === 204 ? null : result.archiveBytes ?? result.bodyText, {
         status: result.status,
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": result.archiveBytes === undefined ? "application/json" : "application/zip" },
       });
     },
   };
@@ -430,6 +443,7 @@ async function fixture(
       http: vi.fn(() => {
         throw new Error("Mutation must use the journal-owned HTTP port");
       }),
+      emailTemplates: emailTemplateFixtureAdmission(),
       attachmentSource: (): ReturnType<JiraAttachmentSource> => {
         const sha256 = createHash("sha256").update(ATTACHED).digest("hex");
         return Promise.resolve({
@@ -541,7 +555,7 @@ it.each(SINGLE_MUTATIONS)(
   "executes %s through the real gateway/binder/SDK and durable journal",
   async (operation) => {
     const f = await fixture("confirmed", undefined, operation, reviewedAuthority(operation));
-    const expectedOutcome = expectedPermissionRoleOutcome(operation) ?? expectedPlanningOutcome(operation) ?? expectedConfigurationOutcome(operation) ?? expectedLifecycleOutcome(operation) ?? expectedSavedConfigurationOutcome(operation) ?? "succeeded";
+    const expectedOutcome = expectedSchemeSettingOutcome(operation) ?? expectedPermissionRoleOutcome(operation) ?? expectedPlanningOutcome(operation) ?? expectedConfigurationOutcome(operation) ?? expectedLifecycleOutcome(operation) ?? expectedSavedConfigurationOutcome(operation) ?? "succeeded";
     expect(await f.invoke(operation)).toMatchObject({
       kind: "settled",
       result: {
@@ -905,7 +919,16 @@ it("keeps an independent complete argument/state/receipt case for every register
   expect(Object.keys(ARGUMENTS).sort()).toEqual([...JIRA_MUTATION_OPERATIONS].sort());
   expect(Object.keys(REMOTE_STATE).sort()).toEqual([...SINGLE_MUTATIONS].sort());
   expect(Object.keys(SUCCESS_RECEIPTS).sort()).toEqual([...SINGLE_MUTATIONS].sort());
-  expect(ADMIN_MUTATIONS).toHaveLength(38);
+  expect(ADMIN_MUTATIONS).toHaveLength(73);
+  expect(Object.keys(SCHEME_SETTING_EXPECTED_OUTCOMES)).toHaveLength(35);
+  expect(Object.entries(SCHEME_SETTING_EXPECTED_OUTCOMES).filter(([, outcome]) => outcome === "succeeded-unconfirmed").map(([name]) => name).sort()).toEqual([
+    "jira.add-issue-type-scheme-projects", "jira.apply-email-template-pack", "jira.clear-issue-type-scheme-projects",
+    "jira.delete-issue-type-scheme", "jira.delete-priority-scheme", "jira.delete-workflow-scheme",
+    "jira.delete-workflow-scheme-default", "jira.delete-workflow-scheme-issue-type", "jira.delete-workflow-scheme-workflow",
+    "jira.remove-issue-type-scheme-project", "jira.revert-email-template-pack", "jira.set-instance-base-url",
+    "jira.set-issue-type-scheme-projects", "jira.set-workflow-scheme-default", "jira.set-workflow-scheme-issue-type",
+    "jira.set-workflow-scheme-workflow", "jira.upload-email-template-pack",
+  ]);
   expect(Object.entries(PERMISSION_ROLE_EXPECTED_OUTCOMES).filter(([, outcome]) => outcome === "succeeded-unconfirmed").map(([name]) => name).sort())
     .toEqual(["jira.add-project-role-actors", "jira.add-role-default-actors", "jira.delete-permission-scheme", "jira.delete-project-role-actor", "jira.delete-role", "jira.delete-role-default-actor", "jira.set-project-role-actors"]);
   expect(Object.entries(PLANNING_EXPECTED_OUTCOMES).filter(([, outcome]) => outcome === "succeeded-unconfirmed").map(([name]) => name).sort())

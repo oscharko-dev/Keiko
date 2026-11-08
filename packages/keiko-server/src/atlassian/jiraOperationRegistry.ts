@@ -19,6 +19,25 @@ type CompositeTool = "jira.report" | "jira.draft-stage" | "jira.draft";
 type NativeTool = Exclude<JiraOperationTool, CompositeTool>;
 type JiraOperationEffect = "remote-read" | "remote-write" | "local-report" | "local-draft";
 type JiraPermissionPolicy =
+  | "instance-admin-issue-type-scheme-config-and-readback"
+  | "instance-admin-issue-type-scheme-delete-unconfirmed"
+  | "instance-admin-issue-type-scheme-projects-unconfirmed"
+  | "instance-admin-priority-scheme-config-and-readback"
+  | "instance-admin-priority-scheme-delete-unconfirmed"
+  | "instance-admin-workflow-scheme-config-and-readback"
+  | "instance-admin-workflow-scheme-update-and-scope-uncertainty"
+  | "instance-admin-workflow-scheme-delete-unconfirmed"
+  | "instance-admin-workflow-draft-config-and-readback"
+  | "instance-admin-workflow-draft-delete-and-parent-readback"
+  | "instance-admin-workflow-scheme-mapping-unconfirmed"
+  | "instance-admin-application-property-and-readback"
+  | "instance-admin-system-columns-and-readback"
+  | "instance-admin-base-url-config-unconfirmed"
+  | "instance-admin-read-only-config-and-readback"
+  | "instance-admin-email-template-upload-unconfirmed"
+  | "instance-admin-email-template-apply-unconfirmed"
+  | "instance-admin-email-template-revert-unconfirmed"
+  | "instance-admin-email-template-archive-observation"
   | "instance-admin-role-create-and-readback"
   | "instance-admin-role-update-and-readback"
   | "instance-admin-role-replace-and-readback"
@@ -227,6 +246,114 @@ function writes<const K extends NativeTool>(
   return result as NativeGroup<K>;
 }
 const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
+  ...writes("instance-admin-issue-type-scheme-config-and-readback", {
+    "jira.create-issue-type-scheme": ["POST", "/issuetypescheme"],
+  }),
+  ...writes("instance-admin-issue-type-scheme-config-and-readback", {
+    "jira.update-issue-type-scheme": ["PUT", "/issuetypescheme/{schemeId}"],
+  }),
+  ...writes("instance-admin-issue-type-scheme-delete-unconfirmed", {
+    "jira.delete-issue-type-scheme": ["DELETE", "/issuetypescheme/{schemeId}"],
+  }),
+  ...writes("instance-admin-issue-type-scheme-projects-unconfirmed", {
+    "jira.add-issue-type-scheme-projects": ["POST", "/issuetypescheme/{schemeId}/associations"],
+  }),
+  ...writes("instance-admin-issue-type-scheme-projects-unconfirmed", {
+    "jira.set-issue-type-scheme-projects": ["PUT", "/issuetypescheme/{schemeId}/associations"],
+  }),
+  ...writes("instance-admin-issue-type-scheme-projects-unconfirmed", {
+    "jira.clear-issue-type-scheme-projects": ["DELETE", "/issuetypescheme/{schemeId}/associations"],
+  }),
+  ...writes("instance-admin-issue-type-scheme-projects-unconfirmed", {
+    "jira.remove-issue-type-scheme-project": ["DELETE", "/issuetypescheme/{schemeId}/associations/{projIdOrKey}"],
+  }),
+  ...writes("instance-admin-priority-scheme-config-and-readback", {
+    "jira.create-priority-scheme": ["POST", "/priorityschemes"],
+  }),
+  ...writes("instance-admin-priority-scheme-config-and-readback", {
+    "jira.update-priority-scheme": ["PUT", "/priorityschemes/{schemeId}"],
+  }),
+  ...writes("instance-admin-priority-scheme-delete-unconfirmed", {
+    "jira.delete-priority-scheme": ["DELETE", "/priorityschemes/{schemeId}"],
+  }),
+  ...writes("instance-admin-workflow-scheme-config-and-readback", {
+    "jira.create-workflow-scheme": ["POST", "/workflowscheme"],
+  }),
+  ...writes("instance-admin-workflow-scheme-update-and-scope-uncertainty", {
+    "jira.update-workflow-scheme": ["PUT", "/workflowscheme/{id}"],
+  }),
+  ...writes("instance-admin-workflow-scheme-delete-unconfirmed", {
+    "jira.delete-workflow-scheme": ["DELETE", "/workflowscheme/{id}"],
+  }),
+  ...writes("instance-admin-workflow-draft-config-and-readback", {
+    "jira.create-workflow-scheme-draft": ["POST", "/workflowscheme/{id}/createdraft"],
+  }),
+  ...writes("instance-admin-workflow-draft-config-and-readback", {
+    "jira.update-workflow-scheme-draft": ["PUT", "/workflowscheme/{id}/draft"],
+  }),
+  ...writes("instance-admin-workflow-draft-delete-and-parent-readback", {
+    "jira.delete-workflow-scheme-draft": ["DELETE", "/workflowscheme/{id}/draft"],
+  }),
+  ...writes("instance-admin-workflow-scheme-mapping-unconfirmed", {
+    "jira.set-workflow-scheme-default": ["PUT", "/workflowscheme/{id}/default"],
+  }),
+  ...writes("instance-admin-workflow-scheme-mapping-unconfirmed", {
+    "jira.delete-workflow-scheme-default": ["DELETE", "/workflowscheme/{id}/default"],
+  }),
+  ...writes("instance-admin-workflow-draft-config-and-readback", {
+    "jira.set-workflow-scheme-draft-default": ["PUT", "/workflowscheme/{id}/draft/default"],
+  }),
+  ...writes("instance-admin-workflow-draft-config-and-readback", {
+    "jira.delete-workflow-scheme-draft-default": ["DELETE", "/workflowscheme/{id}/draft/default"],
+  }),
+  ...writes("instance-admin-workflow-scheme-mapping-unconfirmed", {
+    "jira.set-workflow-scheme-issue-type": ["PUT", "/workflowscheme/{id}/issuetype/{issueType}"],
+  }),
+  ...writes("instance-admin-workflow-scheme-mapping-unconfirmed", {
+    "jira.delete-workflow-scheme-issue-type": ["DELETE", "/workflowscheme/{id}/issuetype/{issueType}"],
+  }),
+  ...writes("instance-admin-workflow-draft-config-and-readback", {
+    "jira.set-workflow-scheme-draft-issue-type": ["PUT", "/workflowscheme/{id}/draft/issuetype/{issueType}"],
+  }),
+  ...writes("instance-admin-workflow-draft-config-and-readback", {
+    "jira.delete-workflow-scheme-draft-issue-type": ["DELETE", "/workflowscheme/{id}/draft/issuetype/{issueType}"],
+  }),
+  ...writes("instance-admin-workflow-scheme-mapping-unconfirmed", {
+    "jira.set-workflow-scheme-workflow": ["PUT", "/workflowscheme/{id}/workflow"],
+  }),
+  ...writes("instance-admin-workflow-scheme-mapping-unconfirmed", {
+    "jira.delete-workflow-scheme-workflow": ["DELETE", "/workflowscheme/{id}/workflow"],
+  }),
+  ...writes("instance-admin-workflow-draft-config-and-readback", {
+    "jira.set-workflow-scheme-draft-workflow": ["PUT", "/workflowscheme/{id}/draft/workflow"],
+  }),
+  ...writes("instance-admin-workflow-draft-config-and-readback", {
+    "jira.delete-workflow-scheme-draft-workflow": ["DELETE", "/workflowscheme/{id}/draft/workflow"],
+  }),
+  ...writes("instance-admin-application-property-and-readback", {
+    "jira.set-application-property": ["PUT", "/application-properties/{id}"],
+  }),
+  ...writes("instance-admin-system-columns-and-readback", {
+    "jira.set-system-columns": ["PUT", "/settings/columns"],
+  }),
+  ...writes("instance-admin-base-url-config-unconfirmed", {
+    "jira.set-instance-base-url": ["PUT", "/settings/baseUrl"],
+  }),
+  ...writes("instance-admin-read-only-config-and-readback", {
+    "jira.set-read-only-mode": ["PUT", "/readonly-mode"],
+  }),
+  ...writes("instance-admin-email-template-upload-unconfirmed", {
+    "jira.upload-email-template-pack": ["POST", "/email-templates"],
+  }),
+  ...writes("instance-admin-email-template-apply-unconfirmed", {
+    "jira.apply-email-template-pack": ["POST", "/email-templates/apply"],
+  }),
+  ...writes("instance-admin-email-template-revert-unconfirmed", {
+    "jira.revert-email-template-pack": ["POST", "/email-templates/revert"],
+  }),
+  ...reads("instance-admin-email-template-archive-observation", {
+    "jira.email-template-pack": "/email-templates",
+  }),
   ...writes("instance-admin-permission-scheme-create-and-readback", {
     "jira.create-permission-scheme": ["POST", "/permissionscheme"],
   }),

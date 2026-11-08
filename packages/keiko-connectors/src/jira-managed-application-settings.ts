@@ -32,12 +32,12 @@ const PAGE_ARGS = new Set(["startAt", "maxResults"]);
 const APPLICATION_ARGS = new Set(["permissionLevel", "startAt", "maxResults"]);
 // Exact APKeys / PreferenceKeys constants, not a caller-supplied whitelist or native type hint.
 // https://docs.atlassian.com/software/jira/docs/api/11.3.0/constant-values.html
-const APPLICATION_VALUE_KINDS: Readonly<Record<string, ValueKind>> = {
+export const JIRA_NONSECRET_APPLICATION_KINDS = Object.freeze({
   "jira.clone.prefix": "string",
   "jira.option.voting": "boolean",
   "jira.option.watching": "boolean",
   "jira.option.timetracking": "boolean",
-};
+} as const satisfies Readonly<Record<string, ValueKind>>);
 export const JIRA_NONSECRET_PREFERENCE_KINDS = Object.freeze({
   "jira.user.locale": "string",
   "jira.user.timezone": "string",
@@ -82,7 +82,7 @@ function selection(name: SettingsRead, args: CatalogJsonObject): Selection | und
   };
 }
 function valueKind(key: string, preference: boolean): ValueKind | undefined {
-  const kinds: Readonly<Record<string, ValueKind>> = preference ? JIRA_NONSECRET_PREFERENCE_KINDS : APPLICATION_VALUE_KINDS;
+  const kinds: Readonly<Record<string, ValueKind>> = preference ? JIRA_NONSECRET_PREFERENCE_KINDS : JIRA_NONSECRET_APPLICATION_KINDS;
   return Object.hasOwn(kinds, key) ? kinds[key] : undefined;
 }
 function integerValue(key: string, value: string): Projection {
@@ -112,6 +112,11 @@ export function projectJiraPreferenceValue(key: string, raw: unknown): Projectio
   return kind === undefined
     ? { item: { key, valueState: "withheld" } }
     : projectValue(key, raw, kind);
+}
+/** Exact nonsecret application keys share the existing native-string value semantics. */
+export function projectJiraApplicationValue(key: string, raw: unknown): Projection {
+  const kind = valueKind(key, false);
+  return kind === undefined ? { item: { key, valueState: "withheld" } } : projectValue(key, raw, kind);
 }
 function property(value: unknown): Projection {
   const raw = asRecord(value);

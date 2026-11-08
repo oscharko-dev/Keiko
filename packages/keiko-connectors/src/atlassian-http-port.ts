@@ -72,12 +72,14 @@ export interface AtlassianHttpBodyRequest {
   // Serialized JSON request body for POST/PUT, bounded by ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES.
   // Never a credential — the Authorization header is materialised by the adapter only.
   readonly bodyJson?: string | undefined;
-  // Bounded multipart upload for POST (#4176), bounded by ATLASSIAN_HTTP_UPLOAD_MAX_BYTES.
+  // Bounded multipart POST, or fixed email-template ZIP POST with its separate closed flag.
   readonly upload?: AtlassianHttpUpload | undefined;
   /** Server-owned opt-in for the two documented experimental sprint-unmap PUT identities only. */
   readonly jiraExperimental?: true | undefined;
   /** Closed native text/plain boolean PUT; never a caller-provided content type or header. */
   readonly jiraPermissionAttribute?: true | undefined;
+  /** Fixed email-template ZIP GET/POST only; never an arbitrary binary response or upload. */
+  readonly jiraEmailTemplateArchive?: true | undefined;
   // Run-level cancellation (ADR-0128 D5): the adapter composes this with its own timeout so an
   // aborted sync run tears down the in-flight request instead of waiting it out.
   readonly signal?: AbortSignal | undefined;
@@ -89,9 +91,12 @@ export type AtlassianHttpBodyResult =
       readonly status: number;
       /** Server-owned identity proof for a documented ambiguous 401; never upstream content. */
       readonly authentication?: "confirmed";
-      // Decoded UTF-8 body read up to `maxBodyBytes`. Empty for bodyless responses (e.g. 3xx —
+      // Decoded UTF-8 body read up to `maxBodyBytes`; empty for a fixed archive download.
+      // Empty for bodyless responses (e.g. 3xx —
       // which the adapter surfaces and never follows).
       readonly bodyText: string;
+      /** Exact bytes only for an admitted successful email-template ZIP download. */
+      readonly archiveBytes?: Uint8Array<ArrayBuffer>;
       // Bytes actually read from the stream (≤ maxBodyBytes).
       readonly bodyBytes: number;
       readonly truncated: boolean;

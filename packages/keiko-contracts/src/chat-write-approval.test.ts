@@ -120,10 +120,14 @@ describe("backlog draft deselection (#4178)", () => {
 describe("the reviewed file of an attachment approval (#4176)", () => {
   const attach = { ...approval(), operation: "jira.attach" as const };
   const preview = { name: "report.txt", sizeBytes: 1024, sha256: "a".repeat(64) };
-  it("carries the file's name, size and digest on an attachment approval only", () => {
+  it("carries the file's name, size and digest only for the two reviewed file uploads", () => {
     const value = { ...attach, attachment: preview };
     expect(validateChatToolWriteApprovalView(value)).toEqual({ ok: true, value });
     expect(validateChatToolWriteApprovalView({ ...value, operation: "jira.edit" }).ok).toBe(false);
+    const email = { ...value, operation: "jira.upload-email-template-pack", attachment: { ...preview, name: "templates.zip" } };
+    expect(validateChatToolWriteApprovalView(email)).toEqual({ ok: true, value: email });
+    for (const operation of ["jira.apply-email-template-pack", "jira.revert-email-template-pack", "jira.set-application-property"])
+      expect(validateChatToolWriteApprovalView({ ...email, operation }).ok).toBe(false);
   });
   it.each([
     ["a path as the name", { ...preview, name: "docs/report.txt" }],
@@ -135,5 +139,6 @@ describe("the reviewed file of an attachment approval (#4176)", () => {
     ["not an object", "report.txt"],
   ])("refuses a preview with %s", (_label, attachment) => {
     expect(validateChatToolWriteApprovalView({ ...attach, attachment }).ok).toBe(false);
+    expect(validateChatToolWriteApprovalView({ ...attach, operation: "jira.upload-email-template-pack", attachment }).ok).toBe(false);
   });
 });

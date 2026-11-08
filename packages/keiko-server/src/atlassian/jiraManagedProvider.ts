@@ -1,3 +1,4 @@
+import { jiraEmailTemplateDeclarationForTool, type JIRA_EMAIL_TEMPLATE_DEFINITIONS } from "./jiraEmailTemplateDescriptors.js";
 import { jiraIdentityObservationDeclarationForTool, type JIRA_IDENTITY_OBSERVATION_READ_DEFINITIONS } from "./jiraIdentityObservationDescriptors.js";
 import {
   jiraRemoteVersionLinkDeclarationForTool,
@@ -245,6 +246,7 @@ type CoreReadToolName = Exclude<
   | "jira.draft-stage"
   | Extract<
       JiraManagedReadToolName,
+      | keyof typeof JIRA_EMAIL_TEMPLATE_DEFINITIONS
       | keyof typeof JIRA_IDENTITY_OBSERVATION_READ_DEFINITIONS
       | keyof typeof JIRA_REMOTE_VERSION_LINK_READ_DEFINITIONS
       | keyof typeof JIRA_WORKLOG_FEED_READ_DEFINITIONS
@@ -449,6 +451,7 @@ function isCoreReadTool(name: JiraManagedReadToolName): name is CoreReadToolName
 }
 function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
   for (const producer of [
+    jiraEmailTemplateDeclarationForTool,
     jiraIdentityObservationDeclarationForTool,
     jiraRemoteVersionLinkDeclarationForTool,
     jiraWorklogFeedDeclarationForTool,

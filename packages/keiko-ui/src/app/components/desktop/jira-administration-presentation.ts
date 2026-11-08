@@ -1,5 +1,6 @@
 import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
 import type { JiraAgileDetails, JiraOutcomeFact } from "./jira-agile-presentation";
+import { jiraSchemeReviewDetails } from "./jira-scheme-review-presentation";
 
 import {
   jiraPresentationFact as fact,
@@ -120,7 +121,7 @@ function booleanLabels(source: Source): WidgetMessageKey[] {
     );
   if (typeof source.draft === "boolean")
     labels.push(
-      source.draft ? "chat.jira.administration.draft" : "chat.jira.administration.published",
+      source.draft ? "chat.jira.administration.draft" : "chat.jira.schemeWrite.baseOnly",
     );
   if (typeof source.archived === "boolean")
     labels.push(source.archived ? "chat.jira.metadata.archived" : "chat.jira.metadata.notArchived");
@@ -141,6 +142,11 @@ function labelsFor(tool: string, source: Source): WidgetMessageKey[] {
   return labels;
 }
 /** Configuration observations are not proof of field requiredness, write permission or activation. */
+function schemeReview(tool: string, source: Source): JiraAgileDetails {
+  if (WORKFLOW_SCHEMES.has(tool)) return jiraSchemeReviewDetails("workflow", source);
+  return tool === "jira_issue_type_scheme" || tool === "jira_issue_type_schemes"
+    ? jiraSchemeReviewDetails("issue-type", source) : { facts: [], labels: [] };
+}
 export function jiraAdministrationDetails(tool: string, source: Source): JiraAgileDetails {
   if (SCREEN_TAB_WRITES.has(tool)) return screenTabReceipt(tool, source);
   const facts = Object.entries(TEXT_FACTS).flatMap(([field, label]) => fact(label, source[field]));
@@ -153,10 +159,11 @@ export function jiraAdministrationDetails(tool: string, source: Source): JiraAgi
     facts.push(...fact("chat.jira.fact.projectKey", source.key));
   const name = text(source.name);
   const body = text(source.description);
+  const review = schemeReview(tool, source);
   return {
     ...(name === undefined ? {} : { name }),
     ...(body === undefined ? {} : { body }),
-    facts,
-    labels: labelsFor(tool, source),
+    facts: [...facts, ...review.facts],
+    labels: [...labelsFor(tool, source), ...review.labels],
   };
 }

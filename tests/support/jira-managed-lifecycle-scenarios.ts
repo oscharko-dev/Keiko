@@ -1,4 +1,6 @@
 import { permissionRoleTransportController } from "./jira-permission-role-transport-fixture.js";
+import { schemeSettingTransportController } from "./jira-scheme-setting-transport-fixture.js";
+import { emailTemplateTransportController } from "./jira-email-template-transport-fixture.js";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { AtlassianHttpBodyRequest, AtlassianHttpBodyResult } from "@oscharko-dev/keiko-connectors";
 import { LINK_MUTATION_FIXTURE_CASES, linkMutationTransportFixture } from "./jira-link-mutation-fixture.js";
@@ -74,6 +76,8 @@ interface Controller {
 }
 const API_ROOT = "/context/rest/api/2";
 function controller(operation: string | undefined): Controller | undefined {
+  const next = schemeSettingTransportController(operation, ACTOR) ?? emailTemplateTransportController(operation, ACTOR);
+  if (next !== undefined) return next;
   const permissionRole = permissionRoleTransportController(operation, ACTOR);
   if (permissionRole !== undefined) return permissionRole;
   const planning = planningTransportController(operation);
@@ -91,15 +95,19 @@ export function lifecycleRemoteFixture(operation: string | undefined): {
 } {
   const selected = controller(operation);
   return {
-    read: async (url) => selected?.read({ method: "GET", url, timeoutMs: 1000, maxBodyBytes: 262144 }),
+    read: async (url) => selected?.read({ method: "GET", url, timeoutMs: 1000, maxBodyBytes: 262144,
+      ...(new URL(url).pathname === "/context/rest/api/2/email-templates" ? { jiraEmailTemplateArchive: true } : {}),
+    }),
     async write(request) {
       if (selected === undefined) return undefined;
       const method = request.method;
       if (method !== "POST" && method !== "PUT" && method !== "DELETE") return undefined;
-      const bodyJson = await request.clone().text();
+      const archive = request.headers.get("content-type") === "application/zip";
+      const bodyJson = archive ? "" : await request.clone().text();
       return selected.write({ method, url: request.url, timeoutMs: 1000, maxBodyBytes: 262144,
         ...(request.headers.get("x-experimentalapi") === "true" ? { jiraExperimental: true } : {}),
         ...(request.headers.get("content-type") === "text/plain" ? { jiraPermissionAttribute: true } : {}),
+        ...(archive ? { jiraEmailTemplateArchive: true, upload: { contentType: "application/zip", bytes: new Uint8Array(await request.clone().arrayBuffer()) } } : {}),
         ...(bodyJson === "" ? {} : { bodyJson }) });
     },
     snapshot: () => selected?.snapshot(),

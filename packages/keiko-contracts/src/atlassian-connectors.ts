@@ -35,6 +35,14 @@ import {
 import { JIRA_READ_TOOL_FAMILIES } from "./jira-read-tools.js";
 import { JIRA_MANAGED_READ_TOOLS, type JiraManagedReadToolName } from "./jira-tool-fields.js";
 import {
+  JIRA_OPTION_SCHEME_MUTATIONS,
+  type JiraOptionSchemeMutation,
+  JIRA_WORKFLOW_SCHEME_MUTATIONS,
+  type JiraWorkflowSchemeMutation,
+  JIRA_INSTANCE_SETTING_MUTATIONS,
+  type JiraInstanceSettingMutation,
+  JIRA_EMAIL_TEMPLATE_MUTATIONS,
+  type JiraEmailTemplateMutation,
   JIRA_AGILE_PLANNING_MUTATIONS,
   JIRA_PERMISSION_SCHEME_MUTATIONS,
   JIRA_ROLE_MUTATIONS,
@@ -117,6 +125,18 @@ function accessConfigurationAction(name: JiraAccessConfigurationMutation): JiraA
 const JIRA_ACCESS_CONFIGURATION_ACTIONS = Object.freeze([
   ...JIRA_PERMISSION_SCHEME_MUTATIONS, ...JIRA_ROLE_MUTATIONS,
 ].map(accessConfigurationAction));
+
+type JiraSchemeRuntimeOrEmailMutation = JiraOptionSchemeMutation | JiraWorkflowSchemeMutation | JiraInstanceSettingMutation | JiraEmailTemplateMutation;
+type JiraSchemeRuntimeOrEmailAction = JiraSchemeRuntimeOrEmailMutation extends `jira.${infer Action}` ? Action : never;
+function schemeRuntimeOrEmailAction(name: JiraSchemeRuntimeOrEmailMutation): JiraSchemeRuntimeOrEmailAction {
+  return name.slice(5) as JiraSchemeRuntimeOrEmailAction;
+}
+const JIRA_SCHEME_RUNTIME_EMAIL_ACTIONS = Object.freeze([
+  ...JIRA_OPTION_SCHEME_MUTATIONS,
+  ...JIRA_WORKFLOW_SCHEME_MUTATIONS,
+  ...JIRA_INSTANCE_SETTING_MUTATIONS,
+  ...JIRA_EMAIL_TEMPLATE_MUTATIONS,
+].map(schemeRuntimeOrEmailAction));
 
 // ─── Schema version ───────────────────────────────────────────────────────────
 // Pinned to "1". A breaking change introduces a NEW literal rather than mutating "1", the same
@@ -675,6 +695,7 @@ export type AtlassianConnectorActionType =
   | JiraConfigurationAction
   | JiraPlanningVersionOrCategoryAction
   | JiraAccessConfigurationAction
+  | JiraSchemeRuntimeOrEmailAction
   | "set-app-monitoring"
   | "set-ipd-monitoring"
   | "start-jmx-metrics"
@@ -719,6 +740,7 @@ export type AtlassianConnectorActionType =
 
 export const ATLASSIAN_CONNECTOR_ACTION_TYPES: readonly AtlassianConnectorActionType[] =
   Object.freeze([
+    ...JIRA_SCHEME_RUNTIME_EMAIL_ACTIONS,
     ...JIRA_ACCESS_CONFIGURATION_ACTIONS,
     ...JIRA_PLANNING_VERSION_CATEGORY_ACTIONS,
     ...JIRA_CONFIGURATION_ACTIONS,
@@ -776,6 +798,41 @@ export const JIRA_REQUIREMENT_REFERENCE_CHARS_MAX = 120;
 export const JIRA_MANAGED_ACTION_TYPES: Readonly<
   Record<JiraManagedReadToolName | JiraMutationOperation, AtlassianConnectorActionType>
 > = Object.freeze({
+  "jira.create-issue-type-scheme": "create-issue-type-scheme",
+  "jira.update-issue-type-scheme": "update-issue-type-scheme",
+  "jira.delete-issue-type-scheme": "delete-issue-type-scheme",
+  "jira.add-issue-type-scheme-projects": "add-issue-type-scheme-projects",
+  "jira.set-issue-type-scheme-projects": "set-issue-type-scheme-projects",
+  "jira.clear-issue-type-scheme-projects": "clear-issue-type-scheme-projects",
+  "jira.remove-issue-type-scheme-project": "remove-issue-type-scheme-project",
+  "jira.create-priority-scheme": "create-priority-scheme",
+  "jira.update-priority-scheme": "update-priority-scheme",
+  "jira.delete-priority-scheme": "delete-priority-scheme",
+  "jira.create-workflow-scheme": "create-workflow-scheme",
+  "jira.update-workflow-scheme": "update-workflow-scheme",
+  "jira.delete-workflow-scheme": "delete-workflow-scheme",
+  "jira.create-workflow-scheme-draft": "create-workflow-scheme-draft",
+  "jira.update-workflow-scheme-draft": "update-workflow-scheme-draft",
+  "jira.delete-workflow-scheme-draft": "delete-workflow-scheme-draft",
+  "jira.set-workflow-scheme-default": "set-workflow-scheme-default",
+  "jira.delete-workflow-scheme-default": "delete-workflow-scheme-default",
+  "jira.set-workflow-scheme-draft-default": "set-workflow-scheme-draft-default",
+  "jira.delete-workflow-scheme-draft-default": "delete-workflow-scheme-draft-default",
+  "jira.set-workflow-scheme-issue-type": "set-workflow-scheme-issue-type",
+  "jira.delete-workflow-scheme-issue-type": "delete-workflow-scheme-issue-type",
+  "jira.set-workflow-scheme-draft-issue-type": "set-workflow-scheme-draft-issue-type",
+  "jira.delete-workflow-scheme-draft-issue-type": "delete-workflow-scheme-draft-issue-type",
+  "jira.set-workflow-scheme-workflow": "set-workflow-scheme-workflow",
+  "jira.delete-workflow-scheme-workflow": "delete-workflow-scheme-workflow",
+  "jira.set-workflow-scheme-draft-workflow": "set-workflow-scheme-draft-workflow",
+  "jira.delete-workflow-scheme-draft-workflow": "delete-workflow-scheme-draft-workflow",
+  "jira.set-application-property": "set-application-property",
+  "jira.set-system-columns": "set-system-columns",
+  "jira.set-instance-base-url": "set-instance-base-url",
+  "jira.set-read-only-mode": "set-read-only-mode",
+  "jira.upload-email-template-pack": "upload-email-template-pack",
+  "jira.apply-email-template-pack": "apply-email-template-pack",
+  "jira.revert-email-template-pack": "revert-email-template-pack",
   "jira.epic-remove-issues": "epic-remove-issues",
   "jira.create-permission-scheme": "create-permission-scheme",
   "jira.update-permission-scheme": "update-permission-scheme",
@@ -911,6 +968,7 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASSES: readonly AtlassianConnectorActi
 export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
   Record<AtlassianConnectorActionType, AtlassianConnectorActionClass>
 > = Object.freeze({
+  ...jiraActionValues(JIRA_SCHEME_RUNTIME_EMAIL_ACTIONS, "connector-admin"),
   ...jiraActionValues(JIRA_ACCESS_CONFIGURATION_ACTIONS, "connector-admin"),
   ...jiraActionValues(JIRA_PLANNING_VERSION_CATEGORY_ACTIONS, "connector-write"),
   ...jiraActionValues(JIRA_PROJECT_CATEGORY_ACTIONS, "connector-admin"),
@@ -921,6 +979,7 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
   ...jiraActionValues(JIRA_SAVED_WRITE_ACTIONS, "connector-write"),
   ...jiraActionValues(JIRA_MANAGED_READ_TOOLS, "connector-access"),
   ...jiraActionValues(JIRA_READ_TOOL_FAMILIES.anonymization, "connector-admin"),
+  ...jiraActionValues(JIRA_READ_TOOL_FAMILIES.emailTemplatePacks, "connector-admin"),
   ...jiraActionValues(JIRA_PROPERTY_ACTIONS, "connector-write"),
   "set-issue-type-property": "connector-admin",
   "delete-issue-type-property": "connector-admin",
@@ -970,6 +1029,7 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
 export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
   Record<AtlassianConnectorActionType, AtlassianConnectorProvider>
 > = Object.freeze({
+  ...jiraActionValues(JIRA_SCHEME_RUNTIME_EMAIL_ACTIONS, "jira"),
   ...jiraActionValues(JIRA_ACCESS_CONFIGURATION_ACTIONS, "jira"),
   ...jiraActionValues(JIRA_PLANNING_VERSION_CATEGORY_ACTIONS, "jira"),
   ...jiraActionValues(JIRA_CONFIGURATION_ACTIONS, "jira"),
@@ -1023,6 +1083,7 @@ export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
 export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchConnectorScope>
 > = Object.freeze({
+  ...jiraActionValues(JIRA_SCHEME_RUNTIME_EMAIL_ACTIONS, "issue-tracker.admin"),
   ...jiraActionValues(JIRA_ACCESS_CONFIGURATION_ACTIONS, "issue-tracker.admin"),
   ...jiraActionValues(JIRA_PLANNING_VERSION_CATEGORY_ACTIONS, "issue-tracker.write"),
   ...jiraActionValues(JIRA_PROJECT_CATEGORY_ACTIONS, "issue-tracker.admin"),
@@ -1033,6 +1094,7 @@ export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
   ...jiraActionValues(JIRA_SAVED_WRITE_ACTIONS, "issue-tracker.write"),
   ...jiraActionValues(JIRA_MANAGED_READ_TOOLS, "issue-tracker.read"),
   ...jiraActionValues(JIRA_READ_TOOL_FAMILIES.anonymization, "issue-tracker.admin"),
+  ...jiraActionValues(JIRA_READ_TOOL_FAMILIES.emailTemplatePacks, "issue-tracker.admin"),
   ...jiraActionValues(JIRA_PROPERTY_ACTIONS, "issue-tracker.write"),
   "set-issue-type-property": "issue-tracker.admin",
   "delete-issue-type-property": "issue-tracker.admin",
@@ -1092,6 +1154,7 @@ export function jiraRequiredConnectorScope(
 export const ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchApprovalRisk>
 > = Object.freeze({
+  ...jiraActionValues(JIRA_SCHEME_RUNTIME_EMAIL_ACTIONS, "high"),
   ...jiraActionValues(JIRA_ACCESS_CONFIGURATION_ACTIONS, "high"),
   ...jiraActionValues(JIRA_PLANNING_VERSION_CATEGORY_ACTIONS, "high"),
   "upsert-version-remote-link": "medium",
@@ -2038,6 +2101,14 @@ export {
   isJiraDraftRef,
   type JiraDraftItemState,
   JIRA_MUTATION_OPERATIONS,
+  JIRA_OPTION_SCHEME_MUTATIONS,
+  type JiraOptionSchemeMutation,
+  JIRA_WORKFLOW_SCHEME_MUTATIONS,
+  type JiraWorkflowSchemeMutation,
+  JIRA_INSTANCE_SETTING_MUTATIONS,
+  type JiraInstanceSettingMutation,
+  JIRA_EMAIL_TEMPLATE_MUTATIONS,
+  type JiraEmailTemplateMutation,
   JIRA_PERMISSION_SCHEME_MUTATIONS,
   JIRA_ROLE_MUTATIONS,
   type JiraPermissionSchemeMutation,

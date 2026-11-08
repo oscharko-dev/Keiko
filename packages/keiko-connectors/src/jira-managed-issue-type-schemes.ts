@@ -1,3 +1,4 @@
+import { jiraOptionSchemeReview, jiraOptionSchemeReviewFields } from "./jira-option-scheme-review.js";
 import {
   JIRA_READ_TOOL_FAMILIES,
   isSafeAtlassianIdentifier,
@@ -118,9 +119,9 @@ function scheme(value: unknown): CatalogJsonObject | undefined {
   if (!jiraNativeId(raw?.id) || !jiraNativeText(raw.name, 255)) return undefined;
   const optional = details(raw);
   const metadata = schemeMetadata(raw);
-  return optional === undefined || metadata === undefined
-    ? undefined
-    : { id: raw.id, name: raw.name, ...optional, ...metadata };
+  if (optional === undefined || metadata === undefined) return undefined;
+  const projected = { id: raw.id, name: raw.name, ...optional, ...metadata };
+  return { ...projected, ...jiraOptionSchemeReviewFields("issue-type", jiraOptionSchemeReview("issue-type", raw, projected)) };
 }
 function project(value: unknown): CatalogJsonObject | undefined {
   const raw = asRecord(value);
@@ -135,6 +136,8 @@ function project(value: unknown): CatalogJsonObject | undefined {
     ? undefined
     : { id: raw.id, key: raw.key, name: raw.name, ...optional };
 }
+// Private write review reuses the same native metadata projection; no public package surface.
+export { scheme as jiraIssueTypeSchemeProjection, project as jiraIssueTypeSchemeProjectProjection };
 function collection(
   values: unknown,
   selected: Selection,

@@ -36,6 +36,12 @@ export interface Observation {
   readonly definition: Extract<JiraOperationDefinition, { readonly kind: "native" }>;
 }
 const UNCONFIRMED_NATIVE_OPERATIONS: ReadonlySet<string> = new Set([
+  "jira.delete-issue-type-scheme", "jira.add-issue-type-scheme-projects", "jira.set-issue-type-scheme-projects",
+  "jira.clear-issue-type-scheme-projects", "jira.remove-issue-type-scheme-project", "jira.delete-priority-scheme",
+  "jira.delete-workflow-scheme", "jira.set-workflow-scheme-default", "jira.delete-workflow-scheme-default",
+  "jira.set-workflow-scheme-issue-type", "jira.delete-workflow-scheme-issue-type",
+  "jira.set-workflow-scheme-workflow", "jira.delete-workflow-scheme-workflow", "jira.set-instance-base-url",
+  "jira.upload-email-template-pack", "jira.apply-email-template-pack", "jira.revert-email-template-pack",
   "jira.delete-filter", "jira.delete-my-preference", "jira.delete-component",
   "jira.merge-version", "jira.remove-and-swap-version",
   "jira.add-default-screen-field", "jira.delete-board",

@@ -20,6 +20,7 @@
 import {
   ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES,
   ATLASSIAN_HTTP_UPLOAD_MAX_BYTES,
+  ATLASSIAN_WRITE_RESPONSE_MAX_BYTES,
   AtlassianCredentialCustodyError,
   type AtlassianCredentialExecutionResolver,
   type AtlassianHttpBodyPort,
@@ -33,6 +34,7 @@ import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
   isSafeAtlassianConnectorBaseUrl,
   canonicalAtlassianConnectorBaseUrl,
+  JIRA_ATTACHMENT_MAX_BYTES,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   outboundTargetBlockedReason,
@@ -334,31 +336,66 @@ export function createGatewayAtlassianHttpPort(
 
 interface BoundedBodyRead {
   readonly bodyText: string;
+  readonly archiveBytes?: Uint8Array<ArrayBuffer>;
   readonly bodyBytes: number;
   readonly truncated: boolean;
 }
 
-async function readBodyBounded(response: Response, maxBodyBytes: number): Promise<BoundedBodyRead> {
+function bodyCollector(binary: boolean, cap: number) {
+  const decoder = new TextDecoder("utf-8", { fatal: false });
+  let archive: Uint8Array<ArrayBuffer> | undefined;
+  let offset = 0;
+  let text = "";
+  return {
+    append: (chunk: Uint8Array) => {
+      if (!binary) { text += decoder.decode(chunk, { stream: true }); return; }
+      if (chunk.byteLength === 0) return;
+      archive ??= new Uint8Array(cap);
+      archive.set(chunk, offset);
+      offset += chunk.byteLength;
+    },
+    finish: (bodyBytes: number, truncated: boolean): BoundedBodyRead => {
+      if (!binary) return { bodyText: text + decoder.decode(), bodyBytes, truncated };
+      const archiveBytes = archive === undefined ? new Uint8Array(0) : archive.slice(0, bodyBytes);
+      return { bodyText: "", archiveBytes, bodyBytes, truncated };
+    },
+  };
+}
+async function readBodyBounded(response: Response, maxBodyBytes: number, binary = false): Promise<BoundedBodyRead> {
   const cap = Math.max(0, Math.trunc(maxBodyBytes));
   const reader = response.body?.getReader();
-  if (reader === undefined) return { bodyText: "", bodyBytes: 0, truncated: false };
-  const decoder = new TextDecoder("utf-8", { fatal: false });
-  let text = "";
+  const body = bodyCollector(binary, cap);
+  if (reader === undefined) return body.finish(0, false);
   let bytes = 0;
   for (;;) {
     const chunk = await reader.read();
     if (chunk.done) break;
     const remaining = cap - bytes;
     if (chunk.value.byteLength >= remaining) {
-      text += decoder.decode(chunk.value.subarray(0, Math.max(0, remaining)), { stream: true });
+      body.append(chunk.value.subarray(0, Math.max(0, remaining)));
       bytes += Math.min(chunk.value.byteLength, Math.max(0, remaining));
       await reader.cancel().catch(() => undefined);
-      return { bodyText: text + decoder.decode(), bodyBytes: bytes, truncated: true };
+      return body.finish(bytes, true);
     }
-    text += decoder.decode(chunk.value, { stream: true });
+    body.append(chunk.value);
     bytes += chunk.value.byteLength;
   }
-  return { bodyText: text + decoder.decode(), bodyBytes: bytes, truncated: false };
+  return body.finish(bytes, false);
+}
+
+async function readResponseBody(response: Response, request: AtlassianHttpBodyRequest): Promise<BoundedBodyRead> {
+  if (request.jiraEmailTemplateArchive === true && request.method === "GET" && response.ok) {
+    const mediaType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+    if (mediaType !== "application/zip") {
+      await discardBody(response);
+      return { bodyText: "", bodyBytes: 0, truncated: false };
+    }
+    return readBodyBounded(response, request.maxBodyBytes, true);
+  }
+  // Native error text stays under the ordinary write-response ceiling even for ZIP downloads.
+  const cap = request.jiraEmailTemplateArchive === true
+    ? Math.min(request.maxBodyBytes, ATLASSIAN_WRITE_RESPONSE_MAX_BYTES) : request.maxBodyBytes;
+  return readBodyBounded(response, cap);
 }
 
 // Parses `Retry-After` (delay-seconds or HTTP-date) into a non-negative millisecond delay. The
@@ -389,13 +426,32 @@ function assertValidUpload(request: AtlassianHttpBodyRequest): void {
   if (
     request.method !== "POST" ||
     request.bodyJson !== undefined ||
-    !MULTIPART_CONTENT_TYPE.test(upload.contentType) ||
+    !(upload.bytes instanceof Uint8Array) || !(upload.bytes.buffer instanceof ArrayBuffer) ||
+    !(request.jiraEmailTemplateArchive === true
+      ? upload.contentType === "application/zip" : MULTIPART_CONTENT_TYPE.test(upload.contentType)) ||
     exceedsBodyByteCeiling(upload.bytes.byteLength, ATLASSIAN_HTTP_UPLOAD_MAX_BYTES)
   ) {
     throw new AtlassianCredentialCustodyError("invalid-input", [
-      "upload must be one bounded multipart POST",
+      "upload must be one bounded admitted POST",
     ]);
   }
+}
+
+function assertEmailTemplateTarget(base: URL, target: URL, request: AtlassianHttpBodyRequest): void {
+  if (request.jiraEmailTemplateArchive === undefined) return;
+  const path = `${base.pathname.replace(/\/$/u, "")}/rest/api/2/email-templates`;
+  if (request.jiraEmailTemplateArchive !== true || target.pathname !== path || target.search !== "" ||
+      !Number.isSafeInteger(request.maxBodyBytes) || request.maxBodyBytes < 1 ||
+      request.maxBodyBytes > JIRA_ATTACHMENT_MAX_BYTES)
+    throw new AtlassianCredentialCustodyError("invalid-input", ["Unsupported email-template archive target or byte bound"]);
+}
+
+function ownedBodyRequest(request: Readonly<AtlassianHttpBodyRequest>): Readonly<AtlassianHttpBodyRequest> {
+  if (request.jiraEmailTemplateArchive !== true || request.upload === undefined) return request;
+  // Admission/egress can await: retain our own bytes before either callback can run.
+  return Object.freeze({ ...request, upload: Object.freeze({
+    contentType: request.upload.contentType, bytes: new Uint8Array(request.upload.bytes),
+  }) });
 }
 function assertValidRequestBody(request: AtlassianHttpBodyRequest): void {
   assertValidUpload(request);
@@ -425,9 +481,11 @@ export function createGatewayAtlassianHttpBodyPort(
 ): AtlassianHttpBodyPort {
   const base = atlassianPortBaseUrl(options.baseUrl);
   return async (input: AtlassianHttpBodyRequest): Promise<AtlassianHttpBodyResult> => {
-    const request = Object.freeze({ ...input });
-    const target = assertAllowlistedTarget(base, request.url);
-    assertValidRequestBody(request);
+    const snapshot = Object.freeze({ ...input });
+    const target = assertAllowlistedTarget(base, snapshot.url);
+    assertEmailTemplateTarget(base, target, snapshot);
+    assertValidRequestBody(snapshot);
+    const request = ownedBodyRequest(snapshot);
     const signal = composeBodyRequestSignal(request);
     const lifecycle = atlassianHttpRequestLifecycle(
       { ...options, correlationId: options.correlationId ?? UNKNOWN_CORRELATION_ID },
@@ -450,11 +508,12 @@ export function createGatewayAtlassianHttpBodyPort(
       const response = await authenticatedReadResponse(request.method, upstream);
       await lifecycle.observe(response);
       const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"), Date.now());
-      const body = await readBodyBounded(response, request.maxBodyBytes);
+      const body = await readResponseBody(response, request);
       return {
         kind: "response",
         status: response.status,
         bodyText: body.bodyText,
+        ...(body.archiveBytes === undefined ? {} : { archiveBytes: body.archiveBytes }),
         bodyBytes: body.bodyBytes,
         truncated: body.truncated,
         ...(retryAfterMs === undefined ? {} : { retryAfterMs }),

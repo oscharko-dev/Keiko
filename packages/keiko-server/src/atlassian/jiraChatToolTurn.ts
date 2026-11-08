@@ -14,6 +14,7 @@ import { chatDraftArguments } from "./jiraChatDraftArguments.js";
 import {
   jiraChatAttachmentLimit,
   previewJiraChatAttachment,
+  previewJiraEmailTemplatePack,
   type JiraChatAttachmentDeps,
 } from "./jiraChatAttachment.js";
 import type { UiHandlerDeps } from "../deps.js";
@@ -174,6 +175,7 @@ async function reviewedAttachment(
 ): Promise<JiraAttachmentPreview | undefined> {
   const { deps, message, correlationId, authority, signal } = options;
   const args = proposedWriteArguments(access, action);
+  if (action.tool === "jira.upload-email-template-pack") return reviewedEmailTemplate(options, access, action, args);
   const parsed =
     args !== undefined && access.reviewableWrite(action)
       ? parseJiraAttachmentArguments(args)
@@ -195,6 +197,25 @@ async function reviewedAttachment(
     correlationId,
     maxBytes,
   );
+  return access.readAllowed(action) ? preview : undefined;
+}
+
+function emailTemplatePath(args: CatalogJsonObject): string | undefined {
+  const source: unknown = args.source;
+  if (source === null || typeof source !== "object" || Array.isArray(source)) return undefined;
+  if (!("kind" in source) || source.kind !== "connected-file" || !("path" in source)) return undefined;
+  return typeof source.path === "string" ? source.path : undefined;
+}
+async function reviewedEmailTemplate(
+  options: JiraChatTurnOptions,
+  access: JiraChatTurnReviewAccess,
+  action: JiraChatCatalogAction,
+  args: CatalogJsonObject | undefined,
+): Promise<JiraAttachmentPreview | undefined> {
+  if (args === undefined || !access.reviewableWrite(action) || !access.readAllowed(action)) return undefined;
+  const path = emailTemplatePath(args);
+  if (path === undefined) return undefined;
+  const preview = await previewJiraEmailTemplatePack(options.deps, options.message.chatId, path, options.correlationId, options.signal);
   return access.readAllowed(action) ? preview : undefined;
 }
 

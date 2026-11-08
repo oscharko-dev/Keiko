@@ -23,6 +23,10 @@ import {
   JIRA_PROJECT_CATEGORY_MUTATIONS,
   JIRA_ROLE_MUTATIONS,
   JIRA_PERMISSION_SCHEME_MUTATIONS,
+  JIRA_OPTION_SCHEME_MUTATIONS,
+  JIRA_WORKFLOW_SCHEME_MUTATIONS,
+  JIRA_INSTANCE_SETTING_MUTATIONS,
+  JIRA_EMAIL_TEMPLATE_MUTATIONS,
   sanitizeJiraMutationFailureDetail,
   type JiraFieldValidationFailure,
   type JiraMutationOperation,
@@ -42,6 +46,8 @@ import { recordJiraDraftActivity } from "./jiraDraftActivity.js";
 import { draftRefusalData, readableChatDraft } from "./jiraChatDraftArguments.js";
 import { resolveCurrentJiraChatAuthority } from "./jiraChatAuthority.js";
 import { requireDispatch } from "../tool-catalog/catalogToolErrors.js";
+import { jiraChatEmailTemplateComposition } from "./jiraEmailTemplateComposition.js";
+import type { JiraChatAttachmentDeps } from "./jiraChatAttachment.js";
 import {
   jiraIssueTemplateSource,
   recordJiraFieldRefusal,
@@ -50,6 +56,10 @@ import {
 
 /** Field and metadata writes share read-only validation; templates apply only to issue fields. */
 const FIELD_OPERATIONS = [
+  ...JIRA_OPTION_SCHEME_MUTATIONS,
+  ...JIRA_WORKFLOW_SCHEME_MUTATIONS,
+  ...JIRA_INSTANCE_SETTING_MUTATIONS,
+  ...JIRA_EMAIL_TEMPLATE_MUTATIONS,
   ...JIRA_ROLE_MUTATIONS,
   ...JIRA_PERMISSION_SCHEME_MUTATIONS,
   ...JIRA_AGILE_PLANNING_MUTATIONS,
@@ -97,7 +107,7 @@ function fieldOperation(tool: string): JiraFieldOperation | undefined {
     : FIELD_OPERATIONS.find((operation) => operation === tool);
 }
 
-type PreflightDeps = JiraChatAdmissionOptions["deps"] &
+type PreflightDeps = JiraChatAdmissionOptions["deps"] & JiraChatAttachmentDeps &
   Pick<UiHandlerDeps, "store" | "atlassianConnectorCredentials" | "jiraDraftStore" | "activityLog">;
 
 export interface JiraChatTemplatePreflightPorts {
@@ -152,6 +162,12 @@ function dryRunTarget(
       deployment: current.credential.deployment,
       http: factory(current.credential, context.correlationId, { beforeDispatch: allowed }),
       issueTemplates: jiraIssueTemplateSource(ports.deps.store),
+      emailTemplates: jiraChatEmailTemplateComposition(ports.deps, {
+        chatId: context.chatId,
+        correlationId: context.correlationId,
+        signal: context.signal,
+        review: () => ({ required: true, reviewed: undefined }),
+      }),
     },
   };
 }

@@ -300,6 +300,28 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.add-issue-type-scheme-projects": {
+      "identity": "POST /rest/api/2/issuetypescheme/{schemeId}/associations",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-issue-type-scheme-projects-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Closed exact actor-bound native scheme configuration. Complete reviewed issue-type/priority order, actual nullable descriptions/defaults and explicit absence are preserved; missing data is unavailable. Project association inputs independently bind canonical project IDs/keys. Four create/update calls may confirm exact native configuration, not deployment or effective issue permissions. Scheme deletion and all project-association changes remain acknowledged/unconfirmed for aggregate consequences; a visible project list is not the complete issue population. No invented migration flags, issue rewriting, status migration or blanket formal-rule activation. Future issue writes re-read their actual native metadata and saved rules. Input and known receipt bytes are bounded before the single effect; existing intent/approval/ACK/recovery owners prohibit automatic replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-option-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-values.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-review.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraOptionSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-option-scheme-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-review.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOptionSchemeMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.add-permission-grant": {
       "identity": "POST /rest/api/2/permissionscheme/{schemeId}/permission",
       "effect": "write",
@@ -573,6 +595,30 @@
         "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
         "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.apply-email-template-pack": {
+      "identity": "POST /rest/api/2/email-templates/apply",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-email-template-apply-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Fixed native ZIP export and upload/apply/revert routes, explicit local admin scope and independent native permissions. Export returns bounded metadata/hashes only, though Jira documents creating a temporary local export ZIP. The private transport preserves exact ZIP bytes, fixed application/zip media and existing custody/admission/retry/ACK ownership; raw bytes never enter model/log output. Upload uses the existing connected-file containment/currentness/content owner, server-minted immutable byte snapshot in allowed mode or the existing reviewed approval snapshot in required mode. Model expectedFile is not authority. The shared bounded ZIP reader rejects unsafe entries, aliases, links, unsupported representations and unscannable/credential-bearing contents under the existing credential floor. Strict subset limitations are explicit, not claimed as universal archive compatibility. Apply/revert bind the independently observed active canonical manifest but native staged selection has no CAS or independently readable ID. All three writes always remain acknowledged/unconfirmed; fresh active export is not complete global email-effect or delivery proof. No automatic replay or hidden credential-derived admin grant. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-email-templates.ts",
+        "packages/keiko-connectors/src/jira-email-template-request.ts",
+        "packages/keiko-server/src/atlassian/jiraEmailTemplateArchive.ts",
+        "packages/keiko-server/src/atlassian/jiraEmailTemplateDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-email-templates.test.ts",
+        "packages/keiko-connectors/src/jira-email-template-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEmailTemplateArchive.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEmailTemplateDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.email-template.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
@@ -1004,6 +1050,28 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.clear-issue-type-scheme-projects": {
+      "identity": "DELETE /rest/api/2/issuetypescheme/{schemeId}/associations",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-issue-type-scheme-projects-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Closed exact actor-bound native scheme configuration. Complete reviewed issue-type/priority order, actual nullable descriptions/defaults and explicit absence are preserved; missing data is unavailable. Project association inputs independently bind canonical project IDs/keys. Four create/update calls may confirm exact native configuration, not deployment or effective issue permissions. Scheme deletion and all project-association changes remain acknowledged/unconfirmed for aggregate consequences; a visible project list is not the complete issue population. No invented migration flags, issue rewriting, status migration or blanket formal-rule activation. Future issue writes re-read their actual native metadata and saved rules. Input and known receipt bytes are bounded before the single effect; existing intent/approval/ACK/recovery owners prohibit automatic replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-option-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-values.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-review.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraOptionSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-option-scheme-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-review.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOptionSchemeMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.cluster-nodes": {
       "identity": "GET /rest/api/2/cluster/nodes",
       "effect": "read",
@@ -1270,6 +1338,28 @@
         "packages/keiko-server/src/atlassian/jiraLinkMutationDescriptors.test.ts"
       ]
     },
+    "jira.create-issue-type-scheme": {
+      "identity": "POST /rest/api/2/issuetypescheme",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-issue-type-scheme-config-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Closed exact actor-bound native scheme configuration. Complete reviewed issue-type/priority order, actual nullable descriptions/defaults and explicit absence are preserved; missing data is unavailable. Project association inputs independently bind canonical project IDs/keys. Four create/update calls may confirm exact native configuration, not deployment or effective issue permissions. Scheme deletion and all project-association changes remain acknowledged/unconfirmed for aggregate consequences; a visible project list is not the complete issue population. No invented migration flags, issue rewriting, status migration or blanket formal-rule activation. Future issue writes re-read their actual native metadata and saved rules. Input and known receipt bytes are bounded before the single effect; existing intent/approval/ACK/recovery owners prohibit automatic replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-option-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-values.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-review.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraOptionSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-option-scheme-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-review.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOptionSchemeMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.create-permission-scheme": {
       "identity": "POST /rest/api/2/permissionscheme",
       "effect": "write",
@@ -1293,6 +1383,28 @@
         "packages/keiko-server/src/store/jiraAccessConfigurationMigration.test.ts",
         "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.create-priority-scheme": {
+      "identity": "POST /rest/api/2/priorityschemes",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-priority-scheme-config-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Closed exact actor-bound native scheme configuration. Complete reviewed issue-type/priority order, actual nullable descriptions/defaults and explicit absence are preserved; missing data is unavailable. Project association inputs independently bind canonical project IDs/keys. Four create/update calls may confirm exact native configuration, not deployment or effective issue permissions. Scheme deletion and all project-association changes remain acknowledged/unconfirmed for aggregate consequences; a visible project list is not the complete issue population. No invented migration flags, issue rewriting, status migration or blanket formal-rule activation. Future issue writes re-read their actual native metadata and saved rules. Input and known receipt bytes are bounded before the single effect; existing intent/approval/ACK/recovery owners prohibit automatic replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-option-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-values.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-review.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraOptionSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-option-scheme-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-review.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOptionSchemeMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
@@ -1394,6 +1506,48 @@
       ],
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-versions.test.ts"
+      ]
+    },
+    "jira.create-workflow-scheme": {
+      "identity": "POST /rest/api/2/workflowscheme",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-workflow-scheme-config-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Closed exact actor/parent/draft and native workflow/issue-type identities. Complete configured snapshots preserve native null, empty and omitted fields; configured default is distinct from effective fallback. Base calls fix updateDraftIfNeeded:false and never silently target a draft, publish or migrate statuses. Existing-draft writes require the same reviewed draft and unchanged parent; native draft PUT has no CAS and a concurrent replacement stays unconfirmed. Fresh create IDs come only from a readable native acknowledgement. Base mapping/default changes, base update containing mappings/default and base deletion remain acknowledged/unconfirmed for global consequences. Other confirmation proves only exact configuration; draft deletion needs the independently readable unchanged parent and documented fallback, not a bare404. Native active/in-use/admin/WebSudo constraints remain authoritative. Existing formal rules remain applied to actual issue writes, not prose skills or imagined bulk migrations. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-plan.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.create-workflow-scheme-draft": {
+      "identity": "POST /rest/api/2/workflowscheme/{id}/createdraft",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-workflow-draft-config-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Closed exact actor/parent/draft and native workflow/issue-type identities. Complete configured snapshots preserve native null, empty and omitted fields; configured default is distinct from effective fallback. Base calls fix updateDraftIfNeeded:false and never silently target a draft, publish or migrate statuses. Existing-draft writes require the same reviewed draft and unchanged parent; native draft PUT has no CAS and a concurrent replacement stays unconfirmed. Fresh create IDs come only from a readable native acknowledgement. Base mapping/default changes, base update containing mappings/default and base deletion remain acknowledged/unconfirmed for global consequences. Other confirmation proves only exact configuration; draft deletion needs the independently readable unchanged parent and documented fallback, not a bare404. Native active/in-use/admin/WebSudo constraints remain authoritative. Existing formal rules remain applied to actual issue writes, not prose skills or imagined bulk migrations. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-plan.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
     "jira.create-worklog": {
@@ -1868,6 +2022,28 @@
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"
       ]
     },
+    "jira.delete-issue-type-scheme": {
+      "identity": "DELETE /rest/api/2/issuetypescheme/{schemeId}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-issue-type-scheme-delete-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Closed exact actor-bound native scheme configuration. Complete reviewed issue-type/priority order, actual nullable descriptions/defaults and explicit absence are preserved; missing data is unavailable. Project association inputs independently bind canonical project IDs/keys. Four create/update calls may confirm exact native configuration, not deployment or effective issue permissions. Scheme deletion and all project-association changes remain acknowledged/unconfirmed for aggregate consequences; a visible project list is not the complete issue population. No invented migration flags, issue rewriting, status migration or blanket formal-rule activation. Future issue writes re-read their actual native metadata and saved rules. Input and known receipt bytes are bounded before the single effect; existing intent/approval/ACK/recovery owners prohibit automatic replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-option-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-values.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-review.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraOptionSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-option-scheme-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-review.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOptionSchemeMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.delete-my-preference": {
       "identity": "DELETE /rest/api/2/mypreferences",
       "effect": "write",
@@ -1941,6 +2117,28 @@
         "packages/keiko-server/src/store/jiraAccessConfigurationMigration.test.ts",
         "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.delete-priority-scheme": {
+      "identity": "DELETE /rest/api/2/priorityschemes/{schemeId}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-priority-scheme-delete-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Closed exact actor-bound native scheme configuration. Complete reviewed issue-type/priority order, actual nullable descriptions/defaults and explicit absence are preserved; missing data is unavailable. Project association inputs independently bind canonical project IDs/keys. Four create/update calls may confirm exact native configuration, not deployment or effective issue permissions. Scheme deletion and all project-association changes remain acknowledged/unconfirmed for aggregate consequences; a visible project list is not the complete issue population. No invented migration flags, issue rewriting, status migration or blanket formal-rule activation. Future issue writes re-read their actual native metadata and saved rules. Input and known receipt bytes are bounded before the single effect; existing intent/approval/ACK/recovery owners prohibit automatic replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-option-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-values.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-review.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraOptionSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-option-scheme-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-review.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOptionSchemeMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
@@ -2270,6 +2468,174 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.delete-workflow-scheme": {
+      "identity": "DELETE /rest/api/2/workflowscheme/{id}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-workflow-scheme-delete-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Closed exact actor/parent/draft and native workflow/issue-type identities. Complete configured snapshots preserve native null, empty and omitted fields; configured default is distinct from effective fallback. Base calls fix updateDraftIfNeeded:false and never silently target a draft, publish or migrate statuses. Existing-draft writes require the same reviewed draft and unchanged parent; native draft PUT has no CAS and a concurrent replacement stays unconfirmed. Fresh create IDs come only from a readable native acknowledgement. Base mapping/default changes, base update containing mappings/default and base deletion remain acknowledged/unconfirmed for global consequences. Other confirmation proves only exact configuration; draft deletion needs the independently readable unchanged parent and documented fallback, not a bare404. Native active/in-use/admin/WebSudo constraints remain authoritative. Existing formal rules remain applied to actual issue writes, not prose skills or imagined bulk migrations. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-plan.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.delete-workflow-scheme-default": {
+      "identity": "DELETE /rest/api/2/workflowscheme/{id}/default",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-workflow-scheme-mapping-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Closed exact actor/parent/draft and native workflow/issue-type identities. Complete configured snapshots preserve native null, empty and omitted fields; configured default is distinct from effective fallback. Base calls fix updateDraftIfNeeded:false and never silently target a draft, publish or migrate statuses. Existing-draft writes require the same reviewed draft and unchanged parent; native draft PUT has no CAS and a concurrent replacement stays unconfirmed. Fresh create IDs come only from a readable native acknowledgement. Base mapping/default changes, base update containing mappings/default and base deletion remain acknowledged/unconfirmed for global consequences. Other confirmation proves only exact configuration; draft deletion needs the independently readable unchanged parent and documented fallback, not a bare404. Native active/in-use/admin/WebSudo constraints remain authoritative. Existing formal rules remain applied to actual issue writes, not prose skills or imagined bulk migrations. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-plan.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.delete-workflow-scheme-draft": {
+      "identity": "DELETE /rest/api/2/workflowscheme/{id}/draft",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-workflow-draft-delete-and-parent-readback",
+      "kind": "constrained-tool",
+      "constraints": "Closed exact actor/parent/draft and native workflow/issue-type identities. Complete configured snapshots preserve native null, empty and omitted fields; configured default is distinct from effective fallback. Base calls fix updateDraftIfNeeded:false and never silently target a draft, publish or migrate statuses. Existing-draft writes require the same reviewed draft and unchanged parent; native draft PUT has no CAS and a concurrent replacement stays unconfirmed. Fresh create IDs come only from a readable native acknowledgement. Base mapping/default changes, base update containing mappings/default and base deletion remain acknowledged/unconfirmed for global consequences. Other confirmation proves only exact configuration; draft deletion needs the independently readable unchanged parent and documented fallback, not a bare404. Native active/in-use/admin/WebSudo constraints remain authoritative. Existing formal rules remain applied to actual issue writes, not prose skills or imagined bulk migrations. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-plan.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.delete-workflow-scheme-draft-default": {
+      "identity": "DELETE /rest/api/2/workflowscheme/{id}/draft/default",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-workflow-draft-config-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Closed exact actor/parent/draft and native workflow/issue-type identities. Complete configured snapshots preserve native null, empty and omitted fields; configured default is distinct from effective fallback. Base calls fix updateDraftIfNeeded:false and never silently target a draft, publish or migrate statuses. Existing-draft writes require the same reviewed draft and unchanged parent; native draft PUT has no CAS and a concurrent replacement stays unconfirmed. Fresh create IDs come only from a readable native acknowledgement. Base mapping/default changes, base update containing mappings/default and base deletion remain acknowledged/unconfirmed for global consequences. Other confirmation proves only exact configuration; draft deletion needs the independently readable unchanged parent and documented fallback, not a bare404. Native active/in-use/admin/WebSudo constraints remain authoritative. Existing formal rules remain applied to actual issue writes, not prose skills or imagined bulk migrations. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-plan.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.delete-workflow-scheme-draft-issue-type": {
+      "identity": "DELETE /rest/api/2/workflowscheme/{id}/draft/issuetype/{issueType}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-workflow-draft-config-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Closed exact actor/parent/draft and native workflow/issue-type identities. Complete configured snapshots preserve native null, empty and omitted fields; configured default is distinct from effective fallback. Base calls fix updateDraftIfNeeded:false and never silently target a draft, publish or migrate statuses. Existing-draft writes require the same reviewed draft and unchanged parent; native draft PUT has no CAS and a concurrent replacement stays unconfirmed. Fresh create IDs come only from a readable native acknowledgement. Base mapping/default changes, base update containing mappings/default and base deletion remain acknowledged/unconfirmed for global consequences. Other confirmation proves only exact configuration; draft deletion needs the independently readable unchanged parent and documented fallback, not a bare404. Native active/in-use/admin/WebSudo constraints remain authoritative. Existing formal rules remain applied to actual issue writes, not prose skills or imagined bulk migrations. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-plan.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.delete-workflow-scheme-draft-workflow": {
+      "identity": "DELETE /rest/api/2/workflowscheme/{id}/draft/workflow",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-workflow-draft-config-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Closed exact actor/parent/draft and native workflow/issue-type identities. Complete configured snapshots preserve native null, empty and omitted fields; configured default is distinct from effective fallback. Base calls fix updateDraftIfNeeded:false and never silently target a draft, publish or migrate statuses. Existing-draft writes require the same reviewed draft and unchanged parent; native draft PUT has no CAS and a concurrent replacement stays unconfirmed. Fresh create IDs come only from a readable native acknowledgement. Base mapping/default changes, base update containing mappings/default and base deletion remain acknowledged/unconfirmed for global consequences. Other confirmation proves only exact configuration; draft deletion needs the independently readable unchanged parent and documented fallback, not a bare404. Native active/in-use/admin/WebSudo constraints remain authoritative. Existing formal rules remain applied to actual issue writes, not prose skills or imagined bulk migrations. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-plan.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.delete-workflow-scheme-issue-type": {
+      "identity": "DELETE /rest/api/2/workflowscheme/{id}/issuetype/{issueType}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-workflow-scheme-mapping-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Closed exact actor/parent/draft and native workflow/issue-type identities. Complete configured snapshots preserve native null, empty and omitted fields; configured default is distinct from effective fallback. Base calls fix updateDraftIfNeeded:false and never silently target a draft, publish or migrate statuses. Existing-draft writes require the same reviewed draft and unchanged parent; native draft PUT has no CAS and a concurrent replacement stays unconfirmed. Fresh create IDs come only from a readable native acknowledgement. Base mapping/default changes, base update containing mappings/default and base deletion remain acknowledged/unconfirmed for global consequences. Other confirmation proves only exact configuration; draft deletion needs the independently readable unchanged parent and documented fallback, not a bare404. Native active/in-use/admin/WebSudo constraints remain authoritative. Existing formal rules remain applied to actual issue writes, not prose skills or imagined bulk migrations. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-plan.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.delete-workflow-scheme-workflow": {
+      "identity": "DELETE /rest/api/2/workflowscheme/{id}/workflow",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-workflow-scheme-mapping-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Closed exact actor/parent/draft and native workflow/issue-type identities. Complete configured snapshots preserve native null, empty and omitted fields; configured default is distinct from effective fallback. Base calls fix updateDraftIfNeeded:false and never silently target a draft, publish or migrate statuses. Existing-draft writes require the same reviewed draft and unchanged parent; native draft PUT has no CAS and a concurrent replacement stays unconfirmed. Fresh create IDs come only from a readable native acknowledgement. Base mapping/default changes, base update containing mappings/default and base deletion remain acknowledged/unconfirmed for global consequences. Other confirmation proves only exact configuration; draft deletion needs the independently readable unchanged parent and documented fallback, not a bare404. Native active/in-use/admin/WebSudo constraints remain authoritative. Existing formal rules remain applied to actual issue writes, not prose skills or imagined bulk migrations. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-plan.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.delete-worklog": {
       "identity": "DELETE /rest/api/2/issue/{issueIdOrKey}/worklog/{id}",
       "effect": "write",
@@ -2365,6 +2731,30 @@
       ],
       "testFiles": [
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"
+      ]
+    },
+    "jira.email-template-pack": {
+      "identity": "GET /rest/api/2/email-templates",
+      "effect": "read",
+      "permissionPolicy": "instance-admin-email-template-archive-observation",
+      "kind": "constrained-tool",
+      "constraints": "Fixed native ZIP export and upload/apply/revert routes, explicit local admin scope and independent native permissions. Export returns bounded metadata/hashes only, though Jira documents creating a temporary local export ZIP. The private transport preserves exact ZIP bytes, fixed application/zip media and existing custody/admission/retry/ACK ownership; raw bytes never enter model/log output. Upload uses the existing connected-file containment/currentness/content owner, server-minted immutable byte snapshot in allowed mode or the existing reviewed approval snapshot in required mode. Model expectedFile is not authority. The shared bounded ZIP reader rejects unsafe entries, aliases, links, unsupported representations and unscannable/credential-bearing contents under the existing credential floor. Strict subset limitations are explicit, not claimed as universal archive compatibility. Apply/revert bind the independently observed active canonical manifest but native staged selection has no CAS or independently readable ID. All three writes always remain acknowledged/unconfirmed; fresh active export is not complete global email-effect or delivery proof. No automatic replay or hidden credential-derived admin grant. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-email-templates.ts",
+        "packages/keiko-connectors/src/jira-email-template-request.ts",
+        "packages/keiko-server/src/atlassian/jiraEmailTemplateArchive.ts",
+        "packages/keiko-server/src/atlassian/jiraEmailTemplateDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-email-templates.test.ts",
+        "packages/keiko-connectors/src/jira-email-template-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEmailTemplateArchive.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEmailTemplateDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.email-template.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
     "jira.email-template-types": {
@@ -4381,6 +4771,28 @@
         "packages/keiko-server/src/atlassian/jiraReleaseLifecycleDescriptors.test.ts"
       ]
     },
+    "jira.remove-issue-type-scheme-project": {
+      "identity": "DELETE /rest/api/2/issuetypescheme/{schemeId}/associations/{projIdOrKey}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-issue-type-scheme-projects-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Closed exact actor-bound native scheme configuration. Complete reviewed issue-type/priority order, actual nullable descriptions/defaults and explicit absence are preserved; missing data is unavailable. Project association inputs independently bind canonical project IDs/keys. Four create/update calls may confirm exact native configuration, not deployment or effective issue permissions. Scheme deletion and all project-association changes remain acknowledged/unconfirmed for aggregate consequences; a visible project list is not the complete issue population. No invented migration flags, issue rewriting, status migration or blanket formal-rule activation. Future issue writes re-read their actual native metadata and saved rules. Input and known receipt bytes are bounded before the single effect; existing intent/approval/ACK/recovery owners prohibit automatic replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-option-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-values.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-review.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraOptionSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-option-scheme-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-review.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOptionSchemeMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.remove-screen-tab-field": {
       "identity": "DELETE /rest/api/2/screens/{screenId}/tabs/{tabId}/fields/{id}",
       "effect": "write",
@@ -4572,6 +4984,30 @@
         "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
         "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.revert-email-template-pack": {
+      "identity": "POST /rest/api/2/email-templates/revert",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-email-template-revert-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Fixed native ZIP export and upload/apply/revert routes, explicit local admin scope and independent native permissions. Export returns bounded metadata/hashes only, though Jira documents creating a temporary local export ZIP. The private transport preserves exact ZIP bytes, fixed application/zip media and existing custody/admission/retry/ACK ownership; raw bytes never enter model/log output. Upload uses the existing connected-file containment/currentness/content owner, server-minted immutable byte snapshot in allowed mode or the existing reviewed approval snapshot in required mode. Model expectedFile is not authority. The shared bounded ZIP reader rejects unsafe entries, aliases, links, unsupported representations and unscannable/credential-bearing contents under the existing credential floor. Strict subset limitations are explicit, not claimed as universal archive compatibility. Apply/revert bind the independently observed active canonical manifest but native staged selection has no CAS or independently readable ID. All three writes always remain acknowledged/unconfirmed; fresh active export is not complete global email-effect or delivery proof. No automatic replay or hidden credential-derived admin grant. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-email-templates.ts",
+        "packages/keiko-connectors/src/jira-email-template-request.ts",
+        "packages/keiko-server/src/atlassian/jiraEmailTemplateArchive.ts",
+        "packages/keiko-server/src/atlassian/jiraEmailTemplateDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-email-templates.test.ts",
+        "packages/keiko-connectors/src/jira-email-template-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEmailTemplateArchive.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEmailTemplateDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.email-template.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
@@ -4873,6 +5309,26 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.set-application-property": {
+      "identity": "PUT /rest/api/2/application-properties/{id}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-application-property-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Closed exact actor and reviewed native setting. Only four documented nonsecret application keys are admitted; native values are strings and false becomes the string false. System columns are complete ordered nonempty IDs with repetitions retained and use the primary documented JSON overload. Desired base URL is HTTPS without credentials/query/fragment; current safe HTTP metadata is comparison-only and never changes the connection routing. Base URL always remains acknowledged/unconfirmed for global proxy/notification/routing consequences. Read-only edits support only explicit enabled booleans and never promise universal effective enforcement. Other settings confirm only fresh exact configuration. Missing flags/strings/layouts are unavailable, never empty or false. Target receipts contain only digests, ordered column IDs or a Boolean, with their full 16 KiB bound checked before any native request. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-instance-setting-mutations.ts",
+        "packages/keiko-connectors/src/jira-instance-setting-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-instance-setting-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraInstanceSettingMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-instance-setting-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraInstanceSettingMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.set-board-property": {
       "identity": "PUT /rest/agile/1.0/board/{boardId}/properties/{propertyKey}",
       "effect": "write",
@@ -5025,6 +5481,26 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.set-instance-base-url": {
+      "identity": "PUT /rest/api/2/settings/baseUrl",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-base-url-config-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Closed exact actor and reviewed native setting. Only four documented nonsecret application keys are admitted; native values are strings and false becomes the string false. System columns are complete ordered nonempty IDs with repetitions retained and use the primary documented JSON overload. Desired base URL is HTTPS without credentials/query/fragment; current safe HTTP metadata is comparison-only and never changes the connection routing. Base URL always remains acknowledged/unconfirmed for global proxy/notification/routing consequences. Read-only edits support only explicit enabled booleans and never promise universal effective enforcement. Other settings confirm only fresh exact configuration. Missing flags/strings/layouts are unavailable, never empty or false. Target receipts contain only digests, ordered column IDs or a Boolean, with their full 16 KiB bound checked before any native request. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-instance-setting-mutations.ts",
+        "packages/keiko-connectors/src/jira-instance-setting-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-instance-setting-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraInstanceSettingMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-instance-setting-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraInstanceSettingMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.set-ipd-monitoring": {
       "identity": "POST /rest/api/2/monitoring/ipd",
       "effect": "write",
@@ -5132,6 +5608,28 @@
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"
       ]
     },
+    "jira.set-issue-type-scheme-projects": {
+      "identity": "PUT /rest/api/2/issuetypescheme/{schemeId}/associations",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-issue-type-scheme-projects-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Closed exact actor-bound native scheme configuration. Complete reviewed issue-type/priority order, actual nullable descriptions/defaults and explicit absence are preserved; missing data is unavailable. Project association inputs independently bind canonical project IDs/keys. Four create/update calls may confirm exact native configuration, not deployment or effective issue permissions. Scheme deletion and all project-association changes remain acknowledged/unconfirmed for aggregate consequences; a visible project list is not the complete issue population. No invented migration flags, issue rewriting, status migration or blanket formal-rule activation. Future issue writes re-read their actual native metadata and saved rules. Input and known receipt bytes are bounded before the single effect; existing intent/approval/ACK/recovery owners prohibit automatic replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-option-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-values.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-review.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraOptionSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-option-scheme-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-review.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOptionSchemeMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.set-my-preference": {
       "identity": "PUT /rest/api/2/mypreferences",
       "effect": "write",
@@ -5236,6 +5734,26 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.set-read-only-mode": {
+      "identity": "PUT /rest/api/2/readonly-mode",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-read-only-config-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Closed exact actor and reviewed native setting. Only four documented nonsecret application keys are admitted; native values are strings and false becomes the string false. System columns are complete ordered nonempty IDs with repetitions retained and use the primary documented JSON overload. Desired base URL is HTTPS without credentials/query/fragment; current safe HTTP metadata is comparison-only and never changes the connection routing. Base URL always remains acknowledged/unconfirmed for global proxy/notification/routing consequences. Read-only edits support only explicit enabled booleans and never promise universal effective enforcement. Other settings confirm only fresh exact configuration. Missing flags/strings/layouts are unavailable, never empty or false. Target receipts contain only digests, ordered column IDs or a Boolean, with their full 16 KiB bound checked before any native request. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-instance-setting-mutations.ts",
+        "packages/keiko-connectors/src/jira-instance-setting-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-instance-setting-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraInstanceSettingMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-instance-setting-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraInstanceSettingMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.set-screen-field-show-when-empty": {
       "identity": "PUT /rest/api/2/screens/{screenId}/tabs/{tabId}/fields/{id}/updateShowWhenEmptyIndicator/{newValue}",
       "effect": "write",
@@ -5288,6 +5806,26 @@
         "packages/keiko-server/src/atlassian/jiraAgileOperationTransport.test.ts"
       ]
     },
+    "jira.set-system-columns": {
+      "identity": "PUT /rest/api/2/settings/columns",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-system-columns-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Closed exact actor and reviewed native setting. Only four documented nonsecret application keys are admitted; native values are strings and false becomes the string false. System columns are complete ordered nonempty IDs with repetitions retained and use the primary documented JSON overload. Desired base URL is HTTPS without credentials/query/fragment; current safe HTTP metadata is comparison-only and never changes the connection routing. Base URL always remains acknowledged/unconfirmed for global proxy/notification/routing consequences. Read-only edits support only explicit enabled booleans and never promise universal effective enforcement. Other settings confirm only fresh exact configuration. Missing flags/strings/layouts are unavailable, never empty or false. Target receipts contain only digests, ordered column IDs or a Boolean, with their full 16 KiB bound checked before any native request. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-instance-setting-mutations.ts",
+        "packages/keiko-connectors/src/jira-instance-setting-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-instance-setting-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraInstanceSettingMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-instance-setting-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraInstanceSettingMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.set-user-property": {
       "identity": "PUT /rest/api/2/user/properties/{propertyKey}",
       "effect": "write",
@@ -5313,6 +5851,132 @@
         "packages/keiko-server/src/store/jiraEntityPropertyMigration.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"
+      ]
+    },
+    "jira.set-workflow-scheme-default": {
+      "identity": "PUT /rest/api/2/workflowscheme/{id}/default",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-workflow-scheme-mapping-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Closed exact actor/parent/draft and native workflow/issue-type identities. Complete configured snapshots preserve native null, empty and omitted fields; configured default is distinct from effective fallback. Base calls fix updateDraftIfNeeded:false and never silently target a draft, publish or migrate statuses. Existing-draft writes require the same reviewed draft and unchanged parent; native draft PUT has no CAS and a concurrent replacement stays unconfirmed. Fresh create IDs come only from a readable native acknowledgement. Base mapping/default changes, base update containing mappings/default and base deletion remain acknowledged/unconfirmed for global consequences. Other confirmation proves only exact configuration; draft deletion needs the independently readable unchanged parent and documented fallback, not a bare404. Native active/in-use/admin/WebSudo constraints remain authoritative. Existing formal rules remain applied to actual issue writes, not prose skills or imagined bulk migrations. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-plan.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.set-workflow-scheme-draft-default": {
+      "identity": "PUT /rest/api/2/workflowscheme/{id}/draft/default",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-workflow-draft-config-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Closed exact actor/parent/draft and native workflow/issue-type identities. Complete configured snapshots preserve native null, empty and omitted fields; configured default is distinct from effective fallback. Base calls fix updateDraftIfNeeded:false and never silently target a draft, publish or migrate statuses. Existing-draft writes require the same reviewed draft and unchanged parent; native draft PUT has no CAS and a concurrent replacement stays unconfirmed. Fresh create IDs come only from a readable native acknowledgement. Base mapping/default changes, base update containing mappings/default and base deletion remain acknowledged/unconfirmed for global consequences. Other confirmation proves only exact configuration; draft deletion needs the independently readable unchanged parent and documented fallback, not a bare404. Native active/in-use/admin/WebSudo constraints remain authoritative. Existing formal rules remain applied to actual issue writes, not prose skills or imagined bulk migrations. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-plan.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.set-workflow-scheme-draft-issue-type": {
+      "identity": "PUT /rest/api/2/workflowscheme/{id}/draft/issuetype/{issueType}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-workflow-draft-config-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Closed exact actor/parent/draft and native workflow/issue-type identities. Complete configured snapshots preserve native null, empty and omitted fields; configured default is distinct from effective fallback. Base calls fix updateDraftIfNeeded:false and never silently target a draft, publish or migrate statuses. Existing-draft writes require the same reviewed draft and unchanged parent; native draft PUT has no CAS and a concurrent replacement stays unconfirmed. Fresh create IDs come only from a readable native acknowledgement. Base mapping/default changes, base update containing mappings/default and base deletion remain acknowledged/unconfirmed for global consequences. Other confirmation proves only exact configuration; draft deletion needs the independently readable unchanged parent and documented fallback, not a bare404. Native active/in-use/admin/WebSudo constraints remain authoritative. Existing formal rules remain applied to actual issue writes, not prose skills or imagined bulk migrations. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-plan.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.set-workflow-scheme-draft-workflow": {
+      "identity": "PUT /rest/api/2/workflowscheme/{id}/draft/workflow",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-workflow-draft-config-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Closed exact actor/parent/draft and native workflow/issue-type identities. Complete configured snapshots preserve native null, empty and omitted fields; configured default is distinct from effective fallback. Base calls fix updateDraftIfNeeded:false and never silently target a draft, publish or migrate statuses. Existing-draft writes require the same reviewed draft and unchanged parent; native draft PUT has no CAS and a concurrent replacement stays unconfirmed. Fresh create IDs come only from a readable native acknowledgement. Base mapping/default changes, base update containing mappings/default and base deletion remain acknowledged/unconfirmed for global consequences. Other confirmation proves only exact configuration; draft deletion needs the independently readable unchanged parent and documented fallback, not a bare404. Native active/in-use/admin/WebSudo constraints remain authoritative. Existing formal rules remain applied to actual issue writes, not prose skills or imagined bulk migrations. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-plan.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.set-workflow-scheme-issue-type": {
+      "identity": "PUT /rest/api/2/workflowscheme/{id}/issuetype/{issueType}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-workflow-scheme-mapping-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Closed exact actor/parent/draft and native workflow/issue-type identities. Complete configured snapshots preserve native null, empty and omitted fields; configured default is distinct from effective fallback. Base calls fix updateDraftIfNeeded:false and never silently target a draft, publish or migrate statuses. Existing-draft writes require the same reviewed draft and unchanged parent; native draft PUT has no CAS and a concurrent replacement stays unconfirmed. Fresh create IDs come only from a readable native acknowledgement. Base mapping/default changes, base update containing mappings/default and base deletion remain acknowledged/unconfirmed for global consequences. Other confirmation proves only exact configuration; draft deletion needs the independently readable unchanged parent and documented fallback, not a bare404. Native active/in-use/admin/WebSudo constraints remain authoritative. Existing formal rules remain applied to actual issue writes, not prose skills or imagined bulk migrations. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-plan.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.set-workflow-scheme-workflow": {
+      "identity": "PUT /rest/api/2/workflowscheme/{id}/workflow",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-workflow-scheme-mapping-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Closed exact actor/parent/draft and native workflow/issue-type identities. Complete configured snapshots preserve native null, empty and omitted fields; configured default is distinct from effective fallback. Base calls fix updateDraftIfNeeded:false and never silently target a draft, publish or migrate statuses. Existing-draft writes require the same reviewed draft and unchanged parent; native draft PUT has no CAS and a concurrent replacement stays unconfirmed. Fresh create IDs come only from a readable native acknowledgement. Base mapping/default changes, base update containing mappings/default and base deletion remain acknowledged/unconfirmed for global consequences. Other confirmation proves only exact configuration; draft deletion needs the independently readable unchanged parent and documented fallback, not a bare404. Native active/in-use/admin/WebSudo constraints remain authoritative. Existing formal rules remain applied to actual issue writes, not prose skills or imagined bulk migrations. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-plan.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
     "jira.sprint": {
@@ -5920,6 +6584,28 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.update-issue-type-scheme": {
+      "identity": "PUT /rest/api/2/issuetypescheme/{schemeId}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-issue-type-scheme-config-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Closed exact actor-bound native scheme configuration. Complete reviewed issue-type/priority order, actual nullable descriptions/defaults and explicit absence are preserved; missing data is unavailable. Project association inputs independently bind canonical project IDs/keys. Four create/update calls may confirm exact native configuration, not deployment or effective issue permissions. Scheme deletion and all project-association changes remain acknowledged/unconfirmed for aggregate consequences; a visible project list is not the complete issue population. No invented migration flags, issue rewriting, status migration or blanket formal-rule activation. Future issue writes re-read their actual native metadata and saved rules. Input and known receipt bytes are bounded before the single effect; existing intent/approval/ACK/recovery owners prohibit automatic replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-option-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-values.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-review.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraOptionSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-option-scheme-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-review.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOptionSchemeMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.update-permission-scheme": {
       "identity": "PUT /rest/api/2/permissionscheme/{schemeId}",
       "effect": "write",
@@ -5943,6 +6629,28 @@
         "packages/keiko-server/src/store/jiraAccessConfigurationMigration.test.ts",
         "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.update-priority-scheme": {
+      "identity": "PUT /rest/api/2/priorityschemes/{schemeId}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-priority-scheme-config-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Closed exact actor-bound native scheme configuration. Complete reviewed issue-type/priority order, actual nullable descriptions/defaults and explicit absence are preserved; missing data is unavailable. Project association inputs independently bind canonical project IDs/keys. Four create/update calls may confirm exact native configuration, not deployment or effective issue permissions. Scheme deletion and all project-association changes remain acknowledged/unconfirmed for aggregate consequences; a visible project list is not the complete issue population. No invented migration flags, issue rewriting, status migration or blanket formal-rule activation. Future issue writes re-read their actual native metadata and saved rules. Input and known receipt bytes are bounded before the single effect; existing intent/approval/ACK/recovery owners prohibit automatic replay. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-option-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-values.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-review.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraOptionSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-option-scheme-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-option-scheme-review.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOptionSchemeMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
@@ -6042,6 +6750,48 @@
         "packages/keiko-connectors/src/jira-managed-versions.test.ts"
       ]
     },
+    "jira.update-workflow-scheme": {
+      "identity": "PUT /rest/api/2/workflowscheme/{id}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-workflow-scheme-update-and-scope-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Closed exact actor/parent/draft and native workflow/issue-type identities. Complete configured snapshots preserve native null, empty and omitted fields; configured default is distinct from effective fallback. Base calls fix updateDraftIfNeeded:false and never silently target a draft, publish or migrate statuses. Existing-draft writes require the same reviewed draft and unchanged parent; native draft PUT has no CAS and a concurrent replacement stays unconfirmed. Fresh create IDs come only from a readable native acknowledgement. Base mapping/default changes, base update containing mappings/default and base deletion remain acknowledged/unconfirmed for global consequences. Other confirmation proves only exact configuration; draft deletion needs the independently readable unchanged parent and documented fallback, not a bare404. Native active/in-use/admin/WebSudo constraints remain authoritative. Existing formal rules remain applied to actual issue writes, not prose skills or imagined bulk migrations. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-plan.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.update-workflow-scheme-draft": {
+      "identity": "PUT /rest/api/2/workflowscheme/{id}/draft",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-workflow-draft-config-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Closed exact actor/parent/draft and native workflow/issue-type identities. Complete configured snapshots preserve native null, empty and omitted fields; configured default is distinct from effective fallback. Base calls fix updateDraftIfNeeded:false and never silently target a draft, publish or migrate statuses. Existing-draft writes require the same reviewed draft and unchanged parent; native draft PUT has no CAS and a concurrent replacement stays unconfirmed. Fresh create IDs come only from a readable native acknowledgement. Base mapping/default changes, base update containing mappings/default and base deletion remain acknowledged/unconfirmed for global consequences. Other confirmation proves only exact configuration; draft deletion needs the independently readable unchanged parent and documented fallback, not a bare404. Native active/in-use/admin/WebSudo constraints remain authoritative. Existing formal rules remain applied to actual issue writes, not prose skills or imagined bulk migrations. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-plan.ts",
+        "packages/keiko-connectors/src/jira-workflow-scheme-mutation-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-scheme-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraWorkflowSchemeMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.update-worklog": {
       "identity": "PUT /rest/api/2/issue/{issueIdOrKey}/worklog/{id}",
       "effect": "write",
@@ -6093,6 +6843,30 @@
         "packages/keiko-connectors/src/jira-managed-job-observations.test.ts",
         "packages/keiko-server/src/atlassian/jiraJobObservationDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.upload-email-template-pack": {
+      "identity": "POST /rest/api/2/email-templates",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-email-template-upload-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Fixed native ZIP export and upload/apply/revert routes, explicit local admin scope and independent native permissions. Export returns bounded metadata/hashes only, though Jira documents creating a temporary local export ZIP. The private transport preserves exact ZIP bytes, fixed application/zip media and existing custody/admission/retry/ACK ownership; raw bytes never enter model/log output. Upload uses the existing connected-file containment/currentness/content owner, server-minted immutable byte snapshot in allowed mode or the existing reviewed approval snapshot in required mode. Model expectedFile is not authority. The shared bounded ZIP reader rejects unsafe entries, aliases, links, unsupported representations and unscannable/credential-bearing contents under the existing credential floor. Strict subset limitations are explicit, not claimed as universal archive compatibility. Apply/revert bind the independently observed active canonical manifest but native staged selection has no CAS or independently readable ID. All three writes always remain acknowledged/unconfirmed; fresh active export is not complete global email-effect or delivery proof. No automatic replay or hidden credential-derived admin grant. This source checkpoint is unexecuted and supplies no runtime qualification or acceptance evidence.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-email-templates.ts",
+        "packages/keiko-connectors/src/jira-email-template-request.ts",
+        "packages/keiko-server/src/atlassian/jiraEmailTemplateArchive.ts",
+        "packages/keiko-server/src/atlassian/jiraEmailTemplateDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-email-templates.test.ts",
+        "packages/keiko-connectors/src/jira-email-template-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEmailTemplateArchive.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEmailTemplateDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.email-template.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
@@ -6703,8 +7477,8 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "b812eede6ed1602aa902144b5a0074915b66b9a5247412eb08b5d80ded8018e6",
-    "nativeOperationCount": 323
+    "sha256": "d9066c8d26df99ace69c0186ae3ff75f40c69dabb63522a2c94a805d1df93303",
+    "nativeOperationCount": 359
   },
   "operations": [
     {
@@ -8478,10 +9252,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.set-application-property"
+      ]
     },
     {
       "identity": "GET /rest/api/2/applicationrole",
@@ -9994,10 +10770,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.email-template-pack"
+      ]
     },
     {
       "identity": "POST /rest/api/2/email-templates",
@@ -10028,10 +10806,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.upload-email-template-pack"
+      ]
     },
     {
       "identity": "POST /rest/api/2/email-templates/apply",
@@ -10062,10 +10842,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.apply-email-template-pack"
+      ]
     },
     {
       "identity": "POST /rest/api/2/email-templates/revert",
@@ -10096,10 +10878,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.revert-email-template-pack"
+      ]
     },
     {
       "identity": "GET /rest/api/2/email-templates/types",
@@ -13774,10 +14558,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.create-issue-type-scheme"
+      ]
     },
     {
       "identity": "DELETE /rest/api/2/issuetypescheme/{schemeId}",
@@ -13809,10 +14595,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.delete-issue-type-scheme"
+      ]
     },
     {
       "identity": "GET /rest/api/2/issuetypescheme/{schemeId}",
@@ -13881,10 +14669,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.update-issue-type-scheme"
+      ]
     },
     {
       "identity": "DELETE /rest/api/2/issuetypescheme/{schemeId}/associations",
@@ -13916,10 +14706,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.clear-issue-type-scheme-projects"
+      ]
     },
     {
       "identity": "GET /rest/api/2/issuetypescheme/{schemeId}/associations",
@@ -13988,10 +14780,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.add-issue-type-scheme-projects"
+      ]
     },
     {
       "identity": "PUT /rest/api/2/issuetypescheme/{schemeId}/associations",
@@ -14023,10 +14817,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.set-issue-type-scheme-projects"
+      ]
     },
     {
       "identity": "DELETE /rest/api/2/issuetypescheme/{schemeId}/associations/{projIdOrKey}",
@@ -14058,10 +14854,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.remove-issue-type-scheme-project"
+      ]
     },
     {
       "identity": "GET /rest/api/2/jql/autocompletedata",
@@ -15489,10 +16287,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.create-priority-scheme"
+      ]
     },
     {
       "identity": "DELETE /rest/api/2/priorityschemes/{schemeId}",
@@ -15524,10 +16324,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.delete-priority-scheme"
+      ]
     },
     {
       "identity": "GET /rest/api/2/priorityschemes/{schemeId}",
@@ -15596,10 +16398,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.update-priority-scheme"
+      ]
     },
     {
       "identity": "GET /rest/api/2/project",
@@ -17250,10 +18054,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.set-read-only-mode"
+      ]
     },
     {
       "identity": "GET /rest/api/2/reindex",
@@ -18677,10 +19483,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.set-instance-base-url"
+      ]
     },
     {
       "identity": "GET /rest/api/2/settings/columns",
@@ -18743,10 +19551,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.set-system-columns"
+      ]
     },
     {
       "identity": "GET /rest/api/2/status",
@@ -21147,10 +21957,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.create-workflow-scheme"
+      ]
     },
     {
       "identity": "DELETE /rest/api/2/workflowscheme/{id}",
@@ -21182,10 +21994,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.delete-workflow-scheme"
+      ]
     },
     {
       "identity": "GET /rest/api/2/workflowscheme/{id}",
@@ -21254,10 +22068,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.update-workflow-scheme"
+      ]
     },
     {
       "identity": "POST /rest/api/2/workflowscheme/{id}/createdraft",
@@ -21289,10 +22105,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.create-workflow-scheme-draft"
+      ]
     },
     {
       "identity": "DELETE /rest/api/2/workflowscheme/{id}/default",
@@ -21324,10 +22142,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.delete-workflow-scheme-default"
+      ]
     },
     {
       "identity": "GET /rest/api/2/workflowscheme/{id}/default",
@@ -21396,10 +22216,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.set-workflow-scheme-default"
+      ]
     },
     {
       "identity": "DELETE /rest/api/2/workflowscheme/{id}/draft",
@@ -21431,10 +22253,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.delete-workflow-scheme-draft"
+      ]
     },
     {
       "identity": "GET /rest/api/2/workflowscheme/{id}/draft",
@@ -21503,10 +22327,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.update-workflow-scheme-draft"
+      ]
     },
     {
       "identity": "DELETE /rest/api/2/workflowscheme/{id}/draft/default",
@@ -21538,10 +22364,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.delete-workflow-scheme-draft-default"
+      ]
     },
     {
       "identity": "GET /rest/api/2/workflowscheme/{id}/draft/default",
@@ -21610,10 +22438,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.set-workflow-scheme-draft-default"
+      ]
     },
     {
       "identity": "DELETE /rest/api/2/workflowscheme/{id}/draft/issuetype/{issueType}",
@@ -21645,10 +22475,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.delete-workflow-scheme-draft-issue-type"
+      ]
     },
     {
       "identity": "GET /rest/api/2/workflowscheme/{id}/draft/issuetype/{issueType}",
@@ -21717,10 +22549,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.set-workflow-scheme-draft-issue-type"
+      ]
     },
     {
       "identity": "DELETE /rest/api/2/workflowscheme/{id}/draft/workflow",
@@ -21752,10 +22586,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.delete-workflow-scheme-draft-workflow"
+      ]
     },
     {
       "identity": "GET /rest/api/2/workflowscheme/{id}/draft/workflow",
@@ -21824,10 +22660,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.set-workflow-scheme-draft-workflow"
+      ]
     },
     {
       "identity": "DELETE /rest/api/2/workflowscheme/{id}/issuetype/{issueType}",
@@ -21859,10 +22697,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.delete-workflow-scheme-issue-type"
+      ]
     },
     {
       "identity": "GET /rest/api/2/workflowscheme/{id}/issuetype/{issueType}",
@@ -21931,10 +22771,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.set-workflow-scheme-issue-type"
+      ]
     },
     {
       "identity": "DELETE /rest/api/2/workflowscheme/{id}/workflow",
@@ -21966,10 +22808,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.delete-workflow-scheme-workflow"
+      ]
     },
     {
       "identity": "GET /rest/api/2/workflowscheme/{id}/workflow",
@@ -22038,10 +22882,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.set-workflow-scheme-workflow"
+      ]
     },
     {
       "identity": "GET /rest/api/2/worklog/deleted",

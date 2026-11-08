@@ -1,5 +1,10 @@
 import { executeJiraPermissionSchemeMutation, isJiraPermissionSchemeMutation } from "./jira-managed-permission-scheme-mutations.js";
 import { executeJiraRoleMutation, isJiraRoleMutation } from "./jira-managed-role-mutations.js";
+import { executeJiraOptionSchemeMutation, isJiraOptionSchemeMutation } from "./jira-managed-option-scheme-mutations.js";
+import { executeJiraWorkflowSchemeMutation, isJiraWorkflowSchemeMutation } from "./jira-managed-workflow-scheme-mutations.js";
+import { executeJiraInstanceSettingMutation, isJiraInstanceSettingMutation } from "./jira-managed-instance-setting-mutations.js";
+import { executeJiraEmailTemplateMutation, isJiraEmailTemplateMutation } from "./jira-managed-email-templates.js";
+import { jiraManagedEmailTemplatePorts } from "./jira-managed-email-template-ports.js";
 import { jiraPermissionAttributeRequest } from "./jira-permission-attribute-request.js";
 import { executeJiraScreenTabMutation, isJiraScreenTabMutation } from "./jira-managed-screen-tab-mutations.js";
 import { executeJiraScreenConfigurationMutation, isJiraScreenConfigurationMutation } from "./jira-managed-screen-configuration.js";
@@ -1459,7 +1464,8 @@ function dedicatedMutation(
 ): Promise<JiraMutationAttempt> | undefined {
   const args = structuredClone(source);
   const request = requestFor(connection, context);
-  const specialized = permissionRoleMutation(operation, args, request, connection, context, check)
+  const specialized = instanceConfigurationMutation(operation, args, request, connection, context, check)
+    ?? permissionRoleMutation(operation, args, request, connection, context, check)
     ?? configurationMutation(operation, args, request, context, connection, check)
     ?? deletionMutation(operation, args, request, connection, check)
     ?? nativeLifecycleMutation(operation, args, request, connection, check);
@@ -1477,6 +1483,28 @@ function dedicatedMutation(
   if (isJiraProjectMutation(operation))
     return executeJiraProjectMutation(operation, args, request, check);
   return undefined;
+}
+
+function instanceConfigurationMutation(
+  operation: JiraMutationOperation,
+  args: CatalogJsonObject,
+  request: JiraMutationRequest,
+  connection: JiraManagedConnection,
+  context: ManagedMcpInvocationContext,
+  check: boolean,
+): Promise<JiraMutationAttempt> | undefined {
+  if (isJiraOptionSchemeMutation(operation)) return executeJiraOptionSchemeMutation(operation, args, request, check);
+  if (isJiraWorkflowSchemeMutation(operation)) return executeJiraWorkflowSchemeMutation(operation, args, request, check);
+  if (isJiraInstanceSettingMutation(operation)) return executeJiraInstanceSettingMutation(operation, args, request, check);
+  if (!isJiraEmailTemplateMutation(operation)) return undefined;
+  const ports = jiraManagedEmailTemplatePorts(connection, context, request, check);
+  if (ports === undefined) return Promise.resolve({ ok: false, reason: "unavailable" });
+  if (operation === "jira.upload-email-template-pack" && ports.source === undefined) return Promise.resolve({
+    ok: false, reason: "unavailable", detail: { messages: [
+      "Email-template upload requires a Chat with a connected file or folder and the existing file review. No archive was uploaded.",
+    ] },
+  });
+  return executeJiraEmailTemplateMutation(operation, args, ports, check);
 }
 
 /** Fresh capability metadata and one mutation request. Durability/authority remain server-owned. */
@@ -1567,7 +1595,9 @@ function isNativeLifecycleMutation(operation: JiraMutationOperation): boolean {
 function isReviewedConfigurationMutation(operation: JiraMutationOperation): boolean {
   return [isJiraEntityPropertyMutation, isJiraScreenTabMutation, isJiraScreenConfigurationMutation,
     isJiraBoardConfigurationMutation, isJiraSprintLifecycleMutation, isJiraAgilePlanningMutation,
-    isJiraMonitoringMutation, isJiraPermissionSchemeMutation, isJiraRoleMutation].some((accepts) => accepts(operation));
+    isJiraMonitoringMutation, isJiraPermissionSchemeMutation, isJiraRoleMutation,
+    isJiraOptionSchemeMutation, isJiraWorkflowSchemeMutation, isJiraInstanceSettingMutation,
+    isJiraEmailTemplateMutation].some((accepts) => accepts(operation));
 }
 function requiresSuccessfulPreflight(operation: JiraMutationOperation): boolean {
   return (

@@ -701,9 +701,9 @@ Memory retains its separate explicit-or-`governed-assist` default. This availabi
 itself grant a Chat read grant, mutation approval, connector scope or authority envelope.
 
 
-**Explicit instance administration (#4287, review 4503902861).** The thirty-eight implemented administration writes—application/IPD monitoring, JMX exposure
+**Explicit instance administration (#4287, review 4503902861).** The seventy-three implemented administration writes—application/IPD monitoring, JMX exposure
 start/stop, screen-tab and screen-field layout changes, issue-type property set/delete, filter creation,
-future-filter default sharing, filter permission addition/removal, project-category lifecycle, role/default/project-membership, permission-scheme/grant/attribute changes and instance-wide sprint synchronization cleanup—use the separate connector class
+future-filter default sharing, filter permission addition/removal, project-category lifecycle, role/default/project-membership, permission-scheme/grant/attribute changes, issue-type/priority/workflow-scheme configuration, four closed instance settings, email-template upload/apply/revert and instance-wide sprint synchronization cleanup—use the separate connector class
 `connector-admin` and require `issue-tracker.admin`. Ordinary `issue-tracker.write` never admits
 these operations, including in Full access. They retain high risk and the same Workbench
 `connector-access` class, `internet` resource scope, supervised `connector-write` kind and existing
@@ -759,6 +759,33 @@ opt-in before dispatch admission or credential materialisation. Ordinary seriali
 their JSON media type. This transport contract remains inside the existing authority, custody,
 timeouts and method-aware retry owner; the operation's local administration and native permissions
 remain independently required.
+
+Issue-type/priority schemes bind complete configured order/defaults and canonical project identities.
+Association and deletion acknowledgements do not prove aggregate issue consequences. Workflow
+scheme mutations bind the complete parent and, where selected, the exact reviewed draft. Base
+writes fix `updateDraftIfNeeded:false`; no call publishes or fabricates status migration. Native
+in-use restrictions remain independent, and draft PUT has no atomic compare-and-swap: a concurrently
+recreated draft cannot become confirmed success. Base mapping/default effects remain unconfirmed;
+exact draft configuration is not deployment. These configuration changes do not activate prose
+skills or invent a formal bulk-field migration; later issue writes rebind native metadata and rules.
+
+Closed instance-setting writes bind the exact actor and prior configuration. Four documented
+nonsecret application keys use native string values; global columns use the primary JSON overload
+with complete ordered IDs and repetitions. Base URL values are comparison-only, never new outbound
+routing; the desired value is safe HTTPS and global consequences remain unconfirmed. Read-only
+confirmation proves only the observed Boolean configuration. Target receipt bytes are bounded
+before any request; values/URLs are digests in private receipts.
+
+Email-template export is an explicit administration read with low risk, despite Jira's documented
+temporary local export ZIP. Only fixed raw `application/zip` download/upload is admitted, through
+the same custody, bounds, current authority and ACK/retry owners. Upload reuses connected-file
+containment, currentness and the credential floor; allowed mode mints a private immutable file
+snapshot under accepted authority, while review-required mode binds the existing approved snapshot.
+Model file metadata grants no authority and allowed mode gains no new mandatory prompt. Strict ZIP
+inspection reuses the existing bounded reader, rejects unsafe/unsupported entries and returns
+only manifest metadata/hashes. Unsupported export representations remain explicitly unavailable.
+Upload/apply/revert always stay acknowledged/unconfirmed: staged selection has no readable stable
+ID or CAS and active export is not proof of global email consequences. No replay is scheduled.
 
 Three native anonymization validation/progress observations use that same explicit admin scope
 while retaining low read risk and the existing per-Chat read grant. Their GET contracts do not

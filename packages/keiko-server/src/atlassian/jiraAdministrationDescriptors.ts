@@ -1,9 +1,11 @@
+import { JIRA_ISSUE_TYPE_SCHEME_REVIEW_SCHEMA } from "./jiraOptionSchemeSchemas.js";
 import {
   TOOL_CATALOG_LIMITS,
   type CatalogJsonObject,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { object, text } from "./jiraManagedSchemas.js";
+import { jiraWorkflowSchemeReviewSchema } from "./jiraWorkflowSchemeReviewSchema.js";
 import {
   jiraNativeIdentitySchema as ID,
   jiraNativeProjectSchema as KEY,
@@ -26,6 +28,8 @@ const ISSUE_TYPE_SCHEME = object(
     description: text(32768),
     issueTypes: { type: "array", maxItems: TOOL_CATALOG_LIMITS.maxArrayItems, items: ISSUE_TYPE },
     defaultIssueType: ISSUE_TYPE,
+    reviewSnapshotAvailable: BOOL,
+    reviewSnapshot: JIRA_ISSUE_TYPE_SCHEME_REVIEW_SCHEMA,
   },
   ["id", "name"],
 );
@@ -65,6 +69,7 @@ export const JIRA_WORKFLOW_SCHEME_RESULT_FIELDS = {
   defaultWorkflow: NAME,
   originalDefaultWorkflow: NAME,
   lastModified: text(128),
+  reviewSnapshot: jiraWorkflowSchemeReviewSchema,
   ...page(SCHEME_MAPPING),
 };
 const SCHEME_RESULT = jiraNativeReadResult(JIRA_WORKFLOW_SCHEME_RESULT_FIELDS);
@@ -91,7 +96,7 @@ export const JIRA_ADMINISTRATION_READ_DEFINITIONS = {
     jiraNativeReadResult(page(ISSUE_TYPE_SCHEME)),
   ),
   "jira.issue-type-scheme": read(
-    "Inspect one exact native issue-type scheme, its available type definitions and default type. Jira administration permission is required. Missing optional metadata is not inferred, and no issue migration or scheme mutation occurs.",
+    "Inspect one exact native issue-type scheme, its available type definitions and default type. Jira administration permission is required. Missing optional metadata is not inferred, and no issue migration or scheme mutation occurs. reviewSnapshot is available only with independently observed description (including null), ordered type IDs and explicit default; omitted facts never become a reviewable null or empty set.",
     object({ schemeId: ID }, ["schemeId"]),
     jiraNativeReadResult({ schemeId: ID, ...page(ISSUE_TYPE_SCHEME) }),
     1,

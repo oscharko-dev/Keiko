@@ -78,6 +78,8 @@ import {
  */
 
 export interface CodingJiraPodDeps extends JiraPodAccessDeps {
+  /** Bound by server composition to its current credential floor; never supplied by the runtime. */
+  readonly emailTemplateInspection?: (signal: AbortSignal) => NonNullable<JiraManagedConnection["emailTemplates"]>;
   /**
    * The skill library holds the customer-defined issue templates every Jira write is checked by.
    * Required: a Pod wired without it would write unchecked, so that cannot be expressed.
@@ -428,6 +430,7 @@ class CodingJiraPodService implements CodingJiraPods {
         beforeDispatch: () => this.admit(binding, context),
       }),
       issueTemplates: jiraIssueTemplateSource(deps.store),
+      ...(deps.emailTemplateInspection === undefined ? {} : { emailTemplates: deps.emailTemplateInspection(context.signal) }),
       templateMetadataActivity: (activity): void => {
         recordJiraTemplateMetadata(undefined, context.correlationId, activity);
       },

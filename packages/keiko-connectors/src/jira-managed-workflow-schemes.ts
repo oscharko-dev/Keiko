@@ -10,6 +10,7 @@ import { boundJiraReadResult } from "./jira-managed-issue-reads.js";
 import { jiraReadFailure, localJiraPage } from "./jira-managed-metadata.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { jiraNativeId, jiraNativeText } from "./jira-native-values.js";
+import { jiraWorkflowSchemeMappings as mappings, jiraWorkflowSchemeReviewSnapshot } from "./jira-workflow-scheme-values.js";
 
 const OPERATIONS = {
   "jira.workflow-scheme": { kind: "scheme", draft: false },
@@ -119,16 +120,6 @@ function optionalText(
   }
   return result;
 }
-function mappings(value: unknown): ReadonlyMap<string, string> | undefined {
-  const raw = asRecord(value);
-  if (raw === undefined || Object.keys(raw).length > MAX_NATIVE) return undefined;
-  const result = new Map<string, string>();
-  for (const [key, workflow] of Object.entries(raw)) {
-    if (!jiraNativeId(key) || !jiraNativeText(workflow, 255)) return undefined;
-    result.set(key, workflow);
-  }
-  return result;
-}
 function schemeMappings(raw: Record<string, unknown>): readonly CatalogJsonObject[] | undefined {
   const current = mappings(raw.issueTypeMappings ?? {});
   const original = mappings(raw.originalIssueTypeMappings ?? {});
@@ -173,12 +164,14 @@ export function jiraWorkflowSchemeResult(
   )
     return jiraReadFailure("malformed-payload");
   if (!schemeIdentityMatches(raw, id, selected)) return jiraReadFailure("malformed-payload");
+  const reviewSnapshot = jiraWorkflowSchemeReviewSnapshot(raw);
   const data: CatalogJsonObject = {
     outcome: "succeeded",
     schemeId: selected.schemeId,
     id,
     ...text,
     ...(typeof raw.draft === "boolean" ? { draft: raw.draft } : {}),
+    ...(reviewSnapshot === undefined ? {} : { reviewSnapshot }),
   };
   if (
     ![raw.issueTypeMappings, raw.originalIssueTypeMappings].some(

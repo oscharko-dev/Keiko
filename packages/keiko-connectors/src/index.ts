@@ -356,3 +356,4 @@ export { jiraRemoteVersionLinkGlobalId } from "./jira-managed-remote-version-lin
 export { rolePrincipalText } from "./jira-role-values.js";
 export { isJiraFieldId } from "./jira-field-metadata.js";
 export { JIRA_NONSECRET_PREFERENCE_KINDS } from "./jira-managed-application-settings.js";
+export type { JiraEmailTemplateEntry, JiraEmailTemplatePack, JiraEmailTemplateObservation } from "./jira-email-template-values.js";

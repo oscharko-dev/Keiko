@@ -1,3 +1,4 @@
+import { JIRA_PRIORITY_SCHEME_REVIEW_SCHEMA } from "./jiraOptionSchemeSchemas.js";
 import {
   TOOL_CATALOG_LIMITS,
   type CatalogJsonObject,
@@ -14,6 +15,8 @@ import {
   type JiraNativeDefinition,
 } from "./jiraProjectStructureDescriptors.js";
 
+const PRIORITY_SCHEME_FIELDS = { ...JIRA_PRIORITY_SCHEME_RESULT_FIELDS,
+  reviewSnapshotAvailable: { type: "boolean" }, reviewSnapshot: JIRA_PRIORITY_SCHEME_REVIEW_SCHEMA };
 const MAX = TOOL_CATALOG_LIMITS.maxArrayItems;
 const NAME = { ...text(255), minLength: 1 };
 export const jiraRoleReviewSnapshotSchema = object({ id: ID, name: NAME,
@@ -81,12 +84,12 @@ export const JIRA_ROLE_READ_DEFINITIONS = {
   "jira.priority-schemes": read(
     "Read a native page of visible priority schemes. Preserve observed defaults and priority IDs using the same contract as project associations; follow native paging and reported totals. Do not infer project assignments, user permissions or available issue edits from this metadata.",
     object(PAGING),
-    page(object(JIRA_PRIORITY_SCHEME_RESULT_FIELDS, ["id", "name"]), false),
+    page(object(PRIORITY_SCHEME_FIELDS, ["id", "name"]), false),
   ),
   "jira.priority-scheme": read(
-    "Inspect one exact native priority scheme. Preserve supplied default-scheme state, default priority ID and priority membership, with missing optional metadata unknown. No default, ordering, priority or project association changes.",
+    "Inspect one exact native priority scheme. Preserve supplied default-scheme state, default priority ID and priority membership, with missing optional metadata unknown. No default, ordering, priority or project association changes. Optional reviewSnapshot preserves explicit null description/default, native false and complete ordered priority IDs; missing facts make review unavailable.",
     object({ schemeId: ID }, ["schemeId"]),
-    JIRA_PRIORITY_SCHEME_RESULT_FIELDS,
+    PRIORITY_SCHEME_FIELDS,
     1,
   ),
 } as const satisfies Readonly<Record<string, JiraNativeDefinition>>;

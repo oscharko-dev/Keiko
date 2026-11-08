@@ -6,6 +6,7 @@ import {
   jiraPresentationFact as fact,
   jiraPresentationRecord as record,
   jiraPresentationText as text,
+  jiraPresentationNativeText as nativeText,
   type JiraPresentationSource as Source,
 } from "./jira-presentation-values";
 export const JIRA_INSTANCE_TOOLS: ReadonlySet<string> = new Set([
@@ -36,6 +37,16 @@ const TIME_LABELS: Readonly<Record<string, Readonly<Record<string, WidgetMessage
     pretty: "chat.jira.instance.formatPretty", days: "chat.jira.instance.formatDays", hours: "chat.jira.instance.formatHours",
   },
 };
+function comparisonUrl(value: unknown): value is string {
+  if (!nativeText(value, 2048) || /[\s\\@?#]/u.test(value) || !URL.canParse(value)) return false;
+  const parsed = new URL(value);
+  return (parsed.protocol === "http:" || parsed.protocol === "https:") && parsed.hostname.length > 0 && parsed.username === "" && parsed.password === "";
+}
+function baseUrlReview(source: Source): JiraAgileDetails {
+  return source.configuredBaseUrlState === "observed" && comparisonUrl(source.configuredBaseUrl)
+    ? { facts: [{ label: "chat.jira.instanceWrite.reviewedBaseUrl", value: source.configuredBaseUrl }], labels: ["chat.jira.instanceWrite.noNavigation"] }
+    : { facts: [], labels: ["chat.jira.instanceWrite.configuredBaseUrlUnavailable"] };
+}
 function serverInfo(source: Source): readonly JiraAgileDetails[] {
   if (text(source.version) === undefined) return [];
   const facts = Object.entries(SERVER_FACTS).flatMap(([field, label]) => fact(label, source[field]));
@@ -44,7 +55,8 @@ function serverInfo(source: Source): readonly JiraAgileDetails[] {
     typeof part === "number" && Number.isSafeInteger(part) && part >= 0))
     facts.push({ label: "chat.jira.instance.versionNumbers", value: parts.join(".") });
   const name = text(source.serverTitle);
-  return [{ ...(name === undefined ? {} : { name }), facts, labels: ["chat.jira.instance.serverObservation"] }];
+  const review = baseUrlReview(source);
+  return [{ ...(name === undefined ? {} : { name }), facts: [...facts, ...review.facts], labels: ["chat.jira.instance.serverObservation", ...review.labels] }];
 }
 function timeSettings(value: unknown): JiraAgileDetails {
   const source = record(value);

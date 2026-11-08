@@ -4,6 +4,14 @@ import { jiraInstanceDeclarationForTool } from "./jiraInstanceDescriptors.js";
 import { JIRA_DIRECTORY_READ_DEFINITIONS } from "./jiraDirectoryDescriptors.js";
 import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
 
+it("describes configured base URL as a comparison-only fact with explicit availability", () => {
+  const declaration = jiraInstanceDeclarationForTool("jira.server-info");
+  if (declaration === undefined) throw new TypeError("Missing server-info declaration");
+  expect(describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, { outcome: "succeeded", version: "11.3", configuredBaseUrlState: "observed", configuredBaseUrl: "http://proxy.synthetic.invalid/context" })).toBeUndefined();
+  expect(describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, { outcome: "succeeded", version: "11.3", configuredBaseUrlState: "unavailable" })).toBeUndefined();
+  expect(declaration.descriptor.description).toContain("never a trusted request or navigation destination");
+});
+
 it.each([
   ["jira.server-info", {}, { version: "11.4-SNAPSHOT", versionNumbers: [11, 4, 0], buildNumber: "9007199254740993", databaseBuildNumber: "0" }],
   ["jira.instance-configuration", {}, { watchingEnabled: false, timeTrackingConfiguration: { workingHoursPerDay: 7.5, workingDaysPerWeek: 0, defaultUnit: "hour", timeFormat: "pretty" } }],

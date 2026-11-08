@@ -46,6 +46,10 @@ function reportObservationFailure(correlationId: string, error: unknown): void {
 
 /** A JSON body is declared as such; a governed upload also carries Jira's XSRF opt-out (#4176). */
 function requestBodyHeaders(request: RequestSnapshot): Record<string, string> {
+  const archive = emailTemplateHeaders(
+    "jiraEmailTemplateArchive" in request ? request.jiraEmailTemplateArchive : undefined, request,
+  );
+  if (archive !== undefined) return archive;
   const permissionAttribute = permissionAttributeHeaders(
     "jiraPermissionAttribute" in request ? request.jiraPermissionAttribute : undefined, request,
   );
@@ -55,6 +59,27 @@ function requestBodyHeaders(request: RequestSnapshot): Record<string, string> {
   return "bodyJson" in request && request.bodyJson !== undefined
     ? { "content-type": "application/json" }
     : {};
+}
+function emailTemplateHeaders(value: unknown, request: RequestSnapshot): Record<string, string> | undefined {
+  if (value === undefined) return undefined;
+  if (value !== true || !("maxBodyBytes" in request) || !URL.canParse(request.url))
+    throw new AtlassianCredentialCustodyError("invalid-input", ["Unsupported email-template archive request"]);
+  const url = new URL(request.url);
+  if (!emailTemplateUrl(url, request.url))
+    throw new AtlassianCredentialCustodyError("invalid-input", ["Unsupported email-template archive target"]);
+  return emailTemplateBodyHeaders(request);
+}
+function emailTemplateBodyHeaders(request: AtlassianHttpBodyRequest): Record<string, string> {
+  if (request.bodyJson !== undefined || request.jiraExperimental !== undefined || request.jiraPermissionAttribute !== undefined)
+    throw new AtlassianCredentialCustodyError("invalid-input", ["Unsupported email-template archive content"]);
+  if (request.method === "GET" && request.upload === undefined) return { accept: "application/zip" };
+  if (request.method === "POST" && request.upload?.contentType === "application/zip")
+    return { "content-type": "application/zip" };
+  throw new AtlassianCredentialCustodyError("invalid-input", ["Unsupported email-template archive body"]);
+}
+function emailTemplateUrl(url: URL, raw: string): boolean {
+  return closedJiraUrl(url) && url.toString() === raw &&
+    url.pathname.endsWith("/rest/api/2/email-templates") && !/%(?:2e|2f|5c|25)/iu.test(url.pathname);
 }
 function closedJiraUrl(url: URL): boolean {
   return url.protocol === "https:" && url.search === "" && url.hash === "" &&

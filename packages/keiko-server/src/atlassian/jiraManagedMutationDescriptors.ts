@@ -1,3 +1,7 @@
+import { jiraOptionSchemeMutationDeclarationForTool, type JIRA_OPTION_SCHEME_WRITE_DEFINITIONS } from "./jiraOptionSchemeMutationDescriptors.js";
+import { jiraWorkflowSchemeMutationDeclarationForTool, type JIRA_WORKFLOW_SCHEME_WRITE_DEFINITIONS } from "./jiraWorkflowSchemeMutationDescriptors.js";
+import { jiraInstanceSettingMutationDeclarationForTool, type JIRA_INSTANCE_SETTING_WRITE_DEFINITIONS } from "./jiraInstanceSettingMutationDescriptors.js";
+import { jiraEmailTemplateDeclarationForTool, type JIRA_EMAIL_TEMPLATE_DEFINITIONS } from "./jiraEmailTemplateDescriptors.js";
 import {
   jiraPermissionSchemeMutationDeclarationForTool,
   type JIRA_PERMISSION_SCHEME_WRITE_DEFINITIONS,
@@ -445,6 +449,10 @@ type CoreMutationToolName = Exclude<
   JiraMutationOperation,
   Extract<
     JiraMutationOperation,
+    | keyof typeof JIRA_OPTION_SCHEME_WRITE_DEFINITIONS
+    | keyof typeof JIRA_WORKFLOW_SCHEME_WRITE_DEFINITIONS
+    | keyof typeof JIRA_INSTANCE_SETTING_WRITE_DEFINITIONS
+    | keyof typeof JIRA_EMAIL_TEMPLATE_DEFINITIONS
     | keyof typeof JIRA_PERMISSION_SCHEME_WRITE_DEFINITIONS
     | keyof typeof JIRA_ROLE_WRITE_DEFINITIONS
     | keyof typeof JIRA_SPRINT_LIFECYCLE_WRITE_DEFINITIONS
@@ -633,6 +641,10 @@ function isCoreMutationTool(name: JiraMutationOperation): name is CoreMutationTo
 }
 export function jiraMutationDeclaration(name: JiraMutationOperation): ManagedMcpToolDeclaration {
   for (const producer of [
+    jiraOptionSchemeMutationDeclarationForTool,
+    jiraWorkflowSchemeMutationDeclarationForTool,
+    jiraInstanceSettingMutationDeclarationForTool,
+    jiraEmailTemplateDeclarationForTool,
     jiraPermissionSchemeMutationDeclarationForTool,
     jiraRoleMutationDeclarationForTool,
     jiraVersionLinkMutationDeclarationForTool,

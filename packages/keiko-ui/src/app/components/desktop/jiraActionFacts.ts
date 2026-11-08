@@ -22,6 +22,7 @@ import { jiraStructuralMutationFacts, jiraStructuralMutationContextFacts } from 
 import { jiraConfigurationMutationFacts, jiraConfigurationMutationContextFacts } from "./jira-configuration-mutation-approval";
 import { jiraPlanningMutationFacts, jiraPlanningMutationContextFacts } from "./jira-planning-mutation-approval";
 import { jiraAccessConfigurationFacts, jiraAccessConfigurationContextFacts } from "./jira-access-configuration-approval";
+import { jiraAdministrativeMutationFacts, jiraAdministrativeMutationContextFacts } from "./jira-administrative-mutation-approval";
 
 type Raw = Readonly<Record<string, unknown>>;
 type Fact = JiraDraftField;
@@ -270,7 +271,7 @@ function jiraFacts(key: string, value: unknown, t: OptionalWidgetTranslate): rea
 }
 
 const OPERATION_FACTS = [deletionFacts, jiraPropertyMutationFacts, jiraSavedConfigurationFacts,
-  jiraStructuralMutationFacts, jiraConfigurationMutationFacts, jiraAccessConfigurationFacts,
+  jiraStructuralMutationFacts, jiraConfigurationMutationFacts, jiraAccessConfigurationFacts, jiraAdministrativeMutationFacts,
   jiraPlanningMutationFacts, screenTabFacts, monitoringFacts] as const;
 function operationFacts(operation: string | undefined, key: string, value: unknown, t: OptionalWidgetTranslate): readonly Fact[] | undefined {
   for (const present of OPERATION_FACTS) {
@@ -314,7 +315,7 @@ export function jiraActionFacts(
   return managed ? [...facts, ...deletionContextFacts(raw, operation, t), ...monitoringContextFacts(operation, t),
     ...jiraSavedConfigurationContextFacts(operation, raw, t), ...jiraStructuralMutationContextFacts(operation, t),
     ...jiraConfigurationMutationContextFacts(operation, t), ...jiraPlanningMutationContextFacts(operation, t),
-    ...jiraAccessConfigurationContextFacts(operation, raw, t)] : facts;
+    ...jiraAccessConfigurationContextFacts(operation, raw, t), ...jiraAdministrativeMutationContextFacts(operation, raw, t)] : facts;
 }
 /** Jira's own names where this turn read them; a field that repeats the target is said once. */
 function managedFacts(

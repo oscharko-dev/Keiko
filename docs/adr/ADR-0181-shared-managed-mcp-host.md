@@ -165,10 +165,18 @@ factory, never a raw token resolver. Every metadata and confirmation read rechec
 authority and the Chat read grant. The exact action approval is claimed atomically inside
 the durable journal's dispatch boundary, immediately before the first mutating HTTP request;
 metadata reads and duplicate deliveries cannot consume or reapply that claim. Full access
-uses the same boundary with its currently validated allowed disposition. The thirty-eight global
+uses the same boundary with its currently validated allowed disposition. The seventy-three global
 administration writes additionally require the explicitly selected `issue-tracker.admin` scope
 defined in ADR-0128 D4. A Chat scope change advances the existing binding generation and revokes
 earlier approvals; neither schema selection nor Full access supplies administration authority.
+
+Four administration observations retain read effects and low risk: three anonymization diagnostics
+and metadata-only email-template export. The fixed ZIP byte port uses the existing request lifecycle
+and never exposes template bytes to the model or log. File snapshots follow the existing mode-derived
+authority: private immutable snapshots in allowed mode and reviewed snapshots where approval is
+required. Global template replacement, base-URL consequences and scheme-wide effects cannot be
+confirmed from partial configuration readbacks. Exact draft configuration never means publication;
+no alternative transport, approval store or replay owner is introduced.
 
 HTTP acknowledgement is recorded before parsing a response or evaluating late cancellation.
 The fixed Jira request owners share one private admission wrapper over the existing bounded HTTP

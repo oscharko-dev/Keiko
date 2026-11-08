@@ -1,6 +1,11 @@
 import { PERMISSION_SCHEME_MUTATION_CASES as PERMISSION_CASES } from "../../../../tests/support/jira-permission-scheme-mutation-fixture.js";
 import { ROLE_MUTATION_FIXTURE_CASES as ROLE_CASES } from "../../../../tests/support/jira-role-mutation-fixture.js";
 import { permissionRoleTransportController } from "../../../../tests/support/jira-permission-role-transport-fixture.js";
+import { OPTION_SCHEME_MUTATION_CASES as OPTION_CASES } from "../../../../tests/support/jira-option-scheme-fixture.js";
+import { WORKFLOW_SCHEME_MUTATION_FIXTURE_CASES as WORKFLOW_CASES } from "../../../../tests/support/jira-workflow-scheme-mutation-fixture.js";
+import { INSTANCE_SETTING_FIXTURE_CASES as INSTANCE_CASES } from "../../../../tests/support/jira-instance-setting-mutation-fixture.js";
+import { schemeSettingTransportController } from "../../../../tests/support/jira-scheme-setting-transport-fixture.js";
+import { EMAIL_TEMPLATE_NATIVE_CASES as EMAIL_CASES, emailTemplateTransportController, emailTemplateFixtureAdmission } from "../../../../tests/support/jira-email-template-transport-fixture.js";
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type {
@@ -51,6 +56,42 @@ const CREATE = {
 };
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
+  { tool: "jira.create-issue-type-scheme", args: OPTION_CASES[0].args, expectedReceipt: OPTION_CASES[0].receipt },
+  { tool: "jira.update-issue-type-scheme", args: OPTION_CASES[1].args, parameters: { schemeId: "7" }, expectedReceipt: OPTION_CASES[1].receipt },
+  { tool: "jira.delete-issue-type-scheme", args: OPTION_CASES[2].args, parameters: { schemeId: "7" }, expectedReceipt: OPTION_CASES[2].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.add-issue-type-scheme-projects", args: OPTION_CASES[3].args, parameters: { schemeId: "7" }, expectedReceipt: OPTION_CASES[3].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.set-issue-type-scheme-projects", args: OPTION_CASES[4].args, parameters: { schemeId: "7" }, expectedReceipt: OPTION_CASES[4].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.clear-issue-type-scheme-projects", args: OPTION_CASES[5].args, parameters: { schemeId: "7" }, expectedReceipt: OPTION_CASES[5].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.remove-issue-type-scheme-project", args: OPTION_CASES[6].args, parameters: { schemeId: "7", projIdOrKey: "10000" }, expectedReceipt: OPTION_CASES[6].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.create-priority-scheme", args: OPTION_CASES[7].args, expectedReceipt: OPTION_CASES[7].receipt },
+  { tool: "jira.update-priority-scheme", args: OPTION_CASES[8].args, parameters: { schemeId: "9" }, expectedReceipt: OPTION_CASES[8].receipt },
+  { tool: "jira.delete-priority-scheme", args: OPTION_CASES[9].args, parameters: { schemeId: "9" }, expectedReceipt: OPTION_CASES[9].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.create-workflow-scheme", args: WORKFLOW_CASES[0].args, expectedReceipt: WORKFLOW_CASES[0].receipt },
+  { tool: "jira.update-workflow-scheme", args: WORKFLOW_CASES[1].args, parameters: { id: "37" }, expectedReceipt: WORKFLOW_CASES[1].receipt },
+  { tool: "jira.delete-workflow-scheme", args: WORKFLOW_CASES[2].args, parameters: { id: "37" }, expectedReceipt: WORKFLOW_CASES[2].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.create-workflow-scheme-draft", args: WORKFLOW_CASES[3].args, parameters: { id: "37" }, expectedReceipt: WORKFLOW_CASES[3].receipt },
+  { tool: "jira.update-workflow-scheme-draft", args: WORKFLOW_CASES[4].args, parameters: { id: "37" }, expectedReceipt: WORKFLOW_CASES[4].receipt },
+  { tool: "jira.delete-workflow-scheme-draft", args: WORKFLOW_CASES[5].args, parameters: { id: "37" }, expectedReceipt: WORKFLOW_CASES[5].receipt },
+  { tool: "jira.set-workflow-scheme-default", args: WORKFLOW_CASES[6].args, parameters: { id: "37" }, expectedReceipt: WORKFLOW_CASES[6].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.delete-workflow-scheme-default", args: WORKFLOW_CASES[7].args, parameters: { id: "37" }, query: { updateDraftIfNeeded: "false" }, expectedReceipt: WORKFLOW_CASES[7].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.set-workflow-scheme-draft-default", args: WORKFLOW_CASES[8].args, parameters: { id: "37" }, expectedReceipt: WORKFLOW_CASES[8].receipt },
+  { tool: "jira.delete-workflow-scheme-draft-default", args: WORKFLOW_CASES[9].args, parameters: { id: "37" }, expectedReceipt: WORKFLOW_CASES[9].receipt },
+  { tool: "jira.set-workflow-scheme-issue-type", args: WORKFLOW_CASES[10].args, parameters: { id: "37", issueType: "1" }, expectedReceipt: WORKFLOW_CASES[10].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.delete-workflow-scheme-issue-type", args: WORKFLOW_CASES[11].args, parameters: { id: "37", issueType: "1" }, query: { updateDraftIfNeeded: "false" }, expectedReceipt: WORKFLOW_CASES[11].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.set-workflow-scheme-draft-issue-type", args: WORKFLOW_CASES[12].args, parameters: { id: "37", issueType: "1" }, expectedReceipt: WORKFLOW_CASES[12].receipt },
+  { tool: "jira.delete-workflow-scheme-draft-issue-type", args: WORKFLOW_CASES[13].args, parameters: { id: "37", issueType: "1" }, expectedReceipt: WORKFLOW_CASES[13].receipt },
+  { tool: "jira.set-workflow-scheme-workflow", args: WORKFLOW_CASES[14].args, parameters: { id: "37" }, query: { workflowName: "Flow" }, expectedReceipt: WORKFLOW_CASES[14].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.delete-workflow-scheme-workflow", args: WORKFLOW_CASES[15].args, parameters: { id: "37" }, query: { workflowName: "Flow", updateDraftIfNeeded: "false" }, expectedReceipt: WORKFLOW_CASES[15].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.set-workflow-scheme-draft-workflow", args: WORKFLOW_CASES[16].args, parameters: { id: "37" }, query: { workflowName: "Flow" }, expectedReceipt: WORKFLOW_CASES[16].receipt },
+  { tool: "jira.delete-workflow-scheme-draft-workflow", args: WORKFLOW_CASES[17].args, parameters: { id: "37" }, query: { workflowName: "Flow" }, expectedReceipt: WORKFLOW_CASES[17].receipt },
+  { tool: "jira.set-application-property", args: INSTANCE_CASES[0].args, parameters: { id: "jira.option.voting" }, expectedReceipt: INSTANCE_CASES[0].receipt },
+  { tool: "jira.set-system-columns", args: INSTANCE_CASES[1].args, expectedReceipt: INSTANCE_CASES[1].receipt },
+  { tool: "jira.set-instance-base-url", args: INSTANCE_CASES[2].args, expectedReceipt: INSTANCE_CASES[2].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.set-read-only-mode", args: INSTANCE_CASES[3].args, expectedReceipt: INSTANCE_CASES[3].receipt },
+  { tool: "jira.email-template-pack", args: EMAIL_CASES[0].args },
+  { tool: "jira.upload-email-template-pack", args: EMAIL_CASES[1].args, expectedReceipt: EMAIL_CASES[1].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.apply-email-template-pack", args: EMAIL_CASES[2].args, expectedReceipt: EMAIL_CASES[2].receipt, expectedOutcome: "succeeded-unconfirmed" },
+  { tool: "jira.revert-email-template-pack", args: EMAIL_CASES[3].args, expectedReceipt: EMAIL_CASES[3].receipt, expectedOutcome: "succeeded-unconfirmed" },
   { tool: "jira.create-permission-scheme", args: PERMISSION_CASES[0].args,
     expectedReceipt: { userKey: "synthetic-actor", schemeId: "9007199254740993", schemePresent: true } },
   { tool: "jira.update-permission-scheme", args: PERMISSION_CASES[1].args, parameters: { schemeId: "7" },
@@ -1491,7 +1532,8 @@ function lifecycleRemote(tool: string | undefined): ReturnType<typeof vi.fn<Atla
   const related = selectedLink === undefined
     ? (release ? releaseLifecycleTransportFixture("/context/rest/api/2") : undefined)
     : linkMutationTransportFixture("/context/rest/api/2", selectedLink);
-  const fixture = permissionRoleTransportController(tool) ?? reviewedPlatformFixture(tool)
+  const fixture = schemeSettingTransportController(tool) ?? emailTemplateTransportController(tool)
+    ?? permissionRoleTransportController(tool) ?? reviewedPlatformFixture(tool)
     ?? (selectedScreen === undefined ? related : screenConfigurationTransportFixture("/context/rest/api/2", selectedScreen));
   if (fixture === undefined) return undefined;
   return vi.fn<AtlassianHttpBodyPort>(async (request) => {
@@ -1536,6 +1578,7 @@ function connection(http: AtlassianHttpBodyPort): JiraManagedConnection {
     deployment: "data-center",
     baseUrl: "https://jira.example.invalid/context",
     http,
+    emailTemplates: emailTemplateFixtureAdmission(),
     attachmentSource: () =>
       Promise.resolve({
         ok: true,
@@ -1557,7 +1600,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(277);
+    expect(native).toHaveLength(313);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),
@@ -1569,6 +1612,23 @@ describe("native Jira registry and real connector transport agreement", () => {
     const writes = observed.requests.filter((request) => request.method !== "GET");
     expect(writes).toHaveLength(observed.definition.method === "GET" ? 0 : 1);
     if (scenario.expectedReceipt !== undefined) expect(observed.result.data).toMatchObject(scenario.expectedReceipt);
+  });
+  it("uses fixed binary ZIP reads and a single raw upload without leaking archive bytes into results", async () => {
+    const read = SCENARIOS.find(({ tool }) => tool === "jira.email-template-pack");
+    const upload = SCENARIOS.find(({ tool }) => tool === "jira.upload-email-template-pack");
+    if (read === undefined || upload === undefined) throw new TypeError("Missing email native scenarios");
+    const observedRead = await observe(read);
+    expect(observedRead.requests).toHaveLength(1);
+    expect(observedRead.requests[0]).toMatchObject({ method: "GET", jiraEmailTemplateArchive: true });
+    expect(observedRead.result.data).toMatchObject({ outcome: "succeeded", entryCount: 2 });
+    expect(observedRead.result.data).not.toHaveProperty("bytes");
+    expect(JSON.stringify(observedRead.result.data)).not.toContain("$issue.summary");
+    const observedUpload = await observe(upload);
+    const writes = observedUpload.requests.filter(({ method }) => method !== "GET");
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toMatchObject({ method: "POST", jiraEmailTemplateArchive: true, upload: { contentType: "application/zip" } });
+    expect(writes[0]?.bodyJson).toBeUndefined();
+    expect(observedUpload.result.data).toMatchObject({ outcome: "succeeded-unconfirmed", emailTemplateAction: "upload" });
   });
   it("uses only the closed attribute port for literal false and independently rereads the same scheme", async () => {
     const scenario = SCENARIOS.find(({ tool }) => tool === "jira.set-permission-scheme-attribute");

@@ -22,6 +22,7 @@ import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
 import { bindSecurityLogCorrelation, type SecurityLogSink } from "@oscharko-dev/keiko-security";
 import { atomicPublishTreeSwap } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 import yauzl from "yauzl";
+import { zipEntryKind } from "@oscharko-dev/keiko-local-knowledge";
 import {
   MAX_ARCHIVE_ENTRIES,
   MAX_ENTRY_BYTES,
@@ -180,11 +181,7 @@ function entryFileMode(entry: yauzl.Entry): number {
 }
 
 function entryType(entry: yauzl.Entry): "directory" | "file" | "unsafe" {
-  if (entry.fileName.endsWith("/")) return "directory";
-  const type = (entry.externalFileAttributes >>> 16) & 0o170000;
-  if (type === 0 || type === 0o100000) return "file";
-  if (type === 0o040000) return "directory";
-  return "unsafe";
+  return zipEntryKind(entry);
 }
 
 export interface PortableArchiveLimitState {

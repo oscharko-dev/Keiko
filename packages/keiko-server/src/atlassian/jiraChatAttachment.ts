@@ -29,6 +29,7 @@ import { FilesError, readConnectedFileBytes } from "../files.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { currentRedactionSecrets } from "../redaction-secrets.js";
 import { admitAttachmentContent } from "./jiraAttachmentContentPolicy.js";
+import { inspectJiraEmailTemplateArchive } from "./jiraEmailTemplateArchive.js";
 import {
   resolveCurrentJiraChatAuthority,
   type JiraChatAuthorityDeps,
@@ -221,9 +222,16 @@ const PROJECTION: Readonly<Record<Refusal, RefusalProjection>> = {
     message: "The file could not be read.",
   },
 };
-function refused(refusal: Refusal): Extract<JiraAttachmentSourceResult, { ok: false }> {
+const EMAIL_TEMPLATE_GUIDANCE: Partial<Readonly<Record<Refusal, string>>> = {
+  unreviewed: "No server-owned integrity snapshot covers this email-template ZIP. Inspect the connected file through the current task authority; retain the existing approval only where the selected mode requires it.",
+  "changed-after-review": "The email-template ZIP changed after its integrity snapshot. Refresh the connected-file snapshot and, when required by the existing mode, its review before uploading.",
+  "too-large": "The email-template ZIP exceeds the existing 20 MiB file limit. Supply a smaller complete pack; entries are never silently omitted.",
+  unscannable: "The email-template ZIP must contain a complete bounded set of regular, unambiguous portable entries whose contents pass the existing credential scan. Encrypted, aliased, linked, malformed or unscannable entries are refused.",
+};
+function refused(refusal: Refusal, purpose?: JiraAttachmentSourceRequest["purpose"]): Extract<JiraAttachmentSourceResult, { ok: false }> {
   const { reason, validation, message } = PROJECTION[refusal];
-  return { ok: false, reason, detail: { fieldId: "source", validation, messages: [message] } };
+  const guidance = purpose === "jira-email-template-pack" ? EMAIL_TEMPLATE_GUIDANCE[refusal] ?? message : message;
+  return { ok: false, reason, detail: { fieldId: "source", validation, messages: [guidance] } };
 }
 
 const FILES_ERROR_REFUSAL: Readonly<Record<string, Refusal>> = {
@@ -337,19 +345,27 @@ async function attachmentContent(
   deps: JiraChatAttachmentDeps,
   file: Candidate,
   name: string | undefined,
+  purpose?: JiraAttachmentSourceRequest["purpose"],
+  signal?: AbortSignal,
 ): Promise<Content> {
   const finalName = name ?? file.name;
   if (!isJiraAttachmentName(finalName)) return { ok: false, refusal: "invalid-name" };
   if (file.bytes.length === 0) return { ok: false, refusal: "empty" };
   const bytes = new Uint8Array(file.bytes.buffer, file.bytes.byteOffset, file.bytes.length);
-  const verdict = await admitAttachmentContent({
-    bytes,
-    name: finalName,
-    secrets: currentRedactionSecrets(deps),
-  });
-  if (!verdict.ok) return { ok: false, refusal: verdict.refusal };
+  const refusal = await contentRefusal(deps, bytes, finalName, purpose, signal);
+  if (refusal !== undefined) return { ok: false, refusal };
   const sha256 = createHash("sha256").update(bytes).digest("hex");
   return { ok: true, content: { name: finalName, bytes, sha256 } };
+}
+async function contentRefusal(deps: JiraChatAttachmentDeps, bytes: Uint8Array, name: string, purpose: JiraAttachmentSourceRequest["purpose"], signal: AbortSignal | undefined): Promise<Refusal | undefined> {
+  const secrets = currentRedactionSecrets(deps);
+  if (purpose === "jira-email-template-pack") {
+    const inspected = await inspectJiraEmailTemplateArchive(bytes, { secrets, ...(signal === undefined ? {} : { signal }) });
+    if (inspected.ok) return undefined;
+    return inspected.contentRefusal ?? (inspected.reason === "bounds-exceeded" ? "too-large" : "unscannable");
+  }
+  const verdict = await admitAttachmentContent({ bytes, name, secrets, ...(signal === undefined ? {} : { signal }) });
+  return verdict.ok ? undefined : verdict.refusal;
 }
 function previewOf(content: ContentWithPreview): JiraAttachmentPreview {
   return { name: content.name, sizeBytes: content.bytes.length, sha256: content.sha256 };
@@ -358,11 +374,12 @@ function previewOf(content: ContentWithPreview): JiraAttachmentPreview {
 async function readContent(
   deps: JiraChatAttachmentDeps,
   chatId: string,
-  request: Pick<JiraAttachmentSourceRequest, "path" | "name" | "maxBytes">,
+  request: Pick<JiraAttachmentSourceRequest, "path" | "name" | "maxBytes" | "purpose">,
   correlationId: string,
+  signal?: AbortSignal,
 ): Promise<Content> {
   const located = await locate(deps, chatId, request.path, request.maxBytes, correlationId);
-  return located.ok ? attachmentContent(deps, located.file, request.name) : located;
+  return located.ok ? attachmentContent(deps, located.file, request.name, request.purpose, signal) : located;
 }
 
 /**
@@ -445,6 +462,28 @@ export async function previewJiraChatAttachment(
   );
   return read.ok ? previewOf(read.content) : undefined;
 }
+/** Server-minted file integrity snapshot through the same connected scope and content floor.
+ * This is not an authority grant: the caller retains the existing mode/approval decision. */
+export async function previewJiraEmailTemplatePack(deps: JiraChatAttachmentDeps, chatId: string, path: string, correlationId: string, signal?: AbortSignal): Promise<JiraAttachmentPreview | undefined> {
+  const read = await readContent(deps, chatId, { path, maxBytes: JIRA_ATTACHMENT_MAX_BYTES, purpose: "jira-email-template-pack" }, correlationId, signal);
+  recordJiraAttachmentSource(correlationId, "review", read.ok ? undefined : read.refusal, read.ok ? read.content.bytes.length : 0);
+  return read.ok ? Object.freeze(previewOf(read.content)) : undefined;
+}
+
+/** Read-only preflight source. The composing owner supplies this ONLY to check=true; it grants
+ * neither upload nor approval. Requiring the future approval here would prevent its own card. */
+export function jiraChatEmailTemplatePreviewSource(
+  deps: JiraChatAttachmentDeps,
+  options: { readonly chatId: string; readonly correlationId: string; readonly signal?: AbortSignal },
+): JiraAttachmentSource {
+  return async (request) => {
+    if (request.purpose !== "jira-email-template-pack") return refused("unscannable");
+    const read = await readContent(deps, options.chatId,
+      { ...request, maxBytes: Math.min(request.maxBytes, JIRA_ATTACHMENT_MAX_BYTES) }, options.correlationId, options.signal);
+    recordJiraAttachmentSource(options.correlationId, "review", read.ok ? undefined : read.refusal, read.ok ? read.content.bytes.length : 0);
+    return read.ok ? { ok: true, content: read.content } : refused(read.refusal, request.purpose);
+  };
+}
 
 /**
  * Whether policy requires a human review of this attachment and, if so, the file that was
@@ -468,7 +507,7 @@ export function attachmentReviewFor(
   return {
     required: true,
     reviewed:
-      approval?.kind === "jira-chat-write" && approval.operation === "jira.attach"
+      approval?.kind === "jira-chat-write" && (approval.operation === "jira.attach" || approval.operation === "jira.upload-email-template-pack")
         ? approval.attachment
         : undefined,
   };
@@ -491,12 +530,19 @@ export function jiraChatAttachmentSource(
     readonly chatId: string;
     readonly correlationId: string;
     readonly review: () => JiraChatAttachmentReview;
+    /** Private server-minted byte snapshot for an already allowed email-template operation. */
+    readonly emailTemplateSnapshot?: JiraAttachmentPreview;
+    readonly signal?: AbortSignal;
   },
 ): JiraAttachmentSource {
+  const templateSnapshot = options.emailTemplateSnapshot === undefined ? undefined : Object.freeze({ ...options.emailTemplateSnapshot });
   return async (request): Promise<JiraAttachmentSourceResult> => {
-    const read = await readContent(deps, options.chatId, request, options.correlationId);
+    const read = await readContent(deps, options.chatId, request, options.correlationId, options.signal);
     const review = options.review();
-    const refusal = read.ok ? reviewRefusal(review, read.content) : read.refusal;
+    // A required integrity snapshot never upgrades policy or creates a fresh approval prompt.
+    const integrityReview: JiraChatAttachmentReview = request.purpose === "jira-email-template-pack"
+      ? { required: true, reviewed: review.required ? review.reviewed : templateSnapshot } : review;
+    const refusal = read.ok ? reviewRefusal(integrityReview, read.content) : read.refusal;
     recordJiraAttachmentSource(
       options.correlationId,
       "send",
@@ -504,7 +550,7 @@ export function jiraChatAttachmentSource(
       read.ok ? read.content.bytes.length : 0,
     );
     return !read.ok || refusal !== undefined
-      ? refused(refusal ?? "failed")
+      ? refused(refusal ?? "failed", request.purpose)
       : { ok: true, content: read.content };
   };
 }

@@ -66,6 +66,8 @@ import { JIRA_LINK_MUTATION_TOOLS, jiraLinkMutationDetails } from "./jira-link-m
 import { JIRA_CONFIGURATION_MUTATION_TOOLS, jiraConfigurationMutationDetails } from "./jira-configuration-mutation-presentation";
 import { JIRA_PLANNING_MUTATION_TOOLS, jiraPlanningMutationDetails } from "./jira-planning-mutation-presentation";
 import { JIRA_ACCESS_CONFIGURATION_TOOLS, jiraAccessConfigurationDetails } from "./jira-access-configuration-presentation";
+import { JIRA_SCHEME_ADMINISTRATION_TOOLS, jiraSchemeAdministrationDetails } from "./jira-scheme-administration-presentation";
+import { JIRA_INSTANCE_ADMINISTRATION_TOOLS, JIRA_INSTANCE_ADMINISTRATION_WRITE_TOOLS, jiraInstanceAdministrationDetails } from "./jira-instance-administration-presentation";
 import { JIRA_SPRINT_REVIEW_TOOLS, jiraSprintReviewDetails } from "./jira-sprint-review-presentation";
 import { JIRA_PROPERTY_TOOLS, jiraPropertyDetails } from "./jira-property-presentation";
 import { JIRA_MONITORING_WRITE_TOOLS, jiraMonitoringDetails } from "./jira-monitoring-presentation";
@@ -284,8 +286,10 @@ function boardContextLink(tool: string, source: UnknownRecord): string | undefin
     ? boardLink(source.boardBrowseUrl, source.originBoardId)
     : undefined;
 }
-type ConfigurationPresenter = (tool: string, source: UnknownRecord) => readonly JiraAgileDetails[];
+type ConfigurationPresenter = (tool: string, source: UnknownRecord, args?: unknown) => readonly JiraAgileDetails[];
 const CONFIGURATION_PRESENTERS: readonly (readonly [ReadonlySet<string>, ConfigurationPresenter])[] = [
+  [JIRA_SCHEME_ADMINISTRATION_TOOLS, jiraSchemeAdministrationDetails],
+  [JIRA_INSTANCE_ADMINISTRATION_TOOLS, jiraInstanceAdministrationDetails],
   [JIRA_IDENTITY_OBSERVATION_TOOLS, jiraIdentityObservationDetails],
   [JIRA_SELECTED_WORKLOG_TOOLS, jiraSelectedWorklogDetails],
   [JIRA_SAVED_CONFIGURATION_WRITE_TOOLS, jiraSavedConfigurationDetails],
@@ -319,8 +323,8 @@ const CONFIGURATION_PRESENTERS: readonly (readonly [ReadonlySet<string>, Configu
   [JIRA_JQL_TOOLS, jiraJqlDetails],
   [JIRA_PROJECT_ASSOCIATION_TOOLS, jiraProjectAssociationDetails],
 ];
-function configurationDetails(tool: string, source: UnknownRecord): readonly JiraAgileDetails[] | undefined {
-  return CONFIGURATION_PRESENTERS.find(([tools]) => tools.has(tool))?.[1](tool, source);
+function configurationDetails(tool: string, source: UnknownRecord, args?: unknown): readonly JiraAgileDetails[] | undefined {
+  return CONFIGURATION_PRESENTERS.find(([tools]) => tools.has(tool))?.[1](tool, source, args);
 }
 function metadataDetails(tool: string, source: UnknownRecord): JiraAgileDetails | undefined {
   if (tool === "jira_pinned_comments") return jiraPinnedCommentDetails(source);
@@ -425,7 +429,7 @@ function outcomeItems(
 ): JiraOutcomeItem[] {
   const issueContext = issueContextItems(exchange.call.name, data ?? {});
   if (issueContext !== undefined) return issueContext;
-  const configuration = configurationDetails(exchange.call.name, data ?? {});
+  const configuration = configurationDetails(exchange.call.name, data ?? {}, exchange.call.arguments);
   if (configuration !== undefined) return configurationItems(exchange.call.name, data ?? {}, configuration);
   const items = returnedEntries(data, exchange.call.name) ?? [];
   const progress = Array.isArray(exchange.draftProgress?.items) ? exchange.draftProgress.items : [];
@@ -557,7 +561,7 @@ export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcome
   const data =
     [JIRA_PARTICIPATION_TOOLS, JIRA_MONITORING_WRITE_TOOLS, JIRA_PROPERTY_MUTATION_TOOLS, JIRA_SAVED_CONFIGURATION_WRITE_TOOLS,
       JIRA_RELEASE_LIFECYCLE_TOOLS, JIRA_LINK_MUTATION_TOOLS, JIRA_CONFIGURATION_MUTATION_TOOLS, JIRA_PLANNING_MUTATION_TOOLS,
-      JIRA_ACCESS_CONFIGURATION_TOOLS].some((tools) => tools.has(exchange.call.name)) && exchange.mutationOutcome !== undefined
+      JIRA_ACCESS_CONFIGURATION_TOOLS, JIRA_SCHEME_ADMINISTRATION_TOOLS, JIRA_INSTANCE_ADMINISTRATION_WRITE_TOOLS].some((tools) => tools.has(exchange.call.name)) && exchange.mutationOutcome !== undefined
       ? { ...stored, outcome: exchange.mutationOutcome }
       : stored;
   return {

@@ -301,6 +301,18 @@ function packagePartVerdict(
   if (text !== undefined) return textHoldsCredential(text, secrets) ? CREDENTIAL : ALLOWED;
   return imageVerdict(part, secrets, budget) ?? UNSCANNABLE;
 }
+/** Closed Jira email-template purpose: the caller has already admitted every strict ZIP entry.
+ * Reuse the same raw-container/part credential floor without admitting generic ZIP attachments. */
+export function admitJiraEmailTemplateParts(bytes: Uint8Array, parts: ReadonlyMap<string, Uint8Array>, secrets: readonly string[]): AttachmentContentVerdict {
+  if (containsLiteral(bytes, secrets) || textHoldsCredential(latin1Of(bytes), secrets)) return CREDENTIAL;
+  const budget: InflateBudget = { remaining: INFLATE_MAX_BYTES };
+  for (const part of parts.values()) {
+    if (containsLiteral(part, secrets)) return CREDENTIAL;
+    const verdict = packagePartVerdict(part, secrets, budget);
+    if (!verdict.ok) return verdict;
+  }
+  return ALLOWED;
+}
 
 /** Every part of an OOXML package, not only the parts the text extractor reads. */
 async function packageVerdict(

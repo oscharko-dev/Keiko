@@ -2,6 +2,7 @@ import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
 import type { JiraAgileDetails, JiraOutcomeFact } from "./jira-agile-presentation";
 import { jiraAccessDetails } from "./jira-access-presentation";
 import { jiraAdministrationDetails } from "./jira-administration-presentation";
+import { jiraSchemeReviewDetails } from "./jira-scheme-review-presentation";
 
 import {
   jiraPresentationFact as fact,
@@ -78,6 +79,7 @@ function priority(source: Source): JiraAgileDetails {
   const body = text(source.description);
   const options = source.optionIds;
   const knownOptions = Array.isArray(options) && options.every((value: unknown) => typeof value === "string");
+  const review = jiraSchemeReviewDetails("priority", source);
   const labels: WidgetMessageKey[] = ["chat.jira.access.configurationOnly"];
   if (!knownOptions) labels.push("chat.jira.association.priorityOptionsUnknown");
   if (typeof source.defaultScheme === "boolean")
@@ -95,8 +97,8 @@ function priority(source: Source): JiraAgileDetails {
   return {
     ...(name === undefined ? {} : { name }),
     ...(body === undefined ? {} : { body }),
-    facts,
-    labels,
+    facts: [...facts, ...review.facts],
+    labels: [...labels, ...review.labels],
   };
 }
 /** Project context is observed independently; association metadata does not grant permission. */

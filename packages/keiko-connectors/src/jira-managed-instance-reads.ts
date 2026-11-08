@@ -12,6 +12,7 @@ import { jiraReadFailure, localJiraPage, projectJiraOptionalFields } from "./jir
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { executeJiraSelectedRead, type JiraReadResponse } from "./jira-managed-read-request.js";
 import { jiraNativeText } from "./jira-native-values.js";
+import { jiraInstanceBaseUrlObservation } from "./jira-instance-base-url-value.js";
 
 export const JIRA_INSTANCE_READS = JIRA_READ_TOOL_FAMILIES.instance;
 type InstanceRead = (typeof JIRA_INSTANCE_READS)[number];
@@ -63,14 +64,15 @@ function serverInfo(body: Record<string, unknown>): CatalogJsonObject | undefine
     (value) => jiraNativeText(value, 255) ? value : undefined);
   const builds = projectJiraOptionalFields(body, ["buildNumber", "databaseBuildNumber"], buildNumber);
   if (text === undefined || builds === undefined) return undefined;
-  const item: Record<string, CatalogJsonValue> = { version: body.version, ...text, ...builds };
+  const item: Record<string, CatalogJsonValue> = { version: body.version, ...text, ...builds, ...jiraInstanceBaseUrlObservation(body.baseUrl) };
   if (body.versionNumbers !== undefined && body.versionNumbers !== null) {
     const parts = releaseNumbers(body.versionNumbers);
     if (parts === undefined) return undefined;
     item.versionNumbers = parts;
   }
   // Observing this response never updates custody, supported releases or operation availability.
-  // Remote base URLs, health-check bodies, clock values and SCM metadata are not projected.
+  // The safe configured base URL is comparison-only metadata, never custody/routing/navigation.
+  // Health-check bodies, clock values and SCM metadata are not projected.
   return item;
 }
 const FEATURES = [

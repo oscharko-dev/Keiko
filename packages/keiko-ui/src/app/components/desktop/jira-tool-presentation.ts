@@ -40,6 +40,8 @@ import { JIRA_LINK_MUTATION_TOOLS, jiraLinkMutationIdentityComplete } from "./ji
 import { JIRA_CONFIGURATION_MUTATION_TOOLS, jiraConfigurationMutationIdentityComplete, jiraConfigurationConfirmationUnavailable } from "./jira-configuration-mutation-presentation";
 import { JIRA_PLANNING_MUTATION_TOOLS, jiraPlanningIdentityComplete, jiraPlanningConfirmationUnavailable } from "./jira-planning-mutation-presentation";
 import { JIRA_ACCESS_CONFIGURATION_TOOLS, jiraAccessConfigurationIdentityComplete, jiraAccessConfirmationUnavailable, jiraAccessActorNoopSupported } from "./jira-access-configuration-presentation";
+import { JIRA_SCHEME_ADMINISTRATION_TOOLS, jiraSchemeAdministrationIdentityComplete, jiraSchemeConfirmationUnavailable, jiraSchemeNoopSupported } from "./jira-scheme-administration-presentation";
+import { JIRA_INSTANCE_ADMINISTRATION_WRITE_TOOLS, JIRA_INSTANCE_SETTING_WRITE_TOOLS, jiraInstanceAdministrationIdentityComplete, jiraInstanceConfirmationUnavailable } from "./jira-instance-administration-presentation";
 const LOCALLY_PAGED_TOOLS = new Set([
   ...JIRA_REMOTE_VERSION_LINK_TOOLS,
   ...JIRA_ACCOUNT_DIAGNOSTIC_TOOLS,
@@ -232,6 +234,8 @@ function isMutation(exchange: ChatToolExchange): boolean {
 }
 function mutationIdentityMissing(exchange: ChatToolExchange): boolean {
   const data = plainRecord(exchange.result?.data) ?? {};
+  if (JIRA_SCHEME_ADMINISTRATION_TOOLS.has(exchange.call.name)) return !jiraSchemeAdministrationIdentityComplete(exchange.call.name, data);
+  if (JIRA_INSTANCE_ADMINISTRATION_WRITE_TOOLS.has(exchange.call.name)) return !jiraInstanceAdministrationIdentityComplete(exchange.call.name, data);
   if (JIRA_ACCESS_CONFIGURATION_TOOLS.has(exchange.call.name)) return !jiraAccessConfigurationIdentityComplete(exchange.call.name, data);
   if (JIRA_PROPERTY_MUTATION_TOOLS.has(exchange.call.name)) return !jiraPropertyMutationIdentityComplete(exchange.call.name, data);
   if (JIRA_RELEASE_LIFECYCLE_TOOLS.has(exchange.call.name)) return !jiraReleaseLifecycleIdentityComplete(exchange.call.name, data);
@@ -240,14 +244,21 @@ function mutationIdentityMissing(exchange: ChatToolExchange): boolean {
   if (JIRA_PLANNING_MUTATION_TOOLS.has(exchange.call.name)) return !jiraPlanningIdentityComplete(exchange.call.name, data);
   return JIRA_SAVED_CONFIGURATION_WRITE_TOOLS.has(exchange.call.name) && !jiraSavedConfigurationIdentityComplete(exchange.call.name, data);
 }
-function mutationConfirmationUnavailable(tool: string): boolean {
-  return jiraSavedConfigurationDeletionUnconfirmed(tool) || jiraReleaseReferenceEffectsUnconfirmed(tool) || jiraConfigurationConfirmationUnavailable(tool) || jiraPlanningConfirmationUnavailable(tool) || jiraAccessConfirmationUnavailable(tool);
+function mutationConfirmationUnavailable(tool: string, args?: unknown): boolean {
+  return jiraSavedConfigurationDeletionUnconfirmed(tool) || jiraReleaseReferenceEffectsUnconfirmed(tool) || jiraConfigurationConfirmationUnavailable(tool) || jiraPlanningConfirmationUnavailable(tool) || jiraAccessConfirmationUnavailable(tool) || jiraSchemeConfirmationUnavailable(tool, args) || jiraInstanceConfirmationUnavailable(tool);
+}
+function unconfirmedNoopSupported(tool: string): boolean {
+  return jiraAccessActorNoopSupported(tool) || jiraSchemeNoopSupported(tool) || JIRA_INSTANCE_SETTING_WRITE_TOOLS.has(tool);
+}
+function mutationNoopUnsupported(exchange: ChatToolExchange): boolean {
+  if (JIRA_SCHEME_ADMINISTRATION_TOOLS.has(exchange.call.name)) return !jiraSchemeNoopSupported(exchange.call.name);
+  return mutationConfirmationUnavailable(exchange.call.name, exchange.call.arguments) && !unconfirmedNoopSupported(exchange.call.name);
 }
 /** Only an explicit, rejected no-change receipt can soften a conflict; journal state wins. */
 export function jiraMutationUnchanged(exchange: ChatToolExchange): boolean {
   const data = plainRecord(exchange.result?.data);
   if (mutationIdentityMissing(exchange)) return false;
-  if (mutationConfirmationUnavailable(exchange.call.name) && !jiraAccessActorNoopSupported(exchange.call.name)) return false;
+  if (mutationNoopUnsupported(exchange)) return false;
   return (
     isMutation(exchange) &&
     mutationOutcome(exchange) === "rejected" &&
@@ -262,7 +273,7 @@ function managedMutationState(
 ): WidgetMessageKey {
   const outcome = mutationOutcome(exchange);
   if (outcome === "succeeded" && mutationIdentityMissing(exchange)) return OUTCOME_KEYS.unknown;
-  if (outcome === "succeeded" && mutationConfirmationUnavailable(exchange.call.name)) return OUTCOME_KEYS["succeeded-unconfirmed"];
+  if (outcome === "succeeded" && mutationConfirmationUnavailable(exchange.call.name, exchange.call.arguments)) return OUTCOME_KEYS["succeeded-unconfirmed"];
   if (outcome !== undefined)
     return jiraMutationUnchanged(exchange) ? "chat.jira.write.unchanged" : OUTCOME_KEYS[outcome];
   return exchange.result === undefined && turnState === "pending"
