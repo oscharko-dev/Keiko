@@ -1,6 +1,7 @@
 // Port of the Golden Jira oracle: only native reads establish the result, never model prose.
 import { readFileSync } from "node:fs";
 import { URL, URLSearchParams } from "node:url";
+import { REQUIREMENT_DOCUMENT_SCOPE_PATTERN } from "../../../../packages/keiko-quality-intelligence/dist/domain/requirementInventory.js";
 import { basicAuth, labRequest } from "../lab-client.mjs";
 import { nativePages } from "../project-agile-oracles.mjs";
 
@@ -9,6 +10,7 @@ export const GOLDEN_ACCEPTANCE_COUNT = 1029;
 export const GOLDEN_NO_CRITERIA_TEXT = "No acceptance criteria are specified in the source.";
 const PAGE_SIZE = 100;
 const REQUIREMENT_ID = /^[A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)*-[0-9]+(?:\.[0-9]+)*$/u;
+const DOCUMENT_SCOPE = new RegExp(REQUIREMENT_DOCUMENT_SCOPE_PATTERN, "u");
 const record = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const norm = (value) => value.normalize("NFC").replaceAll(/\s+/gu, " ").trim();
 
@@ -250,6 +252,16 @@ function sectionTrace(source, requirement) {
   );
 }
 
+function ownedTraceReference(group, requirementId) {
+  const references = group.split("\n").filter((line) => line.startsWith("Reference: "));
+  if (references.length !== 1) return undefined;
+  const reference = references[0].slice("Reference: ".length);
+  const parts = reference.split(":");
+  if (parts.length !== 2 || !DOCUMENT_SCOPE.test(parts[0]) || parts[1] !== requirementId)
+    return undefined;
+  return reference;
+}
+
 function requirementTrace(description, requirement) {
   const block = traceBlocks(description);
   if (block === undefined) return { id: false, source: false, body: description };
@@ -268,7 +280,14 @@ function requirementTrace(description, requirement) {
     id: true,
     source: sectionTrace(source, requirement) || pageTrace(source, requirement),
     body: block.body,
+    reference: ownedTraceReference(owned[0], requirement.id),
   };
+}
+
+/** Return only the exact native reference owned by this requirement and its observed source. */
+export function goldenRequirementTraceReference(description, requirement) {
+  const trace = requirementTrace(description, requirement);
+  return trace.id && trace.source ? trace.reference : undefined;
 }
 
 function acceptanceRegion(body) {

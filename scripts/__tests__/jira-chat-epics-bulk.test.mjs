@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { URL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+import * as goldenOracle from "../testing/jira-chat-lab/requirements/golden-jira-oracle.mjs";
 import {
   goldenJiraReadAdapter,
   gradeGoldenEpics,
@@ -116,10 +117,14 @@ function bulkHarness() {
             result: {
               toolRef: { canonicalId: "keiko.jira.create" },
               status: "failed",
+              reason: "provider-reported-error",
+              effectStarted: false,
               data: {
                 outcome: "rejected",
                 reason: "field-validation",
-                violations: [{ ruleId: "summary-pattern", template: `${PROJECT}/Epic` }],
+                violations: [
+                  { ruleId: "summary-pattern", subject: "summary", template: `${PROJECT}/Epic` },
+                ],
               },
             },
           },
@@ -445,6 +450,104 @@ describe("Golden manifest exact content and source grading", () => {
       expect(grade([{ ...first, fields: { ...first.fields, description } }, second]).ok).toBe(
         false,
       );
+  });
+});
+
+describe("Golden requirement trace reference", () => {
+  const reference = "a1b2c3d4:REQ-FA-001";
+  const group = [
+    "Requirement: REQ-FA-001 · Exact first requirement",
+    `Reference: ${reference}`,
+    "Source: synthetic.pdf · 1 Context · 1.1 First source",
+    "Document digest: 0123456789abcdef",
+    "Requirement digest: fedcba9876543210",
+    "Quality findings: none",
+  ].join("\n");
+  const footer = (value) => `Keiko traceability\n${value}\nEnd of Keiko traceability`;
+  const description = `Human description.\n\n${footer(group)}`;
+  const selectedReference = (value, requirement = REQUIREMENTS[0]) => {
+    expect(goldenOracle.goldenRequirementTraceReference).toBeTypeOf("function");
+    return goldenOracle.goldenRequirementTraceReference(value, requirement);
+  };
+
+  it("returns the exact native scoped reference from its owned source group", () => {
+    expect(selectedReference(description)).toBe(reference);
+    const extended = "a1b2c3d4e5f60708:REQ-FA-001";
+    expect(selectedReference(description.replace(reference, extended))).toBe(extended);
+    expect(selectedReference(description.replaceAll("\n", "\r\n"))).toBe(reference);
+  });
+
+  it("preserves the existing exact page-range source alternative", () => {
+    expect(selectedReference(description.replace("1 Context · 1.1 First source", "page 3–4"))).toBe(
+      reference,
+    );
+    expect(
+      selectedReference(description.replace("1 Context · 1.1 First source", "page 3")),
+    ).toBeUndefined();
+  });
+
+  it("takes the reference only from the selected requirement in a multi-group footer", () => {
+    const other = [
+      "Requirement: MIG_ROL-003 · Exact second requirement",
+      "Reference: 11223344:MIG_ROL-003",
+      "Source: synthetic.pdf · 2 Migration · 2.1 Roles",
+    ].join("\n");
+    const combined = footer(`${other}\n\n${group}`);
+    expect(selectedReference(combined)).toBe(reference);
+    expect(selectedReference(combined, REQUIREMENTS[1])).toBe("11223344:MIG_ROL-003");
+  });
+
+  it.each([
+    ["missing reference", footer(group.replace(`Reference: ${reference}\n`, ""))],
+    ["empty reference", footer(group.replace(reference, ""))],
+    [
+      "duplicate reference",
+      footer(
+        group.replace(
+          `Reference: ${reference}`,
+          `Reference: ${reference}\nReference: ${reference}`,
+        ),
+      ),
+    ],
+    ["foreign requirement reference", footer(group.replace(reference, "a1b2c3d4:REQ-FA-0010"))],
+    ["unscoped reference", footer(group.replace(reference, "REQ-FA-001"))],
+    ["legacy fuzzy reference", footer(group.replace(reference, "REQ-FA-001@doc-1"))],
+    ["reference trailing prose", footer(group.replace(reference, `${reference} extra`))],
+    [
+      "reference in another group",
+      footer(
+        group.replace(`Reference: ${reference}\n`, "") +
+          `\n\nRequirement: MIG_ROL-003 · Other\nReference: ${reference}\nSource: synthetic.pdf · 2 Migration · 2.1 Roles`,
+      ),
+    ],
+    [
+      "source in another group",
+      footer(
+        group.replace(
+          "Source: synthetic.pdf",
+          "\nRequirement: MIG_ROL-003 · Other\nSource: synthetic.pdf",
+        ),
+      ),
+    ],
+    ["duplicate requirement group", footer(`${group}\n\n${group}`)],
+    ["duplicate source", footer(`${group}\nSource: synthetic.pdf · 1 Context · 1.1 First source`)],
+    [
+      "wrong source path",
+      footer(group.replace("1.1 First source", "1.1 First source · Descendant")),
+    ],
+    ["duplicate owned block", `${description}\n\n${footer(group)}`],
+    ["missing end marker", description.replace("\nEnd of Keiko traceability", "")],
+    [
+      "reference before block",
+      `Reference: ${reference}\n${footer(group.replace(`Reference: ${reference}\n`, ""))}`,
+    ],
+    [
+      "reference after block",
+      `${footer(group.replace(`Reference: ${reference}\n`, ""))}\nReference: ${reference}`,
+    ],
+    ["unowned prose only", group],
+  ])("refuses %s instead of borrowing an unrelated reference", (_name, value) => {
+    expect(selectedReference(value)).toBeUndefined();
   });
 });
 

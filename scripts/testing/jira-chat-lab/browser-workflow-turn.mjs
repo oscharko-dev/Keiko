@@ -290,12 +290,15 @@ export async function openWorkflowBrowser(context, provided = {}) {
   }
 }
 
-export function workflowHistory(context, chatId) {
+export function workflowHistory(context, chatId, options = {}) {
+  const limit = options.limit;
+  if (limit !== undefined) assert.ok(Number.isSafeInteger(limit) && limit >= 1 && limit <= 500);
+  const suffix = limit === undefined ? "" : `&limit=${limit}`;
   return jsonRequest(
     context.origin,
     context.cookie,
     "workflow-observe",
-    `/api/chats/messages?chatId=${encodeURIComponent(chatId)}&projectPath=${encodeURIComponent(context.projectPath)}`,
+    `/api/chats/messages?chatId=${encodeURIComponent(chatId)}&projectPath=${encodeURIComponent(context.projectPath)}${suffix}`,
     undefined,
     "GET",
     globalThis.AbortSignal.timeout(30000),
