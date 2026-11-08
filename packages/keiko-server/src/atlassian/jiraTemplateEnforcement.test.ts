@@ -1506,7 +1506,7 @@ describe("a violating write never reaches Jira under Full access (#4177)", () =>
     const f = fullAccessWrite(wrapped, trace);
     const result = await f.run();
     expect(result.data).toMatchObject({ outcome: "succeeded" });
-    expect(f.writtenDescription()).toBe(`h2. Acceptance criteria\n\n* works\n\n${footer}`);
+    expect(f.writtenDescription()).toBe(`h2. Acceptance criteria\n* works\n\n${footer}`);
     expect(JSON.stringify(wrapped)).toBe(before);
     const serialized = f.mutationLog.events.filter(
       (event) => event.extra?.descriptionConvertedHeadingCount !== undefined,

@@ -53,8 +53,9 @@ export function jiraChatPrivatePorts(
   lifecycle?: AtlassianHttpLifecycleOptions,
 ): JiraPrivatePortFactoryResult | undefined {
   const factory = deps.atlassianConnectorCredentials?.jiraPrivatePortFactory;
+  if (factory === undefined) return undefined;
   const pod = currentPod(deps, context, credential);
-  if (factory === undefined || pod === undefined) return undefined;
+  if (pod === undefined) return undefined;
   const selection = context.activeHumanInput?.();
   const ports = factory(
     credential,
