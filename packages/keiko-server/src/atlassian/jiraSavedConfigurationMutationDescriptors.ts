@@ -131,6 +131,13 @@ function write(
     maxResultCount: 1,
   };
 }
+function preferenceValueSchema(kind: string): CatalogJsonObject {
+  if (kind === "integer") {
+    return { type: "integer", minimum: Number.MIN_SAFE_INTEGER, maximum: Number.MAX_SAFE_INTEGER };
+  }
+  if (kind === "boolean") return BOOL;
+  return text(4096);
+}
 function preferenceInput(set: boolean): CatalogJsonObject {
   const valueSchema = {
     anyOf: [
@@ -150,12 +157,7 @@ function preferenceInput(set: boolean): CatalogJsonObject {
       ["key", "expectedActorKey", "expectedValue", ...(set ? ["value"] : [])],
     ),
     anyOf: Object.entries(JIRA_NONSECRET_PREFERENCE_KINDS).map(([key, kind]) => {
-      const value =
-        kind === "integer"
-          ? { type: "integer", minimum: Number.MIN_SAFE_INTEGER, maximum: Number.MAX_SAFE_INTEGER }
-          : kind === "boolean"
-            ? BOOL
-            : text(4096);
+      const value = preferenceValueSchema(kind);
       return object(
         {
           key: { type: "string", enum: [key] },
