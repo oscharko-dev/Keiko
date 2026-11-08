@@ -3,7 +3,7 @@
 // baseline, so no task passes or fails on another task's leftovers. The verdict table and
 // `verdicts.json` in --work-dir are the result; the exit code is 0 only when every selected task
 // ran and every oracle, including the Coding History check, passed.
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
   cpSync,
   mkdirSync,
@@ -14,6 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, relative, resolve } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import {
   flatten,
@@ -121,20 +122,30 @@ function driverArgs(entry, task, options) {
   return args;
 }
 
-/** Drives the run through the real UI; the driver's last run line names the run. */
+/**
+ * Drives the run through the real UI; the driver's run line names the run. The driver runs
+ * asynchronously: a run takes minutes, and a blocked event loop would keep a keep-alive
+ * connection the server closed meanwhile in the pool, so the next request failed.
+ */
 function driveTask(entry, task, options) {
   const started = new Date().toISOString();
-  const result = spawnSync(process.execPath, driverArgs(entry, task, options), {
-    cwd: REPO_ROOT,
-    encoding: "utf8",
-    env: process.env,
-    maxBuffer: 64 * 1024 * 1024,
+  return new Promise((resolveRun, rejectRun) => {
+    const child = spawn(process.execPath, driverArgs(entry, task, options), {
+      cwd: REPO_ROOT,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk) => (stdout += chunk));
+    child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
+    child.on("error", rejectRun);
+    child.on("close", (code) => {
+      writeFileSync(join(task.root, "driver.log"), `${stdout}\n${stderr}`, { mode: 0o600 });
+      const runs = [...stdout.matchAll(/^----- run (run-\d+) -----$/gm)];
+      resolveRun({ started, exitCode: code, runId: runs[0]?.[1] });
+    });
   });
-  writeFileSync(join(task.root, "driver.log"), `${result.stdout}\n${result.stderr}`, {
-    mode: 0o600,
-  });
-  const runs = [...(result.stdout ?? "").matchAll(/^----- run (run-\d+) -----$/gm)];
-  return { started, exitCode: result.status, runId: runs[0]?.[1] };
 }
 
 function filesContaining(repo, value) {
@@ -164,6 +175,33 @@ async function readHistory(baseUrl, repo) {
     `/api/coding-workbench/history/${encodeURIComponent(task.id)}`,
   );
   return { listed: true, messageCount: detail.json.messages?.length ?? 0, status: detail.status };
+}
+
+const MODEL_READY_WAIT_MS = 300_000;
+
+/**
+ * Waits until the Workbench offers the coding model, as its Start button does: after a server
+ * start Keiko verifies each model once, and until then the Workbench does not start a run.
+ */
+async function readCodingModel(baseUrl, model) {
+  const session = await openApiSession(labBaseUrl(baseUrl));
+  const path = `/api/coding-sidecar/gateway/profile?modelId=${encodeURIComponent(model)}`;
+  const profile = (await session.request("GET", path)).json ?? {};
+  return {
+    ready: profile.status === "available" && profile.verification === "verified",
+    state: `${String(profile.status)}, ${String(profile.verification ?? profile.unavailableReason)}`,
+  };
+}
+
+async function awaitCodingModel(baseUrl, model) {
+  if (model === undefined) return;
+  const deadline = Date.now() + MODEL_READY_WAIT_MS;
+  for (;;) {
+    const { ready, state } = await readCodingModel(baseUrl, model);
+    if (ready) return;
+    if (Date.now() >= deadline) throw new Error(`the coding model is not ready (${state})`);
+    await sleep(5000);
+  }
 }
 
 function oracleContext(task, run, events) {
@@ -196,7 +234,9 @@ async function runEntry(entry, options, cache) {
   try {
     return await judgeEntry(entry, options, cache);
   } catch (error) {
-    log("bump-set", `${entry.id}: ${errorMessage(error)}`);
+    const cause =
+      error instanceof Error && error.cause instanceof Error ? ` (${error.cause.message})` : "";
+    log("bump-set", `${entry.id}: ${errorMessage(error)}${cause}`);
     const checks = [{ name: "harness", ok: false, reason: errorMessage(error).slice(0, 200) }];
     return { id: entry.id, runId: undefined, driverExit: undefined, checks, ok: false };
   }
@@ -205,14 +245,16 @@ async function runEntry(entry, options, cache) {
 async function judgeEntry(entry, options, cache) {
   log("bump-set", `${entry.id}: preparing`);
   const task = prepareTask(options.workDir, entry, cache);
+  await awaitCodingModel(options.baseUrl, options.model);
   log("bump-set", `${entry.id}: running (approve ${entry.approve})`);
-  const run = driveTask(entry, task, options);
+  const run = await driveTask(entry, task, options);
+  // History first: the oracles below block on npm and Maven.
+  const history = await readHistory(options.baseUrl, task.repo);
   const events = await readActivityEvents(options.logDir);
   const checks =
     run.runId === undefined
       ? [{ name: "run", ok: false, reason: "no run started" }]
       : judge(entry, oracleContext(task, run, events));
-  const history = await readHistory(options.baseUrl, task.repo);
   checks.push({ name: "history", ...historyCheck(history) });
   return {
     id: entry.id,
