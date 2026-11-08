@@ -7,6 +7,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { parseJiraDraftReference } from "@oscharko-dev/keiko-connectors";
 import { join } from "node:path";
+import { nativeProgressFillRatio } from "./support/jira-progress-geometry.js";
 import { jiraAccessibilityJourney } from "./support/jira-chat-4081-accessibility.js";
 import {
   api,
@@ -69,43 +70,6 @@ function completedBatchMessage(resumed: boolean): ChatMessage {
     shortResult: undefined,
     taskType: undefined,
   };
-}
-
-interface NativeProgressNode {
-  readonly backendNodeId: number;
-  readonly attributes?: readonly string[];
-  readonly children?: readonly NativeProgressNode[];
-  readonly shadowRoots?: readonly NativeProgressNode[];
-}
-
-function progressFillNode(node: NativeProgressNode): NativeProgressNode | undefined {
-  if (node.attributes?.includes("-webkit-progress-value")) return node;
-  for (const child of [...(node.children ?? []), ...(node.shadowRoots ?? [])]) {
-    const found = progressFillNode(child);
-    if (found !== undefined) return found;
-  }
-  return undefined;
-}
-
-async function nativeProgressFillRatio(page: Page): Promise<number> {
-  const session = await page.context().newCDPSession(page);
-  try {
-    const { root } = await session.send("DOM.getDocument");
-    const { nodeId } = await session.send("DOM.querySelector", {
-      nodeId: root.nodeId,
-      selector: 'progress[data-complete="true"]',
-    });
-    const { node } = await session.send("DOM.describeNode", { nodeId, depth: -1, pierce: true });
-    const fill = progressFillNode(node);
-    if (fill === undefined) throw new TypeError("Native progress fill is unavailable");
-    const [{ model: track }, { model: value }] = await Promise.all([
-      session.send("DOM.getBoxModel", { nodeId }),
-      session.send("DOM.getBoxModel", { backendNodeId: fill.backendNodeId }),
-    ]);
-    return value.width / track.width;
-  } finally {
-    await session.detach();
-  }
 }
 
 for (const resumed of [false, true]) {

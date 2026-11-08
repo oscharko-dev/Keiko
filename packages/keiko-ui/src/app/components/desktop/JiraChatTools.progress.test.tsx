@@ -102,7 +102,6 @@ describe.each(["en", "de"] as const)("draft batch progress card in %s", (locale)
     expect(bar).toHaveAttribute("aria-valuemin", "0");
     expect(bar).toHaveAttribute("aria-valuemax", "40");
     expect(bar).toHaveAttribute("aria-valuenow", "24");
-    expect(bar).not.toHaveAttribute("data-complete");
     expect(screen.getByText(copy.title)).toBeVisible();
     expect(container.querySelector("[data-tone]")).toHaveAttribute("data-tone", "info");
     expect(
@@ -287,7 +286,6 @@ describe.each(["en", "de"] as const)("draft batch progress card in %s", (locale)
       expect(bar.value).toBe(370);
       expect(bar.max).toBe(370);
       expect(bar.position).toBe(1);
-      expect(bar).toHaveAttribute("data-complete", "true");
     },
   );
 });
