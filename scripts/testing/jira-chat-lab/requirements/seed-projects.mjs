@@ -8,27 +8,12 @@
 // already seeded: it leaves the file's other entries and the issues of REQ and RPT untouched.
 // Lab-side code may know Jira Software's field schemas; product code may not.
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { basicAuth, checked, labRequest, loadSession } from "../lab-client.mjs";
 import { privateJson } from "../private-json.mjs";
 import { STRUCTURE_RULES, buildCorpus } from "./corpus.mjs";
 import { LARGE_PROJECT, largePlan, largeTruth } from "./large-project.mjs";
-
-const [directory, ...options] = process.argv.slice(2);
-if (!directory || (options.length > 0 && !(options.length === 2 && options[0] === "--only")))
-  throw new TypeError("Usage: seed-projects.mjs <session-directory> [--only LRG]");
-const only = options[1];
-if (only !== undefined && only !== LARGE_PROJECT)
-  throw new TypeError(`--only accepts ${LARGE_PROJECT}`);
-const session = loadSession(directory);
-const auth = basicAuth(session, "admin");
-const truthPath = join(session.directory, "requirements-truth.json");
-if (only === undefined && existsSync(truthPath)) {
-  console.log(JSON.stringify({ operation: "requirements-seed", skipped: "truth exists" }));
-  process.exit(0);
-}
-if (only !== undefined && !existsSync(truthPath))
-  throw new TypeError("--only adds to a seeded laboratory: run the full seed first");
 
 const SCRUM = "com.pyxis.greenhopper.jira:gh-scrum-template";
 const EPIC_NAME = "com.pyxis.greenhopper.jira:gh-epic-label";
@@ -36,7 +21,7 @@ const EPIC_LINK = "com.pyxis.greenhopper.jira:gh-epic-link";
 const STORY_POINTS = "com.atlassian.jira.plugin.system.customfieldtypes:float";
 const BULK = 50;
 
-async function ensureProject(key, name) {
+async function ensureProject({ session, auth }, key, name) {
   const existing = await labRequest(session, "GET", `/rest/api/2/project/${key}`, auth);
   if (existing.status === 200) return existing.value;
   await checked(session, `project-${key}`, "POST", "/rest/api/2/project", auth, {
@@ -47,15 +32,16 @@ async function ensureProject(key, name) {
     lead: "keiko-admin",
     assigneeType: "UNASSIGNED",
   });
-  for (const id of ["10002", "10001", "10000"]) {
-    await labRequest(session, "POST", `/rest/api/2/project/${key}/role/${id}`, auth, {
+  await inBatches(["10002", "10001", "10000"], 1, (id) =>
+    labRequest(session, "POST", `/rest/api/2/project/${key}/role/${id}`, auth, {
       user: ["keiko-api"],
-    });
-  }
+    }),
+  );
   return checked(session, `project-${key}-read`, "GET", `/rest/api/2/project/${key}`, auth);
 }
 
-async function fieldIds(projectKey) {
+/** Reads the selected project's native field metadata without owning its session or CLI lifetime. */
+export async function fieldIds({ session, auth }, projectKey) {
   const types = await checked(
     session,
     "types",
@@ -86,10 +72,12 @@ async function fieldIds(projectKey) {
 const wiki = (sections) =>
   sections.map((name) => `h3. ${name}\nSynthetischer Inhalt.`).join("\n\n");
 
-async function bulkCreate(project, items) {
+async function bulkCreate({ session, auth }, project, items) {
   const keys = [];
-  for (let start = 0; start < items.length; start += BULK) {
-    const slice = items.slice(start, start + BULK);
+  const slices = Array.from({ length: Math.ceil(items.length / BULK) }, (_, index) =>
+    items.slice(index * BULK, (index + 1) * BULK),
+  );
+  await inBatches(slices, 1, async (slice) => {
     const result = await checked(session, "bulk", "POST", "/rest/api/2/issue/bulk", auth, {
       issueUpdates: slice.map((item) => ({
         fields: { project: { key: project }, issuetype: { name: item.type }, ...item.fields },
@@ -100,16 +88,30 @@ async function bulkCreate(project, items) {
       throw new TypeError(`Bulk create rejected: ${JSON.stringify(first?.errors ?? first)}`);
     }
     keys.push(...result.issues.map((issue) => issue.key));
-  }
+  });
   return keys;
 }
 
-async function moveTo(key, statusName) {
+/** Uses this issue's currently offered native transition; no issue creation or transition retry. */
+export async function moveTo({ session, auth, signal }, key, statusName) {
   const path = `/rest/api/2/issue/${key}/transitions`;
   const options = await checked(session, "transitions", "GET", path, auth);
   const match = options.transitions.find((transition) => transition.to.name === statusName);
   if (!match) throw new TypeError(`No transition to ${statusName}`);
+  signal?.throwIfAborted();
   await checked(session, "transition", "POST", path, auth, { transition: { id: match.id } });
+}
+
+/** Reuses the seed's authenticated native port for an explicitly planned, currently editable field. */
+export async function updateFields({ session, auth, signal }, key, fields) {
+  const path = `/rest/api/2/issue/${encodeURIComponent(key)}`;
+  const metadata = await checked(session, "edit-fields", "GET", `${path}/editmeta`, auth);
+  for (const id of Object.keys(fields)) {
+    if (!metadata.fields?.[id]?.operations?.includes("set"))
+      throw new TypeError("Planned field is not currently editable");
+  }
+  signal?.throwIfAborted();
+  await checked(session, "update-fields", "PUT", path, auth, { fields });
 }
 
 function epicPlan(fields) {
@@ -194,7 +196,7 @@ function bugPlan(fields, epics) {
 }
 
 /** The truth file describes exactly what was seeded, so a partly seeded project must stop here. */
-async function assertEmptyProject(key) {
+async function assertEmptyProject({ session, auth }, key) {
   const jql = encodeURIComponent(`project = ${key}`);
   const found = await checked(
     session,
@@ -209,15 +211,15 @@ async function assertEmptyProject(key) {
     );
 }
 
-async function seedBase() {
-  await ensureProject("REQ", "Anforderungen Schadenmeldung");
-  await ensureProject("RPT", "Auswertung Schadenmeldung");
-  await assertEmptyProject("RPT");
-  const fields = await fieldIds("RPT");
+async function seedBase(context) {
+  await ensureProject(context, "REQ", "Anforderungen Schadenmeldung");
+  await ensureProject(context, "RPT", "Auswertung Schadenmeldung");
+  await assertEmptyProject(context, "RPT");
+  const fields = await fieldIds(context, "RPT");
   const epics = epicPlan(fields);
-  (await bulkCreate("RPT", epics)).forEach((key, index) => (epics[index].key = key));
+  (await bulkCreate(context, "RPT", epics)).forEach((key, index) => (epics[index].key = key));
   const tasks = taskPlan(fields, epics);
-  (await bulkCreate("RPT", tasks)).forEach((key, index) => (tasks[index].key = key));
+  (await bulkCreate(context, "RPT", tasks)).forEach((key, index) => (tasks[index].key = key));
   const subtasks = tasks
     .filter((_, index) => index % 5 === 0)
     .map((task) => ({
@@ -226,13 +228,13 @@ async function seedBase() {
       type: "Sub-task",
       fields: { summary: `Teilaufgabe zu ${task.key}`, parent: { key: task.key } },
     }));
-  (await bulkCreate("RPT", subtasks)).forEach((key, index) => (subtasks[index].key = key));
+  (await bulkCreate(context, "RPT", subtasks)).forEach((key, index) => (subtasks[index].key = key));
   const bugs = bugPlan(fields, epics);
-  (await bulkCreate("RPT", bugs)).forEach((key, index) => (bugs[index].key = key));
+  (await bulkCreate(context, "RPT", bugs)).forEach((key, index) => (bugs[index].key = key));
   const moving = [...tasks, ...bugs].filter((item) => item.status !== "To Do");
-  await inBatches(moving, 1, (item) => moveTo(item.key, item.status));
+  await inBatches(moving, 1, (item) => moveTo(context, item.key, item.status));
   const strip = ({ fields: _fields, type, ...rest }) => ({ type, ...rest });
-  privateJson(truthPath, {
+  privateJson(context.truthPath, {
     schemaVersion: 1,
     projects: { work: "REQ", report: "RPT" },
     fieldIds: fields,
@@ -253,20 +255,21 @@ async function seedBase() {
 }
 
 /** The ids come from a fresh task, whose workflow offers each status the plan moves issues to. */
-async function transitionIds(sampleKey) {
+async function transitionIds({ session, auth }, sampleKey) {
   const path = `/rest/api/2/issue/${sampleKey}/transitions`;
   const options = await checked(session, "large-transitions", "GET", path, auth);
   return new Map(options.transitions.map((transition) => [transition.to.name, transition.id]));
 }
 
-async function inBatches(items, size, step, from = 0) {
+export async function inBatches(items, size, step, from = 0) {
   if (from >= items.length) return;
   await Promise.all(items.slice(from, from + size).map((item) => step(item)));
   return inBatches(items, size, step, from + size);
 }
 
-async function moveAll(plan, keys) {
-  const ids = await transitionIds(keys[plan.findIndex((item) => item.type === "Task")]);
+async function moveAll(context, plan, keys) {
+  const { session, auth } = context;
+  const ids = await transitionIds(context, keys[plan.findIndex((item) => item.type === "Task")]);
   const moves = plan.flatMap((item, index) =>
     item.status === "To Do" ? [] : [[keys[index], item.status]],
   );
@@ -280,40 +283,54 @@ async function moveAll(plan, keys) {
   return moves.length;
 }
 
+function largeEpicInputs(epics, fields) {
+  return epics.map((item, index) => ({
+    type: item.type,
+    fields: {
+      summary: item.summary,
+      labels: item.labels,
+      [fields.epicName]: `Paket ${index + 1}`,
+    },
+  }));
+}
+
+function largeMemberInputs(members, fields, epicKeys) {
+  return members.map((item) => ({
+    type: item.type,
+    fields: {
+      summary: item.summary,
+      labels: item.labels,
+      ...(item.epic === undefined ? {} : { [fields.epicLink]: epicKeys[item.epic] }),
+    },
+  }));
+}
+
 /** Adds LRG to a seeded laboratory; the truth keeps every other entry exactly as it was. */
-async function seedLarge() {
-  const recorded = JSON.parse(readFileSync(truthPath, "utf8"));
+async function seedLarge(context) {
+  const recorded = JSON.parse(readFileSync(context.truthPath, "utf8"));
   if (recorded.large !== undefined) {
     console.log(
       JSON.stringify({ operation: "requirements-seed", skipped: "large project exists" }),
     );
     return;
   }
-  await ensureProject(LARGE_PROJECT, "Auswertung Großprojekt");
-  await assertEmptyProject(LARGE_PROJECT);
-  const fields = await fieldIds(LARGE_PROJECT);
+  await ensureProject(context, LARGE_PROJECT, "Auswertung Großprojekt");
+  await assertEmptyProject(context, LARGE_PROJECT);
+  const fields = await fieldIds(context, LARGE_PROJECT);
   if (fields.epicLink === undefined || fields.epicName === undefined)
     throw new TypeError(`${LARGE_PROJECT} offers no Epic Link or Epic Name field`);
   const plan = largePlan();
   const epics = plan.filter((item) => item.type === "Epic");
-  const epicKeys = await bulkCreate(
-    LARGE_PROJECT,
-    epics.map((item, index) => ({
-      type: item.type,
-      fields: { summary: item.summary, [fields.epicName]: `Paket ${index + 1}` },
-    })),
-  );
+  const epicKeys = await bulkCreate(context, LARGE_PROJECT, largeEpicInputs(epics, fields));
   const members = plan.filter((item) => item.type !== "Epic");
   const memberKeys = await bulkCreate(
+    context,
     LARGE_PROJECT,
-    members.map((item) => ({
-      type: item.type,
-      fields: { summary: item.summary, [fields.epicLink]: epicKeys[item.epic] },
-    })),
+    largeMemberInputs(members, fields, epicKeys),
   );
   const keys = [...epicKeys, ...memberKeys];
-  const moved = await moveAll(plan, keys);
-  privateJson(truthPath, {
+  const moved = await moveAll(context, plan, keys);
+  privateJson(context.truthPath, {
     ...recorded,
     projects: { ...recorded.projects, large: LARGE_PROJECT },
     large: largeTruth(plan, keys, { epicLink: fields.epicLink, epicName: fields.epicName }),
@@ -329,5 +346,32 @@ async function seedLarge() {
   );
 }
 
-if (only === undefined) await seedBase();
-await seedLarge();
+function cliOptions(args) {
+  const [directory, ...options] = args;
+  if (!directory || (options.length > 0 && !(options.length === 2 && options[0] === "--only")))
+    throw new TypeError("Usage: seed-projects.mjs <session-directory> [--only LRG]");
+  const only = options[1];
+  if (only !== undefined && only !== LARGE_PROJECT)
+    throw new TypeError(`--only accepts ${LARGE_PROJECT}`);
+  return { directory, only };
+}
+
+async function main() {
+  const { directory, only } = cliOptions(process.argv.slice(2));
+  const session = loadSession(directory);
+  const context = {
+    session,
+    auth: basicAuth(session, "admin"),
+    truthPath: join(session.directory, "requirements-truth.json"),
+  };
+  if (only === undefined && existsSync(context.truthPath)) {
+    console.log(JSON.stringify({ operation: "requirements-seed", skipped: "truth exists" }));
+    return;
+  }
+  if (only !== undefined && !existsSync(context.truthPath))
+    throw new TypeError("--only adds to a seeded laboratory: run the full seed first");
+  if (only === undefined) await seedBase(context);
+  await seedLarge(context);
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();

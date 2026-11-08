@@ -7,10 +7,11 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { Buffer } from "node:buffer";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { URL } from "node:url";
+import { dirname, join } from "node:path";
+import { pathToFileURL, URL } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { basicAuth, loadSession } from "../testing/jira-chat-lab/lab-client.mjs";
 import { LARGE_PROJECT, largePlan } from "../testing/jira-chat-lab/requirements/large-project.mjs";
 
 const run = promisify(execFile);
@@ -195,6 +196,60 @@ function seededWithoutLarge(lab) {
 
 const touchesOtherProjects = (requests) => requests.filter((request) => /RPT|REQ/.test(request));
 
+describe("W7 seed module import boundary", () => {
+  it("imports without CLI arguments, a session or any native request", async () => {
+    const source = [
+      'globalThis.fetch = () => { throw new Error("Unexpected native request on import"); };',
+      `await import(${JSON.stringify(pathToFileURL(SEED).href)});`,
+      'console.log("seed-module-imported");',
+    ].join("\n");
+    const result = await run(process.execPath, ["--input-type=module", "--eval", source]);
+    expect(result.stdout.trim()).toBe("seed-module-imported");
+    expect(result.stderr).toBe("");
+  });
+
+  it("does not consume a caller's arguments or exit because its truth already exists", async () => {
+    const lab = await laboratory();
+    seededWithoutLarge(lab);
+    const before = readFileSync(lab.truthPath, "utf8");
+    const source = [
+      `process.argv = [process.execPath, "synthetic-importer.mjs", ${JSON.stringify(dirname(lab.truthPath))}];`,
+      'globalThis.fetch = () => { throw new Error("Unexpected native request on import"); };',
+      `await import(${JSON.stringify(pathToFileURL(SEED).href)});`,
+      'console.log("seed-module-imported");',
+    ].join("\n");
+    const result = await run(process.execPath, ["--input-type=module", "--eval", source]);
+    expect(result.stdout.trim()).toBe("seed-module-imported");
+    expect(result.stderr).toBe("");
+    expect(readFileSync(lab.truthPath, "utf8")).toBe(before);
+    expect(lab.jira.requests).toEqual([]);
+  });
+
+  it("reuses native metadata and transitions for the selected runtime project without seeding", async () => {
+    const lab = await laboratory();
+    const project = lab.jira.created("LIM7", "Runtime project");
+    project.issues.push({ key: "LIM7-1", type: "Task", status: "To Do", fields: {} });
+    const session = loadSession(dirname(lab.truthPath));
+    const context = { session, auth: basicAuth(session, "admin") };
+    const seed = await import("../testing/jira-chat-lab/requirements/seed-projects.mjs");
+    expect(await seed.fieldIds(context, "LIM7")).toEqual({
+      epicName: NAME_FIELD,
+      epicLink: LINK_FIELD,
+      storyPoints: undefined,
+    });
+    await seed.moveTo(context, "LIM7-1", "Done");
+    expect(project.issues).toHaveLength(1);
+    expect(project.issues[0].status).toBe("Done");
+    expect(lab.jira.requests).toEqual([
+      "GET /rest/api/2/issue/createmeta/LIM7/issuetypes",
+      "GET /rest/api/2/issue/createmeta/LIM7/issuetypes/1?maxResults=200",
+      "GET /rest/api/2/field",
+      "GET /rest/api/2/issue/LIM7-1/transitions",
+      "POST /rest/api/2/issue/LIM7-1/transitions",
+    ]);
+  });
+});
+
 describe("seed-projects.mjs --only LRG", () => {
   it("adds the large project to a seeded laboratory and leaves everything else alone", async () => {
     const lab = await laboratory();
@@ -251,6 +306,56 @@ describe("seed-projects.mjs --only LRG", () => {
     expect(stdout).toContain("large project exists");
     expect(lab.jira.requests).toHaveLength(requests);
     expect(lab.truth()).toEqual(first);
+  }, 120_000);
+
+  it("W7 writes only the planned native label and parent defects and records the exact facts", async () => {
+    const lab = await laboratory();
+    seededWithoutLarge(lab);
+    await lab.seed("--only", LARGE_PROJECT);
+    const { issues } = lab.jira.projects.get(LARGE_PROJECT);
+    let taskOrdinal = 0;
+    issues.forEach((issue, index) => {
+      if (issue.type === "Task") taskOrdinal += 1;
+      expect(issue.fields.labels).toEqual((index + 1) % 7 === 0 ? [] : ["anforderung"]);
+      const linked = issue.type === "Bug" || (issue.type === "Task" && taskOrdinal % 11 !== 0);
+      expect(Object.hasOwn(issue.fields, LINK_FIELD)).toBe(linked);
+    });
+    const recorded = lab.truth().large;
+    expect(recorded.seedVersion).toBe(2);
+    expect(recorded.issues).toEqual(
+      issues.map((issue) => ({
+        key: issue.key,
+        type: issue.type,
+        status: issue.status,
+        labels: issue.fields.labels,
+        ...(Object.hasOwn(issue.fields, LINK_FIELD) ? { epic: issue.fields[LINK_FIELD] } : {}),
+        deviations: [
+          ...(issue.fields.labels.length === 0 ? ["label:anforderung"] : []),
+          ...(issue.type === "Task" && !Object.hasOwn(issue.fields, LINK_FIELD) ? ["parent"] : []),
+        ],
+      })),
+    );
+    expect(recorded.issues.filter((issue) => issue.deviations.length > 0)).toHaveLength(510);
+    expect(recorded.issues.reduce((sum, issue) => sum + issue.deviations.length, 0)).toBe(536);
+  }, 120_000);
+
+  it("W7 does not rewrite or silently upgrade a previously recorded large project", async () => {
+    const lab = await laboratory();
+    const recorded = seededWithoutLarge(lab);
+    recorded.large = {
+      project: LARGE_PROJECT,
+      issueCount: 1,
+      counts: [],
+      epics: [],
+      fieldIds: {},
+    };
+    writeFileSync(lab.truthPath, JSON.stringify(recorded));
+    const original = readFileSync(lab.truthPath, "utf8");
+    await lab.seed("--only", LARGE_PROJECT);
+    expect(lab.jira.requests).toEqual([]);
+    expect(readFileSync(lab.truthPath, "utf8")).toBe(original);
+    expect(lab.truth().large.seedVersion).toBeUndefined();
+    expect(lab.truth().large.issues).toBeUndefined();
   }, 120_000);
 
   it("refuses a project that holds issues the truth does not record", async () => {

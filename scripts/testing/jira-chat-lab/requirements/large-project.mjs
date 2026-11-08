@@ -53,13 +53,32 @@ function bugsOf(shape, epic) {
   }));
 }
 
+function withSeededDeviations(items) {
+  let taskOrdinal = 0;
+  return items.map((item, index) => {
+    if (item.type === "Task") taskOrdinal += 1;
+    const missingLabel = (index + 1) % 7 === 0;
+    const missingParent = item.type === "Task" && taskOrdinal % 11 === 0;
+    return {
+      ...item,
+      epic: missingParent ? undefined : item.epic,
+      labels: missingLabel ? [] : ["anforderung"],
+      deviations: [
+        ...(missingLabel ? ["label:anforderung"] : []),
+        ...(missingParent ? ["parent"] : []),
+      ],
+    };
+  });
+}
+
 /**
  * The issues of the project in creation order: the epics, then the tasks, then the bugs of every
- * epic. `epic` is the index of the epic an issue belongs to; epics stay "To Do" like those of RPT.
+ * epic. `epic` is the actual parent index, absent for every eleventh task. Every seventh issue
+ * lacks the required label. Epics stay "To Do" like those of RPT; all status figures are unchanged.
  */
 export function largePlan(shape = LARGE_SHAPE) {
   const indices = Array.from({ length: shape.epics }, (_, epic) => epic);
-  return [
+  return withSeededDeviations([
     ...indices.map((epic) => ({
       type: "Epic",
       epic: undefined,
@@ -68,7 +87,7 @@ export function largePlan(shape = LARGE_SHAPE) {
     })),
     ...indices.flatMap((epic) => tasksOf(shape, epic)),
     ...indices.flatMap((epic) => bugsOf(shape, epic)),
-  ];
+  ]);
 }
 
 /**
@@ -87,10 +106,20 @@ export function largeTruth(plan, keys, fieldIds) {
     .sort((a, b) => `${a.type};${a.status}`.localeCompare(`${b.type};${b.status}`));
   const membersOf = (epic) => plan.filter((item) => item.epic === epic);
   return {
+    seedVersion: 2,
     project: LARGE_PROJECT,
+    templateScope: { issueTypes: ["Epic", "Task", "Bug"] },
     fieldIds,
     issueCount: plan.length,
     counts,
+    issues: plan.map((item, index) => ({
+      key: keys[index],
+      type: item.type,
+      status: item.status,
+      labels: [...item.labels],
+      ...(item.epic === undefined ? {} : { epic: epicKeys[item.epic] }),
+      deviations: [...item.deviations],
+    })),
     epics: epicKeys.map((key, epic) => ({
       key,
       members: membersOf(epic).length,
