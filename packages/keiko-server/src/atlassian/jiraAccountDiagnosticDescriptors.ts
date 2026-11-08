@@ -1,14 +1,12 @@
-import {
-  TOOL_CATALOG_LIMITS,
-  type CatalogJsonObject,
-} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { object, text } from "./jiraManagedSchemas.js";
 import {
   jiraNativeDeclaration,
   jiraNativeIdentitySchema as ID,
   jiraNativePagingSchema as PAGING,
-  jiraNativeReadResult,
+  jiraNativeReadDefinition as read,
+  jiraNativeBoundedLocalPageFields as page,
   type JiraNativeDefinition,
 } from "./jiraProjectStructureDescriptors.js";
 
@@ -18,28 +16,6 @@ const CACHED_DUPLICATES = {
   type: "string",
   enum: ["cached-duplicate-accounts"],
 };
-function page(item: CatalogJsonObject): CatalogJsonObject {
-  return {
-    items: { type: "array", maxItems: 100, items: item },
-    startAt: PAGING.startAt,
-    total: { type: "integer", minimum: 0, maximum: MAX },
-    nextStartAt: PAGING.startAt,
-  };
-}
-function read(
-  description: string,
-  input: CatalogJsonObject,
-  result: CatalogJsonObject,
-  maxResultCount = 1,
-): JiraNativeDefinition {
-  return {
-    description,
-    input,
-    result: jiraNativeReadResult(result),
-    risk: "read",
-    maxResultCount,
-  };
-}
 export const JIRA_ACCOUNT_DIAGNOSTIC_READ_DEFINITIONS = {
   "jira.password-policy": read(
     "Read and locally page the native password requirement messages for an explicit hasOldPassword context, defaulting to false. These messages describe requirements only: this operation never receives or tests a password, proves acceptance, or grants permission. Empty requirements are a known empty list, not proof that every password is permitted.",

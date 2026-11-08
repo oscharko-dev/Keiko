@@ -4,7 +4,7 @@ import {
   JIRA_MUTATION_DETAIL_LIMITS,
   JIRA_MUTATION_RESULT_STATES,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { TOOL_CATALOG_LIMITS, type CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import {
   compileExternalCatalogSchema,
@@ -101,6 +101,15 @@ function collection(item: CatalogJsonObject): CatalogJsonObject {
     nextStartAt: PAGE_NUMBER,
   });
 }
+/** Locally paged observations of one complete collection bounded by the catalog array limit. */
+function boundedLocalPageFields(item: CatalogJsonObject): CatalogJsonObject {
+  return {
+    items: { type: "array", maxItems: 100, items: item },
+    startAt: PAGING.startAt,
+    total: { type: "integer", minimum: 0, maximum: TOOL_CATALOG_LIMITS.maxArrayItems },
+    nextStartAt: PAGING.startAt,
+  };
+}
 function writeResult(receipt: CatalogJsonObject): CatalogJsonObject {
   return object(
     {
@@ -123,6 +132,9 @@ interface Definition {
   readonly result: CatalogJsonObject;
   readonly risk: "read" | "write";
   readonly maxResultCount: number;
+}
+function readDefinition(description: string, input: CatalogJsonObject, fields: CatalogJsonObject, maxResultCount = 1): Definition {
+  return { description, input, result: readResult(fields), risk: "read", maxResultCount };
 }
 export const JIRA_PROJECT_STRUCTURE_READ_DEFINITIONS = {
   "jira.components": {
@@ -241,6 +253,8 @@ export {
   VERSION_FIELDS as jiraNativeVersionFields,
   COMPONENT_FIELDS_WITH_IDENTITY as jiraNativeComponentFields,
   readResult as jiraNativeReadResult,
+  readDefinition as jiraNativeReadDefinition,
+  boundedLocalPageFields as jiraNativeBoundedLocalPageFields,
   collection as jiraNativeCollectionResult,
   writeResult as jiraNativeWriteResult,
   declaration as jiraNativeDeclaration,

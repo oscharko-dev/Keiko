@@ -1,4 +1,4 @@
-import { TOOL_CATALOG_LIMITS, type CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { object, text } from "./jiraManagedSchemas.js";
 import {
@@ -6,6 +6,8 @@ import {
   jiraNativePagingSchema as PAGING,
   jiraNativeDeclaration,
   jiraNativeReadResult,
+  jiraNativeReadDefinition as read,
+  jiraNativeBoundedLocalPageFields as page,
   type JiraNativeDefinition,
 } from "./jiraProjectStructureDescriptors.js";
 
@@ -36,17 +38,6 @@ const TASK_CONTEXT = {
   taskSelection: { type: "string", enum: ["active-or-latest", "selected-task"] },
   selectedTaskId: ID,
 };
-function page(item: CatalogJsonObject): CatalogJsonObject {
-  return {
-    items: { type: "array", maxItems: 100, items: item },
-    startAt: PAGING.startAt,
-    total: { type: "integer", minimum: 0, maximum: MAX },
-    nextStartAt: PAGING.startAt,
-  };
-}
-function read(description: string, input: CatalogJsonObject, result: CatalogJsonObject, maxResultCount = 1): JiraNativeDefinition {
-  return { description, input, result: jiraNativeReadResult(result), risk: "read", maxResultCount };
-}
 export const JIRA_JOB_OBSERVATION_READ_DEFINITIONS = {
   "jira.reindex-status": {
     ...read(
