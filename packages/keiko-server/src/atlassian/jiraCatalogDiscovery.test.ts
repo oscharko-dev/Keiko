@@ -106,6 +106,30 @@ describe("local Jira operation discovery", () => {
     expect(f.select).not.toHaveBeenCalled();
   });
 
+  it("ranks operations matching a plain-word query first, before any paging", async () => {
+    const f = fixture();
+    const unfiltered = await f.discover.execute({ maxResults: 100 }, f.context);
+    const total = unfiltered.data.total;
+    if (typeof total !== "number") throw new TypeError("Missing discovery total");
+    const ranked = await f.discover.execute({ query: "create project", maxResults: 3 }, f.context);
+    const items = ranked.data.items as readonly { identity: string; tool: string }[];
+    expect(items[0]).toMatchObject({
+      identity: "POST /rest/api/2/project",
+      tool: "jira_create_project",
+    });
+    const matched = ranked.data.total;
+    if (typeof matched !== "number") throw new TypeError("Missing ranked total");
+    expect(matched).toBeGreaterThan(0);
+    expect(matched).toBeLessThan(total);
+    expect(ranked.data.nextStartAt).toBe(3);
+    const synonym = await f.discover.execute({ query: "make project", maxResults: 100 }, f.context);
+    expect(synonym.data.total).toBeGreaterThan(0);
+    const blank = await f.discover.execute({ query: " -/ ", maxResults: 1 }, f.context);
+    expect(blank.data.total).toBe(total);
+    const none = await f.discover.execute({ query: "zzqqxx", maxResults: 1 }, f.context);
+    expect(none.data).toMatchObject({ outcome: "succeeded", items: [], total: 0 });
+    expect(f.select).not.toHaveBeenCalled();
+  });
   it("binds a closed identity and passes the exact short receipt for next-round budget accounting", async () => {
     const f = fixture();
     const result = await f.describe.execute({ identities: ["GET /rest/api/2/project"] }, f.context);

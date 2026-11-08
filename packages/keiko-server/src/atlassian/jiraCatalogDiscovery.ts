@@ -60,6 +60,42 @@ function summaries(options: DiscoveryOptions): readonly Summary[] {
     }));
 }
 
+const QUERY_MAX_CHARS = 200;
+const QUERY_TERMS_MAX = 12;
+/** Lowercase words of an identity, tool name or query; separators and HTTP path syntax split words. */
+function words(value: string): readonly string[] {
+  return value
+    .toLowerCase()
+    .split(/[^a-z0-9]+/u)
+    .filter((word) => word.length > 0);
+}
+/**
+ * Rank summaries by query words: a whole word of the tool name counts twice, a word found anywhere
+ * in the identity, tool or description once. The narrower tool name, then registry order, breaks
+ * ties. Partial agreement still ranks, so a synonym in the query cannot hide every operation.
+ */
+function matching(available: readonly Summary[], query: string): readonly Summary[] {
+  const terms = [...new Set(words(query))].slice(0, QUERY_TERMS_MAX);
+  if (terms.length === 0) return available;
+  return available
+    .map((summary, index) => {
+      const name = new Set(words(summary.tool));
+      const description = typeof summary.description === "string" ? summary.description : "";
+      const haystack = words(`${summary.identity} ${summary.tool} ${description}`).join(" ");
+      const score = terms.reduce(
+        (total, term) => total + (name.has(term) ? 2 : 0) + (haystack.includes(term) ? 1 : 0),
+        0,
+      );
+      return { summary, index, score, breadth: name.size };
+    })
+    .filter((entry) => entry.score > 0)
+    .sort(
+      (left, right) =>
+        right.score - left.score || left.breadth - right.breadth || left.index - right.index,
+    )
+    .map((entry) => entry.summary);
+}
+
 /** Exact registry identity lookup: neither user URLs nor HTTP request shapes are accepted. */
 export function jiraToolsForIdentities(identities: readonly string[]): readonly string[] {
   const definitions = jiraOperationDefinitions();
@@ -80,7 +116,8 @@ function discover(
   requireDispatch(context.beforeEffect(), "denied", "effect-denied");
   const startAt = typeof args.startAt === "number" ? args.startAt : 0;
   const maxResults = typeof args.maxResults === "number" ? args.maxResults : 100;
-  const available = summaries(options);
+  const available =
+    typeof args.query === "string" ? matching(summaries(options), args.query) : summaries(options);
   requireDispatch(context.jiraDiscoveryResultFits !== undefined, "failed", "handler-unavailable");
   const items: CatalogJsonObject[] = [];
   const page = (): CatalogJsonObject => ({
@@ -223,10 +260,11 @@ function tool(
     descriptor: createToolDescriptor({
       toolRef: createToolRef(`keiko.${name}`, 2),
       description: discovery
-        ? "List implemented Jira Data Center operations by stable identity. This reads local catalog metadata, not Jira data. Page until the required operation is found, then use jira.describe to load its typed tool."
+        ? "List implemented Jira Data Center operations by stable identity. This reads local catalog metadata, not Jira data. Pass a short query of plain words, such as create project or sprint issues, to rank matching operations first; page until the required operation is found, then use jira.describe to load its typed tool."
         : "Select additional native Jira operation identities returned by jira.discover. Curated Jira tools stay available. Replaces the additional selected tool set for the next model round; typed argument schemas are offered there subject to current authority and budgets. Include all additional operations needed together. An empty list clears the additional selection. Unknown identities or a subset exceeding the model or authority budget are refused without truncation.",
       inputSchema: discovery
         ? object({
+            query: text(QUERY_MAX_CHARS),
             startAt: { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
             maxResults: { type: "integer", minimum: 1, maximum: 100 },
           })
