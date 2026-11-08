@@ -81,7 +81,7 @@ const FIELDS: Readonly<Record<JiraInstanceSettingMutation, ReadonlySet<string>>>
   "jira.set-instance-base-url": new Set([
     "expectedActorKey",
     "expectedBaseUrl",
-    "baseUrl",
+    "configuredBaseUrl",
     "confirmInstanceWide",
   ]),
   "jira.set-read-only-mode": new Set([
@@ -127,10 +127,10 @@ function columnInput(args: CatalogJsonObject, actor: string): InstanceSettingInp
 function urlInput(args: CatalogJsonObject, actor: string): InstanceSettingInput | undefined {
   return args.confirmInstanceWide === true &&
     jiraObservedInstanceBaseUrl(args.expectedBaseUrl) &&
-    isSafeAtlassianConnectorBaseUrl(args.baseUrl) &&
-    savedText(args.baseUrl, 2048) &&
-    !args.baseUrl.includes("\\")
-    ? { kind: "base-url", actor, expected: args.expectedBaseUrl, value: args.baseUrl }
+    isSafeAtlassianConnectorBaseUrl(args.configuredBaseUrl) &&
+    savedText(args.configuredBaseUrl, 2048) &&
+    !args.configuredBaseUrl.includes("\\")
+    ? { kind: "base-url", actor, expected: args.expectedBaseUrl, value: args.configuredBaseUrl }
     : undefined;
 }
 function readOnlyInput(args: CatalogJsonObject, actor: string): InstanceSettingInput | undefined {

@@ -97,6 +97,11 @@ describe.each(["en", "de"] as const)(
             say("existing approval rules", "bestehenden Freigaberegeln"),
           );
         }
+        if (operation === "jira.set-instance-base-url") {
+          expect(review.textContent).toContain(String(args.expectedBaseUrl));
+          expect(review.textContent).toContain(String(args.configuredBaseUrl));
+          expect(review.textContent).not.toContain("configuredBaseUrl");
+        }
         if (operation === "jira.set-system-columns")
           expect(review.textContent).toContain(say("repeated IDs", "wiederholte IDs"));
         if (operation === "jira.set-read-only-mode")
