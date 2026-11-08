@@ -1,3 +1,4 @@
+import { guardJiraDirectorySelfAccess } from "./jira-directory-self-access.js";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { AtlassianWriteHttpOutcome } from "./atlassian-write-http.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
@@ -16,6 +17,8 @@ async function userAdmission(request: JiraMutationRequest, input: Exclude<Direct
   const user = await bindDirectoryUser(request, input.user);
   if (user !== undefined) return user;
   if (input.kind === "application") {
+    if (!input.present && input.user.key === input.actor)
+      return directoryAccessRefusal("Removing application access from the connected actor could revoke this connection's own access and prevent readback or repair. Use a different authorized Jira administrator connection. No write was sent.", "conflict");
     const role = await readDirectoryRole(request, input.role);
     return role.ok ? undefined : role;
   }
@@ -89,9 +92,17 @@ export async function executeJiraDirectoryAccessMutation(operation: JiraDirector
   if (!actor.ok) return actor;
   const refused = input.kind === "roles" ? await roleAdmission(request, ports, input, receipt) : await userAdmission(request, input, receipt);
   if (refused !== undefined) return refused;
+  if (input.kind === "roles") {
+    const selfAccess = await guardJiraDirectorySelfAccess(request, input, actor.value);
+    if (selfAccess !== undefined) return selfAccess;
+  }
   if (check) return { ok: true, receipt: {} };
   const reboundActor = await readSavedActor(request, input.actor);
   if (!reboundActor.ok) return reboundActor;
+  if (input.kind === "roles") {
+    const selfAccess = await guardJiraDirectorySelfAccess(request, input, reboundActor.value);
+    if (selfAccess !== undefined) return selfAccess;
+  }
   const dispatched = input.kind === "roles" ? await roleEffect(ports, input)
     : { ok: true, value: await userEffect(request, ports, input) } as const;
   if (!dispatched.ok) return dispatched;

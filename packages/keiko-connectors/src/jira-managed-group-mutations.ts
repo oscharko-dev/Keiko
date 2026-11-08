@@ -41,8 +41,8 @@ export async function executeJiraGroupMutation(operation: JiraGroupMutation, arg
   const refused = await admitGroupMutation(request, input);
   if (refused !== undefined) return refused;
   if (check) return { ok: true, receipt: {} };
-  const actor = await readSavedActor(request, input.actor);
-  if (!actor.ok) return actor;
+  const current = await admitGroupMutation(request, input);
+  if (current !== undefined) return current;
   const target = effect(input);
   const response = await request(target.path, target.method, target.body, target.expect);
   if (!response.ok) return { ...dispatchFailure(response), receipt };

@@ -147,3 +147,20 @@ describe("native administration group lifecycle and direct membership", () => {
     expect(f.calls).toEqual([]);
   });
 });
+
+describe("group mutation self-access protection", () => {
+  it("refuses deletion when the connected actor is in the complete native group population", async () => {
+    const selected = GROUP_MUTATION_FIXTURE_CASES[1]; const f = groupMutationFixture();
+    f.members.push({ key: "synthetic-actor", name: "operator" });
+    const outcome = await execute(selected.name, structuredClone(selected.args), f.request);
+    expect(outcome).toMatchObject({ ok: false, reason: "conflict" });
+    expect(JSON.stringify(outcome)).toContain("own application or administration access");
+    expect(f.calls.every((call) => call.method === "GET")).toBe(true);
+  });
+  it("refuses removing the connected actor without substituting a same-name target", async () => {
+    const f = groupMutationFixture();
+    expect(await execute(remove.name, { ...remove.args, user: { key: "synthetic-actor", name: "operator" } }, f.request))
+      .toMatchObject({ ok: false, reason: "conflict" });
+    expect(f.calls.every((call) => call.method === "GET")).toBe(true);
+  });
+});

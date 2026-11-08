@@ -115,3 +115,27 @@ describe("governed directory configuration native operations", () => {
     expect(f.snapshot().effects).toBe(0);
   });
 });
+
+it("refuses removing the connected actor's own native application access", async () => {
+  const selected = CASES[3]; const f = directoryAccessFixture(selected);
+  const request: typeof f.request = async (path, ...rest) => {
+    if (path === "user?key=synthetic-actor" || path === "user?username=operator")
+      return { ok: true, status: 200, body: { key: "synthetic-actor", name: "operator" } };
+    return f.request(path, ...rest);
+  };
+  const outcome = await execute(selected.name, { ...selected.args, user: { key: "synthetic-actor", name: "operator" } }, request, f.ports);
+  expect(outcome).toMatchObject({ ok: false, reason: "conflict" });
+  expect(JSON.stringify(outcome)).toContain("own access");
+  expect(f.snapshot().effects).toBe(0);
+});
+it.each([false, true])("refuses single/bulk role updates that remove the actor's observed group (bulk=%s)", async (bulk) => {
+  const selected = bulk ? CASES[1] : CASES[0]; const f = directoryAccessFixture(selected);
+  const target = { expected: DIRECTORY_ROLE_REVIEW, value: { key: "jira-software", groups: [], defaultGroups: [] } };
+  const args = { expectedActorKey: "synthetic-actor", acceptGlobalPermissionChange: true,
+    ...(bulk ? { roles: [target] } : { role: target }) };
+  const request: typeof f.request = async (path, ...rest) => path === "user?key=synthetic-actor&expand=groups"
+    ? { ok: true, status: 200, body: { key: "synthetic-actor", name: "operator", groups: { size: 1, items: [{ name: "jira-users" }] } } }
+    : f.request(path, ...rest);
+  expect(await execute(selected.name, args, request, f.ports)).toMatchObject({ ok: false, reason: "conflict" });
+  expect(f.snapshot().effects).toBe(0);
+});

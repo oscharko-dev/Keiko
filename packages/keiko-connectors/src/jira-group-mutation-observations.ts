@@ -60,6 +60,14 @@ export async function admitGroupMutation(request: JiraMutationRequest, input: Gr
   if (input.kind === "create") return undefined;
   const group = await bindMutationGroup(request, input.name);
   if (group !== undefined) return group;
-  if (input.kind === "membership") return membershipAdmission(request, input);
+  if (input.kind === "membership") {
+    if (!input.present && input.user.key === input.actor)
+      return groupMutationRefusal("Removing the connected actor from a group could revoke this connection's own access. Use a different authorized Jira administrator connection. No write was sent.", "conflict");
+    return membershipAdmission(request, input);
+  }
+  const member = await readGroupMutationMembership(request, { kind: "membership", actor: input.actor,
+    name: input.name, user: actor.value, expected: false, present: false });
+  if (!member.ok) return member;
+  if (member.value) return groupMutationRefusal("Deleting a group containing the connected actor could revoke this connection's own application or administration access. Use a different authorized Jira administrator connection outside this group. No write was sent.", "conflict");
   return input.swap === undefined ? undefined : bindMutationGroup(request, input.swap);
 }
