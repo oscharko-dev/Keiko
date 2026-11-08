@@ -287,11 +287,17 @@ function subjectOf(
   };
 }
 
-function metadataCatalog(metadata: readonly JiraFieldMetadata[]): readonly JiraFieldCatalogEntry[] {
+/** One entry per field id; a later list describes the instance more exactly and wins. */
+function mergedCatalog(
+  ...lists: readonly (readonly JiraFieldCatalogEntry[])[]
+): readonly JiraFieldCatalogEntry[] {
   const known = new Map<string, JiraFieldCatalogEntry>();
-  for (const entry of JIRA_TEMPLATE_SYSTEM_FIELDS) known.set(entry.id, entry);
-  for (const field of metadata) known.set(field.id, { id: field.id, name: field.name });
+  for (const entry of lists.flat()) known.set(entry.id, { id: entry.id, name: entry.name });
   return [...known.values()];
+}
+
+function metadataCatalog(metadata: readonly JiraFieldMetadata[]): readonly JiraFieldCatalogEntry[] {
+  return mergedCatalog(JIRA_TEMPLATE_SYSTEM_FIELDS, metadata);
 }
 
 function references(templates: readonly JiraIssueTemplate[]): readonly string[] {
@@ -301,12 +307,20 @@ function references(templates: readonly JiraIssueTemplate[]): readonly string[] 
   ]);
 }
 
-/** The instance field list (`GET field`), or nothing when it is unreadable or over its bound. */
+/**
+ * The fields a template reference can name: Jira's system fields and the instance field list
+ * (`GET field`), or nothing when that list is unreadable or over its bound. The system fields are
+ * part of it because `GET field` does not list all of them; Data Center omits `parent`, which only
+ * a sub-task type's create metadata carries.
+ */
 export async function readJiraFieldCatalog(
   request: JiraMutationRequest,
 ): Promise<readonly JiraFieldCatalogEntry[] | undefined> {
   const items = await readFieldCatalogValues(request);
-  return items === undefined ? undefined : fieldCatalogValues(items);
+  return items === undefined ? undefined : systemAndInstanceFields(items);
+}
+function systemAndInstanceFields(items: readonly unknown[]): readonly JiraFieldCatalogEntry[] {
+  return mergedCatalog(JIRA_TEMPLATE_SYSTEM_FIELDS, fieldCatalogValues(items));
 }
 async function readFieldCatalogValues(
   request: JiraMutationRequest,
@@ -400,9 +414,7 @@ function bulkReferenceViolations(
   values: readonly unknown[] | undefined,
 ): readonly JiraTemplateViolation[] {
   const catalog =
-    values === undefined
-      ? JIRA_TEMPLATE_SYSTEM_FIELDS
-      : [...JIRA_TEMPLATE_SYSTEM_FIELDS, ...fieldCatalogValues(values)];
+    values === undefined ? JIRA_TEMPLATE_SYSTEM_FIELDS : systemAndInstanceFields(values);
   const violations: JiraTemplateViolation[] = [];
   for (const rule of rules) {
     const ids = resolveJiraTemplateFieldIds(rule.reference, catalog);
@@ -484,7 +496,7 @@ function mayReferenceDeletedIssue(id: string, values: readonly unknown[]): boole
 }
 function deletionRuleAffected(template: JiraIssueTemplate, values: readonly unknown[]): boolean {
   if (template.parent.link !== undefined) return true;
-  const catalog = [...JIRA_TEMPLATE_SYSTEM_FIELDS, ...fieldCatalogValues(values)];
+  const catalog = systemAndInstanceFields(values);
   return references([template]).some((reference) => {
     const ids = resolveJiraTemplateFieldIds(reference, catalog);
     return ids.length === 0 || ids.some((id) => mayReferenceDeletedIssue(id, values));
@@ -560,7 +572,7 @@ async function completeCatalog(
   );
   if (!unresolved) return local;
   const remote = await readJiraFieldCatalog(input.request);
-  return remote === undefined ? local : [...local, ...remote];
+  return remote === undefined ? local : mergedCatalog(remote, local);
 }
 
 async function completeIdentity(

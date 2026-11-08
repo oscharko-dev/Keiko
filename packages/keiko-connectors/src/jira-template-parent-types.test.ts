@@ -264,6 +264,47 @@ describe("native validation of a saved parent-type clause", () => {
     });
     expect(request).toHaveBeenCalledWith("issuetype", "GET", undefined, "json-array");
   });
+  it("knows the system parent field that the Data Center field list omits", async () => {
+    // Jira Data Center's `GET field` lists no `parent`; only a sub-task type's create metadata
+    // carries it. Validation resolves template references against the same system fields the write
+    // gate uses, so a correct sub-task template is not shown as one whose writes are refused.
+    const request = vi.fn<JiraMutationRequest>((path) => {
+      if (path === "project/SYN")
+        return Promise.resolve<AtlassianWriteHttpOutcome>({
+          ok: true,
+          status: 200,
+          body: { id: "10000", key: "SYN", issueTypes: [{ id: "10003", name: "Sub-task" }] },
+        });
+      if (path === "issuetype")
+        return Promise.resolve<AtlassianWriteHttpOutcome>({
+          ok: true,
+          status: 200,
+          body: undefined,
+          items: [{ id: "7", name: "Task" }],
+        });
+      if (path === "field")
+        return Promise.resolve<AtlassianWriteHttpOutcome>({
+          ok: true,
+          status: 200,
+          body: undefined,
+          items: [
+            { id: "summary", name: "Summary" },
+            { id: "customfield_10107", name: "Parent Link" },
+          ],
+        });
+      return Promise.resolve<AtlassianWriteHttpOutcome>({
+        ok: false,
+        reason: "permission-denied",
+      });
+    });
+    const read = await readJiraTemplateInstanceMetadata(request, rule());
+    if (!read.ok) throw new TypeError("Expected independently read validation metadata");
+    expect(validateJiraIssueTemplateAgainstInstance(rule(), read.instance)).toEqual([]);
+    const unknown = { ...rule(), requiredFields: ["customfield_404"] };
+    expect(validateJiraIssueTemplateAgainstInstance(unknown, read.instance)).toEqual([
+      { code: "unknown-field", subject: "customfield_404" },
+    ]);
+  });
   it("refuses unavailable global type metadata instead of displaying a successful validation", async () => {
     const request = vi.fn<JiraMutationRequest>((path) =>
       Promise.resolve<AtlassianWriteHttpOutcome>(
