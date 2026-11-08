@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 394,
-  "completeClassCount": 394,
+  "supportedClassCount": 395,
+  "completeClassCount": 395,
   "completeness": "complete",
   "classes": [
     {
@@ -1537,8 +1537,10 @@
         "start": [],
         "state": [
           "atlassian.jira-draft",
+          "atlassian.jira-draft-batch",
           "atlassian.jira-report",
           "jira.attachment.source",
+          "jira.citation.markers",
           "jira.field.admission"
         ],
         "end": ["atlassian.action.outcome"],
@@ -1555,11 +1557,19 @@
           "mode": "correlation"
         },
         {
+          "op": "atlassian.jira-draft-batch",
+          "mode": "correlation"
+        },
+        {
           "op": "atlassian.jira-report",
           "mode": "correlation"
         },
         {
           "op": "jira.attachment.source",
+          "mode": "correlation"
+        },
+        {
+          "op": "jira.citation.markers",
           "mode": "correlation"
         },
         {
@@ -1571,8 +1581,10 @@
       "resourceSignals": [
         "atlassian.action.outcome",
         "atlassian.jira-draft",
+        "atlassian.jira-draft-batch",
         "atlassian.jira-report",
         "jira.attachment.source",
+        "jira.citation.markers",
         "jira.field.admission"
       ],
       "replayReferences": [],
@@ -1694,6 +1706,18 @@
               "required": true
             },
             {
+              "name": "readCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "readReusedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "refusal",
               "type": "string",
               "dataClass": "closed-enum",
@@ -1730,6 +1754,140 @@
             "causeChain": false
           },
           "proofIds": ["atlassian.jira-draft.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "atlassian.jira-draft-batch",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "causeChain",
+              "type": "string-array",
+              "dataClass": "error-kind",
+              "required": false
+            },
+            {
+              "name": "completionTokens",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "createRequested",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "draftedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "durationMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": false
+            },
+            {
+              "name": "failedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "frames",
+              "type": "string-array",
+              "dataClass": "safe-platform-class",
+              "required": false
+            },
+            {
+              "name": "granularity",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "groupCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "itemCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "pageItemCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "phase",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "plannedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "plannedItemTokens",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "refusal",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "requirementCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "stopReason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "duration",
+            "error-kind",
+            "loss-state",
+            "safe-platform-class"
+          ],
+          "frameCauseEvidence": {
+            "frames": true,
+            "causeChain": true
+          },
+          "proofIds": ["atlassian.jira-draft-batch.line"],
           "replayReferences": [],
           "missingObligations": []
         },
@@ -1953,6 +2111,60 @@
             "causeChain": false
           },
           "proofIds": ["jira.attachment.source.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "jira.citation.markers",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "callCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "labelCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "markdownDescriptionCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "resolvedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "unresolvedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "unscannedTextCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            }
+          ],
+          "evidenceClasses": ["completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["jira.citation.markers.line"],
           "replayReferences": [],
           "missingObligations": []
         },
@@ -3655,9 +3867,11 @@
         "state": [
           "chat.tool-mutation.projected",
           "chat.tool-transcript.updated",
+          "chat.tool-turn.batch-draft-offer",
           "chat.tool-turn.context-fitted",
           "chat.tool-turn.corrected",
-          "chat.tool-turn.ended"
+          "chat.tool-turn.ended",
+          "chat.tool-turn.result-condensed"
         ],
         "end": [],
         "failure": [],
@@ -3673,6 +3887,10 @@
           "mode": "correlation"
         },
         {
+          "op": "chat.tool-turn.batch-draft-offer",
+          "mode": "correlation"
+        },
+        {
           "op": "chat.tool-turn.context-fitted",
           "mode": "correlation"
         },
@@ -3683,15 +3901,21 @@
         {
           "op": "chat.tool-turn.ended",
           "mode": "correlation"
+        },
+        {
+          "op": "chat.tool-turn.result-condensed",
+          "mode": "correlation"
         }
       ],
       "lossSignals": [],
       "resourceSignals": [
         "chat.tool-mutation.projected",
         "chat.tool-transcript.updated",
+        "chat.tool-turn.batch-draft-offer",
         "chat.tool-turn.context-fitted",
         "chat.tool-turn.corrected",
-        "chat.tool-turn.ended"
+        "chat.tool-turn.ended",
+        "chat.tool-turn.result-condensed"
       ],
       "replayReferences": [],
       "operations": [
@@ -3734,6 +3958,30 @@
           "analyzerProjection": "timeline",
           "safeContextFields": [
             {
+              "name": "batchDraftedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "batchFailedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "batchPhase",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "batchPlannedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "draftReceiptCount",
               "type": "integer",
               "dataClass": "count",
@@ -3764,6 +4012,42 @@
             "causeChain": false
           },
           "proofIds": ["chat.tool-transcript.updated.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "chat.tool-turn.batch-draft-offer",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "messageDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": true
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "digest", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["chat.tool-turn.batch-draft-offer.line"],
           "replayReferences": [],
           "missingObligations": []
         },
@@ -3945,6 +4229,42 @@
             "causeChain": false
           },
           "proofIds": ["chat.tool-turn.ended.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "chat.tool-turn.result-condensed",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "keptRowCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "messageDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": true
+            },
+            {
+              "name": "rowCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["completeness-state", "count", "digest", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["chat.tool-turn.result-condensed.line"],
           "replayReferences": [],
           "missingObligations": []
         }
@@ -4185,6 +4505,12 @@
           "analyzerProjection": "timeline",
           "safeContextFields": [
             {
+              "name": "capsuleCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "messageCount",
               "type": "integer",
               "dataClass": "count",
@@ -4195,9 +4521,15 @@
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "stampMemo",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             }
           ],
-          "evidenceClasses": ["completeness-state", "count", "loss-state"],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
           "frameCauseEvidence": {
             "frames": false,
             "causeChain": false
@@ -5537,6 +5869,62 @@
             "causeChain": false
           },
           "proofIds": ["client.citation.activated.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "client-citation-highlight",
+      "requirementContract": "client-citation-highlight",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["client.citation.highlighted"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "client.citation.highlighted",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["client.citation.highlighted"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "client.citation.highlighted",
+          "owner": "keiko-server",
+          "category": "diagnostic",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "boxCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["client.citation.highlighted.line"],
           "replayReferences": [],
           "missingObligations": []
         }
@@ -41523,6 +41911,12 @@
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "draftBatchCoveredRequirementCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             },
             {
               "name": "hasNextPage",

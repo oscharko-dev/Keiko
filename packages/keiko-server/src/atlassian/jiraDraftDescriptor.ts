@@ -21,7 +21,7 @@ import {
 const DESCRIPTION =
   "Save a reviewable backlog draft in Keiko without creating Jira issues. Supports small and large drafts in pages of 1 to " +
   String(JIRA_DRAFT_PAGE_ITEMS_MAX) +
-  " items in the jira.draft item form. Omit draftId to start a new draft; supply the returned draftId only to append to that draft. " +
+  " items in the jira.draft item form; for Knowledge requirements use jira.draft-batch. Omit draftId to start a new draft; supply the returned draftId only to append to that draft. " +
   "A page that breaks an issue template is refused whole with the violations to correct. The result returns draftId and draftDigest for review. " +
   "Only when the user requests creation in Jira and unresolvedRefCount is 0, call jira.draft with only draftId and the last draftDigest; that tool performs Jira writes under the current write authority and required human approval.";
 

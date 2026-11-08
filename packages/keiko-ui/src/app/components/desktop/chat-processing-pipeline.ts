@@ -1,10 +1,12 @@
-import type {
-  ChatToolExchange,
-  ChatToolTranscript,
-  ChatTurnState,
+import {
+  CHAT_TOOL_BATCH_TOOL_NAME,
+  type ChatToolExchange,
+  type ChatToolTranscript,
+  type ChatTurnState,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
 import { jiraToolLabel, jiraToolState } from "./jira-tool-presentation";
+import { batchStepCount } from "./jira-tool-progress";
 
 export type ChatProcessingState =
   "done" | "active" | "upcoming" | "approval" | "failed" | "cancelled" | "attention" | "blocked";
@@ -14,6 +16,8 @@ export interface ChatProcessingStep {
   readonly label: WidgetMessageKey;
   readonly state: ChatProcessingState;
   readonly toolName?: string;
+  /** A counted progress such as `24/131`, shown beside the label while a call counts its work. */
+  readonly progress?: string;
 }
 
 export const CHAT_PROCESSING_STATE_LABELS: Readonly<Record<ChatProcessingState, WidgetMessageKey>> =
@@ -115,6 +119,7 @@ function exchangeLabel(exchange: ChatToolExchange): WidgetMessageKey {
   if (exchange.call.name === "knowledge_documents")
     return DOCUMENT_VIEWS.get(viewKey) ?? "chat.processing.documents";
   if (exchange.call.name === "knowledge_review") return "chat.processing.review";
+  if (exchange.call.name === CHAT_TOOL_BATCH_TOOL_NAME) return "chat.processing.draftBatch";
   return exchange.call.name.startsWith("mcp_") ? "chat.mcp.tool" : jiraToolLabel(exchange);
 }
 
@@ -131,7 +136,9 @@ export function chatProcessingSteps(
     { id: "request", label: "chat.processing.request", state: "done" },
     ...exchanges.map((exchange): ChatProcessingStep => {
       const state = exchangeState(exchange, turnState);
+      const progress = batchStepCount(exchange);
       return {
+        ...(progress === undefined ? {} : { progress }),
         id: `tool:${exchange.call.id}`,
         label: exchangeLabel(exchange),
         toolName: exchange.call.name,

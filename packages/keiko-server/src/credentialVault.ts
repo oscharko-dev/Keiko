@@ -17,7 +17,7 @@ import { dirname, join } from "node:path";
 import {
   createLocalSecretVault,
   readLocalVaultReferences,
-  resolveLocalVaultKey,
+  resolveLocalVaultKeyOnce,
   type LocalSecretVault,
   type LocalVaultKeychainAccess,
 } from "@oscharko-dev/keiko-security/secret-vault";
@@ -73,16 +73,35 @@ export interface OpenCredentialVaultOptions {
   readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
-export function openProviderCredentialVault(options: OpenCredentialVaultOptions): LocalSecretVault {
-  const vaultDir = credentialVaultDir(options.configPath);
-  const { key } = resolveLocalVaultKey({
+/** The env, keychain and keyfile names of one credential store's key. */
+export interface CredentialVaultKeyNamespace {
+  readonly envVarName: string;
+  readonly keychainService: string;
+  readonly keyfileName: string;
+}
+
+/**
+ * The key of a credential store in the `credentials/` directory next to the config, resolved once
+ * per process and key namespace (each store keeps its own namespace).
+ */
+export function resolveCredentialVaultKey(
+  options: OpenCredentialVaultOptions,
+  namespace: CredentialVaultKeyNamespace,
+): Buffer {
+  return resolveLocalVaultKeyOnce({
     env: options.env,
-    vaultDir,
+    vaultDir: credentialVaultDir(options.configPath),
+    ...namespace,
+    ...(options.keychainAccess !== undefined ? { keychainAccess: options.keychainAccess } : {}),
+    sink: options.securityLogSink,
+  }).key;
+}
+
+export function openProviderCredentialVault(options: OpenCredentialVaultOptions): LocalSecretVault {
+  const key = resolveCredentialVaultKey(options, {
     envVarName: CREDENTIALS_KEY_ENV,
     keychainService: CREDENTIALS_KEYCHAIN_SERVICE,
     keyfileName: CREDENTIALS_KEYFILE,
-    ...(options.keychainAccess !== undefined ? { keychainAccess: options.keychainAccess } : {}),
-    sink: options.securityLogSink,
   });
   return createLocalSecretVault({
     key,

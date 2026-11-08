@@ -324,3 +324,80 @@ it("retains unreadable search documents even when metadata reports extraction su
   );
   expect(requiredCoverage([page]).unavailableDocumentCount).toBe(1);
 });
+
+describe("a completed draft batch covers the requirements it drafted (#4292)", () => {
+  const batch = (data: object): ChatToolExchange =>
+    exchange(
+      {
+        outcome: "succeeded",
+        requirementCount: 370,
+        coveredRequirementCount: 370,
+        wholeCollection: true,
+        ...data,
+      },
+      {},
+      "keiko.jira.draft.batch",
+    );
+  const partialRead = exchange(units(["doc:REQ-1"], "next"));
+
+  it("leaves no page chain pending once a new, unfiltered batch drafted the whole collection", () => {
+    expect(requiredCoverage([partialRead]).pendingPageCount).toBe(1);
+
+    const coverage = requiredCoverage([partialRead, batch({})]);
+
+    expect(coverage).toMatchObject({ pendingPageCount: 0, draftBatchCoveredRequirementCount: 370 });
+    expect(knowledgeCoverageCorrection(coverage)).toBeUndefined();
+    expect(knowledgeCoverageIssues(coverage)).not.toContainEqual(
+      expect.objectContaining({ kind: "pending-reads" }),
+    );
+  });
+
+  it("keeps the chain pending for a filtered, continued, paused, failed or partial batch", () => {
+    for (const data of [
+      { wholeCollection: false },
+      { paused: true },
+      { outcome: "failed" },
+      { coveredRequirementCount: 369 },
+      { requirementCount: 0, coveredRequirementCount: 0 },
+    ]) {
+      const coverage = requiredCoverage([partialRead, batch(data)]);
+      expect(coverage.pendingPageCount).toBe(1);
+      expect(coverage.draftBatchCoveredRequirementCount).toBeUndefined();
+      expect(knowledgeCoverageCorrection(coverage)).toContain("same selection");
+    }
+  });
+
+  const partialDocumentRead = exchange(
+    { outcome: "succeeded", view: "text", documentComplete: false, nextCursor: "doc-next" },
+    {},
+    "keiko.knowledge.documents",
+  );
+
+  it("keeps an unfinished document read pending whether it ran before or after the batch (F29)", () => {
+    for (const order of [
+      [partialDocumentRead, batch({})],
+      [batch({}), partialDocumentRead],
+    ]) {
+      const coverage = requiredCoverage(order);
+      expect(coverage.pendingPageCount).toBe(1);
+      expect(knowledgeCoverageCorrection(coverage)).toContain("same selection");
+      expect(knowledgeCoverageIssues(coverage)).toContainEqual(
+        expect.objectContaining({ kind: "pending-reads", count: 1 }),
+      );
+    }
+  });
+
+  it("settles only the earlier requirement chain, not one started after the batch (F29)", () => {
+    const later = exchange(units(["doc:REQ-9"], "later"), { view: "units", query: "other" });
+    expect(requiredCoverage([partialRead, batch({}), later]).pendingPageCount).toBe(1);
+    expect(requiredCoverage([partialRead, partialDocumentRead, batch({})]).pendingPageCount).toBe(
+      1,
+    );
+  });
+
+  it("judges the latest batch, and a batch alone is no Knowledge read", () => {
+    const later = batch({ coveredRequirementCount: 12 });
+    expect(requiredCoverage([partialRead, batch({}), later]).pendingPageCount).toBe(1);
+    expect(knowledgeTurnCoverage([batch({})])).toBeUndefined();
+  });
+});

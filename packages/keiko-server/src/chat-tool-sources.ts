@@ -54,6 +54,9 @@ export interface ChatSourcesContext extends ToolConsumerContext {
   readonly knowledgeReviewModelId?: () => string | undefined;
   readonly confirmModelOperation?: (response: NormalizedResponse) => void;
   readonly retainDraftProgress?: JiraChatCatalogContext["retainDraftProgress"];
+  readonly reportBatchProgress?: JiraChatCatalogContext["reportBatchProgress"];
+  readonly remainingModelCalls?: JiraChatCatalogContext["remainingModelCalls"];
+  readonly citationSources?: JiraChatCatalogContext["citationSources"];
   readonly jira: JiraChatCatalogContext;
   readonly mcp: McpChatCatalogContext;
 }
@@ -97,6 +100,17 @@ export const chatSourcesConsumerPort: CatalogConsumerPort<ChatSourcesConsumer> =
   captureApprovedAction: captureSourceAction,
 };
 
+const OPTIONAL_INVOCATION_KEYS = [
+  "meterModel",
+  "retainDraftProgress",
+  "reportBatchProgress",
+  "remainingModelCalls",
+  "knowledgeReviewModelId",
+  "confirmModelOperation",
+  "citationSources",
+] as const;
+type OptionalInvocationKey = (typeof OPTIONAL_INVOCATION_KEYS)[number];
+
 function invocationFields(
   context: CatalogHandlerContext<ChatSourcesConsumer>,
 ): Pick<
@@ -110,18 +124,17 @@ function invocationFields(
   | "knowledgeReviewModelId"
   | "confirmModelOperation"
   | "retainDraftProgress"
+  | "reportBatchProgress"
+  | "remainingModelCalls"
+  | "citationSources"
 > {
+  const optional: Partial<Pick<CatalogHandlerContext<ChatSourcesConsumer>, OptionalInvocationKey>> =
+    {};
+  for (const key of OPTIONAL_INVOCATION_KEYS) {
+    if (context[key] !== undefined) Object.assign(optional, { [key]: context[key] });
+  }
   return {
-    ...(context.meterModel === undefined ? {} : { meterModel: context.meterModel }),
-    ...(context.retainDraftProgress === undefined
-      ? {}
-      : { retainDraftProgress: context.retainDraftProgress }),
-    ...(context.knowledgeReviewModelId === undefined
-      ? {}
-      : { knowledgeReviewModelId: context.knowledgeReviewModelId }),
-    ...(context.confirmModelOperation === undefined
-      ? {}
-      : { confirmModelOperation: context.confirmModelOperation }),
+    ...optional,
     invocationId: context.invocationId,
     signal: context.signal,
     beforeEffect: context.beforeEffect,

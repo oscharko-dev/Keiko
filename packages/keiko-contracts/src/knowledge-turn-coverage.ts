@@ -42,6 +42,8 @@ function count(value: unknown): number {
 interface Stream {
   readonly cursor: string | undefined;
   readonly continuous: boolean;
+  /** Position of the exchange that last advanced this chain. */
+  readonly seq: number;
 }
 interface ReviewCoverage {
   readonly revision: string;
@@ -66,6 +68,12 @@ interface Tally {
   readonly missingCriteria: Set<string>;
   readonly reviewed: Map<string, ReviewCoverage>;
   readonly streams: Map<string, Stream>;
+  /** The latest draft batch's coverage of the whole collection; undefined when it covered less. */
+  batchCovered: number | undefined;
+  /** Exchange position of the batch behind `batchCovered`. */
+  batchSeq: number;
+  /** Exchanges observed so far; orders chains against the batch. */
+  seq: number;
 }
 export interface KnowledgeTurnCoverage {
   readonly documentCount: number;
@@ -80,6 +88,11 @@ export interface KnowledgeTurnCoverage {
   readonly failedOperationCount: number;
   readonly omittedRequirementCount: number;
   readonly truncatedRequirementCount: number;
+  /**
+   * Requirements a completed, unfiltered new draft batch of the turn read and drafted, all of the
+   * collection. Keiko covered them itself, so an earlier partial page chain is not pending.
+   */
+  readonly draftBatchCoveredRequirementCount?: number;
 }
 
 /** A cursor is only a position; cumulative coverage requires an observed, continuous page chain. */
@@ -96,6 +109,7 @@ function observeStream(
     cursor: typeof data.nextCursor === "string" ? data.nextCursor : undefined,
     continuous:
       cursor === undefined || (previous?.continuous === true && previous.cursor === cursor),
+    seq: tally.seq,
   });
 }
 
@@ -232,6 +246,50 @@ function observeReviewTarget(tally: Tally, exchange: ChatToolExchange): void {
   )
     tally.reviewTargets.add(exchange.call.arguments.documentScope);
 }
+const REQUIREMENTS_TOOL = "keiko.knowledge.requirements";
+const DRAFT_BATCH_TOOL = "keiko.jira.draft.batch";
+
+/** A completed, unfiltered new batch that drafted every requirement of the collection. */
+function wholeBatchCoverage(exchange: ChatToolExchange): number | undefined {
+  const result = exchange.result;
+  const data = result?.status === "completed" ? record(result.data) : undefined;
+  if (data?.outcome !== "succeeded" || data.paused === true || data.wholeCollection !== true)
+    return undefined;
+  return everyRequirementCovered(data.requirementCount, data.coveredRequirementCount);
+}
+function everyRequirementCovered(selected: unknown, covered: unknown): number | undefined {
+  if (typeof selected !== "number" || typeof covered !== "number" || selected <= 0)
+    return undefined;
+  return covered >= selected ? covered : undefined;
+}
+
+/** A draft batch settles the turn's batch coverage; every other exchange is a Knowledge receipt. */
+function observeExchange(tally: Tally, exchange: ChatToolExchange): void {
+  tally.seq++;
+  if (exchange.result?.toolRef?.canonicalId === DRAFT_BATCH_TOOL) {
+    tally.batchCovered = wholeBatchCoverage(exchange);
+    tally.batchSeq = tally.seq;
+  } else observe(tally, exchange);
+}
+
+/**
+ * A whole-collection batch drafted the requirements an earlier requirement page chain was
+ * reading. Document, search and review continuations, and any read after the batch, stay pending.
+ */
+function settledByBatch(tally: Tally, key: string, stream: Stream): boolean {
+  return (
+    tally.batchCovered !== undefined &&
+    stream.seq < tally.batchSeq &&
+    key.startsWith(`${REQUIREMENTS_TOOL}|`)
+  );
+}
+function pendingPageCount(tally: Tally): number {
+  return [...tally.streams].filter(
+    ([key, stream]) =>
+      (stream.cursor !== undefined || !stream.continuous) && !settledByBatch(tally, key, stream),
+  ).length;
+}
+
 function observe(tally: Tally, exchange: ChatToolExchange): void {
   const result = exchange.result;
   if (result === undefined || !TOOLS.has(result.toolRef?.canonicalId ?? "")) return;
@@ -300,9 +358,13 @@ export function knowledgeTurnCoverage(
     missingCriteria: new Set(),
     reviewed: new Map(),
     streams: new Map(),
+    batchCovered: undefined,
+    batchSeq: 0,
+    seq: 0,
   };
-  for (const exchange of exchanges) observe(tally, exchange);
+  for (const exchange of exchanges) observeExchange(tally, exchange);
   if (!tally.observed) return undefined;
+  const covered = tally.batchCovered;
   return {
     documentCount: tally.documents,
     requirementCount: tally.requirements,
@@ -315,9 +377,8 @@ export function knowledgeTurnCoverage(
     failedOperationCount: tally.failedOperations,
     omittedRequirementCount: tally.omittedRequirements,
     truncatedRequirementCount: tally.truncatedRequirements.size,
-    pendingPageCount: [...tally.streams.values()].filter(
-      (stream) => stream.cursor !== undefined || !stream.continuous,
-    ).length,
+    pendingPageCount: pendingPageCount(tally),
+    ...(covered === undefined ? {} : { draftBatchCoveredRequirementCount: covered }),
   };
 }
 

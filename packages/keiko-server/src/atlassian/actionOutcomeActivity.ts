@@ -54,6 +54,7 @@ const ACTION_OUTCOME = defineActivityLogOperation({
         "jira.assignable-users",
         "jira.report",
         "jira.draft-stage",
+        "jira.draft-batch",
         "assign-issue",
       ],
     },

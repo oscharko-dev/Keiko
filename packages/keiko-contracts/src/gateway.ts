@@ -840,6 +840,14 @@ export interface GatewayRequest {
   readonly seed?: number | undefined;
   /** Optional provider-neutral reasoning level, admitted only from the selected model capability. */
   readonly reasoningEffort?: ModelReasoningEffort | undefined;
+  /**
+   * Internal, server-chosen preference to spend no reasoning on a mechanical call. `"off"` asks an
+   * OpenAI-compatible adapter for the wire-only `reasoning_effort: "none"` unless an explicit
+   * `reasoningEffort` or a provider requirement already decides. It is deliberately not a
+   * `ModelReasoningEffort` value and never user-selectable (#3640); a provider that rejects the
+   * parameter is retried once without it.
+   */
+  readonly reasoningPreference?: "off" | undefined;
 }
 
 // ─── Tool-call normalisation ──────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 {
   "issue": 1300,
   "epic": 1290,
-  "captureSha256": "0cf20a8782eeb190ac35ca193d162b127c92b377abcdc3af67db74bea7b55f45",
+  "captureSha256": "6c94aaa1051ad5dccbd5a4c25f22e4ab78c5b270273dff2900cc38e5271f61f1",
   "sourceFiles": [
     {
       "path": "design-system/keiko-ai.css",
@@ -45,7 +45,7 @@
     },
     {
       "path": "docs/design-system/evidence/1300/browser/capture.mjs",
-      "sha256": "0cf20a8782eeb190ac35ca193d162b127c92b377abcdc3af67db74bea7b55f45"
+      "sha256": "6c94aaa1051ad5dccbd5a4c25f22e4ab78c5b270273dff2900cc38e5271f61f1"
     },
     {
       "path": "docs/design-system/evidence/1300/component-fixture-data.json",
@@ -89,7 +89,7 @@
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/widgets/cards/PdfCitationPreviewWindow.module.css",
-      "sha256": "cff8d9ba0a72bc481669096937ab47a6f2c28bd46a3dffe73bfd4515bdf2ea39"
+      "sha256": "73583079453265733c218a7e089da7288cb7337bc7b107d93b2f329e74900304"
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/widgets/cards/TerminalWidget.module.css",
@@ -121,7 +121,7 @@
     }
   ],
   "postCssSha256": "a75653326a80e3d3ca9212fe75c233744952b1129d216cbb11741b094da870c2",
-  "renderedCssBundleSha256": "6fc5e350f3c94f1d5940e79234ee0b709edfdf41b1bc0548cae3ded779f6c8a3",
+  "renderedCssBundleSha256": "0c4a1124d469ac46654f4618d9e037f0e86bab00cb0b69a3fc414db0e3cde6a2",
   "appPath": "packages/keiko-ui/out",
   "route": "/",
   "shotCount": 108,
@@ -247,7 +247,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1294,
+      "textLen": 1264,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -396,7 +396,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1294,
+      "textLen": 1264,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -545,7 +545,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1294,
+      "textLen": 1264,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -694,7 +694,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1294,
+      "textLen": 1264,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -843,7 +843,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1294,
+      "textLen": 1264,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -992,7 +992,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1294,
+      "textLen": 1264,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -1141,7 +1141,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1288,
+      "textLen": 1258,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -1290,7 +1290,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1288,
+      "textLen": 1258,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -1439,7 +1439,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1288,
+      "textLen": 1258,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -1588,7 +1588,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1288,
+      "textLen": 1258,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -1737,7 +1737,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1288,
+      "textLen": 1258,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -1886,7 +1886,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1288,
+      "textLen": 1258,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -2035,7 +2035,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1288,
+      "textLen": 1258,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -2184,7 +2184,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1288,
+      "textLen": 1258,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -2333,7 +2333,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1288,
+      "textLen": 1258,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -2482,7 +2482,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1288,
+      "textLen": 1258,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -2631,7 +2631,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1288,
+      "textLen": 1258,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []
@@ -2780,7 +2780,7 @@
       "visibleErrorNoticeCount": 0,
       "crashedWindowBodyCount": 0,
       "unavailableTrustStateCount": 0,
-      "textLen": 1288,
+      "textLen": 1258,
       "missingRequiredSelectors": [],
       "unexpectedApiRequestCount": 0,
       "pageErrors": []

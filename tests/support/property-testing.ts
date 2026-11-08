@@ -330,9 +330,9 @@ export function shrinkRecord<T extends object>(fields: FieldShrinkers<T>): Shrin
 
 // ─── Scaling ─────────────────────────────────────────────────────────────────
 
-export interface ScalingOptions {
-  readonly build: (size: number) => string;
-  readonly run: (input: string) => unknown;
+export interface ScalingOptions<Input = string> {
+  readonly build: (size: number) => Input;
+  readonly run: (input: Input) => unknown;
   // The first size tried; it grows fourfold until the small run takes `minimumMs`, and once it
   // reaches `maximumSize` the rule is run several times per timing instead.
   readonly size: number;
@@ -373,7 +373,7 @@ function fastestMs(run: () => unknown): number {
 }
 
 // Builds the input first and runs it once untimed, so only the rule's own, warmed work is timed.
-function timedAt(options: ScalingOptions, size: number, repetitions: number): number {
+function timedAt<Input>(options: ScalingOptions<Input>, size: number, repetitions: number): number {
   const input = options.build(size);
   options.run(input);
   return fastestMs(() => {
@@ -381,7 +381,7 @@ function timedAt(options: ScalingOptions, size: number, repetitions: number): nu
   });
 }
 
-function measureOnce(options: ScalingOptions, minimumMs: number): Scaling {
+function measureOnce<Input>(options: ScalingOptions<Input>, minimumMs: number): Scaling {
   let size = options.size;
   let repetitions = 1;
   let smallMs = timedAt(options, size, repetitions);
@@ -407,7 +407,7 @@ export function scalingRatio(scaling: Scaling): number {
 // a rule still too fast at the largest size is timed over repeated runs. A
 // ratio over the limit is measured once more, because a stall under load can inflate one run;
 // a quadratic rule exceeds it both times.
-export function measureScaling(options: ScalingOptions): Scaling {
+export function measureScaling<Input = string>(options: ScalingOptions<Input>): Scaling {
   const minimumMs = options.minimumMs ?? 10;
   const first = measureOnce(options, minimumMs);
   if (!first.measurable || scalingRatio(first) < LINEAR_RATIO_MAX) return first;

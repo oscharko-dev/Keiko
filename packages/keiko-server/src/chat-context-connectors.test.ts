@@ -6,7 +6,7 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
-import type { ToolDefinition } from "@oscharko-dev/keiko-contracts";
+import type { KnowledgeCapsuleId, ToolDefinition } from "@oscharko-dev/keiko-contracts";
 import type { ChatContextStatusWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { deriveContextProfile } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import type { ExternalMcpConnection } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
@@ -300,7 +300,7 @@ describe("chatConnectorTools for the Jira Pod", () => {
     const get = vi.spyOn(runtime, "get");
     const result = chatConnectorTools(deps, { jiraPodBinding: BINDING }, ACCOUNTING, "corr-jira");
     expect(get).not.toHaveBeenCalled();
-    const admitted = await runtime.get();
+    const admitted = await runtime.get({ knowledgeScoped: false });
     const expected = gatewayToolDefinitions(admitted.catalog, { id: "jira-chat", version: 1 });
     expect(expected.length).toBeGreaterThan(10);
     expect(result.connectors).toEqual([
@@ -314,12 +314,39 @@ describe("chatConnectorTools for the Jira Pod", () => {
     expect(result.tokens).toBe(toolTokens(expected));
   });
 
+  it("counts the requirement batch only for a Chat with a Knowledge scope", async () => {
+    const f = fixture([]);
+    const { deps, runtime } = withPod(f);
+    const scope = {
+      kind: "capsule" as const,
+      capsuleId: "pod" as KnowledgeCapsuleId,
+      connectedAtMs: 1,
+    };
+    const scoped = chatConnectorTools(
+      deps,
+      { jiraPodBinding: BINDING, localKnowledgeScopes: [scope] },
+      ACCOUNTING,
+      "corr-scoped",
+    );
+    const admitted = await runtime.get({ knowledgeScoped: true });
+    const expected = gatewayToolDefinitions(admitted.catalog, { id: "jira-chat", version: 1 });
+    expect(scoped.connectors).toEqual([
+      {
+        kind: "jira",
+        name: "Synthetic Jira",
+        toolCount: expected.length,
+        tokens: toolTokens(expected),
+      },
+    ]);
+    expect(expected.map((tool) => tool.name)).toContain("jira_draft_batch");
+  });
+
   it("adds the connectors' definitions together and counts them once as one request carries them", async () => {
     const f = fixture([server("alpha")]);
     connectProduction(f, "alpha");
     const mcp = await productionMcpDefinitions(f);
     const { deps, runtime } = withPod(f);
-    const admitted = await runtime.get();
+    const admitted = await runtime.get({ knowledgeScoped: false });
     const jira = gatewayToolDefinitions(admitted.catalog, { id: "jira-chat", version: 1 });
     const result = chatConnectorTools(deps, { jiraPodBinding: BINDING }, ACCOUNTING, "corr-both");
     expect(result.connectors.map((connector) => connector.kind)).toEqual(["mcp", "jira"]);

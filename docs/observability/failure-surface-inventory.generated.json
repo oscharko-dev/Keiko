@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "e00a7a2bcdc3a5a8bf094b880c80372927c0516028c891a6ed67d0564a2dd896"
+    "catalogDigest": "a6d848a3e02c1ee85746d645c9a32f454b8ceff44b1efa4d8e0fc22ae3f5e0c0"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,10 +75,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 656,
-    "proofCount": 678,
-    "resolvedProofCount": 678,
-    "failureClassCount": 394,
+    "operationCount": 661,
+    "proofCount": 683,
+    "resolvedProofCount": 683,
+    "failureClassCount": 395,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -114,6 +114,7 @@
         "atlassian.credential.rejected",
         "atlassian.credential.updated",
         "atlassian.jira-draft",
+        "atlassian.jira-draft-batch",
         "atlassian.jira-report",
         "atlassian.target.admission",
         "chat.compaction.facts.classified",
@@ -137,9 +138,11 @@
         "chat.tool-mutation",
         "chat.tool-mutation.projected",
         "chat.tool-transcript.updated",
+        "chat.tool-turn.batch-draft-offer",
         "chat.tool-turn.context-fitted",
         "chat.tool-turn.corrected",
         "chat.tool-turn.ended",
+        "chat.tool-turn.result-condensed",
         "chat.turn.started",
         "git-change.chat.apply",
         "git-change.chat.description-target.denied",
@@ -148,6 +151,7 @@
         "http.request.body.received",
         "http.request.body.rejected",
         "jira.attachment.source",
+        "jira.citation.markers",
         "jira.field.admission",
         "jira.template.admission",
         "jira.template.metadata",
@@ -190,6 +194,7 @@
         "client.binding.resolved",
         "client.binding.target-missing",
         "client.citation.activated",
+        "client.citation.highlighted",
         "client.coding-run.restored",
         "client.coding-workbench.interaction",
         "client.coding-workbench.request-timed-out",
@@ -897,6 +902,7 @@
     "client-answer-speech": ["client-diagnostics.dependency-failure"],
     "client-knowledge-catalog": ["client-diagnostics.dependency-failure"],
     "client-citation-activation": ["client-diagnostics.dependency-failure"],
+    "client-citation-highlight": ["client-diagnostics.dependency-failure"],
     "client-coding-run-restore": ["client-diagnostics.dependency-failure"],
     "client-coding-workbench-interaction": ["client-diagnostics.dependency-failure"],
     "client-coding-workbench-request-timeout": ["client-diagnostics.dependency-failure"],
@@ -1316,7 +1322,13 @@
     "atlassian.credential.updated.line": [
       "packages/keiko-server/src/atlassian/credentialRoutes.test.ts"
     ],
-    "atlassian.jira-draft.line": ["packages/keiko-server/src/atlassian/jiraDraftRoutes.test.ts"],
+    "atlassian.jira-draft.line": [
+      "packages/keiko-server/src/atlassian/jiraDraftRoutes.test.ts",
+      "packages/keiko-server/src/atlassian/jiraOpenDraft.test.ts"
+    ],
+    "atlassian.jira-draft-batch.line": [
+      "packages/keiko-server/src/atlassian/jiraDraftBatchTool.test.ts"
+    ],
     "atlassian.jira-report.line": [
       "packages/keiko-server/src/atlassian/jiraReportRoutes.test.ts",
       "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.test.ts"
@@ -1363,7 +1375,8 @@
     ],
     "chat.regeneration.rejected.reason": ["packages/keiko-server/src/chat-activity.test.ts"],
     "chat.request.compatibility-retry.emitted-line": [
-      "packages/keiko-model-gateway/src/openai-adapter.compat.test.ts"
+      "packages/keiko-model-gateway/src/openai-adapter.compat.test.ts",
+      "packages/keiko-model-gateway/src/openai-adapter.reasoning-preference.test.ts"
     ],
     "chat.request.dispatch.emitted-line": [
       "packages/keiko-model-gateway/src/openai-adapter.compat.test.ts",
@@ -1420,6 +1433,9 @@
     "chat.tool-transcript.updated.line": [
       "packages/keiko-server/src/store/chatToolTranscript.test.ts"
     ],
+    "chat.tool-turn.batch-draft-offer.line": [
+      "packages/keiko-server/src/chat-tool-batch-draft.test.ts"
+    ],
     "chat.tool-turn.context-fitted.line": [
       "packages/keiko-server/src/chat-tool-turn-ending.test.ts"
     ],
@@ -1428,6 +1444,9 @@
       "packages/keiko-server/src/chat-tool-turn-ending.test.ts"
     ],
     "chat.tool-turn.ended.line": ["packages/keiko-server/src/chat-tool-turn-ending.test.ts"],
+    "chat.tool-turn.result-condensed.line": [
+      "packages/keiko-server/src/chat-tool-turn-ending.test.ts"
+    ],
     "chat.turn.started.shape": ["packages/keiko-server/src/chat-activity.test.ts"],
     "cli.audit.completed.real-sink-line": ["packages/keiko-cli/src/audit.test.ts"],
     "cli.audit.failed.real-sink-line": ["packages/keiko-cli/src/audit.test.ts"],
@@ -1492,6 +1511,9 @@
       "packages/keiko-server/src/client-diagnostics-loss.test.ts"
     ],
     "client.citation.activated.line": [
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
+    ],
+    "client.citation.highlighted.line": [
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
     "client.coding-run.restored.line": [
@@ -2597,6 +2619,9 @@
     ],
     "jira.attachment.source.line": [
       "packages/keiko-server/src/atlassian/jiraChatAttachment.test.ts"
+    ],
+    "jira.citation.markers.line": [
+      "packages/keiko-server/src/atlassian/jiraCitationMarkers.test.ts"
     ],
     "jira.field.admission.line": [
       "packages/keiko-server/src/atlassian/jiraTemplateEnforcement.test.ts"

@@ -70,3 +70,38 @@ it("keeps known draft receipts beside the unchanged timeout in ordinary model hi
     draftProgress,
   });
 });
+
+it("sends the model the outcome and data, not the envelope's per-call bookkeeping", () => {
+  const first = observation("runtime");
+  if (first.result === undefined) throw new TypeError("Missing fixture result");
+  // The same observation in a later turn: only Keiko's ids, digests and timings differ.
+  const later: ChatToolExchange = {
+    ...first,
+    result: {
+      ...first.result,
+      invocationId: "another-invocation",
+      projectionDigest: null,
+      metrics: { inputBytes: 7, outputBytes: 9, resultCount: 1, durationMs: 42 },
+    },
+  };
+  const [, tool] = gatewayMessagesForToolExchange(first);
+  expect(JSON.parse(tool?.content ?? "")).toEqual({
+    status: "completed",
+    reason: "none",
+    effectStarted: false,
+    page: { truncated: false, reason: "none", cursor: null },
+    data: { items: [{ name: DOCUMENT_TITLE }] },
+  });
+  expect(gatewayMessagesForToolExchange(later)).toEqual(gatewayMessagesForToolExchange(first));
+});
+
+it("keeps the unavailable observation for a call without a stored result", () => {
+  const [, tool] = gatewayMessagesForToolExchange({
+    call: { id: "lost-call", name: "jira_search", arguments: {} },
+  });
+  expect(JSON.parse(tool?.content ?? "")).toEqual({
+    status: "unavailable",
+    reason: "observation-unavailable",
+    effect: "unknown",
+  });
+});

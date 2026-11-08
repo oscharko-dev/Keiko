@@ -110,6 +110,8 @@ function validTransition(previous: ChatReadGrantEntry, next: ChatReadGrantEntry)
   const renewal = isRenewal(prior, next.grant);
   const pinned = {
     ...next,
+    // A renewal may re-bind the grant to the renewing invocation's authority; nothing else moves.
+    ...(renewal ? { authority: previous.authority } : {}),
     grant: {
       ...next.grant,
       state: prior.state,

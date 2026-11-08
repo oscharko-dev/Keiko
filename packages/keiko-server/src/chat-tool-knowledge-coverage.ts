@@ -29,5 +29,8 @@ export function logKnowledgeCoverage(
     readRequirementCount: coverage.readRequirementCount,
     reviewedDocumentCount: coverage.reviewedDocumentCount,
     pendingPageCount: coverage.pendingPageCount,
+    ...(coverage.draftBatchCoveredRequirementCount === undefined
+      ? {}
+      : { draftBatchCoveredRequirementCount: coverage.draftBatchCoveredRequirementCount }),
   });
 }

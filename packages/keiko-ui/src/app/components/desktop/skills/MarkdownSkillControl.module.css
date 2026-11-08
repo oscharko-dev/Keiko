@@ -1,3 +1,4 @@
+/* ── Composer control: the Skills button and the chip of the chosen skill ─────────────── */
 .cmpControls {
   display: flex;
   /* Never narrower than its content (at most 220px): the model select absorbs a narrow composer
@@ -9,8 +10,7 @@
   gap: 4px;
   font-size: 12px;
 }
-.cmpControls button,
-.cmpDialog button {
+.cmpControls button {
   border: 1px solid var(--border-default);
   border-radius: 6px;
   background: var(--surface-overlay);
@@ -18,19 +18,11 @@
   padding: 5px 9px;
   cursor: pointer;
 }
-.cmpControls button:focus-visible,
-.cmpDialog button:focus-visible,
-.cmpFilePicker:focus-within,
-.cmpMarkdown:focus-visible,
-.cmpDialog input:focus-visible,
-.cmpDialog select:focus-visible,
-.cmpDialog textarea:focus-visible {
+.cmpControls button:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
-.cmpControls button:disabled,
-.cmpDialog button:disabled,
-.cmpDialog button[aria-disabled="true"] {
+.cmpControls button:disabled {
   opacity: 0.55;
   cursor: default;
 }
@@ -63,188 +55,582 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.cmpChip .cmpRevision {
+.cmpRevision {
   flex-shrink: 0;
-}
-.cmpRevision,
-.cmpHint {
   color: var(--text-secondary);
   font-size: 12px;
 }
+
+/* ── The skills manager: a large modal, library on the left third, editor on two thirds ── */
 .cmpBackdrop {
   position: fixed;
   inset: 0;
   z-index: 100200;
-  background: rgb(0 0 0 / 35%);
   display: grid;
   place-items: center;
-  padding: 16px;
+  padding: 24px;
+  background: var(--modal-backdrop);
 }
 .cmpDialog {
   position: relative;
-  margin: 0;
-  width: min(600px, 100%);
-  max-height: min(760px, 90dvh);
-  overflow: auto;
-  border: 1px solid var(--border-default);
-  border-radius: 12px;
-  background: var(--surface-overlay);
-  color: var(--text-primary);
-  padding: 24px;
-  box-shadow: 0 12px 48px rgb(0 0 0 / 20%);
-}
-.cmpDialog header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-.cmpDialog h2 {
-  margin: 0;
-  font-size: 18px;
-}
-.cmpDialog p {
-  font-size: 13px;
-  line-height: 1.5;
-}
-.cmpUpload {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  font-size: 13px;
-}
-.cmpUpload select,
-.cmpUpload input:not([type="file"]) {
-  min-height: 34px;
-  padding: 6px 10px;
-  border: 1px solid var(--border-default);
-  border-radius: 6px;
-  background: var(--surface-overlay);
+  width: min(1440px, 100%);
+  height: min(920px, 100%);
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--modal-border);
+  border-radius: var(--radius-lg);
+  background: var(--modal-surface);
   color: var(--text-primary);
-  font: inherit;
+  box-shadow: var(--modal-shadow);
+  font: 400 var(--text-body-sm) / 1.5 var(--font-ui);
 }
-.cmpFilePicker {
-  position: relative;
+.cmpHeader {
   display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: 18px 20px 16px 24px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.cmpHeader h2 {
+  margin: 0;
+  font-size: var(--text-heading);
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.005em;
+}
+.cmpHeader p {
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+}
+.cmpManager {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) 2fr;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Buttons: the design system's secondary, primary, ghost-icon and danger grammar (.c-btn).
+   One class of specificity: above the global button reset, below the shared Markdown editor's
+   own toolbar rules. */
+.cmpDialog :where(button),
+.cmpUploadButton,
+.cmpFilePicker {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: var(--space-2);
-  min-height: 44px;
-  padding: 10px 16px;
-  border: 1px solid var(--border-default);
+  gap: 7px;
+  height: var(--control-height);
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--button-secondary-border);
   border-radius: var(--radius-control);
-  background: var(--surface-elevated);
-  color: var(--text-primary);
-  font-size: 13px;
-  font-weight: var(--weight-semibold);
+  background: var(--button-secondary-surface);
+  color: var(--button-secondary-text);
+  font: var(--weight-medium) 13px var(--font-ui);
+  white-space: nowrap;
   cursor: pointer;
 }
+.cmpDialog :where(button:hover:enabled:not([aria-disabled="true"])),
+.cmpUploadButton:hover,
 .cmpFilePicker:hover {
   border-color: var(--border-strong);
-  background: var(--surface-overlay);
 }
-.cmpFilePicker[data-disabled="true"] {
-  opacity: 0.55;
-  cursor: not-allowed;
+.cmpDialog .cmpPrimary {
+  border-color: transparent;
+  background: var(--button-primary-surface);
+  color: var(--button-primary-text);
+  font-weight: var(--weight-semibold);
 }
-.cmpList li[data-selected="true"] {
-  background: var(--surface-elevated);
+.cmpDialog .cmpPrimary:hover:enabled {
+  border-color: transparent;
+  background: var(--button-primary-surface-hover);
 }
-.cmpDialog button {
-  min-height: 36px;
+.cmpDialog .cmpIconButton {
+  width: var(--control-height);
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-secondary);
 }
-.cmpDialog button:hover:enabled {
-  background: var(--surface-elevated);
-  border-color: var(--border-strong);
-}
-.cmpDialog button[aria-pressed="true"] {
+.cmpDialog .cmpIconButton:hover:enabled {
+  border-color: transparent;
+  background: var(--surface-secondary);
   color: var(--text-primary);
-  border-color: var(--accent);
-  opacity: 1;
 }
-.cmpDialog [role="alert"] {
+.cmpDialog .cmpDanger {
+  border-color: color-mix(in oklch, var(--feedback-danger) 45%, transparent);
+  background: transparent;
   color: var(--feedback-danger);
 }
-.cmpDialog output {
-  color: var(--text-secondary);
-  font-size: 13px;
+.cmpDialog .cmpDanger:hover:enabled {
+  border-color: var(--feedback-danger);
+  background: color-mix(in oklch, var(--feedback-danger) 14%, transparent);
 }
-.cmpList {
-  margin: 16px 0;
+.cmpDialog .cmpActive {
+  border-color: var(--border-accent);
+  background: var(--surface-accent-subtle);
+  color: var(--accent-on-tint);
+}
+.cmpDialog :where(button:disabled),
+.cmpDialog :where(button[aria-disabled="true"]:not([aria-pressed="true"])),
+.cmpUploadButton[data-disabled="true"],
+.cmpFilePicker[data-disabled="true"] {
+  opacity: var(--opacity-disabled);
+  cursor: not-allowed;
+}
+.cmpDialog button:focus-visible,
+.cmpUploadButton:focus-within,
+.cmpFilePicker:focus-within,
+.cmpDialog input:focus-visible,
+.cmpDialog select:focus-visible,
+.cmpDialog textarea:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* ── Library (left third) ─────────────────────────────────────────────────────────────── */
+.cmpLibrary {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--border-subtle);
+  background: var(--surface-secondary);
+}
+.cmpLibraryActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: 16px 16px 12px;
+}
+.cmpLibraryActions .cmpPrimary {
+  flex: 1 1 100%;
+}
+.cmpLibraryActions > button:not(.cmpPrimary),
+.cmpLibraryActions > label {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.cmpGroups {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 4px 8px 12px;
+}
+.cmpGroup + .cmpGroup {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
+}
+.cmpGroupHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 4px 8px 6px;
+}
+.cmpGroupHead h3 {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.cmpCount {
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-inset);
+  color: var(--text-tertiary);
+  font: var(--weight-medium) 11px / 18px var(--font-mono);
+  text-align: center;
+}
+.cmpGroupHint {
+  margin: 0 8px 8px;
+  color: var(--text-tertiary);
+  font-size: var(--text-label);
+}
+.cmpItems {
+  margin: 0;
   padding: 0;
   list-style: none;
 }
-.cmpList li {
+/* A list row: the file to open, and beside it the switch that puts it into the chat. */
+.cmpRow {
   display: flex;
-  gap: 8px;
   align-items: center;
-  padding: 8px;
-  border-radius: var(--radius-control);
+  gap: var(--space-2);
 }
-.cmpList .cmpName {
+.cmpRow > .cmpItem {
   flex: 1;
   min-width: 0;
-  overflow-wrap: anywhere;
+}
+.cmpDialog .cmpToggle {
+  flex: none;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.cmpDialog .cmpItem {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  width: 100%;
+  height: auto;
+  padding: 8px 10px 8px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-primary);
   text-align: left;
+  white-space: normal;
 }
-.cmpPreview {
-  border-top: 1px solid var(--border-default);
-  padding-top: 12px;
+.cmpDialog .cmpItem:hover:enabled {
+  border-color: transparent;
+  background: var(--surface-elevated);
 }
-.cmpPreview h3 {
-  font-size: 14px;
-  overflow-wrap: anywhere;
+.cmpDialog .cmpItem[aria-current="true"] {
+  border-color: var(--border-subtle);
+  background: var(--modal-surface);
+  box-shadow: var(--shadow-card);
 }
-.cmpMarkdown {
-  max-height: 260px;
-  overflow: auto;
-  padding: 8px;
-  border: 1px solid var(--border-default);
-  border-radius: 6px;
+.cmpDialog .cmpItem[aria-current="true"]::before {
+  content: "";
+  position: absolute;
+  inset: 8px auto 8px 0;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent);
 }
-.cmpActions {
+.cmpItemName {
+  overflow: hidden;
+  font-weight: var(--weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cmpStatus {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-label);
+  font-weight: var(--weight-regular);
+  line-height: 1.45;
+}
+.cmpDot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+  transform: translateY(-1px);
+}
+.cmpStatus[data-state="ok"] .cmpDot {
+  background: var(--feedback-success);
+}
+.cmpStatus[data-state="ok"] {
+  color: var(--text-secondary);
+}
+.cmpStatus[data-state="mismatch"] {
+  color: var(--feedback-warning);
+}
+.cmpStatus[data-state="mismatch"] .cmpDot {
+  background: var(--feedback-warning);
+}
+.cmpEmpty {
+  display: block;
+  margin: 0;
+  padding: 6px 10px 10px;
+  color: var(--text-tertiary);
+  font-size: var(--text-label);
+}
+.cmpDialog .cmpLink {
+  height: 30px;
+  margin: 4px 0 0;
+  padding: 0 10px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--accent-text);
+  font-size: var(--text-label);
+}
+.cmpDialog .cmpLink:hover:enabled {
+  border-color: transparent;
+  background: var(--surface-accent-subtle);
+}
+.cmpPod {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 8px 8px;
+  color: var(--text-secondary);
+  font-size: var(--text-label);
+}
+.cmpPod select,
+.cmpField input,
+.cmpField textarea {
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-control);
+  background: var(--input-surface);
+  color: var(--input-text);
+  font: 13px var(--font-ui);
+}
+.cmpPod select {
+  flex: 1;
+}
+.cmpFootnote {
+  margin: 0;
+  padding: 10px 16px 14px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-tertiary);
+  font-size: var(--text-caption);
+  line-height: 1.5;
+}
+.cmpAlert {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 16px 10px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in oklch, var(--feedback-danger) 40%, transparent);
+  border-radius: var(--radius-control);
+  background: var(--feedback-danger-surface);
+  color: var(--feedback-danger);
+  font-size: var(--text-label);
+}
+
+/* ── Workspace (right two thirds) ─────────────────────────────────────────────────────── */
+.cmpWorkspace {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--modal-surface);
+}
+.cmpDiscard {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 10px 20px;
+  border-bottom: 1px solid color-mix(in oklch, var(--feedback-warning) 40%, transparent);
+  background: var(--feedback-warning-surface);
+}
+.cmpDiscard > span {
+  flex: 1;
+  color: var(--text-primary);
+}
+.cmpEmptyWorkspace {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: 32px;
+  text-align: center;
+}
+.cmpEmptyWorkspace h3 {
+  margin: 8px 0 0;
+  font-size: var(--text-body-lg);
+  font-weight: var(--weight-semibold);
+}
+.cmpEmptyWorkspace p {
+  max-width: 46ch;
+  margin: 0 0 10px;
+  color: var(--text-secondary);
+}
+.cmpEmptyIcon {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-lg);
+  background: var(--surface-accent-subtle);
+  color: var(--accent-text);
+}
+.cmpInline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.cmpDocument {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  padding: 16px 20px 20px;
+  gap: 10px;
+}
+.cmpDocumentHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.cmpTitle {
+  min-width: 0;
+  flex: 1 1 260px;
+}
+.cmpTitle h3 {
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--text-heading);
+  font-weight: var(--weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cmpMeta {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  margin-top: 12px;
+  margin-top: 4px;
+  color: var(--text-tertiary);
+  font-size: var(--text-label);
+}
+.cmpBadge {
+  padding: 1px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--surface-inset);
+  color: var(--text-secondary);
+  font-weight: var(--weight-medium);
+}
+.cmpBadge[data-kind="template"] {
+  border-color: var(--border-accent);
+  background: var(--surface-accent-subtle);
+  color: var(--accent-on-tint);
+}
+.cmpDirty {
+  color: var(--feedback-warning);
+}
+.cmpDirty::before {
+  content: "● ";
+}
+.cmpTemplateLine {
+  padding: 8px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  background: var(--surface-secondary);
+}
+.cmpEditorFrame {
+  flex: 1;
+  min-height: 0;
+}
+.cmpDocument > .cmpAlert {
+  margin: 0;
+}
+.cmpConfirm {
+  display: inline-flex;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--text-label);
 }
 
-.cmpAuthor {
-  margin-top: 16px;
-  border-top: 1px solid var(--border-default);
-  padding-top: 12px;
+/* Drafting forms in the workspace: from a document with the chat model, or from a Jira project. */
+.cmpForm {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(720px, 100%);
+  padding: 28px 32px;
+  overflow: auto;
 }
-.cmpAuthor textarea {
-  width: 100%;
-  box-sizing: border-box;
+.cmpForm h3 {
+  margin: 0;
+  font-size: var(--text-heading);
+  font-weight: var(--weight-semibold);
+}
+.cmpForm > p {
+  margin: 0;
+  color: var(--text-secondary);
+}
+.cmpForm [role="alert"] {
+  color: var(--feedback-danger);
+}
+.cmpField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: var(--text-label);
+  font-weight: var(--weight-medium);
+}
+.cmpField textarea {
+  line-height: 1.5;
   resize: vertical;
-  border: 1px solid var(--border-default);
-  border-radius: 6px;
-  background: var(--surface-overlay);
-  color: var(--text-primary);
-  padding: 8px;
-  font: inherit;
 }
-.cmpAuthor label {
-  margin: 12px 0;
+.cmpInline .cmpField {
+  flex: 0 1 220px;
+}
+.cmpInline:has(.cmpField) {
+  align-items: flex-end;
+}
+.cmpFilePicker {
+  align-self: flex-start;
+}
+.cmpProposals {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.cmpProposals li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  background: var(--surface-secondary);
 }
 
-@media (max-width: 480px) {
-  .cmpDialog {
-    padding: 16px;
+@media (max-width: 900px) {
+  .cmpBackdrop {
+    padding: 8px;
   }
-  .cmpList li {
-    flex-wrap: wrap;
+  .cmpManager {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(160px, 34%) 1fr;
   }
-  .cmpList .cmpName {
-    flex-basis: calc(100% - 50px);
+  .cmpLibrary {
+    border-right: 0;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .cmpFootnote {
+    display: none;
   }
 }
 @media (forced-colors: active) {
-  .cmpFilePicker,
   .cmpChip,
-  .cmpDialog {
+  .cmpDialog,
+  .cmpDialog .cmpItem[aria-current="true"] {
     border-color: ButtonText;
+  }
+  .cmpDot {
+    forced-color-adjust: none;
   }
 }

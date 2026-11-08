@@ -138,7 +138,9 @@ function jiraReading(
   try {
     const pod = findOwnedJiraPod(deps, binding.podId);
     if (pod === undefined) return { connector: { kind: "jira" }, definitions: [] };
-    const definitions = deps.jiraChatCatalog.toolDefinitions();
+    const definitions = deps.jiraChatCatalog.toolDefinitions({
+      knowledgeScoped: chatKnowledgeScopes(chat).length > 0,
+    });
     return {
       connector: { kind: "jira", name: pod.displayName, toolCount: definitions.length },
       definitions,

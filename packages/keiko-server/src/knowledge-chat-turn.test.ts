@@ -302,6 +302,47 @@ it.each([
   expect(deps.store.findChatById(pod.chatId)?.jiraPodBinding).toBeUndefined();
   expect(transcript?.readGrant).toBeUndefined();
 });
+it("sends the runtime inventory as the same prompt prefix in consecutive turns", async () => {
+  const { pod, deps } = await fixture();
+  const runtimePrefix = async (key: string): Promise<GatewayCallRequest["messages"]> => {
+    const accepted = deps.store.admitChatTurn(key, {
+      chatId: pod.chatId,
+      role: "user",
+      content: "Read the attached documents",
+      timestamp: Date.now(),
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    if (accepted.kind !== "admitted") throw new Error("Expected human turn");
+    const calls: GatewayCallRequest[] = [];
+    const turn = await createChatToolTurn(
+      deps,
+      MODEL,
+      accepted.userMessage,
+      new AbortController().signal,
+      `knowledge-prefix-${key}`,
+    );
+    if (turn === undefined) throw new Error("Expected Knowledge-only turn");
+    await turn.call(
+      turn.meter(model(calls, "knowledge.documents", { view: "inventory" })),
+      { modelId: MODEL, messages: [{ role: "user", content: "Read the documents" }] },
+      new AbortController().signal,
+    );
+    const messages = calls[0]?.messages ?? [];
+    // Everything before the human message: instruction plus the runtime inventory pair.
+    return messages.slice(
+      0,
+      messages.findIndex((message) => message.role === "user"),
+    );
+  };
+  const first = await runtimePrefix("prefix-first");
+  const second = await runtimePrefix("prefix-second");
+  expect(first.some((message) => message.role === "tool")).toBe(true);
+  expect(second).toEqual(first);
+});
 it("accounts for Knowledge tool definitions without admitting a host", async () => {
   const { pod, deps } = await fixture();
   const profile = deriveContextProfile({

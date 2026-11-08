@@ -328,9 +328,10 @@ test("keeps a long private skill preview keyboard-scrollable and accessible @smo
   await page.getByRole("button", { name: "Skills", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Skills", exact: true });
   const body = "# Long synthetic method\n\n" + "Review the next boundary.\n\n".repeat(60);
-  await expect(dialog.getByLabel(/Upload Markdown/)).toBeEnabled();
+  const upload = dialog.getByLabel("Import", { exact: true });
+  await expect(upload).toBeEnabled();
   const chooser = page.waitForEvent("filechooser");
-  await dialog.getByText("Upload Markdown (.md, up to 128 KiB)", { exact: true }).click();
+  await dialog.getByText("Import", { exact: true }).click();
   await (
     await chooser
   ).setFiles({
@@ -338,34 +339,39 @@ test("keeps a long private skill preview keyboard-scrollable and accessible @smo
     mimeType: "text/markdown",
     buffer: Buffer.from(body),
   });
-  const content = dialog.getByRole("region", { name: "Long synthetic method · v1" });
+  await expect(
+    dialog.getByRole("heading", { name: "Long synthetic method", level: 3 }),
+  ).toBeVisible();
+  const content = dialog.getByRole("textbox", { name: "Long synthetic method" });
   await expect(content).toBeVisible();
   await content.focus();
   await expect(content).toBeFocused();
   await content.press("PageDown");
-  await expect.poll(() => content.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  // The editable document is the focus target; its parent page is the scroll container.
+  await expect
+    .poll(() => content.evaluate((element) => element.parentElement?.scrollTop ?? 0))
+    .toBeGreaterThan(0);
   const violations = await runAxe(page, "dialog");
   expect(violations, formatViolations(violations)).toEqual([]);
-  const preview = dialog.getByRole("region", { name: "Skill preview", exact: true });
-  await preview.getByRole("button", { name: "Delete", exact: true }).click();
-  await preview.getByRole("button", { name: "Delete skill", exact: true }).click();
-  await expect(preview).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+  await dialog.getByRole("button", { name: "Delete skill", exact: true }).click();
+  await expect(content).toHaveCount(0);
 });
 
 async function uploadAndSelectBoundarySkill(page: Page): Promise<void> {
   const dialog = page.getByRole("dialog", { name: "Skills", exact: true });
   const body = readFileSync(new URL("./fixtures/private-markdown-skill.md", import.meta.url));
-  await expect(dialog.getByLabel(/Upload Markdown/)).toBeEnabled();
+  await expect(dialog.getByLabel("Import", { exact: true })).toBeEnabled();
   const chooser = page.waitForEvent("filechooser");
-  await dialog.getByText("Upload Markdown (.md, up to 128 KiB)", { exact: true }).click();
+  await dialog.getByText("Import", { exact: true }).click();
   await (await chooser).setFiles({ name: "synthetic.md", mimeType: "text/markdown", buffer: body });
   await expect(
-    dialog.getByRole("heading", { name: "Synthetic boundary method · v1" }),
+    dialog.getByRole("heading", { name: "Synthetic boundary method", level: 3 }),
   ).toBeVisible();
   const selection = dialog
     .getByRole("listitem")
     .filter({ hasText: "Synthetic boundary method" })
-    .getByRole("button", { name: "Select", exact: true });
+    .getByRole("button", { name: "Use in this chat", exact: true });
   await expect(selection).toBeVisible();
   await selection.click();
   await expect(dialog.getByRole("button", { name: "Active in this chat" })).toBeVisible();
@@ -460,7 +466,10 @@ test("creates, reviews, exports and reimports a private skill without automatic 
   await page.goto(`/${editorM11PairingFragment("skill-authoring")}`);
   await page.getByRole("button", { name: "Skills", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Skills", exact: true });
-  await dialog.getByRole("button", { name: "Create from document or text" }).click();
+  await dialog
+    .getByRole("complementary", { name: "Skill library" })
+    .getByRole("button", { name: "Draft with AI" })
+    .click();
   await dialog.getByLabel("Source file (.md or .txt)").setInputFiles({
     name: "concept.txt",
     mimeType: "text/plain",
@@ -470,33 +479,37 @@ test("creates, reviews, exports and reimports a private skill without automatic 
   });
   await expect(dialog.getByLabel("Source text")).toHaveValue(/SYNTHETIC_GARDEN_SOURCE_COMPLETE/);
   await dialog.getByRole("button", { name: "Prepare draft" }).click();
-  const draft = dialog.getByLabel("Skill draft (Markdown)");
+  // The draft opens as a new, unsaved skill in the editor; review it in the Markdown view.
+  await expect(dialog.getByText("Not saved yet", { exact: true })).toBeVisible();
+  await dialog.getByRole("button", { name: "Markdown", exact: true }).click();
+  const draft = dialog.getByRole("textbox", { name: "Garden calibration review · Markdown" });
   await expect(draft).toHaveValue(/Weekly calibration is proposed, not approved/);
   await expect(dialog.getByRole("button", { name: "Active in this chat" })).toHaveCount(0);
   await draft.fill(`${await draft.inputValue()}\nReviewed by the local operator.`);
-  await dialog.getByRole("button", { name: "Save reviewed skill" }).click();
+  await dialog.getByRole("button", { name: "Save", exact: true }).click();
   await expect(
-    dialog.getByRole("heading", { name: "Garden calibration review · v1" }),
+    dialog.getByRole("heading", { name: "Garden calibration review", level: 3 }),
   ).toBeVisible();
+  await expect(dialog.getByText("v1", { exact: true }).first()).toBeVisible();
+  await expect(dialog.getByText("Not saved yet", { exact: true })).toHaveCount(0);
   await expect(dialog.getByRole("button", { name: "Active in this chat" })).toHaveCount(0);
   const downloaded = page.waitForEvent("download");
-  const preview = dialog.getByRole("region", { name: "Skill preview" });
-  await preview.getByRole("button", { name: "Download Markdown" }).click();
+  await dialog.getByRole("button", { name: "Download Markdown" }).click();
   const saved = testInfo.outputPath("reviewed-skill.md");
   await (await downloaded).saveAs(saved);
   expect(readFileSync(saved, "utf8")).toContain("Reviewed by the local operator.");
-  await preview.getByRole("button", { name: "Delete", exact: true }).click();
-  await preview.getByRole("button", { name: "Delete skill", exact: true }).click();
-  await expect(preview).toHaveCount(0);
-  await expect(dialog.getByLabel(/Upload Markdown/)).toBeEnabled();
-  await dialog.getByLabel(/Upload Markdown/).setInputFiles(saved);
+  await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+  await dialog.getByRole("button", { name: "Delete skill", exact: true }).click();
+  await expect(draft).toHaveCount(0);
+  await expect(dialog.getByLabel("Import", { exact: true })).toBeEnabled();
+  await dialog.getByLabel("Import", { exact: true }).setInputFiles(saved);
   await expect(
-    dialog.getByRole("heading", { name: "Garden calibration review · v1" }),
+    dialog.getByRole("heading", { name: "Garden calibration review", level: 3 }),
   ).toBeVisible();
   await dialog
     .getByRole("listitem")
     .filter({ hasText: "Garden calibration review" })
-    .getByRole("button", { name: "Select", exact: true })
+    .getByRole("button", { name: "Use in this chat", exact: true })
     .click();
   await expect(dialog.getByRole("button", { name: "Active in this chat" })).toBeVisible();
   await dialog.getByRole("button", { name: "Close skills" }).click();

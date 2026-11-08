@@ -988,3 +988,110 @@ describe("interrupted draft receipt retention", () => {
     expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0]?.result).toBeUndefined();
   });
 });
+
+describe("draft batch progress on the stored exchange", () => {
+  const batchCall = { id: "batch-call", name: "jira_draft_batch", arguments: {} };
+  const progress = {
+    phase: "drafting",
+    draftedCount: 4,
+    plannedCount: 10,
+    coveredRequirementCount: 8,
+    requirementCount: 30,
+    failedCount: 1,
+  } as const;
+  const batchExchange = (store: UiStore, id: string): ChatToolExchange | undefined =>
+    store
+      .findMessageById(id)
+      ?.toolTranscript?.exchanges.find((entry) => entry.call.id === "batch-call");
+
+  it("persists each page on the running call, keeps it when the call settles and logs counts only", () => {
+    const { store, id, logs } = fixture();
+    store.updateChatToolTranscript(id, { kind: "started", call: batchCall }, "batch-progress");
+    store.updateChatToolTranscript(
+      id,
+      { kind: "progress", callId: batchCall.id, batchProgress: progress },
+      "batch-progress",
+    );
+    expect(batchExchange(store, id)?.batchProgress).toEqual(progress);
+    const later = { ...progress, draftedCount: 6 };
+    store.updateChatToolTranscript(
+      id,
+      { kind: "progress", callId: batchCall.id, batchProgress: later },
+      "batch-progress",
+    );
+    store.updateChatToolTranscript(
+      id,
+      { kind: "settled", callId: batchCall.id, result: result() },
+      "batch-progress",
+    );
+    expect(batchExchange(store, id)).toMatchObject({
+      batchProgress: later,
+      result: { status: "denied" },
+    });
+    const lines = logs.events.filter(
+      (entry) => entry.op === "chat.tool-transcript.updated" && entry.extra?.phase === "progress",
+    );
+    expect(lines).toHaveLength(2);
+    expect(lines[1]?.extra).toMatchObject({
+      batchPhase: "drafting",
+      batchDraftedCount: 6,
+      batchPlannedCount: 10,
+      batchFailedCount: 1,
+    });
+    expectActivityLogProof(
+      "chat.tool-transcript.updated.line",
+      formatActivityLogProofLine(lines[1] ?? {}),
+    );
+  });
+
+  it("refuses progress for another tool, an unknown or settled call and invalid counts", () => {
+    const { store, id } = fixture();
+    store.updateChatToolTranscript(id, { kind: "started", call }, "batch-progress");
+    store.updateChatToolTranscript(id, { kind: "started", call: batchCall }, "batch-progress");
+    const progressFor = (callId: string, batchProgress: unknown): void => {
+      store.updateChatToolTranscript(
+        id,
+        { kind: "progress", callId, batchProgress: batchProgress as typeof progress },
+        "batch-progress",
+      );
+    };
+    expect(() => {
+      progressFor(call.id, progress);
+    }).toThrow("identity conflict");
+    expect(() => {
+      progressFor("missing", progress);
+    }).toThrow("identity conflict");
+    for (const invalid of [
+      { ...progress, phase: "finished" },
+      { ...progress, draftedCount: 11 },
+      { ...progress, extra: "text" },
+    ]) {
+      expect(() => {
+        progressFor(batchCall.id, invalid);
+      }).toThrow("Invalid tool progress");
+    }
+    store.updateChatToolTranscript(
+      id,
+      { kind: "settled", callId: batchCall.id, result: result() },
+      "batch-progress",
+    );
+    expect(() => {
+      progressFor(batchCall.id, progress);
+    }).toThrow("identity conflict");
+    expect(batchExchange(store, id)?.batchProgress).toBeUndefined();
+  });
+
+  it("rejects a stored transcript that carries progress on any other tool", () => {
+    const { store, db, id } = fixture();
+    store.updateChatToolTranscript(id, { kind: "started", call: batchCall }, "batch-progress");
+    store.updateChatToolTranscript(
+      id,
+      { kind: "progress", callId: batchCall.id, batchProgress: progress },
+      "batch-progress",
+    );
+    const row = db.prepare("SELECT tool_transcript_json FROM chat_messages WHERE id = ?").get(id);
+    const tampered = String(row?.tool_transcript_json).replace("jira_draft_batch", "jira_issue");
+    db.prepare("UPDATE chat_messages SET tool_transcript_json = ? WHERE id = ?").run(tampered, id);
+    expect(() => store.findMessageById(id)).toThrow("invalid");
+  });
+});

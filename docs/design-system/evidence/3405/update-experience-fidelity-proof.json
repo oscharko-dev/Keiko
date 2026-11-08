@@ -83,7 +83,7 @@
     },
     {
       "path": "packages/keiko-ui/src/lib/api.ts",
-      "sha256": "5b259131a81454baab7763b2a3f66c4a67377bf5e849bf24b005d234d2037ca5"
+      "sha256": "886cfb2177307225937a747cc5d6fc7e2635a4c583da5199956c0c1e42bf6818"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.de.ts",
@@ -95,11 +95,11 @@
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts",
-      "sha256": "ed28207fd8cf6e22f5932cf8d1720c59333347b744046fb44eb68fca133ed2d5"
+      "sha256": "8498a00bb8fb3ed1950de62d0d4f214bf558990fcabadd77b84e3b63cfb15e68"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts",
-      "sha256": "cd828da224d62b929d1983de551e78aac4bed8054a1de760695399c9aeb9c2fa"
+      "sha256": "4f2a196ea0481cbe3336fcf37aba32d15bfaafb52cc2bb48eb2462653595f2c2"
     },
     {
       "path": "packages/keiko-ui/src/lib/optional-widget-i18n.ts",
@@ -120,7 +120,7 @@
   "harness": "tests/e2e/config/playwright.issue-1696-update-ui.config.ts",
   "route": "/",
   "appPath": "packaged-cli-ui",
-  "generatedAt": "2026-11-07T18:55:18.681Z",
+  "generatedAt": "2026-11-08T05:52:40.407Z",
   "visualFixtureScope": "All screenshot captures use deterministic /api/update/* fixtures. They prove rendered UI behavior only, never native handoff, real package replacement, or production-BFF update success.",
   "captures": [
     {

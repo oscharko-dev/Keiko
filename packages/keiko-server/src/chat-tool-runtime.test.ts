@@ -20,6 +20,7 @@ import type {
   AtlassianCredentialMetadata,
   AtlassianHttpBodyPort,
 } from "@oscharko-dev/keiko-connectors";
+import type { ChatMessage } from "./store/index.js";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import { handleSendDesktopChat } from "./chat-handlers.js";
 import { handleUpdateChat } from "./store-handlers.js";
@@ -52,6 +53,10 @@ interface Options {
     readonly arguments: () => Record<string, unknown>;
   };
   readonly reasoningHistory?: "required-with-tools" | undefined;
+  /** A scripted single-tool conversation: the tool to call in model round `round`, if any. */
+  readonly steps?: (
+    round: number,
+  ) => { canonicalId: string; args: Record<string, unknown> } | undefined;
   readonly write?: boolean;
   readonly repeat?: boolean;
   readonly batchSize?: number;
@@ -115,29 +120,41 @@ function configure(deps: UiHandlerDeps, reasoningHistory?: "required-with-tools"
     deps.gatewayConfig.generation(),
   );
 }
+function settledResponse(
+  request: GatewayCallRequest,
+  round: number,
+  promptTokens: number,
+): NormalizedResponse {
+  const admission = request.attemptAdmission?.({ promptTokens, maxOutputTokens: 100 });
+  const response: NormalizedResponse = {
+    modelId: MODEL,
+    content: "Both source observations are available.",
+    finishReason: "stop",
+    toolCalls: [],
+    structuredOutput: null,
+    reasoning: "Inspect both configured sources.",
+    usage: {
+      requestId: `request-${String(round)}`,
+      promptTokens,
+      completionTokens: 10,
+      latencyMs: 1,
+      costClass: "low",
+    },
+  };
+  admission?.settle(response.usage, true, "observed");
+  return response;
+}
 function model(calls: GatewayCallRequest[], options: Options): ModelPort {
   const promptTokens = options.promptTokens ?? 100;
   const batchSize = options.batchSize ?? 2;
   return {
     call: (request): Promise<NormalizedResponse> => {
       calls.push(request);
-      const admission = request.attemptAdmission?.({ promptTokens, maxOutputTokens: 100 });
-      const response: NormalizedResponse = {
-        modelId: MODEL,
-        content: "Both source observations are available.",
-        finishReason: "stop",
-        toolCalls: [],
-        structuredOutput: null,
-        reasoning: "Inspect both configured sources.",
-        usage: {
-          requestId: `request-${String(calls.length)}`,
-          promptTokens,
-          completionTokens: 10,
-          latencyMs: 1,
-          costClass: "low",
-        },
-      };
-      admission?.settle(response.usage, true, "observed");
+      const response = settledResponse(request, calls.length, promptTokens);
+      if (options.steps !== undefined)
+        return Promise.resolve(
+          scriptedStep(request, response, options.steps(calls.length), calls.length),
+        );
       if (calls.length > 1 && options.repeat !== true) return Promise.resolve(response);
       if (request.toolCatalog?.kind !== "bound") throw new Error("Expected shared bound catalog");
       const jira = request.toolCatalog.projection.tools.find(
@@ -172,6 +189,28 @@ function model(calls: GatewayCallRequest[], options: Options): ModelPort {
         }),
       });
     },
+  };
+}
+function scriptedStep(
+  request: GatewayCallRequest,
+  response: NormalizedResponse,
+  step: { canonicalId: string; args: Record<string, unknown> } | undefined,
+  round: number,
+): NormalizedResponse {
+  if (step === undefined) return response;
+  if (request.toolCatalog?.kind !== "bound") throw new Error("Expected shared bound catalog");
+  const tool = request.toolCatalog.projection.tools.find(
+    (entry) => entry.toolRef.canonicalId === step.canonicalId,
+  );
+  if (tool === undefined) throw new Error(`Missing offered ${step.canonicalId}`);
+  const bridge = createGatewayToolCatalogBridge({ ...request, stream: false }, Date.now);
+  return {
+    ...response,
+    content: "",
+    finishReason: "tool_calls",
+    toolCalls: [
+      bridge.bind({ id: `step-${String(round)}`, name: tool.alias, arguments: step.args }),
+    ],
   };
 }
 function credential(deps: UiHandlerDeps): AtlassianCredentialMetadata {
@@ -594,6 +633,12 @@ it("preserves complete parallel assistant exchanges through real Gateway and rel
 // The public combined source path must retain Jira's existing review owners (#4173/4176/4178).
 // No test imports another test module, and the external MCP fixture remains the same real binder.
 describe("combined Jira review admission parity", () => {
+  function turnExchanges(f: Fixture): readonly ChatToolExchange[] {
+    return (
+      f.deps.store.listMessages(f.chatId).find((message) => message.toolTranscript !== undefined)
+        ?.toolTranscript?.exchanges ?? []
+    );
+  }
   function jiraExchange(f: Fixture): ChatToolExchange | undefined {
     return f.deps.store
       .listMessages(f.chatId)[0]
@@ -943,6 +988,83 @@ describe("combined Jira review admission parity", () => {
         result: { status: "completed", data: { excludedCount: 2, createdCount: 1 } },
       });
       expect(f.effects).toEqual(["mcp-read"]);
+    } finally {
+      await settlePendingJira(f, pending);
+    }
+  });
+
+  it("names the active citation sources of a staged draft on the combined Jira, MCP and Knowledge route (F7)", async () => {
+    const stagedItem = (description: string): Record<string, unknown> => ({
+      ref: "epic",
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Epic", description },
+    });
+    const reference = (f: Fixture): Record<string, unknown> => {
+      const staged = turnExchanges(f).find((exchange) => exchange.call.name === "jira_draft_stage");
+      const data = staged?.result?.status === "completed" ? staged.result.data : undefined;
+      const { draftId, draftDigest } = (data ?? {}) as Record<string, string | undefined>;
+      return { draftId, draftDigest };
+    };
+    const holder: { fixture?: Fixture } = {};
+    const f = fixture({
+      steps: (round) => {
+        if (round === 1)
+          return {
+            canonicalId: "keiko.jira.draft.stage",
+            args: { items: [stagedItem("Goal [1].")] },
+          };
+        return round === 2 && holder.fixture !== undefined
+          ? { canonicalId: "keiko.jira.draft", args: reference(holder.fixture) }
+          : undefined;
+      },
+    });
+    holder.fixture = f;
+    const jira = useDraftRemote(f);
+    f.deps.store.createMessage({
+      chatId: f.chatId,
+      role: "assistant",
+      content: "Goal [1].",
+      timestamp: 1,
+      groundedAnswer: {
+        groundingKind: "local-knowledge",
+        citations: [{ marker: "[1]", label: "Spec A.pdf · page 2" }],
+      } as unknown as NonNullable<ChatMessage["groundedAnswer"]>,
+    } as Parameters<typeof f.deps.store.createMessage>[0]);
+    const pending = send(f);
+    void pending.catch(() => undefined);
+    try {
+      const approval = await vi.waitFor(
+        () => {
+          const pendingApproval = turnExchanges(f).find(
+            (exchange) => exchange.call.name === "jira_draft",
+          )?.approval;
+          expect(pendingApproval?.state).toBe("pending");
+          return pendingApproval;
+        },
+        { timeout: 8_000, interval: 10 },
+      );
+      if (approval === undefined) throw new TypeError("Missing draft approval");
+      const stored = f.deps.jiraDraftStore?.peek(String(reference(f).draftId), f.chatId);
+      expect(JSON.stringify(stored)).toContain("Goal (Spec A.pdf · page 2).");
+      expect(JSON.stringify(stored)).not.toContain("Goal [1]");
+      expect(stored?.digest).toBe(reference(f).draftDigest);
+      expect(jira.posts()).toEqual([]);
+      expect(
+        (
+          await handleDecideChatWriteApproval(
+            context(
+              { decision: "approve", actionDigest: approval.actionDigest },
+              { approvalId: approval.approvalId },
+            ),
+            f.deps,
+          )
+        ).status,
+      ).toBe(200);
+      expect((await pending).status).toBe(200);
+      expect(jira.posts().map((post) => post.fields)).toMatchObject([
+        { description: "Goal (Spec A.pdf · page 2)." },
+      ]);
     } finally {
       await settlePendingJira(f, pending);
     }
