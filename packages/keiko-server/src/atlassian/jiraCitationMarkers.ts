@@ -313,6 +313,17 @@ function codeSpans(text: string): readonly Span[] {
 const CODE_MASK = "\u0001";
 
 /**
+ * A code region blanked unit for unit: the mask keeps every UTF-16 offset and line break, so an
+ * astral character inside code cannot shift the markers that follow it.
+ */
+function maskedSpan(segment: string): string {
+  return segment
+    .split("\n")
+    .map((line) => CODE_MASK.repeat(line.length))
+    .join("\n");
+}
+
+/**
  * The text with every code region blanked at the same offsets. The shared grammar reads Markdown
  * code on its own; masking hands it the regions decided here, so a delimiter that is literal in an
  * outer context cannot start a region that hides later prose.
@@ -322,7 +333,7 @@ function maskCode(text: string, code: readonly Span[]): string {
   let cursor = 0;
   for (const span of code) {
     out += text.slice(cursor, span.start);
-    out += text.slice(span.start, span.end).replaceAll(/[^\n]/gu, CODE_MASK);
+    out += maskedSpan(text.slice(span.start, span.end));
     cursor = span.end;
   }
   return out + text.slice(cursor);

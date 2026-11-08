@@ -105,6 +105,21 @@ describe("Jira text names the sources of the grounded answer it was written from
     });
   });
 
+  it("keeps later markers in place after an astral character inside code (F31)", () => {
+    const cases = [
+      "Use `\u{1F600}` literally. Ziel [5].",
+      "```\n\u{1F600}\n```\nZiel [5].",
+      "{code}\u{1F600}{code}\nZiel [5].",
+    ];
+    for (const description of cases) {
+      const rewrite = resolveJiraCitationMarkers({ description }, LABELS);
+      expect(rewrite.arguments).toEqual({
+        description: description.replace("Ziel [5].", `Ziel (${DOC} · page 2).`),
+      });
+      expect(rewrite).toMatchObject({ resolvedCount: 1, unresolvedCount: 0 });
+    }
+  });
+
   it("rewrites tagged Markdown and every draft item, keeping links and wiki links intact", () => {
     const args = {
       items: [
