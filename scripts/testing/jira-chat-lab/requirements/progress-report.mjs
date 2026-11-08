@@ -7,6 +7,10 @@
 //   SCHÄTZUNG;<total>;<done>;<remaining>  one line (only when the instance has an estimate field;
 //                                         a time-tracking estimate is asked for in hours)
 
+import { JIRA_REPORT_ESTIMATE_UNAVAILABLE_REASONS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { toolExchangeOf } from "./tool-exchanges.mjs";
+import { NO_TURN } from "./journey-support.mjs";
+
 const DONE_CATEGORY = "done";
 const EPSILON = 1e-6;
 
@@ -230,5 +234,156 @@ export function gradeProgress(answer, truth) {
     epics: withClean(gradeEpics(parsed, truth)),
     estimate: withClean(gradeEstimate(parsed, truth)),
     conflicts: parsed.conflicts.length,
+  };
+}
+
+const unavailableReasons = new Set(JIRA_REPORT_ESTIMATE_UNAVAILABLE_REASONS);
+const METRIC_ROW = /^(?:SCHÄTZUNG|SCHAETZUNG|ESTIMATE);/iu;
+const SCOPE_ROW = /^(?:SCOPE-LÜCKE|SCOPE-LUECKE|SCOPE GAP);/iu;
+const METRIC_NAME = /^(?:SCHÄTZUNG|SCHAETZUNG|ESTIMATE)$/iu;
+const UNAVAILABLE_CELL = /^(?:NICHT_VERFÜGBAR|NICHT_VERFUEGBAR|UNAVAILABLE)$/iu;
+
+/** The last summary for this project is authoritative; an older unavailable result is no proof. */
+function unavailableReport(exchanges, projectKey) {
+  let current;
+  let reportId;
+  for (const exchange of (exchanges ?? []).filter((item) => toolExchangeOf(item, "jira.report"))) {
+    const data = exchange.result.data;
+    if (targetsUnavailableProject(exchange, projectKey)) {
+      current = exchange.result.status === "completed" ? data : undefined;
+      reportId = current?.reportId;
+    } else if (
+      continuationOfUnavailableReport(exchange, reportId) &&
+      !validUnavailableContinuation(exchange, current, reportId)
+    ) {
+      current = undefined;
+    }
+  }
+  return current;
+}
+
+function continuationOfUnavailableReport(exchange, reportId) {
+  return typeof reportId === "string" && exchange.call?.arguments?.reportId === reportId;
+}
+
+function targetsUnavailableProject(exchange, projectKey) {
+  return (
+    exchange.result.data?.report?.scope?.projectKey === projectKey ||
+    exchange.call?.arguments?.projectKey === projectKey
+  );
+}
+
+function validUnavailableContinuation(exchange, current, reportId) {
+  const data = exchange.result.data;
+  if (!data || !current) return false;
+  return (
+    exchange.result.status === "completed" &&
+    data.outcome === "succeeded" &&
+    data.status === "complete" &&
+    data.reportId === reportId &&
+    data.report?.digest === current.report.digest
+  );
+}
+
+function unavailableScope(scope, projectKey) {
+  return (
+    scope?.estimateUnit === "unavailable" &&
+    scope.estimateSource === "unavailable" &&
+    unavailableReasons.has(scope.estimateUnavailableReason) &&
+    scope.estimateUnavailableReason !== "project-not-specified" &&
+    scope.projectKey === projectKey
+  );
+}
+
+function nativeEstimateUnavailable(data, projectKey) {
+  if (data?.outcome !== "succeeded" || data.status !== "complete") return false;
+  const report = data.report;
+  return (
+    report?.completeness?.complete === true &&
+    report.progress?.project?.estimate === null &&
+    unavailableScope(report.scope, projectKey)
+  );
+}
+
+function unavailableAnswer(answer, reason) {
+  const lines = answer.split(/\r?\n/u).map((line) => line.trim());
+  if (
+    lines.some((line) => /schätz|schaetz|estimate/iu.test(line) && /\b0(?:[.,]0+)?\b/u.test(line))
+  )
+    return false;
+  const metrics = lines.filter((line) => METRIC_ROW.test(line)).map((line) => line.split(";"));
+  const gaps = lines.filter((line) => SCOPE_ROW.test(line)).map((line) => line.split(";"));
+  return (
+    metrics.length === 1 &&
+    metrics[0].length === 3 &&
+    UNAVAILABLE_CELL.test(metrics[0][1]) &&
+    metrics[0][2] === reason &&
+    gaps.length === 1 &&
+    gaps[0].length === 3 &&
+    METRIC_NAME.test(gaps[0][1]) &&
+    gaps[0][2] === reason
+  );
+}
+
+/**
+ * Grade the native unavailable estimate, never an omitted value or a fabricated zero. The report
+ * wire represents this state as a null estimate plus its closed source/unit/reason; `metric` is
+ * the oracle's explicit normalized verdict, not an additional product DTO. Other issue counts may
+ * legitimately be zero. The requested two answer rows name both the metric and its scope gap.
+ */
+export function gradeUnavailable(answer, exchanges, { projectKey }) {
+  const data = unavailableReport(exchanges, projectKey);
+  const scope = data?.report?.scope;
+  const reason = scope?.estimateUnavailableReason;
+  if (!nativeEstimateUnavailable(data, projectKey))
+    return {
+      ok: false,
+      metric: { status: "unverified" },
+      reason: "native-unavailable-evidence-missing",
+    };
+  return { ok: unavailableAnswer(answer, reason), metric: { status: "unavailable", reason } };
+}
+
+const unavailablePrompt = (projectKey) =>
+  `Erstelle einen Fortschrittsbericht für das Jira-Projekt ${projectKey}. Prüfe die Verfügbarkeit ` +
+  "der Schätzung über jira.report. Erfinde keine 0 für eine nicht verfügbare Schätzung. " +
+  "Wenn die Schätzung nicht verfügbar ist, antworte mit genau zwei lesbaren Zeilen: " +
+  "SCHÄTZUNG;NICHT_VERFÜGBAR;<estimateUnavailableReason des Berichts> und " +
+  "SCOPE-LÜCKE;SCHÄTZUNG;<derselbe Grund>. Falls sie verfügbar ist, melde ihre wirklichen Werte.";
+
+function unavailableVerdict(turn, grade, refused) {
+  if (turn.termination === "lab-limit" && !refused) return "unverified";
+  if (turn.failure !== undefined || refused) return "red";
+  if (grade.metric.status === "unverified") return "unverified";
+  return grade.ok ? "green" : "red";
+}
+
+/** A distinct real-model turn, on the seeded project with no configured estimate field. */
+export async function unavailableProgressPart(ctx) {
+  const projectKey = ctx.truth.projects?.unavailable ?? ctx.truth.large?.project;
+  if (projectKey === undefined || typeof ctx.freshChat !== "function")
+    return {
+      part: {
+        label: "unavailable-estimate",
+        status: "unverified",
+        covers: [],
+        detail: "unavailable-project-or-chat-missing",
+      },
+      turn: NO_TURN,
+    };
+  const chat = await ctx.freshChat();
+  const before = ctx.refusals?.();
+  const turn = await ctx.turn(chat, unavailablePrompt(projectKey));
+  const refused = ctx.refusals?.() > before;
+  const grade = gradeUnavailable(turn.answer, turn.toolExchanges, { projectKey });
+  const status = unavailableVerdict(turn, grade, refused);
+  return {
+    part: {
+      label: "unavailable-estimate",
+      status,
+      covers: status === "unverified" ? [] : ["unavailable-metrics-labelled"],
+      detail: `metric=${grade.metric.status}; reason=${grade.metric.reason ?? grade.reason}`,
+    },
+    turn,
   };
 }

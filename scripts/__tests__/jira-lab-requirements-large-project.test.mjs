@@ -41,25 +41,82 @@ describe("the large project plan", () => {
     );
   });
 
-  it("links every task and bug to an epic and gives epics different figures", () => {
+  it("accounts for every linked member and orphan and gives epics different figures", () => {
     const truth = largeTruth(
       plan,
       plan.map((_, index) => `${LARGE_PROJECT}-${index + 1}`),
       {},
     );
     expect(truth.epics).toHaveLength(LARGE_SHAPE.epics);
-    expect(truth.epics.reduce((sum, epic) => sum + epic.members, 0)).toBe(
+    const orphans = plan.filter((item) => item.type === "Task" && item.epic === undefined);
+    expect(orphans).toHaveLength(181);
+    expect(truth.epics.reduce((sum, epic) => sum + epic.members, 0) + orphans.length).toBe(
       plan.filter((item) => item.type !== "Epic").length,
     );
     expect(new Set(truth.epics.map((epic) => `${epic.members}/${epic.done}`)).size).toBeGreaterThan(
       LARGE_SHAPE.epics / 2,
     );
     expect(truth.counts.reduce((sum, entry) => sum + entry.count, 0)).toBe(truth.issueCount);
-    expect(plan.filter((item) => item.type !== "Epic").every((item) => item.epic >= 0)).toBe(true);
+    expect(plan.filter((item) => item.type === "Bug").every((item) => item.epic >= 0)).toBe(true);
+    expect(
+      plan
+        .filter((item) => item.type === "Task" && !item.deviations.includes("parent"))
+        .every((item) => item.epic >= 0),
+    ).toBe(true);
   });
 
   it("refuses a key list that does not match the plan", () => {
     expect(() => largeTruth(plan, ["LRG-1"], {})).toThrow(TypeError);
+  });
+
+  it("W7 seeds exactly every seventh label and every eleventh task parent as deviations", () => {
+    let taskOrdinal = 0;
+    plan.forEach((item, index) => {
+      if (item.type === "Task") taskOrdinal += 1;
+      const missingLabel = (index + 1) % 7 === 0;
+      const missingParent = item.type === "Task" && taskOrdinal % 11 === 0;
+      expect(item.labels).toEqual(missingLabel ? [] : ["anforderung"]);
+      expect(item.deviations).toEqual([
+        ...(missingLabel ? ["label:anforderung"] : []),
+        ...(missingParent ? ["parent"] : []),
+      ]);
+      if (item.type !== "Epic") expect(item.epic === undefined).toBe(missingParent);
+    });
+    expect(taskOrdinal).toBe(1995);
+    expect(plan.filter((item) => item.deviations.includes("label:anforderung"))).toHaveLength(355);
+    expect(plan.filter((item) => item.deviations.includes("parent"))).toHaveLength(181);
+    expect(plan.filter((item) => item.deviations.length === 2)).toHaveLength(26);
+    expect(plan.filter((item) => item.deviations.length > 0)).toHaveLength(510);
+  });
+
+  it("W7 records all version-two issue facts without inventing epic parents for orphans", () => {
+    const keys = plan.map((_, index) => `${LARGE_PROJECT}-${index + 1}`);
+    const truth = largeTruth(plan, keys, { epicLink: "customfield_10001" });
+    expect(truth.seedVersion).toBe(2);
+    expect(truth.issues).toHaveLength(2490);
+    expect(truth.issues).toEqual(
+      plan.map((item, index) => ({
+        key: keys[index],
+        type: item.type,
+        status: item.status,
+        labels: item.labels,
+        ...(item.epic === undefined ? {} : { epic: keys[item.epic] }),
+        deviations: item.deviations,
+      })),
+    );
+    expect(truth.issues[55]).toEqual({
+      key: "LRG-56",
+      type: "Task",
+      status: "In Progress",
+      labels: [],
+      deviations: ["label:anforderung", "parent"],
+    });
+    const orphanKeys = new Set(
+      truth.issues.filter((item) => item.deviations.includes("parent")).map((item) => item.key),
+    );
+    expect(orphanKeys.size).toBe(181);
+    expect(truth.epics.reduce((sum, epic) => sum + epic.members, 0) + orphanKeys.size).toBe(2445);
+    expect(truth.counts.reduce((sum, entry) => sum + entry.count, 0)).toBe(2490);
   });
 
   it("is a separate obligation of S10 that the existing ones do not replace", () => {
@@ -69,6 +126,7 @@ describe("the large project plan", () => {
       "per-epic-progress",
       "estimate-totals",
       "large-project-report",
+      "unavailable-metrics-labelled",
     ]);
   });
 });
@@ -114,7 +172,7 @@ const countOf = (issues) => async (jql) =>
   issues.filter((issue) => jql.split(" AND ").every((clause) => clauseMatches(issue, clause)))
     .length;
 
-function productReport(issues) {
+function productReport(issues, estimateScope = { estimateUnit: "points" }) {
   return buildJiraReport({
     issues: issues.map((issue) => ({
       key: issue.key,
@@ -137,7 +195,7 @@ function productReport(issues) {
     scope: {
       projectKey: LARGE_PROJECT,
       jql: `project = ${LARGE_PROJECT}`,
-      estimateUnit: "points",
+      ...estimateScope,
       asOf: "2026-11-02",
       timeZone: "UTC",
     },
@@ -215,6 +273,30 @@ describe("the independent Jira read of the large project", () => {
     );
     const jira = await largeJiraFigures(countOf(drifted), world.large);
     expect(matchesSeededTruth(jira, world.large)).toBe(false);
+  });
+
+  it("W7 keeps orphan tasks in project progress and detects an invented epic membership", async () => {
+    const orphans = world.issues.filter(
+      (issue) => issue.type === "Task" && issue.epicKey === undefined,
+    );
+    expect(orphans).toHaveLength(2);
+    const jira = await largeJiraFigures(countOf(world.issues), world.large);
+    expect(jira.total).toBe(40);
+    expect([...jira.epics.values()].reduce((sum, epic) => sum + epic.total, 0)).toBe(34);
+    expect(matchesSeededTruth(jira, world.large)).toBe(true);
+    expect(
+      gradeReportFigures([summaryExchange(productReport(world.issues))], jira).problems,
+    ).toEqual([]);
+    const drifted = world.issues.map((issue) =>
+      issue.key === orphans[0].key ? { ...issue, epicKey: world.keys[0] } : issue,
+    );
+    const changed = await largeJiraFigures(countOf(drifted), world.large);
+    expect(changed.total).toBe(jira.total);
+    expect(changed.byStatus).toEqual(jira.byStatus);
+    expect(matchesSeededTruth(changed, world.large)).toBe(false);
+    expect(
+      gradeReportFigures([summaryExchange(productReport(drifted))], jira).problems.length,
+    ).toBeGreaterThan(0);
   });
 });
 
@@ -487,7 +569,22 @@ describe("S10 with the large project", () => {
   };
   const s10 = (answers, truth) => {
     let turns = 0;
-    const exchanges = [summaryExchange(productReport(world.issues))];
+    const responses = [
+      { answer: answers[0], toolExchanges: [] },
+      { answer: answers[1], toolExchanges: [summaryExchange(productReport(world.issues))] },
+      {
+        answer: "SCHÄTZUNG;NICHT_VERFÜGBAR;field-not-found\nSCOPE-LÜCKE;SCHÄTZUNG;field-not-found",
+        toolExchanges: [
+          summaryExchange(
+            productReport(world.issues, {
+              estimateUnit: "unavailable",
+              estimateSource: "unavailable",
+              estimateUnavailableReason: "field-not-found",
+            }),
+          ),
+        ],
+      },
+    ];
     return JOURNEYS.S10(
       {
         truth: { fieldIds: { epicLink: "customfield_10001" }, ...truth },
@@ -495,8 +592,7 @@ describe("S10 with the large project", () => {
         count: countOf(world.issues),
         freshChat: async () => ({ id: "second-chat" }),
         turn: async () => ({
-          answer: answers[turns++],
-          toolExchanges: turns === 2 ? exchanges : [],
+          ...responses[turns++],
           failure: undefined,
           durationMs: 1000,
           toolCalls: 1,
@@ -513,6 +609,7 @@ describe("S10 with the large project", () => {
       "counts-by-type-status",
       "per-epic-progress",
       "large-project-report",
+      "unavailable-metrics-labelled",
     ]);
   });
 

@@ -253,6 +253,56 @@ describe("seed-projects.mjs --only LRG", () => {
     expect(lab.truth()).toEqual(first);
   }, 120_000);
 
+  it("W7 writes only the planned native label and parent defects and records the exact facts", async () => {
+    const lab = await laboratory();
+    seededWithoutLarge(lab);
+    await lab.seed("--only", LARGE_PROJECT);
+    const { issues } = lab.jira.projects.get(LARGE_PROJECT);
+    let taskOrdinal = 0;
+    issues.forEach((issue, index) => {
+      if (issue.type === "Task") taskOrdinal += 1;
+      expect(issue.fields.labels).toEqual((index + 1) % 7 === 0 ? [] : ["anforderung"]);
+      const linked = issue.type === "Bug" || (issue.type === "Task" && taskOrdinal % 11 !== 0);
+      expect(Object.hasOwn(issue.fields, LINK_FIELD)).toBe(linked);
+    });
+    const recorded = lab.truth().large;
+    expect(recorded.seedVersion).toBe(2);
+    expect(recorded.issues).toEqual(
+      issues.map((issue) => ({
+        key: issue.key,
+        type: issue.type,
+        status: issue.status,
+        labels: issue.fields.labels,
+        ...(Object.hasOwn(issue.fields, LINK_FIELD) ? { epic: issue.fields[LINK_FIELD] } : {}),
+        deviations: [
+          ...(issue.fields.labels.length === 0 ? ["label:anforderung"] : []),
+          ...(issue.type === "Task" && !Object.hasOwn(issue.fields, LINK_FIELD) ? ["parent"] : []),
+        ],
+      })),
+    );
+    expect(recorded.issues.filter((issue) => issue.deviations.length > 0)).toHaveLength(510);
+    expect(recorded.issues.reduce((sum, issue) => sum + issue.deviations.length, 0)).toBe(536);
+  }, 120_000);
+
+  it("W7 does not rewrite or silently upgrade a previously recorded large project", async () => {
+    const lab = await laboratory();
+    const recorded = seededWithoutLarge(lab);
+    recorded.large = {
+      project: LARGE_PROJECT,
+      issueCount: 1,
+      counts: [],
+      epics: [],
+      fieldIds: {},
+    };
+    writeFileSync(lab.truthPath, JSON.stringify(recorded));
+    const original = readFileSync(lab.truthPath, "utf8");
+    await lab.seed("--only", LARGE_PROJECT);
+    expect(lab.jira.requests).toEqual([]);
+    expect(readFileSync(lab.truthPath, "utf8")).toBe(original);
+    expect(lab.truth().large.seedVersion).toBeUndefined();
+    expect(lab.truth().large.issues).toBeUndefined();
+  }, 120_000);
+
   it("refuses a project that holds issues the truth does not record", async () => {
     const lab = await laboratory();
     seededWithoutLarge(lab);

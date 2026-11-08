@@ -280,6 +280,28 @@ async function moveAll(plan, keys) {
   return moves.length;
 }
 
+function largeEpicInputs(epics, fields) {
+  return epics.map((item, index) => ({
+    type: item.type,
+    fields: {
+      summary: item.summary,
+      labels: item.labels,
+      [fields.epicName]: `Paket ${index + 1}`,
+    },
+  }));
+}
+
+function largeMemberInputs(members, fields, epicKeys) {
+  return members.map((item) => ({
+    type: item.type,
+    fields: {
+      summary: item.summary,
+      labels: item.labels,
+      ...(item.epic === undefined ? {} : { [fields.epicLink]: epicKeys[item.epic] }),
+    },
+  }));
+}
+
 /** Adds LRG to a seeded laboratory; the truth keeps every other entry exactly as it was. */
 async function seedLarge() {
   const recorded = JSON.parse(readFileSync(truthPath, "utf8"));
@@ -296,21 +318,9 @@ async function seedLarge() {
     throw new TypeError(`${LARGE_PROJECT} offers no Epic Link or Epic Name field`);
   const plan = largePlan();
   const epics = plan.filter((item) => item.type === "Epic");
-  const epicKeys = await bulkCreate(
-    LARGE_PROJECT,
-    epics.map((item, index) => ({
-      type: item.type,
-      fields: { summary: item.summary, [fields.epicName]: `Paket ${index + 1}` },
-    })),
-  );
+  const epicKeys = await bulkCreate(LARGE_PROJECT, largeEpicInputs(epics, fields));
   const members = plan.filter((item) => item.type !== "Epic");
-  const memberKeys = await bulkCreate(
-    LARGE_PROJECT,
-    members.map((item) => ({
-      type: item.type,
-      fields: { summary: item.summary, [fields.epicLink]: epicKeys[item.epic] },
-    })),
-  );
+  const memberKeys = await bulkCreate(LARGE_PROJECT, largeMemberInputs(members, fields, epicKeys));
   const keys = [...epicKeys, ...memberKeys];
   const moved = await moveAll(plan, keys);
   privateJson(truthPath, {

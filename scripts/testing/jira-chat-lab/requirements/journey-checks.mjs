@@ -4,6 +4,7 @@
 //   ctx.turn(chat, content)  -> { answer, failure, durationMs, toolCalls, toolExchanges,
 //                                 approvals: { writes, records } }
 //   ctx.search(query, fields) -> every matching Jira issue (admin read, all pages)
+//   ctx.searchPages(query, fields) -> { issues, pages } from that same native GET paging owner
 //   ctx.count(query)         -> the number of issues a JQL query matches (admin read, S10 large project)
 //   ctx.refusals()           -> count of generation-changed refusals in the live log
 //   ctx.truth                -> generated ground truth of the report project
@@ -25,6 +26,7 @@
 // when the check is green, so a check that covers part of a scenario never turns it green.
 import { backlogJourney } from "./backlog-turn.mjs";
 import { changeImpactTruth, structuredChangeSet } from "./change-impact.mjs";
+import { gradeLargeDeviationReport, largeDeviationTruth } from "./deviation-report.mjs";
 import { STRUCTURE_RULES, buildCorpus, corpusChange } from "./corpus.mjs";
 import {
   gradeCoverageMatrix,
@@ -53,6 +55,7 @@ import {
   estimateOf,
   gradeProgress,
   progressPrompt,
+  unavailableProgressPart,
   progressTruth,
 } from "./progress-report.mjs";
 import {
@@ -78,6 +81,7 @@ import {
   proposeTemplates,
   validateTemplate,
   complianceTemplates,
+  templateMarkdown,
   withTemplate,
   withTemplates,
 } from "./templates.mjs";
@@ -253,7 +257,11 @@ async function projectProgress(ctx, chat) {
     detail: `${issues.length} issues; type/status counts ${grade.counts.matched}/${grade.counts.expected} exact (${grade.counts.extra} extra), epics ${grade.epics.graded ? `${grade.epics.matched}/${grade.epics.expected}` : "not gradable"}, estimate ${grade.estimate.graded ? (grade.estimate.ok ? "exact" : "wrong") : "not gradable"}, ${grade.conflicts} conflicting lines${ungraded > 0 ? "; ungradable parts are not credited" : ""}`,
   };
   const large = await largeProjectPart(ctx);
-  return aggregateParts([answer, large.part], [turn, large.turn]);
+  const unavailable = await unavailableProgressPart(ctx);
+  return aggregateParts(
+    [answer, large.part, unavailable.part],
+    [turn, large.turn, unavailable.turn],
+  );
 }
 
 // ---------- S12 ----------
@@ -374,6 +382,64 @@ async function complianceReport(ctx, chat) {
   );
 }
 
+const LARGE_COMPLIANCE_OBLIGATIONS = [
+  "large-deviating-issues",
+  "large-deviation-detail",
+  "independent-paged-jql",
+];
+
+function largeComplianceTemplates(truth) {
+  return ["Epic", "Task", "Bug"].map((issueType) => ({
+    name: `${truth.project}-${issueType}`,
+    markdown: templateMarkdown({
+      project: truth.project,
+      issueType,
+      rule: { labels: ["anforderung"], sections: [] },
+      ...(issueType === "Task"
+        ? { parentField: truth.fieldIds.epicLink, parentIssueTypes: ["Epic"] }
+        : {}),
+    }),
+  }));
+}
+
+async function observeLargeCompliance(ctx, chat, truth) {
+  const turn = await ctx.turn(
+    chat,
+    `Prüfe jeden Vorgang des Jira-Projekts ${truth.project} gegen die aktiven Vorlagen. Lies den vollständigen jira.report einschließlich ALLER Abweichungsseiten derselben reportId. Liste jeden abweichenden Vorgang mit seinem Schlüssel und allen konkreten Abweichungen auf. Keine Kürzung auf eine Beispielauswahl; nenne keine konformen Vorgänge als Abweichung.`,
+  );
+  let observed;
+  try {
+    observed = await ctx.searchPages(
+      `project = ${truth.project} ORDER BY key ASC`,
+      `issuetype,status,labels,${truth.fieldIds.epicLink}`,
+    );
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+    return result("unverified", turn, "independent native JQL pagination is unavailable", []);
+  }
+  const grade = gradeLargeDeviationReport(turn.toolExchanges, observed, truth, turn.answer);
+  return result(
+    grade.status,
+    turn,
+    grade.detail,
+    grade.status === "green" ? LARGE_COMPLIANCE_OBLIGATIONS : [],
+  );
+}
+
+function largeComplianceReport(ctx, chat) {
+  const truth = largeDeviationTruth(ctx.truth);
+  if (truth === undefined || typeof ctx.searchPages !== "function")
+    return result(
+      "unverified",
+      NO_TURN,
+      "versioned large truth or independent native paging is unavailable",
+      [],
+    );
+  return withTemplates(ctx.http, largeComplianceTemplates(truth), () =>
+    observeLargeCompliance(ctx, chat, truth),
+  );
+}
+
 export const JOURNEYS = {
   S01: (ctx, chat) => templateDefinedAndApplied(ctx, chat),
   S02: (ctx, chat) => proposalReviewedBeforeActivation(ctx, chat),
@@ -464,6 +530,7 @@ export const JOURNEYS = {
     withTemplates(ctx.http, complianceTemplates("RPT", complianceFieldIds(ctx.truth)), () =>
       complianceReport(ctx, chat),
     ),
+  S11b: (ctx, chat) => largeComplianceReport(ctx, chat),
   S12: (ctx, chat) => coverageMatrix(ctx, chat),
   S13: (ctx, chat) => reportExportAndComment(ctx, chat),
   async S14(ctx, chat) {

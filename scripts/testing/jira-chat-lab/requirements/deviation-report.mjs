@@ -61,7 +61,7 @@ const STRUCTURED_IDS = {
 
 /** Whether a structured entry names the seeded deviation by its rule ids or its field ids. */
 function structurallyReported(code, entry, fieldIds, sectionCount) {
-  const ids = [...entry.ruleIds, ...entry.fieldIds].map(normalized);
+  const ids = [...entry.ruleIds, ...entry.fieldIds].map((id) => normalized(id));
   const mentions = (pattern) => ids.some((id) => pattern.test(id));
   const [kind, detail = ""] = code.split(":");
   if (kind === "section") {
@@ -142,19 +142,19 @@ const CLAUSE_BREAK = /[.;!?\n]+|\s+(?:aber|jedoch|während|whereas|but|however|a
 
 // A line that names no issue and ends in a colon, or a Markdown heading, introduces what follows.
 const LEAD = /^\s*(?:#{1,6}\s+\S.*|.*\S:[*_`\s]*)$/;
-const NAMES_ISSUE = new RegExp(ISSUE_KEY.source);
 
 /**
  * For each line of a list that a lead introduces, the index of that lead: a lead whose next
  * non-blank line names an issue covers every following line up to the first non-blank line that
  * names none. "**Abschnitt Abgrenzung fehlt:**" over "* RPT-6, RPT-12" attributes it to both.
  */
-function listLeads(lines) {
+function listLeads(lines, issueKey) {
+  const namesIssue = new RegExp(issueKey.source);
   const leads = new Map();
   let lead;
   for (const [index, line] of lines.entries()) {
     if (line.trim() === "") continue;
-    if (NAMES_ISSUE.test(line)) {
+    if (namesIssue.test(line)) {
       if (lead !== undefined) leads.set(index, lead);
     } else {
       lead = LEAD.test(line) ? index : undefined;
@@ -192,9 +192,9 @@ const clausesOf = (keyLines) =>
  * the issues of the list before it. The context is never credited as a description by itself, but
  * it can deny ("## No deviations found" over a list) or state that what follows are deviations.
  */
-function clausesByKey(answer) {
+function clausesByKey(answer, issueKey = ISSUE_KEY) {
   const lines = answer.split("\n");
-  const leads = listLeads(lines);
+  const leads = listLeads(lines, issueKey);
   const headings = enclosingHeadings(lines);
   const opening = new Set(leads.values());
   const segments = new Map();
@@ -202,7 +202,7 @@ function clausesByKey(answer) {
   let current = [];
   for (const [index, line] of lines.entries()) {
     if (opening.has(index)) continue;
-    const keys = line.match(ISSUE_KEY);
+    const keys = line.match(issueKey);
     if (keys) current = [...new Set(keys)];
     const attributed = leads.has(index) ? [lines[leads.get(index)], line] : [line];
     const framing = [...(leads.has(index) ? [lines[leads.get(index)]] : []), ...headings[index]];
@@ -279,10 +279,16 @@ function gaps(issue, structured, part, fieldIds) {
  * each of them is both reported by the tool for that issue and described in that issue's part of the
  * answer without negation.
  */
-export function gradeDeviationReport(answer, issues, structured, fieldIds = {}) {
+export function gradeDeviationReport(
+  answer,
+  issues,
+  structured,
+  fieldIds = {},
+  issueKey = ISSUE_KEY,
+) {
   const expected = issues.filter((issue) => issue.deviations.length > 0);
   const expectedKeys = new Set(expected.map((issue) => issue.key));
-  const parts = clausesByKey(answer);
+  const parts = clausesByKey(answer, issueKey);
   const reported = new Set([...parts.keys()].filter((key) => !issueDenied(key, parts.get(key))));
   const found = expected.filter((issue) => reported.has(issue.key) && structured.has(issue.key));
   const falseFindings = [...reported].filter((key) => !expectedKeys.has(key));
@@ -306,5 +312,250 @@ export function gradeDeviationReport(answer, issues, structured, fieldIds = {}) 
     unreported,
     undescribed,
     deviationCount: expected.reduce((sum, issue) => sum + issue.deviations.length, 0),
+  };
+}
+
+// ---------- S11b: a whole large report against independent native pages ----------
+
+const LARGE_ISSUE_KEY = /\b[A-Z][A-Z0-9_]*-\d+\b/g;
+const sameStrings = (left, right) =>
+  Array.isArray(left) &&
+  Array.isArray(right) &&
+  left.length === right.length &&
+  new Set(left).size === left.length &&
+  left.every((value) => typeof value === "string" && right.includes(value));
+
+function largeTruthFields(truth) {
+  return typeof truth.fieldIds?.epicLink === "string" && truth.issues.length === truth.issueCount;
+}
+
+/** The versioned seed is a review snapshot, never evidence that Jira still holds those values. */
+export function largeDeviationTruth(value) {
+  const truth = value?.large ?? value;
+  if (!isRecord(truth) || truth.seedVersion !== 2 || !Array.isArray(truth.issues)) return undefined;
+  if (typeof truth.project !== "string" || !/^[A-Z][A-Z0-9_]{0,9}$/u.test(truth.project))
+    return undefined;
+  return largeTruthFields(truth) ? truth : undefined;
+}
+
+function nativePageReceipt(page, offset, total) {
+  return (
+    page.startAt === offset &&
+    page.maxResults === 100 &&
+    page.total === total &&
+    Number.isSafeInteger(page.count) &&
+    page.count >= 1 &&
+    page.count <= 100
+  );
+}
+
+function completeNativePages(observed) {
+  if (
+    !Array.isArray(observed?.issues) ||
+    !Array.isArray(observed.pages) ||
+    observed.pages.length < 3
+  )
+    return false;
+  let offset = 0;
+  for (const page of observed.pages) {
+    if (!nativePageReceipt(page, offset, observed.issues.length)) return false;
+    offset += page.count;
+  }
+  return offset === observed.issues.length;
+}
+
+function nativeDeviations(issue, epicLink, epics) {
+  const { fields } = issue;
+  if (!Array.isArray(fields?.labels) || !Object.hasOwn(fields, epicLink)) return undefined;
+  const codes = fields.labels.includes("anforderung") ? [] : ["label:anforderung"];
+  if (fields.issuetype?.name === "Task" && !epics.has(fields[epicLink])) codes.push("parent");
+  return codes;
+}
+
+function sameNativeMetadata(expected, actual, project) {
+  if (!isRecord(expected) || !isRecord(actual?.fields)) return false;
+  const fields = actual.fields;
+  return (
+    actual.key === expected.key &&
+    actual.key.startsWith(`${project}-`) &&
+    fields.issuetype?.name === expected.type &&
+    fields.status?.name === expected.status
+  );
+}
+
+function sameNativeIssue(expected, actual, truth, epics) {
+  if (!sameNativeMetadata(expected, actual, truth.project)) return false;
+  const fields = actual.fields;
+  if (!sameStrings(fields.labels, expected.labels)) return false;
+  const parent = fields[truth.fieldIds.epicLink];
+  if (parent !== (expected.epic ?? null)) return false;
+  return sameStrings(nativeDeviations(actual, truth.fieldIds.epicLink, epics), expected.deviations);
+}
+
+function observedLargeTruth(observed, truth) {
+  if (!completeNativePages(observed) || observed.issues.length !== truth.issueCount) return false;
+  const expected = new Map(truth.issues.map((issue) => [issue.key, issue]));
+  const actual = new Map(observed.issues.map((issue) => [issue.key, issue]));
+  if (expected.size !== truth.issueCount || actual.size !== truth.issueCount) return false;
+  const epics = new Set(
+    observed.issues
+      .filter((issue) => issue.fields?.issuetype?.name === "Epic")
+      .map((issue) => issue.key),
+  );
+  return observed.issues.every((issue) =>
+    sameNativeIssue(expected.get(issue.key), issue, truth, epics),
+  );
+}
+
+function completeReportIdentity(data, summary, truth) {
+  if (data?.outcome !== "succeeded" || data.status !== "complete") return false;
+  if (data.reportId !== summary.reportId || data.report?.digest !== summary.report.digest)
+    return false;
+  return completeReportPopulation(data.report.completeness, truth.issueCount);
+}
+
+const completeReportPopulation = (complete, count) =>
+  complete?.complete === true && complete.issuesRead === count && complete.issuesTotal === count;
+
+function reportSummary(exchanges, truth) {
+  return exchanges
+    .filter(completedReport)
+    .map((exchange) => exchange.result.data)
+    .find(
+      (data) =>
+        data?.report?.scope?.projectKey === truth.project && isRecord(data.report.compliance),
+    );
+}
+
+function readDeviationPage(data, call, summary, offset) {
+  if (data === summary) return { ...data.report.compliance.deviations, startAt: 0 };
+  const page = data.section;
+  if (page?.name !== "deviations" || call.arguments?.reportId !== summary.reportId)
+    return undefined;
+  if (call.arguments.section !== "deviations" || call.arguments.startAt !== offset)
+    return undefined;
+  return page;
+}
+
+function deviationPageBounds(page, state) {
+  if (
+    !isRecord(page) ||
+    !Array.isArray(page.items) ||
+    page.startAt !== state.offset ||
+    page.total !== state.total
+  )
+    return false;
+  const end = state.offset + page.items.length;
+  if (end > state.total || (end < state.total && page.items.length === 0)) return false;
+  if (page.nextStartAt !== (end < state.total ? end : undefined)) return false;
+  return true;
+}
+
+function appendDeviationPage(page, state) {
+  if (!deviationPageBounds(page, state)) return false;
+  for (const item of page.items) {
+    if (!isRecord(item) || typeof item.key !== "string" || state.entries.has(item.key))
+      return false;
+    if (!sameStrings(item.ruleIds, item.ruleIds) || !sameStrings(item.fieldIds, item.fieldIds))
+      return false;
+    state.entries.set(item.key, {
+      ruleIds: new Set(item.ruleIds),
+      fieldIds: new Set(item.fieldIds),
+    });
+  }
+  state.offset += page.items.length;
+  return true;
+}
+
+const completeComplianceScope = (compliance, count) =>
+  compliance.checker === "applied" &&
+  compliance.issuesChecked === count &&
+  compliance.issuesWithoutTemplate === 0 &&
+  compliance.issuesJudged === count;
+
+function completeComplianceSummary(summary, truth) {
+  if (typeof summary?.reportId !== "string" || !/^[a-f0-9]{64}$/u.test(summary.report.digest ?? ""))
+    return undefined;
+  const compliance = summary.report.compliance;
+  const total = compliance.deviations?.total;
+  if (!Number.isSafeInteger(total) || total < 0) return undefined;
+  if (!completeComplianceScope(compliance, truth.issueCount)) return undefined;
+  return { compliance, total };
+}
+
+const carriesDeviations = (data) =>
+  isRecord(data?.report?.compliance) || data?.section?.name === "deviations";
+
+function completeLargeDeviations(exchanges, truth) {
+  const summary = reportSummary(exchanges, truth);
+  const admitted = completeComplianceSummary(summary, truth);
+  if (admitted === undefined) return undefined;
+  const { compliance, total } = admitted;
+  const state = { total, offset: 0, entries: new Map() };
+  for (const exchange of exchanges.filter(completedReport)) {
+    const data = exchange.result.data;
+    if (!carriesDeviations(data)) continue;
+    if (!completeReportIdentity(data, summary, truth)) return undefined;
+    const page = readDeviationPage(data, exchange.call, summary, state.offset);
+    if (!appendDeviationPage(page, state)) return undefined;
+  }
+  if (state.offset !== total || state.entries.size !== total) return undefined;
+  return { entries: state.entries, compliance };
+}
+
+function exactLargeEntries(issues, entries, epicLink) {
+  return issues.every((issue) => {
+    const entry = entries.get(issue.key);
+    if (issue.deviations.length === 0) return entry === undefined;
+    if (entry === undefined) return false;
+    const rules = issue.deviations.map((code) =>
+      code === "parent" ? "parent-missing" : "label-missing",
+    );
+    const fields = issue.deviations.map((code) => (code === "parent" ? epicLink : "labels"));
+    return sameStrings([...entry.ruleIds], rules) && sameStrings([...entry.fieldIds], fields);
+  });
+}
+
+const largeUnverified = (detail) => ({ status: "unverified", detail, counts: {} });
+const largeGradeStatus = (grade, exact, falseFindings) =>
+  grade.keysOk && grade.detailOk && exact && falseFindings === 0 ? "green" : "red";
+
+/** Shared S11b/limit-run oracle. The caller supplies this turn's answer and tool exchanges. */
+export function gradeLargeDeviationReport(exchanges, observed, value, answer) {
+  const truth = largeDeviationTruth(value);
+  if (truth === undefined) return largeUnverified("versioned large-project truth is unavailable");
+  if (!observedLargeTruth(observed, truth))
+    return largeUnverified("independent native pages or seed agreement are unavailable");
+  const report = completeLargeDeviations(Array.isArray(exchanges) ? exchanges : [], truth);
+  if (report === undefined)
+    return largeUnverified("a complete, coherent report deviation sequence is unavailable");
+  if (typeof answer !== "string")
+    return largeUnverified("this turn's readable report answer is unavailable");
+  const grade = gradeDeviationReport(
+    answer,
+    truth.issues,
+    report.entries,
+    truth.fieldIds,
+    LARGE_ISSUE_KEY,
+  );
+  const expectedKeys = new Set(
+    truth.issues.filter((issue) => issue.deviations.length > 0).map((issue) => issue.key),
+  );
+  const extras = [...report.entries.keys()].filter((key) => !expectedKeys.has(key));
+  const falseFindings = new Set([...grade.falseFindings, ...extras]).size;
+  const exact =
+    report.compliance.issuesWithDeviations === grade.expected &&
+    report.compliance.deviationCount === grade.deviationCount &&
+    exactLargeEntries(truth.issues, report.entries, truth.fieldIds.epicLink);
+  return {
+    status: largeGradeStatus(grade, exact, falseFindings),
+    detail: `${grade.found}/${grade.expected} deviating issues; ${grade.deviationCount} deviations; ${falseFindings} false findings; ${observed.pages.length} independent native pages`,
+    counts: {
+      issues: observed.issues.length,
+      pages: observed.pages.length,
+      deviations: grade.deviationCount,
+      deviatingIssues: grade.expected,
+      falseFindings,
+    },
   };
 }
