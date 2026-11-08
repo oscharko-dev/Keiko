@@ -50,14 +50,36 @@ function reviewedState(input: MaintenanceInput): CatalogJsonObject {
   if (input.kind === "snapshot") return { running: false };
   return input.expected;
 }
-function stateConstraint(input: MaintenanceInput): MaintenanceFailure | undefined {
-  if (input.kind === "upgrade" && input.expected.upgradeState === "running")
-    return maintenanceRefusal("The independent native upgrade observation is running. Do not schedule another pending-upgrade request.", "conflict");
-  if (input.kind !== "node") return undefined;
+function nodeConstraint(input: Extract<MaintenanceInput, { kind: "node" }>): MaintenanceFailure | undefined {
+  if (input.operation === "jira.request-cluster-index-snapshot" && (input.expected.state !== "ACTIVE" || input.expected.alive !== true))
+    return maintenanceRefusal("A cluster index snapshot requires an independently observed ACTIVE and alive node. Select and review a live active node before requesting its index.", "conflict");
   if (input.operation === "jira.delete-cluster-node" && input.expected.state !== "OFFLINE")
     return maintenanceRefusal("Native node deletion requires an observed OFFLINE node; other states are not safe deletion evidence.", "conflict");
   if (input.operation === "jira.mark-cluster-node-offline" && (input.expected.state !== "ACTIVE" || input.expected.alive !== false))
     return maintenanceRefusal("Native offline admission requires an observed ACTIVE node that is explicitly not alive. Unknown liveness is not false.", "conflict");
+  return undefined;
+}
+// UpgradeState (11.3) distinguishes readiness, mixed versions, running tasks and failure.
+// Cancellation is deliberately limited to readiness before any node upgrade, not rollback.
+const ZDU_STATES: Readonly<Partial<Record<JiraMaintenanceMutation, string>>> = {
+  "jira.approve-cluster-upgrade": "READY_TO_RUN_UPGRADE_TASKS",
+  "jira.cancel-cluster-upgrade": "READY_TO_UPGRADE",
+  "jira.retry-cluster-upgrade": "UPGRADE_TASKS_FAILED",
+  "jira.start-cluster-upgrade": "STABLE",
+};
+function clusterConstraint(input: Extract<MaintenanceInput, { kind: "cluster-upgrade" }>): MaintenanceFailure | undefined {
+  const required = ZDU_STATES[input.operation];
+  if (required === undefined) return maintenanceRefusal("This operation has no supported cluster transition.");
+  return input.expected.state === required ? undefined
+    : maintenanceRefusal(`This cluster action requires the independently observed native state ${required}. Read the current upgrade state and choose the supported next action; unfamiliar or mixed states do not authorize this transition.`, "conflict");
+}
+function stateConstraint(input: MaintenanceInput): MaintenanceFailure | undefined {
+  if (input.kind === "node") return nodeConstraint(input);
+  if (input.kind === "cluster-upgrade") return clusterConstraint(input);
+  if (input.kind === "reindex" && input.expected.taskState !== "no-prior-task" && typeof input.expected.finishTime !== "string")
+    return maintenanceRefusal("The observed reindex has no native finishTime. Do not start another reindex while the current task is running or its completion is unavailable; progress or success alone is not a completion marker.", "conflict");
+  if (input.kind === "upgrade" && input.expected.upgradeState === "running")
+    return maintenanceRefusal("The independent native upgrade observation is running. Do not schedule another pending-upgrade request.", "conflict");
   return undefined;
 }
 async function admit(request: JiraMutationRequest, input: MaintenanceInput): Promise<MaintenanceFailure | undefined> {
@@ -108,8 +130,8 @@ export async function executeJiraMaintenanceMutation(operation: JiraMaintenanceM
   const refusal = await admit(request, input);
   if (refusal !== undefined) return refusal;
   if (check) return { ok: true, receipt: {} };
-  const actor = await readSavedActor(request, input.actor);
-  if (!actor.ok) return actor;
+  const currentRefusal = await admit(request, input);
+  if (currentRefusal !== undefined) return currentRefusal;
   const effect = effectFor(input);
   const response = await request(effect.path, effect.method, undefined, effect.expect);
   if (!response.ok) return { ...dispatchFailure(response), receipt };

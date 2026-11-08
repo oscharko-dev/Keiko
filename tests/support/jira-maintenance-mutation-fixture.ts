@@ -22,13 +22,13 @@ interface MaintenanceCase {
 }
 /** Independent native paths/query/status literals; no expected request is derived from product code. */
 export const MAINTENANCE_MUTATION_FIXTURE_CASES = [
-  { name: "jira.request-cluster-index-snapshot", args: { ...COMMON, expectedNode: MAINTENANCE_NODE_REVIEW }, method: "PUT", path: "cluster/index-snapshot/node-a", status: 200, receipt: { userKey: ACTOR, nodeId: "node-a" } },
+  { name: "jira.request-cluster-index-snapshot", args: { ...COMMON, expectedNode: { ...MAINTENANCE_NODE_REVIEW, alive: true } }, method: "PUT", path: "cluster/index-snapshot/node-a", status: 200, receipt: { userKey: ACTOR, nodeId: "node-a" } },
   { name: "jira.delete-cluster-node", args: { ...COMMON, expectedNode: { ...MAINTENANCE_NODE_REVIEW, state: "OFFLINE" } }, method: "DELETE", path: "cluster/node/node-a", status: 204, receipt: { userKey: ACTOR, nodeId: "node-a" } },
   { name: "jira.mark-cluster-node-offline", args: { ...COMMON, expectedNode: MAINTENANCE_NODE_REVIEW }, method: "PUT", path: "cluster/node/node-a/offline", status: 200, receipt: { userKey: ACTOR, nodeId: "node-a" } },
-  { name: "jira.approve-cluster-upgrade", args: { ...COMMON, expectedClusterState: MAINTENANCE_CLUSTER_REVIEW }, method: "POST", path: "cluster/zdu/approve", status: 200, receipt: { userKey: ACTOR } },
+  { name: "jira.approve-cluster-upgrade", args: { ...COMMON, expectedClusterState: { ...MAINTENANCE_CLUSTER_REVIEW, state: "READY_TO_RUN_UPGRADE_TASKS" } }, method: "POST", path: "cluster/zdu/approve", status: 200, receipt: { userKey: ACTOR } },
   { name: "jira.cancel-cluster-upgrade", args: { ...COMMON, expectedClusterState: MAINTENANCE_CLUSTER_REVIEW }, method: "POST", path: "cluster/zdu/cancel", status: 201, receipt: { userKey: ACTOR } },
-  { name: "jira.retry-cluster-upgrade", args: { ...COMMON, expectedClusterState: MAINTENANCE_CLUSTER_REVIEW }, method: "POST", path: "cluster/zdu/retryUpgrade", status: 200, receipt: { userKey: ACTOR } },
-  { name: "jira.start-cluster-upgrade", args: { ...COMMON, expectedClusterState: MAINTENANCE_CLUSTER_REVIEW }, method: "POST", path: "cluster/zdu/start", status: 201, receipt: { userKey: ACTOR } },
+  { name: "jira.retry-cluster-upgrade", args: { ...COMMON, expectedClusterState: { ...MAINTENANCE_CLUSTER_REVIEW, state: "UPGRADE_TASKS_FAILED" } }, method: "POST", path: "cluster/zdu/retryUpgrade", status: 200, receipt: { userKey: ACTOR } },
+  { name: "jira.start-cluster-upgrade", args: { ...COMMON, expectedClusterState: { ...MAINTENANCE_CLUSTER_REVIEW, state: "STABLE" } }, method: "POST", path: "cluster/zdu/start", status: 201, receipt: { userKey: ACTOR } },
   { name: "jira.create-index-snapshot", args: { ...COMMON, expectedRunning: false }, method: "POST", path: "index-snapshot", status: 202, receipt: { userKey: ACTOR } },
   { name: "jira.start-reindex", args: { ...COMMON, expectedReindex: MAINTENANCE_REINDEX_REVIEW, type: "BACKGROUND_PREFERRED", ...FLAGS }, method: "POST", path: "reindex?type=BACKGROUND_PREFERRED&indexComments=false&indexChangeHistory=true&indexWorklogs=false", status: 202, receipt: { userKey: ACTOR } },
   { name: "jira.reindex-issues", args: { ...COMMON, expectedIssues: [{ issueId: "10001", issueKey: "SYN-1" }, { issueId: "9223372036854775807", issueKey: "SYN-2" }], ...FLAGS }, method: "POST", path: "reindex/issue?issueId=10001&issueId=9223372036854775807&indexComments=false&indexChangeHistory=true&indexWorklogs=false", status: 200, receipt: { userKey: ACTOR, issueIds: ["10001", "9223372036854775807"] } },
@@ -38,8 +38,8 @@ export const MAINTENANCE_MUTATION_FIXTURE_CASES = [
 
 export function maintenanceMutationFixture(selected: MaintenanceCase) {
   const actor = { key: ACTOR, name: "operator" };
-  let nodes: unknown[] = [{ ...MAINTENANCE_NODE_REVIEW, state: selected.name === "jira.delete-cluster-node" ? "OFFLINE" : "ACTIVE" }];
-  let cluster: unknown = structuredClone(MAINTENANCE_CLUSTER_REVIEW);
+  let nodes: unknown[] = [structuredClone(selected.args.expectedNode ?? MAINTENANCE_NODE_REVIEW)];
+  let cluster: unknown = structuredClone(selected.args.expectedClusterState ?? MAINTENANCE_CLUSTER_REVIEW);
   let reindex: unknown = { type: "BACKGROUND", currentProgress: 100, success: true, finishTime: "native-finished" };
   let upgrade: unknown = { outcome: "SUCCESS", duration: 0, startTime: "native-start", message: "" };
   let snapshot: unknown = { running: false };

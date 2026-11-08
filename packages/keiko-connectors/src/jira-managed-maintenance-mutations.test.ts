@@ -4,6 +4,7 @@ import { MAINTENANCE_MUTATION_FIXTURE_CASES as CASES, MAINTENANCE_NODE_REVIEW as
 import { executeJiraMaintenanceMutation as execute, isJiraMaintenanceMutation } from "./jira-managed-maintenance-mutations.js";
 import { JiraAcknowledgedMutationError } from "./jira-mutation-failure.js";
 import { maintenanceReceiptFits, parseMaintenanceInput } from "./jira-maintenance-mutation-values.js";
+import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 
 describe("one-effect reviewed maintenance operations", () => {
   it.each(CASES)("retains $name context but never confirms completed effects", async (selected) => {
@@ -109,8 +110,66 @@ describe("native state and exact identity maintenance admission", () => {
   it("preserves unfamiliar observed cluster states without inventing transition eligibility", async () => {
     const selected = CASES[3]; const native = maintenanceMutationFixture(selected);
     const expected = { ...CLUSTER, state: "FUTURE_NATIVE_CODE" }; native.setCluster(expected);
-    expect(await execute(selected.name, { ...selected.args, expectedClusterState: expected }, native.request)).toMatchObject({ ok: false, reason: "unavailable" });
+    expect(await execute(selected.name, { ...selected.args, expectedClusterState: expected }, native.request)).toMatchObject({ ok: false, reason: "conflict" });
+    expect(native.snapshot()).toMatchObject({ effects: 0 });
+    expect(native.calls.every((call) => call.method === "GET")).toBe(true);
+  });
+  it.each([
+    { selected: CASES[3], state: "MIXED", required: "READY_TO_RUN_UPGRADE_TASKS" },
+    { selected: CASES[4], state: "RUNNING_UPGRADE_TASKS", required: "READY_TO_UPGRADE" },
+    { selected: CASES[5], state: "STABLE", required: "UPGRADE_TASKS_FAILED" },
+    { selected: CASES[6], state: "READY_TO_UPGRADE", required: "STABLE" },
+  ])("refuses a matching but illegal $selected.name pre-state $state", async ({ selected, state, required }) => {
+    for (const check of [true, false]) {
+      const native = maintenanceMutationFixture(selected);
+      const expected = { ...CLUSTER, state }; native.setCluster(expected);
+      const result = await execute(selected.name, { ...selected.args, expectedClusterState: expected }, native.request, check);
+      expect(result).toMatchObject({ ok: false, reason: "conflict" });
+      if (result.ok) throw new TypeError("Expected local transition refusal");
+      expect(result.detail?.messages?.join(" ")).toContain(required);
+      expect(native.snapshot()).toMatchObject({ effects: 0 });
+      expect(native.calls.every((call) => call.method === "GET")).toBe(true);
+    }
+  });
+  it.each([{ state: "OFFLINE", alive: true }, { state: "ACTIVE", alive: false }])("refuses an unavailable snapshot source $state/$alive", async (state) => {
+    const selected = CASES[0]; const native = maintenanceMutationFixture(selected);
+    const expected = { ...NODE, ...state }; native.setNodes([expected]);
+    expect(await execute(selected.name, { ...selected.args, expectedNode: expected }, native.request)).toMatchObject({ ok: false, reason: "conflict" });
+    expect(native.snapshot()).toMatchObject({ effects: 0 });
+    expect(native.calls.every((call) => call.method === "GET")).toBe(true);
+  });
+  it.each([0, 100])("requires native finishTime even with progress %s or success true", async (currentProgress) => {
+    const selected = CASES[8]; const native = maintenanceMutationFixture(selected);
+    const current = { type: "BACKGROUND", currentProgress, success: true }; native.setReindex(current);
+    expect(await execute(selected.name, { ...selected.args, expectedReindex: { taskState: "observed", ...current } }, native.request))
+      .toMatchObject({ ok: false, reason: "conflict" });
+    expect(native.snapshot()).toMatchObject({ effects: 0 });
+    expect(native.calls.every((call) => call.method === "GET")).toBe(true);
+  });
+  it("allows a finished failed native task without claiming the new reindex completed", async () => {
+    const selected = CASES[8]; const native = maintenanceMutationFixture(selected);
+    const current = { type: "BACKGROUND", currentProgress: 0, success: false, finishTime: "2026-11-08T18:00:00Z" }; native.setReindex(current);
+    expect(await execute(selected.name, { ...selected.args, expectedReindex: { taskState: "observed", ...current } }, native.request))
+      .toMatchObject({ ok: false, reason: "unavailable" });
     expect(native.snapshot()).toMatchObject({ effects: 1 });
+  });
+  it("re-reads cluster eligibility before dispatch when the reviewed state becomes mixed", async () => {
+    const selected = CASES[4]; const native = maintenanceMutationFixture(selected); let reads = 0;
+    const request: JiraMutationRequest = async (path, method, body, codec) => {
+      if (path === "cluster/zdu/state" && ++reads === 2) native.setCluster({ ...CLUSTER, state: "MIXED" });
+      return native.request(path, method, body, codec);
+    };
+    expect(await execute(selected.name, selected.args, request)).toMatchObject({ ok: false, reason: "conflict" });
+    expect(reads).toBe(2); expect(native.snapshot()).toMatchObject({ effects: 0 });
+  });
+  it("does not dispatch when the second reindex observation is now running", async () => {
+    const selected = CASES[8]; const native = maintenanceMutationFixture(selected); let reads = 0;
+    const request: JiraMutationRequest = async (path, method, body, codec) => {
+      if (path === "reindex" && ++reads === 2) native.setReindex({ type: "BACKGROUND", currentProgress: 1, success: false });
+      return native.request(path, method, body, codec);
+    };
+    expect(await execute(selected.name, selected.args, request)).toMatchObject({ ok: false, reason: "conflict" });
+    expect(reads).toBe(2); expect(native.snapshot()).toMatchObject({ effects: 0 });
   });
   it("does not infer a snapshot from false running after asynchronous ACK", async () => {
     const selected = CASES[7]; const native = maintenanceMutationFixture(selected);

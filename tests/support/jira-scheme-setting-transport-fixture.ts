@@ -17,7 +17,7 @@ const WORKFLOW_READS = new Set([
   "workflow?workflowName=Second", "workflow?workflowName=Next",
 ]);
 const INSTANCE_READS = new Set([
-  "myself", "application-properties?key=jira.option.voting", "settings/columns", "serverInfo", "readonly-mode",
+  "myself", "application-properties?key=jira.option.voting", "settings/columns", "field", "serverInfo", "readonly-mode",
 ]);
 /** Independent fixed native targets and states; no route derives from the production registry. */
 export function schemeSettingTransportController(operation: string | undefined, actorKey = "synthetic-actor") {

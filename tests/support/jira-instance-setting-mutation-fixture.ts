@@ -22,9 +22,11 @@ export const INSTANCE_SETTING_FIXTURE_CASES = [
 export function instanceSettingMutationFixture() {
   const actor = { key: ACTOR, name: "operator" };
   const properties = new Map<string, unknown>([["jira.clone.prefix", "CLONE - "], ["jira.option.voting", "true"], ["jira.option.watching", "true"], ["jira.option.timetracking", "false"]]);
-  const state: { columns: string[]; baseUrl: unknown; enabled: unknown; message: string } = {
-    columns: ["issuekey", "summary"], baseUrl: "http://legacy.synthetic.invalid/jira", enabled: false, message: "Existing banner",
+  const state: { columns: string[]; baseUrl: unknown; enabled: unknown; message: string; endTime: string; timeZone: string } = {
+    columns: ["issuekey", "summary"], baseUrl: "http://legacy.synthetic.invalid/jira", enabled: false,
+    message: "Existing banner", endTime: "2026-11-09T18:00", timeZone: "Europe/Berlin",
   };
+  const fields: unknown[] = [{ id: "issuekey", name: "Key", navigable: true }, { id: "summary", name: "Summary", navigable: true }];
   const controls = { lostAck: false, denyReadback: false, throwReadback: false, wrongReadback: false, propertyArray: false,
     wrongPropertyKey: false, duplicateProperty: false, actorChanges: false, acknowledgementStatus: 204 };
   const calls: { path: string; method: string; body: unknown; expect: unknown }[] = [];
@@ -39,9 +41,11 @@ export function instanceSettingMutationFixture() {
     }
     if (url.pathname === "/settings/columns") return { ok: true, status: 200, body: undefined,
       items: (wrote && controls.wrongReadback ? ["summary"] : state.columns).map((value) => ({ value, label: "Native label" })) };
+    if (url.pathname === "/field") return { ok: true, status: 200, body: undefined, items: structuredClone(fields) };
     if (url.pathname === "/serverInfo") return ok({ version: "11.3.3", versionNumbers: [11, 3, 3], deploymentType: "Data Center",
       baseUrl: wrote && controls.wrongReadback ? "https://other.synthetic.invalid" : state.baseUrl });
-    if (url.pathname === "/readonly-mode") return ok({ enabled: wrote && controls.wrongReadback ? false : state.enabled, message: state.message });
+    if (url.pathname === "/readonly-mode") return ok({ enabled: wrote && controls.wrongReadback ? false : state.enabled,
+      message: state.message, endTime: state.endTime, timeZone: state.timeZone });
     throw new TypeError("Unexpected synthetic instance setting read");
   }
   function effect(url: URL, body: Parameters<JiraMutationRequest>[2]): AtlassianWriteHttpOutcome {
@@ -67,7 +71,8 @@ export function instanceSettingMutationFixture() {
     if (method === "GET") return read(url);
     assert.equal(method, "PUT"); return effect(url, body);
   };
-  return { request, calls, controls, actor, properties, state,
+  return { request, calls, controls, actor, properties, state, fields,
     snapshot: (): CatalogJsonObject => ({ columns: [...state.columns], baseUrl: typeof state.baseUrl === "string" ? state.baseUrl : null,
-      enabled: typeof state.enabled === "boolean" ? state.enabled : null, banner: state.message, voting: String(properties.get("jira.option.voting")) }) };
+      enabled: typeof state.enabled === "boolean" ? state.enabled : null, banner: state.message, endTime: state.endTime,
+      timeZone: state.timeZone, voting: String(properties.get("jira.option.voting")) }) };
 }

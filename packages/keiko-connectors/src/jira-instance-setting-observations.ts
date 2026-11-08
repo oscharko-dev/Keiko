@@ -1,11 +1,14 @@
+import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { asRecord } from "./atlassian-sync-classify.js";
 import { jiraReadOnlyProjection } from "./jira-configuration-values.js";
 import { jiraObservedInstanceBaseUrl } from "./jira-instance-base-url-value.js";
 import { projectJiraApplicationValue } from "./jira-managed-application-settings.js";
 import { projectJiraFilterColumnState } from "./jira-managed-column-reads.js";
+import { jiraFieldDirectoryProjection } from "./jira-managed-field-directory.js";
+import { projectJiraCollection } from "./jira-managed-metadata.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { dispatchFailure } from "./jira-mutation-failure.js";
-import { INSTANCE_SETTING_MALFORMED, instanceSettingRefusal, type InstanceSettingInput, type InstanceSettingObservation } from "./jira-instance-setting-mutation-values.js";
+import { INSTANCE_SETTING_MALFORMED, instanceSettingRefusal, type InstanceSettingFailure, type InstanceSettingInput, type InstanceSettingObservation } from "./jira-instance-setting-mutation-values.js";
 
 export type InstanceSettingValue = string | boolean | readonly string[];
 async function property(request: JiraMutationRequest, key: string): Promise<InstanceSettingObservation<string>> {
@@ -27,6 +30,18 @@ async function columns(request: JiraMutationRequest): Promise<InstanceSettingObs
   if (!state.ok) return state;
   return state.columns === undefined ? instanceSettingRefusal("The complete system default column sequence is unavailable. No user/filter layout is substituted.", "unavailable")
     : { ok: true, value: Object.freeze([...state.columns]) };
+}
+/** Eligibility is an observed native flag, never inferred from a column's label or current presence. */
+export async function admitJiraSystemColumns(request: JiraMutationRequest, desired: readonly string[]): Promise<InstanceSettingFailure | undefined> {
+  const response = await request("field", "GET", undefined, "json-array");
+  if (!response.ok) return dispatchFailure(response);
+  if (response.status !== 200 || response.items === undefined) return INSTANCE_SETTING_MALFORMED;
+  if (response.items.length > TOOL_CATALOG_LIMITS.maxArrayItems) return { ok: false, reason: "bounds-exceeded" };
+  const fields = projectJiraCollection(response.items, TOOL_CATALOG_LIMITS.maxArrayItems, jiraFieldDirectoryProjection, "id");
+  if (fields === undefined) return INSTANCE_SETTING_MALFORMED;
+  const navigable = new Set(fields.filter((field) => field.navigable === true).map((field) => field.id));
+  return desired.every((id) => navigable.has(id)) ? undefined
+    : instanceSettingRefusal("Every requested system column must match an observed field with navigable:true in the native field catalog. Remove unknown or non-navigable IDs and review the complete ordered column sequence; missing/null eligibility is not permission.");
 }
 async function baseUrl(request: JiraMutationRequest): Promise<InstanceSettingObservation<string>> {
   const response = await request("serverInfo", "GET", undefined, "json");

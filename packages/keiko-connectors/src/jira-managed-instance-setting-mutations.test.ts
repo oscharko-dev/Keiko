@@ -94,16 +94,75 @@ describe("reviewed instance configuration writes", () => {
     expect(await execute(CASES[1].name, { ...CASES[1].args, expectedColumns: ["summary", "issuekey"] }, f.request)).toMatchObject({ ok: false, reason: "conflict" });
     expect(f.calls.every(({ method, path }) => method === "GET" && !path.includes("filter/") && !path.includes("user/columns"))).toBe(true);
   });
+  it.each([false, null, undefined])("refuses requested columns without explicit navigable:true (%j)", async (navigable) => {
+    for (const check of [true, false]) {
+      const f = instanceSettingMutationFixture();
+      f.fields.splice(1, 1, { id: "summary", name: "Summary", ...(navigable === undefined ? {} : { navigable }) });
+      expect(await execute(CASES[1].name, CASES[1].args, f.request, check)).toMatchObject({ ok: false, reason: "field-validation" });
+      expect(f.calls).toContainEqual({ path: "field", method: "GET", body: undefined, expect: "json-array" });
+      expect(f.calls.every(({ method }) => method === "GET")).toBe(true);
+      expect(f.state.columns).toEqual(["issuekey", "summary"]);
+    }
+  });
+  it("refuses unknown system-column IDs rather than trusting a syntactically valid name", async () => {
+    const f = instanceSettingMutationFixture();
+    expect(await execute(CASES[1].name, { ...CASES[1].args, columns: ["unknown"] }, f.request)).toMatchObject({ ok: false, reason: "field-validation" });
+    expect(f.calls.every(({ method }) => method === "GET")).toBe(true);
+  });
+  it.each([
+    { extra: { id: "summary", name: "Duplicate", navigable: true } },
+    { extra: { id: "unrelated", name: "Malformed", navigable: "true" } },
+  ])("refuses a malformed complete field catalog before any write: $extra.name", async ({ extra }) => {
+    const f = instanceSettingMutationFixture(); f.fields.push(extra);
+    expect(await execute(CASES[1].name, CASES[1].args, f.request)).toMatchObject({ ok: false, reason: "malformed-payload" });
+    expect(f.calls.every(({ method }) => method === "GET")).toBe(true);
+  });
+  it("never uses a truncated field-catalog prefix as eligibility evidence", async () => {
+    const f = instanceSettingMutationFixture();
+    f.fields.push(...Array.from({ length: 999 }, (_, index) => ({ id: `customfield_${index + 1}`, name: "Field", navigable: true })));
+    expect(await execute(CASES[1].name, CASES[1].args, f.request)).toMatchObject({ ok: false, reason: "bounds-exceeded" });
+    expect(f.calls.every(({ method }) => method === "GET")).toBe(true);
+  });
+  it("preserves field-catalog permission refusal without a configuration write", async () => {
+    const f = instanceSettingMutationFixture();
+    const request: JiraMutationRequest = (path, method, body, codec) => path === "field"
+      ? Promise.resolve({ ok: false, reason: "permission-denied", httpStatus: 403 }) : f.request(path, method, body, codec);
+    expect(await execute(CASES[1].name, CASES[1].args, request)).toMatchObject({ ok: false, reason: "permission-denied" });
+    expect(f.calls.every(({ method }) => method === "GET")).toBe(true);
+  });
+  it("rechecks field eligibility before dispatch and refuses newly non-navigable targets", async () => {
+    const f = instanceSettingMutationFixture(); let reads = 0;
+    const request: JiraMutationRequest = (path, method, body, codec) => {
+      if (path === "field" && ++reads === 2) f.fields.splice(1, 1, { id: "summary", name: "Summary", navigable: false });
+      return f.request(path, method, body, codec);
+    };
+    expect(await execute(CASES[1].name, CASES[1].args, request)).toMatchObject({ ok: false, reason: "field-validation" });
+    expect(reads).toBe(2); expect(f.calls.every(({ method }) => method === "GET")).toBe(true);
+  });
   it.each([null, undefined, "false"])("refuses an unobserved read-only Boolean %j", async (value) => {
     const f = instanceSettingMutationFixture(); f.state.enabled = value;
     expect(await execute(CASES[3].name, CASES[3].args, f.request)).toMatchObject({ ok: false, reason: "unavailable" });
     expect(f.calls.every(({ method }) => method === "GET")).toBe(true);
   });
-  it("can disable an observed flag without changing banner settings or claiming enforcement", async () => {
-    const f = instanceSettingMutationFixture(); f.state.enabled = true;
-    const result = await execute(CASES[3].name, { ...CASES[3].args, expectedEnabled: true, enabled: false }, f.request);
-    expect(result).toEqual({ ok: true, receipt: { userKey: "synthetic-actor", readOnlyEnabled: false } });
-    expect(f.state.message).toBe("Existing banner"); expect(result.receipt).not.toHaveProperty("writesBlocked");
+  it.each([true, false])("sets only enabled=%s and preserves native banner configuration without claiming enforcement", async (enabled) => {
+    const f = instanceSettingMutationFixture(); f.state.enabled = !enabled;
+    const result = await execute(CASES[3].name, { ...CASES[3].args, expectedEnabled: !enabled, enabled }, f.request);
+    expect(result).toEqual({ ok: true, receipt: { userKey: "synthetic-actor", readOnlyEnabled: enabled } });
+    expect(f.calls.filter(({ method }) => method === "PUT")).toEqual([{ path: "readonly-mode", method: "PUT", body: { enabled }, expect: "none" }]);
+    expect(f.snapshot()).toMatchObject({ banner: "Existing banner", endTime: "2026-11-09T18:00", timeZone: "Europe/Berlin" });
+    expect(result.receipt).not.toHaveProperty("writesBlocked");
+    expect(result.receipt).not.toHaveProperty("message");
+  });
+  it.each(["message", "endTime", "timeZone"])("never synthesizes the native empty-string clear/reset command for %s", async (field) => {
+    const f = instanceSettingMutationFixture();
+    expect(await execute(CASES[3].name, { ...CASES[3].args, [field]: "" }, f.request)).toMatchObject({ ok: false, reason: "field-validation" });
+    expect(f.calls).toEqual([]);
+  });
+  it("preserves observed empty banner fields as they are while changing only the enabled flag", async () => {
+    const f = instanceSettingMutationFixture(); f.state.message = ""; f.state.endTime = ""; f.state.timeZone = "";
+    expect(await execute(CASES[3].name, CASES[3].args, f.request)).toEqual({ ok: true, receipt: CASES[3].receipt });
+    expect(f.snapshot()).toMatchObject({ banner: "", endTime: "", timeZone: "" });
+    expect(f.calls.find(({ method }) => method === "PUT")?.body).toEqual({ enabled: true });
   });
   it("keeps a matching base URL write unconfirmed and never routes to its target", async () => {
     const f = instanceSettingMutationFixture(); const result = await execute(CASES[2].name, CASES[2].args, f.request);
