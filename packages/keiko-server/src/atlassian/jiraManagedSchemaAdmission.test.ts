@@ -160,3 +160,27 @@ it.each(["string", "null", "array", null] as const)(
       ).toThrow("invalid-schema");
   },
 );
+
+// Live limit run 2026-11-08: a model sent `projectTemplateKey: ""`; native Jira answered 500
+// ("Invalid module key specified") and left the effect uncertain. Empty identifiers are refused
+// before dispatch so the model receives a correctable validation error instead.
+it.each([
+  ["jira.create-project", "key"],
+  ["jira.create-project", "name"],
+  ["jira.create-project", "lead"],
+  ["jira.create-project", "projectTypeKey"],
+  ["jira.create-project", "projectTemplateKey"],
+  ["jira.update-project", "projectIdOrKey"],
+  ["jira.update-project", "name"],
+  ["jira.update-project", "lead"],
+])("refuses an empty %s %s identifier before any Jira dispatch", (name, field) => {
+  const declaration = jiraMutationDeclarations().find((entry) => entry.name === name);
+  if (declaration === undefined) throw new TypeError(`Missing ${name} declaration`);
+  const descriptor = createJiraOperationContract(declaration).declaration.descriptor;
+  const valid: CatalogJsonObject =
+    name === "jira.create-project"
+      ? { key: "LIM1", name: "Limit", lead: "keiko-admin", projectTypeKey: "software" }
+      : { projectIdOrKey: "LIM1", name: "Limit" };
+  expect(() => validateToolArguments(valid, descriptor)).not.toThrow();
+  expect(() => validateToolArguments({ ...valid, [field]: "" }, descriptor)).toThrow();
+});

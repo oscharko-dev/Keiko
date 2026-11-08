@@ -150,7 +150,7 @@ import {
   createToolDescriptor,
   createToolRef,
 } from "@oscharko-dev/keiko-tool-catalog";
-import { object, text } from "./jiraManagedSchemas.js";
+import { identifier, object, text } from "./jiraManagedSchemas.js";
 import {
   JIRA_ISSUE_LINKS_MAX,
   JIRA_METADATA_MAX_UPDATES,
@@ -569,11 +569,11 @@ const DEFINITIONS: Readonly<
       "Create a Jira project using native supported options. Validate its key and accessible project type first; Jira administration permission is required. Return independently verified project identity. A partial or uncertain creation must never be repeated automatically.",
     input: object(
       {
-        key: text(64),
-        name: text(255),
-        lead: text(JIRA_PROJECT_LEAD_MAX_CHARS),
-        projectTypeKey: text(64),
-        projectTemplateKey: text(255),
+        key: identifier(64),
+        name: identifier(255),
+        lead: identifier(JIRA_PROJECT_LEAD_MAX_CHARS),
+        projectTypeKey: identifier(64),
+        projectTemplateKey: identifier(255),
         description: text(32768),
         url: text(JIRA_PROJECT_URL_MAX_CHARS),
         assigneeType: { type: "string", enum: ["PROJECT_LEAD", "UNASSIGNED"] },
@@ -586,9 +586,9 @@ const DEFINITIONS: Readonly<
       "Update ordinary Jira project metadata and independently read back the requested fields. Supply at least one change. Project key, project type and scheme changes are not supported by this operation.",
     input: object(
       {
-        projectIdOrKey: text(64),
-        name: text(255),
-        lead: text(JIRA_PROJECT_LEAD_MAX_CHARS),
+        projectIdOrKey: identifier(64),
+        name: identifier(255),
+        lead: identifier(JIRA_PROJECT_LEAD_MAX_CHARS),
         description: text(32768),
         url: text(JIRA_PROJECT_URL_MAX_CHARS),
         assigneeType: { type: "string", enum: ["PROJECT_LEAD", "UNASSIGNED"] },
