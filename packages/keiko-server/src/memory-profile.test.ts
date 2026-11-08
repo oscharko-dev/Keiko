@@ -123,7 +123,7 @@ describe("standingProfileForUser (#4228)", () => {
   it("is empty for a person without standing facts", () => {
     const profile = standingProfileForUser(vault(), USER, NOW);
     expect(profile.entries).toEqual([]);
-    expect(standingProfileWire(profile)).toEqual({ entries: [], tokens: 0 });
+    expect(standingProfileWire(profile)).toEqual({ entries: [], tokens: 0, droppedCount: 0 });
   });
 });
 

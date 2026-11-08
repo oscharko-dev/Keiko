@@ -58,12 +58,15 @@ export interface StandingProfileEntry {
   readonly text: string;
   readonly tokens: number;
   readonly pinned: boolean;
+  /** True when the fact was longer than one entry may be; retrieval may still supply it whole. */
+  readonly clipped: boolean;
 }
 
 export type StandingProfileDropReason =
   | "not-private"
   | "not-standing-type"
   | "not-accepted"
+  | "not-public"
   | "suppressed"
   | "excluded"
   | "empty"
@@ -83,6 +86,8 @@ function ineligibility(
 ): StandingProfileDropReason | undefined {
   if (record.scope.kind !== "user") return "not-private";
   if (record.status !== "accepted") return "not-accepted";
+  // A confidential or restricted fact never rides along with every answer, pinned or not.
+  if (record.provenance.sensitivity !== "public") return "not-public";
   if (isMemorySuppressed(record, nowMs, staleConfidenceThreshold).suppressed) return "suppressed";
   if (record.pinned) return undefined;
   if (!STANDING_PROFILE_TYPES.includes(record.type)) return "not-standing-type";
@@ -177,7 +182,15 @@ export function selectStandingProfile(
     if (text.length === 0) drop("empty");
     else if (tokens + cost > caps.maxTokens) drop("token-cap");
     else {
-      entries.push({ id: record.id, type: record.type, text, tokens: cost, pinned: record.pinned });
+      const clipped = text !== record.body.replace(/\s+/gu, " ").trim();
+      entries.push({
+        id: record.id,
+        type: record.type,
+        text,
+        tokens: cost,
+        pinned: record.pinned,
+        clipped,
+      });
       tokens += cost;
     }
   }

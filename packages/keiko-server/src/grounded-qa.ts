@@ -49,6 +49,7 @@ import {
   logGroundedPromptSelection,
   logChatResponseMessage,
   type ChatResponseMemoryActivity,
+  memorySelectionLogFields,
 } from "./chat-activity.js";
 import {
   citationBehaviourFor,
@@ -3858,6 +3859,7 @@ function finalGroundedMemoryActivity(
   ).length;
   const requestedDisposition = markerCount > 0 ? "included" : "excluded";
   return {
+    ...memorySelectionLogFields(prepared.memory?.result),
     uncitedMemoryContextMarkerCount: markerCount,
     memoryContextDisposition:
       prepared.input.memory?.enabled !== true ? "not-requested" : requestedDisposition,

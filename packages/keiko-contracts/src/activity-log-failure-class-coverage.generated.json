@@ -4372,6 +4372,12 @@
               "required": true
             },
             {
+              "name": "profileDroppedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "profileEntryCount",
               "type": "integer",
               "dataClass": "count",
@@ -4571,9 +4577,39 @@
           "analyzerProjection": "timeline",
           "safeContextFields": [
             {
+              "name": "belowFloorMemoryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "memoryContextDisposition",
               "type": "string",
               "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "profileDroppedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "profileEntryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "profileTokens",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "retrievedMemoryCount",
+              "type": "integer",
+              "dataClass": "count",
               "required": false
             },
             {

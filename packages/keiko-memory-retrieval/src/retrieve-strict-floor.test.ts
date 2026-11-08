@@ -56,6 +56,7 @@ const PAIRS: readonly (readonly [string, string, boolean])[] = [
   ["Bitte schreib mir eine E-Mail an den Kunden.", "Mein Hund heißt Bello.", false],
   ["Erkläre mir Docker.", "Ich nutze immer Numbers für Tabellen.", false],
   ["Wann ist das Meeting?", "Wann immer möglich, antworte kurz.", false],
+  ["Erkläre etwas über Rust.", "Ich schreibe über Kafka.", false],
   ["Could you please help me with this?", "You should always answer in short sentences.", false],
 ];
 

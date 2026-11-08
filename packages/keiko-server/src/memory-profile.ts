@@ -104,5 +104,6 @@ export function standingProfileWire(profile: StandingProfile): ConversationStand
   return {
     entries: profile.entries.map((entry) => ({ memoryId: String(entry.id), text: entry.text })),
     tokens: profile.tokens,
+    droppedCount: (profile.dropped["entry-cap"] ?? 0) + (profile.dropped["token-cap"] ?? 0),
   };
 }

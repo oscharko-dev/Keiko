@@ -100,7 +100,12 @@ import type {
   MemoryRecord,
   MemoryScope,
 } from "@oscharko-dev/keiko-contracts/memory";
-import { retrieveMemoryContext, type StandingProfile } from "@oscharko-dev/keiko-memory-retrieval";
+import {
+  DEFAULT_BUDGET_TOKENS,
+  DEFAULT_STANDING_PROFILE_CAPS,
+  retrieveMemoryContext,
+  type StandingProfile,
+} from "@oscharko-dev/keiko-memory-retrieval";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import {
   isMaintenanceDue,
@@ -1465,7 +1470,12 @@ async function retrieveChatMemory(
       strictRelevanceFloor: true,
       maxIncluded: CHAT_MAX_RETRIEVED_MEMORIES,
       ...(profile.entries.length > 0
-        ? { excludeMemoryIds: new Set(profile.entries.map((entry) => entry.id)) }
+        ? {
+            // A clipped fact stays retrievable, so a related question can still get it whole.
+            excludeMemoryIds: new Set(
+              profile.entries.filter((entry) => !entry.clipped).map((entry) => entry.id),
+            ),
+          }
         : {}),
       nowMs,
     },
@@ -1493,13 +1503,17 @@ export async function buildMemoryResult(
   }
   const nowMs = Date.now();
   // The profile is part of the person's memory budget; retrieval gets what it leaves.
-  const profile = standingProfileForUser(vault, context.userId, nowMs);
+  const memoryBudget = budgetTokens ?? DEFAULT_BUDGET_TOKENS;
+  const profile = standingProfileForUser(vault, context.userId, nowMs, {
+    ...DEFAULT_STANDING_PROFILE_CAPS,
+    maxTokens: Math.min(DEFAULT_STANDING_PROFILE_CAPS.maxTokens, memoryBudget),
+  });
   const retrieval = await retrieveChatMemory(
     deps,
     vault,
     scopes,
     request.content,
-    budgetTokens === undefined ? undefined : Math.max(0, budgetTokens - profile.tokens),
+    Math.max(0, memoryBudget - profile.tokens),
     nowMs,
     profile,
   );

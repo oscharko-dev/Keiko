@@ -1086,6 +1086,8 @@ export interface ConversationStandingProfileEntryWire {
 export interface ConversationStandingProfileWire {
   readonly entries: readonly ConversationStandingProfileEntryWire[];
   readonly tokens: number;
+  /** Eligible facts the profile's entry or token cap left out. */
+  readonly droppedCount?: number;
 }
 
 export interface ConversationMemoryContextWire {

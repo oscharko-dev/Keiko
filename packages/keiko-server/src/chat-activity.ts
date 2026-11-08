@@ -23,7 +23,24 @@ export type ChatRejectionReason = "readiness" | "generation" | "grounding-scope"
 // `not-ready` when a check ran and failed.
 export type ChatReadinessObservation = "unobserved" | "not-ready";
 
-export interface ChatResponseMemoryActivity {
+// #4228: the standing profile and the memories retrieved for an answer, as counts only.
+interface MemorySelectionLogFields {
+  readonly profileEntryCount?: number;
+  readonly profileTokens?: number;
+  readonly profileDroppedCount?: number;
+  readonly retrievedMemoryCount?: number;
+  readonly belowFloorMemoryCount?: number;
+}
+
+const MEMORY_SELECTION_LOG_FIELDS = {
+  profileEntryCount: { type: "integer", dataClass: "count", required: false },
+  profileTokens: { type: "integer", dataClass: "count", required: false },
+  profileDroppedCount: { type: "integer", dataClass: "count", required: false },
+  retrievedMemoryCount: { type: "integer", dataClass: "count", required: false },
+  belowFloorMemoryCount: { type: "integer", dataClass: "count", required: false },
+} as const;
+
+export interface ChatResponseMemoryActivity extends MemorySelectionLogFields {
   readonly uncitedMemoryContextMarkerCount: number;
   readonly memoryContextDisposition: "included" | "excluded" | "not-requested";
 }
@@ -165,6 +182,7 @@ const CHAT_RESPONSE_MESSAGE_OPERATION = defineActivityLogOperation({
   emitter: "chat-activity.logChatResponseMessage",
   fields: {
     uncitedMemoryContextMarkerCount: { type: "integer", dataClass: "count", required: false },
+    ...MEMORY_SELECTION_LOG_FIELDS,
     memoryContextDisposition: {
       type: "string",
       dataClass: "closed-enum",
@@ -201,11 +219,7 @@ const CHAT_CONTEXT_SELECTED_OPERATION = defineActivityLogOperation({
     compactedHistoryMessages: { type: "integer", dataClass: "count", required: true },
     retainedHistoryMessages: { type: "integer", dataClass: "count", required: true },
     historyDocumentCandidates: { type: "integer", dataClass: "count", required: false },
-    // #4228: the standing profile and the memories retrieved for this answer, as counts only.
-    profileEntryCount: { type: "integer", dataClass: "count", required: false },
-    profileTokens: { type: "integer", dataClass: "count", required: false },
-    retrievedMemoryCount: { type: "integer", dataClass: "count", required: false },
-    belowFloorMemoryCount: { type: "integer", dataClass: "count", required: false },
+    ...MEMORY_SELECTION_LOG_FIELDS,
     tokensBefore: { type: "integer", dataClass: "count", required: true },
     tokensAfter: { type: "integer", dataClass: "count", required: true },
     tokensSaved: { type: "integer", dataClass: "count", required: true },
@@ -438,13 +452,6 @@ function selectedSkillLogFields(
 }
 
 /** Record the selection before dispatch so failed or cancelled turns retain their budget evidence. */
-interface MemorySelectionLogFields {
-  readonly profileEntryCount?: number;
-  readonly profileTokens?: number;
-  readonly retrievedMemoryCount?: number;
-  readonly belowFloorMemoryCount?: number;
-}
-
 /** Counts of the memory an answer received; nothing when memory was off for the turn. */
 export function memorySelectionLogFields(
   memory: ConversationMemoryResultWire | undefined,
@@ -453,6 +460,7 @@ export function memorySelectionLogFields(
   return {
     profileEntryCount: memory.context.profile?.entries.length ?? 0,
     profileTokens: memory.context.profile?.tokens ?? 0,
+    profileDroppedCount: memory.context.profile?.droppedCount ?? 0,
     retrievedMemoryCount: memory.context.memories.length,
     belowFloorMemoryCount: memory.context.belowFloorCount ?? 0,
   };

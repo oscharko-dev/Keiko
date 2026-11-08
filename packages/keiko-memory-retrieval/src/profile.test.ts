@@ -71,6 +71,31 @@ describe("selectStandingProfile", () => {
     });
   });
 
+  it("keeps confidential and restricted facts out, pinned or not", () => {
+    expect(
+      ids([
+        candidate({ id: "confidential", sensitivity: "confidential", pinned: true }),
+        candidate({ id: "restricted", sensitivity: "restricted" }),
+        candidate({ id: "public" }),
+      ]),
+    ).toEqual(["public"]);
+  });
+
+  it("marks a clipped fact so retrieval may still supply it whole", () => {
+    const profile = selectStandingProfile(
+      [
+        candidate({ id: "long", body: "eins zwei drei vier fünf sechs sieben" }, 1),
+        candidate({ id: "short", body: "Tabellen" }),
+      ],
+      NOW,
+      { maxEntries: 5, maxTokens: 100, entryMaxTokens: 4 },
+    );
+    expect(profile.entries.map((entry) => [entry.id, entry.clipped])).toEqual([
+      ["long", true],
+      ["short", false],
+    ]);
+  });
+
   it("lets a pinned fact in and keeps an unpinned, excluded fact out", () => {
     const fact = (pinned: boolean, tags: readonly string[]): StandingProfileCandidate =>
       candidate({ id: "tables", type: "episodic", pinned, tags });
