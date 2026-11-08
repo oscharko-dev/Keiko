@@ -1,7 +1,10 @@
 # Server mutation and Memory startup follow-up — #4321 / PR #4288
 
-This delivery starts at `4f23d5ed4`. All Vitest runs use the isolated Linux container
-`keiko-codex3-c4`, Node 24.18.0, with OS Keychain access disabled. No host Vitest,
+This delivery starts at `4f23d5ed4` and integrates feature-branch head `29b3857fc` without conflicts. All Vitest runs use the isolated Linux container
+`keiko-codex3-c4`, then `keiko-codex3-c4-recovery`, Node 24.18.0, with OS Keychain access disabled.
+After the machine-load instruction the verification container is limited to at most four CPUs,
+reduced to two CPUs for recovery and delivery. Subsequent heavy checks require a passing
+headroom check and run sequentially with at most four Vitest workers. No host Vitest,
 HOME override, schema rewrite, rebase or dev integration is involved.
 
 ## Baseline and bisect
@@ -43,6 +46,15 @@ manufacture a passing count. They remain separately identified integration depen
 | `atlassian/jiraOperationActivity.test.ts`          |                        1 | Correct the PR inventory to include the already restored local `jira.draft-batch`: three local reads and four composites. Native count, uniqueness, complete coverage and field bounds stay pinned.                                                                    |
 | `atlassian/jiraAvatarComposition.test.ts`          |                        1 | Use the advertised `Uint8Array` image input rather than a Vitest-specific Buffer comparison. Byte and authority assertions remain.                                                                                                                                     |
 
+The broad run also exposed two related pin conflicts. The PR had replaced the dev terminal
+identity assertion in `actionOutcomeActivity.test.ts` with a generic class. Its legacy inputs
+now retain the exact dev assertion; separately, expanded PR read inputs retain the bounded
+class. Digest, content exclusion and reconstruction assertions remain. The PR-only
+`httpPrivateIdentity.journal.test.ts` expected a settled result to become pending after recovery.
+It now pins the exact stored outcome and replay marker before and after re-admission, without
+a private actor receipt, executor call or extra native write. These 17 cases and unchanged
+write-route controls pass together: 275 tests, exit 0.
+
 The journal fix has an additional red-first proof on the actual base: settle an uncertain result,
 end the original turn, then replay the matching identity without redispatch. A changed actor or a
 new mutation remains refused, without a new record. Private receipts stay in the existing private
@@ -83,11 +95,113 @@ source declarations. ADR-0035 and ADR-0173 describe the same behavior.
 | Ended-turn journal replay (actual base control)                                  | exit 1                                                            | exit 0; no new dispatch and no identity widening                                             |
 | Actor control-character property (actual base control)                           | exit 1                                                            | exit 0; all control codes exercised                                                          |
 
+The merged Codex 4 permission-scheme test needed explicit non-null fixture references for
+strict TypeScript. Its assertions are unchanged.
+
 All existing Memory migration SQL, versions and ordering are unchanged. UI-store migrations
 v62–v77 are unchanged.
 
+## Completed measurements and remaining Server failures
+
+The combined package sweep passes 5,638 Connector tests and 262 Memory-vault tests. The additional
+Security sweep exposes nine inherited failures in `macos-keychain-withheld`,
+`secret-vault.resolve-once` and `secret-vault`; unchanged `4f23d5ed4` source reproduces all nine.
+Four depend on the lane's explicit keychain-withheld environment; five concern the pre-existing
+secret-vault path/refusal contract. Affected kernel-lock/CAS and OAuth/credential tests pass.
+
+UI coverage passes 14,269 tests with one skip in 726 files. The original nine-case updater
+producer also passes, including real BFF stop/restart; its unchanged freshness check passes.
+The recovery producer passes all nine cases in 2.2 minutes, regenerates all 17 artifacts, and
+its 14 captures were visually inspected. The Editor release-evidence checker passes against
+the rebuilt export without changing its numerical budget.
+
+The final whole Server sweep uses `--maxWorkers=4 --pool=forks` under the four-CPU ceiling.
+It reports 946 failed, 33,965 passed and 314 skipped tests over 1,317 files, with one worker OOM
+in the reserved `jiraManagedMutationIntegration` file. No final JSON is produced by that run.
+The entire suite is not repeated: only the aborted file runs again in four disjoint name groups,
+with one worker and JSON output. All 835 unique names are covered exactly once, with no missing
+or overlapping cases: 829 fail and six pass. The 17 terminal/private-journal pin conflicts above
+pass in their targeted follow-up.
+
+The combined receipt therefore contains **937 failed tests in 20 files**, 33,983 passed and
+314 skipped (35,234 tests), plus one Draft suite setup error that leaves 26 tests skipped.
+This is a combined measurement, not a claim of a second whole-suite run or a green PR.
+The remaining failures belong to the reserved Codex 2 scope (885), Draft/Grounding owned by
+Codex 1 (29), and container-boundary failures (23). The additional `postApplyVerification`
+container failure reproduces identically on untouched dev `b762563f1`: 11 pass, one fails,
+exit 1. Its pin is unchanged.
+
+| Remaining Server file                                         | Failed tests | Suite setup error |
+| ------------------------------------------------------------- | -----------: | ----------------- |
+| `atlassian/jiraChatAuthority.test.ts`                         |           32 | no                |
+| `atlassian/jiraChatToolTurn.test.ts`                          |            1 | no                |
+| `atlassian/jiraDraftBatchTool.test.ts`                        |           28 | no                |
+| `atlassian/jiraDraftInputContract.test.ts`                    |            0 | yes               |
+| `atlassian/jiraEmailTemplateDescriptors.test.ts`              |            4 | no                |
+| `atlassian/jiraEntityPropertyMutationDescriptors.test.ts`     |            1 | no                |
+| `atlassian/jiraManagedMutationIntegration.test.ts`            |          829 | no                |
+| `atlassian/jiraMonitoringDescriptors.test.ts`                 |            4 | no                |
+| `atlassian/jiraVersionLinkMutationDescriptors.test.ts`        |            1 | no                |
+| `chat-tool-runtime.test.ts`                                   |            1 | no                |
+| `coding-runtime/codingJiraCatalog.test.ts`                    |            7 | no                |
+| `coding-runtime/productionOpenCodeBackend.functional.test.ts` |            1 | no                |
+| `coding-runtime/secureWorkspaceTextRead.test.ts`              |           16 | no                |
+| `deps.test.ts`                                                |            1 | no                |
+| `editor/postApplyVerification.test.ts`                        |            1 | no                |
+| `editor/verificationExecution.test.ts`                        |            3 | no                |
+| `editor/verificationRuntimeTarget.test.ts`                    |            1 | no                |
+| `gitChangeSnapshotService.test.ts`                            |            1 | no                |
+| `grounded-jira-mixed.public-handler.test.ts`                  |            1 | no                |
+| `store/chatJiraBinding.test.ts`                               |            1 | no                |
+| `tool-catalog/catalogNonCodingConsumer.test.ts`               |            3 | no                |
+
+## Worktree recovery
+
+After the successful assembled package-surface check, the active worktree disappeared together
+with its Git registration. Signed commits and verification receipts remained available. The
+replacement detached worktree is locked. Its 48 analyzed text files were recovered from the
+successful local Sonar source snapshot; source formatting removes the API's extra terminal
+newline. UI sources match the signed checkpoint byte for byte. Generated registries and updater
+evidence are rebuilt by their original producers. No whole Server or UI coverage sweep is repeated
+for this recovery; relevant regression and type checks qualify the recovered source.
+
 ## Final verification
 
-Final command exit codes and the measured residual server-suite failures are recorded with the
-delivery after the complete implementation and integration checks. The two catalog dependencies
-above and the explicitly excluded environment suites must not be represented as repaired here.
+Commands below run inside the isolated container unless they invoke the host-side governor or
+the container-owning Sonar wrapper. Vitest uses `--maxWorkers=4 --pool=forks` after the machine-load
+instruction; the four matrix partitions use one worker. The complete Server sweep runs once.
+The two catalog dependencies above and the explicitly excluded environment suites are not
+represented as repaired here.
+
+| Command / scope                                                                            |   Exit | Measured result                                                                                                                      |
+| ------------------------------------------------------------------------------------------ | -----: | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Assigned dev controls on `b762563f1`                                                       |      0 | 166 passed; unchanged dev pins                                                                                                       |
+| Red-first Memory, ended-turn replay and actor-character controls                           |      1 | Each fails before its repair; detailed cases above                                                                                   |
+| Assigned repaired server/storage regression selection                                      |      0 | 2,631 passed                                                                                                                         |
+| Recovery `npx vitest run` over the nine affected regression files                          |      0 | 859 passed                                                                                                                           |
+| Recovery targeted UI Vitest, four files                                                    |      0 | 50 passed                                                                                                                            |
+| `npm run test:coverage:ui`                                                                 |      0 | 14,269 passed, one skipped                                                                                                           |
+| Combined Connector / Memory / Security Vitest sweep                                        |      1 | Connector 5,638 passed; Memory 262 passed; Security 1,552 passed and nine inherited failures, all nine reproduced on the actual base |
+| Whole Server Vitest sweep                                                                  |      1 | 946 failures and one worker OOM; completed and corrected by the disjoint/targeted measurements above                                 |
+| Four disjoint managed-mutation partitions                                                  | 1 each | All 835 names measured exactly once; 829 failed, six passed                                                                          |
+| Terminal outcome / private journal / unchanged write-route follow-up                       |      0 | 275 passed; combined residual Server count is 937 plus one suite setup error                                                         |
+| `postApplyVerification` unchanged dev control                                              |      1 | Identical container failure; 11 passed, one failed                                                                                   |
+| `npm run build:packages` immediately before delivery                                       |      0 | Recovered package graph builds                                                                                                       |
+| `npm run typecheck` immediately before delivery                                            |      0 | Root/package type checks pass                                                                                                        |
+| `node node_modules/@typescript/native/bin/tsc -p packages/keiko-ui/tsconfig.json --noEmit` |      0 | UI type check passes                                                                                                                 |
+| ESLint on all touched non-UI TypeScript, `--max-warnings=0`                                |      0 | No warnings                                                                                                                          |
+| `npm run lint --workspace @oscharko-dev/keiko-ui`                                          |      0 | No warnings                                                                                                                          |
+| `npm run check:error-observability`                                                        |      0 | Explicit typed error rethrows are recognized; no suppression                                                                         |
+| `npm run generate:op-catalog`; `npm run check:op-catalog`                                  | 0 each | Generated closed operation inventory matches source                                                                                  |
+| `npm run check:activity-log`                                                               |      0 | All seven implementation-gate stages pass, including architecture and negative controls                                              |
+| `npm run gates:sonar -- --base 29b3857fc`                                                  |      0 | Real local analyzer: zero findings in this delivery's analyzed diff                                                                  |
+| `npm run check:package-surface:assembled`                                                  |      0 | Repeated successfully after worktree recovery                                                                                        |
+| `KEIKO_WRITE_TRACKED_EVIDENCE=1 npm run test:e2e:update-ui-1696`                           |      0 | Nine unchanged browser cases passed                                                                                                  |
+| `npm run check:update-ui-evidence`                                                         |      0 | Current source/harness fingerprints                                                                                                  |
+| `npm run check:editor-release-evidence`                                                    |      0 | Actual rebuilt export; existing budget unchanged                                                                                     |
+
+The final `prettier --check` exits 0 across all 61 changed supported text files, including
+`packages/keiko-ui/src/app/components/desktop/chat-processing-pipeline.ts`. The source recovery
+comparison covers all 48 analyzed TypeScript files, with zero hash differences after normalizing
+only the Sonar API's extra terminal newline. The final delivery includes the regenerated
+operation emitter name, not a hand-edited catalog digest.

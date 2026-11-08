@@ -351,3 +351,20 @@ fonts: all nine tests passed in 2.4 minutes, including real BFF stop/restart. Al
 records were regenerated; the progress and reconnect captures changed and were visually inspected.
 No updater behavior, fixture, assertion or numerical ceiling changed. This is updater presentation
 and recovery evidence; it does not qualify native installation or a live Jira instance.
+
+## Memory withholding and recovered delivery — 2026-11-08 (#4321)
+
+The additive Memory health projection and its English/German notices changed the declared API
+and optional-catalog fingerprints. The complete original producer ran on signed source head
+`e5176a23e` in the recovered Linux arm64 worktree, with Node 24.18.0, Playwright 1.64.1 and
+Chromium build 1248. All nine cases passed in 2.2 minutes, including real BFF stop/restart.
+The container had a two-CPU quota, and the producer used its existing single worker. Each heavy
+run required the machine governor's headroom admission.
+
+The producer regenerated all 17 artifacts. All 14 captures changed bytes and were visually
+inspected, including contrast modes, the narrow manual path, install progress and reconnect
+state. The three JSON records bind the current sources and harness inputs; the unchanged
+freshness gate passes. No updater fixture, assertion, behavior or numerical ceiling changed.
+The Editor release-evidence checker also passes against the actual rebuilt export. These
+records qualify updater presentation and the declared recovery fixture, not native installation
+or overall integrated-head acceptance.
