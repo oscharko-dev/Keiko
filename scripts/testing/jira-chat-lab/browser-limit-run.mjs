@@ -11,6 +11,8 @@ import { withExclusiveProcessLock } from "./requirements/work-project-lock.mjs";
 
 const MODES = ["governed-assist", "supervised-coding", "autonomous-delivery"];
 const CHAT_SLOTS = ["document", "report", "denied"];
+const FAULT_STEPS = new Set(["bulk-epics", "hierarchy", "progress"].map((scope) => `ac8-${scope}`));
+const RECOVERED_FAULT_COUNTS = { injected: 2, recovered: 2, duplicates: 0, lost: 0 };
 const OWNERS = {
   runProjectSetup: "./browser-project-agile-journey.mjs",
   installTemplates: "./requirements/templates.mjs",
@@ -143,8 +145,39 @@ export function validateLimitStepResult(ctx, result) {
       !/[\r\n]/u.test(result.detail),
   );
   validateCounts(result.counts);
+  if (result.step.startsWith("ac8-")) validateFaultResult(result);
   if (result.evidenceFile !== undefined) privateEvidence(ctx, result.evidenceFile);
   return result;
+}
+
+function validateFaultResult(result) {
+  assert.ok(FAULT_STEPS.has(result.step), "Fault evidence belongs to a configured run scope");
+  const counts = result.counts;
+  assert.ok(
+    Object.keys(RECOVERED_FAULT_COUNTS).every((key) => Object.hasOwn(counts, key)),
+    "Fault evidence retains every required counter",
+  );
+  assert.ok(Object.values(counts).every(Number.isSafeInteger), "Fault counters are exact counts");
+  assert.ok(
+    counts.injected <= 2 && counts.recovered <= counts.injected,
+    "Observed recoveries cannot exceed the fixed two injected faults",
+  );
+  const incomplete = ["pending", "skipped", "unverified"];
+  assert.ok(incomplete.every((key) => counts[key] === undefined || counts[key] <= 2));
+  assert.ok(
+    result.status === "red" || (counts.duplicates === 0 && counts.lost === 0),
+    "Observed duplicates or lost records stop the run",
+  );
+  if (result.status === "green") {
+    assert.ok(
+      Object.entries(RECOVERED_FAULT_COUNTS).every(([key, value]) => counts[key] === value),
+      "Green fault evidence proves both complete recoveries without duplicate or lost records",
+    );
+    assert.ok(
+      incomplete.every((key) => counts[key] === undefined || counts[key] === 0),
+      "Incomplete fault evidence cannot be green",
+    );
+  }
 }
 
 function validateCounts(counts) {
@@ -163,7 +196,11 @@ async function step(ctx, results, name, run) {
   ctx.signal.throwIfAborted();
   ctx.intent.settled(name, result);
   results.push(result);
-  assert.equal(result.status, "green", "An incomplete limit-run step stops the run");
+  assert.ok(
+    result.status === "green" ||
+      (FAULT_STEPS.has(name) && result.step === name && result.status === "unverified"),
+    "An incomplete limit-run step stops the run",
+  );
   return result;
 }
 
@@ -205,7 +242,25 @@ function faultPlan(blocks, scope) {
     kinds: ["response-drop", "server-kill"],
   });
   assert.equal(typeof plan?.maybeInject, "function");
+  const maybeInject = plan.maybeInject;
+  plan.maybeInject = async (ctx, progress01) => {
+    const result = validateLimitStepResult(ctx, await maybeInject.call(plan, ctx, progress01));
+    assert.ok(result.step === `ac8-${scope}`, "Fault evidence matches its calling scope");
+    assert.ok(
+      progress01 === 1 || result.status !== "red",
+      "A red fault verdict stops further product work",
+    );
+    return result;
+  };
   return plan;
+}
+
+async function finishFaultPlan(ctx, results, scope, plan) {
+  return step(ctx, results, `ac8-${scope}`, async () => {
+    const result = await plan.maybeInject(ctx, 1);
+    assert.ok(result?.step === `ac8-${scope}`, "The final fault verdict matches its calling scope");
+    return result;
+  });
 }
 
 function bulkSeeds(ctx) {
@@ -228,19 +283,23 @@ async function stages(ctx, options, blocks, results) {
   await step(ctx, results, "ac1-templates", () => blocks.installTemplates(ctx));
   await step(ctx, results, "ac1-probes", () => blocks.runRuleProbes(ctx, { modes: [...MODES] }));
   await step(ctx, results, "ac2-lastenheft", () => blocks.stageLastenheft(ctx));
+  const epicFaults = faultPlan(blocks, "bulk-epics");
   await step(ctx, results, "ac2-epics", () =>
     blocks.runBulkEpics(ctx, {
       violationRate: options.violationRate,
-      faults: faultPlan(blocks, "bulk-epics"),
+      faults: epicFaults,
     }),
   );
+  await finishFaultPlan(ctx, results, "bulk-epics", epicFaults);
   await step(ctx, results, "ac1-bulk-refusals", () =>
     blocks.gradeBulkRefusals(ctx, { seeded: bulkSeeds(ctx) }),
   );
   await cards(ctx, blocks, results, "epics");
+  const hierarchyFaults = faultPlan(blocks, "hierarchy");
   await step(ctx, results, "ac4-hierarchy", () =>
-    blocks.runHierarchyBulk(ctx, { faults: faultPlan(blocks, "hierarchy") }),
+    blocks.runHierarchyBulk(ctx, { faults: hierarchyFaults }),
   );
+  await finishFaultPlan(ctx, results, "hierarchy", hierarchyFaults);
   await step(ctx, results, "ac6-sprint", () =>
     blocks.runSprintBulk(ctx, { size: options.sprintSize, batch: 50 }),
   );
@@ -249,6 +308,7 @@ async function stages(ctx, options, blocks, results) {
   const progress = await step(ctx, results, "progress-simulation", () =>
     blocks.simulateProgress(ctx, { seedDeviations: true }),
   );
+  await finishFaultPlan(ctx, results, "progress", ctx.faults);
   assert.ok(
     progress.evidenceFile,
     "Progress simulation must return its independently observed private truth",
@@ -265,11 +325,18 @@ export async function runBrowserLimitRun(ctx, options = {}, blocks) {
   const results = [];
   try {
     await stages(ctx, selected, blocks, results);
-    ctx.intent.record("orchestrator", { phase: "steps-verified", results });
+    const verified = results.every((result) => result.status === "green");
+    ctx.intent.record("orchestrator", {
+      phase: verified ? "steps-verified" : "steps-unverified",
+      results,
+    });
+    if (!verified) ctx.intent.failed();
     return {
       step: "browser-limit-run",
-      status: "green",
-      detail: "All limit-run steps independently verified",
+      status: verified ? "green" : "unverified",
+      detail: verified
+        ? "All limit-run steps independently verified"
+        : "Fault evidence remains incomplete",
       counts: { steps: results.length },
       evidenceFile: ctx.intent.path,
     };
@@ -277,6 +344,21 @@ export async function runBrowserLimitRun(ctx, options = {}, blocks) {
     ctx.intent.failed();
     throw error;
   }
+}
+
+/** Finalization runs only after the owned browser/server cleanup has completed. */
+export function finalizeLimitRun(intent, result) {
+  assert.ok(
+    result?.step === "browser-limit-run" && new Set(["green", "unverified"]).has(result.status),
+    "A terminal run verdict is required",
+  );
+  if (result.status === "unverified") {
+    intent.failed();
+    return "unverified";
+  }
+  assert.equal(intent.state.orchestrator?.phase, "steps-verified");
+  intent.complete();
+  return "green";
 }
 
 function validateLimitOptions(ctx, options, blocks) {
@@ -576,6 +658,8 @@ async function main(argv) {
       const intent = createLimitRunIntent(session.directory, options, assertOwned);
       const { withLiveChat } = await import("./chat-read.mjs");
       const signal = globalThis.AbortSignal.timeout(14 * 60 * 60 * 1000);
+      let outcome;
+      let status;
       try {
         await withLiveChat({
           session,
@@ -589,7 +673,7 @@ async function main(argv) {
           run: async (live) => {
             const opened = await openLimitRunChats(live, options, intent);
             try {
-              await runBrowserLimitRun(
+              outcome = await runBrowserLimitRun(
                 await createLimitRunContext(live, opened, options, intent, signal),
                 {},
                 blocks,
@@ -599,13 +683,13 @@ async function main(argv) {
             }
           },
         });
-        assert.equal(intent.state.orchestrator?.phase, "steps-verified");
-        intent.complete();
+        status = finalizeLimitRun(intent, outcome);
       } catch (error) {
         intent.failed();
         throw error;
       }
-      console.log(JSON.stringify({ operation: "jira-browser-limit-run", status: "green" }));
+      if (status === "unverified") process.exitCode = 1;
+      console.log(JSON.stringify({ operation: "jira-browser-limit-run", status }));
     },
   );
 }

@@ -794,20 +794,6 @@ export async function withLiveChat({
   ownedChild = false,
 }) {
   if (!modelId) throw new TypeError("A locally installed model is required");
-  if (ownedChild)
-    return withOwnedLiveChat({
-      session,
-      modelId,
-      run,
-      retainState,
-      stateReady,
-      browser,
-      restoreState,
-      decorateAtlassianHttp,
-      configureServer,
-      modelRetries,
-      embeddingModelId,
-    });
   return withLabProduct({
     session,
     modelId,
@@ -818,6 +804,9 @@ export async function withLiveChat({
     restoreState,
     decorateAtlassianHttp,
     configureServer,
+    ownedChild,
+    modelRetries,
+    embeddingModelId,
     prepareModel: (root) =>
       prepareLiveModel(root, session, modelId, { modelRetries, embeddingModelId }),
   });
@@ -843,7 +832,7 @@ export async function withModelFreeJira({ session, run, stateReady, decorateAtla
 async function withLabProduct(options) {
   const release = await prepareLabRun(options.session);
   try {
-    return await runLabProduct(options);
+    return await (options.ownedChild ? withOwnedLiveChat(options) : runLabProduct(options));
   } finally {
     release();
   }

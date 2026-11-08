@@ -45,6 +45,227 @@ const result = (step) => ({
   detail: "Independent fixture observation",
   counts: { observed: 1 },
 });
+
+it.each([
+  ["bulk-epics", "runBulkEpics", "runHierarchyBulk"],
+  ["hierarchy", "runHierarchyBulk", "runSprintBulk"],
+  ["progress", "simulateProgress", "runProgressReport"],
+])(
+  "settles the final %s fault pulse before the next product phase",
+  async (scope, before, after) => {
+    const f = fixture();
+    await runBrowserLimitRun(f.ctx, {}, f.blocks);
+    const plan = f.plans.find((entry) => entry.options.scope === scope);
+    expect(plan.observedPulse).toHaveBeenCalledExactlyOnceWith(f.ctx, 1);
+    const pulseOrder = plan.observedPulse.mock.invocationCallOrder[0];
+    expect(pulseOrder).toBeGreaterThan(f.blocks[before].mock.invocationCallOrder[0]);
+    expect(pulseOrder).toBeLessThan(f.blocks[after].mock.invocationCallOrder[0]);
+    const saved = JSON.parse(readFileSync(f.ctx.intent.path, "utf8"));
+    expect(saved.results.filter((entry) => entry.step === `ac8-${scope}`)).toEqual([
+      { step: `ac8-${scope}`, result: faultResult(scope) },
+    ]);
+  },
+);
+
+it.each(["bulk-epics", "hierarchy", "progress"])(
+  "keeps a final unverified %s fault from turning all-green product blocks into an overall green run",
+  async (scope) => {
+    const f = fixture();
+    f.faultResults.set(scope, faultResult(scope, "unverified", { injected: 1, recovered: 1 }));
+    await expect(runBrowserLimitRun(f.ctx, {}, f.blocks)).resolves.toMatchObject({
+      step: "browser-limit-run",
+      status: "unverified",
+      counts: { steps: 28 },
+      evidenceFile: f.ctx.intent.path,
+    });
+    expect(f.blocks.runProgressReport).toHaveBeenCalledOnce();
+    const saved = JSON.parse(readFileSync(f.ctx.intent.path, "utf8"));
+    expect(saved.phase).toBe("incomplete");
+    expect(saved.data.orchestrator.phase).toBe("steps-unverified");
+    expect(saved.results.find((entry) => entry.step === `ac8-${scope}`).result.status).toBe(
+      "unverified",
+    );
+  },
+);
+
+it.each([
+  ["bulk-epics", "runHierarchyBulk"],
+  ["hierarchy", "runSprintBulk"],
+  ["progress", "runProgressReport"],
+])("stops later product work after a red %s fault oracle", async (scope, nextOwner) => {
+  const f = fixture();
+  f.faultResults.set(scope, faultResult(scope, "red", { recovered: 1, duplicates: 1 }));
+  await expect(runBrowserLimitRun(f.ctx, {}, f.blocks)).rejects.toThrow(/incomplete/u);
+  expect(f.blocks[nextOwner]).not.toHaveBeenCalled();
+  expect(JSON.parse(readFileSync(f.ctx.intent.path, "utf8")).phase).toBe("incomplete");
+});
+
+it.each(["pending", "skipped", "unverified"])(
+  "rejects green fault evidence with a positive %s counter before later native writes",
+  async (counter) => {
+    const f = fixture();
+    f.faultResults.set("bulk-epics", faultResult("bulk-epics", "green", { [counter]: 1 }));
+    await expect(runBrowserLimitRun(f.ctx, {}, f.blocks)).rejects.toThrow();
+    expect(f.blocks.runHierarchyBulk).not.toHaveBeenCalled();
+  },
+);
+
+it.each([undefined, null, faultResult("progress")])(
+  "refuses missing or wrong-scope final fault evidence instead of assuming success: %j",
+  async (evidence) => {
+    const f = fixture();
+    f.faultResults.set("bulk-epics", evidence);
+    await expect(runBrowserLimitRun(f.ctx, {}, f.blocks)).rejects.toThrow();
+    expect(f.blocks.runHierarchyBulk).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  { injected: 0, recovered: 0 },
+  { injected: 1, recovered: 1 },
+  { injected: 2, recovered: 1 },
+  { injected: 3, recovered: 3 },
+  { injected: 1, recovered: 2 },
+  { injected: 1.5, recovered: 1 },
+  { injected: undefined },
+  { recovered: undefined },
+  { duplicates: undefined },
+  { lost: undefined },
+  { duplicates: 1 },
+  { lost: 1 },
+  { injected: Number.NaN },
+  { recovered: Number.POSITIVE_INFINITY },
+  { duplicates: -1 },
+  { lost: 0.5 },
+  { pending: 1 },
+  { skipped: 1 },
+  { unverified: 1 },
+])(
+  "refuses incoherent green ac8 counts without changing ordinary count admission: %j",
+  (counts) => {
+    const f = fixture();
+    expect(() =>
+      validateLimitStepResult(f.ctx, faultResult("bulk-epics", "green", counts)),
+    ).toThrow();
+    const ordinary = { ...result("ordinary-observation"), counts: { elapsedMs: 0.5 } };
+    expect(validateLimitStepResult(f.ctx, ordinary)).toBe(ordinary);
+  },
+);
+
+it.each([
+  faultResult("bulk-epics"),
+  faultResult("hierarchy", "unverified", { injected: 0, recovered: 0, skipped: 2 }),
+  faultResult("progress", "red", { injected: 1, recovered: 0, lost: 1 }),
+])("preserves coherent actual fault verdicts without promoting them: %j", (evidence) => {
+  const f = fixture();
+  expect(validateLimitStepResult(f.ctx, evidence)).toBe(evidence);
+});
+
+it.each(["green", "unverified"])(
+  "finalizes only the actual %s aggregate verdict",
+  async (status) => {
+    const { finalizeLimitRun } = await import("../testing/jira-chat-lab/browser-limit-run.mjs");
+    const f = fixture();
+    if (status === "unverified")
+      f.faultResults.set(
+        "progress",
+        faultResult("progress", "unverified", { injected: 0, recovered: 0 }),
+      );
+    const outcome = await runBrowserLimitRun(f.ctx, {}, f.blocks);
+    const completed = vi.spyOn(f.ctx.intent, "complete");
+    expect(finalizeLimitRun(f.ctx.intent, outcome)).toBe(status);
+    expect(completed).toHaveBeenCalledTimes(status === "green" ? 1 : 0);
+    expect(JSON.parse(readFileSync(f.ctx.intent.path, "utf8")).phase).toBe(
+      status === "green" ? "completed" : "incomplete",
+    );
+  },
+);
+
+it("refuses to complete an incomplete intent even if a caller falsely labels its result green", async () => {
+  const { finalizeLimitRun } = await import("../testing/jira-chat-lab/browser-limit-run.mjs");
+  const f = fixture();
+  f.faultResults.set(
+    "progress",
+    faultResult("progress", "unverified", { injected: 0, recovered: 0 }),
+  );
+  const outcome = await runBrowserLimitRun(f.ctx, {}, f.blocks);
+  const completed = vi.spyOn(f.ctx.intent, "complete");
+  expect(() => finalizeLimitRun(f.ctx.intent, { ...outcome, status: "green" })).toThrow();
+  expect(completed).not.toHaveBeenCalled();
+  expect(JSON.parse(readFileSync(f.ctx.intent.path, "utf8")).phase).toBe("incomplete");
+});
+
+it("consumes actual F threshold-missed results as unverified without any fault injection or native read", async () => {
+  const { createFaultPlan } = await import("../testing/jira-chat-lab/browser-bulk-fault.mjs");
+  const f = fixture();
+  f.blocks.createFaultPlan.mockImplementation(createFaultPlan);
+  f.ctx.read = vi.fn(() => {
+    throw new TypeError("No native read is expected at a missed final threshold");
+  });
+  f.ctx.search = vi.fn(() => {
+    throw new TypeError("No native search is expected at a missed final threshold");
+  });
+  f.ctx.page = { route: vi.fn(), unroute: vi.fn() };
+  f.ctx.recovery = { restartServer: vi.fn() };
+  await expect(runBrowserLimitRun(f.ctx, {}, f.blocks)).resolves.toMatchObject({
+    status: "unverified",
+    counts: { steps: 28 },
+  });
+  expect(Object.keys(f.ctx.intent.state.faults).sort()).toEqual([
+    "bulk-epics:response-drop",
+    "bulk-epics:server-kill",
+    "hierarchy:response-drop",
+    "hierarchy:server-kill",
+    "progress:response-drop",
+    "progress:server-kill",
+  ]);
+  for (const evidence of Object.values(f.ctx.intent.state.faults))
+    expect(evidence).toEqual({ phase: "skipped", progress01: 1, reason: "threshold-missed" });
+  expect(f.ctx.read).not.toHaveBeenCalled();
+  expect(f.ctx.search).not.toHaveBeenCalled();
+  expect(f.ctx.page.route).not.toHaveBeenCalled();
+  expect(f.ctx.page.unroute).not.toHaveBeenCalled();
+  expect(f.ctx.recovery.restartServer).not.toHaveBeenCalled();
+  const saved = JSON.parse(readFileSync(f.ctx.intent.path, "utf8"));
+  expect(saved.phase).toBe("incomplete");
+  expect(
+    saved.results
+      .filter((entry) => entry.step.startsWith("ac8-"))
+      .map(({ result }) => ({
+        status: result.status,
+        counts: result.counts,
+      })),
+  ).toEqual(
+    Array.from({ length: 3 }, () => ({
+      status: "unverified",
+      counts: { injected: 0, recovered: 0, duplicates: 0, lost: 0 },
+    })),
+  );
+});
+
+it("stops the current product block immediately when an intermediate F verdict is red", async () => {
+  const f = fixture();
+  const nextNativeWrite = vi.fn();
+  f.faultResults.set("bulk-epics", faultResult("bulk-epics", "red", { recovered: 1, lost: 1 }));
+  f.blocks.runBulkEpics.mockImplementation(async (ctx, { faults }) => {
+    await faults.maybeInject(ctx, 0.4);
+    nextNativeWrite();
+    return result("bulk-epics");
+  });
+  await expect(runBrowserLimitRun(f.ctx, {}, f.blocks)).rejects.toThrow();
+  expect(nextNativeWrite).not.toHaveBeenCalled();
+  expect(f.blocks.runHierarchyBulk).not.toHaveBeenCalled();
+  expect(JSON.parse(readFileSync(f.ctx.intent.path, "utf8")).phase).toBe("incomplete");
+});
+
+function faultResult(scope, status = "green", counts = {}) {
+  return {
+    step: `ac8-${scope}`,
+    status,
+    detail: "Independent fault evidence",
+    counts: { injected: 2, recovered: 2, duplicates: 0, lost: 0, ...counts },
+  };
+}
 function fixture() {
   const sessionDir = directory();
   const intent = createLimitRunIntent(sessionDir, { projectKey: "LIM7", modelId: "fixture-model" });
@@ -75,8 +296,17 @@ function fixture() {
     ]),
   );
   const plans = [];
+  const faultResults = new Map();
   blocks.createFaultPlan.mockImplementation((options) => {
-    const plan = { maybeInject: vi.fn(() => Promise.resolve()), options };
+    const plan = {
+      maybeInject: vi.fn(async () =>
+        faultResults.has(options.scope)
+          ? faultResults.get(options.scope)
+          : faultResult(options.scope),
+      ),
+      options,
+    };
+    plan.observedPulse = plan.maybeInject;
     plans.push(plan);
     return plan;
   });
@@ -98,7 +328,7 @@ function fixture() {
     privateJson(evidenceFile, { total: 1007, statuses: { todo: 1007 } }, true);
     return { ...result("progress-simulation"), evidenceFile };
   });
-  return { ctx, blocks, calls, plans, controller };
+  return { ctx, blocks, calls, plans, faultResults, controller };
 }
 
 it("composes the exact owners once in plan order, with bilingual reload checks after epics, sprint and report", async () => {
@@ -108,7 +338,7 @@ it("composes the exact owners once in plan order, with bilingual reload checks a
     step: "browser-limit-run",
     status: "green",
     detail: "All limit-run steps independently verified",
-    counts: { steps: 25 },
+    counts: { steps: 28 },
     evidenceFile: f.ctx.intent.path,
   });
   expect(
@@ -177,13 +407,13 @@ it("composes the exact owners once in plan order, with bilingual reload checks a
       "setUiLanguage",
     ]);
   }
-  expect(f.ctx.checkLicense).toHaveBeenCalledTimes(25);
+  expect(f.ctx.checkLicense).toHaveBeenCalledTimes(28);
   expect(f.ctx.prepareTruth).toHaveBeenCalledTimes(1);
   expect(f.ctx.locale).toBe("en");
   const saved = JSON.parse(readFileSync(f.ctx.intent.path, "utf8"));
   expect(saved.phase).toBe("checkpoint");
   expect(saved.current).toBeUndefined();
-  expect(saved.results).toHaveLength(25);
+  expect(saved.results).toHaveLength(28);
   expect(saved.data.orchestrator.phase).toBe("steps-verified");
   expect(statSync(f.ctx.intent.path).mode & 0o777).toBe(0o600);
 });
