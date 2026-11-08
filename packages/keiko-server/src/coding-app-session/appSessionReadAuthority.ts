@@ -27,8 +27,11 @@ export function resolveAppSessionReadAuthority(
   deps: Pick<UiHandlerDeps, "codingAppSessionChannel">,
   req: IncomingMessage,
 ): AppSession | undefined {
+  // No composed channel grants nothing, so nothing about the request is read or observed.
+  const channel = deps.codingAppSessionChannel;
+  if (channel === undefined) return undefined;
   const { cookieToken, ...observation } = readSessionCookieObservation(req);
-  return deps.codingAppSessionChannel?.verifySession(cookieToken, {
+  return channel.verifySession(cookieToken, {
     ...observation,
     correlationId: resolveCorrelationId(req),
   });
