@@ -303,7 +303,7 @@ export async function observeQualificationFixtures(context, fixture) {
     ["statuscategory", "statusCategoryIdOrKey", (rows) => rows[0]?.id],
     ["role", "roleId", (rows) => rows[0]?.id],
   ]) {
-    const response = await nativeRead(context, `/rest/api/2/${path}`);
+    const response = await nativeRead({ ...context, actor: "admin" }, `/rest/api/2/${path}`);
     assert.equal(response.status, 200);
     const value = select(response.value);
     assert.notEqual(value, undefined);

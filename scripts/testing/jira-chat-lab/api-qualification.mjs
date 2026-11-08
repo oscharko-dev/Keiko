@@ -6,6 +6,7 @@ import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { withModelFreeJira, prepareModelFreeChat } from "./chat-read.mjs";
+import { reportFaultQualificationFailure } from "./chat-lifecycle.mjs";
 import {
   assertSessionServerInfo,
   basicAuth,
@@ -259,6 +260,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       reconcileRequired: true,
       errorType: error instanceof Error ? error.name : "unknown",
     });
-    process.exitCode = 1;
+    reportFaultQualificationFailure("jira-api-qualification", error);
   }
 }
