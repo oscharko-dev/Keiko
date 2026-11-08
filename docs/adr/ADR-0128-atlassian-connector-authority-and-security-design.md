@@ -1437,9 +1437,13 @@ the approval.
   independently reads its native type through the bound issue reader, and refuses unreadable or
   contradictory identities and disallowed types. Embedded/model-supplied type hints are no proof.
   Without this clause the existing parent-presence rule is unchanged. Validation reads the native
-  type catalog; saving and activation still use the ordinary Markdown skill library. The synchronous
-  report checker, without independent parent-type evidence, marks template compliance `unavailable`;
-  missing evidence never increments deviation totals. Prose-only skills never enter this enforcement path. The
+  type catalog; saving and activation still use the ordinary Markdown skill library. The report
+  checker reuses the same independently bound parent reader through its existing GET-only HTTP
+  owner, current admission, cancellation signal and read-slice deadline. Measured disallowed types
+  count as deviations; unavailable or contradictory evidence marks compliance `unavailable` and the
+  report incomplete without adding a deviation. Already measured partial facts remain explicit.
+  A slice exhausted during a parent read resumes that issue under the next call's fresh admission.
+  Prose-only skills never enter this enforcement path. The
   level-2 headings of the template body (`## Title`, or a setext title underlined with `---`) are
   the required description sections, each of which must be present and carry content. One reader
   (`jira-description-sections.ts`) uses Markdown mode for template bodies and explicitly tagged

@@ -4,6 +4,7 @@ import type {
   JiraReportIncompleteReason,
   JiraReportStatusCategory,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 
 /**
  * One deviation from a rule. `ruleId` is a stable identifier. `subject` names the template element
@@ -66,7 +67,12 @@ export interface JiraReportIssueFacts {
  */
 export interface JiraReportComplianceChecker {
   readonly fieldIds: readonly string[];
-  readonly check: (facts: JiraReportIssueFacts) => readonly JiraReportDeviation[];
+  readonly requiresNativeEvidence?: true;
+  /** Auxiliary native evidence shares this slice's GET-only admission and deadline. */
+  readonly check: (
+    facts: JiraReportIssueFacts,
+    request?: JiraMutationRequest,
+  ) => readonly JiraReportDeviation[] | "unavailable" | Promise<readonly JiraReportDeviation[] | "unavailable">;
   /**
    * Whether at least one template applies to the issue, so that `check` actually judged it (#4181).
    * A checker without it is taken to judge every issue.
@@ -221,8 +227,8 @@ export interface JiraReport {
      * With `checker: "applied"`: the issues at least one template judged. An issue of a type no
      * template covers is not counted here; it is counted in `issuesWithoutTemplate`, because "no
      * deviation" is only a statement about an issue something judged (#4181). With `none` or
-     * `unavailable` no template judged anything: the number is the issues read, which only the
-     * required-field rules (`requiredFieldRules`) could have judged.
+     * `unavailable` complete template coverage is unknown: the number is the issues read.
+     * Independently measured partial deviations may remain, while missing evidence never adds one.
      */
     readonly issuesChecked: number;
     /**

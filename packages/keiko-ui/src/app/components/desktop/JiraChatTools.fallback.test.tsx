@@ -81,7 +81,7 @@ describe.each(["en", "de"] as const)("closed result fallback in %s", (locale) =>
   });
 
   it.each(["knowledge_requirements", "knowledge_documents", "knowledge_review", "mcp_foreign_tool", "jira_future_tool"])(
-    "records only unavailable presentation facts for live %s and does not replay them on reload", (name) => {
+    "does not misclassify live or restored %s as Jira presentation evidence", (name) => {
       const report = vi.spyOn(diagnostics, "reportClientDiagnostic");
       const transcript = restored(result(name));
       const events = () => report.mock.calls.flatMap(([, meta]) =>
@@ -92,18 +92,13 @@ describe.each(["en", "de"] as const)("closed result fallback in %s", (locale) =>
       );
       try {
         const live = render(show("pending"));
-        expect(events()).toEqual([{
-          messageDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
-          exchangeCount: 1, itemCount: 0, shownCount: 0, returnedCount: 0,
-          unreadableCount: 1, problemCount: 0, ruleCount: 0,
-          failure: "unavailable", restored: false,
-        }]);
+        expect(events()).toEqual([]);
         live.rerender(show("pending"));
         live.rerender(show("completed"));
-        expect(events()).toHaveLength(1);
+        expect(events()).toHaveLength(0);
         live.unmount();
         render(show("completed"));
-        expect(events()).toHaveLength(1);
+        expect(events()).toHaveLength(0);
         const recorded = JSON.stringify(report.mock.calls);
         expect(recorded).not.toContain(name);
         expect(recorded).not.toMatch(/private-fallback-parent|fallback-result|SYN-7|untrusted|Opaque|Unvalidated|browseUrl|password|license/u);

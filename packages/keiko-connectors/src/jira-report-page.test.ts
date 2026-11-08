@@ -30,6 +30,7 @@ function chunkedRead(offset: number | undefined): {
   return {
     requests,
     http: {
+      request: async () => ({ ok: false, reason: "not-found" }),
       getArray: async () => ({ ok: true, items: [] }),
       getRecord: async (path) => {
         const url = new URL(path, "https://jira.example.invalid/rest/api/2/");

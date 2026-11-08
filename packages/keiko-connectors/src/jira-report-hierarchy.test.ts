@@ -7,6 +7,7 @@ import { JIRA_REPORT_FIELD_CHUNK_CHARS } from "./jira-report-page.js";
 
 function listing(items: readonly unknown[]): JiraReportHttp {
   return {
+    request: async () => ({ ok: false, reason: "not-found" }),
     getArray: () => Promise.resolve({ ok: true, items }),
     getRecord: () => Promise.resolve({ ok: false, reason: "not-found" }),
   };

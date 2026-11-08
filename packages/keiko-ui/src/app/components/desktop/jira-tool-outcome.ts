@@ -34,7 +34,7 @@ import {
   JIRA_ADMINISTRATION_TOOLS,
   jiraAdministrationDetails,
 } from "./jira-administration-presentation";
-import { jiraLocalReadFailureNotice, jiraMutationUnchanged } from "./jira-tool-presentation";
+import { isCanonicalKnowledgeExchange, jiraLocalReadFailureNotice, jiraMutationUnchanged } from "./jira-tool-presentation";
 import { JIRA_DIRECTORY_TOOLS, jiraDirectoryDetails } from "./jira-directory-presentation";
 import { JIRA_ACCESS_TOOLS, jiraAccessDetails } from "./jira-access-presentation";
 import {
@@ -105,6 +105,9 @@ export interface JiraOutcomeRule {
   readonly subject: string;
 }
 export interface JiraToolOutcomeView {
+  readonly facts?: readonly JiraOutcomeFact[];
+  readonly labels?: readonly WidgetMessageKey[];
+  readonly resultsLabel?: WidgetMessageKey;
   readonly items: readonly JiraOutcomeItem[];
   readonly returnedCount: number | undefined;
   readonly total: number | undefined;
@@ -575,8 +578,251 @@ function pageCounts(
   };
 }
 
+const KNOWLEDGE_VIEWS: Readonly<Record<string, readonly string[]>> = {
+  knowledge_requirements: ["units", "documents", "change-queries", "changes"],
+  knowledge_documents: ["inventory", "search", "read"],
+  knowledge_review: ["review"],
+};
+const KNOWLEDGE_COUNTS = {
+  detectedCount: "chat.knowledge.outcome.detected",
+  matchedCount: "chat.knowledge.outcome.matched",
+  documentsScanned: "chat.knowledge.outcome.scanned",
+  documentCount: "chat.knowledge.outcome.documents",
+  documentsNotExtracted: "chat.knowledge.outcome.notExtracted",
+  documentsOmitted: "chat.knowledge.outcome.documentsOmitted",
+  unitsOmitted: "chat.knowledge.outcome.unitsOmitted",
+} as const satisfies Readonly<Record<string, WidgetMessageKey>>;
+const KNOWLEDGE_SOURCE_FIELDS = {
+  documentScope: "chat.knowledge.outcome.documentReference",
+  documentName: "chat.knowledge.outcome.document",
+  pageLabel: "chat.knowledge.outcome.page",
+} as const satisfies Readonly<Record<string, WidgetMessageKey>>;
+const KNOWLEDGE_REVIEW_KINDS: Readonly<Record<string, WidgetMessageKey>> = {
+  obligation: "chat.knowledge.outcome.obligation",
+  "acceptance-criterion": "chat.knowledge.outcome.criterion",
+  conflict: "chat.knowledge.outcome.conflict",
+  omission: "chat.knowledge.outcome.omission",
+  clarification: "chat.knowledge.outcome.clarification",
+};
+function knowledgeFacts(
+  source: UnknownRecord,
+  fields: Readonly<Record<string, WidgetMessageKey>>,
+): JiraOutcomeFact[] {
+  return Object.entries(fields).flatMap(([field, label]) => {
+    const value = text(source[field]);
+    return value === undefined || value.length > 32_768 ? [] : [{ label, value }];
+  });
+}
+function knowledgeCounts(
+  source: UnknownRecord,
+  fields: Readonly<Record<string, WidgetMessageKey>>,
+): JiraOutcomeFact[] {
+  return Object.entries(fields).flatMap(([field, label]) => {
+    const value = count(source[field]);
+    return value === undefined ? [] : [{ label, value: String(value) }];
+  });
+}
+function knowledgeRange(source: UnknownRecord): string | undefined {
+  const start = count(source.characterStart);
+  const end = count(source.characterEnd);
+  return start !== undefined && end !== undefined && end >= start ? `${start}–${end}` : undefined;
+}
+function knowledgeSourceFacts(source: UnknownRecord): JiraOutcomeFact[] {
+  const facts = knowledgeFacts(source, KNOWLEDGE_SOURCE_FIELDS);
+  const range = knowledgeRange(source);
+  if (range !== undefined) facts.push({ label: "chat.knowledge.outcome.characters", value: range });
+  const section = source.sectionPath;
+  if (
+    Array.isArray(section) && section.length > 0 && section.length <= 12 &&
+    section.every((part) => typeof part === "string" && part.length <= 300)
+  )
+    facts.push({ label: "chat.knowledge.outcome.section", value: section.join(" › ") });
+  return facts;
+}
+function knowledgeRequirement(source: UnknownRecord): JiraOutcomeItem | undefined {
+  const reference = text(source.reference);
+  if (reference === undefined || reference.length > 120 || text(source.documentScope) === undefined) return undefined;
+  const facts = knowledgeSourceFacts(source);
+  const criteria = source.acceptanceCriteria;
+  if (Array.isArray(criteria) && criteria.length <= 20) {
+    const entries = criteria.flatMap((entry) => {
+      const criterion = record(entry);
+      const id = text(criterion?.id);
+      const value = text(criterion?.text);
+      return id === undefined || value === undefined ? [] : [`${id}: ${value}`];
+    });
+    if (entries.length > 0) facts.push({ label: "chat.knowledge.outcome.criteria", value: entries.join("\n") });
+  }
+  return {
+    key: reference,
+    ...textMembers({ name: source.title, body: source.statement }),
+    facts,
+    labels: source.statementTruncated === true || source.criteriaTruncated === true
+      ? ["chat.requirements.partial"] : [],
+  };
+}
+function knowledgeDocument(source: UnknownRecord): JiraOutcomeItem | undefined {
+  if (text(source.documentScope) === undefined || text(source.documentName) === undefined) return undefined;
+  const labels: WidgetMessageKey[] = [];
+  if (source.sourceUnavailable === true) labels.push("chat.knowledge.outcome.sourceUnavailable");
+  else if (source.text === "") labels.push("chat.knowledge.outcome.emptyText");
+  if (source.positionSpace === "original-document-text") labels.push("chat.knowledge.outcome.originalPositions");
+  if (source.positionSpace === "redacted-document-text") labels.push("chat.knowledge.outcome.redactedPositions");
+  return {
+    ...textMembers({
+      name: source.documentName,
+      body: source.sourceUnavailable === true ? undefined : source.text,
+    }),
+    labels,
+    facts: [
+      ...knowledgeSourceFacts(source),
+      ...knowledgeFacts(source, { extractionStatus: "chat.knowledge.outcome.extraction" }),
+      ...knowledgeCounts(source, { unitCount: "chat.knowledge.outcome.detected" }),
+    ],
+  };
+}
+function knowledgeReviewSources(source: UnknownRecord): JiraOutcomeFact[] | undefined {
+  if (!Array.isArray(source.sources) || source.sources.length === 0 || source.sources.length > 2) return undefined;
+  const references: string[] = [];
+  for (const value of source.sources) {
+    const citation = record(value);
+    if (citation === undefined) return undefined;
+    const document = text(citation.documentScope);
+    const range = knowledgeRange(citation);
+    if (document === undefined || range === undefined) return undefined;
+    const quote = text(citation.quote);
+    references.push(`${document} · ${range}${quote === undefined ? "" : `\n${quote}`}`);
+  }
+  return [{ label: "chat.knowledge.outcome.sources", value: references.join("\n\n") }];
+}
+function knowledgeReview(source: UnknownRecord): JiraOutcomeItem | undefined {
+  const key = text(source.proposalId);
+  const kind = typeof source.kind === "string" && Object.hasOwn(KNOWLEDGE_REVIEW_KINDS, source.kind)
+    ? KNOWLEDGE_REVIEW_KINDS[source.kind] : undefined;
+  const facts = knowledgeReviewSources(source);
+  if (key === undefined || kind === undefined || facts === undefined) return undefined;
+  if (source.origin !== "model-proposal" || source.status !== "proposed") return undefined;
+  const labels: WidgetMessageKey[] = ["chat.knowledge.outcome.proposal", kind];
+  if (Array.isArray(source.sources) && source.sources.some((value) => record(value)?.quoteTruncated === true))
+    labels.push("chat.knowledge.outcome.quoteTruncated");
+  return {
+    key,
+    ...textMembers({ body: source.proposal }),
+    labels,
+    facts: [...facts, ...knowledgeFacts(source, { question: "chat.knowledge.outcome.question" })],
+  };
+}
+function knowledgeQuery(source: UnknownRecord): JiraOutcomeItem | undefined {
+  if (text(source.jql) === undefined || !Array.isArray(source.requirementIds)) return undefined;
+  const refs = source.requirementIds;
+  if (!refs.every((ref) => typeof ref === "string" && ref.length <= 120)) return undefined;
+  return {
+    facts: [
+      { label: "chat.knowledge.outcome.requirements", value: refs.join(", ") },
+      ...knowledgeFacts(source, { jql: "chat.knowledge.outcome.query" }),
+    ],
+    labels: [],
+  };
+}
+function knowledgeItem(view: unknown, value: unknown): JiraOutcomeItem | undefined {
+  const source = record(value);
+  if (source === undefined) return undefined;
+  if (view === "units") return knowledgeRequirement(source);
+  if (view === "review") return knowledgeReview(source);
+  return view === "change-queries" ? knowledgeQuery(source) : knowledgeDocument(source);
+}
+function knowledgeChangeItems(changes: UnknownRecord): JiraOutcomeItem[] {
+  const labels = {
+    changed: "chat.knowledge.outcome.changed",
+    removed: "chat.knowledge.outcome.removed",
+    untraced: "chat.knowledge.outcome.untraced",
+    unchanged: "chat.knowledge.outcome.unchanged",
+  } as const;
+  return Object.entries(labels).flatMap(([field, label]) => {
+    const entries = changes[field];
+    if (!Array.isArray(entries) || entries.length > 200) return [];
+    return entries.flatMap((value): JiraOutcomeItem[] => {
+      const source = record(value);
+      const key = text(source?.id ?? value);
+      if (key === undefined || key.length > 120) return [];
+      return [{
+        key,
+        ...textMembers({ name: source?.title }),
+        labels: [label],
+        facts: knowledgeCounts(source ?? {}, { issueCount: "chat.knowledge.outcome.linkedIssues" }),
+      }];
+    });
+  });
+}
+function knowledgeReceiptData(exchange: ChatToolExchange): UnknownRecord | undefined {
+  if (!isCanonicalKnowledgeExchange(exchange) || exchange.result?.status !== "completed") return undefined;
+  const data = record(exchange.result.data);
+  const views = KNOWLEDGE_VIEWS[exchange.call.name];
+  if (data?.outcome !== "succeeded" || typeof data.view !== "string" || !views?.includes(data.view)) return undefined;
+  return data;
+}
+function knowledgeEntries(data: UnknownRecord): readonly unknown[] | undefined {
+  if (data.view === "changes") {
+    const counts = record(record(data.changes)?.counts);
+    return ["changed", "removed", "untraced", "unchanged"].every((key) => count(counts?.[key]) !== undefined)
+      ? [] : undefined;
+  }
+  return Array.isArray(data.items) && data.items.length <= 100 ? data.items : undefined;
+}
+function knowledgeTotal(data: UnknownRecord, returned: number): number | undefined {
+  const totals = record(data.totals);
+  let total: number | undefined;
+  if (data.view === "units") total = count(totals?.matchedCount);
+  if (data.view === "inventory") total = count(totals?.documentCount);
+  return total !== undefined && total >= returned ? total : undefined;
+}
+function knowledgeSummaryFacts(data: UnknownRecord): JiraOutcomeFact[] {
+  const coverage = record(data.coverage) ?? {};
+  return [
+    ...knowledgeCounts(record(data.totals) ?? {}, KNOWLEDGE_COUNTS),
+    ...(data.view === "review" ? knowledgeSourceFacts(coverage) : []),
+    ...knowledgeCounts(coverage, {
+      returnedChars: "chat.knowledge.outcome.returnedChars",
+      documentChars: "chat.knowledge.outcome.documentChars",
+    }),
+    ...knowledgeCounts(record(record(data.changes)?.counts) ?? {}, {
+      changed: "chat.knowledge.outcome.changedCount",
+      removed: "chat.knowledge.outcome.removedCount",
+      untraced: "chat.knowledge.outcome.untracedCount",
+      unchanged: "chat.knowledge.outcome.unchangedCount",
+    }),
+  ];
+}
+/** Only the versioned Knowledge producers' declared fields become plain text facts, never URLs. */
+export function knowledgeToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcomeView | undefined {
+  const data = knowledgeReceiptData(exchange);
+  if (data === undefined) return undefined;
+  const entries = knowledgeEntries(data);
+  if (entries === undefined) return undefined;
+  const projected = entries.map((entry) => knowledgeItem(data.view, entry));
+  const items = projected.filter((item): item is JiraOutcomeItem => item !== undefined);
+  if (entries.length > 0 && items.length === 0) return undefined;
+  return {
+    items: data.view === "changes" ? knowledgeChangeItems(record(data.changes) ?? {}) : items,
+    returnedCount: data.view === "changes" ? undefined : entries.length,
+    total: knowledgeTotal(data, entries.length),
+    unreadableCount: entries.length - items.length,
+    stagedCount: undefined,
+    unresolvedCount: undefined,
+    problems: [],
+    rules: [],
+    validation: undefined,
+    failure: undefined,
+    resultsLabel: "chat.knowledge.outcome.results",
+    facts: knowledgeSummaryFacts(data),
+    labels: data.view === "review" ? ["chat.knowledge.outcome.reviewScope"] : [],
+  };
+}
+
 /** A display projection of the immutable receipt, shared by the live turn and restored history. */
 export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcomeView {
+  const knowledge = knowledgeToolOutcomeView(exchange);
+  if (knowledge !== undefined) return knowledge;
   const stored = record(exchange.result?.data) ?? {};
   const data =
     [JIRA_PARTICIPATION_TOOLS, JIRA_MONITORING_WRITE_TOOLS, JIRA_PROPERTY_MUTATION_TOOLS, JIRA_SAVED_CONFIGURATION_WRITE_TOOLS,

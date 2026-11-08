@@ -258,7 +258,7 @@ function checkParentType(context: Context): void {
     raise(context, "parent-type-mismatch", `${field}: ${issueTypes.join(", ")}`);
 }
 
-function observedParentType(context: Context, field: string) {
+function observedParentType(context: Context, field: string): { readonly id: string; readonly name: string } | undefined {
   const ids = resolveJiraTemplateFieldIds(field, context.catalog);
   const id = ids.length === 1 ? ids[0] : undefined;
   const evidence = context.subject.parentIssueTypes;

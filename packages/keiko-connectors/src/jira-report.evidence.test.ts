@@ -404,6 +404,7 @@ describe("create metadata is trusted only with Jira's completion evidence (D2)",
     function pages(...bodies: Body[]): JiraReportHttp {
       const queue = [...bodies];
       return {
+        request: async () => ({ ok: false, reason: "not-found" }),
         getArray: () => Promise.resolve({ ok: false, reason: "not-found" }),
         getRecord: (): ReturnType<JiraReportHttp["getRecord"]> => {
           const body = queue.shift();

@@ -99,21 +99,40 @@ export function isKnownJiraToolAlias(name: string): boolean {
 /** The Chat alias of the local `knowledge.requirements` read (#4179). */
 const REQUIREMENTS_TOOL_ALIAS = "knowledge_requirements";
 const KNOWLEDGE_TOOLS: Readonly<
-  Record<string, { readonly label: WidgetMessageKey; readonly details: WidgetMessageKey }>
+  Record<string, {
+    readonly label: WidgetMessageKey;
+    readonly details: WidgetMessageKey;
+    readonly canonicalId: string;
+    readonly version: number;
+  }>
 > = {
   knowledge_requirements: {
     label: "chat.requirements.tool",
     details: "chat.requirements.details",
+    canonicalId: "keiko.knowledge.requirements",
+    version: 1,
   },
   knowledge_documents: {
     label: "chat.documents.tool",
     details: "chat.documents.details",
+    canonicalId: "keiko.knowledge.documents",
+    version: 1,
   },
   knowledge_review: {
     label: "chat.review.tool",
     details: "chat.review.details",
+    canonicalId: "keiko.knowledge.review",
+    version: 2,
   },
 };
+/** A saved alias alone cannot turn an external payload into a Knowledge receipt. */
+export function isCanonicalKnowledgeExchange(exchange: ChatToolExchange): boolean {
+  if (!Object.hasOwn(KNOWLEDGE_TOOLS, exchange.call.name)) return false;
+  const known = KNOWLEDGE_TOOLS[exchange.call.name];
+  const ref = exchange.result?.toolRef;
+  return known !== undefined && ref?.canonicalId === known.canonicalId &&
+    ref.contractVersion === known.version;
+}
 const REQUIREMENTS_CUT_COUNTS = ["unitsOmitted", "documentsOmitted", "documentsNotExtracted"];
 
 /** A draft and an attachment are governed like a create and an edit, but are neither to the human. */
@@ -188,16 +207,31 @@ function plainRecord(value: unknown): Record<string, unknown> | undefined {
 /** The inventory is cut when the tool's own totals name an omission, or a further page remains. */
 type CompletedResult = Extract<NonNullable<ChatToolExchange["result"]>, { status: "completed" }>;
 function requirementsCut(result: CompletedResult): boolean {
-  const totals = plainRecord(plainRecord(result.data)?.totals);
+  const data = plainRecord(result.data);
+  const totals = plainRecord(data?.totals);
   const reasons = totals?.cutReasons;
   return (
     result.page.truncated ||
+    requirementChangesCut(data) ||
+    (typeof data?.nextCursor === "string" && data.nextCursor.length > 0) ||
     (Array.isArray(reasons) && reasons.length > 0) ||
     REQUIREMENTS_CUT_COUNTS.some((name) => {
       const value = totals?.[name];
       return typeof value === "number" && value > 0;
     })
   );
+}
+function requirementChangesCut(data: Record<string, unknown> | undefined): boolean {
+  const changes = plainRecord(data?.changes);
+  return plainRecord(changes?.baseline)?.complete === false ||
+    (Array.isArray(changes?.truncated) && changes.truncated.length > 0);
+}
+function knowledgeCut(result: CompletedResult): boolean {
+  const data = plainRecord(result.data);
+  const coverage = plainRecord(data?.coverage);
+  return requirementsCut(result) ||
+    ["inventoryComplete", "documentComplete", "searchComplete", "windowReviewComplete", "documentReviewComplete", "documentReadable"]
+      .some((field) => coverage?.[field] === false);
 }
 /** The note a completed read of a partial result carries, or undefined for a complete one. */
 export function jiraToolPartialNotice(exchange: ChatToolExchange): WidgetMessageKey | undefined {
@@ -206,7 +240,7 @@ export function jiraToolPartialNotice(exchange: ChatToolExchange): WidgetMessage
   if (exchange.call.name === REQUIREMENTS_TOOL_ALIAS)
     return requirementsCut(exchange.result) ? "chat.requirements.partial" : undefined;
   if (KNOWLEDGE_TOOLS[exchange.call.name] !== undefined)
-    return exchange.result.page.truncated ? "chat.knowledge.partial" : undefined;
+    return knowledgeCut(exchange.result) ? "chat.knowledge.partial" : undefined;
   const data = plainRecord(exchange.result.data) ?? {};
   const directory = jiraDirectoryNotice(exchange.call.name, data) ?? jiraLookupNotice(exchange.call.name, data)
     ?? jiraAdminMetadataNotice(exchange.call.name, data);

@@ -55,3 +55,21 @@ it("propagates a programmer defect through the report owner even after cancellat
   f.http.mockImplementation(async () => { f.caller.abort(); throw defect; });
   await expect(f.reader.getArray("field")).rejects.toBe(defect);
 });
+
+it("shares report admission and cancellation with auxiliary parent GETs", async () => {
+  const f = fixture();
+  f.beforeEffect.mockReturnValue(false);
+  expect(await f.reader.request("issue/REP-1?fields=issuetype")).toEqual({ ok: false, reason: "effect-denied" });
+  expect(f.http).not.toHaveBeenCalled();
+  f.beforeEffect.mockReturnValue(true);
+  f.caller.abort();
+  expect(await f.reader.request("issue/REP-1?fields=issuetype")).toEqual({ ok: false, reason: "cancelled" });
+  expect(f.http).not.toHaveBeenCalled();
+});
+it("refuses write or body-bearing auxiliary requests before transport", async () => {
+  const f = fixture();
+  expect(await f.reader.request("issue/REP-1", "PUT", { fields: {} })).toEqual({ ok: false, reason: "effect-denied" });
+  expect(await f.reader.request("issue/REP-1", "GET", {})).toEqual({ ok: false, reason: "effect-denied" });
+  expect(await f.reader.request("issue/REP-1", "GET", undefined, "json-array")).toEqual({ ok: false, reason: "effect-denied" });
+  expect(f.http).not.toHaveBeenCalled();
+});

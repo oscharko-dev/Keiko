@@ -127,11 +127,13 @@ function statusNames(types: readonly unknown[], wantedId: string | undefined): r
   return [...names];
 }
 
-async function readParentIssueTypes(request: JiraMutationRequest) {
+async function readParentIssueTypes(request: JiraMutationRequest): Promise<JiraTemplateInstanceRead<{
+  readonly types: readonly { readonly id: string; readonly name: string }[];
+}>> {
   const response = await request("issuetype", "GET", undefined, "json-array");
   if (!response.ok) return response;
-  if (response.status !== 200 || response.items === undefined || response.items.length > 1000)
-    return MALFORMED;
+  if (response.status !== 200 || response.items === undefined) return MALFORMED;
+  if (response.items.length > 1000) return { ok: false, reason: "bounds-exceeded" };
   const types: { id: string; name: string }[] = [];
   const seen = new Set<string>();
   for (const item of response.items) {

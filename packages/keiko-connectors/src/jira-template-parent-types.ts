@@ -17,9 +17,13 @@ interface ParentSelection {
   readonly id?: string;
   readonly key?: string;
 }
+interface ParentIssueType {
+  readonly id: string;
+  readonly name: string;
+}
 
 /** The same native type facts feed parent admission and the template validation picker. */
-export function jiraTemplateNativeIssueType(value: unknown): { id: string; name: string } | undefined {
+export function jiraTemplateNativeIssueType(value: unknown): ParentIssueType | undefined {
   const type = asRecord(value);
   if (type === undefined) return undefined;
   return jiraNativeId(type.id) && jiraNativeText(type.name, 255)
@@ -31,13 +35,15 @@ function selectedParent(value: unknown): ParentSelection | undefined {
   const record = asRecord(value);
   if (record === undefined) return undefined;
   const { id, key } = record;
-  if (id !== undefined && !jiraNativeId(id)) return undefined;
-  if (key !== undefined && !isSafeAtlassianIdentifier(key)) return undefined;
+  if (!validParentReferences(id, key)) return undefined;
   if (jiraNativeId(id)) return { selector: id, id, ...(typeof key === "string" ? { key } : {}) };
   return isSafeAtlassianIdentifier(key) ? { selector: key, key } : undefined;
 }
+function validParentReferences(id: unknown, key: unknown): boolean {
+  return (id === undefined || jiraNativeId(id)) && (key === undefined || isSafeAtlassianIdentifier(key));
+}
 
-async function readParentType(request: JiraMutationRequest, value: unknown) {
+async function readParentType(request: JiraMutationRequest, value: unknown): Promise<ParentIssueType | undefined> {
   const selected = selectedParent(value);
   if (selected === undefined) return undefined;
   const read = await readJiraMutationIssue(request, selected.selector, ["issuetype"]);
@@ -60,10 +66,9 @@ export async function bindJiraTemplateParentTypes(
     const ids = resolveJiraTemplateFieldIds(field, catalog);
     return ids.length === 1 ? ids : [];
   }));
-  const parentIssueTypes = new Map<string, { id: string; name: string }>();
-  for (const fieldId of fieldIds) {
-    const type = await readParentType(request, subject.fields[fieldId]);
-    if (type !== undefined) parentIssueTypes.set(fieldId, type);
-  }
+  const types = await Promise.all([...fieldIds].map(async (fieldId): Promise<readonly [string, ParentIssueType | undefined]> =>
+    [fieldId, await readParentType(request, subject.fields[fieldId])]));
+  const parentIssueTypes = new Map<string, ParentIssueType>();
+  for (const [fieldId, type] of types) if (type !== undefined) parentIssueTypes.set(fieldId, type);
   return { ...subject, parentIssueTypes: Object.fromEntries(parentIssueTypes) };
 }

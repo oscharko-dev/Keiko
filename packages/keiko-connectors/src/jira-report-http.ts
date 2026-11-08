@@ -2,6 +2,7 @@ import type { AtlassianConnectorWriteFailureReason } from "@oscharko-dev/keiko-c
 import { atlassianApiEndpointsFor, atlassianApiUrl } from "./atlassian-sync-classify.js";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import { executeAdmittedJiraRequest } from "./jira-request-admission.js";
+import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 
 interface JiraReportFailure {
   readonly ok: false;
@@ -14,6 +15,8 @@ export type JiraReportArrayRead =
 
 /** GET-only access to the Data Center REST API under the invocation's cancellation and effect guard. */
 export interface JiraReportHttp {
+  /** Adapter for existing native evidence binders; rejects every non-GET request. */
+  readonly request: JiraMutationRequest;
   readonly getRecord: (path: string) => Promise<JiraReportRecordRead>;
   readonly getArray: (path: string) => Promise<JiraReportArrayRead>;
 }
@@ -27,9 +30,20 @@ export interface JiraReportHttpDeps {
   readonly sleep?: ((ms: number) => Promise<void>) | undefined;
 }
 
-export function createJiraReportHttp(deps: JiraReportHttpDeps): JiraReportHttp {
+export function createJiraReportHttp(
+  deps: JiraReportHttpDeps,
+  evidenceAdmission: Pick<JiraReportHttpDeps, "signal" | "beforeEffect"> = deps,
+): JiraReportHttp {
   const endpoints = atlassianApiEndpointsFor(deps.baseUrl, "/rest/api/2/");
+  const request: JiraMutationRequest = (path, method = "GET", body, expect = "json", upload) => {
+    if (method !== "GET" || body !== undefined || upload !== undefined || expect !== "json")
+      return Promise.resolve({ ok: false, reason: "effect-denied" });
+    return executeAdmittedJiraRequest(deps, evidenceAdmission, evidenceAdmission.signal, {
+      method: "GET", url: atlassianApiUrl(endpoints, path), expect: "json",
+    }, { sleep: deps.sleep });
+  };
   return {
+    request,
     getRecord: async (path): Promise<JiraReportRecordRead> => {
       const outcome = await executeAdmittedJiraRequest(deps, deps, deps.signal, {
         method: "GET",

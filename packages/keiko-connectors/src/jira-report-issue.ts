@@ -11,6 +11,7 @@ import type {
   JiraReportDeviation,
   JiraReportIssue,
 } from "./jira-report-types.js";
+import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 
 /** Everything the parser needs from the instance and the request; derived once per report. */
 export interface JiraReportFieldPlan {
@@ -177,24 +178,35 @@ function assignedOf(fields: Record<string, unknown>, plan: JiraReportFieldPlan):
   if (!Object.hasOwn(fields, "assignee")) plan.omittedFields.add("assignee");
   return fields.assignee !== null && fields.assignee !== undefined;
 }
-function checkerDeviations(
+async function checkerDeviations(
   facts: Parameters<JiraReportComplianceChecker["check"]>[0],
   plan: JiraReportFieldPlan,
-): readonly JiraReportDeviation[] {
+  request: JiraMutationRequest,
+): Promise<readonly JiraReportDeviation[] | "unavailable"> {
   if (plan.checker === undefined) return [];
-  const result: JiraReportDeviation[] = [];
-  for (const item of plan.checker.check(facts)) {
-    if (!RULE_ID_PATTERN.test(item.ruleId)) continue;
-    const fieldId =
-      item.fieldId !== undefined && /^\w{1,64}$/u.test(item.fieldId) ? item.fieldId : undefined;
-    const subject = subjectOf(item.subject);
-    result.push({
-      ruleId: item.ruleId,
-      ...(fieldId === undefined ? {} : { fieldId }),
-      ...(subject === undefined ? {} : { subject }),
-    });
-  }
-  return result;
+  const checked = await plan.checker.check(facts, request);
+  if (checked === "unavailable") return checked;
+  return checked.flatMap((item) => {
+    const projected = safeCheckerDeviation(item);
+    return projected === undefined ? [] : [projected];
+  });
+}
+function safeCheckerDeviation(item: JiraReportDeviation): JiraReportDeviation | undefined {
+  if (!RULE_ID_PATTERN.test(item.ruleId)) return undefined;
+  const fieldId = item.fieldId !== undefined && /^\w{1,64}$/u.test(item.fieldId) ? item.fieldId : undefined;
+  const subject = subjectOf(item.subject);
+  return {
+    ruleId: item.ruleId,
+    ...(fieldId === undefined ? {} : { fieldId }),
+    ...(subject === undefined ? {} : { subject }),
+  };
+}
+function templateJudged(
+  checker: JiraReportComplianceChecker | undefined,
+  facts: Parameters<JiraReportComplianceChecker["check"]>[0],
+  unavailable: boolean,
+): boolean {
+  return !unavailable && checker !== undefined && (checker.covers?.(facts) ?? true);
 }
 function dedupeDeviations(items: readonly JiraReportDeviation[]): readonly JiraReportDeviation[] {
   const seen = new Set<string>();
@@ -306,10 +318,11 @@ function identityOf(value: unknown): IssueIdentity | undefined {
 }
 
 /** Project one Jira search hit onto the compact record. A hit without key and type is refused. */
-export function parseJiraReportIssue(
+export async function parseJiraReportIssue(
   value: unknown,
   plan: JiraReportFieldPlan,
-): JiraReportIssue | undefined {
+  request: JiraMutationRequest,
+): Promise<{ readonly issue: JiraReportIssue; readonly checkerUnavailable: boolean } | undefined> {
   const identity = identityOf(value);
   if (identity === undefined) return undefined;
   const { key, fields, typeName, typeId, subtask } = identity;
@@ -319,8 +332,10 @@ export function parseJiraReportIssue(
   const statusCategory = category(status);
   const summary = stringOf(fields.summary, SUMMARY_MAX) ?? "";
   const facts = checkerFacts(key, fields, plan, { typeName, typeId, category: statusCategory });
+  const checked = await checkerDeviations(facts, plan, request);
+  const checkerUnavailable = checked === "unavailable";
   const labels = labelsOf(fields, plan);
-  return {
+  const issue: JiraReportIssue = {
     key,
     typeName,
     subtask,
@@ -334,11 +349,12 @@ export function parseJiraReportIssue(
     estimate,
     deviations: dedupeDeviations([
       ...requiredDeviations(fields, typeId, plan),
-      ...checkerDeviations(facts, plan),
+      ...(checkerUnavailable ? [] : checked),
     ]),
-    templateJudged: plan.checker !== undefined && (plan.checker.covers?.(facts) ?? true),
+    templateJudged: templateJudged(plan.checker, facts, checkerUnavailable),
     requiredJudged: plan.requiredByType.has(typeId),
     requirementIds: referencedRequirements(summary, labels, fields, plan),
     labels,
   };
+  return { issue, checkerUnavailable };
 }

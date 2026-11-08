@@ -10,6 +10,7 @@ import type {
 import {
   useOptionalWidgetTranslate as useTranslate,
   type OptionalWidgetTranslate,
+  type WidgetMessageKey,
 } from "@/lib/optional-widget-i18n";
 import {
   knowledgeTurnCoverage,
@@ -78,6 +79,7 @@ import { JIRA_SYSTEM_ACTION_TOOLS } from "./jira-system-action-receipt";
 import { JIRA_ACCOUNT_RESOURCE_TOOLS } from "./jira-account-resource-presentation";
 import {
   jiraToolOutcomeView,
+  knowledgeToolOutcomeView,
   JIRA_OUTCOME_ITEMS_SHOWN,
   JIRA_PROJECT_TOOLS,
   type JiraOutcomeItem,
@@ -155,10 +157,13 @@ function JiraContextLink({ href, label }: {
     </a>
   );
 }
-function JiraResultItems({ items }: { readonly items: readonly JiraOutcomeItem[] }): ReactNode {
+function JiraResultItems({ items, label = "chat.jira.outcome.results" }: {
+  readonly items: readonly JiraOutcomeItem[];
+  readonly label?: WidgetMessageKey | undefined;
+}): ReactNode {
   const t = useTranslate();
   return (
-    <ul className={styles.cmpResultItems} aria-label={t("chat.jira.outcome.results")}>
+    <ul className={styles.cmpResultItems} aria-label={t(label)}>
       {items.map((item, index) => {
         const title = (
           <>
@@ -226,6 +231,8 @@ function JiraResultCounts({ view }: { readonly view: JiraToolOutcomeView }): Rea
   const t = useTranslate();
   return (
     <>
+      {view.facts?.map((fact) => <p key={fact.label}>{t(fact.label)}: {fact.value}</p>)}
+      {view.labels?.map((label) => <p key={label}>{t(label)}</p>)}
       {view.returnedCount === undefined ? null : (
         <p>
           {view.total === undefined
@@ -248,19 +255,22 @@ function JiraResultCounts({ view }: { readonly view: JiraToolOutcomeView }): Rea
     </>
   );
 }
-function JiraResultList({ items }: { readonly items: readonly JiraOutcomeItem[] }): ReactNode {
+function JiraResultList({ items, label }: {
+  readonly items: readonly JiraOutcomeItem[];
+  readonly label?: WidgetMessageKey | undefined;
+}): ReactNode {
   const t = useTranslate();
   return (
     <>
       {items.length === 0 ? null : (
-        <JiraResultItems items={items.slice(0, JIRA_OUTCOME_ITEMS_SHOWN)} />
+        <JiraResultItems items={items.slice(0, JIRA_OUTCOME_ITEMS_SHOWN)} label={label} />
       )}
       {items.length <= JIRA_OUTCOME_ITEMS_SHOWN ? null : (
         <details className={styles.cmpResultMore}>
           <summary>
             {t("chat.jira.outcome.more", { count: items.length - JIRA_OUTCOME_ITEMS_SHOWN })}
           </summary>
-          <JiraResultItems items={items.slice(JIRA_OUTCOME_ITEMS_SHOWN)} />
+          <JiraResultItems items={items.slice(JIRA_OUTCOME_ITEMS_SHOWN)} label={label} />
         </details>
       )}
     </>
@@ -304,7 +314,7 @@ function JiraToolOutcome({ exchange }: { readonly exchange: ChatToolExchange }):
   return (
     <>
       <JiraResultCounts view={view} />
-      <JiraResultList items={view.items} />
+      <JiraResultList items={view.items} label={view.resultsLabel} />
       <JiraResultProblems view={view} />
     </>
   );
@@ -391,7 +401,7 @@ function JiraToolExchange({
       {localDenial === undefined ? null : <p>{t(localDenial)}</p>}
       {report === undefined ? null : <JiraReportCard view={report} chatId={chatId} />}
       {report === undefined && partial !== undefined ? <p>{t(partial)}</p> : null}
-      {isKnownJiraToolAlias(exchange.call.name) ? (
+      {isKnownJiraToolAlias(exchange.call.name) || knowledgeToolOutcomeView(exchange) !== undefined ? (
         report === undefined ? (
           <JiraToolOutcome exchange={exchange} />
         ) : null

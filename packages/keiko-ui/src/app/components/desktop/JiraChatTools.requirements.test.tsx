@@ -1,5 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { axe } from "jest-axe";
 import type {
   ChatToolExchange,
   ChatToolTranscript,
@@ -10,6 +11,7 @@ import { createToolRef } from "@oscharko-dev/keiko-tool-catalog";
 import { JiraChatTools } from "./JiraChatTools";
 import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
+import * as diagnostics from "@/lib/client-diagnostics";
 
 function requirementsRead(totals: Record<string, unknown>, nextCursor?: string): ChatToolExchange {
   return {
@@ -115,8 +117,8 @@ function knowledgeReceipt(
   if (base.result?.status !== "completed") throw new TypeError("Expected completed tool receipt");
   return {
     ...base,
-    call: { ...base.call, arguments: args },
-    result: { ...base.result, toolRef: createToolRef(canonicalId, 1), data },
+    call: { ...base.call, name: canonicalId.replace("keiko.", "").replaceAll(".", "_"), arguments: args },
+    result: { ...base.result, toolRef: createToolRef(canonicalId, canonicalId === "keiko.knowledge.review" ? 2 : 1), data },
   };
 }
 
@@ -240,5 +242,52 @@ describe("durable Knowledge coverage notice", () => {
       },
     ]);
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+describe("readable Knowledge source receipts", () => {
+  it.each(["en", "de"] as const)("keeps requirements and document facts readable in %s after remount without Jira failure evidence", async (locale) => {
+    await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+    localStorage.setItem(I18N_STORAGE_KEY, locale);
+    const report = vi.spyOn(diagnostics, "reportClientDiagnostic");
+    try {
+      const requirement = knowledgeReceipt({ outcome: "succeeded", view: "units",
+        totals: { detectedCount: 3, matchedCount: 2, documentsScanned: 1, unitsOmitted: 0 },
+        items: [{ reference: "source-a:REQ-7", title: "Preserve evidence", statement: "Evidence must survive reload.",
+          documentScope: "source-a", documentName: "Requirements.pdf", pageLabel: "7", sectionPath: ["System", "Evidence"],
+          acceptanceCriteria: [{ id: "AC-7", text: "Restored evidence is readable." }], characterStart: 0, characterEnd: 36 }], nextCursor: "private-next" });
+      const document = knowledgeReceipt({ outcome: "succeeded", view: "read", totals: { documentCount: 9 },
+        items: [{ documentScope: "source-a", documentName: "Source.pdf", text: "Source <script> remains text.",
+          characterStart: 0, characterEnd: 30, positionSpace: "original-document-text", extractionStatus: "extracted" }],
+        coverage: { documentComplete: false, returnedChars: 30, documentChars: 90 } }, {}, "keiko.knowledge.documents");
+      const transcript: ChatToolTranscript = { schemaVersion: 1, exchanges: [requirement, { ...document, call: { ...document.call, id: "document-read" } }] };
+      const show = (value: ChatToolTranscript, state: ChatTurnState) => <I18nProvider>
+        <JiraChatTools transcript={value} turnState={state} messageId="private-knowledge-message" />
+      </I18nProvider>;
+      const live = render(show(transcript, "pending"));
+      live.rerender(show(transcript, "completed"));
+      const before = live.container.textContent;
+      live.unmount();
+      const saved = JSON.parse(JSON.stringify(transcript)) as ChatToolTranscript;
+      const restored = render(show(saved, "completed"));
+      expect(restored.container.textContent).toBe(before);
+      expect(screen.getByText("source-a:REQ-7")).toBeVisible();
+      expect(screen.getByText("Preserve evidence")).toBeVisible();
+      expect(screen.getByText("Evidence must survive reload.")).toBeVisible();
+      expect(screen.getByText(/AC-7: Restored evidence is readable\./u)).toBeVisible();
+      expect(screen.getByText(locale === "en" ? "Source page: 7" : "Quellseite: 7")).toBeVisible();
+      expect(screen.getByText(locale === "en" ? "Section: System › Evidence" : "Abschnitt: System › Evidence")).toBeVisible();
+      expect(screen.getByText("Source <script> remains text.")).toBeVisible();
+      expect(screen.getAllByRole("list", { name: locale === "en" ? "Knowledge results" : "Wissensergebnisse" })).toHaveLength(2);
+      expect(screen.getByText(locale === "en" ? "1 of 2 results returned." : "1 von 2 Ergebnissen zurückgegeben.")).toBeVisible();
+      expect(screen.queryByText(locale === "en" ? "1 of 9 results returned." : "1 von 9 Ergebnissen zurückgegeben.")).toBeNull();
+      expect(restored.container.querySelector("pre, script, a, input, button")).toBeNull();
+      expect(restored.container.textContent).not.toMatch(/private-next|readable view.*unavailable|Jira-Ergebnisse|Jira results/u);
+      expect(report.mock.calls.some(([, meta]) => meta?.jiraResultPresentation !== undefined)).toBe(false);
+      expect(await axe(restored.container)).toHaveNoViolations();
+    } finally {
+      report.mockRestore();
+      localStorage.removeItem(I18N_STORAGE_KEY);
+    }
   });
 });

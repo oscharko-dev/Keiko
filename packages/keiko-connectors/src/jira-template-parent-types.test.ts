@@ -93,13 +93,15 @@ describe("native parent issue-type admission", () => {
     })).toEqual({ ok: true });
     expect(request).not.toHaveBeenCalled();
   });
-  it("does not mistake an embedded parent type for report/compliance evidence", () => {
+  it("does not mistake an embedded parent type for report/compliance evidence", async () => {
     const template = rule();
     const fields = { parent: PARENT };
     expect(checkJiraIssueTemplate(template, { operation: "create", projectKey: "SYN", issueType: { name: "Sub-task" }, fields }, [{ id: "parent", name: "Parent" }]))
       .toMatchObject([{ ruleId: "template-unreadable" }]);
     const checker = createJiraReportTemplateChecker(() => ({ templates: [template], unreadable: 0 })).bind([]);
-    expect(checker).toBe("unavailable");
+    if (typeof checker === "string") throw new TypeError("Expected bound parent checker");
+    expect(await checker.check({ key: "SYN-1", projectKey: "SYN", issueTypeId: "10003", typeName: "Sub-task",
+      category: "new", fields })).toBe("unavailable");
     const legacy = { ...template, parent: { field: "parent" } };
     expect(createJiraReportTemplateChecker(() => ({ templates: [legacy], unreadable: 0 })).bind([]))
       .not.toBe("unavailable");
@@ -112,6 +114,13 @@ describe("native parent issue-type admission", () => {
 });
 
 describe("native validation of a saved parent-type clause", () => {
+  it("reports an oversized native parent-type catalog as a bounds failure", async () => {
+    const request = vi.fn<JiraMutationRequest>(async (path) => path === "project/SYN"
+      ? { ok: true, status: 200, body: { id: "10000", key: "SYN", issueTypes: [] } }
+      : { ok: true, status: 200, body: undefined, items: Array.from({ length: 1001 }, (_, index) => ({ id: String(index + 1), name: "Task" })) });
+    expect(await readJiraTemplateInstanceMetadata(request, rule())).toEqual({ ok: false, reason: "bounds-exceeded" });
+    expect(request).toHaveBeenCalledTimes(2);
+  });
   it("uses the global type catalog, not the child project's available types, and never defaults unknown IDs", async () => {
     const request = vi.fn<JiraMutationRequest>(async (path) => {
       if (path === "project/SYN") return { ok: true, status: 200, body: { id: "10000", key: "SYN", issueTypes: [{ id: "10003", name: "Sub-task" }] } };

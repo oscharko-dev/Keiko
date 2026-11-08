@@ -222,25 +222,68 @@ function readPage(body: Record<string, unknown>, startAt: number): PageRead | un
   if (body.startAt !== startAt || startAt + issues.length > total) return undefined;
   return { issues, total };
 }
-type Ingest = "ok" | "invalid" | "repeated" | "budget" | "omitted";
-function ingestPage(
+type Ingest = "ok" | "invalid" | "repeated" | "budget" | "omitted" | "slice";
+type ParsedIssue = Exclude<Awaited<ReturnType<typeof parseJiraReportIssue>>, undefined>;
+/** A hit contributes observations only when it survives the slice and is retained. */
+function issueFieldPlan(plan: JiraReportFieldPlan): JiraReportFieldPlan {
+  return {
+    ...plan,
+    parentFieldsSeen: new Set(),
+    parentFieldsNonKey: new Set(),
+    parentProposals: new Map(),
+    omittedFields: new Set(),
+  };
+}
+function retainFieldObservations(
+  plan: JiraReportFieldPlan,
+  observed: JiraReportFieldPlan,
+): void {
+  for (const id of observed.parentFieldsSeen) plan.parentFieldsSeen.add(id);
+  for (const id of observed.parentFieldsNonKey) plan.parentFieldsNonKey.add(id);
+  for (const [key, proposals] of observed.parentProposals) plan.parentProposals.set(key, proposals);
+}
+function retainIssue(
   session: JiraReportSession,
-  raws: readonly unknown[],
+  parsed: ParsedIssue,
   plan: JiraReportFieldPlan,
   budget: number,
 ): Ingest {
-  for (const raw of raws) {
-    const issue = parseJiraReportIssue(raw, plan);
-    if (issue === undefined) return "invalid";
-    if (plan.omittedFields.size > 0) return "omitted";
-    if (session.issues.has(issue.key)) return "repeated";
-    session.issues.set(issue.key, issue);
-    session.bytes += jiraReportIssueCost(issue) + jiraReportProposalCost(plan, issue.key);
-    session.lastKey = issue.key;
-    session.startAt += 1;
-    if (session.bytes > budget) return "budget";
-  }
-  return "ok";
+  const { issue } = parsed;
+  if (plan.omittedFields.size > 0) return "omitted";
+  if (session.issues.has(issue.key)) return "repeated";
+  session.issues.set(issue.key, issue);
+  session.bytes += jiraReportIssueCost(issue) + jiraReportProposalCost(plan, issue.key);
+  session.lastKey = issue.key;
+  session.startAt += 1;
+  if (parsed.checkerUnavailable) session.checker = "unavailable";
+  return session.bytes > budget ? "budget" : "ok";
+}
+interface PageAdmission {
+  readonly http: JiraReportHttp;
+  readonly deadline: number;
+  readonly deps: JiraReportReadDeps;
+  readonly signal: AbortSignal;
+}
+function sliceAvailable({ deps, deadline, signal }: PageAdmission): boolean {
+  return !signal.aborted && deps.now() < deadline;
+}
+/** Sequential issue admission bounds concurrency; each issue's independent parents share the HTTP gate. */
+async function ingestPage(
+  session: JiraReportSession,
+  raws: readonly unknown[],
+  plan: JiraReportFieldPlan,
+  admission: PageAdmission,
+  index = 0,
+): Promise<Ingest> {
+  if (index === raws.length) return "ok";
+  if (plan.checker?.requiresNativeEvidence === true && !sliceAvailable(admission)) return "slice";
+  const observed = issueFieldPlan(plan);
+  const parsed = await parseJiraReportIssue(raws[index], observed, admission.http.request);
+  if (plan.checker?.requiresNativeEvidence === true && !sliceAvailable(admission)) return "slice";
+  if (parsed === undefined) return "invalid";
+  const retained = retainIssue(session, parsed, observed, admission.deps.memoryBudgetBytes);
+  if (retained === "ok" || retained === "budget") retainFieldObservations(plan, observed);
+  return retained === "ok" ? ingestPage(session, raws, plan, admission, index + 1) : retained;
 }
 function adaptPageSize(session: JiraReportSession, truncated: boolean): void {
   if (truncated) {
@@ -288,12 +331,13 @@ function newIssuesOf(
 function scopeMoved(session: JiraReportSession, page: PageRead): boolean {
   return session.total !== undefined && page.total !== session.total;
 }
-function onPageRead(
+async function onPageRead(
   session: JiraReportSession,
   deps: JiraReportReadDeps,
   page: PageRead,
   overlap: number,
-): void {
+  admission: PageAdmission,
+): Promise<void> {
   const plan = session.plan;
   const fresh = newIssuesOf(session, page, overlap);
   if (plan === undefined) {
@@ -304,12 +348,13 @@ function onPageRead(
     finish(session, deps, "scope-changed");
     return;
   }
-  const ingested = ingestPage(session, fresh, plan, deps.memoryBudgetBytes);
+  const ingested = await ingestPage(session, fresh, plan, admission);
   rejectNonParentFields(plan);
   session.pageCount += 1;
   session.transientFailures = 0;
   session.failure = undefined;
   session.total = page.total;
+  if (ingested === "slice") return;
   adaptPageSize(session, false);
   if (ingested === "ok") {
     if (fresh.length === 0 || session.startAt >= page.total) finish(session, deps);
@@ -328,9 +373,9 @@ function onPageRead(
 }
 async function readNextPage(
   session: JiraReportSession,
-  deps: JiraReportReadDeps,
-  http: JiraReportHttp,
+  admission: PageAdmission,
 ): Promise<void> {
+  const { deps, http } = admission;
   if (session.plan === undefined) {
     finish(session, deps, "read-failed");
     return;
@@ -350,7 +395,7 @@ async function readNextPage(
     return;
   }
   const page = readPage(fetched.body, session.startAt - overlap);
-  if (page !== undefined) onPageRead(session, deps, page, overlap);
+  if (page !== undefined) await onPageRead(session, deps, page, overlap, admission);
   else {
     // Jira answered, but without coherent pagination: fewer issues per page cannot repair that.
     session.failure = "malformed-payload";
@@ -360,16 +405,14 @@ async function readNextPage(
 
 async function pump(
   session: JiraReportSession,
-  deps: JiraReportReadDeps,
-  http: JiraReportHttp,
-  deadline: number,
+  admission: PageAdmission,
 ): Promise<void> {
-  if (session.phase !== "reading" || deps.signal.aborted || deps.now() >= deadline) return;
+  if (session.phase !== "reading" || !sliceAvailable(admission)) return;
   const before = session.transientFailures;
-  await readNextPage(session, deps, http);
+  await readNextPage(session, admission);
   // A transient failure ends this slice; the next call of the tool resumes at the same offset.
   if (session.transientFailures > before) return;
-  await pump(session, deps, http, deadline);
+  await pump(session, admission);
 }
 
 /** Read Jira until the scope is complete or the slice ends; the session carries the progress. */
@@ -377,8 +420,12 @@ export async function advanceJiraReportSession(
   session: JiraReportSession,
   deps: JiraReportReadDeps,
 ): Promise<void> {
-  const http = createJiraReportHttp(deps);
   const deadline = deps.now() + deps.sliceMs;
+  const signal = AbortSignal.any([deps.signal, AbortSignal.timeout(Math.max(1, Math.ceil(deps.sliceMs)))]);
+  const http = createJiraReportHttp(deps, {
+    signal,
+    beforeEffect: () => deps.now() < deadline && deps.beforeEffect(),
+  });
   if (session.phase === "new") await initialize(session, deps, http);
-  await pump(session, deps, http, deadline);
+  await pump(session, { http, deps, deadline, signal });
 }
