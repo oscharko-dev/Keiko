@@ -342,7 +342,7 @@ async function groupedEntries(
       groups.push(...[next, ...pending].flatMap((chunk) => chunk.chunk.map(singleGroup)));
       break;
     }
-    const step = await outlineChunk(state, ports, next.chunk);
+    const step = await outlineChunk(state, ports, next.chunk); // NOSONAR typescript:S9382 -- each answer decides what is asked next and spends the shared deadline
     groups.push(...step.groups);
     for (const half of step.halves ?? []) pending.push({ chunk: half, retried: next.retried });
     const unassigned = step.unassigned ?? [];

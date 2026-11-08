@@ -1309,7 +1309,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       this.retainToolResponse(request.modelId, prepared);
       for (const call of prepared.toolCalls) await this.dispatch(call); // NOSONAR typescript:S9382 -- dispatches share authority/budgets; receipts, mutation journals and transcripts must settle before the next admission
       this.currentToolResponse = undefined;
-      await this.offerBatchDrafts(prepared.toolCalls);
+      await this.offerBatchDrafts(prepared.toolCalls); // NOSONAR typescript:S9382 -- the next model round reads the batch offer this round settled
       this.correctedSinceProgress = false;
     }
     requireDispatch(false, "denied", "budget-exhausted");
