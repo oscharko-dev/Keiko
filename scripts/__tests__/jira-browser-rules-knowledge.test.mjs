@@ -1,6 +1,7 @@
 // Source regressions for the live journey's independent verdicts, not live qualification.
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
+import { URL } from "node:url";
 import {
   gradeRuleRefusal,
   gradeCorrectedCreate,
@@ -374,7 +375,9 @@ describe("live UI journey wiring", () => {
     expect(setup).not.toMatch(
       /page\.route\(|\.request\.(?:post|put|patch|delete)\(|jsonRequest\(/u,
     );
-    expect(setup).toContain("templates.some((entry) => entry.id === skill.id), false");
+    expect(setup).toMatch(
+      /assert\.equal\(\s*templates\.some\(\(entry\) => entry\.id === skill\.id\),\s*false,/u,
+    );
     const journey = read("browser-rules-knowledge-journey.mjs");
     expect(journey).toContain('from "./browser-workflow-turn.mjs"');
     expect(journey).toContain("await opened.page.reload()");
