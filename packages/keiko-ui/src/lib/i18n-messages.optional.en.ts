@@ -3,10 +3,13 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   ...EN_AUTONOMY_MODE_LABELS,
   "atlassianConnectors.action.unlock-user-anonymization": "Request Jira anonymization unlock",
   "chat.jira.accountWrite.executingNode": "Observed task owner node",
-  "chat.jira.accountWrite.unlockScope": "Unlock was requested. The node shutdown confirmation is a human attestation, not native proof that the process stopped. Unlock and subsequent anonymization effects remain unconfirmed; do not replay automatically.",
+  "chat.jira.accountWrite.unlockScope":
+    "Unlock was requested. The node shutdown confirmation is a human attestation, not native proof that the process stopped. Unlock and subsequent anonymization effects remain unconfirmed; do not replay automatically.",
   "chat.jira.accountWrite.taskReviewAvailable": "Bound native anonymization task review available",
-  "chat.jira.accountWrite.taskReviewUnavailable": "Complete bound anonymization task review unavailable",
-  "chat.jira.accountWrite.taskOwnerNotShutdown": "An observed task owner or interrupted status does not prove node shutdown or a stopped worker.",
+  "chat.jira.accountWrite.taskReviewUnavailable":
+    "Complete bound anonymization task review unavailable",
+  "chat.jira.accountWrite.taskOwnerNotShutdown":
+    "An observed task owner or interrupted status does not prove node shutdown or a stopped worker.",
   "atlassianConnectors.action.upload-temporary-avatar": "Upload temporary Jira avatar",
   "atlassianConnectors.action.crop-temporary-avatar": "Set temporary Jira avatar crop",
   "atlassianConnectors.action.upload-issue-type-avatar": "Upload Jira issue-type avatar",
@@ -39,9 +42,11 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.action.archive-project": "Archive Jira project",
   "atlassianConnectors.action.restore-project": "Restore Jira project",
   "atlassianConnectors.action.update-project-type": "Change Jira project type",
-  "atlassianConnectors.action.set-project-permission-scheme": "Assign Jira project permission scheme",
+  "atlassianConnectors.action.set-project-permission-scheme":
+    "Assign Jira project permission scheme",
   "atlassianConnectors.action.set-project-priority-scheme": "Assign Jira project priority scheme",
-  "atlassianConnectors.action.remove-project-priority-scheme": "Remove Jira project priority scheme",
+  "atlassianConnectors.action.remove-project-priority-scheme":
+    "Remove Jira project priority scheme",
   "atlassianConnectors.action.update-myself": "Update connected Jira profile",
   "atlassianConnectors.action.update-my-password": "Change connected Jira password",
   "atlassianConnectors.action.update-user-password": "Change Jira user password",
@@ -61,16 +66,23 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.resourceWrite.failureStatus": "Native failure HTTP status",
   "chat.jira.resourceWrite.applicationLink": "Configured application-link ID",
   "chat.jira.resourceWrite.destinationDigest": "Configured destination digest",
-  "chat.jira.resourceWrite.selectedRemoteIssue": "Selected remote issue ID (not independently observed)",
+  "chat.jira.resourceWrite.selectedRemoteIssue":
+    "Selected remote issue ID (not independently observed)",
   "chat.jira.resourceWrite.requestedCount": "Requested issue count",
   "chat.jira.resourceWrite.originalPosition": "Observed original position",
   "chat.jira.resourceWrite.currentPosition": "Observed current position",
-  "chat.jira.resourceWrite.createdUnknown": "Created issue identities were not returned. No IDs or input-to-result assignments are inferred.",
-  "chat.jira.resourceWrite.bulkScope": "One native batch was requested. Returned issue IDs and native partial failures are retained without assigning successes to input rows. Full creation and follow-up effects remain unconfirmed; do not replay the batch.",
-  "chat.jira.resourceWrite.delegationScope": "Jira was asked to perform a delegated reciprocal-link effect through the freshly bound configured application link. The remote actor and remote issue are not independently observed; local and remote effects may be partial.",
-  "chat.jira.resourceWrite.subtaskScope": "This operation reorders existing subtasks; it does not change their parent. Native positions and the reviewed set do not prove all ordering effects.",
-  "chat.jira.resourceWrite.projectScope": "Project, issue, permission and scheme consequences remain unconfirmed. A missing resource or visible subset is not proof of complete deletion or migration. Restoration does not run a reindex automatically.",
-  "chat.jira.resourceWrite.issueScope": "Archive, restore and deletion effects remain unconfirmed. Missing issues and visible search results do not prove complete effects or absence.",
+  "chat.jira.resourceWrite.createdUnknown":
+    "Created issue identities were not returned. No IDs or input-to-result assignments are inferred.",
+  "chat.jira.resourceWrite.bulkScope":
+    "One native batch was requested. Returned issue IDs and native partial failures are retained without assigning successes to input rows. Full creation and follow-up effects remain unconfirmed; do not replay the batch.",
+  "chat.jira.resourceWrite.delegationScope":
+    "Jira was asked to perform a delegated reciprocal-link effect through the freshly bound configured application link. The remote actor and remote issue are not independently observed; local and remote effects may be partial.",
+  "chat.jira.resourceWrite.subtaskScope":
+    "This operation reorders existing subtasks; it does not change their parent. Native positions and the reviewed set do not prove all ordering effects.",
+  "chat.jira.resourceWrite.projectScope":
+    "Project, issue, permission and scheme consequences remain unconfirmed. A missing resource or visible subset is not proof of complete deletion or migration. Restoration does not run a reindex automatically.",
+  "chat.jira.resourceWrite.issueScope":
+    "Archive, restore and deletion effects remain unconfirmed. Missing issues and visible search results do not prove complete effects or absence.",
   "chat.jira.accountWrite.avatarType": "Avatar owner type",
   "chat.jira.accountWrite.avatarId": "Observed avatar ID",
   "chat.jira.accountWrite.uploadDigest": "Reviewed upload digest",
@@ -84,25 +96,42 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.accountWrite.cropX": "Acknowledged crop X offset",
   "chat.jira.accountWrite.cropY": "Acknowledged crop Y offset",
   "chat.jira.accountWrite.cropWidth": "Acknowledged crop width",
-  "chat.jira.accountWrite.avatarSelectionScope": "Confirmation covers only independently observed avatar selection for this bound owner, not image bytes or every visible use.",
-  "chat.jira.accountWrite.temporaryScope": "Temporary upload/crop metadata is an acknowledgement, not proof of a saved avatar, image content or selection. No image or session material is displayed.",
-  "chat.jira.accountWrite.avatarConsequences": "Avatar creation or deletion remains unconfirmed for all image and assignment consequences. A returned ID is retained without guessing selection or image content.",
-  "chat.jira.accountWrite.identityConsequences": "Only an exact display-name-only update can confirm metadata. Account access, directory defaults, generated credentials and deletion consequences remain unconfirmed.",
-  "chat.jira.accountWrite.anonymizationScope": "Anonymization was requested, not proved complete. The replacement owner is observed separately; no global reference or worker completion is inferred.",
-  "chat.jira.accountWrite.sessionInvalidationScope": "Session invalidation was requested; this result does not prove that all sessions ended.",
-  "chat.jira.accountWrite.createdIdentityUnknown": "The acknowledgement did not provide the new identity. No name-based recovery or repeated creation is offered.",
-  "chat.jira.accountWrite.privateValuesOmitted": "Passwords, license values and session cookies are excluded from this result and its saved card.",
-  "chat.jira.accountWrite.profileScope": "Confirmation covers the independently observed display name and unchanged account identity and active state.",
-  "chat.jira.accountWrite.privateEffectScope": "Password changes, logout and release of elevated access remain unconfirmed after acknowledgement. No credential or session-clearance guarantee is inferred.",
-  "chat.jira.accountWrite.sessionObserved": "The private session actor was independently observed using that session. No cookie or reusable credential is shown.",
-  "chat.jira.accountWrite.sessionUnconfirmed": "An independently bound private session has not been confirmed for this result.",
-  "chat.jira.accountWrite.passwordValidationScope": "Native password-policy observation only: no user or password was changed, and old-password validity or account availability was not established.",
-  "chat.jira.accountWrite.licenseValidationScope": "Native license-validation observation only: no license was activated and no license value is displayed.",
+  "chat.jira.accountWrite.avatarSelectionScope":
+    "Confirmation covers only independently observed avatar selection for this bound owner, not image bytes or every visible use.",
+  "chat.jira.accountWrite.temporaryScope":
+    "Temporary upload/crop metadata is an acknowledgement, not proof of a saved avatar, image content or selection. No image or session material is displayed.",
+  "chat.jira.accountWrite.avatarConsequences":
+    "Avatar creation or deletion remains unconfirmed for all image and assignment consequences. A returned ID is retained without guessing selection or image content.",
+  "chat.jira.accountWrite.identityConsequences":
+    "Only an exact display-name-only update can confirm metadata. Account access, directory defaults, generated credentials and deletion consequences remain unconfirmed.",
+  "chat.jira.accountWrite.anonymizationScope":
+    "Anonymization was requested, not proved complete. The replacement owner is observed separately; no global reference or worker completion is inferred.",
+  "chat.jira.accountWrite.sessionInvalidationScope":
+    "Session invalidation was requested; this result does not prove that all sessions ended.",
+  "chat.jira.accountWrite.createdIdentityUnknown":
+    "The acknowledgement did not provide the new identity. No name-based recovery or repeated creation is offered.",
+  "chat.jira.accountWrite.privateValuesOmitted":
+    "Passwords, license values and session cookies are excluded from this result and its saved card.",
+  "chat.jira.accountWrite.profileScope":
+    "Confirmation covers the independently observed display name and unchanged account identity and active state.",
+  "chat.jira.accountWrite.privateEffectScope":
+    "Password changes, logout and release of elevated access remain unconfirmed after acknowledgement. No credential or session-clearance guarantee is inferred.",
+  "chat.jira.accountWrite.sessionObserved":
+    "The private session actor was independently observed using that session. No cookie or reusable credential is shown.",
+  "chat.jira.accountWrite.sessionUnconfirmed":
+    "An independently bound private session has not been confirmed for this result.",
+  "chat.jira.accountWrite.passwordValidationScope":
+    "Native password-policy observation only: no user or password was changed, and old-password validity or account availability was not established.",
+  "chat.jira.accountWrite.licenseValidationScope":
+    "Native license-validation observation only: no license was activated and no license value is displayed.",
   "chat.jira.accountWrite.validationAccepted": "Native validation accepted",
   "chat.jira.accountWrite.violationCount": "Native validation violation count",
-  "chat.jira.humanInput.ownerShutdownConfirmation": "I have shut down Jira node {node} and verified that its anonymization worker has stopped.",
-  "chat.jira.humanInput.attestationPrivate": "Your confirmation applies to this reviewed task and node only. Keiko records it as a human attestation; Jira controls the native unlock.",
-  "chat.jira.humanInput.ownerUnavailable": "The reviewed owner node is unavailable. Refresh the task in Jira before a new unlock request.",
+  "chat.jira.humanInput.ownerShutdownConfirmation":
+    "I have shut down Jira node {node} and verified that its anonymization worker has stopped.",
+  "chat.jira.humanInput.attestationPrivate":
+    "Your confirmation applies to this reviewed task and node only. Keiko records it as a human attestation; Jira controls the native unlock.",
+  "chat.jira.humanInput.ownerUnavailable":
+    "The reviewed owner node is unavailable. Refresh the task in Jira before a new unlock request.",
   "chat.jira.humanInput.title": "Private Jira input",
   "chat.jira.humanInput.review.server": "Connected Jira server",
   "chat.jira.humanInput.review.purpose": "Purpose of this input",
@@ -114,15 +143,22 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.humanInput.review.proposedUsername": "Proposed username (not an observed account)",
   "chat.jira.humanInput.review.executingNode": "Observed task owner node",
   "chat.jira.humanInput.review.instance": "Connected Jira instance",
-  "chat.jira.humanInput.review.profile": "Confirm the connected user's profile change with their current password.",
+  "chat.jira.humanInput.review.profile":
+    "Confirm the connected user's profile change with their current password.",
   "chat.jira.humanInput.review.ownPassword": "Change the connected user's password.",
-  "chat.jira.humanInput.review.userPassword": "Set a new password for the verified target user shown below.",
-  "chat.jira.humanInput.review.createValidation": "Check a proposed password against Jira's creation policy; no account is created.",
-  "chat.jira.humanInput.review.updateValidation": "Check Jira's password-update policy for the verified target; no password is changed.",
-  "chat.jira.humanInput.review.licenseValidation": "Validate a license with the connected Jira server; no license is activated.",
+  "chat.jira.humanInput.review.userPassword":
+    "Set a new password for the verified target user shown below.",
+  "chat.jira.humanInput.review.createValidation":
+    "Check a proposed password against Jira's creation policy; no account is created.",
+  "chat.jira.humanInput.review.updateValidation":
+    "Check Jira's password-update policy for the verified target; no password is changed.",
+  "chat.jira.humanInput.review.licenseValidation":
+    "Validate a license with the connected Jira server; no license is activated.",
   "chat.jira.humanInput.review.login": "Create a private Jira session for the connected user.",
-  "chat.jira.humanInput.review.unlock": "Provide human shutdown confirmation for the observed anonymization task and node.",
-  "chat.jira.humanInput.review.unavailable": "The connected server and target could not be verified. Refresh before providing private input.",
+  "chat.jira.humanInput.review.unlock":
+    "Provide human shutdown confirmation for the observed anonymization task and node.",
+  "chat.jira.humanInput.review.unavailable":
+    "The connected server and target could not be verified. Refresh before providing private input.",
   "chat.jira.humanInput.password": "Password",
   "chat.jira.humanInput.currentPassword": "Current password",
   "chat.jira.humanInput.newPassword": "New password",
@@ -130,11 +166,15 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.humanInput.license": "License key",
   "chat.jira.humanInput.waiting": "This Jira operation needs your input.",
   "chat.jira.humanInput.ready": "Your input is sealed and ready for this operation.",
-  "chat.jira.humanInput.consumed": "Your input was consumed once. The operation result appears in its result card.",
+  "chat.jira.humanInput.consumed":
+    "Your input was consumed once. The operation result appears in its result card.",
   "chat.jira.humanInput.cancelled": "You cancelled this input request.",
-  "chat.jira.humanInput.expired": "The input window expired. Refresh the operation result before deciding how to continue.",
-  "chat.jira.humanInput.private": "Only Jira receives these values. They are excluded from the model, conversation and saved drafts. Existing operation permissions still apply.",
-  "chat.jira.humanInput.failed": "The input state could not be confirmed. Refresh before entering values again; the submission is never retried automatically.",
+  "chat.jira.humanInput.expired":
+    "The input window expired. Refresh the operation result before deciding how to continue.",
+  "chat.jira.humanInput.private":
+    "Only Jira receives these values. They are excluded from the model, conversation and saved drafts. Existing operation permissions still apply.",
+  "chat.jira.humanInput.failed":
+    "The input state could not be confirmed. Refresh before entering values again; the submission is never retried automatically.",
   "chat.jira.humanInput.fields": "Requested private fields",
   "chat.jira.humanInput.optional": "Optional",
   "chat.jira.humanInput.required": "Required",
@@ -160,7 +200,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.action.process-reindex-requests": "Process Jira reindex requests",
   "atlassianConnectors.action.run-upgrade": "Run Jira delayed upgrade tasks",
   "atlassianConnectors.action.set-application-role": "Replace Jira application role groups",
-  "atlassianConnectors.action.set-application-roles": "Replace selected Jira application role groups",
+  "atlassianConnectors.action.set-application-roles":
+    "Replace selected Jira application role groups",
   "atlassianConnectors.action.add-user-application": "Add Jira user application access",
   "atlassianConnectors.action.remove-user-application": "Remove Jira user application access",
   "atlassianConnectors.action.set-user-columns": "Set Jira user columns",
@@ -199,20 +240,34 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.systemAction.reviewedLinkTypeCount": "Reviewed link-type sequence length",
   "chat.jira.systemAction.originalTerm": "Original term",
   "chat.jira.systemAction.selectedTermCount": "Selected term count",
-  "chat.jira.jobs.noPriorTask": "Jira reports no prior reindex task for the current or latest task lookup. No task ID, progress or completion is inferred.",
-  "chat.jira.systemAction.maintenanceUnconfirmed": "A maintenance acknowledgement alone does not confirm job completion, index contents, cluster consequences or deletion.",
-  "chat.jira.systemAction.currentJobNotCorrelated": "A current or latest task observation is not proof that it belongs to this request. No completion percentage or duration unit is inferred.",
-  "chat.jira.systemAction.groupConsequences": "Group existence and membership observations do not establish effective permissions or every restriction-transfer consequence.",
-  "chat.jira.systemAction.inheritedMembership": "The native member list includes subgroups. Observed membership does not prove a direct assignment; receipt flags describe requested direct membership.",
-  "chat.jira.systemAction.directoryConsequences": "Configuration is not effective-user-permission proof. Actor and target account remain separate; unknown effects must not be replayed.",
-  "chat.jira.systemAction.namedUserLayout": "This is the selected user's ordered column layout; repeated IDs remain repeated. Reset acknowledgement does not prove default inheritance.",
-  "chat.jira.systemAction.selectedRolesOnly": "Only the selected application-role groups/default groups are replaced. Explicit empty lists clear them; omitted roles remain outside the request.",
-  "chat.jira.systemAction.applicationAssignment": "This requests application access for the exact reviewed user and application role. Role configuration and an acknowledgement do not prove the user's effective access.",
-  "chat.jira.systemAction.schemaConsequences": "Native schema configuration is not proof of a complete issue migration. Relevant saved formal rules still govern actual field, type-selection and parent-link changes.",
-  "chat.jira.systemAction.orderUnconfirmed": "The reviewed visible sequence does not independently prove Jira's persistent order or collation. No index or name is treated as a new identity.",
-  "chat.jira.systemAction.notificationUnconfirmed": "The native response acknowledges a notification request only. Recipient delivery is unconfirmed; do not resend after uncertainty.",
-  "chat.jira.systemAction.pinScope": "Only the exact reviewed same-issue comment is pinned. This action neither sends a notification nor unpins another comment.",
-  "chat.jira.systemAction.requestIdsUnknown": "Acknowledged request IDs were not supplied. No task identity or empty queue is inferred.",
+  "chat.jira.jobs.noPriorTask":
+    "Jira reports no prior reindex task for the current or latest task lookup. No task ID, progress or completion is inferred.",
+  "chat.jira.systemAction.maintenanceUnconfirmed":
+    "A maintenance acknowledgement alone does not confirm job completion, index contents, cluster consequences or deletion.",
+  "chat.jira.systemAction.currentJobNotCorrelated":
+    "A current or latest task observation is not proof that it belongs to this request. No completion percentage or duration unit is inferred.",
+  "chat.jira.systemAction.groupConsequences":
+    "Group existence and membership observations do not establish effective permissions or every restriction-transfer consequence.",
+  "chat.jira.systemAction.inheritedMembership":
+    "The native member list includes subgroups. Observed membership does not prove a direct assignment; receipt flags describe requested direct membership.",
+  "chat.jira.systemAction.directoryConsequences":
+    "Configuration is not effective-user-permission proof. Actor and target account remain separate; unknown effects must not be replayed.",
+  "chat.jira.systemAction.namedUserLayout":
+    "This is the selected user's ordered column layout; repeated IDs remain repeated. Reset acknowledgement does not prove default inheritance.",
+  "chat.jira.systemAction.selectedRolesOnly":
+    "Only the selected application-role groups/default groups are replaced. Explicit empty lists clear them; omitted roles remain outside the request.",
+  "chat.jira.systemAction.applicationAssignment":
+    "This requests application access for the exact reviewed user and application role. Role configuration and an acknowledgement do not prove the user's effective access.",
+  "chat.jira.systemAction.schemaConsequences":
+    "Native schema configuration is not proof of a complete issue migration. Relevant saved formal rules still govern actual field, type-selection and parent-link changes.",
+  "chat.jira.systemAction.orderUnconfirmed":
+    "The reviewed visible sequence does not independently prove Jira's persistent order or collation. No index or name is treated as a new identity.",
+  "chat.jira.systemAction.notificationUnconfirmed":
+    "The native response acknowledges a notification request only. Recipient delivery is unconfirmed; do not resend after uncertainty.",
+  "chat.jira.systemAction.pinScope":
+    "Only the exact reviewed same-issue comment is pinned. This action neither sends a notification nor unpins another comment.",
+  "chat.jira.systemAction.requestIdsUnknown":
+    "Acknowledged request IDs were not supplied. No task identity or empty queue is inferred.",
   "chat.jira.systemAction.acceptAccess": "Accept global access consequences",
   "chat.jira.systemAction.reviewedUser": "Reviewed target account: key and native username",
   "chat.jira.systemAction.explicitRecipients": "Explicit recipients: keys and native usernames",
@@ -279,7 +334,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.systemAction.duration": "Native duration (unit not inferred)",
   "chat.jira.systemAction.nativeMessage": "Native message",
   "chat.jira.systemAction.reviewAvailable": "Complete native issue-type review snapshot available",
-  "chat.jira.systemAction.reviewUnavailable": "Complete native issue-type review snapshot unavailable",
+  "chat.jira.systemAction.reviewUnavailable":
+    "Complete native issue-type review snapshot unavailable",
   "atlassianConnectors.action.create-issue-type-scheme": "Create Jira issue type scheme",
   "atlassianConnectors.action.update-issue-type-scheme": "Update Jira issue type scheme",
   "atlassianConnectors.action.delete-issue-type-scheme": "Delete Jira issue type scheme",
@@ -297,17 +353,26 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.action.update-workflow-scheme-draft": "Update Jira workflow scheme draft",
   "atlassianConnectors.action.delete-workflow-scheme-draft": "Delete Jira workflow scheme draft",
   "atlassianConnectors.action.set-workflow-scheme-default": "Set Jira scheme default workflow",
-  "atlassianConnectors.action.delete-workflow-scheme-default": "Remove Jira scheme default workflow",
+  "atlassianConnectors.action.delete-workflow-scheme-default":
+    "Remove Jira scheme default workflow",
   "atlassianConnectors.action.set-workflow-scheme-draft-default": "Set Jira draft default workflow",
-  "atlassianConnectors.action.delete-workflow-scheme-draft-default": "Remove Jira draft default workflow",
+  "atlassianConnectors.action.delete-workflow-scheme-draft-default":
+    "Remove Jira draft default workflow",
   "atlassianConnectors.action.set-workflow-scheme-issue-type": "Set Jira scheme issue type mapping",
-  "atlassianConnectors.action.delete-workflow-scheme-issue-type": "Remove Jira scheme issue type mapping",
-  "atlassianConnectors.action.set-workflow-scheme-draft-issue-type": "Set Jira draft issue type mapping",
-  "atlassianConnectors.action.delete-workflow-scheme-draft-issue-type": "Remove Jira draft issue type mapping",
-  "atlassianConnectors.action.set-workflow-scheme-workflow": "Replace Jira scheme workflow references",
-  "atlassianConnectors.action.delete-workflow-scheme-workflow": "Remove Jira scheme workflow references",
-  "atlassianConnectors.action.set-workflow-scheme-draft-workflow": "Replace Jira draft workflow references",
-  "atlassianConnectors.action.delete-workflow-scheme-draft-workflow": "Remove Jira draft workflow references",
+  "atlassianConnectors.action.delete-workflow-scheme-issue-type":
+    "Remove Jira scheme issue type mapping",
+  "atlassianConnectors.action.set-workflow-scheme-draft-issue-type":
+    "Set Jira draft issue type mapping",
+  "atlassianConnectors.action.delete-workflow-scheme-draft-issue-type":
+    "Remove Jira draft issue type mapping",
+  "atlassianConnectors.action.set-workflow-scheme-workflow":
+    "Replace Jira scheme workflow references",
+  "atlassianConnectors.action.delete-workflow-scheme-workflow":
+    "Remove Jira scheme workflow references",
+  "atlassianConnectors.action.set-workflow-scheme-draft-workflow":
+    "Replace Jira draft workflow references",
+  "atlassianConnectors.action.delete-workflow-scheme-draft-workflow":
+    "Remove Jira draft workflow references",
   "atlassianConnectors.action.set-application-property": "Set Jira application property",
   "atlassianConnectors.action.set-system-columns": "Set Jira system columns",
   "atlassianConnectors.action.set-instance-base-url": "Set Jira instance base URL",
@@ -331,17 +396,26 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.schemeWrite.draftFlag": "Native draft flag",
   "chat.jira.schemeWrite.defaultScheme": "Native global default scheme flag",
   "chat.jira.schemeWrite.draftId": "Observed draft scheme ID",
-  "chat.jira.schemeWrite.configurationOnly": "Configuration facts do not prove deployment, issue migration, effective permissions or all project consequences.",
-  "chat.jira.schemeWrite.baseOnly": "Base scheme configuration; the non-draft flag is not proof of publication or inactivity.",
-  "chat.jira.schemeWrite.draftOnly": "Draft configuration only; no publication or status migration is performed.",
-  "chat.jira.schemeWrite.configuredNotEffective": "A configured default is distinct from Jira's effective fallback. Missing facts are not null or an empty mapping.",
+  "chat.jira.schemeWrite.configurationOnly":
+    "Configuration facts do not prove deployment, issue migration, effective permissions or all project consequences.",
+  "chat.jira.schemeWrite.baseOnly":
+    "Base scheme configuration; the non-draft flag is not proof of publication or inactivity.",
+  "chat.jira.schemeWrite.draftOnly":
+    "Draft configuration only; no publication or status migration is performed.",
+  "chat.jira.schemeWrite.configuredNotEffective":
+    "A configured default is distinct from Jira's effective fallback. Missing facts are not null or an empty mapping.",
   "chat.jira.schemeWrite.mappingRequested": "Requested mapping state: present",
   "chat.jira.schemeWrite.mappingRemovalRequested": "Requested mapping state: removed",
-  "chat.jira.schemeWrite.associationConsequences": "Project IDs describe reviewed or requested configuration, not a complete visible issue population or proven default-scheme consequences.",
-  "chat.jira.schemeWrite.replaceMappings": "The supplied mapping list replaces all explicit mappings; an empty list clears them.",
-  "chat.jira.schemeWrite.replaceProjects": "This replaces or clears the complete project association set; an empty list is intentional.",
-  "chat.jira.schemeWrite.consequencesUnconfirmed": "Native acknowledgement and readable configuration do not independently confirm all consequences of this operation.",
-  "chat.jira.schemeWrite.removeConfiguredDefault": "Remove the configured default (explicit null); no effective fallback is invented.",
+  "chat.jira.schemeWrite.associationConsequences":
+    "Project IDs describe reviewed or requested configuration, not a complete visible issue population or proven default-scheme consequences.",
+  "chat.jira.schemeWrite.replaceMappings":
+    "The supplied mapping list replaces all explicit mappings; an empty list clears them.",
+  "chat.jira.schemeWrite.replaceProjects":
+    "This replaces or clears the complete project association set; an empty list is intentional.",
+  "chat.jira.schemeWrite.consequencesUnconfirmed":
+    "Native acknowledgement and readable configuration do not independently confirm all consequences of this operation.",
+  "chat.jira.schemeWrite.removeConfiguredDefault":
+    "Remove the configured default (explicit null); no effective fallback is invented.",
   "chat.jira.schemeWrite.reviewAvailable": "Complete native scheme review snapshot available",
   "chat.jira.schemeWrite.reviewUnavailable": "Complete native scheme review snapshot unavailable",
   "chat.jira.schemeWrite.mappingCount": "Explicit mapping count",
@@ -362,12 +436,18 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.instanceWrite.reviewedReadOnly": "Reviewed native read-only enabled flag",
   "chat.jira.instanceWrite.requestedReadOnly": "Requested native read-only enabled flag",
   "chat.jira.instanceWrite.observedReadOnly": "Independently observed read-only configuration flag",
-  "chat.jira.instanceWrite.baseUrlConsequences": "Global URL, proxy, routing and notification consequences remain unconfirmed; the trusted connection destination does not change.",
-  "chat.jira.instanceWrite.noNavigation": "URLs are literal review metadata, never navigation links or new request destinations.",
-  "chat.jira.instanceWrite.noEnforcementProof": "The native enabled flag is configuration, not proof that every effective write path is blocked or unblocked.",
-  "chat.jira.instanceWrite.systemSequence": "Replace the complete system default sequence, preserving order and repeated IDs; individual user or filter layouts are not changed by this claim.",
-  "chat.jira.instanceWrite.closedProperties": "Only the four documented nonsecret application properties are writable; false and empty text retain their exact meaning.",
-  "chat.jira.instanceWrite.configuredBaseUrlUnavailable": "Safe native base URL review metadata unavailable",
+  "chat.jira.instanceWrite.baseUrlConsequences":
+    "Global URL, proxy, routing and notification consequences remain unconfirmed; the trusted connection destination does not change.",
+  "chat.jira.instanceWrite.noNavigation":
+    "URLs are literal review metadata, never navigation links or new request destinations.",
+  "chat.jira.instanceWrite.noEnforcementProof":
+    "The native enabled flag is configuration, not proof that every effective write path is blocked or unblocked.",
+  "chat.jira.instanceWrite.systemSequence":
+    "Replace the complete system default sequence, preserving order and repeated IDs; individual user or filter layouts are not changed by this claim.",
+  "chat.jira.instanceWrite.closedProperties":
+    "Only the four documented nonsecret application properties are writable; false and empty text retain their exact meaning.",
+  "chat.jira.instanceWrite.configuredBaseUrlUnavailable":
+    "Safe native base URL review metadata unavailable",
   "chat.jira.emailPack.connectedSource": "Connected source file",
   "chat.jira.emailPack.connectedPath": "Path within the connected selection",
   "chat.jira.emailPack.sourceKind": "Governed source kind",
@@ -382,19 +462,27 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.emailPack.entryDigest": "Archive entry SHA-256",
   "chat.jira.emailPack.acceptStaged": "Accept replacement of Jira's staged template folder",
   "chat.jira.emailPack.acceptGlobal": "Accept global notification-template replacement",
-  "chat.jira.emailPack.acceptUnverifiedStaged": "Accept that Jira cannot atomically identify the staged pack",
-  "chat.jira.emailPack.integrityNotAuthority": "Exact bytes must match a server-owned snapshot. This integrity check preserves the selected mode's existing approval rules; model file metadata never grants authority.",
-  "chat.jira.emailPack.unconfirmed": "The staged pack or complete global template consequences cannot be independently confirmed. Retain known digests and never replay an uncertain operation.",
-  "chat.jira.emailPack.noDelivery": "No email delivery is claimed. Template contents are neither shown nor executed here.",
-  "chat.jira.emailPack.metadataOnly": "Complete bounded archive metadata only; raw ZIP identity and canonical entry identity are distinct, and neither proves staged identity.",
-  "chat.jira.emailPack.exportSideEffect": "Jira creates a temporary export ZIP on its server for this read; active templates are not replaced.",
-  "chat.jira.emailPack.metadataUnavailable": "Complete archive metadata unavailable; no empty pack or missing entry is inferred.",
+  "chat.jira.emailPack.acceptUnverifiedStaged":
+    "Accept that Jira cannot atomically identify the staged pack",
+  "chat.jira.emailPack.integrityNotAuthority":
+    "Exact bytes must match a server-owned snapshot. This integrity check preserves the selected mode's existing approval rules; model file metadata never grants authority.",
+  "chat.jira.emailPack.unconfirmed":
+    "The staged pack or complete global template consequences cannot be independently confirmed. Retain known digests and never replay an uncertain operation.",
+  "chat.jira.emailPack.noDelivery":
+    "No email delivery is claimed. Template contents are neither shown nor executed here.",
+  "chat.jira.emailPack.metadataOnly":
+    "Complete bounded archive metadata only; raw ZIP identity and canonical entry identity are distinct, and neither proves staged identity.",
+  "chat.jira.emailPack.exportSideEffect":
+    "Jira creates a temporary export ZIP on its server for this read; active templates are not replaced.",
+  "chat.jira.emailPack.metadataUnavailable":
+    "Complete archive metadata unavailable; no empty pack or missing entry is inferred.",
   "atlassianConnectors.action.create-permission-scheme": "Create Jira permission scheme",
   "atlassianConnectors.action.update-permission-scheme": "Update Jira permission scheme",
   "atlassianConnectors.action.delete-permission-scheme": "Delete Jira permission scheme",
   "atlassianConnectors.action.add-permission-grant": "Add Jira permission grant",
   "atlassianConnectors.action.delete-permission-grant": "Delete Jira permission grant",
-  "atlassianConnectors.action.set-permission-scheme-attribute": "Set Jira permission scheme attribute",
+  "atlassianConnectors.action.set-permission-scheme-attribute":
+    "Set Jira permission scheme attribute",
   "atlassianConnectors.action.create-role": "Create Jira role",
   "atlassianConnectors.action.update-role": "Update Jira role",
   "atlassianConnectors.action.replace-role": "Replace Jira role metadata",
@@ -432,25 +520,39 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.accessWrite.userCount": "Requested user count",
   "chat.jira.accessWrite.groupCount": "Requested group count",
   "chat.jira.accessWrite.emptySet": "Explicit empty set (0 entries)",
-  "chat.jira.accessWrite.admin": "Requires an explicit Jira administration grant; Full access alone does not grant administration.",
-  "chat.jira.accessWrite.holderNamespaces": "Permission holders retain their exact native type and parameter. A group, user, project role or custom field is a different namespace; configuration is not proof of a person's effective permissions.",
-  "chat.jira.accessWrite.principalNamespaces": "User keys and usernames are reviewed together; group names are a separate namespace. The selected principals do not prove group membership or effective permissions.",
-  "chat.jira.accessWrite.replaceGrants": "The supplied grant list replaces ALL grants. An empty list clears them all; native grant IDs may change.",
-  "chat.jira.accessWrite.retainGrants": "No replacement grant list was supplied. Existing grants are retained.",
-  "chat.jira.accessWrite.replaceActors": "Both supplied namespaces replace the complete project role actor set. Two empty lists clear ALL actors in this project role.",
-  "chat.jira.accessWrite.actorTargets": "Actor lists identify requested targets, not independently confirmed membership or effective permissions.",
-  "chat.jira.accessWrite.actorUnconfirmed": "After an actor-change acknowledgement, verification remains incomplete even when the visible configuration matches.",
-  "chat.jira.accessWrite.roleDeleteUnconfirmed": "Role deletion remains unconfirmed after acknowledgement: the complete association and permission effects cannot be established.",
-  "chat.jira.accessWrite.schemeDeleteUnconfirmed": "Permission scheme deletion remains unconfirmed after acknowledgement: absence alone does not prove all project association and permission effects.",
-  "chat.jira.accessWrite.ackUnconfirmed": "This action cannot be reported as independently confirmed after acknowledgement. Known IDs are retained and the action is never replayed automatically.",
-  "chat.jira.accessWrite.reviewAvailable": "Native role review snapshot available. Actor completeness and effective permissions remain separate.",
-  "chat.jira.accessWrite.reviewUnavailable": "Complete native role review snapshot unavailable. Missing metadata is not an empty value.",
+  "chat.jira.accessWrite.admin":
+    "Requires an explicit Jira administration grant; Full access alone does not grant administration.",
+  "chat.jira.accessWrite.holderNamespaces":
+    "Permission holders retain their exact native type and parameter. A group, user, project role or custom field is a different namespace; configuration is not proof of a person's effective permissions.",
+  "chat.jira.accessWrite.principalNamespaces":
+    "User keys and usernames are reviewed together; group names are a separate namespace. The selected principals do not prove group membership or effective permissions.",
+  "chat.jira.accessWrite.replaceGrants":
+    "The supplied grant list replaces ALL grants. An empty list clears them all; native grant IDs may change.",
+  "chat.jira.accessWrite.retainGrants":
+    "No replacement grant list was supplied. Existing grants are retained.",
+  "chat.jira.accessWrite.replaceActors":
+    "Both supplied namespaces replace the complete project role actor set. Two empty lists clear ALL actors in this project role.",
+  "chat.jira.accessWrite.actorTargets":
+    "Actor lists identify requested targets, not independently confirmed membership or effective permissions.",
+  "chat.jira.accessWrite.actorUnconfirmed":
+    "After an actor-change acknowledgement, verification remains incomplete even when the visible configuration matches.",
+  "chat.jira.accessWrite.roleDeleteUnconfirmed":
+    "Role deletion remains unconfirmed after acknowledgement: the complete association and permission effects cannot be established.",
+  "chat.jira.accessWrite.schemeDeleteUnconfirmed":
+    "Permission scheme deletion remains unconfirmed after acknowledgement: absence alone does not prove all project association and permission effects.",
+  "chat.jira.accessWrite.ackUnconfirmed":
+    "This action cannot be reported as independently confirmed after acknowledgement. Known IDs are retained and the action is never replayed automatically.",
+  "chat.jira.accessWrite.reviewAvailable":
+    "Native role review snapshot available. Actor completeness and effective permissions remain separate.",
+  "chat.jira.accessWrite.reviewUnavailable":
+    "Complete native role review snapshot unavailable. Missing metadata is not an empty value.",
   "atlassianConnectors.action.epic-remove-issues": "Remove issues from Jira epics",
   "atlassianConnectors.action.rank-epic": "Rank Jira epic",
   "atlassianConnectors.action.rank-issues": "Rank Jira issues",
   "atlassianConnectors.action.set-issue-estimation": "Set Jira issue estimate",
   "atlassianConnectors.action.upsert-version-remote-link": "Set Jira version remote link",
-  "atlassianConnectors.action.upsert-version-remote-link-by-global-id": "Set Jira version remote link by global ID",
+  "atlassianConnectors.action.upsert-version-remote-link-by-global-id":
+    "Set Jira version remote link by global ID",
   "atlassianConnectors.action.delete-version-remote-link": "Delete Jira version remote link",
   "atlassianConnectors.action.delete-version-remote-links": "Delete all Jira version remote links",
   "atlassianConnectors.action.create-project-category": "Create Jira project category",
@@ -472,31 +574,44 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.planning.reviewedIssues": "Reviewed issues in the requested order",
   "chat.jira.planning.reviewedEpic": "Reviewed current epic",
   "chat.jira.planning.reviewedNoEpic": "Explicitly observed without an epic (null)",
-  "chat.jira.planning.epicTargetAbsent": "Requested target: no epic relationship. An uncertain receipt does not prove removal.",
-  "chat.jira.planning.epicRemovalHelp": "Remove only the selected issues from their reviewed epics. A known null epic is distinct from an unreadable relationship. Formal issue rules still apply before the write.",
-  "chat.jira.planning.rankUnconfirmed": "Ranking remains unconfirmed after acknowledgement: the visible board subset and opaque rank strings do not prove the global order. Partial native results may include effects on only some issues. Do not replay the action.",
+  "chat.jira.planning.epicTargetAbsent":
+    "Requested target: no epic relationship. An uncertain receipt does not prove removal.",
+  "chat.jira.planning.epicRemovalHelp":
+    "Remove only the selected issues from their reviewed epics. A known null epic is distinct from an unreadable relationship. Formal issue rules still apply before the write.",
+  "chat.jira.planning.rankUnconfirmed":
+    "Ranking remains unconfirmed after acknowledgement: the visible board subset and opaque rank strings do not prove the global order. Partial native results may include effects on only some issues. Do not replay the action.",
   "chat.jira.planning.observedEstimate": "Independently confirmed estimate",
   "chat.jira.planning.requestedEstimate": "Requested estimate; confirmation depends on the outcome",
   "chat.jira.planning.reviewedEstimate": "Reviewed current native estimate",
-  "chat.jira.planning.reviewedEmptyEstimate": "Explicitly observed empty estimate (null); this does not request clearing",
+  "chat.jira.planning.reviewedEmptyEstimate":
+    "Explicitly observed empty estimate (null); this does not request clearing",
   "chat.jira.planning.inputUnit": "Requested input unit",
   "chat.jira.planning.minutes": "Minutes",
   "chat.jira.planning.seconds": "Native verification unit: seconds",
   "chat.jira.planning.nativeBoardNumber": "Native board number; no points or time unit inferred",
   "chat.jira.planning.unitUnknown": "Estimate unit unknown",
-  "chat.jira.planning.estimateInputHelp": "The requested decimal text is sent as a native value. Original estimate takes minutes and is independently checked in seconds; other board numbers do not imply story points. Null is a reviewed empty value, not a supported clear request. Remaining estimate and time-tracking side effects are not inferred.",
+  "chat.jira.planning.estimateInputHelp":
+    "The requested decimal text is sent as a native value. Original estimate takes minutes and is independently checked in seconds; other board numbers do not imply story points. Null is a reviewed empty value, not a supported clear request. Remaining estimate and time-tracking side effects are not inferred.",
   "chat.jira.versionLinkWrite.reviewedLinks": "Complete reviewed version-link set",
   "chat.jira.versionLinkWrite.reviewedEmpty": "The complete reviewed version-link set is empty.",
   "chat.jira.versionLinkWrite.deleteAll": "Delete every link in the reviewed version context",
-  "chat.jira.versionLinkWrite.completeSet": "Confirmation requires the complete independently readable same-version link set and unchanged retained values. A missing link or 404 alone does not prove deletion; known global IDs remain plain text.",
-  "chat.jira.versionLinkWrite.replaceValue": "A supplied value replaces the complete link value. Typed null, false, zero, empty text and empty containers are real values. No URL is followed and text is not parsed again as JSON.",
-  "chat.jira.versionLinkWrite.identityAvailable": "This row has a bound native global ID; the complete set and value still require review.",
-  "chat.jira.versionLinkWrite.identityUnavailable": "Native global ID unavailable: a name or opaque self URL cannot identify a link for a write.",
+  "chat.jira.versionLinkWrite.completeSet":
+    "Confirmation requires the complete independently readable same-version link set and unchanged retained values. A missing link or 404 alone does not prove deletion; known global IDs remain plain text.",
+  "chat.jira.versionLinkWrite.replaceValue":
+    "A supplied value replaces the complete link value. Typed null, false, zero, empty text and empty containers are real values. No URL is followed and text is not parsed again as JSON.",
+  "chat.jira.versionLinkWrite.identityAvailable":
+    "This row has a bound native global ID; the complete set and value still require review.",
+  "chat.jira.versionLinkWrite.identityUnavailable":
+    "Native global ID unavailable: a name or opaque self URL cannot identify a link for a write.",
   "chat.jira.categoryWrite.reviewed": "Complete reviewed project category",
-  "chat.jira.categoryWrite.acceptUnconfirmed": "Accept deletion without independently proven association effects",
-  "chat.jira.categoryWrite.admin": "This requires an explicit Jira administration grant and Jira's own native administration permission. A credential or Full access mode alone is not that grant.",
-  "chat.jira.categoryWrite.metadataOnly": "Only project-category metadata is changed. An empty requested description clears that text; this does not create an issue rule or grant project access.",
-  "chat.jira.categoryWrite.deleteUnconfirmed": "Category deletion remains unconfirmed after acknowledgement. Visible-list omission and a 404 cannot establish every deletion or project-association effect. The known ID and requested absence remain recorded; do not replay.",
+  "chat.jira.categoryWrite.acceptUnconfirmed":
+    "Accept deletion without independently proven association effects",
+  "chat.jira.categoryWrite.admin":
+    "This requires an explicit Jira administration grant and Jira's own native administration permission. A credential or Full access mode alone is not that grant.",
+  "chat.jira.categoryWrite.metadataOnly":
+    "Only project-category metadata is changed. An empty requested description clears that text; this does not create an issue rule or grant project access.",
+  "chat.jira.categoryWrite.deleteUnconfirmed":
+    "Category deletion remains unconfirmed after acknowledgement. Visible-list omission and a 404 cannot establish every deletion or project-association effect. The known ID and requested absence remain recorded; do not replay.",
   "atlassianConnectors.action.replace-sprint": "Replace Jira sprint metadata",
   "atlassianConnectors.action.delete-sprint": "Delete Jira sprint",
   "atlassianConnectors.action.swap-sprints": "Swap Jira sprints",
@@ -512,28 +627,41 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.sprintLifecycle.reviewedSwap": "Reviewed other sprint metadata",
   "chat.jira.sprintLifecycle.visibleOrder": "Complete reviewed order visible to this actor",
   "chat.jira.sprintLifecycle.reviewedSelection": "Reviewed selected sprints",
-  "chat.jira.sprintLifecycle.reviewedSample": "Reviewed sample; does not restrict the instance-wide effect",
-  "chat.jira.sprintLifecycle.confirmInstanceWide": "Confirm cleanup across the entire Jira instance",
+  "chat.jira.sprintLifecycle.reviewedSample":
+    "Reviewed sample; does not restrict the instance-wide effect",
+  "chat.jira.sprintLifecycle.confirmInstanceWide":
+    "Confirm cleanup across the entire Jira instance",
   "chat.jira.sprintLifecycle.autoStartStop": "Automatic start and stop",
   "chat.jira.sprintLifecycle.incompleteDestination": "Destination sprint ID for incomplete issues",
   "chat.jira.sprintLifecycle.synced": "Native synchronization flag",
   "chat.jira.sprintLifecycle.metadataOmitted": "Native metadata omitted; value unknown.",
-  "chat.jira.sprintLifecycle.snapshotAvailable": "Native sprint review snapshot: omitted fields remain unknown. This snapshot does not establish the complete affected issue population.",
-  "chat.jira.sprintLifecycle.snapshotUnavailable": "A complete native sprint review snapshot is unavailable; ordinary readable sprint facts remain visible.",
-  "chat.jira.sprintLifecycle.clearValue": "Requested replacement: clear this nullable value (null).",
+  "chat.jira.sprintLifecycle.snapshotAvailable":
+    "Native sprint review snapshot: omitted fields remain unknown. This snapshot does not establish the complete affected issue population.",
+  "chat.jira.sprintLifecycle.snapshotUnavailable":
+    "A complete native sprint review snapshot is unavailable; ordinary readable sprint facts remain visible.",
+  "chat.jira.sprintLifecycle.clearValue":
+    "Requested replacement: clear this nullable value (null).",
   "chat.jira.sprintLifecycle.requestedUnsynced": "Requested target: synchronization flag false.",
-  "chat.jira.sprintLifecycle.replacementLimit": "Confirmation applies only to independently observed replacement metadata. Closing and automatic lifecycle membership effects remain unconfirmed.",
-  "chat.jira.sprintLifecycle.fullReplacement": "This replaces every supplied sprint field, with explicit null clearing nullable values. Native identity, origin board and observed synchronization are preserved. Closing or automatic lifecycle changes may affect issue membership; their complete effect remains unconfirmed.",
-  "chat.jira.sprintLifecycle.deleteUnconfirmed": "Jira moves the sprint's issues to backlog. Deletion and the complete issue reassignment remain unconfirmed after acknowledgement; visible issues or a 404 do not prove the full effect.",
-  "chat.jira.sprintLifecycle.swapUnconfirmed": "The reviewed order is visible to this actor only. The swap remains unconfirmed because Jira does not independently expose absolute positions of all sprints.",
-  "chat.jira.sprintLifecycle.selectedOnly": "Only synchronization of the exact selected sprints is changed. Issue membership and origin board assignment are unchanged by this operation.",
-  "chat.jira.sprintLifecycle.instanceWide": "IRREVERSIBLE INSTANCE-WIDE CLEANUP: every sprint in this Jira instance is in scope, including sprints outside the reviewed sample. Explicit Jira administration authority is required. The sample is neither a population count nor a write restriction, and the overall effect remains unconfirmed.",
-  "chat.jira.sprintLifecycle.experimental": "This uses Jira's experimental synchronization API through Keiko's fixed server opt-in. No request header or additional endpoint is selected by these arguments.",
+  "chat.jira.sprintLifecycle.replacementLimit":
+    "Confirmation applies only to independently observed replacement metadata. Closing and automatic lifecycle membership effects remain unconfirmed.",
+  "chat.jira.sprintLifecycle.fullReplacement":
+    "This replaces every supplied sprint field, with explicit null clearing nullable values. Native identity, origin board and observed synchronization are preserved. Closing or automatic lifecycle changes may affect issue membership; their complete effect remains unconfirmed.",
+  "chat.jira.sprintLifecycle.deleteUnconfirmed":
+    "Jira moves the sprint's issues to backlog. Deletion and the complete issue reassignment remain unconfirmed after acknowledgement; visible issues or a 404 do not prove the full effect.",
+  "chat.jira.sprintLifecycle.swapUnconfirmed":
+    "The reviewed order is visible to this actor only. The swap remains unconfirmed because Jira does not independently expose absolute positions of all sprints.",
+  "chat.jira.sprintLifecycle.selectedOnly":
+    "Only synchronization of the exact selected sprints is changed. Issue membership and origin board assignment are unchanged by this operation.",
+  "chat.jira.sprintLifecycle.instanceWide":
+    "IRREVERSIBLE INSTANCE-WIDE CLEANUP: every sprint in this Jira instance is in scope, including sprints outside the reviewed sample. Explicit Jira administration authority is required. The sample is neither a population count nor a write restriction, and the overall effect remains unconfirmed.",
+  "chat.jira.sprintLifecycle.experimental":
+    "This uses Jira's experimental synchronization API through Keiko's fixed server opt-in. No request header or additional endpoint is selected by these arguments.",
   "atlassianConnectors.action.add-default-screen-field": "Add field to Jira's default screen",
   "atlassianConnectors.action.add-screen-tab-field": "Add Jira screen tab field",
   "atlassianConnectors.action.remove-screen-tab-field": "Remove Jira screen tab field",
   "atlassianConnectors.action.move-screen-tab-field": "Reorder Jira screen tab field",
-  "atlassianConnectors.action.set-screen-field-show-when-empty": "Set Jira field display when empty",
+  "atlassianConnectors.action.set-screen-field-show-when-empty":
+    "Set Jira field display when empty",
   "atlassianConnectors.action.move-screen-tab": "Reorder Jira screen tab",
   "atlassianConnectors.action.delete-board": "Delete Jira board",
   "atlassianConnectors.action.set-board-refined-velocity": "Set Jira board refined velocity",
@@ -550,43 +678,63 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.configuration.reviewedVelocity": "Reviewed refined-velocity setting",
   "chat.jira.configuration.requestedVelocity": "Requested refined-velocity setting",
   "chat.jira.configuration.zeroBasedPosition": "Requested tab position (zero-based)",
-  "chat.jira.configuration.zeroBasedHelp": "Native tab position 0 is the first tab. Confirmation requires the complete requested order and unchanged tab names.",
+  "chat.jira.configuration.zeroBasedHelp":
+    "Native tab position 0 is the first tab. Confirmation requires the complete requested order and unchanged tab names.",
   "chat.jira.configuration.observedBoolean": "Independently observed setting",
   "chat.jira.configuration.requestedBoolean": "Requested setting; the current value is unconfirmed",
-  "chat.jira.configuration.requestedFieldPresent": "Requested target: field present on the selected tab.",
-  "chat.jira.configuration.requestedDefaultFieldPresent": "Requested target: field added to the default layout chosen by Jira.",
-  "chat.jira.configuration.requestedFieldAbsent": "Requested target: field absent from the selected tab.",
-  "chat.jira.configuration.defaultUnconfirmed": "Jira chooses the default screen and tab. Their identities and the resulting layout are unconfirmed, including after acknowledgement. Do not repeat the write automatically.",
-  "chat.jira.configuration.boardDeleteUnconfirmed": "Requested target: board absent. Deletion remains unconfirmed after acknowledgement; a 404 or omission from visible boards also permits access loss. The filter and issue data are separate resources.",
-  "chat.jira.configuration.velocitySettingOnly": "This is the refined-velocity setting only; it does not establish velocity measurements or estimation units.",
-  "chat.jira.configuration.displayOnly": "Screen display metadata does not establish required fields, edit permissions or effective issue access.",
-  "chat.jira.configuration.explicitAdmin": "This screen change requires an explicit Jira administration grant; the selected mode does not grant it automatically.",
-  "chat.jira.configuration.addPositionUnspecified": "Adding the field makes no insertion-position promise. A separate reviewed move is needed for placement.",
-  "chat.jira.configuration.removeMembershipOnly": "This removes the field from this tab only. It does not delete the field definition or existing issue values.",
+  "chat.jira.configuration.requestedFieldPresent":
+    "Requested target: field present on the selected tab.",
+  "chat.jira.configuration.requestedDefaultFieldPresent":
+    "Requested target: field added to the default layout chosen by Jira.",
+  "chat.jira.configuration.requestedFieldAbsent":
+    "Requested target: field absent from the selected tab.",
+  "chat.jira.configuration.defaultUnconfirmed":
+    "Jira chooses the default screen and tab. Their identities and the resulting layout are unconfirmed, including after acknowledgement. Do not repeat the write automatically.",
+  "chat.jira.configuration.boardDeleteUnconfirmed":
+    "Requested target: board absent. Deletion remains unconfirmed after acknowledgement; a 404 or omission from visible boards also permits access loss. The filter and issue data are separate resources.",
+  "chat.jira.configuration.velocitySettingOnly":
+    "This is the refined-velocity setting only; it does not establish velocity measurements or estimation units.",
+  "chat.jira.configuration.displayOnly":
+    "Screen display metadata does not establish required fields, edit permissions or effective issue access.",
+  "chat.jira.configuration.explicitAdmin":
+    "This screen change requires an explicit Jira administration grant; the selected mode does not grant it automatically.",
+  "chat.jira.configuration.addPositionUnspecified":
+    "Adding the field makes no insertion-position promise. A separate reviewed move is needed for placement.",
+  "chat.jira.configuration.removeMembershipOnly":
+    "This removes the field from this tab only. It does not delete the field definition or existing issue values.",
   "atlassianConnectors.action.delete-component": "Delete Jira component",
   "atlassianConnectors.action.merge-version": "Merge Jira versions",
   "atlassianConnectors.action.move-version": "Reorder Jira version",
-  "atlassianConnectors.action.remove-and-swap-version": "Remove and replace Jira version references",
+  "atlassianConnectors.action.remove-and-swap-version":
+    "Remove and replace Jira version references",
   "atlassianConnectors.action.create-issue-link": "Create Jira issue link",
   "atlassianConnectors.action.delete-issue-link": "Delete Jira issue link",
   "atlassianConnectors.action.upsert-remote-link": "Create or replace Jira remote link",
   "atlassianConnectors.action.update-remote-link": "Replace Jira remote link",
   "atlassianConnectors.action.delete-remote-link": "Delete Jira remote link",
-  "atlassianConnectors.action.delete-remote-link-by-global-id": "Delete Jira remote link by global ID",
-  "chat.jira.structural.nativeNotProvided": "Native metadata not provided (null); this is not empty text or false.",
-  "chat.jira.outcome.failure.localAuthority": "Local authority no longer permits this Jira request. Review the selected Pod and allowed connector scopes before requesting it again.",
-  "chat.jira.outcome.failure.cancelled": "This Jira request was cancelled. Review its displayed outcome before starting another request.",
-  "chat.jira.outcome.failure.localHandler": "Keiko could not finish this Jira read because of an internal handler error. Review the Activity Log before starting a new read.",
-  "chat.jira.outcome.failure.readDeadline": "This Jira read reached its local deadline and is incomplete. Start another read only if it is still needed.",
+  "atlassianConnectors.action.delete-remote-link-by-global-id":
+    "Delete Jira remote link by global ID",
+  "chat.jira.structural.nativeNotProvided":
+    "Native metadata not provided (null); this is not empty text or false.",
+  "chat.jira.outcome.failure.localAuthority":
+    "Local authority no longer permits this Jira request. Review the selected Pod and allowed connector scopes before requesting it again.",
+  "chat.jira.outcome.failure.cancelled":
+    "This Jira request was cancelled. Review its displayed outcome before starting another request.",
+  "chat.jira.outcome.failure.localHandler":
+    "Keiko could not finish this Jira read because of an internal handler error. Review the Activity Log before starting a new read.",
+  "chat.jira.outcome.failure.readDeadline":
+    "This Jira read reached its local deadline and is incomplete. Start another read only if it is still needed.",
   "chat.jira.structural.clearReference": "Clear this reference; no replacement target.",
   "chat.jira.structural.whitespaceText": "Exact whitespace-only text (controls shown as escapes)",
   "chat.jira.structural.reviewedProject": "Reviewed native project ID",
   "chat.jira.structural.reviewedComponent": "Reviewed complete source component metadata",
   "chat.jira.structural.reviewedVersion": "Reviewed complete source version metadata",
-  "chat.jira.structural.reviewedReplacementComponent": "Reviewed complete replacement component metadata",
+  "chat.jira.structural.reviewedReplacementComponent":
+    "Reviewed complete replacement component metadata",
   "chat.jira.structural.reviewedTargetVersion": "Reviewed complete target version metadata",
   "chat.jira.structural.reviewedVersionOrder": "Reviewed complete version IDs in their exact order",
-  "chat.jira.structural.reviewedReplacementVersions": "Reviewed replacement versions and complete metadata",
+  "chat.jira.structural.reviewedReplacementVersions":
+    "Reviewed replacement versions and complete metadata",
   "chat.jira.structural.replacementTarget": "Replacement target ID",
   "chat.jira.structural.requestedPosition": "Requested position in the project version order",
   "chat.jira.structural.afterVersion": "Place after this version ID",
@@ -608,12 +756,18 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.structural.earlier": "One position earlier (native Earlier)",
   "chat.jira.structural.later": "One position later (native Later)",
   "chat.jira.structural.noReplacementVersions": "No replacement versions are selected.",
-  "chat.jira.structural.clearAllCustomReferences": "The empty replacement list removes this version from ALL custom version fields.",
-  "chat.jira.structural.noAtomicSnapshot": "Jira does not atomically bind the write to these reviewed snapshots. Changed evidence refuses before dispatch; uncertainty after dispatch is never replayed.",
-  "chat.jira.releaseLifecycle.referencesUnconfirmed": "The complete issue-reference effect remains unconfirmed. Even an acknowledged request and source absence cannot prove every affected reference was replaced or removed.",
-  "chat.jira.releaseLifecycle.orderConfirmed": "The complete requested version order and unchanged metadata were independently confirmed.",
-  "chat.jira.releaseLifecycle.orderOnly": "This changes version order within the same project only; it does not move issues or rename versions.",
-  "chat.jira.releaseLifecycle.knownTargets": "Known source and replacement IDs identify the request; they do not by themselves prove its effects.",
+  "chat.jira.structural.clearAllCustomReferences":
+    "The empty replacement list removes this version from ALL custom version fields.",
+  "chat.jira.structural.noAtomicSnapshot":
+    "Jira does not atomically bind the write to these reviewed snapshots. Changed evidence refuses before dispatch; uncertainty after dispatch is never replayed.",
+  "chat.jira.releaseLifecycle.referencesUnconfirmed":
+    "The complete issue-reference effect remains unconfirmed. Even an acknowledged request and source absence cannot prove every affected reference was replaced or removed.",
+  "chat.jira.releaseLifecycle.orderConfirmed":
+    "The complete requested version order and unchanged metadata were independently confirmed.",
+  "chat.jira.releaseLifecycle.orderOnly":
+    "This changes version order within the same project only; it does not move issues or rename versions.",
+  "chat.jira.releaseLifecycle.knownTargets":
+    "Known source and replacement IDs identify the request; they do not by themselves prove its effects.",
   "chat.jira.releaseLifecycle.replacementComponent": "Replacement component ID",
   "chat.jira.releaseLifecycle.targetVersion": "Target version ID",
   "chat.jira.releaseLifecycle.replacementVersions": "Replacement version IDs",
@@ -628,33 +782,46 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.linkMutation.statusIconTitle": "Status icon title",
   "chat.jira.linkMutation.statusIconLink": "Status icon destination (text only)",
   "chat.jira.linkMutation.linkedIssueId": "Linked issue native ID",
-  "chat.jira.linkMutation.knownTargets": "Known issue and link IDs retain the request context. The requested presence flag is not proof of current membership.",
+  "chat.jira.linkMutation.knownTargets":
+    "Known issue and link IDs retain the request context. The requested presence flag is not proof of current membership.",
   "chat.jira.linkMutation.requestedAbsent": "Requested relation state: absent",
   "chat.jira.linkMutation.requestedPresent": "Requested relation state: present",
-  "chat.jira.linkMutation.snapshotAvailable": "Complete native remote-link review snapshot follows. Nullable fields are shown explicitly.",
-  "chat.jira.linkMutation.snapshotUnavailable": "A complete native remote-link review snapshot is unavailable. Missing values must not be guessed before replacement or deletion.",
-  "chat.jira.linkMutation.urlsMetadata": "Keiko displays these URLs as review text and does not open or fetch them. Jira can load icon URLs in each viewer's browser, disclosing their network address to that server.",
-  "chat.jira.linkMutation.upsertHelp": "Jira POST creates or replaces the link with this global ID. It is not unconditional creation; review either exact absence or the complete existing value.",
-  "chat.jira.linkMutation.fullReplacement": "Remote-link replacement includes every supported field. Explicit null means the requested field has no value; omitting prior metadata must never silently preserve it.",
+  "chat.jira.linkMutation.snapshotAvailable":
+    "Complete native remote-link review snapshot follows. Nullable fields are shown explicitly.",
+  "chat.jira.linkMutation.snapshotUnavailable":
+    "A complete native remote-link review snapshot is unavailable. Missing values must not be guessed before replacement or deletion.",
+  "chat.jira.linkMutation.urlsMetadata":
+    "Keiko displays these URLs as review text and does not open or fetch them. Jira can load icon URLs in each viewer's browser, disclosing their network address to that server.",
+  "chat.jira.linkMutation.upsertHelp":
+    "Jira POST creates or replaces the link with this global ID. It is not unconditional creation; review either exact absence or the complete existing value.",
+  "chat.jira.linkMutation.fullReplacement":
+    "Remote-link replacement includes every supported field. Explicit null means the requested field has no value; omitting prior metadata must never silently preserve it.",
   "chat.jira.linkMutation.requestedNull": "Requested field value: none (null).",
-  "chat.jira.linkMutation.directionHelp": "The inward issue is the source and the outward issue is the destination. Both native directional labels are reviewed; no extra comment or reciprocal remote-link write is added.",
+  "chat.jira.linkMutation.directionHelp":
+    "The inward issue is the source and the outward issue is the destination. Both native directional labels are reviewed; no extra comment or reciprocal remote-link write is added.",
   "atlassianConnectors.action.jira.anonymization-validation": "Read Jira anonymization validation",
-  "atlassianConnectors.action.jira.anonymization-rerun-validation": "Read Jira anonymization rerun validation",
+  "atlassianConnectors.action.jira.anonymization-rerun-validation":
+    "Read Jira anonymization rerun validation",
   "atlassianConnectors.action.jira.anonymization-progress": "Read Jira anonymization progress",
   "atlassianConnectors.action.jira.current-session": "Read the current Jira session",
   "atlassianConnectors.action.jira.search-post": "Search Jira issues",
   "atlassianConnectors.action.jira.worklogs-by-id": "Read selected Jira worklogs",
-  "chat.jira.identity.validationOnly": "This is a native validation observation. No anonymization was started and no identity was changed.",
-  "chat.jira.identity.rerunValidationOnly": "Only rerun eligibility was inspected. No existing job was resumed or repeated.",
-  "chat.jira.identity.validationTrue": "Native validation success flag: true. This does not confirm a completed anonymization.",
-  "chat.jira.identity.validationFalse": "Native validation success flag: false. Review the reported errors and warnings.",
+  "chat.jira.identity.validationOnly":
+    "This is a native validation observation. No anonymization was started and no identity was changed.",
+  "chat.jira.identity.rerunValidationOnly":
+    "Only rerun eligibility was inspected. No existing job was resumed or repeated.",
+  "chat.jira.identity.validationTrue":
+    "Native validation success flag: true. This does not confirm a completed anonymization.",
+  "chat.jira.identity.validationFalse":
+    "Native validation success flag: false. Review the reported errors and warnings.",
   "chat.jira.identity.validationUnknown": "The native validation success flag was not provided.",
   "chat.jira.identity.deletedTrue": "Native account-deleted flag: true",
   "chat.jira.identity.deletedFalse": "Native account-deleted flag: false",
   "chat.jira.identity.deletedUnknown": "Native account-deleted flag: unknown",
   "chat.jira.identity.businessFailedTrue": "Native business-logic validation failed flag: true",
   "chat.jira.identity.businessFailedFalse": "Native business-logic validation failed flag: false",
-  "chat.jira.identity.businessFailedUnknown": "Native business-logic validation failed flag: unknown",
+  "chat.jira.identity.businessFailedUnknown":
+    "Native business-logic validation failed flag: unknown",
   "chat.jira.identity.rerunTrue": "Native rerun flag: true",
   "chat.jira.identity.rerunFalse": "Native rerun flag: false",
   "chat.jira.identity.rerunUnknown": "Native rerun flag: unknown",
@@ -663,34 +830,44 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.identity.operationsUnknown": "The native operation list was not provided.",
   "chat.jira.identity.errorGroups": "Native error groups returned",
   "chat.jira.identity.warningGroups": "Native warning groups returned",
-  "chat.jira.identity.errorsUnknown": "The native error collection was not provided; absence of errors is not established.",
-  "chat.jira.identity.warningsUnknown": "The native warning collection was not provided; absence of warnings is not established.",
+  "chat.jira.identity.errorsUnknown":
+    "The native error collection was not provided; absence of errors is not established.",
+  "chat.jira.identity.warningsUnknown":
+    "The native warning collection was not provided; absence of warnings is not established.",
   "chat.jira.identity.nativeError": "Native error",
   "chat.jira.identity.nativeWarning": "Native warning",
   "chat.jira.identity.displayName": "Observed display name",
   "chat.jira.identity.blankUsername": "The native user name is empty or whitespace-only.",
   "chat.jira.identity.blankDisplayName": "The native display name is empty or whitespace-only.",
-  "chat.jira.identity.progressOnly": "One native progress observation; no job was started, resumed, unlocked or polled automatically.",
-  "chat.jira.identity.progressUnitsUnknown": "The native progress unit was not established. The value is not shown as a percentage.",
-  "chat.jira.identity.completionCaveat": "COMPLETED alone does not prove an error-free anonymization; native errors and warnings remain relevant.",
-  "chat.jira.identity.requestedTaskOnly": "The task ID is the requested selector. The native response contains no independent task ID to verify it.",
+  "chat.jira.identity.progressOnly":
+    "One native progress observation; no job was started, resumed, unlocked or polled automatically.",
+  "chat.jira.identity.progressUnitsUnknown":
+    "The native progress unit was not established. The value is not shown as a percentage.",
+  "chat.jira.identity.completionCaveat":
+    "COMPLETED alone does not prove an error-free anonymization; native errors and warnings remain relevant.",
+  "chat.jira.identity.requestedTaskOnly":
+    "The task ID is the requested selector. The native response contains no independent task ID to verify it.",
   "chat.jira.identity.emptySubtask": "The native subtask text is explicitly empty.",
-  "chat.jira.identity.sessionOnly": "Session information for the bound current Jira user. This does not create a login, renew credentials or grant permissions.",
+  "chat.jira.identity.sessionOnly":
+    "Session information for the bound current Jira user. This does not create a login, renew credentials or grant permissions.",
   "chat.jira.identity.failedLoginCount": "Observed failed login count",
   "chat.jira.identity.loginCount": "Observed login count",
   "chat.jira.identity.failedLoginCountUnknown": "The failed login count was not provided.",
   "chat.jira.identity.loginCountUnknown": "The login count was not provided.",
   "chat.jira.identity.lastFailedLoginTime": "Native last failed login time",
   "chat.jira.identity.previousLoginTime": "Native previous login time",
-  "chat.jira.selectedWorklogs.scope": "This result covers only the explicitly requested worklog IDs that Jira returned under the current user's visibility. It is not a complete worklog inventory.",
-  "chat.jira.selectedWorklogs.unreturnedMeaning": "IDs not returned may be missing or inaccessible. This is not proof of deletion or absence.",
+  "chat.jira.selectedWorklogs.scope":
+    "This result covers only the explicitly requested worklog IDs that Jira returned under the current user's visibility. It is not a complete worklog inventory.",
+  "chat.jira.selectedWorklogs.unreturnedMeaning":
+    "IDs not returned may be missing or inaccessible. This is not proof of deletion or absence.",
   "chat.jira.selectedWorklogs.requestedCount": "Worklog IDs requested",
   "chat.jira.selectedWorklogs.returnedCount": "Requested worklogs returned",
   "chat.jira.selectedWorklogs.unreturnedIds": "Requested worklog IDs not returned",
   "chat.jira.selectedWorklogs.unreturnedCount": "Requested IDs not returned count",
   "chat.jira.selectedWorklogs.requestedUnknown": "The requested worklog count was not provided.",
   "chat.jira.selectedWorklogs.returnedUnknown": "The returned worklog count was not provided.",
-  "chat.jira.selectedWorklogs.unreturnedUnknown": "The list of requested IDs not returned was not provided.",
+  "chat.jira.selectedWorklogs.unreturnedUnknown":
+    "The list of requested IDs not returned was not provided.",
   "chat.jira.selectedWorklogs.itemsUnknown": "The selected worklog collection was not provided.",
   // File preview is loaded with the Files and Editor window bodies.
   "filePreview.showSource": "Show source preview",
@@ -926,16 +1103,21 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.action.jira.security-level": "Read Jira security level",
   "atlassianConnectors.action.jira.notification-schemes": "Read Jira notification schemes",
   "atlassianConnectors.action.jira.notification-scheme": "Read Jira notification scheme",
-  "atlassianConnectors.action.jira.project-notification-scheme": "Read Jira project notification scheme",
-  "atlassianConnectors.action.jira.project-permission-scheme": "Read Jira project permission scheme",
-  "atlassianConnectors.action.jira.project-issue-security-scheme": "Read Jira project issue security scheme",
-  "atlassianConnectors.action.jira.project-security-levels": "Read accessible Jira project security levels",
+  "atlassianConnectors.action.jira.project-notification-scheme":
+    "Read Jira project notification scheme",
+  "atlassianConnectors.action.jira.project-permission-scheme":
+    "Read Jira project permission scheme",
+  "atlassianConnectors.action.jira.project-issue-security-scheme":
+    "Read Jira project issue security scheme",
+  "atlassianConnectors.action.jira.project-security-levels":
+    "Read accessible Jira project security levels",
   "atlassianConnectors.action.jira.project-workflow-scheme": "Read Jira project workflow scheme",
   "atlassianConnectors.action.jira.project-priority-scheme": "Read Jira project priority scheme",
   "chat.jira.association.accessibleLevelCount": "Accessible security levels",
   "chat.jira.association.accessibleLevelsScope":
     "Only accessible security levels are shown. An empty result does not mean that no levels are configured; access can depend on Set Issue Security permission.",
-  "chat.jira.association.levelsScopeUnknown": "The scope of these security levels was not provided.",
+  "chat.jira.association.levelsScopeUnknown":
+    "The scope of these security levels was not provided.",
   "chat.jira.association.priorityOptionsUnknown": "Configured priority options were not provided.",
   "chat.jira.association.defaultPriorityScheme": "This is the default priority scheme.",
   "chat.jira.association.notDefaultPriorityScheme": "This is not the default priority scheme.",
@@ -961,7 +1143,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.core.descriptionTranslationKey": "Description translation key",
   "chat.jira.core.configuredStatusCount": "Configured statuses for this issue type",
   "chat.jira.core.statusesUnknown": "Statuses for this issue type were not provided.",
-  "chat.jira.core.projectStatusesScope": "Statuses configured for this project and issue type; available transitions and current-user permissions have not been determined.",
+  "chat.jira.core.projectStatusesScope":
+    "Statuses configured for this project and issue type; available transitions and current-user permissions have not been determined.",
   "atlassianConnectors.action.jira.global-issue-types": "Read global Jira issue types",
   "atlassianConnectors.action.jira.issue-type": "Read Jira issue type",
   "atlassianConnectors.action.jira.issue-type-page": "Read a Jira issue type page",
@@ -992,7 +1175,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.instance.buildNumber": "Build number",
   "chat.jira.instance.databaseBuildNumber": "Database build number",
   "chat.jira.instance.buildPartnerName": "Build partner",
-  "chat.jira.instance.serverObservation": "Reported instance metadata. This read does not verify the connection or establish which operations are supported.",
+  "chat.jira.instance.serverObservation":
+    "Reported instance metadata. This read does not verify the connection or establish which operations are supported.",
   "chat.jira.instance.attachmentsOn": "Attachments: enabled",
   "chat.jira.instance.attachmentsOff": "Attachments: disabled",
   "chat.jira.instance.attachmentsUnknown": "Attachments: setting unknown",
@@ -1037,9 +1221,12 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.action.jira.project-role": "Read Jira project role membership",
   "atlassianConnectors.action.jira.priority-schemes": "Read Jira priority schemes",
   "atlassianConnectors.action.jira.priority-scheme": "Read Jira priority scheme",
-  "chat.jira.role.configurationScope": "Role configuration. Effective permissions have not been determined.",
-  "chat.jira.role.defaultsScope": "Default role actors. These defaults do not establish membership in a particular project or effective permissions.",
-  "chat.jira.role.membershipScope": "Configured project role membership. The current user's membership and effective permissions have not been determined.",
+  "chat.jira.role.configurationScope":
+    "Role configuration. Effective permissions have not been determined.",
+  "chat.jira.role.defaultsScope":
+    "Default role actors. These defaults do not establish membership in a particular project or effective permissions.",
+  "chat.jira.role.membershipScope":
+    "Configured project role membership. The current user's membership and effective permissions have not been determined.",
   "chat.jira.role.indexScope": "Project role names only. Role IDs and members were not returned.",
   "chat.jira.role.scopeUnknown": "The scope of the role actors was not provided.",
   "chat.jira.role.actorsUnknown": "Role actor details were not provided.",
@@ -1047,9 +1234,11 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.role.actorId": "Role actor ID",
   "chat.jira.role.actorName": "Role actor name",
   "chat.jira.role.actorType": "Role actor type",
-  "atlassianConnectors.action.jira.component-related-issue-counts": "Read Jira component issue counts",
+  "atlassianConnectors.action.jira.component-related-issue-counts":
+    "Read Jira component issue counts",
   "atlassianConnectors.action.jira.version-related-issue-counts": "Read Jira version issue counts",
-  "atlassianConnectors.action.jira.version-unresolved-issue-count": "Read Jira version unresolved issue count",
+  "atlassianConnectors.action.jira.version-unresolved-issue-count":
+    "Read Jira version unresolved issue count",
   "atlassianConnectors.action.jira.project-version-page": "Read a Jira project version page",
   "chat.jira.release.relatedIssues": "Related issues reported by Jira",
   "chat.jira.release.affectedIssues": "Issues using the affected version",
@@ -1058,13 +1247,17 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.release.unresolvedIssues": "Unresolved issues reported by Jira",
   "chat.jira.release.fieldIssues": "Issues using the version in this field",
   "chat.jira.release.customFieldCount": "Custom fields returned",
-  "chat.jira.release.nativeCountScope": "Counts from Jira's response, without an independent JQL comparison. Separate count categories may overlap.",
+  "chat.jira.release.nativeCountScope":
+    "Counts from Jira's response, without an independent JQL comparison. Separate count categories may overlap.",
   "chat.jira.release.countScopeUnknown": "The scope of these counts was not provided.",
-  "chat.jira.release.countsUnknown": "Some requested counts were not provided; missing counts are unknown.",
+  "chat.jira.release.countsUnknown":
+    "Some requested counts were not provided; missing counts are unknown.",
   "chat.jira.release.customUsageUnknown": "Custom-field usage details were not provided.",
-  "atlassianConnectors.action.jira.multi-project-assignable-users": "Find assignable users across Jira projects",
+  "atlassianConnectors.action.jira.multi-project-assignable-users":
+    "Find assignable users across Jira projects",
   "atlassianConnectors.action.jira.permission-users": "Find Jira users by permission",
-  "atlassianConnectors.action.jira.browse-permission-users": "Find Jira users with browse permission",
+  "atlassianConnectors.action.jira.browse-permission-users":
+    "Find Jira users with browse permission",
   "atlassianConnectors.action.jira.group-user-picker": "Suggest Jira users and groups",
   "atlassianConnectors.action.jira.project-picker": "Suggest Jira projects",
   "atlassianConnectors.action.jira.fields": "Read Jira field definitions",
@@ -1090,7 +1283,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.lookup.clauseNames": "JQL clause names",
   "chat.jira.lookup.clauseCount": "JQL clause names returned",
   "chat.jira.lookup.clausesUnknown": "JQL clause names were not provided.",
-  "chat.jira.lookup.fieldScope": "Field definition only. Requiredness and editability for a particular issue have not been determined.",
+  "chat.jira.lookup.fieldScope":
+    "Field definition only. Requiredness and editability for a particular issue have not been determined.",
   "chat.jira.lookup.optionId": "Custom field option ID",
   "chat.jira.lookup.optionDisabled": "Option disabled",
   "chat.jira.lookup.optionEnabled": "Option enabled",
@@ -1117,7 +1311,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.action.jira.filter-columns": "Read Jira filter columns",
   "atlassianConnectors.action.jira.reindex-status": "Read Jira reindex status",
   "atlassianConnectors.action.jira.password-policy": "Read Jira password requirements",
-  "atlassianConnectors.action.jira.duplicate-user-count": "Read Jira's cached duplicate-account count",
+  "atlassianConnectors.action.jira.duplicate-user-count":
+    "Read Jira's cached duplicate-account count",
   "atlassianConnectors.action.jira.duplicate-users": "Read Jira's cached duplicate accounts",
   "atlassianConnectors.action.jira.search-error": "Read the stored Jira search error",
   "atlassianConnectors.action.jira.application-properties": "Read Jira application properties",
@@ -1125,7 +1320,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.action.jira.my-preference": "Read a preference of the connected Jira user",
   "atlassianConnectors.action.jira.remote-version-links": "Read Jira version links by global ID",
   "atlassianConnectors.action.jira.version-remote-links": "Read a Jira version's remote links",
-  "atlassianConnectors.action.jira.version-remote-link": "Read a Jira version's selected remote link",
+  "atlassianConnectors.action.jira.version-remote-link":
+    "Read a Jira version's selected remote link",
   "atlassianConnectors.action.jira.deleted-worklogs": "Read Jira worklog deletion observations",
   "atlassianConnectors.action.jira.updated-worklogs": "Read Jira worklog update observations",
   "chat.jira.outcome.openFilter": "Open Jira filter",
@@ -1138,19 +1334,29 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.action.add-filter-permission": "Add Jira filter sharing permission",
   "atlassianConnectors.action.delete-filter-permission": "Remove Jira filter sharing permission",
   "atlassianConnectors.action.set-my-preference": "Set a preference of the connected Jira user",
-  "atlassianConnectors.action.delete-my-preference": "Delete a preference of the connected Jira user",
+  "atlassianConnectors.action.delete-my-preference":
+    "Delete a preference of the connected Jira user",
   "chat.jira.savedConfiguration.private": "Private",
   "chat.jira.savedConfiguration.authenticated": "Signed-in users",
   "chat.jira.savedConfiguration.global": "Global",
-  "chat.jira.savedConfiguration.identityUnknown": "The complete identity or confirmation context is unavailable. This card does not establish a successful change.",
-  "chat.jira.savedConfiguration.deletionUnconfirmed": "This native API cannot independently prove complete removal. An acknowledged deletion remains unconfirmed; an inaccessible item or inherited default is not proof of absence. Do not repeat the deletion automatically.",
-  "chat.jira.savedConfiguration.confirmed": "The requested change was independently confirmed for this identity.",
-  "chat.jira.savedConfiguration.unchanged": "The independently observed state already matched the request. Nothing was written.",
-  "chat.jira.savedConfiguration.unconfirmed": "The known identity is retained. The requested change is not confirmed; do not repeat it automatically.",
-  "chat.jira.savedConfiguration.nonAtomicCreate": "Jira creates this filter using the connected user's default sharing. The endpoint cannot atomically bind creation to the reviewed default or guarantee a private start. A concurrent default change can publish the filter under a different scope.",
-  "chat.jira.savedConfiguration.futureDefaults": "This changes only the connected user's default sharing for future filters. It does not change existing filters or grant Jira permissions.",
-  "chat.jira.savedConfiguration.resetProof": "Reset is confirmed only when a fresh native response identifies a system, user or absent filter configuration. A legacy column array alone does not prove reset.",
-  "chat.jira.savedConfiguration.currentUserOnly": "This preference belongs to the bound connected Jira user.",
+  "chat.jira.savedConfiguration.identityUnknown":
+    "The complete identity or confirmation context is unavailable. This card does not establish a successful change.",
+  "chat.jira.savedConfiguration.deletionUnconfirmed":
+    "This native API cannot independently prove complete removal. An acknowledged deletion remains unconfirmed; an inaccessible item or inherited default is not proof of absence. Do not repeat the deletion automatically.",
+  "chat.jira.savedConfiguration.confirmed":
+    "The requested change was independently confirmed for this identity.",
+  "chat.jira.savedConfiguration.unchanged":
+    "The independently observed state already matched the request. Nothing was written.",
+  "chat.jira.savedConfiguration.unconfirmed":
+    "The known identity is retained. The requested change is not confirmed; do not repeat it automatically.",
+  "chat.jira.savedConfiguration.nonAtomicCreate":
+    "Jira creates this filter using the connected user's default sharing. The endpoint cannot atomically bind creation to the reviewed default or guarantee a private start. A concurrent default change can publish the filter under a different scope.",
+  "chat.jira.savedConfiguration.futureDefaults":
+    "This changes only the connected user's default sharing for future filters. It does not change existing filters or grant Jira permissions.",
+  "chat.jira.savedConfiguration.resetProof":
+    "Reset is confirmed only when a fresh native response identifies a system, user or absent filter configuration. A legacy column array alone does not prove reset.",
+  "chat.jira.savedConfiguration.currentUserOnly":
+    "This preference belongs to the bound connected Jira user.",
   "chat.jira.savedConfiguration.targetPresent": "Requested preference state: present",
   "chat.jira.savedConfiguration.targetAbsent": "Requested preference state: absent",
   "chat.jira.savedConfiguration.returnedScope": "Sharing scope returned by independent readback:",
@@ -1164,8 +1370,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.savedConfiguration.newDescription": "Requested filter description",
   "chat.jira.savedConfiguration.reviewedDefaultScope": "Reviewed default sharing",
   "chat.jira.savedConfiguration.requestedDefaultScope": "Requested default sharing",
-  "chat.jira.savedConfiguration.acceptDefaultSharing": "Accept native default sharing without an atomic private-start guarantee",
-  "chat.jira.savedConfiguration.acceptGlobalReplacement": "Accept replacement of all existing filter shares",
+  "chat.jira.savedConfiguration.acceptDefaultSharing":
+    "Accept native default sharing without an atomic private-start guarantee",
+  "chat.jira.savedConfiguration.acceptGlobalReplacement":
+    "Accept replacement of all existing filter shares",
   "chat.jira.savedConfiguration.reviewedColumns": "Reviewed columns in native order",
   "chat.jira.savedConfiguration.requestedColumns": "Requested columns in exact order",
   "chat.jira.savedConfiguration.reviewedColumnConfig": "Reviewed native column configuration",
@@ -1175,57 +1383,74 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.savedConfiguration.requestedValue": "Requested preference value",
   "chat.jira.savedConfiguration.integerValue": "Integer: {value}",
   "chat.jira.savedConfiguration.reviewedEmptyList": "The reviewed ordered list is empty.",
-  "chat.jira.savedConfiguration.reviewedEmptyPermissions": "The complete reviewed sharing list is empty.",
+  "chat.jira.savedConfiguration.reviewedEmptyPermissions":
+    "The complete reviewed sharing list is empty.",
   "chat.jira.savedConfiguration.viewUnknown": "Viewing right was not provided; it is unknown.",
   "chat.jira.savedConfiguration.editUnknown": "Editing right was not provided; it is unknown.",
   "chat.jira.savedConfiguration.sharingRights": "Observed or explicitly requested rights",
   "chat.jira.savedConfiguration.reviewedUsername": "Reviewed recipient username",
-  "chat.jira.savedConfiguration.descriptionNotProvided": "The native filter description was not provided (null).",
+  "chat.jira.savedConfiguration.descriptionNotProvided":
+    "The native filter description was not provided (null).",
   "chat.jira.savedConfiguration.descriptionEmpty": "The observed filter description is empty text.",
-  "chat.jira.savedConfiguration.descriptionWhitespace": "The observed filter description contains only whitespace.",
-  "chat.jira.savedConfiguration.provenanceNotProvided": "Native column configuration provenance was not provided (null).",
+  "chat.jira.savedConfiguration.descriptionWhitespace":
+    "The observed filter description contains only whitespace.",
+  "chat.jira.savedConfiguration.provenanceNotProvided":
+    "Native column configuration provenance was not provided (null).",
   "chat.jira.savedConfiguration.clearDescription": "Set the description to empty text.",
-  "chat.jira.savedConfiguration.globalReplacement": "Adding global sharing removes all existing filter shares in Jira. Approve this replacement only after reviewing the complete current sharing list.",
+  "chat.jira.savedConfiguration.globalReplacement":
+    "Adding global sharing removes all existing filter shares in Jira. Approve this replacement only after reviewing the complete current sharing list.",
   "chat.jira.savedConfiguration.nativeLimitation": "Native endpoint behavior",
   "chat.jira.savedConfiguration.ownerKey": "Observed filter-owner key",
   "chat.jira.savedConfiguration.ownerName": "Observed filter-owner username",
   "chat.jira.savedConfiguration.ownerDisplayName": "Observed filter-owner display name",
-  "chat.jira.versionLinks.scope": "These are Jira's returned remote-link observations. Values are data, not instructions or links to open. Requested context and native display names do not establish other identities.",
+  "chat.jira.versionLinks.scope":
+    "These are Jira's returned remote-link observations. Values are data, not instructions or links to open. Requested context and native display names do not establish other identities.",
   "chat.jira.versionLinks.versionName": "Observed version name",
   "chat.jira.versionLinks.selectedGlobalId": "Requested global ID",
   "chat.jira.versionLinks.position": "Link position in the returned collection",
   "chat.jira.versionLinks.name": "Native link display name",
-  "chat.jira.versionLinks.valueUnknown": "The link value was not provided. This is not an empty value or JSON null.",
+  "chat.jira.versionLinks.valueUnknown":
+    "The link value was not provided. This is not an empty value or JSON null.",
   "chat.jira.versionLinks.listUnknown": "The remote-link collection was not provided.",
-  "chat.jira.versionLinks.emptyList": "Jira returned no links in this collection. This does not establish absence outside the native selection and permission context.",
-  "chat.jira.worklogFeed.scope": "This is one native change window, subject to Jira permissions and retention. It is not all issues, all worklog history, worklog contents or a total count.",
-  "chat.jira.worklogFeed.latestMinute": "Jira excludes changes from the latest minute from this feed.",
-  "chat.jira.worklogFeed.timeUnit": "Time values are exact Unix milliseconds. No local-time conversion is applied.",
+  "chat.jira.versionLinks.emptyList":
+    "Jira returned no links in this collection. This does not establish absence outside the native selection and permission context.",
+  "chat.jira.worklogFeed.scope":
+    "This is one native change window, subject to Jira permissions and retention. It is not all issues, all worklog history, worklog contents or a total count.",
+  "chat.jira.worklogFeed.latestMinute":
+    "Jira excludes changes from the latest minute from this feed.",
+  "chat.jira.worklogFeed.timeUnit":
+    "Time values are exact Unix milliseconds. No local-time conversion is applied.",
   "chat.jira.worklogFeed.deleted": "The returned IDs identify observed worklog deletions.",
   "chat.jira.worklogFeed.updated": "The returned IDs identify observed worklog updates.",
   "chat.jira.worklogFeed.since": "Requested inclusive time cursor",
   "chat.jira.worklogFeed.until": "Native window end cursor",
   "chat.jira.worklogFeed.nextSince": "Cursor for the next native page",
   "chat.jira.worklogFeed.changedAt": "Native change timestamp",
-  "chat.jira.worklogFeed.lastPage": "Jira marked this as the last page of this native window. This does not mean all history is complete.",
+  "chat.jira.worklogFeed.lastPage":
+    "Jira marked this as the last page of this native window. This does not mean all history is complete.",
   "chat.jira.worklogFeed.morePages": "Jira reported another page for this native window.",
-  "chat.jira.worklogFeed.inclusiveCursor": "Continue with the exact supplied cursor. It is inclusive, so changes at the same time may repeat; do not add one or skip them.",
+  "chat.jira.worklogFeed.inclusiveCursor":
+    "Continue with the exact supplied cursor. It is inclusive, so changes at the same time may repeat; do not add one or skip them.",
   "chat.jira.worklogFeed.pageUnknown": "The native page continuation state is unknown.",
   "chat.jira.worklogFeed.cursorUnknown": "The continuation cursor was not provided.",
   "chat.jira.worklogFeed.listUnknown": "The native change collection was not provided.",
-  "chat.jira.worklogFeed.emptyWindow": "Jira returned no changes in this native window. This is not evidence that no other changes exist.",
+  "chat.jira.worklogFeed.emptyWindow":
+    "Jira returned no changes in this native window. This is not evidence that no other changes exist.",
   "chat.jira.worklogFeed.changeUnknown": "The worklog identity or change timestamp is unknown.",
-  "chat.jira.settings.observation": "These are saved setting observations. No Jira or Keiko setting was changed.",
+  "chat.jira.settings.observation":
+    "These are saved setting observations. No Jira or Keiko setting was changed.",
   "chat.jira.settings.applicationScope": "Jira application properties",
   "chat.jira.settings.advancedScope": "Jira advanced settings",
   "chat.jira.settings.preferenceScope": "Preference of the connected Jira user",
   "chat.jira.settings.permissionFilter": "Requested native permission filter",
-  "chat.jira.settings.filterOnly": "This filter selects the returned settings. It does not establish permission to change them.",
+  "chat.jira.settings.filterOnly":
+    "This filter selects the returned settings. It does not establish permission to change them.",
   "chat.jira.settings.collectionCount": "Settings in the returned native collection",
   "chat.jira.settings.key": "Setting key",
   "chat.jira.settings.keyUnknown": "The setting key was not provided.",
   "chat.jira.settings.unknown": "The setting value is unknown. No default value is assumed.",
-  "chat.jira.settings.withheld": "The setting value was withheld because this key is not approved for value disclosure.",
+  "chat.jira.settings.withheld":
+    "The setting value was withheld because this key is not approved for value disclosure.",
   "chat.jira.settings.stringValue": "Observed text",
   "chat.jira.settings.integerValue": "Observed integer",
   "chat.jira.settings.true": "Observed boolean: true",
@@ -1235,9 +1460,11 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.settings.emptyList": "No settings were returned in this collection.",
   "chat.jira.settings.listUnknown": "The settings collection was not provided.",
   "chat.jira.accounts.countUnknown": "The count was not provided.",
-  "atlassianConnectors.action.jira.permission-scheme-attribute": "Read a Jira permission-scheme attribute",
+  "atlassianConnectors.action.jira.permission-scheme-attribute":
+    "Read a Jira permission-scheme attribute",
   "atlassianConnectors.action.jira.email-template-types": "Read Jira email notification types",
-  "chat.jira.adminObservation.configurationOnly": "This is permission-scheme configuration. It does not establish effective permissions or grant authority.",
+  "chat.jira.adminObservation.configurationOnly":
+    "This is permission-scheme configuration. It does not establish effective permissions or grant authority.",
   "chat.jira.adminObservation.schemeId": "Permission scheme ID",
   "chat.jira.adminObservation.attributeKey": "Attribute key",
   "chat.jira.adminObservation.attributeValue": "Observed attribute value",
@@ -1259,13 +1486,17 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.adminObservation.noText": "Text format: false",
   "chat.jira.adminObservation.textUnknown": "Text format: unknown",
   "chat.jira.adminObservation.typeCount": "Returned notification-type entries",
-  "chat.jira.adminObservation.countUnknown": "The number of returned notification-type entries was not provided.",
-  "chat.jira.adminObservation.metadataOnly": "These are native notification and template descriptions. No email was sent or template pack exported. Repeated event IDs may describe different formats; template names are plain remote metadata.",
+  "chat.jira.adminObservation.countUnknown":
+    "The number of returned notification-type entries was not provided.",
+  "chat.jira.adminObservation.metadataOnly":
+    "These are native notification and template descriptions. No email was sent or template pack exported. Repeated event IDs may describe different formats; template names are plain remote metadata.",
   "chat.jira.accounts.requirementCount": "Returned password requirements",
-  "chat.jira.accounts.requirementsOnly": "These are password requirements. No password was supplied or tested, and acceptance is not established.",
+  "chat.jira.accounts.requirementsOnly":
+    "These are password requirements. No password was supplied or tested, and acceptance is not established.",
   "chat.jira.accounts.withOldPassword": "Requirements requested for a change with an old password",
   "chat.jira.accounts.withoutOldPassword": "Requirements requested without an old password",
-  "chat.jira.accounts.passwordContextUnknown": "The requested password-change context was not provided.",
+  "chat.jira.accounts.passwordContextUnknown":
+    "The requested password-change context was not provided.",
   "chat.jira.accounts.username": "Account name",
   "chat.jira.accounts.directoriesUnknown": "The account directories were not provided.",
   "chat.jira.accounts.directoryCount": "Returned directories for this account",
@@ -1276,8 +1507,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.accounts.activityUnknown": "Reported account activity: unknown",
   "chat.jira.accounts.duplicateCount": "Cached duplicate-account count",
   "chat.jira.accounts.cachedUsernames": "Returned cached account names",
-  "chat.jira.accounts.cachedOnly": "This observes Jira's duplicate-account cache without refreshing it. It does not establish a complete account audit or instance health.",
-  "chat.jira.accounts.searchContext": "This observation applies to the connected user's current HTTP context. It does not inspect a browser session or validate another query.",
+  "chat.jira.accounts.cachedOnly":
+    "This observes Jira's duplicate-account cache without refreshing it. It does not establish a complete account audit or instance health.",
+  "chat.jira.accounts.searchContext":
+    "This observation applies to the connected user's current HTTP context. It does not inspect a browser session or validate another query.",
   "chat.jira.accounts.noStoredError": "Jira reports no stored search error in this context.",
   "chat.jira.accounts.storedError": "Jira returned a stored search error in this context.",
   "chat.jira.accounts.searchErrorUnknown": "The stored search error is unavailable.",
@@ -1287,7 +1520,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.action.jira.sprint-property": "Read a Jira sprint property",
   "atlassianConnectors.action.jira.comment-property-keys": "Read Jira comment property keys",
   "atlassianConnectors.action.jira.comment-property": "Read a Jira comment property",
-  "atlassianConnectors.action.jira.dashboard-item-property-keys": "Read Jira dashboard item property keys",
+  "atlassianConnectors.action.jira.dashboard-item-property-keys":
+    "Read Jira dashboard item property keys",
   "atlassianConnectors.action.jira.dashboard-item-property": "Read a Jira dashboard item property",
   "atlassianConnectors.action.jira.issue-property-keys": "Read Jira issue property keys",
   "atlassianConnectors.action.jira.issue-property": "Read a Jira issue property",
@@ -1298,18 +1532,23 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.action.jira.user-property-keys": "Read Jira user property keys",
   "atlassianConnectors.action.jira.user-property": "Read a Jira user property",
   "chat.jira.properties.observation": "Stored Jira properties were read. No property was changed.",
-  "chat.jira.properties.keysScope": "This list describes keys returned by Jira for the selected entity; it does not establish visibility of other properties.",
-  "chat.jira.properties.pointerHelp": "Root means the whole value. A JSON Pointer identifies a child: ~1 stands for / and ~0 for ~. The path / alone names an empty object key. Array positions start at 0.",
-  "chat.jira.properties.visibleEscapes": "Display escapes: \\u0000 represents the corresponding control character; \\\\ represents one literal backslash. The stored text and pointer are unchanged.",
+  "chat.jira.properties.keysScope":
+    "This list describes keys returned by Jira for the selected entity; it does not establish visibility of other properties.",
+  "chat.jira.properties.pointerHelp":
+    "Root means the whole value. A JSON Pointer identifies a child: ~1 stands for / and ~0 for ~. The path / alone names an empty object key. Array positions start at 0.",
+  "chat.jira.properties.visibleEscapes":
+    "Display escapes: \\u0000 represents the corresponding control character; \\\\ represents one literal backslash. The stored text and pointer are unchanged.",
   "chat.jira.properties.issueId": "Issue ID",
   "chat.jira.properties.selectedItemId": "Requested dashboard item ID",
-  "chat.jira.properties.requestedItemContext": "The dashboard was identified independently. The item ID is requested context; Jira's property response determines access to that item.",
+  "chat.jira.properties.requestedItemContext":
+    "The dashboard was identified independently. The item ID is requested context; Jira's property response determines access to that item.",
   "chat.jira.properties.key": "Property key",
   "chat.jira.properties.keyUnknown": "The property key was not provided.",
   "chat.jira.properties.returnedKeys": "Keys returned by Jira",
   "chat.jira.properties.keysUnknown": "The property key list was not provided.",
   "chat.jira.properties.keysEmpty": "Jira returned an empty property key list.",
-  "chat.jira.properties.unselectableKey": "This key contains characters that the current connection cannot address safely.",
+  "chat.jira.properties.unselectableKey":
+    "This key contains characters that the current connection cannot address safely.",
   "chat.jira.properties.nodeCount": "Value entries, including containers",
   "chat.jira.properties.root": "Root: the whole property value",
   "chat.jira.properties.pointer": "JSON Pointer",
@@ -1338,7 +1577,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.action.jira.app-monitoring": "Read Jira application monitoring settings",
   "atlassianConnectors.action.jira.ipd-monitoring": "Read Jira in-product diagnostics settings",
   "atlassianConnectors.action.jira.jmx-metrics": "Read Jira JMX metric descriptions",
-  "chat.jira.jobs.observation": "These are Jira's returned observations. No maintenance job was started or setting changed.",
+  "chat.jira.jobs.observation":
+    "These are Jira's returned observations. No maintenance job was started or setting changed.",
   "chat.jira.jobs.selectedTask": "Observation for the requested task",
   "chat.jira.jobs.activeOrLatest": "Observation for Jira's active or latest task",
   "chat.jira.jobs.taskSelectionUnknown": "The task selection was not provided.",
@@ -1346,7 +1586,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.jobs.nativeProgress": "Native progress value",
   "chat.jira.jobs.progressUnknown": "The native progress value was not provided.",
   "chat.jira.jobs.successTrue": "Native success flag: true",
-  "chat.jira.jobs.successFalse": "Native success flag: false; this alone does not establish task failure.",
+  "chat.jira.jobs.successFalse":
+    "Native success flag: false; this alone does not establish task failure.",
   "chat.jira.jobs.successUnknown": "Native success flag: unknown",
   "chat.jira.jobs.subtask": "Reported subtask",
   "chat.jira.jobs.type": "Reported task type",
@@ -1365,24 +1606,28 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.jobs.unreturnedIds": "Requested IDs not returned by Jira",
   "chat.jira.jobs.unreturnedCount": "Requested IDs not returned: count",
   "chat.jira.jobs.selectedScope": "This result concerns only the requested reindex IDs.",
-  "chat.jira.jobs.unreturnedMeaning": "An unreturned ID does not establish that the request is absent or complete.",
+  "chat.jira.jobs.unreturnedMeaning":
+    "An unreturned ID does not establish that the request is absent or complete.",
   "chat.jira.jobs.upgradeRunning": "Jira reports that an upgrade is running.",
   "chat.jira.jobs.noPriorUpgrade": "Jira returned no prior upgrade result.",
   "chat.jira.jobs.upgradeOutcome": "Reported upgrade outcome",
   "chat.jira.jobs.upgradeOutcomeUnknown": "The upgrade outcome was not provided.",
   "chat.jira.jobs.nativeDuration": "Native duration value",
-  "chat.jira.jobs.durationUnitsUnknown": "The duration unit was not established; the native value is unchanged.",
+  "chat.jira.jobs.durationUnitsUnknown":
+    "The duration unit was not established; the native value is unchanged.",
   "chat.jira.jobs.durationUnknown": "The duration value was not provided.",
   "chat.jira.jobs.remoteSnapshotPath": "Reported server snapshot path",
   "chat.jira.jobs.snapshotTimestamp": "Native snapshot timestamp, unchanged",
   "chat.jira.jobs.snapshotTimeUnknown": "The snapshot timestamp was not provided.",
-  "chat.jira.jobs.remotePathOnly": "This is server-reported path text. No snapshot file was opened or downloaded.",
+  "chat.jira.jobs.remotePathOnly":
+    "This is server-reported path text. No snapshot file was opened or downloaded.",
   "chat.jira.jobs.appMonitoring": "Application monitoring observation",
   "chat.jira.jobs.ipdMonitoring": "In-product diagnostics observation",
   "chat.jira.jobs.monitoringEnabled": "Native monitoring enabled flag: true",
   "chat.jira.jobs.monitoringDisabled": "Native monitoring enabled flag: false",
   "chat.jira.jobs.monitoringUnknown": "Native monitoring enabled flag: unknown",
-  "chat.jira.jobs.metricDescriptionOnly": "Returned metric descriptions do not establish current metric measurements or overall health.",
+  "chat.jira.jobs.metricDescriptionOnly":
+    "Returned metric descriptions do not establish current metric measurements or overall health.",
   "chat.jira.jobs.metricsEmpty": "Jira returned an empty metric description.",
   "chat.jira.jobs.metricsUnknown": "The metric description was not provided.",
   "chat.jira.viewSettings.enabled": "Reported enabled flag: true",
@@ -1390,7 +1635,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.viewSettings.enabledUnknown": "Enabled flag: unknown",
   "chat.jira.viewSettings.connectedUser": "Settings for the connected Jira account",
   "chat.jira.viewSettings.scopeUnknown": "The settings scope was not provided.",
-  "chat.jira.viewSettings.observation": "These are returned Jira preferences. No Jira or Keiko setting was changed.",
+  "chat.jira.viewSettings.observation":
+    "These are returned Jira preferences. No Jira or Keiko setting was changed.",
   "chat.jira.viewSettings.systemLayout": "Observed system column layout",
   "chat.jira.viewSettings.currentUserLayout": "Observed connected-user column layout",
   "chat.jira.viewSettings.namedUserLayout": "Observed layout for the requested Jira user",
@@ -1401,12 +1647,14 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.viewSettings.requestedUser": "Requested Jira user",
   "chat.jira.viewSettings.requestedFilter": "Requested filter ID",
   "chat.jira.viewSettings.nativeLayoutMode": "Native layout mode",
-  "chat.jira.viewSettings.layoutObservation": "Returned columns retain their native order. This layout does not establish field requiredness, edit permission or which layout another context uses.",
+  "chat.jira.viewSettings.layoutObservation":
+    "Returned columns retain their native order. This layout does not establish field requiredness, edit permission or which layout another context uses.",
   "atlassianConnectors.action.jira.cluster-nodes": "Read Jira cluster node observations",
   "atlassianConnectors.action.jira.cluster-upgrade-state": "Read Jira cluster upgrade state",
   "atlassianConnectors.action.jira.index-snapshot-status": "Read Jira index snapshot status",
   "atlassianConnectors.action.jira.index-summary": "Read Jira index summary",
-  "chat.jira.maintenance.observation": "These are Jira's reported observations. No maintenance job was started, and they do not establish overall availability.",
+  "chat.jira.maintenance.observation":
+    "These are Jira's reported observations. No maintenance job was started, and they do not establish overall availability.",
   "chat.jira.maintenance.nodeId": "Node ID",
   "chat.jira.maintenance.state": "Reported state",
   "chat.jira.maintenance.stateUnknown": "The state was not provided.",
@@ -1423,7 +1671,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.maintenance.archiveCount": "Reported archive count",
   "chat.jira.maintenance.databaseCount": "Reported database count",
   "chat.jira.maintenance.indexCount": "Reported index count",
-  "chat.jira.maintenance.indexCountsScope": "These native counts describe separate populations. No index completeness or replication delay was calculated.",
+  "chat.jira.maintenance.indexCountsScope":
+    "These native counts describe separate populations. No index completeness or replication delay was calculated.",
   "chat.jira.maintenance.indexReadable": "Native index readable flag: true",
   "chat.jira.maintenance.indexUnreadable": "Native index readable flag: false",
   "chat.jira.maintenance.indexReadableUnknown": "Native index readable flag: unknown",
@@ -1453,14 +1702,19 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.maintenance.reportTimeUnknown": "The report time was not provided.",
   "chat.jira.maintenance.issueIndexUnknown": "Issue index observations were not provided.",
   "atlassianConnectors.action.jira.jmx-metrics-exposed": "Read Jira JMX metric exposure",
-  "atlassianConnectors.action.jira.search-max-aggregation-buckets": "Read Jira's search aggregation bucket limit",
-  "atlassianConnectors.action.jira.search-max-result-window": "Read Jira's search result window limit",
-  "chat.jira.runtimeSettings.exposureObservation": "This is Jira's reported JMX metric exposure setting. No monitoring setting was changed.",
+  "atlassianConnectors.action.jira.search-max-aggregation-buckets":
+    "Read Jira's search aggregation bucket limit",
+  "atlassianConnectors.action.jira.search-max-result-window":
+    "Read Jira's search result window limit",
+  "chat.jira.runtimeSettings.exposureObservation":
+    "This is Jira's reported JMX metric exposure setting. No monitoring setting was changed.",
   "chat.jira.runtimeSettings.exposed": "JMX metrics reported exposed",
   "chat.jira.runtimeSettings.notExposed": "JMX metrics reported not exposed",
   "chat.jira.runtimeSettings.exposureUnknown": "JMX metric exposure is unknown.",
-  "chat.jira.runtimeSettings.limitObservation": "This native limit is shown unchanged, including zero or negative values. Its meaning is not inferred, and Keiko's search budgets and permissions remain separate.",
-  "chat.jira.runtimeSettings.limitUnknown": "The native search limit was not provided in a readable form.",
+  "chat.jira.runtimeSettings.limitObservation":
+    "This native limit is shown unchanged, including zero or negative values. Its meaning is not inferred, and Keiko's search budgets and permissions remain separate.",
+  "chat.jira.runtimeSettings.limitUnknown":
+    "The native search limit was not provided in a readable form.",
   "chat.jira.runtimeSettings.aggregationLimit": "Reported maximum aggregation buckets",
   "chat.jira.runtimeSettings.resultWindowLimit": "Reported maximum result window",
   "atlassianConnectors.action.jira.screens": "Read Jira screens",
@@ -1470,7 +1724,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.action.jira.terminology": "Read Jira terminology",
   "atlassianConnectors.action.jira.terminology-entry": "Read a Jira terminology entry",
   "atlassianConnectors.action.jira.read-only-mode": "Read Jira read-only mode settings",
-  "chat.jira.adminMetadata.configurationOnly": "These are observed configuration details. They do not establish edit permission or prove that a rule is enforced.",
+  "chat.jira.adminMetadata.configurationOnly":
+    "These are observed configuration details. They do not establish edit permission or prove that a rule is enforced.",
   "chat.jira.adminMetadata.fieldType": "Reported field type",
   "chat.jira.adminMetadata.searcherKey": "Searcher key",
   "chat.jira.adminMetadata.lastValueUpdate": "Reported last value update",
@@ -1502,7 +1757,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.adminMetadata.customTerminology": "Custom terminology reported",
   "chat.jira.adminMetadata.terminologyDefaultUnknown": "Default terminology flag: unknown",
   "chat.jira.adminMetadata.terminologyUnknown": "Some configured terminology was not provided.",
-  "chat.jira.adminMetadata.readOnlyObservation": "This is Jira's reported read-only configuration, not confirmation that a particular operation is blocked or allowed.",
+  "chat.jira.adminMetadata.readOnlyObservation":
+    "This is Jira's reported read-only configuration, not confirmation that a particular operation is blocked or allowed.",
   "chat.jira.adminMetadata.readOnlyEnabled": "Read-only setting: enabled",
   "chat.jira.adminMetadata.readOnlyDisabled": "Read-only setting: disabled",
   "chat.jira.adminMetadata.readOnlyUnknown": "Read-only setting: unknown",
@@ -1514,9 +1770,11 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.adminMetadata.emptyZone": "Jira supplied an empty time zone.",
   "chat.jira.adminMetadata.optionPage": "Option page",
   "chat.jira.adminMetadata.allOptionContexts": "Options requested across all field contexts",
-  "chat.jira.adminMetadata.nativeOptionContext": "Options returned for Jira's native context selection",
+  "chat.jira.adminMetadata.nativeOptionContext":
+    "Options returned for Jira's native context selection",
   "chat.jira.adminMetadata.optionScopeUnknown": "Option context scope: unknown",
-  "chat.jira.adminMetadata.optionScopeOnly": "These options do not establish edit permission. An empty result can reflect an absent or ambiguous context.",
+  "chat.jira.adminMetadata.optionScopeOnly":
+    "These options do not establish edit permission. An empty result can reflect an absent or ambiguous context.",
   "chat.jira.adminMetadata.deletable": "Reported deletable flag: true",
   "chat.jira.adminMetadata.notDeletable": "Reported deletable flag: false",
   "chat.jira.adminMetadata.deletableUnknown": "Deletable flag: unknown",
@@ -1526,26 +1784,31 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.adminMetadata.defaultWorkflow": "Reported default workflow: true",
   "chat.jira.adminMetadata.notDefaultWorkflow": "Reported default workflow: false",
   "chat.jira.adminMetadata.defaultWorkflowUnknown": "Default workflow flag: unknown",
-  "atlassianConnectors.action.jira.board-epicless-issues": "Read visible board issues without an epic",
+  "atlassianConnectors.action.jira.board-epicless-issues":
+    "Read visible board issues without an epic",
   "atlassianConnectors.action.jira.board-epic-issues": "Read visible board epic issues",
   "atlassianConnectors.action.jira.board-sprint-issues": "Read visible board sprint issues",
   "atlassianConnectors.action.jira.epicless-issues": "Read visible issues without an epic",
   "atlassianConnectors.action.jira.board-projects": "Read visible board projects",
   "atlassianConnectors.action.jira.board-versions": "Read visible board versions",
-  "atlassianConnectors.action.jira.board-refined-velocity": "Read the board refined velocity setting",
+  "atlassianConnectors.action.jira.board-refined-velocity":
+    "Read the board refined velocity setting",
   "atlassianConnectors.action.jira.agile-issue": "Read a Jira Software issue",
   "atlassianConnectors.action.jira.issue-estimation": "Read an issue estimate in board context",
   "chat.jira.agileContext.visibleBoardIssues": "Visible issues in the requested board context",
   "chat.jira.agileContext.visibleEpiclessIssues": "Visible issues without an epic",
   "chat.jira.agileContext.visibleBoardProjects": "Visible projects returned for this board",
   "chat.jira.agileContext.visibleBoardVersions": "Visible versions returned for this board",
-  "chat.jira.agileContext.visibleOnly": "Results and counts cover the population Jira made visible to this account. An empty result does not prove that no other resources exist.",
+  "chat.jira.agileContext.visibleOnly":
+    "Results and counts cover the population Jira made visible to this account. An empty result does not prove that no other resources exist.",
   "chat.jira.agileContext.epicId": "Epic ID",
   "chat.jira.agileContext.issueId": "Issue ID",
   "chat.jira.agileContext.estimate": "Observed estimate value",
   "chat.jira.agileContext.estimateUnknown": "The estimate value was not provided.",
-  "chat.jira.agileContext.estimateBlank": "Jira supplied an empty or whitespace-only estimate text.",
-  "chat.jira.agileContext.estimateUnitUnknown": "The estimate unit is unknown. This value has not been converted to time or story points.",
+  "chat.jira.agileContext.estimateBlank":
+    "Jira supplied an empty or whitespace-only estimate text.",
+  "chat.jira.agileContext.estimateUnitUnknown":
+    "The estimate unit is unknown. This value has not been converted to time or story points.",
   "chat.jira.agileContext.refinedEnabled": "Refined velocity setting: enabled",
   "chat.jira.agileContext.refinedDisabled": "Refined velocity setting: disabled",
   "chat.jira.agileContext.refinedUnknown": "Refined velocity setting: unknown",
@@ -1555,7 +1818,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.jql.reservedWords": "JQL reserved words",
   "chat.jira.jql.nativeSuggestions": "Native JQL value suggestions",
   "chat.jira.jql.scopeUnknown": "The metadata scope was not provided.",
-  "chat.jira.jql.discoveryOnly": "These are metadata entries returned by Jira. Counts refer to these entries, not issues; no JQL validation or permission check was performed.",
+  "chat.jira.jql.discoveryOnly":
+    "These are metadata entries returned by Jira. Counts refer to these entries, not issues; no JQL validation or permission check was performed.",
   "chat.jira.jql.types": "Reported types",
   "chat.jira.jql.typeCount": "Reported types returned",
   "chat.jira.jql.typesUnknown": "Type metadata was not provided.",
@@ -1591,25 +1855,30 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.screenTabs.reviewedEmptyFields": "The reviewed tab contains no fields.",
   "chat.jira.screenTabs.created": "The new tab was confirmed on the selected screen.",
   "chat.jira.screenTabs.renamed": "The tab's new name was confirmed on the selected screen.",
-  "chat.jira.screenTabs.deleted": "The tab's absence was confirmed on the selected screen; another tab remains.",
-  "chat.jira.screenTabs.tabUnconfirmed": "No tab identity was confirmed. The screen ID alone does not confirm a created tab.",
+  "chat.jira.screenTabs.deleted":
+    "The tab's absence was confirmed on the selected screen; another tab remains.",
+  "chat.jira.screenTabs.tabUnconfirmed":
+    "No tab identity was confirmed. The screen ID alone does not confirm a created tab.",
   "atlassianConnectors.action.jira.issue-picker": "Read Jira issue suggestions",
   "atlassianConnectors.action.jira.pinned-comments": "Read pinned Jira comments",
   "atlassianConnectors.action.jira.subtasks": "Read Jira subtasks",
-  "atlassianConnectors.action.jira.subtask-move-availability": "Read Jira subtask ordering availability",
+  "atlassianConnectors.action.jira.subtask-move-availability":
+    "Read Jira subtask ordering availability",
   "atlassianConnectors.action.jira.remote-links": "Read Jira remote link metadata",
   "atlassianConnectors.action.jira.remote-link": "Read a Jira remote link's metadata",
   "chat.jira.issueContext.globalId": "Remote link global ID",
   "chat.jira.issueContext.applicationName": "Application name",
   "chat.jira.issueContext.applicationType": "Application type",
   "chat.jira.issueContext.relationship": "Observed relationship",
-  "chat.jira.issueContext.linkObservation": "Observed remote link metadata. No destination was opened and no relationship was created.",
+  "chat.jira.issueContext.linkObservation":
+    "Observed remote link metadata. No destination was opened and no relationship was created.",
   "chat.jira.issueContext.resolved": "Native resolved flag: true",
   "chat.jira.issueContext.notResolved": "Native resolved flag: false",
   "chat.jira.issueContext.resolvedUnknown": "Native resolved flag was not provided.",
   "chat.jira.issueContext.linksUnknown": "The remote link list was not provided.",
   "chat.jira.issueContext.linksEmpty": "The returned remote link list is empty.",
-  "chat.jira.issueContext.reorderScope": "This observation concerns ordering subtasks within the same parent. It does not authorize moving them to another parent or performing a change.",
+  "chat.jira.issueContext.reorderScope":
+    "This observation concerns ordering subtasks within the same parent. It does not authorize moving them to another parent or performing a change.",
   "chat.jira.issueContext.reorderAllowed": "Jira reported that ordering is available.",
   "chat.jira.issueContext.reorderUnavailable": "Jira reported that ordering is unavailable.",
   "chat.jira.issueContext.reorderUnknown": "Ordering availability was not provided.",
@@ -1617,14 +1886,16 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.issueContext.pinnedDate": "Native pin date",
   "chat.jira.issueContext.pinObservation": "Observed pinned comment; no pin was changed.",
   "chat.jira.issueContext.suggestionsOnly": "Issue suggestions only; no relationship was created.",
-  "chat.jira.issueContext.suggestionsScope": "These are Jira's returned suggestions, not a complete issue list or a permission grant.",
+  "chat.jira.issueContext.suggestionsScope":
+    "These are Jira's returned suggestions, not a complete issue list or a permission grant.",
   "chat.jira.issueContext.suggestionsUnknown": "Suggestions for this section were not provided.",
   "chat.jira.issueContext.suggestionsEmpty": "The returned section contains no suggestions.",
   "chat.jira.issueContext.sectionsUnknown": "Suggestion sections were not provided.",
   "chat.jira.issueContext.sectionsEmpty": "Jira returned no suggestion sections.",
   "chat.jira.issueContext.sectionId": "Suggestion section ID",
   "chat.jira.issueContext.sectionLabel": "Suggestion section",
-  "chat.jira.issueContext.subtaskObservation": "Observed subtasks of the selected parent; no parent or ordering was changed.",
+  "chat.jira.issueContext.subtaskObservation":
+    "Observed subtasks of the selected parent; no parent or ordering was changed.",
   "chat.jira.issueContext.collectionUnknown": "The collection was not provided.",
   "chat.jira.issueContext.collectionEmpty": "The returned collection is empty.",
   "atlassianConnectors.action.set-app-monitoring": "Change Jira application monitoring",
@@ -1636,13 +1907,16 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.monitoring.enabled": "Enabled",
   "chat.jira.monitoring.disabled": "Disabled",
   "chat.jira.monitoring.scope": "Scope of this change",
-  "chat.jira.monitoring.instanceScope": "The requested change concerns this monitoring setting for the Jira instance. No metrics are retrieved and unrelated settings are outside its scope.",
+  "chat.jira.monitoring.instanceScope":
+    "The requested change concerns this monitoring setting for the Jira instance. No metrics are retrieved and unrelated settings are outside its scope.",
   "chat.jira.monitoring.jmxExposure": "JMX metric exposure",
   "chat.jira.monitoring.confirmed": "An independent read confirmed the requested monitoring state.",
   "chat.jira.monitoring.observedEnabled": "Confirmed state: enabled",
   "chat.jira.monitoring.observedDisabled": "Confirmed state: disabled",
-  "chat.jira.monitoring.observedNoop": "The reviewed state already matched the requested state; no write was performed.",
-  "chat.jira.monitoring.targetUnconfirmed": "The saved value is only the requested target. The current monitoring state has not been confirmed.",
+  "chat.jira.monitoring.observedNoop":
+    "The reviewed state already matched the requested state; no write was performed.",
+  "chat.jira.monitoring.targetUnconfirmed":
+    "The saved value is only the requested target. The current monitoring state has not been confirmed.",
   "chat.jira.monitoring.targetEnabled": "Requested target: enabled",
   "chat.jira.monitoring.targetDisabled": "Requested target: disabled",
   "chat.jira.monitoring.stateUnknown": "No valid monitoring state was recorded.",
@@ -1653,7 +1927,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.action.set-comment-property": "Set Jira comment property",
   "atlassianConnectors.action.delete-comment-property": "Delete Jira comment property",
   "atlassianConnectors.action.set-dashboard-item-property": "Set Jira dashboard item property",
-  "atlassianConnectors.action.delete-dashboard-item-property": "Delete Jira dashboard item property",
+  "atlassianConnectors.action.delete-dashboard-item-property":
+    "Delete Jira dashboard item property",
   "atlassianConnectors.action.set-issue-property": "Set Jira issue property",
   "atlassianConnectors.action.delete-issue-property": "Delete Jira issue property",
   "atlassianConnectors.action.set-issue-type-property": "Set Jira issue type property",
@@ -1667,21 +1942,29 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.propertyMutation.reviewedValue": "Reviewed existing property value",
   "chat.jira.propertyMutation.requestedValue": "Requested new property value",
   "chat.jira.propertyMutation.reviewedAbsence": "Reviewed absence",
-  "chat.jira.propertyMutation.absenceExpected": "The property was reviewed as absent. This does not mean JSON null or an empty value.",
+  "chat.jira.propertyMutation.absenceExpected":
+    "The property was reviewed as absent. This does not mean JSON null or an empty value.",
   "chat.jira.propertyMutation.null": "Value: JSON null",
   "chat.jira.propertyMutation.emptyText": "Value: empty text",
   "chat.jira.propertyMutation.emptyObject": "Value: empty object",
   "chat.jira.propertyMutation.emptyArray": "Value: empty array",
   "chat.jira.propertyMutation.true": "Boolean: true",
   "chat.jira.propertyMutation.false": "Boolean: false",
-  "chat.jira.propertyMutation.confirmedPresent": "The property and its requested value were independently confirmed on the selected entity.",
-  "chat.jira.propertyMutation.confirmedAbsent": "The property's absence was independently confirmed on the selected entity.",
-  "chat.jira.propertyMutation.alreadyPresent": "The reviewed property already had the requested value; no write was performed.",
-  "chat.jira.propertyMutation.alreadyAbsent": "The reviewed property was already absent; no write was performed.",
-  "chat.jira.propertyMutation.targetUnconfirmed": "Only the requested property state is recorded. The current stored state has not been confirmed.",
-  "chat.jira.propertyMutation.requestedPresent": "Requested target: property present with the new value",
+  "chat.jira.propertyMutation.confirmedPresent":
+    "The property and its requested value were independently confirmed on the selected entity.",
+  "chat.jira.propertyMutation.confirmedAbsent":
+    "The property's absence was independently confirmed on the selected entity.",
+  "chat.jira.propertyMutation.alreadyPresent":
+    "The reviewed property already had the requested value; no write was performed.",
+  "chat.jira.propertyMutation.alreadyAbsent":
+    "The reviewed property was already absent; no write was performed.",
+  "chat.jira.propertyMutation.targetUnconfirmed":
+    "Only the requested property state is recorded. The current stored state has not been confirmed.",
+  "chat.jira.propertyMutation.requestedPresent":
+    "Requested target: property present with the new value",
   "chat.jira.propertyMutation.requestedAbsent": "Requested target: property absent",
-  "chat.jira.propertyMutation.presenceUnknown": "No valid property-state confirmation was recorded.",
+  "chat.jira.propertyMutation.presenceUnknown":
+    "No valid property-state confirmation was recorded.",
   "chat.jira.fact.dashboardId": "Dashboard ID",
   "chat.jira.fact.sharePermissionId": "Share entry ID",
   "chat.jira.fact.shareType": "Share type",
@@ -1717,7 +2000,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "This is the last page of this directory read. Earlier pages, if any, are not shown here.",
   "chat.jira.directory.morePages":
     "More directory pages are available. These users are only the current page.",
-  "chat.jira.directory.pageStateUnknown": "Jira did not confirm whether more directory pages exist.",
+  "chat.jira.directory.pageStateUnknown":
+    "Jira did not confirm whether more directory pages exist.",
   "chat.jira.directory.pickerTotalUnknown":
     "Jira did not provide the total number of matches. These suggestions may be incomplete.",
   "chat.jira.directory.pickerPartial":
@@ -1863,8 +2147,14 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.fact.updateRemove": "Remove from {fieldId}: {value}",
 
   "chat.jira.resultUnavailable": "Result unavailable",
+  "chat.requirements.details": "View requirements",
+  "chat.documents.details": "View document result",
+  "chat.review.details": "View review result",
+  "chat.mcp.details": "View MCP result",
+  "chat.jira.details": "View Jira result",
   "chat.tool.readableResultUnavailable": "A readable view of this result is unavailable.",
-  "chat.tool.readableResultHelp": "Ask for a supported result view. Do not repeat an action just to recover its display; check its existing outcome first.",
+  "chat.tool.readableResultHelp":
+    "Ask for a supported result view. Do not repeat an action just to recover its display; check its existing outcome first.",
   "chat.jira.partial": "Partial Jira result. Some available data is not included.",
   "chat.jira.outcome.results": "Jira results",
   "chat.jira.outcome.projectId": "Project ID: {id}",
@@ -1872,10 +2162,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.outcome.keyUnavailable": "This project key cannot be used. Choose another key.",
   "chat.jira.outcome.permissionGranted": "Permission granted",
   "chat.jira.outcome.permissionDenied": "Permission not granted",
-  "chat.jira.outcome.problems": "What Jira said",
-  "chat.jira.outcome.more": "Show {count} more results",
+  "chat.jira.outcome.moreResults": "Show {count} more results",
   "chat.jira.outcome.openBoard": "Open board",
-  "chat.jira.outcome.newTab": "(opens Jira in a new tab)",
   "chat.jira.outcome.returned": "Returned results: {count}.",
   "chat.jira.outcome.returnedTotal": "{count} of {total} results returned.",
   "chat.jira.outcome.staged": "Issues in the saved draft: {count}.",
@@ -1892,32 +2180,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.outcome.state.uncertain": "Uncertain",
   "chat.jira.outcome.state.skipped": "Skipped",
   "chat.jira.outcome.state.excluded": "Excluded",
-  "chat.jira.outcome.validation.required-field":
-    "A required Jira field was missing, so nothing was sent. Fill it in before requesting the change again.",
-  "chat.jira.outcome.validation.unsupported-field":
-    "A required Jira field cannot be filled from Keiko. Review that field in Jira before requesting the change again.",
-  "chat.jira.outcome.validation.invalid-field":
-    "A Jira field has an invalid value. Correct it before requesting the change again.",
-  "chat.jira.outcome.validation.invalid-operation":
-    "The requested field change is not available. Review the permitted changes in Jira.",
-  "chat.jira.outcome.validation.bounds-exceeded":
-    "The change was too large to send. Reduce its scope before requesting it again.",
-  "chat.jira.outcome.rules": "Template rules not met",
-  "chat.jira.outcome.rule.summary-too-short": "The summary is too short.",
-  "chat.jira.outcome.rule.summary-too-long": "The summary is too long.",
-  "chat.jira.outcome.rule.summary-pattern": "The summary does not follow the required pattern.",
-  "chat.jira.outcome.rule.section-missing": "The description lacks the section “{subject}”.",
-  "chat.jira.outcome.rule.section-empty": "The section “{subject}” is empty.",
-  "chat.jira.outcome.rule.field-missing": "The field “{subject}” is required.",
-  "chat.jira.outcome.rule.field-unavailable":
-    "The field “{subject}” is unavailable in this Jira project.",
-  "chat.jira.outcome.rule.label-missing": "The label “{subject}” is required.",
-  "chat.jira.outcome.rule.label-pattern": "A label does not follow the required pattern.",
-  "chat.jira.outcome.rule.label-count": "The number of labels does not meet the template rule.",
-  "chat.jira.outcome.rule.parent-missing": "The issue needs a parent ({subject}).",
-  "chat.jira.outcome.rule.parent-type-mismatch": "The parent must have an allowed issue type ({subject}).",
-  "chat.jira.outcome.rule.template-unreadable":
-    "The template could not be read. Check it before requesting the change again.",
+  "chat.jira.outcome.rule.parent-type-mismatch":
+    "The parent must have an allowed issue type ({subject}).",
   "chat.jira.outcome.failure.auth":
     "Verify the Jira Pod connection and its credentials before trying again.",
   "chat.jira.outcome.failure.sourceChanged":
@@ -1941,12 +2205,28 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.outcome.failure.unavailable":
     "The Jira result is unavailable. Check the connection and the remote state before making another request.",
   "chat.requirements.tool": "Requirements",
-  "chat.requirements.details": "View requirements",
-  "chat.requirements.partial": "Partial list. Some requirements are not included.",
+  "chat.requirements.partial": "Not all requirements were read.",
+  "chat.requirements.read": "Requirements read: {done} of {total}",
+  "chat.requirements.cut.documentsNotExtracted": "Documents that could not be read: {count}",
+  "chat.requirements.cut.documentsOmitted": "Documents left out: {count}",
+  "chat.requirements.cut.unitsOmitted": "Requirements left out: {count}",
+  "chat.batch.outlining": "Grouping requirements …",
+  "chat.batch.drafted": "Drafted {drafted} of {planned} issues",
+  "chat.batch.stopped": "You stopped it after {drafted} of {planned} issues",
+  "chat.batch.stoppedOutlining": "You stopped it while grouping requirements",
+  "chat.batch.failedOutlining": "Could not finish grouping requirements",
+  "chat.batch.failed": "Could not finish: {drafted} of {planned} issues drafted",
+  "chat.batch.complete":
+    "Drafted {drafted} of {planned} issues · {covered} of {requirements} requirements covered",
+  "chat.batch.paused": "Paused after {drafted} of {planned} issues. Continue to draft the rest",
+  "chat.batch.none": "No issues drafted",
+  "chat.batch.uncovered": "Requirements not covered: {count}",
+  "chat.batch.unfinished": "Issues not finished: {count}",
+  "chat.batch.failedRequirements": "Requirements that could not be drafted: {count}",
+  "chat.batch.failedIssues": "Issues that could not be drafted: {count}",
+  "chat.processing.draftBatch": "Create draft",
   "chat.documents.tool": "Documents",
-  "chat.documents.details": "View document result",
   "chat.review.tool": "Document review",
-  "chat.review.details": "View review result",
   "chat.knowledge.partial": "Partial result. Some document information is not included.",
   "chat.knowledge.outcome.results": "Knowledge results",
   "chat.knowledge.outcome.detected": "Detected requirements",
@@ -1976,7 +2256,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.knowledge.outcome.conflict": "Potential conflict",
   "chat.knowledge.outcome.omission": "Potential omission",
   "chat.knowledge.outcome.clarification": "Clarification needed",
-  "chat.knowledge.outcome.reviewScope": "These are review proposals for the returned source window. They do not prove an exhaustive review of the document or Knowledge Pod.",
+  "chat.knowledge.outcome.reviewScope":
+    "These are review proposals for the returned source window. They do not prove an exhaustive review of the document or Knowledge Pod.",
   "chat.knowledge.outcome.requirements": "Requirement references",
   "chat.knowledge.outcome.query": "Suggested change query",
   "chat.knowledge.outcome.changed": "Changed requirement",
@@ -2065,7 +2346,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.connectors.mcp": "MCP servers",
   "chat.connectors.jira": "Jira Pods",
   "chat.connectors.jiraAdministration": "Administer the Jira instance",
-  "chat.connectors.jiraAdministrationHelp": "Separately allow changes to shared Jira configuration, such as screens and monitoring, for this selected Pod. Ordinary Jira writes continue to follow the chosen mode. Full access does not enable instance administration; Jira's own permissions still apply.",
+  "chat.connectors.jiraAdministrationHelp":
+    "Separately allow changes to shared Jira configuration, such as screens and monitoring, for this selected Pod. Ordinary Jira writes continue to follow the chosen mode. Full access does not enable instance administration; Jira's own permissions still apply.",
   "chat.connectors.manage": "Manage",
   "chat.connectors.noServers": "No MCP servers set up",
   "chat.connectors.noPods": "No Jira Pods yet",
@@ -2075,7 +2357,6 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.live.title": "Jira Live Pods",
   "atlassianConnectors.live.add": "Create Jira Pod",
   "chat.mcp.tool": "MCP action",
-  "chat.mcp.details": "View MCP result",
   "chat.mcp.writeApproval.title": "Approve MCP action",
   "chat.mcp.write.notDispatched": "Not sent to the MCP server",
   "chat.mcp.write.rejected": "MCP action rejected",
@@ -2089,11 +2370,44 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "The change may have been applied. It will not be repeated automatically. Check the remote state before starting another write.",
   "chat.mcp.write.pendingHelp":
     "The action has started. Wait for its outcome before starting another write.",
+  "chat.jira.outcome.issues": "Jira issues",
+  "chat.jira.outcome.problems": "What Jira said",
+  "chat.jira.outcome.more": "and {count} more",
+  "chat.jira.outcome.newTab": "(opens Jira in a new tab)",
+  "chat.jira.outcome.validation.required-field": "A required Jira field was missing.",
+  "chat.jira.outcome.validation.unsupported-field":
+    "A required Jira field cannot be filled from Keiko.",
+  "chat.jira.outcome.validation.invalid-field": "A Jira field had a value Jira does not accept.",
+  "chat.jira.outcome.validation.invalid-operation":
+    "The requested field change is not possible in Jira.",
+  "chat.jira.outcome.validation.bounds-exceeded": "The change was too large to send in one step.",
+  "chat.jira.outcome.nothingSent": "Nothing was sent to Jira.",
+  "chat.jira.outcome.rules": "Template rules not met",
+  "chat.jira.outcome.rule.summary-too-short": "The summary is too short.",
+  "chat.jira.outcome.rule.summary-too-long": "The summary is too long.",
+  "chat.jira.outcome.rule.summary-pattern": "The summary does not follow the required pattern.",
+  "chat.jira.outcome.rule.section-missing": "The description lacks the section “{subject}”.",
+  "chat.jira.outcome.rule.section-empty": "The section “{subject}” is empty.",
+  "chat.jira.outcome.rule.field-missing": "The field “{subject}” is required.",
+  "chat.jira.outcome.rule.field-unavailable":
+    "The field “{subject}” does not exist in this Jira project.",
+  "chat.jira.outcome.rule.label-missing": "The label “{subject}” is required.",
+  "chat.jira.outcome.rule.label-pattern":
+    "The label “{subject}” does not follow the required pattern.",
+  "chat.jira.outcome.rule.label-count": "The issue has too few labels.",
+  "chat.jira.outcome.rule.parent-missing": "The issue needs a parent ({subject}).",
+  "chat.jira.outcome.rule.template-unreadable": "The template “{subject}” could not be read.",
   "chat.jira.tool": "Jira action",
   "chat.jira.complete": "Completed",
   "chat.jira.running": "Running",
   "chat.jira.unavailable": "Could not complete",
-  "chat.jira.details": "View Jira result",
+  "chat.jira.batch.refused.noRequirements": "No requirement matched the selection",
+  "chat.jira.batch.refused.noKnowledgePod":
+    "No Knowledge Pod with requirements is attached to this Chat",
+  "chat.jira.batch.refused.projectNotFound": "Project not found",
+  "chat.jira.batch.refused.noUsableIssueType":
+    "No issue type available for drafting in this project",
+  "chat.jira.batch.refused.issueTypeNotFound": "Issue type not available in this project",
   "browserApproval.title": "Connect this browser",
   "browserApproval.close": "Close",
   "browserApproval.notice":
@@ -2205,28 +2519,21 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "Use complete UTF-8 text up to 100,000 characters and 128 KiB. Files must be .md or .txt.",
   "chat.skills.author.generationError":
     "No complete skill draft was returned. Check the selected model and gateway, shorten the source if needed, and try again.",
-  "chat.skills.author.review":
-    "Review the full draft, especially proposals, contradictions and open decisions. Regular skills apply only after selection for the chat. Jira templates apply as soon as they are saved; downloading activates nothing.",
-  "chat.skills.author.draft": "Skill draft (Markdown)",
-  "chat.skills.author.save": "Save reviewed skill",
-  "chat.skills.jira.title": "Jira issue templates",
-  "chat.skills.jira.description":
-    "A template is a skill with a Jira front matter. Keiko checks every issue create, edit and chosen workflow transition against it before anything is sent to Jira, in every mode.",
+  "chat.skills.jira.title": "Jira templates",
+  "chat.skills.jira.description": "Apply automatically to every Jira change Keiko makes.",
   "chat.skills.jira.pod": "Jira Pod",
   "chat.skills.jira.podRequired": "Connect a ready Jira Pod to validate a template or propose one.",
-  "chat.skills.jira.empty":
-    "No Jira issue templates yet. Upload a Markdown skill with a Jira template front matter, or propose one from a project below.",
+  "chat.skills.jira.empty": "No templates yet. Create one from a Jira project.",
   "chat.skills.jira.invalid": "Needs repair",
-  "chat.skills.jira.validate": "Validate against Jira",
-  "chat.skills.jira.validating": "Validating…",
-  "chat.skills.jira.valid": "The template matches the Jira instance.",
-  "chat.skills.jira.partial":
-    "Not fully checked: Jira did not provide its {checks}, so the template was not compared with them. Writes it governs can still be refused.",
+  "chat.skills.jira.checking": "Checking against Jira…",
+  "chat.skills.jira.checkFailed": "Could not be checked against Jira right now.",
+  "chat.skills.jira.notApplied": "Not applied: {reasons}",
+  "chat.skills.jira.valid": "Matches Jira.",
+  "chat.skills.jira.partial": "Matches Jira; {checks} could not be read.",
   "chat.skills.jira.check.project": "project details",
   "chat.skills.jira.check.fields": "fields",
   "chat.skills.jira.check.linkTypes": "link types",
   "chat.skills.jira.check.transitions": "workflow statuses",
-  "chat.skills.jira.syntax": "The template is malformed ({codes}). Fix it and upload it again.",
   "chat.skills.jira.finding.unknown-project": "Project {subject} does not exist or is not visible.",
   "chat.skills.jira.finding.unknown-issue-type":
     "Issue type {subject} does not exist in the project.",
@@ -2239,37 +2546,55 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "{subject} is not a status of the project. A transition name or id cannot be checked here.",
   "chat.skills.jira.projectKey": "Project key",
   "chat.skills.jira.propose": "Propose from project",
+  "chat.skills.jira.proposeTitle": "Create a template from a Jira project",
   "chat.skills.jira.proposing": "Reading project…",
   "chat.skills.jira.proposalNone": "No template could be derived from this project.",
   "chat.skills.jira.proposalTitle": "Proposed for {issueType} ({count} issues sampled)",
-  "chat.skills.jira.save": "Save Jira template",
   "chat.skills.jira.error":
     "Jira or the template library could not be read. Check the Pod and try again.",
   "chat.skills.title": "Skills",
+  "chat.skills.chat.title": "Chat skills",
   "chat.skills.sessionRequired":
     "Open Keiko from its launcher to manage private skills. Chat remains available without a skill.",
   "chat.skills.close": "Close skills",
-  "chat.skills.description":
-    "After uploading a regular skill, select it for this chat. Saved Jira templates apply to the projects, issue types and actions specified in them.",
+  "chat.skills.description": "Write, import and manage the instructions Keiko follows.",
   "chat.skills.protected":
     "Used for each new message. Skill instructions count toward the context and remain intact when the conversation is compacted.",
   "chat.skills.remove": "Remove skill from this chat",
   "chat.skills.unavailable": "Selected skill unavailable",
   "chat.skills.requestError": "Skills could not be updated. Reload the selection and try again.",
   "chat.skills.upload": "Upload Markdown (.md, up to 128 KiB)",
-  "chat.skills.replace": "Replace with Markdown",
   "chat.skills.retry": "Reload",
   "chat.skills.loading": "Loading skills…",
-  "chat.skills.empty": "No skills yet. Upload your first Markdown skill.",
+  "chat.skills.empty": "No chat skills yet.",
   "chat.skills.fileError": "Choose a non-empty .md file up to 128 KiB.",
   "chat.skills.selected": "Active in this chat",
-  "chat.skills.select": "Select",
-  "chat.skills.preview": "Skill preview",
   "chat.skills.export": "Download Markdown",
   "chat.skills.delete": "Delete",
   "chat.skills.deleteWarning": "Chats using this skill will require a new selection.",
   "chat.skills.confirmDelete": "Delete skill",
   "chat.skills.cancel": "Cancel",
+  "chat.skills.library": "Skill library",
+  "chat.skills.new": "New skill",
+  "chat.skills.newName": "New skill",
+  "chat.skills.author.short": "Draft with AI",
+  "chat.skills.import": "Import",
+  "chat.skills.unsaved": "Unsaved changes",
+  "chat.skills.discardQuestion": "This file has unsaved changes. Discard them?",
+  "chat.skills.keepEditing": "Keep editing",
+  "chat.skills.discard": "Discard changes",
+  "chat.skills.emptyTitle": "Open a skill or start a new one",
+  "chat.skills.emptyText": "Choose a skill or template, or write a new one.",
+  "chat.skills.untitled": "Untitled skill",
+  "chat.skills.editorPlaceholder": "Describe how Keiko should work…",
+  "chat.skills.kind.skill": "Chat skill",
+  "chat.skills.kind.template": "Jira template",
+  "chat.skills.notSaved": "Not saved yet",
+  "chat.skills.save": "Save",
+  "chat.skills.useInChat": "Use in this chat",
+  "chat.skills.jira.proposeDescription":
+    "Keiko reads recent issues of a project and proposes one template per issue type. Each opens in the editor for review before you save it.",
+  "chat.skills.jira.openProposal": "Open in editor",
 
   "agentLauncher.agent": "Agent",
   "agentLauncher.agentCount": "{count} agents",
@@ -3956,6 +4281,33 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.composer.codeUnavailable": "Syntax highlighting unavailable. You can keep editing here.",
   "chat.composer.inputLimit": "The message is too long. Shorten it before adding more content.",
   "chat.composer.markdownHint": "Markdown · ``` + Shift+Enter for code · Enter to send",
+  "markdownEditor.toolbar": "Formatting",
+  "markdownEditor.blockStyle": "Paragraph style",
+  "markdownEditor.block.paragraph": "Text",
+  "markdownEditor.block.heading-1": "Heading 1",
+  "markdownEditor.block.heading-2": "Heading 2",
+  "markdownEditor.block.heading-3": "Heading 3",
+  "markdownEditor.block.other": "Other block",
+  "markdownEditor.mark.strong": "Bold ({shortcut})",
+  "markdownEditor.mark.em": "Italic ({shortcut})",
+  "markdownEditor.mark.code": "Inline code ({shortcut})",
+  "markdownEditor.wrap.bullet_list": "Bulleted list",
+  "markdownEditor.wrap.ordered_list": "Numbered list",
+  "markdownEditor.wrap.blockquote": "Quote",
+  "markdownEditor.codeBlock": "Code block",
+  "markdownEditor.undo": "Undo ({shortcut})",
+  "markdownEditor.redo": "Redo ({shortcut})",
+  "markdownEditor.view": "View",
+  "markdownEditor.view.rich": "Formatted",
+  "markdownEditor.view.source": "Markdown",
+  "markdownEditor.view.split": "Split",
+  "markdownEditor.preview": "Preview",
+  "markdownEditor.sourceOnly":
+    "This file uses Markdown the formatted view would change (such as tables or HTML), so it is edited as Markdown.",
+  "markdownEditor.frontMatter": "Metadata (YAML)",
+  "markdownEditor.lines": "{count} lines",
+  "markdownEditor.characters": "{count} characters",
+  "markdownEditor.limit": "The text is too long. Shorten it before adding more.",
   "chat.model.menuTitle": "Models",
   "chat.model.search": "Search models...",
   "chat.model.searchEmpty": "No matching models.",
@@ -4932,6 +5284,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.action.jira.assignable-users": "Find assignable Jira users",
   "atlassianConnectors.action.jira.report": "Compute Jira progress, compliance and coverage report",
   "atlassianConnectors.action.jira.draft-stage": "Stage part of a Jira backlog draft",
+  "atlassianConnectors.action.jira.draft-batch": "Draft Jira issues from requirements",
   "chat.jira.report.figures":
     "Figures are computed by Keiko from the Jira data read, not by the model.",
   "chat.jira.report.reading": "Reading Jira: {read} of {total} issues",
@@ -4992,8 +5345,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.result.reason.not-found": "The target no longer exists.",
   "atlassianConnectors.result.reason.rate-limited": "Atlassian rate-limited the request.",
   "atlassianConnectors.result.reason.timeout": "The request timed out.",
-  "atlassianConnectors.result.reason.effect-denied": "Local authority no longer permits this request. Review the allowed connector scopes and the recorded outcome before deciding on another request.",
-  "atlassianConnectors.result.reason.cancelled": "The request was cancelled. Check the recorded outcome before deciding on another request; cancellation does not undo an acknowledged change.",
+  "atlassianConnectors.result.reason.effect-denied":
+    "Local authority no longer permits this request. Review the allowed connector scopes and the recorded outcome before deciding on another request.",
+  "atlassianConnectors.result.reason.cancelled":
+    "The request was cancelled. Check the recorded outcome before deciding on another request; cancellation does not undo an acknowledged change.",
   "atlassianConnectors.result.reason.unavailable": "Atlassian was temporarily unavailable.",
   "atlassianConnectors.result.reason.malformed-payload": "The request could not be processed.",
   "atlassianConnectors.result.reason.bounds-exceeded": "The request exceeded its size limit.",
@@ -5204,12 +5559,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "filesWidget.multiRoot.moveDown": "Move root down: {name}",
   "filesWidget.multiRoot.remove": "Remove root: {name}",
   "filesWidget.multiRoot.error": "Unable to update workspace roots. Refresh and try again.",
-  "pdfCitationPreviewWindow.anchorQuality.approximate": "Near cited passage",
-  "pdfCitationPreviewWindow.anchorQuality.unavailable": "Verified page unavailable",
-  "pdfCitationPreviewWindow.anchorQuality.pageOnly": "Verified page only",
   "pdfCitationPreviewWindow.page": "Page {pageNumber}",
-  "pdfCitationPreviewWindow.noVerifiedPage": "No verified page",
-  "pdfCitationPreviewWindow.verifiedPdf": "Verified PDF",
   "pdfCitationPreviewWindow.failure.sessionEnded.title": "Preview session ended",
   "pdfCitationPreviewWindow.failure.sessionEnded.message":
     "This verified preview session is no longer active. Reopen the citation to create a fresh preview.",
@@ -5248,15 +5598,6 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "pdfCitationPreviewWindow.failure.reVerificationRequired.message":
     "This viewer was restored without an active verified preview session. Reopen the citation from the answer to re-verify the source before Keiko renders PDF bytes.",
   "pdfCitationPreviewWindow.documentLabelFallback": "PDF Preview",
-  "pdfCitationPreviewWindow.sourceLabelFallback": "Local Knowledge PDF",
-  "pdfCitationPreviewWindow.eyebrow": "Verified preview",
-  "pdfCitationPreviewWindow.citationContext.ariaLabel": "Citation context",
-  "pdfCitationPreviewWindow.citationContext.eyebrow": "Active citation",
-  "pdfCitationPreviewWindow.backToChat.defaultTip":
-    "Restore the originating chat and highlight this citation",
-  "pdfCitationPreviewWindow.backToChat.label": "Back to chat",
-  "pdfCitationPreviewWindow.sameAnswerCitations": "Same answer citations",
-  "pdfCitationPreviewWindow.citationActive": "Active",
   "pdfCitationPreviewWindow.toolbar.ariaLabel": "PDF preview controls",
   "pdfCitationPreviewWindow.toolbar.previous": "Previous",
   "pdfCitationPreviewWindow.toolbar.currentPage": "Current page",
@@ -5264,9 +5605,6 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "pdfCitationPreviewWindow.toolbar.zoomOut": "Zoom out",
   "pdfCitationPreviewWindow.toolbar.zoomIn": "Zoom in",
   "pdfCitationPreviewWindow.toolbar.fitWidth": "Fit width",
-  "pdfCitationPreviewWindow.toolbar.fitPage": "Fit page",
-  "pdfCitationPreviewWindow.toolbar.rotateLeft": "Rotate left",
-  "pdfCitationPreviewWindow.toolbar.rotateRight": "Rotate right",
   "pdfCitationPreviewWindow.action.reopenPreview": "Reopen preview",
   "pdfCitationPreviewWindow.action.retryPreview": "Retry preview",
   "pdfCitationPreviewWindow.action.retryPage": "Retry page",

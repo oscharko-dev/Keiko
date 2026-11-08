@@ -30,6 +30,7 @@ import {
 } from "@oscharko-dev/keiko-local-knowledge";
 import { seedCapsuleWithVectors } from "@oscharko-dev/keiko-local-knowledge/testing";
 import { handleSendDesktopChat } from "./chat-handlers.js";
+import { openKnowledgeStoreForDeps } from "./local-knowledge-store-open.js";
 import { handleSendDesktopChatStream } from "./chat-stream-handlers.js";
 import { handleDecideChatWriteApproval } from "./atlassian/chatWriteApprovalRoutes.js";
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -355,6 +356,8 @@ function runtime(
   chatId: string;
   root: string;
   jiraRequests: string[];
+  /** The serialized body of every Jira POST, as it left Keiko. */
+  jiraBodies: string[];
   /** Grant ids the server accepted itself, in order; no human ever decides a read grant. */
   acceptedReadGrants: string[];
 } {
@@ -401,11 +404,13 @@ function runtime(
   if (credentials === undefined || approvals === undefined) throw new Error("Missing owners");
   vi.spyOn(credentials.custody, "list").mockReturnValue([metadata(deps)]);
   const jiraRequests: string[] = [];
+  const jiraBodies: string[] = [];
   vi.spyOn(credentials, "httpBodyPortFactory").mockImplementation(
     (_metadata, _correlation, lifecycle) =>
       (request): ReturnType<AtlassianHttpBodyPort> => {
         expect(lifecycle?.beforeDispatch?.(request)).toBe(true);
         jiraRequests.push(request.method);
+        if (request.bodyJson !== undefined) jiraBodies.push(request.bodyJson);
         const status = request.method === "GET" ? 200 : 201;
         lifecycle?.onResponse?.(request, status);
         const bodyText = JSON.stringify(
@@ -437,7 +442,7 @@ function runtime(
     );
     expect(result.status).toBe(200);
   });
-  return { deps, chatId: chat.id, root, jiraRequests, acceptedReadGrants };
+  return { deps, chatId: chat.id, root, jiraRequests, jiraBodies, acceptedReadGrants };
 }
 
 function credentialContext(authRef: string, body: Record<string, unknown> = {}): RouteContext {
@@ -1433,23 +1438,69 @@ function assertFailedCitationRepairActivity(deps: UiHandlerDeps): void {
   expect(analyzeLogText(raw).evidence.classification).toBe("supported");
 }
 
+async function prepareCitationRepairSource(
+  f: ReturnType<typeof runtime>,
+  source: "folder" | "multi-source" | "hybrid",
+): Promise<void> {
+  if (source === "hybrid")
+    await connectDataPod(f, "Feature returns true. Feature is a function.", true);
+  if (source !== "multi-source") return;
+  writeFileSync(join(f.root, "src", "Second.ts"), "export const second = true;\n");
+  f.deps.store.updateChat(f.chatId, {
+    connectedScopes: ["Feature.ts", "Second.ts"].map((file) => ({
+      kind: "files" as const,
+      root: f.root,
+      relativePaths: [`src/${file}`],
+      connectedAtMs: 1,
+    })),
+  });
+}
+function citationRepairDisposition(deps: UiHandlerDeps): unknown {
+  const raw = readPersistedActivityLog(dirname(deps.uiDbPath ?? ""));
+  const line = persistedActivityLogLines(raw, "search.connected-context.answer-details").at(-1);
+  return expectRegisteredActivityLogLine("search.connected-context.answer-details", line ?? "")
+    .citationRepairDisposition;
+}
+
+// The pin of a citation repair that offers no tool and refuses a write in its response, kept on
+// the turn shape that still repairs: a tool round that sent no change (#4173).
 it.each(["folder", "multi-source", "hybrid"] as const)(
-  "keeps %s citation repair tool-free after a committed write and refuses a changed write response",
+  "keeps %s citation repair tool-free after a read round and refuses a write in its response",
   async (source) => {
     const f = runtime(true);
-    if (source === "hybrid")
-      await connectDataPod(f, "Feature returns true. Feature is a function.", true);
-    if (source === "multi-source") {
-      writeFileSync(join(f.root, "src", "Second.ts"), "export const second = true;\n");
-      f.deps.store.updateChat(f.chatId, {
-        connectedScopes: ["Feature.ts", "Second.ts"].map((file) => ({
-          kind: "files" as const,
-          root: f.root,
-          relativePaths: [`src/${file}`],
-          connectedAtMs: 1,
-        })),
-      });
-    }
+    await prepareCitationRepairSource(f, source);
+    const requests = provider(["tool", "uncited", "repair-write", "answer"]);
+    const result = await handleGroundedAsk(
+      context({
+        chatId: f.chatId,
+        content: "Explain Feature and list the Jira projects.",
+        modelId: MODEL,
+      }),
+      f.deps,
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect.soft(requests[2]?.includes('"tools":')).toBe(false);
+    expect(requests).toHaveLength(3);
+    expect(requests[0]).toContain('"tools":');
+    expect(requests[1]).toContain('"tools":');
+    expect(requests[2]).not.toContain('"tools":');
+    expect(requests[2]).not.toContain('"role":"tool"');
+    expect(outputCap(requests[2] ?? "{}")).toBeLessThan(outputCap(requests[1] ?? "{}"));
+    expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual([]);
+    expect((result.body as GroundedAnswer).content).toContain("Feature returns true.");
+    const exchanges = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges ?? [];
+    expect(exchanges.filter((exchange) => exchange.call.name === "jira_comment")).toHaveLength(0);
+    assertFailedCitationRepairActivity(f.deps);
+  },
+);
+
+// Stronger than a tool-free repair: after a committed write no repair call exists at all, so a
+// changed write can never be offered again and the answer reporting the change stays as written.
+it.each(["folder", "multi-source", "hybrid"] as const)(
+  "never repairs %s citations after a committed write, so the write reaches Jira once",
+  async (source) => {
+    const f = runtime(true);
+    await prepareCitationRepairSource(f, source);
     const requests = provider(["write", "uncited", "repair-write", "answer"]);
     const result = await handleGroundedAsk(
       context({
@@ -1460,19 +1511,13 @@ it.each(["folder", "multi-source", "hybrid"] as const)(
       f.deps,
     );
     expect(result.status, JSON.stringify(result.body)).toBe(200);
-    expect.soft(requests[2]?.includes('"tools":')).toBe(false);
-    expect.soft(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
-    expect(requests).toHaveLength(3);
-    expect(requests[0]).toContain('"tools":');
-    expect(requests[1]).toContain('"tools":');
-    expect(requests[2]).not.toContain('"tools":');
-    expect(requests[2]).not.toContain('"role":"tool"');
-    expect(outputCap(requests[2] ?? "{}")).toBeLessThan(outputCap(requests[1] ?? "{}"));
+    expect(requests).toHaveLength(2);
+    expect(requests.join("\n")).not.toContain("Changed citation repair comment");
     expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
     expect((result.body as GroundedAnswer).content).toContain("Feature returns true.");
     const exchanges = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges ?? [];
     expect(exchanges.filter((exchange) => exchange.call.name === "jira_comment")).toHaveLength(1);
-    assertFailedCitationRepairActivity(f.deps);
+    expect(citationRepairDisposition(f.deps)).toBe("skipped-tool-action");
   },
 );
 
@@ -2794,4 +2839,111 @@ it("still names untraceable statements when no Jira result backs the answer", as
   expect(result.status, JSON.stringify(result.body)).toBe(200);
   const answer = result.body as GroundedAnswer;
   expect(answer.uncertainty.map((marker) => marker.kind)).toContain("uncited-answer");
+});
+
+// F8: a `[n]` marker in Jira text designates a source of the evidence pack the turn's synthesis
+// actually sent, never the same numeral of an earlier answer.
+async function connectNamedDataPod(
+  f: ReturnType<typeof runtime>,
+  name: string,
+  text: string,
+): Promise<void> {
+  const session = openKnowledgeStoreForDeps(f.deps);
+  try {
+    const pod = await seedCapsuleWithVectors(session.store, {
+      displayName: name,
+      safeDisplayName: `${name}.pdf`,
+      capsuleId: `cap-${name}`,
+      sourceId: `src-${name}`,
+      documentId: `doc-${name}`,
+      text,
+    });
+    updateCapsuleState(session.store, pod.capsuleId, "ready");
+    f.deps.store.updateChat(f.chatId, {
+      connectedScope: null,
+      localKnowledgeScopes: [{ kind: "capsule", capsuleId: pod.capsuleId, connectedAtMs: 1 }],
+    });
+  } finally {
+    session.close();
+  }
+}
+
+/** The comment Jira received; it must be the one the recorded, approved call carried. */
+function postedComment(f: ReturnType<typeof runtime>): string {
+  expect(f.jiraBodies).toHaveLength(1);
+  const posted = (JSON.parse(f.jiraBodies[0] ?? "{}") as { readonly body: string }).body;
+  const approved = f.deps.store
+    .listMessages(f.chatId)
+    .flatMap((message) => message.toolTranscript?.exchanges ?? [])
+    .filter((exchange) => exchange.call.name === "jira_comment");
+  expect(approved).toHaveLength(1);
+  expect(approved[0]?.call.arguments.body).toBe(posted);
+  expect(approved[0]?.approval?.state).toBe("claimed");
+  return posted;
+}
+
+describe("Jira text cites the evidence pack of its own turn (F8)", () => {
+  const ASK = "What does Feature return? Also add the Jira comment.";
+  const COMMENT = "Feature returns true [1].";
+
+  function firstLabel(answer: GroundedAnswer): string {
+    const first = answer.citations[0] as { readonly label?: string } | undefined;
+    return first?.label ?? "";
+  }
+
+  async function ask(f: ReturnType<typeof runtime>, turn: string): Promise<GroundedAnswer> {
+    const result = await handleGroundedAsk(
+      context({ chatId: f.chatId, content: ASK, modelId: MODEL, clientTurnId: turn }),
+      f.deps,
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    return result.body as GroundedAnswer;
+  }
+
+  it("names the current pack's source when no earlier answer exists", async () => {
+    const f = runtime(true);
+    await connectNamedDataPod(f, "Current specification", "Feature returns true.");
+    provider(["write", "answer"], "Feature returns true [1]. The comment was added.", COMMENT);
+    const answer = await ask(f, "f8-no-prior");
+    const label = firstLabel(answer);
+    expect(label).toContain("Current specification");
+    expect(postedComment(f)).toBe(`Feature returns true (${label}).`);
+  });
+
+  it("names the current pack's source, not an earlier answer's colliding [1]", async () => {
+    const f = runtime(true);
+    await connectNamedDataPod(f, "Old archived specification", "Feature returns true.");
+    provider(["answer"], "Feature returns true [1].");
+    const earlier = await ask(f, "f8-earlier");
+    expect(firstLabel(earlier)).toContain("Old archived specification");
+    await connectNamedDataPod(f, "Current specification", "Feature returns true.");
+    provider(["write", "answer"], "Feature returns true [1]. The comment was added.", COMMENT);
+    const current = await ask(f, "f8-current");
+    const label = firstLabel(current);
+    expect(label).toContain("Current specification");
+    expect(postedComment(f)).toBe(`Feature returns true (${label}).`);
+    expect(postedComment(f)).not.toContain("Old archived specification");
+  });
+
+  it("still resolves a follow-up that refers to an earlier answer when no new pack is sent", async () => {
+    const f = runtime(true);
+    await connectNamedDataPod(f, "Old archived specification", "Feature returns true.");
+    provider(["answer"], "Feature returns true [1].");
+    const earlier = await ask(f, "f8-reference");
+    const label = firstLabel(earlier);
+    f.deps.store.updateChat(f.chatId, { localKnowledgeScopes: [] });
+    provider(["write", "answer"], "The comment was added.", COMMENT);
+    const result = await handleSendDesktopChat(
+      context({
+        chatId: f.chatId,
+        projectPath: f.root,
+        content: "Add your last answer as a Jira comment.",
+        modelId: MODEL,
+        clientTurnId: "f8-follow-up",
+      }),
+      f.deps,
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(postedComment(f)).toBe(`Feature returns true (${label}).`);
+  });
 });

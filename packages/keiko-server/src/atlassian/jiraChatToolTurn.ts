@@ -1,6 +1,7 @@
 import { createJiraChatHumanInput } from "./jiraChatHumanInput.js";
+import { chatKnowledgeScopes } from "../requirement-inventory.js";
 import { reserveChatToolPrompt } from "../chat-tool-approvals.js";
-import { JIRA_TOOL_GUIDANCE } from "./jiraToolGuidance.js";
+import { jiraTurnGuidance } from "./jiraOpenDraft.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -178,10 +179,13 @@ async function reviewedAttachment(
 ): Promise<JiraAttachmentPreview | undefined> {
   const { deps, message, correlationId, authority, signal } = options;
   const args = proposedWriteArguments(access, action);
-  if (action.tool === "jira.upload-email-template-pack") return reviewedEmailTemplate(options, access, action, args);
+  if (action.tool === "jira.upload-email-template-pack")
+    return reviewedEmailTemplate(options, access, action, args);
   if (isJiraAvatarUploadOperation(action.tool)) {
-    if (args === undefined || !access.reviewableWrite(action) || !access.readAllowed(action)) return undefined;
-    const path = emailTemplatePath(args); if (path === undefined) return undefined;
+    if (args === undefined || !access.reviewableWrite(action) || !access.readAllowed(action))
+      return undefined;
+    const path = emailTemplatePath(args);
+    if (path === undefined) return undefined;
     const preview = await previewJiraAvatarImage(deps, message.chatId, path, correlationId, signal);
     return access.readAllowed(action) ? preview : undefined;
   }
@@ -212,7 +216,8 @@ async function reviewedAttachment(
 function emailTemplatePath(args: CatalogJsonObject): string | undefined {
   const source: unknown = args.source;
   if (source === null || typeof source !== "object" || Array.isArray(source)) return undefined;
-  if (!("kind" in source) || source.kind !== "connected-file" || !("path" in source)) return undefined;
+  if (!("kind" in source) || source.kind !== "connected-file" || !("path" in source))
+    return undefined;
   return typeof source.path === "string" ? source.path : undefined;
 }
 async function reviewedEmailTemplate(
@@ -221,10 +226,17 @@ async function reviewedEmailTemplate(
   action: JiraChatCatalogAction,
   args: CatalogJsonObject | undefined,
 ): Promise<JiraAttachmentPreview | undefined> {
-  if (args === undefined || !access.reviewableWrite(action) || !access.readAllowed(action)) return undefined;
+  if (args === undefined || !access.reviewableWrite(action) || !access.readAllowed(action))
+    return undefined;
   const path = emailTemplatePath(args);
   if (path === undefined) return undefined;
-  const preview = await previewJiraEmailTemplatePack(options.deps, options.message.chatId, path, options.correlationId, options.signal);
+  const preview = await previewJiraEmailTemplatePack(
+    options.deps,
+    options.message.chatId,
+    path,
+    options.correlationId,
+    options.signal,
+  );
   return access.readAllowed(action) ? preview : undefined;
 }
 
@@ -276,9 +288,16 @@ export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
     const { authority, deps, managed, correlationId, message } = jiraOptions;
     const baseContext = jiraTurnContext(jiraOptions);
     const humanInput = createJiraChatHumanInput(jiraOptions, baseContext);
-    const context = { ...baseContext, humanInputFor: humanInput.selectionFor, activeHumanInput: humanInput.currentSelection };
+    const context = {
+      ...baseContext,
+      humanInputFor: humanInput.selectionFor,
+      activeHumanInput: humanInput.currentSelection,
+    };
     const sourcePreparation = jiraSourcePreparationForTurn(jiraOptions, context);
-    const consumerPort = createJiraChatCatalogConsumerPort(sourcePreparation.sourceDigestFor, humanInput.revisionFor);
+    const consumerPort = createJiraChatCatalogConsumerPort(
+      sourcePreparation.sourceDigestFor,
+      humanInput.revisionFor,
+    );
     const bind =
       (
         selected: ManagedProviderCatalog<JiraChatCatalogConsumer>,
@@ -311,7 +330,12 @@ export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
       context,
       correlationId,
       budget: authority.envelope.budget,
-      guidance: JIRA_TOOL_GUIDANCE,
+      guidance: jiraTurnGuidance(
+        deps.jiraDraftStore,
+        message.chatId,
+        deps.activityLog,
+        correlationId,
+      ),
       bind: bind(managed),
       prepareInvocation: async (call, actionId, ports) => {
         const source = await sourcePreparation.prepareInvocation(call, actionId);
@@ -321,7 +345,9 @@ export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
       finalizeInvocation: (actionId) => humanInput.finalize(actionId),
       selectTools: async (identities) => {
         requireDispatch(deps.jiraChatCatalog !== undefined, "failed", "handler-unavailable");
-        const selected = await deps.jiraChatCatalog.select(identities);
+        const selected = await deps.jiraChatCatalog.select(identities, {
+          knowledgeScoped: chatKnowledgeScopes(deps.store.findChatById(message.chatId)).length > 0,
+        });
         return { managed: selected, bind: bind(selected), close: selected.close };
       },
     });
@@ -423,7 +449,9 @@ export async function createJiraChatToolTurn(
   if (deps.store.findChatById(message.chatId)?.jiraPodBinding === undefined) return undefined;
   const catalog = deps.jiraChatCatalog;
   requireDispatch(catalog !== undefined, "denied", "authority-invalid");
-  const managed = await catalog.get();
+  const managed = await catalog.get({
+    knowledgeScoped: chatKnowledgeScopes(deps.store.findChatById(message.chatId)).length > 0,
+  });
   const correlation = correlationIdOrUnknown(correlationId);
   const bound = mintAndBoundChatTurn<JiraChatTurnOptions["authority"]>(
     deps,

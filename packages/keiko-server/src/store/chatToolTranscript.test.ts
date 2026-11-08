@@ -1,4 +1,7 @@
-import { jiraOperationBindingForTool, jiraOperationForTool } from "../atlassian/jiraManagedProvider.js";
+import {
+  jiraOperationBindingForTool,
+  jiraOperationForTool,
+} from "../atlassian/jiraManagedProvider.js";
 import { jiraChatWriteAction } from "../atlassian/jiraChatCatalogWrite.js";
 import { jiraOperationActionDigest } from "../atlassian/jiraOperationRegistry.js";
 import { mcpChatWriteAction } from "../mcp/mcpChatCatalogAdmission.js";
@@ -1076,33 +1079,86 @@ describe("persisted Jira operation approval contracts", () => {
     const contract = jiraOperationForTool("jira.projects");
     if (contract === undefined) throw new Error("Expected read contract");
     const projection = managedCatalogProjection(
-      [{ name: "jira.projects", alias: "jira_projects" }], [contract.declaration],
-      { id: "read-capture-fixture", version: 1 }, 0,
+      [{ name: "jira.projects", alias: "jira_projects" }],
+      [contract.declaration],
+      { id: "read-capture-fixture", version: 1 },
+      0,
     );
-    const binding = { descriptor: contract.declaration.descriptor, projectionDigest: projection.projectionDigest };
+    const binding = {
+      descriptor: contract.declaration.descriptor,
+      projectionDigest: projection.projectionDigest,
+    };
     const call = { id: "mcp-read-synthetic", name: "jira_projects", arguments: {} };
-    const data = { outcome: "succeeded", items: [], startAt: 0, total: 0, operationBinding: contract.binding };
-    const result = validateToolResultEnvelope({
-      schemaVersion: 1, invocationId: call.id, toolRef: binding.descriptor.toolRef,
-      projectionDigest: binding.projectionDigest, status: "completed", reason: "none",
-      effectStarted: false, data, page: { truncated: false, reason: "none", cursor: null },
-      metrics: { inputBytes: 2, outputBytes: Buffer.byteLength(JSON.stringify(data)), resultCount: 0, durationMs: 0 },
-    }, binding);
+    const data = {
+      outcome: "succeeded",
+      items: [],
+      startAt: 0,
+      total: 0,
+      operationBinding: contract.binding,
+    };
+    const result = validateToolResultEnvelope(
+      {
+        schemaVersion: 1,
+        invocationId: call.id,
+        toolRef: binding.descriptor.toolRef,
+        projectionDigest: binding.projectionDigest,
+        status: "completed",
+        reason: "none",
+        effectStarted: false,
+        data,
+        page: { truncated: false, reason: "none", cursor: null },
+        metrics: {
+          inputBytes: 2,
+          outputBytes: Buffer.byteLength(JSON.stringify(data)),
+          resultCount: 0,
+          durationMs: 0,
+        },
+      },
+      binding,
+    );
     const captured = { kind: "captured", call, result, binding } as const;
     f.store.updateChatToolTranscript(f.id, captured, "native-read");
     expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges).toEqual([{ call, result }]);
-    expect(() => f.store.updateChatToolTranscript(f.id, {
-      ...captured, mutationOutcome: "succeeded",
-    }, "native-read")).toThrow();
-    expect(() => f.store.updateChatToolTranscript(f.id, {
-      ...captured, operationBinding: contract.binding,
-    }, "native-read")).toThrow();
-    expect(() => f.store.updateChatToolTranscript(f.id, {
-      ...captured, result: { ...result, effectStarted: true },
-    }, "native-read")).toThrow();
-    expect(() => f.store.updateChatToolTranscript(f.id, {
-      ...captured, call: { ...call, name: "jira_guessed" },
-    }, "native-read")).toThrow();
+    expect(() =>
+      f.store.updateChatToolTranscript(
+        f.id,
+        {
+          ...captured,
+          mutationOutcome: "succeeded",
+        },
+        "native-read",
+      ),
+    ).toThrow();
+    expect(() =>
+      f.store.updateChatToolTranscript(
+        f.id,
+        {
+          ...captured,
+          operationBinding: contract.binding,
+        },
+        "native-read",
+      ),
+    ).toThrow();
+    expect(() =>
+      f.store.updateChatToolTranscript(
+        f.id,
+        {
+          ...captured,
+          result: { ...result, effectStarted: true },
+        },
+        "native-read",
+      ),
+    ).toThrow();
+    expect(() =>
+      f.store.updateChatToolTranscript(
+        f.id,
+        {
+          ...captured,
+          call: { ...call, name: "jira_guessed" },
+        },
+        "native-read",
+      ),
+    ).toThrow();
     expect(chatToolTranscriptOccupancy(f.db, f.id).exchangeCount).toBe(1);
   });
 
@@ -1110,14 +1166,26 @@ describe("persisted Jira operation approval contracts", () => {
     const f = fixture();
     const contract = jiraOperationForTool("jira.comment");
     const prior = mutationResult();
-    if (contract === undefined || prior.projectionDigest === null) throw new Error("Expected snapshot");
-    const binding = { descriptor: contract.declaration.descriptor, projectionDigest: prior.projectionDigest };
+    if (contract === undefined || prior.projectionDigest === null)
+      throw new Error("Expected snapshot");
+    const binding = {
+      descriptor: contract.declaration.descriptor,
+      projectionDigest: prior.projectionDigest,
+    };
     const nativeCall = { ...mutationCall, id: "mcp-synthetic-native-call" };
-    const result = validateToolResultEnvelope({ ...prior, invocationId: nativeCall.id,
-      toolRef: binding.descriptor.toolRef }, binding);
-    const captured = { kind: "captured", call: nativeCall, result, binding,
+    const result = validateToolResultEnvelope(
+      { ...prior, invocationId: nativeCall.id, toolRef: binding.descriptor.toolRef },
+      binding,
+    );
+    const captured = {
+      kind: "captured",
+      call: nativeCall,
+      result,
+      binding,
       nativeArgumentsDigest: sha256Hex(canonicalise(nativeCall.arguments)),
-      operationBinding: contract.binding, mutationOutcome: "not-dispatched" } as const;
+      operationBinding: contract.binding,
+      mutationOutcome: "not-dispatched",
+    } as const;
     f.store.updateChatToolTranscript(f.id, captured, "native-result");
     const stored = f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0];
     expect(stored).toMatchObject({ call: nativeCall, result, mutationOutcome: "not-dispatched" });
@@ -1126,21 +1194,50 @@ describe("persisted Jira operation approval contracts", () => {
     expect(stored).not.toHaveProperty("nativeArgumentsDigest");
     expect(chatToolTranscriptOccupancy(f.db, f.id)).toEqual({
       exchangeCount: 1,
-      bytes: Buffer.byteLength(String(f.db.prepare("SELECT tool_transcript_json AS json FROM chat_messages WHERE id=?")
-        .get(f.id)?.json)),
+      bytes: Buffer.byteLength(
+        String(
+          f.db
+            .prepare("SELECT tool_transcript_json AS json FROM chat_messages WHERE id=?")
+            .get(f.id)?.json,
+        ),
+      ),
     });
-    expect(f.logs.events.filter((event) => event.op === "chat.tool-transcript.updated")
-      .map((event) => event.extra?.phase)).toEqual(["captured"]);
-    expect(() => f.store.updateChatToolTranscript(f.id, { ...captured,
-      call: { ...mutationCall, id: "invalid-capture" },
-      result: { ...result, status: "failed", reason: "provider-reported-error", page: null,
-        data: { unexpected: "private-token" } } satisfies ToolResultEnvelope,
-    }, "native-result")).toThrow();
+    expect(
+      f.logs.events
+        .filter((event) => event.op === "chat.tool-transcript.updated")
+        .map((event) => event.extra?.phase),
+    ).toEqual(["captured"]);
+    expect(() =>
+      f.store.updateChatToolTranscript(
+        f.id,
+        {
+          ...captured,
+          call: { ...mutationCall, id: "invalid-capture" },
+          result: {
+            ...result,
+            status: "failed",
+            reason: "provider-reported-error",
+            page: null,
+            data: { unexpected: "private-token" },
+          } satisfies ToolResultEnvelope,
+        },
+        "native-result",
+      ),
+    ).toThrow();
     expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges).toHaveLength(1);
     expect(JSON.stringify(f.logs.events)).not.toContain("private-token");
-    expect(() => f.store.updateChatToolTranscript(f.id, {
-      kind: "captured", call: nativeCall, result, binding,
-    }, "native-result")).toThrow();
+    expect(() =>
+      f.store.updateChatToolTranscript(
+        f.id,
+        {
+          kind: "captured",
+          call: nativeCall,
+          result,
+          binding,
+        },
+        "native-result",
+      ),
+    ).toThrow();
   });
 
   it.each(["jira.create-project", "jira.update-project"] as const)(
@@ -1494,19 +1591,37 @@ describe("persisted Jira operation approval contracts", () => {
 });
 
 describe("private Jira input transcript ownership", () => {
-  const inputCall = { id: "private-input-call", name: "jira_login", arguments: { expectedActorKey: "actor-key" } };
+  const inputCall = {
+    id: "private-input-call",
+    name: "jira_login",
+    arguments: { expectedActorKey: "actor-key" },
+  };
   const awaiting = {
-    requestId: `jhi_${"a".repeat(64)}`, revision: "12345678-1234-4123-8123-123456789abc",
-    purpose: "login" as const, state: "awaiting-input" as const, expiresAt: 100000,
-    fields: ["password" as const], optionalFields: [],
+    requestId: `jhi_${"a".repeat(64)}`,
+    revision: "12345678-1234-4123-8123-123456789abc",
+    purpose: "login" as const,
+    state: "awaiting-input" as const,
+    expiresAt: 100000,
+    fields: ["password" as const],
+    optionalFields: [],
   };
   it("retains only closed metadata and prevents replacing a ready input or reviving cancellation", () => {
     const { store, id } = fixture();
     store.updateChatToolTranscript(id, { kind: "started", call: inputCall }, "private-input-proof");
-    const update = (view: import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors").JiraHumanInputView) =>
-      store.updateChatToolTranscript(id, { kind: "human-input", callId: inputCall.id, view }, "private-input-proof");
+    const update = (
+      view: import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors").JiraHumanInputView,
+    ) =>
+      store.updateChatToolTranscript(
+        id,
+        { kind: "human-input", callId: inputCall.id, view },
+        "private-input-proof",
+      );
     update(awaiting);
-    const ready = { ...awaiting, state: "ready" as const, revision: "87654321-1234-4123-8123-123456789abc" };
+    const ready = {
+      ...awaiting,
+      state: "ready" as const,
+      revision: "87654321-1234-4123-8123-123456789abc",
+    };
     update(ready);
     expect(() => update({ ...ready, revision: awaiting.revision })).toThrow();
     expect(() => update({ ...ready, requestId: `jhi_${"b".repeat(64)}` })).toThrow();
@@ -1519,11 +1634,21 @@ describe("private Jira input transcript ownership", () => {
   it("rejects secret-bearing extras and metadata attached to another operation", () => {
     const { store, id } = fixture();
     store.updateChatToolTranscript(id, { kind: "started", call: inputCall }, "private-input-proof");
-    for (const view of [{ ...awaiting, values: { password: "synthetic-never-store" } }, { ...awaiting, purpose: "validate-license", fields: ["license"] }]) {
-      expect(() => store.updateChatToolTranscript(id,
-        { kind: "human-input", callId: inputCall.id, view: view as typeof awaiting }, "private-input-proof")).toThrow();
+    for (const view of [
+      { ...awaiting, values: { password: "synthetic-never-store" } },
+      { ...awaiting, purpose: "validate-license", fields: ["license"] },
+    ]) {
+      expect(() =>
+        store.updateChatToolTranscript(
+          id,
+          { kind: "human-input", callId: inputCall.id, view: view as typeof awaiting },
+          "private-input-proof",
+        ),
+      ).toThrow();
     }
-    expect(JSON.stringify(store.findMessageById(id)?.toolTranscript)).not.toContain("synthetic-never-store");
+    expect(JSON.stringify(store.findMessageById(id)?.toolTranscript)).not.toContain(
+      "synthetic-never-store",
+    );
   });
   it("retains a pending native identity without fabricating a result and settles only that exact call", () => {
     const f = fixture();
@@ -1531,28 +1656,68 @@ describe("private Jira input transcript ownership", () => {
     if (contract === undefined) throw new TypeError("Missing private login contract");
     const nativeCall = { ...inputCall, id: "mcp-private-input-call" };
     const digest = sha256Hex(canonicalise(nativeCall.arguments));
-    const started = { kind: "started", call: nativeCall, operationBinding: contract.binding, nativeArgumentsDigest: digest } as const;
+    const started = {
+      kind: "started",
+      call: nativeCall,
+      operationBinding: contract.binding,
+      nativeArgumentsDigest: digest,
+    } as const;
     f.store.updateChatToolTranscript(f.id, started, "coding-private-input");
-    f.store.updateChatToolTranscript(f.id, { kind: "human-input", callId: nativeCall.id, view: awaiting }, "coding-private-input");
+    f.store.updateChatToolTranscript(
+      f.id,
+      { kind: "human-input", callId: nativeCall.id, view: awaiting },
+      "coding-private-input",
+    );
     const pending = f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0];
     expect(pending).toMatchObject({ call: nativeCall, humanInput: awaiting });
     expect(pending).not.toHaveProperty("result");
     expect(pending).not.toHaveProperty("mutationOutcome");
     const projection = managedCatalogProjection(
-      [{ name: "jira.login", alias: "jira_login" }], [contract.declaration],
-      { id: "pending-input-fixture", version: 1 }, 0,
+      [{ name: "jira.login", alias: "jira_login" }],
+      [contract.declaration],
+      { id: "pending-input-fixture", version: 1 },
+      0,
     );
-    const binding = { descriptor: contract.declaration.descriptor, projectionDigest: projection.projectionDigest };
-    const completed = validateToolResultEnvelope({ ...result(), invocationId: nativeCall.id,
-      toolRef: binding.descriptor.toolRef, projectionDigest: binding.projectionDigest }, binding);
-    const captured = { kind: "captured", call: nativeCall, operationBinding: contract.binding,
-      nativeArgumentsDigest: digest, result: completed, binding, mutationOutcome: "not-dispatched" } as const;
-    expect(() => f.store.updateChatToolTranscript(f.id, { ...captured, call: {
-      ...nativeCall, arguments: { expectedActorKey: "other" },
-    } }, "coding-private-input")).toThrow();
+    const binding = {
+      descriptor: contract.declaration.descriptor,
+      projectionDigest: projection.projectionDigest,
+    };
+    const completed = validateToolResultEnvelope(
+      {
+        ...result(),
+        invocationId: nativeCall.id,
+        toolRef: binding.descriptor.toolRef,
+        projectionDigest: binding.projectionDigest,
+      },
+      binding,
+    );
+    const captured = {
+      kind: "captured",
+      call: nativeCall,
+      operationBinding: contract.binding,
+      nativeArgumentsDigest: digest,
+      result: completed,
+      binding,
+      mutationOutcome: "not-dispatched",
+    } as const;
+    expect(() =>
+      f.store.updateChatToolTranscript(
+        f.id,
+        {
+          ...captured,
+          call: {
+            ...nativeCall,
+            arguments: { expectedActorKey: "other" },
+          },
+        },
+        "coding-private-input",
+      ),
+    ).toThrow();
     f.store.updateChatToolTranscript(f.id, captured, "coding-private-input");
     expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0]).toMatchObject({
-      humanInput: awaiting, result: { status: "denied", effectStarted: false }, mutationOutcome: "not-dispatched",
+      humanInput: awaiting,
+      result: { status: "denied", effectStarted: false },
+      mutationOutcome: "not-dispatched",
     });
   });
   it("refuses forged pending native digests and does not accept them on ordinary Chat IDs", () => {
@@ -1562,8 +1727,123 @@ describe("private Jira input transcript ownership", () => {
     const digest = sha256Hex(canonicalise(inputCall.arguments));
     for (const update of [
       { kind: "started", call: inputCall, operationBinding, nativeArgumentsDigest: digest },
-      { kind: "started", call: { ...inputCall, id: "mcp-private-input" }, operationBinding, nativeArgumentsDigest: "f".repeat(64) },
-    ] as const) expect(() => f.store.updateChatToolTranscript(f.id, update, "coding-private-input")).toThrow();
+      {
+        kind: "started",
+        call: { ...inputCall, id: "mcp-private-input" },
+        operationBinding,
+        nativeArgumentsDigest: "f".repeat(64),
+      },
+    ] as const)
+      expect(() =>
+        f.store.updateChatToolTranscript(f.id, update, "coding-private-input"),
+      ).toThrow();
     expect(f.store.findMessageById(f.id)?.toolTranscript).toBeUndefined();
+  });
+});
+
+describe("draft batch progress on the stored exchange", () => {
+  const batchCall = { id: "batch-call", name: "jira_draft_batch", arguments: {} };
+  const progress = {
+    phase: "drafting",
+    draftedCount: 4,
+    plannedCount: 10,
+    coveredRequirementCount: 8,
+    requirementCount: 30,
+    failedCount: 1,
+  } as const;
+  const batchExchange = (store: UiStore, id: string): ChatToolExchange | undefined =>
+    store
+      .findMessageById(id)
+      ?.toolTranscript?.exchanges.find((entry) => entry.call.id === "batch-call");
+
+  it("persists each page on the running call, keeps it when the call settles and logs counts only", () => {
+    const { store, id, logs } = fixture();
+    store.updateChatToolTranscript(id, { kind: "started", call: batchCall }, "batch-progress");
+    store.updateChatToolTranscript(
+      id,
+      { kind: "progress", callId: batchCall.id, batchProgress: progress },
+      "batch-progress",
+    );
+    expect(batchExchange(store, id)?.batchProgress).toEqual(progress);
+    const later = { ...progress, draftedCount: 6 };
+    store.updateChatToolTranscript(
+      id,
+      { kind: "progress", callId: batchCall.id, batchProgress: later },
+      "batch-progress",
+    );
+    store.updateChatToolTranscript(
+      id,
+      { kind: "settled", callId: batchCall.id, result: result() },
+      "batch-progress",
+    );
+    expect(batchExchange(store, id)).toMatchObject({
+      batchProgress: later,
+      result: { status: "denied" },
+    });
+    const lines = logs.events.filter(
+      (entry) => entry.op === "chat.tool-transcript.updated" && entry.extra?.phase === "progress",
+    );
+    expect(lines).toHaveLength(2);
+    expect(lines[1]?.extra).toMatchObject({
+      batchPhase: "drafting",
+      batchDraftedCount: 6,
+      batchPlannedCount: 10,
+      batchFailedCount: 1,
+    });
+    expectActivityLogProof(
+      "chat.tool-transcript.updated.line",
+      formatActivityLogProofLine(lines[1] ?? {}),
+    );
+  });
+
+  it("refuses progress for another tool, an unknown or settled call and invalid counts", () => {
+    const { store, id } = fixture();
+    store.updateChatToolTranscript(id, { kind: "started", call }, "batch-progress");
+    store.updateChatToolTranscript(id, { kind: "started", call: batchCall }, "batch-progress");
+    const progressFor = (callId: string, batchProgress: unknown): void => {
+      store.updateChatToolTranscript(
+        id,
+        { kind: "progress", callId, batchProgress: batchProgress as typeof progress },
+        "batch-progress",
+      );
+    };
+    expect(() => {
+      progressFor(call.id, progress);
+    }).toThrow("identity conflict");
+    expect(() => {
+      progressFor("missing", progress);
+    }).toThrow("identity conflict");
+    for (const invalid of [
+      { ...progress, phase: "finished" },
+      { ...progress, draftedCount: 11 },
+      { ...progress, extra: "text" },
+    ]) {
+      expect(() => {
+        progressFor(batchCall.id, invalid);
+      }).toThrow("Invalid tool progress");
+    }
+    store.updateChatToolTranscript(
+      id,
+      { kind: "settled", callId: batchCall.id, result: result() },
+      "batch-progress",
+    );
+    expect(() => {
+      progressFor(batchCall.id, progress);
+    }).toThrow("identity conflict");
+    expect(batchExchange(store, id)?.batchProgress).toBeUndefined();
+  });
+
+  it("rejects a stored transcript that carries progress on any other tool", () => {
+    const { store, db, id } = fixture();
+    store.updateChatToolTranscript(id, { kind: "started", call: batchCall }, "batch-progress");
+    store.updateChatToolTranscript(
+      id,
+      { kind: "progress", callId: batchCall.id, batchProgress: progress },
+      "batch-progress",
+    );
+    const row = db.prepare("SELECT tool_transcript_json FROM chat_messages WHERE id = ?").get(id);
+    const tampered = String(row?.tool_transcript_json).replace("jira_draft_batch", "jira_issue");
+    db.prepare("UPDATE chat_messages SET tool_transcript_json = ? WHERE id = ?").run(tampered, id);
+    expect(() => store.findMessageById(id)).toThrow("invalid");
   });
 });

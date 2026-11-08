@@ -1,3 +1,4 @@
+import { chatKnowledgeScopes } from "./requirement-inventory.js";
 import {
   isKnowledgeChatAuthorityEnvelope,
   prepareAcceptedKnowledgeChatAuthority,
@@ -5,7 +6,7 @@ import {
 } from "./knowledge-chat-authority.js";
 import type { KnowledgeChatTurnOptions } from "./knowledge-chat-turn.js";
 import { reserveChatToolPrompt } from "./chat-tool-approvals.js";
-import { JIRA_TOOL_GUIDANCE } from "./atlassian/jiraToolGuidance.js";
+import { jiraTurnGuidance } from "./atlassian/jiraOpenDraft.js";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { ToolResultEnvelope } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -105,6 +106,7 @@ function sourceContext(options: Options): ChatSourcesContext {
 
 function selectedSourceCatalog(
   deps: UiHandlerDeps,
+  chatId: string,
   mcp: McpChatCatalog,
   bind: (
     managed: ReturnType<typeof combineChatCatalogs>,
@@ -112,7 +114,9 @@ function selectedSourceCatalog(
 ): NonNullable<ChatToolTurnOptions<ChatSourcesContext>["selectTools"]> {
   return async (identities) => {
     requireDispatch(deps.jiraChatCatalog !== undefined, "failed", "handler-unavailable");
-    const selected = await deps.jiraChatCatalog.select(identities);
+    const selected = await deps.jiraChatCatalog.select(identities, {
+      knowledgeScoped: chatKnowledgeScopes(deps.store.findChatById(chatId)).length > 0,
+    });
     try {
       const combined = combineChatCatalogs(selected, mcp);
       return { managed: combined, bind: bind(combined), close: selected.close };
@@ -154,7 +158,10 @@ function sourcePreparationFor(options: Options): {
     sourcePreparation,
     humanInput,
     consumerPort: createChatSourcesConsumerPort(
-      createJiraChatCatalogConsumerPort(sourcePreparation?.sourceDigestFor, humanInput?.revisionFor),
+      createJiraChatCatalogConsumerPort(
+        sourcePreparation?.sourceDigestFor,
+        humanInput?.revisionFor,
+      ),
     ),
   };
 }
@@ -224,8 +231,13 @@ class ChatSourcesToolTurn extends ChatToolTurn<ChatSourcesContext> {
           }),
       ...(primary.kind === "jira"
         ? {
-            guidance: JIRA_TOOL_GUIDANCE,
-            selectTools: selectedSourceCatalog(deps, mcp.managed, bind),
+            guidance: jiraTurnGuidance(
+              deps.jiraDraftStore,
+              message.chatId,
+              deps.activityLog,
+              correlationId,
+            ),
+            selectTools: selectedSourceCatalog(deps, message.chatId, mcp.managed, bind),
           }
         : {}),
       bind: bind(managed),
@@ -330,9 +342,11 @@ export async function createChatSourcesToolTurn(
     logConversationAdmission("observation-unavailable", correlation, generation, generation);
     throw new ConversationModelNotReadyError("tool-calling");
   }
-  const jira = await (
-    primaryKind === "knowledge" ? deps.knowledgeChatCatalog : deps.jiraChatCatalog
-  )?.get();
+  const jira = await (primaryKind === "knowledge"
+    ? deps.knowledgeChatCatalog?.get()
+    : deps.jiraChatCatalog?.get({
+        knowledgeScoped: chatKnowledgeScopes(deps.store.findChatById(message.chatId)).length > 0,
+      }));
   requireDispatch(jira !== undefined, "denied", "authority-invalid");
   const {
     primary: { authority },

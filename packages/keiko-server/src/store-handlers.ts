@@ -1,4 +1,5 @@
-import { browserChatMessages } from "./chat-message-projection.js";
+import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import { browserChatMessages, type ChatLifecycleRefresh } from "./chat-message-projection.js";
 import {
   revokeChangedJiraChatAuthority,
   revokeJiraChatAccess,
@@ -66,13 +67,13 @@ import {
   projectWithWorkspaceAvailability,
   userFacingProjects,
 } from "./workspace-root-membership.js";
-import {
-  openKnowledgeStore,
-  resolveKnowledgeStorePath,
-  type KnowledgeStore,
-} from "@oscharko-dev/keiko-local-knowledge";
+import { openKnowledgeStore, resolveKnowledgeStorePath } from "@oscharko-dev/keiko-local-knowledge";
 import { localKnowledgeProtectionOptions } from "./localKnowledgeKeyProvider.js";
 import { processServerLogSink } from "./process-log-sink.js";
+import {
+  currentCapsuleStampLookup,
+  type CapsuleStampSource,
+} from "./local-knowledge-capsule-stamps.js";
 import { refreshGroundedAnswerIndexLifecycle } from "./local-knowledge-index-lifecycle.js";
 import { pathIsDenied } from "./files-deny.js";
 import {
@@ -1466,47 +1467,70 @@ function hasLocalKnowledgeLifecycle(message: ChatMessage): boolean {
   return false;
 }
 
-function openLocalKnowledgeStoreForProjection(deps: UiHandlerDeps): {
-  readonly store: KnowledgeStore;
-  readonly close: () => void;
-} {
+function localKnowledgeProjectionStoreSource(deps: UiHandlerDeps): CapsuleStampSource {
   const root = dirname(deps.uiDbPath ?? resolve(process.cwd(), "keiko-ui.db"));
   const dbPath = resolveKnowledgeStorePath({ runtimeStateDir: root });
-  const protection = localKnowledgeProtectionOptions(deps.localKnowledgeKeyProvider);
-  // The chat-message projection opens the SAME store file as the capsule handlers, so it can be
-  // the call that first meets a corrupt or wrongly-keyed database. It carries the same sink for
-  // the same reason: a quarantine that leaves no line is a data-losing decision nobody can trace.
-  const logSink = processServerLogSink();
-  const store =
-    protection === undefined
-      ? openKnowledgeStore({ dbPath, logSink })
-      : openKnowledgeStore({ dbPath, protection, logSink });
   return {
-    store,
-    close: (): void => {
-      store.close();
+    dbPath,
+    open: (): ReturnType<CapsuleStampSource["open"]> => {
+      const protection = localKnowledgeProtectionOptions(deps.localKnowledgeKeyProvider);
+      // The chat-message projection opens the SAME store file as the capsule handlers, so it can be
+      // the call that first meets a corrupt or wrongly-keyed database. It carries the same sink for
+      // the same reason: a quarantine that leaves no line is a data-losing decision nobody can trace.
+      const logSink = processServerLogSink();
+      const store =
+        protection === undefined
+          ? openKnowledgeStore({ dbPath, logSink })
+          : openKnowledgeStore({ dbPath, protection, logSink });
+      return {
+        store,
+        close: (): void => {
+          store.close();
+        },
+      };
     },
   };
+}
+
+function lifecycleCapsuleIds(messages: readonly ChatMessage[]): readonly KnowledgeCapsuleId[] {
+  const ids = new Set<KnowledgeCapsuleId>();
+  for (const message of messages) {
+    const answer = message.groundedAnswer;
+    let lifecycle;
+    if (answer?.groundingKind === "local-knowledge") lifecycle = answer.contextPack.indexLifecycle;
+    else if (answer?.groundingKind === "hybrid")
+      lifecycle = answer.contextPack.knowledge.indexLifecycle;
+    for (const stamp of lifecycle?.capsules ?? []) ids.add(stamp.capsuleId);
+  }
+  return [...ids];
+}
+
+interface LifecycleProjection {
+  readonly messages: readonly ChatMessage[];
+  readonly refresh?: ChatLifecycleRefresh;
 }
 
 function projectMessagesWithCurrentLocalKnowledgeLifecycle(
   deps: UiHandlerDeps,
   messages: readonly ChatMessage[],
-): readonly ChatMessage[] {
-  if (!messages.some(hasLocalKnowledgeLifecycle)) return messages;
-  const env = openLocalKnowledgeStoreForProjection(deps);
-  try {
-    return messages.map((message) =>
+): LifecycleProjection {
+  if (!messages.some(hasLocalKnowledgeLifecycle)) return { messages };
+  const capsuleIds = lifecycleCapsuleIds(messages);
+  const { lookup, outcome } = currentCapsuleStampLookup(
+    localKnowledgeProjectionStoreSource(deps),
+    capsuleIds,
+  );
+  return {
+    messages: messages.map((message) =>
       message.groundedAnswer === undefined
         ? message
         : {
             ...message,
-            groundedAnswer: refreshGroundedAnswerIndexLifecycle(env.store, message.groundedAnswer),
+            groundedAnswer: refreshGroundedAnswerIndexLifecycle(lookup, message.groundedAnswer),
           },
-    );
-  } finally {
-    env.close();
-  }
+    ),
+    refresh: { stampMemo: outcome, capsuleCount: capsuleIds.length },
+  };
 }
 
 export function handleListMessages(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
@@ -1525,13 +1549,11 @@ export function handleListMessages(ctx: RouteContext, deps: UiHandlerDeps): Rout
     const messages = deps.store
       .listMessages(chatId, limit)
       .filter((message) => !isLegacyEmptyAssistantPlaceholder(message));
+    const projection = projectMessagesWithCurrentLocalKnowledgeLifecycle(deps, messages);
     return {
       status: 200,
       body: {
-        messages: browserChatMessages(
-          projectMessagesWithCurrentLocalKnowledgeLifecycle(deps, messages),
-          ctx.correlationId,
-        ),
+        messages: browserChatMessages(projection.messages, ctx.correlationId, projection.refresh),
       },
     };
   });

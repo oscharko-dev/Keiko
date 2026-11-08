@@ -15,6 +15,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import {
+  CODING_JIRA_READS as CODING_READS,
   CODING_JIRA_SERVER_NAME,
   CODING_JIRA_TOOL_RISKS,
   codingJiraServerDefinition,
@@ -46,13 +47,17 @@ describe("the run's Jira server definition", () => {
       Object.entries(CODING_JIRA_TOOL_RISKS)
         .filter(([, risk]) => risk === "read")
         .map(([n]) => n),
-    ).toEqual(["jira.discover", "jira.describe", ...JIRA_MANAGED_READ_TOOLS]);
+    ).toEqual(["jira.discover", "jira.describe", ...CODING_READS]);
     expect(
       Object.entries(CODING_JIRA_TOOL_RISKS)
         .filter(([, risk]) => risk === "write")
         .map(([n]) => n),
     ).toEqual(CODING_MUTATIONS);
     expect(CODING_JIRA_TOOL_RISKS).not.toHaveProperty(["jira.draft"]);
+    // A draft batch needs the Chat's Knowledge Pods and turn model (#4173); a run has neither.
+    expect(CODING_JIRA_TOOL_RISKS).not.toHaveProperty(["jira.draft-batch"]);
+    expect(CODING_READS).not.toContain("jira.draft-batch");
+    expect(CODING_READS).toHaveLength(JIRA_MANAGED_READ_TOOLS.length - 1);
     expect(CODING_JIRA_TOOL_RISKS).not.toHaveProperty(["jira.attach"]);
   });
 
@@ -168,7 +173,7 @@ describe("the coding-runtime.jira-pod Activity Log operation", () => {
     expect(registration?.fields.toolDigest).toMatchObject({ dataClass: "digest", maxLength: 64 });
     expect(registration?.fields).not.toHaveProperty("tool");
     const digests = new Set<string>();
-    for (const tool of [...JIRA_MANAGED_READ_TOOLS, ...CODING_MUTATIONS]) {
+    for (const tool of [...CODING_READS, ...CODING_MUTATIONS]) {
       const sink = createBufferedServerLogSink();
       const risk = CODING_JIRA_TOOL_RISKS[tool];
       recordCodingJiraPod(sink, "synthetic-correlation", {
@@ -190,6 +195,6 @@ describe("the coding-runtime.jira-pod Activity Log operation", () => {
       digests.add(digest);
     }
     // The two local discovery tools use ManagedHost's metadata lifecycle, not native Jira receipts.
-    expect(digests.size).toBe(JIRA_MANAGED_READ_TOOLS.length + CODING_MUTATIONS.length);
+    expect(digests.size).toBe(CODING_READS.length + CODING_MUTATIONS.length);
   });
 });

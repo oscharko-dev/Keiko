@@ -58,3 +58,30 @@ it("omits private document metadata from browser rows while preserving stored pr
   expect(browserChatMessages([visible ?? message])[0]).toBe(visible);
   expect(sink.events).toHaveLength(0);
 });
+
+it("records how an index-lifecycle refresh obtained its capsule stamps, as a closed word and a count", () => {
+  const sink = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink, level: "debug" }));
+  const plain: ChatMessage = {
+    id: "m",
+    chatId: "c",
+    role: "assistant",
+    content: "Answer",
+    timestamp: 1,
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
+  };
+  browserChatMessages([plain], "refresh-proof", { stampMemo: "hit", capsuleCount: 2 });
+  const line = formatActivityLogProofLine(sink.events[0] ?? {});
+  expect(expectActivityLogProof("chat.messages.projected.document-context", line)).toMatchObject({
+    op: "chat.messages.projected",
+    correlationId: "refresh-proof",
+    messageCount: 1,
+    omittedDocumentCount: 0,
+    stampMemo: "hit",
+    capsuleCount: 2,
+  });
+});

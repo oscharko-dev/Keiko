@@ -5,45 +5,33 @@ import { listAtlassianConnectors } from "@/lib/atlassian-connectors-api";
 import {
   fetchJiraTemplates,
   proposeJiraTemplates,
-  validateJiraTemplate,
   type JiraTemplateEntry,
   type JiraTemplateFindingCode,
   type JiraTemplateProposal,
   type JiraTemplateValidation,
 } from "@/lib/jira-templates-api";
-import { readMarkdownSkill } from "@/lib/markdown-skills-api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { bffRequestErrorKind } from "@/lib/http";
 import { usePodChoices } from "../useJiraPodChoices";
+import {
+  templateKey,
+  useAutomaticTemplateChecks,
+  type AutomaticTemplateCheck,
+} from "./useAutomaticTemplateChecks";
 import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
-import { skillTextFits } from "./useMarkdownSkillAuthor";
+import type { MarkdownSkillMetadata } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { ChatMarkdownSkill } from "../hooks/useChatMarkdownSkill";
+import { SkillChatToggle } from "./SkillChatToggle";
 import type { MarkdownSkillLibrary } from "./useMarkdownSkillLibrary";
 import styles from "./MarkdownSkillControl.module.css";
 
 /**
- * Jira issue templates are skills with a Jira front matter (#4177): upload, replace, download and
- * delete are the skill library's. This section lists them and adds the two things that need Jira:
- * validating a template against the live instance and proposing one from an existing project.
+ * Jira issue templates are skills with a Jira front matter (#4177): saving, downloading and
+ * deleting are the skill library's. They apply on their own to every Jira write, so they have no
+ * per-chat selection. Keiko checks each against Jira and can propose one from an existing project.
  */
-export function JiraTemplateTools({
-  library,
-}: {
-  readonly library: MarkdownSkillLibrary;
-}): ReactNode {
-  const t = useTranslate();
-  const [open, setOpen] = useState(false);
-  return (
-    <section className={styles.cmpAuthor}>
-      <button type="button" aria-expanded={open} onClick={() => setOpen(!open)}>
-        {t("chat.skills.jira.title")}
-      </button>
-      {open ? <JiraTemplatePanel library={library} /> : null}
-    </section>
-  );
-}
-
 const FINDING_MESSAGES = {
   "unknown-project": "chat.skills.jira.finding.unknown-project",
   "unknown-issue-type": "chat.skills.jira.finding.unknown-issue-type",
@@ -53,15 +41,7 @@ const FINDING_MESSAGES = {
   "unknown-transition-target": "chat.skills.jira.finding.unknown-transition-target",
 } as const satisfies Record<JiraTemplateFindingCode, string>;
 
-type Work = "idle" | "loading" | "validating" | "proposing";
-/** A validation belongs to the exact stored revision it read, never to the template's name. */
-interface Validation {
-  readonly scope: RequestScope;
-  readonly id: string;
-  readonly revision: number;
-  readonly name: string;
-  readonly result: JiraTemplateValidation;
-}
+type Work = "idle" | "loading" | "proposing";
 /** Each proposal run is a generation, so a new proposal never inherits an earlier draft's edits. */
 interface Proposals {
   readonly scope: RequestScope;
@@ -71,12 +51,13 @@ interface Proposals {
 }
 interface Tools {
   readonly templates: readonly JiraTemplateEntry[];
+  /** True once the list for the current library was read, successfully or not. */
+  readonly listed: boolean;
+  /** Automatic results by `id:revision`, for the selected Pod and the listed revisions only. */
+  readonly checks: ReadonlyMap<string, AutomaticTemplateCheck>;
   readonly work: Work;
   readonly failed: boolean;
-  readonly validatingId: string | undefined;
-  readonly validation: Validation | undefined;
   readonly proposals: Proposals | undefined;
-  readonly validate: (entry: JiraTemplateEntry) => Promise<void>;
   readonly propose: (projectKey: string) => Promise<void>;
   readonly reload: () => Promise<void>;
 }
@@ -102,17 +83,13 @@ interface RequestState {
   readonly scope: RequestScope;
   readonly work: Work;
   readonly failed: boolean;
-  readonly validatingId?: string | undefined;
 }
 type Run = (
   kind: Work,
   operation: (isCurrent: () => boolean, correlationId: string) => Promise<void>,
-  validatingId?: string,
 ) => Promise<void>;
 
-function useTemplateRequest(
-  scope: RequestScope,
-): Pick<Tools, "work" | "failed" | "validatingId"> & { run: Run } {
+function useTemplateRequest(scope: RequestScope): Pick<Tools, "work" | "failed"> & { run: Run } {
   const [state, setState] = useState<RequestState>({ scope, work: "loading", failed: false });
   const currentScope = useRef<RequestScope | undefined>(scope);
   const sequence = useRef(0);
@@ -123,11 +100,11 @@ function useTemplateRequest(
       if (currentScope.current === scope) currentScope.current = undefined;
     };
   }, [scope]);
-  const run: Run = async (kind, operation, validatingId) => {
+  const run: Run = async (kind, operation) => {
     const correlationId = newClientCorrelationId();
     const request = ++sequence.current;
     const isCurrent = (): boolean => currentScope.current === scope && sequence.current === request;
-    setState({ scope, work: kind, failed: false, validatingId });
+    setState({ scope, work: kind, failed: false });
     try {
       await operation(isCurrent, correlationId);
     } catch (error) {
@@ -138,50 +115,18 @@ function useTemplateRequest(
         errorEvidence: clientErrorEvidence(error),
       });
     } finally {
-      if (isCurrent())
-        setState((current) => ({ ...current, work: "idle", validatingId: undefined }));
+      if (isCurrent()) setState((current) => ({ ...current, work: "idle" }));
     }
   };
   return {
     run,
     work: state.scope === scope ? state.work : "idle",
     failed: state.scope === scope && state.failed,
-    validatingId: state.scope === scope ? state.validatingId : undefined,
   };
 }
 
-async function validateStoredTemplate(
-  entry: JiraTemplateEntry,
-  scope: RequestScope,
-  isCurrent: () => boolean,
-  publish: (validation: Validation) => void,
-  correlationId: string,
-): Promise<void> {
-  if (scope.podId === undefined) return;
-  reportClientDiagnostic("Jira template validation started.", { correlationId });
-  const skill = await readMarkdownSkill(
-    { id: entry.id, revision: entry.revision, digest: "" },
-    correlationId,
-  );
-  if (!isCurrent()) {
-    reportClientDiagnostic("Jira template validation superseded.", { correlationId });
-    return;
-  }
-  const result = await validateJiraTemplate(scope.podId, skill.body, correlationId);
-  if (!isCurrent()) {
-    reportClientDiagnostic("Jira template validation superseded.", { correlationId });
-    return;
-  }
-  publish({ scope, id: entry.id, revision: entry.revision, name: entry.name, result });
-  reportClientDiagnostic("Jira template validation completed.", { correlationId });
-}
-
-/** Validation and proposal need a Pod; each result is recorded against what it was made from. */
-function useTemplateActions(
-  run: Run,
-  scope: RequestScope,
-): Pick<Tools, "validate" | "propose"> & Pick<Tools, "validation" | "proposals"> {
-  const [validation, setValidation] = useState<Validation>();
+/** A proposal needs a Pod; each result is recorded against the run that made it. */
+function useTemplateProposals(run: Run, scope: RequestScope): Pick<Tools, "propose" | "proposals"> {
   const [proposals, setProposals] = useState<Proposals>();
   const retired = useRef<Proposals | undefined>(undefined);
   useEffect(() => {
@@ -193,17 +138,7 @@ function useTemplateActions(
     });
   }, [proposals, scope]);
   return {
-    validation,
     proposals: proposals?.scope === scope ? proposals : undefined,
-    validate: (entry): Promise<void> => {
-      setValidation(undefined);
-      return run(
-        "validating",
-        (isCurrent, correlationId) =>
-          validateStoredTemplate(entry, scope, isCurrent, setValidation, correlationId),
-        entry.id,
-      );
-    },
     propose: (projectKey) =>
       run("proposing", async (isCurrent, correlationId) => {
         if (scope.podId === undefined) return;
@@ -246,105 +181,151 @@ function useJiraTemplateTools(podId: string | undefined, version: string): Tools
     // The library version changes when a template is uploaded, replaced or deleted.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- list reads depend on the library, not its selected Pod
   }, [version]);
-  const actions = useTemplateActions(run, scope);
-  const { validation } = actions;
+  const proposals = useTemplateProposals(run, scope);
   // A list read for an older stored library describes rules the store no longer holds, so while
-  // the current read is unavailable nothing is listed, validated or qualified from it.
+  // the current read is unavailable nothing is listed, checked or qualified from it.
   const templates = loaded?.version === version ? loaded.entries : [];
+  const checks = useAutomaticTemplateChecks(podId, templates);
   return {
-    ...actions,
+    ...proposals,
     templates,
+    listed: loaded?.version === version,
+    checks,
     ...request,
     failed: request.failed || (loaded?.version === version && loaded.failed),
     reload,
-    // Only a result for a revision the list still holds can describe what write admission enforces.
-    validation:
-      validation?.scope === scope &&
-      templates.some(
-        (entry) => entry.id === validation.id && entry.revision === validation.revision,
-      )
-        ? validation
-        : undefined,
   };
 }
 
-function JiraTemplatePanel({ library }: { readonly library: MarkdownSkillLibrary }): ReactNode {
-  const t = useTranslate();
+/** The templates, their checks against the chosen Jira Pod, and the project proposals. */
+export interface JiraTemplates {
+  readonly tools: Tools;
+  readonly pods: readonly { readonly id: string; readonly name: string }[];
+  readonly podId: string | undefined;
+  readonly selectPod: (podId: string) => void;
+  /** The stored skills that are templates, once the list was read (empty when it failed). */
+  readonly templateIds: ReadonlySet<string> | undefined;
+}
+
+export function useJiraTemplates(library: MarkdownSkillLibrary): JiraTemplates {
   const pods = usePodChoices(listAtlassianConnectors, true);
   const ready = pods.pods.filter((pod) => pod.ready);
   const [selected, setSelected] = useState<string>();
   const podId = ready.find((pod) => pod.id === selected)?.id ?? ready[0]?.id;
   const tools = useJiraTemplateTools(podId, libraryVersion(library.skills));
-  const busy = tools.work !== "idle";
+  const ids = tools.templates.map((entry) => entry.id).join("|");
+  const templateIds = useMemo(() => {
+    if (!tools.listed) return undefined;
+    return new Set(ids.length === 0 ? [] : ids.split("|"));
+  }, [ids, tools.listed]);
+  return { tools, pods: ready, podId, selectPod: setSelected, templateIds };
+}
+
+export function PodSelect({ jira }: { readonly jira: JiraTemplates }): ReactNode {
+  const t = useTranslate();
   const selectId = useId();
+  if (jira.pods.length < 2) return null;
   return (
-    <>
-      <p>{t("chat.skills.jira.description")}</p>
-      <label className={styles.cmpUpload} htmlFor={selectId}>
-        {t("chat.skills.jira.pod")}
-        <select
-          id={selectId}
-          value={podId ?? ""}
-          disabled={ready.length === 0}
-          onChange={(event) => setSelected(event.target.value)}
-        >
-          {ready.map((pod) => (
-            <option key={pod.id} value={pod.id}>
-              {pod.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      {podId === undefined ? <p>{t("chat.skills.jira.podRequired")}</p> : null}
-      {tools.failed ? <p role="alert">{t("chat.skills.jira.error")}</p> : null}
-      <TemplateList tools={tools} canValidate={podId !== undefined && !busy} />
-      <Proposal tools={tools} library={library} canPropose={podId !== undefined && !busy} />
-    </>
+    <label className={styles.cmpPod} htmlFor={selectId}>
+      <span>{t("chat.skills.jira.pod")}</span>
+      <select
+        id={selectId}
+        value={jira.podId ?? ""}
+        onChange={(event) => jira.selectPod(event.target.value)}
+      >
+        {jira.pods.map((pod) => (
+          <option key={pod.id} value={pod.id}>
+            {pod.name}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 
-function TemplateList({
-  tools,
-  canValidate,
+function TemplateRow({
+  entry,
+  item,
+  library,
+  check,
+  open,
+  onOpen,
+  chat,
 }: {
-  readonly tools: Tools;
-  readonly canValidate: boolean;
+  readonly entry: JiraTemplateEntry;
+  readonly item: MarkdownSkillMetadata | undefined;
+  readonly library: MarkdownSkillLibrary;
+  readonly check: AutomaticTemplateCheck | undefined;
+  readonly open: boolean;
+  readonly onOpen: (skill: MarkdownSkillMetadata) => void;
+  readonly chat: { readonly skill: ChatMarkdownSkill; readonly disabled: boolean } | undefined;
+}): ReactNode {
+  return (
+    <li className={styles.cmpRow}>
+      <button
+        type="button"
+        className={styles.cmpItem}
+        aria-current={open ? "true" : undefined}
+        disabled={item === undefined}
+        onClick={() => {
+          if (item !== undefined) onOpen(item);
+        }}
+      >
+        <span className={styles.cmpItemName}>{entry.name}</span>
+        <TemplateStatus entry={entry} check={check} />
+      </button>
+      {item === undefined || chat === undefined ? null : (
+        <SkillChatToggle
+          item={item}
+          skill={chat.skill}
+          library={library}
+          disabled={chat.disabled}
+        />
+      )}
+    </li>
+  );
+}
+
+/** The templates in the library column; each opens in the editor. */
+export function JiraTemplateList({
+  jira,
+  library,
+  openId,
+  onOpen,
+  chat,
+}: {
+  readonly jira: JiraTemplates;
+  readonly library: MarkdownSkillLibrary;
+  readonly openId: string | undefined;
+  readonly onOpen: (skill: MarkdownSkillMetadata) => void;
+  /** Offers choosing a stored template for the chat beside its row. */
+  readonly chat?: { readonly skill: ChatMarkdownSkill; readonly disabled: boolean };
 }): ReactNode {
   const t = useTranslate();
-  if (tools.work === "loading") return <output>{t("chat.skills.loading")}</output>;
-  if (tools.templates.length === 0) return <p>{t("chat.skills.jira.empty")}</p>;
+  const { tools } = jira;
+  if (tools.failed)
+    return (
+      <p role="alert" className={styles.cmpEmpty}>
+        {t("chat.skills.jira.error")}
+      </p>
+    );
+  if (tools.work === "loading" && tools.templates.length === 0)
+    return <output className={styles.cmpEmpty}>{t("chat.skills.loading")}</output>;
+  if (tools.templates.length === 0)
+    return <p className={styles.cmpEmpty}>{t("chat.skills.jira.empty")}</p>;
   return (
-    <ul className={styles.cmpList}>
+    <ul className={styles.cmpItems}>
       {tools.templates.map((entry) => (
-        <li key={entry.id}>
-          <div className={styles.cmpName}>
-            {entry.name}
-            <br />
-            <span className={styles.cmpHint}>
-              {entry.valid
-                ? `${entry.project ?? ""} · ${entry.issueType ?? ""} · ${(entry.activations ?? []).join(", ")}`
-                : t("chat.skills.jira.invalid")}
-            </span>
-            {tools.validation?.id === entry.id ? (
-              <div>
-                <ValidationResult validation={tools.validation} />
-              </div>
-            ) : null}
-          </div>
-          <button
-            type="button"
-            disabled={!canValidate || !entry.valid}
-            onClick={() => {
-              void tools.validate(entry);
-            }}
-          >
-            {t(
-              tools.work === "validating" && tools.validatingId === entry.id
-                ? "chat.skills.jira.validating"
-                : "chat.skills.jira.validate",
-            )}
-          </button>
-        </li>
+        <TemplateRow
+          key={entry.id}
+          entry={entry}
+          item={library.skills.find((skill) => skill.id === entry.id)}
+          library={library}
+          check={tools.checks.get(templateKey(entry))}
+          open={openId === entry.id}
+          onOpen={onOpen}
+          chat={chat}
+        />
       ))}
     </ul>
   );
@@ -357,77 +338,97 @@ const INSTANCE_CHECKS = {
   transitions: "chat.skills.jira.check.transitions",
 } as const satisfies Record<keyof ValidChecked, string>;
 type ValidChecked = Extract<JiraTemplateValidation, { valid: true }>["checked"];
+type Translate = ReturnType<typeof useTranslate>;
 
-function ValidationResult({
-  validation,
+/** What the automatic check found, as one sentence; a mismatch names its cause and nothing else. */
+function checkSentence(check: AutomaticTemplateCheck | undefined, t: Translate): string {
+  if (check === undefined) return t("chat.skills.jira.checking");
+  if (check === "failed") return t("chat.skills.jira.checkFailed");
+  if (!check.valid) return t("chat.skills.jira.invalid");
+  if (check.findings.length > 0)
+    return t("chat.skills.jira.notApplied", {
+      reasons: check.findings
+        .map((finding) => t(FINDING_MESSAGES[finding.code], { subject: finding.subject }))
+        .join(" "),
+    });
+  // The server omits instance metadata it could not read, so "no findings" is a complete match
+  // only when every part was actually compared.
+  const unchecked = (Object.keys(INSTANCE_CHECKS) as (keyof ValidChecked)[]).filter(
+    (part) => !check.checked[part],
+  );
+  return unchecked.length === 0
+    ? t("chat.skills.jira.valid")
+    : t("chat.skills.jira.partial", {
+        checks: unchecked.map((part) => t(INSTANCE_CHECKS[part])).join(", "),
+      });
+}
+
+type CheckState = "ok" | "mismatch" | "pending";
+
+function checkState(
+  entry: JiraTemplateEntry,
+  check: AutomaticTemplateCheck | undefined,
+): CheckState {
+  if (!entry.valid) return "mismatch";
+  if (check === undefined) return "pending";
+  return check === "failed" || !check.valid || check.findings.length > 0 ? "mismatch" : "ok";
+}
+
+/** One short line per template: which Jira project and issue type it governs, and whether it can. */
+export function TemplateStatus({
+  entry,
+  check,
 }: {
-  readonly validation: NonNullable<Tools["validation"]>;
+  readonly entry: JiraTemplateEntry;
+  readonly check: AutomaticTemplateCheck | undefined;
 }): ReactNode {
   const t = useTranslate();
-  const { result } = validation;
-  if (!result.valid)
-    return (
-      <p role="alert">
-        {t("chat.skills.jira.syntax", {
-          codes: result.errors.map((error) => error.code).join(", "),
-        })}
-      </p>
-    );
-  // The server omits instance metadata it could not read and the comparison skips that part, so
-  // "no findings" is a complete match only when every part was actually compared.
-  const unchecked = (Object.keys(INSTANCE_CHECKS) as (keyof ValidChecked)[]).filter(
-    (check) => !result.checked[check],
-  );
+  const state = checkState(entry, check);
+  const sentence = entry.valid ? checkSentence(check, t) : t("chat.skills.jira.invalid");
+  const scope = entry.valid ? `${entry.project ?? ""} · ${entry.issueType ?? ""} — ` : "";
   return (
-    <>
-      {result.findings.length === 0 ? null : (
-        <ul aria-label={validation.name}>
-          {result.findings.map((finding) => (
-            <li key={`${finding.code}:${finding.subject}`}>
-              {t(FINDING_MESSAGES[finding.code], { subject: finding.subject })}
-            </li>
-          ))}
-        </ul>
-      )}
-      {unchecked.length === 0 && result.findings.length === 0 ? (
-        <output>{t("chat.skills.jira.valid")}</output>
-      ) : null}
-      {unchecked.length === 0 ? null : (
-        <output>
-          {t("chat.skills.jira.partial", {
-            checks: unchecked.map((check) => t(INSTANCE_CHECKS[check])).join(", "),
-          })}
-        </output>
-      )}
-    </>
+    <span className={styles.cmpStatus} data-state={state}>
+      <span className={styles.cmpDot} aria-hidden="true" />
+      <span>
+        {scope}
+        {sentence}
+      </span>
+    </span>
   );
 }
 
-function Proposal({
-  tools,
-  library,
-  canPropose,
+/** A project lead's occasional task: read a Jira project and open the proposal in the editor. */
+export function JiraTemplateProposal({
+  jira,
+  onDraft,
 }: {
-  readonly tools: Tools;
-  readonly library: MarkdownSkillLibrary;
-  readonly canPropose: boolean;
+  readonly jira: JiraTemplates;
+  readonly onDraft: (text: string, fileName: string) => void;
 }): ReactNode {
   const t = useTranslate();
   const [projectKey, setProjectKey] = useState("");
   const key = projectKey.trim();
+  const { tools } = jira;
+  const canPropose = jira.podId !== undefined && tools.work === "idle";
   return (
-    <section>
-      <label className={styles.cmpUpload}>
-        {t("chat.skills.jira.projectKey")}
-        <input
-          value={projectKey}
-          maxLength={128}
-          onChange={(event) => setProjectKey(event.target.value)}
-        />
-      </label>
-      <div className={styles.cmpActions}>
+    <div className={styles.cmpForm}>
+      <h3>{t("chat.skills.jira.proposeTitle")}</h3>
+      <p>{t("chat.skills.jira.proposeDescription")}</p>
+      {jira.podId === undefined ? <p role="alert">{t("chat.skills.jira.podRequired")}</p> : null}
+      <PodSelect jira={jira} />
+      <div className={styles.cmpInline}>
+        <label className={styles.cmpField}>
+          <span>{t("chat.skills.jira.projectKey")}</span>
+          <input
+            value={projectKey}
+            maxLength={128}
+            placeholder="KER"
+            onChange={(event) => setProjectKey(event.target.value)}
+          />
+        </label>
         <button
           type="button"
+          className={styles.cmpPrimary}
           disabled={!canPropose || !/^[A-Za-z]\w*$/u.test(key)}
           onClick={() => {
             void tools.propose(key);
@@ -438,63 +439,45 @@ function Proposal({
           )}
         </button>
       </div>
-      {tools.proposals?.items.length === 0 ? <p>{t("chat.skills.jira.proposalNone")}</p> : null}
-      {(tools.proposals?.items ?? []).map((proposal) => (
-        <ProposalDraft
-          key={`${String(tools.proposals?.generation)}:${proposal.issueType}`}
-          proposal={proposal}
-          library={library}
-          onSaved={tools.reload}
-        />
-      ))}
-    </section>
+      {tools.failed ? <p role="alert">{t("chat.skills.jira.error")}</p> : null}
+      <ProposalList proposals={tools.proposals} onDraft={onDraft} />
+    </div>
   );
 }
 
-function ProposalDraft({
-  proposal,
-  library,
-  onSaved,
+function ProposalList({
+  proposals,
+  onDraft,
 }: {
-  readonly proposal: JiraTemplateProposal;
-  readonly library: MarkdownSkillLibrary;
-  readonly onSaved: () => Promise<void>;
+  readonly proposals: Proposals | undefined;
+  readonly onDraft: (text: string, fileName: string) => void;
 }): ReactNode {
   const t = useTranslate();
-  const [draft, setDraft] = useState(proposal.markdown);
+  if (proposals === undefined) return null;
+  if (proposals.items.length === 0) return <p>{t("chat.skills.jira.proposalNone")}</p>;
   return (
-    <section>
-      <h3>
-        {t("chat.skills.jira.proposalTitle", {
-          issueType: proposal.issueType,
-          count: proposal.sampledIssueCount,
-        })}
-      </h3>
-      <textarea
-        aria-label={proposal.issueType}
-        rows={10}
-        value={draft}
-        onChange={(event) => setDraft(event.target.value)}
-      />
-      <div className={styles.cmpActions}>
-        <button
-          type="button"
-          disabled={library.busy || !library.available || !skillTextFits(draft)}
-          onClick={() => {
-            void library
-              .upload(
-                new File(
-                  [draft],
-                  `${proposal.issueType.replace(/[^A-Za-z0-9_-]+/gu, "-")}-template.md`,
-                  { type: "text/markdown" },
-                ),
+    <ul className={styles.cmpProposals}>
+      {proposals.items.map((proposal) => (
+        <li key={`${String(proposals.generation)}:${proposal.issueType}`}>
+          <span>
+            {t("chat.skills.jira.proposalTitle", {
+              issueType: proposal.issueType,
+              count: proposal.sampledIssueCount,
+            })}
+          </span>
+          <button
+            type="button"
+            onClick={() =>
+              onDraft(
+                proposal.markdown,
+                `${proposal.issueType.replace(/[^A-Za-z0-9_-]+/gu, "-")}-template.md`,
               )
-              .then(onSaved);
-          }}
-        >
-          {t("chat.skills.jira.save")}
-        </button>
-      </div>
-    </section>
+            }
+          >
+            {t("chat.skills.jira.openProposal")}
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }

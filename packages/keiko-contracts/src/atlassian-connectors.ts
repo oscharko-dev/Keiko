@@ -2316,6 +2316,7 @@ export {
   readJiraDescriptionSections,
   readJiraDescriptionBlocks,
   serializeJiraDescriptionHeadings,
+  serializeJiraMarkdownDescription,
   JIRA_DESCRIPTION_INPUT_SCHEMA,
   readJiraMarkdownDescription,
   projectJiraDescriptionInput,

@@ -1,4 +1,8 @@
-import type { ChatToolExchange, ChatTurnState } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  CHAT_TOOL_BATCH_TOOL_NAME,
+  type ChatToolExchange,
+  type ChatTurnState,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   JIRA_MANAGED_READ_TOOLS,
   JIRA_MANAGED_ACTION_TYPES,
@@ -24,26 +28,77 @@ import { JIRA_RELEASE_TOOLS } from "./jira-release-presentation";
 import { JIRA_LOOKUP_TOOLS, jiraLookupNotice } from "./jira-lookup-presentation";
 import { JIRA_JQL_TOOLS } from "./jira-jql-presentation";
 import { JIRA_AGILE_CONTEXT_TOOLS } from "./jira-agile-context-presentation";
-import { JIRA_ADMIN_METADATA_TOOLS, jiraAdminMetadataNotice } from "./jira-admin-metadata-presentation";
+import {
+  JIRA_ADMIN_METADATA_TOOLS,
+  jiraAdminMetadataNotice,
+} from "./jira-admin-metadata-presentation";
 import { JIRA_MAINTENANCE_TOOLS } from "./jira-maintenance-presentation";
 import { JIRA_VIEW_SETTINGS_TOOLS } from "./jira-view-settings-presentation";
 import { JIRA_JOB_OBSERVATION_TOOLS } from "./jira-job-observation-presentation";
 import { JIRA_ADMINISTRATIVE_OBSERVATION_TOOLS } from "./jira-administrative-observation-presentation";
 import { JIRA_PROPERTY_KEY_TOOLS } from "./jira-property-presentation";
-import { JIRA_PROPERTY_MUTATION_TOOLS, jiraPropertyMutationIdentityComplete } from "./jira-property-mutation-presentation";
+import {
+  JIRA_PROPERTY_MUTATION_TOOLS,
+  jiraPropertyMutationIdentityComplete,
+} from "./jira-property-mutation-presentation";
 import { JIRA_ACCOUNT_DIAGNOSTIC_TOOLS } from "./jira-account-diagnostic-presentation";
 import { JIRA_APPLICATION_SETTINGS_TOOLS } from "./jira-application-settings-presentation";
 import { JIRA_REMOTE_VERSION_LINK_TOOLS } from "./jira-remote-version-link-presentation";
-import { JIRA_SAVED_CONFIGURATION_WRITE_TOOLS, jiraSavedConfigurationIdentityComplete, jiraSavedConfigurationDeletionUnconfirmed } from "./jira-saved-configuration-presentation";
-import { JIRA_RELEASE_LIFECYCLE_TOOLS, jiraReleaseLifecycleIdentityComplete, jiraReleaseReferenceEffectsUnconfirmed } from "./jira-release-lifecycle-presentation";
-import { JIRA_LINK_MUTATION_TOOLS, jiraLinkMutationIdentityComplete } from "./jira-link-mutation-presentation";
-import { JIRA_CONFIGURATION_MUTATION_TOOLS, jiraConfigurationMutationIdentityComplete, jiraConfigurationConfirmationUnavailable } from "./jira-configuration-mutation-presentation";
-import { JIRA_PLANNING_MUTATION_TOOLS, jiraPlanningIdentityComplete, jiraPlanningConfirmationUnavailable } from "./jira-planning-mutation-presentation";
-import { JIRA_ACCESS_CONFIGURATION_TOOLS, jiraAccessConfigurationIdentityComplete, jiraAccessConfirmationUnavailable, jiraAccessActorNoopSupported } from "./jira-access-configuration-presentation";
-import { JIRA_SCHEME_ADMINISTRATION_TOOLS, jiraSchemeAdministrationIdentityComplete, jiraSchemeConfirmationUnavailable, jiraSchemeNoopSupported } from "./jira-scheme-administration-presentation";
-import { JIRA_INSTANCE_ADMINISTRATION_WRITE_TOOLS, JIRA_INSTANCE_SETTING_WRITE_TOOLS, jiraInstanceAdministrationIdentityComplete, jiraInstanceConfirmationUnavailable } from "./jira-instance-administration-presentation";
-import { JIRA_SYSTEM_ACTION_TOOLS, jiraSystemActionIdentityComplete, jiraSystemConfirmationUnavailable, jiraSystemNoopSupported } from "./jira-system-action-receipt";
-import { JIRA_ACCOUNT_RESOURCE_WRITE_TOOLS, jiraAccountResourceIdentityComplete, jiraAccountResourceConfirmationUnavailable, jiraAccountResourceNoopSupported } from "./jira-account-resource-presentation";
+import {
+  JIRA_SAVED_CONFIGURATION_WRITE_TOOLS,
+  jiraSavedConfigurationIdentityComplete,
+  jiraSavedConfigurationDeletionUnconfirmed,
+} from "./jira-saved-configuration-presentation";
+import {
+  JIRA_RELEASE_LIFECYCLE_TOOLS,
+  jiraReleaseLifecycleIdentityComplete,
+  jiraReleaseReferenceEffectsUnconfirmed,
+} from "./jira-release-lifecycle-presentation";
+import {
+  JIRA_LINK_MUTATION_TOOLS,
+  jiraLinkMutationIdentityComplete,
+} from "./jira-link-mutation-presentation";
+import {
+  JIRA_CONFIGURATION_MUTATION_TOOLS,
+  jiraConfigurationMutationIdentityComplete,
+  jiraConfigurationConfirmationUnavailable,
+} from "./jira-configuration-mutation-presentation";
+import {
+  JIRA_PLANNING_MUTATION_TOOLS,
+  jiraPlanningIdentityComplete,
+  jiraPlanningConfirmationUnavailable,
+} from "./jira-planning-mutation-presentation";
+import {
+  JIRA_ACCESS_CONFIGURATION_TOOLS,
+  jiraAccessConfigurationIdentityComplete,
+  jiraAccessConfirmationUnavailable,
+  jiraAccessActorNoopSupported,
+} from "./jira-access-configuration-presentation";
+import {
+  JIRA_SCHEME_ADMINISTRATION_TOOLS,
+  jiraSchemeAdministrationIdentityComplete,
+  jiraSchemeConfirmationUnavailable,
+  jiraSchemeNoopSupported,
+} from "./jira-scheme-administration-presentation";
+import {
+  JIRA_INSTANCE_ADMINISTRATION_WRITE_TOOLS,
+  JIRA_INSTANCE_SETTING_WRITE_TOOLS,
+  jiraInstanceAdministrationIdentityComplete,
+  jiraInstanceConfirmationUnavailable,
+} from "./jira-instance-administration-presentation";
+import {
+  JIRA_SYSTEM_ACTION_TOOLS,
+  jiraSystemActionIdentityComplete,
+  jiraSystemConfirmationUnavailable,
+  jiraSystemNoopSupported,
+} from "./jira-system-action-receipt";
+import {
+  JIRA_ACCOUNT_RESOURCE_WRITE_TOOLS,
+  jiraAccountResourceIdentityComplete,
+  jiraAccountResourceConfirmationUnavailable,
+  jiraAccountResourceNoopSupported,
+} from "./jira-account-resource-presentation";
+import { REQUIREMENTS_TOOL_ALIAS, requirementsReadGroups } from "./jira-tool-progress";
 const LOCALLY_PAGED_TOOLS = new Set([
   ...JIRA_REMOTE_VERSION_LINK_TOOLS,
   ...JIRA_ACCOUNT_DIAGNOSTIC_TOOLS,
@@ -96,15 +151,16 @@ const MANAGED_TOOLS = [...JIRA_MANAGED_READ_TOOLS, ...JIRA_MUTATION_OPERATIONS];
 export function isKnownJiraToolAlias(name: string): boolean {
   return MANAGED_TOOLS.some((operation) => operation.replace(/[.-]/gu, "_") === name);
 }
-/** The Chat alias of the local `knowledge.requirements` read (#4179). */
-const REQUIREMENTS_TOOL_ALIAS = "knowledge_requirements";
 const KNOWLEDGE_TOOLS: Readonly<
-  Record<string, {
-    readonly label: WidgetMessageKey;
-    readonly details: WidgetMessageKey;
-    readonly canonicalId: string;
-    readonly version: number;
-  }>
+  Record<
+    string,
+    {
+      readonly label: WidgetMessageKey;
+      readonly details: WidgetMessageKey;
+      readonly canonicalId: string;
+      readonly version: number;
+    }
+  >
 > = {
   knowledge_requirements: {
     label: "chat.requirements.tool",
@@ -130,8 +186,11 @@ export function isCanonicalKnowledgeExchange(exchange: ChatToolExchange): boolea
   if (!Object.hasOwn(KNOWLEDGE_TOOLS, exchange.call.name)) return false;
   const known = KNOWLEDGE_TOOLS[exchange.call.name];
   const ref = exchange.result?.toolRef;
-  return known !== undefined && ref?.canonicalId === known.canonicalId &&
-    ref.contractVersion === known.version;
+  return (
+    known !== undefined &&
+    ref?.canonicalId === known.canonicalId &&
+    ref.contractVersion === known.version
+  );
 }
 const REQUIREMENTS_CUT_COUNTS = ["unitsOmitted", "documentsOmitted", "documentsNotExtracted"];
 
@@ -161,6 +220,8 @@ export function jiraCallLabel(
     : jiraOperationLabel(operation);
 }
 export function jiraToolLabel(exchange: ChatToolExchange): WidgetMessageKey {
+  if (exchange.call.name === CHAT_TOOL_BATCH_TOOL_NAME)
+    return actionTypeLabelKey("jira.draft-batch");
   const knowledge = KNOWLEDGE_TOOLS[exchange.call.name];
   if (knowledge !== undefined) return knowledge.label;
   const operation = MANAGED_TOOLS.find(
@@ -171,11 +232,16 @@ export function jiraToolLabel(exchange: ChatToolExchange): WidgetMessageKey {
     : jiraCallLabel(operation, exchange.call.arguments);
 }
 /** A local envelope refusal is not a Jira permission response or evidence of a remote effect. */
-export function jiraLocalAccessDenialNotice(exchange: ChatToolExchange): WidgetMessageKey | undefined {
+export function jiraLocalAccessDenialNotice(
+  exchange: ChatToolExchange,
+): WidgetMessageKey | undefined {
   const result = exchange.result;
-  return result?.status === "denied" && result.reason === "effect-denied" && result.data === null &&
+  return result?.status === "denied" &&
+    result.reason === "effect-denied" &&
+    result.data === null &&
     MANAGED_TOOLS.some((name) => name.replace(/[.-]/gu, "_") === exchange.call.name)
-    ? "atlassianConnectors.denied.reason.connector-access-denied" : undefined;
+    ? "atlassianConnectors.denied.reason.connector-access-denied"
+    : undefined;
 }
 const LOCAL_READ_FAILURE_NOTICES: ReadonlyMap<string, WidgetMessageKey> = new Map([
   ["denied:effect-denied", "chat.jira.outcome.failure.localAuthority"],
@@ -184,9 +250,15 @@ const LOCAL_READ_FAILURE_NOTICES: ReadonlyMap<string, WidgetMessageKey> = new Ma
   ["cancelled:parent-cancelled", "chat.jira.outcome.failure.cancelled"],
 ]);
 /** Technical read outcomes retain their exact closed envelope cause, including after history reload. */
-export function jiraLocalReadFailureNotice(exchange: ChatToolExchange): WidgetMessageKey | undefined {
+export function jiraLocalReadFailureNotice(
+  exchange: ChatToolExchange,
+): WidgetMessageKey | undefined {
   const result = exchange.result;
-  if (result?.data !== null || !JIRA_MANAGED_READ_TOOLS.some((name) => name.replace(/[.-]/gu, "_") === exchange.call.name)) return undefined;
+  if (
+    result?.data !== null ||
+    !JIRA_MANAGED_READ_TOOLS.some((name) => name.replace(/[.-]/gu, "_") === exchange.call.name)
+  )
+    return undefined;
   return LOCAL_READ_FAILURE_NOTICES.get(`${result.status}:${result.reason}`);
 }
 export function jiraToolRegionLabel(exchange: ChatToolExchange): WidgetMessageKey {
@@ -204,16 +276,14 @@ function plainRecord(value: unknown): Record<string, unknown> | undefined {
     ? Object.fromEntries(Object.entries(value))
     : undefined;
 }
-/** The inventory is cut when the tool's own totals name an omission, or a further page remains. */
+/** The inventory is cut only when the tool's own totals name an omission; a further page is not. */
 type CompletedResult = Extract<NonNullable<ChatToolExchange["result"]>, { status: "completed" }>;
 function requirementsCut(result: CompletedResult): boolean {
   const data = plainRecord(result.data);
   const totals = plainRecord(data?.totals);
   const reasons = totals?.cutReasons;
   return (
-    result.page.truncated ||
     requirementChangesCut(data) ||
-    (typeof data?.nextCursor === "string" && data.nextCursor.length > 0) ||
     (Array.isArray(reasons) && reasons.length > 0) ||
     REQUIREMENTS_CUT_COUNTS.some((name) => {
       const value = totals?.[name];
@@ -223,27 +293,45 @@ function requirementsCut(result: CompletedResult): boolean {
 }
 function requirementChangesCut(data: Record<string, unknown> | undefined): boolean {
   const changes = plainRecord(data?.changes);
-  return plainRecord(changes?.baseline)?.complete === false ||
-    (Array.isArray(changes?.truncated) && changes.truncated.length > 0);
+  return (
+    plainRecord(changes?.baseline)?.complete === false ||
+    (Array.isArray(changes?.truncated) && changes.truncated.length > 0)
+  );
 }
 function knowledgeCut(result: CompletedResult): boolean {
   const data = plainRecord(result.data);
   const coverage = plainRecord(data?.coverage);
-  return requirementsCut(result) ||
-    ["inventoryComplete", "documentComplete", "searchComplete", "windowReviewComplete", "documentReviewComplete", "documentReadable"]
-      .some((field) => coverage?.[field] === false);
+  const cursor = data?.nextCursor;
+  return (
+    requirementsCut(result) ||
+    result.page.truncated ||
+    (typeof cursor === "string" && cursor.length > 0) ||
+    [
+      "inventoryComplete",
+      "documentComplete",
+      "searchComplete",
+      "windowReviewComplete",
+      "documentReviewComplete",
+      "documentReadable",
+    ].some((field) => coverage?.[field] === false)
+  );
 }
 /** The note a completed read of a partial result carries, or undefined for a complete one. */
 export function jiraToolPartialNotice(exchange: ChatToolExchange): WidgetMessageKey | undefined {
   if (exchange.call.name.startsWith("mcp_") || exchange.result?.status !== "completed")
     return undefined;
+  // Paged unit reads are counted by the consolidated card, which names what a cut left out.
   if (exchange.call.name === REQUIREMENTS_TOOL_ALIAS)
-    return requirementsCut(exchange.result) ? "chat.requirements.partial" : undefined;
+    return requirementsReadGroups([exchange]).members.size === 0 && requirementsCut(exchange.result)
+      ? "chat.requirements.partial"
+      : undefined;
   if (KNOWLEDGE_TOOLS[exchange.call.name] !== undefined)
     return knowledgeCut(exchange.result) ? "chat.knowledge.partial" : undefined;
   const data = plainRecord(exchange.result.data) ?? {};
-  const directory = jiraDirectoryNotice(exchange.call.name, data) ?? jiraLookupNotice(exchange.call.name, data)
-    ?? jiraAdminMetadataNotice(exchange.call.name, data);
+  const directory =
+    jiraDirectoryNotice(exchange.call.name, data) ??
+    jiraLookupNotice(exchange.call.name, data) ??
+    jiraAdminMetadataNotice(exchange.call.name, data);
   if (directory !== undefined) return directory;
   return exchange.result.page.truncated || projectMetadataPageCut(exchange)
     ? "chat.jira.partial"
@@ -287,22 +375,49 @@ const MUTATION_IDENTITY_PRESENTERS = [
 ] as const;
 function mutationIdentityMissing(exchange: ChatToolExchange): boolean {
   const presenter = MUTATION_IDENTITY_PRESENTERS.find(([tools]) => tools.has(exchange.call.name));
-  return presenter !== undefined && !presenter[1](exchange.call.name, plainRecord(exchange.result?.data) ?? {});
+  return (
+    presenter !== undefined &&
+    !presenter[1](exchange.call.name, plainRecord(exchange.result?.data) ?? {})
+  );
 }
-const TOOL_CONFIRMATION_REFUSALS = [jiraSystemConfirmationUnavailable, jiraSavedConfigurationDeletionUnconfirmed,
-  jiraReleaseReferenceEffectsUnconfirmed, jiraConfigurationConfirmationUnavailable, jiraPlanningConfirmationUnavailable,
-  jiraAccessConfirmationUnavailable, jiraInstanceConfirmationUnavailable];
-function mutationConfirmationUnavailable(tool: string, args?: unknown, source: Readonly<Record<string, unknown>> = {}): boolean {
-  return TOOL_CONFIRMATION_REFUSALS.some((refuses) => refuses(tool)) || jiraSchemeConfirmationUnavailable(tool, args) || jiraAccountResourceConfirmationUnavailable(tool, args, source);
+const TOOL_CONFIRMATION_REFUSALS = [
+  jiraSystemConfirmationUnavailable,
+  jiraSavedConfigurationDeletionUnconfirmed,
+  jiraReleaseReferenceEffectsUnconfirmed,
+  jiraConfigurationConfirmationUnavailable,
+  jiraPlanningConfirmationUnavailable,
+  jiraAccessConfirmationUnavailable,
+  jiraInstanceConfirmationUnavailable,
+];
+function mutationConfirmationUnavailable(
+  tool: string,
+  args?: unknown,
+  source: Readonly<Record<string, unknown>> = {},
+): boolean {
+  return (
+    TOOL_CONFIRMATION_REFUSALS.some((refuses) => refuses(tool)) ||
+    jiraSchemeConfirmationUnavailable(tool, args) ||
+    jiraAccountResourceConfirmationUnavailable(tool, args, source)
+  );
 }
 function unconfirmedNoopSupported(tool: string): boolean {
-  return jiraAccessActorNoopSupported(tool) || jiraSchemeNoopSupported(tool) || JIRA_INSTANCE_SETTING_WRITE_TOOLS.has(tool);
+  return (
+    jiraAccessActorNoopSupported(tool) ||
+    jiraSchemeNoopSupported(tool) ||
+    JIRA_INSTANCE_SETTING_WRITE_TOOLS.has(tool)
+  );
 }
 function mutationNoopUnsupported(exchange: ChatToolExchange): boolean {
-  if (JIRA_ACCOUNT_RESOURCE_WRITE_TOOLS.has(exchange.call.name)) return !jiraAccountResourceNoopSupported(exchange.call.name);
-  if (JIRA_SYSTEM_ACTION_TOOLS.has(exchange.call.name)) return !jiraSystemNoopSupported(exchange.call.name);
-  if (JIRA_SCHEME_ADMINISTRATION_TOOLS.has(exchange.call.name)) return !jiraSchemeNoopSupported(exchange.call.name);
-  return mutationConfirmationUnavailable(exchange.call.name, exchange.call.arguments) && !unconfirmedNoopSupported(exchange.call.name);
+  if (JIRA_ACCOUNT_RESOURCE_WRITE_TOOLS.has(exchange.call.name))
+    return !jiraAccountResourceNoopSupported(exchange.call.name);
+  if (JIRA_SYSTEM_ACTION_TOOLS.has(exchange.call.name))
+    return !jiraSystemNoopSupported(exchange.call.name);
+  if (JIRA_SCHEME_ADMINISTRATION_TOOLS.has(exchange.call.name))
+    return !jiraSchemeNoopSupported(exchange.call.name);
+  return (
+    mutationConfirmationUnavailable(exchange.call.name, exchange.call.arguments) &&
+    !unconfirmedNoopSupported(exchange.call.name)
+  );
 }
 /** Only an explicit, rejected no-change receipt can soften a conflict; journal state wins. */
 export function jiraMutationUnchanged(exchange: ChatToolExchange): boolean {
@@ -317,13 +432,36 @@ export function jiraMutationUnchanged(exchange: ChatToolExchange): boolean {
     data.unchanged === true
   );
 }
+/** Why a draft batch was refused, in words a business user reads; any other reason stays generic. */
+const BATCH_REFUSAL_KEYS: Readonly<Record<string, WidgetMessageKey>> = {
+  "no-requirements": "chat.jira.batch.refused.noRequirements",
+  "no-knowledge-pod": "chat.jira.batch.refused.noKnowledgePod",
+  "project-not-found": "chat.jira.batch.refused.projectNotFound",
+  "issue-type-not-found": "chat.jira.batch.refused.issueTypeNotFound",
+  "no-usable-issue-type": "chat.jira.batch.refused.noUsableIssueType",
+};
+function batchRefusalState(exchange: ChatToolExchange): WidgetMessageKey | undefined {
+  const { result } = exchange;
+  if (exchange.call.name !== CHAT_TOOL_BATCH_TOOL_NAME || result?.status !== "failed")
+    return undefined;
+  const reason = plainRecord(result.data)?.reason;
+  return typeof reason === "string" ? BATCH_REFUSAL_KEYS[reason] : undefined;
+}
 function managedMutationState(
   exchange: ChatToolExchange,
   turnState: ChatTurnState | undefined,
 ): WidgetMessageKey {
   const outcome = mutationOutcome(exchange);
   if (outcome === "succeeded" && mutationIdentityMissing(exchange)) return OUTCOME_KEYS.unknown;
-  if (outcome === "succeeded" && mutationConfirmationUnavailable(exchange.call.name, exchange.call.arguments, plainRecord(exchange.result?.data) ?? {})) return OUTCOME_KEYS["succeeded-unconfirmed"];
+  if (
+    outcome === "succeeded" &&
+    mutationConfirmationUnavailable(
+      exchange.call.name,
+      exchange.call.arguments,
+      plainRecord(exchange.result?.data) ?? {},
+    )
+  )
+    return OUTCOME_KEYS["succeeded-unconfirmed"];
   if (outcome !== undefined)
     return jiraMutationUnchanged(exchange) ? "chat.jira.write.unchanged" : OUTCOME_KEYS[outcome];
   return exchange.result === undefined && turnState === "pending"
@@ -334,15 +472,20 @@ export function jiraToolState(
   exchange: ChatToolExchange,
   turnState: ChatTurnState | undefined,
 ): WidgetMessageKey {
-  if (exchange.result === undefined && exchange.mutationOutcome === undefined &&
-      exchange.humanInput?.state === "awaiting-input" && turnState === "pending")
+  if (
+    exchange.result === undefined &&
+    exchange.mutationOutcome === undefined &&
+    exchange.humanInput?.state === "awaiting-input" &&
+    turnState === "pending"
+  )
     return "chat.jira.humanInput.waiting";
   if (exchange.call.name.startsWith("mcp_") && exchange.mutationOutcome !== undefined)
     return MCP_OUTCOME_KEYS[exchange.mutationOutcome];
   if (isMutation(exchange)) return managedMutationState(exchange, turnState);
   if (exchange.result === undefined)
     return turnState === "pending" ? "chat.jira.running" : "chat.jira.resultUnavailable";
-  return exchange.result.status === "completed" ? "chat.jira.complete" : "chat.jira.unavailable";
+  if (exchange.result.status === "completed") return "chat.jira.complete";
+  return batchRefusalState(exchange) ?? "chat.jira.unavailable";
 }
 export function jiraToolOutcomeHelp(state: WidgetMessageKey): WidgetMessageKey | undefined {
   switch (state) {

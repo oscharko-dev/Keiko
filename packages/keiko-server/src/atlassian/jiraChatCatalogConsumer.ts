@@ -1,7 +1,11 @@
 import { chatCapabilityMatches } from "../chat-tool-authority.js";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { KNOWLEDGE_CHAT_TOOLS, type KnowledgeChatToolName } from "../requirementsToolName.js";
-import { createChatToolAuthorityPort, reserveChatToolInvocation } from "../chat-tool-approvals.js";
+import {
+  createChatToolAuthorityPort,
+  renewRunningReadGrant,
+  reserveChatToolInvocation,
+} from "../chat-tool-approvals.js";
 import { CatalogDispatchFault, requireDispatch } from "../tool-catalog/catalogToolErrors.js";
 import type {
   ChatToolReadGrantView,
@@ -27,6 +31,9 @@ import type {
   CatalogJsonValue,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
+import type { ChatToolBatchProgress } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { UiHandlerDeps } from "../deps.js";
 import { recordChatAuthorityResult } from "../editor/chatAuthorityActivity.js";
 import { decideAtlassianEnvelopeAction } from "./actionPolicy.js";
@@ -65,8 +72,12 @@ import { jiraCatalogResult } from "./jiraCatalogResult.js";
 
 /** Private ordinary-Chat scope. Neither a workspace nor a Coding session is required. */
 export interface JiraChatCatalogContext extends ToolConsumerContext {
-  readonly activeHumanInput?: () => import("@oscharko-dev/keiko-connectors").JiraHumanInputSelection | undefined;
-  readonly humanInputFor?: (operation: string, argumentsDigest: string) => import("@oscharko-dev/keiko-connectors").JiraHumanInputSelection | undefined;
+  readonly activeHumanInput?: () =>
+    import("@oscharko-dev/keiko-connectors").JiraHumanInputSelection | undefined;
+  readonly humanInputFor?: (
+    operation: string,
+    argumentsDigest: string,
+  ) => import("@oscharko-dev/keiko-connectors").JiraHumanInputSelection | undefined;
   readonly jiraDiscoveryResultFits?: ((result: CatalogJsonObject) => boolean) | undefined;
   readonly chatId: string;
   readonly authorityReference: EditorAgentGovernedAuthorityReference;
@@ -78,6 +89,18 @@ export interface JiraChatCatalogContext extends ToolConsumerContext {
   readonly retainDraftProgress?:
     | ((actionId: string, invocationId: string, snapshot: () => CatalogJsonObject) => void)
     | undefined;
+  /** Publishes the counted progress of the running jira.draft-batch call (#4173); counts only. */
+  readonly reportBatchProgress?: ((progress: ChatToolBatchProgress) => void) | undefined;
+  /** Model calls the turn can still spend on nested work after reserving its answer rounds. */
+  readonly remainingModelCalls?: (() => number) | undefined;
+  /** The model the accepted turn runs on; a draft batch writes its pages with the same model. */
+  readonly knowledgeReviewModelId?: () => string | undefined;
+  /** The sources the model's `[n]` markers designate in this turn; staged drafts name them too. */
+  readonly citationSources?: (() => ReadonlyMap<number, string>) | undefined;
+  /** Runs a nested model call under the accepted turn's readiness guard and meter. */
+  readonly meterModel?: (model: ModelPort) => ModelPort;
+  /** Releases the provisional synthesis charge of a nested call whose answer was used. */
+  readonly confirmModelOperation?: (response: NormalizedResponse) => void;
 }
 export interface JiraChatCatalogAction extends ToolConsumerActionIdentity {
   readonly tool:
@@ -142,8 +165,11 @@ function validActionBinding(tool: string, action: CatalogJsonObject): boolean {
   return (
     Object.keys(action).sort(compareStrings).join() === keys &&
     (!bound || isCurrentJiraOperationBinding(tool, action.operationBinding)) &&
-    (action.humanInputRevision === undefined || (typeof action.humanInputRevision === "string" &&
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(action.humanInputRevision))) &&
+    (action.humanInputRevision === undefined ||
+      (typeof action.humanInputRevision === "string" &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(
+          action.humanInputRevision,
+        ))) &&
     (action.sourceDigest === undefined ||
       (typeof action.sourceDigest === "string" && /^[0-9a-f]{64}$/u.test(action.sourceDigest)))
   );
@@ -166,7 +192,9 @@ function captureAction(value: CatalogJsonValue): JiraChatCatalogAction | undefin
     argumentsDigest: action.argumentsDigest as string,
     ...actionBinding(tool),
     ...(typeof action.sourceDigest === "string" ? { sourceDigest: action.sourceDigest } : {}),
-    ...(typeof action.humanInputRevision === "string" ? { humanInputRevision: action.humanInputRevision } : {}),
+    ...(typeof action.humanInputRevision === "string"
+      ? { humanInputRevision: action.humanInputRevision }
+      : {}),
   };
 }
 
@@ -180,9 +208,13 @@ export function createJiraChatCatalogConsumerPort(
     const sourceDigest = sourceDigestFor?.(action.actionId, action.argumentsDigest);
     if (action.sourceDigest !== undefined && action.sourceDigest !== sourceDigest) return undefined;
     const humanInputRevision = humanInputRevisionFor?.(action.actionId, action.argumentsDigest);
-    if (action.humanInputRevision !== undefined && action.humanInputRevision !== humanInputRevision) return undefined;
-    return { ...action, ...(sourceDigest === undefined ? {} : { sourceDigest }),
-      ...(humanInputRevision === undefined ? {} : { humanInputRevision }) };
+    if (action.humanInputRevision !== undefined && action.humanInputRevision !== humanInputRevision)
+      return undefined;
+    return {
+      ...action,
+      ...(sourceDigest === undefined ? {} : { sourceDigest }),
+      ...(humanInputRevision === undefined ? {} : { humanInputRevision }),
+    };
   };
   return {
     scope: (context) => ({
@@ -430,6 +462,32 @@ export function createJiraChatCatalogAdmission(options: JiraChatAdmissionOptions
   };
 }
 
+/** Only the running invocation's guard renews, and only after the full current-state check passed. */
+function keepReadGrantCurrent(
+  options: JiraChatAdmissionOptions,
+  action: JiraChatCatalogAction,
+): void {
+  // A local catalog or Knowledge Pod read never consulted the Jira grant, so it does not keep it alive.
+  if (isLocalCatalogRead(action.tool)) return;
+  const context = options.context();
+  const nowMs = options.now();
+  const current = resolveCurrentJiraChatAuthority(
+    options.deps,
+    context.chatId,
+    context.authorityReference,
+    new Date(nowMs).toISOString(),
+    context.correlationId,
+  );
+  if (current.ok)
+    renewRunningReadGrant(
+      options.deps.atlassianActionApprovalRegistry,
+      current.envelope,
+      context.authorityReference,
+      nowMs,
+      context.correlationId,
+    );
+}
+
 function mutationGuard(
   options: JiraChatAdmissionOptions,
   capability: string | undefined,
@@ -437,7 +495,11 @@ function mutationGuard(
 ): JiraChatCatalogConsumer["guard"] {
   let claim: ChatWriteApprovalClaim | undefined;
   const source = options.sourcePreparation?.sourceFor(action.actionId, action.argumentsDigest);
-  const check = (): boolean => preview(options, capability, action, claim).ok;
+  const check = (): boolean => {
+    const ok = preview(options, capability, action, claim).ok;
+    if (ok) keepReadGrantCurrent(options, action);
+    return ok;
+  };
   return READ_TOOLS.has(action.tool)
     ? { check }
     : {

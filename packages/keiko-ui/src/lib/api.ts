@@ -1381,14 +1381,17 @@ export async function deleteChat(
   );
 }
 
+/** `limit` reads only the newest messages; without it the server's default page is read. */
 export async function fetchChatMessages(
   chatId: string,
   projectPath: string,
   signal?: AbortSignal,
+  limit?: number,
 ): Promise<MessagesResponse> {
   const params = new URLSearchParams();
   params.set("chatId", chatId);
   params.set("projectPath", projectPath);
+  if (limit !== undefined) params.set("limit", String(limit));
   return fetchJson(
     `/api/chats/messages?${params.toString()}`,
     signal === undefined ? undefined : { signal },

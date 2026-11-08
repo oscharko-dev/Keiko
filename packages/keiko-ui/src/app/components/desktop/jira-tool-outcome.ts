@@ -34,49 +34,129 @@ import {
   JIRA_ADMINISTRATION_TOOLS,
   jiraAdministrationDetails,
 } from "./jira-administration-presentation";
-import { isCanonicalKnowledgeExchange, jiraLocalReadFailureNotice, jiraMutationUnchanged } from "./jira-tool-presentation";
+import {
+  isCanonicalKnowledgeExchange,
+  jiraLocalReadFailureNotice,
+  jiraMutationUnchanged,
+} from "./jira-tool-presentation";
 import { JIRA_DIRECTORY_TOOLS, jiraDirectoryDetails } from "./jira-directory-presentation";
 import { JIRA_ACCESS_TOOLS, jiraAccessDetails } from "./jira-access-presentation";
 import {
   JIRA_PROJECT_ASSOCIATION_TOOLS,
   jiraProjectAssociationDetails,
 } from "./jira-project-association-presentation";
-import { JIRA_CORE_METADATA_TOOLS, jiraCoreMetadataDetails } from "./jira-core-metadata-presentation";
+import {
+  JIRA_CORE_METADATA_TOOLS,
+  jiraCoreMetadataDetails,
+} from "./jira-core-metadata-presentation";
 import { JIRA_INSTANCE_TOOLS, jiraInstanceDetails } from "./jira-instance-presentation";
 import { JIRA_ROLE_TOOLS, jiraRoleDetails } from "./jira-role-presentation";
 import { JIRA_RELEASE_TOOLS, jiraReleaseDetails } from "./jira-release-presentation";
 import { JIRA_LOOKUP_TOOLS, jiraLookupDetails } from "./jira-lookup-presentation";
 import { JIRA_JQL_TOOLS, jiraJqlDetails } from "./jira-jql-presentation";
-import { JIRA_AGILE_CONTEXT_TOOLS, JIRA_AGILE_CONTEXT_METADATA_TOOLS, jiraAgileContextDetails } from "./jira-agile-context-presentation";
-import { JIRA_ADMIN_METADATA_TOOLS, jiraAdminMetadataDetails } from "./jira-admin-metadata-presentation";
-import { JIRA_RUNTIME_SETTINGS_TOOLS, jiraRuntimeSettingsDetails } from "./jira-runtime-settings-presentation";
+import {
+  JIRA_AGILE_CONTEXT_TOOLS,
+  JIRA_AGILE_CONTEXT_METADATA_TOOLS,
+  jiraAgileContextDetails,
+} from "./jira-agile-context-presentation";
+import {
+  JIRA_ADMIN_METADATA_TOOLS,
+  jiraAdminMetadataDetails,
+} from "./jira-admin-metadata-presentation";
+import {
+  JIRA_RUNTIME_SETTINGS_TOOLS,
+  jiraRuntimeSettingsDetails,
+} from "./jira-runtime-settings-presentation";
 import { JIRA_MAINTENANCE_TOOLS, jiraMaintenanceDetails } from "./jira-maintenance-presentation";
-import { JIRA_VIEW_SETTINGS_TOOLS, jiraViewSettingsDetails } from "./jira-view-settings-presentation";
-import { JIRA_JOB_OBSERVATION_TOOLS, jiraJobObservationDetails } from "./jira-job-observation-presentation";
-import { JIRA_ACCOUNT_DIAGNOSTIC_TOOLS, jiraAccountDiagnosticDetails } from "./jira-account-diagnostic-presentation";
-import { JIRA_ADMINISTRATIVE_OBSERVATION_TOOLS, jiraAdministrativeObservationDetails } from "./jira-administrative-observation-presentation";
-import { JIRA_APPLICATION_SETTINGS_TOOLS, jiraApplicationSettingsDetails } from "./jira-application-settings-presentation";
-import { JIRA_REMOTE_VERSION_LINK_TOOLS, jiraRemoteVersionLinkDetails } from "./jira-remote-version-link-presentation";
+import {
+  JIRA_VIEW_SETTINGS_TOOLS,
+  jiraViewSettingsDetails,
+} from "./jira-view-settings-presentation";
+import {
+  JIRA_JOB_OBSERVATION_TOOLS,
+  jiraJobObservationDetails,
+} from "./jira-job-observation-presentation";
+import {
+  JIRA_ACCOUNT_DIAGNOSTIC_TOOLS,
+  jiraAccountDiagnosticDetails,
+} from "./jira-account-diagnostic-presentation";
+import {
+  JIRA_ADMINISTRATIVE_OBSERVATION_TOOLS,
+  jiraAdministrativeObservationDetails,
+} from "./jira-administrative-observation-presentation";
+import {
+  JIRA_APPLICATION_SETTINGS_TOOLS,
+  jiraApplicationSettingsDetails,
+} from "./jira-application-settings-presentation";
+import {
+  JIRA_REMOTE_VERSION_LINK_TOOLS,
+  jiraRemoteVersionLinkDetails,
+} from "./jira-remote-version-link-presentation";
 import { JIRA_WORKLOG_FEED_TOOLS, jiraWorklogFeedDetails } from "./jira-worklog-feed-presentation";
-import { JIRA_IDENTITY_OBSERVATION_TOOLS, jiraIdentityObservationDetails } from "./jira-identity-observation-presentation";
-import { JIRA_SELECTED_WORKLOG_TOOLS, jiraSelectedWorklogDetails } from "./jira-selected-worklog-presentation";
-import { JIRA_SAVED_CONFIGURATION_WRITE_TOOLS, jiraSavedConfigurationDetails, jiraSavedConfigurationFilterContextComplete } from "./jira-saved-configuration-presentation";
-import { JIRA_RELEASE_LIFECYCLE_TOOLS, jiraReleaseLifecycleDetails } from "./jira-release-lifecycle-presentation";
-import { JIRA_LINK_MUTATION_TOOLS, jiraLinkMutationDetails } from "./jira-link-mutation-presentation";
-import { JIRA_CONFIGURATION_MUTATION_TOOLS, jiraConfigurationMutationDetails } from "./jira-configuration-mutation-presentation";
-import { JIRA_PLANNING_MUTATION_TOOLS, jiraPlanningMutationDetails } from "./jira-planning-mutation-presentation";
-import { JIRA_ACCESS_CONFIGURATION_TOOLS, jiraAccessConfigurationDetails } from "./jira-access-configuration-presentation";
-import { JIRA_SCHEME_ADMINISTRATION_TOOLS, jiraSchemeAdministrationDetails } from "./jira-scheme-administration-presentation";
-import { JIRA_INSTANCE_ADMINISTRATION_TOOLS, JIRA_INSTANCE_ADMINISTRATION_WRITE_TOOLS, jiraInstanceAdministrationDetails } from "./jira-instance-administration-presentation";
+import {
+  JIRA_IDENTITY_OBSERVATION_TOOLS,
+  jiraIdentityObservationDetails,
+} from "./jira-identity-observation-presentation";
+import {
+  JIRA_SELECTED_WORKLOG_TOOLS,
+  jiraSelectedWorklogDetails,
+} from "./jira-selected-worklog-presentation";
+import {
+  JIRA_SAVED_CONFIGURATION_WRITE_TOOLS,
+  jiraSavedConfigurationDetails,
+  jiraSavedConfigurationFilterContextComplete,
+} from "./jira-saved-configuration-presentation";
+import {
+  JIRA_RELEASE_LIFECYCLE_TOOLS,
+  jiraReleaseLifecycleDetails,
+} from "./jira-release-lifecycle-presentation";
+import {
+  JIRA_LINK_MUTATION_TOOLS,
+  jiraLinkMutationDetails,
+} from "./jira-link-mutation-presentation";
+import {
+  JIRA_CONFIGURATION_MUTATION_TOOLS,
+  jiraConfigurationMutationDetails,
+} from "./jira-configuration-mutation-presentation";
+import {
+  JIRA_PLANNING_MUTATION_TOOLS,
+  jiraPlanningMutationDetails,
+} from "./jira-planning-mutation-presentation";
+import {
+  JIRA_ACCESS_CONFIGURATION_TOOLS,
+  jiraAccessConfigurationDetails,
+} from "./jira-access-configuration-presentation";
+import {
+  JIRA_SCHEME_ADMINISTRATION_TOOLS,
+  jiraSchemeAdministrationDetails,
+} from "./jira-scheme-administration-presentation";
+import {
+  JIRA_INSTANCE_ADMINISTRATION_TOOLS,
+  JIRA_INSTANCE_ADMINISTRATION_WRITE_TOOLS,
+  jiraInstanceAdministrationDetails,
+} from "./jira-instance-administration-presentation";
 import { JIRA_SYSTEM_ACTION_TOOLS } from "./jira-system-action-receipt";
 import { jiraSystemActionDetails } from "./jira-system-action-presentation";
-import { JIRA_ACCOUNT_RESOURCE_TOOLS, JIRA_ACCOUNT_RESOURCE_WRITE_TOOLS, jiraAccountResourceDetails } from "./jira-account-resource-presentation";
+import {
+  JIRA_ACCOUNT_RESOURCE_TOOLS,
+  JIRA_ACCOUNT_RESOURCE_WRITE_TOOLS,
+  jiraAccountResourceDetails,
+} from "./jira-account-resource-presentation";
 import { JIRA_PRIVATE_ACCOUNT_TOOLS } from "./jira-private-account-presentation";
-import { JIRA_RESOURCE_LIFECYCLE_TOOLS, jiraResourceLifecycleIdentityComplete } from "./jira-resource-lifecycle-presentation";
-import { JIRA_SPRINT_REVIEW_TOOLS, jiraSprintReviewDetails } from "./jira-sprint-review-presentation";
+import {
+  JIRA_RESOURCE_LIFECYCLE_TOOLS,
+  jiraResourceLifecycleIdentityComplete,
+} from "./jira-resource-lifecycle-presentation";
+import {
+  JIRA_SPRINT_REVIEW_TOOLS,
+  jiraSprintReviewDetails,
+} from "./jira-sprint-review-presentation";
 import { JIRA_PROPERTY_TOOLS, jiraPropertyDetails } from "./jira-property-presentation";
 import { JIRA_MONITORING_WRITE_TOOLS, jiraMonitoringDetails } from "./jira-monitoring-presentation";
-import { JIRA_PROPERTY_MUTATION_TOOLS, jiraPropertyMutationDetails } from "./jira-property-mutation-presentation";
+import {
+  JIRA_PROPERTY_MUTATION_TOOLS,
+  jiraPropertyMutationDetails,
+} from "./jira-property-mutation-presentation";
 import {
   JIRA_ISSUE_CONTEXT_METADATA_TOOLS,
   jiraIssueContextDetails,
@@ -84,6 +164,17 @@ import {
   jiraPinnedCommentDetails,
 } from "./jira-issue-context-presentation";
 
+/** One Jira issue a tool call created, changed or read, as a person recognises it. */
+export interface JiraOutcomeIssue {
+  readonly key: string;
+  readonly summary?: string;
+  readonly href?: string;
+}
+/** One draft item Keiko's own field check refused before Jira saw it. */
+export interface JiraOutcomeItemValidation {
+  readonly ref: string;
+  readonly validation: JiraFieldValidationFailure;
+}
 export interface JiraOutcomeItem {
   readonly key?: string;
   readonly projectId?: string;
@@ -97,6 +188,8 @@ export interface JiraOutcomeItem {
   readonly facts: readonly JiraOutcomeFact[];
 }
 interface JiraOutcomeProblem {
+  /** The draft item the refusal belongs to. */
+  readonly ref?: string;
   readonly field?: string;
   readonly message: string;
 }
@@ -117,10 +210,28 @@ export interface JiraToolOutcomeView {
   readonly problems: readonly JiraOutcomeProblem[];
   readonly rules: readonly JiraOutcomeRule[];
   readonly validation: JiraFieldValidationFailure | undefined;
+  /** Keiko's own field check refused these draft items; each is named by its reference. */
+  readonly itemValidations: readonly JiraOutcomeItemValidation[];
+  /** Problems beyond the shown ones, counted rather than dropped silently. */
+  readonly hiddenProblemCount: number;
   readonly failure: WidgetMessageKey | undefined;
+  /**
+   * The issue keys of the result as a bounded projection (#4173): a compact large draft lists
+   * its keys as ranges, so the keys are counted here rather than present as items.
+   */
+  readonly issues: readonly JiraOutcomeIssue[];
+  readonly hiddenIssueCount: number;
+  /**
+   * `count` lists at most JIRA_OUTCOME_ITEMS_SHOWN issues and counts the rest in "and N more";
+   * `disclosure` keeps every item behind a bounded disclosure.
+   */
+  readonly overflow: "count" | "disclosure";
+  /** Issues a compact result counted but did not list; added to the hidden count in `count` mode. */
+  readonly unlistedItemCount: number;
 }
 
 export const JIRA_OUTCOME_ITEMS_SHOWN = 5;
+const JIRA_OUTCOME_PROBLEMS_SHOWN = 20;
 const ISSUE_KEY = /^[A-Z][A-Z0-9_]{0,63}-\d{1,12}$/u;
 const PROJECT_KEY = /^[A-Z][A-Z0-9_]{0,63}$/u;
 export const JIRA_PROJECT_TOOLS: ReadonlySet<string> = new Set([
@@ -207,10 +318,14 @@ function boardLink(value: unknown, identity: unknown): string | undefined {
 }
 function filterLink(tool: string, source: UnknownRecord): string | undefined {
   if (!jiraSavedConfigurationFilterContextComplete(tool, source)) return undefined;
-  if (typeof source.browseUrl !== "string" || /[\p{Cc}\\]/u.test(source.browseUrl)) return undefined;
+  if (typeof source.browseUrl !== "string" || /[\p{Cc}\\]/u.test(source.browseUrl))
+    return undefined;
   const url = savedUrl(source.browseUrl, true);
-  return url?.pathname.endsWith("/issues/") === true && !/%(?:2f|5c|25)/iu.test(url.pathname) &&
-    url.search === `?filter=${String(source.filterId)}` ? url.href : undefined;
+  return url?.pathname.endsWith("/issues/") === true &&
+    !/%(?:2f|5c|25)/iu.test(url.pathname) &&
+    url.search === `?filter=${String(source.filterId)}`
+    ? url.href
+    : undefined;
 }
 function issueLink(value: unknown, key: string | undefined): string | undefined {
   if (key === undefined || !ISSUE_KEY.test(key)) return undefined;
@@ -282,7 +397,12 @@ function outcomeHref(
   key: string | undefined,
   projectKey: string | undefined,
 ): string | undefined {
-  if (tool === "jira_board_create" || JIRA_SPRINT_TOOLS.has(tool) || JIRA_SYSTEM_ACTION_TOOLS.has(tool)) return undefined;
+  if (
+    tool === "jira_board_create" ||
+    JIRA_SPRINT_TOOLS.has(tool) ||
+    JIRA_SYSTEM_ACTION_TOOLS.has(tool)
+  )
+    return undefined;
   if (BOARD_READ_TOOLS.has(tool)) return boardLink(source.browseUrl, source.boardId ?? source.id);
   return projectKey === undefined
     ? issueLink(source.browseUrl, key)
@@ -294,8 +414,15 @@ function boardContextLink(tool: string, source: UnknownRecord): string | undefin
     ? boardLink(source.boardBrowseUrl, source.originBoardId)
     : undefined;
 }
-type ConfigurationPresenter = (tool: string, source: UnknownRecord, args?: unknown) => readonly JiraAgileDetails[];
-const CONFIGURATION_PRESENTERS: readonly (readonly [ReadonlySet<string>, ConfigurationPresenter])[] = [
+type ConfigurationPresenter = (
+  tool: string,
+  source: UnknownRecord,
+  args?: unknown,
+) => readonly JiraAgileDetails[];
+const CONFIGURATION_PRESENTERS: readonly (readonly [
+  ReadonlySet<string>,
+  ConfigurationPresenter,
+])[] = [
   [JIRA_ACCOUNT_RESOURCE_TOOLS, jiraAccountResourceDetails],
   [JIRA_SYSTEM_ACTION_TOOLS, jiraSystemActionDetails],
   [JIRA_SCHEME_ADMINISTRATION_TOOLS, jiraSchemeAdministrationDetails],
@@ -333,7 +460,11 @@ const CONFIGURATION_PRESENTERS: readonly (readonly [ReadonlySet<string>, Configu
   [JIRA_JQL_TOOLS, jiraJqlDetails],
   [JIRA_PROJECT_ASSOCIATION_TOOLS, jiraProjectAssociationDetails],
 ];
-function configurationDetails(tool: string, source: UnknownRecord, args?: unknown): readonly JiraAgileDetails[] | undefined {
+function configurationDetails(
+  tool: string,
+  source: UnknownRecord,
+  args?: unknown,
+): readonly JiraAgileDetails[] | undefined {
   return CONFIGURATION_PRESENTERS.find(([tools]) => tools.has(tool))?.[1](tool, source, args);
 }
 function metadataDetails(tool: string, source: UnknownRecord): JiraAgileDetails | undefined {
@@ -346,9 +477,18 @@ function metadataDetails(tool: string, source: UnknownRecord): JiraAgileDetails 
   if (JIRA_FILE_METADATA_TOOLS.has(tool)) return jiraFileMetadataDetails(tool, source);
   return JIRA_ADMINISTRATION_TOOLS.has(tool) ? jiraAdministrationDetails(tool, source) : undefined;
 }
+/** A draft row Jira or Keiko's field check refused is named by its reference where the refusal is read. */
+function refusedRow(source: UnknownRecord): boolean {
+  return (
+    text(source.ref) !== undefined &&
+    text(source.issueKey) === undefined &&
+    (JIRA_FIELD_VALIDATION_FAILURES.some((value) => value === source.validation) ||
+      problemsOf(source).length > 0)
+  );
+}
 function outcomeItem(value: unknown, tool: string): JiraOutcomeItem | undefined {
   const source = record(value);
-  if (source === undefined) return undefined;
+  if (source === undefined || refusedRow(source)) return undefined;
   if (JIRA_PROJECT_METADATA_TOOLS.has(tool)) return metadataOutcomeItem(source, tool);
   const metadata = metadataDetails(tool, source);
   if (metadata !== undefined) return metadataDetailsItem(metadata);
@@ -408,19 +548,34 @@ function presentedDetails(details: readonly JiraAgileDetails[]): JiraOutcomeItem
     return item === undefined ? [] : [item];
   });
 }
-function configurationItems(tool: string, data: UnknownRecord, details: readonly JiraAgileDetails[]): JiraOutcomeItem[] {
+function configurationItems(
+  tool: string,
+  data: UnknownRecord,
+  details: readonly JiraAgileDetails[],
+): JiraOutcomeItem[] {
   const items = presentedDetails(details);
   const resourceLink = resourceLifecycleLink(tool, data);
-  if (resourceLink !== undefined) return items.map((item, index) => index === 0 ? { ...item, ...resourceLink } : item);
+  if (resourceLink !== undefined)
+    return items.map((item, index) => (index === 0 ? { ...item, ...resourceLink } : item));
   const filterHref = filterLink(tool, data);
-  return filterHref === undefined ? items : items.map((item, index) => index === 0 ? { ...item, filterHref } : item);
+  return filterHref === undefined
+    ? items
+    : items.map((item, index) => (index === 0 ? { ...item, filterHref } : item));
 }
 /** A retained, canonical receipt supplies the key; its saved URL uses the existing Jira destination
  * validators. Do not turn arguments, remote-link content or a current connector into a URL. */
-function resourceLifecycleLink(tool: string, data: UnknownRecord): Pick<JiraOutcomeItem, "key" | "href"> | undefined {
-  if (!JIRA_RESOURCE_LIFECYCLE_TOOLS.has(tool) || !jiraResourceLifecycleIdentityComplete(tool, data)) return undefined;
+function resourceLifecycleLink(
+  tool: string,
+  data: UnknownRecord,
+): Pick<JiraOutcomeItem, "key" | "href"> | undefined {
+  if (
+    !JIRA_RESOURCE_LIFECYCLE_TOOLS.has(tool) ||
+    !jiraResourceLifecycleIdentityComplete(tool, data)
+  )
+    return undefined;
   const saved = data.browseUrl;
-  if (typeof saved !== "string" || /[\p{Cc}\\]/u.test(saved) || /%(?:2f|5c|25)/iu.test(saved)) return undefined;
+  if (typeof saved !== "string" || /[\p{Cc}\\]/u.test(saved) || /%(?:2f|5c|25)/iu.test(saved))
+    return undefined;
   const projectKey = text(data.projectKey);
   const key = projectKey ?? text(data.issueKey);
   const href = projectKey === undefined ? issueLink(saved, key) : projectLink(saved, projectKey);
@@ -452,8 +607,13 @@ function outcomeItems(
 ): JiraOutcomeItem[] {
   const issueContext = issueContextItems(exchange.call.name, data ?? {});
   if (issueContext !== undefined) return issueContext;
-  const configuration = configurationDetails(exchange.call.name, data ?? {}, exchange.call.arguments);
-  if (configuration !== undefined) return configurationItems(exchange.call.name, data ?? {}, configuration);
+  const configuration = configurationDetails(
+    exchange.call.name,
+    data ?? {},
+    exchange.call.arguments,
+  );
+  if (configuration !== undefined)
+    return configurationItems(exchange.call.name, data ?? {}, configuration);
   const items = returnedEntries(data, exchange.call.name) ?? [];
   const progress = Array.isArray(exchange.draftProgress?.items) ? exchange.draftProgress.items : [];
   const single = data?.issueKey !== undefined || STANDALONE_TOOLS.has(exchange.call.name);
@@ -486,22 +646,141 @@ function outcomeItems(
     return [item];
   });
 }
-function problemsOf(data: UnknownRecord | undefined): JiraOutcomeProblem[] {
-  const errors = Array.isArray(data?.fieldErrors) ? data.fieldErrors : [];
-  const messages = Array.isArray(data?.messages) ? data.messages : [];
+/** Only a plain web link opens Jira; anything else stays an unlinked key. */
+function webLink(value: unknown): string | undefined {
+  const candidate = text(value);
+  if (candidate === undefined) return undefined;
+  try {
+    const url = new URL(candidate);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+function issueOf(source: UnknownRecord | undefined, keyField: string): JiraOutcomeIssue[] {
+  const key = text(source?.[keyField]);
+  if (key === undefined || !ISSUE_KEY.test(key)) return [];
+  const summary = text(source?.summary);
+  const href = webLink(source?.browseUrl);
   return [
-    ...errors.flatMap((entry): JiraOutcomeProblem[] => {
+    { key, ...(summary === undefined ? {} : { summary }), ...(href === undefined ? {} : { href }) },
+  ];
+}
+/** A read lists `key`; a draft's item rows list `issueKey` (the production draft schema). */
+function listed(value: unknown): JiraOutcomeIssue[] {
+  return Array.isArray(value)
+    ? value.flatMap((entry) => {
+        const item = record(entry);
+        return item?.issueKey === undefined ? issueOf(item, "key") : issueOf(item, "issueKey");
+      })
+    : [];
+}
+
+interface ListedKeys {
+  readonly shown: readonly JiraOutcomeIssue[];
+  readonly count: number;
+}
+const RANGE = /^([A-Z][A-Z0-9_]{0,254})-(\d{1,15})\.\.\1-(\d{1,15})$/u;
+interface KeyRun {
+  readonly project: string;
+  readonly from: number;
+  readonly to: number;
+}
+function runOf(part: string): KeyRun | undefined {
+  const range = RANGE.exec(part);
+  const project = range?.[1];
+  const from = Number(range?.[2]);
+  const to = Number(range?.[3]);
+  return project === undefined || to < from || !Number.isSafeInteger(to)
+    ? undefined
+    : { project, from, to };
+}
+/** One `KEY-3` or `KEY-3..KEY-9` part: the keys it names, as many as fit, and how many in all. */
+function partKeys(part: string, room: number): ListedKeys {
+  const run = runOf(part);
+  if (run === undefined) {
+    const single = ISSUE_KEY.test(part);
+    return { shown: single && room > 0 ? [{ key: part }] : [], count: single ? 1 : 0 };
+  }
+  const shown: JiraOutcomeIssue[] = [];
+  for (let n = run.from; n <= run.to && shown.length < room; n += 1)
+    shown.push({ key: `${run.project}-${String(n)}` });
+  return { shown, count: run.to - run.from + 1 };
+}
+/** One entry of a compact draft's key list: several comma-joined keys and ranges. */
+function rangeKeys(entry: string, room: number): ListedKeys {
+  const shown: JiraOutcomeIssue[] = [];
+  let count = 0;
+  for (const part of entry.split(",")) {
+    const parsed = partKeys(part.trim(), room - shown.length);
+    shown.push(...parsed.shown);
+    count += parsed.count;
+  }
+  return { shown, count };
+}
+/** A listed key opens under the result's own browse prefix; without a web prefix it stays plain. */
+function linked(issue: JiraOutcomeIssue, prefix: unknown): JiraOutcomeIssue {
+  const base = text(prefix);
+  const href = base === undefined ? undefined : webLink(`${base}${issue.key}`);
+  return href === undefined ? issue : { ...issue, href };
+}
+/** The created and found keys a compact large-draft result lists as ranges, and those it counts. */
+function compactKeys(data: UnknownRecord | undefined): ListedKeys {
+  if (data?.compact !== true) return { shown: [], count: 0 };
+  const shown: JiraOutcomeIssue[] = [];
+  let count = typeof data.unlistedKeyCount === "number" ? Math.max(0, data.unlistedKeyCount) : 0;
+  for (const name of ["createdRanges", "existingRanges"]) {
+    const entries = Array.isArray(data[name]) ? (data[name] as unknown[]) : [];
+    for (const entry of entries) {
+      if (typeof entry !== "string") continue;
+      const parsed = rangeKeys(entry, JIRA_OUTCOME_ITEMS_SHOWN - shown.length);
+      shown.push(...parsed.shown);
+      count += parsed.count;
+    }
+  }
+  return { shown: shown.map((issue) => linked(issue, data.browseUrlPrefix)), count };
+}
+function uniqueIssues(issues: readonly JiraOutcomeIssue[]): JiraOutcomeIssue[] {
+  const seen = new Map<string, JiraOutcomeIssue>();
+  for (const issue of issues) if (!seen.has(issue.key)) seen.set(issue.key, issue);
+  return [...seen.values()];
+}
+function problemsOf(data: UnknownRecord | undefined, ref?: string): JiraOutcomeProblem[] {
+  const fieldErrors = Array.isArray(data?.fieldErrors) ? data.fieldErrors : [];
+  const messages = Array.isArray(data?.messages) ? data.messages : [];
+  const own = ref === undefined ? {} : { ref };
+  return [
+    ...fieldErrors.flatMap((entry): JiraOutcomeProblem[] => {
       const error = record(entry);
       const message = text(error?.message);
-      const field = text(error?.fieldName);
-      return message === undefined ? [] : [{ ...(field === undefined ? {} : { field }), message }];
+      if (message === undefined) return [];
+      const field = text(error?.fieldName) ?? text(error?.fieldId);
+      return [{ ...own, ...(field === undefined ? {} : { field }), message }];
     }),
     ...messages.flatMap((entry): JiraOutcomeProblem[] => {
       const message = text(entry);
-      return message === undefined ? [] : [{ message }];
+      return message === undefined ? [] : [{ ...own, message }];
     }),
   ];
 }
+/** Jira's words for each refused draft item, tied to the item's reference. */
+function itemProblemsOf(data: UnknownRecord | undefined): JiraOutcomeProblem[] {
+  const items = Array.isArray(data?.items) ? data.items : [];
+  return items.flatMap((entry) => {
+    const item = record(entry);
+    return problemsOf(item, text(item?.ref));
+  });
+}
+function itemValidationsOf(data: UnknownRecord | undefined): JiraOutcomeItemValidation[] {
+  const items = Array.isArray(data?.items) ? data.items : [];
+  return items.flatMap((entry): JiraOutcomeItemValidation[] => {
+    const item = record(entry);
+    const ref = text(item?.ref);
+    const validation = JIRA_FIELD_VALIDATION_FAILURES.find((value) => value === item?.validation);
+    return ref === undefined || validation === undefined ? [] : [{ ref, validation }];
+  });
+}
+
 function rulesOf(data: UnknownRecord | undefined): JiraOutcomeRule[] {
   const own = Array.isArray(data?.violations) ? data.violations : [];
   const items = Array.isArray(data?.items) ? data.items : [];
@@ -568,13 +847,17 @@ function pageCounts(
   const items = returnedEntries(data, tool);
   if (items === undefined)
     return { returnedCount: undefined, total: undefined, unreadableCount: 0 };
-  const total = JIRA_WORKLOG_FEED_TOOLS.has(tool) || JIRA_SELECTED_WORKLOG_TOOLS.has(tool)
-    ? undefined : count(data.total);
+  const total =
+    JIRA_WORKLOG_FEED_TOOLS.has(tool) || JIRA_SELECTED_WORKLOG_TOOLS.has(tool)
+      ? undefined
+      : count(data.total);
   const covered = (count(data.startAt) ?? 0) + items.length;
   return {
     returnedCount: items.length,
     total: total !== undefined && total >= covered ? total : undefined,
-    unreadableCount: items.filter((item) => outcomeItem(item, tool) === undefined).length,
+    unreadableCount: items.filter(
+      (item) => outcomeItem(item, tool) === undefined && !refusedRow(record(item) ?? {}),
+    ).length,
   };
 }
 
@@ -633,7 +916,9 @@ function knowledgeSourceFacts(source: UnknownRecord): JiraOutcomeFact[] {
   if (range !== undefined) facts.push({ label: "chat.knowledge.outcome.characters", value: range });
   const section = source.sectionPath;
   if (
-    Array.isArray(section) && section.length > 0 && section.length <= 12 &&
+    Array.isArray(section) &&
+    section.length > 0 &&
+    section.length <= 12 &&
     section.every((part) => typeof part === "string" && part.length <= 300)
   )
     facts.push({ label: "chat.knowledge.outcome.section", value: section.join(" › ") });
@@ -641,7 +926,8 @@ function knowledgeSourceFacts(source: UnknownRecord): JiraOutcomeFact[] {
 }
 function knowledgeRequirement(source: UnknownRecord): JiraOutcomeItem | undefined {
   const reference = text(source.reference);
-  if (reference === undefined || reference.length > 120 || text(source.documentScope) === undefined) return undefined;
+  if (reference === undefined || reference.length > 120 || text(source.documentScope) === undefined)
+    return undefined;
   const facts = knowledgeSourceFacts(source);
   const criteria = source.acceptanceCriteria;
   if (Array.isArray(criteria) && criteria.length <= 20) {
@@ -651,23 +937,29 @@ function knowledgeRequirement(source: UnknownRecord): JiraOutcomeItem | undefine
       const value = text(criterion?.text);
       return id === undefined || value === undefined ? [] : [`${id}: ${value}`];
     });
-    if (entries.length > 0) facts.push({ label: "chat.knowledge.outcome.criteria", value: entries.join("\n") });
+    if (entries.length > 0)
+      facts.push({ label: "chat.knowledge.outcome.criteria", value: entries.join("\n") });
   }
   return {
     key: reference,
     ...textMembers({ name: source.title, body: source.statement }),
     facts,
-    labels: source.statementTruncated === true || source.criteriaTruncated === true
-      ? ["chat.requirements.partial"] : [],
+    labels:
+      source.statementTruncated === true || source.criteriaTruncated === true
+        ? ["chat.requirements.partial"]
+        : [],
   };
 }
 function knowledgeDocument(source: UnknownRecord): JiraOutcomeItem | undefined {
-  if (text(source.documentScope) === undefined || text(source.documentName) === undefined) return undefined;
+  if (text(source.documentScope) === undefined || text(source.documentName) === undefined)
+    return undefined;
   const labels: WidgetMessageKey[] = [];
   if (source.sourceUnavailable === true) labels.push("chat.knowledge.outcome.sourceUnavailable");
   else if (source.text === "") labels.push("chat.knowledge.outcome.emptyText");
-  if (source.positionSpace === "original-document-text") labels.push("chat.knowledge.outcome.originalPositions");
-  if (source.positionSpace === "redacted-document-text") labels.push("chat.knowledge.outcome.redactedPositions");
+  if (source.positionSpace === "original-document-text")
+    labels.push("chat.knowledge.outcome.originalPositions");
+  if (source.positionSpace === "redacted-document-text")
+    labels.push("chat.knowledge.outcome.redactedPositions");
   return {
     ...textMembers({
       name: source.documentName,
@@ -682,7 +974,8 @@ function knowledgeDocument(source: UnknownRecord): JiraOutcomeItem | undefined {
   };
 }
 function knowledgeReviewSources(source: UnknownRecord): JiraOutcomeFact[] | undefined {
-  if (!Array.isArray(source.sources) || source.sources.length === 0 || source.sources.length > 2) return undefined;
+  if (!Array.isArray(source.sources) || source.sources.length === 0 || source.sources.length > 2)
+    return undefined;
   const references: string[] = [];
   for (const value of source.sources) {
     const citation = record(value);
@@ -697,13 +990,18 @@ function knowledgeReviewSources(source: UnknownRecord): JiraOutcomeFact[] | unde
 }
 function knowledgeReview(source: UnknownRecord): JiraOutcomeItem | undefined {
   const key = text(source.proposalId);
-  const kind = typeof source.kind === "string" && Object.hasOwn(KNOWLEDGE_REVIEW_KINDS, source.kind)
-    ? KNOWLEDGE_REVIEW_KINDS[source.kind] : undefined;
+  const kind =
+    typeof source.kind === "string" && Object.hasOwn(KNOWLEDGE_REVIEW_KINDS, source.kind)
+      ? KNOWLEDGE_REVIEW_KINDS[source.kind]
+      : undefined;
   const facts = knowledgeReviewSources(source);
   if (key === undefined || kind === undefined || facts === undefined) return undefined;
   if (source.origin !== "model-proposal" || source.status !== "proposed") return undefined;
   const labels: WidgetMessageKey[] = ["chat.knowledge.outcome.proposal", kind];
-  if (Array.isArray(source.sources) && source.sources.some((value) => record(value)?.quoteTruncated === true))
+  if (
+    Array.isArray(source.sources) &&
+    source.sources.some((value) => record(value)?.quoteTruncated === true)
+  )
     labels.push("chat.knowledge.outcome.quoteTruncated");
   return {
     key,
@@ -745,27 +1043,36 @@ function knowledgeChangeItems(changes: UnknownRecord): JiraOutcomeItem[] {
       const source = record(value);
       const key = text(source?.id ?? value);
       if (key === undefined || key.length > 120) return [];
-      return [{
-        key,
-        ...textMembers({ name: source?.title }),
-        labels: [label],
-        facts: knowledgeCounts(source ?? {}, { issueCount: "chat.knowledge.outcome.linkedIssues" }),
-      }];
+      return [
+        {
+          key,
+          ...textMembers({ name: source?.title }),
+          labels: [label],
+          facts: knowledgeCounts(source ?? {}, {
+            issueCount: "chat.knowledge.outcome.linkedIssues",
+          }),
+        },
+      ];
     });
   });
 }
 function knowledgeReceiptData(exchange: ChatToolExchange): UnknownRecord | undefined {
-  if (!isCanonicalKnowledgeExchange(exchange) || exchange.result?.status !== "completed") return undefined;
+  if (!isCanonicalKnowledgeExchange(exchange) || exchange.result?.status !== "completed")
+    return undefined;
   const data = record(exchange.result.data);
   const views = KNOWLEDGE_VIEWS[exchange.call.name];
-  if (data?.outcome !== "succeeded" || typeof data.view !== "string" || !views?.includes(data.view)) return undefined;
+  if (data?.outcome !== "succeeded" || typeof data.view !== "string" || !views?.includes(data.view))
+    return undefined;
   return data;
 }
 function knowledgeEntries(data: UnknownRecord): readonly unknown[] | undefined {
   if (data.view === "changes") {
     const counts = record(record(data.changes)?.counts);
-    return ["changed", "removed", "untraced", "unchanged"].every((key) => count(counts?.[key]) !== undefined)
-      ? [] : undefined;
+    return ["changed", "removed", "untraced", "unchanged"].every(
+      (key) => count(counts?.[key]) !== undefined,
+    )
+      ? []
+      : undefined;
   }
   return Array.isArray(data.items) && data.items.length <= 100 ? data.items : undefined;
 }
@@ -794,7 +1101,9 @@ function knowledgeSummaryFacts(data: UnknownRecord): JiraOutcomeFact[] {
   ];
 }
 /** Only the versioned Knowledge producers' declared fields become plain text facts, never URLs. */
-export function knowledgeToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcomeView | undefined {
+export function knowledgeToolOutcomeView(
+  exchange: ChatToolExchange,
+): JiraToolOutcomeView | undefined {
   const data = knowledgeReceiptData(exchange);
   if (data === undefined) return undefined;
   const entries = knowledgeEntries(data);
@@ -812,6 +1121,12 @@ export function knowledgeToolOutcomeView(exchange: ChatToolExchange): JiraToolOu
     problems: [],
     rules: [],
     validation: undefined,
+    itemValidations: [],
+    hiddenProblemCount: 0,
+    issues: [],
+    hiddenIssueCount: 0,
+    overflow: "disclosure",
+    unlistedItemCount: 0,
     failure: undefined,
     resultsLabel: "chat.knowledge.outcome.results",
     facts: knowledgeSummaryFacts(data),
@@ -819,27 +1134,129 @@ export function knowledgeToolOutcomeView(exchange: ChatToolExchange): JiraToolOu
   };
 }
 
+/** Tools with their own presentation; every other Jira result lists the issues it names. */
+const SPECIALIZED_TOOLS: ReadonlySet<string> = new Set([
+  ...STANDALONE_TOOLS,
+  ...JIRA_COLLABORATION_TOOLS,
+  ...JIRA_PARTICIPATION_TOOLS,
+  ...CONFIGURATION_PRESENTERS.flatMap(([tools]) => [...tools]),
+  "jira_pinned_comments",
+  "jira_subtasks",
+  "jira_issue_picker",
+  "jira_issue",
+]);
+interface IssueProjection {
+  readonly issues: readonly JiraOutcomeIssue[];
+  readonly hiddenIssueCount: number;
+  readonly listed: ListedKeys;
+}
+/** The issues and the compact key ranges a Jira exchange carries; MCP and knowledge tools carry none. */
+function issueProjection(exchange: ChatToolExchange, data: UnknownRecord): IssueProjection {
+  const issues = uniqueIssues([
+    ...issueOf(data, "issueKey"),
+    ...listed(data.items),
+    ...listed(record(exchange.draftProgress)?.items),
+  ]);
+  const ranged = compactKeys(data);
+  const room = Math.max(0, JIRA_OUTCOME_ITEMS_SHOWN - issues.length);
+  const shown = [...issues, ...ranged.shown.slice(0, room)].slice(0, JIRA_OUTCOME_ITEMS_SHOWN);
+  return {
+    issues: shown,
+    hiddenIssueCount: Math.max(0, issues.length + ranged.count - shown.length),
+    listed: ranged,
+  };
+}
+function issueListItems(
+  items: readonly JiraOutcomeItem[],
+  projection: IssueProjection,
+): JiraOutcomeItem[] {
+  const keyed = new Set(items.flatMap((item) => (item.key === undefined ? [] : [item.key])));
+  const compact = projection.listed.shown.flatMap((issue): JiraOutcomeItem[] =>
+    keyed.has(issue.key)
+      ? []
+      : [
+          {
+            key: issue.key,
+            ...(issue.href === undefined ? {} : { href: issue.href }),
+            labels: [],
+            facts: [],
+          },
+        ],
+  );
+  return [...items, ...compact];
+}
+function usesIssueList(
+  tool: string,
+  items: readonly JiraOutcomeItem[],
+  projection: IssueProjection,
+): boolean {
+  return (
+    !SPECIALIZED_TOOLS.has(tool) &&
+    (projection.listed.shown.length > 0 ||
+      items.some((item) => item.key !== undefined && ISSUE_KEY.test(item.key)))
+  );
+}
+function privateAccount(tool: string): boolean {
+  return JIRA_PRIVATE_ACCOUNT_TOOLS.has(tool);
+}
+function problemViews(
+  exchange: ChatToolExchange,
+  data: UnknownRecord,
+): Pick<JiraToolOutcomeView, "problems" | "hiddenProblemCount"> {
+  // Private credential/session validators expose only closed reasons and violation counts.
+  const all = privateAccount(exchange.call.name)
+    ? []
+    : [...problemsOf(data), ...itemProblemsOf(data)];
+  return {
+    problems: all.slice(0, JIRA_OUTCOME_PROBLEMS_SHOWN),
+    hiddenProblemCount: Math.max(0, all.length - JIRA_OUTCOME_PROBLEMS_SHOWN),
+  };
+}
 /** A display projection of the immutable receipt, shared by the live turn and restored history. */
 export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcomeView {
   const knowledge = knowledgeToolOutcomeView(exchange);
   if (knowledge !== undefined) return knowledge;
   const stored = record(exchange.result?.data) ?? {};
   const data =
-    [JIRA_PARTICIPATION_TOOLS, JIRA_MONITORING_WRITE_TOOLS, JIRA_PROPERTY_MUTATION_TOOLS, JIRA_SAVED_CONFIGURATION_WRITE_TOOLS,
-      JIRA_RELEASE_LIFECYCLE_TOOLS, JIRA_LINK_MUTATION_TOOLS, JIRA_CONFIGURATION_MUTATION_TOOLS, JIRA_PLANNING_MUTATION_TOOLS,
-      JIRA_ACCESS_CONFIGURATION_TOOLS, JIRA_SCHEME_ADMINISTRATION_TOOLS, JIRA_INSTANCE_ADMINISTRATION_WRITE_TOOLS,
-      JIRA_SYSTEM_ACTION_TOOLS, JIRA_ACCOUNT_RESOURCE_WRITE_TOOLS].some((tools) => tools.has(exchange.call.name)) && exchange.mutationOutcome !== undefined
+    [
+      JIRA_PARTICIPATION_TOOLS,
+      JIRA_MONITORING_WRITE_TOOLS,
+      JIRA_PROPERTY_MUTATION_TOOLS,
+      JIRA_SAVED_CONFIGURATION_WRITE_TOOLS,
+      JIRA_RELEASE_LIFECYCLE_TOOLS,
+      JIRA_LINK_MUTATION_TOOLS,
+      JIRA_CONFIGURATION_MUTATION_TOOLS,
+      JIRA_PLANNING_MUTATION_TOOLS,
+      JIRA_ACCESS_CONFIGURATION_TOOLS,
+      JIRA_SCHEME_ADMINISTRATION_TOOLS,
+      JIRA_INSTANCE_ADMINISTRATION_WRITE_TOOLS,
+      JIRA_SYSTEM_ACTION_TOOLS,
+      JIRA_ACCOUNT_RESOURCE_WRITE_TOOLS,
+    ].some((tools) => tools.has(exchange.call.name)) && exchange.mutationOutcome !== undefined
       ? { ...stored, outcome: exchange.mutationOutcome }
       : stored;
+  const projection = exchange.call.name.startsWith("jira_")
+    ? issueProjection(exchange, data)
+    : { issues: [], hiddenIssueCount: 0, listed: { shown: [], count: 0 } };
+  const own = outcomeItems(exchange, data);
+  const issueList = usesIssueList(exchange.call.name, own, projection);
+  const items = issueList ? issueListItems(own, projection) : own;
   return {
-    items: outcomeItems(exchange, data),
+    items,
+    ...(issueList ? { resultsLabel: "chat.jira.outcome.issues" as const } : {}),
+    overflow: issueList ? "count" : "disclosure",
+    unlistedItemCount: issueList
+      ? Math.max(0, projection.listed.count - projection.listed.shown.length)
+      : 0,
+    issues: projection.issues,
+    hiddenIssueCount: projection.hiddenIssueCount,
     ...pageCounts(data, exchange.call.name),
     stagedCount: count(data.itemCount),
     unresolvedCount: count(data.unresolvedRefCount),
-    // Private credential/session validators expose only closed reasons and violation counts.
-    problems: JIRA_PRIVATE_ACCOUNT_TOOLS.has(exchange.call.name) ? [] : problemsOf(data),
-    rules: JIRA_PRIVATE_ACCOUNT_TOOLS.has(exchange.call.name) ? [] : rulesOf(data),
+    ...problemViews(exchange, data),
+    rules: privateAccount(exchange.call.name) ? [] : rulesOf(data),
     validation: JIRA_FIELD_VALIDATION_FAILURES.find((value) => value === data.validation),
+    itemValidations: privateAccount(exchange.call.name) ? [] : itemValidationsOf(data),
     failure: failureMessage(exchange, data),
   };
 }

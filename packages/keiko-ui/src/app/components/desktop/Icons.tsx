@@ -526,6 +526,35 @@ export const Icons = {
       <path d="M7.4 7.5 h.01 M7.4 16.5 h.01 M12 7.5 H16 M12 16.5 H16" />
     </Ico>
   ),
+  /* Markdown editor formatting glyphs: open strokes, no seam. */
+  bold: (p: IcoProps): ReactNode => (
+    <Ico {...p} d="M7 5h6a3.5 3.5 0 0 1 0 7H7zM7 12h7a3.5 3.5 0 0 1 0 7H7z" />
+  ),
+  italic: (p: IcoProps): ReactNode => <Ico {...p} d="M10 5h8M6 19h8M14.5 5 9.5 19" />,
+  listBullet: (p: IcoProps): ReactNode => (
+    <Ico {...p} d="M9.5 7H20M9.5 12H20M9.5 17H20M5 7h.01M5 12h.01M5 17h.01" />
+  ),
+  listOrdered: (p: IcoProps): ReactNode => (
+    <Ico
+      {...p}
+      d="M10 7h10M10 12h10M10 17h10M4.5 5.5 6 5v4M4.5 15.5a1.2 1.2 0 0 1 2.2.7L4.5 19h2.4"
+    />
+  ),
+  quote: (p: IcoProps): ReactNode => <Ico {...p} d="M5 6v12M9.5 8H19M9.5 12H19M9.5 16H15" />,
+  codeBlock: (p: IcoProps): ReactNode => (
+    <Ico {...p}>
+      <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" />
+      <path d="M9.5 10 7.5 12l2 2M14.5 10l2 2-2 2" />
+    </Ico>
+  ),
+  undo: (p: IcoProps): ReactNode => <Ico {...p} d="M9 7 5 11l4 4M5 11h9.5a4.5 4.5 0 0 1 0 9H12" />,
+  redo: (p: IcoProps): ReactNode => <Ico {...p} d="m15 7 4 4-4 4M19 11H9.5a4.5 4.5 0 0 0 0 9H12" />,
+  eye: (p: IcoProps): ReactNode => (
+    <Ico {...p}>
+      <path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" />
+      <circle cx="12" cy="12" r="2.8" />
+    </Ico>
+  ),
 } as const;
 
 export type IconName = keyof typeof Icons;

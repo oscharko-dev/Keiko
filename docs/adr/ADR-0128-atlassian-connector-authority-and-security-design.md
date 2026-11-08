@@ -472,12 +472,18 @@ caller as reporter when the field is absent although create metadata lists it as
 default (lab S17, #4176). A supplied reporter is validated like any user; every other required
 field still blocks the create, and edit and transition are unaffected. Add/remove is
 limited to labels; replacement and additive changes cannot target the same field in one action.
-Cloud rich text uses the existing ADF composer. Existing Data Center description strings remain
-byte-for-byte native Jira wiki text: `#` is also a valid wiki list marker, so strings cannot prove
-Markdown provenance. A new Markdown description uses only the strict explicit value
-`{ format: "markdown", text: "..." }`, advertised on the description field's create metadata.
-Only this Data Center description value serializes supported ATX and setext headings as native
-`hN.` wiki headings through the bounded canonical heading reader. It preserves code/fences,
+Cloud rich text uses the existing ADF composer. A Data Center description string stays
+byte-for-byte native Jira wiki text unless it uses a construct wiki never writes (`**strong**`, a
+`[text](url)` link or a backtick/tilde fence) and none that only wiki writes (`hN.` headings,
+`[text|url]` links, wiki macros, `||` table headers, consecutive `# ` list lines): `#` alone is
+also a valid wiki list marker and never proves Markdown provenance. Owner decision 2026-11-07
+(#4173 AC2): models write Markdown as a plain string, and Data Center rendered it as literal
+asterisks and broken links, so such a string is converted like the strict explicit value
+`{ format: "markdown", text: "..." }`, which remains advertised on the description field's create
+metadata. Both serialize supported ATX and setext headings as native `hN.` wiki headings through
+the bounded canonical heading reader, then emphasis, inline code, links, lists, rules, tables and
+fences as wiki markup (`jira-markdown-wiki.ts`); code, fences, wiki macros and quoted lines are
+copied verbatim, and an unterminated fence keeps the heading-only result. It preserves code/fences,
 quoted source, acceptance criteria and source text; other fields and Cloud values keep their
 existing contracts. The same contracts-leaf projection supplies template validation and the human
 approval preview without changing submitted staged values, their digest or journal identity.
@@ -1461,6 +1467,8 @@ the approval.
   The existing Chat/Coding mutation evidence records the closed `supported-markdown` projection
   even without a heading, alongside the actual converted-heading count; neither field contains
   description content. The existing public headings-only helper remains unchanged for its callers.
+  An untagged plain string that reads as Markdown only is serialized to native wiki by the same
+  projection before this check (#4173), and native strings remain unchanged.
   Backtick and tilde fences are Markdown syntax only: native descriptions and the native samples
   from which a template is proposed recognize matching `{code}` and `{noformat}` blocks instead.
   Markdown heading discovery ignores backtick/tilde fences and wiki code macros. Native wire

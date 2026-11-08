@@ -56,6 +56,8 @@ export interface JiraDraftStore {
   readonly get: (id: string, owner: string) => StagedJiraDraft | undefined;
   /** The same lookup without renewing the expiry: reading a draft is not use of it. */
   readonly peek: (id: string, owner: string) => StagedJiraDraft | undefined;
+  /** The owner's most recently used draft, without renewing it; none once every one expired. */
+  readonly latest: (owner: string) => StagedJiraDraft | undefined;
   readonly size: () => number;
 }
 
@@ -194,14 +196,15 @@ export function createJiraDraftStore(options: JiraDraftStoreOptions = {}): JiraD
   const maxDraftBytes = options.maxDraftBytes ?? JIRA_DRAFT_STAGE_BYTES_MAX;
   const perOwner = options.maxDraftsPerOwner ?? JIRA_DRAFT_OWNER_DRAFTS_MAX;
   const drafts: Drafts = new Map();
-  const sweep = (): void => {
+  /** The drafts still held: idle ones expired and the shared byte bound kept. */
+  const swept = (): Drafts => {
     const cutoff = now() - idleTtlMs;
     for (const [id, draft] of drafts) if (draft.lastUsedAt < cutoff) drafts.delete(id);
     trimBytes(drafts, maxTotalBytes);
+    return drafts;
   };
   const peek = (id: string, owner: string): StagedJiraDraft | undefined => {
-    sweep();
-    const draft = drafts.get(id);
+    const draft = swept().get(id);
     return draft?.owner === owner ? draft : undefined;
   };
   return {
@@ -233,6 +236,7 @@ export function createJiraDraftStore(options: JiraDraftStoreOptions = {}): JiraD
       return renewed;
     },
     peek,
+    latest: (owner): StagedJiraDraft | undefined => oldestFirst(swept(), owner).at(-1),
     size: () => drafts.size,
   };
 }

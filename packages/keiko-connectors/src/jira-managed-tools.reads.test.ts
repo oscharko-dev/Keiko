@@ -236,20 +236,27 @@ describe("source managed Jira read dispatch", () => {
     if (mode === "denied") f.beforeEffect.mockReturnValue(false);
     else f.controller.abort();
     expect(await f.run("jira.projects")).toEqual({
-      data: { outcome: "failed", reason: mode === "denied" ? "effect-denied" : "cancelled" }, isError: true,
+      data: { outcome: "failed", reason: mode === "denied" ? "effect-denied" : "cancelled" },
+      isError: true,
     });
     expect(f.http).not.toHaveBeenCalled();
   });
 });
 
-it.each([200, 401])("retains ordinary Jira issue HTTP%s after late cancellation", async (status) => {
-  const f = fixture(ISSUE);
-  f.http.mockImplementation(async () => { f.controller.abort(); return response(status === 200 ? ISSUE : { errorMessages: ["Native refusal"] }, status); });
-  const result = await f.run("jira.issue", { issueKey: "SYN-1" });
-  expect(result.data.outcome).toBe(status === 200 ? "succeeded" : "failed");
-  if (status === 401) expect(result.data.reason).toBe("auth-failed");
-  expect(f.http).toHaveBeenCalledTimes(1);
-});
+it.each([200, 401])(
+  "retains ordinary Jira issue HTTP%s after late cancellation",
+  async (status) => {
+    const f = fixture(ISSUE);
+    f.http.mockImplementation(async () => {
+      f.controller.abort();
+      return response(status === 200 ? ISSUE : { errorMessages: ["Native refusal"] }, status);
+    });
+    const result = await f.run("jira.issue", { issueKey: "SYN-1" });
+    expect(result.data.outcome).toBe(status === 200 ? "succeeded" : "failed");
+    if (status === 401) expect(result.data.reason).toBe("auth-failed");
+    expect(f.http).toHaveBeenCalledTimes(1);
+  },
+);
 
 it.each([
   ["jira.projects", { extra: true }],
@@ -486,7 +493,7 @@ it("advertises explicit Markdown provenance only for Data Center description inp
       markdownSerialization: "supported-markdown",
       inputSchema: {
         description:
-          "Native Jira wiki text is unchanged. Explicit Markdown supports headings, inline formatting, links, simple lists, tables, quotes and closed code blocks. Unsupported structures are refused; use native wiki text when needed.",
+          "Native Jira wiki text is unchanged. Markdown is converted to Jira wiki markup: headings, inline formatting, links, lists, tables and code blocks.",
         oneOf: [
           { type: "string", maxLength: 32768 },
           {

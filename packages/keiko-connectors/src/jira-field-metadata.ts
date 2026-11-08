@@ -434,9 +434,10 @@ function encodedDocumentStructure(value: string): boolean {
   const decoded = value.replaceAll(String.raw`\n`, "\n");
   return readJiraDescriptionSections(decoded).length > 0 || LIST_LINE.test(decoded);
 }
+/** The same projection the template check and the human approval read (#4173 AC2). */
 function markdownDescriptionValue(field: JiraFieldMetadata, value: unknown): ValueResult {
-  const markdown = readJiraMarkdownDescription(value);
-  if (markdown === undefined || !validFieldText(field, markdown)) return INVALID;
+  const source = typeof value === "string" ? value : readJiraMarkdownDescription(value);
+  if (source === undefined || !validFieldText(field, source)) return INVALID;
   const serialized = projectJiraDescriptionInput(value);
   if (serialized === undefined)
     return invalidWith(
@@ -457,7 +458,7 @@ function textValue(
   value: unknown,
   deployment: AtlassianConnectorDeployment,
 ): ValueResult {
-  if (deployment === "data-center" && field.id === "description" && typeof value !== "string")
+  if (deployment === "data-center" && field.id === "description")
     return markdownDescriptionValue(field, value);
   if (typeof value !== "string" || !validFieldText(field, value)) return INVALID;
   if (deployment !== "cloud" || !field.richText) return { ok: true, value };

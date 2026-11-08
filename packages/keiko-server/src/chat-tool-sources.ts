@@ -56,6 +56,9 @@ export interface ChatSourcesContext extends ToolConsumerContext {
   readonly retainDraftProgress?: JiraChatCatalogContext["retainDraftProgress"];
   readonly selectJiraOperations?: JiraChatCatalogContext["selectJiraOperations"];
   readonly jiraDiscoveryResultFits?: JiraChatCatalogContext["jiraDiscoveryResultFits"];
+  readonly reportBatchProgress?: JiraChatCatalogContext["reportBatchProgress"];
+  readonly remainingModelCalls?: JiraChatCatalogContext["remainingModelCalls"];
+  readonly citationSources?: JiraChatCatalogContext["citationSources"];
   readonly jira: JiraChatCatalogContext;
   readonly mcp: McpChatCatalogContext;
 }
@@ -105,6 +108,19 @@ export function createChatSourcesConsumerPort(
 }
 export const chatSourcesConsumerPort = createChatSourcesConsumerPort();
 
+const OPTIONAL_INVOCATION_KEYS = [
+  "meterModel",
+  "retainDraftProgress",
+  "selectJiraOperations",
+  "jiraDiscoveryResultFits",
+  "reportBatchProgress",
+  "remainingModelCalls",
+  "knowledgeReviewModelId",
+  "confirmModelOperation",
+  "citationSources",
+] as const;
+type OptionalInvocationKey = (typeof OPTIONAL_INVOCATION_KEYS)[number];
+
 function invocationFields(
   context: CatalogHandlerContext<ChatSourcesConsumer>,
 ): Pick<
@@ -120,18 +136,17 @@ function invocationFields(
   | "retainDraftProgress"
   | "selectJiraOperations"
   | "jiraDiscoveryResultFits"
+  | "reportBatchProgress"
+  | "remainingModelCalls"
+  | "citationSources"
 > {
+  const optional: Partial<Pick<CatalogHandlerContext<ChatSourcesConsumer>, OptionalInvocationKey>> =
+    {};
+  for (const key of OPTIONAL_INVOCATION_KEYS) {
+    if (context[key] !== undefined) Object.assign(optional, { [key]: context[key] });
+  }
   return {
-    ...(context.meterModel === undefined ? {} : { meterModel: context.meterModel }),
-    retainDraftProgress: context.retainDraftProgress,
-    selectJiraOperations: context.selectJiraOperations,
-    jiraDiscoveryResultFits: context.jiraDiscoveryResultFits,
-    ...(context.knowledgeReviewModelId === undefined
-      ? {}
-      : { knowledgeReviewModelId: context.knowledgeReviewModelId }),
-    ...(context.confirmModelOperation === undefined
-      ? {}
-      : { confirmModelOperation: context.confirmModelOperation }),
+    ...optional,
     invocationId: context.invocationId,
     signal: context.signal,
     beforeEffect: context.beforeEffect,

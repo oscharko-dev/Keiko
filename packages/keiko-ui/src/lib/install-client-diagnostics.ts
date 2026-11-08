@@ -281,6 +281,13 @@ function codingReportFields(
   };
 }
 
+// What a cited source did when the person opened it: the click and the frame drawn on its page.
+function citationReportFields(
+  meta: ClientDiagnosticMeta,
+): Pick<ClientDiagnosticIngestRequest, "citationActivation" | "citationHighlight"> {
+  return { citationActivation: meta.citationActivation, citationHighlight: meta.citationHighlight };
+}
+
 // Builds the wire body for one already-bounded diagnostic message. `clientTs` is stamped at send
 // time (not at the original `reportClientDiagnostic` call), which is close enough for an operator
 // diagnostic and avoids threading a timestamp through the sink's string-only contract.
@@ -319,7 +326,7 @@ function clientMessagePostBody(
     knowledgeCatalog: meta.knowledgeCatalog,
     answerCopy: meta.answerCopy,
     answerSpeech: meta.answerSpeech,
-    citationActivation: meta.citationActivation,
+    ...citationReportFields(meta),
     scopeNotice: meta.scopeNotice,
     evidenceInspection: meta.evidenceInspection,
     supportReportDelivery: meta.supportReportDelivery,
@@ -418,6 +425,7 @@ function routineSupportReportEvidence(meta: ClientDiagnosticMeta): boolean {
     meta.codingRunRestore !== undefined ||
     meta.codingWorkbenchInteraction !== undefined ||
     meta.citationActivation !== undefined ||
+    meta.citationHighlight !== undefined ||
     meta.scopeNotice !== undefined
   );
 }

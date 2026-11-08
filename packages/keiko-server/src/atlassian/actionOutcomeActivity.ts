@@ -155,9 +155,16 @@ export function recordAtlassianActionOutcome(
     );
     const tool = jiraToolForAction(record.actionType);
     if (record.provider === "jira" && tool !== undefined) {
-      recordJiraOperationActivity(sink, { correlationId: record.correlationId, level: OUTCOME_LEVEL[outcome] }, tool, {
-        stage: "action-outcome", outcome, reason: failureReason(record, outcome),
-      });
+      recordJiraOperationActivity(
+        sink,
+        { correlationId: record.correlationId, level: OUTCOME_LEVEL[outcome] },
+        tool,
+        {
+          stage: "action-outcome",
+          outcome,
+          reason: failureReason(record, outcome),
+        },
+      );
     }
   } catch (error) {
     recordActivityLogLoss("port-sink-failed");

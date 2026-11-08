@@ -537,10 +537,72 @@ export interface ChatToolExchange {
   readonly draftProgress?: Readonly<Record<string, unknown>> | undefined;
   /** Public request metadata only; values stay in the private credential vault. */
   readonly humanInput?: JiraHumanInputView | undefined;
+  /** Counted progress of a running Keiko-driven draft batch (#4173); counts only, never text. */
+  readonly batchProgress?: ChatToolBatchProgress | undefined;
   readonly approval?: ChatToolWriteApprovalView | undefined;
   /** Durable remote-effect knowledge is independent from transport cancellation or denial. */
   readonly mutationOutcome?: JiraMutationOutcome | undefined;
 }
+/** The phases of a Keiko-driven draft batch: grouping requirements, then drafting them in pages. */
+export const CHAT_TOOL_BATCH_PHASES = ["outlining", "drafting", "complete"] as const;
+export type ChatToolBatchPhase = (typeof CHAT_TOOL_BATCH_PHASES)[number];
+/** The largest count a batch reports; a requirements inventory holds at most 5000 units. */
+export const CHAT_TOOL_BATCH_COUNT_MAX = 5000;
+/**
+ * How far a draft batch has come: drafted issues of the planned issues and the requirements they
+ * cover. Only the tool that runs a batch carries it, and only while or after it ran.
+ */
+export interface ChatToolBatchProgress {
+  readonly phase: ChatToolBatchPhase;
+  readonly draftedCount: number;
+  readonly plannedCount: number;
+  readonly coveredRequirementCount: number;
+  readonly requirementCount: number;
+  readonly failedCount: number;
+}
+/** The model-facing name of the tool that runs a draft batch. */
+export const CHAT_TOOL_BATCH_TOOL_NAME = "jira_draft_batch";
+
+function isBatchCount(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= CHAT_TOOL_BATCH_COUNT_MAX
+  );
+}
+
+const BATCH_PROGRESS_KEYS = [
+  "phase",
+  "draftedCount",
+  "plannedCount",
+  "coveredRequirementCount",
+  "requirementCount",
+  "failedCount",
+] as const;
+
+function hasBatchProgressShape(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  return (
+    keys.length === BATCH_PROGRESS_KEYS.length &&
+    BATCH_PROGRESS_KEYS.every((key) => keys.includes(key))
+  );
+}
+
+/** A closed, self-consistent batch progress record. */
+export function isChatToolBatchProgress(value: unknown): value is ChatToolBatchProgress {
+  if (!hasBatchProgressShape(value)) return false;
+  if (!(CHAT_TOOL_BATCH_PHASES as readonly unknown[]).includes(value.phase)) return false;
+  const counts = BATCH_PROGRESS_KEYS.slice(1).map((key) => value[key]);
+  if (!counts.every(isBatchCount)) return false;
+  const progress = value as unknown as ChatToolBatchProgress;
+  return (
+    progress.draftedCount + progress.failedCount <= progress.plannedCount &&
+    progress.coveredRequirementCount <= progress.requirementCount
+  );
+}
+
 export interface ChatToolTranscript {
   readonly schemaVersion: 1;
   readonly exchanges: readonly ChatToolExchange[];
@@ -1263,14 +1325,24 @@ function isDesktopChatDraftProgress(name: unknown, progress: unknown): boolean {
   }));
   return parsed.ok && parsed.value;
 }
+function isDesktopChatBatchProgress(name: unknown, progress: unknown): boolean {
+  return (
+    progress === undefined ||
+    (name === CHAT_TOOL_BATCH_TOOL_NAME && isChatToolBatchProgress(progress))
+  );
+}
 function isDesktopChatStreamedExchange(exchange: unknown): boolean {
   return (
     isWireRecord(exchange) &&
-    exactKeys(exchange, ["call", "result", "mutationOutcome", "draftProgress"], "exchange")
-      .length === 0 &&
+    exactKeys(
+      exchange,
+      ["call", "result", "mutationOutcome", "draftProgress", "batchProgress"],
+      "exchange",
+    ).length === 0 &&
     isChatToolCallView(exchange.call) &&
     (exchange.result === undefined || isWireRecord(exchange.result)) &&
     isDesktopChatDraftProgress(exchange.call.name, exchange.draftProgress) &&
+    isDesktopChatBatchProgress(exchange.call.name, exchange.batchProgress) &&
     (exchange.mutationOutcome === undefined || typeof exchange.mutationOutcome === "string")
   );
 }
@@ -2094,7 +2166,8 @@ export type CitationRepairDisposition =
   | "rejected-uncited"
   | "failed"
   | "skipped-budget"
-  | "skipped-capability";
+  | "skipped-capability"
+  | "skipped-tool-action";
 
 export interface GroundedAnswerEvidenceDeclaration {
   readonly answerKind?: GroundedAnswerKind | undefined;

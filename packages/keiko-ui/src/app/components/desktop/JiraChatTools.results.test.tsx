@@ -73,6 +73,7 @@ it.each([
       else expect(screen.queryByText(notice)).toBeNull();
       expect(screen.getByText("Synthetic project")).toBeVisible();
       expect(screen.getByText("SYN", { exact: true })).toBeVisible();
+      expect(screen.queryByText(/"outcome"/u)).toBeNull();
       expect(document.querySelector("pre")).toBeNull();
       expect(screen.queryByRole("button", { name: /retry|erneut|next page/i })).toBeNull();
     } finally {
@@ -81,7 +82,7 @@ it.each([
   },
 );
 
-it("links historical results to their saved Jira instance with the same ticket key", () => {
+it("links each historical result to its own saved Jira instance, even with the same key", () => {
   const urls = [
     "https://10.1.2.3:8443/context/browse/SYN-1",
     "https://10.4.5.6:8443/context/browse/SYN-1",
@@ -120,6 +121,7 @@ it("links historical results to their saved Jira instance with the same ticket k
   );
   const links = screen.getAllByRole("link", { name: /SYN-1/u });
   expect(links.map((link) => link.getAttribute("href"))).toEqual(urls);
+  for (const link of links) expect(link).toHaveTextContent("SYN-1 Synthetic");
   for (const link of links) {
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
@@ -311,7 +313,7 @@ it("keeps known unconfirmed draft keys visible beside a timeout with no result d
   );
   expect(screen.getByText("Jira accepted the change; confirmation incomplete")).toBeVisible();
   expect(screen.queryByText("Jira change confirmed")).toBeNull();
-  expect(screen.getByText(/LAB-1/u)).toBeVisible();
+  expect(screen.getByRole("list", { name: "Jira issues" })).toHaveTextContent("LAB-1");
   expect(screen.getByText("Uncertain", { exact: true })).toBeVisible();
   expect(screen.queryByRole("button", { name: /retry/iu })).toBeNull();
   expect(draft.result).toMatchObject({ status: "timeout", data: null });
@@ -458,31 +460,43 @@ it.each([
   expect(document.querySelector("pre")).toBeNull();
 });
 
-it("keeps every returned issue available behind a readable bounded disclosure", async () => {
+it("keeps every returned project available behind a readable bounded disclosure", async () => {
+  const keys = ["PA", "PB", "PC", "PD", "PE", "PF", "PG"];
   render(
     <JiraChatTools
       transcript={{
         schemaVersion: 1,
         exchanges: [
-          resultExchange("jira_search", {
+          resultExchange("jira_projects", {
             outcome: "succeeded",
             total: 7,
             startAt: 0,
-            items: Array.from({ length: 7 }, (_, index) => ({
-              key: `SYN-${String(index + 1)}`,
-              summary: `Issue ${String(index + 1)}`,
-            })),
+            items: keys.map((key) => ({ key, name: `Project ${key}` })),
           }),
         ],
       }}
       turnState="completed"
     />,
   );
-  expect(screen.getByText("SYN-5", { exact: true })).toBeVisible();
-  expect(screen.getByText("SYN-7", { exact: true })).not.toBeVisible();
+  expect(screen.getByText("PE", { exact: true })).toBeVisible();
+  expect(screen.getByText("PG", { exact: true })).not.toBeVisible();
   await userEvent.setup().click(screen.getByText("Show 2 more results"));
-  expect(screen.getByText("SYN-7", { exact: true })).toBeVisible();
+  expect(screen.getByText("PG", { exact: true })).toBeVisible();
   expect(screen.queryByRole("button", { name: /retry|next page/iu })).toBeNull();
+});
+
+it("shows no card for a complete Jira read that has nothing to say beyond the progress", () => {
+  render(
+    <JiraChatTools
+      transcript={{
+        schemaVersion: 1,
+        exchanges: [resultExchange("jira_search", { outcome: "succeeded", items: [] })],
+      }}
+      turnState="completed"
+    />,
+  );
+  expect(screen.queryByText("Completed", { exact: true })).toBeNull();
+  expect(document.querySelector("pre, details")).toBeNull();
 });
 
 it("records live Jira result counts joined to the parent without private content", () => {
@@ -730,4 +744,158 @@ it("explains a refused Jira read without claiming that it completed", () => {
   ).toBeVisible();
   expect(screen.queryByText("Completed", { exact: true })).toBeNull();
   expect(screen.queryByRole("button", { name: /retry/iu })).toBeNull();
+});
+
+describe("Jira tool outcome for a business user (#4173)", () => {
+  function created(data: CatalogJsonObject): ChatToolExchange {
+    const original = exchange("succeeded");
+    if (original.result?.status !== "completed") throw new Error("Missing completed fixture");
+    return {
+      call: { id: "create-1", name: "jira_create", arguments: { projectKey: "KER" } },
+      result: { ...original.result, data },
+    };
+  }
+
+  it("names the created issue and links it to Jira instead of showing raw data", () => {
+    render(
+      <JiraChatTools
+        transcript={{
+          schemaVersion: 1,
+          exchanges: [
+            created({
+              outcome: "succeeded",
+              issueKey: "KER-3",
+              issueId: "10203",
+              browseUrl: "https://jira.example.test/browse/KER-3",
+            }),
+          ],
+        }}
+        turnState="completed"
+      />,
+    );
+    expect(screen.getByRole("link", { name: /KER-3/u })).toHaveAttribute(
+      "href",
+      "https://jira.example.test/browse/KER-3",
+    );
+    expect(screen.queryByText(/10203|"outcome"/u)).toBeNull();
+    expect(document.querySelector("pre, details")).toBeNull();
+  });
+
+  it("says in Jira's words which field it refused, and never links a non-web URL", () => {
+    render(
+      <JiraChatTools
+        transcript={{
+          schemaVersion: 1,
+          exchanges: [
+            created({
+              outcome: "rejected",
+              issueKey: "KER-4",
+              browseUrl: "javascript:alert(1)",
+              fieldErrors: [
+                { fieldId: "customfield_10104", fieldName: "Epic Name", message: "required" },
+              ],
+              messages: ["Nothing was changed."],
+              guidance: "internal instruction for the model",
+            }),
+          ],
+        }}
+        turnState="completed"
+      />,
+    );
+    const problems = screen.getByRole("list", { name: "What Jira said" });
+    expect(problems).toHaveTextContent("Epic Name: required");
+    expect(problems).toHaveTextContent("Nothing was changed.");
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(screen.getByText("KER-4")).toBeVisible();
+    expect(screen.queryByText(/internal instruction/u)).toBeNull();
+  });
+
+  it("names the project lead's broken template rules as sentences, never as rule ids", () => {
+    render(
+      <JiraChatTools
+        transcript={{
+          schemaVersion: 1,
+          exchanges: [
+            created({
+              outcome: "rejected",
+              reason: "field-validation",
+              violations: [
+                { ruleId: "field-missing", subject: "Epic Name", template: "KER/Epic" },
+                { ruleId: "section-missing", subject: "Ziel", template: "KER/Epic" },
+                { ruleId: "summary-pattern", subject: "^[A-Z].*$", template: "KER/Epic" },
+                { ruleId: "not-a-rule", subject: "ignored", template: "KER/Epic" },
+              ],
+            }),
+            {
+              ...created({
+                outcome: "rejected",
+                items: [
+                  {
+                    ref: "epic",
+                    state: "failed",
+                    violations: [
+                      { ruleId: "field-missing", subject: "Epic Name", template: "KER/Epic" },
+                      { ruleId: "parent-missing", subject: "Epic Link", template: "KER/Task" },
+                    ],
+                  },
+                ],
+              }),
+              call: { id: "draft", name: "jira_draft", arguments: {} },
+            },
+          ],
+        }}
+        turnState="completed"
+      />,
+    );
+    const [create, draft] = screen.getAllByRole("list", { name: "Template rules not met" });
+    expect(create).toHaveTextContent("The field \u201cEpic Name\u201d is required.");
+    expect(create).toHaveTextContent("The description lacks the section \u201cZiel\u201d.");
+    expect(create).toHaveTextContent("The summary does not follow the required pattern.");
+    expect(create).not.toHaveTextContent(/ignored|\^\[A-Z\]|field-missing/u);
+    expect(draft?.querySelectorAll("li")).toHaveLength(2);
+    expect(draft).toHaveTextContent("The issue needs a parent (Epic Link).");
+  });
+
+  it("explains a change Keiko's own field check stopped before Jira saw it", () => {
+    render(
+      <JiraChatTools
+        transcript={{
+          schemaVersion: 1,
+          exchanges: [
+            created({
+              outcome: "rejected",
+              reason: "field-validation",
+              fieldId: "customfield_10103",
+              validation: "required-field",
+            }),
+          ],
+        }}
+        turnState="completed"
+      />,
+    );
+    expect(screen.getByText("A required Jira field was missing.")).toBeVisible();
+    expect(screen.queryByText(/customfield_10103|required-field/u)).toBeNull();
+  });
+
+  it("shows at most five read issues and counts the rest", () => {
+    const items = Array.from({ length: 7 }, (_, index) => ({ key: `KER-${String(index + 1)}` }));
+    render(
+      <JiraChatTools
+        transcript={{
+          schemaVersion: 1,
+          exchanges: [
+            {
+              ...created({ outcome: "succeeded", items }),
+              call: { id: "s", name: "jira_search", arguments: {} },
+            },
+          ],
+        }}
+        turnState="completed"
+      />,
+    );
+    const list = screen.getByRole("list", { name: "Jira issues" });
+    expect(list).toHaveTextContent("KER-5");
+    expect(list).not.toHaveTextContent("KER-6");
+    expect(list).toHaveTextContent("and 2 more");
+  });
 });

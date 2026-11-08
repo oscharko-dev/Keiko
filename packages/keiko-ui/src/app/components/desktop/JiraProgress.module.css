@@ -1,0 +1,88 @@
+/* Counted progress of a long read or draft (#4173): blue while it runs, green when complete. */
+.cmpProgress {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+/* A native <progress>: the browser supplies the progressbar role and value; the reset below
+   keeps the track and fill identical to the former hand-drawn bar. */
+.cmpTrack {
+  appearance: none;
+  display: block;
+  inline-size: 100%;
+  block-size: 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--border-subtle);
+  color: var(--feedback-info);
+  overflow: hidden;
+}
+.cmpTrack::-webkit-progress-bar {
+  background: transparent;
+}
+.cmpTrack::-webkit-progress-value {
+  background: currentcolor;
+  border-radius: var(--radius-sm);
+  transition: inline-size 200ms ease-out;
+}
+.cmpTrack::-moz-progress-bar {
+  background: currentcolor;
+  border-radius: var(--radius-sm);
+}
+.cmpProgress[data-tone="success"] .cmpTrack {
+  color: var(--feedback-success);
+}
+.cmpProgress[data-tone="warning"] .cmpTrack {
+  color: var(--feedback-warning);
+}
+@media (prefers-reduced-motion: reduce) {
+  .cmpTrack::-webkit-progress-value {
+    transition: none;
+  }
+}
+.cmpProgress[data-stopped="true"] .cmpTrack::-webkit-progress-value {
+  transition: none;
+}
+@media (forced-colors: active) {
+  .cmpTrack {
+    border: 1px solid CanvasText;
+    background: Canvas;
+    color: Highlight;
+    forced-color-adjust: none;
+  }
+  .cmpProgress[data-indeterminate="true"] .cmpTrack {
+    animation: none;
+    background: Highlight;
+  }
+}
+.cmpLabel {
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.cmpRegion {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+/* Work without a countable end yet: the design system's shimmer, still when motion is reduced. */
+.cmpProgress[data-indeterminate="true"] .cmpTrack {
+  background: linear-gradient(
+    90deg,
+    var(--skeleton-base),
+    var(--skeleton-highlight),
+    var(--skeleton-base)
+  );
+  background-size: 200% 100%;
+  animation: cmp-working 1.3s linear infinite;
+}
+@keyframes cmp-working {
+  to {
+    background-position: -200% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cmpProgress[data-indeterminate="true"] .cmpTrack {
+    animation: none;
+    background: color-mix(in srgb, var(--feedback-info) 40%, var(--border-subtle));
+  }
+}
