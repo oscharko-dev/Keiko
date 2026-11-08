@@ -383,7 +383,7 @@ export async function prepareModelFreeChat(context, actor = "api", administratio
 }
 
 async function bindVerifiedChat(origin, cookie, chat, credential, toolMode, administration) {
-  const bound = await jsonRequest(
+  let bound = await jsonRequest(
     origin,
     cookie,
     "chat-bind",
@@ -391,12 +391,26 @@ async function bindVerifiedChat(origin, cookie, chat, credential, toolMode, admi
     {
       jiraPodId: credential.livePod.podId,
       ...(toolMode === undefined ? {} : { toolMode }),
-      ...(administration ? { jiraAdministrationEnabled: true } : {}),
       expectedGroundingScopeIdentity: chat.groundingScopeIdentity,
     },
     "PATCH",
   );
   assert.equal(bound.chat.jiraPodBinding.podId, credential.livePod.podId);
+  if (administration) {
+    bound = await jsonRequest(
+      origin,
+      cookie,
+      "chat-administration-enable",
+      `/api/chats?id=${encodeURIComponent(chat.id)}`,
+      {
+        jiraAdministrationEnabled: true,
+        expectedGroundingScopeIdentity: bound.chat.groundingScopeIdentity,
+      },
+      "PATCH",
+    );
+    assert.equal(bound.chat.jiraAdministrationEnabled, true);
+    assert.equal(bound.chat.jiraPodBinding.podId, credential.livePod.podId);
+  }
   if (toolMode !== undefined) assert.equal(bound.chat.toolMode, toolMode);
   console.log(JSON.stringify({ operation: "jira-chat-live-binding", verified: true }));
   return bound.chat;

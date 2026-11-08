@@ -58,7 +58,21 @@ export async function labDocker(args) {
   return result.stdout.trim();
 }
 
+/** Read-only admission: a foreign Jira is never stopped or shared by this session. */
+export async function requireExclusiveLab(session) {
+  const running = await labDocker([
+    "ps",
+    "--filter",
+    "label=com.docker.compose.service=jira",
+    "--format",
+    '{{.Label "com.docker.compose.project"}}',
+  ]);
+  if (running.split("\n").some((project) => project.length > 0 && project !== session.project))
+    throw new TypeError("Another Jira laboratory is running; wait for an exclusive window");
+}
+
 export async function inspectServices(session) {
+  await requireExclusiveLab(session);
   const ids = (
     await labDocker(["ps", "-q", "--filter", `label=com.docker.compose.project=${session.project}`])
   ).split("\n");

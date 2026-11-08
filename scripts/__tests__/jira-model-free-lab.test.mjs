@@ -48,7 +48,7 @@ it("uses the paired product server with an empty provider catalog and no model p
   }
 });
 
-function syntheticNativeTransport(request) {
+function syntheticNativeTransport(request, actor = "api") {
   const path = new URL(request.url).pathname;
   const bodies = {
     "/rest/api/2/serverInfo": {
@@ -56,7 +56,11 @@ function syntheticNativeTransport(request) {
       versionNumbers: [10, 3, 26],
       deploymentType: "Data Center",
     },
-    "/rest/api/2/myself": { name: "keiko-api", key: "JIRAUSER10000", active: true },
+    "/rest/api/2/myself": {
+      name: `keiko-${actor}`,
+      key: actor === "admin" ? "JIRAUSER10001" : "JIRAUSER10000",
+      active: true,
+    },
     "/rest/api/2/project": [{ id: "10000", key: "KEIKO", name: "Synthetic project" }],
   };
   expect(Object.hasOwn(bodies, path)).toBe(true);
@@ -71,54 +75,63 @@ function syntheticNativeTransport(request) {
   });
 }
 
-it("dispatches successive model-free turns through the real provider, authority and budget receipt", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "keiko-model-free-dispatch-"));
-  const session = {
-    ...DEFAULT_LAB_CONNECTION,
-    directory,
-    project: "keiko-jira-4081-unit",
-    schemaVersion: 1,
-    syntheticOnly: true,
-  };
-  mkdirSync(join(directory, "secrets"), { mode: 0o700 });
-  writeFileSync(join(directory, "secrets", "api-token"), "synthetic-unit-token", { mode: 0o600 });
-  try {
-    await withModelFreeJira({
-      session,
-      decorateAtlassianHttp: () => () => syntheticNativeTransport,
-      run: async (context) => {
-        const chat = await prepareModelFreeChat(context, "api");
-        for (let call = 0; call < 2; call += 1) {
-          const result = await dispatchQualification(
-            context,
-            chat,
-            { tool: "jira.projects", identity: "GET /rest/api/2/project" },
-            {},
-          );
-          expect(result.dispatch.kind).toBe("settled");
-          expect(result.dispatch.result).toMatchObject({
-            status: "completed",
-            data: {
-              outcome: "succeeded",
-              items: [{ id: "10000", key: "KEIKO", name: "Synthetic project" }],
-            },
-          });
-          expect(result.dispatch.receipt).toMatchObject({
-            effectStarted: true,
-            budgetDisposition: "committed",
-          });
-          expect(result.mutation).toBe(false);
-          expect(result.journal).toBeUndefined();
-        }
-        expect(
-          context.deps.store
-            .listMessages(chat.id)
-            .filter((message) => message.role === "user")
-            .map((message) => message.turnState),
-        ).toEqual(["completed", "completed"]);
-      },
+it.each([
+  { actor: "api", administration: false },
+  { actor: "admin", administration: true },
+])(
+  "dispatches successive model-free $actor turns through the real provider, authority and budget receipt",
+  async ({ actor, administration }) => {
+    const directory = mkdtempSync(join(tmpdir(), "keiko-model-free-dispatch-"));
+    const session = {
+      ...DEFAULT_LAB_CONNECTION,
+      directory,
+      project: "keiko-jira-4081-unit",
+      schemaVersion: 1,
+      syntheticOnly: true,
+    };
+    mkdirSync(join(directory, "secrets"), { mode: 0o700 });
+    writeFileSync(join(directory, "secrets", `${actor}-token`), "synthetic-unit-token", {
+      mode: 0o600,
     });
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
+    try {
+      await withModelFreeJira({
+        session,
+        decorateAtlassianHttp: () => () => (request) => syntheticNativeTransport(request, actor),
+        run: async (context) => {
+          const chat = await prepareModelFreeChat(context, actor, administration);
+          expect(chat.jiraAdministrationEnabled === true).toBe(administration);
+          for (let call = 0; call < 2; call += 1) {
+            const result = await dispatchQualification(
+              context,
+              chat,
+              { tool: "jira.projects", identity: "GET /rest/api/2/project" },
+              {},
+            );
+            expect(result.dispatch.kind).toBe("settled");
+            expect(result.dispatch.result).toMatchObject({
+              status: "completed",
+              data: {
+                outcome: "succeeded",
+                items: [{ id: "10000", key: "KEIKO", name: "Synthetic project" }],
+              },
+            });
+            expect(result.dispatch.receipt).toMatchObject({
+              effectStarted: true,
+              budgetDisposition: "committed",
+            });
+            expect(result.mutation).toBe(false);
+            expect(result.journal).toBeUndefined();
+          }
+          expect(
+            context.deps.store
+              .listMessages(chat.id)
+              .filter((message) => message.role === "user")
+              .map((message) => message.turnState),
+          ).toEqual(["completed", "completed"]);
+        },
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+);

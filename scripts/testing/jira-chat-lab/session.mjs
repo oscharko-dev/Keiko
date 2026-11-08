@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { initializeLabTls } from "./tls-front.mjs";
 import { DEFAULT_LAB_CONNECTION, loadSession, normalizeLabSession } from "./lab-client.mjs";
+import { requireExclusiveLab } from "./lab-services.mjs";
 
 const [
   action,
@@ -44,16 +45,18 @@ if (action === "init") {
       mode: 0o600,
       flag: "wx",
     });
-  writeFileSync(
-    join(directory, "session.json"),
-    JSON.stringify(manifest) + "\n",
-    { mode: 0o600, flag: "wx" },
-  );
+  writeFileSync(join(directory, "session.json"), JSON.stringify(manifest) + "\n", {
+    mode: 0o600,
+    flag: "wx",
+  });
   console.log(JSON.stringify({ operation: "jira-lab-session", initialized: true }));
 } else {
   const session = loadSession(directory);
   const command = action === "start" ? ["up", "-d"] : [action === "status" ? "ps" : "stop"];
-  if (action === "start") initializeLabTls(join(directory, "secrets", "tls"));
+  if (action === "start") {
+    await requireExclusiveLab(session);
+    initializeLabTls(join(directory, "secrets", "tls"));
+  }
   execFileSync(
     "docker",
     [

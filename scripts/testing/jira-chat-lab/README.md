@@ -228,6 +228,11 @@ binding. Old manifests retain the original defaults without being rewritten;
 partial or malformed pins are refused. Start, stop and status use the saved
 manifest and accept no port/image overrides.
 
+Start and runtime service inspection refuse a foreign running Compose Jira
+service before proceeding. Docker inspection failures also refuse the start.
+Stopping the owned session remains available. This check supplements the
+coordinated exclusive window; it never stops another operator's containers.
+
 Use a new private directory, separate Compose project/volumes and unused distinct
 HTTP/HTTPS ports for each release. Never reuse an existing Jira data volume for
 another release or stop another session to free its port. The TLS listener and its
