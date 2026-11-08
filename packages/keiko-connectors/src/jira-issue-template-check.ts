@@ -411,6 +411,11 @@ export function jiraTemplateViolationGuidance(
   violations: readonly JiraTemplateViolation[],
 ): string | undefined {
   if (violations.length === 0) return undefined;
+  if (violations.some((violation) => violation.ruleId === "template-unreadable")) {
+    return "Nothing was changed: the formal rule or its current Jira evidence could not be read completely and bound to this issue. " +
+      "Refresh the named native fields and project/issue-type metadata, or repair an unreadable formal skill, then check the corrected request again. " +
+      "Missing evidence does not establish a rule violation or permission to write.";
+  }
   const sections = violations.some((violation) => SECTION_RULES.has(violation.ruleId))
     ? " A section is a line of its own, h2. Title, with its text below; subject is its title."
     : "";

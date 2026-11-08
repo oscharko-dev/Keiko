@@ -441,7 +441,7 @@ describe("the dry run before approval", () => {
     });
     const http = vi.fn<AtlassianHttpBodyPort>((request) => {
       const path = new URL(request.url).pathname;
-      if (path.endsWith("/project/10000")) return Promise.resolve(response({ key: "SYN" }));
+      if (path.endsWith("/project/10000")) return Promise.resolve(response({ id: "10000", key: "SYN" }));
       if (path.endsWith("/issuetype/10001"))
         return Promise.resolve(response({ id: "10001", name: "Story" }));
       if (path.endsWith("/search")) {
@@ -995,7 +995,7 @@ describe("a violating write never reaches Jira under Full access (#4177)", () =>
     const http = vi.fn<AtlassianHttpBodyPort>((request) => {
       requests.push(request.method);
       const path = new URL(request.url).pathname;
-      if (path.endsWith("/project/10000")) return Promise.resolve(response({ key: "SYN" }));
+      if (path.endsWith("/project/10000")) return Promise.resolve(response({ id: "10000", key: "SYN" }));
       if (path.endsWith("/issuetype/10001"))
         return Promise.resolve(response({ id: "10001", name: "Story" }));
       if (path.includes("createmeta")) {

@@ -69,7 +69,7 @@ interface ReadRoute {
 }
 function readRoutes(remote: Remote): readonly ReadRoute[] {
   return [
-    { suffix: "/project/10000", body: { key: "SYN" } },
+    { suffix: "/project/10000", body: { id: "10000", key: "SYN" } },
     { suffix: "/issuetype/10001", body: { id: "10001", name: "Story" } },
     {
       includes: "createmeta",
@@ -455,6 +455,58 @@ describe("transition", () => {
 });
 
 describe("dry run before approval", () => {
+  it("refuses a mismatched native type both before approval and before create", async () => {
+    const f = fixture(SET(template(ALL_POINTS)));
+    const native = f.http.getMockImplementation();
+    if (native === undefined) throw new TypeError("Missing native fixture");
+    f.http.mockImplementation((request) =>
+      new URL(request.url).pathname.endsWith("/issuetype/10001")
+        ? Promise.resolve(response({ id: "10002", name: "Bug" }))
+        : native(request),
+    );
+    for (const operation of [f.check, f.run]) {
+      expect(await operation("jira.create", CREATE)).toMatchObject({
+        ok: false, reason: "malformed-payload", violations: [{ ruleId: "template-unreadable" }],
+      });
+    }
+    expect(f.writes()).toEqual([]);
+    f.http.mockImplementation(native);
+    expect(await f.check("jira.create", CREATE)).toEqual({ ok: true });
+    await f.run("jira.create", CREATE);
+    expect(f.writes()).toEqual(["POST /context/rest/api/2/issue"]);
+  });
+
+  it.each(["jira.edit", "jira.transition"] as const)("keeps %s unsent when the complete field read changes type", async (operation) => {
+    const f = fixture(SET(template([...ALL_POINTS, "requiredFields: [Story Points]"])), {
+      fieldCatalog: true,
+      issue: {
+        project: { key: "SYN" }, issuetype: { id: "10001", name: "Story" },
+        summary: "Native task", description: FULL_DESCRIPTION, labels: [], customfield_10016: 5,
+        status: { id: "1", name: "To Do" },
+      },
+    });
+    const native = f.http.getMockImplementation();
+    if (native === undefined) throw new TypeError("Missing native fixture");
+    f.http.mockImplementation((request) => {
+      const url = new URL(request.url);
+      return url.pathname.endsWith("/issue/SYN-1") && url.searchParams.get("fields")?.includes("customfield_10016")
+        ? Promise.resolve(response({ id: "10001", key: "SYN-1", fields: {
+            project: { key: "SYN" }, issuetype: { id: "10002", name: "Bug" }, customfield_10016: 5,
+          } }))
+        : native(request);
+    });
+    const args: CatalogJsonObject = operation === "jira.edit"
+      ? { issueKey: "SYN-1", fields: { summary: "Corrected native work" } }
+      : { issueKey: "SYN-1", transitionId: "31" };
+    expect(await f.check(operation, args)).toMatchObject({ ok: false, reason: "conflict", violations: [{ ruleId: "template-unreadable" }] });
+    expect(await f.run(operation, args)).toMatchObject({ ok: false, reason: "conflict" });
+    expect(f.writes()).toEqual([]);
+    f.http.mockImplementation(native);
+    expect(await f.check(operation, args)).toEqual({ ok: true });
+    await f.run(operation, args);
+    expect(f.writes()).toHaveLength(1);
+  });
+
   it("reports violations and performs no write", async () => {
     const f = fixture(SET(template(ALL_POINTS)));
     expect(

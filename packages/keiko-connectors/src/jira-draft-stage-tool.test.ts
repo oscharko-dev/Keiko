@@ -60,7 +60,7 @@ function connection(
 ): Parameters<typeof executeJiraDraftStageTool>[2] {
   const http = vi.fn<AtlassianHttpBodyPort>((request) => {
     const path = new URL(request.url).pathname;
-    if (path.endsWith("/project/10000")) return Promise.resolve(response({ key: "SYN" }));
+    if (path.endsWith("/project/10000")) return Promise.resolve(response({ id: "10000", key: "SYN" }));
     if (path.endsWith("/issuetype/10001"))
       return Promise.resolve(response({ id: "10001", name: "Story" }));
     if (path.includes("createmeta"))

@@ -8,6 +8,7 @@ import {
   checkJiraIssueTemplates,
   jiraTemplateValuePresent,
   jiraTemplateValueText,
+  jiraTemplateViolationGuidance,
   matchingJiraIssueTemplates,
   resolveJiraTemplateFieldIds,
   validateJiraIssueTemplateAgainstInstance,
@@ -15,6 +16,22 @@ import {
   type JiraTemplateSubject,
 } from "./jira-issue-template-check.js";
 import { deriveJiraTemplateSections } from "./jira-issue-template-instance.js";
+
+describe("formal admission guidance", () => {
+  it("asks for complete evidence rather than alleging a rule violation when native data is unreadable", () => {
+    const guidance = jiraTemplateViolationGuidance([
+      { ruleId: "template-unreadable", subject: "labels", template: "SYN/Task" },
+    ]);
+    expect(guidance).toContain("Refresh the named native fields");
+    expect(guidance).toContain("Missing evidence does not establish a rule violation");
+    expect(guidance).not.toContain("this breaks the issue template");
+  });
+  it("keeps correctable known violations on the existing payload correction path", () => {
+    expect(jiraTemplateViolationGuidance([
+      { ruleId: "field-missing", subject: "Story Points", template: "SYN/Task" },
+    ])).toContain("Correct what violations name");
+  });
+});
 
 describe("sections sampled from native Jira descriptions", () => {
   it("does not invent Markdown headings from native lists, underlines or fence text", () => {
