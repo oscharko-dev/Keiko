@@ -18,15 +18,8 @@ export type JiraLinkMutationAttempt = LinkFailure | { readonly ok: true; readonl
 export type LinkObservation<T> = LinkFailure | { readonly ok: true; readonly value: T };
 export interface LinkIssue { readonly id: string; readonly key: string; readonly fields: Readonly<Record<string, unknown>> }
 export const LINK_MALFORMED: LinkFailure = { ok: false, reason: "malformed-payload" };
-export function linkInvalid(message: string): LinkFailure {
-  return { ok: false, reason: "field-validation", detail: { validation: "invalid-field", messages: [message] } };
-}
-export function linkConflict(message: string, receipt?: JiraLinkMutationReceipt): LinkFailure {
-  return { ok: false, reason: "conflict", detail: { messages: [message] }, ...(receipt === undefined ? {} : { receipt }) };
-}
-export function linkUnchanged(message: string, receipt: JiraLinkMutationReceipt): LinkFailure {
-  return { ok: false, reason: "conflict", detail: { unchanged: true, messages: [message] }, receipt };
-}
+export { jiraFieldValidationFailure as linkInvalid, jiraConflictFailure as linkConflict,
+  jiraUnchangedFailure as linkUnchanged } from "./jira-mutation-failure.js";
 export function linkActorInput(args: CatalogJsonObject, allowed: ReadonlySet<string>): args is CatalogJsonObject & { readonly expectedActorKey: string } {
   return savedExactKeys(args, allowed) && savedText(args.expectedActorKey, 255);
 }

@@ -1512,8 +1512,15 @@ function systemAdministrationMutation(
   return undefined;
 }
 function avatarPortsForMutation(connection: JiraManagedConnection, request: JiraMutationRequest, check: boolean): Parameters<typeof executeJiraAvatarMutation>[2] {
-  const source = connection.avatars?.sourceFor?.(check);
-  return { request, ...connection.avatars, ...(source === undefined ? {} : { source }) };
+  const { inspectImage, sourceFor, withSession, legacyTemporaryRelease } = connection.avatars ?? {};
+  const source = sourceFor?.(check);
+  return {
+    request,
+    ...(inspectImage === undefined ? {} : { inspectImage }),
+    ...(withSession === undefined ? {} : { withSession }),
+    ...(legacyTemporaryRelease === undefined ? {} : { legacyTemporaryRelease }),
+    ...(source === undefined ? {} : { source }),
+  };
 }
 function resourceAndIdentityMutation(
   operation: JiraMutationOperation, args: CatalogJsonObject, request: JiraMutationRequest,
@@ -1674,12 +1681,13 @@ function isNativeLifecycleMutation(operation: JiraMutationOperation): boolean {
     .some((accepts) => accepts(operation));
 }
 function isReviewedConfigurationMutation(operation: JiraMutationOperation): boolean {
-  return [isJiraEntityPropertyMutation, isJiraScreenTabMutation, isJiraScreenConfigurationMutation,
+  return operation === "jira.create-reciprocal-remote-link" ||
+    [isJiraEntityPropertyMutation, isJiraScreenTabMutation, isJiraScreenConfigurationMutation,
     isJiraBoardConfigurationMutation, isJiraSprintLifecycleMutation, isJiraAgilePlanningMutation,
     isJiraMonitoringMutation, isJiraPermissionSchemeMutation, isJiraRoleMutation,
     isJiraOptionSchemeMutation, isJiraWorkflowSchemeMutation, isJiraInstanceSettingMutation,
     isJiraAnonymizationUnlock, isJiraAvatarMutation, isJiraIdentityMutation, isJiraPrivateAccountMutation, isJiraIssueLifecycleMutation,
-    isJiraProjectLifecycleMutation, isJiraBulkCreate, (name) => name === "jira.create-reciprocal-remote-link",
+    isJiraProjectLifecycleMutation, isJiraBulkCreate,
     isJiraEmailTemplateMutation, isJiraDirectoryAccessMutation, isJiraMaintenanceMutation,
     isJiraSchemaMutation, isJiraGroupMutation, isJiraIssueActionMutation].some((accepts) => accepts(operation));
 }

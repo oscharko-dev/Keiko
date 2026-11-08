@@ -5,7 +5,7 @@ it("composes every canonical read family exactly once without changing its deliv
   const owned = Object.values(JIRA_READ_TOOL_FAMILIES).flat();
   expect(JIRA_MANAGED_READ_TOOLS).toEqual(owned);
   expect(new Set(owned).size).toBe(owned.length);
-  expect(owned).toHaveLength(188);
+  expect(owned).toHaveLength(218);
   for (const tool of owned) expect(JIRA_MANAGED_ACTION_TYPES[tool]).toBe(tool);
 });
 it("prevents shared consumers from changing canonical read identities at runtime", () => {
