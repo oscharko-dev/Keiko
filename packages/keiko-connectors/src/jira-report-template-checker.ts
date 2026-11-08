@@ -179,6 +179,10 @@ export function createJiraReportTemplateChecker(
       if (set.unreadable > 0) return "unavailable";
       const templates = set.templates.filter(definesStructure).map(judgedOnEdit);
       if (templates.length === 0) return "none";
+      // This synchronous checker has no independently bound native parent-type facts.
+      // Unknown evidence is unavailable compliance, never a counted template deviation.
+      if (templates.some((template) => template.parent.issueTypes !== undefined))
+        return "unavailable";
       const catalog = catalogOf(instance);
       return instance === undefined && unresolved(templates, catalog)
         ? "unavailable"

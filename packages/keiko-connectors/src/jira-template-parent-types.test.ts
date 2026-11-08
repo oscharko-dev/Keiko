@@ -99,9 +99,10 @@ describe("native parent issue-type admission", () => {
     expect(checkJiraIssueTemplate(template, { operation: "create", projectKey: "SYN", issueType: { name: "Sub-task" }, fields }, [{ id: "parent", name: "Parent" }]))
       .toMatchObject([{ ruleId: "template-unreadable" }]);
     const checker = createJiraReportTemplateChecker(() => ({ templates: [template], unreadable: 0 })).bind([]);
-    if (typeof checker === "string") throw new TypeError("Expected the existing report checker");
-    expect(checker.check({ key: "SYN-1", projectKey: "SYN", issueTypeId: "10003", typeName: "Sub-task", category: "new", fields }))
-      .toMatchObject([{ ruleId: "template-unreadable" }]);
+    expect(checker).toBe("unavailable");
+    const legacy = { ...template, parent: { field: "parent" } };
+    expect(createJiraReportTemplateChecker(() => ({ templates: [legacy], unreadable: 0 })).bind([]))
+      .not.toBe("unavailable");
   });
   it("includes allowed parent types in existing type-migration impact admission", async () => {
     expect(await gateJiraSchemaRuleImpact({ request: fixture(), source: () => ({ templates: [rule()], unreadable: 0 }),
