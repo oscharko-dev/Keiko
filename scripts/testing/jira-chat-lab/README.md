@@ -1062,3 +1062,30 @@ and the requirements scorecard with a model. Compare the new scorecard with the 
 `trend.tsv`; a changed REST schema, permission refusal status (the content seed records Jira's
 400 for a denied write) or field schema shows up there first, and the oracles that name such a
 detail are the lab code to adjust. Product code never gains a version-specific branch for it.
+
+## Reusable limit-run blocks
+
+The orchestrator imports these six async exports directly:
+
+- `installTemplates(ctx)` from `templates.mjs`.
+- `runRuleProbes(ctx, { modes })` from `browser-rules-knowledge-journey.mjs`.
+- `runProjectSetup(ctx, { deniedActor: true })` and
+  `runSprintBulk(ctx, { size: 300, batch: 50 })` from `browser-project-agile-journey.mjs`.
+- `assertCardsReadable(ctx, { reload: true })` and `setUiLanguage(ctx, "de" | "en")`
+  from `browser-a11y.mjs`.
+
+All blocks use the runtime `ctx.projectKey`, the orchestrator's existing Chats and
+`ctx.turn(chat, prompt, extra)`. State is stored only through `ctx.intent.record`.
+Project setup requires the separate verified restricted `ctx.deniedChat`; its
+absence returns `unverified` with `denied-chat-unavailable`. No block creates or
+rebinds a Chat or persists a PAT value.
+
+Sprint bulk selects 200–300 existing unfinished backlog Tasks, records their exact
+identities and moves them in batches of at most 50. The native oracle compares
+more than three membership pages, both full-size lifecycle refusals, five Done
+Tasks and the remaining backlog after completion. It creates no issues: 200 Tasks
+require 12 writes, 300 require 14. Unconfirmed receipts remain `unverified`.
+Card checks use the ordinary Settings language control, reject raw JSON and
+generic result rows, require zero serious/critical axe findings and compare keys,
+links, history and native state across reload without replay. Hermetic tests are
+not live Jira/Keiko/model acceptance; the integrator owns that coordinated run.
