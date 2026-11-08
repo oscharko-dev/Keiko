@@ -94,8 +94,15 @@ const RECORD_KEYS = new Set([
 function context(value: unknown): JiraHumanInputContext | undefined {
   const raw = asRecord(value);
   if (raw === undefined || !savedName(raw.callId)) return undefined;
+  if (raw.kind === "chat") return chatContext(raw, raw.callId);
+  if (raw.kind === "coding") return codingContext(raw, raw.callId);
+  return undefined;
+}
+function chatContext(
+  raw: Readonly<Record<string, unknown>>,
+  callId: string,
+): JiraHumanInputContext | undefined {
   if (
-    raw.kind === "chat" &&
     savedExactKeys(raw, CHAT_KEYS) &&
     savedName(raw.chatId) &&
     savedName(raw.messageId) &&
@@ -106,18 +113,19 @@ function context(value: unknown): JiraHumanInputContext | undefined {
       kind: "chat",
       chatId: raw.chatId,
       messageId: raw.messageId,
-      callId: raw.callId,
+      callId,
       podId: raw.podId,
       bindingGeneration: raw.bindingGeneration,
     };
-  if (
-    raw.kind === "coding" &&
-    savedExactKeys(raw, CODING_KEYS) &&
-    savedName(raw.taskId) &&
-    savedName(raw.runId)
-  )
-    return { kind: "coding", taskId: raw.taskId, runId: raw.runId, callId: raw.callId };
   return undefined;
+}
+function codingContext(
+  raw: Readonly<Record<string, unknown>>,
+  callId: string,
+): JiraHumanInputContext | undefined {
+  return savedExactKeys(raw, CODING_KEYS) && savedName(raw.taskId) && savedName(raw.runId)
+    ? { kind: "coding", taskId: raw.taskId, runId: raw.runId, callId }
+    : undefined;
 }
 function generation(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
@@ -134,23 +142,44 @@ export function copyJiraInputAuthority(
     ? Object.freeze({ runId: raw.runId, envelopeDigest: raw.envelopeDigest })
     : undefined;
 }
-export function copyHumanInputBinding(value: unknown): JiraHumanInputBinding | undefined {
-  const raw = asRecord(value);
-  if (raw === undefined || !savedExactKeys(raw, BINDING_KEYS)) return undefined;
-  const selected = context(raw.context);
-  const authority = copyJiraInputAuthority(raw.authority);
-  const purpose = typeof raw.operation === "string" ? humanInputPurpose(raw.operation) : undefined;
+function digestValue(value: unknown): value is string {
+  return typeof value === "string" && DIGEST.test(value);
+}
+type CredentialBindingFields = Pick<
+  JiraHumanInputBinding,
+  | "authRef"
+  | "principalDigest"
+  | "argumentsDigest"
+  | "authenticationGeneration"
+  | "verificationRevision"
+>;
+function credentialBindingFields(
+  raw: Readonly<Record<string, unknown>>,
+): CredentialBindingFields | undefined {
   if (
-    selected === undefined ||
-    authority === undefined ||
-    purpose === undefined ||
     !isAtlassianConnectorAuthRef(raw.authRef) ||
-    typeof raw.principalDigest !== "string" ||
-    !DIGEST.test(raw.principalDigest) ||
-    typeof raw.argumentsDigest !== "string" ||
-    !DIGEST.test(raw.argumentsDigest) ||
+    !digestValue(raw.principalDigest) ||
+    !digestValue(raw.argumentsDigest) ||
     !generation(raw.authenticationGeneration) ||
-    !generation(raw.verificationRevision) ||
+    !generation(raw.verificationRevision)
+  )
+    return undefined;
+  return {
+    authRef: raw.authRef,
+    principalDigest: raw.principalDigest,
+    argumentsDigest: raw.argumentsDigest,
+    authenticationGeneration: raw.authenticationGeneration,
+    verificationRevision: raw.verificationRevision,
+  };
+}
+type ActorBindingFields = Pick<
+  JiraHumanInputBinding,
+  "actorUserKey" | "actorUsername" | "expiresAt"
+>;
+function actorBindingFields(
+  raw: Readonly<Record<string, unknown>>,
+): ActorBindingFields | undefined {
+  if (
     !savedName(raw.actorUserKey) ||
     !savedName(raw.actorUsername) ||
     typeof raw.expiresAt !== "number" ||
@@ -158,36 +187,74 @@ export function copyHumanInputBinding(value: unknown): JiraHumanInputBinding | u
     raw.expiresAt <= 0
   )
     return undefined;
-  const review = Object.hasOwn(raw, "review")
-    ? copyJiraHumanInputReview(raw.review, purpose)
-    : undefined;
-  if (
-    Object.hasOwn(raw, "review") &&
-    (review === undefined ||
-      review.actorUserKey !== raw.actorUserKey ||
-      review.actorUsername !== raw.actorUsername)
-  )
-    return undefined;
-  const operationCorrelationId = raw.operationCorrelationId;
-  if (operationCorrelationId !== undefined && !isActivityLogCorrelationId(operationCorrelationId))
-    return undefined;
-  if (operationCorrelationId === undefined && Object.hasOwn(raw, "operationCorrelationId"))
-    return undefined;
-  return Object.freeze({
-    context: Object.freeze(selected),
-    authority,
-    principalDigest: raw.principalDigest,
-    authRef: raw.authRef,
-    authenticationGeneration: raw.authenticationGeneration,
-    verificationRevision: raw.verificationRevision,
-    operation: `jira.${purpose}`,
-    argumentsDigest: raw.argumentsDigest,
+  return {
     actorUserKey: raw.actorUserKey,
     actorUsername: raw.actorUsername,
     expiresAt: raw.expiresAt,
-    ...(review === undefined ? {} : { review }),
-    ...(operationCorrelationId === undefined ? {} : { operationCorrelationId }),
-  });
+  };
+}
+function requiredBinding(
+  raw: Readonly<Record<string, unknown>>,
+): JiraHumanInputBinding | undefined {
+  const selected = context(raw.context);
+  const authority = copyJiraInputAuthority(raw.authority);
+  const purpose = typeof raw.operation === "string" ? humanInputPurpose(raw.operation) : undefined;
+  const credentials = credentialBindingFields(raw);
+  const actor = actorBindingFields(raw);
+  if (
+    selected === undefined ||
+    authority === undefined ||
+    purpose === undefined ||
+    credentials === undefined ||
+    actor === undefined
+  )
+    return undefined;
+  return {
+    context: Object.freeze(selected),
+    authority,
+    principalDigest: credentials.principalDigest,
+    authRef: credentials.authRef,
+    authenticationGeneration: credentials.authenticationGeneration,
+    verificationRevision: credentials.verificationRevision,
+    operation: `jira.${purpose}`,
+    argumentsDigest: credentials.argumentsDigest,
+    actorUserKey: actor.actorUserKey,
+    actorUsername: actor.actorUsername,
+    expiresAt: actor.expiresAt,
+  };
+}
+function bindingReview(
+  raw: Readonly<Record<string, unknown>>,
+  binding: JiraHumanInputBinding,
+): Pick<JiraHumanInputBinding, "review"> | undefined {
+  if (!Object.hasOwn(raw, "review")) return {};
+  const purpose = humanInputPurpose(binding.operation);
+  if (purpose === undefined) return undefined;
+  const review = copyJiraHumanInputReview(raw.review, purpose);
+  return review?.actorUserKey === binding.actorUserKey &&
+    review.actorUsername === binding.actorUsername
+    ? { review }
+    : undefined;
+}
+function bindingCorrelation(
+  raw: Readonly<Record<string, unknown>>,
+): Pick<JiraHumanInputBinding, "operationCorrelationId"> | undefined {
+  const operationCorrelationId = raw.operationCorrelationId;
+  if (operationCorrelationId === undefined)
+    return Object.hasOwn(raw, "operationCorrelationId") ? undefined : {};
+  return isActivityLogCorrelationId(operationCorrelationId)
+    ? { operationCorrelationId }
+    : undefined;
+}
+export function copyHumanInputBinding(value: unknown): JiraHumanInputBinding | undefined {
+  const raw = asRecord(value);
+  if (raw === undefined || !savedExactKeys(raw, BINDING_KEYS)) return undefined;
+  const binding = requiredBinding(raw);
+  if (binding === undefined) return undefined;
+  const review = bindingReview(raw, binding);
+  const correlation = bindingCorrelation(raw);
+  if (review === undefined || correlation === undefined) return undefined;
+  return Object.freeze({ ...binding, ...review, ...correlation });
 }
 export function currentHumanInputLifetime(binding: JiraHumanInputBinding, now: number): boolean {
   return (
@@ -233,51 +300,68 @@ export function parseHumanInputValues(
   const allowed = new Set([...fields.required, ...fields.optional]);
   if (!savedExactKeys(raw, allowed) || fields.required.some((field) => !Object.hasOwn(raw, field)))
     return undefined;
+  return inputValues(raw, allowed);
+}
+function validInputField(field: JiraHumanInputField, value: unknown): value is string {
+  // JSON body material only; preserve well-formed passwords verbatim including spaces/control characters.
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= (field === "license" ? 32768 : 4096) &&
+    !/\p{Surrogate}/u.test(value) &&
+    (field !== "ownerShutdownConfirmation" || value === "confirmed")
+  );
+}
+function inputValues(
+  raw: Readonly<Record<string, unknown>>,
+  allowed: ReadonlySet<JiraHumanInputField>,
+): JiraHumanInputValues | undefined {
   const result: Partial<Record<JiraHumanInputField, string>> = {};
   for (const field of allowed) {
     const selected = raw[field];
     if (selected === undefined && !Object.hasOwn(raw, field)) continue;
-    // JSON body material only; preserve well-formed passwords verbatim including spaces/control characters.
-    if (
-      typeof selected !== "string" ||
-      selected.length === 0 ||
-      selected.length > (field === "license" ? 32768 : 4096) ||
-      /\p{Surrogate}/u.test(selected)
-    )
-      return undefined;
-    if (field === "ownerShutdownConfirmation" && selected !== "confirmed") return undefined;
+    if (!validInputField(field, selected)) return undefined;
     result[field] = selected;
   }
   return new TextEncoder().encode(JSON.stringify(result)).byteLength <= JIRA_HUMAN_INPUT_MAX_BYTES
     ? Object.freeze(result)
     : undefined;
 }
-export function parseHumanInputRecord(serialized: string): JiraHumanInputRecord | undefined {
-  if (new TextEncoder().encode(serialized).byteLength > JIRA_HUMAN_INPUT_MAX_BYTES + 8192)
-    return undefined;
-  const raw = parseJsonRecord(serialized);
-  const binding = copyHumanInputBinding(raw?.binding);
+function inputState(value: unknown): value is JiraHumanInputState {
+  return (
+    value === "awaiting-input" ||
+    value === "ready" ||
+    value === "consumed" ||
+    value === "cancelled" ||
+    value === "expired"
+  );
+}
+function revisionValue(value: unknown): value is string {
+  return typeof value === "string" && REVISION.test(value);
+}
+function recordIdentity(
+  raw: Readonly<Record<string, unknown>>,
+  binding: JiraHumanInputBinding,
+): Pick<JiraHumanInputRecord, "requestId" | "revision" | "state"> | undefined {
+  const requestId = humanInputRequestId(binding);
   if (
-    raw === undefined ||
     !savedExactKeys(raw, RECORD_KEYS) ||
-    binding === undefined ||
     raw.kind !== "jira-operation-input" ||
     raw.schemaVersion !== 1 ||
-    raw.requestId !== humanInputRequestId(binding) ||
-    typeof raw.revision !== "string" ||
-    !REVISION.test(raw.revision) ||
-    !savedText(raw.state, 32)
+    raw.requestId !== requestId ||
+    !revisionValue(raw.revision) ||
+    !savedText(raw.state, 32) ||
+    !inputState(raw.state)
   )
     return undefined;
-  const state = raw.state;
-  if (
-    state !== "awaiting-input" &&
-    state !== "ready" &&
-    state !== "consumed" &&
-    state !== "cancelled" &&
-    state !== "expired"
-  )
-    return undefined;
+  return { requestId, revision: raw.revision, state: raw.state };
+}
+function inputRecord(raw: Readonly<Record<string, unknown>>): JiraHumanInputRecord | undefined {
+  const binding = copyHumanInputBinding(raw.binding);
+  if (binding === undefined) return undefined;
+  const identity = recordIdentity(raw, binding);
+  if (identity === undefined) return undefined;
+  const { state } = identity;
   const values =
     raw.values === undefined ? undefined : parseHumanInputValues(binding.operation, raw.values);
   if (
@@ -289,9 +373,15 @@ export function parseHumanInputRecord(serialized: string): JiraHumanInputRecord 
     schemaVersion: 1,
     kind: "jira-operation-input",
     binding,
-    requestId: raw.requestId,
-    revision: raw.revision,
+    requestId: identity.requestId,
+    revision: identity.revision,
     state,
     ...(values === undefined ? {} : { values }),
   };
+}
+export function parseHumanInputRecord(serialized: string): JiraHumanInputRecord | undefined {
+  if (new TextEncoder().encode(serialized).byteLength > JIRA_HUMAN_INPUT_MAX_BYTES + 8192)
+    return undefined;
+  const raw = parseJsonRecord(serialized);
+  return raw === undefined ? undefined : inputRecord(raw);
 }

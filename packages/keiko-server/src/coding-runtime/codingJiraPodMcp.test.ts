@@ -259,7 +259,13 @@ function runAuthority(h: Harness): CodingJiraRunAuthority {
   };
 }
 
-function retainingHarness(h: Harness) {
+function retainingHarness(h: Harness): Harness & {
+  readonly retained: ManagedMcpToolResult[];
+  readonly localFailures: string[];
+  readonly capture: ReturnType<
+    typeof vi.fn<(result: ManagedMcpToolResult) => ManagedMcpToolResult>
+  >;
+} {
   const retained: ManagedMcpToolResult[] = [];
   const localFailures: string[] = [];
   const capture = vi.fn((result: ManagedMcpToolResult) => {
@@ -275,7 +281,7 @@ function retainingHarness(h: Harness) {
       return {
         ...read,
         retainProviderResult: capture,
-        retainLocalFailure: (reason) => {
+        retainLocalFailure: (reason): void => {
           localFailures.push(reason);
         },
       };
@@ -287,7 +293,7 @@ function retainingHarness(h: Harness) {
       return {
         ...permit,
         retainProviderResult: capture,
-        retainLocalFailure: (reason) => {
+        retainLocalFailure: (reason): void => {
           localFailures.push(reason);
         },
       };
@@ -366,7 +372,7 @@ function connect(h: Harness, connections: CodingJiraConnections): Client {
     rawCall: (name, args) => rpc("tools/call", { name, arguments: args }),
     select: (identities) => rpc("tools/call", { name: "jira.describe", arguments: { identities } }),
     // Existing native lifecycle cases explicitly traverse the same describe -> typed call path.
-    call: async (name, args) => {
+    call: async (name, args): Promise<RpcResult> => {
       const definition = jiraOperationDefinitions().find((entry) => entry.tool === name);
       if (definition !== undefined) {
         const selection = await rpc("tools/call", {
@@ -745,21 +751,24 @@ describe("serving the bound Pod through the relay", () => {
       response({ errorMessages: ["Synthetic denied prerequisite"], errors: {} }, 403),
     );
     const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
-    const result = await client.call("jira.comment", {
+    const result = await client.call("jira.edit", {
       issueKey: "SYN-1",
-      body: "Synthetic private comment",
+      fields: { summary: "Synthetic private summary" },
     });
     expect(result).toMatchObject({
       isError: true,
       structuredContent: { reason: "permission-denied" },
     });
-    expect(h.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
+    expect(h.http.mock.calls.map(([request]) => [request.method, request.url])).toEqual([
+      ["GET", "https://jira.example.invalid/context/rest/api/2/issue/SYN-1/editmeta"],
+    ]);
     expect(h.dispatched).not.toHaveBeenCalled();
+    expect(h.released).toHaveBeenCalledOnce();
     expect(h.recover).not.toHaveBeenCalled();
     const fact = h.records.find(({ op }) => op === "jira.operation.core");
     const line = formatActivityLogProofLine(fact ?? {});
     expect(expectActivityLogProof("jira.operation.core.line", line)).toMatchObject({
-      operation: "jira.comment",
+      operation: "jira.edit",
       stage: "coding-call",
       outcome: "failed",
       reason: "tool-failed",
@@ -797,15 +806,21 @@ describe("serving the bound Pod through the relay", () => {
 
   it("retains a closed read scope refusal without inventing Jira data or an effect", async () => {
     const h = retainingHarness(harness());
+    let admitted = true;
     const client = connect(
       h,
       h.pods.connections(undefined, bound(h), {
         runId: h.context.correlationId,
         catalogFits: () => true,
-        currentScopes: (phase) => (phase === "discovery" ? ["issue-tracker.read"] : []),
+        currentScopes: (phase) => (phase === "discovery" || admitted ? ["issue-tracker.read"] : []),
       }),
     );
-    const result = await client.call("jira.issue", { issueKey: "SYN-1" });
+    expect(await client.select(["GET /rest/api/2/issue/{issueIdOrKey}"])).not.toHaveProperty(
+      "isError",
+      true,
+    );
+    admitted = false;
+    const result = await client.rawCall("jira.issue", { issueKey: "SYN-1" });
     expect(result.isError).toBe(true);
     expect(h.localFailures).toEqual(["connector-scope-missing"]);
     expect(h.retained).toEqual([]);
@@ -845,8 +860,18 @@ describe("the customer's issue templates bind a Coding run's Jira writes (#4177)
       outcome: "succeeded",
       issueKey: "SYN-1",
       commentId: "10002",
-      operationBinding: { identity: expect.any(String), contractDigest: expect.any(String) },
     });
+    const operationBinding = h.retained[0]?.data.operationBinding;
+    if (
+      operationBinding === null ||
+      typeof operationBinding !== "object" ||
+      Array.isArray(operationBinding) ||
+      !("identity" in operationBinding) ||
+      !("contractDigest" in operationBinding)
+    )
+      throw new TypeError("Missing retained operation binding");
+    expect(typeof operationBinding.identity).toBe("string");
+    expect(typeof operationBinding.contractDigest).toBe("string");
     expect(result.structuredContent).toEqual(h.retained[0]?.data);
     expect(writes(h)).toBe(1);
   });
@@ -871,18 +896,23 @@ describe("the customer's issue templates bind a Coding run's Jira writes (#4177)
 
   it("retains a known tool's local scope refusal without inventing a native Jira permission result", async () => {
     const h = retainingHarness(harness());
+    let admitted = true;
     const client = connect(
       h,
       h.pods.connections(undefined, bound(h), {
         runId: h.context.correlationId,
         catalogFits: () => true,
         currentScopes: (phase) =>
-          phase === "discovery"
+          phase === "discovery" || admitted
             ? ["issue-tracker.read", "issue-tracker.write"]
             : ["issue-tracker.read"],
       }),
     );
-    const result = await client.call("jira.comment", {
+    expect(
+      await client.select(["POST /rest/api/2/issue/{issueIdOrKey}/comment"]),
+    ).not.toHaveProperty("isError", true);
+    admitted = false;
+    const result = await client.rawCall("jira.comment", {
       issueKey: "SYN-1",
       body: "Synthetic comment",
     });
@@ -949,8 +979,18 @@ describe("the customer's issue templates bind a Coding run's Jira writes (#4177)
     expect(result.structuredContent).toEqual(h.retained[0]?.data);
     expect(result.structuredContent).toMatchObject({
       outcome: "rejected",
-      reason: "template-violation",
+      reason: "field-validation",
+      violations: [
+        { ruleId: "summary-too-short", subject: "at least 40 characters", template: "SYN/Story" },
+      ],
     });
+    expect(result.structuredContent?.violations).toEqual([
+      { ruleId: "summary-too-short", subject: "at least 40 characters", template: "SYN/Story" },
+    ]);
+    expect(result.structuredContent?.guidance).toBe(
+      "Nothing was changed: this breaks the issue template of the project. " +
+        "Correct what violations name (ruleId, subject), then send it again.",
+    );
     expect(writes(h)).toBe(0);
     expect(h.dispatched).not.toHaveBeenCalled();
     expect(h.released).toHaveBeenCalledOnce();
@@ -1008,7 +1048,7 @@ describe("the customer's issue templates bind a Coding run's Jira writes (#4177)
       structuredContent: { outcome: "succeeded", issueKey: "SYN-1" },
     });
     expect(writes(h)).toBe(1);
-    expect(h.state.fields.description).toBe("h2. Goal\n\nKept content.");
+    expect(h.state.fields.description).toBe("h2. Goal\nKept content.");
     expect(h.recover).not.toHaveBeenCalled();
     expect(
       h.records.filter((event) => event.extra?.action === "serialize-description"),
@@ -1220,13 +1260,13 @@ describe("a write that does not complete", () => {
   it("retains the leaf's acknowledged target receipt when independent Coding readback throws", async () => {
     const h = retainingHarness(harness());
     let written = false;
-    h.http.mockImplementation(async (request) => {
+    h.http.mockImplementation((request) => {
       if (request.method === "POST") {
         written = true;
-        return response(undefined, 204);
+        return Promise.resolve(response(undefined, 204));
       }
-      if (written) throw new TypeError("Synthetic readback failure");
-      return response({ enabled: false });
+      if (written) return Promise.reject(new TypeError("Synthetic readback failure"));
+      return Promise.resolve(response({ enabled: false }));
     });
     const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
     const result = await client.call("jira.set-app-monitoring", {
@@ -1234,14 +1274,12 @@ describe("a write that does not complete", () => {
       expectedEnabled: false,
     });
     // The real leaf wraps only this post-ACK exception; the Coding owner validates its receipt.
-    expect(result).toMatchObject({
-      isError: true,
-      structuredContent: {
-        outcome: "succeeded-unconfirmed",
-        reason: "unavailable",
-        monitoringEnabled: true,
-      },
-    });
+    // The relay retains the typed result privately, then reports dispatched uncertainty through
+    // its existing closed error. It must not return this as an undispatched refusal.
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toBeUndefined();
+    expect(JSON.stringify(result)).toContain("The change may or may not have been applied");
+    expect(h.retained).toHaveLength(1);
     expect(h.retained).toMatchObject([
       {
         isError: true,
@@ -1263,12 +1301,14 @@ describe("a write that does not complete", () => {
     "does not invent ACK or retain an arbitrary receipt on a %s exception",
     async (phase) => {
       const h = retainingHarness(harness());
-      h.http.mockImplementation(async (request) => {
+      h.http.mockImplementation((request) => {
         if (phase === "preflight" || request.method === "POST")
-          throw Object.assign(new TypeError("Synthetic unacknowledged failure"), {
-            receipt: { monitoringEnabled: true },
-          });
-        return response({ enabled: false });
+          return Promise.reject(
+            Object.assign(new TypeError("Synthetic unacknowledged failure"), {
+              receipt: { monitoringEnabled: true },
+            }),
+          );
+        return Promise.resolve(response({ enabled: false }));
       });
       const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
       const result = await client.call("jira.set-app-monitoring", {
@@ -1276,15 +1316,17 @@ describe("a write that does not complete", () => {
         expectedEnabled: false,
       });
       const outcome = phase === "preflight" ? "rejected" : "unknown";
-      expect(result).toMatchObject({
-        isError: true,
-        structuredContent: {
-          outcome,
-          reason: "unavailable",
-        },
-      });
-      expect(result.structuredContent).not.toHaveProperty("monitoringEnabled");
-      expect(h.retained).toMatchObject([{ isError: true, data: { outcome } }]);
+      expect(result.isError).toBe(true);
+      if (phase === "preflight")
+        expect(result.structuredContent).toMatchObject({ outcome, reason: "unavailable" });
+      else {
+        expect(result.structuredContent).toBeUndefined();
+        expect(JSON.stringify(result)).toContain("The change may or may not have been applied");
+      }
+      expect(h.retained).toHaveLength(1);
+      expect(h.retained).toMatchObject([
+        { isError: true, data: { outcome, reason: "unavailable" } },
+      ]);
       expect(h.retained[0]?.data).not.toHaveProperty("monitoringEnabled");
       expect(h.http.mock.calls.map(([request]) => request.method)).toEqual(
         phase === "preflight" ? ["GET"] : ["GET", "POST"],
@@ -1298,10 +1340,12 @@ describe("a write that does not complete", () => {
     "never treats native HTTP %s as an acknowledged successful write",
     async (status) => {
       const h = retainingHarness(harness());
-      h.http.mockImplementation(async (request) =>
-        request.method === "GET"
-          ? fixtureRead(new URL(request.url).pathname.replace("/context/rest/api/2", ""), h.state)
-          : response({ errorMessages: ["Native mutation refused"], errors: {} }, status),
+      h.http.mockImplementation((request) =>
+        Promise.resolve(
+          request.method === "GET"
+            ? fixtureRead(new URL(request.url).pathname.replace("/context/rest/api/2", ""), h.state)
+            : response({ errorMessages: ["Native mutation refused"], errors: {} }, status),
+        ),
       );
       const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
       const result = await client.call("jira.comment", {
@@ -1435,12 +1479,12 @@ describe("Coding Jira's live, explicitly selected scopes", () => {
   it("executes one explicitly admitted admin change with independent state readback", async () => {
     const h = harness();
     let enabled = false;
-    h.http.mockImplementation(async (request) => {
+    h.http.mockImplementation((request) => {
       if (request.method === "POST") {
         enabled = true;
-        return response(undefined, 204);
+        return Promise.resolve(response(undefined, 204));
       }
-      return response({ enabled });
+      return Promise.resolve(response({ enabled }));
     });
     const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
     const result = await client.call("jira.set-app-monitoring", {
@@ -1463,12 +1507,12 @@ describe("Coding Jira's live, explicitly selected scopes", () => {
       "issue-tracker.write",
       "issue-tracker.admin",
     ];
-    h.http.mockImplementation(async (request) => {
+    h.http.mockImplementation((request) => {
       if (request.method === "POST") {
         scopes = ["issue-tracker.read", "issue-tracker.write"];
-        return response(undefined, 204);
+        return Promise.resolve(response(undefined, 204));
       }
-      return response({ enabled: false });
+      return Promise.resolve(response({ enabled: false }));
     });
     const client = connect(
       h,
@@ -1515,9 +1559,9 @@ describe("Coding Jira's live, explicitly selected scopes", () => {
     const client = connect(h, h.pods.connections(undefined, bound(h), authority));
     await client.select(["POST /rest/api/2/monitoring/app"]);
     expect(await client.list()).toContain("jira.set-app-monitoring");
-    h.http.mockImplementation(async () => {
+    h.http.mockImplementation(() => {
       scopes = ["issue-tracker.read", "issue-tracker.write"];
-      return response({ enabled: false });
+      return Promise.resolve(response({ enabled: false }));
     });
     const result = await client.rawCall("jira.set-app-monitoring", {
       enabled: true,

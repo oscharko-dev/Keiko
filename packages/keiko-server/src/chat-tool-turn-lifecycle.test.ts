@@ -49,14 +49,13 @@ interface LifecycleContext extends CatalogTrustedContext {
     result: CatalogJsonObject,
   ) => Promise<void>;
 }
-// Structural extension lets the failure-first source exercise the current constructor before
-// its optional production hook exists. The actual base call/round/finally code is never mocked.
+// Require the optional hook in this fixture; the actual base call/round/finally code is never mocked.
 type LifecycleOptions = ChatToolTurnOptions<LifecycleContext> & {
   readonly finalizeTurn: () => Promise<void>;
 };
 class LifecycleTurn extends ChatToolTurn<LifecycleContext> {
-  constructor(options: LifecycleOptions) {
-    super(options);
+  static create(options: LifecycleOptions): LifecycleTurn {
+    return new LifecycleTurn(options);
   }
   protected override reserveAuthorityPrompt(): boolean {
     return true;
@@ -133,7 +132,7 @@ function fixture(
         handlerBindings: [
           {
             ...f.handler,
-            execute: async (args, handlerContext) => {
+            execute: async (args, handlerContext): ReturnType<typeof f.handler.execute> => {
               if (selectionClose !== undefined) {
                 if (context.selectJiraOperations === undefined)
                   throw new Error("Missing selection port");
@@ -146,11 +145,15 @@ function fixture(
       },
       { ...f.options, context: () => context, invocationRegistry },
     );
-  const turn = new LifecycleTurn({
+  const turn = LifecycleTurn.create({
     deps: {
       store,
       gatewayConfig: gateway(),
-      diagnostics: { record: (entry) => diagnostics.push(entry) },
+      diagnostics: {
+        record: (entry): void => {
+          diagnostics.push(entry);
+        },
+      },
     },
     message,
     context: f.context,
@@ -162,7 +165,8 @@ function fixture(
     ...(selectionClose === undefined
       ? {}
       : {
-          selectTools: () => Promise.resolve({ managed: f.pure, bind, close: selectionClose }),
+          selectTools: (): ReturnType<NonNullable<LifecycleOptions["selectTools"]>> =>
+            Promise.resolve({ managed: f.pure, bind, close: selectionClose }),
         }),
   });
   return { turn, diagnostics };
@@ -188,7 +192,7 @@ function answer(): NormalizedResponse {
 function selectedModel(next: () => Promise<NormalizedResponse>): ModelPort {
   let rounds = 0;
   return {
-    call: (round) => {
+    call: (round): Promise<NormalizedResponse> => {
       if (++rounds > 1) return next();
       const bridge = createGatewayToolCatalogBridge(round, Date.now);
       return Promise.resolve({
@@ -214,7 +218,7 @@ type Terminal = "success" | "error" | "cancel";
 const terminals: readonly Terminal[] = ["success", "error", "cancel"];
 function terminalModel(terminal: Terminal, controller: AbortController, failure: Error): ModelPort {
   return {
-    call: () => {
+    call: (): Promise<NormalizedResponse> => {
       if (terminal === "success") return Promise.resolve(answer());
       if (terminal === "cancel") controller.abort(failure);
       return Promise.reject(failure);
@@ -228,7 +232,12 @@ function deferred(): { readonly promise: Promise<void>; readonly resolve: () => 
   const promise = new Promise<void>((resolve) => {
     release = resolve;
   });
-  return { promise, resolve: (): void => release() };
+  return {
+    promise,
+    resolve: (): void => {
+      release();
+    },
+  };
 }
 
 describe("ChatToolTurn final lifetime cleanup", () => {
@@ -272,11 +281,13 @@ describe("ChatToolTurn final lifetime cleanup", () => {
     let finalized = 0;
     let closed = 0;
     const f = fixture(
-      async () => {
+      () => {
         finalized++;
+        return Promise.resolve();
       },
-      async () => {
+      () => {
         closed++;
+        return Promise.resolve();
       },
     );
     const overflow = new ContextOverflowError("synthetic adopted window");
@@ -324,12 +335,13 @@ describe("ChatToolTurn final lifetime cleanup", () => {
       const events: string[] = [];
       const original = new Error("synthetic original failure");
       const f = fixture(
-        async () => {
+        () => {
           events.push("private-finished");
+          return Promise.resolve();
         },
-        async () => {
+        () => {
           events.push("selection-close");
-          throw new Error("synthetic-private-selection-canary");
+          return Promise.reject(new Error("synthetic-private-selection-canary"));
         },
       );
       const model = selectedModel(() =>

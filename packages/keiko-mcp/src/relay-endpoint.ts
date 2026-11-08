@@ -68,7 +68,9 @@ function beginMutation(
     sessionId: typeof input.sessionId === "string" ? input.sessionId : undefined,
     toolName: input.name,
     argumentsValue: input.argumentsValue,
-    ...(input.connection.localProvider === undefined ? {} : { localProvider: input.connection.localProvider }),
+    ...(input.connection.localProvider === undefined
+      ? {}
+      : { localProvider: input.connection.localProvider }),
   });
   if (permit === undefined) throw new ManagedMcpError("not-admitted");
   return permit;
@@ -149,13 +151,14 @@ function dispatchAdmission(
 ): { readonly beforeDispatch?: () => boolean } {
   const dispatch = permit?.dispatch;
   if (dispatch === undefined) return {};
-  if (connection.dispatchGate === true) return {
-    beforeDispatch: (): boolean => {
-      const admitted = dispatch();
-      if (admitted) observation.dispatched = true;
-      return admitted;
-    },
-  };
+  if (connection.dispatchGate === true)
+    return {
+      beforeDispatch: (): boolean => {
+        const admitted = dispatch();
+        if (admitted) observation.dispatched = true;
+        return admitted;
+      },
+    };
   if (!dispatch()) throw noEffectError("not-admitted");
   observation.dispatched = true;
   return {};
@@ -173,49 +176,72 @@ function resultCapture(
   const retain = permit?.retainProviderResult;
   const retainLocalFailure = permit?.retainLocalFailure;
   return {
-    retainLocalFailure: retainLocalFailure === undefined ? undefined : (reason) => {
-      retainLocalFailure(reason);
-      observation.localFailure = true;
-    },
-    retainProviderResult: retain === undefined ? undefined : (result) => {
-      const retained = retain(result);
-      observation.retained = retained;
-      return retained;
-    },
+    retainLocalFailure:
+      retainLocalFailure === undefined
+        ? undefined
+        : (reason): void => {
+            retainLocalFailure(reason);
+            observation.localFailure = true;
+          },
+    retainProviderResult:
+      retain === undefined
+        ? undefined
+        : (result): ManagedMcpToolResult => {
+            const retained = retain(result);
+            observation.retained = retained;
+            return retained;
+          },
   };
 }
 
 /** A technical read failure is not a permission refusal and never enters mutation recovery. */
-function throwRelayCallFailure(
+function relayCallFailure(
   input: RelayCall,
   capture: ManagedMcpReadCapture | undefined,
   observation: RelayObservation,
   reason: ManagedMcpFailure,
   effect: ManagedMcpEffect,
   primaryError: unknown,
-): never {
+): RelayToolFailure {
   const failure = (cause: unknown): RelayToolFailure =>
     new RelayToolFailure(failureText(reason, effect, input.mutation), reason, effect, cause);
-  if (input.mutation || input.connection.localProvider !== "jira" || capture === undefined ||
-      observation.retained !== undefined || observation.localFailure === true) throw failure(primaryError);
+  if (
+    input.mutation ||
+    input.connection.localProvider !== "jira" ||
+    capture === undefined ||
+    observation.retained !== undefined ||
+    observation.localFailure === true
+  )
+    return failure(primaryError);
   try {
     capture.retainRelayFailure(reason);
   } catch (captureError) {
     // Preserve both original causes, while the SDK receives only the primary closed failure.
-    throw failure(new AggregateError([primaryError, captureError], "Jira read result retention failed"));
+    throw failure(
+      new AggregateError([primaryError, captureError], "Jira read result retention failed"),
+    );
   }
-  throw failure(primaryError);
+  return failure(primaryError);
 }
 
 function isLocalMetadataRead(input: Pick<RelayCall, "connection" | "name" | "mutation">): boolean {
-  return !input.mutation && input.connection.localProvider === "jira" &&
+  return (
+    !input.mutation &&
+    input.connection.localProvider === "jira" &&
     (input.name === "jira.discover" || input.name === "jira.describe") &&
-    input.connection.localMetadataTools?.includes(input.name) === true;
+    input.connection.localMetadataTools?.includes(input.name) === true
+  );
 }
-function beginReadCapture(input: RelayCall, context: ManagedMcpInvocationContext): ManagedMcpReadCapture | undefined {
-  if (input.mutation || input.connection.localProvider !== "jira" || isLocalMetadataRead(input)) return undefined;
+function beginReadCapture(
+  input: RelayCall,
+  context: ManagedMcpInvocationContext,
+): ManagedMcpReadCapture | undefined {
+  if (input.mutation || input.connection.localProvider !== "jira" || isLocalMetadataRead(input))
+    return undefined;
   const capture = context.beginReadCapture?.({
-    toolName: input.name, argumentsValue: input.argumentsValue, localProvider: "jira",
+    toolName: input.name,
+    argumentsValue: input.argumentsValue,
+    localProvider: "jira",
     signal: AbortSignal.any([context.signal, input.signal]),
   });
   if (capture === undefined) throw new ManagedMcpError("not-admitted");
@@ -223,10 +249,12 @@ function beginReadCapture(input: RelayCall, context: ManagedMcpInvocationContext
 }
 function assertRetainedResult(result: CallToolResult, observation: RelayObservation): void {
   const retained = observation.retained;
-  if (retained !== undefined && (
-    (result.isError === true) !== (retained.isError === true) ||
-    canonicalise(result.structuredContent) !== canonicalise(retained.data)
-  )) throw new ManagedMcpError("protocol-error");
+  if (
+    retained !== undefined &&
+    ((result.isError === true) !== (retained.isError === true) ||
+      canonicalise(result.structuredContent) !== canonicalise(retained.data))
+  )
+    throw new ManagedMcpError("protocol-error");
 }
 
 function retainedPreflightFailure(
@@ -245,49 +273,58 @@ function retainedPreflightFailure(
   };
 }
 
+/** Bind the one invocation signal and capture/dispatch ports to their existing permit. */
+function relayInvocationContext(
+  input: RelayCall,
+  context: ManagedMcpInvocationContext,
+  permit: ManagedMcpMutationInvocation | undefined,
+  readCapture: ManagedMcpReadCapture | undefined,
+  observation: RelayObservation,
+): ManagedMcpInvocationContext {
+  const signal = AbortSignal.any([context.signal, input.signal]);
+  return {
+    ...context,
+    signal,
+    invocationId: permit?.invocationId ?? readCapture?.invocationId ?? context.invocationId,
+    ...dispatchAdmission(input.connection, permit, observation),
+    ...resultCapture(permit ?? readCapture, observation),
+  };
+}
+
 async function invokeRelayTool(input: RelayCall): Promise<CallToolResult> {
   const { context } = input;
   assertCurrent(context, input.active, input.signal);
   const permit = beginMutation(input, context);
   const readCapture = beginReadCapture(input, context);
-  const observation: RelayObservation = { dispatched: input.mutation && permit?.dispatch === undefined };
+  const observation: RelayObservation = {
+    dispatched: input.mutation && permit?.dispatch === undefined,
+  };
   try {
-    const signal = AbortSignal.any([context.signal, input.signal]);
-    const result = await input.connection.call(input.name, input.argumentsValue, {
-      ...context,
-      signal,
-      invocationId: permit?.invocationId ?? readCapture?.invocationId ?? context.invocationId,
-      ...dispatchAdmission(input.connection, permit, observation),
-      ...resultCapture(permit ?? readCapture, observation),
-    });
+    const invocation = relayInvocationContext(input, context, permit, readCapture, observation);
+    const result = await input.connection.call(input.name, input.argumentsValue, invocation);
     if (!isCallToolResult(result)) throw new ManagedMcpError("protocol-error");
     assertRetainedResult(result, observation);
     if (input.mutation && result.isError === true) {
-      assertCurrent(context, input.active, signal);
+      assertCurrent(context, input.active, invocation.signal);
       const failure = retainedPreflightFailure(observation, permit);
-      assertCurrent(context, input.active, signal);
+      assertCurrent(context, input.active, invocation.signal);
       return failure;
     }
     permit?.acknowledge();
-    assertCurrent(context, input.active, signal);
+    assertCurrent(context, input.active, invocation.signal);
     return result;
   } catch (error) {
     const { reason, effect } = failureOf(error);
     await settleFailedCall(input, context, permit, effect);
     // The SDK delivers a thrown error's message to the model as an error result.
-    return throwRelayCallFailure(input, readCapture, observation, reason, effect, error);
+    throw relayCallFailure(input, readCapture, observation, reason, effect, error);
   } finally {
     readCapture?.release();
   }
 }
 
-function relayServer(
-  connection: ExternalMcpConnection,
-  allowed: ReadonlyMap<string, "read" | "write">,
-  context: ManagedMcpInvocationContext | undefined,
-  active: () => boolean,
-): McpServer {
-  const server = new McpServer(
+function createRelayProtocolServer(connection: ExternalMcpConnection): McpServer {
+  return new McpServer(
     { name: "keiko-mcp", version: "1" },
     {
       supportedProtocolVersions: [
@@ -299,6 +336,15 @@ function relayServer(
       ...(connection.instructions === undefined ? {} : { instructions: connection.instructions }),
     },
   );
+}
+
+function relayServer(
+  connection: ExternalMcpConnection,
+  allowed: ReadonlyMap<string, "read" | "write">,
+  context: ManagedMcpInvocationContext | undefined,
+  active: () => boolean,
+): McpServer {
+  const server = createRelayProtocolServer(connection);
   const advertised = connection.tools;
   for (const tool of advertised.filter((tool) => allowed.has(tool.name))) {
     server.registerTool(
@@ -322,8 +368,14 @@ function relayServer(
         });
         // Managed selection replaces the immutable list. Notify on this request's stream so the
         // native client refreshes its cached tools; no separate listener or replay is needed.
-        if (connection.tools !== advertised && isLocalMetadataRead({ connection, name: tool.name,
-          mutation: allowed.get(tool.name) === "write" }))
+        if (
+          connection.tools !== advertised &&
+          isLocalMetadataRead({
+            connection,
+            name: tool.name,
+            mutation: allowed.get(tool.name) === "write",
+          })
+        )
           await sdkContext.mcpReq.notify({ method: "notifications/tools/list_changed" });
         return result;
       },

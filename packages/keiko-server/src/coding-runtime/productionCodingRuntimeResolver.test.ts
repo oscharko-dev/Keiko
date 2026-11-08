@@ -124,6 +124,7 @@ vi.mock("./productionManagedWorktreeTools.js", async (importOriginal) => {
 });
 
 const roots: string[] = [];
+const WORKSPACE_NOW = Date.parse("2026-07-13T12:00:00.000Z");
 
 afterEach(() => {
   ciRepairBudgetOverride.current = undefined;
@@ -1183,7 +1184,7 @@ describe("production coding runtime resolver", () => {
         connections: vi.fn(),
         attach: vi.fn(),
         close: vi.fn(),
-        closeRun: vi.fn(async () => undefined),
+        closeRun: vi.fn(() => Promise.resolve()),
       };
       return { pods, port: pods as unknown as CodingJiraPods };
     }
@@ -1320,15 +1321,16 @@ describe("production coding runtime resolver", () => {
         : undefined;
       const baseUrl = "https://jira.example.invalid/context";
       const cookie = { name: "JSESSIONID", value: "synthetic-idle-test-cookie" };
-      const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
-        if (String(url) === `${baseUrl}/rest/api/2/myself`)
-          return Response.json({ key: "actor-key", name: "Native Actor" });
-        if (String(url) !== `${baseUrl}/rest/auth/1/session`)
-          throw new TypeError("Unexpected private fixture URL");
-        if (init?.method === "POST") return Response.json({ session: cookie });
-        if (init?.method === "GET") return Response.json({ name: "Native Actor" });
-        if (init?.method === "DELETE") return new Response(null, { status: 204 });
-        throw new TypeError("Unexpected private fixture method");
+      const fetchImpl = vi.fn<typeof fetch>((input, init) => {
+        const url = privateFixtureUrl(input);
+        if (url === `${baseUrl}/rest/api/2/myself`)
+          return Promise.resolve(Response.json({ key: "actor-key", name: "Native Actor" }));
+        if (url !== `${baseUrl}/rest/auth/1/session`)
+          return Promise.reject(new TypeError("Unexpected private fixture URL"));
+        if (init?.method === "POST") return Promise.resolve(Response.json({ session: cookie }));
+        if (init?.method === "GET") return Promise.resolve(Response.json({ name: "Native Actor" }));
+        if (init?.method === "DELETE") return Promise.resolve(new Response(null, { status: 204 }));
+        return Promise.reject(new TypeError("Unexpected private fixture method"));
       });
       const options = {
         baseUrl,
@@ -1393,7 +1395,9 @@ describe("production coding runtime resolver", () => {
           expect(f.sealedPortEntries.has(reference)).toBe(false);
           const logout = f.fetchImpl.mock.calls.filter(([, init]) => init?.method === "DELETE");
           expect(logout).toHaveLength(1);
-          expect(String(logout[0]?.[0])).toBe(
+          const logoutInput = logout[0]?.[0];
+          if (logoutInput === undefined) throw new TypeError("Missing logout request");
+          expect(privateFixtureUrl(logoutInput)).toBe(
             "https://jira.example.invalid/context/rest/auth/1/session",
           );
           expect(new Headers(logout[0]?.[1]?.headers).get("cookie")).toBe(
@@ -1440,7 +1444,7 @@ describe("production coding runtime resolver", () => {
         const run = await idleRun();
         expect(vi.getTimerCount()).toBe(1);
         if (end === "stop") await run.manager.stop(run.request.runId);
-        else run.backend.authorityLifecycle.revokeRuntime(run.request.runId);
+        else await run.backend.authorityLifecycle.revokeRuntime(run.request.runId);
         expect(run.signal.aborted).toBe(true);
         expect(vi.getTimerCount()).toBe(0);
         await vi.advanceTimersByTimeAsync(run.remainingMs * 2);
@@ -1450,9 +1454,19 @@ describe("production coding runtime resolver", () => {
     );
 
     it("checks catalog expansion against the existing live cumulative prompt ledger without charging it", async () => {
-      const { host, createRun, confirmations, fixture, request } = jiraHost();
+      const chargePrompt = vi.fn<CiRepairExecutionBudget["chargePrompt"]>(() => ({
+        accepted: true,
+      }));
+      ciRepairBudgetOverride.current = {
+        admitTool: () => undefined,
+        canChargePrompt: () => ({ accepted: true }),
+        chargePrompt,
+        observed: () => undefined,
+      };
+      // Capability custody captures Date.now during host composition, so install this clock first.
       vi.useFakeTimers({ toFake: ["Date"] });
-      vi.setSystemTime(fixture.nowMs());
+      vi.setSystemTime(WORKSPACE_NOW);
+      const { host, createRun, confirmations, fixture, request } = jiraHost();
       confirmations.issue(
         resolveProductionRuntimeStartConfirmationClaim(fixture.authority, {
           ...request,
@@ -1475,12 +1489,14 @@ describe("production coding runtime resolver", () => {
       });
       expect(fits(1000)).toBe(true);
       expect(fits(1000)).toBe(true);
+      expect(chargePrompt).not.toHaveBeenCalled();
       const charged = backend.context.budget.maxPromptTokens - 500;
       expect(
         ledger.reservePromptTokens?.(backend.minted.modelGatewayCapability, charged),
       ).toMatchObject({ ok: true });
       expect(fits(500)).toBe(true);
       expect(fits(501)).toBe(false);
+      expect(chargePrompt).toHaveBeenCalledOnce();
       await manager.stop(request.runId);
       expect(fits(1)).toBe(false);
     });
@@ -1852,6 +1868,11 @@ function childUnavailable(host: ProductionCodingRuntimeHost, runId: string): boo
     ?.has("keiko_child_agent");
 }
 
+function privateFixtureUrl(value: Parameters<typeof fetch>[0]): string {
+  if (typeof value === "string") return value;
+  return value instanceof URL ? value.href : value.url;
+}
+
 function resolverFor(
   fixture: ReturnType<typeof workspaceFixture>,
   createRun: ProductionRuntimeBackendResolver["createRun"],
@@ -1988,7 +2009,7 @@ function workspaceFixture(maxDurationMinutes?: number) {
   mkdirSync(workspace, { recursive: true });
   let head = "1".repeat(40);
   let workspaceAccessAvailable = true;
-  let nowMs = Date.parse("2026-07-13T12:00:00.000Z");
+  let nowMs = WORKSPACE_NOW;
   const instance = {
     workspaceId: "workspace-private",
     repositoryId: "repository-private",

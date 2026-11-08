@@ -632,8 +632,8 @@ describe("production OpenCode backend composition", () => {
         verificationRevision: 1,
       };
       const connections = vi.fn<CodingJiraPods["connections"]>(() => ({
-        generation: () => new AbortController().signal,
-        serve: async () => new Response(null, { status: 403 }),
+        generation: (): AbortSignal => new AbortController().signal,
+        serve: (): Promise<Response> => Promise.resolve(new Response(null, { status: 403 })),
       }));
       const pods: CodingJiraPods = {
         currentInputContext: () => undefined,
@@ -641,8 +641,8 @@ describe("production OpenCode backend composition", () => {
         recordBind: () => undefined,
         connections,
         attach: () => undefined,
-        close: async () => undefined,
-        closeRun: async () => undefined,
+        close: () => Promise.resolve(),
+        closeRun: () => Promise.resolve(),
       };
       const input = runInput(root);
       const contextUsage = createCodingRuntimeContextUsageRegistry();

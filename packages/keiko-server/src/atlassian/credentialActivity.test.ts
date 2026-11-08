@@ -112,7 +112,7 @@ describe("credential creation activity", () => {
     const diagnostics: ServerDiagnosticRecord[] = [];
     const privateText = "synthetic private cleanup value";
     const outcome = { ok: false, reason: "unavailable", receipt: { userKey: "synthetic-actor" } };
-    const finish = () => {
+    const finish = (): typeof outcome => {
       try {
         return outcome;
       } finally {

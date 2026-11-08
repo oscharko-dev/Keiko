@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import {
   JiraAcknowledgedMutationError,
   jiraPrivateSessionReference,
@@ -25,11 +25,84 @@ async function finishTurn(ports: PrivatePorts): Promise<void> {
 }
 type FixturePurpose =
   "login" | "update-user-password" | "unlock-user-anonymization" | "validate-update-user-password";
+type CustodyFixture = ReturnType<typeof privateJiraCustodyFixture>;
+interface Controls {
+  cookieActor: string;
+  loginStatus: number;
+  lostLogin: boolean;
+  privateStatus: number;
+  logoutStatus: number;
+  lostLogout: boolean;
+  cookieStoredAtLogout: boolean;
+  targetAdmitted: boolean;
+}
+interface Fixture extends CustodyFixture {
+  readonly controls: Controls;
+  readonly fetchImpl: Mock<typeof fetch>;
+  readonly beforeEffect: Mock<() => boolean>;
+  readonly controller: AbortController;
+  readonly ports: PrivatePorts;
+  readonly onConsumed: Mock;
+  readonly onResponse: Mock<NonNullable<CreateAtlassianHttpPortOptions["onResponse"]>>;
+  readonly cleanupFailures: unknown[];
+  readonly sessionScope: ReturnType<typeof jiraSessionBindingForInput>;
+}
+function fetchUrl(input: Parameters<typeof fetch>[0]): string {
+  return input instanceof Request ? input.url : input.toString();
+}
+function loginResponse(controls: Controls): Response {
+  if (controls.lostLogin) throw new TypeError("Synthetic lost login response");
+  return Response.json({ session: COOKIE }, { status: controls.loginStatus });
+}
+function logoutResponse(custody: CustodyFixture, controls: Controls): Response {
+  controls.cookieStoredAtLogout = [...custody.sealedPortEntries.values()].some((value) =>
+    value.includes(COOKIE.value),
+  );
+  if (controls.lostLogout) throw new TypeError("Synthetic logout transport failure");
+  return new Response(null, { status: controls.logoutStatus });
+}
+function actorResponse(headers: Headers, controls: Controls): Response {
+  return Response.json({
+    key: headers.has("cookie") ? controls.cookieActor : "actor-key",
+    name: "Native Actor",
+  });
+}
+function nativeResponse(
+  custody: CustodyFixture,
+  controls: Controls,
+  url: string,
+  method: string,
+  headers: Headers,
+): Response {
+  if (url === `${BASE}/rest/api/2/myself`) return actorResponse(headers, controls);
+  switch (`${method} ${url}`) {
+    case `POST ${BASE}/rest/auth/1/session`:
+      return loginResponse(controls);
+    case `GET ${BASE}/rest/auth/1/session`:
+      return Response.json({ name: "Native Actor" });
+    case `DELETE ${BASE}/rest/auth/1/session`:
+      return logoutResponse(custody, controls);
+    case `PUT ${BASE}/rest/api/2/user/password?key=target-key`:
+    case `DELETE ${BASE}/rest/api/2/user/anonymization/unlock`:
+      return new Response(null, { status: controls.privateStatus });
+    case `POST ${BASE}/rest/api/2/password/policy/updateUser`:
+      return Response.json([]);
+    case `POST ${BASE}/rest/api/2/avatar/user/temporary?filename=avatar.png&size=8`:
+      return Response.json({
+        cropperOffsetX: 0,
+        cropperOffsetY: 0,
+        cropperWidth: 1,
+        needsCropping: false,
+      });
+    default:
+      throw new TypeError("Unexpected synthetic private-session route");
+  }
+}
 function fixture(
   purpose: FixturePurpose = "login",
   legacyTemporaryRelease?: "10.3" | "10.4",
   turnLifetimeMs = 60_000,
-) {
+): Fixture {
   const custody = privateJiraCustodyFixture(`jira.${purpose}`);
   const pending = custody.inputs.prepare(custody.binding);
   const values =
@@ -54,45 +127,20 @@ function fixture(
     cookieStoredAtLogout: false,
     targetAdmitted: true,
   };
-  const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
-    const url = String(input);
-    const headers = new Headers(init?.headers);
-    if (url === `${BASE}/rest/api/2/myself`)
-      return Response.json({
-        key: headers.has("cookie") ? controls.cookieActor : "actor-key",
-        name: "Native Actor",
-      });
-    if (url === `${BASE}/rest/auth/1/session` && init?.method === "POST") {
-      if (controls.lostLogin) throw new TypeError("Synthetic lost login response");
-      return Response.json({ session: COOKIE }, { status: controls.loginStatus });
-    }
-    if (url === `${BASE}/rest/auth/1/session` && init?.method === "GET")
-      return Response.json({ name: "Native Actor" });
-    if (url === `${BASE}/rest/auth/1/session` && init?.method === "DELETE") {
-      controls.cookieStoredAtLogout = [...custody.sealedPortEntries.values()].some((value) =>
-        value.includes(COOKIE.value),
-      );
-      if (controls.lostLogout) throw new TypeError("Synthetic logout transport failure");
-      return new Response(null, { status: controls.logoutStatus });
-    }
-    if (url === `${BASE}/rest/api/2/user/password?key=target-key` && init?.method === "PUT")
-      return new Response(null, { status: controls.privateStatus });
-    if (url === `${BASE}/rest/api/2/user/anonymization/unlock` && init?.method === "DELETE")
-      return new Response(null, { status: controls.privateStatus });
-    if (url === `${BASE}/rest/api/2/password/policy/updateUser` && init?.method === "POST")
-      return Response.json([]);
-    if (
-      url === `${BASE}/rest/api/2/avatar/user/temporary?filename=avatar.png&size=8` &&
-      init?.method === "POST"
-    )
-      return Response.json({
-        cropperOffsetX: 0,
-        cropperOffsetY: 0,
-        cropperWidth: 1,
-        needsCropping: false,
-      });
-    throw new TypeError("Unexpected synthetic private-session route");
-  });
+  const fetchImpl = vi.fn<typeof fetch>(
+    (input, init) =>
+      new Promise<Response>((resolve) => {
+        resolve(
+          nativeResponse(
+            custody,
+            controls,
+            fetchUrl(input),
+            init?.method ?? "",
+            new Headers(init?.headers),
+          ),
+        );
+      }),
+  );
   const beforeEffect = vi.fn(() => true);
   const controller = new AbortController();
   const context = {
@@ -102,9 +150,10 @@ function fixture(
     beforeEffect,
   };
   const onResponse = vi.fn<NonNullable<CreateAtlassianHttpPortOptions["onResponse"]>>(() => true);
-  const targetAdmission: NonNullable<
-    CreateAtlassianHttpPortOptions["targetAdmission"]
-  > = async () => (controls.targetAdmitted ? { baseUrl: BASE, addressClass: "public" } : undefined);
+  const targetAdmission: NonNullable<CreateAtlassianHttpPortOptions["targetAdmission"]> = () =>
+    Promise.resolve(
+      controls.targetAdmitted ? { baseUrl: BASE, addressClass: "public" } : undefined,
+    );
   const options = {
     baseUrl: BASE,
     authRef: custody.binding.authRef,
@@ -147,17 +196,18 @@ describe("real private Jira session composition", () => {
     const f = fixture("login", undefined, 120_000);
     await f.ports.identity.perform("login", {});
     f.advance(61_000);
-    await f.sessions.withLease(f.sessionScope, async (session) => {
+    await f.sessions.withLease(f.sessionScope, (session) => {
       expect(session.current()?.expiresAt).toBe(f.sessionScope.expiresAt);
       expect(session.cookieHeader()).toBe(`${COOKIE.name}=${COOKIE.value}`);
+      return Promise.resolve();
     });
     expect([...f.sealedPortEntries.values()].join("")).not.toContain(PASSWORD);
     expect(f.fetchImpl.mock.calls.filter(([, init]) => init?.method === "DELETE")).toEqual([]);
     f.advance(59_000);
     f.controller.abort();
-    await vi.waitFor(() =>
-      expect(f.sealedPortEntries.has(jiraPrivateSessionReference(f.sessionScope))).toBe(false),
-    );
+    await vi.waitFor(() => {
+      expect(f.sealedPortEntries.has(jiraPrivateSessionReference(f.sessionScope))).toBe(false);
+    });
     expect(f.fetchImpl.mock.calls.filter(([, init]) => init?.method === "DELETE")).toHaveLength(1);
   });
   it("logs out once at turn finish with the exact cookie, then erases the sealed cookie and temp slot", async () => {
@@ -165,7 +215,7 @@ describe("real private Jira session composition", () => {
     const result = await f.ports.identity.perform("login", {});
     const scope = jiraSessionBindingForInput(f.binding);
     const reference = jiraPrivateSessionReference(scope);
-    await f.sessions.withLease(scope, async (session) => {
+    await f.sessions.withLease(scope, (session) => {
       session.rememberTemporary({
         actorKey: "actor-key",
         target: { kind: "user", key: "actor-key", name: "Native Actor" },
@@ -174,12 +224,13 @@ describe("real private Jira session composition", () => {
         crop: { cropperOffsetX: 0, cropperOffsetY: 0, cropperWidth: 1 },
         needsCropping: false,
       });
+      return Promise.resolve();
     });
     expect(f.sealedPortEntries.get(reference)).toContain(COOKIE.value);
     f.onResponse.mockClear();
     await finishTurn(f.ports);
     const calls = f.fetchImpl.mock.calls.filter(([, init]) => init?.method === "DELETE");
-    expect(calls.map(([url, init]) => [String(url), init?.method])).toEqual([
+    expect(calls.map(([url, init]) => [fetchUrl(url), init?.method])).toEqual([
       [`${BASE}/rest/auth/1/session`, "DELETE"],
     ]);
     const headers = new Headers(calls[0]?.[1]?.headers);
@@ -260,16 +311,18 @@ describe("real private Jira session composition", () => {
             }
           : old;
       const replacement = { name: "JSESSIONID", value: "synthetic-replacement-session" };
-      await f.sessions.withLease(next, async (session) => {
+      await f.sessions.withLease(next, (session) => {
         session.establish(replacement);
+        return Promise.resolve();
       });
       const reference = jiraPrivateSessionReference(next);
       const before = f.sealedPortEntries.get(reference);
       await finishTurn(f.ports);
       expect(f.fetchImpl.mock.calls.filter(([, init]) => init?.method === "DELETE")).toEqual([]);
       expect(f.sealedPortEntries.get(reference)).toBe(before);
-      await f.sessions.withLease(next, async (session) => {
+      await f.sessions.withLease(next, (session) => {
         expect(session.cookieHeader()).toBe(`${replacement.name}=${replacement.value}`);
+        return Promise.resolve();
       });
     },
   );
@@ -328,7 +381,7 @@ describe("real private Jira session composition", () => {
     });
     let nested: Promise<void> | undefined;
     let nestedSettled = false;
-    const late = vi.fn(async () => undefined);
+    const late = vi.fn(() => Promise.resolve());
     lifetime.register(async () => {
       nested = lifetime.finish();
       void nested.then(() => {
@@ -382,7 +435,7 @@ describe("real private Jira session composition", () => {
         ).toMatchObject({ ok: true, status: 200 });
         return { ok: false, reason: "unavailable" };
       });
-      const writes = f.fetchImpl.mock.calls.filter(([url]) => String(url).includes("/avatar/"));
+      const writes = f.fetchImpl.mock.calls.filter(([url]) => fetchUrl(url).includes("/avatar/"));
       expect(writes).toHaveLength(1);
       expect(new Headers(writes[0]?.[1]?.headers).get("cookie")).toBe(
         `${COOKIE.name}=${COOKIE.value}`,
@@ -399,7 +452,7 @@ describe("real private Jira session composition", () => {
       body: { sessionEstablished: true, userKey: "actor-key", username: "Native Actor" },
     });
     const calls = f.fetchImpl.mock.calls;
-    expect(calls.map(([url, init]) => [String(url), init?.method])).toEqual([
+    expect(calls.map(([url, init]) => [fetchUrl(url), init?.method])).toEqual([
       [`${BASE}/rest/api/2/myself`, "GET"],
       [`${BASE}/rest/auth/1/session`, "POST"],
       [`${BASE}/rest/api/2/myself`, "GET"],
@@ -434,14 +487,15 @@ describe("real private Jira session composition", () => {
       reason: "unavailable",
       httpStatus: 200,
     });
-    await f.sessions.withLease(jiraSessionBindingForInput(f.binding), async (session) => {
+    await f.sessions.withLease(jiraSessionBindingForInput(f.binding), (session) => {
       expect(session.current()).toBeUndefined();
+      return Promise.resolve();
     });
   });
   it("retains known actor identity after a login ACK when persisting the independently proven session fails", async () => {
     const f = fixture();
     const compare = f.vault.compareAndSet;
-    f.vault.compareAndSet = (reference, expected, next) => {
+    f.vault.compareAndSet = (reference, expected, next): boolean => {
       if (next?.includes('"cookie":')) throw new TypeError("Synthetic session store failure");
       return compare(reference, expected, next);
     };
@@ -477,8 +531,9 @@ describe("real private Jira session composition", () => {
     const writes = f.fetchImpl.mock.calls.filter(([, init]) => init?.method === "DELETE");
     expect(writes).toHaveLength(1);
     expect(new Headers(writes[0]?.[1]?.headers).has("authorization")).toBe(false);
-    await f.sessions.withLease(jiraSessionBindingForInput(f.binding), async (session) => {
+    await f.sessions.withLease(jiraSessionBindingForInput(f.binding), (session) => {
       expect(session.current()).toBeUndefined();
+      return Promise.resolve();
     });
   });
   it.each([200, 202, 204])(

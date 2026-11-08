@@ -153,7 +153,7 @@ describe("human input on existing Atlassian custody", () => {
     const pending = f.inputs.prepare(f.binding);
     f.inputs.submit(pending.requestId, f.binding, pending.revision, { password: PRIVATE_VALUE });
     f.advance(60_000);
-    f.vault.compareAndSet = () => false;
+    f.vault.compareAndSet = (): boolean => false;
     expect(errorCode(() => f.inputs.inspect(pending.requestId, f.binding))).toBe("not-pending");
     expect(f.clearedPhases).toEqual([]);
   });
@@ -167,7 +167,7 @@ describe("human input on existing Atlassian custody", () => {
     if (ref === undefined) throw new TypeError("Missing reference");
     const get = f.vault.get;
     let reads = 0;
-    f.vault.get = (key) => {
+    f.vault.get = (key): string | undefined => {
       if (key === ref && ++reads === 2) {
         const original = get(key);
         if (original === undefined) throw new TypeError("Missing ready record");
@@ -283,7 +283,7 @@ describe("human input on existing Atlassian custody", () => {
     const waiting = f.inputs.wait(pending.requestId, f.binding, controller.signal, () => undefined);
     const failure = new Error("Synthetic storage unavailable");
     const get = f.vault.get;
-    f.vault.get = () => {
+    f.vault.get = (): never => {
       throw failure;
     };
     const rejected = expect(waiting).rejects.toBeInstanceOf(AtlassianCredentialCustodyError);

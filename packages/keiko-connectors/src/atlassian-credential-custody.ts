@@ -916,14 +916,19 @@ function deleteCredential(
   return deps.metadataStore.delete(authRef);
 }
 
-export function createAtlassianCredentialCustody(
-  deps: AtlassianCredentialCustodyDeps,
-): CreatedAtlassianCredentialCustody {
-  const now = deps.now ?? ((): number => Date.now());
-  const privateVault: AtlassianCredentialVaultPort = {
+function privateCustodyVault(deps: AtlassianCredentialCustodyDeps): AtlassianCredentialVaultPort {
+  return {
     get: (reference) => vaultOp(() => deps.vault.get(reference)),
-    set: (reference, value) => vaultOp(() => deps.vault.set(reference, value)),
-    delete: (reference) => vaultOp(() => deps.vault.delete(reference)),
+    set: (reference, value): void => {
+      vaultOp(() => {
+        deps.vault.set(reference, value);
+      });
+    },
+    delete: (reference): void => {
+      vaultOp(() => {
+        deps.vault.delete(reference);
+      });
+    },
     ...(deps.vault.compareAndSet === undefined
       ? {}
       : {
@@ -943,20 +948,14 @@ export function createAtlassianCredentialCustody(
       ? {}
       : { list: () => vaultOp(() => deps.vault.list?.() ?? []) }),
   };
-  const metadata = (authRef: string): AtlassianCredentialMetadata | undefined => {
-    const raw = deps.metadataStore.get(authRef);
-    return raw !== undefined && isAtlassianCredentialMetadata(raw) ? raw : undefined;
-  };
-  const humanInputs = createJiraHumanInputCustody({
-    vault: privateVault,
-    now,
-    metadata,
-    onCleared: (binding, phase) =>
-      deps.onHumanInputCleared?.(binding.operationCorrelationId, phase),
-  });
-  const sessions = createJiraPrivateSessionCustody({ vault: privateVault, now, metadata });
-  const custody: AtlassianCredentialCustody = {
-    humanInputs: humanInputs.custody,
+}
+function credentialCustodyPort(
+  deps: AtlassianCredentialCustodyDeps,
+  now: () => number,
+  humanInputs: JiraHumanInputCustody,
+): AtlassianCredentialCustody {
+  return {
+    humanInputs,
     create: (input: unknown, ownerDigest?: string): AtlassianCredentialMetadata =>
       createCredential(deps, now, input, ownerDigest),
     updateLivePod: (authRef, input, correlationId) =>
@@ -986,6 +985,26 @@ export function createAtlassianCredentialCustody(
         .sort(compareAtlassianCredentialMetadata),
     delete: (authRef, correlationId) => deleteCredential(deps, authRef, correlationId),
   };
+}
+export function createAtlassianCredentialCustody(
+  deps: AtlassianCredentialCustodyDeps,
+): CreatedAtlassianCredentialCustody {
+  const now = deps.now ?? ((): number => Date.now());
+  const privateVault = privateCustodyVault(deps);
+  const metadata = (authRef: string): AtlassianCredentialMetadata | undefined => {
+    const raw = deps.metadataStore.get(authRef);
+    return raw !== undefined && isAtlassianCredentialMetadata(raw) ? raw : undefined;
+  };
+  const humanInputs = createJiraHumanInputCustody({
+    vault: privateVault,
+    now,
+    metadata,
+    onCleared: (binding, phase) => {
+      deps.onHumanInputCleared?.(binding.operationCorrelationId, phase);
+    },
+  });
+  const sessions = createJiraPrivateSessionCustody({ vault: privateVault, now, metadata });
+  const custody = credentialCustodyPort(deps, now, humanInputs.custody);
   return {
     custody,
     executionResolver: {

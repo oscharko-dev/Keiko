@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import {
   jiraSessionBindingForInput,
   type JiraManagedConnection,
@@ -23,7 +23,48 @@ import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
 const BASE = "https://jira.example.invalid/context";
 const COOKIE = { name: "JSESSIONID", value: "synthetic-private-journal-session" };
 type Scenario = "login-proof" | "login-store" | "avatar-store" | "avatar-lost";
-async function fixture(path: string, scenario: Scenario) {
+interface JournalFixture {
+  readonly store: ReturnType<typeof createNodeUiStore>;
+  readonly journal: NonNullable<JiraChatMutationExecution["journal"]>;
+  readonly execution: JiraChatMutationExecution;
+  readonly fetchImpl: Mock<typeof fetch>;
+  readonly writeCount: () => number;
+}
+interface NativeJournalState {
+  readonly scenario: Scenario;
+  readonly avatar: boolean;
+  readonly binding: ReturnType<typeof privateJiraCustodyFixture>["binding"];
+  readonly journal: JournalFixture["journal"];
+  readonly intent: JiraChatMutationExecution["intent"];
+  writes: number;
+}
+function journalWrite(state: NativeJournalState): Response {
+  expect(state.journal.find(state.intent.invocationId)?.phase).toBe("dispatched");
+  state.writes++;
+  if (state.scenario === "avatar-lost") throw new TypeError("Synthetic lost native response");
+  return state.avatar
+    ? Response.json(
+        { cropperOffsetX: 0, cropperOffsetY: 0, cropperWidth: 32, needsCropping: false },
+        { status: 201 },
+      )
+    : Response.json({ session: COOKIE });
+}
+function journalRead(state: NativeJournalState, url: URL, cookie: boolean): Response {
+  if (state.writes > 0)
+    expect(state.journal.find(state.intent.invocationId)?.phase).toBe("acknowledged");
+  if (url.pathname === "/context/rest/api/2/myself")
+    return Response.json({
+      key:
+        state.scenario === "login-proof" && cookie ? "different-actor" : state.binding.actorUserKey,
+      name: state.binding.actorUsername,
+    });
+  if (url.pathname === "/context/rest/auth/1/session")
+    return Response.json({ name: state.binding.actorUsername });
+  if (url.pathname === "/context/rest/api/2/project/100")
+    return Response.json({ id: "100", key: "SYN", name: "Synthetic project" });
+  throw new TypeError("Unexpected synthetic journal prerequisite");
+}
+async function fixture(path: string, scenario: Scenario): Promise<JournalFixture> {
   const store = createNodeUiStore(path);
   const privateState = privateJiraCustodyFixture("jira.login");
   const journal = store.chatToolMutations;
@@ -71,8 +112,9 @@ async function fixture(path: string, scenario: Scenario) {
   };
   let selection: JiraHumanInputSelection | undefined;
   if (avatar)
-    await privateState.sessions.withLease(jiraSessionBindingForInput(binding), async (session) => {
+    await privateState.sessions.withLease(jiraSessionBindingForInput(binding), (session) => {
       session.establish(COOKIE);
+      return Promise.resolve();
     });
   else {
     const pending = privateState.inputs.prepare(binding);
@@ -81,41 +123,25 @@ async function fixture(path: string, scenario: Scenario) {
     });
     selection = { requestId: ready.requestId, revision: ready.revision, binding };
   }
-  let writes = 0;
-  const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
-    const url = new URL(String(input));
-    const method = init?.method ?? "GET";
-    const cookie = new Headers(init?.headers).has("cookie");
-    if (method !== "GET") {
-      expect(journal.find(intent.invocationId)?.phase).toBe("dispatched");
-      writes++;
-      if (scenario === "avatar-lost") throw new TypeError("Synthetic lost native response");
-      return avatar
-        ? Response.json(
-            { cropperOffsetX: 0, cropperOffsetY: 0, cropperWidth: 32, needsCropping: false },
-            { status: 201 },
-          )
-        : Response.json({ session: COOKIE });
-    }
-    if (writes > 0) expect(journal.find(intent.invocationId)?.phase).toBe("acknowledged");
-    if (url.pathname === "/context/rest/api/2/myself")
-      return Response.json({
-        key: scenario === "login-proof" && cookie ? "different-actor" : binding.actorUserKey,
-        name: binding.actorUsername,
-      });
-    if (url.pathname === "/context/rest/auth/1/session")
-      return Response.json({ name: binding.actorUsername });
-    if (url.pathname === "/context/rest/api/2/project/100")
-      return Response.json({ id: "100", key: "SYN", name: "Synthetic project" });
-    throw new TypeError("Unexpected synthetic journal prerequisite");
-  });
+  const state: NativeJournalState = { scenario, avatar, binding, journal, intent, writes: 0 };
+  const fetchImpl = vi.fn<typeof fetch>(
+    (input, init) =>
+      new Promise<Response>((resolve) => {
+        const url = new URL(input instanceof Request ? input.url : input);
+        const method = init?.method ?? "GET";
+        const cookie = new Headers(init?.headers).has("cookie");
+        resolve(method === "GET" ? journalRead(state, url, cookie) : journalWrite(state));
+      }),
+  );
   const compare = privateState.vault.compareAndSet;
-  privateState.vault.compareAndSet = (reference, previous, next) => {
-    const failStore =
-      writes > 0 &&
-      ((scenario === "login-store" && next?.includes('"cookie":')) ||
-        (scenario === "avatar-store" && next?.includes('"temporary":')));
-    if (failStore) {
+  privateState.vault.compareAndSet = (reference, previous, next): boolean => {
+    const marker =
+      scenario === "login-store"
+        ? '"cookie":'
+        : scenario === "avatar-store"
+          ? '"temporary":'
+          : undefined;
+    if (state.writes > 0 && marker !== undefined && next?.includes(marker) === true) {
       expect(journal.find(intent.invocationId)?.phase).toBe("acknowledged");
       throw new TypeError("Synthetic persistence failure after native acknowledgement");
     }
@@ -125,7 +151,7 @@ async function fixture(path: string, scenario: Scenario) {
     invocationId: intent.invocationId,
     correlationId: intent.correlationId,
     signal: new AbortController().signal,
-    beforeEffect: () => true,
+    beforeEffect: (): boolean => true,
   };
   const options = {
     baseUrl: BASE,
@@ -134,15 +160,16 @@ async function fixture(path: string, scenario: Scenario) {
     fetchImpl,
   };
   const filePorts: JiraManagedConnection["avatars"] = {
-    sourceFor: () => async () => ({
-      ok: true,
-      content: {
-        name: AVATAR_FIXTURE_FILE.name,
-        sha256: AVATAR_FIXTURE_FILE.sha256,
-        bytes: AVATAR_FIXTURE_BYTES,
-      },
-    }),
-    inspectImage: async () => ({ ok: true, value: { mimeType: "image/png" } }),
+    sourceFor: () => () =>
+      Promise.resolve({
+        ok: true,
+        content: {
+          name: AVATAR_FIXTURE_FILE.name,
+          sha256: AVATAR_FIXTURE_FILE.sha256,
+          bytes: AVATAR_FIXTURE_BYTES,
+        },
+      }),
+    inspectImage: () => Promise.resolve({ ok: true, value: { mimeType: "image/png" } }),
   };
   const args = avatar
     ? { ...AVATAR_MUTATION_FIXTURE_CASES[4].args, expectedActorKey: binding.actorUserKey }
@@ -182,7 +209,7 @@ async function fixture(path: string, scenario: Scenario) {
       return attempted;
     },
   };
-  return { store, journal, execution, fetchImpl, writeCount: () => writes };
+  return { store, journal, execution, fetchImpl, writeCount: (): number => state.writes };
 }
 describe("private native ports share the real Chat mutation journal", () => {
   it.each(["login-proof", "login-store", "avatar-store", "avatar-lost"] as const)(

@@ -156,7 +156,7 @@ describe("stored Data Center admission through real custody, wiring and verifica
         invocationId: "legacy-avatar",
         correlationId: "legacy-avatar",
         signal: new AbortController().signal,
-        beforeEffect: () => true,
+        beforeEffect: (): boolean => true,
       };
       const options = {
         legacyTemporaryRelease: "10.3" as const,

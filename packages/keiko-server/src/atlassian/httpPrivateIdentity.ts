@@ -60,6 +60,16 @@ interface JiraPrivateLifetime {
 }
 type AvatarSessionOperation = NonNullable<JiraAvatarPorts["withSession"]>;
 type AvatarAttempt = Awaited<ReturnType<AvatarSessionOperation>>;
+async function completePrivateFinalizer(
+  finalize: () => Promise<void>,
+  correlationId: string,
+): Promise<void> {
+  try {
+    await finalize();
+  } catch (error) {
+    reportJiraHumanInputCleanupFailure(undefined, { operationCorrelationId: correlationId }, error);
+  }
+}
 /** Private finalizers belong to the existing held Chat turn or Coding run. */
 export function createJiraPrivateLifetime(
   signal: AbortSignal,
@@ -68,17 +78,6 @@ export function createJiraPrivateLifetime(
   const finalizers = new Set<() => Promise<void>>();
   let settled: Promise<void> | undefined;
   let drained = false;
-  async function complete(finalize: () => Promise<void>): Promise<void> {
-    try {
-      await finalize();
-    } catch (error) {
-      reportJiraHumanInputCleanupFailure(
-        undefined,
-        { operationCorrelationId: correlationId },
-        error,
-      );
-    }
-  }
   function finish(): Promise<void> {
     if (settled !== undefined) return settled;
     signal.removeEventListener("abort", aborted);
@@ -87,7 +86,9 @@ export function createJiraPrivateLifetime(
       while (finalizers.size > 0) {
         const pending = [...finalizers];
         finalizers.clear();
-        await Promise.all(pending.map(complete));
+        await Promise.all(
+          pending.map((finalize) => completePrivateFinalizer(finalize, correlationId)),
+        );
       }
       drained = true;
     });
@@ -106,7 +107,7 @@ export function createJiraPrivateLifetime(
         const previous = settled;
         settled = Promise.resolve().then(async () => {
           await previous;
-          await complete(finalize);
+          await completePrivateFinalizer(finalize, correlationId);
         });
       }
     },
@@ -149,20 +150,24 @@ class JiraPrivateHttpOwner {
     if (this.lifetime.aborted) this.aborted();
   }
 
-  private reportCleanupFailure(error: unknown): void {
-    reportJiraHumanInputCleanupFailure(
-      undefined,
-      { operationCorrelationId: this.context.correlationId },
-      error,
-    );
+  private async completeCleanup(execute: () => Promise<void>): Promise<void> {
     try {
-      this.options.onCleanupFailure?.(error);
-    } catch (observerError) {
+      await execute();
+    } catch (error) {
       reportJiraHumanInputCleanupFailure(
         undefined,
         { operationCorrelationId: this.context.correlationId },
-        observerError,
+        error,
       );
+      try {
+        this.options.onCleanupFailure?.(error);
+      } catch (observerError) {
+        reportJiraHumanInputCleanupFailure(
+          undefined,
+          { operationCorrelationId: this.context.correlationId },
+          observerError,
+        );
+      }
     }
   }
   private async logout(cookie: () => string): Promise<void> {
@@ -196,14 +201,11 @@ class JiraPrivateHttpOwner {
     await Promise.allSettled([...this.active]);
     const retained = this.owned;
     this.owned = undefined;
-    if (retained === undefined || this.sessions === undefined) return;
-    try {
-      await this.sessions.finish(retained.binding, retained.revision, (cookie) =>
-        this.logout(cookie),
-      );
-    } catch (error) {
-      this.reportCleanupFailure(error);
-    }
+    const sessions = this.sessions;
+    if (retained === undefined || sessions === undefined) return;
+    await this.completeCleanup(() =>
+      sessions.finish(retained.binding, retained.revision, (cookie) => this.logout(cookie)),
+    );
   }
   private withSession<T>(
     scope: JiraPrivateSessionBinding,
@@ -374,13 +376,8 @@ class JiraPrivateHttpOwner {
     request: AtlassianWriteHttpRequest,
     extra: Partial<CreateAtlassianHttpPortOptions>,
   ): Promise<AtlassianWriteHttpOutcome> {
-    if (session.current() !== undefined) {
-      try {
-        await this.logout(session.cookieHeader);
-      } catch (error) {
-        this.reportCleanupFailure(error);
-      }
-    }
+    if (session.current() !== undefined)
+      await this.completeCleanup(() => this.logout(session.cookieHeader));
     session.invalidate();
     let candidate: JiraPrivateCookie | undefined;
     let established = false;
@@ -408,13 +405,8 @@ class JiraPrivateHttpOwner {
       };
     } finally {
       const cookie = candidate;
-      if (!established && cookie !== undefined) {
-        try {
-          await this.logout(() => `${cookie.name}=${cookie.value}`);
-        } catch (error) {
-          this.reportCleanupFailure(error);
-        }
-      }
+      if (!established && cookie !== undefined)
+        await this.completeCleanup(() => this.logout(() => `${cookie.name}=${cookie.value}`));
     }
   }
   private async sessionAction(

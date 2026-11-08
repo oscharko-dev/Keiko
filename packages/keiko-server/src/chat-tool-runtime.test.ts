@@ -495,11 +495,19 @@ const PRIVATE_PROFILE = {
 } as const;
 const PRIVATE_PASSWORD = "synthetic-human-only-profile-password";
 
+interface PrivateProfileFixture extends Fixture {
+  readonly argumentsValue: {
+    readonly expectedActorKey: string;
+    readonly expectedUser: typeof PRIVATE_PROFILE;
+    readonly displayName: string;
+  };
+  readonly requests: { method: string; path: string }[];
+}
 function privateProfileFixture(
   defaultMode: boolean,
   unchanged = false,
   activityLog?: ServerLogSink,
-) {
+): PrivateProfileFixture {
   const displayName = unchanged ? PRIVATE_PROFILE.displayName : "Reviewed private actor";
   const argumentsValue = {
     expectedActorKey: PRIVATE_PROFILE.key,
@@ -516,17 +524,25 @@ function privateProfileFixture(
   const configPath = join(f.root, "private-credentials.json");
   const requests: { method: string; path: string }[] = [];
   let observedName: string = PRIVATE_PROFILE.displayName;
-  const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
-    const method = init?.method ?? "GET";
-    const path = new URL(String(url)).pathname;
-    requests.push({ method, path });
-    if (path !== "/rest/api/2/myself") throw new TypeError("Unexpected private profile route");
-    if (method === "GET") return Response.json({ ...PRIVATE_PROFILE, displayName: observedName });
-    if (method !== "PUT") throw new TypeError("Unexpected private profile method");
-    expect(JSON.parse(String(init?.body))).toEqual({ displayName, password: PRIVATE_PASSWORD });
-    observedName = displayName;
-    return new Response(null, { status: 204 });
-  });
+  const fetchImpl = vi.fn<typeof fetch>(
+    (url, init) =>
+      new Promise<Response>((resolve) => {
+        const method = init?.method ?? "GET";
+        const path = new URL(url instanceof Request ? url.url : url).pathname;
+        requests.push({ method, path });
+        if (path !== "/rest/api/2/myself") throw new TypeError("Unexpected private profile route");
+        if (method === "GET") {
+          resolve(Response.json({ ...PRIVATE_PROFILE, displayName: observedName }));
+          return;
+        }
+        if (method !== "PUT") throw new TypeError("Unexpected private profile method");
+        if (typeof init?.body !== "string")
+          throw new TypeError("Missing private profile JSON body");
+        expect(JSON.parse(init.body)).toEqual({ displayName, password: PRIVATE_PASSWORD });
+        observedName = displayName;
+        resolve(new Response(null, { status: 204 }));
+      }),
+  );
   const credentials = buildAtlassianConnectorCredentialDeps({
     configPath,
     env: { KEIKO_STATE_DIR: f.root },
@@ -597,7 +613,10 @@ async function pendingPrivateInput(f: Fixture): Promise<JiraHumanInputView> {
   return view;
 }
 
-function submitPrivateProfileInput(f: Fixture, view: JiraHumanInputView) {
+function submitPrivateProfileInput(
+  f: Fixture,
+  view: JiraHumanInputView,
+): ReturnType<typeof handleSubmitJiraHumanInput> {
   return handleSubmitJiraHumanInput(
     context(
       {
@@ -610,7 +629,7 @@ function submitPrivateProfileInput(f: Fixture, view: JiraHumanInputView) {
   );
 }
 
-function privateInputActivityFixture() {
+function privateInputActivityFixture(): PrivateProfileFixture & { readonly lines: string[] } {
   const lines: string[] = [];
   const f = privateProfileFixture(true, false, {
     write: (event): void => {
@@ -634,6 +653,41 @@ function expectNoPrivateInputLogContent(lines: readonly string[], view: JiraHuma
     view.revision,
   ])
     expect(text).not.toContain(privateValue);
+}
+
+function assertPrivateProfileJournal(
+  f: PrivateProfileFixture,
+  input: JiraHumanInputView,
+  defaultMode: boolean,
+): JiraHumanInputView {
+  const exchange = privateProfileExchange(f);
+  const message = f.deps.store.listMessages(f.chatId)[0];
+  const contract = jiraOperationForTool("jira.update-myself");
+  if (exchange?.humanInput === undefined || message === undefined || contract === undefined)
+    throw new TypeError("Missing retained private exchange");
+  expect(exchange.humanInput.state).toBe("consumed");
+  expect(exchange.humanInput.revision).not.toBe(input.revision);
+  expect(exchange).toMatchObject({ mutationOutcome: "succeeded", result: { status: "completed" } });
+  const invocationId = sha256Hex(canonicalise({ messageId: message.id, callId: exchange.call.id }));
+  const argumentsDigest = sha256Hex(canonicalise(f.argumentsValue));
+  const digest = jiraOperationActionDigest(
+    "jira.update-myself",
+    argumentsDigest,
+    contract.binding,
+    undefined,
+    exchange.humanInput.revision,
+  );
+  expect(f.deps.store.chatToolMutations?.find(invocationId)).toMatchObject({
+    actionDigest: digest,
+    phase: "settled",
+    outcome: "succeeded",
+  });
+  expect(digest).not.toBe(
+    jiraOperationActionDigest("jira.update-myself", argumentsDigest, contract.binding),
+  );
+  if (defaultMode) expect(exchange.approval).toBeUndefined();
+  else expect(exchange.approval?.actionDigest).toBe(digest);
+  return exchange.humanInput;
 }
 
 it("keeps requested and consumed on the operation timeline and causally binds its separate Submit request", async () => {
@@ -745,38 +799,7 @@ it.each([false, true])(
     expect((await submitPrivateProfileInput(f, input)).status).toBe(200);
     if (!defaultMode) await approveWrite(f, "jira-chat-write");
     expect((await pending).status).toBe(200);
-    const exchange = privateProfileExchange(f);
-    const message = f.deps.store.listMessages(f.chatId)[0];
-    const contract = jiraOperationForTool("jira.update-myself");
-    if (exchange?.humanInput === undefined || message === undefined || contract === undefined)
-      throw new TypeError("Missing retained private exchange");
-    expect(exchange.humanInput.state).toBe("consumed");
-    expect(exchange.humanInput.revision).not.toBe(input.revision);
-    expect(exchange).toMatchObject({
-      mutationOutcome: "succeeded",
-      result: { status: "completed" },
-    });
-    const invocationId = sha256Hex(
-      canonicalise({ messageId: message.id, callId: exchange.call.id }),
-    );
-    const argumentsDigest = sha256Hex(canonicalise(f.argumentsValue));
-    const digest = jiraOperationActionDigest(
-      "jira.update-myself",
-      argumentsDigest,
-      contract.binding,
-      undefined,
-      exchange.humanInput.revision,
-    );
-    expect(f.deps.store.chatToolMutations?.find(invocationId)).toMatchObject({
-      actionDigest: digest,
-      phase: "settled",
-      outcome: "succeeded",
-    });
-    expect(digest).not.toBe(
-      jiraOperationActionDigest("jira.update-myself", argumentsDigest, contract.binding),
-    );
-    if (defaultMode) expect(exchange.approval).toBeUndefined();
-    else expect(exchange.approval?.actionDigest).toBe(digest);
+    const consumedInput = assertPrivateProfileJournal(f, input, defaultMode);
     expect(f.requests.filter((request) => request.method === "PUT")).toEqual([
       { method: "PUT", path: "/rest/api/2/myself" },
     ]);
@@ -785,7 +808,7 @@ it.each([false, true])(
     ).not.toContain(PRIVATE_PASSWORD);
     expect((await send(f)).status).toBe(200);
     expect(f.requests.filter((request) => request.method === "PUT")).toHaveLength(1);
-    expect((await submitPrivateProfileInput(f, exchange.humanInput)).status).not.toBe(200);
+    expect((await submitPrivateProfileInput(f, consumedInput)).status).not.toBe(200);
   },
 );
 
@@ -1315,7 +1338,7 @@ describe("combined Jira review admission parity", () => {
           const source = createPreparation(options);
           return {
             ...source,
-            current: (prepared, itemRef) => {
+            current: (prepared, itemRef): boolean => {
               checkedRefs.push(itemRef);
               return source.current(prepared, itemRef);
             },

@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "7200d1e614811360f8fab60f2e929bf9741b46e595c33f2ff1b8e970e8d98cf5"
+    "catalogDigest": "ad8b405f32f344d251ffb36341e5e781843359127bd5221299247f6f3a45f0da"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -73,7 +73,7 @@
   "summary": {
     "operationCount": 673,
     "proofCount": 696,
-    "resolvedProofCount": 695,
+    "resolvedProofCount": 696,
     "failureClassCount": 394,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -1343,7 +1343,11 @@
       "packages/keiko-server/src/atlassian/jiraReportRoutes.test.ts",
       "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.test.ts"
     ],
-    "atlassian.jira.human-input.line": [],
+    "atlassian.jira.human-input.line": [
+      "packages/keiko-server/src/atlassian/credentialActivity.test.ts",
+      "packages/keiko-server/src/atlassian/wiring.target-admission.test.ts",
+      "packages/keiko-server/src/chat-tool-runtime.test.ts"
+    ],
     "atlassian.target.admission.line": [
       "packages/keiko-server/src/atlassian/wiring.target-admission.test.ts"
     ],
@@ -3065,6 +3069,7 @@
       "packages/keiko-activity-log/src/server-log.writer-rejection.test.ts"
     ],
     "server.diagnostic.failure.activity-log-line": [
+      "packages/keiko-server/src/atlassian/credentialActivity.test.ts",
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts",
       "packages/keiko-server/src/diagnostics-log.activity-log-proof.test.ts",
       "packages/keiko-server/src/editor/verificationExecution.bootstrap.test.ts",
@@ -3350,12 +3355,5 @@
     "ui.crash": ["tests/activity-log-scenarios/client-diagnostics-ui.test.ts"],
     "ui.dependency-failure": ["tests/activity-log-scenarios/client-diagnostics-ui.test.ts"]
   },
-  "violations": [
-    {
-      "code": "proof-unresolved",
-      "site": "proofs.atlassian.jira.human-input.line",
-      "detail": "atlassian.jira.human-input",
-      "correctiveAction": "Add an owning-package test that calls expectActivityLogProof with a production-persisted line."
-    }
-  ]
+  "violations": []
 }

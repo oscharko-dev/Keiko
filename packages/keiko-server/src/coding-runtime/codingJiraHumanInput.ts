@@ -7,6 +7,7 @@ import {
   JiraHumanInputCustodyError,
   type JiraHumanInputBinding,
   type JiraHumanInputSelection,
+  type JiraManagedConnection,
 } from "@oscharko-dev/keiko-connectors";
 import {
   JIRA_HUMAN_INPUT_MAX_LIFETIME_MS,
@@ -122,7 +123,7 @@ function boundHistory(
     return refuse();
   return {
     transcript: history.nativeToolTranscript(runId, turn),
-    current: () => {
+    current: (): boolean => {
       const latest = history.nativeTurn(runId);
       return (
         latest?.chatId === turn.chatId &&
@@ -162,7 +163,7 @@ function readConnection(
   input: PrepareInput,
   credential: JiraLivePodCredential,
   current: () => boolean,
-) {
+): Pick<JiraManagedConnection, "deployment" | "baseUrl" | "http"> {
   const factory = input.deps.atlassianConnectorCredentials?.httpBodyPortFactory;
   if (factory === undefined) return refuse();
   return {
@@ -268,7 +269,13 @@ function pendingState(
   };
   return pending;
 }
-function selectedAuthority(input: PrepareInput) {
+function selectedAuthority(input: PrepareInput): {
+  readonly authority: CodingJiraInputAuthority;
+  readonly credential: JiraLivePodCredential;
+  readonly custody: NonNullable<
+    NonNullable<Dependencies["atlassianConnectorCredentials"]>["custody"]["humanInputs"]
+  >;
+} {
   const observed = input.currentAuthority();
   const currentCredential = input.currentCredential();
   const custody = input.deps.atlassianConnectorCredentials?.custody.humanInputs;
@@ -309,12 +316,13 @@ async function awaitSelection(
           );
       },
       input.context.signal,
-      (error) =>
+      (error): void => {
         reportJiraHumanInputCleanupFailure(
           input.deps.atlassianConnectorCredentials,
           pending.binding,
           error,
-        ),
+        );
+      },
     );
     if (!pending.current()) return refuse();
     return pending;
@@ -342,7 +350,8 @@ export async function prepareCodingJiraHumanInput(
   )
     return undefined;
   const { authority, credential, custody } = selectedAuthority(input);
-  const current = () => authorityCurrent(input, authority) && credentialCurrent(input, credential);
+  const current = (): boolean =>
+    authorityCurrent(input, authority) && credentialCurrent(input, credential);
   if (!(await needsInput(input, args, credential, current))) return undefined;
   const observed = await actor(input, credential, args, current);
   const review = await prepareJiraHumanInputReview(
@@ -354,12 +363,7 @@ export async function prepareCodingJiraHumanInput(
       beforeEffect: current,
     }),
   );
-  if (
-    !current() ||
-    review === undefined ||
-    review.actorUserKey !== observed.key ||
-    review.actorUsername !== observed.name
-  )
+  if (!current() || review?.actorUserKey !== observed.key || review.actorUsername !== observed.name)
     return refuse();
   const binding = pendingBinding(input, authority, credential, args, observed, review);
   const history = boundHistory(input, authority);

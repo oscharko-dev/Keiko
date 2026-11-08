@@ -342,17 +342,7 @@ function groupMember(property, name, policy, root) {
   const [method, path] = tuple.elements.map((element) => element.text);
   return entryFor(property.name.text, [method, "write", path, policy, root]);
 }
-function nativeGroup(property, ast, verified) {
-  const call = property.expression;
-  requireValid(
-    ts.isCallExpression(call) &&
-      ts.isIdentifier(call.expression) &&
-      GROUP_NAMES.has(call.expression.text) &&
-      call.typeArguments === undefined,
-    "registry-native-property",
-  );
-  const name = call.expression.text;
-  verifyGroupBuilder(ast, name, verified);
+function nativeGroupArguments(call) {
   const [policy, members, root] = call.arguments;
   requireValid(
     (call.arguments.length === 2 || call.arguments.length === 3) &&
@@ -365,6 +355,20 @@ function nativeGroup(property, ast, verified) {
       (root === undefined || ts.isStringLiteralLike(root)),
     "registry-native-group-arguments",
   );
+  return { policy, members, root };
+}
+function nativeGroup(property, ast, verified) {
+  const call = property.expression;
+  requireValid(
+    ts.isCallExpression(call) &&
+      ts.isIdentifier(call.expression) &&
+      GROUP_NAMES.has(call.expression.text) &&
+      call.typeArguments === undefined,
+    "registry-native-property",
+  );
+  const name = call.expression.text;
+  verifyGroupBuilder(ast, name, verified);
+  const { policy, members, root } = nativeGroupArguments(call);
   return members.properties.map((member) =>
     groupMember(member, name, policy.text, root?.text ?? "/rest/api/2"),
   );

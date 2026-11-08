@@ -90,21 +90,32 @@ function fail(code: JiraHumanInputRefusal): never {
 function now(owner: Owner): number {
   return (owner.now ?? Date.now)();
 }
-function selected(owner: Owner, candidate: JiraHumanInputBinding): JiraHumanInputBinding {
-  const binding = copyHumanInputBinding(candidate);
-  if (binding === undefined) return fail("invalid-input");
+type LivePod = NonNullable<
+  Extract<AtlassianCredentialMetadata, { deployment: "data-center" }>["livePod"]
+>;
+function selectedPod(owner: Owner, binding: JiraHumanInputBinding): LivePod {
   const metadata = owner.metadata(binding.authRef);
   if (
     metadata?.deployment !== "data-center" ||
-    metadata.generation !== binding.authenticationGeneration ||
-    metadata.livePod?.verificationRevision !== binding.verificationRevision ||
-    metadata.livePod.ownerDigest !== binding.principalDigest ||
-    metadata.livePod.verificationStatus !== "ok" ||
-    metadata.livePod.verificationInProgress ||
-    metadata.livePod.credentialOperation !== undefined
+    metadata.generation !== binding.authenticationGeneration
   )
     return fail("binding-changed");
-  if (binding.context.kind === "chat" && metadata.livePod.podId !== binding.context.podId)
+  const pod = metadata.livePod;
+  if (
+    pod?.verificationRevision !== binding.verificationRevision ||
+    pod.ownerDigest !== binding.principalDigest ||
+    pod.verificationStatus !== "ok" ||
+    pod.verificationInProgress ||
+    pod.credentialOperation !== undefined
+  )
+    return fail("binding-changed");
+  return pod;
+}
+function selected(owner: Owner, candidate: JiraHumanInputBinding): JiraHumanInputBinding {
+  const binding = copyHumanInputBinding(candidate);
+  if (binding === undefined) return fail("invalid-input");
+  const pod = selectedPod(owner, binding);
+  if (binding.context.kind === "chat" && pod.podId !== binding.context.podId)
     return fail("binding-changed");
   return binding;
 }
@@ -124,8 +135,7 @@ function load(
   if (serialized === undefined) return undefined;
   const record = parseHumanInputRecord(serialized);
   if (
-    record === undefined ||
-    record.requestId !== requestId ||
+    record?.requestId !== requestId ||
     humanInputRequestId(record.binding) !== humanInputRequestId(binding)
   )
     return fail("binding-changed");
@@ -135,24 +145,38 @@ function load(
 function changed(owner: Owner, requestId: string): void {
   for (const notify of [...(owner.listeners.get(requestId) ?? [])]) notify();
 }
-function save(owner: Owner, record: JiraHumanInputRecord, previous?: JiraHumanInputRecord): void {
-  const compare = owner.vault.compareAndSet;
-  const expectedDigest = previous === undefined ? undefined : owner.loaded.get(previous);
-  if (compare === undefined || (previous !== undefined && expectedDigest === undefined))
-    return fail("not-ready");
-  const expected =
-    previous === undefined ? undefined : owner.vault.get(reference(record.requestId));
-  if (previous !== undefined && (expected === undefined || digest(expected) !== expectedDigest))
-    return fail("not-pending");
-  const serialized = JSON.stringify(record);
-  if (!compare(reference(record.requestId), expected, serialized)) return fail("not-pending");
-  owner.loaded.set(record, digest(serialized));
+function expectedSerialized(
+  owner: Owner,
+  requestId: string,
+  previous?: JiraHumanInputRecord,
+): string | undefined {
+  if (previous === undefined) return undefined;
+  const expectedDigest = owner.loaded.get(previous);
+  if (expectedDigest === undefined) return fail("not-ready");
+  const expected = owner.vault.get(reference(requestId));
+  if (expected === undefined || digest(expected) !== expectedDigest) return fail("not-pending");
+  return expected;
+}
+function notifySaved(
+  owner: Owner,
+  record: JiraHumanInputRecord,
+  previous?: JiraHumanInputRecord,
+): void {
   if (
     record.state !== previous?.state &&
     (record.state === "expired" || record.state === "cancelled")
   )
     owner.onCleared?.(record.binding, record.state);
   changed(owner, record.requestId);
+}
+function save(owner: Owner, record: JiraHumanInputRecord, previous?: JiraHumanInputRecord): void {
+  const compare = owner.vault.compareAndSet;
+  if (compare === undefined) return fail("not-ready");
+  const expected = expectedSerialized(owner, record.requestId, previous);
+  const serialized = JSON.stringify(record);
+  if (!compare(reference(record.requestId), expected, serialized)) return fail("not-pending");
+  owner.loaded.set(record, digest(serialized));
+  notifySaved(owner, record, previous);
 }
 function cleared(
   record: JiraHumanInputRecord,
@@ -189,23 +213,28 @@ function inspect(
   const record = load(owner, requestId, binding);
   return record === undefined ? undefined : humanInputView(current(owner, record));
 }
-function bindingFor(
+function ownedRecord(
   owner: Owner,
   requestId: string,
   principalDigest: string,
-): JiraHumanInputBinding | undefined {
+): JiraHumanInputRecord | undefined {
   const key = humanInputReference(requestId);
   if (key === undefined || !/^[a-f0-9]{64}$/u.test(principalDigest)) return undefined;
   const serialized = owner.vault.get(key);
   if (serialized === undefined) return undefined;
   const record = parseHumanInputRecord(serialized);
-  if (
-    record === undefined ||
-    record.requestId !== requestId ||
-    record.binding.principalDigest !== principalDigest
-  )
+  if (record?.requestId !== requestId || record.binding.principalDigest !== principalDigest)
     return undefined;
   owner.loaded.set(record, digest(serialized));
+  return record;
+}
+function bindingFor(
+  owner: Owner,
+  requestId: string,
+  principalDigest: string,
+): JiraHumanInputBinding | undefined {
+  const record = ownedRecord(owner, requestId, principalDigest);
+  if (record === undefined) return undefined;
   if (current(owner, record).state === "expired") return undefined;
   try {
     return selected(owner, record.binding);
@@ -237,18 +266,20 @@ function prepare(owner: Owner, candidate: JiraHumanInputBinding): JiraHumanInput
     },
   );
 }
-function retentionSelection(owner: Owner) {
+function retentionSelection(owner: Owner): Parameters<typeof sweepExpiredJiraPrivateRecords>[0] {
   return {
     vault: owner.vault,
-    kind: "input" as const,
+    kind: "input",
     now: now(owner),
-    identity: (serialized: string) => {
+    identity: (
+      serialized: string,
+    ): { readonly reference: string; readonly expiresAt: number } | undefined => {
       const record = parseHumanInputRecord(serialized);
       return record === undefined
         ? undefined
         : { reference: reference(record.requestId), expiresAt: record.binding.expiresAt };
     },
-    onExpired: (serialized: string) => {
+    onExpired: (serialized: string): void => {
       const record = parseHumanInputRecord(serialized);
       if (record?.state === "awaiting-input" || record?.state === "ready")
         owner.onCleared?.(record.binding, "expired");
@@ -336,49 +367,93 @@ function wait(
   const view = inspect(owner, requestId, binding);
   if (view?.state !== "awaiting-input" && view?.state !== "ready") return Promise.resolve(view);
   return new Promise((resolve, reject) => {
-    let settled = false;
-    let stopped = false;
-    let observing = false;
-    const listeners = owner.listeners.get(requestId) ?? new Set<() => void>();
-    owner.listeners.set(requestId, listeners);
-    const stop = (): void => {
-      stopped = true;
-      clearTimeout(timer);
-      signal.removeEventListener("abort", interrupted);
-      listeners.delete(observe);
-      if (listeners.size === 0) owner.listeners.delete(requestId);
-    };
-    const interrupted = (): void => observe();
-    const observe = (deadline = false): void => {
-      if (stopped || observing) return;
-      observing = true;
-      try {
-        const currentView =
-          signal.aborted || deadline
-            ? cancel(owner, requestId, binding)
-            : inspect(owner, requestId, binding);
-        if (currentView?.state !== "awaiting-input" && currentView?.state !== "ready") stop();
-        if (!settled && currentView?.state !== "awaiting-input") {
-          settled = true;
-          resolve(currentView);
-        }
-      } catch (error) {
-        stop();
-        if (!settled) {
-          settled = true;
-          reject(error);
-        } else reportCleanupFailure(error);
-      } finally {
-        observing = false;
-      }
-    };
-    // This is the same held-input timer, retained until claim/cancel rather than only submit.
-    const timer = setTimeout(() => observe(true), Math.max(1, view.expiresAt - now(owner)));
-    timer.unref();
-    listeners.add(observe);
-    signal.addEventListener("abort", interrupted, { once: true });
-    observe();
+    const observer = new HumanInputWait(
+      { owner, requestId, binding, signal, reportCleanupFailure },
+      resolve,
+      reject,
+    );
+    observer.start(view);
   });
+}
+interface WaitInput {
+  readonly owner: Owner;
+  readonly requestId: string;
+  readonly binding: JiraHumanInputBinding;
+  readonly signal: AbortSignal;
+  readonly reportCleanupFailure: (error: unknown) => void;
+}
+class HumanInputWait {
+  private settled = false;
+  private stopped = false;
+  private observing = false;
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private readonly listeners: Set<() => void>;
+  private readonly interrupted = (): void => {
+    this.observe();
+  };
+  constructor(
+    private readonly input: WaitInput,
+    private readonly resolve: (value: JiraHumanInputView | undefined) => void,
+    private readonly reject: (error: Error) => void,
+  ) {
+    this.listeners = input.owner.listeners.get(input.requestId) ?? new Set<() => void>();
+    input.owner.listeners.set(input.requestId, this.listeners);
+  }
+  start(view: JiraHumanInputView): void {
+    // Same held-input timer, retained until claim/cancel rather than only submit.
+    this.timer = setTimeout(
+      () => {
+        this.observe(true);
+      },
+      Math.max(1, view.expiresAt - now(this.input.owner)),
+    );
+    this.timer.unref();
+    this.listeners.add(this.interrupted);
+    this.input.signal.addEventListener("abort", this.interrupted, { once: true });
+    this.observe();
+  }
+  private stop(): void {
+    this.stopped = true;
+    clearTimeout(this.timer);
+    this.input.signal.removeEventListener("abort", this.interrupted);
+    this.listeners.delete(this.interrupted);
+    if (this.listeners.size === 0) this.input.owner.listeners.delete(this.input.requestId);
+  }
+  private observed(view: JiraHumanInputView | undefined): void {
+    if (view?.state !== "awaiting-input" && view?.state !== "ready") this.stop();
+    if (!this.settled && view?.state !== "awaiting-input") {
+      this.settled = true;
+      this.resolve(view);
+    }
+  }
+  private observe(deadline = false): void {
+    if (this.stopped || this.observing) return;
+    this.observing = true;
+    const { owner, requestId, binding, signal } = this.input;
+    try {
+      this.observed(
+        signal.aborted || deadline
+          ? cancel(owner, requestId, binding)
+          : inspect(owner, requestId, binding),
+      );
+    } catch (error) {
+      this.stop();
+      if (this.settled) {
+        // The ready result already settled the wait; cleanup reports through its existing owner.
+        const { reportCleanupFailure } = this.input;
+        reportCleanupFailure(error);
+      } else {
+        this.settled = true;
+        this.reject(
+          error instanceof Error
+            ? error
+            : new Error("Private Jira input observation failed", { cause: error }),
+        );
+      }
+    } finally {
+      this.observing = false;
+    }
+  }
 }
 /** A facet of existing Atlassian custody, backed by the same LocalSecretVault instance. */
 export function createJiraHumanInputCustody(deps: Dependencies): {
@@ -394,7 +469,9 @@ export function createJiraHumanInputCustody(deps: Dependencies): {
       submit: (id, binding, revision, values) => submit(owner, id, binding, revision, values),
       cancel: (id, binding) => cancel(owner, id, binding),
       cancelOwned: (id, principal) => cancelOwned(owner, id, principal),
-      sweepExpired: () => sweepExpiredJiraPrivateRecords(retentionSelection(owner)),
+      sweepExpired: (): void => {
+        sweepExpiredJiraPrivateRecords(retentionSelection(owner));
+      },
       wait: (id, binding, signal, reportCleanupFailure) =>
         wait(owner, id, binding, signal, reportCleanupFailure),
     },

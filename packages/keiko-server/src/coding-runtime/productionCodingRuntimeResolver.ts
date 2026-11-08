@@ -1280,7 +1280,9 @@ function armRunExpiry(
     return;
   }
   const delayMs = Number.isFinite(nowMs) ? Math.max(0, deadlineMs - nowMs) : 0;
-  const timeout = setTimeout(() => controller.abort(), delayMs);
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, delayMs);
   timeout.unref();
   controller.signal.addEventListener(
     "abort",
@@ -1521,27 +1523,42 @@ function createBackendRun({
       resolveWorkspaceRootAccess,
     }),
     workspaceIsCurrent: runtimeWorkspaceIsCurrent(input, context),
-    jiraAuthority: {
-      runId: request.runId,
-      signal: controller.signal,
-      currentScopes: (phase) => runtimeJiraScopes(input, context, minted, authority, phase),
-      currentInputAuthority: () => runtimeJiraInputAuthority(input, context, minted, authority),
-      promptFits: (promptTokens) =>
-        authority.delegationFits({
-          capability: minted.toolFacadeCapability,
-          adapterKind: adapterKind(context),
-          liveFacts: productionRuntimeAuthorityFacts(input.workspaceAuthority, context),
-          workspaceRoot: context.workspaceRoot,
-          deploymentCeiling: context.deploymentCeiling,
-          nowIso: runtimeNow(input).toISOString(),
-          usage: { toolCalls: 0, patchBytes: 0, promptTokens },
-        }),
-    },
+    jiraAuthority: backendJiraAuthority({ input, request, context, minted, authority, controller }),
     resolveWorkspaceRootAccess,
     contextUsage,
   });
   validateLaunchedBackend(backend, context, request.runId, input.diagnostics);
   return backend;
+}
+
+function backendJiraAuthority({
+  input,
+  request,
+  context,
+  minted,
+  authority,
+  controller,
+}: Pick<
+  CreateBackendRunInput,
+  "input" | "request" | "context" | "minted" | "authority" | "controller"
+>): CodingJiraRunAuthority {
+  return {
+    runId: request.runId,
+    signal: controller.signal,
+    currentScopes: (phase) => runtimeJiraScopes(input, context, minted, authority, phase),
+    currentInputAuthority: () => runtimeJiraInputAuthority(input, context, minted, authority),
+    promptFits: (promptTokens) =>
+      !controller.signal.aborted &&
+      authority.delegationFits({
+        capability: minted.toolFacadeCapability,
+        adapterKind: adapterKind(context),
+        liveFacts: productionRuntimeAuthorityFacts(input.workspaceAuthority, context),
+        workspaceRoot: context.workspaceRoot,
+        deploymentCeiling: context.deploymentCeiling,
+        nowIso: runtimeNow(input).toISOString(),
+        usage: { toolCalls: 0, patchBytes: 0, promptTokens },
+      }),
+  };
 }
 
 function runtimeWorkspaceIsCurrent(
@@ -2042,8 +2059,7 @@ function runtimeJiraInputAuthority(
 ): ReturnType<NonNullable<CodingJiraRunAuthority["currentInputAuthority"]>> {
   const envelope = runtimeJiraEnvelope(input, context, minted, authority, "effect");
   if (
-    envelope === undefined ||
-    envelope.authority.runId !== minted.authorityRef.runId ||
+    envelope?.authority.runId !== minted.authorityRef.runId ||
     editorAgentAuthorityEnvelopeDigest(envelope.authority) !== minted.authorityRef.envelopeDigest
   )
     return undefined;

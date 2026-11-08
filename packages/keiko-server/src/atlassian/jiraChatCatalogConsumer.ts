@@ -169,14 +169,19 @@ function validActionBinding(tool: string, action: CatalogJsonObject): boolean {
   return (
     Object.keys(action).sort(compareStrings).join() === keys &&
     (!bound || isCurrentJiraOperationBinding(tool, action.operationBinding)) &&
-    (action.humanInputRevision === undefined ||
-      (typeof action.humanInputRevision === "string" &&
-        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(
-          action.humanInputRevision,
-        ))) &&
-    (action.sourceDigest === undefined ||
-      (typeof action.sourceDigest === "string" && /^[0-9a-f]{64}$/u.test(action.sourceDigest)))
+    validOptionalActionRevision(action.humanInputRevision) &&
+    validOptionalSourceDigest(action.sourceDigest)
   );
+}
+function validOptionalActionRevision(value: CatalogJsonValue | undefined): boolean {
+  return (
+    value === undefined ||
+    (typeof value === "string" &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value))
+  );
+}
+function validOptionalSourceDigest(value: CatalogJsonValue | undefined): boolean {
+  return value === undefined || (typeof value === "string" && /^[0-9a-f]{64}$/u.test(value));
 }
 function actionBinding(tool: string): Pick<JiraChatCatalogAction, "operationBinding"> {
   const binding = jiraOperationBindingForTool(tool);

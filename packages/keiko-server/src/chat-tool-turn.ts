@@ -473,14 +473,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
         invocationId: string,
         snapshot: () => CatalogJsonObject,
       ): void => {
-        const active = this.activeDraftProgress;
-        requireDispatch(
-          active?.actionId === actionId && active.snapshot === undefined,
-          "invalid",
-          "recovery-required",
-        );
-        active.invocationId = invocationId;
-        active.snapshot = snapshot;
+        this.retainDraftProgress(actionId, invocationId, snapshot);
       },
       reportBatchProgress: (progress: ChatToolBatchProgress): void => {
         this.reportBatchProgress(progress);
@@ -504,6 +497,20 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       now: Date.now,
       deadlineAt: Date.parse(this.context.deadlineAt),
     });
+  }
+  private retainDraftProgress(
+    actionId: string,
+    invocationId: string,
+    snapshot: () => CatalogJsonObject,
+  ): void {
+    const active = this.activeDraftProgress;
+    requireDispatch(
+      active?.actionId === actionId && active.snapshot === undefined,
+      "invalid",
+      "recovery-required",
+    );
+    active.invocationId = invocationId;
+    active.snapshot = snapshot;
   }
   private async callNestedModel(
     request: GatewayCallRequest,
