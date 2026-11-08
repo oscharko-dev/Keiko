@@ -5538,6 +5538,15 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Jira-Fortschritts-, Konformitäts- und Abdeckungsbericht berechnen",
   "atlassianConnectors.action.jira.draft-stage": "Teil eines Jira-Backlog-Entwurfs vorbereiten",
   "atlassianConnectors.action.jira.draft-batch": "Jira-Vorgänge aus Anforderungen entwerfen",
+  "chat.jira.report.estimateField": "Schätzfeld: {name} ({id})",
+  "chat.jira.report.estimateUnavailable": "Schätzung nicht verfügbar: {reason}",
+  "chat.jira.report.estimateReason.project-not-specified": "kein Projekt angegeben",
+  "chat.jira.report.estimateReason.field-not-found":
+    "auf den Boards oder Masken des Projekts ist kein Schätzfeld konfiguriert",
+  "chat.jira.report.estimateReason.ambiguous-field":
+    "das Projekt hat widersprüchliche Schätzfelder",
+  "chat.jira.report.estimateReason.metadata-unavailable":
+    "die Schätzkonfiguration des Projekts konnte nicht gelesen werden",
   "chat.jira.report.figures":
     "Die Zahlen berechnet Keiko aus den gelesenen Jira-Daten, nicht das Modell.",
   "chat.jira.report.reading": "Jira wird gelesen: {read} von {total} Vorgängen",

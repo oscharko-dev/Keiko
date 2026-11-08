@@ -342,3 +342,12 @@ unchanged Chromium cases passed in 1.6 minutes, including the real-BFF stop/rest
 producer regenerated all 17 artifacts, and the source/harness freshness gate passes. Representative
 update-window and reconnect captures were visually inspected. No updater behavior, fixture,
 assertion or threshold changed; this remains updater fixture and BFF recovery evidence.
+
+## Jira report estimate field refresh — 2026-11-08
+
+The C4 report-card translations changed the declared optional catalog digests. The complete
+original producer ran in the Linux arm64 container with Node 24.18.0, an init process and Liberation
+fonts: all nine tests passed in 2.4 minutes, including real BFF stop/restart. All source provenance
+records were regenerated; the progress and reconnect captures changed and were visually inspected.
+No updater behavior, fixture, assertion or numerical ceiling changed. This is updater presentation
+and recovery evidence; it does not qualify native installation or a live Jira instance.

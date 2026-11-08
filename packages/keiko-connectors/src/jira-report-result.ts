@@ -32,7 +32,7 @@ function progress(value: JiraReportProgress): CatalogJsonObject {
     done: value.done,
     noCategory: value.noCategory,
     donePercent: value.donePercent,
-    estimate: { ...value.estimate },
+    estimate: value.estimate === null ? null : { ...value.estimate },
   };
 }
 /**

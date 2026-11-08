@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "7200d1e614811360f8fab60f2e929bf9741b46e595c33f2ff1b8e970e8d98cf5",
+    "catalogDigest": "63eba91bb4849326c380d18f60c9b31c8c2632ae181890720f4579a8f87075f8",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1545,6 +1545,23 @@
             "dataClass": "closed-enum",
             "required": true
           },
+          "estimateSource": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["explicit-field", "board-configuration", "project-screen", "unavailable"]
+          },
+          "estimateUnavailableReason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "project-not-specified",
+              "field-not-found",
+              "ambiguous-field",
+              "metadata-unavailable"
+            ]
+          },
           "format": {
             "type": "string",
             "dataClass": "closed-enum",
@@ -1651,8 +1668,8 @@
         "failureClasses": ["atlassian-action-execution"],
         "proofIds": ["atlassian.jira-report.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraReportActivity.ts:28",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraReportActivity.ts:294"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraReportActivity.ts:32",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraReportActivity.ts:324"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -33725,7 +33742,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["jira.report", "jira.draft-stage"]
+            "values": ["jira.report", "jira.draft-stage", "jira.draft-batch"]
           }
         },
         "proofIds": ["jira.operation.local.line"],
@@ -62084,6 +62101,18 @@
                   "name": "durationMs",
                   "type": "integer",
                   "dataClass": "duration",
+                  "required": false
+                },
+                {
+                  "name": "estimateSource",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "estimateUnavailableReason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
                   "required": false
                 },
                 {
@@ -114941,7 +114970,7 @@
     {
       "op": "atlassian.jira-report",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraReportActivity.ts:31",
+      "site": "packages/keiko-server/src/atlassian/jiraReportActivity.ts:35",
       "package": "keiko-server"
     },
     {

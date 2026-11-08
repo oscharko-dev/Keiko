@@ -2,6 +2,7 @@ import type {
   JiraReportFailureReason,
   JiraReportIncompleteReason,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { JIRA_REPORT_FAILURE_REASONS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import { buildJiraReport, type JiraReportInput } from "./jira-report-aggregate.js";
 import { createJiraReportHttp, type JiraReportHttp } from "./jira-report-http.js";
@@ -12,6 +13,7 @@ import {
   type JiraReportFieldPlan,
 } from "./jira-report-issue.js";
 import { fetchJiraReportPage } from "./jira-report-page.js";
+import { resolveJiraReportEstimate } from "./jira-report-estimate.js";
 import {
   discoverHierarchyFields,
   loadRequiredFields,
@@ -43,24 +45,10 @@ export function jiraReportFailure(
   reason: JiraReportFailure,
   search: boolean,
 ): JiraReportFailureReason {
-  switch (reason) {
-    case "field-validation":
-      return search ? "invalid-jql" : "unavailable";
-    case "auth-failed":
-      return "auth";
-    case "permission-denied":
-      return "permission";
-    case "not-found":
-    case "effect-denied":
-    case "cancelled":
-    case "rate-limited":
-    case "timeout":
-    case "malformed-payload":
-    case "bounds-exceeded":
-      return reason;
-    default:
-      return "unavailable";
-  }
+  if (reason === "field-validation") return search ? "invalid-jql" : "unavailable";
+  if (reason === "auth-failed") return "auth";
+  if (reason === "permission-denied") return "permission";
+  return JIRA_REPORT_FAILURE_REASONS.find((value) => value === reason) ?? "unavailable";
 }
 
 function fieldPlan(
@@ -77,7 +65,7 @@ function fieldPlan(
     parentFieldsRejected: new Set(),
     parentProposals: new Map(),
     omittedFields: new Set(),
-    estimateFieldId: session.request.estimateFieldId ?? "timeoriginalestimate",
+    estimateFieldId: session.scope.estimateFieldId,
     requirementIds: new Set(session.request.requirementIds),
     requiredByType: required.byType,
     checker,
@@ -194,6 +182,19 @@ async function initialize(
   }
   const checker = bindChecker(deps.checker, hierarchy.catalog);
   session.checker = checkerState(checker);
+  const { failure, ...estimate } = await resolveJiraReportEstimate(
+    http,
+    session.request,
+    required,
+    hierarchy.catalog,
+  );
+  const { estimateUnavailableReason: _previousReason, ...scope } = session.scope;
+  session.scope = { ...scope, ...estimate };
+  if (failure !== undefined) {
+    session.failure = jiraReportFailure(failure, false);
+    finish(session, deps, "read-failed");
+    return;
+  }
   session.plan = fieldPlan(
     session,
     hierarchy,
@@ -234,10 +235,7 @@ function issueFieldPlan(plan: JiraReportFieldPlan): JiraReportFieldPlan {
     omittedFields: new Set(),
   };
 }
-function retainFieldObservations(
-  plan: JiraReportFieldPlan,
-  observed: JiraReportFieldPlan,
-): void {
+function retainFieldObservations(plan: JiraReportFieldPlan, observed: JiraReportFieldPlan): void {
   for (const id of observed.parentFieldsSeen) plan.parentFieldsSeen.add(id);
   for (const id of observed.parentFieldsNonKey) plan.parentFieldsNonKey.add(id);
   for (const [key, proposals] of observed.parentProposals) plan.parentProposals.set(key, proposals);
@@ -267,6 +265,9 @@ interface PageAdmission {
 function sliceAvailable({ deps, deadline, signal }: PageAdmission): boolean {
   return !signal.aborted && deps.now() < deadline;
 }
+function nativeSliceAvailable(plan: JiraReportFieldPlan, admission: PageAdmission): boolean {
+  return plan.checker?.requiresNativeEvidence !== true || sliceAvailable(admission);
+}
 /** Sequential issue admission bounds concurrency; each issue's independent parents share the HTTP gate. */
 async function ingestPage(
   session: JiraReportSession,
@@ -276,10 +277,10 @@ async function ingestPage(
   index = 0,
 ): Promise<Ingest> {
   if (index === raws.length) return "ok";
-  if (plan.checker?.requiresNativeEvidence === true && !sliceAvailable(admission)) return "slice";
+  if (!nativeSliceAvailable(plan, admission)) return "slice";
   const observed = issueFieldPlan(plan);
   const parsed = await parseJiraReportIssue(raws[index], observed, admission.http.request);
-  if (plan.checker?.requiresNativeEvidence === true && !sliceAvailable(admission)) return "slice";
+  if (!nativeSliceAvailable(plan, admission)) return "slice";
   if (parsed === undefined) return "invalid";
   const retained = retainIssue(session, parsed, observed, admission.deps.memoryBudgetBytes);
   if (retained === "ok" || retained === "budget") retainFieldObservations(plan, observed);
@@ -371,10 +372,7 @@ async function onPageRead(
   if (ingested === "invalid") session.failure = "malformed-payload";
   finish(session, deps, reasons[ingested]);
 }
-async function readNextPage(
-  session: JiraReportSession,
-  admission: PageAdmission,
-): Promise<void> {
+async function readNextPage(session: JiraReportSession, admission: PageAdmission): Promise<void> {
   const { deps, http } = admission;
   if (session.plan === undefined) {
     finish(session, deps, "read-failed");
@@ -403,10 +401,7 @@ async function readNextPage(
   }
 }
 
-async function pump(
-  session: JiraReportSession,
-  admission: PageAdmission,
-): Promise<void> {
+async function pump(session: JiraReportSession, admission: PageAdmission): Promise<void> {
   if (session.phase !== "reading" || !sliceAvailable(admission)) return;
   const before = session.transientFailures;
   await readNextPage(session, admission);
@@ -421,7 +416,10 @@ export async function advanceJiraReportSession(
   deps: JiraReportReadDeps,
 ): Promise<void> {
   const deadline = deps.now() + deps.sliceMs;
-  const signal = AbortSignal.any([deps.signal, AbortSignal.timeout(Math.max(1, Math.ceil(deps.sliceMs)))]);
+  const signal = AbortSignal.any([
+    deps.signal,
+    AbortSignal.timeout(Math.max(1, Math.ceil(deps.sliceMs))),
+  ]);
   const http = createJiraReportHttp(deps, {
     signal,
     beforeEffect: () => deps.now() < deadline && deps.beforeEffect(),

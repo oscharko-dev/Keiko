@@ -77,6 +77,17 @@ export interface JiraReportRequiredFields {
   readonly state: "applied" | "partial" | "unavailable";
   readonly reason?: JiraReportFailure;
   readonly byType: ReadonlyMap<string, readonly string[]>;
+  /** Numeric Story Points fields actually present on this project's create screens. */
+  readonly estimateFields?: readonly JiraReportFieldCatalogEntry[];
+}
+
+function screenEstimateField(value: unknown): readonly JiraReportFieldCatalogEntry[] {
+  const field = asRecord(value);
+  if (typeof field?.fieldId !== "string" || !FIELD_ID.test(field.fieldId)) return [];
+  if (typeof field.name !== "string" || asRecord(field.schema)?.type !== "number") return [];
+  return /^story[ -]points(?: estimate)?$/iu.test(field.name.trim())
+    ? [{ id: field.fieldId, name: field.name.trim() }]
+    : [];
 }
 
 function requiredIds(values: readonly unknown[]): readonly string[] {
@@ -104,6 +115,10 @@ function statedTotal(body: Record<string, unknown>): number | undefined | "inval
 function coherent(body: Record<string, unknown>, startAt: number): boolean {
   return (body.startAt ?? startAt) === startAt && statedTotal(body) !== "invalid";
 }
+function nextPage(body: Record<string, unknown>, read: number, total: number | undefined): PageEnd {
+  if (total === undefined && body.isLast !== false) return "malformed";
+  return read > 0 ? "more" : "malformed";
+}
 /**
  * Whether a createmeta page ends its collection. Jira's own completion statement (`isLast`) or a
  * total this page reaches settles it, and the two must agree: a page that starts elsewhere than
@@ -116,17 +131,18 @@ function pageEnd(body: Record<string, unknown>, startAt: number, read: number): 
   const reached = total !== undefined && startAt + read >= total;
   if (body.isLast === true) return total === undefined || reached ? "last" : "malformed";
   if (reached) return "last";
-  return total === undefined || read === 0 ? "malformed" : "more";
+  return nextPage(body, read, total);
 }
 /** Every page of one createmeta collection; the failure reason when a page cannot be read. */
-async function collectPages(
-  http: JiraReportHttp,
+export async function collectJiraReportMetadataPages(
+  http: Pick<JiraReportHttp, "getRecord">,
   path: string,
   startAt: number,
   into: unknown[],
+  maxItems = Number.MAX_SAFE_INTEGER,
 ): Promise<JiraReportFailure | undefined> {
   const outcome = await http.getRecord(
-    `${path}?startAt=${String(startAt)}&maxResults=${String(METADATA_PAGE_SIZE)}`,
+    `${path}${path.includes("?") ? "&" : "?"}startAt=${String(startAt)}&maxResults=${String(METADATA_PAGE_SIZE)}`,
   );
   if (!outcome.ok) return outcome.reason;
   const values = asArray(outcome.body.values);
@@ -134,23 +150,32 @@ async function collectPages(
   const end = pageEnd(outcome.body, startAt, values.length);
   if (end === "malformed") return "malformed-payload";
   into.push(...values);
-  return end === "last" ? undefined : collectPages(http, path, startAt + values.length, into);
+  if (into.length > maxItems) return "bounds-exceeded";
+  return end === "last"
+    ? undefined
+    : collectJiraReportMetadataPages(http, path, startAt + values.length, into, maxItems);
 }
 type TypeRequirements =
-  { readonly fields: readonly string[] } | { readonly reason: JiraReportFailure };
+  | {
+      readonly fields: readonly string[];
+      readonly estimateFields: readonly JiraReportFieldCatalogEntry[];
+    }
+  | { readonly reason: JiraReportFailure };
 async function typeRequirements(
   http: JiraReportHttp,
   projectKey: string,
   typeId: string,
 ): Promise<TypeRequirements> {
   const values: unknown[] = [];
-  const reason = await collectPages(
+  const reason = await collectJiraReportMetadataPages(
     http,
     `issue/createmeta/${encodeURIComponent(projectKey)}/issuetypes/${typeId}`,
     0,
     values,
   );
-  return reason === undefined ? { fields: requiredIds(values) } : { reason };
+  return reason === undefined
+    ? { fields: requiredIds(values), estimateFields: values.flatMap(screenEstimateField) }
+    : { reason };
 }
 
 function requiredState(read: number, expected: number): JiraReportRequiredFields["state"] {
@@ -165,7 +190,7 @@ export async function loadRequiredFields(
 ): Promise<JiraReportRequiredFields> {
   const types: unknown[] = [];
   const typesReason = isSafeAtlassianIdentifier(projectKey)
-    ? await collectPages(
+    ? await collectJiraReportMetadataPages(
         http,
         `issue/createmeta/${encodeURIComponent(projectKey)}/issuetypes`,
         0,
@@ -187,5 +212,6 @@ export async function loadRequiredFields(
     else if ("reason" in item) reason = item.reason;
   });
   const state = requiredState(byType.size, ids.length);
-  return { state, ...(reason === undefined ? {} : { reason }), byType };
+  const estimateFields = loaded.flatMap((item) => ("fields" in item ? item.estimateFields : []));
+  return { state, ...(reason === undefined ? {} : { reason }), byType, estimateFields };
 }

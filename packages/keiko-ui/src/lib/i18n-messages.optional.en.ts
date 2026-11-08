@@ -5285,6 +5285,14 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.action.jira.report": "Compute Jira progress, compliance and coverage report",
   "atlassianConnectors.action.jira.draft-stage": "Stage part of a Jira backlog draft",
   "atlassianConnectors.action.jira.draft-batch": "Draft Jira issues from requirements",
+  "chat.jira.report.estimateField": "Estimate field: {name} ({id})",
+  "chat.jira.report.estimateUnavailable": "Estimate unavailable: {reason}",
+  "chat.jira.report.estimateReason.project-not-specified": "no project was specified",
+  "chat.jira.report.estimateReason.field-not-found":
+    "no estimate field is configured on the project's boards or screens",
+  "chat.jira.report.estimateReason.ambiguous-field": "the project has conflicting estimate fields",
+  "chat.jira.report.estimateReason.metadata-unavailable":
+    "the project's estimate configuration could not be read",
   "chat.jira.report.figures":
     "Figures are computed by Keiko from the Jira data read, not by the model.",
   "chat.jira.report.reading": "Reading Jira: {read} of {total} issues",

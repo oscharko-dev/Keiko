@@ -9,6 +9,7 @@ import type {
   JiraReportProgress,
   JiraReportRow,
 } from "./jira-report-types.js";
+import { jiraReportEstimateSummary } from "./jira-report-figures.js";
 
 /** Columns of the CSV export. A parser needs nothing but this list and RFC 4180. */
 export const JIRA_REPORT_CSV_COLUMNS = [
@@ -104,6 +105,8 @@ const BYTE_ORDER_MARK = "\uFEFF";
 /** The unit of every estimate and the date overdue was judged against, stated beside the figures. */
 function unitsText(report: JiraReport): string {
   const { estimateUnit, estimateFieldId, asOf, timeZone } = report.scope;
+  if (estimateUnit === "unavailable")
+    return `estimateUnit=unavailable;estimateReason=${report.scope.estimateUnavailableReason ?? "metadata-unavailable"};asOf=${asOf} ${timeZone}`;
   const unit =
     estimateUnit === "seconds"
       ? "estimateUnit=seconds"
@@ -176,15 +179,10 @@ const PROGRESS_HEADER = ["", "Issues", "To do", "In progress", "Done", "No categ
 
 function progressSection(report: JiraReport): string {
   const { project, byType, unassigned, overdue } = report.progress;
-  const { estimate } = project;
-  const unit =
-    report.scope.estimateUnit === "seconds"
-      ? "seconds of original time estimate"
-      : `the unit of field ${report.scope.estimateFieldId ?? ""}`;
   return [
     "## Progress\n",
     table(PROGRESS_HEADER, [progressRow("Project", project)]),
-    `Estimate (${unit}): ${String(estimate.total)} total, ${String(estimate.done)} done, ${String(estimate.remaining)} remaining; ${String(estimate.unestimated)} issues without an estimate.\n`,
+    `${jiraReportEstimateSummary(report)}.\n`,
     `Open issues without an assignee: ${String(unassigned)}. Open issues past their due date on ${report.scope.asOf} (${report.scope.timeZone}): ${String(overdue)}.\n`,
     "### By issue type and status\n",
     table(
@@ -348,10 +346,6 @@ function readText(report: JiraReport): string {
   const total = issuesTotal === undefined ? " of an unknown total" : ` of ${String(issuesTotal)}`;
   return `${String(issuesRead)}${total}`;
 }
-function estimateUnitText(report: JiraReport): string {
-  const { estimateUnit, estimateFieldId } = report.scope;
-  return estimateUnit === "seconds" ? "seconds" : `unit of ${estimateFieldId ?? "field"}`;
-}
 /** Numbers and issue keys only, so the text is safe in a Jira comment and cannot carry markup. */
 export function jiraReportCommentText(report: JiraReport): string {
   const { project, unassigned, overdue } = report.progress;
@@ -360,7 +354,7 @@ export function jiraReportCommentText(report: JiraReport): string {
     `Keiko Jira report ${report.scope.projectKey ?? ""} (${stateText(report)}), digest ${report.digest}`,
     `Issues read: ${readText(report)}`,
     `Progress: ${String(project.total)} issues, ${String(project.new)} to do, ${String(project.indeterminate)} in progress, ${String(project.done)} done (${String(project.donePercent)}%), ${String(project.noCategory)} without category`,
-    `Estimate (${estimateUnitText(report)}): ${String(project.estimate.total)} total, ${String(project.estimate.done)} done, ${String(project.estimate.remaining)} remaining; ${String(project.estimate.unestimated)} issues without an estimate`,
+    jiraReportEstimateSummary(report),
     `Open and unassigned: ${String(unassigned)}; open and overdue: ${String(overdue)}`,
     `Compliance: ${String(compliance.issuesWithDeviations)} of ${String(compliance.issuesJudged)} issues deviate (${String(compliance.deviationCount)} deviations)`,
     `Required-field rules: ${compliance.requiredFieldRules}. Template checker: ${compliance.checker}.`,

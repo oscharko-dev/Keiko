@@ -15,6 +15,8 @@ async function figuresOf(count: number): Promise<{ report: JiraReport; text: str
 }
 
 function withEstimate(report: JiraReport, total: number, done: number): JiraReport {
+  if (report.progress.project.estimate === null)
+    throw new TypeError("Expected an available estimate");
   const estimate = { ...report.progress.project.estimate, total, done, remaining: total - done };
   return {
     ...report,
@@ -33,6 +35,7 @@ describe("the figures a weaker model quotes instead of computing (#4181)", () =>
         `${epic.key};${epic.typeName};${String(epic.members.total)};${String(epic.members.done)}`,
       );
     const { estimate } = report.progress.project;
+    if (estimate === null) throw new TypeError("Expected an available estimate");
     expect(lines).toContain(
       `${String(estimate.total)};${String(estimate.done)};${String(estimate.remaining)}`,
     );
