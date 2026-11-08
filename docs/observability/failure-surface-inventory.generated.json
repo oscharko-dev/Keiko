@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "7acd8b8958cc9994860e34c6e5b26dc74d11180bac2796860a0b4b177f5d761a"
+    "catalogDigest": "6e372c3e26a9c064f00774344cc70d135b50fd006c6cb5e4e63d6c64dc8b2cf3"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -1457,6 +1457,7 @@
     ],
     "chat.tool-turn.corrected.line": [
       "packages/keiko-server/src/atlassian/jiraChatToolTurn.test.ts",
+      "packages/keiko-server/src/chat-tool-turn-coverage.test.ts",
       "packages/keiko-server/src/chat-tool-turn-ending.test.ts"
     ],
     "chat.tool-turn.ended.line": ["packages/keiko-server/src/chat-tool-turn-ending.test.ts"],
@@ -2237,6 +2238,7 @@
       "packages/keiko-server/src/gateway-context-window.test.ts"
     ],
     "gateway.conversation.admission.line": [
+      "packages/keiko-server/src/chat-tool-model-readiness.test.ts",
       "packages/keiko-server/src/conversation-readiness-admission.test.ts"
     ],
     "gateway.discovery.alias-intersection.line": [
@@ -2696,6 +2698,7 @@
       "packages/keiko-server/src/atlassian/jiraCreateTemplateMetadata.test.ts"
     ],
     "knowledge.documents.operation.line": [
+      "packages/keiko-server/src/chat-tool-turn-coverage.test.ts",
       "packages/keiko-server/src/knowledgeDocumentsTool.test.ts"
     ],
     "knowledge.log.sink-failed.body-free": [

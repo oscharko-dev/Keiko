@@ -9,9 +9,8 @@ import {
 
 import {
   ConversationModelNotReadyError,
-  TOOL_CALLING_REQUIRED_MESSAGE,
-  CONVERSATION_REQUIRED_MESSAGE,
   type RequiredConversationCapability,
+  type ToolCallingReadinessReason,
 } from "./conversation-readiness-error.js";
 
 import {
@@ -36,16 +35,17 @@ export interface ConversationReadinessAdmission {
 
 export function conversationModelNotReadyResult(
   requiredCapability: RequiredConversationCapability = "conversation",
+  reason: ToolCallingReadinessReason | undefined = requiredCapability === "tool-calling"
+    ? "unsupported"
+    : undefined,
 ): RouteResult {
+  const unsupported = requiredCapability === "tool-calling" && reason === "unsupported";
+  const failure = new ConversationModelNotReadyError(requiredCapability, reason);
   return {
     status: 400,
     body: errorBody(
-      requiredCapability === "tool-calling"
-        ? "CONVERSATION_UNAVAILABLE_MODEL"
-        : "CONVERSATION_MODEL_NOT_READY",
-      requiredCapability === "tool-calling"
-        ? TOOL_CALLING_REQUIRED_MESSAGE
-        : CONVERSATION_REQUIRED_MESSAGE,
+      unsupported ? "CONVERSATION_UNAVAILABLE_MODEL" : "CONVERSATION_MODEL_NOT_READY",
+      failure.message,
     ),
   };
 }
@@ -198,6 +198,6 @@ export function withConversationReadinessAdmission(
 
 export function mappedConversationReadinessError(error: unknown): RouteResult | undefined {
   return error instanceof ConversationModelNotReadyError
-    ? conversationModelNotReadyResult(error.requiredCapability)
+    ? conversationModelNotReadyResult(error.requiredCapability, error.reason)
     : undefined;
 }

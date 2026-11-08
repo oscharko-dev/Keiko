@@ -15,7 +15,7 @@ import type { ChatMessage } from "./store/index.js";
 import {
   bindChatToolCatalog,
   ChatToolTurn,
-  chatModelSupportsTools,
+  chatModelToolReadiness,
   type ChatToolTurnPort,
   type ChatToolTurnOptions,
 } from "./chat-tool-turn.js";
@@ -373,10 +373,17 @@ export async function createChatSourcesToolTurn(
   primaryKind: "jira" | "knowledge" = "jira",
 ): Promise<ChatToolTurnPort> {
   const correlation = correlationIdOrUnknown(correlationId);
-  if (!chatModelSupportsTools(deps, modelId)) {
+  const readinessFailure = chatModelToolReadiness(deps, modelId);
+  if (readinessFailure !== undefined) {
     const generation = deps.gatewayConfig?.generation();
-    logConversationAdmission("observation-unavailable", correlation, generation, generation);
-    throw new ConversationModelNotReadyError("tool-calling");
+    logConversationAdmission(
+      "observation-unavailable",
+      correlation,
+      generation,
+      generation,
+      readinessFailure,
+    );
+    throw new ConversationModelNotReadyError("tool-calling", readinessFailure);
   }
   const jira = await (primaryKind === "knowledge"
     ? deps.knowledgeChatCatalog?.get()

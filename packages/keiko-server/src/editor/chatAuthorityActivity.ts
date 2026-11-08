@@ -268,7 +268,12 @@ export function recordChatAuthorityResult<T extends Outcome>(
     CHAT_AUTHORITY_OPERATION,
     {
       correlationId: correlationIdOrUnknown(correlationId),
-      level: result.ok || result.reason === "review-required" ? "info" : "warn",
+      level:
+        result.ok ||
+        result.reason === "review-required" ||
+        (phase === "read-grant" && result.reason === "expired")
+          ? "info"
+          : "warn",
     },
     {
       phase,

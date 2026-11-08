@@ -504,9 +504,10 @@ export const EN_MESSAGES = {
   "chat.modelSelectionUnavailable":
     "The selected model is temporarily unavailable. Choose another available model or wait for it to recover.",
   "chat.error.modelNotReady.title": "Model verification needed",
-  "chat.error.modelNotReady.message": "The selected model has not passed its readiness check.",
+  "chat.error.modelNotReady.message":
+    "A readiness check is missing, no longer valid, or failed for the selected model.",
   "chat.error.modelNotReady.remediation":
-    "Open model settings, run the readiness check, then send your message again.",
+    "Open Settings > Models, run the readiness check for the selected model, then send your message again.",
   "chat.error.modelNotReady.action": "Open model verification",
   "chat.error.capabilityUnavailable.title": "Model capability unavailable",
   "chat.error.capabilityUnavailable.message":

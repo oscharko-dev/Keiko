@@ -87,11 +87,15 @@ import {
   GatewayError,
   GatewayToolCatalogError,
   toolCallingConfigurationFingerprint,
+  type ModelProviderConfig,
   type GatewayCallRequest,
   type NormalizedResponse,
   type GatewayStreamChunk,
 } from "@oscharko-dev/keiko-model-gateway";
-import { isToolCallingVerificationFresh } from "@oscharko-dev/keiko-contracts/runtime/gateway";
+import {
+  isToolCallingVerificationFresh,
+  type ToolCallingVerification,
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import {
   isChatToolBatchProgress,
   type ChatToolBatchProgress,
@@ -117,7 +121,10 @@ import {
   knowledgeCoverageCorrection,
   logKnowledgeCoverage,
 } from "./chat-tool-knowledge-coverage.js";
-import { ConversationModelNotReadyError } from "./conversation-readiness-error.js";
+import {
+  ConversationModelNotReadyError,
+  type ToolCallingReadinessReason,
+} from "./conversation-readiness-error.js";
 import { logConversationAdmission } from "./conversation-readiness-log.js";
 import type { AcceptedJiraChatTurn } from "./atlassian/jiraChatAuthority.js";
 import { jiraMutationToolId } from "./atlassian/jiraMutationToolId.js";
@@ -188,10 +195,17 @@ export function mintAndBoundChatTurn<
   mint: (turn: AcceptedJiraChatTurn) => Authority | { readonly ok: false },
   signals: readonly AbortSignal[],
 ): { readonly authority: Authority; readonly signal: AbortSignal } {
-  if (!chatModelSupportsTools(deps, modelId)) {
+  const readinessFailure = chatModelToolReadiness(deps, modelId);
+  if (readinessFailure !== undefined) {
     const generation = deps.gatewayConfig?.generation();
-    logConversationAdmission("observation-unavailable", correlationId, generation, generation);
-    throw new ConversationModelNotReadyError("tool-calling");
+    logConversationAdmission(
+      "observation-unavailable",
+      correlationId,
+      generation,
+      generation,
+      readinessFailure,
+    );
+    throw new ConversationModelNotReadyError("tool-calling", readinessFailure);
   }
   requireDispatch(
     signals.every((signal) => !signal.aborted),
@@ -269,20 +283,38 @@ export function chatModelSupportsTools(
   deps: Pick<UiHandlerDeps, "gatewayConfig">,
   modelId: string,
 ): boolean {
+  return chatModelToolReadiness(deps, modelId) === undefined;
+}
+
+/** One reason owner for both source-turn admission and the legacy boolean capability view. */
+export function chatModelToolReadiness(
+  deps: Pick<UiHandlerDeps, "gatewayConfig">,
+  modelId: string,
+): ToolCallingReadinessReason | undefined {
   const config = deps.gatewayConfig?.current();
-  if (config === undefined) return false;
+  if (config === undefined) return "unverified";
   const provider = config.providers.find((candidate) => candidate.modelId === modelId);
   const capability = findConfiguredCapability(config, modelId);
-  return (
-    provider !== undefined &&
-    capability?.kind === "chat" &&
-    capability.toolCalling &&
-    capability.toolCallingVerification?.configurationFingerprint ===
-      toolCallingConfigurationFingerprint(provider) &&
-    isToolCallingVerificationFresh(capability.toolCallingVerification, {
-      nowMs: Date.now(),
-    })
-  );
+  if (provider === undefined || capability === undefined) return "unverified";
+  if (capability.kind !== "chat") return "unsupported";
+  const proofFailure = toolCallingProofFailure(capability.toolCallingVerification, provider);
+  if (proofFailure !== undefined) return proofFailure;
+  // Parsing withdraws the effective flag when proof expires; it must not hide that proof's cause.
+  return capability.toolCalling ? undefined : "unsupported";
+}
+
+function toolCallingProofFailure(
+  verification: ToolCallingVerification | undefined,
+  provider: ModelProviderConfig,
+): ToolCallingReadinessReason | undefined {
+  if (verification?.status === "unsupported") return "unsupported";
+  if (verification?.status !== "verified") return "unverified";
+  if (verification.configurationFingerprint !== toolCallingConfigurationFingerprint(provider))
+    return "configuration-changed";
+  const checkedAt = Date.parse(verification.checkedAt);
+  const nowMs = Date.now();
+  if (!Number.isFinite(checkedAt) || checkedAt > nowMs) return "unverified";
+  return isToolCallingVerificationFresh(verification, { nowMs }) ? undefined : "stale";
 }
 
 function boundArguments(value: unknown): Record<string, unknown> | undefined {
@@ -408,6 +440,8 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   private readonly runtimeContext: GatewayMessage[] = [];
   private currentToolResponse: NormalizedResponse | undefined;
   private readonly settledExchanges: ChatToolExchange[] = [];
+  /** Only server-dispatched inventory reads qualify as incidental; aliases and ids prove nothing. */
+  private readonly incidentalKnowledgeReadCallIds = new Set<string>();
   private usableObservation = false;
   /** One active serial dispatch, retired before any later turn can reuse its private snapshot. */
   private activeDraftProgress: ActiveDraftProgress | undefined;
@@ -1228,7 +1262,9 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   }
 
   private knowledgeAnswer(answer: NormalizedResponse): NormalizedResponse {
-    const coverage = knowledgeTurnCoverage(this.settledExchanges);
+    const coverage = knowledgeTurnCoverage(this.settledExchanges, {
+      incidentalReadCallIds: [...this.incidentalKnowledgeReadCallIds],
+    });
     logKnowledgeCoverage(this.options.correlationId, coverage);
     return answer;
   }
@@ -1273,7 +1309,12 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       exchanges,
       budget,
     });
-    logKnowledgeCoverage(correlationId, knowledgeTurnCoverage(exchanges));
+    logKnowledgeCoverage(
+      correlationId,
+      knowledgeTurnCoverage(exchanges, {
+        incidentalReadCallIds: [...this.incidentalKnowledgeReadCallIds],
+      }),
+    );
     this.endedAnswer = {
       modelId,
       content: chatToolTurnPartialAnswer(exchanges, reason),
@@ -1457,9 +1498,11 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     requireDispatch(tool !== undefined, "failed", "handler-unavailable");
     const offered = this.binder.offerTool(tool.toolRef);
     const args = { view: "inventory" };
+    const callId = `runtime-inventory-${randomUUID()}`;
+    this.incidentalKnowledgeReadCallIds.add(callId);
     await this.dispatch(
       {
-        id: `runtime-inventory-${randomUUID()}`,
+        id: callId,
         name: tool.alias,
         arguments: args,
         invocation: {
@@ -1480,29 +1523,52 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
    * dispatched like any other: mode, approval, authority, budget and idempotency all still apply,
    * and its result reaches the model's next round like a model-issued one.
    */
-  private async offerBatchDrafts(calls: NormalizedResponse["toolCalls"]): Promise<void> {
-    for (const call of calls) {
-      if (
-        call.invocation?.toolRef.canonicalId !== JIRA_DRAFT_BATCH_TOOL_ID ||
-        this.offeredBatchCalls.has(call.id)
-      )
-        continue;
-      this.offeredBatchCalls.add(call.id);
-      if (this.batchOfferEnded()) {
-        this.recordBatchDraftOffer("turn-ended");
-        continue;
-      }
-      const stored = this.options.deps.store
-        .findMessageById(this.options.message.id)
-        ?.toolTranscript?.exchanges.find((exchange) => exchange.call.id === call.id);
-      if (stored === undefined) {
-        this.recordBatchDraftOffer("no-stored-result");
-        continue;
-      }
-      const decision = batchDraftDecision(stored);
-      if (decision.kind === "skip") this.recordBatchDraftOffer(decision.reason);
-      else await this.dispatchBatchDraft(decision); // NOSONAR typescript:S9382 -- the approval of one batch settles before the next batch is offered
+  private offerBatchDrafts(calls: NormalizedResponse["toolCalls"]): Promise<void> {
+    return this.settleToolCalls(calls, (call) => this.offerBatchDraft(call));
+  }
+  private async offerBatchDraft(call: NormalizedResponse["toolCalls"][number]): Promise<void> {
+    if (
+      call.invocation?.toolRef.canonicalId !== JIRA_DRAFT_BATCH_TOOL_ID ||
+      this.offeredBatchCalls.has(call.id)
+    )
+      return;
+    this.offeredBatchCalls.add(call.id);
+    if (this.batchOfferEnded()) {
+      this.recordBatchDraftOffer("turn-ended");
+      return;
     }
+    const stored = this.options.deps.store
+      .findMessageById(this.options.message.id)
+      ?.toolTranscript?.exchanges.find((exchange) => exchange.call.id === call.id);
+    if (stored === undefined) {
+      this.recordBatchDraftOffer("no-stored-result");
+      return;
+    }
+    const decision = batchDraftDecision(stored);
+    if (decision.kind === "skip") this.recordBatchDraftOffer(decision.reason);
+    else await this.dispatchBatchDraft(decision);
+  }
+  /** One receipt settles before the next call; callback continuation retains no growing chain. */
+  private settleToolCalls(
+    calls: NormalizedResponse["toolCalls"],
+    settle: (call: NormalizedResponse["toolCalls"][number]) => Promise<void>,
+  ): Promise<void> {
+    const remaining = calls.values();
+    return new Promise<void>((resolve, reject) => {
+      const next = (): void => {
+        void Promise.resolve()
+          .then(() => {
+            const call = remaining.next();
+            if (call.done) {
+              resolve();
+              return undefined;
+            }
+            return settle(call.value).then(next);
+          })
+          .catch(reject);
+      };
+      next();
+    });
   }
   /** A cancelled, early-ended or scope-changed turn never gets a draft offered on its behalf. */
   private batchOfferEnded(): boolean {
@@ -1559,40 +1625,63 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       throw error;
     });
     await this.inventoryPreparation;
-    while (this.counters.iterations < this.limits.maxIterations) {
-      this.admitRound(request.modelId, signal);
-      const offered = this.binder.offer();
-      const round = this.roundRequest(request, offered);
-      const response = await this.callRound(model, round, signal, retryFollows); // NOSONAR typescript:S9382 -- each round depends on the previous round's results
-      if (response === undefined) continue;
-      observeRound?.(response);
-      this.chargeUsage(response);
-      if (response.toolCalls.length === 0) {
-        const answer: NormalizedResponse = {
-          ...response,
-          usage: {
-            ...response.usage,
-            promptTokens: this.promptTokens,
-            completionTokens: this.completionTokens,
-          },
-        };
-        if (!this.correctAnswer(answer, request)) return this.knowledgeAnswer(answer);
-        continue;
-      }
-      requireDispatch(
-        response.toolCalls.length <= this.limits.maxToolCalls - this.counters.toolCalls,
-        "denied",
-        "budget-exhausted",
-      );
-      const prepared = this.withCitationSources(response);
-      this.retainToolResponse(request.modelId, prepared);
-      for (const call of prepared.toolCalls) await this.dispatch(call); // NOSONAR typescript:S9382 -- dispatches share authority/budgets; receipts, mutation journals and transcripts must settle before the next admission
-      await this.activateToolSelection();
-      this.currentToolResponse = undefined;
-      await this.offerBatchDrafts(prepared.toolCalls); // NOSONAR typescript:S9382 -- the next model round reads the batch offer this round settled
-      this.correctedSinceProgress = false;
+    return new Promise<NormalizedResponse>((resolve, reject) => {
+      // Only this completion promise spans rounds; next never returns the next round's promise.
+      const next = (): void => {
+        void Promise.resolve()
+          .then(() => this.runRound(model, request, signal, observeRound, retryFollows))
+          .then((answer) => {
+            if (answer === undefined) next();
+            else resolve(answer);
+          }, reject);
+      };
+      next();
+    });
+  }
+  /** Admission, model usage and every tool receipt of this round precede the next round. */
+  private async runRound(
+    model: ModelPort,
+    request: GatewayCallRequest,
+    signal: AbortSignal,
+    observeRound?: (response: NormalizedResponse) => void,
+    retryFollows?: (error: unknown) => boolean,
+  ): Promise<NormalizedResponse | undefined> {
+    requireDispatch(
+      this.counters.iterations < this.limits.maxIterations,
+      "denied",
+      "budget-exhausted",
+    );
+    this.admitRound(request.modelId, signal);
+    const offered = this.binder.offer();
+    const round = this.roundRequest(request, offered);
+    const response = await this.callRound(model, round, signal, retryFollows);
+    if (response === undefined) return undefined;
+    observeRound?.(response);
+    this.chargeUsage(response);
+    if (response.toolCalls.length === 0) {
+      const answer: NormalizedResponse = {
+        ...response,
+        usage: {
+          ...response.usage,
+          promptTokens: this.promptTokens,
+          completionTokens: this.completionTokens,
+        },
+      };
+      return this.correctAnswer(answer, request) ? undefined : this.knowledgeAnswer(answer);
     }
-    requireDispatch(false, "denied", "budget-exhausted");
+    requireDispatch(
+      response.toolCalls.length <= this.limits.maxToolCalls - this.counters.toolCalls,
+      "denied",
+      "budget-exhausted",
+    );
+    const prepared = this.withCitationSources(response);
+    this.retainToolResponse(request.modelId, prepared);
+    await this.settleToolCalls(prepared.toolCalls, (call) => this.dispatch(call));
+    await this.activateToolSelection();
+    this.currentToolResponse = undefined;
+    await this.offerBatchDrafts(prepared.toolCalls);
+    this.correctedSinceProgress = false;
+    return undefined;
   }
 
   /** What the turn's tools may read of it: the model it runs on and the sources `[n]` designates. */
@@ -1753,7 +1842,9 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
         content: unsupportedIssueKeyCorrection(unsupported),
         log: { correctionKind: "unsupported-issue-key", unsupportedKeyCount: unsupported.length },
       });
-    const coverage = knowledgeTurnCoverage(this.settledExchanges);
+    const coverage = knowledgeTurnCoverage(this.settledExchanges, {
+      incidentalReadCallIds: [...this.incidentalKnowledgeReadCallIds],
+    });
     const knowledge = coverage === undefined ? undefined : knowledgeCoverageCorrection(coverage);
     if (knowledge !== undefined && coverage !== undefined)
       corrections.push({

@@ -2655,9 +2655,9 @@ it("rejects a bound mixed model without verified tool capability before any prov
   );
   expect(result).toMatchObject({
     status: 400,
-    body: { error: { code: "CONVERSATION_UNAVAILABLE_MODEL" } },
+    body: { error: { code: "CONVERSATION_MODEL_NOT_READY" } },
   });
-  expect(result).toMatchObject(conversationModelNotReadyResult("tool-calling"));
+  expect(result).toMatchObject(conversationModelNotReadyResult("tool-calling", "unverified"));
   expect(requests).toEqual([]);
   expect(f.jiraRequests).toEqual([]);
   expect(fetch).not.toHaveBeenCalled();

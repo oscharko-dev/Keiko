@@ -98,6 +98,51 @@ describe("formatUserError", () => {
     },
   );
   it.each(["en", "de"] as const)(
+    "directs a missing, stale or changed readiness proof to model verification after a saved error round trip in %s",
+    async (locale) => {
+      await loadLocaleMessages(locale);
+      window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+      try {
+        const error = new ApiError(
+          "CONVERSATION_MODEL_NOT_READY",
+          "Private provider detail must not determine the recovery action.",
+          400,
+        );
+        error.correlationId = "readiness-proof-support";
+        const notice = toUserErrorNotice(error, "Could not send message.");
+        expect(notice.title).toBe(
+          locale === "de" ? "Modellprüfung erforderlich" : "Model verification needed",
+        );
+        expect(notice.message).toBe(
+          locale === "de"
+            ? "Die Bereitschaftsprüfung für das ausgewählte Modell fehlt, ist nicht mehr gültig oder ist fehlgeschlagen."
+            : "A readiness check is missing, no longer valid, or failed for the selected model.",
+        );
+        expect(notice.remediation).toBe(
+          locale === "de"
+            ? "Öffne Einstellungen > Modelle, führe die Bereitschaftsprüfung für das ausgewählte Modell aus und sende deine Nachricht anschließend erneut."
+            : "Open Settings > Models, run the readiness check for the selected model, then send your message again.",
+        );
+        const restored = toUserErrorNotice(
+          formatUserError(error, "Could not send message."),
+          "Could not send message.",
+        );
+        expect(restored).toEqual(notice);
+        expect(restored).toMatchObject({
+          code: "CONVERSATION_MODEL_NOT_READY",
+          correlationId: "readiness-proof-support",
+        });
+        expect(JSON.stringify(restored)).not.toContain("Private provider detail");
+        expect(notice.remediation).not.toBe(
+          translate(locale, "chat.error.capabilityUnavailable.remediation"),
+        );
+      } finally {
+        window.localStorage.removeItem(I18N_STORAGE_KEY);
+        resetLoadedMessageCatalogs();
+      }
+    },
+  );
+  it.each(["en", "de"] as const)(
     "localizes caller admission without claiming context overflow (%s)",
     async (locale) => {
       await loadLocaleMessages(locale);
