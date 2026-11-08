@@ -1,3 +1,6 @@
+import { PERMISSION_SCHEME_MUTATION_CASES as PERMISSION_CASES } from "../../../../tests/support/jira-permission-scheme-mutation-fixture.js";
+import { ROLE_MUTATION_FIXTURE_CASES as ROLE_CASES } from "../../../../tests/support/jira-role-mutation-fixture.js";
+import { permissionRoleTransportController } from "../../../../tests/support/jira-permission-role-transport-fixture.js";
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type {
@@ -48,6 +51,36 @@ const CREATE = {
 };
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
+  { tool: "jira.create-permission-scheme", args: PERMISSION_CASES[0].args,
+    expectedReceipt: { userKey: "synthetic-actor", schemeId: "9007199254740993", schemePresent: true } },
+  { tool: "jira.update-permission-scheme", args: PERMISSION_CASES[1].args, parameters: { schemeId: "7" },
+    expectedReceipt: { userKey: "synthetic-actor", schemeId: "7", schemePresent: true } },
+  { tool: "jira.delete-permission-scheme", args: PERMISSION_CASES[2].args, parameters: { schemeId: "7" },
+    expectedOutcome: "succeeded-unconfirmed", expectedReceipt: { userKey: "synthetic-actor", schemeId: "7", schemePresent: false } },
+  { tool: "jira.add-permission-grant", args: PERMISSION_CASES[3].args, parameters: { schemeId: "7" },
+    expectedReceipt: { userKey: "synthetic-actor", schemeId: "7", permissionId: "23", grantPresent: true } },
+  { tool: "jira.delete-permission-grant", args: PERMISSION_CASES[4].args, parameters: { schemeId: "7", permissionId: "21" },
+    expectedReceipt: { userKey: "synthetic-actor", schemeId: "7", permissionId: "21", grantPresent: false } },
+  { tool: "jira.set-permission-scheme-attribute", args: PERMISSION_CASES[5].args, parameters: { permissionSchemeId: "7", key: "ADMINISTER_PROJECTS.extended.enabled" },
+    expectedReceipt: { userKey: "synthetic-actor", schemeId: "7", attributeKey: "ADMINISTER_PROJECTS.extended.enabled", attributeEnabled: false } },
+  { tool: "jira.create-role", args: ROLE_CASES[0].args,
+    expectedReceipt: { userKey: "synthetic-actor", roleId: "9007199254740993", rolePresent: true } },
+  { tool: "jira.update-role", args: ROLE_CASES[1].args, parameters: { id: "7" },
+    expectedReceipt: { userKey: "synthetic-actor", roleId: "7", rolePresent: true } },
+  { tool: "jira.replace-role", args: ROLE_CASES[2].args, parameters: { id: "7" },
+    expectedReceipt: { userKey: "synthetic-actor", roleId: "7", rolePresent: true } },
+  { tool: "jira.delete-role", args: ROLE_CASES[3].args, parameters: { id: "7" }, query: { swap: "9" },
+    expectedOutcome: "succeeded-unconfirmed", expectedReceipt: { userKey: "synthetic-actor", roleId: "7", rolePresent: false, swapRoleId: "9" } },
+  { tool: "jira.add-role-default-actors", args: ROLE_CASES[4].args, parameters: { id: "7" }, expectedOutcome: "succeeded-unconfirmed",
+    expectedReceipt: { userKey: "synthetic-actor", roleId: "7", rolePresent: true, roleActorsScope: "role-defaults", actorChange: "add", actorUserKeys: ["next-key"], actorGroupNames: [] } },
+  { tool: "jira.delete-role-default-actor", args: ROLE_CASES[5].args, parameters: { id: "7" }, query: { group: "current-group" }, expectedOutcome: "succeeded-unconfirmed",
+    expectedReceipt: { userKey: "synthetic-actor", roleId: "7", rolePresent: true, roleActorsScope: "role-defaults", actorChange: "remove", actorUserKeys: [], actorGroupNames: ["current-group"] } },
+  { tool: "jira.add-project-role-actors", args: ROLE_CASES[6].args, parameters: { projectIdOrKey: "10000", id: "7" }, expectedOutcome: "succeeded-unconfirmed",
+    expectedReceipt: { userKey: "synthetic-actor", roleId: "7", rolePresent: true, projectId: "10000", projectKey: "SYN", roleActorsScope: "project-membership", actorChange: "add", actorUserKeys: ["next-key"], actorGroupNames: [] } },
+  { tool: "jira.set-project-role-actors", args: ROLE_CASES[7].args, parameters: { projectIdOrKey: "10000", id: "7" }, expectedOutcome: "succeeded-unconfirmed",
+    expectedReceipt: { userKey: "synthetic-actor", roleId: "7", rolePresent: true, projectId: "10000", projectKey: "SYN", roleActorsScope: "project-membership", actorChange: "replace", actorUserKeys: [], actorGroupNames: ["next-group"] } },
+  { tool: "jira.delete-project-role-actor", args: ROLE_CASES[8].args, parameters: { projectIdOrKey: "10000", id: "7" }, query: { user: "current-user" }, expectedOutcome: "succeeded-unconfirmed",
+    expectedReceipt: { userKey: "synthetic-actor", roleId: "7", rolePresent: true, projectId: "10000", projectKey: "SYN", roleActorsScope: "project-membership", actorChange: "remove", actorUserKeys: ["current-key"], actorGroupNames: [] } },
   { tool: "jira.upsert-version-remote-link", args: VERSION_LINK_CASES[0].args, parameters: { versionId: "81" },
     expectedReceipt: { versionId: "81", projectId: "10000", projectKey: "SYN", userKey: "synthetic-actor", globalId: "release:link", linkPresent: true } },
   { tool: "jira.upsert-version-remote-link-by-global-id", args: VERSION_LINK_CASES[1].args, parameters: { versionId: "81", globalId: "release:link" },
@@ -1458,7 +1491,7 @@ function lifecycleRemote(tool: string | undefined): ReturnType<typeof vi.fn<Atla
   const related = selectedLink === undefined
     ? (release ? releaseLifecycleTransportFixture("/context/rest/api/2") : undefined)
     : linkMutationTransportFixture("/context/rest/api/2", selectedLink);
-  const fixture = reviewedPlatformFixture(tool)
+  const fixture = permissionRoleTransportController(tool) ?? reviewedPlatformFixture(tool)
     ?? (selectedScreen === undefined ? related : screenConfigurationTransportFixture("/context/rest/api/2", selectedScreen));
   if (fixture === undefined) return undefined;
   return vi.fn<AtlassianHttpBodyPort>(async (request) => {
@@ -1524,7 +1557,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(262);
+    expect(native).toHaveLength(277);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),
@@ -1536,6 +1569,39 @@ describe("native Jira registry and real connector transport agreement", () => {
     const writes = observed.requests.filter((request) => request.method !== "GET");
     expect(writes).toHaveLength(observed.definition.method === "GET" ? 0 : 1);
     if (scenario.expectedReceipt !== undefined) expect(observed.result.data).toMatchObject(scenario.expectedReceipt);
+  });
+  it("uses only the closed attribute port for literal false and independently rereads the same scheme", async () => {
+    const scenario = SCENARIOS.find(({ tool }) => tool === "jira.set-permission-scheme-attribute");
+    if (scenario === undefined) throw new TypeError("Missing permission attribute fixture");
+    const observed = await observe(scenario);
+    const effects = observed.requests.filter(({ method }) => method !== "GET");
+    expect(effects).toHaveLength(1);
+    expect(effects[0]).toMatchObject({ method: "PUT", jiraPermissionAttribute: true,
+      url: "https://jira.example.invalid/context/rest/api/2/permissionscheme/7/attribute/ADMINISTER_PROJECTS.extended.enabled", bodyJson: "false" });
+    expect(effects[0]).not.toHaveProperty("upload");
+    expect(observed.result.data).toMatchObject({ outcome: "succeeded", schemeId: "7", attributeEnabled: false });
+    expect(observed.requests.at(-1)).toMatchObject({ method: "GET",
+      url: "https://jira.example.invalid/context/rest/api/2/permissionscheme/7/attribute/ADMINISTER_PROJECTS.extended.enabled" });
+    expect(observed.requests.filter(({ method }) => method === "GET").every((request) => request.jiraPermissionAttribute === undefined)).toBe(true);
+  });
+  it.each([
+    ["jira.create-permission-scheme", "schemeId"], ["jira.create-role", "roleId"],
+  ] as const)("retains the exact native creation ID for %s", async (tool, identity) => {
+    const scenario = SCENARIOS.find((item) => item.tool === tool);
+    if (scenario === undefined) throw new TypeError("Missing administration creation fixture");
+    const observed = await observe(scenario);
+    expect(observed.result.data).toMatchObject({ outcome: "succeeded", [identity]: "9007199254740993" });
+    expect(observed.requests.filter(({ method }) => method !== "GET")).toHaveLength(1);
+  });
+  it("keeps replacement actor namespaces and numeric role identity explicit in the native PUT", async () => {
+    const scenario = SCENARIOS.find(({ tool }) => tool === "jira.set-project-role-actors");
+    if (scenario === undefined) throw new TypeError("Missing project actor replacement fixture");
+    const observed = await observe(scenario);
+    expect(observed.requests.filter(({ method }) => method === "PUT")).toEqual([expect.objectContaining({
+      url: "https://jira.example.invalid/context/rest/api/2/project/10000/role/7",
+      bodyJson: '{"id":7,"categorisedActors":{"atlassian-user-role-actor":[],"atlassian-group-role-actor":["next-group"]}}',
+    })]);
+    expect(observed.result).toMatchObject({ isError: true, data: { outcome: "succeeded-unconfirmed", actorChange: "replace", actorGroupNames: ["next-group"] } });
   });
   it("sends a version link's false JSON value without wrapping it and confirms the complete native set", async () => {
     const scenario = SCENARIOS.find(({ tool }) => tool === "jira.upsert-version-remote-link-by-global-id");

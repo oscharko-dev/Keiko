@@ -21,6 +21,7 @@ import { jiraSavedConfigurationFacts, jiraSavedConfigurationContextFacts } from 
 import { jiraStructuralMutationFacts, jiraStructuralMutationContextFacts } from "./jira-structural-mutation-approval";
 import { jiraConfigurationMutationFacts, jiraConfigurationMutationContextFacts } from "./jira-configuration-mutation-approval";
 import { jiraPlanningMutationFacts, jiraPlanningMutationContextFacts } from "./jira-planning-mutation-approval";
+import { jiraAccessConfigurationFacts, jiraAccessConfigurationContextFacts } from "./jira-access-configuration-approval";
 
 type Raw = Readonly<Record<string, unknown>>;
 type Fact = JiraDraftField;
@@ -268,14 +269,15 @@ function jiraFacts(key: string, value: unknown, t: OptionalWidgetTranslate): rea
   }
 }
 
+const OPERATION_FACTS = [deletionFacts, jiraPropertyMutationFacts, jiraSavedConfigurationFacts,
+  jiraStructuralMutationFacts, jiraConfigurationMutationFacts, jiraAccessConfigurationFacts,
+  jiraPlanningMutationFacts, screenTabFacts, monitoringFacts] as const;
 function operationFacts(operation: string | undefined, key: string, value: unknown, t: OptionalWidgetTranslate): readonly Fact[] | undefined {
-  return deletionFacts(operation, key, value, t) ??
-    jiraPropertyMutationFacts(operation, key, value, t) ??
-    jiraSavedConfigurationFacts(operation, key, value, t) ??
-    jiraStructuralMutationFacts(operation, key, value, t) ??
-    jiraConfigurationMutationFacts(operation, key, value, t) ??
-    jiraPlanningMutationFacts(operation, key, value, t) ??
-    screenTabFacts(operation, key, value, t) ?? monitoringFacts(operation, key, value, t);
+  for (const present of OPERATION_FACTS) {
+    const facts = present(operation, key, value, t);
+    if (facts !== undefined) return facts;
+  }
+  return undefined;
 }
 /**
  * The facts of a write approval. `managed` is a Jira write whose argument names the page knows;
@@ -311,7 +313,8 @@ export function jiraActionFacts(
   });
   return managed ? [...facts, ...deletionContextFacts(raw, operation, t), ...monitoringContextFacts(operation, t),
     ...jiraSavedConfigurationContextFacts(operation, raw, t), ...jiraStructuralMutationContextFacts(operation, t),
-    ...jiraConfigurationMutationContextFacts(operation, t), ...jiraPlanningMutationContextFacts(operation, t)] : facts;
+    ...jiraConfigurationMutationContextFacts(operation, t), ...jiraPlanningMutationContextFacts(operation, t),
+    ...jiraAccessConfigurationContextFacts(operation, raw, t)] : facts;
 }
 /** Jira's own names where this turn read them; a field that repeats the target is said once. */
 function managedFacts(

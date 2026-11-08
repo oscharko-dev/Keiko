@@ -1,3 +1,4 @@
+import { permissionRoleTransportController } from "./jira-permission-role-transport-fixture.js";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { AtlassianHttpBodyRequest, AtlassianHttpBodyResult } from "@oscharko-dev/keiko-connectors";
 import { LINK_MUTATION_FIXTURE_CASES, linkMutationTransportFixture } from "./jira-link-mutation-fixture.js";
@@ -73,6 +74,8 @@ interface Controller {
 }
 const API_ROOT = "/context/rest/api/2";
 function controller(operation: string | undefined): Controller | undefined {
+  const permissionRole = permissionRoleTransportController(operation, ACTOR);
+  if (permissionRole !== undefined) return permissionRole;
   const planning = planningTransportController(operation);
   if (planning !== undefined) return planning;
   const configuration = configurationTransportController(operation);
@@ -96,6 +99,7 @@ export function lifecycleRemoteFixture(operation: string | undefined): {
       const bodyJson = await request.clone().text();
       return selected.write({ method, url: request.url, timeoutMs: 1000, maxBodyBytes: 262144,
         ...(request.headers.get("x-experimentalapi") === "true" ? { jiraExperimental: true } : {}),
+        ...(request.headers.get("content-type") === "text/plain" ? { jiraPermissionAttribute: true } : {}),
         ...(bodyJson === "" ? {} : { bodyJson }) });
     },
     snapshot: () => selected?.snapshot(),

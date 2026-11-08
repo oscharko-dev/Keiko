@@ -41,6 +41,9 @@ const UNCONFIRMED_NATIVE_OPERATIONS: ReadonlySet<string> = new Set([
   "jira.add-default-screen-field", "jira.delete-board",
   "jira.delete-sprint", "jira.swap-sprints", "jira.unmap-all-sprints",
   "jira.delete-project-category", "jira.rank-epic", "jira.rank-issues",
+  "jira.delete-permission-scheme", "jira.delete-role", "jira.add-role-default-actors",
+  "jira.delete-role-default-actor", "jira.add-project-role-actors",
+  "jira.set-project-role-actors", "jira.delete-project-role-actor",
 ]);
 export async function observeNativeJiraOperation(
   scenario: Scenario,

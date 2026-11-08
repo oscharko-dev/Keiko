@@ -1,3 +1,4 @@
+import { expectedPermissionRoleOutcome, PERMISSION_ROLE_EXPECTED_OUTCOMES } from "../../../../tests/support/jira-managed-permission-role-scenarios.js";
 import { DatabaseSync } from "node:sqlite";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
@@ -206,6 +207,20 @@ async function fixtureReadResult(
   const path = new URL(url).pathname;
   return verificationProbe(path) ?? await lifecycle.read(url) ?? nativeRead(path, state) ?? fixtureRead(path, state);
 }
+async function assertNativeRequestHeaders(request: Request, path: string): Promise<void> {
+  expect(request.headers.get("authorization")).toBe(["Bearer", "synthetic-test-pat"].join(" "));
+  const experimental = request.method === "PUT" &&
+    (path === "/context/rest/agile/1.0/sprint/unmap" || path === "/context/rest/agile/1.0/sprint/unmap-all");
+  expect(request.headers.get("x-experimentalapi")).toBe(experimental ? "true" : null);
+  const attribute = request.method === "PUT" &&
+    path === "/context/rest/api/2/permissionscheme/7/attribute/ADMINISTER_PROJECTS.extended.enabled";
+  if (!attribute) {
+    expect(request.headers.get("content-type")).not.toBe("text/plain");
+    return;
+  }
+  expect(request.headers.get("content-type")).toBe("text/plain");
+  expect(await request.clone().text()).toBe("false");
+}
 function remote(
   mode: RemoteMode,
   beforeWrite: () => void,
@@ -224,11 +239,8 @@ function remote(
     writes: () => writes,
     fetch: async (input, init): Promise<Response> => {
       const request = new Request(input, init);
-      expect(request.headers.get("authorization")).toBe(["Bearer", "synthetic-test-pat"].join(" "));
       const path = new URL(request.url).pathname;
-      const experimental = request.method === "PUT" &&
-        (path === "/context/rest/agile/1.0/sprint/unmap" || path === "/context/rest/agile/1.0/sprint/unmap-all");
-      expect(request.headers.get("x-experimentalapi")).toBe(experimental ? "true" : null);
+      await assertNativeRequestHeaders(request, path);
       if (request.method !== "GET") {
         beforeWrite();
         writes += 1;
@@ -529,7 +541,7 @@ it.each(SINGLE_MUTATIONS)(
   "executes %s through the real gateway/binder/SDK and durable journal",
   async (operation) => {
     const f = await fixture("confirmed", undefined, operation, reviewedAuthority(operation));
-    const expectedOutcome = expectedPlanningOutcome(operation) ?? expectedConfigurationOutcome(operation) ?? expectedLifecycleOutcome(operation) ?? expectedSavedConfigurationOutcome(operation) ?? "succeeded";
+    const expectedOutcome = expectedPermissionRoleOutcome(operation) ?? expectedPlanningOutcome(operation) ?? expectedConfigurationOutcome(operation) ?? expectedLifecycleOutcome(operation) ?? expectedSavedConfigurationOutcome(operation) ?? "succeeded";
     expect(await f.invoke(operation)).toMatchObject({
       kind: "settled",
       result: {
@@ -893,7 +905,9 @@ it("keeps an independent complete argument/state/receipt case for every register
   expect(Object.keys(ARGUMENTS).sort()).toEqual([...JIRA_MUTATION_OPERATIONS].sort());
   expect(Object.keys(REMOTE_STATE).sort()).toEqual([...SINGLE_MUTATIONS].sort());
   expect(Object.keys(SUCCESS_RECEIPTS).sort()).toEqual([...SINGLE_MUTATIONS].sort());
-  expect(ADMIN_MUTATIONS).toHaveLength(23);
+  expect(ADMIN_MUTATIONS).toHaveLength(38);
+  expect(Object.entries(PERMISSION_ROLE_EXPECTED_OUTCOMES).filter(([, outcome]) => outcome === "succeeded-unconfirmed").map(([name]) => name).sort())
+    .toEqual(["jira.add-project-role-actors", "jira.add-role-default-actors", "jira.delete-permission-scheme", "jira.delete-project-role-actor", "jira.delete-role", "jira.delete-role-default-actor", "jira.set-project-role-actors"]);
   expect(Object.entries(PLANNING_EXPECTED_OUTCOMES).filter(([, outcome]) => outcome === "succeeded-unconfirmed").map(([name]) => name).sort())
     .toEqual(["jira.delete-project-category", "jira.rank-epic", "jira.rank-issues"]);
   expect(Object.entries(LIFECYCLE_EXPECTED_OUTCOMES).filter(([, outcome]) => outcome === "succeeded-unconfirmed").map(([name]) => name).sort())

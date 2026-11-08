@@ -158,6 +158,7 @@ function resourceExceedsBounds(value: unknown): boolean {
   return false;
 }
 export {
+  grant as jiraPermissionGrantProjection,
   permissionScheme as jiraPermissionSchemeProjection,
   securityScheme as jiraSecuritySchemeProjection,
   namedResource as jiraSecurityLevelProjection,

@@ -8,6 +8,7 @@ import {
 import { CODING_WORKBENCH_MODES } from "./coding-workbench.js";
 
 const ADMIN_TOOLS = [
+  "jira.create-permission-scheme", "jira.update-permission-scheme", "jira.delete-permission-scheme", "jira.add-permission-grant", "jira.delete-permission-grant", "jira.set-permission-scheme-attribute", "jira.create-role", "jira.update-role", "jira.replace-role", "jira.delete-role", "jira.add-role-default-actors", "jira.delete-role-default-actor", "jira.add-project-role-actors", "jira.set-project-role-actors", "jira.delete-project-role-actor",
   "jira.create-project-category", "jira.update-project-category", "jira.delete-project-category",
   "jira.add-default-screen-field", "jira.add-screen-tab-field", "jira.remove-screen-tab-field", "jira.move-screen-tab-field", "jira.set-screen-field-show-when-empty", "jira.move-screen-tab", "jira.unmap-all-sprints",
   "jira.anonymization-validation", "jira.anonymization-rerun-validation", "jira.anonymization-progress",

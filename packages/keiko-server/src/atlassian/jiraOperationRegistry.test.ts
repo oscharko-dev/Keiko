@@ -18,6 +18,28 @@ const JIRA_MUTATION_DECLARATIONS = jiraMutationDeclarations();
 
 describe("server-owned Jira operation contracts", () => {
   it.each([
+    { tool: "jira.create-permission-scheme", identity: "POST /rest/api/2/permissionscheme", permissionPolicy: "instance-admin-permission-scheme-create-and-readback" },
+    { tool: "jira.update-permission-scheme", identity: "PUT /rest/api/2/permissionscheme/{schemeId}", permissionPolicy: "instance-admin-permission-scheme-update-and-readback" },
+    { tool: "jira.delete-permission-scheme", identity: "DELETE /rest/api/2/permissionscheme/{schemeId}", permissionPolicy: "instance-admin-permission-scheme-delete-unconfirmed" },
+    { tool: "jira.add-permission-grant", identity: "POST /rest/api/2/permissionscheme/{schemeId}/permission", permissionPolicy: "instance-admin-permission-grant-add-and-readback" },
+    { tool: "jira.delete-permission-grant", identity: "DELETE /rest/api/2/permissionscheme/{schemeId}/permission/{permissionId}", permissionPolicy: "instance-admin-permission-grant-delete-and-absence" },
+    { tool: "jira.set-permission-scheme-attribute", identity: "PUT /rest/api/2/permissionscheme/{permissionSchemeId}/attribute/{key}", permissionPolicy: "instance-admin-permission-attribute-and-readback" },
+    { tool: "jira.create-role", identity: "POST /rest/api/2/role", permissionPolicy: "instance-admin-role-create-and-readback" },
+    { tool: "jira.update-role", identity: "POST /rest/api/2/role/{id}", permissionPolicy: "instance-admin-role-update-and-readback" },
+    { tool: "jira.replace-role", identity: "PUT /rest/api/2/role/{id}", permissionPolicy: "instance-admin-role-replace-and-readback" },
+    { tool: "jira.delete-role", identity: "DELETE /rest/api/2/role/{id}", permissionPolicy: "instance-admin-role-delete-unconfirmed" },
+    { tool: "jira.add-role-default-actors", identity: "POST /rest/api/2/role/{id}/actors", permissionPolicy: "instance-admin-role-default-actors-unconfirmed" },
+    { tool: "jira.delete-role-default-actor", identity: "DELETE /rest/api/2/role/{id}/actors", permissionPolicy: "instance-admin-role-default-actors-unconfirmed" },
+    { tool: "jira.add-project-role-actors", identity: "POST /rest/api/2/project/{projectIdOrKey}/role/{id}", permissionPolicy: "instance-admin-project-role-actors-unconfirmed" },
+    { tool: "jira.set-project-role-actors", identity: "PUT /rest/api/2/project/{projectIdOrKey}/role/{id}", permissionPolicy: "instance-admin-project-role-actors-unconfirmed" },
+    { tool: "jira.delete-project-role-actor", identity: "DELETE /rest/api/2/project/{projectIdOrKey}/role/{id}", permissionPolicy: "instance-admin-project-role-actors-unconfirmed" },
+  ] as const)("binds access configuration $tool to its exact native identity and admin scope", ({ tool, identity, permissionPolicy }) => {
+    expect(jiraOperationForTool(tool)?.definition).toMatchObject({
+      kind: "native", identity, permissionPolicy, effects: ["remote-write"],
+    });
+    expect(jiraRequiredConnectorScope(tool)).toBe("issue-tracker.admin");
+  });
+  it.each([
     { tool: "jira.create-project-category", identity: "POST /rest/api/2/projectCategory", permissionPolicy: "instance-admin-project-category-create-and-readback" },
     { tool: "jira.update-project-category", identity: "PUT /rest/api/2/projectCategory/{id}", permissionPolicy: "instance-admin-project-category-update-and-readback" },
     { tool: "jira.delete-project-category", identity: "DELETE /rest/api/2/projectCategory/{id}", permissionPolicy: "instance-admin-project-category-delete-unconfirmed" },
@@ -57,7 +79,7 @@ describe("server-owned Jira operation contracts", () => {
     const admin = jiraOperationContracts().filter((entry) =>
       jiraRequiredConnectorScope(entry.definition.tool) === "issue-tracker.admin" &&
       entry.definition.effects.includes("remote-write"));
-    expect(admin).toHaveLength(23);
+    expect(admin).toHaveLength(38);
     for (const contract of admin) {
       expect(contract.definition.permissionPolicy).toMatch(/^instance-admin-/);
       expect(contract.definition.effects).toContain("remote-write");
@@ -108,7 +130,7 @@ describe("server-owned Jira operation contracts", () => {
   });
   it("keeps executable native operations distinct from local compositions", () => {
     const entries = jiraOperationContracts();
-    expect(entries.filter((entry) => entry.definition.kind === "native")).toHaveLength(308);
+    expect(entries.filter((entry) => entry.definition.kind === "native")).toHaveLength(323);
     expect(entries.filter((entry) => entry.definition.kind === "composite")).toHaveLength(3);
     expect(jiraOperationForTool("jira.discover")).toBeUndefined();
     expect(jiraOperationForTool("DELETE /rest/api/2/project")).toBeUndefined();

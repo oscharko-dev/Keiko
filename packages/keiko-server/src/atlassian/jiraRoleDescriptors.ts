@@ -16,6 +16,8 @@ import {
 
 const MAX = TOOL_CATALOG_LIMITS.maxArrayItems;
 const NAME = { ...text(255), minLength: 1 };
+export const jiraRoleReviewSnapshotSchema = object({ id: ID, name: NAME,
+  description: { anyOf: [text(32768), { type: "null" }] } }, ["id", "name", "description"]);
 const ACTOR = object({
   name: NAME,
   id: ID,
@@ -55,9 +57,9 @@ export const JIRA_ROLE_READ_DEFINITIONS = {
     { actorsScope: ROLE_CONFIGURATION, ...page(ROLE) },
   ),
   "jira.role": read(
-    "Read the exact native role ID and observed configuration, including actor metadata only when supplied. The role-configuration scope does not establish project-specific membership or actor permissions. No role, default actor or project membership is changed.",
+    "Read the exact native role ID and observed configuration, including actor metadata only when supplied. Optional reviewSnapshot preserves exact ID/name and an explicitly observed description, including null or empty; omission leaves the snapshot unavailable. The role-configuration scope does not establish project-specific membership or actor permissions. No role, default actor or project membership is changed.",
     object({ roleId: ID }, ["roleId"]),
-    { actorsScope: ROLE_CONFIGURATION, ...ROLE_FIELDS },
+    { actorsScope: ROLE_CONFIGURATION, ...ROLE_FIELDS, reviewSnapshot: jiraRoleReviewSnapshotSchema },
     1,
   ),
   "jira.role-default-actors": read(
@@ -71,9 +73,9 @@ export const JIRA_ROLE_READ_DEFINITIONS = {
     { ...PROJECT_CONTEXT, ...page(object({ name: NAME }, ["name"])) },
   ),
   "jira.project-role": read(
-    "Resolve an existing project's canonical identity and inspect one exact role's observed project membership. actorsScope is project-membership; missing actors remain unknown. Role membership alone is not an effective-permission decision, and no users or groups are assigned or removed.",
+    "Resolve an existing project's canonical identity and inspect one exact role's observed project membership. actorsScope is project-membership; missing actors remain unknown. Optional reviewSnapshot preserves exact ID/name/description with observed null or empty distinct from unavailable omission. Role membership alone is not an effective-permission decision, and no users or groups are assigned or removed.",
     object({ projectIdOrKey: KEY, roleId: ID }, ["projectIdOrKey", "roleId"]),
-    { ...PROJECT_CONTEXT, actorsScope: { type: "string", enum: ["project-membership"] }, ...ROLE_FIELDS },
+    { ...PROJECT_CONTEXT, actorsScope: { type: "string", enum: ["project-membership"] }, ...ROLE_FIELDS, reviewSnapshot: jiraRoleReviewSnapshotSchema },
     1,
   ),
   "jira.priority-schemes": read(

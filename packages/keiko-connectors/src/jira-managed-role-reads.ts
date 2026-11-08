@@ -2,17 +2,17 @@ import {
   JIRA_READ_TOOL_FAMILIES,
   isSafeAtlassianIdentifier,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import { TOOL_CATALOG_LIMITS, type CatalogJsonObject, type CatalogJsonValue } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { TOOL_CATALOG_LIMITS, type CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
-import { jiraSecurityLevelProjection } from "./jira-managed-access-schemes.js";
 import { jiraProjectionTextFits } from "./jira-managed-field-reads.js";
 import { boundJiraReadResult } from "./jira-managed-issue-reads.js";
-import { jiraReadFailure, localJiraPage, projectJiraCollection, projectJiraOptionalFields } from "./jira-managed-metadata.js";
+import { jiraReadFailure, localJiraPage, projectJiraCollection } from "./jira-managed-metadata.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { readJiraBoundProject } from "./jira-managed-projects.js";
 import { executeJiraSelectedRead, selectJiraReadPage, type JiraReadResponse } from "./jira-managed-read-request.js";
-import { jiraNativeId, jiraNativeNumericId, jiraNativeText } from "./jira-native-values.js";
+import { jiraNativeId, jiraNativeText } from "./jira-native-values.js";
+import { jiraRoleSummary as role, jiraRoleActors as actors, jiraRoleReviewSnapshot } from "./jira-role-values.js";
 
 export const JIRA_ROLE_READS = JIRA_READ_TOOL_FAMILIES.roles;
 type RoleRead = (typeof JIRA_ROLE_READS)[number];
@@ -55,41 +55,6 @@ function selection(name: RoleRead, args: CatalogJsonObject): Selection | undefin
     case "jira.project-roles": return projectSelection(args, page, false);
     case "jira.project-role": return projectSelection(args, page, true);
   }
-}
-function actorDetail(value: unknown, key: "id" | "type" | "displayName"): CatalogJsonValue | undefined {
-  if (key === "id") return jiraNativeNumericId(value);
-  return jiraNativeText(value, key === "type" ? 128 : 255) ? value : undefined;
-}
-function actor(value: unknown): CatalogJsonObject | undefined {
-  const raw = asRecord(value);
-  if (raw === undefined || !jiraNativeText(raw.name, 255)) return undefined;
-  const details = projectJiraOptionalFields(raw, ["id", "type", "displayName"], actorDetail);
-  return details === undefined ? undefined : { name: raw.name, ...details };
-}
-function actors(value: unknown): readonly CatalogJsonObject[] | undefined {
-  const values = asArray(value);
-  if (values === undefined || values.length > TOOL_CATALOG_LIMITS.maxArrayItems) return undefined;
-  const items: CatalogJsonObject[] = [];
-  const observedIds = new Set<string>();
-  for (const value of values) {
-    const item = actor(value);
-    if (item === undefined) return undefined;
-    // A user and group can share a name. Only an actual actor ID establishes identity uniqueness.
-    if (typeof item.id === "string") {
-      if (observedIds.has(item.id)) return undefined;
-      observedIds.add(item.id);
-    }
-    items.push(item);
-  }
-  return items;
-}
-function role(value: unknown): CatalogJsonObject | undefined {
-  const raw = asRecord(value);
-  const metadata = jiraSecurityLevelProjection(value);
-  if (raw === undefined || metadata === undefined) return undefined;
-  if (raw.actors === undefined || raw.actors === null) return metadata;
-  const items = actors(raw.actors);
-  return items === undefined ? undefined : { ...metadata, actors: items };
 }
 function exceedsBounds(value: unknown): boolean {
   const raw = asRecord(value);
@@ -136,8 +101,10 @@ function roleSingle(name: RoleRead, response: JiraReadResponse, selected: Select
   if (exceedsBounds(response.body)) return jiraReadFailure("bounds-exceeded");
   if (selected.roleId === undefined) return jiraReadFailure("malformed-payload");
   const item = role(response.body);
+  const reviewSnapshot = jiraRoleReviewSnapshot(response.body);
   return item?.id !== selected.roleId ? jiraReadFailure("malformed-payload")
     : boundJiraReadResult({ data: { outcome: "succeeded", ...item, ...selected.context,
+      ...(reviewSnapshot === undefined ? {} : { reviewSnapshot: { ...reviewSnapshot } }),
       actorsScope: name === "jira.project-role" ? "project-membership" : "role-configuration" } });
 }
 function projectResponse(name: RoleRead, response: JiraReadResponse, selected: Selection): ManagedMcpToolResult {
@@ -149,6 +116,8 @@ function projectResponse(name: RoleRead, response: JiraReadResponse, selected: S
   }
 }
 export function isJiraRoleRead(name: string): name is RoleRead { return READS.has(name); }
+// Internal reuse for native role-mutation review; optional observations remain optional here.
+export { jiraRoleSummary, jiraRoleActors } from "./jira-role-values.js";
 /** Role definitions/defaults/project membership are observations, never effective access grants. */
 export async function executeJiraRoleRead(name: RoleRead, args: CatalogJsonObject, request: JiraMutationRequest): Promise<ManagedMcpToolResult> {
   let selected = selection(name, args);

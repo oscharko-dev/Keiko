@@ -21,6 +21,8 @@ import {
   JIRA_AGILE_PLANNING_MUTATIONS,
   JIRA_VERSION_REMOTE_LINK_MUTATIONS,
   JIRA_PROJECT_CATEGORY_MUTATIONS,
+  JIRA_ROLE_MUTATIONS,
+  JIRA_PERMISSION_SCHEME_MUTATIONS,
   sanitizeJiraMutationFailureDetail,
   type JiraFieldValidationFailure,
   type JiraMutationOperation,
@@ -48,6 +50,8 @@ import {
 
 /** Field and metadata writes share read-only validation; templates apply only to issue fields. */
 const FIELD_OPERATIONS = [
+  ...JIRA_ROLE_MUTATIONS,
+  ...JIRA_PERMISSION_SCHEME_MUTATIONS,
   ...JIRA_AGILE_PLANNING_MUTATIONS,
   ...JIRA_VERSION_REMOTE_LINK_MUTATIONS,
   ...JIRA_PROJECT_CATEGORY_MUTATIONS,

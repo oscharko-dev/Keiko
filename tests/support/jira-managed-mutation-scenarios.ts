@@ -1,3 +1,4 @@
+import { PERMISSION_ROLE_ARGUMENTS, PERMISSION_ROLE_RECEIPTS, PERMISSION_ROLE_REMOTE_STATE } from "./jira-managed-permission-role-scenarios.js";
 import type { JiraMutationOperation } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { response, type SyntheticJira } from "./jira-managed-remote.js";
@@ -20,6 +21,7 @@ export type SingleMutation = Exclude<JiraMutationOperation, "jira.draft">;
 export const ATTACHED = new TextEncoder().encode("synthetic attachment body");
 export const ARGUMENTS: Readonly<Record<JiraMutationOperation, CatalogJsonObject>> = {
   ...CONFIGURATION_ARGUMENTS,
+  ...PERMISSION_ROLE_ARGUMENTS,
   ...PLANNING_ARGUMENTS,
   ...LIFECYCLE_ARGUMENTS,
   ...SAVED_CONFIGURATION_ARGUMENTS,
@@ -87,6 +89,7 @@ export const ARGUMENTS: Readonly<Record<JiraMutationOperation, CatalogJsonObject
 /** Observed remote state after the request, independent of returned receipts and registry metadata. */
 export const REMOTE_STATE: Readonly<Record<SingleMutation, object>> = {
   ...CONFIGURATION_REMOTE_STATE,
+  ...PERMISSION_ROLE_REMOTE_STATE,
   ...PLANNING_REMOTE_STATE,
   ...LIFECYCLE_REMOTE_STATE,
   ...SAVED_CONFIGURATION_REMOTE_STATE,
@@ -151,6 +154,7 @@ const PROJECT_RECEIPT = {
 const COMPONENT_RECEIPT = { componentId: "71", projectId: "10000", projectKey: "SYN" };
 export const SUCCESS_RECEIPTS: Readonly<Record<SingleMutation, CatalogJsonObject>> = {
   ...CONFIGURATION_RECEIPTS,
+  ...PERMISSION_ROLE_RECEIPTS,
   ...PLANNING_RECEIPTS,
   ...LIFECYCLE_RECEIPTS,
   ...SAVED_CONFIGURATION_RECEIPTS,

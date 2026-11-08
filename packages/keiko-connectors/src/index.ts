@@ -353,5 +353,6 @@ export type {
 export { JiraAcknowledgedMutationError } from "./jira-mutation-failure.js";
 export { jiraPropertyPathKey, jiraPropertyUserText } from "./jira-entity-property-values.js";
 export { jiraRemoteVersionLinkGlobalId } from "./jira-managed-remote-version-links.js";
+export { rolePrincipalText } from "./jira-role-values.js";
 export { isJiraFieldId } from "./jira-field-metadata.js";
 export { JIRA_NONSECRET_PREFERENCE_KINDS } from "./jira-managed-application-settings.js";

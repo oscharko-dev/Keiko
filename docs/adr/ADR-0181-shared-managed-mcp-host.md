@@ -165,7 +165,7 @@ factory, never a raw token resolver. Every metadata and confirmation read rechec
 authority and the Chat read grant. The exact action approval is claimed atomically inside
 the durable journal's dispatch boundary, immediately before the first mutating HTTP request;
 metadata reads and duplicate deliveries cannot consume or reapply that claim. Full access
-uses the same boundary with its currently validated allowed disposition. The twenty-three global
+uses the same boundary with its currently validated allowed disposition. The thirty-eight global
 administration writes additionally require the explicitly selected `issue-tracker.admin` scope
 defined in ADR-0128 D4. A Chat scope change advances the existing binding generation and revokes
 earlier approvals; neither schema selection nor Full access supplies administration authority.

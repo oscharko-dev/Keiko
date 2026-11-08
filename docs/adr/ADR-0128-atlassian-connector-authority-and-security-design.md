@@ -701,9 +701,9 @@ Memory retains its separate explicit-or-`governed-assist` default. This availabi
 itself grant a Chat read grant, mutation approval, connector scope or authority envelope.
 
 
-**Explicit instance administration (#4287, review 4503902861).** The twenty-three implemented administration writes—application/IPD monitoring, JMX exposure
+**Explicit instance administration (#4287, review 4503902861).** The thirty-eight implemented administration writes—application/IPD monitoring, JMX exposure
 start/stop, screen-tab and screen-field layout changes, issue-type property set/delete, filter creation,
-future-filter default sharing, filter permission addition/removal, project-category lifecycle changes and instance-wide sprint synchronization cleanup—use the separate connector class
+future-filter default sharing, filter permission addition/removal, project-category lifecycle, role/default/project-membership, permission-scheme/grant/attribute changes and instance-wide sprint synchronization cleanup—use the separate connector class
 `connector-admin` and require `issue-tracker.admin`. Ordinary `issue-tracker.write` never admits
 these operations, including in Full access. They retain high risk and the same Workbench
 `connector-access` class, `internet` resource scope, supervised `connector-write` kind and existing
@@ -729,6 +729,13 @@ those native permissions nor permits a privileged credential fallback. Conversel
 with native project-creation permission does not acquire Keiko's instance-administration scope.
 This keeps the accepted project-setup workflow distinct from changing instance runtime or shared
 schema configuration, while enforcing both local task authority and the actual Jira permission.
+
+Role/default/project-membership and permission-scheme/grant/attribute changes require that same
+explicit administration grant. Native principal namespaces remain exact: user key and username are
+independently bound, while group name is the documented native group principal. Default actors and
+project membership stay separate. A matched configuration proves only that configuration; complete
+effective access and aggregate group/project/scheme consequences are separate facts. Role deletion,
+five actor mutations and permission-scheme deletion therefore remain acknowledged/unconfirmed.
 
 Project-category create/update/delete modify shared instance categorization and require explicit administration.
 Their native global-admin permission remains independent. Version-link metadata upserts retain ordinary

@@ -2,7 +2,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { MIGRATIONS } from "./schema.js";
 
-export function seedJiraMutationMigrationDatabase(db: DatabaseSync, version: 66 | 67 | 68 | 69 | 70 | 71 | 72): void {
+export function seedJiraMutationMigrationDatabase(db: DatabaseSync, version: 66 | 67 | 68 | 69 | 70 | 71 | 72 | 73): void {
   db.exec("PRAGMA foreign_keys = ON; PRAGMA synchronous = FULL;");
   for (const migration of MIGRATIONS) {
     if (migration.version > version) break;

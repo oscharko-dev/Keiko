@@ -26,6 +26,7 @@ function attributeValue(value: unknown): CatalogJsonObject | undefined {
   return jiraNativeText(value, 4096, true) && !/\p{Surrogate}/u.test(value)
     ? { valueState: "observed", textValue: value } : undefined;
 }
+export { attributeValue as jiraPermissionAttributeValueProjection };
 async function attribute(args: CatalogJsonObject, request: JiraMutationRequest): Promise<ManagedMcpToolResult> {
   const selected = attributeSelection(args);
   if (selected === undefined) return jiraReadFailure("invalid-input");

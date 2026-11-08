@@ -19,6 +19,18 @@ type CompositeTool = "jira.report" | "jira.draft-stage" | "jira.draft";
 type NativeTool = Exclude<JiraOperationTool, CompositeTool>;
 type JiraOperationEffect = "remote-read" | "remote-write" | "local-report" | "local-draft";
 type JiraPermissionPolicy =
+  | "instance-admin-role-create-and-readback"
+  | "instance-admin-role-update-and-readback"
+  | "instance-admin-role-replace-and-readback"
+  | "instance-admin-role-delete-unconfirmed"
+  | "instance-admin-role-default-actors-unconfirmed"
+  | "instance-admin-project-role-actors-unconfirmed"
+  | "instance-admin-permission-scheme-create-and-readback"
+  | "instance-admin-permission-scheme-update-and-readback"
+  | "instance-admin-permission-scheme-delete-unconfirmed"
+  | "instance-admin-permission-grant-add-and-readback"
+  | "instance-admin-permission-grant-delete-and-absence"
+  | "instance-admin-permission-attribute-and-readback"
   | "instance-admin-project-category-create-and-readback"
   | "instance-admin-project-category-update-and-readback"
   | "instance-admin-project-category-delete-unconfirmed"
@@ -215,6 +227,51 @@ function writes<const K extends NativeTool>(
   return result as NativeGroup<K>;
 }
 const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
+  ...writes("instance-admin-permission-scheme-create-and-readback", {
+    "jira.create-permission-scheme": ["POST", "/permissionscheme"],
+  }),
+  ...writes("instance-admin-permission-scheme-update-and-readback", {
+    "jira.update-permission-scheme": ["PUT", "/permissionscheme/{schemeId}"],
+  }),
+  ...writes("instance-admin-permission-scheme-delete-unconfirmed", {
+    "jira.delete-permission-scheme": ["DELETE", "/permissionscheme/{schemeId}"],
+  }),
+  ...writes("instance-admin-permission-grant-add-and-readback", {
+    "jira.add-permission-grant": ["POST", "/permissionscheme/{schemeId}/permission"],
+  }),
+  ...writes("instance-admin-permission-grant-delete-and-absence", {
+    "jira.delete-permission-grant": ["DELETE", "/permissionscheme/{schemeId}/permission/{permissionId}"],
+  }),
+  ...writes("instance-admin-permission-attribute-and-readback", {
+    "jira.set-permission-scheme-attribute": ["PUT", "/permissionscheme/{permissionSchemeId}/attribute/{key}"],
+  }),
+  ...writes("instance-admin-role-create-and-readback", {
+    "jira.create-role": ["POST", "/role"],
+  }),
+  ...writes("instance-admin-role-update-and-readback", {
+    "jira.update-role": ["POST", "/role/{id}"],
+  }),
+  ...writes("instance-admin-role-replace-and-readback", {
+    "jira.replace-role": ["PUT", "/role/{id}"],
+  }),
+  ...writes("instance-admin-role-delete-unconfirmed", {
+    "jira.delete-role": ["DELETE", "/role/{id}"],
+  }),
+  ...writes("instance-admin-role-default-actors-unconfirmed", {
+    "jira.add-role-default-actors": ["POST", "/role/{id}/actors"],
+  }),
+  ...writes("instance-admin-role-default-actors-unconfirmed", {
+    "jira.delete-role-default-actor": ["DELETE", "/role/{id}/actors"],
+  }),
+  ...writes("instance-admin-project-role-actors-unconfirmed", {
+    "jira.add-project-role-actors": ["POST", "/project/{projectIdOrKey}/role/{id}"],
+  }),
+  ...writes("instance-admin-project-role-actors-unconfirmed", {
+    "jira.set-project-role-actors": ["PUT", "/project/{projectIdOrKey}/role/{id}"],
+  }),
+  ...writes("instance-admin-project-role-actors-unconfirmed", {
+    "jira.delete-project-role-actor": ["DELETE", "/project/{projectIdOrKey}/role/{id}"],
+  }),
   ...writes("instance-admin-project-category-create-and-readback", {
     "jira.create-project-category": ["POST", "/projectCategory"],
   }),

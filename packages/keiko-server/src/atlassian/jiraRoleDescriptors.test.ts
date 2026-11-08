@@ -58,3 +58,14 @@ it.each([
   if (declaration === undefined) throw new TypeError("Missing role declaration");
   expect(describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, { outcome: "succeeded", ...result })).toBeDefined();
 });
+it.each(["jira.role", "jira.project-role"])("preserves a closed optional %s review snapshot without making omitted description null", (name) => {
+  const declaration = jiraRoleDeclarationForTool(name);
+  if (declaration === undefined) throw new TypeError("Missing role declaration");
+  const result = { outcome: "succeeded", ...ROLE, ...(name === "jira.project-role" ? PROJECT : {}),
+    actorsScope: name === "jira.project-role" ? "project-membership" : "role-configuration" };
+  for (const description of [null, "", "Observed"])
+    expect(describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, { ...result, reviewSnapshot: { id: "7", name: "Synthetic role", description } })).toBeUndefined();
+  expect(describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, result)).toBeUndefined();
+  for (const reviewSnapshot of [{ id: "7", name: "Synthetic role" }, { id: "7", name: "Synthetic role", description: null, inferred: true }])
+    expect(describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, { ...result, reviewSnapshot })).toBeDefined();
+});

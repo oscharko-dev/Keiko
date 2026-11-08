@@ -2,6 +2,29 @@ import { describe, expect, it } from "vitest";
 import { jiraRoleDetails } from "./jira-role-presentation";
 
 describe("saved Jira role and priority scheme facts", () => {
+  it.each([null, "", " ", "Reviewed description"])("retains the exact role review description %j without claiming complete membership", (description) => {
+    const source = { actorsScope: "role-configuration", id: "37", name: "Reviewers", reviewSnapshot: { id: "37", name: "Reviewers", description } };
+    const cards = jiraRoleDetails("jira_role", source);
+    expect(cards.flatMap((card) => card.labels)).toContain("chat.jira.accessWrite.reviewAvailable");
+    expect(cards[0]?.labels).toContain("chat.jira.role.actorsUnknown");
+    if (description === null) expect(cards.at(-1)?.labels).toContain("chat.jira.structural.nativeNotProvided");
+    else if (description === "") expect(cards.at(-1)?.labels).toContain("chat.jira.propertyMutation.emptyText");
+    else expect(cards.at(-1)?.facts).toContainEqual({ label: "chat.jira.structural.nativeDescription", value: description });
+  });
+  it.each([
+    undefined, { id: "37", name: "Reviewers" }, { id: "38", name: "Reviewers", description: null },
+    { id: "37", name: "Other role", description: null }, { id: "37", name: "Reviewers", description: false },
+    { id: "37", name: "Reviewers", description: null, inferredPermission: true },
+  ])("does not invent a reviewable role from missing or contradictory metadata %j", (reviewSnapshot) => {
+    const cards = jiraRoleDetails("jira_project_role", { id: "37", name: "Reviewers", actors: [], projectId: "10000", projectKey: "SYN", reviewSnapshot });
+    expect(cards.at(-1)?.labels).toContain("chat.jira.accessWrite.reviewUnavailable");
+    expect(cards.flatMap((card) => card.labels)).not.toContain("chat.jira.accessWrite.reviewAvailable");
+  });
+  it("does not claim a review snapshot when its description contradicts ordinary observed metadata", () => {
+    const cards = jiraRoleDetails("jira_role", { id: "37", name: "Reviewers", description: "Observed text",
+      reviewSnapshot: { id: "37", name: "Reviewers", description: null } });
+    expect(cards.at(-1)?.labels).toContain("chat.jira.accessWrite.reviewUnavailable");
+  });
   it("keeps configured actors bound to their role without asserting current-user rights", () => {
     const cards = jiraRoleDetails("jira_role", {
       actorsScope: "role-configuration", id: "37", name: "Reviewers", actors: [{

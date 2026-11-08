@@ -300,6 +300,86 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.add-permission-grant": {
+      "identity": "POST /rest/api/2/permissionscheme/{schemeId}/permission",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-permission-grant-add-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Bind actor and complete current scheme. Supported native holder type/parameter and exact permission remain distinct. Actual native acknowledgement supplies the new permission ID; missing ID never becomes a name-derived ID. Full independent parent/grant readback confirms only exact configuration with unchanged retained grants. Explicit issue-tracker.admin/high risk and independent native permissions apply. Requested receipt facts remain targets until proven; complete receipts are bounded before effects. Source regressions are authored only; no runtime qualification is implied.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-permission-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-permission-scheme-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-permission-scheme-observations.ts",
+        "packages/keiko-connectors/src/jira-permission-attribute-request.ts",
+        "packages/keiko-server/src/atlassian/jiraPermissionSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessConfigurationReceipts.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-permission-scheme-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraPermissionSchemeMutationDescriptors.test.ts",
+        "tests/support/jira-permission-scheme-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessConfigurationReceipts.test.ts",
+        "packages/keiko-server/src/store/jiraAccessConfigurationMigration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.add-project-role-actors": {
+      "identity": "POST /rest/api/2/project/{projectIdOrKey}/role/{id}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-project-role-actors-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Canonical independently bound project, role metadata and full current project actor assignments. Add only one selected namespace with stable user key+username or exact native group name. Rebind project by numeric ID on readback. All effective grant/group-population consequences remain unconfirmed. Explicit issue-tracker.admin/high risk and independent native permissions apply. Requested receipt facts remain targets until proven; complete receipts are bounded before effects. Source regressions are authored only; no runtime qualification is implied.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-role-mutations.ts",
+        "packages/keiko-connectors/src/jira-role-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-role-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-role-mutation-admission.ts",
+        "packages/keiko-server/src/atlassian/jiraRoleMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessConfigurationReceipts.ts",
+        "packages/keiko-server/src/store/schema.ts",
+        "packages/keiko-connectors/src/jira-role-values.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-role-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraRoleMutationDescriptors.test.ts",
+        "tests/support/jira-role-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessConfigurationReceipts.test.ts",
+        "packages/keiko-server/src/store/jiraAccessConfigurationMigration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.add-role-default-actors": {
+      "identity": "POST /rest/api/2/role/{id}/actors",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-role-default-actors-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Exactly one selected user/group namespace; native users bind independently by stable key and username, groups by exact native group name. Full current actor assignment IDs/types/names are required. Default actors are not project membership or effective rights. Fresh configuration still leaves aggregate grant consequences unconfirmed. Explicit issue-tracker.admin/high risk and independent native permissions apply. Requested receipt facts remain targets until proven; complete receipts are bounded before effects. Source regressions are authored only; no runtime qualification is implied.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-role-mutations.ts",
+        "packages/keiko-connectors/src/jira-role-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-role-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-role-mutation-admission.ts",
+        "packages/keiko-server/src/atlassian/jiraRoleMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessConfigurationReceipts.ts",
+        "packages/keiko-server/src/store/schema.ts",
+        "packages/keiko-connectors/src/jira-role-values.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-role-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraRoleMutationDescriptors.test.ts",
+        "tests/support/jira-role-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessConfigurationReceipts.test.ts",
+        "packages/keiko-server/src/store/jiraAccessConfigurationMigration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.add-screen-tab-field": {
       "identity": "POST /rest/api/2/screens/{screenId}/tabs/{tabId}/fields",
       "effect": "write",
@@ -1190,6 +1270,32 @@
         "packages/keiko-server/src/atlassian/jiraLinkMutationDescriptors.test.ts"
       ]
     },
+    "jira.create-permission-scheme": {
+      "identity": "POST /rest/api/2/permissionscheme",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-permission-scheme-create-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Explicit actor/name/description/complete initial grants, supported native holder namespaces and native global-admin permission. Retain only the actual ACK scheme ID, never name inference. Fresh full scheme and grant set confirm the created configuration; effective user permissions are not inferred. Explicit issue-tracker.admin/high risk and independent native permissions apply. Requested receipt facts remain targets until proven; complete receipts are bounded before effects. Source regressions are authored only; no runtime qualification is implied.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-permission-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-permission-scheme-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-permission-scheme-observations.ts",
+        "packages/keiko-connectors/src/jira-permission-attribute-request.ts",
+        "packages/keiko-server/src/atlassian/jiraPermissionSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessConfigurationReceipts.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-permission-scheme-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraPermissionSchemeMutationDescriptors.test.ts",
+        "tests/support/jira-permission-scheme-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessConfigurationReceipts.test.ts",
+        "packages/keiko-server/src/store/jiraAccessConfigurationMigration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.create-project": {
       "identity": "POST /rest/api/2/project",
       "effect": "write",
@@ -1217,6 +1323,33 @@
         "packages/keiko-connectors/src/jira-managed-project-category-mutations.test.ts",
         "packages/keiko-server/src/atlassian/jiraProjectCategoryMutationDescriptors.test.ts",
         "tests/support/jira-project-category-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.create-role": {
+      "identity": "POST /rest/api/2/role",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-role-create-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Explicit connected actor/name/description and native global administration. Only actual native ACK ID identifies creation; int64 strings stay exact beyond JS numeric range. Fresh role metadata and observed empty defaults confirm the created configuration. Lost/malformed ACK never infers ID from name or URI. Explicit issue-tracker.admin/high risk and independent native permissions apply. Requested receipt facts remain targets until proven; complete receipts are bounded before effects. Source regressions are authored only; no runtime qualification is implied.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-role-mutations.ts",
+        "packages/keiko-connectors/src/jira-role-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-role-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-role-mutation-admission.ts",
+        "packages/keiko-server/src/atlassian/jiraRoleMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessConfigurationReceipts.ts",
+        "packages/keiko-server/src/store/schema.ts",
+        "packages/keiko-connectors/src/jira-role-values.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-role-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraRoleMutationDescriptors.test.ts",
+        "tests/support/jira-role-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessConfigurationReceipts.test.ts",
+        "packages/keiko-server/src/store/jiraAccessConfigurationMigration.test.ts",
         "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
@@ -1759,6 +1892,58 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.delete-permission-grant": {
+      "identity": "DELETE /rest/api/2/permissionscheme/{schemeId}/permission/{permissionId}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-permission-grant-delete-and-absence",
+      "kind": "constrained-tool",
+      "constraints": "Exact parent/full grants and selected permission ID bind before one DELETE. Only a complete same-parent independent grant collection with exact selected absence and unchanged retained grants confirms removal;404/access loss and effective-user-permission guesses are refused. Explicit issue-tracker.admin/high risk and independent native permissions apply. Requested receipt facts remain targets until proven; complete receipts are bounded before effects. Source regressions are authored only; no runtime qualification is implied.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-permission-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-permission-scheme-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-permission-scheme-observations.ts",
+        "packages/keiko-connectors/src/jira-permission-attribute-request.ts",
+        "packages/keiko-server/src/atlassian/jiraPermissionSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessConfigurationReceipts.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-permission-scheme-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraPermissionSchemeMutationDescriptors.test.ts",
+        "tests/support/jira-permission-scheme-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessConfigurationReceipts.test.ts",
+        "packages/keiko-server/src/store/jiraAccessConfigurationMigration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.delete-permission-scheme": {
+      "identity": "DELETE /rest/api/2/permissionscheme/{schemeId}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-permission-scheme-delete-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Exact reviewed scheme and full grants with explicit unverified-deletion acceptance. One DELETE retains known ID and requested false presence. Scoped absence/404 does not establish all project/default/permission consequences, so acknowledgement remains unconfirmed and cannot be replayed. Explicit issue-tracker.admin/high risk and independent native permissions apply. Requested receipt facts remain targets until proven; complete receipts are bounded before effects. Source regressions are authored only; no runtime qualification is implied.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-permission-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-permission-scheme-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-permission-scheme-observations.ts",
+        "packages/keiko-connectors/src/jira-permission-attribute-request.ts",
+        "packages/keiko-server/src/atlassian/jiraPermissionSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessConfigurationReceipts.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-permission-scheme-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraPermissionSchemeMutationDescriptors.test.ts",
+        "tests/support/jira-permission-scheme-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessConfigurationReceipts.test.ts",
+        "packages/keiko-server/src/store/jiraAccessConfigurationMigration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.delete-project-category": {
       "identity": "DELETE /rest/api/2/projectCategory/{id}",
       "effect": "write",
@@ -1803,6 +1988,33 @@
         "packages/keiko-server/src/store/jiraEntityPropertyMigration.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"
+      ]
+    },
+    "jira.delete-project-role-actor": {
+      "identity": "DELETE /rest/api/2/project/{projectIdOrKey}/role/{id}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-project-role-actors-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Canonical project/role/actor-set and exactly one observed user/group principal bind before one DELETE. Fresh same-project evidence retains requested scope and aligned principal identity; selected404/visibility gaps do not prove all membership/security consequences. ACK stays unconfirmed and is never replayed. Explicit issue-tracker.admin/high risk and independent native permissions apply. Requested receipt facts remain targets until proven; complete receipts are bounded before effects. Source regressions are authored only; no runtime qualification is implied.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-role-mutations.ts",
+        "packages/keiko-connectors/src/jira-role-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-role-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-role-mutation-admission.ts",
+        "packages/keiko-server/src/atlassian/jiraRoleMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessConfigurationReceipts.ts",
+        "packages/keiko-server/src/store/schema.ts",
+        "packages/keiko-connectors/src/jira-role-values.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-role-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraRoleMutationDescriptors.test.ts",
+        "tests/support/jira-role-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessConfigurationReceipts.test.ts",
+        "packages/keiko-server/src/store/jiraAccessConfigurationMigration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
     "jira.delete-remote-link": {
@@ -1851,6 +2063,60 @@
         "packages/keiko-connectors/src/jira-managed-issue-link-mutations.test.ts",
         "packages/keiko-connectors/src/jira-managed-remote-link-mutations.test.ts",
         "packages/keiko-server/src/atlassian/jiraLinkMutationDescriptors.test.ts"
+      ]
+    },
+    "jira.delete-role": {
+      "identity": "DELETE /rest/api/2/role/{id}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-role-delete-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Exact reviewed role/defaults plus explicit uncertainty acceptance; optional swap binds a distinct fully reviewed role/default set. Native scheme/project consequences are not proven by readable absence, so acknowledgement always remains unconfirmed with known source/swap IDs and no replay. Explicit issue-tracker.admin/high risk and independent native permissions apply. Requested receipt facts remain targets until proven; complete receipts are bounded before effects. Source regressions are authored only; no runtime qualification is implied.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-role-mutations.ts",
+        "packages/keiko-connectors/src/jira-role-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-role-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-role-mutation-admission.ts",
+        "packages/keiko-server/src/atlassian/jiraRoleMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessConfigurationReceipts.ts",
+        "packages/keiko-server/src/store/schema.ts",
+        "packages/keiko-connectors/src/jira-role-values.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-role-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraRoleMutationDescriptors.test.ts",
+        "tests/support/jira-role-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessConfigurationReceipts.test.ts",
+        "packages/keiko-server/src/store/jiraAccessConfigurationMigration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.delete-role-default-actor": {
+      "identity": "DELETE /rest/api/2/role/{id}/actors",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-role-default-actors-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Exactly one reviewed user or group principal, full role/default actor set and current actor bind before one fixed user/group query DELETE. No key/name fallback or actor-ID invention. Requested principal arrays remain context, not effective-rights proof; ACK stays unconfirmed even if configuration matches. Explicit issue-tracker.admin/high risk and independent native permissions apply. Requested receipt facts remain targets until proven; complete receipts are bounded before effects. Source regressions are authored only; no runtime qualification is implied.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-role-mutations.ts",
+        "packages/keiko-connectors/src/jira-role-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-role-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-role-mutation-admission.ts",
+        "packages/keiko-server/src/atlassian/jiraRoleMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessConfigurationReceipts.ts",
+        "packages/keiko-server/src/store/schema.ts",
+        "packages/keiko-connectors/src/jira-role-values.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-role-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraRoleMutationDescriptors.test.ts",
+        "tests/support/jira-role-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessConfigurationReceipts.test.ts",
+        "packages/keiko-server/src/store/jiraAccessConfigurationMigration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
     "jira.delete-screen-tab": {
@@ -3690,14 +3956,15 @@
       "effect": "read",
       "permissionPolicy": "visible-role-configuration",
       "kind": "constrained-tool",
-      "constraints": "Independent canonical project binding and exact observed role ID precede a bounded project membership projection. actorsScope=project-membership is distinct from default/global role configuration and never grants effective rights.",
+      "constraints": "Independent canonical project binding and exact observed role ID precede a bounded project membership projection. actorsScope=project-membership is distinct from default/global role configuration and never grants effective rights. An optional same-identity reviewSnapshot reuses the strict shared role projector, retaining explicitly native null description versus unavailable omission; no actor ID/type/defaults or effective permissions are invented.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-metadata.ts",
         "packages/keiko-connectors/src/jira-managed-role-reads.ts",
         "packages/keiko-connectors/src/jira-managed-projects.ts",
         "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
         "packages/keiko-connectors/src/jira-managed-read-request.ts",
-        "packages/keiko-server/src/atlassian/jiraRoleDescriptors.ts"
+        "packages/keiko-server/src/atlassian/jiraRoleDescriptors.ts",
+        "packages/keiko-connectors/src/jira-role-values.ts"
       ],
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-role-reads.test.ts",
@@ -4167,6 +4434,33 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.replace-role": {
+      "identity": "PUT /rest/api/2/role/{id}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-role-replace-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Native PUT requires both target name and description. Match complete reviewed role/default actors and current connected actor, dispatch once, then independently confirm exact desired metadata and unchanged defaults. Unknown actor metadata refuses instead of a guessed namespace or empty set. Explicit issue-tracker.admin/high risk and independent native permissions apply. Requested receipt facts remain targets until proven; complete receipts are bounded before effects. Source regressions are authored only; no runtime qualification is implied.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-role-mutations.ts",
+        "packages/keiko-connectors/src/jira-role-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-role-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-role-mutation-admission.ts",
+        "packages/keiko-server/src/atlassian/jiraRoleMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessConfigurationReceipts.ts",
+        "packages/keiko-server/src/store/schema.ts",
+        "packages/keiko-connectors/src/jira-role-values.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-role-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraRoleMutationDescriptors.test.ts",
+        "tests/support/jira-role-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessConfigurationReceipts.test.ts",
+        "packages/keiko-server/src/store/jiraAccessConfigurationMigration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.replace-sprint": {
       "identity": "PUT /rest/agile/1.0/sprint/{sprintId}",
       "effect": "write",
@@ -4286,13 +4580,14 @@
       "effect": "read",
       "permissionPolicy": "visible-role-configuration",
       "kind": "constrained-tool",
-      "constraints": "One exact native role ID with bounded name/description and optional observed actors. Actor names are not unique identities; optional native actor IDs/types/display names remain unknown when omitted. No email/avatar expansion or inferred rights.",
+      "constraints": "One exact native role ID with bounded name/description and optional observed actors. Actor names are not unique identities; optional native actor IDs/types/display names remain unknown when omitted. No email/avatar expansion or inferred rights. An optional same-identity reviewSnapshot reuses the strict shared role projector, retaining explicitly native null description versus unavailable omission; no actor ID/type/defaults or effective permissions are invented.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-metadata.ts",
         "packages/keiko-connectors/src/jira-managed-role-reads.ts",
         "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
         "packages/keiko-connectors/src/jira-managed-read-request.ts",
-        "packages/keiko-server/src/atlassian/jiraRoleDescriptors.ts"
+        "packages/keiko-server/src/atlassian/jiraRoleDescriptors.ts",
+        "packages/keiko-connectors/src/jira-role-values.ts"
       ],
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-role-reads.test.ts",
@@ -4861,6 +5156,32 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.set-permission-scheme-attribute": {
+      "identity": "PUT /rest/api/2/permissionscheme/{permissionSchemeId}/attribute/{key}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-permission-attribute-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Exact reviewed actor/scheme/full grants/key/observed string true-or-false. Fixed private transport sends literal boolean bytes as native text/plain; URL/key/opt-in/bytes validate before dispatch and custody. Missing writer refuses before reads. Rebound parent and same-key observed native value confirm actual false/true; missing/defaulted attributes never imply stored absence. Explicit issue-tracker.admin/high risk and independent native permissions apply. Requested receipt facts remain targets until proven; complete receipts are bounded before effects. Source regressions are authored only; no runtime qualification is implied.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-permission-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-permission-scheme-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-permission-scheme-observations.ts",
+        "packages/keiko-connectors/src/jira-permission-attribute-request.ts",
+        "packages/keiko-server/src/atlassian/jiraPermissionSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessConfigurationReceipts.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-permission-scheme-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraPermissionSchemeMutationDescriptors.test.ts",
+        "tests/support/jira-permission-scheme-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessConfigurationReceipts.test.ts",
+        "packages/keiko-server/src/store/jiraAccessConfigurationMigration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.set-project-property": {
       "identity": "PUT /rest/api/2/project/{projectIdOrKey}/properties/{propertyKey}",
       "effect": "write",
@@ -4886,6 +5207,33 @@
         "packages/keiko-server/src/store/jiraEntityPropertyMigration.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"
+      ]
+    },
+    "jira.set-project-role-actors": {
+      "identity": "PUT /rest/api/2/project/{projectIdOrKey}/role/{id}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-project-role-actors-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Explicit categorised user/group namespaces replace native project role assignments; []/[] clears. Native numeric role body ID must be safely representable before reads, while path IDs remain exact strings. Complete reviewed state and current principal bindings precede one PUT; actual matched configuration never claims full effective-permission proof. Explicit issue-tracker.admin/high risk and independent native permissions apply. Requested receipt facts remain targets until proven; complete receipts are bounded before effects. Source regressions are authored only; no runtime qualification is implied.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-role-mutations.ts",
+        "packages/keiko-connectors/src/jira-role-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-role-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-role-mutation-admission.ts",
+        "packages/keiko-server/src/atlassian/jiraRoleMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessConfigurationReceipts.ts",
+        "packages/keiko-server/src/store/schema.ts",
+        "packages/keiko-connectors/src/jira-role-values.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-role-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraRoleMutationDescriptors.test.ts",
+        "tests/support/jira-role-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessConfigurationReceipts.test.ts",
+        "packages/keiko-server/src/store/jiraAccessConfigurationMigration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
     "jira.set-screen-field-show-when-empty": {
@@ -5572,6 +5920,32 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.update-permission-scheme": {
+      "identity": "PUT /rest/api/2/permissionscheme/{schemeId}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-permission-scheme-update-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Exact reviewed metadata/full grant set. Omitted permissions preserve them, explicit [] replaces with empty; at least one supported target field is required. Native full independent same-ID metadata/grant readback proves only the requested configuration, never effective access. No atomic CAS claim. Explicit issue-tracker.admin/high risk and independent native permissions apply. Requested receipt facts remain targets until proven; complete receipts are bounded before effects. Source regressions are authored only; no runtime qualification is implied.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-permission-scheme-mutations.ts",
+        "packages/keiko-connectors/src/jira-permission-scheme-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-permission-scheme-observations.ts",
+        "packages/keiko-connectors/src/jira-permission-attribute-request.ts",
+        "packages/keiko-server/src/atlassian/jiraPermissionSchemeMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessConfigurationReceipts.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-permission-scheme-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraPermissionSchemeMutationDescriptors.test.ts",
+        "tests/support/jira-permission-scheme-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessConfigurationReceipts.test.ts",
+        "packages/keiko-server/src/store/jiraAccessConfigurationMigration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.update-project": {
       "identity": "PUT /rest/api/2/project/{projectIdOrKey}",
       "effect": "write",
@@ -5626,6 +6000,33 @@
         "packages/keiko-connectors/src/jira-managed-issue-link-mutations.test.ts",
         "packages/keiko-connectors/src/jira-managed-remote-link-mutations.test.ts",
         "packages/keiko-server/src/atlassian/jiraLinkMutationDescriptors.test.ts"
+      ]
+    },
+    "jira.update-role": {
+      "identity": "POST /rest/api/2/role/{id}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-role-update-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Native POST is partial metadata update: exact reviewed role including native null description and complete defaults bind first. Omitted target fields preserve, actual empty string clears description. Fresh same-ID metadata and unchanged full defaults confirm only metadata; unavailable prior description is not synthesized. Explicit issue-tracker.admin/high risk and independent native permissions apply. Requested receipt facts remain targets until proven; complete receipts are bounded before effects. Source regressions are authored only; no runtime qualification is implied.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-role-mutations.ts",
+        "packages/keiko-connectors/src/jira-role-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-role-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-role-mutation-admission.ts",
+        "packages/keiko-server/src/atlassian/jiraRoleMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessConfigurationReceipts.ts",
+        "packages/keiko-server/src/store/schema.ts",
+        "packages/keiko-connectors/src/jira-role-values.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-role-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraRoleMutationDescriptors.test.ts",
+        "tests/support/jira-role-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessConfigurationReceipts.test.ts",
+        "packages/keiko-server/src/store/jiraAccessConfigurationMigration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
     "jira.update-version": {
@@ -6302,8 +6703,8 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "3ae6f185ee44207ea24284a3a14e0c565712357efb551bf4d472ae1e7e64d92f",
-    "nativeOperationCount": 308
+    "sha256": "b812eede6ed1602aa902144b5a0074915b66b9a5247412eb08b5d80ded8018e6",
+    "nativeOperationCount": 323
   },
   "operations": [
     {
@@ -14579,10 +14980,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.create-permission-scheme"
+      ]
     },
     {
       "identity": "GET /rest/api/2/permissionscheme/{permissionSchemeId}/attribute/{attributeKey}",
@@ -14651,10 +15054,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.set-permission-scheme-attribute"
+      ]
     },
     {
       "identity": "DELETE /rest/api/2/permissionscheme/{schemeId}",
@@ -14686,10 +15091,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.delete-permission-scheme"
+      ]
     },
     {
       "identity": "GET /rest/api/2/permissionscheme/{schemeId}",
@@ -14758,10 +15165,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.update-permission-scheme"
+      ]
     },
     {
       "identity": "GET /rest/api/2/permissionscheme/{schemeId}/permission",
@@ -14830,10 +15239,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.add-permission-grant"
+      ]
     },
     {
       "identity": "DELETE /rest/api/2/permissionscheme/{schemeId}/permission/{permissionId}",
@@ -14865,10 +15276,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.delete-permission-grant"
+      ]
     },
     {
       "identity": "GET /rest/api/2/permissionscheme/{schemeId}/permission/{permissionId}",
@@ -15961,10 +16374,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.delete-project-role-actor"
+      ]
     },
     {
       "identity": "GET /rest/api/2/project/{projectIdOrKey}/role/{id}",
@@ -16031,10 +16446,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.add-project-role-actors"
+      ]
     },
     {
       "identity": "PUT /rest/api/2/project/{projectIdOrKey}/role/{id}",
@@ -16065,10 +16482,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.set-project-role-actors"
+      ]
     },
     {
       "identity": "GET /rest/api/2/project/{projectIdOrKey}/statuses",
@@ -17251,10 +17670,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.create-role"
+      ]
     },
     {
       "identity": "DELETE /rest/api/2/role/{id}",
@@ -17286,10 +17707,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.delete-role"
+      ]
     },
     {
       "identity": "GET /rest/api/2/role/{id}",
@@ -17358,10 +17781,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.update-role"
+      ]
     },
     {
       "identity": "PUT /rest/api/2/role/{id}",
@@ -17393,10 +17818,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.replace-role"
+      ]
     },
     {
       "identity": "DELETE /rest/api/2/role/{id}/actors",
@@ -17428,10 +17855,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.delete-role-default-actor"
+      ]
     },
     {
       "identity": "GET /rest/api/2/role/{id}/actors",
@@ -17500,10 +17929,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.add-role-default-actors"
+      ]
     },
     {
       "identity": "GET /rest/api/2/screens",

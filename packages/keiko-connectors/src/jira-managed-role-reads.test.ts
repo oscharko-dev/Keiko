@@ -20,7 +20,7 @@ describe("native role configuration and project membership", () => {
   it("returns a bound global role with unknown actors omitted", async () => {
     const request = requestFor({ ...ROLE, actors: null, self: "https://untrusted.invalid/role" });
     const result = await executeJiraRoleRead("jira.role", { roleId: "10360" }, request);
-    expect(result.data).toEqual({ outcome: "succeeded", ...ROLE, id: "10360", actorsScope: "role-configuration" });
+    expect(result.data).toEqual({ outcome: "succeeded", ...ROLE, id: "10360", actorsScope: "role-configuration", reviewSnapshot: { ...ROLE, id: "10360" } });
     expect(request).toHaveBeenCalledExactlyOnceWith("role/10360", "GET", undefined, "json");
   });
   it("labels default actors independently of actual project membership", async () => {
@@ -64,13 +64,28 @@ describe("native role configuration and project membership", () => {
   it("keeps exact role identity and canonical project context on project membership", async () => {
     const request = requestFor({ ...ROLE, actors: [ACTOR] }).mockResolvedValueOnce({ ok: true, status: 200, body: PROJECT });
     const result = await executeJiraRoleRead("jira.project-role", { projectIdOrKey: "10001", roleId: "10360" }, request);
-    expect(result.data).toEqual({ outcome: "succeeded", ...ROLE, id: "10360", actors: [{ ...ACTOR, id: "10240" }], projectId: "10001", projectKey: "SYN", actorsScope: "project-membership" });
+    expect(result.data).toEqual({ outcome: "succeeded", ...ROLE, id: "10360", actors: [{ ...ACTOR, id: "10240" }], projectId: "10001", projectKey: "SYN", actorsScope: "project-membership", reviewSnapshot: { ...ROLE, id: "10360" } });
     expect(request.mock.calls).toEqual([["project/10001"], ["project/10001/role/10360", "GET", undefined, "json"]]);
   });
   it("refuses mismatched project identity before reading role membership", async () => {
     const request = requestFor({ ...PROJECT, key: "OTHER", id: "10002" });
     expect((await executeJiraRoleRead("jira.project-role", { projectIdOrKey: "SYN", roleId: "10360" }, request)).data.reason).toBe("conflict");
     expect(request).toHaveBeenCalledTimes(1);
+  });
+  it.each([null, "", "Observed description"])("preserves explicit native review description %j separately from ordinary optional facts", async (description) => {
+    const result = await executeJiraRoleRead("jira.role", { roleId: "10360" }, requestFor({ ...ROLE, description }));
+    expect(result.data.reviewSnapshot).toEqual({ id: "10360", name: "Developers", description });
+    if (description === null) expect(result.data).not.toHaveProperty("description");
+  });
+  it("does not manufacture a review snapshot when description is omitted", async () => {
+    const result = await executeJiraRoleRead("jira.role", { roleId: "10360" }, requestFor({ id: 10360, name: "Developers", actors: [{ name: "unknown actor" }] }));
+    expect(result.data).not.toHaveProperty("reviewSnapshot");
+    expect(result.data.actors).toEqual([{ name: "unknown actor" }]);
+  });
+  it("binds project review metadata to the existing canonical project and native role ID", async () => {
+    const request = requestFor({ ...ROLE, description: null, actors: [] }).mockResolvedValueOnce({ ok: true, status: 200, body: PROJECT });
+    const result = await executeJiraRoleRead("jira.project-role", { projectIdOrKey: "syn", roleId: "10360" }, request);
+    expect(result.data).toMatchObject({ projectId: "10001", projectKey: "SYN", actors: [], reviewSnapshot: { id: "10360", name: "Developers", description: null } });
   });
   it("refuses a different returned role ID", async () => {
     expect((await executeJiraRoleRead("jira.role", { roleId: "10361" }, requestFor(ROLE))).data.reason).toBe("malformed-payload");

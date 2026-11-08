@@ -357,6 +357,7 @@ const ADMIN_READ_ACTIONS = [
 const ADMIN_READ_SET: ReadonlySet<string> = new Set(ADMIN_READ_ACTIONS);
 // Explicit expectations for the added native writes; no production policy table supplies values.
 const ADMIN_ACTIONS = [
+  "create-permission-scheme", "update-permission-scheme", "delete-permission-scheme", "add-permission-grant", "delete-permission-grant", "set-permission-scheme-attribute", "create-role", "update-role", "replace-role", "delete-role", "add-role-default-actors", "delete-role-default-actor", "add-project-role-actors", "set-project-role-actors", "delete-project-role-actor",
   "create-project-category", "update-project-category", "delete-project-category",
   "add-default-screen-field", "add-screen-tab-field", "remove-screen-tab-field", "move-screen-tab-field", "set-screen-field-show-when-empty", "move-screen-tab", "unmap-all-sprints",
   "create-screen-tab", "rename-screen-tab", "delete-screen-tab",

@@ -36,6 +36,10 @@ import { JIRA_READ_TOOL_FAMILIES } from "./jira-read-tools.js";
 import { JIRA_MANAGED_READ_TOOLS, type JiraManagedReadToolName } from "./jira-tool-fields.js";
 import {
   JIRA_AGILE_PLANNING_MUTATIONS,
+  JIRA_PERMISSION_SCHEME_MUTATIONS,
+  JIRA_ROLE_MUTATIONS,
+  type JiraPermissionSchemeMutation,
+  type JiraRoleMutation,
   JIRA_VERSION_REMOTE_LINK_MUTATIONS,
   JIRA_PROJECT_CATEGORY_MUTATIONS,
   type JiraAgilePlanningMutation,
@@ -104,6 +108,15 @@ const JIRA_PLANNING_VERSION_CATEGORY_ACTIONS = Object.freeze([
 const JIRA_PROJECT_CATEGORY_ACTIONS = Object.freeze([
   "create-project-category", "update-project-category", "delete-project-category",
 ] as const satisfies readonly JiraPlanningVersionOrCategoryAction[]);
+
+type JiraAccessConfigurationMutation = JiraPermissionSchemeMutation | JiraRoleMutation;
+type JiraAccessConfigurationAction = JiraAccessConfigurationMutation extends `jira.${infer Action}` ? Action : never;
+function accessConfigurationAction(name: JiraAccessConfigurationMutation): JiraAccessConfigurationAction {
+  return name.slice(5) as JiraAccessConfigurationAction;
+}
+const JIRA_ACCESS_CONFIGURATION_ACTIONS = Object.freeze([
+  ...JIRA_PERMISSION_SCHEME_MUTATIONS, ...JIRA_ROLE_MUTATIONS,
+].map(accessConfigurationAction));
 
 // ─── Schema version ───────────────────────────────────────────────────────────
 // Pinned to "1". A breaking change introduces a NEW literal rather than mutating "1", the same
@@ -661,6 +674,7 @@ export type AtlassianConnectorActionType =
   | JiraRelationshipOrReleaseAction
   | JiraConfigurationAction
   | JiraPlanningVersionOrCategoryAction
+  | JiraAccessConfigurationAction
   | "set-app-monitoring"
   | "set-ipd-monitoring"
   | "start-jmx-metrics"
@@ -705,6 +719,7 @@ export type AtlassianConnectorActionType =
 
 export const ATLASSIAN_CONNECTOR_ACTION_TYPES: readonly AtlassianConnectorActionType[] =
   Object.freeze([
+    ...JIRA_ACCESS_CONFIGURATION_ACTIONS,
     ...JIRA_PLANNING_VERSION_CATEGORY_ACTIONS,
     ...JIRA_CONFIGURATION_ACTIONS,
     ...JIRA_RELATIONSHIP_RELEASE_ACTIONS,
@@ -762,6 +777,21 @@ export const JIRA_MANAGED_ACTION_TYPES: Readonly<
   Record<JiraManagedReadToolName | JiraMutationOperation, AtlassianConnectorActionType>
 > = Object.freeze({
   "jira.epic-remove-issues": "epic-remove-issues",
+  "jira.create-permission-scheme": "create-permission-scheme",
+  "jira.update-permission-scheme": "update-permission-scheme",
+  "jira.delete-permission-scheme": "delete-permission-scheme",
+  "jira.add-permission-grant": "add-permission-grant",
+  "jira.delete-permission-grant": "delete-permission-grant",
+  "jira.set-permission-scheme-attribute": "set-permission-scheme-attribute",
+  "jira.create-role": "create-role",
+  "jira.update-role": "update-role",
+  "jira.replace-role": "replace-role",
+  "jira.delete-role": "delete-role",
+  "jira.add-role-default-actors": "add-role-default-actors",
+  "jira.delete-role-default-actor": "delete-role-default-actor",
+  "jira.add-project-role-actors": "add-project-role-actors",
+  "jira.set-project-role-actors": "set-project-role-actors",
+  "jira.delete-project-role-actor": "delete-project-role-actor",
   "jira.rank-epic": "rank-epic",
   "jira.rank-issues": "rank-issues",
   "jira.set-issue-estimation": "set-issue-estimation",
@@ -881,6 +911,7 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASSES: readonly AtlassianConnectorActi
 export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
   Record<AtlassianConnectorActionType, AtlassianConnectorActionClass>
 > = Object.freeze({
+  ...jiraActionValues(JIRA_ACCESS_CONFIGURATION_ACTIONS, "connector-admin"),
   ...jiraActionValues(JIRA_PLANNING_VERSION_CATEGORY_ACTIONS, "connector-write"),
   ...jiraActionValues(JIRA_PROJECT_CATEGORY_ACTIONS, "connector-admin"),
   ...jiraActionValues(JIRA_CONFIGURATION_ACTIONS, "connector-write"),
@@ -939,6 +970,7 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
 export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
   Record<AtlassianConnectorActionType, AtlassianConnectorProvider>
 > = Object.freeze({
+  ...jiraActionValues(JIRA_ACCESS_CONFIGURATION_ACTIONS, "jira"),
   ...jiraActionValues(JIRA_PLANNING_VERSION_CATEGORY_ACTIONS, "jira"),
   ...jiraActionValues(JIRA_CONFIGURATION_ACTIONS, "jira"),
   ...jiraActionValues(JIRA_RELATIONSHIP_RELEASE_ACTIONS, "jira"),
@@ -991,6 +1023,7 @@ export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
 export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchConnectorScope>
 > = Object.freeze({
+  ...jiraActionValues(JIRA_ACCESS_CONFIGURATION_ACTIONS, "issue-tracker.admin"),
   ...jiraActionValues(JIRA_PLANNING_VERSION_CATEGORY_ACTIONS, "issue-tracker.write"),
   ...jiraActionValues(JIRA_PROJECT_CATEGORY_ACTIONS, "issue-tracker.admin"),
   ...jiraActionValues(JIRA_CONFIGURATION_ACTIONS, "issue-tracker.write"),
@@ -1059,6 +1092,7 @@ export function jiraRequiredConnectorScope(
 export const ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchApprovalRisk>
 > = Object.freeze({
+  ...jiraActionValues(JIRA_ACCESS_CONFIGURATION_ACTIONS, "high"),
   ...jiraActionValues(JIRA_PLANNING_VERSION_CATEGORY_ACTIONS, "high"),
   "upsert-version-remote-link": "medium",
   "upsert-version-remote-link-by-global-id": "medium",
@@ -2004,6 +2038,10 @@ export {
   isJiraDraftRef,
   type JiraDraftItemState,
   JIRA_MUTATION_OPERATIONS,
+  JIRA_PERMISSION_SCHEME_MUTATIONS,
+  JIRA_ROLE_MUTATIONS,
+  type JiraPermissionSchemeMutation,
+  type JiraRoleMutation,
   JIRA_AGILE_PLANNING_MUTATIONS,
   JIRA_VERSION_REMOTE_LINK_MUTATIONS,
   JIRA_PROJECT_CATEGORY_MUTATIONS,

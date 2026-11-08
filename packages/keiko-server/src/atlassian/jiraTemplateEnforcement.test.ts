@@ -7,6 +7,8 @@ import { SPRINT_LIFECYCLE_FIXTURE_CASES } from "../../../../tests/support/jira-s
 import { AGILE_PLANNING_FIXTURE_CASES } from "../../../../tests/support/jira-agile-planning-fixture.js";
 import { VERSION_LINK_MUTATION_CASES } from "../../../../tests/support/jira-version-link-mutation-fixture.js";
 import { PROJECT_CATEGORY_FIXTURE_CASES } from "../../../../tests/support/jira-project-category-fixture.js";
+import { ROLE_MUTATION_FIXTURE_CASES } from "../../../../tests/support/jira-role-mutation-fixture.js";
+import { PERMISSION_SCHEME_MUTATION_CASES } from "../../../../tests/support/jira-permission-scheme-mutation-fixture.js";
 import {
   JIRA_FIELD_VALIDATION_FAILURES,
   JIRA_MUTATION_OPERATIONS,
@@ -199,6 +201,16 @@ describe("the model-facing refusal", () => {
       refusedCount: 1, validations: ["invalid-field"], completeness: "complete", loss: "none",
     })));
     expect(sink.lines().join()).not.toMatch(/jira\.set-|jira\.delete-|propertyKey|valueNodes|expectedValueNodes/u);
+  });
+  it("logs administrative role and permission refusals without principal, scheme or attribute facts", () => {
+    const sink = logs();
+    const operations = [...ROLE_MUTATION_FIXTURE_CASES.map(({ name }) => name), ...PERMISSION_SCHEME_MUTATION_CASES.map(({ tool }) => tool)];
+    for (const operation of operations) recordJiraFieldRefusal("admin-refusal", { operation, refusedCount: 1, validations: ["invalid-field"] });
+    expect(sink.events.map((event) => event.extra)).toEqual(operations.map((operation) => ({
+      operation: "jira-write", operationDigest: createHash("sha256").update(operation).digest("hex"),
+      refusedCount: 1, validations: ["invalid-field"], completeness: "complete", loss: "none",
+    })));
+    expect(sink.lines().join()).not.toMatch(/actorUserKeys|actorGroupNames|principals|roleId|schemeId|attributeKey|synthetic-actor/u);
   });
 });
 
@@ -411,6 +423,8 @@ describe("the dry run before approval", () => {
     ...AGILE_PLANNING_FIXTURE_CASES.map(({ name, args }) => ({ tool: name, args })),
     ...VERSION_LINK_MUTATION_CASES.map(({ tool, args }) => ({ tool, args })),
     ...PROJECT_CATEGORY_FIXTURE_CASES.map(({ name, args }) => ({ tool: name, args })),
+    ...ROLE_MUTATION_FIXTURE_CASES.map(({ name, args }) => ({ tool: name, args })),
+    ...PERMISSION_SCHEME_MUTATION_CASES.map(({ tool, args }) => ({ tool, args })),
   ])("refuses denied $tool prerequisites before approval or any native write", async ({ tool, args }) => {
     const f = preflight(TEMPLATE, args, tool);
     f.http.mockImplementation(() => Promise.resolve(response({ errorMessages: ["Denied"] }, 403)));

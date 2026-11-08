@@ -1,3 +1,6 @@
+import { executeJiraPermissionSchemeMutation, isJiraPermissionSchemeMutation } from "./jira-managed-permission-scheme-mutations.js";
+import { executeJiraRoleMutation, isJiraRoleMutation } from "./jira-managed-role-mutations.js";
+import { jiraPermissionAttributeRequest } from "./jira-permission-attribute-request.js";
 import { executeJiraScreenTabMutation, isJiraScreenTabMutation } from "./jira-managed-screen-tab-mutations.js";
 import { executeJiraScreenConfigurationMutation, isJiraScreenConfigurationMutation } from "./jira-managed-screen-configuration.js";
 import { executeJiraBoardConfigurationMutation, isJiraBoardConfigurationMutation } from "./jira-managed-board-configuration-mutations.js";
@@ -1431,6 +1434,22 @@ function nativeLifecycleMutation(
     return executeJiraVersionLifecycleMutation(operation, args, request, check, connection.issueTemplates, connection.baseUrl);
   return undefined;
 }
+function permissionRoleMutation(
+  operation: JiraMutationOperation,
+  args: CatalogJsonObject,
+  request: JiraMutationRequest,
+  connection: JiraManagedConnection,
+  context: ManagedMcpInvocationContext,
+  check: boolean,
+): Promise<JiraMutationAttempt> | undefined {
+  if (isJiraPermissionSchemeMutation(operation))
+    return executeJiraPermissionSchemeMutation(operation, args, {
+      request,
+      setAttribute: jiraPermissionAttributeRequest(connection, context),
+    }, check);
+  if (isJiraRoleMutation(operation)) return executeJiraRoleMutation(operation, args, request, check);
+  return undefined;
+}
 function dedicatedMutation(
   operation: JiraMutationOperation,
   source: CatalogJsonObject,
@@ -1440,7 +1459,8 @@ function dedicatedMutation(
 ): Promise<JiraMutationAttempt> | undefined {
   const args = structuredClone(source);
   const request = requestFor(connection, context);
-  const specialized = configurationMutation(operation, args, request, context, connection, check)
+  const specialized = permissionRoleMutation(operation, args, request, connection, context, check)
+    ?? configurationMutation(operation, args, request, context, connection, check)
     ?? deletionMutation(operation, args, request, connection, check)
     ?? nativeLifecycleMutation(operation, args, request, connection, check);
   if (specialized !== undefined) return specialized;
@@ -1547,7 +1567,7 @@ function isNativeLifecycleMutation(operation: JiraMutationOperation): boolean {
 function isReviewedConfigurationMutation(operation: JiraMutationOperation): boolean {
   return [isJiraEntityPropertyMutation, isJiraScreenTabMutation, isJiraScreenConfigurationMutation,
     isJiraBoardConfigurationMutation, isJiraSprintLifecycleMutation, isJiraAgilePlanningMutation,
-    isJiraMonitoringMutation].some((accepts) => accepts(operation));
+    isJiraMonitoringMutation, isJiraPermissionSchemeMutation, isJiraRoleMutation].some((accepts) => accepts(operation));
 }
 function requiresSuccessfulPreflight(operation: JiraMutationOperation): boolean {
   return (

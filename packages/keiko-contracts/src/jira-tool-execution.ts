@@ -53,6 +53,18 @@ export const JIRA_SPRINT_LIFECYCLE_MUTATIONS = Object.freeze([
 ] as const);
 export type JiraSprintLifecycleMutation = (typeof JIRA_SPRINT_LIFECYCLE_MUTATIONS)[number];
 
+export const JIRA_PERMISSION_SCHEME_MUTATIONS = Object.freeze([
+  "jira.create-permission-scheme", "jira.update-permission-scheme", "jira.delete-permission-scheme",
+  "jira.add-permission-grant", "jira.delete-permission-grant", "jira.set-permission-scheme-attribute",
+] as const);
+export type JiraPermissionSchemeMutation = (typeof JIRA_PERMISSION_SCHEME_MUTATIONS)[number];
+export const JIRA_ROLE_MUTATIONS = Object.freeze([
+  "jira.create-role", "jira.update-role", "jira.replace-role", "jira.delete-role",
+  "jira.add-role-default-actors", "jira.delete-role-default-actor",
+  "jira.add-project-role-actors", "jira.set-project-role-actors", "jira.delete-project-role-actor",
+] as const);
+export type JiraRoleMutation = (typeof JIRA_ROLE_MUTATIONS)[number];
+
 export const JIRA_AGILE_PLANNING_MUTATIONS = Object.freeze([
   "jira.epic-remove-issues", "jira.rank-epic", "jira.rank-issues", "jira.set-issue-estimation",
 ] as const);
@@ -69,6 +81,8 @@ export type JiraProjectCategoryMutation = (typeof JIRA_PROJECT_CATEGORY_MUTATION
 
 /** Remote effects remain separate from the enclosing MCP/catalog terminal status. */
 export const JIRA_MUTATION_OPERATIONS = [
+  ...JIRA_PERMISSION_SCHEME_MUTATIONS,
+  ...JIRA_ROLE_MUTATIONS,
   ...JIRA_AGILE_PLANNING_MUTATIONS,
   ...JIRA_VERSION_REMOTE_LINK_MUTATIONS,
   ...JIRA_PROJECT_CATEGORY_MUTATIONS,
@@ -235,6 +249,18 @@ export type JiraMutationResultState = (typeof JIRA_MUTATION_RESULT_STATES)[numbe
 /** Validated Jira identities and closed state facts; never remote bodies or headers.
  * Monitoring booleans on unknown/unconfirmed writes are requested targets, not success evidence. */
 export interface JiraMutationReceipt {
+  readonly roleId?: string;
+  readonly rolePresent?: boolean;
+  readonly swapRoleId?: string;
+  readonly roleActorsScope?: "role-defaults" | "project-membership";
+  readonly actorChange?: "add" | "replace" | "remove";
+  readonly actorUserKeys?: readonly string[];
+  readonly actorGroupNames?: readonly string[];
+  readonly schemeId?: string;
+  readonly schemePresent?: boolean;
+  readonly grantPresent?: boolean;
+  readonly attributeKey?: string;
+  readonly attributeEnabled?: boolean;
   readonly categoryId?: string;
   readonly categoryPresent?: boolean;
   readonly globalId?: string;

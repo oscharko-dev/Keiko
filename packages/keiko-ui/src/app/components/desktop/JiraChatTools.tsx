@@ -69,6 +69,7 @@ import { JIRA_RELEASE_LIFECYCLE_TOOLS } from "./jira-release-lifecycle-presentat
 import { JIRA_LINK_MUTATION_TOOLS } from "./jira-link-mutation-presentation";
 import { JIRA_CONFIGURATION_MUTATION_TOOLS } from "./jira-configuration-mutation-presentation";
 import { JIRA_PLANNING_MUTATION_TOOLS } from "./jira-planning-mutation-presentation";
+import { JIRA_ACCESS_CONFIGURATION_TOOLS } from "./jira-access-configuration-presentation";
 import {
   jiraToolOutcomeView,
   JIRA_OUTCOME_ITEMS_SHOWN,
@@ -311,6 +312,7 @@ function resultCardSemantics(exchange: ChatToolExchange): {
     JIRA_LINK_MUTATION_TOOLS,
     JIRA_CONFIGURATION_MUTATION_TOOLS,
     JIRA_PLANNING_MUTATION_TOOLS,
+    JIRA_ACCESS_CONFIGURATION_TOOLS,
     JIRA_REMOTE_VERSION_LINK_TOOLS,
     JIRA_WORKLOG_FEED_TOOLS,
     JIRA_ACCOUNT_DIAGNOSTIC_TOOLS,

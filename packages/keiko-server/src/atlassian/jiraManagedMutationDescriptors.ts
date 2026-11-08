@@ -1,4 +1,12 @@
 import {
+  jiraPermissionSchemeMutationDeclarationForTool,
+  type JIRA_PERMISSION_SCHEME_WRITE_DEFINITIONS,
+} from "./jiraPermissionSchemeMutationDescriptors.js";
+import {
+  jiraRoleMutationDeclarationForTool,
+  type JIRA_ROLE_WRITE_DEFINITIONS,
+} from "./jiraRoleMutationDescriptors.js";
+import {
   jiraVersionLinkMutationDeclarationForTool,
   type JIRA_VERSION_LINK_WRITE_DEFINITIONS,
 } from "./jiraVersionLinkMutationDescriptors.js";
@@ -437,6 +445,8 @@ type CoreMutationToolName = Exclude<
   JiraMutationOperation,
   Extract<
     JiraMutationOperation,
+    | keyof typeof JIRA_PERMISSION_SCHEME_WRITE_DEFINITIONS
+    | keyof typeof JIRA_ROLE_WRITE_DEFINITIONS
     | keyof typeof JIRA_SPRINT_LIFECYCLE_WRITE_DEFINITIONS
     | keyof typeof JIRA_VERSION_LINK_WRITE_DEFINITIONS
     | keyof typeof JIRA_PROJECT_CATEGORY_WRITE_DEFINITIONS
@@ -623,6 +633,8 @@ function isCoreMutationTool(name: JiraMutationOperation): name is CoreMutationTo
 }
 export function jiraMutationDeclaration(name: JiraMutationOperation): ManagedMcpToolDeclaration {
   for (const producer of [
+    jiraPermissionSchemeMutationDeclarationForTool,
+    jiraRoleMutationDeclarationForTool,
     jiraVersionLinkMutationDeclarationForTool,
     jiraProjectCategoryMutationDeclarationForTool,
     jiraAgilePlanningDeclarationForTool,

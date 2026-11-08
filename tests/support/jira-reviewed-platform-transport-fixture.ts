@@ -15,10 +15,11 @@ interface NativeCase {
   readonly method: "POST" | "PUT" | "DELETE";
   readonly body: Parameters<JiraMutationRequest>[2];
   readonly acknowledgement: "json" | "none";
+  readonly bodyText?: "true" | "false";
 }
 /** Only a bridge to independent synthetic native state, never a product dispatcher.
  * The actual serialized body must equal the fixture literal before that literal reaches the port. */
-function platformFixture(
+export function reviewedPlatformTransportFixture(
   apiRoot: string,
   selected: NativeCase,
   native: JiraMutationRequest,
@@ -31,22 +32,24 @@ function platformFixture(
     async read(request) {
       const url = new URL(request.url);
       if (!url.pathname.startsWith(`${apiRoot}/`)) return undefined;
-      const path = url.pathname.slice(apiRoot.length + 1);
+      const path = url.pathname.slice(apiRoot.length + 1) + url.search;
       if (!acceptsRead(path)) return undefined;
       expect(request.method).toBe("GET");
       expect(request.bodyJson).toBeUndefined();
       expect(request.jiraExperimental).toBeUndefined();
-      expect(url.search).toBe("");
-      const result = await native(path, "GET", undefined, path === "projectCategory" ? "json-array" : "json");
+      expect(request.jiraPermissionAttribute).toBeUndefined();
+      const array = path === "projectCategory" || path === "role";
+      const result = await native(path, "GET", undefined, array ? "json-array" : "json");
       return result.ok ? response(result.items ?? result.body, result.status) : response({}, result.httpStatus ?? 503);
     },
     async write(request) {
       const url = new URL(request.url);
-      if (url.pathname !== `${apiRoot}/${selected.path}`) return undefined;
+      if (`${url.pathname}${url.search}` !== `${apiRoot}/${selected.path}`) return undefined;
       expect(request.method).toBe(selected.method);
       expect(request.jiraExperimental).toBeUndefined();
-      expect(url.search).toBe("");
-      expect(request.bodyJson).toBe(selected.body === undefined ? undefined : JSON.stringify(selected.body));
+      expect(request.jiraPermissionAttribute).toBe(selected.bodyText === undefined ? undefined : true);
+      const expectedBody = selected.body === undefined ? undefined : JSON.stringify(selected.body);
+      expect(request.bodyJson).toBe(selected.bodyText ?? expectedBody);
       expect(++writes).toBe(1);
       const result = await native(selected.path, selected.method, selected.body, selected.acknowledgement);
       return result.ok ? response(result.items ?? result.body, result.status) : response({}, result.httpStatus ?? 503);
@@ -61,7 +64,7 @@ export function versionLinkTransportFixture(
 ): ReviewedTransportFixture {
   const native = versionLinkMutationFixture(selected);
   native.actor.key = actorKey;
-  return platformFixture(apiRoot, { path: selected.path, method: selected.method,
+  return reviewedPlatformTransportFixture(apiRoot, { path: selected.path, method: selected.method,
     body: selected.nativeBody, acknowledgement: "none" }, native.request,
   (path) => path === "myself" || path === "project/10000" || path === "version/81" || path === "version/81/remotelink",
   native.snapshot);
@@ -74,7 +77,7 @@ export function projectCategoryTransportFixture(
 ): ReviewedTransportFixture {
   const native = projectCategoryFixture();
   native.actor.key = actorKey;
-  return platformFixture(apiRoot, { path: selected.path.slice("/rest/api/2/".length), method: selected.method,
+  return reviewedPlatformTransportFixture(apiRoot, { path: selected.path.slice("/rest/api/2/".length), method: selected.method,
     body: selected.body, acknowledgement: selected.method === "DELETE" ? "none" : "json" }, native.request,
   (path) => path === "myself" || path === "projectCategory" || path === "projectCategory/7" || path === "projectCategory/9007199254740993",
   native.snapshot);

@@ -7,6 +7,13 @@ export type JiraPresentationSource = Readonly<Record<string, unknown>>;
 export function jiraPresentationText(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
+/** Display-only validation of native text; never converts a name into an identifier. */
+export function jiraPresentationNativeText(value: unknown, max: number, options: { readonly empty?: boolean; readonly multiline?: boolean } = {}): value is string {
+  if (typeof value !== "string" || value.length > max) return false;
+  if (options.empty !== true && value.trim().length === 0) return false;
+  const checked = options.multiline === true ? value.replaceAll(/[\t\r\n]/gu, "") : value;
+  return !/[\p{Cc}\p{Surrogate}]/u.test(checked);
+}
 /** Native receipt IDs retain their exact positive int64 spelling. */
 export function jiraPresentationIdentity(value: unknown): string | undefined {
   return typeof value === "string" && /^[1-9]\d{0,18}$/u.test(value) && BigInt(value) <= 9223372036854775807n
