@@ -29,6 +29,8 @@ const fixture = {
   createdIssueId: "10010",
   commentId: "10011",
   worklogId: "10012",
+  // The live recipe captures the native start in prepare; the reviewed delete must echo it.
+  worklogStarted: "2026-11-08T09:00:00.000+0000",
   transitionId: "10003",
 };
 
