@@ -3,7 +3,7 @@ import { expect, it } from "vitest";
 import { emailTemplateFixture, emailZipOffsets } from "../../../../tests/support/jira-email-template-fixture.js";
 import { zipTextEntries, withArchiveComment } from "../../../../tests/support/zip-fixture.js";
 import { inspectJiraEmailTemplateArchive as inspect } from "./jiraEmailTemplateArchive.js";
-import { admitAttachmentContent } from "./jiraAttachmentContentPolicy.js";
+import { admitAttachmentContent, admitJiraEmailTemplateParts } from "./jiraAttachmentContentPolicy.js";
 
 const OPTIONS = { secrets: [], now: () => 0 };
 it("projects only complete sorted metadata through the credential floor", async () => {
@@ -65,4 +65,31 @@ it("refuses incomplete entry populations instead of truncating a claimed complet
 });
 it("preserves local cancellation without a native HTTP claim", async () => {
   expect(await inspect(emailTemplateFixture().bytes, { ...OPTIONS, signal: AbortSignal.abort() })).toEqual({ ok: false, reason: "cancelled" });
+});
+
+it("lets cancellation interrupt a valid multi-part pack during the existing content scan", async () => {
+  const abort = new AbortController();
+  const first = new TextEncoder().encode("safe template content ".repeat(50000));
+  const second = new TextEncoder().encode("another safe template ".repeat(50000));
+  let visited = 0;
+  const parts = new Map<string, Uint8Array>([["first.vm", first], ["second.vm", second]]);
+  const values = parts.values.bind(parts);
+  parts.values = function* () {
+    for (const part of values()) {
+      visited++;
+      if (visited === 2) abort.abort();
+      yield part;
+    }
+  };
+  expect(await admitJiraEmailTemplateParts(new Uint8Array(), parts, [],
+    { signal: abort.signal, deadlineAt: 15000, now: () => 0 })).toEqual({ ok: false, refusal: "cancelled" });
+  expect(visited).toBe(2);
+});
+it("shares the original deadline with content scanning instead of starting a new scan budget", async () => {
+  let current = 0;
+  const parts = new Map([["safe.vm", new TextEncoder().encode("safe text")]]);
+  const values = parts.values.bind(parts);
+  parts.values = function* () { current = 15000; yield* values(); };
+  expect(await admitJiraEmailTemplateParts(new Uint8Array(), parts, [],
+    { deadlineAt: 15000, now: () => current })).toEqual({ ok: false, refusal: "bounds-exceeded" });
 });

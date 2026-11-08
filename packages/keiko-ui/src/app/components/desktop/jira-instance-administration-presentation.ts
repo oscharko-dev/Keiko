@@ -76,10 +76,10 @@ function archive(source: Source): readonly JiraAgileDetails[] {
   const items = archiveEntries(source);
   const complete = items !== undefined && source.selectionScope === "complete-exported-email-template-pack" && positiveBytes(source.archiveBytes) && jiraAdministrativeDigest(source.archiveSha256) && jiraAdministrativeDigest(source.manifestSha256);
   if (!complete) return [{ facts: [], labels: ["chat.jira.emailPack.metadataUnavailable"] }];
-  return [{ facts: [{ label: "chat.jira.emailPack.byteCount", value: String(source.archiveBytes) },
-    { label: "chat.jira.emailPack.entryCount", value: String(items.length) }, ...fact("chat.jira.emailPack.rawDigest", source.archiveSha256), ...fact("chat.jira.emailPack.manifest", source.manifestSha256)],
+  return [{ facts: [...fact("chat.jira.emailPack.byteCount", String(source.archiveBytes)),
+    ...fact("chat.jira.emailPack.entryCount", String(items.length)), ...fact("chat.jira.emailPack.rawDigest", source.archiveSha256), ...fact("chat.jira.emailPack.manifest", source.manifestSha256)],
     labels: ["chat.jira.emailPack.metadataOnly", "chat.jira.emailPack.exportSideEffect"] },
-  ...items.map((row) => ({ facts: [...fact("chat.jira.emailPack.entryPath", row.path), { label: "chat.jira.emailPack.byteCount", value: String(row.sizeBytes) }, ...fact("chat.jira.emailPack.entryDigest", row.sha256)], labels: [] }))];
+  ...items.map((row) => ({ facts: [...fact("chat.jira.emailPack.entryPath", row.path), ...fact("chat.jira.emailPack.byteCount", String(row.sizeBytes)), ...fact("chat.jira.emailPack.entryDigest", row.sha256)], labels: [] }))];
 }
 export function jiraInstanceAdministrationDetails(tool: string, source: Source): readonly JiraAgileDetails[] {
   if (tool === "jira_email_template_pack") return archive(source);

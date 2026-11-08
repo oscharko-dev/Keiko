@@ -32,6 +32,17 @@ describe("native administration group lifecycle and direct membership", () => {
     expect(await execute(name, structuredClone(args), f.request)).toMatchObject({ ok: false, reason: "permission-denied", receipt });
     expect(f.calls.filter((call) => call.method !== "GET")).toHaveLength(1);
   });
+  it("never describes an acknowledged deletion as no change or repeats its pre-effect group binding", async () => {
+    const test = GROUP_MUTATION_FIXTURE_CASES[1]; const f = groupMutationFixture();
+    const outcome = await execute(test.name, structuredClone(test.args), f.request);
+    expect(outcome).toMatchObject({ ok: false, reason: "unavailable", receipt: test.receipt });
+    expect(JSON.stringify(outcome)).toContain("acknowledged the group deletion");
+    expect(JSON.stringify(outcome)).toContain("do not replay");
+    expect(JSON.stringify(outcome)).not.toContain("Nothing was changed");
+    const effect = f.calls.findIndex((call) => call.method === "DELETE");
+    expect(f.calls.slice(effect + 1).map((call) => call.path)).toEqual(["myself"]);
+    expect(f.calls.filter((call) => call.method === "DELETE")).toHaveLength(1);
+  });
   it("preserves the acknowledged cause and frozen target receipt", async () => {
     const f = groupMutationFixture(); f.controls.throwReadback = true;
     let observed: unknown;

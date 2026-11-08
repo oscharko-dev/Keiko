@@ -54,17 +54,24 @@ export async function inspectJiraEmailTemplateArchive(
   bytes: Uint8Array,
   options: { readonly secrets: readonly string[]; readonly signal?: AbortSignal; readonly now?: () => number },
 ): Promise<Inspection> {
+  const now = options.now ?? Date.now;
+  const deadlineAt = now() + TIMEOUT_MS;
   const read = await readBoundedOoxmlPackage(bytes, { maxInputBytes: JIRA_ATTACHMENT_MAX_BYTES,
     maxEntries: TOOL_CATALOG_LIMITS.maxArrayItems, maxInflatedBytes: INFLATED_BYTES, timeoutMs: TIMEOUT_MS,
-    now: options.now ?? Date.now, rejectNonRegularEntries: true, ...(options.signal === undefined ? {} : { signal: options.signal }) });
+    now, rejectNonRegularEntries: true, ...(options.signal === undefined ? {} : { signal: options.signal }) });
   if (!read.ok) return { ok: false, reason: archiveFailure(read.reason) };
-  const projected = entries(read.parts);
-  if (projected === undefined) return malformed();
-  const admitted = admitJiraEmailTemplateParts(bytes, read.parts, options.secrets);
+  const admitted = await admitJiraEmailTemplateParts(bytes, read.parts, options.secrets,
+    { now, deadlineAt, ...(options.signal === undefined ? {} : { signal: options.signal }) });
+  if (!admitted.ok && (admitted.refusal === "cancelled" || admitted.refusal === "bounds-exceeded"))
+    return { ok: false, reason: admitted.refusal };
   if (!admitted.ok) return { ok: false, reason: "field-validation", contentRefusal: admitted.refusal, detail: { fieldId: "source", validation: "invalid-field", messages: [
     admitted.refusal === "contains-credential" ? "The email-template archive contains credential material and cannot be exposed or uploaded. Remove the credential and review a new archive."
       : "Every email-template archive entry must be fully scannable by the existing content policy. Unsupported or unreadable content was refused.",
   ] } };
+  const projected = entries(read.parts);
+  if (projected === undefined) return malformed();
+  if (options.signal?.aborted) return { ok: false, reason: "cancelled" };
+  if (now() >= deadlineAt) return { ok: false, reason: "bounds-exceeded" };
   return { ok: true, value: { archiveBytes: bytes.byteLength, archiveSha256: digest(bytes),
     manifestSha256: digest(JSON.stringify(projected)), entries: projected } };
 }

@@ -57,8 +57,11 @@ function uploadInput(args: CatalogJsonObject, actorKey: string): EmailTemplateUp
   if (!exactKeys(args, ["expectedActorKey", "source", "expectedFile", "acceptStagedTemplateReplacement"]) || args.acceptStagedTemplateReplacement !== true) return undefined;
   const source = asRecord(args.source);
   if (source === undefined || !exactKeys(source, ["kind", "path"]) || source.kind !== "connected-file" || !isPortableWorkspaceRelativePath(source.path)) return undefined;
-  if (!isJiraAttachmentPreview(args.expectedFile) || !exactKeys(args.expectedFile, ["name", "sizeBytes", "sha256"])) return undefined;
-  return { kind: "upload", actorKey, path: source.path, expectedFile: { ...args.expectedFile } };
+  const expected = asRecord(args.expectedFile);
+  if (expected === undefined || !isJiraAttachmentPreview(expected) || !exactKeys(expected, ["name", "sizeBytes", "sha256"]) ||
+      typeof expected.name !== "string" || typeof expected.sizeBytes !== "number" || typeof expected.sha256 !== "string") return undefined;
+  return { kind: "upload", actorKey, path: source.path,
+    expectedFile: { name: expected.name, sizeBytes: expected.sizeBytes, sha256: expected.sha256 } };
 }
 function globalInput(operation: JiraEmailTemplateMutation, args: CatalogJsonObject, actorKey: string): EmailTemplateGlobalInput | undefined {
   const apply = operation === "jira.apply-email-template-pack";

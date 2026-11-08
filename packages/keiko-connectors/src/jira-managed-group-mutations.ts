@@ -21,6 +21,7 @@ function effect(input: GroupMutationInput): { readonly path: string; readonly me
 async function confirm(request: JiraMutationRequest, input: GroupMutationInput, receipt: JiraGroupMutationReceipt): Promise<GroupMutationAttempt> {
   const actor = await readSavedActor(request, input.actor);
   if (!actor.ok) return { ...actor, receipt };
+  if (input.kind === "delete") return groupMutationRefusal("Jira acknowledged the group deletion. A deleted group cannot be rebound, and this observation cannot establish every permission, access or restriction-transfer consequence. Keep the known target receipt and do not replay the deletion.", "unavailable", receipt);
   const group = await bindMutationGroup(request, input.name);
   if (group !== undefined) return { ...group, receipt };
   if (input.kind === "create") return { ok: true, receipt };

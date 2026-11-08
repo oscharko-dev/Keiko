@@ -1,3 +1,4 @@
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { Buffer, isUtf8 } from "node:buffer";
 import { extname } from "node:path";
 import { inflateSync } from "node:zlib";
@@ -303,15 +304,29 @@ function packagePartVerdict(
 }
 /** Closed Jira email-template purpose: the caller has already admitted every strict ZIP entry.
  * Reuse the same raw-container/part credential floor without admitting generic ZIP attachments. */
-export function admitJiraEmailTemplateParts(bytes: Uint8Array, parts: ReadonlyMap<string, Uint8Array>, secrets: readonly string[]): AttachmentContentVerdict {
+export async function admitJiraEmailTemplateParts(
+  bytes: Uint8Array,
+  parts: ReadonlyMap<string, Uint8Array>,
+  secrets: readonly string[],
+  options: { readonly deadlineAt: number; readonly now: () => number; readonly signal?: AbortSignal },
+): Promise<AttachmentContentVerdict | { readonly ok: false; readonly refusal: "cancelled" | "bounds-exceeded" }> {
+  const stopped = (): { readonly ok: false; readonly refusal: "cancelled" | "bounds-exceeded" } | undefined => {
+    if (options.signal?.aborted) return { ok: false, refusal: "cancelled" };
+    return options.now() >= options.deadlineAt ? { ok: false, refusal: "bounds-exceeded" } : undefined;
+  };
+  let refused = stopped(); if (refused !== undefined) return refused;
   if (containsLiteral(bytes, secrets) || textHoldsCredential(latin1Of(bytes), secrets)) return CREDENTIAL;
   const budget: InflateBudget = { remaining: INFLATE_MAX_BYTES };
   for (const part of parts.values()) {
+    // Yield between complete parts; splitting markup or a credential token would weaken scanning.
+    await yieldToEventLoop();
+    refused = stopped(); if (refused !== undefined) return refused;
     if (containsLiteral(part, secrets)) return CREDENTIAL;
     const verdict = packagePartVerdict(part, secrets, budget);
+    refused = stopped(); if (refused !== undefined) return refused;
     if (!verdict.ok) return verdict;
   }
-  return ALLOWED;
+  return stopped() ?? ALLOWED;
 }
 
 /** Every part of an OOXML package, not only the parts the text extractor reads. */
@@ -507,4 +522,18 @@ export async function admitAttachmentContent(input: {
   const text = decodeText(bytes);
   if (text === undefined || startsWith(bytes, ZIP)) return UNSCANNABLE;
   return textHoldsCredential(text, secrets) ? CREDENTIAL : ALLOWED;
+}
+
+/** The fixed avatar port accepts only PNG/JPEG after the existing full content admission.
+ * Signature recognition alone never grants egress or implies valid decoded pixel content. */
+export async function admitJiraAvatarImage(
+  input: Parameters<typeof admitAttachmentContent>[0],
+): Promise<Exclude<AttachmentContentVerdict, { readonly ok: true }> | {
+  readonly ok: true;
+  readonly mimeType: "image/png" | "image/jpeg";
+}> {
+  const mimeType = startsWith(input.bytes, PNG) ? "image/png" : startsWith(input.bytes, JPEG) ? "image/jpeg" : undefined;
+  if (mimeType === undefined) return UNSCANNABLE;
+  const admitted = await admitAttachmentContent(input);
+  return admitted.ok ? { ok: true, mimeType } : admitted;
 }
