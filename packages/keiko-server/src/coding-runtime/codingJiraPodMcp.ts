@@ -101,6 +101,10 @@ export interface CodingJiraRunAuthority {
     phase: "discovery" | "effect",
   ) => readonly CodingWorkbenchConnectorScope[] | undefined;
   readonly currentInputAuthority?: () => CodingJiraInputAuthority | undefined;
+  /** Existing cumulative run budget, rechecked without reserving another model request. */
+  readonly promptFits?: ((promptTokens: number) => boolean) | undefined;
+  /** Composed with the actual model geometry and provider-reported context usage. */
+  readonly catalogFits?: Parameters<typeof createCodingJiraCatalog>[0]["fits"] | undefined;
 }
 
 function requiredScope(tool: CodingJiraTool): CodingWorkbenchConnectorScope {
@@ -202,6 +206,41 @@ function linkLineCounts(
 /** The result a provider reported with its failure; absent for any other kind of failure. */
 function providerResult(error: unknown): CatalogJsonObject | undefined {
   return error instanceof ManagedMcpError ? error.structuredResult : undefined;
+}
+
+/** The existing failed-call observation and capture boundary, shared by the call's catch. */
+function recordJiraCallFailure(
+  log: ServerLogSink | undefined,
+  error: unknown,
+  line: CallLine,
+  started: number,
+  context: JiraInvocationContext,
+): CatalogJsonObject {
+  const provider = providerResult(error);
+  const scopeMissing = context.scopeState.missing;
+  recordCodingJiraPod(log, context.correlationId, {
+    ...line,
+    outcome: "failed",
+    reason: scopeMissing ? "scope-missing" : provider === undefined ? "internal" : "tool-failed",
+    ...linkLineCounts(provider),
+    durationMs: Date.now() - started,
+    ...(provider === undefined ? { error } : {}),
+  });
+  if (scopeMissing) {
+    if (provider === undefined) context.retainLocalFailure?.("connector-scope-missing");
+    else context.retainProviderResult?.({ data: provider, isError: true });
+    throw new ManagedMcpError(
+      "connector-scope-missing",
+      undefined,
+      context.dispatch.dispatched ? "possible" : "none",
+    );
+  }
+  // A failure the provider reported is data for the model; any other failure stays a failure.
+  if (provider !== undefined) {
+    const retained = context.retainProviderResult?.({ data: provider, isError: true });
+    return callToolResult(retained?.data ?? provider, true);
+  }
+  throw error instanceof ManagedMcpError ? error : new ManagedMcpError("tool-error");
 }
 
 class CodingJiraPodService implements CodingJiraPods {
@@ -380,6 +419,7 @@ class CodingJiraPodService implements CodingJiraPods {
       correlationId,
       admitted: (tool, context) => this.current(binding) !== undefined &&
         this.scopeRefusal(authority, context, requiredScope(tool)) === undefined,
+      fits: (selected, result) => authority.catalogFits?.(selected, result),
       provider: (selected) => createJiraProviderForCatalog(
           (context) => this.connection(binding, context),
           selected,
@@ -673,44 +713,11 @@ class CodingJiraPodService implements CodingJiraPods {
       const retained = scopedContext.retainProviderResult?.({ data }) ?? { data };
       return callToolResult(retained.data, false);
     } catch (error) {
-      return this.failedCall(error, line, started, scopedContext);
+      return recordJiraCallFailure(this.log, error, line, started, scopedContext);
     } finally {
       inputs.get(context.invocationId)?.release();
       inputs.delete(context.invocationId);
     }
-  }
-
-  private failedCall(
-    error: unknown,
-    line: CallLine,
-    started: number,
-    context: JiraInvocationContext,
-  ): CatalogJsonObject {
-    const provider = providerResult(error);
-    const scopeMissing = context.scopeState.missing;
-    recordCodingJiraPod(this.log, context.correlationId, {
-      ...line,
-      outcome: "failed",
-      reason: scopeMissing ? "scope-missing" : provider === undefined ? "internal" : "tool-failed",
-      ...linkLineCounts(provider),
-      durationMs: Date.now() - started,
-      ...(provider === undefined ? { error } : {}),
-    });
-    if (scopeMissing) {
-      if (provider === undefined) context.retainLocalFailure?.("connector-scope-missing");
-      else context.retainProviderResult?.({ data: provider, isError: true });
-      throw new ManagedMcpError(
-        "connector-scope-missing",
-        undefined,
-        context.dispatch.dispatched ? "possible" : "none",
-      );
-    }
-    // A failure the provider reported is data for the model; any other failure stays a failure.
-    if (provider !== undefined) {
-      const retained = context.retainProviderResult?.({ data: provider, isError: true });
-      return callToolResult(retained?.data ?? provider, true);
-    }
-    throw error instanceof ManagedMcpError ? error : new ManagedMcpError("tool-error");
   }
 
   private scopeRefusal(

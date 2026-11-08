@@ -14,7 +14,8 @@ export async function prepareJiraHumanInput(
   binding: JiraHumanInputBinding,
   publish: (view: JiraHumanInputView) => void | Promise<void>,
   signal: AbortSignal,
-  cleanupFailed: (error: unknown) => void,
+  /** The composing diagnostic owner is body-free and does not throw. */
+  reportCleanupFailure: (error: unknown) => void,
 ): Promise<JiraHumanInputSelection> {
   const prepared = custody.prepare(binding);
   try {
@@ -33,7 +34,7 @@ export async function prepareJiraHumanInput(
     return { requestId: current.requestId, revision: current.revision, binding: original };
   } catch (error) {
     try { custody.cancel(prepared.requestId, binding); }
-    catch (cleanupError) { cleanupFailed(cleanupError); }
+    catch (cleanupError) { reportCleanupFailure(cleanupError); }
     throw error;
   }
 }

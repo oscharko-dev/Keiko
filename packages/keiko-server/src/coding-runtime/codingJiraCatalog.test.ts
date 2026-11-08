@@ -19,6 +19,7 @@ const ISSUE = "GET /rest/api/2/issue/{issueIdOrKey}";
 function fixture() {
   const execute = vi.fn(async () => ({ data: { outcome: "succeeded" } }));
   const admitted = vi.fn(() => true);
+  const fits = vi.fn<() => boolean | undefined>(() => true);
   const provider = vi.fn((names: readonly CodingJiraTool[]): ManagedMcpProvider<ManagedMcpInvocationContext> => ({
     id: "selected-synthetic-jira",
     tools: () => names.map((name) => ({ name, risk: "read", execute,
@@ -33,12 +34,57 @@ function fixture() {
       }),
     })),
   }));
-  const catalog = createCodingJiraCatalog({ tools: ["jira.projects", "jira.issue"], provider, admitted,
+  const catalog = createCodingJiraCatalog({ tools: ["jira.projects", "jira.issue"], provider, admitted, fits,
     correlationId: context.correlationId, log: { write: () => undefined } });
   cleanups.push(catalog.close);
-  return { catalog, provider, admitted, execute,
+  return { catalog, provider, admitted, fits, execute,
     select: (identities: readonly string[]) => catalog.call("jira.describe", { identities }, context) };
 }
+
+it("publishes no tools until the real discovery host has completed admission", async () => {
+  const f = fixture();
+  expect(f.catalog.tools).toEqual([]);
+  await f.catalog.ready;
+  expect(f.catalog.tools.map((tool) => tool.name)).toEqual(["jira.discover", "jira.describe"]);
+  expect(f.fits).not.toHaveBeenCalled();
+});
+
+it("cannot republish tools when the Pod closes while initial admission is pending", async () => {
+  const f = fixture();
+  const refused = expect(f.catalog.ready).rejects.toBeInstanceOf(mcp.ManagedMcpError);
+  await f.catalog.close();
+  await refused;
+  expect(f.catalog.tools).toEqual([]);
+});
+
+it("keeps the Pod discoverable when the first provider context sample is unavailable", async () => {
+  const f = fixture();
+  f.fits.mockReturnValue(undefined);
+  await f.catalog.ready;
+  expect(await f.catalog.call("jira.discover", { maxResults: 1 }, context)).toMatchObject({ outcome: "succeeded" });
+  await expect(f.select([PROJECTS])).rejects.toMatchObject({ structuredResult: { reason: "selection-unavailable" } });
+  expect(f.catalog.tools.map((tool) => tool.name)).toEqual(["jira.discover", "jira.describe"]);
+  expect(await f.select([])).toMatchObject({ outcome: "succeeded" });
+  f.fits.mockReturnValue(true);
+  await f.select([PROJECTS]);
+  expect(f.catalog.tools.map((tool) => tool.name)).toContain("jira.projects");
+  expect(f.execute).not.toHaveBeenCalled();
+});
+
+it("checks the live prompt allowance after admission and preserves the old subset on exhaustion", async () => {
+  const f = fixture(); await f.catalog.ready; await f.select([PROJECTS]);
+  const before = f.catalog.tools;
+  // The initial identity admission still sees room; only the post-admission recheck consumes it.
+  f.admitted.mockReturnValueOnce(true).mockImplementationOnce(() => {
+    f.fits.mockReturnValue(false);
+    return true;
+  });
+  await expect(f.select([ISSUE])).rejects.toMatchObject({ structuredResult: { reason: "budget-exhausted" } });
+  expect(f.catalog.tools).toBe(before);
+  expect(f.fits).toHaveBeenLastCalledWith(expect.arrayContaining([expect.objectContaining({ name: "jira.issue" })]),
+    expect.objectContaining({ selectedFor: "next-round" }));
+  await f.catalog.call("jira.projects", {}, context);
+});
 
 it("compiles only selected tools, replaces the subset, and clears it without an empty host", async () => {
   const f = fixture(); await f.catalog.ready;

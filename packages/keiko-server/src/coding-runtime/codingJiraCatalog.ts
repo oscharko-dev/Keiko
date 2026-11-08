@@ -41,17 +41,24 @@ export function createCodingJiraCatalog<Context extends ManagedMcpInvocationCont
   readonly log: ManagedMcpLogPort;
   readonly correlationId: string;
   readonly admitted: (tool: CodingJiraTool, context: ManagedMcpInvocationContext) => boolean;
+  /** Undefined is unavailable accounting, distinct from an exhausted observed budget. */
+  readonly fits: (tools: readonly ExternalMcpTool[], result: CatalogJsonObject) => boolean | undefined;
 }): CodingJiraCatalog<Context> {
   const allowed = new Set<string>(input.tools);
   const discovery = createManagedMcpHost<JiraCatalogDiscoveryContext>({
     providers: [createJiraCatalogDiscoveryProvider({ tools: allowed, nativeToolNames: true })], log: input.log,
   });
-  const initial = advertised(discovery);
+  let initial: readonly ExternalMcpTool[] = Object.freeze([]);
   let tools = initial;
   let selected: ManagedMcpHost<Context> | undefined;
   let selecting = false;
   let active = 0;
   let closed = false;
+  const ready = discovery.admit(input.correlationId).then(() => {
+    if (closed) throw new ManagedMcpError("not-admitted");
+    initial = advertised(discovery);
+    tools = initial;
+  });
 
   function requireCurrent(context: ManagedMcpInvocationContext): void {
     requireDispatch(!closed && active === 0 && !context.signal.aborted && context.beforeEffect(), "denied", "effect-denied");
@@ -65,7 +72,7 @@ export function createCodingJiraCatalog<Context extends ManagedMcpInvocationCont
     });
   }
 
-  async function select(identities: readonly string[], context: ManagedMcpInvocationContext): Promise<void> {
+  async function select(identities: readonly string[], result: CatalogJsonObject, context: ManagedMcpInvocationContext): Promise<void> {
     requireCurrent(context);
     requireDispatch(!selecting, "denied", "effect-denied");
     const narrowed = selectedNames(identities, context);
@@ -74,11 +81,16 @@ export function createCodingJiraCatalog<Context extends ManagedMcpInvocationCont
     try {
       if (narrowed.length > 0)
         candidate = createManagedMcpHost({ providers: [input.provider(narrowed)], log: input.log });
+      await candidate?.admit(context.correlationId);
       const next = [...initial, ...(candidate === undefined ? [] : advertised(candidate))];
       requireDispatch(Buffer.byteLength(JSON.stringify(next)) <= TOOL_CATALOG_LIMITS.maxResultBytes, "denied", "budget-exhausted");
-      await candidate?.admit(context.correlationId);
       requireCurrent(context);
       requireDispatch(narrowed.every((name) => input.admitted(name, context)), "denied", "effect-denied");
+      if (narrowed.length > 0) {
+        const fits = input.fits(next, result);
+        requireDispatch(fits !== undefined, "failed", "handler-unavailable");
+        requireDispatch(fits, "denied", "budget-exhausted");
+      }
       const previous = selected;
       selected = candidate;
       candidate = undefined;
@@ -95,13 +107,13 @@ export function createCodingJiraCatalog<Context extends ManagedMcpInvocationCont
   }
 
   return {
-    ready: discovery.admit(input.correlationId),
+    ready,
     get tools(): readonly ExternalMcpTool[] { return tools; },
     async call(name: string, args: CatalogJsonObject, context: Context): Promise<CatalogJsonObject> {
       if (closed || context.signal.aborted || !context.beforeEffect()) throw new ManagedMcpError("not-admitted");
       if (isCodingJiraDiscovery(name)) return discovery.call(name, args, { ...context,
         jiraDiscoveryResultFits: (result) => Buffer.byteLength(JSON.stringify(result)) <= TOOL_CATALOG_LIMITS.maxResultBytes,
-        selectJiraOperations: (identities) => select(identities, context),
+        selectJiraOperations: (identities, result) => select(identities, result, context),
       });
       const host = selected;
       if (selecting || host === undefined || !tools.some((tool) => tool.name === name))
@@ -112,6 +124,7 @@ export function createCodingJiraCatalog<Context extends ManagedMcpInvocationCont
     },
     async close(): Promise<void> {
       closed = true;
+      tools = Object.freeze([]);
       await Promise.all([discovery.close(), selected?.close()]);
     },
   };

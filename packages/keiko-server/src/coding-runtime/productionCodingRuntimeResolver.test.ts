@@ -1216,6 +1216,31 @@ describe("production coding runtime resolver", () => {
       expect(launched?.jiraAuthority?.currentScopes("effect")).toBeUndefined();
     });
 
+    it("checks catalog expansion against the existing live cumulative prompt ledger without charging it", async () => {
+      const { host, createRun, confirmations, fixture, request } = jiraHost();
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(fixture.nowMs());
+      confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, { ...request, jiraPod: BOUND }));
+      const launch = host.launchResolver.resolve({ ...request, jiraPodId: POD });
+      const manager = host.createManager(vi.fn());
+      const backend = createRun.mock.calls[0]?.[0];
+      const ledger = host.runtimeCapabilityAuthenticator;
+      const fits = backend?.jiraAuthority?.promptFits;
+      if (backend === undefined || ledger === undefined || fits === undefined)
+        throw new TypeError("Missing composed Jira budget owner");
+      expect(fits(1)).toBe(false);
+      await manager.start({ ...launch, runId: request.runId, workspaceRoot: fixture.workspace,
+        requestedMode: request.requestedMode });
+      expect(fits(1000)).toBe(true);
+      expect(fits(1000)).toBe(true);
+      const charged = backend.context.budget.maxPromptTokens - 500;
+      expect(ledger.reservePromptTokens?.(backend.minted.modelGatewayCapability, charged)).toMatchObject({ ok: true });
+      expect(fits(500)).toBe(true);
+      expect(fits(501)).toBe(false);
+      await manager.stop(request.runId);
+      expect(fits(1)).toBe(false);
+    });
+
     it("refuses an administrative launch under a confirmation that approved ordinary Jira access", () => {
       const { host, createRun, confirmations, fixture, request } = jiraHost();
       confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, { ...request, jiraPod: BOUND }));

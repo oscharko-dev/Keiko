@@ -235,7 +235,7 @@ function harness(
 function runAuthority(h: Harness): CodingJiraRunAuthority {
   return {
     runId: h.context.correlationId,
-    currentScopes: () => ["issue-tracker.read", "issue-tracker.write", "issue-tracker.admin"],
+    catalogFits: () => true, currentScopes: () => ["issue-tracker.read", "issue-tracker.write", "issue-tracker.admin"],
   };
 }
 
@@ -458,7 +458,7 @@ describe("serving the bound Pod through the relay", () => {
   it("pages only admitted metadata without inventing native history or mutation receipts", async () => {
     const h = retainingHarness(harness());
     const client = connect(h, h.pods.connections(undefined, bound(h), {
-      runId: h.context.correlationId, currentScopes: () => ["issue-tracker.read"],
+      runId: h.context.correlationId, catalogFits: () => true, currentScopes: () => ["issue-tracker.read"],
     }));
     const first = await client.rawCall("jira.discover", { maxResults: 1 });
     expect(first.structuredContent).toMatchObject({ startAt: 0, nextStartAt: 1, items: [expect.any(Object)] });
@@ -470,6 +470,32 @@ describe("serving the bound Pod through the relay", () => {
     expect(h.retained).toEqual([]);
     expect(h.begun).toEqual([]);
     expect(h.recover).not.toHaveBeenCalled();
+  });
+
+  it("opens the real MCP Pod before provider usage exists and refuses only schema expansion", async () => {
+    const h = retainingHarness(harness());
+    let fits: boolean | undefined;
+    const client = connect(h, h.pods.connections(undefined, bound(h), {
+      ...runAuthority(h), catalogFits: () => fits,
+    }));
+    expect(await client.list()).toEqual(["jira.discover", "jira.describe"]);
+    expect((await client.rawCall("jira.discover", { maxResults: 1 })).structuredContent)
+      .toMatchObject({ outcome: "succeeded" });
+    expect((await client.select(["GET /rest/api/2/project"])).structuredContent)
+      .toMatchObject({ outcome: "failed", reason: "selection-unavailable" });
+    expect(await client.list()).toEqual(["jira.discover", "jira.describe"]);
+    expect(client.notifications).toEqual([]);
+    fits = true;
+    await client.select(["GET /rest/api/2/project"]);
+    expect(await client.list()).toContain("jira.projects");
+    fits = false;
+    expect((await client.select(["GET /rest/api/2/issue/{issueIdOrKey}"])).structuredContent)
+      .toMatchObject({ outcome: "failed", reason: "budget-exhausted" });
+    expect(await client.list()).toContain("jira.projects");
+    expect(client.notifications).toEqual(["notifications/tools/list_changed"]);
+    expect(h.http).not.toHaveBeenCalled();
+    expect(h.retained).toEqual([]);
+    expect(h.begun).toEqual([]);
   });
 
   // #4176: an attachment reads Chat-connected files, which a Coding run has no authority over, so
@@ -655,11 +681,28 @@ describe("serving the bound Pod through the relay", () => {
     expect(h.recover).not.toHaveBeenCalled();
   });
 
+  it("records a technical read exception once through the existing failure owner without exposing its body", async () => {
+    const h = retainingHarness(harness());
+    const privateMessage = "Synthetic private provider exception body";
+    h.http.mockRejectedValue(new TypeError(privateMessage));
+    const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
+    const result = await client.call("jira.issue", { issueKey: "SYN-1" });
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toBeUndefined();
+    expect(h.retained).toEqual([]);
+    expect(h.begun).toEqual([]);
+    expect(h.recover).not.toHaveBeenCalled();
+    expect(proofLines(h)).toEqual([
+      expect.objectContaining({ outcome: "failed", reason: "internal", level: "warn" }),
+    ]);
+    expect(JSON.stringify([result, h.records])).not.toContain(privateMessage);
+  });
+
   it("retains a closed read scope refusal without inventing Jira data or an effect", async () => {
     const h = retainingHarness(harness());
     const client = connect(h, h.pods.connections(undefined, bound(h), {
       runId: h.context.correlationId,
-      currentScopes: (phase) => phase === "discovery" ? ["issue-tracker.read"] : [],
+      catalogFits: () => true, currentScopes: (phase) => phase === "discovery" ? ["issue-tracker.read"] : [],
     }));
     const result = await client.call("jira.issue", { issueKey: "SYN-1" });
     expect(result.isError).toBe(true);
@@ -715,7 +758,7 @@ describe("the customer's issue templates bind a Coding run's Jira writes (#4177)
     const h = retainingHarness(harness());
     const client = connect(h, h.pods.connections(undefined, bound(h), {
       runId: h.context.correlationId,
-      currentScopes: (phase) => phase === "discovery"
+      catalogFits: () => true, currentScopes: (phase) => phase === "discovery"
         ? ["issue-tracker.read", "issue-tracker.write"] : ["issue-tracker.read"],
     }));
     const result = await client.call("jira.comment", { issueKey: "SYN-1", body: "Synthetic comment" });
@@ -739,7 +782,7 @@ describe("the customer's issue templates bind a Coding run's Jira writes (#4177)
       return response;
     });
     const client = connect(h, h.pods.connections(undefined, bound(h), {
-      runId: h.context.correlationId, currentScopes: () => scopes,
+      runId: h.context.correlationId, catalogFits: () => true, currentScopes: () => scopes,
     }));
     const result = await client.call("jira.comment", { issueKey: "SYN-1", body: "Synthetic comment" });
     expect(h.retained).toMatchObject([{ isError: true, data: {
@@ -1079,7 +1122,7 @@ describe("native POST reads and administration observations through the Coding r
     const h = retainingHarness(harness());
     h.http.mockImplementation(postAndIdentityReadTransport);
     const client = connect(h, h.pods.connections(undefined, bound(h), {
-      runId: h.context.correlationId, currentScopes: () => ["issue-tracker.read"],
+      runId: h.context.correlationId, catalogFits: () => true, currentScopes: () => ["issue-tracker.read"],
     }));
     const result = await client.call(tool, args);
     expect(result.isError).not.toBe(true);
@@ -1098,7 +1141,7 @@ describe("native POST reads and administration observations through the Coding r
   ] as const)("requires the explicit additional grant for $tool while keeping its effect read-only", async ({ tool, args }) => {
     const h = retainingHarness(harness());
     const ordinary = connect(h, h.pods.connections(undefined, bound(h), {
-      runId: h.context.correlationId, currentScopes: () => ["issue-tracker.read", "issue-tracker.write"],
+      runId: h.context.correlationId, catalogFits: () => true, currentScopes: () => ["issue-tracker.read", "issue-tracker.write"],
     }));
     expect(await ordinary.list()).not.toContain(tool);
     expect((await ordinary.call(tool, args)).isError).toBe(true);
@@ -1127,7 +1170,7 @@ describe("Coding Jira's live, explicitly selected scopes", () => {
     const h = harness();
     const authority: CodingJiraRunAuthority = {
       runId: h.context.correlationId,
-      currentScopes: () => ["issue-tracker.read", "issue-tracker.write"],
+      catalogFits: () => true, currentScopes: () => ["issue-tracker.read", "issue-tracker.write"],
     };
     const client = connect(h, h.pods.connections(undefined, bound(h), authority));
     expect(await client.list()).toEqual(["jira.discover", "jira.describe"]);
@@ -1143,7 +1186,7 @@ describe("Coding Jira's live, explicitly selected scopes", () => {
     expect(await admin.list()).toContain("jira.set-app-monitoring");
     const ordinary = connect(h, h.pods.connections(undefined, bound(h), {
       runId: h.context.correlationId,
-      currentScopes: () => ["issue-tracker.read", "issue-tracker.write"],
+      catalogFits: () => true, currentScopes: () => ["issue-tracker.read", "issue-tracker.write"],
     }));
     expect(await ordinary.list()).not.toContain("jira.set-app-monitoring");
     expect(h.http).not.toHaveBeenCalled();
@@ -1178,7 +1221,7 @@ describe("Coding Jira's live, explicitly selected scopes", () => {
       return response({ enabled: false });
     });
     const client = connect(h, h.pods.connections(undefined, bound(h), {
-      runId: h.context.correlationId, currentScopes: () => scopes,
+      runId: h.context.correlationId, catalogFits: () => true, currentScopes: () => scopes,
     }));
     const result = await client.call("jira.set-app-monitoring", { enabled: true, expectedEnabled: false });
     expect(h.http.mock.calls.map(([request]) => request.method)).toEqual(["GET", "POST"]);
@@ -1196,7 +1239,7 @@ describe("Coding Jira's live, explicitly selected scopes", () => {
   it("rechecks exact scope after discovery and before the native effect", async () => {
     const h = harness();
     let scopes: readonly CodingWorkbenchConnectorScope[] = ["issue-tracker.read", "issue-tracker.write", "issue-tracker.admin"];
-    const authority: CodingJiraRunAuthority = { runId: h.context.correlationId, currentScopes: () => scopes };
+    const authority: CodingJiraRunAuthority = { runId: h.context.correlationId, catalogFits: () => true, currentScopes: () => scopes };
     const client = connect(h, h.pods.connections(undefined, bound(h), authority));
     await client.select(["POST /rest/api/2/monitoring/app"]);
     expect(await client.list()).toContain("jira.set-app-monitoring");
@@ -1221,7 +1264,7 @@ describe("Coding Jira's live, explicitly selected scopes", () => {
     let revoked = false;
     const client = connect(h, h.pods.connections(undefined, bound(h), {
       runId: h.context.correlationId,
-      currentScopes: () => revoked ? undefined : ["issue-tracker.read"],
+      catalogFits: () => true, currentScopes: () => revoked ? undefined : ["issue-tracker.read"],
     }));
     expect(await client.list()).toEqual(["jira.discover", "jira.describe"]);
     revoked = true;

@@ -48,4 +48,15 @@ describe("existing held-call human information continuation", () => {
       .rejects.toBe(original);
     expect(failures).toEqual([cleanup]);
   });
+  it("propagates the exact wait rejection while reporting a cleanup failure once", async () => {
+    const f = privateJiraCustodyFixture("jira.login");
+    const original = new TypeError("Synthetic wait failure");
+    const cleanup = new Error("Synthetic sealed storage failure");
+    const recorded: unknown[] = [];
+    await expect(prepareJiraHumanInput({ ...f.inputs,
+      wait: () => Promise.reject(original), cancel: () => { throw cleanup; },
+    }, f.binding, () => undefined, new AbortController().signal,
+    (error) => { recorded.push(error); })).rejects.toBe(original);
+    expect(recorded).toEqual([cleanup]);
+  });
 });
