@@ -1336,6 +1336,29 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     return this.endedAnswer !== undefined;
   }
 
+  /** Settled observations survive catalog cleanup; repair never reopens a tool or effect. */
+  public readOnlySynthesisRequest(request: GatewayCallRequest): GatewayCallRequest {
+    const callIds = new Set(
+      this.continuation
+        .filter((message) => message.role === "tool")
+        .map((message) => message.toolCallId),
+    );
+    const observations = this.settledExchanges
+      .filter(
+        (exchange) => callIds.has(exchange.call.id) && usableModelObservation(exchange, undefined),
+      )
+      .flatMap(gatewayMessagesForToolExchange);
+    const readOnly = {
+      ...request,
+      toolCatalog: undefined,
+      reasoningScope: `chat:${this.options.message.chatId}`,
+    };
+    return {
+      ...readOnly,
+      messages: [...request.messages, ...this.fittedContinuation(readOnly, [], observations)],
+    };
+  }
+
   private roundRequest(
     request: GatewayCallRequest,
     offered: ReturnType<CatalogToolBinder["offer"]>,
@@ -1343,15 +1366,14 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     const managed = this.managed;
     const definitions = offeredDefinitions(managed, this.toolDefinitions, offered);
     this.roundDefinitions = definitions;
+    const messages = [this.instruction, ...this.runtimeContext, ...request.messages];
     const round: GatewayCallRequest = {
       ...request,
       stream: false,
       reasoningScope: `chat:${this.options.message.chatId}`,
       messages: [
-        this.instruction,
-        ...this.runtimeContext,
-        ...request.messages,
-        ...this.fittedContinuation(request, definitions),
+        ...messages,
+        ...this.fittedContinuation({ ...request, messages }, definitions),
         ...(this.correction === undefined ? [] : [this.correction]),
       ],
       toolCatalog: {
@@ -1388,18 +1410,19 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   private fittedContinuation(
     request: GatewayCallRequest,
     tools: readonly ToolDefinition[],
+    continuation: readonly GatewayMessage[] = this.continuation,
   ): readonly GatewayMessage[] {
     const config = this.options.deps.gatewayConfig?.current();
     const capability =
       config === undefined ? undefined : findConfiguredCapability(config, request.modelId);
-    if (capability?.kind !== "chat") return this.continuation;
+    if (capability?.kind !== "chat") return continuation;
     const output = request.maxOutputTokens ?? capability.maxOutputTokens;
     const profile = deriveContextProfileFromCapability(capability);
     const fixed = countGatewayPromptTokens(
       {
         ...request,
         tools,
-        messages: [this.instruction, ...this.runtimeContext, ...request.messages],
+        messages: request.messages,
       },
       profile.tokenAccounting,
       {
@@ -1410,14 +1433,14 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       },
     );
     const budget = Math.floor((capability.contextWindow - output) * CONTINUATION_WINDOW_SHARE);
-    const fitted = fitToolContinuation(this.continuation, this.settledExchanges, budget - fixed);
+    const fitted = fitToolContinuation(continuation, this.settledExchanges, budget - fixed);
     if (fitted.elidedCount > this.elidedResults) {
       this.elidedResults = fitted.elidedCount;
       recordChatToolTurnContextFitted(processServerLogSink(), {
         correlationId: this.options.correlationId,
         messageId: this.options.message.id,
         elidedResultCount: fitted.elidedCount,
-        continuationMessageCount: this.continuation.length,
+        continuationMessageCount: continuation.length,
       });
     }
     return fitted.messages;
@@ -1835,6 +1858,7 @@ export type ChatToolTurnPort = Pick<
   | "answersAfterScopeChange"
   | "endedEarly"
   | "reportsToolAction"
+  | "readOnlySynthesisRequest"
   | "settleRetryFailure"
   | "bindEvidenceSources"
 >;

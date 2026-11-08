@@ -118291,7 +118291,7 @@
     {
       "op": "retrieval-activity.tryBuild",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/local-knowledge-grounded-qa.ts:2545",
+      "site": "packages/keiko-server/src/local-knowledge-grounded-qa.ts:2612",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
