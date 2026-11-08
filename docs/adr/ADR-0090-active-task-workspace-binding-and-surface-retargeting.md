@@ -116,7 +116,12 @@ window is the repository-control exception: a concrete `projectPath`/`workspaceR
 or the global selected repository root is repository truth for that window, for
 any repository, and `ctx.activeRoot` remains an internal task-worktree detail.
 The Coding Workbench keeps its selected repository, execution location, and target
-branch in its own window configuration. Its compact controls sit above the composer:
+branch in its own window configuration, and that selection survives a reload of the saved layout
+(#4271). A window without a stored repository decides its starting repository once, and only after
+the task-workspace state has answered: an active task binding wins, otherwise the shell's selected
+project; a read that has not answered or failed decides nothing. A restored selection binds like an
+in-session one: when the active pointer names another workspace, the reload re-binds the window's
+own selection. Its compact controls sit above the composer:
 repository, **Work in** (Local or New local worktree), and branch. Local uses the
 registered checkout and the selected local branch; a new local worktree uses the
 existing managed task-workspace provisioning path. Selection binds the execution

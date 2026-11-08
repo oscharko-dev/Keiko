@@ -1126,7 +1126,10 @@ and a changeset received for review (`fileCount`). It also records a history tas
 repository or workspace that was not activated (`history-repository-switched`,
 `history-workspace-switched`; #4118), a window that kept the task picked from Coding History or
 a new task instead of following a settled run of another task (`history-run-held`, once per pick;
-#4271) and a refused editor bridge registration
+#4271), the starting repository of a window without a stored one, decided only after the
+task-workspace state answered (`repository-seeded` from the shell's project or
+`repository-seed-skipped` for an active task binding, once per window; #4271) and a refused editor
+bridge registration
 (`bridge-registration-refused` with the closed `refusal` `root-boundary` or `lease`, under the
 refused request's correlation and the run as parent; #4117) and a diff that switched to the
 windowed review (`diff-windowed` with the closed `surface` `changeset-review`, `run-changes` or
