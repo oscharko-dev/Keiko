@@ -402,11 +402,14 @@ function uniqueSummary(state: BatchState, entry: DraftBatchEntry, summary: strin
   const fit = (base: string, suffix: string): string =>
     `${base.slice(0, SUMMARY_CHARS_MAX - suffix.length).trimEnd()}${suffix}`;
   let chosen = summary;
-  for (let n = 0; !free(chosen); n += 1)
+  let n = 0;
+  while (!free(chosen)) {
     chosen = fit(
       summary,
       n === 0 ? ` (${compactIds(entry)})` : ` (${compactIds(entry)} #${String(n + 1)})`,
     );
+    n += 1;
+  }
   state.summaries.set(chosen.toLowerCase(), entry.ref);
   return chosen;
 }
@@ -527,19 +530,31 @@ async function draftPage(
       continue;
     }
     parsed.items.forEach((written, ref) => state.written.set(ref, written));
-    const staged = await stagePage(state, ports, page);
-    if (staged.kind === "fatal") return stopStaging(state, staged);
-    if (staged.kind === "staged") {
-      recordStaged(state, page, staged);
-      ports.observe({ kind: "page", outcome: "staged", ...observed });
-      return { kind: "staged" };
-    }
-    ports.observe({ kind: "page", outcome: "refused", ...observed });
-    if (staged.owner === "keiko")
-      return page.length === 1 ? { kind: "refused" } : bisectPage(state, ports, page);
-    correction = staged.guidance;
+    const settled = await stageParsedPage(state, ports, page, observed);
+    if (typeof settled !== "string") return settled;
+    correction = settled;
   }
   return { kind: "refused" };
+}
+
+/** Stages a parsed page: its final outcome, or the correction text for one more attempt. */
+async function stageParsedPage(
+  state: BatchState,
+  ports: DraftBatchPorts,
+  page: readonly DraftBatchEntry[],
+  observed: { itemCount: number; plannedItemTokens: number; completionTokens?: number | undefined },
+): Promise<PageOutcome | string> {
+  const staged = await stagePage(state, ports, page);
+  if (staged.kind === "fatal") return stopStaging(state, staged);
+  if (staged.kind === "staged") {
+    recordStaged(state, page, staged);
+    ports.observe({ kind: "page", outcome: "staged", ...observed });
+    return { kind: "staged" };
+  }
+  ports.observe({ kind: "page", outcome: "refused", ...observed });
+  if (staged.owner === "keiko")
+    return page.length === 1 ? { kind: "refused" } : bisectPage(state, ports, page);
+  return staged.guidance;
 }
 
 function nextPage(

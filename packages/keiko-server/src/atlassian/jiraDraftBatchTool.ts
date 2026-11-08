@@ -184,12 +184,12 @@ function noRequirements(
   args: JiraDraftBatchArguments,
   alreadyDrafted: number,
 ): Collected {
-  const guidance =
-    alreadyDrafted > 0
-      ? "Every selected requirement is already in this draft. Tell the user the draft is complete."
-      : args.filtered && count > 0
-        ? `No requirement matched the requirements filter. Omit requirements to draft all ${String(count)}.`
-        : (REFUSAL_GUIDANCE["no-requirements"] ?? "");
+  let guidance = REFUSAL_GUIDANCE["no-requirements"] ?? "";
+  if (alreadyDrafted > 0)
+    guidance =
+      "Every selected requirement is already in this draft. Tell the user the draft is complete.";
+  else if (args.filtered && count > 0)
+    guidance = `No requirement matched the requirements filter. Omit requirements to draft all ${String(count)}.`;
   return { ok: false, refusal: "no-requirements", facts: unfilteredFacts(units, guidance) };
 }
 
@@ -442,10 +442,14 @@ function completeGuidance(create: boolean): string {
 function deadlineGuidance(result: DraftBatchResult, drafted: number): string {
   const count = remainingCount(result);
   const listed = Math.min(count, REMAINING_IDS_MAX);
+  const listedNote =
+    count > listed
+      ? ` Only ${String(listed)} of the ${String(count)} ids are listed, so prefer the draftId route.`
+      : "";
   return [
     `Time ran out: ${String(drafted)} of ${String(result.progress.plannedCount)} issues are drafted and saved; ${String(count)} requirements are not drafted yet.`,
     "Tell the user, then call jira_draft_batch again now with the same draftId and the same requirements filter as before (requirements already in the draft are skipped); Keiko offers the approval once the whole draft is complete.",
-    `If the draft is gone, call without draftId and with requirements.documents = remainingDocuments and requirements.ids = remainingRequirementIds.${count > listed ? ` Only ${String(listed)} of the ${String(count)} ids are listed, so prefer the draftId route.` : ""}`,
+    `If the draft is gone, call without draftId and with requirements.documents = remainingDocuments and requirements.ids = remainingRequirementIds.${listedNote}`,
   ].join(" ");
 }
 
@@ -561,6 +565,14 @@ function failureGuidance(result: DraftBatchResult, fatal: string | undefined): s
   return "Nothing was drafted. Tell the user in plain language and offer to retry with fewer requirements.";
 }
 
+function completedOutcome(
+  data: CatalogJsonObject,
+  failedCount: number,
+): "failed" | "partial" | "succeeded" {
+  if (data.outcome === "failed") return "failed";
+  return failedCount > 0 ? "partial" : "succeeded";
+}
+
 function completionActivity(
   run: BatchRun,
   result: DraftBatchResult,
@@ -570,7 +582,7 @@ function completionActivity(
   const stop = result.stopReason;
   return {
     phase: "completed",
-    outcome: data.outcome === "failed" ? "failed" : failedCount > 0 ? "partial" : "succeeded",
+    outcome: completedOutcome(data, failedCount),
     ...(stop === undefined || stop === "no-requirements" ? {} : { stopReason: stop }),
     ...(result.error === undefined ? {} : { error: result.error }),
     granularity: run.args.granularity,

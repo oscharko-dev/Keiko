@@ -191,7 +191,8 @@ export function fillMessages(
   return messages;
 }
 
-const FENCED_BLOCK = /```[a-zA-Z]*\s*([\s\S]*?)```/gu;
+const FENCE = "```";
+const FENCE_INFO = /[a-zA-Z]*\s*/uy;
 const CANDIDATE_STARTS_MAX = 24;
 
 /** The balanced top-level `{...}` spans of a text, tolerating braces inside JSON strings. */
@@ -242,6 +243,22 @@ function parsedObject(candidate: string): Record<string, unknown> | undefined {
   }
 }
 
+/** The bodies of the closed ``` fenced blocks of a text, without the info string. */
+function fencedBodies(text: string): readonly string[] {
+  const bodies: string[] = [];
+  let from = text.indexOf(FENCE);
+  while (from !== -1) {
+    FENCE_INFO.lastIndex = from + FENCE.length;
+    const bodyStart = FENCE_INFO.exec(text)?.[0].length ?? 0;
+    const start = from + FENCE.length + bodyStart;
+    const end = text.indexOf(FENCE, start);
+    if (end === -1) break;
+    bodies.push(text.slice(start, end));
+    from = text.indexOf(FENCE, end + FENCE.length);
+  }
+  return bodies;
+}
+
 /**
  * The JSON object in an answer: a fenced block first, then every balanced object of the text; the
  * first one that parses and carries the expected key wins, so prose with braces or a second object
@@ -251,7 +268,7 @@ export function answerObject(
   text: string,
   expectedKey?: string,
 ): Record<string, unknown> | undefined {
-  const fenced = [...text.matchAll(FENCED_BLOCK)].map((match) => match[1] ?? "");
+  const fenced = fencedBodies(text);
   for (const source of [...fenced, text]) {
     for (const candidate of balancedObjects(source)) {
       const object = parsedObject(candidate);

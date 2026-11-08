@@ -1495,12 +1495,10 @@ function lifecycleCapsuleIds(messages: readonly ChatMessage[]): readonly Knowled
   const ids = new Set<KnowledgeCapsuleId>();
   for (const message of messages) {
     const answer = message.groundedAnswer;
-    const lifecycle =
-      answer?.groundingKind === "local-knowledge"
-        ? answer.contextPack.indexLifecycle
-        : answer?.groundingKind === "hybrid"
-          ? answer.contextPack.knowledge.indexLifecycle
-          : undefined;
+    let lifecycle;
+    if (answer?.groundingKind === "local-knowledge") lifecycle = answer.contextPack.indexLifecycle;
+    else if (answer?.groundingKind === "hybrid")
+      lifecycle = answer.contextPack.knowledge.indexLifecycle;
     for (const stamp of lifecycle?.capsules ?? []) ids.add(stamp.capsuleId);
   }
   return [...ids];

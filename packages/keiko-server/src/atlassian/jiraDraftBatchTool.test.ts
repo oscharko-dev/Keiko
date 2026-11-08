@@ -1165,7 +1165,7 @@ describe("jira.draft-batch (#4173)", () => {
     expect(drafted).toBeGreaterThan(0);
     expect(drafted).toBeLessThan(25);
     expect(result.data.failedCount).toBe(25 - drafted);
-    expect((result.data.failedRequirementRefs as string[]).length).toBe(25 - drafted);
+    expect(result.data.failedRequirementRefs as string[]).toHaveLength(25 - drafted);
     expect(result.data.guidance).toEqual(expect.stringContaining("model failed"));
     const completed = proofLines(h).find((line) => line.phase === "completed");
     expect(completed).toMatchObject({ stopReason: "model-failed", outcome: "partial" });

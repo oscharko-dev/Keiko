@@ -176,6 +176,16 @@ function templateBlocks(
   return [...ordered, ...extraBlocks(item, (name) => required.has(sectionKey(name)))];
 }
 
+function sectionBlocks(
+  item: WrittenDraftItem,
+  names: readonly string[],
+  name: string | undefined,
+  criteria: readonly string[],
+): readonly Block[] {
+  if (names.length === 0) return freeBlocks(item);
+  return templateBlocks(item, names, name === undefined ? undefined : { name, criteria });
+}
+
 function blocksFor(
   item: WrittenDraftItem,
   entry: DraftBatchEntry,
@@ -184,10 +194,7 @@ function blocksFor(
   const criteria = entryCriteria(entry);
   const name = criteria.length > 0 ? criteriaSectionOf(instructions) : undefined;
   const names = instructions.requiredSections;
-  const sections =
-    names.length === 0
-      ? freeBlocks(item)
-      : templateBlocks(item, names, name === undefined ? undefined : { name, criteria });
+  const sections = sectionBlocks(item, names, name, criteria);
   const appended: readonly Block[] =
     criteria.length > 0 && name === undefined
       ? [
@@ -239,8 +246,20 @@ export function criteriaFitDescription(
 
 // ─── Model text ──────────────────────────────────────────────────────────────
 
-const HEADING_LINE = /^\s{0,3}#{1,6}\s+(.*?)\s*#*\s*$/u;
+const LINE_BREAK_CHAR = /[\r\u2028\u2029]/u;
+const HEADING_PREFIX = /^\s{0,3}#{1,6}\s+/u;
 const FENCE_LINE = /^\s{0,3}(```|~~~)/u;
+
+/** The text of an ATX heading line without its closing hashes, or undefined for any other line. */
+function headingText(line: string): string | undefined {
+  const prefix = HEADING_PREFIX.exec(line);
+  if (prefix === null) return undefined;
+  const rest = line.slice(prefix[0].length).trimEnd();
+  let end = rest.length;
+  while (end > 0 && rest[end - 1] === "#") end -= 1;
+  const text = end === rest.length ? rest : rest.slice(0, end).trimEnd();
+  return LINE_BREAK_CHAR.test(text) ? undefined : text;
+}
 
 /**
  * Keiko's own `##` headings are the only heading level of a description: a heading the model wrote
@@ -256,9 +275,9 @@ export function demoteHeadings(text: string): string {
         return line;
       }
       if (fenced) return line;
-      const heading = HEADING_LINE.exec(line);
-      if (heading === null) return line;
-      return heading[1] === "" ? "" : `**${heading[1] ?? ""}**`;
+      const heading = headingText(line);
+      if (heading === undefined) return line;
+      return heading === "" ? "" : `**${heading}**`;
     })
     .join("\n");
 }
