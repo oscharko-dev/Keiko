@@ -8,7 +8,11 @@ import type {
   ManagedMcpToolResult,
   ManagedMcpInvocationContext,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import { createToolDescriptor, createToolRef, ToolCatalogError } from "@oscharko-dev/keiko-tool-catalog";
+import {
+  createToolDescriptor,
+  createToolRef,
+  ToolCatalogError,
+} from "@oscharko-dev/keiko-tool-catalog";
 import { CatalogDispatchFault, requireDispatch } from "../tool-catalog/catalogToolErrors.js";
 import { jiraOperationDefinitions } from "./jiraOperationRegistry.js";
 import { object, text } from "./jiraManagedSchemas.js";
@@ -18,7 +22,8 @@ export const JIRA_CATALOG_DISCOVERY_TOOLS = ["jira.discover", "jira.describe"] a
 export type JiraCatalogDiscoveryToolName = (typeof JIRA_CATALOG_DISCOVERY_TOOLS)[number];
 export interface JiraCatalogDiscoveryContext extends ManagedMcpInvocationContext {
   readonly jiraDiscoveryResultFits?: ((result: CatalogJsonObject) => boolean) | undefined;
-  readonly selectJiraOperations?: ((identities: readonly string[], result: CatalogJsonObject) => Promise<void>) | undefined;
+  readonly selectJiraOperations?:
+    ((identities: readonly string[], result: CatalogJsonObject) => Promise<void>) | undefined;
 }
 interface DiscoveryOptions {
   /** Server-owned admitted subset; absent retains Chat's ordinary catalog admission. */
@@ -43,15 +48,16 @@ interface Summary extends CatalogJsonObject {
   readonly tool: string;
 }
 function summaries(options: DiscoveryOptions): readonly Summary[] {
-  return jiraOperationDefinitions().filter((definition) =>
-    options.tools === undefined || options.tools.has(definition.tool),
-  ).map((definition) => ({
-    identity: definition.identity,
-    tool: options.nativeToolNames === true ? definition.tool : definition.tool.replace(/[.-]/gu, "_"),
-    description: definition.authorityAction,
-    kind: definition.kind,
-    effects: definition.effects,
-  }));
+  return jiraOperationDefinitions()
+    .filter((definition) => options.tools === undefined || options.tools.has(definition.tool))
+    .map((definition) => ({
+      identity: definition.identity,
+      tool:
+        options.nativeToolNames === true ? definition.tool : definition.tool.replace(/[.-]/gu, "_"),
+      description: definition.authorityAction,
+      kind: definition.kind,
+      effects: definition.effects,
+    }));
 }
 
 /** Exact registry identity lookup: neither user URLs nor HTTP request shapes are accepted. */
@@ -65,7 +71,11 @@ export function jiraToolsForIdentities(identities: readonly string[]): readonly 
   });
 }
 
-function discover(args: CatalogJsonObject, context: Context, options: DiscoveryOptions): Promise<ManagedMcpToolResult> {
+function discover(
+  args: CatalogJsonObject,
+  context: Context,
+  options: DiscoveryOptions,
+): Promise<ManagedMcpToolResult> {
   context.signal.throwIfAborted();
   requireDispatch(context.beforeEffect(), "denied", "effect-denied");
   const startAt = typeof args.startAt === "number" ? args.startAt : 0;
@@ -99,31 +109,24 @@ function discover(args: CatalogJsonObject, context: Context, options: DiscoveryO
   return Promise.resolve({ data: page() });
 }
 
-async function describe(args: CatalogJsonObject, context: Context, options: DiscoveryOptions): Promise<ManagedMcpToolResult> {
-  context.signal.throwIfAborted();
-  requireDispatch(context.beforeEffect(), "denied", "effect-denied");
-  const identities = args.identities;
-  requireDispatch(
-    Array.isArray(identities) && identities.every((identity) => typeof identity === "string"),
-    "invalid",
-    "invalid-arguments",
-  );
-  const tools = jiraToolsForIdentities(identities);
-  requireDispatch(tools.every((name) => options.tools === undefined || options.tools.has(name)), "denied", "effect-denied");
-  requireDispatch(context.selectJiraOperations !== undefined, "failed", "handler-unavailable");
-  const selected = new Set(identities);
-  const data: CatalogJsonObject = {
-    outcome: "succeeded",
-    items: summaries(options)
-      .filter((item) => selected.has(item.identity))
-      .map((item) => ({ identity: item.identity, tool: item.tool })),
-    selectedFor: "next-round",
-  };
+const INVALID_DESCRIPTION = {
+  outcome: "failed",
+  reason: "invalid-arguments",
+  guidance:
+    "Use only exact operation identities returned by jira.discover, each at most once. The current tool selection was not changed.",
+} as const;
+
+async function selectedDescription(
+  select: NonNullable<Context["selectJiraOperations"]>,
+  identities: readonly string[],
+  data: CatalogJsonObject,
+): Promise<ManagedMcpToolResult> {
   try {
-    await context.selectJiraOperations(identities, data);
+    await select(identities, data);
     return { data };
   } catch (error) {
-    if (!(error instanceof CatalogDispatchFault) && !(error instanceof ToolCatalogError)) throw error;
+    if (!(error instanceof CatalogDispatchFault) && !(error instanceof ToolCatalogError))
+      throw error;
     return {
       isError: true,
       data: {
@@ -135,9 +138,49 @@ async function describe(args: CatalogJsonObject, context: Context, options: Disc
   }
 }
 
+async function describe(
+  args: CatalogJsonObject,
+  context: Context,
+  options: DiscoveryOptions,
+): Promise<ManagedMcpToolResult> {
+  context.signal.throwIfAborted();
+  requireDispatch(context.beforeEffect(), "denied", "effect-denied");
+  const invalid: ManagedMcpToolResult = { data: { ...INVALID_DESCRIPTION, items: [] } };
+  const identities = args.identities;
+  if (!Array.isArray(identities) || !identities.every((identity) => typeof identity === "string"))
+    return invalid;
+  let tools: readonly string[];
+  try {
+    tools = jiraToolsForIdentities(identities);
+  } catch (error) {
+    if (!(error instanceof CatalogDispatchFault) || error.reason !== "invalid-arguments")
+      throw error;
+    return invalid;
+  }
+  requireDispatch(
+    tools.every((name) => options.tools === undefined || options.tools.has(name)),
+    "denied",
+    "effect-denied",
+  );
+  requireDispatch(context.selectJiraOperations !== undefined, "failed", "handler-unavailable");
+  const selected = new Set(identities);
+  const data: CatalogJsonObject = {
+    outcome: "succeeded",
+    items: summaries(options)
+      .filter((item) => selected.has(item.identity))
+      .map((item) => ({ identity: item.identity, tool: item.tool })),
+    selectedFor: "next-round",
+  };
+  return selectedDescription(context.selectJiraOperations.bind(context), identities, data);
+}
+
 const RESULT_SCHEMA = object(
   {
-    reason: { type: "string", enum: ["budget-exhausted", "selection-unavailable"] },
+    reason: {
+      type: "string",
+      enum: ["budget-exhausted", "selection-unavailable", "invalid-arguments"],
+    },
+    guidance: text(512),
     outcome: { type: "string", enum: ["succeeded", "failed"] },
     items: {
       type: "array",
@@ -152,13 +195,16 @@ const RESULT_SCHEMA = object(
   ["outcome", "items"],
 );
 
-function tool(name: JiraCatalogDiscoveryToolName, options: DiscoveryOptions): ManagedMcpTool<Context> {
+function tool(
+  name: JiraCatalogDiscoveryToolName,
+  options: DiscoveryOptions,
+): ManagedMcpTool<Context> {
   const discovery = name === "jira.discover";
   return {
     name,
     risk: "read",
     descriptor: createToolDescriptor({
-      toolRef: createToolRef(`keiko.${name}`, 1),
+      toolRef: createToolRef(`keiko.${name}`, 2),
       description: discovery
         ? "List implemented Jira Data Center operations by stable identity. This reads local catalog metadata, not Jira data. Page until the required operation is found, then use jira.describe to load its typed tool."
         : "Select Jira operation identities returned by jira.discover. Replaces the selected Jira tool set for the next model round; typed argument schemas are offered there subject to current authority and budgets. Include all operations needed together. An empty list clears the selection. Unknown identities or a subset exceeding the model or authority budget are refused without truncation.",
@@ -191,11 +237,14 @@ function tool(name: JiraCatalogDiscoveryToolName, options: DiscoveryOptions): Ma
       idempotency: "server-key-required",
       cancellation: "before-effect",
     }),
-    execute: (args, context) => discovery ? discover(args, context, options) : describe(args, context, options),
+    execute: (args, context) =>
+      discovery ? discover(args, context, options) : describe(args, context, options),
   };
 }
 
-export function createJiraCatalogDiscoveryProvider(options: DiscoveryOptions = {}): ManagedMcpProvider<Context> {
+export function createJiraCatalogDiscoveryProvider(
+  options: DiscoveryOptions = {},
+): ManagedMcpProvider<Context> {
   const tools = JIRA_CATALOG_DISCOVERY_TOOLS.map((name) => tool(name, options));
   return { id: "jira-catalog-discovery", tools: () => tools };
 }

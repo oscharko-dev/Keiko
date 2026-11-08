@@ -624,12 +624,11 @@ it.each([false, true])(
     expect(f.requests()).toBe(1);
     const [user, assistant] = f.deps.store.listMessages(f.chatId);
     expect(user?.toolTranscript?.exchanges.map((entry) => entry.call.name)).toEqual([
-      "jira_describe",
       "jira_projects",
     ]);
-    expect(f.calls).toHaveLength(2);
+    expect(f.calls).toHaveLength(1);
     expect(assistant?.content).toContain("this turn reached its time limit");
-    expect(assistant?.content).toContain("Reads completed: 2.");
+    expect(assistant?.content).toContain("Reads completed: 1.");
     if (stream) expect(response.body()).toContain("event: done");
     else expect(result).toMatchObject({ status: 200 });
   },
@@ -3666,7 +3665,7 @@ function demandSelectedModel(
   });
 }
 
-it("loads typed Jira schemas only after a settled describe round and preserves its original binding", async () => {
+it("narrows the curated Jira schemas after a settled describe round and preserves its original binding", async () => {
   const f = fixture(false, undefined, true, false, false, undefined, true);
   configure(f.deps, true, 32768);
   demandSelectedModel(f, false);
@@ -3679,7 +3678,7 @@ it("loads typed Jira schemas only after a settled describe round and preserves i
   const second = f.calls[1]?.toolCatalog;
   if (first?.kind !== "bound" || second?.kind !== "bound")
     throw new TypeError("Expected round catalogs");
-  expect(first.projection.tools.map((tool) => tool.alias)).not.toContain("jira_projects");
+  expect(first.projection.tools.map((tool) => tool.alias)).toContain("jira_projects");
   expect(second.projection.tools.map((tool) => tool.alias)).toContain("jira_projects");
   expect(first.projection.projectionDigest).not.toBe(second.projection.projectionDigest);
   const exchanges = demandExchanges(f);
@@ -3995,7 +3994,7 @@ describe("a clean draft batch is offered for approval by the turn itself (#4173)
     if (catalog === undefined) throw new TypeError("Missing Jira catalog");
     scriptBatch(f);
     const managed = await catalog.get({ knowledgeScoped: true });
-    expect(managed.projection.tools.map((tool) => tool.alias)).not.toContain("jira_create");
+    expect(managed.projection.tools.map((tool) => tool.alias)).toContain("jira_create");
     expect(vi.isMockFunction(catalog.get)).toBe(false);
     const pending = send(f, "discovery-batch-companion");
     void pending.catch(() => undefined);

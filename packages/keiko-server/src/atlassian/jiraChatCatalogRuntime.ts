@@ -107,6 +107,27 @@ const JIRA_DRAFT_BATCH_TOOL = "jira.draft-batch";
 /** The draft run Keiko offers after a clean batch; a catalog that offers the batch hosts it too. */
 const JIRA_DRAFT_TOOL = "jira.draft";
 const JIRA_BATCH_TOOLS = [JIRA_DRAFT_BATCH_TOOL, JIRA_DRAFT_TOOL] as const;
+/** Curated Chat tools stay directly available; discovery adds native operations per turn. */
+const JIRA_BASE_TOOLS = [
+  "jira.projects",
+  "jira.issue-types",
+  "jira.create-fields",
+  "jira.edit-fields",
+  "jira.search",
+  "jira.issue",
+  "jira.comments",
+  "jira.transitions",
+  "jira.assignable-users",
+  "jira.report",
+  "jira.draft-stage",
+  "jira.create",
+  "jira.edit",
+  "jira.assign",
+  "jira.comment",
+  "jira.transition",
+  "jira.draft",
+  "jira.attach",
+] as const satisfies typeof JIRA_CHAT_TOOLS;
 const toolAlias = (tool: string): string => tool.replace(/[.-]/gu, "_");
 const JIRA_BATCH_ALIASES: ReadonlySet<string> = new Set(JIRA_BATCH_TOOLS.map(toolAlias));
 const withBatchTools = (tools: typeof JIRA_CHAT_TOOLS): typeof JIRA_CHAT_TOOLS => [
@@ -629,7 +650,7 @@ function chatCatalogProviders(
   deps: UiHandlerDeps,
   store: JiraReportStore,
   draftStore: JiraDraftStore,
-  tools: typeof JIRA_CHAT_TOOLS = [],
+  tools: typeof JIRA_CHAT_TOOLS = JIRA_BASE_TOOLS,
 ): readonly ManagedMcpProvider<CatalogHandlerContext<JiraChatCatalogConsumer>>[] {
   const draft = draftTool(deps, draftStore);
   return [
@@ -651,7 +672,7 @@ function initializeCatalog(
   log: CatalogLifecycleLogPort,
   store: JiraReportStore,
   draftStore: JiraDraftStore,
-  tools: typeof JIRA_CHAT_TOOLS = [],
+  tools: typeof JIRA_CHAT_TOOLS = JIRA_BASE_TOOLS,
 ): Promise<ChatCatalog> {
   return createManagedProviderCatalog<JiraChatCatalogConsumer>({
     providers: chatCatalogProviders(deps, store, draftStore, tools),
@@ -677,7 +698,7 @@ function staticToolDefinitions(
   return () => {
     definitions ??= managedCatalogToolDefinitions(
       jiraChatCatalogRoutes([
-        ...JIRA_BATCH_TOOLS,
+        ...withBatchTools(JIRA_BASE_TOOLS),
         ...JIRA_CATALOG_DISCOVERY_TOOLS,
         ...KNOWLEDGE_CHAT_TOOLS,
       ]),

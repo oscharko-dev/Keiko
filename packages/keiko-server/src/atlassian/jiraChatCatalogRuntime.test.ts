@@ -13,6 +13,27 @@ import * as managedProvider from "../tool-catalog/managedProviderCatalog.js";
 import { createJiraChatCatalogRuntime, untracedAdvisory } from "./jiraChatCatalogRuntime.js";
 import { KNOWLEDGE_CHAT_TOOLS } from "../requirementsToolName.js";
 
+const CURATED_JIRA_ALIASES = [
+  "jira_projects",
+  "jira_issue_types",
+  "jira_create_fields",
+  "jira_edit_fields",
+  "jira_search",
+  "jira_issue",
+  "jira_comments",
+  "jira_transitions",
+  "jira_assignable_users",
+  "jira_report",
+  "jira_draft_stage",
+  "jira_create",
+  "jira_edit",
+  "jira_assign",
+  "jira_comment",
+  "jira_transition",
+  "jira_attach",
+  "jira_draft",
+] as const;
+
 const cleanups: (() => Promise<void>)[] = [];
 function releaseGate(): { promise: Promise<void>; release: () => void } {
   let release = (): void => undefined;
@@ -57,7 +78,7 @@ function fixture(): {
 }
 
 describe("application-owned Jira catalog initialization", () => {
-  it("advertises discovery, Knowledge and batch execution schemas before an explicit selection", async () => {
+  it("advertises all 18 curated Jira tools with discovery, Knowledge and batch before selection", async () => {
     const f = fixture();
     expect(
       f.runtime
@@ -66,7 +87,7 @@ describe("application-owned Jira catalog initialization", () => {
         .sort(),
     ).toEqual(
       [
-        "jira_draft",
+        ...CURATED_JIRA_ALIASES,
         "jira_draft_batch",
         "jira_discover",
         "jira_describe",
@@ -91,7 +112,7 @@ describe("application-owned Jira catalog initialization", () => {
     await expect(f.runtime.get()).rejects.toMatchObject({ reason: "log-unavailable" });
     const [first, second] = await Promise.all([f.runtime.get(), f.runtime.get()]);
     expect(second).toBe(first);
-    expect(first.catalog.descriptors).toHaveLength(4 + KNOWLEDGE_CHAT_TOOLS.length);
+    expect(first.catalog.descriptors).toHaveLength(21 + KNOWLEDGE_CHAT_TOOLS.length);
     expect(f.record).toHaveBeenCalledOnce();
     expect(JSON.stringify(f.record.mock.calls)).not.toContain("synthetic-private-sink-failure");
     const records = f.lines.map((line) =>
@@ -210,7 +231,7 @@ describe("application-owned Jira catalog initialization", () => {
     expect(projects.projection.tools.map((tool) => tool.alias)).not.toContain("jira_issue");
     expect(issue.projection.tools.map((tool) => tool.alias)).toContain("jira_issue");
     expect(issue.projection.tools.map((tool) => tool.alias)).not.toContain("jira_projects");
-    expect(f.runtime.toolDefinitions().map((tool) => tool.name)).not.toContain("jira_projects");
+    expect(f.runtime.toolDefinitions().map((tool) => tool.name)).toContain("jira_projects");
     await projects.close();
     expect(issue.handlerBindings.every((binding) => binding.readiness() === "ready")).toBe(true);
     await f.runtime.close();

@@ -147,9 +147,17 @@ const MCP_OUTCOME_KEYS: Readonly<Record<JiraMutationResultState, WidgetMessageKe
   pending: "chat.mcp.write.pending",
 };
 const MANAGED_TOOLS = [...JIRA_MANAGED_READ_TOOLS, ...JIRA_MUTATION_OPERATIONS];
+const CATALOG_TOOL_LABELS: Readonly<Record<string, WidgetMessageKey>> = {
+  jira_discover: "chat.jira.catalog.discover",
+  jira_describe: "chat.jira.catalog.describe",
+};
+export const JIRA_CATALOG_TOOLS: ReadonlySet<string> = new Set(Object.keys(CATALOG_TOOL_LABELS));
 /** A familiar prefix does not give an unknown result the native Jira presentation contract. */
 export function isKnownJiraToolAlias(name: string): boolean {
-  return MANAGED_TOOLS.some((operation) => operation.replace(/[.-]/gu, "_") === name);
+  return (
+    JIRA_CATALOG_TOOLS.has(name) ||
+    MANAGED_TOOLS.some((operation) => operation.replace(/[.-]/gu, "_") === name)
+  );
 }
 const KNOWLEDGE_TOOLS: Readonly<
   Record<
@@ -217,9 +225,13 @@ export function jiraCallLabel(
     ? "chat.jira.link.operation"
     : jiraOperationLabel(operation);
 }
-export function jiraToolLabel(exchange: ChatToolExchange): WidgetMessageKey {
+export function jiraToolLabel(exchange: {
+  readonly call: Pick<ChatToolExchange["call"], "name" | "arguments">;
+}): WidgetMessageKey {
   if (exchange.call.name === CHAT_TOOL_BATCH_TOOL_NAME)
     return actionTypeLabelKey("jira.draft-batch");
+  const catalog = CATALOG_TOOL_LABELS[exchange.call.name];
+  if (catalog !== undefined) return catalog;
   const knowledge = KNOWLEDGE_TOOLS[exchange.call.name];
   if (knowledge !== undefined) return knowledge.label;
   const operation = MANAGED_TOOLS.find(
@@ -451,8 +463,10 @@ const BATCH_REFUSAL_KEYS: Readonly<Record<string, WidgetMessageKey>> = {
   "issue-type-not-found": "chat.jira.batch.refused.issueTypeNotFound",
   "no-usable-issue-type": "chat.jira.batch.refused.noUsableIssueType",
 };
-function batchRefusalState(exchange: ChatToolExchange): WidgetMessageKey | undefined {
+function localToolRefusalState(exchange: ChatToolExchange): WidgetMessageKey | undefined {
   const { result } = exchange;
+  if (JIRA_CATALOG_TOOLS.has(exchange.call.name) && plainRecord(result?.data)?.outcome === "failed")
+    return "chat.jira.unavailable";
   if (exchange.call.name !== CHAT_TOOL_BATCH_TOOL_NAME || result?.status !== "failed")
     return undefined;
   const reason = plainRecord(result.data)?.reason;
@@ -500,8 +514,10 @@ export function jiraToolState(
   if (isMutation(exchange)) return managedMutationState(exchange, turnState);
   if (exchange.result === undefined)
     return turnState === "pending" ? "chat.jira.running" : "chat.jira.resultUnavailable";
+  const refusal = localToolRefusalState(exchange);
+  if (refusal !== undefined) return refusal;
   if (exchange.result.status === "completed") return "chat.jira.complete";
-  return batchRefusalState(exchange) ?? "chat.jira.unavailable";
+  return "chat.jira.unavailable";
 }
 export function jiraToolOutcomeHelp(state: WidgetMessageKey): WidgetMessageKey | undefined {
   switch (state) {

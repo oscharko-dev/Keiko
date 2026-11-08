@@ -6,6 +6,7 @@ import {
   type JiraTemplateRuleId,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
+import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
   JIRA_AGILE_TOOLS,
   JIRA_SPRINT_TOOLS,
@@ -36,6 +37,9 @@ import {
 } from "./jira-administration-presentation";
 import {
   isCanonicalKnowledgeExchange,
+  isKnownJiraToolAlias,
+  JIRA_CATALOG_TOOLS,
+  jiraToolLabel,
   jiraLocalReadFailureNotice,
   jiraMutationUnchanged,
 } from "./jira-tool-presentation";
@@ -163,6 +167,7 @@ import {
   jiraIssuePickerGroups,
   jiraPinnedCommentDetails,
 } from "./jira-issue-context-presentation";
+import { jiraPresentationNativeText } from "./jira-presentation-values";
 
 /** One Jira issue a tool call created, changed or read, as a person recognises it. */
 export interface JiraOutcomeIssue {
@@ -179,6 +184,8 @@ export interface JiraOutcomeItem {
   readonly key?: string;
   readonly projectId?: string;
   readonly name?: string;
+  /** A code-owned title for catalog metadata; never a result-provided translation key. */
+  readonly nameLabel?: WidgetMessageKey;
   readonly body?: string;
   readonly href?: string;
   readonly boardHref?: string;
@@ -487,9 +494,44 @@ function refusedRow(source: UnknownRecord): boolean {
       problemsOf(source).length > 0)
   );
 }
+const CATALOG_EFFECT_LABELS: Readonly<Record<string, WidgetMessageKey>> = {
+  "remote-read": "chat.jira.catalog.read",
+  "remote-write": "chat.jira.catalog.write",
+  "local-read": "chat.jira.catalog.local",
+  "local-write": "chat.jira.catalog.local",
+};
+function catalogOutcomeItem(source: UnknownRecord): JiraOutcomeItem | undefined {
+  const alias = jiraPresentationNativeText(source.tool, 128)
+    ? source.tool.replace(/[.-]/gu, "_")
+    : undefined;
+  if (
+    alias === undefined ||
+    JIRA_CATALOG_TOOLS.has(alias) ||
+    !isKnownJiraToolAlias(alias) ||
+    !jiraPresentationNativeText(source.identity, 512)
+  )
+    return undefined;
+  const effects: readonly unknown[] = Array.isArray(source.effects)
+    ? source.effects.slice(0, 16)
+    : [];
+  const labels = Object.entries(CATALOG_EFFECT_LABELS)
+    .filter(([effect]) => effects.includes(effect))
+    .map(([, label]) => label);
+  return {
+    nameLabel: jiraToolLabel({ call: { name: alias, arguments: {} } }),
+    ...textMembers({
+      body: jiraPresentationNativeText(source.description, 4096, { multiline: true })
+        ? source.description
+        : undefined,
+    }),
+    labels: [...new Set(labels)],
+    facts: [],
+  };
+}
 function outcomeItem(value: unknown, tool: string): JiraOutcomeItem | undefined {
   const source = record(value);
   if (source === undefined || refusedRow(source)) return undefined;
+  if (JIRA_CATALOG_TOOLS.has(tool)) return catalogOutcomeItem(source);
   if (JIRA_PROJECT_METADATA_TOOLS.has(tool)) return metadataOutcomeItem(source, tool);
   const metadata = metadataDetails(tool, source);
   if (metadata !== undefined) return metadataDetailsItem(metadata);
@@ -523,7 +565,7 @@ function outcomeItem(value: unknown, tool: string): JiraOutcomeItem | undefined 
   ]);
   const facts = [...agile.facts, ...collaboration.facts, ...participation.facts];
   if (![key, name, body, ...facts].some((entry) => entry !== undefined)) return undefined;
-  const status = firstText([record(source.status)?.name, record(source.to)?.name]);
+  const status = firstText([source.status, source.to].map((value) => record(value)?.name));
   const href = outcomeHref(tool, source, key, projectKey);
   const projectId = text(source.projectId);
   const boardHref = boardContextLink(tool, source);
@@ -538,7 +580,10 @@ function returnedEntries(
   tool: string,
 ): readonly unknown[] | undefined {
   const entries = tool === "jira_project_permissions" ? data?.permissions : data?.items;
-  if (Array.isArray(entries)) return entries;
+  if (Array.isArray(entries))
+    return JIRA_CATALOG_TOOLS.has(tool)
+      ? entries.slice(0, TOOL_CATALOG_LIMITS.maxArrayItems)
+      : entries;
   return JIRA_AGILE_TOOLS.has(tool) && Array.isArray(data?.issueKeys)
     ? data.issueKeys.map((issueKey) => ({ issueKey }))
     : undefined;
@@ -819,6 +864,7 @@ function rulesOf(data: UnknownRecord | undefined): JiraOutcomeRule[] {
   });
 }
 const FAILURE_MESSAGES: Readonly<Record<string, WidgetMessageKey>> = {
+  "catalog:invalid-arguments": "chat.jira.catalog.invalidArguments",
   "source-changed": "chat.jira.outcome.failure.sourceChanged",
   "auth-failed": "chat.jira.outcome.failure.auth",
   "permission-denied": "chat.jira.outcome.failure.permission",
@@ -835,10 +881,14 @@ const FAILURE_MESSAGES: Readonly<Record<string, WidgetMessageKey>> = {
   timeout: "chat.jira.outcome.failure.unavailable",
   unavailable: "chat.jira.outcome.failure.unavailable",
 };
-function failureReason(data: UnknownRecord | undefined): string | undefined {
-  return data?.outcome === "rejected" && data.requirementRefusal === "source-changed"
-    ? "source-changed"
-    : text(data?.reason);
+function failureReason(data: UnknownRecord | undefined, tool: string): string | undefined {
+  const reason =
+    data?.outcome === "rejected" && data.requirementRefusal === "source-changed"
+      ? "source-changed"
+      : text(data?.reason);
+  return JIRA_CATALOG_TOOLS.has(tool) && reason === "invalid-arguments"
+    ? "catalog:invalid-arguments"
+    : reason;
 }
 function failureMessage(
   exchange: ChatToolExchange,
@@ -847,7 +897,7 @@ function failureMessage(
   if (jiraMutationUnchanged(exchange)) return undefined;
   const localRead = jiraLocalReadFailureNotice(exchange);
   if (localRead !== undefined) return localRead;
-  const reason = failureReason(data);
+  const reason = failureReason(data, exchange.call.name);
   if (reason !== undefined && Object.hasOwn(FAILURE_MESSAGES, reason))
     return FAILURE_MESSAGES[reason];
   if (
@@ -869,13 +919,20 @@ function pageCounts(
     JIRA_WORKLOG_FEED_TOOLS.has(tool) || JIRA_SELECTED_WORKLOG_TOOLS.has(tool)
       ? undefined
       : count(data.total);
-  const covered = (count(data.startAt) ?? 0) + items.length;
+  const omitted =
+    JIRA_CATALOG_TOOLS.has(tool) && Array.isArray(data.items)
+      ? data.items.length - items.length
+      : 0;
+  const returnedCount = items.length + omitted;
+  const covered = (count(data.startAt) ?? 0) + returnedCount;
   return {
-    returnedCount: items.length,
+    returnedCount,
     total: total !== undefined && total >= covered ? total : undefined,
-    unreadableCount: items.filter(
-      (item) => outcomeItem(item, tool) === undefined && !refusedRow(record(item) ?? {}),
-    ).length,
+    unreadableCount:
+      omitted +
+      items.filter(
+        (item) => outcomeItem(item, tool) === undefined && !refusedRow(record(item) ?? {}),
+      ).length,
   };
 }
 
@@ -1265,7 +1322,11 @@ function resultItemsView(
   const items = issueList ? issueListItems(own, projection) : own;
   return {
     items,
-    ...(issueList ? { resultsLabel: "chat.jira.outcome.issues" as const } : {}),
+    ...(JIRA_CATALOG_TOOLS.has(exchange.call.name)
+      ? { resultsLabel: "chat.jira.catalog.actions" as const }
+      : issueList
+        ? { resultsLabel: "chat.jira.outcome.issues" as const }
+        : {}),
     overflow: issueList ? "count" : "disclosure",
     unlistedItemCount: issueList
       ? Math.max(0, projection.listed.count - projection.listed.shown.length)
@@ -1282,6 +1343,11 @@ export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcome
   return {
     ...resultItemsView(exchange, data),
     ...pageCounts(data, exchange.call.name),
+    ...(exchange.call.name === "jira_describe" &&
+    data.outcome === "succeeded" &&
+    data.selectedFor === "next-round"
+      ? { labels: ["chat.jira.catalog.selected" as const] }
+      : {}),
     stagedCount: count(data.itemCount),
     unresolvedCount: count(data.unresolvedRefCount),
     ...problemViews(exchange, data),
