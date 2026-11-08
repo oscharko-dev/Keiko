@@ -178,7 +178,9 @@ function replacement(value: unknown): SprintReplacement | undefined {
     agileInputId(raw.incompleteIssuesDestinationId) === undefined
   )
     return undefined;
-  return raw as SprintReplacement;
+  return Object.fromEntries(
+    [...REPLACEMENT_KEYS].map((key) => [key, raw[key]]),
+  ) as SprintReplacement;
 }
 function snapshots(value: unknown): readonly SprintSnapshot[] | undefined {
   if (!Array.isArray(value) || value.length < 1 || value.length > 50) return undefined;
