@@ -1,4 +1,16 @@
 import {
+  jiraVersionLinkMutationDeclarationForTool,
+  type JIRA_VERSION_LINK_WRITE_DEFINITIONS,
+} from "./jiraVersionLinkMutationDescriptors.js";
+import {
+  jiraProjectCategoryMutationDeclarationForTool,
+  type JIRA_PROJECT_CATEGORY_WRITE_DEFINITIONS,
+} from "./jiraProjectCategoryMutationDescriptors.js";
+import {
+  jiraAgilePlanningDeclarationForTool,
+  type JIRA_AGILE_PLANNING_WRITE_DEFINITIONS,
+} from "./jiraAgilePlanningDescriptors.js";
+import {
   jiraSprintLifecycleDeclarationForTool,
   type JIRA_SPRINT_LIFECYCLE_WRITE_DEFINITIONS,
 } from "./jiraSprintLifecycleDescriptors.js";
@@ -426,6 +438,9 @@ type CoreMutationToolName = Exclude<
   Extract<
     JiraMutationOperation,
     | keyof typeof JIRA_SPRINT_LIFECYCLE_WRITE_DEFINITIONS
+    | keyof typeof JIRA_VERSION_LINK_WRITE_DEFINITIONS
+    | keyof typeof JIRA_PROJECT_CATEGORY_WRITE_DEFINITIONS
+    | keyof typeof JIRA_AGILE_PLANNING_WRITE_DEFINITIONS
     | keyof typeof JIRA_SCREEN_CONFIGURATION_WRITE_DEFINITIONS
     | keyof typeof JIRA_BOARD_CONFIGURATION_WRITE_DEFINITIONS
     | keyof typeof JIRA_RELEASE_LIFECYCLE_WRITE_DEFINITIONS
@@ -608,6 +623,9 @@ function isCoreMutationTool(name: JiraMutationOperation): name is CoreMutationTo
 }
 export function jiraMutationDeclaration(name: JiraMutationOperation): ManagedMcpToolDeclaration {
   for (const producer of [
+    jiraVersionLinkMutationDeclarationForTool,
+    jiraProjectCategoryMutationDeclarationForTool,
+    jiraAgilePlanningDeclarationForTool,
     jiraSprintLifecycleDeclarationForTool,
     jiraScreenConfigurationDeclarationForTool,
     jiraBoardConfigurationMutationDeclarationForTool,

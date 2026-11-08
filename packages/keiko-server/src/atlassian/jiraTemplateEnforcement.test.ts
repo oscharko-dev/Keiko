@@ -4,6 +4,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { SCREEN_CONFIGURATION_FIXTURE_CASES } from "../../../../tests/support/jira-screen-configuration-fixture.js";
 import { BOARD_CONFIGURATION_FIXTURE_CASES } from "../../../../tests/support/jira-board-configuration-fixture.js";
 import { SPRINT_LIFECYCLE_FIXTURE_CASES } from "../../../../tests/support/jira-sprint-lifecycle-fixture.js";
+import { AGILE_PLANNING_FIXTURE_CASES } from "../../../../tests/support/jira-agile-planning-fixture.js";
+import { VERSION_LINK_MUTATION_CASES } from "../../../../tests/support/jira-version-link-mutation-fixture.js";
+import { PROJECT_CATEGORY_FIXTURE_CASES } from "../../../../tests/support/jira-project-category-fixture.js";
 import {
   JIRA_FIELD_VALIDATION_FAILURES,
   JIRA_MUTATION_OPERATIONS,
@@ -405,6 +408,9 @@ describe("the dry run before approval", () => {
     ...SCREEN_CONFIGURATION_FIXTURE_CASES.map(({ tool, args }) => ({ tool, args })),
     ...BOARD_CONFIGURATION_FIXTURE_CASES.map(({ tool, args }) => ({ tool, args })),
     ...SPRINT_LIFECYCLE_FIXTURE_CASES.map(({ name, args }) => ({ tool: name, args })),
+    ...AGILE_PLANNING_FIXTURE_CASES.map(({ name, args }) => ({ tool: name, args })),
+    ...VERSION_LINK_MUTATION_CASES.map(({ tool, args }) => ({ tool, args })),
+    ...PROJECT_CATEGORY_FIXTURE_CASES.map(({ name, args }) => ({ tool: name, args })),
   ])("refuses denied $tool prerequisites before approval or any native write", async ({ tool, args }) => {
     const f = preflight(TEMPLATE, args, tool);
     f.http.mockImplementation(() => Promise.resolve(response({ errorMessages: ["Denied"] }, 403)));

@@ -42,6 +42,7 @@ import { nativeAdministrationWrite } from "../../../../tests/support/jira-manage
 import { expectedSavedConfigurationOutcome, nativeSavedConfigurationWrite, prepareSavedConfiguration } from "../../../../tests/support/jira-managed-saved-configuration-scenarios.js";
 import { expectedLifecycleOutcome, lifecycleRemoteFixture, LIFECYCLE_EXPECTED_OUTCOMES } from "../../../../tests/support/jira-managed-lifecycle-scenarios.js";
 import { expectedConfigurationOutcome, CONFIGURATION_EXPECTED_OUTCOMES } from "../../../../tests/support/jira-managed-configuration-scenarios.js";
+import { expectedPlanningOutcome, PLANNING_EXPECTED_OUTCOMES } from "../../../../tests/support/jira-managed-planning-scenarios.js";
 import { jiraChatCatalogRoutes } from "./jiraChatCatalogConsumer.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import {
@@ -528,7 +529,7 @@ it.each(SINGLE_MUTATIONS)(
   "executes %s through the real gateway/binder/SDK and durable journal",
   async (operation) => {
     const f = await fixture("confirmed", undefined, operation, reviewedAuthority(operation));
-    const expectedOutcome = expectedConfigurationOutcome(operation) ?? expectedLifecycleOutcome(operation) ?? expectedSavedConfigurationOutcome(operation) ?? "succeeded";
+    const expectedOutcome = expectedPlanningOutcome(operation) ?? expectedConfigurationOutcome(operation) ?? expectedLifecycleOutcome(operation) ?? expectedSavedConfigurationOutcome(operation) ?? "succeeded";
     expect(await f.invoke(operation)).toMatchObject({
       kind: "settled",
       result: {
@@ -892,7 +893,9 @@ it("keeps an independent complete argument/state/receipt case for every register
   expect(Object.keys(ARGUMENTS).sort()).toEqual([...JIRA_MUTATION_OPERATIONS].sort());
   expect(Object.keys(REMOTE_STATE).sort()).toEqual([...SINGLE_MUTATIONS].sort());
   expect(Object.keys(SUCCESS_RECEIPTS).sort()).toEqual([...SINGLE_MUTATIONS].sort());
-  expect(ADMIN_MUTATIONS).toHaveLength(20);
+  expect(ADMIN_MUTATIONS).toHaveLength(23);
+  expect(Object.entries(PLANNING_EXPECTED_OUTCOMES).filter(([, outcome]) => outcome === "succeeded-unconfirmed").map(([name]) => name).sort())
+    .toEqual(["jira.delete-project-category", "jira.rank-epic", "jira.rank-issues"]);
   expect(Object.entries(LIFECYCLE_EXPECTED_OUTCOMES).filter(([, outcome]) => outcome === "succeeded-unconfirmed").map(([name]) => name).sort())
     .toEqual(["jira.delete-component", "jira.merge-version", "jira.remove-and-swap-version"]);
   expect(Object.entries(CONFIGURATION_EXPECTED_OUTCOMES).filter(([, outcome]) => outcome === "succeeded-unconfirmed").map(([name]) => name).sort())

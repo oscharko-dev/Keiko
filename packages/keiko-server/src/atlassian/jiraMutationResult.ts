@@ -34,6 +34,10 @@ import {
   JIRA_CONFIGURATION_MUTATION_RECEIPTS, isJiraConfigurationReceiptOperation,
   validJiraConfigurationReceipt, canConfirmJiraConfiguration,
 } from "./jiraConfigurationMutationReceipts.js";
+import {
+  JIRA_PLANNING_LIFECYCLE_RECEIPTS, isJiraPlanningLifecycleOperation,
+  validJiraPlanningLifecycleReceipt, canConfirmJiraPlanningLifecycle,
+} from "./jiraPlanningLifecycleReceipts.js";
 
 /**
  * The shared projection of a Jira mutation attempt onto the managed tool result. Ordinary Chat and
@@ -111,6 +115,7 @@ type CollaborationOperation = keyof typeof COLLABORATION_RECEIPTS;
 const REQUIRED_RECEIPTS: Readonly<
   Record<JiraMutationOperation, readonly (keyof JiraMutationReceipt)[]>
 > = {
+  ...JIRA_PLANNING_LIFECYCLE_RECEIPTS,
   ...JIRA_CONFIGURATION_MUTATION_RECEIPTS,
   ...JIRA_RELATION_LIFECYCLE_RECEIPTS,
   ...JIRA_SAVED_CONFIGURATION_RECEIPTS,
@@ -330,6 +335,7 @@ function validProjectReceipt(receipt: JiraMutationReceipt): boolean {
   });
 }
 function specificIdentities(receipt: JiraMutationReceipt, operation: JiraMutationOperation): boolean | undefined {
+  if (isJiraPlanningLifecycleOperation(operation)) return validJiraPlanningLifecycleReceipt(receipt, operation);
   if (isJiraConfigurationReceiptOperation(operation)) return validJiraConfigurationReceipt(receipt, operation);
   if (isJiraRelationLifecycleOperation(operation)) return validJiraRelationLifecycleReceipt(receipt, operation);
   if (isJiraSavedConfigurationOperation(operation)) return validJiraSavedConfigurationReceipt(receipt, operation);
@@ -362,9 +368,7 @@ function partialReceipt(
 }
 function partialIdentity(receipt: JiraMutationReceipt, operation: JiraMutationOperation): boolean {
   return (
-    isJiraConfigurationReceiptOperation(operation) ||
-    isJiraRelationLifecycleOperation(operation) ||
-    isJiraSavedConfigurationOperation(operation) ||
+    exactReceiptFamily(operation) ||
     propertyOperation(operation) ||
     monitoringOperation(operation) ||
     screenTabOperation(operation) ||
@@ -374,7 +378,11 @@ function partialIdentity(receipt: JiraMutationReceipt, operation: JiraMutationOp
     isSafeAtlassianIdentifier(receipt.issueKey)
   );
 }
-function ownReceiptArray(receipt: JiraMutationReceipt, key: "issueKeys" | "replacementVersionIds" | "sprintIds"): readonly string[] | undefined {
+function exactReceiptFamily(operation: JiraMutationOperation): boolean {
+  return isJiraPlanningLifecycleOperation(operation) || isJiraConfigurationReceiptOperation(operation) ||
+    isJiraRelationLifecycleOperation(operation) || isJiraSavedConfigurationOperation(operation);
+}
+function ownReceiptArray(receipt: JiraMutationReceipt, key: "issueKeys" | "replacementVersionIds" | "sprintIds" | "issueIds" | "globalIds"): readonly string[] | undefined {
   const own = Object.getOwnPropertyDescriptor(receipt, key);
   return own !== undefined && "value" in own ? receipt[key] : undefined;
 }
@@ -382,6 +390,8 @@ function snapshotReceipt(receipt: JiraMutationReceipt): JiraMutationReceipt {
   const issueKeys = ownReceiptArray(receipt, "issueKeys");
   const replacements = ownReceiptArray(receipt, "replacementVersionIds");
   const sprintIds = ownReceiptArray(receipt, "sprintIds");
+  const issueIds = ownReceiptArray(receipt, "issueIds");
+  const globalIds = ownReceiptArray(receipt, "globalIds");
   return Object.freeze({
     ...receipt,
     ...(issueKeys === undefined
@@ -389,6 +399,8 @@ function snapshotReceipt(receipt: JiraMutationReceipt): JiraMutationReceipt {
       : { issueKeys: Object.freeze([...issueKeys]) }),
     ...(replacements === undefined ? {} : { replacementVersionIds: Object.freeze([...replacements]) }),
     ...(sprintIds === undefined ? {} : { sprintIds: Object.freeze([...sprintIds]) }),
+    ...(issueIds === undefined ? {} : { issueIds: Object.freeze([...issueIds]) }),
+    ...(globalIds === undefined ? {} : { globalIds: Object.freeze([...globalIds]) }),
   });
 }
 
@@ -461,7 +473,8 @@ function validOriginalReceipt(receipt: JiraMutationReceipt, operation: JiraMutat
   return specificIdentities(receipt, operation) ?? true;
 }
 function canConfirmOperation(operation: JiraMutationOperation): boolean {
-  return canConfirmJiraSavedConfiguration(operation) && canConfirmJiraRelationLifecycle(operation) && canConfirmJiraConfiguration(operation);
+  return canConfirmJiraSavedConfiguration(operation) && canConfirmJiraRelationLifecycle(operation) &&
+    canConfirmJiraConfiguration(operation) && canConfirmJiraPlanningLifecycle(operation);
 }
 
 /** An attempt is a success only with the validated identities its operation must return. */

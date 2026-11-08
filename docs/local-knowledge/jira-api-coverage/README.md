@@ -123,10 +123,10 @@ to Chat or Coding, grant authority, or bypass those owners.
 
 ## Current constrained implementation snapshot
 
-The current registry supplies **297 native identities: 212 reads and 85 writes**. Each is mapped to
+The current registry supplies **308 native identities: 212 reads and 96 writes**. Each is mapped to
 its exact published method/path identity and remains `partial`: the closed typed operation exposes
 only the documented supported fields and behavior, rather than the entire upstream API contract.
-The other **142 operations remain `not-implemented`**. No row is marked fully implemented,
+The other **131 operations remain `not-implemented`**. No row is marked fully implemented,
 executable, owner-deferred or excluded by this snapshot. All 439 source/version IDs, cluster
 assignments, dependencies and qualification fields are retained.
 
@@ -154,8 +154,8 @@ Two further native observations bind a permission-scheme attribute and read the 
 
 Three remote-version-link readers bind native versions where selected, decode only the documented JSON-encoded native link once and reuse the complete typed-value owner. Two worklog change feeds preserve exact native time windows and cursors without totals, synthetic offsets, skipped prefixes or implied all-history coverage. Native permission/retention limits and the excluded latest minute remain explicit. All five new wire/policy/schema and readable EN/DE result regression sources remain unexecuted.
 
-Twenty administration writes (four monitoring changes, nine screen/tab layout changes, two
-global issue-type property mutations, four filter creation/sharing changes and one instance-wide sprint cleanup) require the explicit `issue-tracker.admin` grant. Ordinary
+Twenty-three administration writes (four monitoring changes, nine screen/tab layout changes, two
+global issue-type property mutations, four filter creation/sharing changes, three project-category changes and one instance-wide sprint cleanup) require the explicit `issue-tracker.admin` grant. Ordinary
 Jira write access, a selected credential and Full access mode do not supply that grant. Coding binds
 the human's selected scope into its start confirmation and real Authority Envelope, and rechecks the
 current exact action scope before native dispatch. Metadata reads retain `issue-tracker.read`.
@@ -439,3 +439,6 @@ updating provenance and all affected rows together; a changed digest is never si
 
 
 Thirteen screen/board/sprint operations extend the existing native mutation owner. Six screen-field/tab changes require explicit administration and complete reviewed ordered layouts, preserving false/null and native zero-based tab positions. Default-screen field addition remains unconfirmed because Jira chooses the target. Board deletion remains unconfirmed because actor-visible omission or404 does not establish native absence; refined-velocity changes confirm only the observed boolean, never velocity metrics. Five Sprint operations add full replacement, deletion, swapping and selected/instance-wide synchronization cleanup. Native PUT replacement is distinct from POST partial update, and saved formal edit rules guard implicit Sprint-field membership effects before dispatch, including existing POST completion. The existing sprint reader exposes a bounded shared review snapshot with native missing/null facts preserved. Only the two fixed unmap PUT identities receive the server-owned experimental header; the instance-wide action requires explicit admin authority and a sample is never the effect boundary. Deletion, swap and whole-instance cleanup remain unconfirmed after acknowledgement. V72 preserves prior journal rows and historical SQL. New native-wire, receipt, policy, migration, preflight, EN/DE/reload/accessibility regression sources remain unexecuted. Current source scope is254Platform +42Agile +1authentication identity; all439 runtime qualifications remain unknown.
+
+
+Eleven planning/version-link/project-category operations extend the same native owners. Epic removal binds exact prior relationships and independently confirms explicit native absence. Rank operations include the anchor in formal edit admission, preserve partial207 effects and always keep absolute rank unconfirmed. Estimation binds board/field/issue and explicit units: original-time wire strings are minutes, observed values are seconds, zero is real and missing is unknown. Version-link writes reuse complete typed values and complete same-parent collections; exact available native global IDs are now exposed for review without inferring them from names or following URI content. Selected deletion requires proven same-version absence with unchanged siblings; all-link deletion requires explicit acceptance and a complete bounded receipt admitted before effects. Three project-category mutations require explicit administration, exact string descriptions and native actor binding. Actual empty descriptions remain distinct from missing/null; created IDs stay lossless beyond JS safe integers and never derive from names after lost ACK. Category deletion remains unconfirmed. Forward-only V73 keeps historical migrations unchanged. New wire/policy/schema/receipt/migration/EN-DE/reload/accessibility regression sources are authored and unexecuted. Current source scope is261Platform +46Agile +1authentication identity; all439 runtime qualifications remain unknown.

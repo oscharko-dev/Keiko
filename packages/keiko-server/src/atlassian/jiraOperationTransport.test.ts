@@ -27,6 +27,9 @@ import { POST_AND_IDENTITY_READ_SCENARIOS, POST_AND_IDENTITY_READ_TOOLS, postAnd
 import { RELEASE_LIFECYCLE_FIXTURE_CASES, releaseLifecycleTransportFixture } from "../../../../tests/support/jira-release-lifecycle-fixture.js";
 import { LINK_MUTATION_FIXTURE_CASES, linkMutationTransportFixture } from "../../../../tests/support/jira-link-mutation-fixture.js";
 import { SCREEN_CONFIGURATION_FIXTURE_CASES as SCREEN_CONFIGURATION_CASES, screenConfigurationTransportFixture } from "../../../../tests/support/jira-screen-configuration-fixture.js";
+import { VERSION_LINK_MUTATION_CASES as VERSION_LINK_CASES } from "../../../../tests/support/jira-version-link-mutation-fixture.js";
+import { PROJECT_CATEGORY_FIXTURE_CASES as PROJECT_CATEGORY_CASES } from "../../../../tests/support/jira-project-category-fixture.js";
+import { versionLinkTransportFixture, projectCategoryTransportFixture } from "../../../../tests/support/jira-reviewed-platform-transport-fixture.js";
 import {
   SAVED_CONFIGURATION_ARGUMENTS,
   SAVED_CONFIGURATION_RECEIPTS,
@@ -45,6 +48,20 @@ const CREATE = {
 };
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
+  { tool: "jira.upsert-version-remote-link", args: VERSION_LINK_CASES[0].args, parameters: { versionId: "81" },
+    expectedReceipt: { versionId: "81", projectId: "10000", projectKey: "SYN", userKey: "synthetic-actor", globalId: "release:link", linkPresent: true } },
+  { tool: "jira.upsert-version-remote-link-by-global-id", args: VERSION_LINK_CASES[1].args, parameters: { versionId: "81", globalId: "release:link" },
+    expectedReceipt: { versionId: "81", projectId: "10000", projectKey: "SYN", userKey: "synthetic-actor", globalId: "release:link", linkPresent: true } },
+  { tool: "jira.delete-version-remote-link", args: VERSION_LINK_CASES[2].args, parameters: { versionId: "81", globalId: "release:link" },
+    expectedReceipt: { versionId: "81", projectId: "10000", projectKey: "SYN", userKey: "synthetic-actor", globalId: "release:link", linkPresent: false } },
+  { tool: "jira.delete-version-remote-links", args: VERSION_LINK_CASES[3].args, parameters: { versionId: "81" },
+    expectedReceipt: { versionId: "81", projectId: "10000", projectKey: "SYN", userKey: "synthetic-actor", globalIds: ["release:link", "other:link"], linkPresent: false } },
+  { tool: "jira.create-project-category", args: PROJECT_CATEGORY_CASES[0].args,
+    expectedReceipt: { categoryId: "9007199254740993", userKey: "synthetic-actor", categoryPresent: true } },
+  { tool: "jira.update-project-category", args: PROJECT_CATEGORY_CASES[1].args, parameters: { id: "7" },
+    expectedReceipt: { categoryId: "7", userKey: "synthetic-actor", categoryPresent: true } },
+  { tool: "jira.delete-project-category", args: PROJECT_CATEGORY_CASES[2].args, parameters: { id: "7" },
+    expectedOutcome: "succeeded-unconfirmed", expectedReceipt: { categoryId: "7", userKey: "synthetic-actor", categoryPresent: false } },
   { tool: "jira.add-default-screen-field", args: SCREEN_CONFIGURATION_CASES[0].args, parameters: { fieldId: "customfield_10001" },
     expectedOutcome: "succeeded-unconfirmed", expectedReceipt: { fieldId: "customfield_10001", fieldPresent: true } },
   { tool: "jira.add-screen-tab-field", args: SCREEN_CONFIGURATION_CASES[1].args, parameters: { screenId: "11", tabId: "21" },
@@ -1428,6 +1445,12 @@ function remote(tool?: string, initiallyPresent = true): ReturnType<typeof vi.fn
     );
   });
 }
+function reviewedPlatformFixture(tool: string | undefined) {
+  const selectedVersion = VERSION_LINK_CASES.find((item) => item.tool === tool);
+  if (selectedVersion !== undefined) return versionLinkTransportFixture("/context/rest/api/2", selectedVersion);
+  const selectedCategory = PROJECT_CATEGORY_CASES.find((item) => item.name === tool);
+  return selectedCategory === undefined ? undefined : projectCategoryTransportFixture("/context/rest/api/2", selectedCategory);
+}
 function lifecycleRemote(tool: string | undefined): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> | undefined {
   const selectedScreen = SCREEN_CONFIGURATION_CASES.find((item) => item.tool === tool);
   const selectedLink = LINK_MUTATION_FIXTURE_CASES.find((item) => item.tool === tool);
@@ -1435,13 +1458,14 @@ function lifecycleRemote(tool: string | undefined): ReturnType<typeof vi.fn<Atla
   const related = selectedLink === undefined
     ? (release ? releaseLifecycleTransportFixture("/context/rest/api/2") : undefined)
     : linkMutationTransportFixture("/context/rest/api/2", selectedLink);
-  const fixture = selectedScreen === undefined ? related : screenConfigurationTransportFixture("/context/rest/api/2", selectedScreen);
+  const fixture = reviewedPlatformFixture(tool)
+    ?? (selectedScreen === undefined ? related : screenConfigurationTransportFixture("/context/rest/api/2", selectedScreen));
   if (fixture === undefined) return undefined;
   return vi.fn<AtlassianHttpBodyPort>(async (request) => {
     const url = new URL(request.url);
     expect(url.origin).toBe("https://jira.example.invalid");
     expect(url.pathname.startsWith("/context/rest/api/2/")).toBe(true);
-    const result = request.method === "GET" ? fixture.read(request) : fixture.write(request);
+    const result = await (request.method === "GET" ? fixture.read(request) : fixture.write(request));
     if (result === undefined) throw new TypeError("Unexpected lifecycle native route");
     return result;
   });
@@ -1500,7 +1524,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(255);
+    expect(native).toHaveLength(262);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),
@@ -1512,6 +1536,37 @@ describe("native Jira registry and real connector transport agreement", () => {
     const writes = observed.requests.filter((request) => request.method !== "GET");
     expect(writes).toHaveLength(observed.definition.method === "GET" ? 0 : 1);
     if (scenario.expectedReceipt !== undefined) expect(observed.result.data).toMatchObject(scenario.expectedReceipt);
+  });
+  it("sends a version link's false JSON value without wrapping it and confirms the complete native set", async () => {
+    const scenario = SCENARIOS.find(({ tool }) => tool === "jira.upsert-version-remote-link-by-global-id");
+    if (scenario === undefined) throw new TypeError("Missing version-link scalar fixture");
+    const observed = await observe(scenario);
+    const effects = observed.requests.filter(({ method }) => method !== "GET");
+    expect(effects).toHaveLength(1);
+    expect(effects[0]).toMatchObject({ method: "POST",
+      url: "https://jira.example.invalid/context/rest/api/2/version/81/remotelink/release%3Alink", bodyJson: "false" });
+    expect(observed.result).toMatchObject({ data: { outcome: "succeeded", globalId: "release:link", linkPresent: true } });
+    const completeReads = observed.requests.filter(({ method, url }) => method === "GET" && url.endsWith("/version/81/remotelink"));
+    expect(completeReads).toHaveLength(2);
+    expect(observed.requests.every(({ url }) => new URL(url).origin === "https://jira.example.invalid")).toBe(true);
+  });
+  it("keeps a newly acknowledged category ID exact through independent readback", async () => {
+    const scenario = SCENARIOS.find(({ tool }) => tool === "jira.create-project-category");
+    if (scenario === undefined) throw new TypeError("Missing category creation fixture");
+    const observed = await observe(scenario);
+    expect(observed.result.data).toMatchObject({ outcome: "succeeded", categoryId: "9007199254740993", categoryPresent: true });
+    expect(observed.requests.at(-1)).toMatchObject({ method: "GET",
+      url: "https://jira.example.invalid/context/rest/api/2/projectCategory/9007199254740993" });
+  });
+  it("does not claim every category deletion effect from an empty visible collection", async () => {
+    const scenario = SCENARIOS.find(({ tool }) => tool === "jira.delete-project-category");
+    if (scenario === undefined) throw new TypeError("Missing category deletion fixture");
+    const observed = await observe(scenario);
+    expect(observed.result).toMatchObject({ isError: true, data: {
+      outcome: "succeeded-unconfirmed", categoryId: "7", categoryPresent: false,
+    } });
+    expect(observed.requests.filter(({ method }) => method === "DELETE")).toHaveLength(1);
+    expect(observed.requests.at(-1)).toMatchObject({ method: "GET", url: "https://jira.example.invalid/context/rest/api/2/projectCategory" });
   });
   it("retains default-screen addition as unconfirmed without a guessed screen or tab identity", async () => {
     const scenario = SCENARIOS.find(({ tool }) => tool === "jira.add-default-screen-field");

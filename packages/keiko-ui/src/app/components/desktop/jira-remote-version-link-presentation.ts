@@ -1,6 +1,7 @@
 import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
 import type { JiraAgileDetails } from "./jira-agile-presentation";
 import { jiraPropertyValueDetails } from "./jira-property-presentation";
+import { jiraVersionReviewGlobalId } from "./jira-planning-mutation-presentation";
 import {
   jiraPresentationFact as fact,
   jiraPresentationIdentity as identity,
@@ -24,10 +25,13 @@ function header(data: Source): JiraAgileDetails {
 function linkDetails(value: unknown, position: number): readonly JiraAgileDetails[] {
   const source = record(value);
   const association = [{ label: "chat.jira.versionLinks.position" as const, value: String(position) }];
-  const facts = [...association, ...fact("chat.jira.versionLinks.name", source?.name)];
+  const reviewable = source?.reviewIdentityAvailable === true && jiraVersionReviewGlobalId(source.globalId, false);
+  const facts = [...association, ...fact("chat.jira.versionLinks.name", source?.name),
+    ...(reviewable ? fact("chat.jira.issueContext.globalId", source.globalId) : [])];
+  const identityLabels: WidgetMessageKey[] = [reviewable ? "chat.jira.versionLinkWrite.identityAvailable" : "chat.jira.versionLinkWrite.identityUnavailable"];
   if (source?.valueAvailable !== true || !Array.isArray(source.valueNodes) || source.valueNodes.length === 0)
-    return [{ facts, labels: ["chat.jira.versionLinks.valueUnknown"] }];
-  return [{ facts, labels: [] }, ...source.valueNodes.map((node: unknown): JiraAgileDetails => {
+    return [{ facts, labels: [...identityLabels, "chat.jira.versionLinks.valueUnknown"] }];
+  return [{ facts, labels: identityLabels }, ...source.valueNodes.map((node: unknown): JiraAgileDetails => {
     const row = record(node);
     const details = row === undefined ? { facts: [], labels: ["chat.jira.properties.valueUnknown"] as const }
       : jiraPropertyValueDetails(row);

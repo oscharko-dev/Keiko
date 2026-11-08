@@ -16,7 +16,7 @@ it("binds a version before reading its fixed link resource and preserves typed n
   }));
   const result = await read("jira.version-remote-link", { versionId: "42", globalId: "selected" }, request);
   expect(result.data).toMatchObject({ outcome: "succeeded", linkScope: "native-version-links", versionId: "42", versionName: "Release", selectedGlobalId: "selected" });
-  expect(result.data.items).toEqual([{ name: "Observed link", valueAvailable: true, valueNodes: [
+  expect(result.data.items).toEqual([{ name: "Observed link", reviewIdentityAvailable: true, globalId: "selected", valueAvailable: true, valueNodes: [
     { path: "", kind: "object", childCount: 6 }, { path: "/", kind: "array", childCount: 0 },
     { path: "/a~0~1b", kind: "boolean", booleanValue: false }, { path: "/empty", kind: "object", childCount: 0 },
     { path: "/nil", kind: "null" }, { path: "/zero", kind: "number", numberValue: 0 }, { path: "/text", kind: "string", textValue: "" },
@@ -34,26 +34,42 @@ it("uses a global-ID query without inventing version identity or following encod
   expect(request).toHaveBeenCalledExactlyOnceWith(`version/remotelink?${new URLSearchParams({ globalId }).toString()}`, "GET", undefined, "json");
   expect(result.data.selectedGlobalId).toBe(globalId);
   expect(result.data).not.toHaveProperty("versionId");
-  expect(result.data.items).toEqual([{ name: "Observed link", valueAvailable: true, valueNodes: [{ path: "", kind: "string", textValue: "native text" }] }]);
+  expect(result.data.items).toEqual([{ name: "Observed link", reviewIdentityAvailable: true, globalId, valueAvailable: true, valueNodes: [{ path: "", kind: "string", textValue: "native text" }] }]);
 });
 it("locally pages the validated collection without changing the native request", async () => {
   const request = port({ links: [link(0), link(false), link(null)] });
   const result = await read("jira.version-remote-links", { versionId: "42", startAt: 1, maxResults: 1 }, request);
   expect(request.mock.calls[1]).toEqual(["version/42/remotelink", "GET", undefined, "json"]);
   expect(result.data).toMatchObject({ startAt: 1, total: 3, nextStartAt: 2 });
-  expect(result.data.items).toEqual([{ name: "Observed link", valueAvailable: true, valueNodes: [{ path: "", kind: "boolean", booleanValue: false }] }]);
+  expect(result.data.items).toEqual([{ name: "Observed link", reviewIdentityAvailable: false, valueAvailable: true, valueNodes: [{ path: "", kind: "boolean", booleanValue: false }] }]);
 });
 it("keeps missing link content unknown and actual encoded null observed", async () => {
   const request = port({ links: [{ name: "No content" }, { name: "Null field", link: null }, link(null)] });
   expect((await read("jira.remote-version-links", { globalId: "selected" }, request)).data.items).toEqual([
-    { name: "No content", valueAvailable: false }, { name: "Null field", valueAvailable: false },
-    { name: "Observed link", valueAvailable: true, valueNodes: [{ path: "", kind: "null" }] },
+    { name: "No content", reviewIdentityAvailable: false, valueAvailable: false }, { name: "Null field", reviewIdentityAvailable: false, valueAvailable: false },
+    { name: "Observed link", reviewIdentityAvailable: false, valueAvailable: true, valueNodes: [{ path: "", kind: "null" }] },
   ]);
 });
 it("decodes the documented native JSON string only once", async () => {
   const text = '{"nested":"plain text, not another parse"}';
   const result = await read("jira.version-remote-link", { versionId: "42", globalId: "selected" }, port(link(text)));
-  expect(result.data.items).toEqual([{ name: "Observed link", valueAvailable: true, valueNodes: [{ path: "", kind: "string", textValue: text }] }]);
+  expect(result.data.items).toEqual([{ name: "Observed link", reviewIdentityAvailable: false, valueAvailable: true, valueNodes: [{ path: "", kind: "string", textValue: text }] }]);
+});
+it("exposes a collection review identity only when native payload identity matches its exact self resource", async () => {
+  const request = port({ links: [
+    link({ globalId: "release:link", flag: false }, { self: "https://proxy.invalid/context/rest/api/2/version/42/remotelink/release%3Alink" }),
+    link({ globalId: "another:link" }, { self: "https://proxy.invalid/context/rest/api/2/version/42/remotelink/opaque" }),
+    link(null, { name: "not-an-identity", self: "https://proxy.invalid/context/rest/api/2/version/42/remotelink/not-an-identity" }),
+  ] });
+  const result = await read("jira.version-remote-links", { versionId: "42" }, request);
+  expect(result.data.items).toMatchObject([
+    { reviewIdentityAvailable: true, globalId: "release:link" },
+    { reviewIdentityAvailable: false }, { reviewIdentityAvailable: false },
+  ]);
+  expect(result.data.items).not.toEqual(expect.arrayContaining([
+    expect.objectContaining({ globalId: "opaque" }), expect.objectContaining({ globalId: "not-an-identity" }),
+  ]));
+  expect(request.mock.calls).toHaveLength(2);
 });
 it.each([
   "https://remote.invalid/rest/api/2/version/999/remotelink/selected",

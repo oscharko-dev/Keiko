@@ -24,14 +24,14 @@ interface Selection {
 const GLOBAL_ARGS = new Set(["globalId", "startAt", "maxResults"]);
 const VERSION_ARGS = new Set(["versionId", "startAt", "maxResults"]);
 const SINGLE_ARGS = new Set(["versionId", "globalId"]);
-function globalId(value: unknown, path: boolean): value is string {
+export function jiraRemoteVersionLinkGlobalId(value: unknown, path: boolean): value is string {
   return jiraNativeText(value, 2048) && !/[\p{Cc}\p{Surrogate}]/u.test(value) &&
     (!path || (value !== "." && value !== ".." && !/[/\\%]/u.test(value)));
 }
 function selection(name: LinkRead, args: CatalogJsonObject): Selection | undefined {
   if (name === "jira.remote-version-links") {
     const page = selectJiraReadPage(args, GLOBAL_ARGS);
-    return page === undefined || !globalId(args.globalId, false) ? undefined : {
+    return page === undefined || !jiraRemoteVersionLinkGlobalId(args.globalId, false) ? undefined : {
       path: `version/remotelink?${new URLSearchParams({ globalId: args.globalId }).toString()}`,
       globalId: args.globalId, page,
     };
@@ -42,7 +42,7 @@ function selection(name: LinkRead, args: CatalogJsonObject): Selection | undefin
     const page = selectJiraReadPage(args, VERSION_ARGS);
     return page === undefined ? undefined : { path, versionId: args.versionId, page };
   }
-  return Object.keys(args).some((key) => !SINGLE_ARGS.has(key)) || !globalId(args.globalId, true)
+  return Object.keys(args).some((key) => !SINGLE_ARGS.has(key)) || !jiraRemoteVersionLinkGlobalId(args.globalId, true)
     ? undefined : { path: `${path}/${encodeURIComponent(args.globalId)}`, versionId: args.versionId, globalId: args.globalId };
 }
 /** Only the native resource path is compared; proxy origins never become request destinations. */
@@ -64,7 +64,7 @@ function membership(self: unknown, selected: Selection): boolean {
   return jiraResourceSelfMatches(self, `version/${versionId}/remotelink/${target}`);
 }
 /** RemoteEntityLinkJsonBean.link is documented JSON-encoded native content. Decode exactly once. */
-function linkValue(value: unknown): Projected {
+export function projectJiraRemoteVersionLinkValue(value: unknown): Projected {
   if (value === undefined || value === null) return { item: { valueAvailable: false } };
   if (typeof value !== "string") return { reason: "malformed-payload" };
   if (Buffer.byteLength(value, "utf8") > JIRA_PROPERTY_VALUE_MAX_BYTES) return { reason: "bounds-exceeded" };
@@ -74,15 +74,27 @@ function linkValue(value: unknown): Projected {
   const nodes = jiraPropertyValue(decoded);
   return nodes.ok ? { item: { valueAvailable: true, valueNodes: nodes.items } } : { reason: nodes.reason };
 }
+function reviewIdentity(raw: Record<string, unknown>, selected: Selection, item: CatalogJsonObject): CatalogJsonObject {
+  const nodes = asArray(item.valueNodes);
+  const field = nodes?.map(asRecord).find((node) => node?.path === "/globalId" && node.kind === "string");
+  const candidate = selected.globalId ?? field?.textValue;
+  if (!jiraRemoteVersionLinkGlobalId(candidate, false) || typeof raw.self !== "string" || !URL.canParse(raw.self))
+    return { reviewIdentityAvailable: false };
+  const observed = remoteLinkIdentity(raw.self);
+  const versionId = selected.versionId ?? observed?.versionId;
+  return versionId !== undefined && jiraResourceSelfMatches(raw.self, `version/${versionId}/remotelink/${encodeURIComponent(candidate)}`)
+    ? { reviewIdentityAvailable: true, globalId: candidate } : { reviewIdentityAvailable: false };
+}
 function link(value: unknown, selected: Selection): Projected {
   const raw = asRecord(value);
   if (raw === undefined) return { reason: "malformed-payload" };
   if (!membership(raw.self, selected)) return { reason: "conflict" };
   if (raw.name !== undefined && raw.name !== null &&
     (!jiraNativeText(raw.name, 255) || /\p{Surrogate}/u.test(raw.name))) return { reason: "malformed-payload" };
-  const projected = linkValue(raw.link);
+  const projected = projectJiraRemoteVersionLinkValue(raw.link);
   if ("reason" in projected) return projected;
-  return { item: { ...projected.item, ...(typeof raw.name === "string" ? { name: raw.name } : {}) } };
+  return { item: { ...projected.item, ...reviewIdentity(raw, selected, projected.item),
+    ...(typeof raw.name === "string" ? { name: raw.name } : {}) } };
 }
 function context(selected: Selection): CatalogJsonObject {
   return {

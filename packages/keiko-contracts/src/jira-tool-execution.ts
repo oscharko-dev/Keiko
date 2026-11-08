@@ -53,8 +53,25 @@ export const JIRA_SPRINT_LIFECYCLE_MUTATIONS = Object.freeze([
 ] as const);
 export type JiraSprintLifecycleMutation = (typeof JIRA_SPRINT_LIFECYCLE_MUTATIONS)[number];
 
+export const JIRA_AGILE_PLANNING_MUTATIONS = Object.freeze([
+  "jira.epic-remove-issues", "jira.rank-epic", "jira.rank-issues", "jira.set-issue-estimation",
+] as const);
+export type JiraAgilePlanningMutation = (typeof JIRA_AGILE_PLANNING_MUTATIONS)[number];
+export const JIRA_VERSION_REMOTE_LINK_MUTATIONS = Object.freeze([
+  "jira.upsert-version-remote-link", "jira.upsert-version-remote-link-by-global-id",
+  "jira.delete-version-remote-link", "jira.delete-version-remote-links",
+] as const);
+export type JiraVersionRemoteLinkMutation = (typeof JIRA_VERSION_REMOTE_LINK_MUTATIONS)[number];
+export const JIRA_PROJECT_CATEGORY_MUTATIONS = Object.freeze([
+  "jira.create-project-category", "jira.update-project-category", "jira.delete-project-category",
+] as const);
+export type JiraProjectCategoryMutation = (typeof JIRA_PROJECT_CATEGORY_MUTATIONS)[number];
+
 /** Remote effects remain separate from the enclosing MCP/catalog terminal status. */
 export const JIRA_MUTATION_OPERATIONS = [
+  ...JIRA_AGILE_PLANNING_MUTATIONS,
+  ...JIRA_VERSION_REMOTE_LINK_MUTATIONS,
+  ...JIRA_PROJECT_CATEGORY_MUTATIONS,
   ...JIRA_SCREEN_CONFIGURATION_MUTATIONS,
   ...JIRA_BOARD_CONFIGURATION_MUTATIONS,
   ...JIRA_SPRINT_LIFECYCLE_MUTATIONS,
@@ -218,6 +235,17 @@ export type JiraMutationResultState = (typeof JIRA_MUTATION_RESULT_STATES)[numbe
 /** Validated Jira identities and closed state facts; never remote bodies or headers.
  * Monitoring booleans on unknown/unconfirmed writes are requested targets, not success evidence. */
 export interface JiraMutationReceipt {
+  readonly categoryId?: string;
+  readonly categoryPresent?: boolean;
+  readonly globalId?: string;
+  readonly globalIds?: readonly string[];
+  readonly issueIds?: readonly string[];
+  readonly anchorIssueId?: string;
+  readonly anchorIssueKey?: string;
+  readonly rankDirection?: "before" | "after";
+  readonly estimationValue?: number;
+  readonly estimationUnit?: "seconds" | "board-number";
+  readonly epicPresent?: boolean;
   readonly fieldId?: string;
   /** Requested presence until independent native layout readback succeeds. */
   readonly fieldPresent?: boolean;

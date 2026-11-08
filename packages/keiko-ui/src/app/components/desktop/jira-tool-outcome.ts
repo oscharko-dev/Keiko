@@ -64,6 +64,7 @@ import { JIRA_SAVED_CONFIGURATION_WRITE_TOOLS, jiraSavedConfigurationDetails, ji
 import { JIRA_RELEASE_LIFECYCLE_TOOLS, jiraReleaseLifecycleDetails } from "./jira-release-lifecycle-presentation";
 import { JIRA_LINK_MUTATION_TOOLS, jiraLinkMutationDetails } from "./jira-link-mutation-presentation";
 import { JIRA_CONFIGURATION_MUTATION_TOOLS, jiraConfigurationMutationDetails } from "./jira-configuration-mutation-presentation";
+import { JIRA_PLANNING_MUTATION_TOOLS, jiraPlanningMutationDetails } from "./jira-planning-mutation-presentation";
 import { JIRA_SPRINT_REVIEW_TOOLS, jiraSprintReviewDetails } from "./jira-sprint-review-presentation";
 import { JIRA_PROPERTY_TOOLS, jiraPropertyDetails } from "./jira-property-presentation";
 import { JIRA_MONITORING_WRITE_TOOLS, jiraMonitoringDetails } from "./jira-monitoring-presentation";
@@ -290,6 +291,7 @@ const CONFIGURATION_PRESENTERS: readonly (readonly [ReadonlySet<string>, Configu
   [JIRA_RELEASE_LIFECYCLE_TOOLS, jiraReleaseLifecycleDetails],
   [JIRA_LINK_MUTATION_TOOLS, jiraLinkMutationDetails],
   [JIRA_CONFIGURATION_MUTATION_TOOLS, jiraConfigurationMutationDetails],
+  [JIRA_PLANNING_MUTATION_TOOLS, jiraPlanningMutationDetails],
   [JIRA_SPRINT_REVIEW_TOOLS, jiraSprintReviewDetails],
   [JIRA_REMOTE_VERSION_LINK_TOOLS, jiraRemoteVersionLinkDetails],
   [JIRA_WORKLOG_FEED_TOOLS, jiraWorklogFeedDetails],
@@ -552,7 +554,7 @@ export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcome
   const stored = record(exchange.result?.data) ?? {};
   const data =
     [JIRA_PARTICIPATION_TOOLS, JIRA_MONITORING_WRITE_TOOLS, JIRA_PROPERTY_MUTATION_TOOLS, JIRA_SAVED_CONFIGURATION_WRITE_TOOLS,
-      JIRA_RELEASE_LIFECYCLE_TOOLS, JIRA_LINK_MUTATION_TOOLS, JIRA_CONFIGURATION_MUTATION_TOOLS].some((tools) => tools.has(exchange.call.name)) && exchange.mutationOutcome !== undefined
+      JIRA_RELEASE_LIFECYCLE_TOOLS, JIRA_LINK_MUTATION_TOOLS, JIRA_CONFIGURATION_MUTATION_TOOLS, JIRA_PLANNING_MUTATION_TOOLS].some((tools) => tools.has(exchange.call.name)) && exchange.mutationOutcome !== undefined
       ? { ...stored, outcome: exchange.mutationOutcome }
       : stored;
   return {

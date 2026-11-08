@@ -18,6 +18,23 @@ const JIRA_MUTATION_DECLARATIONS = jiraMutationDeclarations();
 
 describe("server-owned Jira operation contracts", () => {
   it.each([
+    { tool: "jira.create-project-category", identity: "POST /rest/api/2/projectCategory", permissionPolicy: "instance-admin-project-category-create-and-readback" },
+    { tool: "jira.update-project-category", identity: "PUT /rest/api/2/projectCategory/{id}", permissionPolicy: "instance-admin-project-category-update-and-readback" },
+    { tool: "jira.delete-project-category", identity: "DELETE /rest/api/2/projectCategory/{id}", permissionPolicy: "instance-admin-project-category-delete-unconfirmed" },
+    { tool: "jira.upsert-version-remote-link", identity: "POST /rest/api/2/version/{versionId}/remotelink", permissionPolicy: "version-remote-link-upsert-and-readback" },
+    { tool: "jira.upsert-version-remote-link-by-global-id", identity: "POST /rest/api/2/version/{versionId}/remotelink/{globalId}", permissionPolicy: "version-remote-link-upsert-and-readback" },
+    { tool: "jira.delete-version-remote-link", identity: "DELETE /rest/api/2/version/{versionId}/remotelink/{globalId}", permissionPolicy: "version-remote-link-delete-and-absence" },
+    { tool: "jira.delete-version-remote-links", identity: "DELETE /rest/api/2/version/{versionId}/remotelink", permissionPolicy: "version-remote-links-delete-and-absence" },
+    { tool: "jira.epic-remove-issues", identity: "POST /rest/agile/1.0/epic/none/issue", permissionPolicy: "epic-removal-and-readback" },
+    { tool: "jira.rank-epic", identity: "PUT /rest/agile/1.0/epic/{epicIdOrKey}/rank", permissionPolicy: "rank-and-position-uncertainty" },
+    { tool: "jira.rank-issues", identity: "PUT /rest/agile/1.0/issue/rank", permissionPolicy: "rank-and-position-uncertainty" },
+    { tool: "jira.set-issue-estimation", identity: "PUT /rest/agile/1.0/issue/{issueIdOrKey}/estimation", permissionPolicy: "issue-estimation-and-readback" },
+  ] as const)("binds planning/version/category $tool to its independent native identity", ({ tool, identity, permissionPolicy }) => {
+    expect(jiraOperationForTool(tool)?.definition).toMatchObject({
+      kind: "native", identity, permissionPolicy, effects: ["remote-write"],
+    });
+  });
+  it.each([
     { tool: "jira.add-default-screen-field", identity: "POST /rest/api/2/screens/addToDefault/{fieldId}", permissionPolicy: "instance-admin-default-screen-field-unconfirmed" },
     { tool: "jira.add-screen-tab-field", identity: "POST /rest/api/2/screens/{screenId}/tabs/{tabId}/fields", permissionPolicy: "instance-admin-screen-field-add-and-readback" },
     { tool: "jira.remove-screen-tab-field", identity: "DELETE /rest/api/2/screens/{screenId}/tabs/{tabId}/fields/{id}", permissionPolicy: "instance-admin-screen-field-delete-and-absence" },
@@ -40,7 +57,7 @@ describe("server-owned Jira operation contracts", () => {
     const admin = jiraOperationContracts().filter((entry) =>
       jiraRequiredConnectorScope(entry.definition.tool) === "issue-tracker.admin" &&
       entry.definition.effects.includes("remote-write"));
-    expect(admin).toHaveLength(20);
+    expect(admin).toHaveLength(23);
     for (const contract of admin) {
       expect(contract.definition.permissionPolicy).toMatch(/^instance-admin-/);
       expect(contract.definition.effects).toContain("remote-write");
@@ -91,7 +108,7 @@ describe("server-owned Jira operation contracts", () => {
   });
   it("keeps executable native operations distinct from local compositions", () => {
     const entries = jiraOperationContracts();
-    expect(entries.filter((entry) => entry.definition.kind === "native")).toHaveLength(297);
+    expect(entries.filter((entry) => entry.definition.kind === "native")).toHaveLength(308);
     expect(entries.filter((entry) => entry.definition.kind === "composite")).toHaveLength(3);
     expect(jiraOperationForTool("jira.discover")).toBeUndefined();
     expect(jiraOperationForTool("DELETE /rest/api/2/project")).toBeUndefined();

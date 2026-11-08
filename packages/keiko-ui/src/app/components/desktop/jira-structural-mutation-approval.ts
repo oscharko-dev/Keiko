@@ -77,6 +77,9 @@ function position(value: unknown, t: OptionalWidgetTranslate): JiraDraftValue {
   return label === undefined ? jiraDraftValueOf(value) : literal(t(label));
 }
 export { scalar as jiraReviewedMutationScalar, position as jiraNativeOrderPosition };
+export function jiraReviewedVersionSnapshot(value: unknown, t: OptionalWidgetTranslate): JiraDraftValue {
+  return group(value, t, false, false);
+}
 function reviewedValue(key: string, value: unknown, tool: string, t: OptionalWidgetTranslate): JiraDraftValue {
   if (SNAPSHOTS.has(key)) return group(value, t, false, tool === "jira_delete_component");
   if (key === "expected" || key === "value") return group(value, t, true, false, key === "value");

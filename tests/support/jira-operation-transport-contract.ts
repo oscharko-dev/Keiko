@@ -40,6 +40,7 @@ const UNCONFIRMED_NATIVE_OPERATIONS: ReadonlySet<string> = new Set([
   "jira.merge-version", "jira.remove-and-swap-version",
   "jira.add-default-screen-field", "jira.delete-board",
   "jira.delete-sprint", "jira.swap-sprints", "jira.unmap-all-sprints",
+  "jira.delete-project-category", "jira.rank-epic", "jira.rank-issues",
 ]);
 export async function observeNativeJiraOperation(
   scenario: Scenario,

@@ -2,6 +2,9 @@ import { executeJiraScreenTabMutation, isJiraScreenTabMutation } from "./jira-ma
 import { executeJiraScreenConfigurationMutation, isJiraScreenConfigurationMutation } from "./jira-managed-screen-configuration.js";
 import { executeJiraBoardConfigurationMutation, isJiraBoardConfigurationMutation } from "./jira-managed-board-configuration-mutations.js";
 import { executeJiraSprintLifecycleMutation, isJiraSprintLifecycleMutation } from "./jira-managed-sprint-lifecycle.js";
+import { executeJiraAgilePlanningMutation, isJiraAgilePlanningMutation } from "./jira-managed-agile-planning.js";
+import { executeJiraVersionLinkMutation, isJiraVersionLinkMutation } from "./jira-managed-version-link-mutations.js";
+import { executeJiraProjectCategoryMutation, isJiraProjectCategoryMutation } from "./jira-managed-project-category-mutations.js";
 import { executeJiraMonitoringMutation, isJiraMonitoringMutation } from "./jira-managed-monitoring-mutations.js";
 import { executeJiraEntityPropertyMutation, isJiraEntityPropertyMutation } from "./jira-managed-entity-property-mutations.js";
 import { executeJiraFilterMutation, isJiraFilterMutation } from "./jira-managed-filter-mutations.js";
@@ -1408,6 +1411,11 @@ function configurationMutation(
       ...(connection.issueTemplates === undefined ? {} : { templates: connection.issueTemplates }),
       experimentalAgile: jiraExperimentalAgileRequest(connection, context),
     }, check);
+  if (isJiraAgilePlanningMutation(operation))
+    return executeJiraAgilePlanningMutation(operation, args, {
+      requests: jiraAgileRequests(connection, context),
+      ...(connection.issueTemplates === undefined ? {} : { templates: connection.issueTemplates }),
+    }, check);
   return savedConfigurationMutation(operation, args, request, check, connection.baseUrl);
 }
 function nativeLifecycleMutation(
@@ -1417,6 +1425,10 @@ function nativeLifecycleMutation(
   connection: JiraManagedConnection,
   check: boolean,
 ): Promise<JiraMutationAttempt> | undefined {
+  if (isJiraVersionLinkMutation(operation))
+    return executeJiraVersionLinkMutation(operation, args, request, check);
+  if (isJiraProjectCategoryMutation(operation))
+    return executeJiraProjectCategoryMutation(operation, args, request, check);
   if (isJiraIssueLinkMutation(operation))
     return executeJiraIssueLinkMutation(operation, args, request, check, connection.issueTemplates);
   if (isJiraRemoteLinkMutation(operation))
@@ -1535,12 +1547,14 @@ function isSavedConfigurationMutation(operation: JiraMutationOperation): boolean
     .some((accepts) => accepts(operation));
 }
 function isNativeLifecycleMutation(operation: JiraMutationOperation): boolean {
-  return [isJiraComponentDelete, isJiraVersionLifecycleMutation, isJiraIssueLinkMutation, isJiraRemoteLinkMutation]
+  return [isJiraComponentDelete, isJiraVersionLifecycleMutation, isJiraIssueLinkMutation, isJiraRemoteLinkMutation,
+    isJiraVersionLinkMutation, isJiraProjectCategoryMutation]
     .some((accepts) => accepts(operation));
 }
 function isReviewedConfigurationMutation(operation: JiraMutationOperation): boolean {
   return [isJiraEntityPropertyMutation, isJiraScreenTabMutation, isJiraScreenConfigurationMutation,
-    isJiraBoardConfigurationMutation, isJiraSprintLifecycleMutation, isJiraMonitoringMutation].some((accepts) => accepts(operation));
+    isJiraBoardConfigurationMutation, isJiraSprintLifecycleMutation, isJiraAgilePlanningMutation,
+    isJiraMonitoringMutation].some((accepts) => accepts(operation));
 }
 function requiresSuccessfulPreflight(operation: JiraMutationOperation): boolean {
   return (

@@ -13,6 +13,10 @@ import {
 afterEach(resetServerLogger);
 
 it.each([
+  "jira.epic-remove-issues",
+  "jira.rank-epic",
+  "jira.rank-issues",
+  "jira.set-issue-estimation",
   "jira.replace-sprint",
   "jira.delete-sprint",
   ...JIRA_LINK_MUTATIONS,

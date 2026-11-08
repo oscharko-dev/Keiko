@@ -45,6 +45,7 @@ function nodeList(value: unknown, t: OptionalWidgetTranslate): JiraDraftValue {
     ? { kind: "list", items: value.map((entry: unknown, index) => ({ position: index + 1, value: nodeValue(entry, t) })) }
     : textValue(t("chat.jira.properties.valueUnknown"));
 }
+export { nodeList as jiraReviewedPropertyNodes };
 /** The same typed value presenter names every reviewed/requested node; no JSON is decoded here. */
 export function jiraPropertyMutationFacts(operation: string | undefined, key: string, value: unknown, t: OptionalWidgetTranslate): readonly JiraDraftField[] | undefined {
   if (operation === undefined || !OPERATIONS.has(operation)) return undefined;

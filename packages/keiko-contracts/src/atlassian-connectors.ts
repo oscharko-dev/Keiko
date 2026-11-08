@@ -35,6 +35,12 @@ import {
 import { JIRA_READ_TOOL_FAMILIES } from "./jira-read-tools.js";
 import { JIRA_MANAGED_READ_TOOLS, type JiraManagedReadToolName } from "./jira-tool-fields.js";
 import {
+  JIRA_AGILE_PLANNING_MUTATIONS,
+  JIRA_VERSION_REMOTE_LINK_MUTATIONS,
+  JIRA_PROJECT_CATEGORY_MUTATIONS,
+  type JiraAgilePlanningMutation,
+  type JiraVersionRemoteLinkMutation,
+  type JiraProjectCategoryMutation,
   JIRA_SCREEN_CONFIGURATION_MUTATIONS,
   JIRA_BOARD_CONFIGURATION_MUTATIONS,
   JIRA_SPRINT_LIFECYCLE_MUTATIONS,
@@ -86,6 +92,18 @@ const JIRA_CONFIGURATION_ADMIN_ACTIONS = Object.freeze([
   "add-default-screen-field", "add-screen-tab-field", "remove-screen-tab-field",
   "move-screen-tab-field", "set-screen-field-show-when-empty", "move-screen-tab", "unmap-all-sprints",
 ] as const satisfies readonly JiraConfigurationAction[]);
+
+type JiraPlanningVersionOrCategoryMutation = JiraAgilePlanningMutation | JiraVersionRemoteLinkMutation | JiraProjectCategoryMutation;
+type JiraPlanningVersionOrCategoryAction = JiraPlanningVersionOrCategoryMutation extends `jira.${infer Action}` ? Action : never;
+function planningVersionOrCategoryAction(name: JiraPlanningVersionOrCategoryMutation): JiraPlanningVersionOrCategoryAction {
+  return name.slice(5) as JiraPlanningVersionOrCategoryAction;
+}
+const JIRA_PLANNING_VERSION_CATEGORY_ACTIONS = Object.freeze([
+  ...JIRA_AGILE_PLANNING_MUTATIONS, ...JIRA_VERSION_REMOTE_LINK_MUTATIONS, ...JIRA_PROJECT_CATEGORY_MUTATIONS,
+].map(planningVersionOrCategoryAction));
+const JIRA_PROJECT_CATEGORY_ACTIONS = Object.freeze([
+  "create-project-category", "update-project-category", "delete-project-category",
+] as const satisfies readonly JiraPlanningVersionOrCategoryAction[]);
 
 // ─── Schema version ───────────────────────────────────────────────────────────
 // Pinned to "1". A breaking change introduces a NEW literal rather than mutating "1", the same
@@ -642,6 +660,7 @@ export type AtlassianConnectorActionType =
   | JiraSavedConfigurationAction
   | JiraRelationshipOrReleaseAction
   | JiraConfigurationAction
+  | JiraPlanningVersionOrCategoryAction
   | "set-app-monitoring"
   | "set-ipd-monitoring"
   | "start-jmx-metrics"
@@ -686,6 +705,7 @@ export type AtlassianConnectorActionType =
 
 export const ATLASSIAN_CONNECTOR_ACTION_TYPES: readonly AtlassianConnectorActionType[] =
   Object.freeze([
+    ...JIRA_PLANNING_VERSION_CATEGORY_ACTIONS,
     ...JIRA_CONFIGURATION_ACTIONS,
     ...JIRA_RELATIONSHIP_RELEASE_ACTIONS,
     ...JIRA_SAVED_ACTIONS,
@@ -741,6 +761,17 @@ export const JIRA_REQUIREMENT_REFERENCE_CHARS_MAX = 120;
 export const JIRA_MANAGED_ACTION_TYPES: Readonly<
   Record<JiraManagedReadToolName | JiraMutationOperation, AtlassianConnectorActionType>
 > = Object.freeze({
+  "jira.epic-remove-issues": "epic-remove-issues",
+  "jira.rank-epic": "rank-epic",
+  "jira.rank-issues": "rank-issues",
+  "jira.set-issue-estimation": "set-issue-estimation",
+  "jira.upsert-version-remote-link": "upsert-version-remote-link",
+  "jira.upsert-version-remote-link-by-global-id": "upsert-version-remote-link-by-global-id",
+  "jira.delete-version-remote-link": "delete-version-remote-link",
+  "jira.delete-version-remote-links": "delete-version-remote-links",
+  "jira.create-project-category": "create-project-category",
+  "jira.update-project-category": "update-project-category",
+  "jira.delete-project-category": "delete-project-category",
   "jira.add-default-screen-field": "add-default-screen-field",
   "jira.add-screen-tab-field": "add-screen-tab-field",
   "jira.remove-screen-tab-field": "remove-screen-tab-field",
@@ -850,6 +881,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASSES: readonly AtlassianConnectorActi
 export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
   Record<AtlassianConnectorActionType, AtlassianConnectorActionClass>
 > = Object.freeze({
+  ...jiraActionValues(JIRA_PLANNING_VERSION_CATEGORY_ACTIONS, "connector-write"),
+  ...jiraActionValues(JIRA_PROJECT_CATEGORY_ACTIONS, "connector-admin"),
   ...jiraActionValues(JIRA_CONFIGURATION_ACTIONS, "connector-write"),
   ...jiraActionValues(JIRA_CONFIGURATION_ADMIN_ACTIONS, "connector-admin"),
   ...jiraActionValues(JIRA_RELATIONSHIP_RELEASE_ACTIONS, "connector-write"),
@@ -906,6 +939,7 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
 export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
   Record<AtlassianConnectorActionType, AtlassianConnectorProvider>
 > = Object.freeze({
+  ...jiraActionValues(JIRA_PLANNING_VERSION_CATEGORY_ACTIONS, "jira"),
   ...jiraActionValues(JIRA_CONFIGURATION_ACTIONS, "jira"),
   ...jiraActionValues(JIRA_RELATIONSHIP_RELEASE_ACTIONS, "jira"),
   ...jiraActionValues(JIRA_SAVED_ACTIONS, "jira"),
@@ -957,6 +991,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
 export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchConnectorScope>
 > = Object.freeze({
+  ...jiraActionValues(JIRA_PLANNING_VERSION_CATEGORY_ACTIONS, "issue-tracker.write"),
+  ...jiraActionValues(JIRA_PROJECT_CATEGORY_ACTIONS, "issue-tracker.admin"),
   ...jiraActionValues(JIRA_CONFIGURATION_ACTIONS, "issue-tracker.write"),
   ...jiraActionValues(JIRA_CONFIGURATION_ADMIN_ACTIONS, "issue-tracker.admin"),
   ...jiraActionValues(JIRA_RELATIONSHIP_RELEASE_ACTIONS, "issue-tracker.write"),
@@ -1023,6 +1059,9 @@ export function jiraRequiredConnectorScope(
 export const ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchApprovalRisk>
 > = Object.freeze({
+  ...jiraActionValues(JIRA_PLANNING_VERSION_CATEGORY_ACTIONS, "high"),
+  "upsert-version-remote-link": "medium",
+  "upsert-version-remote-link-by-global-id": "medium",
   ...jiraActionValues(JIRA_CONFIGURATION_ACTIONS, "high"),
   ...jiraActionValues(JIRA_RELATIONSHIP_RELEASE_ACTIONS, "medium"),
   ...jiraActionValues(JIRA_SAVED_ADMIN_ACTIONS, "high"),
@@ -1960,6 +1999,12 @@ export {
   isJiraDraftRef,
   type JiraDraftItemState,
   JIRA_MUTATION_OPERATIONS,
+  JIRA_AGILE_PLANNING_MUTATIONS,
+  JIRA_VERSION_REMOTE_LINK_MUTATIONS,
+  JIRA_PROJECT_CATEGORY_MUTATIONS,
+  type JiraAgilePlanningMutation,
+  type JiraVersionRemoteLinkMutation,
+  type JiraProjectCategoryMutation,
   JIRA_LINK_MUTATIONS,
   JIRA_RELEASE_LIFECYCLE_MUTATIONS,
   type JiraLinkMutation,

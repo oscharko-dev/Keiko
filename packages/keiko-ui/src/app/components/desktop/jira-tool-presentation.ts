@@ -38,6 +38,7 @@ import { JIRA_SAVED_CONFIGURATION_WRITE_TOOLS, jiraSavedConfigurationIdentityCom
 import { JIRA_RELEASE_LIFECYCLE_TOOLS, jiraReleaseLifecycleIdentityComplete, jiraReleaseReferenceEffectsUnconfirmed } from "./jira-release-lifecycle-presentation";
 import { JIRA_LINK_MUTATION_TOOLS, jiraLinkMutationIdentityComplete } from "./jira-link-mutation-presentation";
 import { JIRA_CONFIGURATION_MUTATION_TOOLS, jiraConfigurationMutationIdentityComplete, jiraConfigurationConfirmationUnavailable } from "./jira-configuration-mutation-presentation";
+import { JIRA_PLANNING_MUTATION_TOOLS, jiraPlanningIdentityComplete, jiraPlanningConfirmationUnavailable } from "./jira-planning-mutation-presentation";
 const LOCALLY_PAGED_TOOLS = new Set([
   ...JIRA_REMOTE_VERSION_LINK_TOOLS,
   ...JIRA_ACCOUNT_DIAGNOSTIC_TOOLS,
@@ -234,10 +235,11 @@ function mutationIdentityMissing(exchange: ChatToolExchange): boolean {
   if (JIRA_RELEASE_LIFECYCLE_TOOLS.has(exchange.call.name)) return !jiraReleaseLifecycleIdentityComplete(exchange.call.name, data);
   if (JIRA_LINK_MUTATION_TOOLS.has(exchange.call.name)) return !jiraLinkMutationIdentityComplete(exchange.call.name, data);
   if (JIRA_CONFIGURATION_MUTATION_TOOLS.has(exchange.call.name)) return !jiraConfigurationMutationIdentityComplete(exchange.call.name, data);
+  if (JIRA_PLANNING_MUTATION_TOOLS.has(exchange.call.name)) return !jiraPlanningIdentityComplete(exchange.call.name, data);
   return JIRA_SAVED_CONFIGURATION_WRITE_TOOLS.has(exchange.call.name) && !jiraSavedConfigurationIdentityComplete(exchange.call.name, data);
 }
 function mutationConfirmationUnavailable(tool: string): boolean {
-  return jiraSavedConfigurationDeletionUnconfirmed(tool) || jiraReleaseReferenceEffectsUnconfirmed(tool) || jiraConfigurationConfirmationUnavailable(tool);
+  return jiraSavedConfigurationDeletionUnconfirmed(tool) || jiraReleaseReferenceEffectsUnconfirmed(tool) || jiraConfigurationConfirmationUnavailable(tool) || jiraPlanningConfirmationUnavailable(tool);
 }
 /** Only an explicit, rejected no-change receipt can soften a conflict; journal state wins. */
 export function jiraMutationUnchanged(exchange: ChatToolExchange): boolean {

@@ -30,6 +30,14 @@ const ISSUE_QUERY = {
 const CONTEXT_ISSUE_QUERY = { ...ISSUE_QUERY, validateQuery: "true", jql: "project = SYN AND summary ~ \"A & B\"" };
 // Independent selected identities and filters: the registry supplies no fixture input or response.
 const SCENARIOS: readonly Scenario[] = [
+  { tool: "jira.epic-remove-issues", args: PLANNING_CASES[0].args,
+    expectedReceipt: { userKey: "synthetic-actor", issueIds: ["10001"], issueKeys: ["SYN-1"], epicPresent: false } },
+  { tool: "jira.rank-epic", args: PLANNING_CASES[1].args, parameters: { epicIdOrKey: "10001" }, expectedOutcome: "succeeded-unconfirmed",
+    expectedReceipt: { userKey: "synthetic-actor", boardId: "7", fieldId: "customfield_10019", issueIds: ["10001"], issueKeys: ["SYN-1"], anchorIssueId: "10002", anchorIssueKey: "SYN-2", rankDirection: "before" } },
+  { tool: "jira.rank-issues", args: PLANNING_CASES[2].args, expectedOutcome: "succeeded-unconfirmed",
+    expectedReceipt: { userKey: "synthetic-actor", boardId: "7", fieldId: "customfield_10019", issueIds: ["10001"], issueKeys: ["SYN-1"], anchorIssueId: "10002", anchorIssueKey: "SYN-2", rankDirection: "before" } },
+  { tool: "jira.set-issue-estimation", args: PLANNING_CASES[3].args, parameters: { issueIdOrKey: "10001" }, query: { boardId: "7" },
+    expectedReceipt: { userKey: "synthetic-actor", boardId: "7", fieldId: "customfield_10016", issueId: "10001", issueKey: "SYN-1", estimationValue: 5, estimationUnit: "board-number" } },
   { tool: "jira.replace-sprint", args: SPRINT_LIFECYCLE_CASES[0].args, parameters: { sprintId: "11" },
     expectedReceipt: { userKey: "synthetic-actor", sprintId: "11", originBoardId: "7", sprintPresent: true } },
   { tool: "jira.delete-sprint", args: SPRINT_LIFECYCLE_CASES[1].args, parameters: { sprintId: "11" },
@@ -184,10 +192,13 @@ const PROPERTY_WRITE_ROOTS: Readonly<Record<string, string>> = {
   "jira.set-sprint-property": "sprint/9/properties", "jira.delete-sprint-property": "sprint/9/properties",
 };
 function configurationRemote(tool?: string): AtlassianHttpBodyPort | undefined {
+  const selectedPlanning = PLANNING_CASES.find((item) => item.name === tool);
   const selectedSprint = SPRINT_LIFECYCLE_CASES.find((item) => item.name === tool);
   const selectedBoard = BOARD_CONFIGURATION_CASES.find((item) => item.tool === tool);
-  let fixture: ReturnType<typeof sprintLifecycleTransportFixture> | ReturnType<typeof boardConfigurationTransportFixture> | undefined;
-  if (selectedSprint !== undefined)
+  let fixture: ReturnType<typeof sprintLifecycleTransportFixture> | ReturnType<typeof boardConfigurationTransportFixture> | ReturnType<typeof agilePlanningTransportFixture> | undefined;
+  if (selectedPlanning !== undefined)
+    fixture = agilePlanningTransportFixture("/context/rest/api/2", "/context/rest/agile/1.0", selectedPlanning);
+  else if (selectedSprint !== undefined)
     fixture = sprintLifecycleTransportFixture("/context/rest/api/2", "/context/rest/agile/1.0", selectedSprint);
   else if (selectedBoard !== undefined)
     fixture = boardConfigurationTransportFixture("/context/rest/api/2", "/context/rest/agile/1.0", selectedBoard);
@@ -220,7 +231,7 @@ describe("native Agile registry and actual connector transport agreement", () =>
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && definition.apiRoot === "/rest/agile/1.0",
     );
-    expect(native).toHaveLength(42);
+    expect(native).toHaveLength(46);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),
@@ -257,6 +268,38 @@ describe("native Agile registry and actual connector transport agreement", () =>
       ["GET", "https://jira.example.invalid/context/rest/api/2/myself"],
       ["GET", "https://jira.example.invalid/context/rest/agile/1.0/board/7"],
     ]);
+  });
+  it.each(["jira.rank-epic", "jira.rank-issues"] as const)(
+    "keeps %s unconfirmed after native partial acknowledgement despite readable identities",
+    async (tool) => {
+      const scenario = SCENARIOS.find((entry) => entry.tool === tool);
+      if (scenario === undefined) throw new TypeError("Missing reviewed rank fixture");
+      const native = remote(tool);
+      const observed = await observeNativeJiraOperation(scenario, {
+        deployment: "data-center", baseUrl: "https://jira.example.invalid/context",
+        http: async (request) => {
+          const result = await native(request);
+          return request.method === "PUT" ? response({}, 207) : result;
+        },
+      });
+      expect(observed.result).toMatchObject({ isError: true, data: {
+        outcome: "succeeded-unconfirmed", ...scenario.expectedReceipt,
+      } });
+      expect(observed.requests.filter(({ method }) => method !== "GET")).toHaveLength(1);
+      expect(observed.requests.at(-1)?.method).toBe("GET");
+    },
+  );
+  it("changes an estimate using native decimal text and separately confirms the observed numeric unit", async () => {
+    const scenario = SCENARIOS.find(({ tool }) => tool === "jira.set-issue-estimation");
+    if (scenario === undefined) throw new TypeError("Missing estimate fixture");
+    const observed = await observeNativeJiraOperation(scenario, {
+      deployment: "data-center", baseUrl: "https://jira.example.invalid/context", http: remote(scenario.tool),
+    });
+    const effects = observed.requests.filter(({ method }) => method !== "GET");
+    expect(effects).toHaveLength(1);
+    expect(effects[0]).toMatchObject({ method: "PUT", bodyJson: '{"value":"5"}',
+      url: "https://jira.example.invalid/context/rest/agile/1.0/issue/10001/estimation?boardId=7" });
+    expect(observed.result.data).toMatchObject({ outcome: "succeeded", estimationValue: 5, estimationUnit: "board-number" });
   });
   it.each([
     ["jira.unmap-sprints", "sprint/unmap", "succeeded", '{"sprintIds":[12]}'],
@@ -326,3 +369,5 @@ describe("native Agile registry and actual connector transport agreement", () =>
     expect(JSON.stringify(observed.result.data)).not.toContain("untrusted.invalid");
   });
 });
+import { AGILE_PLANNING_FIXTURE_CASES as PLANNING_CASES } from "../../../../tests/support/jira-agile-planning-fixture.js";
+import { agilePlanningTransportFixture } from "../../../../tests/support/jira-agile-planning-transport-fixture.js";

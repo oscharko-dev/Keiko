@@ -20,6 +20,7 @@ import { jiraPropertyMutationFacts } from "./jira-property-mutation-presentation
 import { jiraSavedConfigurationFacts, jiraSavedConfigurationContextFacts } from "./jira-saved-configuration-approval";
 import { jiraStructuralMutationFacts, jiraStructuralMutationContextFacts } from "./jira-structural-mutation-approval";
 import { jiraConfigurationMutationFacts, jiraConfigurationMutationContextFacts } from "./jira-configuration-mutation-approval";
+import { jiraPlanningMutationFacts, jiraPlanningMutationContextFacts } from "./jira-planning-mutation-approval";
 
 type Raw = Readonly<Record<string, unknown>>;
 type Fact = JiraDraftField;
@@ -273,6 +274,7 @@ function operationFacts(operation: string | undefined, key: string, value: unkno
     jiraSavedConfigurationFacts(operation, key, value, t) ??
     jiraStructuralMutationFacts(operation, key, value, t) ??
     jiraConfigurationMutationFacts(operation, key, value, t) ??
+    jiraPlanningMutationFacts(operation, key, value, t) ??
     screenTabFacts(operation, key, value, t) ?? monitoringFacts(operation, key, value, t);
 }
 /**
@@ -309,7 +311,7 @@ export function jiraActionFacts(
   });
   return managed ? [...facts, ...deletionContextFacts(raw, operation, t), ...monitoringContextFacts(operation, t),
     ...jiraSavedConfigurationContextFacts(operation, raw, t), ...jiraStructuralMutationContextFacts(operation, t),
-    ...jiraConfigurationMutationContextFacts(operation, t)] : facts;
+    ...jiraConfigurationMutationContextFacts(operation, t), ...jiraPlanningMutationContextFacts(operation, t)] : facts;
 }
 /** Jira's own names where this turn read them; a field that repeats the target is said once. */
 function managedFacts(

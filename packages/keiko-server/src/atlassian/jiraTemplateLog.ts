@@ -103,6 +103,10 @@ const TEMPLATE_ADMISSION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: true,
       values: [
+        "jira.epic-remove-issues",
+        "jira.rank-epic",
+        "jira.rank-issues",
+        "jira.set-issue-estimation",
         "jira.replace-sprint",
         "jira.delete-sprint",
         "jira.create-issue-link",
@@ -213,6 +217,10 @@ const FIELD_ADMISSION = defineActivityLogOperation({
 });
 
 const TEMPLATE_OPERATIONS = [
+  "jira.epic-remove-issues",
+  "jira.rank-epic",
+  "jira.rank-issues",
+  "jira.set-issue-estimation",
   "jira.replace-sprint",
   "jira.delete-sprint",
   ...JIRA_LINK_MUTATIONS,

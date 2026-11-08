@@ -8,6 +8,7 @@ import {
 import { CODING_WORKBENCH_MODES } from "./coding-workbench.js";
 
 const ADMIN_TOOLS = [
+  "jira.create-project-category", "jira.update-project-category", "jira.delete-project-category",
   "jira.add-default-screen-field", "jira.add-screen-tab-field", "jira.remove-screen-tab-field", "jira.move-screen-tab-field", "jira.set-screen-field-show-when-empty", "jira.move-screen-tab", "jira.unmap-all-sprints",
   "jira.anonymization-validation", "jira.anonymization-rerun-validation", "jira.anonymization-progress",
   "jira.create-filter", "jira.set-filter-share-scope",
@@ -34,6 +35,7 @@ describe("explicit Jira instance administration authority", () => {
   });
 
   it.each([
+    "jira.epic-remove-issues", "jira.rank-epic", "jira.rank-issues", "jira.set-issue-estimation", "jira.delete-version-remote-link", "jira.delete-version-remote-links", "jira.upsert-version-remote-link", "jira.upsert-version-remote-link-by-global-id",
     "jira.delete-board", "jira.set-board-refined-velocity", "jira.replace-sprint",
     "jira.delete-sprint", "jira.swap-sprints", "jira.unmap-sprints",
   ] as const)("keeps %s on its independently required ordinary-write grant", (tool) => {

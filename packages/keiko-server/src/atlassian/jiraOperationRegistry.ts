@@ -19,6 +19,15 @@ type CompositeTool = "jira.report" | "jira.draft-stage" | "jira.draft";
 type NativeTool = Exclude<JiraOperationTool, CompositeTool>;
 type JiraOperationEffect = "remote-read" | "remote-write" | "local-report" | "local-draft";
 type JiraPermissionPolicy =
+  | "instance-admin-project-category-create-and-readback"
+  | "instance-admin-project-category-update-and-readback"
+  | "instance-admin-project-category-delete-unconfirmed"
+  | "version-remote-link-upsert-and-readback"
+  | "version-remote-link-delete-and-absence"
+  | "version-remote-links-delete-and-absence"
+  | "epic-removal-and-readback"
+  | "rank-and-position-uncertainty"
+  | "issue-estimation-and-readback"
   | "instance-admin-default-screen-field-unconfirmed"
   | "instance-admin-screen-field-add-and-readback"
   | "instance-admin-screen-field-delete-and-absence"
@@ -206,6 +215,39 @@ function writes<const K extends NativeTool>(
   return result as NativeGroup<K>;
 }
 const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
+  ...writes("instance-admin-project-category-create-and-readback", {
+    "jira.create-project-category": ["POST", "/projectCategory"],
+  }),
+  ...writes("instance-admin-project-category-update-and-readback", {
+    "jira.update-project-category": ["PUT", "/projectCategory/{id}"],
+  }),
+  ...writes("instance-admin-project-category-delete-unconfirmed", {
+    "jira.delete-project-category": ["DELETE", "/projectCategory/{id}"],
+  }),
+  ...writes("version-remote-link-upsert-and-readback", {
+    "jira.upsert-version-remote-link": ["POST", "/version/{versionId}/remotelink"],
+  }),
+  ...writes("version-remote-link-upsert-and-readback", {
+    "jira.upsert-version-remote-link-by-global-id": ["POST", "/version/{versionId}/remotelink/{globalId}"],
+  }),
+  ...writes("version-remote-link-delete-and-absence", {
+    "jira.delete-version-remote-link": ["DELETE", "/version/{versionId}/remotelink/{globalId}"],
+  }),
+  ...writes("version-remote-links-delete-and-absence", {
+    "jira.delete-version-remote-links": ["DELETE", "/version/{versionId}/remotelink"],
+  }),
+  ...writes("epic-removal-and-readback", {
+    "jira.epic-remove-issues": ["POST", "/epic/none/issue"],
+  }, "/rest/agile/1.0"),
+  ...writes("rank-and-position-uncertainty", {
+    "jira.rank-epic": ["PUT", "/epic/{epicIdOrKey}/rank"],
+  }, "/rest/agile/1.0"),
+  ...writes("rank-and-position-uncertainty", {
+    "jira.rank-issues": ["PUT", "/issue/rank"],
+  }, "/rest/agile/1.0"),
+  ...writes("issue-estimation-and-readback", {
+    "jira.set-issue-estimation": ["PUT", "/issue/{issueIdOrKey}/estimation"],
+  }, "/rest/agile/1.0"),
   ...writes("instance-admin-default-screen-field-unconfirmed", {
     "jira.add-default-screen-field": ["POST", "/screens/addToDefault/{fieldId}"],
   }),

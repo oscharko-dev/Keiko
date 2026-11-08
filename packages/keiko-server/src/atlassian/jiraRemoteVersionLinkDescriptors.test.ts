@@ -41,12 +41,12 @@ it("preserves complete typed nodes and unknown payloads without raw JSON or URL 
   const schema = declaration("jira.version-remote-links").descriptor.resultSchema;
   const base = { outcome: "succeeded", linkScope: "native-version-links", versionId: "42", versionName: "Release", startAt: 0, total: 2 };
   const nodes = [{ path: "", kind: "object", childCount: 1 }, { path: "/value", kind: "boolean", booleanValue: false }];
-  expect(describeCatalogSchemaMismatch(schema, { ...base, items: [{ valueAvailable: true, valueNodes: nodes }, { valueAvailable: false }] })).toBeUndefined();
+  expect(describeCatalogSchemaMismatch(schema, { ...base, items: [{ reviewIdentityAvailable: true, globalId: "native:link", valueAvailable: true, valueNodes: nodes }, { reviewIdentityAvailable: false, valueAvailable: false }] })).toBeUndefined();
   for (const row of [
     { valueAvailable: false, valueNodes: nodes },
     { valueAvailable: true },
     { valueAvailable: true, link: "{}" },
     { valueAvailable: false, self: "https://external.invalid" },
     { valueAvailable: true, valueNodes: [{ path: "", kind: "boolean", booleanValue: "false" }] },
-  ]) expect(describeCatalogSchemaMismatch(schema, { ...base, items: [row] })).toBeDefined();
+  ]) expect(describeCatalogSchemaMismatch(schema, { ...base, items: [{ reviewIdentityAvailable: false, ...row }] })).toBeDefined();
 });

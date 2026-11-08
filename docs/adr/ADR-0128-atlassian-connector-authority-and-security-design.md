@@ -701,9 +701,9 @@ Memory retains its separate explicit-or-`governed-assist` default. This availabi
 itself grant a Chat read grant, mutation approval, connector scope or authority envelope.
 
 
-**Explicit instance administration (#4287, review 4503902861).** The twenty implemented administration writes—application/IPD monitoring, JMX exposure
+**Explicit instance administration (#4287, review 4503902861).** The twenty-three implemented administration writes—application/IPD monitoring, JMX exposure
 start/stop, screen-tab and screen-field layout changes, issue-type property set/delete, filter creation,
-future-filter default sharing, filter permission addition/removal and instance-wide sprint synchronization cleanup—use the separate connector class
+future-filter default sharing, filter permission addition/removal, project-category lifecycle changes and instance-wide sprint synchronization cleanup—use the separate connector class
 `connector-admin` and require `issue-tracker.admin`. Ordinary `issue-tracker.write` never admits
 these operations, including in Full access. They retain high risk and the same Workbench
 `connector-access` class, `internet` resource scope, supervised `connector-write` kind and existing
@@ -729,6 +729,13 @@ those native permissions nor permits a privileged credential fallback. Conversel
 with native project-creation permission does not acquire Keiko's instance-administration scope.
 This keeps the accepted project-setup workflow distinct from changing instance runtime or shared
 schema configuration, while enforcing both local task authority and the actual Jira permission.
+
+Project-category create/update/delete modify shared instance categorization and require explicit administration.
+Their native global-admin permission remains independent. Version-link metadata upserts retain ordinary
+write/medium risk and deletions ordinary write/high risk; native version/project edit and browse
+permissions still govern the actual request. Agile rank/estimation/Epic-removal retain ordinary
+write/high risk and check existing formal edit rules for every affected selected issue and anchor.
+Native partial207 is never an atomic no-effect refusal or an absolute rank proof.
 
 Board deletion/refined-velocity and selected sprint replacement/deletion/swap/unmap retain ordinary
 write scope and high risk. Selected unmap changes synchronization only; instance-wide unmap is an

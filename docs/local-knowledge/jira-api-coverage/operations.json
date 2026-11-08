@@ -1203,6 +1203,25 @@
         "packages/keiko-connectors/src/jira-managed-projects.test.ts"
       ]
     },
+    "jira.create-project-category": {
+      "identity": "POST /rest/api/2/projectCategory",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-project-category-create-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Explicit actor/name/description, existing bounded category collection checks exact native name collisions. Native global admin is independently required. The native201 supplies a lossless string-int64 ID; fresh same-ID readback confirms the desired strings. Missing ACK identity is never guessed from names. Existing authority, immutable receipts and durable journal remain authoritative. Regression sources are authored only; runtime availability and current-head qualification remain unknown.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-project-category-mutations.ts",
+        "packages/keiko-server/src/atlassian/jiraProjectCategoryMutationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-project-category-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraProjectCategoryMutationDescriptors.test.ts",
+        "tests/support/jira-project-category-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.create-screen-tab": {
       "identity": "POST /rest/api/2/screens/{screenId}/tabs",
       "effect": "write",
@@ -1740,6 +1759,25 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.delete-project-category": {
+      "identity": "DELETE /rest/api/2/projectCategory/{id}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-project-category-delete-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Explicit admin/high-risk action and unverified-deletion acceptance bind the exact category snapshot. One DELETE retains known ID and requested false presence. Selected404 and visible collection omission cannot prove every deletion/project-association effect; acknowledgement always remains unconfirmed. Existing authority, immutable receipts and durable journal remain authoritative. Regression sources are authored only; runtime availability and current-head qualification remain unknown.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-project-category-mutations.ts",
+        "packages/keiko-server/src/atlassian/jiraProjectCategoryMutationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-project-category-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraProjectCategoryMutationDescriptors.test.ts",
+        "tests/support/jira-project-category-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.delete-project-property": {
       "identity": "DELETE /rest/api/2/project/{projectIdOrKey}/properties/{propertyKey}",
       "effect": "write",
@@ -1924,6 +1962,48 @@
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"
       ]
     },
+    "jira.delete-version-remote-link": {
+      "identity": "DELETE /rest/api/2/version/{versionId}/remotelink/{globalId}",
+      "effect": "write",
+      "permissionPolicy": "version-remote-link-delete-and-absence",
+      "kind": "constrained-tool",
+      "constraints": "Exact reviewed existing globalId, complete typed values and actor/project/version bind before one DELETE. Only a complete independently readable same-version collection proving selected absence and unchanged siblings confirms deletion. Selected404/access loss never prove absence. Existing authority, immutable receipts and durable journal remain authoritative. Regression sources are authored only; runtime availability and current-head qualification remain unknown.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-version-link-mutations.ts",
+        "packages/keiko-connectors/src/jira-version-link-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-managed-remote-version-links.ts",
+        "packages/keiko-server/src/atlassian/jiraVersionLinkMutationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-version-link-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraVersionLinkMutationDescriptors.test.ts",
+        "tests/support/jira-version-link-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.delete-version-remote-links": {
+      "identity": "DELETE /rest/api/2/version/{versionId}/remotelink",
+      "effect": "write",
+      "permissionPolicy": "version-remote-links-delete-and-absence",
+      "kind": "constrained-tool",
+      "constraints": "Explicit all-links acceptance and complete reviewed exact global IDs/full values for one bound version. Native parent and complete collection must independently confirm an actual empty set. A complete receipt over16KiB refuses before effects within existing result budgets; no budget is widened. Existing authority, immutable receipts and durable journal remain authoritative. Regression sources are authored only; runtime availability and current-head qualification remain unknown.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-version-link-mutations.ts",
+        "packages/keiko-connectors/src/jira-version-link-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-managed-remote-version-links.ts",
+        "packages/keiko-server/src/atlassian/jiraVersionLinkMutationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-version-link-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraVersionLinkMutationDescriptors.test.ts",
+        "tests/support/jira-version-link-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.delete-worklog": {
       "identity": "DELETE /rest/api/2/issue/{issueIdOrKey}/worklog/{id}",
       "effect": "write",
@@ -2079,6 +2159,28 @@
       "testFiles": [
         "packages/keiko-connectors/src/jira-agile-mutations.test.ts",
         "packages/keiko-connectors/src/jira-agile-templates.test.ts"
+      ]
+    },
+    "jira.epic-remove-issues": {
+      "identity": "POST /rest/agile/1.0/epic/none/issue",
+      "effect": "write",
+      "permissionPolicy": "epic-removal-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Bind the actor, canonical issue IDs/keys and every reviewed native Epic relationship. Existing formal edit rules judge planned Epic Link null before one effect. Confirmation requires independently explicit null from native Agile relation and platform Epic Link for each selected issue. Missing relation evidence stays unavailable. Existing authority, immutable receipts and durable journal remain authoritative. Regression sources are authored only; runtime availability and current-head qualification remain unknown.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-agile-planning.ts",
+        "packages/keiko-connectors/src/jira-agile-planning-values.ts",
+        "packages/keiko-connectors/src/jira-agile-planning-observations.ts",
+        "packages/keiko-connectors/src/jira-agile-planning-admission.ts",
+        "packages/keiko-server/src/atlassian/jiraAgilePlanningDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-agile-planning.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgilePlanningDescriptors.test.ts",
+        "tests/support/jira-agile-planning-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
     "jira.epic-update": {
@@ -3778,6 +3880,50 @@
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"
       ]
     },
+    "jira.rank-epic": {
+      "identity": "PUT /rest/agile/1.0/epic/{epicIdOrKey}/rank",
+      "effect": "write",
+      "permissionPolicy": "rank-and-position-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Bind actor/board/native rank custom field, both native Epic identities and reviewed opaque ranks. Existing formal edit admission includes selected issue and anchor because native indexing may change either. Rank postvalue is unavailable, never fabricated. Native global absolute order is not independently exposed; acknowledgement always remains unconfirmed. Existing authority, immutable receipts and durable journal remain authoritative. Regression sources are authored only; runtime availability and current-head qualification remain unknown.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-agile-planning.ts",
+        "packages/keiko-connectors/src/jira-agile-planning-values.ts",
+        "packages/keiko-connectors/src/jira-agile-planning-observations.ts",
+        "packages/keiko-connectors/src/jira-agile-planning-admission.ts",
+        "packages/keiko-server/src/atlassian/jiraAgilePlanningDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-agile-planning.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgilePlanningDescriptors.test.ts",
+        "tests/support/jira-agile-planning-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.rank-issues": {
+      "identity": "PUT /rest/agile/1.0/issue/rank",
+      "effect": "write",
+      "permissionPolicy": "rank-and-position-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Bind canonical selected issue/anchor IDs/keys and reviewed opaque ranks under the exact board/rank field. Scope checks prove only the selected subset, not a board population. Native207 may partially mutate and never proves atomic refusal. One PUT, fresh identity/field observations, but absolute rank remains unconfirmed and unreplayed. Existing authority, immutable receipts and durable journal remain authoritative. Regression sources are authored only; runtime availability and current-head qualification remain unknown.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-agile-planning.ts",
+        "packages/keiko-connectors/src/jira-agile-planning-values.ts",
+        "packages/keiko-connectors/src/jira-agile-planning-observations.ts",
+        "packages/keiko-connectors/src/jira-agile-planning-admission.ts",
+        "packages/keiko-server/src/atlassian/jiraAgilePlanningDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-agile-planning.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgilePlanningDescriptors.test.ts",
+        "tests/support/jira-agile-planning-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.read-only-mode": {
       "identity": "GET /rest/api/2/readonly-mode",
       "effect": "read",
@@ -3934,7 +4080,7 @@
       "effect": "read",
       "permissionPolicy": "native-version-remote-links",
       "kind": "constrained-tool",
-      "constraints": "One required exact globalId query, complete bounded native links collection before local paging. selectedGlobalId is requested context, never a version identity derived from self/name.",
+      "constraints": "One required exact globalId query, complete bounded native links collection before local paging. selectedGlobalId is requested context, never a version identity derived from self/name. Native selected/payload globalId becomes review identity only with an exact matching native self resource path; missing/opaque identity is separately unavailable and never inferred from display names. Comparison-only proxy URLs supply no request target.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-remote-version-links.ts",
         "packages/keiko-server/src/atlassian/jiraRemoteVersionLinkDescriptors.ts"
@@ -4607,6 +4753,28 @@
         "packages/keiko-server/src/store/jiraMonitoringMigration.test.ts",
         "packages/keiko-server/src/store/jiraOperationMigration.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.set-issue-estimation": {
+      "identity": "PUT /rest/agile/1.0/issue/{issueIdOrKey}/estimation",
+      "effect": "write",
+      "permissionPolicy": "issue-estimation-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Bind actor/board/configured field/issue and exact observed expected value. Native decimal-string original-time input is minutes; confirmed receipt is seconds. Board-number and zero remain explicit. Null is reviewed observed absence only, not an undocumented clear request; omitted reads never become null. Existing formal rules judge changed fields and unavailable derived time values before effect; independent numeric native readback confirms. Existing authority, immutable receipts and durable journal remain authoritative. Regression sources are authored only; runtime availability and current-head qualification remain unknown.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-agile-planning.ts",
+        "packages/keiko-connectors/src/jira-agile-planning-values.ts",
+        "packages/keiko-connectors/src/jira-agile-planning-observations.ts",
+        "packages/keiko-connectors/src/jira-agile-planning-admission.ts",
+        "packages/keiko-server/src/atlassian/jiraAgilePlanningDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-agile-planning.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgilePlanningDescriptors.test.ts",
+        "tests/support/jira-agile-planning-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileOperationTransport.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
@@ -5417,6 +5585,25 @@
         "packages/keiko-connectors/src/jira-managed-projects.test.ts"
       ]
     },
+    "jira.update-project-category": {
+      "identity": "PUT /rest/api/2/projectCategory/{id}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-project-category-update-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Explicit admin/high-risk action matches the entire reviewed category ID/name/description before provided PUT fields override. Actual empty description is supported; missing/null target review metadata refuses rather than defaults. Fresh actor and exact-ID readback confirms metadata; true no-op emits no PUT. Existing authority, immutable receipts and durable journal remain authoritative. Regression sources are authored only; runtime availability and current-head qualification remain unknown.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-project-category-mutations.ts",
+        "packages/keiko-server/src/atlassian/jiraProjectCategoryMutationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-project-category-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraProjectCategoryMutationDescriptors.test.ts",
+        "tests/support/jira-project-category-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.update-remote-link": {
       "identity": "PUT /rest/api/2/issue/{issueIdOrKey}/remotelink/{linkId}",
       "effect": "write",
@@ -5530,6 +5717,48 @@
         "packages/keiko-connectors/src/jira-managed-issue-link-mutations.test.ts",
         "packages/keiko-connectors/src/jira-managed-remote-link-mutations.test.ts",
         "packages/keiko-server/src/atlassian/jiraLinkMutationDescriptors.test.ts"
+      ]
+    },
+    "jira.upsert-version-remote-link": {
+      "identity": "POST /rest/api/2/version/{versionId}/remotelink",
+      "effect": "write",
+      "permissionPolicy": "version-remote-link-upsert-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Exact actor/project/version metadata and complete reviewed typed link set bind before one collection POST. Raw native object globalId must equal the selected globalId; generated-ID mode is unsupported. Existing bounded typed inverse/projector preserves full native JSON. Fresh complete same-version set and unchanged siblings establish confirmation; no URI is followed. Existing authority, immutable receipts and durable journal remain authoritative. Regression sources are authored only; runtime availability and current-head qualification remain unknown.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-version-link-mutations.ts",
+        "packages/keiko-connectors/src/jira-version-link-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-managed-remote-version-links.ts",
+        "packages/keiko-server/src/atlassian/jiraVersionLinkMutationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-version-link-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraVersionLinkMutationDescriptors.test.ts",
+        "tests/support/jira-version-link-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.upsert-version-remote-link-by-global-id": {
+      "identity": "POST /rest/api/2/version/{versionId}/remotelink/{globalId}",
+      "effect": "write",
+      "permissionPolicy": "version-remote-link-upsert-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "One path-selected POST sends a complete raw bounded JSON value, including actual null/false/zero/empty containers. Fixed path selector and any payload globalId must agree. Complete reviewed and desired sets plus rebound actor/project/version control confirmation; native Location never retargets or invents identity. Existing authority, immutable receipts and durable journal remain authoritative. Regression sources are authored only; runtime availability and current-head qualification remain unknown.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-version-link-mutations.ts",
+        "packages/keiko-connectors/src/jira-version-link-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-managed-remote-version-links.ts",
+        "packages/keiko-server/src/atlassian/jiraVersionLinkMutationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-version-link-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraVersionLinkMutationDescriptors.test.ts",
+        "tests/support/jira-version-link-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
     "jira.user": {
@@ -5741,7 +5970,7 @@
       "effect": "read",
       "permissionPolicy": "native-version-remote-links",
       "kind": "constrained-tool",
-      "constraints": "One bound native version and safely addressable exact globalId. Complete typed JSON Pointer nodes, no raw JSON display or followed remote destinations; missing value is explicitly unavailable.",
+      "constraints": "One bound native version and safely addressable exact globalId. Complete typed JSON Pointer nodes, no raw JSON display or followed remote destinations; missing value is explicitly unavailable. Native selected/payload globalId becomes review identity only with an exact matching native self resource path; missing/opaque identity is separately unavailable and never inferred from display names. Comparison-only proxy URLs supply no request target.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-remote-version-links.ts",
         "packages/keiko-server/src/atlassian/jiraRemoteVersionLinkDescriptors.ts"
@@ -5757,7 +5986,7 @@
       "effect": "read",
       "permissionPolicy": "native-version-remote-links",
       "kind": "constrained-tool",
-      "constraints": "Independently bind the exact native version, then locally page the complete bounded links collection. Documented JSON-encoded link is decoded once into existing typed nodes; self references only constrain membership.",
+      "constraints": "Independently bind the exact native version, then locally page the complete bounded links collection. Documented JSON-encoded link is decoded once into existing typed nodes; self references only constrain membership. Native selected/payload globalId becomes review identity only with an exact matching native self resource path; missing/opaque identity is separately unavailable and never inferred from display names. Comparison-only proxy URLs supply no request target.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-remote-version-links.ts",
         "packages/keiko-server/src/atlassian/jiraRemoteVersionLinkDescriptors.ts"
@@ -6073,8 +6302,8 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "97efd2146cd1ccc3db2f15b47a48a20d2588082e226a26966a035bbfa8f6d95f",
-    "nativeOperationCount": 297
+    "sha256": "3ae6f185ee44207ea24284a3a14e0c565712357efb551bf4d472ae1e7e64d92f",
+    "nativeOperationCount": 308
   },
   "operations": [
     {
@@ -6898,10 +7127,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.epic-remove-issues"
+      ]
     },
     {
       "identity": "GET /rest/agile/1.0/epic/{epicIdOrKey}",
@@ -7076,10 +7307,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.rank-epic"
+      ]
     },
     {
       "identity": "PUT /rest/agile/1.0/issue/rank",
@@ -7110,10 +7343,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.rank-issues"
+      ]
     },
     {
       "identity": "GET /rest/agile/1.0/issue/{issueIdOrKey}",
@@ -7216,10 +7451,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.set-issue-estimation"
+      ]
     },
     {
       "identity": "POST /rest/agile/1.0/sprint",
@@ -16358,10 +16595,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.create-project-category"
+      ]
     },
     {
       "identity": "DELETE /rest/api/2/projectCategory/{id}",
@@ -16392,10 +16631,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.delete-project-category"
+      ]
     },
     {
       "identity": "GET /rest/api/2/projectCategory/{id}",
@@ -16462,10 +16703,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.update-project-category"
+      ]
     },
     {
       "identity": "GET /rest/api/2/projects/picker",
@@ -20214,10 +20457,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.delete-version-remote-links"
+      ]
     },
     {
       "identity": "GET /rest/api/2/version/{versionId}/remotelink",
@@ -20286,10 +20531,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.upsert-version-remote-link"
+      ]
     },
     {
       "identity": "DELETE /rest/api/2/version/{versionId}/remotelink/{globalId}",
@@ -20321,10 +20568,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.delete-version-remote-link"
+      ]
     },
     {
       "identity": "GET /rest/api/2/version/{versionId}/remotelink/{globalId}",
@@ -20393,10 +20642,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.upsert-version-remote-link-by-global-id"
+      ]
     },
     {
       "identity": "GET /rest/api/2/workflow",

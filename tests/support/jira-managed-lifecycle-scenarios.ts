@@ -3,6 +3,7 @@ import type { AtlassianHttpBodyRequest, AtlassianHttpBodyResult } from "@oschark
 import { LINK_MUTATION_FIXTURE_CASES, linkMutationTransportFixture } from "./jira-link-mutation-fixture.js";
 import { RELEASE_LIFECYCLE_FIXTURE_CASES, releaseLifecycleTransportFixture } from "./jira-release-lifecycle-fixture.js";
 import { configurationTransportController } from "./jira-managed-configuration-scenarios.js";
+import { planningTransportController } from "./jira-managed-planning-scenarios.js";
 
 type LifecycleMutation = (typeof RELEASE_LIFECYCLE_FIXTURE_CASES)[number]["tool"] | (typeof LINK_MUTATION_FIXTURE_CASES)[number]["tool"];
 const ACTOR = "synthetic-key";
@@ -72,6 +73,8 @@ interface Controller {
 }
 const API_ROOT = "/context/rest/api/2";
 function controller(operation: string | undefined): Controller | undefined {
+  const planning = planningTransportController(operation);
+  if (planning !== undefined) return planning;
   const configuration = configurationTransportController(operation);
   if (configuration !== undefined) return configuration;
   if (release.some((item) => item.tool === operation)) return releaseLifecycleTransportFixture(API_ROOT);
