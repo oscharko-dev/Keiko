@@ -4,15 +4,23 @@
 // other lane is active and it holds the restart lock; becoming active takes the same lock, so a lane
 // can never start using Jira while another one restarts it. Waiting lanes never block each other:
 // the first to take the lock renews, the others find the license renewed under the lock.
-import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { join } from "node:path";
+import { privateJson } from "../private-json.mjs";
 import { setTimeout as delay } from "node:timers/promises";
 
 const LANES = "lanes";
 const RESTART_LOCK = "license-restart.lock";
 const WAITING = "waiting";
 const ACTIVE = "active";
-const registrations = new Map();
 // A lock whose owner is not yet written is being taken; only an old one is abandoned.
 const UNOWNED_LOCK_GRACE_MS = 60_000;
 
@@ -38,28 +46,40 @@ function defaults(options) {
   return settings;
 }
 
+function readLane(path) {
+  if (!existsSync(path)) return undefined;
+  const text = readFileSync(path, "utf8").trim();
+  if (!text.startsWith("{")) return { state: text, references: 1 };
+  const record = JSON.parse(text);
+  if (
+    !Number.isSafeInteger(record?.references) ||
+    record.references < 1 ||
+    record.references > 1024 ||
+    (record.state !== ACTIVE && record.state !== WAITING)
+  )
+    throw new TypeError("Invalid lab lane record");
+  return record;
+}
 function writeState(directory, pid, state) {
-  writeFileSync(join(lanesDirectory(directory), String(pid)), `${state}\n`, { mode: 0o600 });
+  const path = join(lanesDirectory(directory), String(pid));
+  privateJson(path, { state, references: readLane(path)?.references ?? 1 });
 }
 
-/** Registers this process as a lane that does not use Jira yet, until it exits. */
+/** Nested owners retain their references in the same lane file; the final release removes it. */
 export function registerLane(directory, pid = process.pid) {
-  const key = join(resolve(directory), LANES, String(pid));
-  const count = registrations.get(key) ?? 0;
-  if (count === 0) writeState(directory, pid, WAITING);
-  registrations.set(key, count + 1);
+  const path = join(lanesDirectory(directory), String(pid));
+  const prior = readLane(path);
+  privateJson(path, { state: prior?.state ?? WAITING, references: (prior?.references ?? 0) + 1 });
   let released = false;
   const release = () => {
     if (released) return;
     released = true;
     process.off("exit", release);
-    const remaining = (registrations.get(key) ?? 1) - 1;
-    if (remaining > 0) {
-      registrations.set(key, remaining);
-      return;
-    }
-    registrations.delete(key);
-    rmSync(key, { force: true });
+    const current = readLane(path);
+    if (current === undefined) return;
+    if (current.references > 1)
+      privateJson(path, { ...current, references: current.references - 1 });
+    else rmSync(path, { force: true });
   };
   process.once("exit", release);
   return release;
@@ -68,7 +88,7 @@ export function registerLane(directory, pid = process.pid) {
 /** Only a lane that says it is waiting is waiting; anything else may be mid-turn on Jira. */
 function laneWaiting(path) {
   try {
-    return readFileSync(path, "utf8").trim() === WAITING;
+    return readLane(path)?.state === WAITING;
   } catch {
     return false;
   }

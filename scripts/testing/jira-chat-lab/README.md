@@ -335,12 +335,40 @@ The same preflight requires at least twelve hours of native PAT validity for eac
 seeded actor, renews a nearly
 expired fixture PAT with that actor's existing basic credentials, verifies the
 replacement by native identity and token readback, then retires only its predecessor.
-Private pending markers block replay after uncertain creation or retirement. Renewal
-occurs before Keiko binds the credential, never halfway through a turn.
+Creation, promotion and retirement hold the same exclusive lane lock as license
+renewal; any active lane delays them. The returned PAT is synchronized privately
+in `<actor>-token.next` before any readback, together with its native id and
+nonce-bound creation intent. `<actor>-token.json` binds the promoted raw file to
+its native id and digest; the pending marker records creation and retirement.
+
+Preflight reconciles these records automatically: a staged candidate is verified
+by native inventory, expiry and actor identity before promotion; interrupted
+retirement is retried only for the bound predecessor id. A lost creation response
+is compensated only when the nonce and prior-id inventory identify exactly one
+owned orphan, with native absence verified before a replacement POST. A missing
+pending marker is reconstructed from the complete private `.next` bundle. A
+marker alone never authorizes another creation. If no creation is observed, an
+existing credential may continue only while its native proof covers the requested
+window; otherwise preflight refuses with `creation-not-observed`.
+
+To run the same recovery explicitly, at an idle boundary:
+
+```sh
+node scripts/testing/jira-chat-lab/fixture-tokens.mjs /absolute/private/session actor 43200
+```
+
+A corrupt or ambiguous intent, or an old raw `.next` with no recoverable id
+binding, fails closed with a specific recovery reason. Preserve these files;
+reconcile the owned native token inventory before any manual repair. Never print
+token contents or remove a pending marker to replay a POST. Renewal completes
+before Keiko binds the credential, never halfway through a turn.
 
 New lab CA and server certificates last 365 days. `session.mjs start` renews existing
-TLS material with less than seven days remaining and recreates only the owned TLS
-front after renewal so the new certificates are served. The run preflight refuses
+TLS material with seven days or less remaining and recreates only the owned TLS
+front after renewal so the new certificates are served. A partial publication or
+mismatched key/certificate generation is refused and regenerated as a complete
+validated generation on the next start; symlink targets are refused before any
+write. The run preflight refuses
 a TLS interval shorter than its run window; restart the owned session at an idle
 boundary before retrying. Each retained product state has its own `memory/` directory
 via `KEIKO_MEMORY_DIR`; it never shares the user's ordinary Memory store.

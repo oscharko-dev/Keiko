@@ -18,17 +18,20 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   vi.clearAllMocks();
 });
-function tokenResponse(state, token, method, target) {
+function tokenResponse(state, token, method, target, body) {
   if (target === "/rest/pat/latest/tokens" && method === "GET")
     return { status: 200, value: structuredClone(state.tokens) };
   if (target === "/rest/pat/latest/tokens" && method === "POST") {
     if (state.failCreation) throw new TypeError("Synthetic lost response");
-    const next = token(2, state.replacementSeconds);
+    const next = { ...token(state.nextId++, state.replacementSeconds), name: body.name };
     state.tokens.push(next);
+    if (state.loseCreationResponse)
+      throw new TypeError("Synthetic committed lost creation response");
     return { status: 201, value: { ...next, rawToken: "synthetic-new-private-token" } };
   }
-  if (target === "/rest/pat/latest/tokens/1" && method === "DELETE") {
-    state.tokens = state.tokens.filter((row) => row.id !== 1);
+  if (target.startsWith("/rest/pat/latest/tokens/") && method === "DELETE") {
+    const id = Number(target.split("/").at(-1));
+    state.tokens = state.tokens.filter((row) => row.id !== id);
     if (state.failRetirement) throw new TypeError("Synthetic lost retirement response");
     return { status: 204 };
   }
@@ -55,10 +58,14 @@ function fixture(seconds = 60) {
     wrongIdentity: false,
     replacementSeconds: 86_400,
     failRetirement: false,
+    loseCreationResponse: false,
+    nextId: 2,
   };
-  native.mockImplementation(async (_session, method, target, auth) => {
+  native.mockImplementation(async (_session, method, target, auth, body) => {
     if (target.startsWith("/rest/pat/latest/tokens"))
-      return tokenResponse(state, token, method, target);
+      return tokenResponse(state, token, method, target, body);
+    if (target === "/rest/api/2/myself" && auth.includes("concurrent-replacement"))
+      return { status: 401 };
     if (target === "/rest/api/2/myself")
       return {
         status: 200,
@@ -124,12 +131,12 @@ it("withholds a replacement that does not outlast the requested window", async (
   expect(readFileSync(f.path, "utf8")).toBe("synthetic-old-private-token");
   expect(native.mock.calls.some((call) => call[1] === "DELETE")).toBe(false);
 });
-it("retains the verified replacement and blocks replay after uncertain predecessor retirement", async () => {
+it("recovers the verified replacement without replay after uncertain predecessor retirement", async () => {
   const f = fixture();
   f.state.failRetirement = true;
   await expect(ensureFixtureAdminToken(f.session)).rejects.toThrow(TypeError);
   expect(readFileSync(f.path, "utf8")).toBe("synthetic-new-private-token");
-  await expect(ensureFixtureAdminToken(f.session)).rejects.toThrow(TypeError);
+  await ensureFixtureAdminToken(f.session);
   expect(native.mock.calls.filter((call) => call[1] === "POST")).toHaveLength(1);
   expect(native.mock.calls.filter((call) => call[1] === "DELETE")).toHaveLength(1);
 });
@@ -164,5 +171,85 @@ it("refuses a credential changed by another preflight before dispatching renewal
     return result;
   });
   await expect(ensureFixtureAdminToken(f.session)).rejects.toThrow(TypeError);
+  expect(native.mock.calls.some((call) => call[1] !== "GET")).toBe(false);
+});
+
+it("persists the received candidate before identity checks and recovers it without another POST", async () => {
+  const f = fixture();
+  f.state.wrongIdentity = true;
+  await expect(ensureFixtureAdminToken(f.session)).rejects.toThrow(TypeError);
+  expect(readFileSync(`${f.path}.next`, "utf8")).toContain("synthetic-new-private-token");
+  f.state.wrongIdentity = false;
+  await ensureFixtureAdminToken(f.session);
+  expect(readFileSync(f.path, "utf8")).toBe("synthetic-new-private-token");
+  expect(native.mock.calls.filter((call) => call[1] === "POST")).toHaveLength(1);
+});
+
+it("reconstructs a lost pending file from the private candidate bundle without creating another PAT", async () => {
+  const f = fixture();
+  f.state.wrongIdentity = true;
+  await expect(ensureFixtureAdminToken(f.session)).rejects.toThrow(TypeError);
+  unlinkSync(join(f.session.directory, "secrets", "admin-pat-renewal.pending.json"));
+  f.state.wrongIdentity = false;
+  await ensureFixtureAdminToken(f.session);
+  expect(readFileSync(f.path, "utf8")).toBe("synthetic-new-private-token");
+  expect(native.mock.calls.filter((call) => call[1] === "POST")).toHaveLength(1);
+});
+
+it("compensates only the nonce-bound orphan after a committed lost creation response", async () => {
+  const f = fixture();
+  f.state.loseCreationResponse = true;
+  await expect(ensureFixtureAdminToken(f.session)).rejects.toThrow(TypeError);
+  f.state.loseCreationResponse = false;
+  await ensureFixtureAdminToken(f.session);
+  const deleted = native.mock.calls.filter((call) => call[1] === "DELETE").map((call) => call[2]);
+  expect(deleted).toEqual(["/rest/pat/latest/tokens/2", "/rest/pat/latest/tokens/1"]);
+  expect(f.state.tokens.map((row) => row.id)).toEqual([3]);
+  expect(native.mock.calls.filter((call) => call[1] === "POST")).toHaveLength(2);
+});
+
+it("waits for another active lane before creating or retiring a PAT", async () => {
+  const { ensureFixtureToken } = await import("../testing/jira-chat-lab/fixture-tokens.mjs");
+  const f = fixture();
+  const other = process.pid + 1;
+  const lanes = join(f.session.directory, "lanes");
+  mkdirSync(lanes);
+  writeFileSync(join(lanes, String(other)), "active\n", { mode: 0o600 });
+  const operation = ensureFixtureToken(f.session, "admin", 3600, {
+    pollMs: 1,
+    isAlive: () => true,
+    log: () => undefined,
+  });
+  try {
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 20));
+    expect(native.mock.calls.some((call) => call[1] !== "GET")).toBe(false);
+    expect(readFileSync(f.path, "utf8")).toBe("synthetic-old-private-token");
+  } finally {
+    writeFileSync(join(lanes, String(other)), "waiting\n", { mode: 0o600 });
+  }
+  await operation;
+  expect(native.mock.calls.filter((call) => call[1] === "POST")).toHaveLength(1);
+});
+
+it("rechecks the credential after acquiring active-lane admission", async () => {
+  const { ensureFixtureToken } = await import("../testing/jira-chat-lab/fixture-tokens.mjs");
+  const f = fixture(7200);
+  const lock = join(f.session.directory, "license-restart.lock");
+  mkdirSync(lock);
+  writeFileSync(join(lock, "owner"), String(process.pid + 1), { mode: 0o600 });
+  const operation = ensureFixtureToken(f.session, "admin", 3600, {
+    pollMs: 1,
+    isAlive: () => true,
+  });
+  try {
+    await vi.waitFor(() =>
+      expect(native.mock.calls.some((call) => call[2] === "/rest/api/2/myself")).toBe(true),
+    );
+    writeFileSync(f.path, "synthetic-new-private-token", { mode: 0o600 });
+    f.state.tokens = [{ ...f.state.tokens[0], id: 2 }];
+  } finally {
+    rmSync(lock, { recursive: true, force: true });
+  }
+  expect(await operation).toBe("Bearer synthetic-new-private-token");
   expect(native.mock.calls.some((call) => call[1] !== "GET")).toBe(false);
 });

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { privateJson } from "../testing/jira-chat-lab/private-json.mjs";
+import { privateJson, privateText } from "../testing/jira-chat-lab/private-json.mjs";
 
 const control = vi.hoisted(() => ({ fail: "", events: [] }));
 vi.mock("node:fs", async (importOriginal) => {
@@ -77,4 +77,12 @@ it("never reports a failed directory sync as durable success and retains complet
   control.fail = "directory-sync";
   expect(() => privateJson(path, { phase: "effect-observed" })).toThrow();
   expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ phase: "effect-observed" });
+});
+
+it("persists an exact private raw token with the same atomic publication contract", () => {
+  privateText(path, "synthetic-raw-token\n");
+  expect(readFileSync(path, "utf8")).toBe("synthetic-raw-token\n");
+  expect(statSync(path).mode & 0o777).toBe(0o600);
+  expect(() => privateText(path, {})).toThrow(TypeError);
+  expect(readFileSync(path, "utf8")).toBe("synthetic-raw-token\n");
 });
