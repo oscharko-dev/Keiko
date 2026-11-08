@@ -363,6 +363,34 @@ describe("explicit Markdown stays inert where wiki would activate it (#4291)", (
   });
 
   it.each([
+    "   > quote",
+    "   - item",
+    "_* mixed marker",
+    "```ts\nliteral\n```",
+    "~~~ts\nliteral\n~~~",
+    "999999999) item",
+    "\t1. item",
+    "    | cell |",
+    "\t| cell |",
+  ])("does not insert a paragraph hard break before a block prefix: %j", (next) => {
+    expect(project(`before  \n${next}`)?.split("\n")[0]).toBe("before  ");
+  });
+
+  it.each([
+    "    > quote",
+    "    - item",
+    "\t- item",
+    "``two backticks",
+    "~~two tildes",
+    "1234567890. item",
+    "1.no space",
+    "-no space",
+    "text | cell |",
+  ])("retains a paragraph hard break outside the block prefix grammar: %j", (next) => {
+    expect(project(`before  \n${next}`)?.split("\n")[0]).toBe("before\\\\");
+  });
+
+  it.each([
     ["| | B | C |", "| x | y | z |", "|| ||B||C||\n|x|y|z|"],
     ["| A | | C |", "| x | y | z |", "||A|| ||C||\n|x|y|z|"],
     ["| A | B | |", "| x | y | z |", "||A||B|| ||\n|x|y|z|"],

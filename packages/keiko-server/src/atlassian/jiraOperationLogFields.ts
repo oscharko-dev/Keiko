@@ -23,10 +23,16 @@ const OTHER_ACTIONS = [
 type ActionClass = "jira-read" | "jira-write" | (typeof OTHER_ACTIONS)[number];
 
 /** A legacy action cannot identify a tool when multiple canonical tools share its policy row. */
-export function jiraToolForAction(actionType: AtlassianConnectorActionType):
-  JiraManagedReadToolName | JiraMutationOperation | undefined {
+export function jiraToolForAction(
+  actionType: AtlassianConnectorActionType,
+): JiraManagedReadToolName | JiraMutationOperation | undefined {
   const matches = TOOLS.filter((tool) => JIRA_MANAGED_ACTION_TYPES[tool] === actionType);
   return matches.length === 1 ? matches[0] : undefined;
+}
+
+function actionClassFor(actionType: AtlassianConnectorActionType): ActionClass | undefined {
+  if (ACTIONS.has(actionType)) return READS.has(actionType) ? "jira-read" : "jira-write";
+  return OTHER_ACTIONS.find((action) => action === actionType);
 }
 
 /** A bounded log taxonomy only; the policy and executor retain the original action identity. */
@@ -34,11 +40,7 @@ export function jiraActionLogFields(actionType: AtlassianConnectorActionType): {
   readonly actionType: ActionClass;
   readonly actionTypeDigest: string;
 } {
-  const kind = ACTIONS.has(actionType)
-    ? READS.has(actionType)
-      ? "jira-read"
-      : "jira-write"
-    : OTHER_ACTIONS.find((action) => action === actionType);
+  const kind = actionClassFor(actionType);
   if (kind === undefined) throw new TypeError("Unsupported connector action log identity");
   return { actionType: kind, actionTypeDigest: sha256Hex(actionType) };
 }

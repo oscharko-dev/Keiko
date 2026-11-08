@@ -62,6 +62,11 @@ function unavailable(): CatalogJsonObject {
   return { outcome: "rejected", reason: "field-validation", requirementRefusal: "unavailable" };
 }
 type SourceRefusal = "source-changed" | "unavailable";
+function traceOperation(operation: SourceOperation): "draft" | "edit" | "create" {
+  if (operation === "jira.draft") return "draft";
+  if (operation === "jira.edit") return "edit";
+  return "create";
+}
 function sourceRefusal(
   options: SourcePreparationOptions,
   operation: SourceOperation,
@@ -69,7 +74,7 @@ function sourceRefusal(
   count: number,
 ): CatalogJsonObject {
   logRequirementTrace(options.correlationId, {
-    operation: operation === "jira.draft" ? "draft" : operation === "jira.edit" ? "edit" : "create",
+    operation: traceOperation(operation),
     tracedItemCount: count,
     refusedItemCount: count,
     referenceProblemCount: 0,

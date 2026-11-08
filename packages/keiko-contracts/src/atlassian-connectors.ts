@@ -143,7 +143,9 @@ type JiraEntityPropertyAction = JiraEntityPropertyMutation extends `jira.${infer
 function jiraPropertyAction(name: JiraEntityPropertyMutation): JiraEntityPropertyAction {
   return name.slice(5) as JiraEntityPropertyAction;
 }
-const JIRA_PROPERTY_ACTIONS = Object.freeze(JIRA_ENTITY_PROPERTY_MUTATIONS.map(jiraPropertyAction));
+const JIRA_PROPERTY_ACTIONS = Object.freeze(
+  JIRA_ENTITY_PROPERTY_MUTATIONS.map((name) => jiraPropertyAction(name)),
+);
 const JIRA_SAVED_ADMIN_ACTIONS = Object.freeze([
   "create-filter",
   "set-filter-share-scope",
@@ -173,7 +175,9 @@ function relationshipOrReleaseAction(
   return name.slice(5) as JiraRelationshipOrReleaseAction;
 }
 const JIRA_RELATIONSHIP_RELEASE_ACTIONS = Object.freeze(
-  [...JIRA_LINK_MUTATIONS, ...JIRA_RELEASE_LIFECYCLE_MUTATIONS].map(relationshipOrReleaseAction),
+  [...JIRA_LINK_MUTATIONS, ...JIRA_RELEASE_LIFECYCLE_MUTATIONS].map((name) =>
+    relationshipOrReleaseAction(name),
+  ),
 );
 
 type JiraConfigurationMutation =
@@ -189,7 +193,7 @@ const JIRA_CONFIGURATION_ACTIONS = Object.freeze(
     ...JIRA_SCREEN_CONFIGURATION_MUTATIONS,
     ...JIRA_BOARD_CONFIGURATION_MUTATIONS,
     ...JIRA_SPRINT_LIFECYCLE_MUTATIONS,
-  ].map(configurationAction),
+  ].map((name) => configurationAction(name)),
 );
 const JIRA_CONFIGURATION_ADMIN_ACTIONS = Object.freeze([
   "add-default-screen-field",
@@ -215,7 +219,7 @@ const JIRA_PLANNING_VERSION_CATEGORY_ACTIONS = Object.freeze(
     ...JIRA_AGILE_PLANNING_MUTATIONS,
     ...JIRA_VERSION_REMOTE_LINK_MUTATIONS,
     ...JIRA_PROJECT_CATEGORY_MUTATIONS,
-  ].map(planningVersionOrCategoryAction),
+  ].map((name) => planningVersionOrCategoryAction(name)),
 );
 const JIRA_PROJECT_CATEGORY_ACTIONS = Object.freeze([
   "create-project-category",
@@ -233,7 +237,9 @@ function accessConfigurationAction(
   return name.slice(5) as JiraAccessConfigurationAction;
 }
 const JIRA_ACCESS_CONFIGURATION_ACTIONS = Object.freeze(
-  [...JIRA_PERMISSION_SCHEME_MUTATIONS, ...JIRA_ROLE_MUTATIONS].map(accessConfigurationAction),
+  [...JIRA_PERMISSION_SCHEME_MUTATIONS, ...JIRA_ROLE_MUTATIONS].map((name) =>
+    accessConfigurationAction(name),
+  ),
 );
 
 type JiraDirectorySchemaOrMaintenanceMutation =
@@ -255,9 +261,11 @@ const JIRA_DIRECTORY_SCHEMA_MAINTENANCE_ACTIONS = Object.freeze(
     ...JIRA_MAINTENANCE_MUTATIONS,
     ...JIRA_SCHEMA_MUTATIONS,
     ...JIRA_DIRECTORY_ACCESS_MUTATIONS,
-  ].map(directorySchemaOrMaintenanceAction),
+  ].map((name) => directorySchemaOrMaintenanceAction(name)),
 );
-const JIRA_ISSUE_ACTIONS = Object.freeze(JIRA_ISSUE_ACTION_MUTATIONS.map(issueAction));
+const JIRA_ISSUE_ACTIONS = Object.freeze(
+  JIRA_ISSUE_ACTION_MUTATIONS.map((name) => issueAction(name)),
+);
 
 type JiraSchemeRuntimeOrEmailMutation =
   | JiraOptionSchemeMutation
@@ -277,7 +285,7 @@ const JIRA_SCHEME_RUNTIME_EMAIL_ACTIONS = Object.freeze(
     ...JIRA_WORKFLOW_SCHEME_MUTATIONS,
     ...JIRA_INSTANCE_SETTING_MUTATIONS,
     ...JIRA_EMAIL_TEMPLATE_MUTATIONS,
-  ].map(schemeRuntimeOrEmailAction),
+  ].map((name) => schemeRuntimeOrEmailAction(name)),
 );
 
 // ─── Schema version ───────────────────────────────────────────────────────────
@@ -1077,20 +1085,11 @@ export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchConnectorScope>
 > = Object.freeze({
   ...jiraActionValues(ATLASSIAN_CONNECTOR_ACTION_TYPES, (action): CodingWorkbenchConnectorScope => {
-    const provider =
-      ATLASSIAN_CONNECTOR_ACTION_PROVIDER[action] === "jira" ? "issue-tracker" : "knowledge-base";
     const actionClass = ATLASSIAN_CONNECTOR_ACTION_CLASS[action];
-    const access =
-      actionClass === "connector-admin"
-        ? "admin"
-        : actionClass === "connector-write"
-          ? "write"
-          : "read";
-    return provider === "knowledge-base"
-      ? actionClass === "connector-access"
-        ? "knowledge-base.read"
-        : "knowledge-base.write"
-      : `issue-tracker.${access}`;
+    if (ATLASSIAN_CONNECTOR_ACTION_PROVIDER[action] !== "jira")
+      return actionClass === "connector-access" ? "knowledge-base.read" : "knowledge-base.write";
+    if (actionClass === "connector-admin") return "issue-tracker.admin";
+    return actionClass === "connector-write" ? "issue-tracker.write" : "issue-tracker.read";
   }),
 } as const satisfies Readonly<Record<AtlassianConnectorActionType, CodingWorkbenchConnectorScope>>);
 

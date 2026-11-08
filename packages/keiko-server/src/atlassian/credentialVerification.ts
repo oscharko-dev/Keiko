@@ -17,6 +17,14 @@ interface CredentialProbeResult {
   readonly compatibility?: JiraDataCenterCompatibilityFacts;
 }
 
+function probeCompatibility(
+  metadata: AtlassianCredentialMetadata,
+  result: CredentialProbeResult,
+): "unverified" | "verified" | undefined {
+  if (metadata.deployment !== "data-center") return undefined;
+  return result.compatibility === undefined ? "unverified" : "verified";
+}
+
 async function probeCredential(
   deps: AtlassianConnectorCredentialDeps,
   metadata: AtlassianCredentialMetadata,
@@ -75,11 +83,7 @@ export async function verifyStoredCredential(
       result.status,
       undefined,
       "verify",
-      metadata.deployment === "data-center"
-        ? result.compatibility === undefined
-          ? "unverified"
-          : "verified"
-        : undefined,
+      probeCompatibility(metadata, result),
     );
     return result.status;
   }

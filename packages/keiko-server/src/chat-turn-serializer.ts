@@ -105,8 +105,8 @@ export function createChatTurnSerializer(): ChatTurnSerializer {
   };
   return {
     runExclusive,
-    interruptGenerations: (chatId, keepRunning = false, reason): number =>
-      interruptGenerations(generations.get(chatId), keepRunning, reason),
+    interruptGenerations: (chatId, keepRunning, reason): number =>
+      interruptGenerations(generations.get(chatId), keepRunning ?? false, reason),
     hasGenerations: (chatId): boolean => activeGenerations(generations.get(chatId)).length > 0,
   };
 }

@@ -45,8 +45,14 @@ export type AttachmentContentVerdict =
   | { readonly ok: false; readonly refusal: "unscannable" | "contains-credential" };
 
 const ALLOWED = { ok: true } as const satisfies AttachmentContentVerdict;
-const UNSCANNABLE = { ok: false, refusal: "unscannable" } as const satisfies AttachmentContentVerdict;
-const CREDENTIAL = { ok: false, refusal: "contains-credential" } as const satisfies AttachmentContentVerdict;
+const UNSCANNABLE = {
+  ok: false,
+  refusal: "unscannable",
+} as const satisfies AttachmentContentVerdict;
+const CREDENTIAL = {
+  ok: false,
+  refusal: "contains-credential",
+} as const satisfies AttachmentContentVerdict;
 
 // A literal shorter than this is an ordinary word, not a secret the redaction layer would mask.
 const MIN_SECRET_LITERAL_BYTES = 8;
@@ -302,31 +308,62 @@ function packagePartVerdict(
   if (text !== undefined) return textHoldsCredential(text, secrets) ? CREDENTIAL : ALLOWED;
   return imageVerdict(part, secrets, budget) ?? UNSCANNABLE;
 }
+interface EmailTemplateScanStop {
+  readonly ok: false;
+  readonly refusal: "cancelled" | "bounds-exceeded";
+}
+type EmailTemplateScanVerdict = AttachmentContentVerdict | EmailTemplateScanStop;
+interface EmailTemplateScan {
+  readonly secrets: readonly string[];
+  readonly budget: InflateBudget;
+  readonly stopped: () => EmailTemplateScanStop | undefined;
+}
+
+async function scanNextEmailTemplatePart(
+  parts: Iterator<Uint8Array>,
+  scan: EmailTemplateScan,
+): Promise<EmailTemplateScanVerdict> {
+  const part = parts.next();
+  if (part.done) return scan.stopped() ?? ALLOWED;
+  // Yield between complete parts; splitting markup or a credential token would weaken scanning.
+  await yieldToEventLoop();
+  const before = scan.stopped();
+  if (before !== undefined) return before;
+  if (containsLiteral(part.value, scan.secrets)) return CREDENTIAL;
+  const verdict = packagePartVerdict(part.value, scan.secrets, scan.budget);
+  const after = scan.stopped();
+  if (after !== undefined) return after;
+  if (!verdict.ok) return verdict;
+  return scanNextEmailTemplatePart(parts, scan);
+}
+
 /** Closed Jira email-template purpose: the caller has already admitted every strict ZIP entry.
  * Reuse the same raw-container/part credential floor without admitting generic ZIP attachments. */
 export async function admitJiraEmailTemplateParts(
   bytes: Uint8Array,
   parts: ReadonlyMap<string, Uint8Array>,
   secrets: readonly string[],
-  options: { readonly deadlineAt: number; readonly now: () => number; readonly signal?: AbortSignal },
-): Promise<AttachmentContentVerdict | { readonly ok: false; readonly refusal: "cancelled" | "bounds-exceeded" }> {
-  const stopped = (): { readonly ok: false; readonly refusal: "cancelled" | "bounds-exceeded" } | undefined => {
+  options: {
+    readonly deadlineAt: number;
+    readonly now: () => number;
+    readonly signal?: AbortSignal;
+  },
+): Promise<EmailTemplateScanVerdict> {
+  const stopped = (): EmailTemplateScanStop | undefined => {
     if (options.signal?.aborted) return { ok: false, refusal: "cancelled" };
-    return options.now() >= options.deadlineAt ? { ok: false, refusal: "bounds-exceeded" } : undefined;
+    return options.now() >= options.deadlineAt
+      ? { ok: false, refusal: "bounds-exceeded" }
+      : undefined;
   };
-  let refused = stopped(); if (refused !== undefined) return refused;
-  if (containsLiteral(bytes, secrets) || textHoldsCredential(latin1Of(bytes), secrets)) return CREDENTIAL;
-  const budget: InflateBudget = { remaining: INFLATE_MAX_BYTES };
-  for (const part of parts.values()) {
-    // Yield between complete parts; splitting markup or a credential token would weaken scanning.
-    await yieldToEventLoop();
-    refused = stopped(); if (refused !== undefined) return refused;
-    if (containsLiteral(part, secrets)) return CREDENTIAL;
-    const verdict = packagePartVerdict(part, secrets, budget);
-    refused = stopped(); if (refused !== undefined) return refused;
-    if (!verdict.ok) return verdict;
-  }
-  return stopped() ?? ALLOWED;
+  const refused = stopped();
+  if (refused !== undefined) return refused;
+  if (containsLiteral(bytes, secrets) || textHoldsCredential(latin1Of(bytes), secrets))
+    return CREDENTIAL;
+  return scanNextEmailTemplatePart(parts.values(), {
+    secrets,
+    budget: { remaining: INFLATE_MAX_BYTES },
+    stopped,
+  });
 }
 
 /** Every part of an OOXML package, not only the parts the text extractor reads. */
@@ -524,15 +561,24 @@ export async function admitAttachmentContent(input: {
   return textHoldsCredential(text, secrets) ? CREDENTIAL : ALLOWED;
 }
 
+function avatarMimeType(bytes: Uint8Array): "image/png" | "image/jpeg" | undefined {
+  if (startsWith(bytes, PNG)) return "image/png";
+  if (startsWith(bytes, JPEG)) return "image/jpeg";
+  return undefined;
+}
+
 /** The fixed avatar port accepts only PNG/JPEG after the existing full content admission.
  * Signature recognition alone never grants egress or implies valid decoded pixel content. */
 export async function admitJiraAvatarImage(
   input: Parameters<typeof admitAttachmentContent>[0],
-): Promise<Exclude<AttachmentContentVerdict, { readonly ok: true }> | {
-  readonly ok: true;
-  readonly mimeType: "image/png" | "image/jpeg";
-}> {
-  const mimeType = startsWith(input.bytes, PNG) ? "image/png" : startsWith(input.bytes, JPEG) ? "image/jpeg" : undefined;
+): Promise<
+  | Exclude<AttachmentContentVerdict, { readonly ok: true }>
+  | {
+      readonly ok: true;
+      readonly mimeType: "image/png" | "image/jpeg";
+    }
+> {
+  const mimeType = avatarMimeType(input.bytes);
   if (mimeType === undefined) return UNSCANNABLE;
   const admitted = await admitAttachmentContent(input);
   if (!admitted.ok) return admitted;

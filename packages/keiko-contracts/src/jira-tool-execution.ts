@@ -30,7 +30,8 @@ export const JIRA_AVATAR_UPLOAD_MUTATIONS = Object.freeze([
 ] as const satisfies readonly JiraAvatarMutation[]);
 export type JiraAvatarUploadMutation = (typeof JIRA_AVATAR_UPLOAD_MUTATIONS)[number];
 export function isJiraAvatarUploadOperation(name: string): name is JiraAvatarUploadMutation {
-  return JIRA_AVATAR_UPLOAD_MUTATIONS.some((operation) => operation === name);
+  const operations: readonly string[] = JIRA_AVATAR_UPLOAD_MUTATIONS;
+  return operations.includes(name);
 }
 export const JIRA_IDENTITY_MUTATIONS = Object.freeze([
   "jira.create-user",
@@ -199,7 +200,8 @@ export type JiraBoardConfigurationMutation = (typeof JIRA_BOARD_CONFIGURATION_MU
 export function isJiraBoardConfigurationMutation(
   name: string,
 ): name is JiraBoardConfigurationMutation {
-  return JIRA_BOARD_CONFIGURATION_MUTATIONS.some((operation) => operation === name);
+  const operations: readonly string[] = JIRA_BOARD_CONFIGURATION_MUTATIONS;
+  return operations.includes(name);
 }
 export const JIRA_SPRINT_LIFECYCLE_MUTATIONS = Object.freeze([
   "jira.replace-sprint",
@@ -301,7 +303,8 @@ export const JIRA_PROJECT_CATEGORY_MUTATIONS = Object.freeze([
 ] as const);
 export type JiraProjectCategoryMutation = (typeof JIRA_PROJECT_CATEGORY_MUTATIONS)[number];
 export function isJiraProjectCategoryMutation(name: string): name is JiraProjectCategoryMutation {
-  return JIRA_PROJECT_CATEGORY_MUTATIONS.some((operation) => operation === name);
+  const operations: readonly string[] = JIRA_PROJECT_CATEGORY_MUTATIONS;
+  return operations.includes(name);
 }
 
 export const JIRA_ANONYMIZATION_UNLOCK_MUTATIONS = Object.freeze([
@@ -795,7 +798,7 @@ function detailFieldErrors(value: unknown): readonly JiraMutationFieldError[] {
 function detailMessages(value: unknown): readonly string[] {
   if (!Array.isArray(value)) return [];
   return (value as unknown[])
-    .map(detailText)
+    .map((entry) => detailText(entry))
     .filter((text): text is string => text !== undefined)
     .slice(0, JIRA_MUTATION_DETAIL_LIMITS.messages);
 }
@@ -861,7 +864,9 @@ export function sanitizeJiraMutationLinkAccount(
   const listed: unknown = Reflect.get(value, "missing");
   if (!linkCount(requested) || !linkCount(created) || created > requested) return undefined;
   if (typeof unconfirmed !== "boolean" || !Array.isArray(listed)) return undefined;
-  const missing: (JiraMutationLinkRef | undefined)[] = (listed as unknown[]).map(linkRef);
+  const missing: (JiraMutationLinkRef | undefined)[] = (listed as unknown[]).map((entry) =>
+    linkRef(entry),
+  );
   if (missing.length > requested) return undefined;
   const refs = missing.filter((link): link is JiraMutationLinkRef => link !== undefined);
   return refs.length === missing.length

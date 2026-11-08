@@ -161,11 +161,15 @@ function validActionFields(action: CatalogJsonObject): boolean {
     /^[a-f0-9]{64}$/u.test(action.argumentsDigest)
   );
 }
+function actionBindingKeys(bound: boolean, action: CatalogJsonObject): string {
+  if (!bound) return "actionId,argumentsDigest,idempotencyKey,tool";
+  const humanInput = action.humanInputRevision === undefined ? "" : "humanInputRevision,";
+  const source = action.sourceDigest === undefined ? "" : "sourceDigest,";
+  return `actionId,argumentsDigest,${humanInput}idempotencyKey,operationBinding,${source}tool`;
+}
 function validActionBinding(tool: string, action: CatalogJsonObject): boolean {
   const bound = jiraOperationForTool(tool) !== undefined;
-  const keys = bound
-    ? `actionId,argumentsDigest,${action.humanInputRevision === undefined ? "" : "humanInputRevision,"}idempotencyKey,operationBinding,${action.sourceDigest === undefined ? "" : "sourceDigest,"}tool`
-    : "actionId,argumentsDigest,idempotencyKey,tool";
+  const keys = actionBindingKeys(bound, action);
   return (
     Object.keys(action).sort(compareStrings).join() === keys &&
     (!bound || isCurrentJiraOperationBinding(tool, action.operationBinding)) &&

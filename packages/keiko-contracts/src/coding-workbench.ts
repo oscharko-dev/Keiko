@@ -87,9 +87,10 @@ export const CODING_WORKBENCH_CONNECTOR_SCOPES: readonly CodingWorkbenchConnecto
 export function isWriteCapableCodingConnectorScope(
   value: unknown,
 ): value is CodingWorkbenchConnectorScope {
+  const scopes: readonly string[] = CODING_WORKBENCH_CONNECTOR_SCOPES;
   return (
     typeof value === "string" &&
-    CODING_WORKBENCH_CONNECTOR_SCOPES.some((scope) => scope === value) &&
+    scopes.includes(value) &&
     (value.endsWith(".write") || value === "issue-tracker.admin")
   );
 }

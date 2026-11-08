@@ -378,6 +378,14 @@ function validResultBinding(value: Record<string, unknown>): boolean {
     (object(value.resultBinding) && exact(value.resultBinding, ["descriptor", "projectionDigest"]))
   );
 }
+function validBoundResult(value: Record<string, unknown>): boolean {
+  if (value.result === undefined) return value.resultBinding === undefined;
+  validateToolResultEnvelope(
+    value.result,
+    value.resultBinding as ToolResultValidationBinding | undefined,
+  );
+  return true;
+}
 function validExchange(
   value: unknown,
   identity: TranscriptIdentity | undefined,
@@ -404,12 +412,7 @@ function validExchange(
   if (value.humanInput !== undefined && !validHumanInput(value.humanInput, value.call))
     return false;
   if (!validResultBinding(value)) return false;
-  if (value.result !== undefined)
-    validateToolResultEnvelope(
-      value.result,
-      value.resultBinding as ToolResultValidationBinding | undefined,
-    );
-  else if (value.resultBinding !== undefined) return false;
+  if (!validBoundResult(value)) return false;
   if (value.draftProgress !== undefined) validateDraftProgress(value as unknown as StoredExchange);
   return validBatchProgress(value, value.call);
 }
@@ -656,47 +659,56 @@ function applyProgress(
     ),
   };
 }
+function applyCaptured(
+  current: StoredTranscript,
+  update: Extract<ChatToolTranscriptUpdate, { kind: "captured" }>,
+): StoredTranscript {
+  const existing = current.exchanges.find((exchange) => exchange.call.id === update.call.id);
+  if (existing !== undefined && existing.nativeArgumentsDigest !== update.nativeArgumentsDigest)
+    throw invalidRequest("Native tool arguments conflict.");
+  const started = applyExchange(current, {
+    kind: "started",
+    call: update.call,
+    ...(update.operationBinding === undefined ? {} : { operationBinding: update.operationBinding }),
+    ...(update.nativeArgumentsDigest === undefined
+      ? {}
+      : { nativeArgumentsDigest: update.nativeArgumentsDigest }),
+  });
+  const captured = {
+    ...started,
+    exchanges: started.exchanges.map((exchange) =>
+      exchange.call.id === update.call.id && update.nativeArgumentsDigest !== undefined
+        ? { ...exchange, nativeArgumentsDigest: update.nativeArgumentsDigest }
+        : exchange,
+    ),
+  };
+  return applyExchange(captured, {
+    kind: "settled",
+    callId: update.call.id,
+    result: update.result,
+    binding: update.binding,
+    ...(update.mutationOutcome === undefined ? {} : { mutationOutcome: update.mutationOutcome }),
+  });
+}
 function applyUpdate(
   current: StoredTranscript,
   update: ChatToolTranscriptUpdate,
   chatId: string,
   messageId: string,
 ): StoredTranscript {
-  if (update.kind === "captured") {
-    const existing = current.exchanges.find((exchange) => exchange.call.id === update.call.id);
-    if (existing !== undefined && existing.nativeArgumentsDigest !== update.nativeArgumentsDigest)
-      throw invalidRequest("Native tool arguments conflict.");
-    const started = applyExchange(current, {
-      kind: "started",
-      call: update.call,
-      ...(update.operationBinding === undefined
-        ? {}
-        : { operationBinding: update.operationBinding }),
-      ...(update.nativeArgumentsDigest === undefined
-        ? {}
-        : { nativeArgumentsDigest: update.nativeArgumentsDigest }),
-    });
-    const captured = {
-      ...started,
-      exchanges: started.exchanges.map((exchange) =>
-        exchange.call.id === update.call.id && update.nativeArgumentsDigest !== undefined
-          ? { ...exchange, nativeArgumentsDigest: update.nativeArgumentsDigest }
-          : exchange,
-      ),
-    };
-    return applyExchange(captured, {
-      kind: "settled",
-      callId: update.call.id,
-      result: update.result,
-      binding: update.binding,
-      ...(update.mutationOutcome === undefined ? {} : { mutationOutcome: update.mutationOutcome }),
-    });
-  }
+  if (update.kind === "captured") return applyCaptured(current, update);
   if (update.kind === "human-input") return applyHumanInput(current, update);
   if (update.kind === "write-prepared") return applyPrepared(current, update);
   if (update.kind === "progress") return applyProgress(current, update);
   if (update.kind === "write-approval") return applyApproval(current, update, chatId, messageId);
   if (update.kind !== "read-consent") return applyExchange(current, update);
+  return applyReadConsent(current, update, chatId);
+}
+function applyReadConsent(
+  current: StoredTranscript,
+  update: Extract<ChatToolTranscriptUpdate, { kind: "read-consent" }>,
+  chatId: string,
+): StoredTranscript {
   if (update.grant.chatId !== chatId) throw invalidRequest("Tool consent Chat mismatch.");
   const grants = current.readGrants ?? (current.readGrant === undefined ? [] : [current.readGrant]);
   const readGrants = grants.some((grant) => grant.kind === update.grant.kind)
@@ -714,12 +726,7 @@ function validHumanInput(
 
 /** An immutable request can advance once to ready, then only to a terminal state. */
 function humanInputTransition(previous: JiraHumanInputView, next: JiraHumanInputView): boolean {
-  if (
-    previous.requestId !== next.requestId ||
-    previous.purpose !== next.purpose ||
-    previous.expiresAt !== next.expiresAt
-  )
-    return false;
+  if (!sameHumanInputRequest(previous, next)) return false;
   if (canonicalise(previous) === canonicalise(next)) return true;
   if (previous.state === "awaiting-input")
     return next.state === "ready" || next.state === "cancelled" || next.state === "expired";
@@ -727,6 +734,13 @@ function humanInputTransition(previous: JiraHumanInputView, next: JiraHumanInput
     previous.state === "ready" &&
     previous.revision === next.revision &&
     (next.state === "consumed" || next.state === "cancelled" || next.state === "expired")
+  );
+}
+function sameHumanInputRequest(previous: JiraHumanInputView, next: JiraHumanInputView): boolean {
+  return (
+    previous.requestId === next.requestId &&
+    previous.purpose === next.purpose &&
+    previous.expiresAt === next.expiresAt
   );
 }
 
@@ -943,56 +957,70 @@ function redactCall(
   return canonicalCall(call);
 }
 
+function redactStarted(
+  update: Extract<ChatToolTranscriptUpdate, { kind: "started" }>,
+  redact: (value: string) => string,
+): ChatToolTranscriptUpdate {
+  if (
+    update.nativeArgumentsDigest !== undefined &&
+    (!update.call.id.startsWith("mcp-") ||
+      update.operationBinding === undefined ||
+      update.nativeArgumentsDigest !== sha256Hex(canonicalise(update.call.arguments)))
+  )
+    throw invalidRequest("Invalid pending native tool identity.");
+  return { ...update, call: redactCall(update, redact) };
+}
 function redactUpdate(
   update: ChatToolTranscriptUpdate,
   redact: (value: string) => string,
 ): ChatToolTranscriptUpdate {
-  if (update.kind === "started") {
-    if (
-      update.nativeArgumentsDigest !== undefined &&
-      (!update.call.id.startsWith("mcp-") ||
-        update.operationBinding === undefined ||
-        update.nativeArgumentsDigest !== sha256Hex(canonicalise(update.call.arguments)))
-    )
-      throw invalidRequest("Invalid pending native tool identity.");
-    return { ...update, call: redactCall(update, redact) };
-  }
+  if (update.kind === "started") return redactStarted(update, redact);
   if (update.kind === "captured") return redactCaptured(update, redact);
   if (update.kind === "settled") return redactSettlement(update, redact);
-  if (update.kind === "human-input") {
-    if (!isJiraHumanInputView(update.view))
-      throw invalidRequest("Invalid private input projection.");
-    // Copy only the closed public DTO; no submission value may survive via an extra property.
-    return {
-      kind: "human-input",
-      callId: update.callId,
-      view: {
-        ...update.view,
-        fields: [...update.view.fields],
-        optionalFields: [...update.view.optionalFields],
-      },
-    };
-  }
+  if (update.kind === "human-input") return redactHumanInput(update);
   if (update.kind === "write-prepared") {
     if (!validSourceDigest(update.sourceDigest))
       throw invalidRequest("Invalid tool source snapshot.");
     return update;
   }
-  if (update.kind === "progress") {
-    if (!isChatToolBatchProgress(update.batchProgress))
-      throw invalidRequest("Invalid tool progress projection.");
-    return { ...update, batchProgress: { ...update.batchProgress } };
-  }
+  if (update.kind === "progress") return redactProgress(update);
   if (update.kind === "write-approval") {
-    if (
-      !isChatToolWriteApprovalView(update.approval) ||
-      (update.operationBinding !== undefined && !isJiraOperationBinding(update.operationBinding))
-    )
-      throw invalidRequest("Invalid tool approval projection.");
-    return update;
+    return redactApproval(update);
   }
   if (!isChatToolReadGrantView(update.grant))
     throw invalidRequest("Invalid tool consent projection.");
+  return update;
+}
+function redactHumanInput(
+  update: Extract<ChatToolTranscriptUpdate, { kind: "human-input" }>,
+): ChatToolTranscriptUpdate {
+  if (!isJiraHumanInputView(update.view)) throw invalidRequest("Invalid private input projection.");
+  // Copy only the closed public DTO; no submission value may survive via an extra property.
+  return {
+    kind: "human-input",
+    callId: update.callId,
+    view: {
+      ...update.view,
+      fields: [...update.view.fields],
+      optionalFields: [...update.view.optionalFields],
+    },
+  };
+}
+function redactProgress(
+  update: Extract<ChatToolTranscriptUpdate, { kind: "progress" }>,
+): ChatToolTranscriptUpdate {
+  if (!isChatToolBatchProgress(update.batchProgress))
+    throw invalidRequest("Invalid tool progress projection.");
+  return { ...update, batchProgress: { ...update.batchProgress } };
+}
+function redactApproval(
+  update: Extract<ChatToolTranscriptUpdate, { kind: "write-approval" }>,
+): ChatToolTranscriptUpdate {
+  if (
+    !isChatToolWriteApprovalView(update.approval) ||
+    (update.operationBinding !== undefined && !isJiraOperationBinding(update.operationBinding))
+  )
+    throw invalidRequest("Invalid tool approval projection.");
   return update;
 }
 
@@ -1020,7 +1048,7 @@ function validCaptureKind(
   if (!MUTATION_ALIASES.has(update.call.name))
     return (
       JIRA_MANAGED_READ_TOOLS.some((tool) => tool.replace(/[.-]/gu, "_") === update.call.name) &&
-      update.result.effectStarted === false &&
+      Object.is(update.result.effectStarted, false) &&
       update.nativeArgumentsDigest === undefined &&
       update.operationBinding === undefined &&
       update.mutationOutcome === undefined

@@ -34,11 +34,24 @@ import {
   type AtlassianHttpRequest,
   type AtlassianHttpResult,
 } from "@oscharko-dev/keiko-connectors";
-import { createSecretSpellingStreamRedactor, SecretSpellingOverflowError } from "@oscharko-dev/keiko-security";
+import {
+  createSecretSpellingStreamRedactor,
+  SecretSpellingOverflowError,
+} from "@oscharko-dev/keiko-security";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
-import { applicationRoleResponseVersion, assertDirectoryAccessTarget } from "./httpDirectoryAccess.js";
+import {
+  applicationRoleResponseVersion,
+  assertDirectoryAccessTarget,
+} from "./httpDirectoryAccess.js";
 import { assertIdentityExperimentalTarget } from "./httpIdentityExperimental.js";
-import { assertHumanInputTarget, claimHttpHumanInput, humanInputPurpose, ownedHumanInput, privateHumanBody, privateHumanResponse } from "./httpHumanInput.js";
+import {
+  assertHumanInputTarget,
+  claimHttpHumanInput,
+  humanInputPurpose,
+  ownedHumanInput,
+  privateHumanBody,
+  privateHumanResponse,
+} from "./httpHumanInput.js";
 import { assertPrivateSessionRequest } from "./httpAvatarSession.js";
 import {
   isSafeAtlassianConnectorBaseUrl,
@@ -356,15 +369,21 @@ interface BoundedBodyRead {
   readonly bodyBytes: number;
   readonly truncated: boolean;
 }
-
-function bodyCollector(binary: boolean, cap: number) {
+interface BodyCollector {
+  readonly append: (chunk: Uint8Array) => void;
+  readonly finish: (bodyBytes: number, truncated: boolean) => BoundedBodyRead;
+}
+function bodyCollector(binary: boolean, cap: number): BodyCollector {
   const decoder = new TextDecoder("utf-8", { fatal: false });
   let archive: Uint8Array<ArrayBuffer> | undefined;
   let offset = 0;
   let text = "";
   return {
-    append: (chunk: Uint8Array) => {
-      if (!binary) { text += decoder.decode(chunk, { stream: true }); return; }
+    append: (chunk: Uint8Array): void => {
+      if (!binary) {
+        text += decoder.decode(chunk, { stream: true });
+        return;
+      }
       if (chunk.byteLength === 0) return;
       archive ??= new Uint8Array(cap);
       archive.set(chunk, offset);
@@ -377,29 +396,58 @@ function bodyCollector(binary: boolean, cap: number) {
     },
   };
 }
-async function readBodyBounded(response: Response, maxBodyBytes: number, binary = false): Promise<BoundedBodyRead> {
+function readBodyChunks(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  body: ReturnType<typeof bodyCollector>,
+  cap: number,
+): Promise<BoundedBodyRead> {
+  return new Promise((resolve, reject) => {
+    let bytes = 0;
+    function readNext(): void {
+      void reader.read().then(retainChunk).catch(reject);
+    }
+    function retainChunk(chunk: ReadableStreamReadResult<Uint8Array>): void {
+      if (chunk.done) {
+        resolve(body.finish(bytes, false));
+        return;
+      }
+      const remaining = cap - bytes;
+      if (chunk.value.byteLength >= remaining) {
+        body.append(chunk.value.subarray(0, Math.max(0, remaining)));
+        bytes += Math.min(chunk.value.byteLength, Math.max(0, remaining));
+        void reader
+          .cancel()
+          .catch(() => undefined)
+          .then(() => {
+            resolve(body.finish(bytes, true));
+          })
+          .catch(reject);
+        return;
+      }
+      body.append(chunk.value);
+      bytes += chunk.value.byteLength;
+      // Each callback settles after scheduling one read; no per-chunk promise chain is retained.
+      readNext();
+    }
+    readNext();
+  });
+}
+function readBodyBounded(
+  response: Response,
+  maxBodyBytes: number,
+  binary = false,
+): Promise<BoundedBodyRead> {
   const cap = Math.max(0, Math.trunc(maxBodyBytes));
   const reader = response.body?.getReader();
   const body = bodyCollector(binary, cap);
-  if (reader === undefined) return body.finish(0, false);
-  let bytes = 0;
-  for (;;) {
-    const chunk = await reader.read();
-    if (chunk.done) break;
-    const remaining = cap - bytes;
-    if (chunk.value.byteLength >= remaining) {
-      body.append(chunk.value.subarray(0, Math.max(0, remaining)));
-      bytes += Math.min(chunk.value.byteLength, Math.max(0, remaining));
-      await reader.cancel().catch(() => undefined);
-      return body.finish(bytes, true);
-    }
-    body.append(chunk.value);
-    bytes += chunk.value.byteLength;
-  }
-  return body.finish(bytes, false);
+  if (reader === undefined) return Promise.resolve(body.finish(0, false));
+  return readBodyChunks(reader, body, cap);
 }
 
-async function readResponseBody(response: Response, request: AtlassianHttpBodyRequest): Promise<BoundedBodyRead> {
+async function readResponseBody(
+  response: Response,
+  request: AtlassianHttpBodyRequest,
+): Promise<BoundedBodyRead> {
   if (request.jiraEmailTemplateArchive === true && request.method === "GET" && response.ok) {
     const mediaType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
     if (mediaType !== "application/zip") {
@@ -409,8 +457,10 @@ async function readResponseBody(response: Response, request: AtlassianHttpBodyRe
     return readBodyBounded(response, request.maxBodyBytes, true);
   }
   // Native error text stays under the ordinary write-response ceiling even for ZIP downloads.
-  const cap = request.jiraEmailTemplateArchive === true
-    ? Math.min(request.maxBodyBytes, ATLASSIAN_WRITE_RESPONSE_MAX_BYTES) : request.maxBodyBytes;
+  const cap =
+    request.jiraEmailTemplateArchive === true
+      ? Math.min(request.maxBodyBytes, ATLASSIAN_WRITE_RESPONSE_MAX_BYTES)
+      : request.maxBodyBytes;
   return readBodyBounded(response, cap);
 }
 
@@ -436,16 +486,21 @@ function composeBodyRequestSignal(request: AtlassianHttpBodyRequest): AbortSigna
 // error and fails closed on the same custody failure surface as an invalid URL.
 // A governed upload (#4176) is one multipart POST, bounded, never combined with a JSON body.
 const MULTIPART_CONTENT_TYPE = /^multipart\/form-data; boundary=[A-Za-z0-9_-]{1,70}$/u;
+function validUploadContentType(request: AtlassianHttpBodyRequest, contentType: string): boolean {
+  if (request.jiraEmailTemplateArchive === true) return contentType === "application/zip";
+  if (request.jiraAvatarImage === true)
+    return contentType === "image/png" || contentType === "image/jpeg";
+  return MULTIPART_CONTENT_TYPE.test(contentType);
+}
 function assertValidUpload(request: AtlassianHttpBodyRequest): void {
   const upload = request.upload;
   if (upload === undefined) return;
   if (
     request.method !== "POST" ||
     request.bodyJson !== undefined ||
-    !(upload.bytes instanceof Uint8Array) || !(upload.bytes.buffer instanceof ArrayBuffer) ||
-    !(request.jiraEmailTemplateArchive === true
-      ? upload.contentType === "application/zip" : request.jiraAvatarImage === true
-        ? upload.contentType === "image/png" || upload.contentType === "image/jpeg" : MULTIPART_CONTENT_TYPE.test(upload.contentType)) ||
+    !(upload.bytes instanceof Uint8Array) ||
+    !(upload.bytes.buffer instanceof ArrayBuffer) ||
+    !validUploadContentType(request, upload.contentType) ||
     exceedsBodyByteCeiling(upload.bytes.byteLength, ATLASSIAN_HTTP_UPLOAD_MAX_BYTES)
   ) {
     throw new AtlassianCredentialCustodyError("invalid-input", [
@@ -454,24 +509,53 @@ function assertValidUpload(request: AtlassianHttpBodyRequest): void {
   }
 }
 
-function assertEmailTemplateTarget(base: URL, target: URL, request: AtlassianHttpBodyRequest): void {
-  if (request.jiraEmailTemplateArchive === undefined) return;
+function assertEmailTemplateTarget(
+  base: URL,
+  target: URL,
+  request: AtlassianHttpBodyRequest,
+): void {
+  const archive: unknown = request.jiraEmailTemplateArchive;
+  if (archive === undefined) return;
   const path = `${base.pathname.replace(/\/$/u, "")}/rest/api/2/email-templates`;
-  if (request.jiraEmailTemplateArchive !== true || target.pathname !== path || target.search !== "" ||
-      !Number.isSafeInteger(request.maxBodyBytes) || request.maxBodyBytes < 1 ||
-      request.maxBodyBytes > JIRA_ATTACHMENT_MAX_BYTES)
-    throw new AtlassianCredentialCustodyError("invalid-input", ["Unsupported email-template archive target or byte bound"]);
+  if (
+    archive !== true ||
+    target.pathname !== path ||
+    target.search !== "" ||
+    !Number.isSafeInteger(request.maxBodyBytes) ||
+    request.maxBodyBytes < 1 ||
+    request.maxBodyBytes > JIRA_ATTACHMENT_MAX_BYTES
+  )
+    throw new AtlassianCredentialCustodyError("invalid-input", [
+      "Unsupported email-template archive target or byte bound",
+    ]);
 }
 
-function ownedBodyRequest(request: Readonly<AtlassianHttpBodyRequest>): Readonly<AtlassianHttpBodyRequest> {
-  if (request.jiraHumanInput !== undefined) return Object.freeze({ ...request, jiraHumanInput: ownedHumanInput(request.jiraHumanInput) });
-  if (typeof request.jiraApplicationRole === "object" && request.jiraApplicationRole !== null)
-    return Object.freeze({ ...request, jiraApplicationRole: Object.freeze({ ...request.jiraApplicationRole }) });
-  if ((request.jiraEmailTemplateArchive !== true && request.jiraAvatarImage !== true) || request.upload === undefined) return request;
+function objectValue(value: unknown): value is object {
+  return typeof value === "object" && value !== null;
+}
+function ownedBodyRequest(
+  request: Readonly<AtlassianHttpBodyRequest>,
+): Readonly<AtlassianHttpBodyRequest> {
+  if (request.jiraHumanInput !== undefined)
+    return Object.freeze({ ...request, jiraHumanInput: ownedHumanInput(request.jiraHumanInput) });
+  if (objectValue(request.jiraApplicationRole))
+    return Object.freeze({
+      ...request,
+      jiraApplicationRole: Object.freeze({ ...request.jiraApplicationRole }),
+    });
+  if (
+    (request.jiraEmailTemplateArchive !== true && request.jiraAvatarImage !== true) ||
+    request.upload === undefined
+  )
+    return request;
   // Admission/egress can await: retain our own bytes before either callback can run.
-  return Object.freeze({ ...request, upload: Object.freeze({
-    contentType: request.upload.contentType, bytes: new Uint8Array(request.upload.bytes),
-  }) });
+  return Object.freeze({
+    ...request,
+    upload: Object.freeze({
+      contentType: request.upload.contentType,
+      bytes: new Uint8Array(request.upload.bytes),
+    }),
+  });
 }
 function assertValidRequestBody(request: AtlassianHttpBodyRequest): void {
   assertValidUpload(request);
@@ -489,18 +573,29 @@ function assertValidRequestBody(request: AtlassianHttpBodyRequest): void {
   }
 }
 
-function requestBody(request: AtlassianHttpBodyRequest, options: CreateAtlassianHttpPortOptions): {
+function requestBody(
+  request: AtlassianHttpBodyRequest,
+  options: CreateAtlassianHttpPortOptions,
+): {
   readonly body?: string | Uint8Array<ArrayBuffer>;
   readonly prepareBody?: () => string;
 } {
   const input = request.jiraHumanInput;
   if (input?.selection.binding.operation === "jira.unlock-user-anonymization") return {};
-  if (input !== undefined) return { prepareBody: () => {
-    const values = claimHttpHumanInput(options.credentials, input, options.onHumanInputConsumed);
-    const body = privateHumanBody(input, values);
-    if (Buffer.byteLength(body, "utf8") > ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES) throw new AtlassianCredentialCustodyError("invalid-input");
-    return body;
-  } };
+  if (input !== undefined)
+    return {
+      prepareBody: (): string => {
+        const values = claimHttpHumanInput(
+          options.credentials,
+          input,
+          options.onHumanInputConsumed,
+        );
+        const body = privateHumanBody(input, values);
+        if (Buffer.byteLength(body, "utf8") > ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES)
+          throw new AtlassianCredentialCustodyError("invalid-input");
+        return body;
+      },
+    };
   if (request.upload !== undefined) return { body: request.upload.bytes };
   return request.bodyJson === undefined ? {} : { body: request.bodyJson };
 }
@@ -511,90 +606,172 @@ function observePrivateCookie(authentication: JiraPrivateAuthentication | undefi
 } {
   let value: string | undefined;
   if (authentication?.kind !== "session") return { authentication, value: () => undefined };
-  return { value: () => value, authentication: { ...authentication, cookie: () => {
-    const header = authentication.cookie(); const separator = header.indexOf("=");
-    const cookie = jiraPrivateCookie({ name: header.slice(0, separator), value: header.slice(separator + 1) });
-    if (separator < 1 || cookie === undefined) throw new AtlassianCredentialCustodyError("invalid-input", ["Invalid private Jira session material"]);
-    value = cookie.value; return `${cookie.name}=${cookie.value}`;
-  } } };
+  return {
+    value: () => value,
+    authentication: {
+      ...authentication,
+      cookie: (): string => {
+        const header = authentication.cookie();
+        const separator = header.indexOf("=");
+        const cookie = jiraPrivateCookie({
+          name: header.slice(0, separator),
+          value: header.slice(separator + 1),
+        });
+        if (separator < 1 || cookie === undefined)
+          throw new AtlassianCredentialCustodyError("invalid-input", [
+            "Invalid private Jira session material",
+          ]);
+        value = cookie.value;
+        return `${cookie.name}=${cookie.value}`;
+      },
+    },
+  };
 }
-function privateCookieBody(body: BoundedBodyRead, status: number, value: string | undefined): BoundedBodyRead {
+function privateCookieBody(
+  body: BoundedBodyRead,
+  status: number,
+  value: string | undefined,
+): BoundedBodyRead {
   if (status < 200 || status >= 300) return { ...body, bodyText: "" };
   if (value === undefined) return { ...body, bodyText: "", truncated: true };
   // Reuse the existing exact-secret spelling owner, including escaped JSON spellings. No second
   // JSON evaluation and no remote diagnostics can disclose this ephemeral cookie to a projector.
   const floor = createSecretSpellingStreamRedactor([value]);
   try {
-    floor.push(body.bodyText); floor.finish();
+    floor.push(body.bodyText);
+    floor.finish();
     return floor.redactedCount() === 0 ? body : { ...body, bodyText: "", truncated: true };
   } catch (error) {
-    if (error instanceof SecretSpellingOverflowError) return { ...body, bodyText: "", truncated: true };
+    if (error instanceof SecretSpellingOverflowError)
+      return { ...body, bodyText: "", truncated: true };
     throw error;
   }
 }
 
+interface PreparedBodyRequest {
+  readonly request: Readonly<AtlassianHttpBodyRequest>;
+  readonly target: URL;
+  readonly signal: AbortSignal;
+  readonly privateCookie: ReturnType<typeof observePrivateCookie>;
+  readonly lifecycle: ReturnType<typeof atlassianHttpRequestLifecycle>;
+}
+function assertLoginAuthentication(
+  request: AtlassianHttpBodyRequest,
+  options: CreateAtlassianHttpPortOptions,
+): void {
+  if (options.privateAuthentication?.kind === "anonymous" && humanInputPurpose(request) !== "login")
+    throw new AtlassianCredentialCustodyError("invalid-input", [
+      "Anonymous Jira transport is reserved for private login",
+    ]);
+  if (humanInputPurpose(request) === "login" && options.privateAuthentication?.kind !== "anonymous")
+    throw new AtlassianCredentialCustodyError("invalid-input", [
+      "Jira login requires private anonymous transport",
+    ]);
+}
+function prepareBodyRequest(
+  base: URL,
+  input: AtlassianHttpBodyRequest,
+  options: CreateAtlassianHttpPortOptions,
+): PreparedBodyRequest {
+  const snapshot = Object.freeze({ ...input });
+  const target = assertAllowlistedTarget(base, snapshot.url);
+  assertEmailTemplateTarget(base, target, snapshot);
+  assertDirectoryAccessTarget(base, target, snapshot);
+  assertIdentityExperimentalTarget(base, target, snapshot);
+  assertHumanInputTarget(base, snapshot, options.authRef);
+  assertPrivateSessionRequest(base, snapshot, options.privateAuthentication);
+  assertLoginAuthentication(snapshot, options);
+  assertValidRequestBody(snapshot);
+  const request = ownedBodyRequest(snapshot);
+  const signal = composeBodyRequestSignal(request);
+  const privateCookie = observePrivateCookie(options.privateAuthentication);
+  const lifecycle = atlassianHttpRequestLifecycle(
+    {
+      ...options,
+      ...(privateCookie.authentication === undefined
+        ? {}
+        : { privateAuthentication: privateCookie.authentication }),
+      correlationId: options.correlationId ?? UNKNOWN_CORRELATION_ID,
+    },
+    request,
+  );
+  return { request, target, signal, privateCookie, lifecycle };
+}
+async function projectBodyResponse(
+  prepared: PreparedBodyRequest,
+  options: CreateAtlassianHttpPortOptions,
+  response: Response,
+): Promise<AtlassianHttpBodyResult> {
+  const { request, privateCookie } = prepared;
+  const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"), Date.now());
+  const observedBody = await readResponseBody(response, request);
+  const body =
+    options.privateAuthentication?.kind === "session"
+      ? privateCookieBody(observedBody, response.status, privateCookie.value())
+      : observedBody;
+  const purpose = humanInputPurpose(request);
+  const bodyText =
+    purpose === undefined
+      ? body.bodyText
+      : privateHumanResponse(
+          purpose,
+          response.status,
+          body.bodyText,
+          body.truncated,
+          options.onJiraLoginCookie,
+        );
+  const applicationRoleVersion = applicationRoleResponseVersion(request, response);
+  return {
+    kind: "response",
+    status: response.status,
+    bodyText,
+    ...(body.archiveBytes === undefined ? {} : { archiveBytes: body.archiveBytes }),
+    ...(applicationRoleVersion === undefined ? {} : { applicationRoleVersion }),
+    bodyBytes: body.bodyBytes,
+    truncated: body.truncated,
+    ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+  };
+}
+async function executeBodyRequest(
+  base: URL,
+  prepared: PreparedBodyRequest,
+  options: CreateAtlassianHttpPortOptions,
+): Promise<AtlassianHttpBodyResult> {
+  const { request, target, signal, lifecycle } = prepared;
+  try {
+    const egress = await connectorEgressConfig(options, base, signal);
+    if (egress === undefined) return { kind: "network-error" };
+    const upstream = await gatewayFetch(target.toString(), {
+      method: request.method,
+      prepareHeaders: lifecycle.prepareHeaders,
+      singleAttempt: options.singleAttempt === true || request.method !== "GET",
+      ...requestBody(request, options),
+      signal,
+      egress,
+      log: processServerLogSink(),
+      logContext: { correlationId: options.correlationId ?? UNKNOWN_CORRELATION_ID },
+      ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
+    });
+    const response = await authenticatedReadResponse(request.method, upstream);
+    await lifecycle.observe(response);
+    return await projectBodyResponse(prepared, options, response);
+  } catch (error) {
+    lifecycle.rethrowFailure();
+    if (
+      error instanceof AtlassianCredentialCustodyError ||
+      error instanceof JiraHumanInputCustodyError ||
+      error instanceof JiraPrivateSessionError
+    )
+      throw error;
+    return classifyTransportError(error);
+  }
+}
 export function createGatewayAtlassianHttpBodyPort(
   options: CreateAtlassianHttpPortOptions,
 ): AtlassianHttpBodyPort {
   const base = atlassianPortBaseUrl(options.baseUrl);
   return async (input: AtlassianHttpBodyRequest): Promise<AtlassianHttpBodyResult> => {
-    const snapshot = Object.freeze({ ...input });
-    const target = assertAllowlistedTarget(base, snapshot.url);
-    assertEmailTemplateTarget(base, target, snapshot);
-    assertDirectoryAccessTarget(base, target, snapshot);
-    assertIdentityExperimentalTarget(base, target, snapshot);
-    assertHumanInputTarget(base, snapshot, options.authRef);
-    assertPrivateSessionRequest(base, snapshot, options.privateAuthentication);
-    if (options.privateAuthentication?.kind === "anonymous" && humanInputPurpose(snapshot) !== "login")
-      throw new AtlassianCredentialCustodyError("invalid-input", ["Anonymous Jira transport is reserved for private login"]);
-    if (humanInputPurpose(snapshot) === "login" && options.privateAuthentication?.kind !== "anonymous")
-      throw new AtlassianCredentialCustodyError("invalid-input", ["Jira login requires private anonymous transport"]);
-    assertValidRequestBody(snapshot);
-    const request = ownedBodyRequest(snapshot);
-    const signal = composeBodyRequestSignal(request);
-    const privateCookie = observePrivateCookie(options.privateAuthentication);
-    const lifecycle = atlassianHttpRequestLifecycle(
-      { ...options, ...(privateCookie.authentication === undefined ? {} : { privateAuthentication: privateCookie.authentication }),
-        correlationId: options.correlationId ?? UNKNOWN_CORRELATION_ID },
-      request,
-    );
-    try {
-      const egress = await connectorEgressConfig(options, base, signal);
-      if (egress === undefined) return { kind: "network-error" };
-      const upstream = await gatewayFetch(target.toString(), {
-        method: request.method,
-        prepareHeaders: lifecycle.prepareHeaders,
-        singleAttempt: options.singleAttempt === true || request.method !== "GET",
-        ...requestBody(request, options),
-        signal,
-        egress,
-        log: processServerLogSink(),
-        logContext: { correlationId: options.correlationId ?? UNKNOWN_CORRELATION_ID },
-        ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
-      });
-      const response = await authenticatedReadResponse(request.method, upstream);
-      await lifecycle.observe(response);
-      const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"), Date.now());
-      const observedBody = await readResponseBody(response, request);
-      const body = options.privateAuthentication?.kind === "session"
-        ? privateCookieBody(observedBody, response.status, privateCookie.value()) : observedBody;
-      const purpose = humanInputPurpose(request);
-      const bodyText = purpose === undefined ? body.bodyText : privateHumanResponse(purpose, response.status, body.bodyText, body.truncated, options.onJiraLoginCookie);
-      const applicationRoleVersion = applicationRoleResponseVersion(request, response);
-      return {
-        kind: "response",
-        status: response.status,
-        bodyText,
-        ...(body.archiveBytes === undefined ? {} : { archiveBytes: body.archiveBytes }),
-        ...(applicationRoleVersion === undefined ? {} : { applicationRoleVersion }),
-        bodyBytes: body.bodyBytes,
-        truncated: body.truncated,
-        ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
-      };
-    } catch (error) {
-      lifecycle.rethrowFailure();
-      if (error instanceof AtlassianCredentialCustodyError || error instanceof JiraHumanInputCustodyError || error instanceof JiraPrivateSessionError) throw error;
-      return classifyTransportError(error);
-    }
+    const prepared = prepareBodyRequest(base, input, options);
+    return executeBodyRequest(base, prepared, options);
   };
 }

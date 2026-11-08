@@ -70,6 +70,28 @@ async function completePrivateFinalizer(
     reportJiraHumanInputCleanupFailure(undefined, { operationCorrelationId: correlationId }, error);
   }
 }
+function drainPrivateFinalizers(
+  finalizers: Set<() => Promise<void>>,
+  correlationId: string,
+  onDrained: () => void,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    function next(): void {
+      if (finalizers.size === 0) {
+        onDrained();
+        resolve();
+        return;
+      }
+      const pending = [...finalizers];
+      finalizers.clear();
+      // Finish each existing concurrent wave before starting the next, without retaining a chain.
+      void Promise.all(pending.map((finalize) => completePrivateFinalizer(finalize, correlationId)))
+        .then(next)
+        .catch(reject);
+    }
+    next();
+  });
+}
 /** Private finalizers belong to the existing held Chat turn or Coding run. */
 export function createJiraPrivateLifetime(
   signal: AbortSignal,
@@ -82,16 +104,11 @@ export function createJiraPrivateLifetime(
     if (settled !== undefined) return settled;
     signal.removeEventListener("abort", aborted);
     // Publish the promise before any finalizer can re-enter finish/register synchronously.
-    settled = Promise.resolve().then(async () => {
-      while (finalizers.size > 0) {
-        const pending = [...finalizers];
-        finalizers.clear();
-        await Promise.all(
-          pending.map((finalize) => completePrivateFinalizer(finalize, correlationId)),
-        );
-      }
-      drained = true;
-    });
+    settled = Promise.resolve().then(() =>
+      drainPrivateFinalizers(finalizers, correlationId, () => {
+        drained = true;
+      }),
+    );
     return settled;
   }
   function aborted(): void {
@@ -105,10 +122,9 @@ export function createJiraPrivateLifetime(
       if (!drained) finalizers.add(finalize);
       else {
         const previous = settled;
-        settled = Promise.resolve().then(async () => {
-          await previous;
-          await completePrivateFinalizer(finalize, correlationId);
-        });
+        settled = Promise.resolve()
+          .then(() => previous)
+          .then(() => completePrivateFinalizer(finalize, correlationId));
       }
     },
     finish,
@@ -198,7 +214,8 @@ class JiraPrivateHttpOwner {
     return this.finishing;
   }
   private async finishOwned(): Promise<void> {
-    await Promise.allSettled([...this.active]);
+    // Native Promise.allSettled consumes this private Set synchronously before yielding.
+    await Promise.allSettled(this.active);
     const retained = this.owned;
     this.owned = undefined;
     const sessions = this.sessions;

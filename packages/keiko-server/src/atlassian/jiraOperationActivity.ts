@@ -46,120 +46,347 @@ import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-
 // These are projections of existing execution families, not another dispatch or authority table.
 // Every schema stays below the unchanged 64-value limit. The union is pinned to the catalog.
 const ISSUE_OPERATIONS = [
-  ...JIRA_READ_TOOL_FAMILIES.issueContext, ...JIRA_READ_TOOL_FAMILIES.issues,
-  ...JIRA_READ_TOOL_FAMILIES.comment, ...JIRA_READ_TOOL_FAMILIES.issueLinks,
-  ...JIRA_READ_TOOL_FAMILIES.participation, ...JIRA_READ_TOOL_FAMILIES.worklogs,
-  ...JIRA_READ_TOOL_FAMILIES.attachments, ...JIRA_READ_TOOL_FAMILIES.issueWorkflow,
-  ...JIRA_READ_TOOL_FAMILIES.searchPost, ...JIRA_READ_TOOL_FAMILIES.worklogBatch,
+  ...JIRA_READ_TOOL_FAMILIES.issueContext,
+  ...JIRA_READ_TOOL_FAMILIES.issues,
+  ...JIRA_READ_TOOL_FAMILIES.comment,
+  ...JIRA_READ_TOOL_FAMILIES.issueLinks,
+  ...JIRA_READ_TOOL_FAMILIES.participation,
+  ...JIRA_READ_TOOL_FAMILIES.worklogs,
+  ...JIRA_READ_TOOL_FAMILIES.attachments,
+  ...JIRA_READ_TOOL_FAMILIES.issueWorkflow,
+  ...JIRA_READ_TOOL_FAMILIES.searchPost,
+  ...JIRA_READ_TOOL_FAMILIES.worklogBatch,
   ...JIRA_READ_TOOL_FAMILIES.worklogFeeds,
-  ...JIRA_ISSUE_LIFECYCLE_MUTATIONS, ...JIRA_ISSUE_ACTION_MUTATIONS,
-  ...JIRA_LINK_MUTATIONS, ...JIRA_EXTENDED_ISSUE_CREATION_MUTATIONS,
+  ...JIRA_ISSUE_LIFECYCLE_MUTATIONS,
+  ...JIRA_ISSUE_ACTION_MUTATIONS,
+  ...JIRA_LINK_MUTATIONS,
+  ...JIRA_EXTENDED_ISSUE_CREATION_MUTATIONS,
 ] as const;
 const PLANNING_OPERATIONS = [
-  ...JIRA_READ_TOOL_FAMILIES.agile, ...JIRA_READ_TOOL_FAMILIES.agileContext,
-  ...JIRA_BOARD_CONFIGURATION_MUTATIONS, ...JIRA_SPRINT_LIFECYCLE_MUTATIONS,
+  ...JIRA_READ_TOOL_FAMILIES.agile,
+  ...JIRA_READ_TOOL_FAMILIES.agileContext,
+  ...JIRA_BOARD_CONFIGURATION_MUTATIONS,
+  ...JIRA_SPRINT_LIFECYCLE_MUTATIONS,
   ...JIRA_AGILE_PLANNING_MUTATIONS,
 ] as const;
 const PROJECT_OPERATIONS = [
-  ...JIRA_READ_TOOL_FAMILIES.projectList, ...JIRA_READ_TOOL_FAMILIES.projects,
-  ...JIRA_READ_TOOL_FAMILIES.components, ...JIRA_READ_TOOL_FAMILIES.versions,
-  ...JIRA_READ_TOOL_FAMILIES.release, ...JIRA_READ_TOOL_FAMILIES.remoteVersionLinks,
-  ...JIRA_PROJECT_LIFECYCLE_MUTATIONS, ...JIRA_RELEASE_LIFECYCLE_MUTATIONS,
-  ...JIRA_VERSION_REMOTE_LINK_MUTATIONS, ...JIRA_PROJECT_CATEGORY_MUTATIONS,
+  ...JIRA_READ_TOOL_FAMILIES.projectList,
+  ...JIRA_READ_TOOL_FAMILIES.projects,
+  ...JIRA_READ_TOOL_FAMILIES.components,
+  ...JIRA_READ_TOOL_FAMILIES.versions,
+  ...JIRA_READ_TOOL_FAMILIES.release,
+  ...JIRA_READ_TOOL_FAMILIES.remoteVersionLinks,
+  ...JIRA_PROJECT_LIFECYCLE_MUTATIONS,
+  ...JIRA_RELEASE_LIFECYCLE_MUTATIONS,
+  ...JIRA_VERSION_REMOTE_LINK_MUTATIONS,
+  ...JIRA_PROJECT_CATEGORY_MUTATIONS,
 ] as const;
 const METADATA_OPERATIONS = [
-  ...JIRA_READ_TOOL_FAMILIES.coreMetadata, ...JIRA_READ_TOOL_FAMILIES.fieldDirectory,
-  ...JIRA_READ_TOOL_FAMILIES.jqlMetadata, ...JIRA_READ_TOOL_FAMILIES.resourceLookups,
-  ...JIRA_READ_TOOL_FAMILIES.issueMetadata, ...JIRA_SCHEMA_MUTATIONS,
+  ...JIRA_READ_TOOL_FAMILIES.coreMetadata,
+  ...JIRA_READ_TOOL_FAMILIES.fieldDirectory,
+  ...JIRA_READ_TOOL_FAMILIES.jqlMetadata,
+  ...JIRA_READ_TOOL_FAMILIES.resourceLookups,
+  ...JIRA_READ_TOOL_FAMILIES.issueMetadata,
+  ...JIRA_SCHEMA_MUTATIONS,
 ] as const;
 const SCHEME_OPERATIONS = [
-  ...JIRA_READ_TOOL_FAMILIES.workflowSchemes, ...JIRA_READ_TOOL_FAMILIES.issueTypeSchemes,
-  ...JIRA_READ_TOOL_FAMILIES.prioritySchemes, ...JIRA_READ_TOOL_FAMILIES.accessSchemes,
-  ...JIRA_READ_TOOL_FAMILIES.notificationSchemes, ...JIRA_READ_TOOL_FAMILIES.projectAssociations,
-  ...JIRA_OPTION_SCHEME_MUTATIONS, ...JIRA_WORKFLOW_SCHEME_MUTATIONS,
+  ...JIRA_READ_TOOL_FAMILIES.workflowSchemes,
+  ...JIRA_READ_TOOL_FAMILIES.issueTypeSchemes,
+  ...JIRA_READ_TOOL_FAMILIES.prioritySchemes,
+  ...JIRA_READ_TOOL_FAMILIES.accessSchemes,
+  ...JIRA_READ_TOOL_FAMILIES.notificationSchemes,
+  ...JIRA_READ_TOOL_FAMILIES.projectAssociations,
+  ...JIRA_OPTION_SCHEME_MUTATIONS,
+  ...JIRA_WORKFLOW_SCHEME_MUTATIONS,
   ...JIRA_PERMISSION_SCHEME_MUTATIONS,
 ] as const;
 const IDENTITY_OPERATIONS = [
-  ...JIRA_READ_TOOL_FAMILIES.accountDiagnostics, ...JIRA_READ_TOOL_FAMILIES.users,
-  ...JIRA_READ_TOOL_FAMILIES.scopedDirectory, ...JIRA_READ_TOOL_FAMILIES.directory,
-  ...JIRA_READ_TOOL_FAMILIES.roles, ...JIRA_READ_TOOL_FAMILIES.privateAccount,
-  ...JIRA_READ_TOOL_FAMILIES.anonymization, ...JIRA_READ_TOOL_FAMILIES.sessionObservation,
-  ...JIRA_IDENTITY_MUTATIONS, ...JIRA_PRIVATE_ACCOUNT_MUTATIONS, ...JIRA_DIRECTORY_ACCESS_MUTATIONS,
-  ...JIRA_GROUP_MUTATIONS, ...JIRA_ROLE_MUTATIONS, ...JIRA_ANONYMIZATION_UNLOCK_MUTATIONS,
+  ...JIRA_READ_TOOL_FAMILIES.accountDiagnostics,
+  ...JIRA_READ_TOOL_FAMILIES.users,
+  ...JIRA_READ_TOOL_FAMILIES.scopedDirectory,
+  ...JIRA_READ_TOOL_FAMILIES.directory,
+  ...JIRA_READ_TOOL_FAMILIES.roles,
+  ...JIRA_READ_TOOL_FAMILIES.privateAccount,
+  ...JIRA_READ_TOOL_FAMILIES.anonymization,
+  ...JIRA_READ_TOOL_FAMILIES.sessionObservation,
+  ...JIRA_IDENTITY_MUTATIONS,
+  ...JIRA_PRIVATE_ACCOUNT_MUTATIONS,
+  ...JIRA_DIRECTORY_ACCESS_MUTATIONS,
+  ...JIRA_GROUP_MUTATIONS,
+  ...JIRA_ROLE_MUTATIONS,
+  ...JIRA_ANONYMIZATION_UNLOCK_MUTATIONS,
 ] as const;
 const AVATAR_OPERATIONS = [...JIRA_READ_TOOL_FAMILIES.avatars, ...JIRA_AVATAR_MUTATIONS] as const;
-const PROPERTY_OPERATIONS = [...JIRA_READ_TOOL_FAMILIES.entityProperties, ...JIRA_ENTITY_PROPERTY_MUTATIONS] as const;
+const PROPERTY_OPERATIONS = [
+  ...JIRA_READ_TOOL_FAMILIES.entityProperties,
+  ...JIRA_ENTITY_PROPERTY_MUTATIONS,
+] as const;
 const CONFIGURATION_OPERATIONS = [
-  ...JIRA_READ_TOOL_FAMILIES.columns, ...JIRA_READ_TOOL_FAMILIES.runtimeSettings,
-  ...JIRA_READ_TOOL_FAMILIES.instance, ...JIRA_READ_TOOL_FAMILIES.configuration,
-  ...JIRA_READ_TOOL_FAMILIES.screens, ...JIRA_READ_TOOL_FAMILIES.applicationSettings,
-  ...JIRA_READ_TOOL_FAMILIES.administrativeObservations, ...JIRA_READ_TOOL_FAMILIES.emailTemplatePacks,
-  ...JIRA_INSTANCE_SETTING_MUTATIONS, ...JIRA_EMAIL_TEMPLATE_MUTATIONS,
+  ...JIRA_READ_TOOL_FAMILIES.columns,
+  ...JIRA_READ_TOOL_FAMILIES.runtimeSettings,
+  ...JIRA_READ_TOOL_FAMILIES.instance,
+  ...JIRA_READ_TOOL_FAMILIES.configuration,
+  ...JIRA_READ_TOOL_FAMILIES.screens,
+  ...JIRA_READ_TOOL_FAMILIES.applicationSettings,
+  ...JIRA_READ_TOOL_FAMILIES.administrativeObservations,
+  ...JIRA_READ_TOOL_FAMILIES.emailTemplatePacks,
+  ...JIRA_INSTANCE_SETTING_MUTATIONS,
+  ...JIRA_EMAIL_TEMPLATE_MUTATIONS,
   ...JIRA_SCREEN_CONFIGURATION_MUTATIONS,
 ] as const;
 const MAINTENANCE_OPERATIONS = [
-  ...JIRA_READ_TOOL_FAMILIES.maintenance, ...JIRA_READ_TOOL_FAMILIES.jobObservations,
+  ...JIRA_READ_TOOL_FAMILIES.maintenance,
+  ...JIRA_READ_TOOL_FAMILIES.jobObservations,
   ...JIRA_MAINTENANCE_MUTATIONS,
 ] as const;
 const SAVED_VIEW_OPERATIONS = [
-  ...JIRA_READ_TOOL_FAMILIES.filters, ...JIRA_READ_TOOL_FAMILIES.savedViews,
+  ...JIRA_READ_TOOL_FAMILIES.filters,
+  ...JIRA_READ_TOOL_FAMILIES.savedViews,
   ...JIRA_SAVED_CONFIGURATION_MUTATIONS,
 ] as const;
 
 const FACT_FIELDS = {
-  stage: { type: "string", dataClass: "closed-enum", required: true,
-    values: ["action-outcome", "provider-call", "coding-call", "coding-binding", "description-projection", "field-admission"] },
-  outcome: { type: "string", dataClass: "closed-enum", required: true,
-    values: ["succeeded", "partial", "failed", "denied", "cancelled", "pending-review", "bound", "refused", "completed"] },
-  reason: { type: "string", dataClass: "closed-enum", required: true,
-    values: [...ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS, "none", "other", "pod-not-found", "pod-not-ready",
-      "pod-changed", "unsupported-runtime", "tool-failed", "scope-missing", "internal"] },
+  stage: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: [
+      "action-outcome",
+      "provider-call",
+      "coding-call",
+      "coding-binding",
+      "description-projection",
+      "field-admission",
+    ],
+  },
+  outcome: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: [
+      "succeeded",
+      "partial",
+      "failed",
+      "denied",
+      "cancelled",
+      "pending-review",
+      "bound",
+      "refused",
+      "completed",
+    ],
+  },
+  reason: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: [
+      ...ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS,
+      "none",
+      "other",
+      "pod-not-found",
+      "pod-not-ready",
+      "pod-changed",
+      "unsupported-runtime",
+      "tool-failed",
+      "scope-missing",
+      "internal",
+    ],
+  },
 } as const;
 const FACT_REGISTRATION = {
-  contractKind: "activity-log-operation", schemaVersion: 1, category: "process", owner: "keiko-server",
-  emitter: "atlassian.jiraOperationActivity.recordJiraOperationActivity", causal: "correlation",
-  lifecycle: "state", analyzerProjection: "timeline", failureClasses: ["atlassian-action-execution"],
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  category: "process",
+  owner: "keiko-server",
+  emitter: "atlassian.jiraOperationActivity.recordJiraOperationActivity",
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["atlassian-action-execution"],
   releaseImpact: "patch",
 } as const;
-const ISSUES = defineActivityLogOperation({ ...FACT_REGISTRATION, op: "jira.operation.issues",
-  fields: { ...FACT_FIELDS, operation: { type: "string", dataClass: "closed-enum", required: true, values: ISSUE_OPERATIONS } },
-  proofIds: ["jira.operation.issues.line"] });
-const PLANNING = defineActivityLogOperation({ ...FACT_REGISTRATION, op: "jira.operation.planning",
-  fields: { ...FACT_FIELDS, operation: { type: "string", dataClass: "closed-enum", required: true, values: PLANNING_OPERATIONS } },
-  proofIds: ["jira.operation.planning.line"] });
-const PROJECTS = defineActivityLogOperation({ ...FACT_REGISTRATION, op: "jira.operation.projects",
-  fields: { ...FACT_FIELDS, operation: { type: "string", dataClass: "closed-enum", required: true, values: PROJECT_OPERATIONS } },
-  proofIds: ["jira.operation.projects.line"] });
-const METADATA = defineActivityLogOperation({ ...FACT_REGISTRATION, op: "jira.operation.metadata",
-  fields: { ...FACT_FIELDS, operation: { type: "string", dataClass: "closed-enum", required: true, values: METADATA_OPERATIONS } },
-  proofIds: ["jira.operation.metadata.line"] });
-const SCHEMES = defineActivityLogOperation({ ...FACT_REGISTRATION, op: "jira.operation.schemes",
-  fields: { ...FACT_FIELDS, operation: { type: "string", dataClass: "closed-enum", required: true, values: SCHEME_OPERATIONS } },
-  proofIds: ["jira.operation.schemes.line"] });
-const IDENTITIES = defineActivityLogOperation({ ...FACT_REGISTRATION, op: "jira.operation.identities",
-  fields: { ...FACT_FIELDS, operation: { type: "string", dataClass: "closed-enum", required: true, values: IDENTITY_OPERATIONS } },
-  proofIds: ["jira.operation.identities.line"] });
-const AVATARS = defineActivityLogOperation({ ...FACT_REGISTRATION, op: "jira.operation.avatars",
-  fields: { ...FACT_FIELDS, operation: { type: "string", dataClass: "closed-enum", required: true, values: AVATAR_OPERATIONS } },
-  proofIds: ["jira.operation.avatars.line"] });
-const PROPERTIES = defineActivityLogOperation({ ...FACT_REGISTRATION, op: "jira.operation.properties",
-  fields: { ...FACT_FIELDS, operation: { type: "string", dataClass: "closed-enum", required: true, values: PROPERTY_OPERATIONS } },
-  proofIds: ["jira.operation.properties.line"] });
-const CONFIGURATION = defineActivityLogOperation({ ...FACT_REGISTRATION, op: "jira.operation.configuration",
-  fields: { ...FACT_FIELDS, operation: { type: "string", dataClass: "closed-enum", required: true, values: CONFIGURATION_OPERATIONS } },
-  proofIds: ["jira.operation.configuration.line"] });
-const MAINTENANCE = defineActivityLogOperation({ ...FACT_REGISTRATION, op: "jira.operation.maintenance",
-  fields: { ...FACT_FIELDS, operation: { type: "string", dataClass: "closed-enum", required: true, values: MAINTENANCE_OPERATIONS } },
-  proofIds: ["jira.operation.maintenance.line"] });
-const SAVED_VIEWS = defineActivityLogOperation({ ...FACT_REGISTRATION, op: "jira.operation.saved-views",
-  fields: { ...FACT_FIELDS, operation: { type: "string", dataClass: "closed-enum", required: true, values: SAVED_VIEW_OPERATIONS } },
-  proofIds: ["jira.operation.saved-views.line"] });
-const CORE = defineActivityLogOperation({ ...FACT_REGISTRATION, op: "jira.operation.core",
-  fields: { ...FACT_FIELDS, operation: { type: "string", dataClass: "closed-enum", required: true, values: JIRA_CORE_MUTATIONS } },
-  proofIds: ["jira.operation.core.line"] });
-const LOCAL = defineActivityLogOperation({ ...FACT_REGISTRATION, op: "jira.operation.local",
-  fields: { ...FACT_FIELDS, operation: { type: "string", dataClass: "closed-enum", required: true, values: JIRA_READ_TOOL_FAMILIES.localCompositions } },
-  proofIds: ["jira.operation.local.line"] });
+const ISSUES = defineActivityLogOperation({
+  ...FACT_REGISTRATION,
+  op: "jira.operation.issues",
+  fields: {
+    ...FACT_FIELDS,
+    operation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ISSUE_OPERATIONS,
+    },
+  },
+  proofIds: ["jira.operation.issues.line"],
+});
+const PLANNING = defineActivityLogOperation({
+  ...FACT_REGISTRATION,
+  op: "jira.operation.planning",
+  fields: {
+    ...FACT_FIELDS,
+    operation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: PLANNING_OPERATIONS,
+    },
+  },
+  proofIds: ["jira.operation.planning.line"],
+});
+const PROJECTS = defineActivityLogOperation({
+  ...FACT_REGISTRATION,
+  op: "jira.operation.projects",
+  fields: {
+    ...FACT_FIELDS,
+    operation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: PROJECT_OPERATIONS,
+    },
+  },
+  proofIds: ["jira.operation.projects.line"],
+});
+const METADATA = defineActivityLogOperation({
+  ...FACT_REGISTRATION,
+  op: "jira.operation.metadata",
+  fields: {
+    ...FACT_FIELDS,
+    operation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: METADATA_OPERATIONS,
+    },
+  },
+  proofIds: ["jira.operation.metadata.line"],
+});
+const SCHEMES = defineActivityLogOperation({
+  ...FACT_REGISTRATION,
+  op: "jira.operation.schemes",
+  fields: {
+    ...FACT_FIELDS,
+    operation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: SCHEME_OPERATIONS,
+    },
+  },
+  proofIds: ["jira.operation.schemes.line"],
+});
+const IDENTITIES = defineActivityLogOperation({
+  ...FACT_REGISTRATION,
+  op: "jira.operation.identities",
+  fields: {
+    ...FACT_FIELDS,
+    operation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: IDENTITY_OPERATIONS,
+    },
+  },
+  proofIds: ["jira.operation.identities.line"],
+});
+const AVATARS = defineActivityLogOperation({
+  ...FACT_REGISTRATION,
+  op: "jira.operation.avatars",
+  fields: {
+    ...FACT_FIELDS,
+    operation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: AVATAR_OPERATIONS,
+    },
+  },
+  proofIds: ["jira.operation.avatars.line"],
+});
+const PROPERTIES = defineActivityLogOperation({
+  ...FACT_REGISTRATION,
+  op: "jira.operation.properties",
+  fields: {
+    ...FACT_FIELDS,
+    operation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: PROPERTY_OPERATIONS,
+    },
+  },
+  proofIds: ["jira.operation.properties.line"],
+});
+const CONFIGURATION = defineActivityLogOperation({
+  ...FACT_REGISTRATION,
+  op: "jira.operation.configuration",
+  fields: {
+    ...FACT_FIELDS,
+    operation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CONFIGURATION_OPERATIONS,
+    },
+  },
+  proofIds: ["jira.operation.configuration.line"],
+});
+const MAINTENANCE = defineActivityLogOperation({
+  ...FACT_REGISTRATION,
+  op: "jira.operation.maintenance",
+  fields: {
+    ...FACT_FIELDS,
+    operation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: MAINTENANCE_OPERATIONS,
+    },
+  },
+  proofIds: ["jira.operation.maintenance.line"],
+});
+const SAVED_VIEWS = defineActivityLogOperation({
+  ...FACT_REGISTRATION,
+  op: "jira.operation.saved-views",
+  fields: {
+    ...FACT_FIELDS,
+    operation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: SAVED_VIEW_OPERATIONS,
+    },
+  },
+  proofIds: ["jira.operation.saved-views.line"],
+});
+const CORE = defineActivityLogOperation({
+  ...FACT_REGISTRATION,
+  op: "jira.operation.core",
+  fields: {
+    ...FACT_FIELDS,
+    operation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: JIRA_CORE_MUTATIONS,
+    },
+  },
+  proofIds: ["jira.operation.core.line"],
+});
+const LOCAL = defineActivityLogOperation({
+  ...FACT_REGISTRATION,
+  op: "jira.operation.local",
+  fields: {
+    ...FACT_FIELDS,
+    operation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: JIRA_READ_TOOL_FAMILIES.localCompositions,
+    },
+  },
+  proofIds: ["jira.operation.local.line"],
+});
 
 interface Observation {
   readonly stage: (typeof FACT_FIELDS.stage.values)[number];
@@ -171,51 +398,93 @@ interface FactInput {
   readonly envelope: ActivityLogEventEnvelope;
   readonly observation: Observation;
 }
-function belongs<const Names extends readonly string[]>(names: Names, tool: string): tool is Names[number] {
-  return names.some((name) => name === tool);
+function belongs<const Names extends readonly string[]>(
+  names: Names,
+  tool: string,
+): tool is Names[number] {
+  return names.includes(tool);
 }
 // Each emission names its own static registration. No dynamic registry factory is admitted.
 function issueFact({ tool, envelope, observation }: FactInput): ServerLogEvent | undefined {
-  return belongs(ISSUE_OPERATIONS, tool) ? activityLogEvent(ISSUES, envelope, { ...observation, operation: tool }) : undefined;
+  return belongs(ISSUE_OPERATIONS, tool)
+    ? activityLogEvent(ISSUES, envelope, { ...observation, operation: tool })
+    : undefined;
 }
 function planningFact({ tool, envelope, observation }: FactInput): ServerLogEvent | undefined {
-  return belongs(PLANNING_OPERATIONS, tool) ? activityLogEvent(PLANNING, envelope, { ...observation, operation: tool }) : undefined;
+  return belongs(PLANNING_OPERATIONS, tool)
+    ? activityLogEvent(PLANNING, envelope, { ...observation, operation: tool })
+    : undefined;
 }
 function projectFact({ tool, envelope, observation }: FactInput): ServerLogEvent | undefined {
-  return belongs(PROJECT_OPERATIONS, tool) ? activityLogEvent(PROJECTS, envelope, { ...observation, operation: tool }) : undefined;
+  return belongs(PROJECT_OPERATIONS, tool)
+    ? activityLogEvent(PROJECTS, envelope, { ...observation, operation: tool })
+    : undefined;
 }
 function metadataFact({ tool, envelope, observation }: FactInput): ServerLogEvent | undefined {
-  return belongs(METADATA_OPERATIONS, tool) ? activityLogEvent(METADATA, envelope, { ...observation, operation: tool }) : undefined;
+  return belongs(METADATA_OPERATIONS, tool)
+    ? activityLogEvent(METADATA, envelope, { ...observation, operation: tool })
+    : undefined;
 }
 function schemeFact({ tool, envelope, observation }: FactInput): ServerLogEvent | undefined {
-  return belongs(SCHEME_OPERATIONS, tool) ? activityLogEvent(SCHEMES, envelope, { ...observation, operation: tool }) : undefined;
+  return belongs(SCHEME_OPERATIONS, tool)
+    ? activityLogEvent(SCHEMES, envelope, { ...observation, operation: tool })
+    : undefined;
 }
 function identityFact({ tool, envelope, observation }: FactInput): ServerLogEvent | undefined {
-  return belongs(IDENTITY_OPERATIONS, tool) ? activityLogEvent(IDENTITIES, envelope, { ...observation, operation: tool }) : undefined;
+  return belongs(IDENTITY_OPERATIONS, tool)
+    ? activityLogEvent(IDENTITIES, envelope, { ...observation, operation: tool })
+    : undefined;
 }
 function avatarFact({ tool, envelope, observation }: FactInput): ServerLogEvent | undefined {
-  return belongs(AVATAR_OPERATIONS, tool) ? activityLogEvent(AVATARS, envelope, { ...observation, operation: tool }) : undefined;
+  return belongs(AVATAR_OPERATIONS, tool)
+    ? activityLogEvent(AVATARS, envelope, { ...observation, operation: tool })
+    : undefined;
 }
 function propertyFact({ tool, envelope, observation }: FactInput): ServerLogEvent | undefined {
-  return belongs(PROPERTY_OPERATIONS, tool) ? activityLogEvent(PROPERTIES, envelope, { ...observation, operation: tool }) : undefined;
+  return belongs(PROPERTY_OPERATIONS, tool)
+    ? activityLogEvent(PROPERTIES, envelope, { ...observation, operation: tool })
+    : undefined;
 }
 function configurationFact({ tool, envelope, observation }: FactInput): ServerLogEvent | undefined {
-  return belongs(CONFIGURATION_OPERATIONS, tool) ? activityLogEvent(CONFIGURATION, envelope, { ...observation, operation: tool }) : undefined;
+  return belongs(CONFIGURATION_OPERATIONS, tool)
+    ? activityLogEvent(CONFIGURATION, envelope, { ...observation, operation: tool })
+    : undefined;
 }
 function maintenanceFact({ tool, envelope, observation }: FactInput): ServerLogEvent | undefined {
-  return belongs(MAINTENANCE_OPERATIONS, tool) ? activityLogEvent(MAINTENANCE, envelope, { ...observation, operation: tool }) : undefined;
+  return belongs(MAINTENANCE_OPERATIONS, tool)
+    ? activityLogEvent(MAINTENANCE, envelope, { ...observation, operation: tool })
+    : undefined;
 }
 function savedViewFact({ tool, envelope, observation }: FactInput): ServerLogEvent | undefined {
-  return belongs(SAVED_VIEW_OPERATIONS, tool) ? activityLogEvent(SAVED_VIEWS, envelope, { ...observation, operation: tool }) : undefined;
+  return belongs(SAVED_VIEW_OPERATIONS, tool)
+    ? activityLogEvent(SAVED_VIEWS, envelope, { ...observation, operation: tool })
+    : undefined;
 }
 function coreFact({ tool, envelope, observation }: FactInput): ServerLogEvent | undefined {
-  return belongs(JIRA_CORE_MUTATIONS, tool) ? activityLogEvent(CORE, envelope, { ...observation, operation: tool }) : undefined;
+  return belongs(JIRA_CORE_MUTATIONS, tool)
+    ? activityLogEvent(CORE, envelope, { ...observation, operation: tool })
+    : undefined;
 }
 function localFact({ tool, envelope, observation }: FactInput): ServerLogEvent | undefined {
-  return belongs(JIRA_READ_TOOL_FAMILIES.localCompositions, tool) ? activityLogEvent(LOCAL, envelope, { ...observation, operation: tool }) : undefined;
+  return belongs(JIRA_READ_TOOL_FAMILIES.localCompositions, tool)
+    ? activityLogEvent(LOCAL, envelope, { ...observation, operation: tool })
+    : undefined;
 }
-const FAMILY_FACTS = [issueFact, planningFact, projectFact, metadataFact, schemeFact, identityFact,
-  avatarFact, propertyFact, configurationFact, maintenanceFact, savedViewFact, coreFact, localFact];
+const FAMILY_FACTS = [
+  issueFact,
+  planningFact,
+  projectFact,
+  metadataFact,
+  schemeFact,
+  identityFact,
+  avatarFact,
+  propertyFact,
+  configurationFact,
+  maintenanceFact,
+  savedViewFact,
+  coreFact,
+  localFact,
+];
 
 /** Exact code-owned identity only; unknown or local discovery names never become native facts. */
 export function recordJiraOperationActivity(
@@ -240,16 +509,30 @@ export function recordJiraProviderCall(
   outcome: "completed" | "failed",
 ): void {
   try {
-    recordJiraOperationActivity(processServerLogSink(), {
-      correlationId, level: outcome === "failed" ? "warn" : "info",
-    }, tool, {
-      stage: "provider-call", outcome, reason: outcome === "failed" ? "tool-failed" : "none",
-    });
+    recordJiraOperationActivity(
+      processServerLogSink(),
+      {
+        correlationId,
+        level: outcome === "failed" ? "warn" : "info",
+      },
+      tool,
+      {
+        stage: "provider-call",
+        outcome,
+        reason: outcome === "failed" ? "tool-failed" : "none",
+      },
+    );
   } catch (error) {
     recordActivityLogLoss("port-sink-failed");
-    emitServerDiagnostic(undefined, serverDiagnosticFromError({
-      correlationId, operation: "atlassian.action.log-failed", source: "atlassian-action-activity",
-      error, redact: () => "server-operation-failed",
-    }));
+    emitServerDiagnostic(
+      undefined,
+      serverDiagnosticFromError({
+        correlationId,
+        operation: "atlassian.action.log-failed",
+        source: "atlassian-action-activity",
+        error,
+        redact: () => "server-operation-failed",
+      }),
+    );
   }
 }
