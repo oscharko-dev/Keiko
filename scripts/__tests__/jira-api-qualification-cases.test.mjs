@@ -5,8 +5,15 @@ import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog"
 import { jiraOperationForTool } from "../../packages/keiko-server/dist/atlassian/jiraManagedProvider.js";
 import { API_QUALIFICATION_CASES } from "../testing/jira-chat-lab/api-qualification-cases.mjs";
 import { API_QUALIFICATION_ISSUE_CASES } from "../testing/jira-chat-lab/api-qualification-issue-cases.mjs";
+import { API_QUALIFICATION_OBSERVATION_CASES } from "../testing/jira-chat-lab/api-qualification-observation-cases.mjs";
+import { API_QUALIFICATION_PROPERTY_CASES } from "../testing/jira-chat-lab/api-qualification-property-cases.mjs";
 
-const cases = [...API_QUALIFICATION_CASES, ...API_QUALIFICATION_ISSUE_CASES];
+const cases = [
+  ...API_QUALIFICATION_CASES,
+  ...API_QUALIFICATION_OBSERVATION_CASES,
+  ...API_QUALIFICATION_ISSUE_CASES,
+  ...API_QUALIFICATION_PROPERTY_CASES,
+];
 const fixture = {
   runId: "synthetic-run",
   projectId: "10000",

@@ -5,7 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { withModelFreeJira, prepareModelFreeChat } from "../testing/jira-chat-lab/chat-read.mjs";
-import { dispatchQualification } from "../testing/jira-chat-lab/api-qualification-runtime.mjs";
+import {
+  dispatchQualification,
+  qualificationWitness,
+} from "../testing/jira-chat-lab/api-qualification-runtime.mjs";
 import { DEFAULT_LAB_CONNECTION } from "../testing/jira-chat-lab/lab-client.mjs";
 
 vi.mock("../testing/jira-chat-lab/lab-client.mjs", async (original) => ({
@@ -135,3 +138,121 @@ it.each([
     }
   },
 );
+
+it("settles one model-free native effect in the production mutation journal and receipt", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "keiko-model-free-mutation-"));
+  const session = {
+    ...DEFAULT_LAB_CONNECTION,
+    directory,
+    project: "keiko-jira-4081-unit",
+    schemaVersion: 1,
+    syntheticOnly: true,
+  };
+  mkdirSync(join(directory, "secrets"));
+  writeFileSync(join(directory, "secrets/api-token"), "synthetic-unit-token", { mode: 0o600 });
+  let watching = false;
+  const requests = [];
+  const witness = qualificationWitness(session);
+  const transport = async (request) => {
+    const path = new URL(request.url).pathname;
+    requests.push(`${request.method} ${path}`);
+    let value;
+    let status = 200;
+    if (request.method === "GET" && /^\/rest\/api\/2\/issue\/(?:KEIKO-1|10001)$/u.test(path))
+      value = {
+        id: "10001",
+        key: "KEIKO-1",
+        fields: {
+          summary: "Synthetic issue",
+          project: { id: "10000", key: "KEIKO" },
+          issuetype: { id: "10002" },
+        },
+      };
+    else if (path === "/rest/api/2/mypermissions")
+      value = {
+        permissions: Object.fromEntries(
+          ["BROWSE_PROJECTS", "EDIT_ISSUES", "MANAGE_WATCHERS"].map((key) => [
+            key,
+            { key, havePermission: true },
+          ]),
+        ),
+      };
+    else if (path === "/rest/api/2/issue/10001/watchers") {
+      if (request.method === "POST") {
+        watching = true;
+        status = 204;
+      } else {
+        expect(request.method).toBe("GET");
+        value = {
+          watchCount: watching ? 1 : 0,
+          isWatching: watching,
+          watchers: watching ? [{ name: "keiko-api", active: true }] : [],
+        };
+      }
+    } else return syntheticNativeTransport(request);
+    const bodyText = value === undefined ? "" : JSON.stringify(value);
+    return {
+      kind: "response",
+      status,
+      bodyText,
+      bodyBytes: Buffer.byteLength(bodyText),
+      truncated: false,
+    };
+  };
+  try {
+    await withModelFreeJira({
+      session,
+      decorateAtlassianHttp: () =>
+        witness.decorate((_metadata, _correlation, lifecycle) => async (request) => {
+          if (lifecycle?.beforeDispatch !== undefined)
+            expect(lifecycle.beforeDispatch(request)).toBe(true);
+          const response = await transport(request);
+          if (lifecycle?.onResponse !== undefined)
+            expect(lifecycle.onResponse(request, response.status)).toBe(true);
+          return response;
+        }),
+      run: async (context) => {
+        const chat = await prepareModelFreeChat(context);
+        witness.arm("POST /rest/api/2/issue/{issueIdOrKey}/watchers", true);
+        const result = await dispatchQualification(
+          context,
+          chat,
+          {
+            tool: "jira.watch",
+            mutation: true,
+            identity: "POST /rest/api/2/issue/{issueIdOrKey}/watchers",
+          },
+          { issueKey: "KEIKO-1" },
+        );
+        expect(
+          result.dispatch.result.status,
+          JSON.stringify({
+            requests,
+            reason: result.dispatch.result.reason,
+            data: result.dispatch.result.data,
+            phase: result.journal?.phase,
+            outcome: result.journal?.outcome,
+          }),
+        ).toBe("completed");
+        expect(result.dispatch).toMatchObject({
+          kind: "settled",
+          result: { status: "completed", data: { outcome: "succeeded", isWatching: true } },
+          receipt: { status: "completed", effectStarted: true, budgetDisposition: "committed" },
+        });
+        expect(result.journal).toMatchObject({
+          phase: "settled",
+          outcome: "succeeded",
+          httpStatus: 204,
+        });
+        expect(witness.snapshot()).toMatchObject({
+          blocked: 0,
+          effects: 1,
+          responses: [{ status: 204 }],
+        });
+        expect(watching).toBe(true);
+      },
+    });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

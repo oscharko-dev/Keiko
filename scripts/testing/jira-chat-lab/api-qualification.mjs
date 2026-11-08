@@ -21,6 +21,8 @@ import {
 } from "./api-qualification-cases.mjs";
 import { dispatchQualification, qualificationWitness } from "./api-qualification-runtime.mjs";
 import { API_QUALIFICATION_ISSUE_CASES } from "./api-qualification-issue-cases.mjs";
+import { API_QUALIFICATION_OBSERVATION_CASES } from "./api-qualification-observation-cases.mjs";
+import { API_QUALIFICATION_PROPERTY_CASES } from "./api-qualification-property-cases.mjs";
 import { requireQualificationSnapshot } from "./api-qualification-snapshot.mjs";
 import {
   classifyQualification,
@@ -220,7 +222,9 @@ export async function qualifyApi(directory, only, snapshotId) {
   const revision = sourceRevision();
   const selected = caseRows(ledger, [
     ...API_QUALIFICATION_CASES,
+    ...API_QUALIFICATION_OBSERVATION_CASES,
     ...API_QUALIFICATION_ISSUE_CASES,
+    ...API_QUALIFICATION_PROPERTY_CASES,
   ]).filter((entry) => only === undefined || only.includes(entry.tool));
   assert.ok(selected.length > 0);
   await observeRelease(session);

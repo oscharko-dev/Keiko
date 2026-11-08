@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "status": "awaiting-owner-decision",
+  "decisionOwner": "oscharko",
+  "proposals": [
+    {
+      "id": "cluster-effects-require-owned-multi-node-fixture",
+      "proposedDisposition": "deferred",
+      "identities": [
+        "PUT /rest/api/2/cluster/index-snapshot/{nodeId}",
+        "DELETE /rest/api/2/cluster/node/{nodeId}",
+        "PUT /rest/api/2/cluster/node/{nodeId}/offline",
+        "POST /rest/api/2/cluster/zdu/approve",
+        "POST /rest/api/2/cluster/zdu/cancel",
+        "POST /rest/api/2/cluster/zdu/retryUpgrade",
+        "POST /rest/api/2/cluster/zdu/start"
+      ],
+      "rationale": "The existing disposable laboratory has exactly one Jira service with CLUSTERED=false. It supplies no second owned node, dead-node lifecycle or rolling-upgrade population. An invented node ID, absent task or validation error would not prove runtime unavailability or successful cluster effects.",
+      "requiredForQualification": "An owner-approved multi-node fixture within the existing laboratory, versioned node snapshots and independent observations of each requested cluster effect.",
+      "sourceReferences": [
+        "scripts/testing/jira-chat-lab/compose.yaml",
+        "scripts/testing/jira-chat-lab/lab-services.mjs",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceMutationDescriptors.ts"
+      ]
+    },
+    {
+      "id": "upgrade-run-requires-pending-native-upgrade",
+      "proposedDisposition": "deferred",
+      "identities": ["POST /rest/api/2/upgrade"],
+      "rationale": "A fresh version-bound Jira database does not supply a pending native upgrade. A no-work acknowledgement cannot establish execution and readback of upgrade tasks. Reusing another release's volume would violate the laboratory's release isolation.",
+      "requiredForQualification": "An owner-approved, snapshot-backed pending-upgrade fixture and independent native task/result observations, without using another operator's data or crossing the release boundary implicitly.",
+      "sourceReferences": [
+        "scripts/testing/jira-chat-lab/README.md",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceMutationDescriptors.ts"
+      ]
+    },
+    {
+      "id": "notification-needs-independent-delivery-observation",
+      "proposedDisposition": "deferred",
+      "identities": ["POST /rest/api/2/issue/{issueIdOrKey}/notify"],
+      "rationale": "The normal disposable setup disables outgoing email. The native notification request has no recipient-delivery readback; neither a successful acknowledgement nor a missing SMTP configuration proves delivery or a missing Jira capability.",
+      "requiredForQualification": "An owner-approved synthetic mail sink integrated into the existing laboratory and an independent matching delivery observation. No real recipient or external mail service is selected by this proposal.",
+      "sourceReferences": [
+        "scripts/testing/jira-chat-lab/setup.mjs",
+        "packages/keiko-server/src/atlassian/jiraIssueActionMutationDescriptors.ts"
+      ]
+    }
+  ]
+}

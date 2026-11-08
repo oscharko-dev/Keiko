@@ -15,7 +15,8 @@ function nativeRows(value, root) {
   return root === undefined ? value : value[root];
 }
 function projectRows(data, root) {
-  return root === "single" ? [data] : data.items;
+  if (typeof root === "function") return root(data);
+  return root === "single" ? [data] : data[root ?? "items"];
 }
 function rowValues(rows, fields, names = {}) {
   assert.ok(Array.isArray(rows));
@@ -27,7 +28,7 @@ function rowValues(rows, fields, names = {}) {
     }),
   );
 }
-function readCase(
+export function readCase(
   tool,
   path,
   fields,

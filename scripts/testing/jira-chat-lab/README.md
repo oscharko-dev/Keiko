@@ -34,7 +34,8 @@ mints its authority from an admitted stored turn, accepts its read disclosure
 through the production owner, dispatches the selected catalog operation and
 settles the stored turn. The ordinary model-backed Chat entry point is unchanged.
 
-Cases live in `api-qualification-cases.mjs`. Each case supplies typed tool
+Read cases live in `api-qualification-cases.mjs` and
+`api-qualification-observation-cases.mjs`. Each case supplies typed tool
 arguments and an independent readback using `lab-client.mjs`; direct REST calls
 are observations and fixture preparation only. A transport witness observes the
 real selected method/path and forwards responses unchanged. An unexpected or
@@ -43,8 +44,18 @@ timeout, resource 404 or mismatching readback remains unknown. Native denials an
 missing capabilities require their own independent evidence. No policy deferral
 is decided by this driver.
 
+`docs/local-knowledge/jira-api-coverage/qualification-proposals.json` collects
+owner-pending fixture/policy proposals for Claude's combined review. They do not
+change runtime availability, authorize a different lab topology or count as
+native execution evidence. Only the owner decides their disposition.
+
 The issue lifecycle cases in `api-qualification-issue-cases.mjs` use their own
-newly created issue and native acknowledgement IDs. Cases not yet authored remain
+newly created issue and native acknowledgement IDs. Property lifecycle cases in
+`api-qualification-property-cases.mjs` create an absent synthetic key, compare
+its exact native value, then independently confirm its removal while the parent
+remains readable. Writes retain the normal persisted tool preview and its
+canonical action digest, source preparation, mutation outcome and settled
+transcript through the production owners. Cases not yet authored remain
 explicitly unknown in the complete report. The driver is incomplete while any
 inventory identity lacks native qualification; a source checkpoint does not
 close AC7.

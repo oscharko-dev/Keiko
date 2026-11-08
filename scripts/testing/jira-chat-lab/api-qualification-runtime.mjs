@@ -3,14 +3,20 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { URL } from "node:url";
 import { createHarnessCatalogBudget, DEFAULT_LIMITS } from "@oscharko-dev/keiko-harness";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   mintAcceptedJiraChatAuthority,
   requestJiraChatReadGrant,
 } from "../../../packages/keiko-server/dist/atlassian/jiraChatAuthority.js";
 import {
   createJiraChatCatalogAdmission,
-  jiraChatCatalogConsumerPort,
+  createJiraChatCatalogConsumerPort,
 } from "../../../packages/keiko-server/dist/atlassian/jiraChatCatalogConsumer.js";
+import {
+  createJiraChatTurnReviewPorts,
+  jiraSourcePreparationForTurn,
+  observeJiraChatMutation,
+} from "../../../packages/keiko-server/dist/atlassian/jiraChatToolTurn.js";
 import { jiraOperationForTool } from "../../../packages/keiko-server/dist/atlassian/jiraManagedProvider.js";
 import { createCatalogToolBinder } from "../../../packages/keiko-server/dist/tool-catalog/catalogToolDispatch.js";
 import { createCodingToolInvocationRegistry } from "../../../packages/keiko-server/dist/coding-runtime/codingToolInvocationRegistry.js";
@@ -134,7 +140,7 @@ async function acceptedContext(context, chat) {
       Math.max(1, Date.parse(authority.envelope.expiresAt) - Date.now()),
     ),
   };
-  return { current, turn };
+  return { current, turn, authority };
 }
 function completeQualificationTurn(context, turn) {
   const assistant = context.deps.store.createTurnAssistant(turn.message.id, {
@@ -157,7 +163,52 @@ function completeQualificationTurn(context, turn) {
   assert.equal(completed.kind, "completed");
 }
 
-function bind(context, current, managed) {
+function qualificationReview(context, current, options, call, actionId) {
+  const writeExchange = (id) =>
+    context.deps.store
+      .findMessageById(options.message.id)
+      ?.toolTranscript?.exchanges.find(
+        (exchange) =>
+          sha256Hex(canonicalise({ messageId: options.message.id, callId: exchange.call.id })) ===
+          id,
+      );
+  const reviewableWrite = (action) => {
+    const exchange = writeExchange(action.actionId);
+    return (
+      exchange !== undefined &&
+      sha256Hex(canonicalise(exchange.call.arguments)) === action.argumentsDigest
+    );
+  };
+  const sourcePreparation = jiraSourcePreparationForTurn(options, current);
+  return {
+    sourcePreparation,
+    consumerPort: createJiraChatCatalogConsumerPort(sourcePreparation.sourceDigestFor),
+    admission: {
+      reviewableWrite,
+      sourcePreparation,
+      ...createJiraChatTurnReviewPorts(options, {
+        writeExchange,
+        reviewableWrite,
+        readAllowed: () => !current.signal.aborted,
+      }),
+    },
+    prepare: async () => {
+      const prepared = await sourcePreparation.prepareInvocation(call, actionId);
+      if (prepared?.sourceDigest !== undefined)
+        context.deps.store.updateChatToolTranscript(
+          options.message.id,
+          {
+            kind: "write-prepared",
+            callId: call.id,
+            sourceDigest: prepared.sourceDigest,
+          },
+          current.correlationId,
+        );
+    },
+  };
+}
+
+function bind(context, current, managed, review) {
   const counters = {
     iterations: 0,
     modelCalls: 0,
@@ -177,11 +228,12 @@ function bind(context, current, managed) {
     deps: context.deps,
     context: () => current,
     now: Date.now,
+    ...review.admission,
   });
   const binder = createCatalogToolBinder(
     {
       ...admission,
-      consumerPort: jiraChatCatalogConsumerPort,
+      consumerPort: review.consumerPort,
       projection: managed.projection,
       handlerBindings: managed.handlerBindings,
       budgetPort: budget.port,
@@ -198,6 +250,64 @@ function bind(context, current, managed) {
   return { binder, budget, counters };
 }
 
+async function prepareQualificationCall(context, accepted, managed, specification, args) {
+  const { current, turn, authority } = accepted;
+  const operation = jiraOperationForTool(specification.tool);
+  const call = {
+    id: randomUUID(),
+    name: specification.tool.replace(/[.-]/gu, "_"),
+    arguments: args,
+  };
+  const actionId = sha256Hex(canonicalise({ messageId: turn.message.id, callId: call.id }));
+  context.deps.store.updateChatToolTranscript(
+    turn.message.id,
+    {
+      kind: "started",
+      call,
+      ...(specification.mutation ? { operationBinding: operation.binding } : {}),
+    },
+    current.correlationId,
+  );
+  const options = {
+    deps: context.deps,
+    message: turn.message,
+    authority,
+    managed,
+    signal: current.signal,
+    correlationId: current.correlationId,
+  };
+  const review = qualificationReview(context, current, options, call, actionId);
+  await review.prepare();
+  return { call, actionId, options, review, operation };
+}
+
+function retainQualificationResult(context, execution, dispatch, budget) {
+  if (dispatch.kind !== "settled") return;
+  const { options, call, actionId, review, operation } = execution;
+  budget.acceptReceipt(dispatch.receipt, operation.declaration.descriptor);
+  const mutationOutcome = observeJiraChatMutation(
+    options,
+    call,
+    actionId,
+    dispatch.result,
+    review.sourcePreparation.sourceDigestFor(actionId, sha256Hex(canonicalise(call.arguments))),
+  );
+  context.deps.store.updateChatToolTranscript(
+    options.message.id,
+    {
+      kind: "settled",
+      callId: call.id,
+      result: dispatch.result,
+      binding: {
+        descriptor: operation.declaration.descriptor,
+        projectionDigest: options.managed.projection.projectionDigest,
+      },
+      ...(mutationOutcome === undefined ? {} : { mutationOutcome }),
+    },
+    options.correlationId,
+  );
+}
+
 export async function dispatchQualification(context, chat, specification, args) {
   const operation = jiraOperationForTool(specification.tool);
   assert.equal(operation?.definition.identity, specification.identity);
@@ -205,13 +315,21 @@ export async function dispatchQualification(context, chat, specification, args) 
     operation.definition.effects.includes("remote-write"),
     specification.mutation === true,
   );
-  const { current, turn } = await acceptedContext(context, chat);
+  const accepted = await acceptedContext(context, chat);
+  const { current, turn } = accepted;
   const managed = await context.deps.jiraChatCatalog.select([specification.identity]);
   try {
-    const { binder, budget, counters } = bind(context, current, managed);
+    const execution = await prepareQualificationCall(
+      context,
+      accepted,
+      managed,
+      specification,
+      args,
+    );
+    const { review, actionId } = execution;
+    const { binder, budget, counters } = bind(context, current, managed, review);
     const toolRef = operation.declaration.descriptor.toolRef;
     const offered = binder.offerTool(toolRef);
-    const actionId = randomUUID();
     const dispatch = await binder.dispatch(
       {
         kind: "bound",
@@ -220,10 +338,9 @@ export async function dispatchQualification(context, chat, specification, args) 
         offerId: offered.offerId,
         arguments: args,
       },
-      { actionId, idempotencyKey: randomUUID() },
+      { actionId, idempotencyKey: actionId },
     );
-    if (dispatch.kind === "settled")
-      budget.acceptReceipt(dispatch.receipt, operation.declaration.descriptor);
+    retainQualificationResult(context, execution, dispatch, budget);
     assert.equal(counters.modelCalls, 0);
     completeQualificationTurn(context, turn);
     return {
