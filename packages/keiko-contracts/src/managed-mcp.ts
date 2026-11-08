@@ -158,6 +158,8 @@ export interface ExternalMcpTool {
 export interface ExternalMcpConnection {
   /** Server-owned adapter identity; an external server named Jira cannot set this marker. */
   readonly localProvider?: "jira";
+  /** Server-owned local catalog reads only; never populated from external MCP metadata. */
+  readonly localMetadataTools?: readonly ("jira.discover" | "jira.describe")[];
   /** Aborts on connection closure or schema drift; it never authorizes reconnect/replay. */
   readonly signal: AbortSignal;
   /** Server-owned guidance for the relayed server; an external server's own text never fills it. */

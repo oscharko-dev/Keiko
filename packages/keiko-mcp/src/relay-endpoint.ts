@@ -204,8 +204,13 @@ function retainReadRelayFailure(
   }
 }
 
+function isLocalMetadataRead(input: Pick<RelayCall, "connection" | "name" | "mutation">): boolean {
+  return !input.mutation && input.connection.localProvider === "jira" &&
+    (input.name === "jira.discover" || input.name === "jira.describe") &&
+    input.connection.localMetadataTools?.includes(input.name) === true;
+}
 function beginReadCapture(input: RelayCall, context: ManagedMcpInvocationContext): ManagedMcpReadCapture | undefined {
-  if (input.mutation || input.connection.localProvider !== "jira") return undefined;
+  if (input.mutation || input.connection.localProvider !== "jira" || isLocalMetadataRead(input)) return undefined;
   const capture = context.beginReadCapture?.({
     toolName: input.name, argumentsValue: input.argumentsValue, localProvider: "jira",
     signal: AbortSignal.any([context.signal, input.signal]),
@@ -292,7 +297,8 @@ function relayServer(
       ...(connection.instructions === undefined ? {} : { instructions: connection.instructions }),
     },
   );
-  for (const tool of connection.tools.filter((tool) => allowed.has(tool.name))) {
+  const advertised = connection.tools;
+  for (const tool of advertised.filter((tool) => allowed.has(tool.name))) {
     server.registerTool(
       tool.name,
       {
@@ -301,8 +307,8 @@ function relayServer(
           : { description: boundedDescription(tool.description) }),
         inputSchema: fromJsonSchema<CatalogJsonObject>(tool.inputSchema),
       },
-      (args, sdkContext) =>
-        invokeRelayTool({
+      async (args, sdkContext) => {
+        const result = await invokeRelayTool({
           connection,
           context,
           active,
@@ -311,7 +317,14 @@ function relayServer(
           mutation: allowed.get(tool.name) === "write",
           signal: sdkContext.mcpReq.signal,
           sessionId: sdkContext.mcpReq._meta?.["ai.opencode/sessionID"],
-        }),
+        });
+        // Managed selection replaces the immutable list. Notify on this request's stream so the
+        // native client refreshes its cached tools; no separate listener or replay is needed.
+        if (connection.tools !== advertised && isLocalMetadataRead({ connection, name: tool.name,
+          mutation: allowed.get(tool.name) === "write" }))
+          await sdkContext.mcpReq.notify({ method: "notifications/tools/list_changed" });
+        return result;
+      },
     );
   }
   return server;

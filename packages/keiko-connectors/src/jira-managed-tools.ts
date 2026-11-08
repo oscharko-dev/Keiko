@@ -450,67 +450,54 @@ function isNativeDetailRead(name: string): name is NativeDetailRead {
     isJiraJqlMetadataRead,
   ].some((accepts) => accepts(name));
 }
+type NativeReadHandler = (name: NativeDetailRead, args: CatalogJsonObject,
+  request: ReturnType<typeof requestFor>) => Promise<ManagedMcpToolResult> | undefined;
+/** Keep family narrowing at the call site without duplicating the dispatch chain. */
+function nativeReadHandler<Name extends NativeDetailRead>(
+  accepts: (name: string) => name is Name,
+  execute: (name: Name, args: CatalogJsonObject, request: ReturnType<typeof requestFor>) => Promise<ManagedMcpToolResult>,
+): NativeReadHandler {
+  return (name, args, request) => accepts(name) ? execute(name, args, request) : undefined;
+}
+const ADMINISTRATION_READS: readonly NativeReadHandler[] = [
+  nativeReadHandler(isJiraAdministrativeObservationRead, executeJiraAdministrativeObservationRead),
+  nativeReadHandler(isJiraResourceLookupRead, executeJiraResourceLookupRead),
+  nativeReadHandler(isJiraColumnRead, executeJiraColumnRead),
+  nativeReadHandler(isJiraScreenRead, executeJiraScreenRead),
+  nativeReadHandler(isJiraIssueTypeSchemeRead, executeJiraIssueTypeSchemeRead),
+  nativeReadHandler(isJiraWorkflowSchemeRead, executeJiraWorkflowSchemeRead),
+  nativeReadHandler(isJiraAccessSchemeRead, executeJiraAccessSchemeRead),
+  nativeReadHandler(isJiraNotificationSchemeRead, executeJiraNotificationSchemeRead),
+  nativeReadHandler(isJiraProjectAssociationRead, executeJiraProjectAssociationRead),
+  nativeReadHandler(isJiraRoleRead, executeJiraRoleRead),
+  nativeReadHandler(isJiraPrioritySchemeRead, executeJiraPrioritySchemeRead),
+  nativeReadHandler(isJiraApplicationSettingsRead, executeJiraApplicationSettingsRead),
+  nativeReadHandler(isJiraConfigurationRead, executeJiraConfigurationRead),
+  nativeReadHandler(isJiraRuntimeSettingsRead, executeJiraRuntimeSettingsRead),
+  nativeReadHandler(isJiraMaintenanceRead, executeJiraMaintenanceRead),
+  nativeReadHandler(isJiraJobObservationRead, executeJiraJobObservationRead),
+  nativeReadHandler(isJiraAccountDiagnosticRead, executeJiraAccountDiagnosticRead),
+  nativeReadHandler(isJiraUserRead, executeJiraUserRead),
+  nativeReadHandler(isJiraDirectoryRead, executeJiraDirectoryRead),
+  nativeReadHandler(isJiraCoreMetadataRead, executeJiraCoreMetadataRead),
+  nativeReadHandler(isJiraInstanceRead, executeJiraInstanceRead),
+  nativeReadHandler(isJiraReleaseRead, executeJiraReleaseRead),
+  nativeReadHandler(isJiraScopedDirectoryRead, executeJiraScopedDirectoryRead),
+  nativeReadHandler(isJiraFieldDirectoryRead, executeJiraFieldDirectoryRead),
+  nativeReadHandler(isJiraJqlMetadataRead, executeJiraJqlMetadataRead),
+  nativeReadHandler(isJiraRemoteVersionLinkRead, executeJiraRemoteVersionLinkRead),
+  nativeReadHandler(isJiraWorklogFeedRead, executeJiraWorklogFeedRead),
+];
 function administrationRead(
   name: NativeDetailRead,
   args: CatalogJsonObject,
   request: ReturnType<typeof requestFor>,
 ): Promise<ManagedMcpToolResult> | undefined {
-  if (isJiraAdministrativeObservationRead(name)) return executeJiraAdministrativeObservationRead(name, args, request);
-  if (isJiraResourceLookupRead(name)) return executeJiraResourceLookupRead(name, args, request);
-  if (isJiraColumnRead(name)) return executeJiraColumnRead(name, args, request);
-  if (isJiraScreenRead(name)) return executeJiraScreenRead(name, args, request);
-  return schemeConfigurationRead(name, args, request) ?? instanceConfigurationRead(name, args, request) ??
-    identityAndMetadataRead(name, args, request) ?? collaborationObservationRead(name, args, request);
-}
-function schemeConfigurationRead(
-  name: NativeDetailRead,
-  args: CatalogJsonObject,
-  request: ReturnType<typeof requestFor>,
-): Promise<ManagedMcpToolResult> | undefined {
-  if (isJiraIssueTypeSchemeRead(name)) return executeJiraIssueTypeSchemeRead(name, args, request);
-  if (isJiraWorkflowSchemeRead(name)) return executeJiraWorkflowSchemeRead(name, args, request);
-  if (isJiraAccessSchemeRead(name)) return executeJiraAccessSchemeRead(name, args, request);
-  if (isJiraNotificationSchemeRead(name)) return executeJiraNotificationSchemeRead(name, args, request);
-  if (isJiraProjectAssociationRead(name)) return executeJiraProjectAssociationRead(name, args, request);
-  if (isJiraRoleRead(name)) return executeJiraRoleRead(name, args, request);
-  if (isJiraPrioritySchemeRead(name)) return executeJiraPrioritySchemeRead(name, args, request);
+  for (const read of ADMINISTRATION_READS) {
+    const result = read(name, args, request);
+    if (result !== undefined) return result;
+  }
   return undefined;
-}
-function instanceConfigurationRead(
-  name: NativeDetailRead,
-  args: CatalogJsonObject,
-  request: ReturnType<typeof requestFor>,
-): Promise<ManagedMcpToolResult> | undefined {
-  if (isJiraApplicationSettingsRead(name)) return executeJiraApplicationSettingsRead(name, args, request);
-  if (isJiraConfigurationRead(name)) return executeJiraConfigurationRead(name, args, request);
-  if (isJiraRuntimeSettingsRead(name)) return executeJiraRuntimeSettingsRead(name, args, request);
-  if (isJiraMaintenanceRead(name)) return executeJiraMaintenanceRead(name, args, request);
-  if (isJiraJobObservationRead(name)) return executeJiraJobObservationRead(name, args, request);
-  return undefined;
-}
-function identityAndMetadataRead(
-  name: NativeDetailRead,
-  args: CatalogJsonObject,
-  request: ReturnType<typeof requestFor>,
-): Promise<ManagedMcpToolResult> | undefined {
-  if (isJiraAccountDiagnosticRead(name)) return executeJiraAccountDiagnosticRead(name, args, request);
-  if (isJiraUserRead(name)) return executeJiraUserRead(name, args, request);
-  if (isJiraDirectoryRead(name)) return executeJiraDirectoryRead(name, args, request);
-  if (isJiraCoreMetadataRead(name)) return executeJiraCoreMetadataRead(name, args, request);
-  if (isJiraInstanceRead(name)) return executeJiraInstanceRead(name, args, request);
-  if (isJiraReleaseRead(name)) return executeJiraReleaseRead(name, args, request);
-  if (isJiraScopedDirectoryRead(name)) return executeJiraScopedDirectoryRead(name, args, request);
-  if (isJiraFieldDirectoryRead(name)) return executeJiraFieldDirectoryRead(name, args, request);
-  if (isJiraJqlMetadataRead(name)) return executeJiraJqlMetadataRead(name, args, request);
-  return undefined;
-}
-function collaborationObservationRead(
-  name: NativeDetailRead,
-  args: CatalogJsonObject,
-  request: ReturnType<typeof requestFor>,
-): Promise<ManagedMcpToolResult> | undefined {
-  if (isJiraRemoteVersionLinkRead(name)) return executeJiraRemoteVersionLinkRead(name, args, request);
-  return isJiraWorklogFeedRead(name) ? executeJiraWorklogFeedRead(name, args, request) : undefined;
 }
 function linkedIssueDetailRead(
   name: NativeDetailRead,

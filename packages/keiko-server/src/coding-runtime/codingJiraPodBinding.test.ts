@@ -46,7 +46,7 @@ describe("the run's Jira server definition", () => {
       Object.entries(CODING_JIRA_TOOL_RISKS)
         .filter(([, risk]) => risk === "read")
         .map(([n]) => n),
-    ).toEqual([...JIRA_MANAGED_READ_TOOLS]);
+    ).toEqual(["jira.discover", "jira.describe", ...JIRA_MANAGED_READ_TOOLS]);
     expect(
       Object.entries(CODING_JIRA_TOOL_RISKS)
         .filter(([, risk]) => risk === "write")
@@ -189,6 +189,7 @@ describe("the coding-runtime.jira-pod Activity Log operation", () => {
       expect(line).not.toContain(tool);
       digests.add(digest);
     }
-    expect(digests.size).toBe(Object.keys(CODING_JIRA_TOOL_RISKS).length);
+    // The two local discovery tools use ManagedHost's metadata lifecycle, not native Jira receipts.
+    expect(digests.size).toBe(JIRA_MANAGED_READ_TOOLS.length + CODING_MUTATIONS.length);
   });
 });

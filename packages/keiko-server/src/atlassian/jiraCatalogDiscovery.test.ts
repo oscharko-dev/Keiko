@@ -1,5 +1,7 @@
 import { describe, expect, it, vi, type Mock } from "vitest";
 import { CatalogDispatchFault } from "../tool-catalog/catalogToolErrors.js";
+import { ToolCatalogError } from "@oscharko-dev/keiko-tool-catalog";
+import * as provider from "./jiraManagedProvider.js";
 import {
   createJiraCatalogDiscoveryProvider,
   jiraToolsForIdentities,
@@ -33,6 +35,30 @@ function fixture(): {
 }
 
 describe("local Jira operation discovery", () => {
+  it("lists and resolves registry identities without compiling unrelated schemas", async () => {
+    const all = vi.spyOn(provider, "jiraOperationContracts").mockImplementation(() => {
+      throw new TypeError("Unrelated invalid descriptor");
+    });
+    try {
+      const f = fixture();
+      expect((await f.discover.execute({ maxResults: 1 }, f.context)).data.items).toHaveLength(1);
+      expect(jiraToolsForIdentities(["GET /rest/api/2/project"])).toEqual(["jira.projects"]);
+      expect(all).not.toHaveBeenCalled();
+    } finally { all.mockRestore(); }
+  });
+
+  it("bounds Coding metadata to the current server-owned tools and refuses foreign selections", async () => {
+    const f = fixture();
+    const tools = createJiraCatalogDiscoveryProvider({ tools: new Set(["jira.projects"]), nativeToolNames: true }).tools();
+    const discovery = tools.find((tool) => tool.name === "jira.discover");
+    const selection = tools.find((tool) => tool.name === "jira.describe");
+    if (discovery === undefined || selection === undefined) throw new TypeError("Missing tools");
+    expect((await discovery.execute({}, f.context)).data).toMatchObject({ total: 1,
+      items: [{ identity: "GET /rest/api/2/project", tool: "jira.projects" }] });
+    await expect(selection.execute({ identities: ["POST /rest/api/2/monitoring/app"] }, f.context))
+      .rejects.toMatchObject({ reason: "effect-denied" });
+    expect(f.select).not.toHaveBeenCalled();
+  });
   it("pages implemented registry summaries without creating a selection or reading Jira", async () => {
     const f = fixture();
     const first = await f.discover.execute({ maxResults: 1 }, f.context);
@@ -102,6 +128,16 @@ describe("local Jira operation discovery", () => {
       isError: true,
       data: { outcome: "failed", reason: "budget-exhausted", items: [] },
     });
+  });
+
+  it("refuses a selected invalid schema while preserving unrelated programming failures", async () => {
+    const f = fixture();
+    f.select.mockRejectedValueOnce(new ToolCatalogError("invalid-schema"));
+    expect(await f.describe.execute({ identities: ["GET /rest/api/2/project"] }, f.context))
+      .toMatchObject({ isError: true, data: { reason: "selection-unavailable" } });
+    const defect = new TypeError("Unexpected invariant defect");
+    f.select.mockRejectedValueOnce(defect);
+    await expect(f.describe.execute({ identities: ["GET /rest/api/2/project"] }, f.context)).rejects.toBe(defect);
   });
 
   it("honors the governed effect boundary even for local schema selection", async () => {

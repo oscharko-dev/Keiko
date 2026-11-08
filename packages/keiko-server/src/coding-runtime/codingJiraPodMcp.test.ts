@@ -35,6 +35,7 @@ import { buildUiStoreOverDatabase } from "../store/index.js";
 import { runMigrations } from "../store/schema.js";
 import { CODING_JIRA_TOOL_RISKS, type CodingJiraPodBinding } from "./codingJiraPodBinding.js";
 import { JIRA_TOOL_GUIDANCE } from "../atlassian/jiraToolGuidance.js";
+import { jiraOperationDefinitions } from "../atlassian/jiraOperationRegistry.js";
 import { postAndIdentityReadTransport } from "../../../../tests/support/jira-post-and-identity-read-fixture.js";
 
 const POD = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
@@ -283,11 +284,15 @@ interface Client {
   readonly list: () => Promise<readonly string[]>;
   readonly descriptions: () => Promise<readonly string[]>;
   readonly call: (name: string, args: Record<string, unknown>) => Promise<RpcResult>;
+  readonly rawCall: (name: string, args: Record<string, unknown>) => Promise<RpcResult>;
+  readonly select: (identities: readonly string[]) => Promise<RpcResult>;
+  readonly notifications: string[];
 }
 
 // The relay's wire as the runtime's own client speaks it: stateless Streamable HTTP JSON-RPC.
 function connect(h: Harness, connections: CodingJiraConnections): Client {
   let id = 0;
+  const notifications: string[] = [];
   const rpc = async (method: string, params: unknown): Promise<RpcResult> => {
     const reply = await connections.serve(
       "jira",
@@ -303,17 +308,16 @@ function connect(h: Harness, connections: CodingJiraConnections): Client {
       h.context,
     );
     const text = await reply.text();
-    const json = text.startsWith("{")
-      ? text
-      : text
-          .split("\n")
-          .find((line) => line.startsWith("data: "))
-          ?.slice(6);
-    const parsed = JSON.parse(json ?? "null") as { result?: RpcResult; error?: unknown };
-    if (parsed.result === undefined) return { isError: true };
+    const messages = text.startsWith("{") ? [text] : text.split("\n")
+      .filter((line) => line.startsWith("data: ")).map((line) => line.slice(6));
+    const frames = messages.map((json) => JSON.parse(json) as { result?: RpcResult; error?: unknown; method?: string });
+    for (const frame of frames) if (frame.method !== undefined) notifications.push(frame.method);
+    const parsed = frames.find((frame) => frame.result !== undefined || frame.error !== undefined);
+    if (parsed?.result === undefined) return { isError: true };
     return parsed.result;
   };
   return {
+    notifications,
     initialize: () =>
       rpc("initialize", {
         protocolVersion: "2025-03-26",
@@ -323,7 +327,17 @@ function connect(h: Harness, connections: CodingJiraConnections): Client {
     list: async () => (await rpc("tools/list", {})).tools?.map((tool) => tool.name) ?? [],
     descriptions: async () =>
       (await rpc("tools/list", {})).tools?.map((tool) => tool.description ?? "") ?? [],
-    call: (name, args) => rpc("tools/call", { name, arguments: args }),
+    rawCall: (name, args) => rpc("tools/call", { name, arguments: args }),
+    select: (identities) => rpc("tools/call", { name: "jira.describe", arguments: { identities } }),
+    // Existing native lifecycle cases explicitly traverse the same describe -> typed call path.
+    call: async (name, args) => {
+      const definition = jiraOperationDefinitions().find((entry) => entry.tool === name);
+      if (definition !== undefined) {
+        const selection = await rpc("tools/call", { name: "jira.describe", arguments: { identities: [definition.identity] } });
+        if (selection.isError === true) return selection;
+      }
+      return rpc("tools/call", { name, arguments: args });
+    },
   };
 }
 
@@ -377,7 +391,7 @@ describe("resolving the Pod the human chose", () => {
       correlationId: "run-jira-1",
       action: "bind",
       outcome: "bound",
-      toolCount: Object.keys(CODING_JIRA_TOOL_RISKS).length,
+      toolCount: Object.keys(CODING_JIRA_TOOL_RISKS).length - 2,
     });
     expect(refused).toMatchObject({
       correlationId: "run-jira-2",
@@ -421,16 +435,41 @@ describe("serving the bound Pod through the relay", () => {
     const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
     expect((await client.initialize()).instructions).toBe(JIRA_TOOL_GUIDANCE);
     const descriptions = await client.descriptions();
-    expect(descriptions).toHaveLength(Object.keys(CODING_JIRA_TOOL_RISKS).length);
+    expect(descriptions).toHaveLength(2);
     for (const description of descriptions)
       expect(description).not.toMatch(/untrusted data|Data Center only|Never retry/u);
   });
 
-  it("offers exactly the Jira tools, reads and writes, with their declared risks", async () => {
+  it("starts with only local discovery, then replaces the exact selected typed tools", async () => {
     const h = harness();
     const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
-    expect([...(await client.list())].sort()).toEqual(Object.keys(CODING_JIRA_TOOL_RISKS).sort());
+    expect(await client.list()).toEqual(["jira.discover", "jira.describe"]);
+    expect(await client.rawCall("jira.projects", {})).toMatchObject({ isError: true });
+    expect(await client.select(["GET /rest/api/2/project"])).not.toHaveProperty("isError", true);
+    expect(await client.list()).toEqual(["jira.discover", "jira.describe", "jira.projects"]);
+    expect(client.notifications).toEqual(["notifications/tools/list_changed"]);
+    await client.select(["GET /rest/api/2/issue/{issueIdOrKey}"]);
+    expect(await client.list()).toEqual(["jira.discover", "jira.describe", "jira.issue"]);
+    await client.select([]);
+    expect(await client.list()).toEqual(["jira.discover", "jira.describe"]);
     expect(h.http).not.toHaveBeenCalled();
+  });
+
+  it("pages only admitted metadata without inventing native history or mutation receipts", async () => {
+    const h = retainingHarness(harness());
+    const client = connect(h, h.pods.connections(undefined, bound(h), {
+      runId: h.context.correlationId, currentScopes: () => ["issue-tracker.read"],
+    }));
+    const first = await client.rawCall("jira.discover", { maxResults: 1 });
+    expect(first.structuredContent).toMatchObject({ startAt: 0, nextStartAt: 1, items: [expect.any(Object)] });
+    const second = await client.rawCall("jira.discover", { startAt: 1, maxResults: 1 });
+    expect(second.structuredContent).toMatchObject({ startAt: 1, nextStartAt: 2 });
+    expect(second.structuredContent?.items).not.toEqual(first.structuredContent?.items);
+    await client.select(["GET /rest/api/2/project"]);
+    expect(h.http).not.toHaveBeenCalled();
+    expect(h.retained).toEqual([]);
+    expect(h.begun).toEqual([]);
+    expect(h.recover).not.toHaveBeenCalled();
   });
 
   // #4176: an attachment reads Chat-connected files, which a Coding run has no authority over, so
@@ -865,7 +904,7 @@ describe("a Pod that is no longer the one the human chose", () => {
     h.http.mockClear();
     change(h.pod);
 
-    await expect(client.call("jira.issue", { issueKey: "SYN-1" })).rejects.toBeInstanceOf(
+    await expect(client.rawCall("jira.issue", { issueKey: "SYN-1" })).rejects.toBeInstanceOf(
       ManagedMcpError,
     );
     expect(h.http).not.toHaveBeenCalled();
@@ -1091,7 +1130,7 @@ describe("Coding Jira's live, explicitly selected scopes", () => {
       currentScopes: () => ["issue-tracker.read", "issue-tracker.write"],
     };
     const client = connect(h, h.pods.connections(undefined, bound(h), authority));
-    expect(await client.list()).toContain("jira.projects");
+    expect(await client.list()).toEqual(["jira.discover", "jira.describe"]);
     expect(await client.list()).not.toContain("jira.set-app-monitoring");
     expect(await client.call("jira.set-app-monitoring", { enabled: true, expectedEnabled: false })).toMatchObject({ isError: true });
     expect(h.http).not.toHaveBeenCalled();
@@ -1100,6 +1139,7 @@ describe("Coding Jira's live, explicitly selected scopes", () => {
   it("does not share an admin host with another run using the same Pod", async () => {
     const h = harness();
     const admin = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
+    await admin.select(["POST /rest/api/2/monitoring/app"]);
     expect(await admin.list()).toContain("jira.set-app-monitoring");
     const ordinary = connect(h, h.pods.connections(undefined, bound(h), {
       runId: h.context.correlationId,
@@ -1158,12 +1198,13 @@ describe("Coding Jira's live, explicitly selected scopes", () => {
     let scopes: readonly CodingWorkbenchConnectorScope[] = ["issue-tracker.read", "issue-tracker.write", "issue-tracker.admin"];
     const authority: CodingJiraRunAuthority = { runId: h.context.correlationId, currentScopes: () => scopes };
     const client = connect(h, h.pods.connections(undefined, bound(h), authority));
+    await client.select(["POST /rest/api/2/monitoring/app"]);
     expect(await client.list()).toContain("jira.set-app-monitoring");
     h.http.mockImplementation(async () => {
       scopes = ["issue-tracker.read", "issue-tracker.write"];
       return response({ enabled: false });
     });
-    const result = await client.call("jira.set-app-monitoring", { enabled: true, expectedEnabled: false });
+    const result = await client.rawCall("jira.set-app-monitoring", { enabled: true, expectedEnabled: false });
     expect(h.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
     expect(h.http).toHaveBeenCalledTimes(1);
     expect(h.dispatched).not.toHaveBeenCalled();
@@ -1182,7 +1223,7 @@ describe("Coding Jira's live, explicitly selected scopes", () => {
       runId: h.context.correlationId,
       currentScopes: () => revoked ? undefined : ["issue-tracker.read"],
     }));
-    expect(await client.list()).toContain("jira.projects");
+    expect(await client.list()).toEqual(["jira.discover", "jira.describe"]);
     revoked = true;
     await expect(client.list()).rejects.toBeInstanceOf(ManagedMcpError);
     expect(h.http).not.toHaveBeenCalled();

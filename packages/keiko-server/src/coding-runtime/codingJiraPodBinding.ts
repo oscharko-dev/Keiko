@@ -51,6 +51,8 @@ const CODING_JIRA_MUTATIONS = JIRA_MUTATION_OPERATIONS.filter(
 /** Reads are the human's grant; writes keep following the run's autonomy mode. */
 export const CODING_JIRA_TOOL_RISKS: Readonly<Record<string, McpToolRisk>> = Object.freeze(
   Object.fromEntries([
+    ["jira.discover", "read"],
+    ["jira.describe", "read"],
     ...JIRA_MANAGED_READ_TOOLS.map((tool): [string, McpToolRisk] => [tool, "read"]),
     ...CODING_JIRA_MUTATIONS.map((tool): [string, McpToolRisk] => [tool, "write"]),
   ]),

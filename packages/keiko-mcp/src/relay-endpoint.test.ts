@@ -1,4 +1,6 @@
 import { afterEach, expect, it, vi, type Mock } from "vitest";
+import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import { MANAGED_MCP_PROTOCOL_VERSION } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type {
   ExternalMcpConnection,
   ManagedMcpInvocationContext,
@@ -31,6 +33,7 @@ function fixture(
   instructions?: string,
   dispatchGate = true,
   localProvider?: "jira",
+  localMetadataTools?: ExternalMcpConnection["localMetadataTools"],
 ): Fixture {
   let allowed = true;
   const recover = vi.fn(() => {
@@ -56,6 +59,7 @@ function fixture(
   const connection: ExternalMcpConnection = {
     signal: new AbortController().signal,
     ...(localProvider === undefined ? {} : { localProvider }),
+    ...(localMetadataTools === undefined ? {} : { localMetadataTools }),
     ...(instructions === undefined ? {} : { instructions }),
     ...(dispatchGate ? { dispatchGate: true } : {}),
     tools: [
@@ -135,6 +139,52 @@ it("exposes only admitted tools to the real SDK and preserves MCP results and pr
   });
   expect(f.call).toHaveBeenCalledOnce();
   expect(f.call.mock.calls[0]?.[2].invocationId).toBe("private-invocation");
+});
+
+it.each([MANAGED_MCP_PROTOCOL_VERSION, "2025-03-26"])(
+  "delivers tools/list_changed to the SDK client after local selection on %s", async (version) => {
+    const initial = [{ name: "jira.describe", inputSchema }];
+    let tools: ExternalMcpConnection["tools"] = initial;
+    let changed: (() => void) | undefined;
+    const notification = new Promise<void>((resolve) => { changed = resolve; });
+    const nativeCapture = vi.fn(() => { throw new TypeError("Metadata is not a native Jira read"); });
+    const context: ManagedMcpInvocationContext = { invocationId: "catalog-selection", correlationId: "same-run",
+      signal: new AbortController().signal, beforeEffect: () => true, beginReadCapture: nativeCapture };
+    const connection: ExternalMcpConnection = { signal: context.signal, localProvider: "jira",
+      localMetadataTools: ["jira.describe"], get tools() { return tools; },
+      call: async () => {
+        tools = [...initial, { name: "jira.issue", inputSchema }];
+        return { content: [{ type: "text", text: "Selected" }] };
+      }, close: async () => undefined,
+    };
+    const endpoint = createMcpRelayEndpoint(connection, { "jira.describe": "read", "jira.issue": "read" });
+    const client = new Client({ name: "native-catalog-client", version: "1" }, { capabilities: {},
+      versionNegotiation: { mode: { pin: version }, probe: { maxRetries: 0 } },
+      listChanged: { tools: { autoRefresh: false, debounceMs: 0, onChanged: () => { changed?.(); } } },
+    });
+    cleanup.push(endpoint.close, () => client.close());
+    await client.connect(new StreamableHTTPClientTransport(new URL("https://relay.example.test/mcp"), {
+      fetch: (input, init) => endpoint.fetch(new Request(input, init), context),
+    }));
+    expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual(["jira.describe"]);
+    await client.callTool({ name: "jira.describe", arguments: { text: "selected identity" } });
+    await notification;
+    expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual(["jira.describe", "jira.issue"]);
+    expect(nativeCapture).not.toHaveBeenCalled();
+  },
+);
+
+it("does not exempt an unrelated read from native capture through a forged metadata list", async () => {
+  // A runtime-forged field is checked by exact closed names, independently of its compile-time type.
+  const metadata: ("jira.discover" | "jira.describe")[] = ["jira.describe"];
+  Reflect.set(metadata, 0, "echo");
+  const f = fixture("read", undefined, true, "jira", metadata);
+  const nativeCapture = vi.fn(() => undefined);
+  const reply = await legacy(f, "tools/call", { name: "echo", arguments: { text: "x" } },
+    { ...f.context, beginReadCapture: nativeCapture });
+  expect(nativeCapture).toHaveBeenCalledOnce();
+  expect(reply.result?.isError).toBe(true);
+  expect(f.call).not.toHaveBeenCalled();
 });
 it("announces server-owned instructions on initialize and none when the connection has none", async () => {
   const initialize = {

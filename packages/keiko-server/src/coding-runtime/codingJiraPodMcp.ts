@@ -1,7 +1,8 @@
 import type { CodingWorkbenchConnectorScope } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { prepareCodingJiraHumanInput, currentCodingJiraInput, type CodingJiraCurrentInputResolver, type CodingJiraInputAuthority, type PendingCodingJiraInput } from "./codingJiraHumanInput.js";
 import { recordJiraHumanInput } from "../atlassian/credentialActivity.js";
-import { jiraRequiredConnectorScope } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { jiraRequiredConnectorScope, JIRA_MANAGED_ACTION_TYPES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { createCodingJiraCatalog, isCodingJiraDiscovery, type CodingJiraCatalog } from "./codingJiraCatalog.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { JIRA_TOOL_GUIDANCE } from "../atlassian/jiraToolGuidance.js";
 import {
@@ -22,13 +23,11 @@ import type {
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
   ExternalMcpConnection,
-  ManagedMcpHost,
   ManagedMcpInvocationContext,
   ManagedMcpToolResult,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type { McpServerDefinition } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import {
-  createManagedMcpHost,
   createMcpRelayEndpoint,
   ManagedMcpError,
 } from "@oscharko-dev/keiko-mcp";
@@ -109,9 +108,10 @@ function requiredScope(tool: CodingJiraTool): CodingWorkbenchConnectorScope {
 }
 
 function scopedTools(scopes: readonly CodingWorkbenchConnectorScope[]): CodingJiraTool[] {
-  return (Object.keys(CODING_JIRA_TOOL_RISKS) as CodingJiraTool[]).filter((tool) =>
-    scopes.includes(requiredScope(tool)),
-  );
+  return Object.keys(CODING_JIRA_TOOL_RISKS).flatMap((name) => {
+    const tool = toolOf(name);
+    return tool !== undefined && scopes.includes(requiredScope(tool)) ? [tool] : [];
+  });
 }
 
 export interface CodingJiraPods {
@@ -141,7 +141,7 @@ interface PodEntry {
   readonly binding: CodingJiraPodBinding;
   readonly lifetime: AbortController;
   readonly ready: Promise<ReturnType<typeof createMcpRelayEndpoint>>;
-  readonly host: ManagedMcpHost<JiraInvocationContext>;
+  readonly host: CodingJiraCatalog<JiraInvocationContext>;
   readonly inputs: Map<string, PendingCodingJiraInput>;
 }
 
@@ -178,7 +178,7 @@ function callToolResult(data: CatalogJsonObject, isError: boolean): CatalogJsonO
 }
 
 function toolOf(name: string): CodingJiraPodLine["tool"] {
-  return Object.hasOwn(CODING_JIRA_TOOL_RISKS, name)
+  return Object.hasOwn(JIRA_MANAGED_ACTION_TYPES, name) && Object.hasOwn(CODING_JIRA_TOOL_RISKS, name)
     ? (name as NonNullable<CodingJiraPodLine["tool"]>)
     : undefined;
 }
@@ -374,11 +374,14 @@ class CodingJiraPodService implements CodingJiraPods {
   ): PodEntry {
     const lifetime = new AbortController();
     const inputs = new Map<string, PendingCodingJiraInput>();
-    const host = createManagedMcpHost<JiraInvocationContext>({
-      providers: [
-        createJiraProviderForCatalog(
+    const host = createCodingJiraCatalog<JiraInvocationContext>({
+      tools,
+      correlationId,
+      admitted: (tool, context) => this.current(binding) !== undefined &&
+        this.scopeRefusal(authority, context, requiredScope(tool)) === undefined,
+      provider: (selected) => createJiraProviderForCatalog(
           (context) => this.connection(binding, context),
-          tools,
+          selected,
           (operation, _args, context, execute) => this.mutate(binding, operation, context, execute),
           {
             store: this.#reports,
@@ -388,11 +391,9 @@ class CodingJiraPodService implements CodingJiraPods {
             },
           },
         ),
-      ],
       log: this.log ?? { write: (): void => undefined },
     });
-    const ready = host
-      .admit(correlationId)
+    const ready = host.ready
       .then(() =>
         createMcpRelayEndpoint(
           this.hostConnection(host, lifetime.signal, binding, authority, inputs),
@@ -593,7 +594,7 @@ class CodingJiraPodService implements CodingJiraPods {
   }
 
   private hostConnection(
-    host: ManagedMcpHost<JiraInvocationContext>,
+    host: PodEntry["host"],
     signal: AbortSignal,
     binding: CodingJiraPodBinding,
     authority: CodingJiraRunAuthority,
@@ -602,21 +603,35 @@ class CodingJiraPodService implements CodingJiraPods {
     return {
       signal,
       localProvider: "jira",
+      localMetadataTools: ["jira.discover", "jira.describe"],
       dispatchGate: true,
       instructions: JIRA_TOOL_GUIDANCE,
-      tools: host.catalog().map(({ name, descriptor }) => ({
-        name,
-        description: descriptor.description,
-        inputSchema: descriptor.inputSchema,
-      })),
-      call: (name, args, context) => this.call(host, binding, name, args, context, authority, inputs),
+      get tools() { return host.tools; },
+      call: (name, args, context) => isCodingJiraDiscovery(name)
+        ? this.discover(host, binding, name, args, context, authority)
+        : this.call(host, binding, name, args, context, authority, inputs),
       close: () => host.close(),
     };
   }
 
+  private async discover(host: PodEntry["host"], binding: CodingJiraPodBinding,
+    name: string, args: CatalogJsonObject, context: ManagedMcpInvocationContext,
+    authority: CodingJiraRunAuthority): Promise<CatalogJsonObject> {
+    // Catalog metadata uses the existing read grant; it never mints a native operation receipt.
+    const scoped = this.scopedContext(authority, context, "issue-tracker.read");
+    const guarded = { ...scoped, beforeEffect: () => scoped.beforeEffect() && this.current(binding) !== undefined };
+    try { return callToolResult(await host.call(name, args, guarded), false); }
+    catch (error) {
+      if (scoped.scopeState.missing) throw new ManagedMcpError("connector-scope-missing", undefined, "none");
+      const result = providerResult(error);
+      if (result !== undefined) return callToolResult(result, true);
+      throw error;
+    }
+  }
+
   /** One decision line per call: the closed tool, its risk and whether the Pod let it through. */
   private async call(
-    host: ManagedMcpHost<JiraInvocationContext>,
+    host: PodEntry["host"],
     binding: CodingJiraPodBinding,
     name: string,
     args: CatalogJsonObject,
@@ -634,10 +649,10 @@ class CodingJiraPodService implements CodingJiraPods {
     if (this.current(binding) === undefined)
       return this.refuseCall(context.correlationId, line, started);
     if (tool === undefined) return this.refuseCall(context.correlationId, line, started, "unavailable");
-    const refusal = this.scopeRefusal(authority, context, tool);
+    const refusal = this.scopeRefusal(authority, context, requiredScope(tool));
     if (refusal === "scope-missing") context.retainLocalFailure?.("connector-scope-missing");
     if (refusal !== undefined) return this.refuseCall(context.correlationId, line, started, refusal);
-    const scopedContext = this.scopedContext(authority, context, tool);
+    const scopedContext = this.scopedContext(authority, context, requiredScope(tool));
     try {
       const deps = this.#deps;
       if (deps === undefined) throw NOT_ADMITTED();
@@ -698,19 +713,19 @@ class CodingJiraPodService implements CodingJiraPods {
   private scopeRefusal(
     authority: CodingJiraRunAuthority,
     context: ManagedMcpInvocationContext,
-    tool: CodingJiraTool,
+    scope: CodingWorkbenchConnectorScope,
   ): "scope-missing" | "unavailable" | undefined {
     if (authority.runId !== context.correlationId || context.signal.aborted || !context.beforeEffect())
       return "unavailable";
     const scopes = authority.currentScopes("effect");
     if (scopes === undefined) return "unavailable";
-    return scopes.includes(requiredScope(tool)) ? undefined : "scope-missing";
+    return scopes.includes(scope) ? undefined : "scope-missing";
   }
 
   private scopedContext(
     authority: CodingJiraRunAuthority,
     context: ManagedMcpInvocationContext,
-    tool: CodingJiraTool,
+    scope: CodingWorkbenchConnectorScope,
   ): JiraInvocationContext {
     const scopeState = { missing: false };
     return {
@@ -719,7 +734,7 @@ class CodingJiraPodService implements CodingJiraPods {
       scopeState,
       inputAuthority: () => authority.currentInputAuthority?.(),
       beforeEffect: () => {
-        const refusal = this.scopeRefusal(authority, context, tool);
+        const refusal = this.scopeRefusal(authority, context, scope);
         if (refusal === "scope-missing") scopeState.missing = true;
         return refusal === undefined;
       },
