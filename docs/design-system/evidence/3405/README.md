@@ -382,3 +382,14 @@ inspected: progress, cancellation, reconnect status and retained update details 
 The earlier capture-10 limitation remains. Separate Chat formatter and ErrorNotice tests cover the
 new verification remedy; these updater fixtures do not prove a live Jira/model journey or that the
 initial JavaScript bundle fits its unchanged budget.
+
+## Lazy Git delivery refresh — 2026-11-08
+
+Moving the Git delivery request bodies to the existing lazy fetcher changed the declared `api.ts`
+digest. The same canonical Linux producer ran with Keychain access disabled, 4 CPUs, 4 GiB and one
+Chromium worker: all nine cases passed (exit 0, 91.92 seconds). The three provenance records were
+regenerated and `check:update-ui-evidence` passed. Changed captures 06, 11 and 13 were visually
+inspected; forced-color controls, installation progress and reconnect details remain readable.
+The earlier capture-10 limitation remains. This updater evidence does not qualify Jira or model
+behavior. Separately, the actual Linux UI build passed the unchanged initial-page bundle gate:
+349,019 gzip bytes across 21 scripts, below the 349,184-byte ceiling.

@@ -84,7 +84,7 @@
     },
     {
       "path": "packages/keiko-ui/src/lib/api.ts",
-      "sha256": "4966a8ecbb0fce1dcae1b483610bf9c180a9b06ccf73141aab98203cd72f5661"
+      "sha256": "330532703a072ea3e17811f13bffe37736932050708e7593dc779c077147736c"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.de.ts",
