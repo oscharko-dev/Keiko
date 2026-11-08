@@ -14,13 +14,18 @@ const ENCODER = new TextEncoder();
 describe("canonical avatar upload identities", () => {
   it("binds file review to exactly the five fixed raw upload tools", () => {
     expect([...JIRA_AVATAR_UPLOAD_MUTATIONS]).toEqual([
-      "jira.upload-temporary-avatar", "jira.upload-issue-type-avatar", "jira.upload-project-avatar",
-      "jira.upload-owned-avatar", "jira.upload-user-avatar",
+      "jira.upload-temporary-avatar",
+      "jira.upload-issue-type-avatar",
+      "jira.upload-project-avatar",
+      "jira.upload-owned-avatar",
+      "jira.upload-user-avatar",
     ]);
     for (const name of JIRA_AVATAR_MUTATIONS)
       expect(isJiraAvatarUploadOperation(name)).toBe(name.startsWith("jira.upload-"));
     expect(isJiraAvatarUploadOperation("jira.upload-avatar-arbitrary")).toBe(false);
-    expect(Reflect.set(JIRA_AVATAR_UPLOAD_MUTATIONS, "0", "jira.upload-avatar-arbitrary")).toBe(false);
+    expect(Reflect.set(JIRA_AVATAR_UPLOAD_MUTATIONS, "0", "jira.upload-avatar-arbitrary")).toBe(
+      false,
+    );
     expect(Reflect.set(JIRA_AVATAR_MUTATIONS, "0", "jira.upload-avatar-arbitrary")).toBe(false);
   });
 });

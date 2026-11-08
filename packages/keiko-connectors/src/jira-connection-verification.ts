@@ -17,7 +17,9 @@ export type JiraDataCenterCompatibilityResult =
   | { readonly status: Exclude<AtlassianConnectionVerificationStatus, "ok"> };
 
 /** Shared native serverInfo projection; observing a release does not qualify its operations. */
-export function jiraServerCompatibility(value: Record<string, unknown>): JiraDataCenterCompatibilityResult {
+export function jiraServerCompatibility(
+  value: Record<string, unknown>,
+): JiraDataCenterCompatibilityResult {
   if (
     typeof value.version !== "string" ||
     !Array.isArray(value.versionNumbers) ||
@@ -64,7 +66,8 @@ async function probe(
   if (remaining <= 0 || signal?.aborted) return { failure: "timeout" };
   // The inherited absolute budget also owns I/O cancellation, independently of a port's timeout floor.
   const deadlineSignal = AbortSignal.timeout(Math.floor(remaining));
-  const cancellation = signal === undefined ? deadlineSignal : AbortSignal.any([signal, deadlineSignal]);
+  const cancellation =
+    signal === undefined ? deadlineSignal : AbortSignal.any([signal, deadlineSignal]);
   const result = await port({
     method: "GET",
     url,
@@ -115,12 +118,7 @@ export async function verifyJiraDataCenterCompatibility(
   if ("failure" in server) return failedProbe(server.failure);
   const result = jiraServerCompatibility(server.value);
   if (result.status !== "ok") return result;
-  const identity = await verifyJiraDataCenterIdentity(
-    port,
-    baseUrl,
-    { deadlineAt: deadline },
-    now,
-  );
+  const identity = await verifyJiraDataCenterIdentity(port, baseUrl, { deadlineAt: deadline }, now);
   return identity === "ok" ? result : failedProbe(identity);
 }
 

@@ -39,18 +39,26 @@ export const JIRA_ACCOUNT_DIAGNOSTIC_READ_DEFINITIONS = {
     "Read and locally page the bounded cached duplicate-account map with flush=false. Preserve exact usernames and directory IDs; supplied directory names and userActive flags are observations, with false distinct from unknown. The total describes returned cached usernames only, not all users or freshly scanned duplicates. No cache flush, directory synchronization or account mutation occurs.",
     object(PAGING),
     {
-      ...page(object({
-        username: { ...text(255), minLength: 1 },
-        directories: {
-          type: "array",
-          maxItems: MAX,
-          items: object({
-            directoryId: ID,
-            directoryName: { ...text(255), minLength: 1 },
-            userActive: BOOL,
-          }, ["directoryId"]),
-        },
-      }, ["username", "directories"])),
+      ...page(
+        object(
+          {
+            username: { ...text(255), minLength: 1 },
+            directories: {
+              type: "array",
+              maxItems: MAX,
+              items: object(
+                {
+                  directoryId: ID,
+                  directoryName: { ...text(255), minLength: 1 },
+                  userActive: BOOL,
+                },
+                ["directoryId"],
+              ),
+            },
+          },
+          ["username", "directories"],
+        ),
+      ),
       observationScope: CACHED_DUPLICATES,
     },
     100,

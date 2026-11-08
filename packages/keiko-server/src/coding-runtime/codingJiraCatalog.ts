@@ -1,36 +1,77 @@
-import { TOOL_CATALOG_LIMITS, type CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import type { ExternalMcpTool, ManagedMcpHost, ManagedMcpInvocationContext, ManagedMcpLogPort, ManagedMcpProvider } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
+import {
+  TOOL_CATALOG_LIMITS,
+  type CatalogJsonObject,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import type {
+  ExternalMcpTool,
+  ManagedMcpHost,
+  ManagedMcpInvocationContext,
+  ManagedMcpLogPort,
+  ManagedMcpProvider,
+} from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { createManagedMcpHost, ManagedMcpError } from "@oscharko-dev/keiko-mcp";
-import { createJiraCatalogDiscoveryProvider, JIRA_CATALOG_DISCOVERY_TOOLS, jiraToolsForIdentities, type JiraCatalogDiscoveryContext } from "../atlassian/jiraCatalogDiscovery.js";
+import {
+  createJiraCatalogDiscoveryProvider,
+  JIRA_CATALOG_DISCOVERY_TOOLS,
+  jiraToolsForIdentities,
+  type JiraCatalogDiscoveryContext,
+} from "../atlassian/jiraCatalogDiscovery.js";
 import { CatalogDispatchFault, requireDispatch } from "../tool-catalog/catalogToolErrors.js";
 import type { CodingJiraTool } from "./codingJiraPodBinding.js";
-import { DEFAULT_SERVER_DIAGNOSTIC_SUMMARY, emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
+import {
+  DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+} from "../diagnostics-log.js";
 
-export function isCodingJiraDiscovery(name: string): name is (typeof JIRA_CATALOG_DISCOVERY_TOOLS)[number] {
+export function isCodingJiraDiscovery(
+  name: string,
+): name is (typeof JIRA_CATALOG_DISCOVERY_TOOLS)[number] {
   return name === "jira.discover" || name === "jira.describe";
 }
-function advertised<Context extends ManagedMcpInvocationContext>(host: ManagedMcpHost<Context>): readonly ExternalMcpTool[] {
-  return Object.freeze(host.catalog().map(({ name, descriptor }) => Object.freeze({ name,
-    description: descriptor.description, inputSchema: descriptor.inputSchema })));
+function advertised<Context extends ManagedMcpInvocationContext>(
+  host: ManagedMcpHost<Context>,
+): readonly ExternalMcpTool[] {
+  return Object.freeze(
+    host.catalog().map(({ name, descriptor }) =>
+      Object.freeze({
+        name,
+        description: descriptor.description,
+        inputSchema: descriptor.inputSchema,
+      }),
+    ),
+  );
 }
 export interface CodingJiraCatalog<Context extends ManagedMcpInvocationContext> {
   readonly ready: Promise<void>;
   readonly tools: readonly ExternalMcpTool[];
-  readonly call: (name: string, args: CatalogJsonObject, context: Context) => Promise<CatalogJsonObject>;
+  readonly call: (
+    name: string,
+    args: CatalogJsonObject,
+    context: Context,
+  ) => Promise<CatalogJsonObject>;
   readonly close: () => Promise<void>;
 }
 
 async function retire<Context extends ManagedMcpInvocationContext>(
-  host: ManagedMcpHost<Context> | undefined, correlationId: string,
+  host: ManagedMcpHost<Context> | undefined,
+  correlationId: string,
 ): Promise<void> {
-  try { await host?.close(); }
-  catch (error) {
+  try {
+    await host?.close();
+  } catch (error) {
     // ManagedHost marks itself closed and aborts before awaiting SDK teardown. Once the new
     // selection is published, a teardown failure cannot turn it into a refused selection.
-    emitServerDiagnostic(undefined, serverDiagnosticFromError({ correlationId,
-      operation: "coding.jira-pod.catalog-cleanup", source: "coding.jira-pod", error,
-      redact: () => DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
-    }));
+    emitServerDiagnostic(
+      undefined,
+      serverDiagnosticFromError({
+        correlationId,
+        operation: "coding.jira-pod.catalog-cleanup",
+        source: "coding.jira-pod",
+        error,
+        redact: () => DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+      }),
+    );
   }
 }
 
@@ -42,11 +83,15 @@ export function createCodingJiraCatalog<Context extends ManagedMcpInvocationCont
   readonly correlationId: string;
   readonly admitted: (tool: CodingJiraTool, context: ManagedMcpInvocationContext) => boolean;
   /** Undefined is unavailable accounting, distinct from an exhausted observed budget. */
-  readonly fits: (tools: readonly ExternalMcpTool[], result: CatalogJsonObject) => boolean | undefined;
+  readonly fits: (
+    tools: readonly ExternalMcpTool[],
+    result: CatalogJsonObject,
+  ) => boolean | undefined;
 }): CodingJiraCatalog<Context> {
   const allowed = new Set<string>(input.tools);
   const discovery = createManagedMcpHost<JiraCatalogDiscoveryContext>({
-    providers: [createJiraCatalogDiscoveryProvider({ tools: allowed, nativeToolNames: true })], log: input.log,
+    providers: [createJiraCatalogDiscoveryProvider({ tools: allowed, nativeToolNames: true })],
+    log: input.log,
   });
   let initial: readonly ExternalMcpTool[] = Object.freeze([]);
   let tools = initial;
@@ -61,9 +106,16 @@ export function createCodingJiraCatalog<Context extends ManagedMcpInvocationCont
   });
 
   function requireCurrent(context: ManagedMcpInvocationContext): void {
-    requireDispatch(!closed && active === 0 && !context.signal.aborted && context.beforeEffect(), "denied", "effect-denied");
+    requireDispatch(
+      !closed && active === 0 && !context.signal.aborted && context.beforeEffect(),
+      "denied",
+      "effect-denied",
+    );
   }
-  function selectedNames(identities: readonly string[], context: ManagedMcpInvocationContext): CodingJiraTool[] {
+  function selectedNames(
+    identities: readonly string[],
+    context: ManagedMcpInvocationContext,
+  ): CodingJiraTool[] {
     return jiraToolsForIdentities(identities).map((name) => {
       const tool = input.tools.find((allowedName) => allowedName === name);
       requireDispatch(tool !== undefined, "denied", "effect-denied");
@@ -72,7 +124,11 @@ export function createCodingJiraCatalog<Context extends ManagedMcpInvocationCont
     });
   }
 
-  async function select(identities: readonly string[], result: CatalogJsonObject, context: ManagedMcpInvocationContext): Promise<void> {
+  async function select(
+    identities: readonly string[],
+    result: CatalogJsonObject,
+    context: ManagedMcpInvocationContext,
+  ): Promise<void> {
     requireCurrent(context);
     requireDispatch(!selecting, "denied", "effect-denied");
     const narrowed = selectedNames(identities, context);
@@ -83,9 +139,17 @@ export function createCodingJiraCatalog<Context extends ManagedMcpInvocationCont
         candidate = createManagedMcpHost({ providers: [input.provider(narrowed)], log: input.log });
       await candidate?.admit(context.correlationId);
       const next = [...initial, ...(candidate === undefined ? [] : advertised(candidate))];
-      requireDispatch(Buffer.byteLength(JSON.stringify(next)) <= TOOL_CATALOG_LIMITS.maxResultBytes, "denied", "budget-exhausted");
+      requireDispatch(
+        Buffer.byteLength(JSON.stringify(next)) <= TOOL_CATALOG_LIMITS.maxResultBytes,
+        "denied",
+        "budget-exhausted",
+      );
       requireCurrent(context);
-      requireDispatch(narrowed.every((name) => input.admitted(name, context)), "denied", "effect-denied");
+      requireDispatch(
+        narrowed.every((name) => input.admitted(name, context)),
+        "denied",
+        "effect-denied",
+      );
       if (narrowed.length > 0) {
         const fits = input.fits(next, result);
         requireDispatch(fits !== undefined, "failed", "handler-unavailable");
@@ -108,19 +172,32 @@ export function createCodingJiraCatalog<Context extends ManagedMcpInvocationCont
 
   return {
     ready,
-    get tools(): readonly ExternalMcpTool[] { return tools; },
-    async call(name: string, args: CatalogJsonObject, context: Context): Promise<CatalogJsonObject> {
-      if (closed || context.signal.aborted || !context.beforeEffect()) throw new ManagedMcpError("not-admitted");
-      if (isCodingJiraDiscovery(name)) return discovery.call(name, args, { ...context,
-        jiraDiscoveryResultFits: (result) => Buffer.byteLength(JSON.stringify(result)) <= TOOL_CATALOG_LIMITS.maxResultBytes,
-        selectJiraOperations: (identities, result) => select(identities, result, context),
-      });
+    get tools(): readonly ExternalMcpTool[] {
+      return tools;
+    },
+    async call(
+      name: string,
+      args: CatalogJsonObject,
+      context: Context,
+    ): Promise<CatalogJsonObject> {
+      if (closed || context.signal.aborted || !context.beforeEffect())
+        throw new ManagedMcpError("not-admitted");
+      if (isCodingJiraDiscovery(name))
+        return discovery.call(name, args, {
+          ...context,
+          jiraDiscoveryResultFits: (result) =>
+            Buffer.byteLength(JSON.stringify(result)) <= TOOL_CATALOG_LIMITS.maxResultBytes,
+          selectJiraOperations: (identities, result) => select(identities, result, context),
+        });
       const host = selected;
       if (selecting || host === undefined || !tools.some((tool) => tool.name === name))
         throw new ManagedMcpError("not-admitted", undefined, "none");
       active += 1;
-      try { return await host.call(name, args, context); }
-      finally { active -= 1; }
+      try {
+        return await host.call(name, args, context);
+      } finally {
+        active -= 1;
+      }
     },
     async close(): Promise<void> {
       closed = true;

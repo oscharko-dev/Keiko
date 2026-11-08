@@ -230,7 +230,9 @@ function contextFromActive(
     input.deploymentCeiling,
   );
   const connectorScopes = codingRuntimeConnectorScopesForSelection(
-    effectiveMode, request.jiraPodId !== undefined || request.jiraPod !== undefined, request.connectorScopes,
+    effectiveMode,
+    request.jiraPodId !== undefined || request.jiraPod !== undefined,
+    request.connectorScopes,
   );
   return {
     runId: request.runId,
@@ -264,7 +266,11 @@ function contextFromActive(
         : { reasoningEffort: runtimeProfile.reasoningEffort }),
     },
     commandPolicy: codingRuntimeCommandPolicyForMode(effectiveMode),
-    networkPolicy: codingRuntimeNetworkPolicyForMode(effectiveMode, input.researchEgressEnabled, connectorScopes),
+    networkPolicy: codingRuntimeNetworkPolicyForMode(
+      effectiveMode,
+      input.researchEgressEnabled,
+      connectorScopes,
+    ),
     gates: ["human-approval"],
     budget: {
       maxRuntimeMs,

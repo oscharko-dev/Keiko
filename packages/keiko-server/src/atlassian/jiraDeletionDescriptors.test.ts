@@ -8,8 +8,12 @@ import { jiraDeletionDeclarationForTool } from "./jiraDeletionDescriptors.js";
 import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
 
 const WORKLOG = {
-  issueKey: "APP-1", worklogId: "8", timeSpentSeconds: 3600,
-  started: "2026-11-07T09:00:00.000Z", comment: "", visibility: null,
+  issueKey: "APP-1",
+  worklogId: "8",
+  timeSpentSeconds: 3600,
+  started: "2026-11-07T09:00:00.000Z",
+  comment: "",
+  visibility: null,
 } as const;
 const WORKLOG_WITHOUT_VISIBILITY = {
   issueKey: WORKLOG.issueKey,
@@ -19,28 +23,52 @@ const WORKLOG_WITHOUT_VISIBILITY = {
   comment: WORKLOG.comment,
 };
 it.each([
-  ["jira.delete-comment", { issueKey: "APP-1", commentId: "7", expectedBody: "Reviewed" }, { commentId: "7" }],
-  ["jira.delete-attachment", { issueKey: "APP-1", attachmentId: "9", filename: "scope.txt", size: 20 }, { attachmentId: "9" }],
+  [
+    "jira.delete-comment",
+    { issueKey: "APP-1", commentId: "7", expectedBody: "Reviewed" },
+    { commentId: "7" },
+  ],
+  [
+    "jira.delete-attachment",
+    { issueKey: "APP-1", attachmentId: "9", filename: "scope.txt", size: 20 },
+    { attachmentId: "9" },
+  ],
   ["jira.delete-worklog", WORKLOG, { worklogId: "8" }],
-] as const)("declares %s as a high-risk governed effect with its exact reviewed snapshot", (name, args, identity) => {
-  const declaration = jiraDeletionDeclarationForTool(name);
-  if (declaration === undefined) throw new TypeError("Missing deletion declaration");
-  expect(declaration.risk).toBe("write");
-  expect(ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK[JIRA_MANAGED_ACTION_TYPES[name]]).toBe("high");
-  expect(describeCatalogSchemaMismatch(declaration.descriptor.inputSchema, args)).toBeUndefined();
-  expect(describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, {
-    outcome: "succeeded", issueKey: "APP-1", issueId: "10001", ...identity,
-  })).toBeUndefined();
-  const connection = vi.fn();
-  const executeMutation = vi.fn();
-  expect(createJiraProviderForCatalog(connection, [name], executeMutation).tools()).toHaveLength(1);
-  expect(connection).not.toHaveBeenCalled();
-  expect(executeMutation).not.toHaveBeenCalled();
-});
+] as const)(
+  "declares %s as a high-risk governed effect with its exact reviewed snapshot",
+  (name, args, identity) => {
+    const declaration = jiraDeletionDeclarationForTool(name);
+    if (declaration === undefined) throw new TypeError("Missing deletion declaration");
+    expect(declaration.risk).toBe("write");
+    expect(ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK[JIRA_MANAGED_ACTION_TYPES[name]]).toBe("high");
+    expect(describeCatalogSchemaMismatch(declaration.descriptor.inputSchema, args)).toBeUndefined();
+    expect(
+      describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, {
+        outcome: "succeeded",
+        issueKey: "APP-1",
+        issueId: "10001",
+        ...identity,
+      }),
+    ).toBeUndefined();
+    const connection = vi.fn();
+    const executeMutation = vi.fn();
+    expect(createJiraProviderForCatalog(connection, [name], executeMutation).tools()).toHaveLength(
+      1,
+    );
+    expect(connection).not.toHaveBeenCalled();
+    expect(executeMutation).not.toHaveBeenCalled();
+  },
+);
 it.each([
   ["jira.delete-comment", { issueKey: "APP-1", commentId: "7" }],
-  ["jira.delete-comment", { issueKey: "APP-1", commentId: "7", expectedBody: "", expectedVisibility: null }],
-  ["jira.delete-attachment", { issueKey: "APP-1", attachmentId: "9", filename: "scope.txt", size: -1 }],
+  [
+    "jira.delete-comment",
+    { issueKey: "APP-1", commentId: "7", expectedBody: "", expectedVisibility: null },
+  ],
+  [
+    "jira.delete-attachment",
+    { issueKey: "APP-1", attachmentId: "9", filename: "scope.txt", size: -1 },
+  ],
   ["jira.delete-attachment", { issueKey: "APP-1", attachmentId: "9", filename: "", size: 0 }],
   ["jira.delete-worklog", WORKLOG_WITHOUT_VISIBILITY],
   ["jira.delete-worklog", { ...WORKLOG, started: "2026-11-07" }],

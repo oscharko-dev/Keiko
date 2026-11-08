@@ -225,7 +225,8 @@ describe("reviewed worklog deletion with existing completeness and template owne
   it("uses the actual response byte budget without inventing native worklog paging", async () => {
     const worklogs = Array.from({ length: TOOL_CATALOG_LIMITS.maxArrayItems + 1 }, (_, index) => ({
       ...WORKLOG,
-      id: String(index + 1), comment: "x".repeat(1024),
+      id: String(index + 1),
+      comment: "x".repeat(1024),
     }));
     const request = fixture({ before: collection(worklogs) });
     expect(await remove(request)).toMatchObject({ ok: false, reason: "bounds-exceeded" });
@@ -306,7 +307,11 @@ describe("reviewed worklog deletion with existing completeness and template owne
 });
 
 it("confirms exact deletion within a complete byte-bounded native worklog array larger than one thousand", async () => {
-  const others = Array.from({ length: 1001 }, (_, index) => ({ ...WORKLOG, id: String(index + 1), comment: "" }));
+  const others = Array.from({ length: 1001 }, (_, index) => ({
+    ...WORKLOG,
+    id: String(index + 1),
+    comment: "",
+  }));
   const request = fixture({ before: collection([...others, WORKLOG]), after: collection(others) });
   expect(await remove(request)).toEqual({ ok: true, receipt: RECEIPT });
   expect(request.mock.calls.filter(([, method]) => method === "DELETE")).toHaveLength(1);

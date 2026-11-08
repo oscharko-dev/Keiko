@@ -67,7 +67,11 @@ export interface ChatToolAuthorityEnvelope {
   readonly actionClasses:
     readonly ["connector-access"] | readonly ["connector-access", "network-egress"];
   readonly connectorScopes: readonly (
-    "issue-tracker.read" | "issue-tracker.write" | "issue-tracker.admin" | "mcp.tools" | "knowledge.read"
+    | "issue-tracker.read"
+    | "issue-tracker.write"
+    | "issue-tracker.admin"
+    | "mcp.tools"
+    | "knowledge.read"
   )[];
   readonly budget: CodingWorkbenchBudget & { readonly maxPatchBytes: 0 };
   readonly expiresAt: string;
@@ -98,7 +102,11 @@ const ENVELOPE_KEYS = [
   "approvalProofDigest",
 ] as const;
 const BUDGET_KEYS = ["maxRuntimeMs", "maxToolCalls", "maxPromptTokens", "maxPatchBytes"] as const;
-const CONNECTOR_SCOPES = new Set(["issue-tracker.read", "issue-tracker.write", "issue-tracker.admin"]);
+const CONNECTOR_SCOPES = new Set([
+  "issue-tracker.read",
+  "issue-tracker.write",
+  "issue-tracker.admin",
+]);
 
 function validateKeys(
   value: Record<string, unknown>,
@@ -468,8 +476,11 @@ function validateWriteApprovalKeys(
   }
   const excluded = Object.hasOwn(value, "excludedItemRefs");
   const attached = Object.hasOwn(value, "attachment");
-  if (!attached && (value.operation === "jira.upload-email-template-pack" ||
-      (typeof value.operation === "string" && isJiraAvatarUploadOperation(value.operation))))
+  if (
+    !attached &&
+    (value.operation === "jira.upload-email-template-pack" ||
+      (typeof value.operation === "string" && isJiraAvatarUploadOperation(value.operation)))
+  )
     errors.push("chatWriteApproval.attachment is required");
   validateKeys(
     value,
@@ -488,8 +499,11 @@ function validateWriteApprovalKeys(
   if (attached) {
     if (!isJiraAttachmentPreview(value.attachment))
       errors.push("chatWriteApproval.attachment is invalid");
-    if (value.operation !== "jira.attach" && value.operation !== "jira.upload-email-template-pack" &&
-      !(typeof value.operation === "string" && isJiraAvatarUploadOperation(value.operation)))
+    if (
+      value.operation !== "jira.attach" &&
+      value.operation !== "jira.upload-email-template-pack" &&
+      !(typeof value.operation === "string" && isJiraAvatarUploadOperation(value.operation))
+    )
       errors.push("chatWriteApproval.operation is invalid");
   }
 }

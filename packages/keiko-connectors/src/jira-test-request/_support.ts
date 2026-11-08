@@ -17,7 +17,9 @@ export function scriptedJiraMutationRequest(
 }
 
 /** Object-only native fixtures must reject scalar bodies rather than simulate a successful write. */
-export function jiraObjectMutationBody(value: Parameters<JiraMutationRequest>[2]): Readonly<Record<string, unknown>> {
+export function jiraObjectMutationBody(
+  value: Parameters<JiraMutationRequest>[2],
+): Readonly<Record<string, unknown>> {
   const body = asRecord(value);
   if (body === undefined) throw new TypeError("Expected a native JSON object request body");
   return body;

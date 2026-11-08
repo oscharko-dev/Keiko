@@ -1,16 +1,54 @@
-import { PRIVATE_ARGUMENTS, PRIVATE_RECEIPTS, PRIVATE_REMOTE_STATE } from "./jira-managed-final-scenarios.js";
-import { PROJECT_ISSUE_ARGUMENTS, PROJECT_ISSUE_RECEIPTS, PROJECT_ISSUE_EXPECTED_REMOTE_STATE } from "./jira-project-issue-transport-fixture.js";
-import { SYSTEM_ADMINISTRATION_ARGUMENTS, SYSTEM_ADMINISTRATION_RECEIPTS, SYSTEM_ADMINISTRATION_REMOTE_STATE } from "./jira-managed-system-administration-scenarios.js";
-import { SCHEME_SETTING_ARGUMENTS, SCHEME_SETTING_RECEIPTS, SCHEME_SETTING_REMOTE_STATE } from "./jira-managed-scheme-setting-scenarios.js";
-import { PERMISSION_ROLE_ARGUMENTS, PERMISSION_ROLE_RECEIPTS, PERMISSION_ROLE_REMOTE_STATE } from "./jira-managed-permission-role-scenarios.js";
+import {
+  PRIVATE_ARGUMENTS,
+  PRIVATE_RECEIPTS,
+  PRIVATE_REMOTE_STATE,
+} from "./jira-managed-final-scenarios.js";
+import {
+  PROJECT_ISSUE_ARGUMENTS,
+  PROJECT_ISSUE_RECEIPTS,
+  PROJECT_ISSUE_EXPECTED_REMOTE_STATE,
+} from "./jira-project-issue-transport-fixture.js";
+import {
+  SYSTEM_ADMINISTRATION_ARGUMENTS,
+  SYSTEM_ADMINISTRATION_RECEIPTS,
+  SYSTEM_ADMINISTRATION_REMOTE_STATE,
+} from "./jira-managed-system-administration-scenarios.js";
+import {
+  SCHEME_SETTING_ARGUMENTS,
+  SCHEME_SETTING_RECEIPTS,
+  SCHEME_SETTING_REMOTE_STATE,
+} from "./jira-managed-scheme-setting-scenarios.js";
+import {
+  PERMISSION_ROLE_ARGUMENTS,
+  PERMISSION_ROLE_RECEIPTS,
+  PERMISSION_ROLE_REMOTE_STATE,
+} from "./jira-managed-permission-role-scenarios.js";
 import type { JiraMutationOperation } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { response, type SyntheticJira } from "./jira-managed-remote.js";
-import { LIFECYCLE_ARGUMENTS, LIFECYCLE_RECEIPTS, LIFECYCLE_REMOTE_STATE } from "./jira-managed-lifecycle-scenarios.js";
-import { CONFIGURATION_ARGUMENTS, CONFIGURATION_RECEIPTS, CONFIGURATION_REMOTE_STATE } from "./jira-managed-configuration-scenarios.js";
-import { PLANNING_ARGUMENTS, PLANNING_RECEIPTS, PLANNING_REMOTE_STATE } from "./jira-managed-planning-scenarios.js";
-import { SAVED_CONFIGURATION_ARGUMENTS, SAVED_CONFIGURATION_REMOTE_STATE, SAVED_CONFIGURATION_RECEIPTS,
-  savedConfigurationRemoteState, nativeSavedConfigurationRead, type SavedConfigurationRemoteState } from "./jira-managed-saved-configuration-scenarios.js";
+import {
+  LIFECYCLE_ARGUMENTS,
+  LIFECYCLE_RECEIPTS,
+  LIFECYCLE_REMOTE_STATE,
+} from "./jira-managed-lifecycle-scenarios.js";
+import {
+  CONFIGURATION_ARGUMENTS,
+  CONFIGURATION_RECEIPTS,
+  CONFIGURATION_REMOTE_STATE,
+} from "./jira-managed-configuration-scenarios.js";
+import {
+  PLANNING_ARGUMENTS,
+  PLANNING_RECEIPTS,
+  PLANNING_REMOTE_STATE,
+} from "./jira-managed-planning-scenarios.js";
+import {
+  SAVED_CONFIGURATION_ARGUMENTS,
+  SAVED_CONFIGURATION_REMOTE_STATE,
+  SAVED_CONFIGURATION_RECEIPTS,
+  savedConfigurationRemoteState,
+  nativeSavedConfigurationRead,
+  type SavedConfigurationRemoteState,
+} from "./jira-managed-saved-configuration-scenarios.js";
 import {
   ADMINISTRATION_ARGUMENTS,
   ADMINISTRATION_REMOTE_STATE,
@@ -24,7 +62,8 @@ import {
 export type SingleMutation = Exclude<JiraMutationOperation, "jira.draft">;
 export const ATTACHED = new TextEncoder().encode("synthetic attachment body");
 export const ARGUMENTS: Readonly<Record<JiraMutationOperation, CatalogJsonObject>> = {
-  ...PRIVATE_ARGUMENTS, ...PROJECT_ISSUE_ARGUMENTS,
+  ...PRIVATE_ARGUMENTS,
+  ...PROJECT_ISSUE_ARGUMENTS,
   ...CONFIGURATION_ARGUMENTS,
   ...PERMISSION_ROLE_ARGUMENTS,
   ...SYSTEM_ADMINISTRATION_ARGUMENTS,
@@ -50,9 +89,26 @@ export const ARGUMENTS: Readonly<Record<JiraMutationOperation, CatalogJsonObject
     visibility: { type: "role", value: "Developers" },
   },
   "jira.update-worklog": { issueKey: "SYN-1", worklogId: "101", comment: "Updated" },
-  "jira.delete-attachment": { issueKey: "SYN-1", attachmentId: "10300", filename: "report.txt", size: ATTACHED.length },
-  "jira.delete-comment": { issueKey: "SYN-1", commentId: "10002", expectedBody: "Original", expectedVisibility: { type: "role", value: "Developers" } },
-  "jira.delete-worklog": { issueKey: "SYN-1", worklogId: "101", timeSpentSeconds: 3600, started: "2026-11-07T09:00:00Z", comment: "Original", visibility: { type: "role", value: "Developers" } },
+  "jira.delete-attachment": {
+    issueKey: "SYN-1",
+    attachmentId: "10300",
+    filename: "report.txt",
+    size: ATTACHED.length,
+  },
+  "jira.delete-comment": {
+    issueKey: "SYN-1",
+    commentId: "10002",
+    expectedBody: "Original",
+    expectedVisibility: { type: "role", value: "Developers" },
+  },
+  "jira.delete-worklog": {
+    issueKey: "SYN-1",
+    worklogId: "101",
+    timeSpentSeconds: 3600,
+    started: "2026-11-07T09:00:00Z",
+    comment: "Original",
+    visibility: { type: "role", value: "Developers" },
+  },
   "jira.watch": { issueKey: "SYN-1" },
   "jira.unwatch": { issueKey: "SYN-1" },
   "jira.vote": { issueKey: "SYN-1" },
@@ -95,7 +151,8 @@ export const ARGUMENTS: Readonly<Record<JiraMutationOperation, CatalogJsonObject
 
 /** Observed remote state after the request, independent of returned receipts and registry metadata. */
 export const REMOTE_STATE: Readonly<Record<SingleMutation, object>> = {
-  ...PRIVATE_REMOTE_STATE, ...PROJECT_ISSUE_EXPECTED_REMOTE_STATE,
+  ...PRIVATE_REMOTE_STATE,
+  ...PROJECT_ISSUE_EXPECTED_REMOTE_STATE,
   ...CONFIGURATION_REMOTE_STATE,
   ...PERMISSION_ROLE_REMOTE_STATE,
   ...SYSTEM_ADMINISTRATION_REMOTE_STATE,
@@ -125,7 +182,17 @@ export const REMOTE_STATE: Readonly<Record<SingleMutation, object>> = {
   "jira.update-worklog": { worklog: { id: "101", issueId: "10001", comment: "Updated" } },
   "jira.delete-attachment": { fields: { attachment: [] } },
   "jira.delete-comment": { commentDeleted: true },
-  "jira.delete-worklog": { worklogDeleted: true, fields: { timespent: 0, timetracking: { originalEstimateSeconds: 7200, remainingEstimateSeconds: 3600, timeSpentSeconds: 0 } } },
+  "jira.delete-worklog": {
+    worklogDeleted: true,
+    fields: {
+      timespent: 0,
+      timetracking: {
+        originalEstimateSeconds: 7200,
+        remainingEstimateSeconds: 3600,
+        timeSpentSeconds: 0,
+      },
+    },
+  },
   "jira.watch": { isWatching: true },
   "jira.unwatch": { isWatching: false },
   "jira.vote": { hasVoted: true },
@@ -163,7 +230,8 @@ const PROJECT_RECEIPT = {
 };
 const COMPONENT_RECEIPT = { componentId: "71", projectId: "10000", projectKey: "SYN" };
 export const SUCCESS_RECEIPTS: Readonly<Record<SingleMutation, CatalogJsonObject>> = {
-  ...PRIVATE_RECEIPTS, ...PROJECT_ISSUE_RECEIPTS,
+  ...PRIVATE_RECEIPTS,
+  ...PROJECT_ISSUE_RECEIPTS,
   ...CONFIGURATION_RECEIPTS,
   ...PERMISSION_ROLE_RECEIPTS,
   ...SYSTEM_ADMINISTRATION_RECEIPTS,
@@ -270,8 +338,9 @@ export function mutationRemoteState(): MutationRemoteState {
 function nativeAttachmentRead(state: MutationRemoteState): ReturnType<typeof response> {
   const attachments = state.fields.attachment;
   const found = Array.isArray(attachments)
-    ? attachments.find((item: unknown) =>
-        typeof item === "object" && item !== null && "id" in item && item.id === "10300",
+    ? attachments.find(
+        (item: unknown) =>
+          typeof item === "object" && item !== null && "id" in item && item.id === "10300",
       )
     : undefined;
   return found === undefined ? response({}, 404) : response(found);
@@ -292,12 +361,14 @@ function nativeDeletionRead(
   const resources: Readonly<Record<string, unknown>> = {
     "/context/rest/api/2/issue/10001": { id: "10001", key: "SYN-1", fields: state.fields },
     "/context/rest/api/2/issue/10001/worklog": {
-      startAt: 0, maxResults: 1000,
+      startAt: 0,
+      maxResults: 1000,
       total: state.worklogDeleted ? 0 : 1,
       worklogs: state.worklogDeleted ? [] : [state.worklog],
     },
     "/context/rest/api/2/issue/10001/comment": {
-      startAt: 0, maxResults: 1000,
+      startAt: 0,
+      maxResults: 1000,
       total: state.commentDeleted ? 0 : 1,
       comments: state.commentDeleted ? [] : [comment],
     },
@@ -461,7 +532,11 @@ export function nativeDeletionWrite(
         throw new TypeError("Worklog deletion must preserve the remaining estimate");
       state.worklogDeleted = true;
       state.fields.timespent = 0;
-      state.fields.timetracking = { originalEstimateSeconds: 7200, remainingEstimateSeconds: 3600, timeSpentSeconds: 0 };
+      state.fields.timetracking = {
+        originalEstimateSeconds: 7200,
+        remainingEstimateSeconds: 3600,
+        timeSpentSeconds: 0,
+      };
       return response(undefined, 204);
     default:
       return undefined;

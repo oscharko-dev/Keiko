@@ -6,7 +6,11 @@
 import type { Buffer } from "node:buffer";
 
 import { buildParserOptions } from "./parsers/registry.js";
-import { classifyOoxmlZipError, isOoxmlEntryOversized, readOoxmlZipEntryBytes } from "./parsers/ooxml-zip.js";
+import {
+  classifyOoxmlZipError,
+  isOoxmlEntryOversized,
+  readOoxmlZipEntryBytes,
+} from "./parsers/ooxml-zip.js";
 
 export interface BoundedOoxmlPackageOptions {
   /** Explicit native archive submission only; does not change ordinary document admission. */
@@ -45,11 +49,14 @@ export async function readBoundedOoxmlPackage(
       maxEntries: options.maxEntries,
       maxEntryInflatedBytes: options.maxInflatedBytes,
       maxTotalInflatedBytes: options.maxInflatedBytes,
-      ...(options.rejectNonRegularEntries === undefined ? {} : { rejectNonRegularEntries: options.rejectNonRegularEntries }),
+      ...(options.rejectNonRegularEntries === undefined
+        ? {}
+        : { rejectNonRegularEntries: options.rejectNonRegularEntries }),
     });
     return { ok: true, parts };
   } catch (error) {
-    if (options.rejectNonRegularEntries === true && isOoxmlEntryOversized(error)) return { ok: false, reason: "oversized" };
+    if (options.rejectNonRegularEntries === true && isOoxmlEntryOversized(error))
+      return { ok: false, reason: "oversized" };
     return { ok: false, reason: classifyOoxmlZipError(error) };
   }
 }

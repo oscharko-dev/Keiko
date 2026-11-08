@@ -6,9 +6,11 @@ import { Buffer } from "node:buffer";
  * rejects replacement decoding while preserving an actually encoded U+FFFD.
  */
 export function decodeCanonicalUriSegment(encoded: string | undefined): string | undefined {
-  if (encoded === undefined || !/^(?:[A-Za-z0-9_.!~*'()-]|%[0-9A-F]{2})*$/u.test(encoded)) return undefined;
+  if (encoded === undefined || !/^(?:[A-Za-z0-9_.!~*'()-]|%[0-9A-F]{2})*$/u.test(encoded))
+    return undefined;
   const decoded = encoded.replace(/(?:%[0-9A-F]{2})+/gu, (bytes) =>
-    Buffer.from(bytes.replaceAll("%", ""), "hex").toString("utf8"));
+    Buffer.from(bytes.replaceAll("%", ""), "hex").toString("utf8"),
+  );
   // Unescaped characters are ASCII and Buffer emits well-formed UTF-16, so
   // encodeURIComponent cannot encounter a lone surrogate here.
   return encodeURIComponent(decoded) === encoded ? decoded : undefined;

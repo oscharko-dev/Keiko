@@ -13,7 +13,11 @@ import {
 
 const MAX = TOOL_CATALOG_LIMITS.maxArrayItems;
 const OBSERVED_TEXT = { ...text(128), minLength: 1 };
-const INTEGER = { type: "integer", minimum: Number.MIN_SAFE_INTEGER, maximum: Number.MAX_SAFE_INTEGER };
+const INTEGER = {
+  type: "integer",
+  minimum: Number.MIN_SAFE_INTEGER,
+  maximum: Number.MAX_SAFE_INTEGER,
+};
 const COUNT = { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER };
 const BOOL = { type: "boolean" };
 const IDS = { type: "array", maxItems: MAX, uniqueItems: true, items: ID };
@@ -42,15 +46,22 @@ export const JIRA_JOB_OBSERVATION_READ_DEFINITIONS = {
   "jira.reindex-status": {
     ...read(
       "Observe the active reindex task or, when none is active, the latest task, optionally requesting one exact task ID. The returned native bean has no task identity: selectedTaskId records requested context only. Preserve supplied progress, subtask, times, type and success without converting progress to a percentage or inferring completion from missing values. Only the documented unselected GET/reindex404 means no-prior-task, with no invented task identity, progress, success or zero metrics. A selected taskId404 remains a refusal. No task is started, resumed or scheduled.",
-      object({ taskId: ID }), {},
+      object({ taskId: ID }),
+      {},
     ),
-    result: { anyOf: [
-      jiraNativeReadResult({ ...REINDEX_FIELDS, ...TASK_CONTEXT }),
-      { ...jiraNativeReadResult({ taskSelection: { type: "string", enum: ["active-or-latest"] }, taskState: { type: "string", enum: ["no-prior-task"] } }),
-        required: ["outcome", "taskSelection", "taskState"],
-        allOf: [{ properties: { outcome: { type: "string", enum: ["succeeded"] } } }],
-      },
-    ] },
+    result: {
+      anyOf: [
+        jiraNativeReadResult({ ...REINDEX_FIELDS, ...TASK_CONTEXT }),
+        {
+          ...jiraNativeReadResult({
+            taskSelection: { type: "string", enum: ["active-or-latest"] },
+            taskState: { type: "string", enum: ["no-prior-task"] },
+          }),
+          required: ["outcome", "taskSelection", "taskState"],
+          allOf: [{ properties: { outcome: { type: "string", enum: ["succeeded"] } } }],
+        },
+      ],
+    },
   },
   "jira.reindex-progress": read(
     "Read one on-demand observation from the native reindex progress endpoint, optionally for an exact requested task ID. Without a selector Jira chooses its active-or-latest task. Keep supplied progress and outcome facts separate from Keiko read success; unknown values stay unknown. No polling loop, reindex start, retry job or cancellation effect is created.",
@@ -87,7 +98,11 @@ export const JIRA_JOB_OBSERVATION_READ_DEFINITIONS = {
   "jira.index-snapshots": read(
     "List and locally page observed native index-snapshot metadata. absolutePath is Jira-reported text, never a local file reference or destination to open, download or follow. Preserve optional timestamps as exact safe numeric observations. No snapshot creation, restore, transfer or filesystem operation occurs.",
     object(PAGING),
-    page(object({ absolutePath: { ...text(4096), minLength: 1 }, timestamp: INTEGER }, ["absolutePath"])),
+    page(
+      object({ absolutePath: { ...text(4096), minLength: 1 }, timestamp: INTEGER }, [
+        "absolutePath",
+      ]),
+    ),
     100,
   ),
   "jira.app-monitoring": read(
@@ -107,8 +122,11 @@ export const JIRA_JOB_OBSERVATION_READ_DEFINITIONS = {
   ),
 } as const satisfies Readonly<Record<string, JiraNativeDefinition>>;
 
-export function jiraJobObservationDeclarationForTool(name: string): ManagedMcpToolDeclaration | undefined {
-  const definitions: Readonly<Record<string, JiraNativeDefinition>> = JIRA_JOB_OBSERVATION_READ_DEFINITIONS;
+export function jiraJobObservationDeclarationForTool(
+  name: string,
+): ManagedMcpToolDeclaration | undefined {
+  const definitions: Readonly<Record<string, JiraNativeDefinition>> =
+    JIRA_JOB_OBSERVATION_READ_DEFINITIONS;
   const selected = Object.hasOwn(definitions, name) ? definitions[name] : undefined;
   return selected === undefined ? undefined : jiraNativeDeclaration(name, selected);
 }

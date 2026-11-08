@@ -4,16 +4,42 @@ import { jiraAdministrationDeclarationForTool } from "./jiraAdministrationDescri
 import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
 
 const ID = "9007199254740993";
-it.each(["jira.workflow-scheme", "jira.workflow-scheme-draft"])("retains explicit nullable review facts in %s without requiring a snapshot", (name) => {
-  const actual = jiraAdministrationDeclarationForTool(name);
-  if (actual === undefined) throw new TypeError("Missing workflow read declaration");
-  const data = { outcome: "succeeded", schemeId: "37", id: ID,
-    reviewSnapshot: { id: ID, draft: true, name: "Reviewed", description: null, defaultWorkflow: null,
-      mappings: [], originalDefaultWorkflow: "Default", originalMappings: [{ issueTypeId: "1", workflow: "Flow" }] } };
-  expect(describeCatalogSchemaMismatch(actual.descriptor.resultSchema, data)).toBeUndefined();
-  expect(describeCatalogSchemaMismatch(actual.descriptor.resultSchema, { outcome: "succeeded", schemeId: "37", id: ID })).toBeUndefined();
-  expect(describeCatalogSchemaMismatch(actual.descriptor.resultSchema, { ...data, reviewSnapshot: { ...data.reviewSnapshot, deployed: true } })).toBeDefined();
-});
+it.each(["jira.workflow-scheme", "jira.workflow-scheme-draft"])(
+  "retains explicit nullable review facts in %s without requiring a snapshot",
+  (name) => {
+    const actual = jiraAdministrationDeclarationForTool(name);
+    if (actual === undefined) throw new TypeError("Missing workflow read declaration");
+    const data = {
+      outcome: "succeeded",
+      schemeId: "37",
+      id: ID,
+      reviewSnapshot: {
+        id: ID,
+        draft: true,
+        name: "Reviewed",
+        description: null,
+        defaultWorkflow: null,
+        mappings: [],
+        originalDefaultWorkflow: "Default",
+        originalMappings: [{ issueTypeId: "1", workflow: "Flow" }],
+      },
+    };
+    expect(describeCatalogSchemaMismatch(actual.descriptor.resultSchema, data)).toBeUndefined();
+    expect(
+      describeCatalogSchemaMismatch(actual.descriptor.resultSchema, {
+        outcome: "succeeded",
+        schemeId: "37",
+        id: ID,
+      }),
+    ).toBeUndefined();
+    expect(
+      describeCatalogSchemaMismatch(actual.descriptor.resultSchema, {
+        ...data,
+        reviewSnapshot: { ...data.reviewSnapshot, deployed: true },
+      }),
+    ).toBeDefined();
+  },
+);
 it.each([
   [
     "jira.issue-type-schemes",

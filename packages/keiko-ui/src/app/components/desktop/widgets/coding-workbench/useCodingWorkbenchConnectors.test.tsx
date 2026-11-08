@@ -64,7 +64,9 @@ beforeEach(() => {
 
 describe("the Jira Pod the person picks for the next run", () => {
   it("grants administration only through a separate ready-Pod selection and drops it on every Pod switch", async () => {
-    const list = vi.fn(() => Promise.resolve([pod(READY_POD, "Acme Jira"), pod(OTHER_POD, "Other Jira")]));
+    const list = vi.fn(() =>
+      Promise.resolve([pod(READY_POD, "Acme Jira"), pod(OTHER_POD, "Other Jira")]),
+    );
     const { result } = renderHook(() => useCodingWorkbenchConnectors(list));
     await waitFor(() => expect(result.current.menu.pods).toHaveLength(2));
     expect(result.current.menu.jiraAdministrationEnabled).toBe(false);

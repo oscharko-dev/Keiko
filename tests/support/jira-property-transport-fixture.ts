@@ -1,24 +1,38 @@
 import { expect } from "vitest";
-import type { AtlassianHttpBodyRequest, AtlassianHttpBodyResult } from "@oscharko-dev/keiko-connectors";
+import type {
+  AtlassianHttpBodyRequest,
+  AtlassianHttpBodyResult,
+} from "@oscharko-dev/keiko-connectors";
 import { response } from "./jira-managed-remote.js";
 
 export const REVIEWED_PROPERTY_NODES = [{ path: "", kind: "null" }] as const;
-export const REQUESTED_PROPERTY_NODES = [{ path: "", kind: "boolean", booleanValue: false }] as const;
+export const REQUESTED_PROPERTY_NODES = [
+  { path: "", kind: "boolean", booleanValue: false },
+] as const;
 export const PROPERTY_FIXTURE_KEY = "view ~settings";
 
 /** One independently selected synthetic property; parent identity stays with each existing fixture. */
-export function propertyTransportFixture(root: string | undefined, initiallyPresent = true): {
+export function propertyTransportFixture(
+  root: string | undefined,
+  initiallyPresent = true,
+): {
   readonly read: (request: AtlassianHttpBodyRequest) => AtlassianHttpBodyResult | undefined;
   readonly write: (request: AtlassianHttpBodyRequest) => AtlassianHttpBodyResult | undefined;
 } {
   let present = initiallyPresent;
   let value: unknown = null;
-  const selected = root === undefined ? undefined : `${root}/${encodeURIComponent(PROPERTY_FIXTURE_KEY)}`;
+  const selected =
+    root === undefined ? undefined : `${root}/${encodeURIComponent(PROPERTY_FIXTURE_KEY)}`;
   return {
     read(request) {
       if (root === undefined) return undefined;
       const path = new URL(request.url).pathname;
-      if (path === root) return response({ keys: present ? [{ key: PROPERTY_FIXTURE_KEY, self: "https://untrusted.invalid/property" }] : [] });
+      if (path === root)
+        return response({
+          keys: present
+            ? [{ key: PROPERTY_FIXTURE_KEY, self: "https://untrusted.invalid/property" }]
+            : [],
+        });
       if (path !== selected) return undefined;
       return present ? response({ key: PROPERTY_FIXTURE_KEY, value }) : response({}, 404);
     },

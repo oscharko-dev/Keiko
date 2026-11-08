@@ -2358,19 +2358,41 @@ describe("Coding Workbench pending messages of a running turn", () => {
   });
 });
 
-
 describe("explicit Coding Jira administrative connector scope", () => {
   const request = {
-    requestId: "admin-start", taskIntent: "Review Jira administration", requestedMode: "autonomous-delivery",
+    requestId: "admin-start",
+    taskIntent: "Review Jira administration",
+    requestedMode: "autonomous-delivery",
     jiraPodId: "0d6c5d3e-7a41-4f0e-9a52-3c1f8e4b7a10",
   };
   it("accepts only the closed additional scope with an explicitly selected Pod", () => {
-    expect(parseCodingWorkbenchRuntimeStartRequest({ ...request, connectorScopes: ["issue-tracker.admin"] })).toMatchObject({ ok: true });
-    expect(parseCodingWorkbenchRuntimeStartRequest({ ...request, connectorScopes: [] })).toMatchObject({ ok: true });
+    expect(
+      parseCodingWorkbenchRuntimeStartRequest({
+        ...request,
+        connectorScopes: ["issue-tracker.admin"],
+      }),
+    ).toMatchObject({ ok: true });
+    expect(
+      parseCodingWorkbenchRuntimeStartRequest({ ...request, connectorScopes: [] }),
+    ).toMatchObject({ ok: true });
     expect(parseCodingWorkbenchRuntimeStartRequest(request)).toMatchObject({ ok: true });
-    for (const connectorScopes of [null, "issue-tracker.admin", ["secrets.read"], ["issue-tracker.write"], ["issue-tracker.admin", "issue-tracker.admin"]]) {
-      expect(parseCodingWorkbenchRuntimeStartRequest({ ...request, connectorScopes })).toMatchObject({ ok: false });
+    for (const connectorScopes of [
+      null,
+      "issue-tracker.admin",
+      ["secrets.read"],
+      ["issue-tracker.write"],
+      ["issue-tracker.admin", "issue-tracker.admin"],
+    ]) {
+      expect(
+        parseCodingWorkbenchRuntimeStartRequest({ ...request, connectorScopes }),
+      ).toMatchObject({ ok: false });
     }
-    expect(parseCodingWorkbenchRuntimeStartRequest({ ...request, jiraPodId: undefined, connectorScopes: ["issue-tracker.admin"] })).toMatchObject({ ok: false });
+    expect(
+      parseCodingWorkbenchRuntimeStartRequest({
+        ...request,
+        jiraPodId: undefined,
+        connectorScopes: ["issue-tracker.admin"],
+      }),
+    ).toMatchObject({ ok: false });
   });
 });

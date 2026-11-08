@@ -11,8 +11,13 @@ import {
   type JiraPresentationSource as Source,
 } from "./jira-presentation-values";
 export const JIRA_ROLE_TOOLS: ReadonlySet<string> = new Set([
-  "jira_roles", "jira_role", "jira_role_default_actors", "jira_project_roles", "jira_project_role",
-  "jira_priority_schemes", "jira_priority_scheme",
+  "jira_roles",
+  "jira_role",
+  "jira_role_default_actors",
+  "jira_project_roles",
+  "jira_project_role",
+  "jira_priority_schemes",
+  "jira_priority_scheme",
 ]);
 const SCOPES: Readonly<Record<string, WidgetMessageKey>> = {
   "role-configuration": "chat.jira.role.configurationScope",
@@ -21,9 +26,14 @@ const SCOPES: Readonly<Record<string, WidgetMessageKey>> = {
 };
 function scope(value: unknown): WidgetMessageKey {
   return typeof value === "string" && Object.hasOwn(SCOPES, value)
-    ? SCOPES[value] ?? "chat.jira.role.scopeUnknown" : "chat.jira.role.scopeUnknown";
+    ? (SCOPES[value] ?? "chat.jira.role.scopeUnknown")
+    : "chat.jira.role.scopeUnknown";
 }
-function actor(source: Source, roleId: unknown, actorsScope: unknown): JiraAgileDetails | undefined {
+function actor(
+  source: Source,
+  roleId: unknown,
+  actorsScope: unknown,
+): JiraAgileDetails | undefined {
   const name = text(source.name);
   if (name === undefined) return undefined;
   return {
@@ -37,7 +47,11 @@ function actor(source: Source, roleId: unknown, actorsScope: unknown): JiraAgile
     labels: [scope(actorsScope)],
   };
 }
-function actors(value: unknown, roleId: unknown, actorsScope: unknown): readonly JiraAgileDetails[] | undefined {
+function actors(
+  value: unknown,
+  roleId: unknown,
+  actorsScope: unknown,
+): readonly JiraAgileDetails[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const result: JiraAgileDetails[] = [];
   for (const entry of value) {
@@ -54,14 +68,28 @@ function role(source: Source, actorsScope: unknown): readonly JiraAgileDetails[]
   if (id === undefined || name === undefined) return [];
   const body = text(source.description);
   const members = actors(source.actors, id, actorsScope);
-  return [{
-    name, ...(body === undefined ? {} : { body }),
-    facts: [
-      { label: "chat.jira.fact.roleId", value: id },
-      ...(members === undefined ? [] : [{ label: "chat.jira.role.actorCount", value: String(members.length) } satisfies JiraOutcomeFact]),
-    ],
-    labels: [scope(actorsScope), ...(members === undefined ? ["chat.jira.role.actorsUnknown"] as const : [])],
-  }, ...(members ?? [])];
+  return [
+    {
+      name,
+      ...(body === undefined ? {} : { body }),
+      facts: [
+        { label: "chat.jira.fact.roleId", value: id },
+        ...(members === undefined
+          ? []
+          : [
+              {
+                label: "chat.jira.role.actorCount",
+                value: String(members.length),
+              } satisfies JiraOutcomeFact,
+            ]),
+      ],
+      labels: [
+        scope(actorsScope),
+        ...(members === undefined ? (["chat.jira.role.actorsUnknown"] as const) : []),
+      ],
+    },
+    ...(members ?? []),
+  ];
 }
 function defaultActors(data: Source): readonly JiraAgileDetails[] {
   const roleId = text(data.roleId);
@@ -70,10 +98,16 @@ function defaultActors(data: Source): readonly JiraAgileDetails[] {
     return item === undefined ? [] : [item];
   }
   const members = actors(data.items, roleId, data.actorsScope);
-  return [{
-    facts: [{ label: "chat.jira.fact.roleId", value: roleId }],
-    labels: [scope(data.actorsScope), ...(members === undefined ? ["chat.jira.role.actorsUnknown"] as const : [])],
-  }, ...(members ?? [])];
+  return [
+    {
+      facts: [{ label: "chat.jira.fact.roleId", value: roleId }],
+      labels: [
+        scope(data.actorsScope),
+        ...(members === undefined ? (["chat.jira.role.actorsUnknown"] as const) : []),
+      ],
+    },
+    ...(members ?? []),
+  ];
 }
 function projectContext(data: Source): JiraOutcomeFact[] {
   return [
@@ -85,34 +119,60 @@ function projectRoles(data: Source): readonly JiraAgileDetails[] {
   const context = projectContext(data);
   const sources = Array.isArray(data.items) ? data.items : [data];
   return [
-    ...(context.length === 0 ? [] : [{ facts: context, labels: ["chat.jira.role.indexScope"] satisfies WidgetMessageKey[] }]),
+    ...(context.length === 0
+      ? []
+      : [{ facts: context, labels: ["chat.jira.role.indexScope"] satisfies WidgetMessageKey[] }]),
     ...sources.flatMap((value: unknown) => {
       const name = text(record(value)?.name);
-      return name === undefined ? [] : [{ name, facts: [], labels: ["chat.jira.role.indexScope"] satisfies WidgetMessageKey[] }];
+      return name === undefined
+        ? []
+        : [{ name, facts: [], labels: ["chat.jira.role.indexScope"] satisfies WidgetMessageKey[] }];
     }),
   ];
 }
 function sameReviewedMetadata(snapshot: Source, data: Source): boolean {
-  return snapshot.id === data.id && snapshot.name === data.name &&
-    (data.description === undefined || data.description === snapshot.description);
+  return (
+    snapshot.id === data.id &&
+    snapshot.name === data.name &&
+    (data.description === undefined || data.description === snapshot.description)
+  );
 }
 function reviewSnapshot(data: Source): Source | undefined {
   const snapshot = record(data.reviewSnapshot);
   if (snapshot === undefined || !sameReviewedMetadata(snapshot, data)) return undefined;
   if (identity(snapshot.id) === undefined || !nativeText(snapshot.name, 255)) return undefined;
   if (snapshot.name !== snapshot.name.trim()) return undefined;
-  if (Object.keys(snapshot).some((key) => key !== "id" && key !== "name" && key !== "description")) return undefined;
-  return snapshot.description === null || nativeText(snapshot.description, 32768, { empty: true, multiline: true }) ? snapshot : undefined;
+  if (Object.keys(snapshot).some((key) => key !== "id" && key !== "name" && key !== "description"))
+    return undefined;
+  return snapshot.description === null ||
+    nativeText(snapshot.description, 32768, { empty: true, multiline: true })
+    ? snapshot
+    : undefined;
 }
 function reviewDetails(data: Source): JiraAgileDetails {
   const snapshot = reviewSnapshot(data);
-  if (snapshot === undefined) return { facts: [], labels: ["chat.jira.accessWrite.reviewUnavailable"] };
+  if (snapshot === undefined)
+    return { facts: [], labels: ["chat.jira.accessWrite.reviewUnavailable"] };
   const labels: WidgetMessageKey[] = ["chat.jira.accessWrite.reviewAvailable"];
-  if (snapshot.description === null) labels.push("chat.jira.structural.nativeDescription", "chat.jira.structural.nativeNotProvided");
-  if (snapshot.description === "") labels.push("chat.jira.structural.nativeDescription", "chat.jira.propertyMutation.emptyText");
-  return { facts: [...fact("chat.jira.fact.roleId", snapshot.id), ...fact("chat.jira.structural.nativeName", snapshot.name),
-    ...(typeof snapshot.description === "string" && snapshot.description.length > 0
-      ? [{ label: "chat.jira.structural.nativeDescription", value: snapshot.description } satisfies JiraOutcomeFact] : [])], labels };
+  if (snapshot.description === null)
+    labels.push("chat.jira.structural.nativeDescription", "chat.jira.structural.nativeNotProvided");
+  if (snapshot.description === "")
+    labels.push("chat.jira.structural.nativeDescription", "chat.jira.propertyMutation.emptyText");
+  return {
+    facts: [
+      ...fact("chat.jira.fact.roleId", snapshot.id),
+      ...fact("chat.jira.structural.nativeName", snapshot.name),
+      ...(typeof snapshot.description === "string" && snapshot.description.length > 0
+        ? [
+            {
+              label: "chat.jira.structural.nativeDescription",
+              value: snapshot.description,
+            } satisfies JiraOutcomeFact,
+          ]
+        : []),
+    ],
+    labels,
+  };
 }
 /** Role configuration, defaults and project membership remain distinct saved observations. */
 export function jiraRoleDetails(tool: string, data: Source): readonly JiraAgileDetails[] {
@@ -128,6 +188,9 @@ export function jiraRoleDetails(tool: string, data: Source): readonly JiraAgileD
       : role(source, data.actorsScope);
   });
   if (tool === "jira_role" || tool === "jira_project_role") cards.push(reviewDetails(data));
-  return cards.map((card, index) => index === 0 && tool === "jira_project_role"
-    ? { ...card, facts: [...projectContext(data), ...card.facts] } : card);
+  return cards.map((card, index) =>
+    index === 0 && tool === "jira_project_role"
+      ? { ...card, facts: [...projectContext(data), ...card.facts] }
+      : card,
+  );
 }

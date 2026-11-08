@@ -1,4 +1,7 @@
-import { TOOL_CATALOG_LIMITS, type CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  TOOL_CATALOG_LIMITS,
+  type CatalogJsonObject,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { object, text } from "./jiraManagedSchemas.js";
 import {
@@ -20,16 +23,26 @@ const PAGE_INPUT = object({
   query: text(255),
   projectIds: { type: "array", minItems: 1, maxItems: MAX, uniqueItems: true, items: ID },
 });
-const VERSION = object({ ...jiraNativeVersionFields, versionId: ID, projectId: ID }, ["versionId", "name"]);
-const COMPONENT = object({ ...jiraNativeComponentFields, projectId: ID }, ["id", "name", "project"]);
+const VERSION = object({ ...jiraNativeVersionFields, versionId: ID, projectId: ID }, [
+  "versionId",
+  "name",
+]);
+const COMPONENT = object({ ...jiraNativeComponentFields, projectId: ID }, [
+  "id",
+  "name",
+  "project",
+]);
 const COLUMN = {
   anyOf: [
     object({ value: NAME, label: text(255) }, ["value"]),
-    object({
-      id: NAME,
-      position: { type: "integer", minimum: -2147483648, maximum: 2147483647 },
-      columnHeadingKey: text(1024),
-    }, ["id"]),
+    object(
+      {
+        id: NAME,
+        position: { type: "integer", minimum: -2147483648, maximum: 2147483647 },
+        columnHeadingKey: text(1024),
+      },
+      ["id"],
+    ),
   ],
 };
 function page(item: CatalogJsonObject): CatalogJsonObject {
@@ -40,7 +53,12 @@ function page(item: CatalogJsonObject): CatalogJsonObject {
     nextStartAt: PAGING.startAt,
   };
 }
-function read(description: string, input: CatalogJsonObject, result: CatalogJsonObject, maxResultCount = 100): JiraNativeDefinition {
+function read(
+  description: string,
+  input: CatalogJsonObject,
+  result: CatalogJsonObject,
+  maxResultCount = 100,
+): JiraNativeDefinition {
   return { description, input, result: jiraNativeReadResult(result), risk: "read", maxResultCount };
 }
 function layout(scope: readonly string[], context: CatalogJsonObject = {}): CatalogJsonObject {
@@ -72,7 +90,10 @@ export const JIRA_RESOURCE_VIEW_READ_DEFINITIONS = {
   "jira.accessibility-settings": read(
     "Observe and locally page the connected Jira actor's native accessibility settings. Preserve each setting key and an enabled flag only when supplied; missing flags remain unknown. No user selector, preference change, HTML or permission inference is provided.",
     object(PAGING),
-    { ...page(object({ key: NAME, enabled: BOOL }, ["key"])), settingsScope: { type: "string", enum: ["connected-user"] } },
+    {
+      ...page(object({ key: NAME, enabled: BOOL }, ["key"])),
+      settingsScope: { type: "string", enum: ["connected-user"] },
+    },
   ),
   "jira.system-columns": read(
     "Inspect and locally page the native system-default issue-column layout. Preserve returned order, repeated fields and optional labels. This observes configuration only; it does not fetch issue data, establish field visibility or change columns.",
@@ -91,8 +112,11 @@ export const JIRA_RESOURCE_VIEW_READ_DEFINITIONS = {
   ),
 } as const satisfies Readonly<Record<string, JiraNativeDefinition>>;
 
-export function jiraResourceViewDeclarationForTool(name: string): ManagedMcpToolDeclaration | undefined {
-  const definitions: Readonly<Record<string, JiraNativeDefinition>> = JIRA_RESOURCE_VIEW_READ_DEFINITIONS;
+export function jiraResourceViewDeclarationForTool(
+  name: string,
+): ManagedMcpToolDeclaration | undefined {
+  const definitions: Readonly<Record<string, JiraNativeDefinition>> =
+    JIRA_RESOURCE_VIEW_READ_DEFINITIONS;
   const selected = Object.hasOwn(definitions, name) ? definitions[name] : undefined;
   return selected === undefined ? undefined : jiraNativeDeclaration(name, selected);
 }

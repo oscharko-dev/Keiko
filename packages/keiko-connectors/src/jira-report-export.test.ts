@@ -33,10 +33,7 @@ describe("report exports preserve the availability of their evidence", () => {
 
   it("exports unavailable template checking and the unestimated count beside native totals", async () => {
     const issues = syntheticProject(23);
-    const h = harness(
-      { issues, pageClamp: 5 },
-      { checker: { bind: () => "unavailable" } },
-    );
+    const h = harness({ issues, pageClamp: 5 }, { checker: { bind: () => "unavailable" } });
     const result = await h.run({ projectKey: "REP" });
     const report = h.session(idOf(result));
     if (report === undefined) throw new Error("Missing report fixture");

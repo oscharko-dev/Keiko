@@ -15,24 +15,36 @@ export function jiraEmailTemplateRequest(
 ): Required<Pick<JiraEmailTemplatePorts, "download" | "upload">> {
   const endpoints = atlassianApiEndpointsFor(connection.baseUrl, "/rest/api/2/");
   const url = atlassianApiUrl(endpoints, "email-templates");
-  const signal = AbortSignal.any([context.signal, AbortSignal.timeout(ATLASSIAN_WRITE_ACTION_TOTAL_TIMEOUT_MS)]);
+  const signal = AbortSignal.any([
+    context.signal,
+    AbortSignal.timeout(ATLASSIAN_WRITE_ACTION_TOTAL_TIMEOUT_MS),
+  ]);
   return {
     download: async () => {
       const result = await executeAdmittedJiraRequest(connection, context, signal, {
-        method: "GET", url, jiraEmailTemplateArchive: true, expect: "jira-email-template-zip",
+        method: "GET",
+        url,
+        jiraEmailTemplateArchive: true,
+        expect: "jira-email-template-zip",
       });
       if (!result.ok) return dispatchFailure(result);
-      return result.bytes === undefined ? { ok: false, reason: "malformed-payload" }
+      return result.bytes === undefined
+        ? { ok: false, reason: "malformed-payload" }
         : { ok: true, status: result.status, bytes: result.bytes };
     },
     upload: (bytes) => {
-      if (!(bytes instanceof Uint8Array)) return Promise.resolve({ ok: false, reason: "field-validation" });
-      if (bytes.byteLength > JIRA_ATTACHMENT_MAX_BYTES) return Promise.resolve({ ok: false, reason: "bounds-exceeded" });
+      if (!(bytes instanceof Uint8Array))
+        return Promise.resolve({ ok: false, reason: "field-validation" });
+      if (bytes.byteLength > JIRA_ATTACHMENT_MAX_BYTES)
+        return Promise.resolve({ ok: false, reason: "bounds-exceeded" });
       // Copy before admission can await. Caller mutation or SharedArrayBuffer ownership cannot
       // alter the exact approved upload after this boundary.
       const owned = new Uint8Array(bytes);
       return executeAdmittedJiraRequest(connection, context, signal, {
-        method: "POST", url, jiraEmailTemplateArchive: true, expect: "none",
+        method: "POST",
+        url,
+        jiraEmailTemplateArchive: true,
+        expect: "none",
         upload: { contentType: "application/zip", bytes: owned },
       });
     },

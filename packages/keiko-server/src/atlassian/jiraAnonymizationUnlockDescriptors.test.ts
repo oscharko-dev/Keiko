@@ -11,13 +11,38 @@ describe("fixed human-attested anonymization unlock contract", () => {
     expect(isBoundedExternalJsonSchema(tool.descriptor.inputSchema)).toBe(true);
     expect(isBoundedExternalJsonSchema(tool.descriptor.resultSchema)).toBe(true);
     expect(describeCatalogSchemaMismatch(tool.descriptor.inputSchema, CASE.args)).toBeUndefined();
-    for (const key of ["shutdownConfirmed", "ownerShutdownConfirmation", "taskId", "password", "url", "method"])
-      expect(describeCatalogSchemaMismatch(tool.descriptor.inputSchema, { ...CASE.args, [key]: true })).toBeDefined();
+    for (const key of [
+      "shutdownConfirmed",
+      "ownerShutdownConfirmation",
+      "taskId",
+      "password",
+      "url",
+      "method",
+    ])
+      expect(
+        describeCatalogSchemaMismatch(tool.descriptor.inputSchema, { ...CASE.args, [key]: true }),
+      ).toBeDefined();
   });
   it("does not manufacture process proof, no-op or confirmed unlock from ACK", () => {
-    expect(describeCatalogSchemaMismatch(tool.descriptor.resultSchema, { outcome: "succeeded-unconfirmed", ...CASE.receipt })).toBeUndefined();
-    expect(describeCatalogSchemaMismatch(tool.descriptor.resultSchema, { outcome: "succeeded", ...CASE.receipt })).toBeDefined();
-    expect(describeCatalogSchemaMismatch(tool.descriptor.resultSchema, { outcome: "succeeded-unconfirmed", ...CASE.receipt, ownerShutdownVerified: true })).toBeDefined();
+    expect(
+      describeCatalogSchemaMismatch(tool.descriptor.resultSchema, {
+        outcome: "succeeded-unconfirmed",
+        ...CASE.receipt,
+      }),
+    ).toBeUndefined();
+    expect(
+      describeCatalogSchemaMismatch(tool.descriptor.resultSchema, {
+        outcome: "succeeded",
+        ...CASE.receipt,
+      }),
+    ).toBeDefined();
+    expect(
+      describeCatalogSchemaMismatch(tool.descriptor.resultSchema, {
+        outcome: "succeeded-unconfirmed",
+        ...CASE.receipt,
+        ownerShutdownVerified: true,
+      }),
+    ).toBeDefined();
     expect(tool.descriptor.description).toContain("human statement");
     expect(tool.descriptor.description).toContain("no compare-and-swap");
   });

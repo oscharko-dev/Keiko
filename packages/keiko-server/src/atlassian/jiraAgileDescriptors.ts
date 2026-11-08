@@ -11,7 +11,11 @@ import {
   type CatalogJsonObject,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import { compileExternalCatalogSchema, createToolDescriptor, createToolRef } from "@oscharko-dev/keiko-tool-catalog";
+import {
+  compileExternalCatalogSchema,
+  createToolDescriptor,
+  createToolRef,
+} from "@oscharko-dev/keiko-tool-catalog";
 import { ATLASSIAN_ACTION_APPROVAL_TTL_MS } from "./actionApprovalLimits.js";
 import { object, text } from "./jiraManagedSchemas.js";
 import { jiraSprintLifecycleSnapshotSchema } from "./jiraSprintLifecycleDescriptors.js";
@@ -83,20 +87,27 @@ const ISSUE_KEYS = {
 const BOARD_FIELDS = { id: ID, name: NAME, type: BOARD_TYPE, browseUrl: text(4096) };
 const BOARD = object(BOARD_FIELDS, ["id", "name", "type"]);
 const SPRINT_FIELDS = {
-    id: ID,
-    name: NAME,
-    state: SPRINT_STATE,
-    originBoardId: ID,
-    boardBrowseUrl: text(4096),
-    startDate: DATE,
-    endDate: DATE,
-    activatedDate: DATE,
-    completeDate: DATE,
-    goal: text(2048),
+  id: ID,
+  name: NAME,
+  state: SPRINT_STATE,
+  originBoardId: ID,
+  boardBrowseUrl: text(4096),
+  startDate: DATE,
+  endDate: DATE,
+  activatedDate: DATE,
+  completeDate: DATE,
+  goal: text(2048),
 };
 const SPRINT = object(SPRINT_FIELDS, ["id", "name", "state"]);
-const SPRINT_DETAIL = object({ ...SPRINT_FIELDS, id: REVIEW_ID, originBoardId: REVIEW_ID,
-  reviewSnapshot: jiraSprintLifecycleSnapshotSchema }, ["id", "name", "state"]);
+const SPRINT_DETAIL = object(
+  {
+    ...SPRINT_FIELDS,
+    id: REVIEW_ID,
+    originBoardId: REVIEW_ID,
+    reviewSnapshot: jiraSprintLifecycleSnapshotSchema,
+  },
+  ["id", "name", "state"],
+);
 const EPIC = object(
   {
     id: ID,
@@ -119,24 +130,21 @@ const REFERENCE = object({
   displayName: text(256),
 });
 const ISSUE_FIELDS = {
-    id: text(128),
-    key: text(128),
-    summary: text(255),
-    browseUrl: text(4096),
-    status: REFERENCE,
-    issuetype: REFERENCE,
-    project: REFERENCE,
-    assignee: REFERENCE,
-    priority: REFERENCE,
-    assigneeEmpty: { type: "boolean" },
-    labels: { type: "array", maxItems: 100, items: text(255) },
-    created: text(64),
-    updated: text(64),
+  id: text(128),
+  key: text(128),
+  summary: text(255),
+  browseUrl: text(4096),
+  status: REFERENCE,
+  issuetype: REFERENCE,
+  project: REFERENCE,
+  assignee: REFERENCE,
+  priority: REFERENCE,
+  assigneeEmpty: { type: "boolean" },
+  labels: { type: "array", maxItems: 100, items: text(255) },
+  created: text(64),
+  updated: text(64),
 };
-const ISSUE = object(
-  ISSUE_FIELDS,
-  ["id", "key", "summary", "browseUrl"],
-);
+const ISSUE = object(ISSUE_FIELDS, ["id", "key", "summary", "browseUrl"]);
 export {
   ISSUE as jiraAgileIssueResultSchema,
   ISSUE_FIELDS as jiraAgileIssueFields,
@@ -271,7 +279,8 @@ export const JIRA_AGILE_READ_DEFINITIONS = {
     paged: true,
   },
   "jira.sprint": {
-    description: "Read one visible sprint including its state, goal and available dates. Optional reviewSnapshot preserves exact native identity and all supported lifecycle facts for a reviewed replacement/delete/unmap: absent flags or dates remain unknown, explicit null remains null. If a complete supported snapshot cannot be projected, reviewSnapshot is unavailable; the ordinary summary does not authorize guessing it. No issue-membership or global-population proof is implied.",
+    description:
+      "Read one visible sprint including its state, goal and available dates. Optional reviewSnapshot preserves exact native identity and all supported lifecycle facts for a reviewed replacement/delete/unmap: absent flags or dates remain unknown, explicit null remains null. If a complete supported snapshot cannot be projected, reviewSnapshot is unavailable; the ordinary summary does not authorize guessing it. No issue-membership or global-population proof is implied.",
     parameters: { sprintId: ID },
     required: ["sprintId"],
     item: SPRINT_DETAIL,
@@ -411,9 +420,10 @@ function declaration(
             { ...(definition.paged ? PAGING : {}), ...definition.parameters },
             definition.required,
           ),
-      resultSchema: name === "jira.sprint" || Object.hasOwn(JIRA_FILTER_READ_DEFINITIONS, name)
-        ? compileExternalCatalogSchema(result)
-        : result,
+      resultSchema:
+        name === "jira.sprint" || Object.hasOwn(JIRA_FILTER_READ_DEFINITIONS, name)
+          ? compileExternalCatalogSchema(result)
+          : result,
       effects: ["connector-access"],
       actionMapping: [{ action: name, effects: ["connector-access"] }],
       policyReferences: ["adr-0128.d4"],

@@ -512,11 +512,20 @@ describe("Coding Workbench composer", () => {
     });
 
     it.each(["running", "paused", "awaiting-approval"] as const)(
-      "locks the administration grant during %s rather than suggesting local revocation", async (runState) => {
+      "locks the administration grant during %s rather than suggesting local revocation",
+      async (runState) => {
         const user = userEvent.setup();
         const onJiraAdministrationChange = vi.fn();
-        render(<TaskStartSection {...composerProps(runState, composerActions())}
-          connectors={connectors({ boundPodId: POD.id, jiraAdministrationEnabled: true, onJiraAdministrationChange })} />);
+        render(
+          <TaskStartSection
+            {...composerProps(runState, composerActions())}
+            connectors={connectors({
+              boundPodId: POD.id,
+              jiraAdministrationEnabled: true,
+              onJiraAdministrationChange,
+            })}
+          />,
+        );
         const panel = await openMenu(user);
         const toggle = within(panel).getByRole("switch", { name: "Administer the Jira instance" });
         expect(toggle).toBeChecked();

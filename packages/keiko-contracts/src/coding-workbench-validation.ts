@@ -414,10 +414,7 @@ function validateConnectorScopeActionClassConsistency(
 }
 
 function hasWriteCapableConnectorScope(value: unknown): boolean {
-  return (
-    Array.isArray(value) &&
-    value.some(isWriteCapableCodingConnectorScope)
-  );
+  return Array.isArray(value) && value.some(isWriteCapableCodingConnectorScope);
 }
 
 function hasHumanApprovalRequiredActionClass(value: unknown): boolean {

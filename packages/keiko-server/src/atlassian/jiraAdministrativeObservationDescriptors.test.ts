@@ -18,16 +18,53 @@ it("admits both bounded administrative observation schemas without opening a con
   }
 });
 it.each([
-  ["jira.permission-scheme-attribute", { schemeId: "37", attributeKey: "review" }, { schemeId: "37", attributeKey: "review", valueState: "observed", textValue: "", attributeScope: "permission-scheme-configuration" }],
-  ["jira.permission-scheme-attribute", { schemeId: "37", attributeKey: "review" }, { schemeId: "37", attributeKey: "review", valueState: "unknown", attributeScope: "permission-scheme-configuration" }],
-  ["jira.email-template-types", { maxResults: 1 }, { items: [{ id: "1", eventName: "Issue created", active: false, html: true, text: false }], startAt: 0, total: 1, templateScope: "notification-type-metadata" }],
-  ["jira.email-template-types", {}, { items: [], startAt: 0, total: 0, templateScope: "notification-type-metadata" }],
+  [
+    "jira.permission-scheme-attribute",
+    { schemeId: "37", attributeKey: "review" },
+    {
+      schemeId: "37",
+      attributeKey: "review",
+      valueState: "observed",
+      textValue: "",
+      attributeScope: "permission-scheme-configuration",
+    },
+  ],
+  [
+    "jira.permission-scheme-attribute",
+    { schemeId: "37", attributeKey: "review" },
+    {
+      schemeId: "37",
+      attributeKey: "review",
+      valueState: "unknown",
+      attributeScope: "permission-scheme-configuration",
+    },
+  ],
+  [
+    "jira.email-template-types",
+    { maxResults: 1 },
+    {
+      items: [{ id: "1", eventName: "Issue created", active: false, html: true, text: false }],
+      startAt: 0,
+      total: 1,
+      templateScope: "notification-type-metadata",
+    },
+  ],
+  [
+    "jira.email-template-types",
+    {},
+    { items: [], startAt: 0, total: 0, templateScope: "notification-type-metadata" },
+  ],
 ] as const)("admits truthful %s metadata without permission inference", (name, args, result) => {
   const tool = declaration(name);
   if (tool === undefined) throw new TypeError("Missing administrative observation");
   expect(tool.risk).toBe("read");
   expect(describeCatalogSchemaMismatch(tool.descriptor.inputSchema, args)).toBeUndefined();
-  expect(describeCatalogSchemaMismatch(tool.descriptor.resultSchema, { outcome: "succeeded", ...result })).toBeUndefined();
+  expect(
+    describeCatalogSchemaMismatch(tool.descriptor.resultSchema, {
+      outcome: "succeeded",
+      ...result,
+    }),
+  ).toBeUndefined();
 });
 it.each([
   ["jira.permission-scheme-attribute", { attributeKey: "review" }],
@@ -49,13 +86,25 @@ it.each([
 ] as const)("refuses leaked or invented %s result fields", (name, result) => {
   const tool = declaration(name);
   if (tool === undefined) throw new TypeError("Missing administrative observation");
-  expect(describeCatalogSchemaMismatch(tool.descriptor.resultSchema, { outcome: "succeeded", ...result })).toBeDefined();
+  expect(
+    describeCatalogSchemaMismatch(tool.descriptor.resultSchema, {
+      outcome: "succeeded",
+      ...result,
+    }),
+  ).toBeDefined();
 });
 it.each([
-  ["jira.permission-scheme-attribute", "/permissionscheme/{permissionSchemeId}/attribute/{attributeKey}"],
+  [
+    "jira.permission-scheme-attribute",
+    "/permissionscheme/{permissionSchemeId}/attribute/{attributeKey}",
+  ],
   ["jira.email-template-types", "/email-templates/types"],
 ] as const)("binds %s to the exact native read path", (name, pathTemplate) => {
   expect(jiraOperationForTool(name)?.definition).toMatchObject({
-    kind: "native", method: "GET", apiRoot: "/rest/api/2", pathTemplate, effects: ["remote-read"],
+    kind: "native",
+    method: "GET",
+    apiRoot: "/rest/api/2",
+    pathTemplate,
+    effects: ["remote-read"],
   });
 });

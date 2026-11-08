@@ -161,7 +161,9 @@ describe("reviewed native attachment deletion", () => {
       { length: TOOL_CATALOG_LIMITS.maxArrayItems + 1 },
       (_, index) => ({ ...FILE, id: String(index + 1), filename: "x".repeat(1024) }),
     );
-    expect(new TextEncoder().encode(JSON.stringify(attachment)).byteLength).toBeGreaterThan(ATLASSIAN_WRITE_RESPONSE_MAX_BYTES);
+    expect(new TextEncoder().encode(JSON.stringify(attachment)).byteLength).toBeGreaterThan(
+      ATLASSIAN_WRITE_RESPONSE_MAX_BYTES,
+    );
     const request = fixture({ before: { ...ISSUE, fields: { attachment } } });
     expect(await remove(request)).toEqual({ ok: false, reason: "bounds-exceeded" });
     expect(request).toHaveBeenCalledTimes(1);
@@ -268,8 +270,10 @@ describe("reviewed native attachment deletion", () => {
 
 it("admits and confirms exact attachment removal among more than a thousand bounded native rows", async () => {
   const others = Array.from({ length: 1001 }, (_, index) => ({ ...OTHER, id: String(index + 1) }));
-  const request = fixture({ before: { ...ISSUE, fields: { attachment: [...others, FILE] } },
-    after: { ...ISSUE, fields: { attachment: others } } });
+  const request = fixture({
+    before: { ...ISSUE, fields: { attachment: [...others, FILE] } },
+    after: { ...ISSUE, fields: { attachment: others } },
+  });
   expect(await remove(request)).toEqual({ ok: true, receipt: RECEIPT });
   expect(request.mock.calls.filter(([, method]) => method === "DELETE")).toHaveLength(1);
 });

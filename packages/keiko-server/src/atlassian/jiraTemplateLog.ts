@@ -305,7 +305,8 @@ export function recordJiraFieldRefusal(
   },
 ): void {
   const operation = jiraToolLogFields(input.operation);
-  if (operation.toolClass !== "jira-write") throw new TypeError("Field refusal requires a Jira mutation");
+  if (operation.toolClass !== "jira-write")
+    throw new TypeError("Field refusal requires a Jira mutation");
   const sink = processServerLogSink();
   sink.write(
     activityLogEvent(
@@ -321,9 +322,16 @@ export function recordJiraFieldRefusal(
       },
     ),
   );
-  recordJiraOperationActivity(sink, { correlationId: correlationId ?? UNKNOWN_CORRELATION_ID, level: "info" }, input.operation, {
-    stage: "field-admission", outcome: "refused", reason: "field-validation",
-  });
+  recordJiraOperationActivity(
+    sink,
+    { correlationId: correlationId ?? UNKNOWN_CORRELATION_ID, level: "info" },
+    input.operation,
+    {
+      stage: "field-admission",
+      outcome: "refused",
+      reason: "field-validation",
+    },
+  );
 }
 
 /** Record a dispatch-stage refusal carried by a mutation attempt; other failures are not ours. */

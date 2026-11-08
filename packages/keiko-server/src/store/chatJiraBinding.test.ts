@@ -159,19 +159,26 @@ describe("Chat Jira binding persistence", () => {
     expect(created.jiraAdministrationEnabled).toBe(false);
     const bound = store.updateChat(created.id, { jiraPodId: FIRST }, target());
     expect(bound.jiraAdministrationEnabled).toBe(false);
-    expect(() => store.updateChat(bound.id, { jiraAdministrationEnabled: true }))
-      .toThrow("current verified Jira Pod");
-    const enabled = store.updateChat(bound.id, {
-      jiraAdministrationEnabled: true,
-      expectedGroundingScopeIdentity: deriveChatGroundingScopeIdentity(bound),
-    }, target());
+    expect(() => store.updateChat(bound.id, { jiraAdministrationEnabled: true })).toThrow(
+      "current verified Jira Pod",
+    );
+    const enabled = store.updateChat(
+      bound.id,
+      {
+        jiraAdministrationEnabled: true,
+        expectedGroundingScopeIdentity: deriveChatGroundingScopeIdentity(bound),
+      },
+      target(),
+    );
     expect(enabled.jiraAdministrationEnabled).toBe(true);
     expect(enabled.jiraBindingGeneration).toBe((bound.jiraBindingGeneration ?? 0) + 1);
     expect(enabled.groundingScopeIdentity).not.toBe(bound.groundingScopeIdentity);
-    expect(() => store.updateChat(bound.id, {
-      jiraAdministrationEnabled: false,
-      expectedGroundingScopeIdentity: deriveChatGroundingScopeIdentity(bound),
-    })).toThrow();
+    expect(() =>
+      store.updateChat(bound.id, {
+        jiraAdministrationEnabled: false,
+        expectedGroundingScopeIdentity: deriveChatGroundingScopeIdentity(bound),
+      }),
+    ).toThrow();
     expect(store.findChatById(bound.id)?.jiraAdministrationEnabled).toBe(true);
     const changedMode = store.updateChat(bound.id, { toolMode: "governed-assist" });
     expect(changedMode.jiraAdministrationEnabled).toBe(true);
@@ -181,12 +188,14 @@ describe("Chat Jira binding persistence", () => {
   });
 
   it.each(["disconnect", "replace-pod", "replace-credential", "remove-credential"] as const)(
-    "clears explicit administration on %s", (change) => {
+    "clears explicit administration on %s",
+    (change) => {
       const created = store.createChat(project, "Administration", "model");
       store.updateChat(created.id, { jiraPodId: FIRST }, target());
       const enabled = store.updateChat(created.id, { jiraAdministrationEnabled: true }, target());
       if (change === "disconnect") store.updateChat(created.id, { jiraPodId: null });
-      if (change === "replace-pod") store.updateChat(created.id, { jiraPodId: SECOND }, target(SECOND));
+      if (change === "replace-pod")
+        store.updateChat(created.id, { jiraPodId: SECOND }, target(SECOND));
       if (change === "replace-credential") store.invalidateJiraPod(FIRST, 2);
       if (change === "remove-credential") store.invalidateJiraPod(FIRST, null);
       const current = store.findChatById(created.id);
@@ -196,30 +205,56 @@ describe("Chat Jira binding persistence", () => {
   );
 
   it("refuses an administration field in legacy schema 1 instead of migrating a grant", () => {
-    const legacy = { schemaVersion: 1, generation: 1, mode: "autonomous-delivery", binding: {
-      podId: FIRST, bindingGeneration: 1, authenticationGeneration: 1, connectedAtMs: 5,
-    } };
+    const legacy = {
+      schemaVersion: 1,
+      generation: 1,
+      mode: "autonomous-delivery",
+      binding: {
+        podId: FIRST,
+        bindingGeneration: 1,
+        authenticationGeneration: 1,
+        connectedAtMs: 5,
+      },
+    };
     expect(decodeJiraChatState(JSON.stringify(legacy))).toMatchObject({
-      schemaVersion: 2, mode: "autonomous-delivery", binding: legacy.binding,
+      schemaVersion: 2,
+      mode: "autonomous-delivery",
+      binding: legacy.binding,
     });
     expect(decodeJiraChatState(JSON.stringify(legacy)).jiraAdministrationEnabled).toBeUndefined();
-    expect(() => decodeJiraChatState(JSON.stringify({ ...legacy, jiraAdministrationEnabled: true })))
-      .toThrow("Stored Jira Chat state is invalid");
+    expect(() =>
+      decodeJiraChatState(JSON.stringify({ ...legacy, jiraAdministrationEnabled: true })),
+    ).toThrow("Stored Jira Chat state is invalid");
   });
 
   it("does not grant administration with an absent, changed or stale credential binding", () => {
     const created = store.createChat(project, "Administration", "model");
-    expect(() => store.updateChat(created.id, { jiraAdministrationEnabled: true }, target())).toThrow();
-    expect(() => store.updateChat(created.id,
-      { jiraPodId: FIRST, jiraAdministrationEnabled: true }, target())).toThrow();
+    expect(() =>
+      store.updateChat(created.id, { jiraAdministrationEnabled: true }, target()),
+    ).toThrow();
+    expect(() =>
+      store.updateChat(created.id, { jiraPodId: FIRST, jiraAdministrationEnabled: true }, target()),
+    ).toThrow();
     store.updateChat(created.id, { jiraPodId: FIRST }, target());
-    expect(() => store.updateChat(created.id,
-      { jiraAdministrationEnabled: true }, target(FIRST, 2))).toThrow("generation has changed");
+    expect(() =>
+      store.updateChat(created.id, { jiraAdministrationEnabled: true }, target(FIRST, 2)),
+    ).toThrow("generation has changed");
     expect(store.findChatById(created.id)?.jiraAdministrationEnabled).toBe(false);
-    expect(decodeJiraChatState(JSON.stringify({ schemaVersion: 2, generation: 0,
-      mode: "autonomous-delivery" })).jiraAdministrationEnabled).toBeUndefined();
-    expect(() => decodeJiraChatState(JSON.stringify({ schemaVersion: 2, generation: 0,
-      mode: "autonomous-delivery", jiraAdministrationEnabled: true }))).toThrow();
+    expect(
+      decodeJiraChatState(
+        JSON.stringify({ schemaVersion: 2, generation: 0, mode: "autonomous-delivery" }),
+      ).jiraAdministrationEnabled,
+    ).toBeUndefined();
+    expect(() =>
+      decodeJiraChatState(
+        JSON.stringify({
+          schemaVersion: 2,
+          generation: 0,
+          mode: "autonomous-delivery",
+          jiraAdministrationEnabled: true,
+        }),
+      ),
+    ).toThrow();
   });
 
   it("revokes all matching bindings atomically, retaining association across credential changes", () => {

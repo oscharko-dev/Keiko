@@ -50,7 +50,14 @@ function componentLabels(source: Source): WidgetMessageKey[] {
   const assignee =
     typeof source.assigneeType === "string" ? ASSIGNEES[source.assigneeType] : undefined;
   const labels: WidgetMessageKey[] = assignee === undefined ? [] : [assignee];
-  labels.push(state(source.deleted, "chat.jira.metadata.deleted", "chat.jira.metadata.notDeleted", "chat.jira.metadata.deletionUnknown"));
+  labels.push(
+    state(
+      source.deleted,
+      "chat.jira.metadata.deleted",
+      "chat.jira.metadata.notDeleted",
+      "chat.jira.metadata.deletionUnknown",
+    ),
+  );
   return labels;
 }
 /** Entity identity comes from its closed tool family, never from a project context or issue key. */
@@ -104,7 +111,9 @@ export function jiraVersionSummaryDetails(source: Source): JiraAgileDetails | un
   const name = text(source.name);
   const body = text(source.description);
   return {
-    ...details, ...(name === undefined ? {} : { name }), ...(body === undefined ? {} : { body }),
+    ...details,
+    ...(name === undefined ? {} : { name }),
+    ...(body === undefined ? {} : { body }),
     facts: [...details.facts, ...fact("chat.jira.fact.projectId", source.projectId)],
   };
 }

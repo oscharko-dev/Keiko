@@ -28,8 +28,14 @@ interface RequestLifecycle {
   readonly rethrowFailure: () => void;
 }
 /** HTTP composition only. Neither variant is accepted from tool arguments or ordinary requests. */
-export type JiraPrivateAuthentication = { readonly kind: "anonymous" } |
-  { readonly kind: "session"; readonly scope: "actor" | "avatar" | "logout" | "websudo"; readonly cookie: () => string; readonly legacyTemporaryRelease?: "10.3" | "10.4" };
+export type JiraPrivateAuthentication =
+  | { readonly kind: "anonymous" }
+  | {
+      readonly kind: "session";
+      readonly scope: "actor" | "avatar" | "logout" | "websudo";
+      readonly cookie: () => string;
+      readonly legacyTemporaryRelease?: "10.3" | "10.4";
+    };
 
 function requireConfirmation(result: unknown): void {
   if (result !== true) {
@@ -59,11 +65,13 @@ function requestBodyHeaders(request: RequestSnapshot): Record<string, string> {
   const directory = "maxBodyBytes" in request ? directoryAccessHeaders(request) : undefined;
   if (directory !== undefined) return directory;
   const archive = emailTemplateHeaders(
-    "jiraEmailTemplateArchive" in request ? request.jiraEmailTemplateArchive : undefined, request,
+    "jiraEmailTemplateArchive" in request ? request.jiraEmailTemplateArchive : undefined,
+    request,
   );
   if (archive !== undefined) return archive;
   const permissionAttribute = permissionAttributeHeaders(
-    "jiraPermissionAttribute" in request ? request.jiraPermissionAttribute : undefined, request,
+    "jiraPermissionAttribute" in request ? request.jiraPermissionAttribute : undefined,
+    request,
   );
   if (permissionAttribute !== undefined) return permissionAttribute;
   if ("upload" in request && request.upload !== undefined)
@@ -72,66 +80,111 @@ function requestBodyHeaders(request: RequestSnapshot): Record<string, string> {
     ? { "content-type": "application/json" }
     : {};
 }
-function emailTemplateHeaders(value: unknown, request: RequestSnapshot): Record<string, string> | undefined {
+function emailTemplateHeaders(
+  value: unknown,
+  request: RequestSnapshot,
+): Record<string, string> | undefined {
   if (value === undefined) return undefined;
   if (value !== true || !("maxBodyBytes" in request) || !URL.canParse(request.url))
-    throw new AtlassianCredentialCustodyError("invalid-input", ["Unsupported email-template archive request"]);
+    throw new AtlassianCredentialCustodyError("invalid-input", [
+      "Unsupported email-template archive request",
+    ]);
   const url = new URL(request.url);
   if (!emailTemplateUrl(url, request.url))
-    throw new AtlassianCredentialCustodyError("invalid-input", ["Unsupported email-template archive target"]);
+    throw new AtlassianCredentialCustodyError("invalid-input", [
+      "Unsupported email-template archive target",
+    ]);
   return emailTemplateBodyHeaders(request);
 }
 function emailTemplateBodyHeaders(request: AtlassianHttpBodyRequest): Record<string, string> {
-  if (request.bodyJson !== undefined || request.jiraExperimental !== undefined || request.jiraPermissionAttribute !== undefined)
-    throw new AtlassianCredentialCustodyError("invalid-input", ["Unsupported email-template archive content"]);
-  if (request.method === "GET" && request.upload === undefined) return { accept: "application/zip" };
+  if (
+    request.bodyJson !== undefined ||
+    request.jiraExperimental !== undefined ||
+    request.jiraPermissionAttribute !== undefined
+  )
+    throw new AtlassianCredentialCustodyError("invalid-input", [
+      "Unsupported email-template archive content",
+    ]);
+  if (request.method === "GET" && request.upload === undefined)
+    return { accept: "application/zip" };
   if (request.method === "POST" && request.upload?.contentType === "application/zip")
     return { "content-type": "application/zip" };
-  throw new AtlassianCredentialCustodyError("invalid-input", ["Unsupported email-template archive body"]);
+  throw new AtlassianCredentialCustodyError("invalid-input", [
+    "Unsupported email-template archive body",
+  ]);
 }
 function emailTemplateUrl(url: URL, raw: string): boolean {
-  return closedJiraUrl(url) && url.toString() === raw &&
-    url.pathname.endsWith("/rest/api/2/email-templates") && !/%(?:2e|2f|5c|25)/iu.test(url.pathname);
+  return (
+    closedJiraUrl(url) &&
+    url.toString() === raw &&
+    url.pathname.endsWith("/rest/api/2/email-templates") &&
+    !/%(?:2e|2f|5c|25)/iu.test(url.pathname)
+  );
 }
 // The enclosing HTTP owner already binds the configured HTTPS origin and context path before
 // constructing this lifecycle. These fixed opt-ins retain that same floor, including loopback.
 function closedJiraUrl(url: URL): boolean {
-  return url.protocol === "https:" && url.search === "" && url.hash === "" &&
-    url.username === "" && url.password === "";
+  return (
+    url.protocol === "https:" &&
+    url.search === "" &&
+    url.hash === "" &&
+    url.username === "" &&
+    url.password === ""
+  );
 }
 function canonicalAttributeKey(encoded: string | undefined): boolean {
   return jiraPropertyPathKey(decodeCanonicalUriSegment(encoded));
 }
 function permissionAttributeUrl(url: URL): boolean {
   if (!closedJiraUrl(url)) return false;
-  const match = /\/rest\/api\/2\/permissionscheme\/([1-9][0-9]{0,18})\/attribute\/([^/]+)$/u.exec(url.pathname);
+  const match = /\/rest\/api\/2\/permissionscheme\/([1-9][0-9]{0,18})\/attribute\/([^/]+)$/u.exec(
+    url.pathname,
+  );
   const id = match?.[1];
-  return id !== undefined && BigInt(id) <= 9223372036854775807n && canonicalAttributeKey(match?.[2]);
+  return (
+    id !== undefined && BigInt(id) <= 9223372036854775807n && canonicalAttributeKey(match?.[2])
+  );
 }
 function plainBooleanRequest(request: RequestSnapshot): boolean {
-  return request.method === "PUT" && !("upload" in request && request.upload !== undefined) &&
-    "bodyJson" in request && (request.bodyJson === "true" || request.bodyJson === "false");
+  return (
+    request.method === "PUT" &&
+    !("upload" in request && request.upload !== undefined) &&
+    "bodyJson" in request &&
+    (request.bodyJson === "true" || request.bodyJson === "false")
+  );
 }
 /** PermissionSchemeResource consumes text/plain, not a JSON string. The only admitted bytes
  * are literal booleans at this one native route; ordinary JSON requests stay JSON. */
-function permissionAttributeHeaders(value: unknown, request: RequestSnapshot): Record<string, string> | undefined {
+function permissionAttributeHeaders(
+  value: unknown,
+  request: RequestSnapshot,
+): Record<string, string> | undefined {
   if (value === undefined) return undefined;
   if (value !== true || !plainBooleanRequest(request) || !URL.canParse(request.url))
-    throw new AtlassianCredentialCustodyError("invalid-input", ["Unsupported permission attribute request"]);
+    throw new AtlassianCredentialCustodyError("invalid-input", [
+      "Unsupported permission attribute request",
+    ]);
   if (!permissionAttributeUrl(new URL(request.url)))
-    throw new AtlassianCredentialCustodyError("invalid-input", ["Unsupported permission attribute target"]);
+    throw new AtlassianCredentialCustodyError("invalid-input", [
+      "Unsupported permission attribute target",
+    ]);
   return { "content-type": "text/plain" };
 }
 function experimentalJiraUrl(url: URL): boolean {
-  return closedJiraUrl(url) &&
-    /\/rest\/agile\/1\.0\/sprint\/(?:unmap|unmap-all)$/u.test(url.pathname);
+  return (
+    closedJiraUrl(url) && /\/rest\/agile\/1\.0\/sprint\/(?:unmap|unmap-all)$/u.test(url.pathname)
+  );
 }
 function experimentalJiraHeaders(value: unknown, request: RequestSnapshot): Record<string, string> {
   if (value === undefined) return {};
   if (value !== true || request.method !== "PUT" || !URL.canParse(request.url))
-    throw new AtlassianCredentialCustodyError("invalid-input", ["Unsupported experimental Jira request"]);
+    throw new AtlassianCredentialCustodyError("invalid-input", [
+      "Unsupported experimental Jira request",
+    ]);
   if (!experimentalJiraUrl(new URL(request.url)))
-    throw new AtlassianCredentialCustodyError("invalid-input", ["Unsupported experimental Jira target"]);
+    throw new AtlassianCredentialCustodyError("invalid-input", [
+      "Unsupported experimental Jira target",
+    ]);
   return { "X-ExperimentalApi": "true" };
 }
 
@@ -149,7 +202,10 @@ export function atlassianHttpRequestLifecycle(
   // Validate the closed opt-in before admission callbacks can mark a native effect dispatched.
   const headers = {
     ...requestBodyHeaders(request),
-    ...experimentalJiraHeaders("jiraExperimental" in request ? request.jiraExperimental : undefined, request),
+    ...experimentalJiraHeaders(
+      "jiraExperimental" in request ? request.jiraExperimental : undefined,
+      request,
+    ),
   };
   let failure: { readonly error: unknown } | undefined;
   function run<T>(callback: () => T): T {
@@ -165,20 +221,40 @@ export function atlassianHttpRequestLifecycle(
       run(() => {
         if (beforeDispatch !== undefined) requireConfirmation(beforeDispatch(request));
         const input = "jiraHumanInput" in request ? request.jiraHumanInput : undefined;
-        if (input?.selection.binding.operation === "jira.unlock-user-anonymization" &&
-            claimHttpHumanInput(credentials, input, options.onHumanInputConsumed).ownerShutdownConfirmation !== "confirmed")
-          throw new AtlassianCredentialCustodyError("invalid-input", ["Missing human owner-shutdown attestation"]);
+        if (
+          input?.selection.binding.operation === "jira.unlock-user-anonymization" &&
+          claimHttpHumanInput(credentials, input, options.onHumanInputConsumed)
+            .ownerShutdownConfirmation !== "confirmed"
+        )
+          throw new AtlassianCredentialCustodyError("invalid-input", [
+            "Missing human owner-shutdown attestation",
+          ]);
         const privateAuth = options.privateAuthentication;
-        if (privateAuth?.kind === "anonymous") return new Headers({ accept: "application/json", ...headers, "content-type": "application/json" });
-        if (privateAuth?.kind === "session") return new Headers({ cookie: privateAuth.cookie(), accept: "application/json", ...headers });
+        if (privateAuth?.kind === "anonymous")
+          return new Headers({
+            accept: "application/json",
+            ...headers,
+            "content-type": "application/json",
+          });
+        if (privateAuth?.kind === "session")
+          return new Headers({
+            cookie: privateAuth.cookie(),
+            accept: "application/json",
+            ...headers,
+          });
         const credential = credentials.resolveForExecution(authRef);
         return new Headers({
           authorization: atlassianAuthorizationHeaderValue(credential),
           accept: "application/json",
-          ...(input !== undefined && input.selection.binding.operation !== "jira.unlock-user-anonymization" ? {
-            "content-type": "application/json",
-            ...(input.selection.binding.operation === "jira.update-user-password" ? { "X-ExperimentalApi": "true" } : {}),
-          } : {}),
+          ...(input !== undefined &&
+          input.selection.binding.operation !== "jira.unlock-user-anonymization"
+            ? {
+                "content-type": "application/json",
+                ...(input.selection.binding.operation === "jira.update-user-password"
+                  ? { "X-ExperimentalApi": "true" }
+                  : {}),
+              }
+            : {}),
           ...headers,
         });
       }),

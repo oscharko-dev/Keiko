@@ -66,9 +66,19 @@ function jiraGet(request: { readonly url: string }): ReturnType<AtlassianHttpBod
       response([{ id: "10001", name: "Story", statuses: [{ name: "To Do" }, { name: "Done" }] }]),
     );
   if (path.endsWith("/field"))
-    return Promise.resolve(response([{ id: "customfield_10016", name: "Story Points" }, { id: "parent", name: "Parent" }]));
+    return Promise.resolve(
+      response([
+        { id: "customfield_10016", name: "Story Points" },
+        { id: "parent", name: "Parent" },
+      ]),
+    );
   if (path.endsWith("/issuetype"))
-    return Promise.resolve(response([{ id: "10001", name: "Story" }, { id: "7", name: "Task" }]));
+    return Promise.resolve(
+      response([
+        { id: "10001", name: "Story" },
+        { id: "7", name: "Task" },
+      ]),
+    );
   if (path.endsWith("/issueLinkType"))
     return Promise.resolve(
       response({
@@ -184,18 +194,37 @@ afterEach(() => {
 describe("template documents in the skill library", () => {
   it("preserves and validates the uploaded parent-type clause through the normal skill owner", async () => {
     const { deps, cookie, http } = fixture();
-    const markdown = ["---", "keiko: jira-issue-template", "version: 1", "project: SYN", "issueType: Story",
-      "activateOn: [create]", "parentField: parent", "parentIssueTypes: [Task]", "---", "# Parent rule"].join("\n");
-    expect((await handleImportMarkdownSkill(context(cookie, upload(markdown)), deps)).status).toBe(201);
+    const markdown = [
+      "---",
+      "keiko: jira-issue-template",
+      "version: 1",
+      "project: SYN",
+      "issueType: Story",
+      "activateOn: [create]",
+      "parentField: parent",
+      "parentIssueTypes: [Task]",
+      "---",
+      "# Parent rule",
+    ].join("\n");
+    expect((await handleImportMarkdownSkill(context(cookie, upload(markdown)), deps)).status).toBe(
+      201,
+    );
     const saved = deps.store.markdownSkills.list()[0];
     if (saved === undefined) throw new TypeError("The uploaded skill must be persisted");
     const stored = deps.store.markdownSkills.get(saved.id);
     expect(stored?.body).toBe(markdown);
-    expect(deps.store.markdownSkills.jiraTemplates()[0]?.template?.parent)
-      .toEqual({ field: "parent", issueTypes: ["Task"] });
-    const result = await handleValidateJiraTemplate(context(cookie, { podId: POD, markdown: stored?.body }), deps);
+    expect(deps.store.markdownSkills.jiraTemplates()[0]?.template?.parent).toEqual({
+      field: "parent",
+      issueTypes: ["Task"],
+    });
+    const result = await handleValidateJiraTemplate(
+      context(cookie, { podId: POD, markdown: stored?.body }),
+      deps,
+    );
     expect(result.body).toMatchObject({ valid: true, findings: [] });
-    expect(http.mock.calls.some(([request]) => new URL(request.url).pathname.endsWith("/issuetype"))).toBe(true);
+    expect(
+      http.mock.calls.some(([request]) => new URL(request.url).pathname.endsWith("/issuetype")),
+    ).toBe(true);
     expect(http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
   });
   it("imports a valid template as an ordinary private skill revision", async () => {

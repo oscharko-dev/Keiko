@@ -57,11 +57,12 @@ export async function bindJiraCommentIssue(
   input: CommentTarget,
   baseUrl: string | undefined,
 ): Promise<
-  Failure | {
-    readonly ok: true;
-    readonly issueKey: string;
-    readonly binding: JiraCommentBinding;
-  }
+  | Failure
+  | {
+      readonly ok: true;
+      readonly issueKey: string;
+      readonly binding: JiraCommentBinding;
+    }
 > {
   if (baseUrl === undefined || !isSafeAtlassianConnectorBaseUrl(baseUrl)) return MALFORMED;
   const current = await readJiraMutationIssue(request, input.issueKey, ["summary"]);

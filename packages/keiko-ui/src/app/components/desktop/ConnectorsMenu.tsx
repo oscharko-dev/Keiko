@@ -148,7 +148,15 @@ type ServerSectionProps = Pick<
 
 type PodSectionProps = Pick<
   ConnectorsMenuProps,
-  "pods" | "boundPodId" | "loading" | "busy" | "failed" | "onPodChange" | "onManagePods" | "jiraAdministrationEnabled" | "onJiraAdministrationChange"
+  | "pods"
+  | "boundPodId"
+  | "loading"
+  | "busy"
+  | "failed"
+  | "onPodChange"
+  | "onManagePods"
+  | "jiraAdministrationEnabled"
+  | "onJiraAdministrationChange"
 >;
 
 type ConnectorsPanelBodyProps = Omit<ConnectorsMenuProps, "onOpen">;
@@ -241,7 +249,9 @@ function JiraAdministrationControl(props: PodSectionProps): ReactNode {
         describedBy={helpId}
         onToggle={props.onJiraAdministrationChange}
       />
-      <p id={helpId} className={styles.cmpEmpty}>{t("chat.connectors.jiraAdministrationHelp")}</p>
+      <p id={helpId} className={styles.cmpEmpty}>
+        {t("chat.connectors.jiraAdministrationHelp")}
+      </p>
     </>
   );
 }

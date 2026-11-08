@@ -27,7 +27,8 @@ export function jiraTemplateNativeIssueType(value: unknown): ParentIssueType | u
   const type = asRecord(value);
   if (type === undefined) return undefined;
   return jiraNativeId(type.id) && jiraNativeText(type.name, 255)
-    ? { id: type.id, name: type.name } : undefined;
+    ? { id: type.id, name: type.name }
+    : undefined;
 }
 
 function selectedParent(value: unknown): ParentSelection | undefined {
@@ -40,16 +41,22 @@ function selectedParent(value: unknown): ParentSelection | undefined {
   return isSafeAtlassianIdentifier(key) ? { selector: key, key } : undefined;
 }
 function validParentReferences(id: unknown, key: unknown): boolean {
-  return (id === undefined || jiraNativeId(id)) && (key === undefined || isSafeAtlassianIdentifier(key));
+  return (
+    (id === undefined || jiraNativeId(id)) && (key === undefined || isSafeAtlassianIdentifier(key))
+  );
 }
 
-async function readParentType(request: JiraMutationRequest, value: unknown): Promise<ParentIssueType | undefined> {
+async function readParentType(
+  request: JiraMutationRequest,
+  value: unknown,
+): Promise<ParentIssueType | undefined> {
   const selected = selectedParent(value);
   if (selected === undefined) return undefined;
   const read = await readJiraMutationIssue(request, selected.selector, ["issuetype"]);
   if (!read.ok || !jiraNativeId(read.id)) return undefined;
   if (selected.id !== undefined && read.id !== selected.id) return undefined;
-  if (selected.key !== undefined && read.key?.toUpperCase() !== selected.key.toUpperCase()) return undefined;
+  if (selected.key !== undefined && read.key?.toUpperCase() !== selected.key.toUpperCase())
+    return undefined;
   return jiraTemplateNativeIssueType(read.fields.issuetype);
 }
 
@@ -60,14 +67,20 @@ export async function bindJiraTemplateParentTypes(
   templates: readonly JiraIssueTemplate[],
   catalog: readonly JiraFieldCatalogEntry[],
 ): Promise<JiraTemplateSubject> {
-  const fieldIds = new Set(templates.flatMap((template) => {
-    const { field, issueTypes } = template.parent;
-    if (field === undefined || issueTypes === undefined) return [];
-    const ids = resolveJiraTemplateFieldIds(field, catalog);
-    return ids.length === 1 ? ids : [];
-  }));
-  const types = await Promise.all([...fieldIds].map(async (fieldId): Promise<readonly [string, ParentIssueType | undefined]> =>
-    [fieldId, await readParentType(request, subject.fields[fieldId])]));
+  const fieldIds = new Set(
+    templates.flatMap((template) => {
+      const { field, issueTypes } = template.parent;
+      if (field === undefined || issueTypes === undefined) return [];
+      const ids = resolveJiraTemplateFieldIds(field, catalog);
+      return ids.length === 1 ? ids : [];
+    }),
+  );
+  const types = await Promise.all(
+    [...fieldIds].map(async (fieldId): Promise<readonly [string, ParentIssueType | undefined]> => [
+      fieldId,
+      await readParentType(request, subject.fields[fieldId]),
+    ]),
+  );
   const parentIssueTypes = new Map<string, ParentIssueType>();
   for (const [fieldId, type] of types) if (type !== undefined) parentIssueTypes.set(fieldId, type);
   return { ...subject, parentIssueTypes: Object.fromEntries(parentIssueTypes) };

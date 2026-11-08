@@ -20,7 +20,8 @@ const SIGNED_METRIC = { type: "integer", minimum: -2147483648, maximum: 21474836
 const CURSOR = {
   ...text(20),
   minLength: 1,
-  description: "Canonical signed decimal int64 cursor returned by Jira; not a user ID or numeric offset.",
+  description:
+    "Canonical signed decimal int64 cursor returned by Jira; not a user ID or numeric offset.",
 };
 const USER_FIELDS = { key: NAME, name: NAME, displayName: NAME, active: BOOL, deleted: BOOL };
 const USER = object(USER_FIELDS, ["key", "name"]);
@@ -42,7 +43,12 @@ const ROLE_FIELDS = {
 function items(item: CatalogJsonObject, maxItems = 100): CatalogJsonObject {
   return { type: "array", maxItems, items: item };
 }
-function read(description: string, input: CatalogJsonObject, result: CatalogJsonObject, maxResultCount = 100): JiraNativeDefinition {
+function read(
+  description: string,
+  input: CatalogJsonObject,
+  result: CatalogJsonObject,
+  maxResultCount = 100,
+): JiraNativeDefinition {
   return { description, input, result: jiraNativeReadResult(result), risk: "read", maxResultCount };
 }
 export const JIRA_DIRECTORY_READ_DEFINITIONS = {
@@ -58,11 +64,15 @@ export const JIRA_DIRECTORY_READ_DEFINITIONS = {
   "jira.users": read(
     "Search visible Jira users within the native first 100 matching records. startAt+maxResults must not exceed 100; nextStartAt stays inside that window and no total is invented. Use user-directory when complete directory paging is permitted. Active/inactive flags are optional native selectors; no emails or remote URLs.",
     object({
-      query: text(255), startAt: { type: "integer", minimum: 0, maximum: 99 },
-      maxResults: PAGING.maxResults, includeActive: BOOL, includeInactive: BOOL,
+      query: text(255),
+      startAt: { type: "integer", minimum: 0, maximum: 99 },
+      maxResults: PAGING.maxResults,
+      includeActive: BOOL,
+      includeInactive: BOOL,
     }),
     {
-      items: items(USER), startAt: { type: "integer", minimum: 0, maximum: 99 },
+      items: items(USER),
+      startAt: { type: "integer", minimum: 0, maximum: 99 },
       searchLimit: { type: "integer", enum: [100] },
       nextStartAt: { type: "integer", minimum: 0, maximum: 99 },
     },
@@ -79,11 +89,22 @@ export const JIRA_DIRECTORY_READ_DEFINITIONS = {
   ),
   "jira.group-members": read(
     "Read a native page of visible members of the exact named group and its subgroups, optionally including inactive users. Forward only fixed groupname/paging selectors. Preserve native paging and optional total; group visibility and Jira administration permissions remain server-enforced. No membership changes or emails.",
-    object({
-      groupName: NAME, startAt: PAGING.startAt,
-      maxResults: { type: "integer", minimum: 1, maximum: 50 }, includeInactiveUsers: BOOL,
-    }, ["groupName"]),
-    { groupName: NAME, items: items(USER, 50), startAt: PAGING.startAt, total: TOTAL, nextStartAt: PAGING.startAt },
+    object(
+      {
+        groupName: NAME,
+        startAt: PAGING.startAt,
+        maxResults: { type: "integer", minimum: 1, maximum: 50 },
+        includeInactiveUsers: BOOL,
+      },
+      ["groupName"],
+    ),
+    {
+      groupName: NAME,
+      items: items(USER, 50),
+      startAt: PAGING.startAt,
+      total: TOTAL,
+      nextStartAt: PAGING.startAt,
+    },
     50,
   ),
   "jira.groups": read(
@@ -94,7 +115,12 @@ export const JIRA_DIRECTORY_READ_DEFINITIONS = {
   "jira.application-roles": read(
     "Read a local page of native application-role facts under Jira's administration permission. Groups, defaults, flags and signed seat/user metrics are observed values, not new grants or inferred capacity. Missing values stay unknown; negative native sentinel metrics remain negative.",
     object(PAGING),
-    { items: items(object(ROLE_FIELDS, ["key"])), startAt: PAGING.startAt, total: TOTAL, nextStartAt: PAGING.startAt },
+    {
+      items: items(object(ROLE_FIELDS, ["key"])),
+      startAt: PAGING.startAt,
+      total: TOTAL,
+      nextStartAt: PAGING.startAt,
+    },
   ),
   "jira.application-role": read(
     "Read the exact named native application role, preserving only documented optional group, default, flag and signed metric facts. Requires the native Jira administration permission; this does not assign roles, change seats or infer absent metadata.",
@@ -104,8 +130,11 @@ export const JIRA_DIRECTORY_READ_DEFINITIONS = {
   ),
 } as const satisfies Readonly<Record<string, JiraNativeDefinition>>;
 
-export function jiraDirectoryDeclarationForTool(name: string): ManagedMcpToolDeclaration | undefined {
-  const definitions: Readonly<Record<string, JiraNativeDefinition>> = JIRA_DIRECTORY_READ_DEFINITIONS;
+export function jiraDirectoryDeclarationForTool(
+  name: string,
+): ManagedMcpToolDeclaration | undefined {
+  const definitions: Readonly<Record<string, JiraNativeDefinition>> =
+    JIRA_DIRECTORY_READ_DEFINITIONS;
   const selected = Object.hasOwn(definitions, name) ? definitions[name] : undefined;
   return selected === undefined ? undefined : jiraNativeDeclaration(name, selected);
 }

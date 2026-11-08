@@ -168,13 +168,11 @@ it("compares version-link values using the native JSON member order", async () =
   mkdirSync(join(directory, "secrets"));
   writeFileSync(join(directory, "secrets/admin-password"), "synthetic-admin", { mode: 0o600 });
   const globalId = "keiko-ac7-synthetic-run-a";
-  const native = vi
-    .spyOn(globalThis, "fetch")
-    .mockResolvedValue(
-      new globalThis.Response(JSON.stringify({ link: JSON.stringify({ flag: true, globalId }) }), {
-        status: 200,
-      }),
-    );
+  const native = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    new globalThis.Response(JSON.stringify({ link: JSON.stringify({ flag: true, globalId }) }), {
+      status: 200,
+    }),
+  );
   const specification = API_QUALIFICATION_RELEASE_CASES.find(
     ({ tool }) => tool === "jira.version-remote-link",
   );

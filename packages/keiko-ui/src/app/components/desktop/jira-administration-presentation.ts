@@ -11,7 +11,11 @@ import {
 } from "./jira-presentation-values";
 const SCREEN_FIELDS = new Set(["jira_screen_tab_fields", "jira_screen_available_fields"]);
 const WORKFLOW_SCHEMES = new Set(["jira_workflow_scheme", "jira_workflow_scheme_draft"]);
-const SCREEN_TAB_WRITES = new Set(["jira_create_screen_tab", "jira_rename_screen_tab", "jira_delete_screen_tab"]);
+const SCREEN_TAB_WRITES = new Set([
+  "jira_create_screen_tab",
+  "jira_rename_screen_tab",
+  "jira_delete_screen_tab",
+]);
 export const JIRA_ADMINISTRATION_TOOLS: ReadonlySet<string> = new Set([
   "jira_screen_tabs",
   ...SCREEN_TAB_WRITES,
@@ -41,14 +45,20 @@ const TEXT_FACTS: Readonly<Record<string, WidgetMessageKey>> = {
   type: "chat.jira.fact.screenFieldType",
 };
 const TAB_ARGUMENTS: Readonly<Record<string, WidgetMessageKey>> = {
-  screenId: "chat.jira.fact.screenId", tabId: "chat.jira.fact.screenTabId",
+  screenId: "chat.jira.fact.screenId",
+  tabId: "chat.jira.fact.screenTabId",
   expectedScreenName: "chat.jira.screenTabs.expectedScreenName",
-  expectedName: "chat.jira.screenTabs.expectedName", name: "chat.jira.screenTabs.newName",
+  expectedName: "chat.jira.screenTabs.expectedName",
+  name: "chat.jira.screenTabs.newName",
   expectedFieldIds: "chat.jira.screenTabs.expectedFieldIds",
 };
-export function jiraScreenTabArgumentLabel(operation: string | undefined, field: string): WidgetMessageKey | undefined {
+export function jiraScreenTabArgumentLabel(
+  operation: string | undefined,
+  field: string,
+): WidgetMessageKey | undefined {
   return operation !== undefined && SCREEN_TAB_WRITES.has(operation.replace(/[.-]/gu, "_"))
-    ? TAB_ARGUMENTS[field] : undefined;
+    ? TAB_ARGUMENTS[field]
+    : undefined;
 }
 const TAB_CONFIRMED: Readonly<Record<string, WidgetMessageKey>> = {
   jira_create_screen_tab: "chat.jira.screenTabs.created",
@@ -58,10 +68,22 @@ const TAB_CONFIRMED: Readonly<Record<string, WidgetMessageKey>> = {
 function screenTabReceipt(tool: string, source: Source): JiraAgileDetails {
   const screenId = receiptId(source.screenId);
   const tabId = receiptId(source.tabId);
-  const confirmed = source.outcome === "succeeded" && screenId !== undefined && tabId !== undefined
-    ? TAB_CONFIRMED[tool] : undefined;
-  return { facts: [...fact("chat.jira.fact.screenId", screenId), ...fact("chat.jira.fact.screenTabId", tabId)],
-    labels: confirmed !== undefined ? [confirmed] : tabId === undefined ? ["chat.jira.screenTabs.tabUnconfirmed"] : [] };
+  const confirmed =
+    source.outcome === "succeeded" && screenId !== undefined && tabId !== undefined
+      ? TAB_CONFIRMED[tool]
+      : undefined;
+  return {
+    facts: [
+      ...fact("chat.jira.fact.screenId", screenId),
+      ...fact("chat.jira.fact.screenTabId", tabId),
+    ],
+    labels:
+      confirmed !== undefined
+        ? [confirmed]
+        : tabId === undefined
+          ? ["chat.jira.screenTabs.tabUnconfirmed"]
+          : [],
+  };
 }
 function entityIdLabel(tool: string): WidgetMessageKey {
   if (tool === "jira_screens") return "chat.jira.fact.screenId";
@@ -120,9 +142,7 @@ function booleanLabels(source: Source): WidgetMessageKey[] {
         : "chat.jira.administration.notDefaultMapping",
     );
   if (typeof source.draft === "boolean")
-    labels.push(
-      source.draft ? "chat.jira.administration.draft" : "chat.jira.schemeWrite.baseOnly",
-    );
+    labels.push(source.draft ? "chat.jira.administration.draft" : "chat.jira.schemeWrite.baseOnly");
   if (typeof source.archived === "boolean")
     labels.push(source.archived ? "chat.jira.metadata.archived" : "chat.jira.metadata.notArchived");
   return labels;
@@ -145,7 +165,8 @@ function labelsFor(tool: string, source: Source): WidgetMessageKey[] {
 function schemeReview(tool: string, source: Source): JiraAgileDetails {
   if (WORKFLOW_SCHEMES.has(tool)) return jiraSchemeReviewDetails("workflow", source);
   return tool === "jira_issue_type_scheme" || tool === "jira_issue_type_schemes"
-    ? jiraSchemeReviewDetails("issue-type", source) : { facts: [], labels: [] };
+    ? jiraSchemeReviewDetails("issue-type", source)
+    : { facts: [], labels: [] };
 }
 export function jiraAdministrationDetails(tool: string, source: Source): JiraAgileDetails {
   if (SCREEN_TAB_WRITES.has(tool)) return screenTabReceipt(tool, source);

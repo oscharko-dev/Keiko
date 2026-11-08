@@ -132,7 +132,8 @@ function fieldOperation(tool: string): JiraFieldOperation | undefined {
     : FIELD_OPERATIONS.find((operation) => operation === tool);
 }
 
-type PreflightDeps = JiraChatAdmissionOptions["deps"] & JiraChatAttachmentDeps &
+type PreflightDeps = JiraChatAdmissionOptions["deps"] &
+  JiraChatAttachmentDeps &
   Pick<UiHandlerDeps, "store" | "atlassianConnectorCredentials" | "jiraDraftStore" | "activityLog">;
 
 export interface JiraChatTemplatePreflightPorts {
@@ -175,8 +176,12 @@ function dryRunTarget(
   current: Credential,
 ): DryRunTarget {
   const allowed = (): boolean => !context.signal.aborted && ports.readAllowed(action);
-  const invocation = { invocationId: action.actionId, correlationId: context.correlationId,
-    signal: context.signal, beforeEffect: allowed };
+  const invocation = {
+    invocationId: action.actionId,
+    correlationId: context.correlationId,
+    signal: context.signal,
+    beforeEffect: allowed,
+  };
   const privatePorts = jiraChatPrivatePorts(ports.deps, context, current.credential, invocation);
   return {
     invocation,
@@ -192,13 +197,20 @@ function dryRunTarget(
         review: () => ({ required: true, reviewed: undefined }),
       }),
       privateIdentity: privatePorts?.identity,
-      avatars: { ...jiraChatAvatarComposition(ports.deps, {
-        chatId: context.chatId,
-        correlationId: context.correlationId,
-        signal: context.signal,
-        review: () => ({ required: true, reviewed: undefined }),
-      }), ...(privatePorts === undefined ? {} : { withSession: privatePorts.withAvatarSession,
-        legacyTemporaryRelease: privatePorts.legacyTemporaryRelease }) },
+      avatars: {
+        ...jiraChatAvatarComposition(ports.deps, {
+          chatId: context.chatId,
+          correlationId: context.correlationId,
+          signal: context.signal,
+          review: () => ({ required: true, reviewed: undefined }),
+        }),
+        ...(privatePorts === undefined
+          ? {}
+          : {
+              withSession: privatePorts.withAvatarSession,
+              legacyTemporaryRelease: privatePorts.legacyTemporaryRelease,
+            }),
+      },
     },
   };
 }

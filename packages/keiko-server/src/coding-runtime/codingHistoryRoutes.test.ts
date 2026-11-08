@@ -208,16 +208,31 @@ describe("live private input is a current native history projection", () => {
     const owner = store.codingHistory;
     if (owner === undefined) throw new TypeError("Missing native history");
     const principal = sha256Hex("operator");
-    owner.begin({ conversationId: id, projectPath: root, title: "Private input", modelId: "coding",
-      workspaceId: "ws-one", taskId: "task-one", branch: "feature/tests",
-      operatorDigest: principal, runId: "private-history-run", intent: "Use Jira" });
+    owner.begin({
+      conversationId: id,
+      projectPath: root,
+      title: "Private input",
+      modelId: "coding",
+      workspaceId: "ws-one",
+      taskId: "task-one",
+      branch: "feature/tests",
+      operatorDigest: principal,
+      runId: "private-history-run",
+      intent: "Use Jira",
+    });
     owner.bindNativeTurn("private-history-run", "msg_private_history", "Use Jira");
     const turn = owner.nativeTurn("private-history-run");
     if (turn === undefined) throw new TypeError("Missing native turn");
     const privateState = privateJiraCustodyFixture("jira.login", principal);
     const args = { expectedActorKey: "actor-key" };
-    const binding: JiraHumanInputBinding = { ...privateState.binding,
-      context: { kind: "coding", taskId: "task-one", runId: "private-history-run", callId: "mcp-private-history" },
+    const binding: JiraHumanInputBinding = {
+      ...privateState.binding,
+      context: {
+        kind: "coding",
+        taskId: "task-one",
+        runId: "private-history-run",
+        callId: "mcp-private-history",
+      },
       authority: { runId: "private-history-run", envelopeDigest: "d".repeat(64) },
       argumentsDigest: sha256Hex(canonicalise(args)),
     };
@@ -225,19 +240,28 @@ describe("live private input is a current native history projection", () => {
     const transcript = owner.nativeToolTranscript("private-history-run", turn);
     const contract = jiraOperationForTool("jira.login");
     if (contract === undefined) throw new TypeError("Missing login contract");
-    const started = { kind: "started" as const,
+    const started = {
+      kind: "started" as const,
       call: { id: binding.context.callId, name: "jira_login", arguments: args },
-      operationBinding: contract.binding, nativeArgumentsDigest: binding.argumentsDigest };
+      operationBinding: contract.binding,
+      nativeArgumentsDigest: binding.argumentsDigest,
+    };
     transcript.humanInput(started, view, "history-route-test");
     let active = true;
     const pending: PendingCodingJiraInput = {
-      binding, argumentsValue: args, requestId: view.requestId, selection: undefined,
-      current: () => active && owner.nativeTurn("private-history-run")?.userMessageId === turn.userMessageId,
+      binding,
+      argumentsValue: args,
+      requestId: view.requestId,
+      selection: undefined,
+      current: () =>
+        active && owner.nativeTurn("private-history-run")?.userMessageId === turn.userMessageId,
       publish: (next) => transcript.humanInput(started, next, "history-route-test"),
       release: () => undefined,
     };
     Object.assign(deps, {
-      store, serverPrincipal: () => "operator", atlassianConnectorCredentials: { custody: privateState.custody },
+      store,
+      serverPrincipal: () => "operator",
+      atlassianConnectorCredentials: { custody: privateState.custody },
       codingJiraInputContext: (selected: JiraHumanInputBinding, requestId: string) =>
         currentCodingJiraInput(pending, selected, requestId),
     });
@@ -247,19 +271,33 @@ describe("live private input is a current native history projection", () => {
       const detail = result.body as CodingHistoryDetail;
       return detail.messages.find((message) => message.id === turn.userMessageId);
     };
-    return { owner, turn, privateState, binding, view, pending, responseMessage,
-      release: () => { active = false; } };
+    return {
+      owner,
+      turn,
+      privateState,
+      binding,
+      view,
+      pending,
+      responseMessage,
+      release: () => {
+        active = false;
+      },
+    };
   }
 
   it("reloads the held current form without persisting pending on an ordinary history row", () => {
     const f = heldInput();
-    expect(f.responseMessage()).toMatchObject({ turnState: "pending", toolTranscript: {
-      exchanges: [{ call: { id: "mcp-private-history" }, humanInput: f.view }],
-    } });
+    expect(f.responseMessage()).toMatchObject({
+      turnState: "pending",
+      toolTranscript: {
+        exchanges: [{ call: { id: "mcp-private-history" }, humanInput: f.view }],
+      },
+    });
     expect(f.responseMessage()?.turnState).toBe("pending");
     expect(history.detail(id, "history-route-test")?.messages[0]?.turnState).toBeUndefined();
-    const ready = f.privateState.inputs.submit(f.view.requestId, f.binding, f.view.revision,
-      { password: "synthetic-private-history-secret" });
+    const ready = f.privateState.inputs.submit(f.view.requestId, f.binding, f.view.revision, {
+      password: "synthetic-private-history-secret",
+    });
     f.pending.publish(ready);
     expect(f.responseMessage()?.turnState).toBe("pending");
     expect(JSON.stringify(f.responseMessage())).not.toContain("synthetic-private-history-secret");
@@ -278,12 +316,14 @@ describe("live private input is a current native history projection", () => {
       }
       if (reason === "expired") f.privateState.advance(60_001);
       if (reason === "consumed") {
-        const ready = f.privateState.inputs.submit(f.view.requestId, f.binding, f.view.revision,
-          { password: "synthetic-private-history-secret" });
+        const ready = f.privateState.inputs.submit(f.view.requestId, f.binding, f.view.revision, {
+          password: "synthetic-private-history-secret",
+        });
         f.pending.publish(ready);
         f.privateState.privateInputs.claim(f.view.requestId, f.binding, ready.revision);
       }
-      if (reason === "new-turn") f.owner.bindNativeTurn("private-history-run", "msg_next_history", "Another request");
+      if (reason === "new-turn")
+        f.owner.bindNativeTurn("private-history-run", "msg_next_history", "Another request");
       if (reason === "lost-owner") Object.assign(deps, { codingJiraInputContext: undefined });
       expect(f.responseMessage()?.turnState).toBeUndefined();
     },
@@ -292,14 +332,23 @@ describe("live private input is a current native history projection", () => {
     const f = heldInput();
     const detail = history.detail(id, "history-route-test");
     if (detail === undefined) throw new TypeError("Missing current detail");
-    vi.spyOn(history, "detail").mockReturnValue({ ...detail, messages: detail.messages.map((message) => {
-      if (message.id !== f.turn.userMessageId || message.toolTranscript === undefined) return message;
-      return { ...message, toolTranscript: { ...message.toolTranscript,
-        exchanges: message.toolTranscript.exchanges.map((exchange) => ({ ...exchange,
-          call: { ...exchange.call, arguments: { expectedActorKey: "different-actor" } },
-        })),
-      } };
-    }) });
+    vi.spyOn(history, "detail").mockReturnValue({
+      ...detail,
+      messages: detail.messages.map((message) => {
+        if (message.id !== f.turn.userMessageId || message.toolTranscript === undefined)
+          return message;
+        return {
+          ...message,
+          toolTranscript: {
+            ...message.toolTranscript,
+            exchanges: message.toolTranscript.exchanges.map((exchange) => ({
+              ...exchange,
+              call: { ...exchange.call, arguments: { expectedActorKey: "different-actor" } },
+            })),
+          },
+        };
+      }),
+    });
     expect(f.responseMessage()?.turnState).toBeUndefined();
   });
 });

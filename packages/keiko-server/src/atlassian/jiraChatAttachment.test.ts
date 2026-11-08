@@ -5,13 +5,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
-import { JIRA_ATTACHMENT_MAX_BYTES, JIRA_AVATAR_UPLOAD_MUTATIONS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  JIRA_ATTACHMENT_MAX_BYTES,
+  JIRA_AVATAR_UPLOAD_MUTATIONS,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ChatConnectedScope } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
-import { docxOf, pdfOf, withArchiveComment, zipTextEntries } from "../../../../tests/support/zip-fixture.js";
+import {
+  docxOf,
+  pdfOf,
+  withArchiveComment,
+  zipTextEntries,
+} from "../../../../tests/support/zip-fixture.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
@@ -91,38 +99,82 @@ const ARGS = (path: string): { issueKey: string; path: string } => ({ issueKey: 
 const MAX = JIRA_ATTACHMENT_MAX_BYTES;
 
 describe("closed avatar image source purpose", () => {
-  const IMAGE = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jE0sAAAAASUVORK5CYII=", "base64");
-  const REQUEST = { kind: "connected-file", path: "docs/avatar.png", maxBytes: MAX, purpose: "jira-avatar-image" } as const;
-  function writeImage(bytes: Uint8Array = IMAGE): void { writeFileSync(join(root, REQUEST.path), bytes); }
+  const IMAGE = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jE0sAAAAASUVORK5CYII=",
+    "base64",
+  );
+  const REQUEST = {
+    kind: "connected-file",
+    path: "docs/avatar.png",
+    maxBytes: MAX,
+    purpose: "jira-avatar-image",
+  } as const;
+  function writeImage(bytes: Uint8Array = IMAGE): void {
+    writeFileSync(join(root, REQUEST.path), bytes);
+  }
   it("previews an admitted image before approval without granting its later send", async () => {
-    connect({}); writeImage();
+    connect({});
+    writeImage();
     const preview = jiraChatAvatarPreviewSource(deps(), { chatId, correlationId: "avatar-source" });
     expect(await preview(REQUEST)).toMatchObject({ ok: true, content: { name: "avatar.png" } });
-    const source = jiraChatAttachmentSource(deps(), { chatId, correlationId: "avatar-source", review: () => ({ required: true, reviewed: undefined }) });
+    const source = jiraChatAttachmentSource(deps(), {
+      chatId,
+      correlationId: "avatar-source",
+      review: () => ({ required: true, reviewed: undefined }),
+    });
     expect(await source(REQUEST)).toMatchObject({ ok: false, reason: "conflict" });
-    expect(await preview({ ...REQUEST, purpose: "jira-email-template-pack" })).toMatchObject({ ok: false });
+    expect(await preview({ ...REQUEST, purpose: "jira-email-template-pack" })).toMatchObject({
+      ok: false,
+    });
   });
   it("requires a server integrity snapshot even when existing policy allows the effect", async () => {
-    connect({}); writeImage();
-    const options = { chatId, correlationId: "avatar-source", review: (): JiraChatAttachmentReview => ({ required: false }) };
-    expect(await jiraChatAttachmentSource(deps(), options)(REQUEST)).toMatchObject({ ok: false, reason: "conflict" });
+    connect({});
+    writeImage();
+    const options = {
+      chatId,
+      correlationId: "avatar-source",
+      review: (): JiraChatAttachmentReview => ({ required: false }),
+    };
+    expect(await jiraChatAttachmentSource(deps(), options)(REQUEST)).toMatchObject({
+      ok: false,
+      reason: "conflict",
+    });
     const snapshot = await previewJiraAvatarImage(deps(), chatId, REQUEST.path, "avatar-source");
     if (snapshot === undefined) throw new TypeError("Missing native image fixture snapshot");
     expect(Object.isFrozen(snapshot)).toBe(true);
-    expect(await jiraChatAttachmentSource(deps(), { ...options, avatarSnapshot: snapshot })(REQUEST)).toMatchObject({ ok: true, content: { sha256: snapshot.sha256 } });
+    expect(
+      await jiraChatAttachmentSource(deps(), { ...options, avatarSnapshot: snapshot })(REQUEST),
+    ).toMatchObject({ ok: true, content: { sha256: snapshot.sha256 } });
     expect(options.review()).toEqual({ required: false });
   });
   it("does not substitute an allowed-mode byte snapshot for a required review", async () => {
-    connect({}); writeImage();
-    const avatarSnapshot = await previewJiraAvatarImage(deps(), chatId, REQUEST.path, "avatar-source");
+    connect({});
+    writeImage();
+    const avatarSnapshot = await previewJiraAvatarImage(
+      deps(),
+      chatId,
+      REQUEST.path,
+      "avatar-source",
+    );
     if (avatarSnapshot === undefined) throw new TypeError("Missing image snapshot");
-    expect(await jiraChatAttachmentSource(deps(), { chatId, correlationId: "avatar-source", avatarSnapshot,
-      review: () => ({ required: true, reviewed: undefined }) })(REQUEST)).toMatchObject({ ok: false, reason: "conflict" });
+    expect(
+      await jiraChatAttachmentSource(deps(), {
+        chatId,
+        correlationId: "avatar-source",
+        avatarSnapshot,
+        review: () => ({ required: true, reviewed: undefined }),
+      })(REQUEST),
+    ).toMatchObject({ ok: false, reason: "conflict" });
   });
   it("uses the exact approved image and refuses changed bytes without replacing the approval", async () => {
-    connect({}); writeImage();
+    connect({});
+    writeImage();
     const reviewed = await previewJiraAvatarImage(deps(), chatId, REQUEST.path, "avatar-source");
-    const source = jiraChatAttachmentSource(deps(), { chatId, correlationId: "avatar-source", review: () => ({ required: true, reviewed }) });
+    const source = jiraChatAttachmentSource(deps(), {
+      chatId,
+      correlationId: "avatar-source",
+      review: () => ({ required: true, reviewed }),
+    });
     expect(await source(REQUEST)).toMatchObject({ ok: true });
     writeImage(new Uint8Array([255, 216, 255, 224, 0, 2, 255, 217]));
     expect(await source(REQUEST)).toMatchObject({ ok: false, reason: "conflict" });
@@ -130,19 +182,36 @@ describe("closed avatar image source purpose", () => {
   });
   it("rechecks the actual connected selection and refuses unconnected Coding/task-like paths", async () => {
     writeImage();
-    expect(await previewJiraAvatarImage(deps(), chatId, REQUEST.path, "avatar-source")).toBeUndefined();
+    expect(
+      await previewJiraAvatarImage(deps(), chatId, REQUEST.path, "avatar-source"),
+    ).toBeUndefined();
     connect({});
-    const avatarSnapshot = await previewJiraAvatarImage(deps(), chatId, REQUEST.path, "avatar-source");
+    const avatarSnapshot = await previewJiraAvatarImage(
+      deps(),
+      chatId,
+      REQUEST.path,
+      "avatar-source",
+    );
     if (avatarSnapshot === undefined) throw new TypeError("Missing image snapshot");
-    const source = jiraChatAttachmentSource(deps(), { chatId, correlationId: "avatar-source", avatarSnapshot, review: () => ({ required: false }) });
+    const source = jiraChatAttachmentSource(deps(), {
+      chatId,
+      correlationId: "avatar-source",
+      avatarSnapshot,
+      review: () => ({ required: false }),
+    });
     connect({ kind: "directory", relativePaths: ["other"] });
     expect(await source(REQUEST)).toMatchObject({ ok: false, reason: "field-validation" });
   });
   it("does not open ordinary text/archive/image-like filenames as avatars or log raw file metadata", async () => {
-    connect({}); writeImage(Buffer.from("ordinary text, not image"));
-    expect(await previewJiraAvatarImage(deps(), chatId, REQUEST.path, "avatar-source")).toBeUndefined();
+    connect({});
+    writeImage(Buffer.from("ordinary text, not image"));
+    expect(
+      await previewJiraAvatarImage(deps(), chatId, REQUEST.path, "avatar-source"),
+    ).toBeUndefined();
     writeImage(Buffer.concat([IMAGE, Buffer.from(CONFIGURED_SECRET)]));
-    expect(await previewJiraAvatarImage(deps(), chatId, REQUEST.path, "avatar-source")).toBeUndefined();
+    expect(
+      await previewJiraAvatarImage(deps(), chatId, REQUEST.path, "avatar-source"),
+    ).toBeUndefined();
     expect(JSON.stringify(logs.events)).not.toContain(CONFIGURED_SECRET);
     expect(JSON.stringify(logs.events)).not.toContain("avatar.png");
   });
@@ -150,18 +219,36 @@ describe("closed avatar image source purpose", () => {
 
 describe("closed email-template ZIP source purpose", () => {
   function writePack(content = "Synthetic notification $issue.summary"): void {
-    writeFileSync(join(root, "docs", "templates.zip"), zipTextEntries([{ name: "templates/issue.vm", content }]));
+    writeFileSync(
+      join(root, "docs", "templates.zip"),
+      zipTextEntries([{ name: "templates/issue.vm", content }]),
+    );
   }
-  const REQUEST = { kind: "connected-file", path: "docs/templates.zip", maxBytes: MAX, purpose: "jira-email-template-pack" } as const;
+  const REQUEST = {
+    kind: "connected-file",
+    path: "docs/templates.zip",
+    maxBytes: MAX,
+    purpose: "jira-email-template-pack",
+  } as const;
   it("can prepare the required approval card through readonly preflight without admitting a send", async () => {
     connect({});
     writePack();
-    const preview = jiraChatEmailTemplatePreviewSource(deps(), { chatId, correlationId: "email-corr" });
+    const preview = jiraChatEmailTemplatePreviewSource(deps(), {
+      chatId,
+      correlationId: "email-corr",
+    });
     expect(await preview(REQUEST)).toMatchObject({ ok: true, content: { name: "templates.zip" } });
     expect(logs.events.at(-1)?.extra).toMatchObject({ stage: "review", outcome: "read" });
-    const send = jiraChatAttachmentSource(deps(), { chatId, correlationId: "email-corr", review: () => ({ required: true, reviewed: undefined }) });
+    const send = jiraChatAttachmentSource(deps(), {
+      chatId,
+      correlationId: "email-corr",
+      review: () => ({ required: true, reviewed: undefined }),
+    });
     expect(await send(REQUEST)).toMatchObject({ ok: false, reason: "conflict" });
-    expect(await preview({ kind: REQUEST.kind, path: REQUEST.path, maxBytes: MAX })).toMatchObject({ ok: false, reason: "field-validation" });
+    expect(await preview({ kind: REQUEST.kind, path: REQUEST.path, maxBytes: MAX })).toMatchObject({
+      ok: false,
+      reason: "field-validation",
+    });
   });
   it("uses a server-minted integrity snapshot in allowed mode without changing approval disposition", async () => {
     connect({});
@@ -170,16 +257,32 @@ describe("closed email-template ZIP source purpose", () => {
     if (snapshot === undefined) throw new TypeError("Missing admitted source snapshot");
     expect(Object.isFrozen(snapshot)).toBe(true);
     const review = vi.fn((): JiraChatAttachmentReview => ({ required: false }));
-    const source = jiraChatAttachmentSource(deps(), { chatId, correlationId: "email-corr", review, emailTemplateSnapshot: snapshot });
-    expect(await source(REQUEST)).toMatchObject({ ok: true, content: { name: snapshot.name, sha256: snapshot.sha256 } });
+    const source = jiraChatAttachmentSource(deps(), {
+      chatId,
+      correlationId: "email-corr",
+      review,
+      emailTemplateSnapshot: snapshot,
+    });
+    expect(await source(REQUEST)).toMatchObject({
+      ok: true,
+      content: { name: snapshot.name, sha256: snapshot.sha256 },
+    });
     expect(review).toHaveReturnedWith({ required: false });
-    expect(logs.events.at(-1)?.extra).toMatchObject({ stage: "send", outcome: "read", refusal: "none" });
+    expect(logs.events.at(-1)?.extra).toMatchObject({
+      stage: "send",
+      outcome: "read",
+      refusal: "none",
+    });
     expect(JSON.stringify(logs.events)).not.toContain("$issue.summary");
   });
   it("never treats missing server integrity metadata as an allowed source", async () => {
     connect({});
     writePack();
-    const source = jiraChatAttachmentSource(deps(), { chatId, correlationId: "email-corr", review: () => ({ required: false }) });
+    const source = jiraChatAttachmentSource(deps(), {
+      chatId,
+      correlationId: "email-corr",
+      review: () => ({ required: false }),
+    });
     expect(await source(REQUEST)).toMatchObject({ ok: false, reason: "conflict" });
   });
   it("preserves required review and refuses a missing approval even with a private snapshot", async () => {
@@ -187,8 +290,12 @@ describe("closed email-template ZIP source purpose", () => {
     writePack();
     const snapshot = await previewJiraEmailTemplatePack(deps(), chatId, REQUEST.path, "email-corr");
     if (snapshot === undefined) throw new TypeError("Missing admitted source snapshot");
-    const source = jiraChatAttachmentSource(deps(), { chatId, correlationId: "email-corr", emailTemplateSnapshot: snapshot,
-      review: () => ({ required: true, reviewed: undefined }) });
+    const source = jiraChatAttachmentSource(deps(), {
+      chatId,
+      correlationId: "email-corr",
+      emailTemplateSnapshot: snapshot,
+      review: () => ({ required: true, reviewed: undefined }),
+    });
     expect(await source(REQUEST)).toMatchObject({ ok: false, reason: "conflict" });
   });
   it("uses exactly the existing approved snapshot when review is required", async () => {
@@ -196,7 +303,11 @@ describe("closed email-template ZIP source purpose", () => {
     writePack();
     const reviewed = await previewJiraEmailTemplatePack(deps(), chatId, REQUEST.path, "email-corr");
     if (reviewed === undefined) throw new TypeError("Missing admitted source snapshot");
-    const source = jiraChatAttachmentSource(deps(), { chatId, correlationId: "email-corr", review: () => ({ required: true, reviewed }) });
+    const source = jiraChatAttachmentSource(deps(), {
+      chatId,
+      correlationId: "email-corr",
+      review: () => ({ required: true, reviewed }),
+    });
     expect(await source(REQUEST)).toMatchObject({ ok: true, content: { sha256: reviewed.sha256 } });
   });
   it("captures private integrity metadata immutably and refuses actual-byte drift", async () => {
@@ -205,7 +316,12 @@ describe("closed email-template ZIP source purpose", () => {
     const snapshot = await previewJiraEmailTemplatePack(deps(), chatId, REQUEST.path, "email-corr");
     if (snapshot === undefined) throw new TypeError("Missing admitted source snapshot");
     const mutableInput = { ...snapshot };
-    const source = jiraChatAttachmentSource(deps(), { chatId, correlationId: "email-corr", emailTemplateSnapshot: mutableInput, review: () => ({ required: false }) });
+    const source = jiraChatAttachmentSource(deps(), {
+      chatId,
+      correlationId: "email-corr",
+      emailTemplateSnapshot: mutableInput,
+      review: () => ({ required: false }),
+    });
     mutableInput.sha256 = "f".repeat(64);
     expect((await source(REQUEST)).ok).toBe(true);
     writePack("Changed synthetic notification");
@@ -217,7 +333,12 @@ describe("closed email-template ZIP source purpose", () => {
     writePack();
     const snapshot = await previewJiraEmailTemplatePack(deps(), chatId, REQUEST.path, "email-corr");
     if (snapshot === undefined) throw new TypeError("Missing admitted source snapshot");
-    const source = jiraChatAttachmentSource(deps(), { chatId, correlationId: "email-corr", emailTemplateSnapshot: snapshot, review: () => ({ required: false }) });
+    const source = jiraChatAttachmentSource(deps(), {
+      chatId,
+      correlationId: "email-corr",
+      emailTemplateSnapshot: snapshot,
+      review: () => ({ required: false }),
+    });
     connect({ kind: "directory", relativePaths: ["other"] });
     expect(await source(REQUEST)).toMatchObject({ ok: false, reason: "field-validation" });
     connect({});
@@ -227,9 +348,13 @@ describe("closed email-template ZIP source purpose", () => {
   it("keeps generic ZIP admission closed for ordinary Jira attachments", async () => {
     connect({});
     writePack();
-    expect(await previewJiraChatAttachment(deps(), chatId, ARGS(REQUEST.path), "ordinary-corr", LIMIT)).toBeUndefined();
+    expect(
+      await previewJiraChatAttachment(deps(), chatId, ARGS(REQUEST.path), "ordinary-corr", LIMIT),
+    ).toBeUndefined();
     expect(logs.events.at(-1)?.extra).toMatchObject({ refusal: "unscannable" });
-    expect(await previewJiraEmailTemplatePack(deps(), chatId, REQUEST.path, "email-corr")).toBeDefined();
+    expect(
+      await previewJiraEmailTemplatePack(deps(), chatId, REQUEST.path, "email-corr"),
+    ).toBeDefined();
   });
 });
 
@@ -586,20 +711,47 @@ describe("what policy and the approval registry say about an attachment", () => 
     ).toEqual({ required: true, reviewed: undefined });
   });
   it("uses the same existing approval attachment snapshot for the exact email upload operation", () => {
-    expect(attachmentReviewFor("review-required", approval({ operation: "jira.upload-email-template-pack", attachment: preview })))
-      .toEqual({ required: true, reviewed: preview });
-    expect(attachmentReviewFor("review-required", approval({ operation: "jira.apply-email-template-pack", attachment: preview })))
-      .toEqual({ required: true, reviewed: undefined });
-    expect(attachmentReviewFor("allowed", approval({ operation: "jira.upload-email-template-pack", attachment: preview })))
-      .toEqual({ required: false });
+    expect(
+      attachmentReviewFor(
+        "review-required",
+        approval({ operation: "jira.upload-email-template-pack", attachment: preview }),
+      ),
+    ).toEqual({ required: true, reviewed: preview });
+    expect(
+      attachmentReviewFor(
+        "review-required",
+        approval({ operation: "jira.apply-email-template-pack", attachment: preview }),
+      ),
+    ).toEqual({ required: true, reviewed: undefined });
+    expect(
+      attachmentReviewFor(
+        "allowed",
+        approval({ operation: "jira.upload-email-template-pack", attachment: preview }),
+      ),
+    ).toEqual({ required: false });
   });
-  it.each(JIRA_AVATAR_UPLOAD_MUTATIONS)("binds the existing file approval to the exact avatar upload %s", (operation) => {
-    const reviewed = approval({ operation, attachment: preview });
-    expect(attachmentReviewFor("review-required", reviewed, operation)).toEqual({ required: true, reviewed: preview });
-    expect(attachmentReviewFor("review-required", reviewed, "jira.attach")).toEqual({ required: true, reviewed: undefined });
-    expect(attachmentReviewFor("review-required", approval({ operation: "jira.attach", attachment: preview }), operation)).toEqual({ required: true, reviewed: undefined });
-    expect(attachmentReviewFor("allowed", undefined, operation)).toEqual({ required: false });
-  });
+  it.each(JIRA_AVATAR_UPLOAD_MUTATIONS)(
+    "binds the existing file approval to the exact avatar upload %s",
+    (operation) => {
+      const reviewed = approval({ operation, attachment: preview });
+      expect(attachmentReviewFor("review-required", reviewed, operation)).toEqual({
+        required: true,
+        reviewed: preview,
+      });
+      expect(attachmentReviewFor("review-required", reviewed, "jira.attach")).toEqual({
+        required: true,
+        reviewed: undefined,
+      });
+      expect(
+        attachmentReviewFor(
+          "review-required",
+          approval({ operation: "jira.attach", attachment: preview }),
+          operation,
+        ),
+      ).toEqual({ required: true, reviewed: undefined });
+      expect(attachmentReviewFor("allowed", undefined, operation)).toEqual({ required: false });
+    },
+  );
 });
 
 // Review (#4176): where policy requires a review, a missing approval is a refusal, never a pass.

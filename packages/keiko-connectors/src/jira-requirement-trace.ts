@@ -74,9 +74,7 @@ function ownedFooterBlock(
   const end = ends[0];
   if (starts.length !== 1 || ends.length !== 1 || start === undefined || end === undefined)
     return undefined;
-  return end > start + trace.footerStart.length
-    ? [start, end + trace.footerEnd.length]
-    : undefined;
+  return end > start + trace.footerStart.length ? [start, end + trace.footerEnd.length] : undefined;
 }
 
 function appendFooter(text: string, footer: string): string {

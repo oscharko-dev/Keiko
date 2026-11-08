@@ -42,7 +42,9 @@ export function templateMarkdown({
       ? [`requiredLabels: [${rule.labels.map((label) => quoted(label)).join(", ")}]`]
       : []),
     ...(parentField === undefined ? [] : [`parentField: ${quoted(parentField)}`]),
-    ...(parentIssueTypes === undefined ? [] : [`parentIssueTypes: [${parentIssueTypes.map(quoted).join(", ")}]`]),
+    ...(parentIssueTypes === undefined
+      ? []
+      : [`parentIssueTypes: [${parentIssueTypes.map(quoted).join(", ")}]`]),
     ...(requiredFields.length > 0
       ? [`requiredFields: [${requiredFields.map((field) => quoted(field)).join(", ")}]`]
       : []),

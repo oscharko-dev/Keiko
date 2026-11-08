@@ -44,11 +44,20 @@ const FILTER = {
   self: "https://remote.invalid/filter",
 };
 describe("closed native board-filter prerequisites", () => {
-  it.each([null, "", "Reviewed description"])("preserves an observed description value %j for later review", async (description) => {
-    expect((await fixture({ ...FILTER, description }).run("jira.filter", { filterId: "42" })).data.items).toMatchObject([{ description }]);
-  });
+  it.each([null, "", "Reviewed description"])(
+    "preserves an observed description value %j for later review",
+    async (description) => {
+      expect(
+        (await fixture({ ...FILTER, description }).run("jira.filter", { filterId: "42" })).data
+          .items,
+      ).toMatchObject([{ description }]);
+    },
+  );
   it("refuses malformed description metadata rather than inventing an empty reviewed value", async () => {
-    expect((await fixture({ ...FILTER, description: false }).run("jira.filter", { filterId: "42" })).data).toMatchObject({ outcome: "failed", reason: "malformed-payload" });
+    expect(
+      (await fixture({ ...FILTER, description: false }).run("jira.filter", { filterId: "42" }))
+        .data,
+    ).toMatchObject({ outcome: "failed", reason: "malformed-payload" });
   });
   it("reads native JQL and explicit private sharing without upstream links or extra owner fields", async () => {
     const f = fixture(FILTER);

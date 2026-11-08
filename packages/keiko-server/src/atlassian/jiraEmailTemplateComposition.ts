@@ -14,9 +14,13 @@ export function jiraEmailTemplateInspection(
   deps: Parameters<typeof currentRedactionSecrets>[0],
   signal: AbortSignal,
 ): NonNullable<JiraManagedConnection["emailTemplates"]> {
-  return { inspect: (bytes) => inspectJiraEmailTemplateArchive(bytes, {
-    secrets: currentRedactionSecrets(deps), signal,
-  }) };
+  return {
+    inspect: (bytes) =>
+      inspectJiraEmailTemplateArchive(bytes, {
+        secrets: currentRedactionSecrets(deps),
+        signal,
+      }),
+  };
 }
 
 /** Check reads precede the approval card. Actual sends keep the existing review decision. */
@@ -35,9 +39,15 @@ export function jiraChatEmailTemplateComposition(
       if (check) return jiraChatEmailTemplatePreviewSource(deps, options);
       return async (request) => {
         const review = options.review();
-        const snapshot = review.required ? undefined : await previewJiraEmailTemplatePack(
-          deps, options.chatId, request.path, options.correlationId, options.signal,
-        );
+        const snapshot = review.required
+          ? undefined
+          : await previewJiraEmailTemplatePack(
+              deps,
+              options.chatId,
+              request.path,
+              options.correlationId,
+              options.signal,
+            );
         // Re-read through the send owner. Changed policy/bytes cannot reuse the earlier snapshot.
         return jiraChatAttachmentSource(deps, {
           ...options,

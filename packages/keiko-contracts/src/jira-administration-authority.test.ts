@@ -109,16 +109,47 @@ const ADMIN_TOOLS = [
   "jira.apply-email-template-pack",
   "jira.revert-email-template-pack",
   "jira.email-template-pack",
-  "jira.create-permission-scheme", "jira.update-permission-scheme", "jira.delete-permission-scheme", "jira.add-permission-grant", "jira.delete-permission-grant", "jira.set-permission-scheme-attribute", "jira.create-role", "jira.update-role", "jira.replace-role", "jira.delete-role", "jira.add-role-default-actors", "jira.delete-role-default-actor", "jira.add-project-role-actors", "jira.set-project-role-actors", "jira.delete-project-role-actor",
-  "jira.create-project-category", "jira.update-project-category", "jira.delete-project-category",
-  "jira.add-default-screen-field", "jira.add-screen-tab-field", "jira.remove-screen-tab-field", "jira.move-screen-tab-field", "jira.set-screen-field-show-when-empty", "jira.move-screen-tab", "jira.unmap-all-sprints",
-  "jira.anonymization-validation", "jira.anonymization-rerun-validation", "jira.anonymization-progress",
-  "jira.create-filter", "jira.set-filter-share-scope",
-  "jira.add-filter-permission", "jira.delete-filter-permission",
-  "jira.set-app-monitoring", "jira.set-ipd-monitoring",
-  "jira.start-jmx-metrics", "jira.stop-jmx-metrics",
-  "jira.create-screen-tab", "jira.rename-screen-tab", "jira.delete-screen-tab",
-  "jira.set-issue-type-property", "jira.delete-issue-type-property",
+  "jira.create-permission-scheme",
+  "jira.update-permission-scheme",
+  "jira.delete-permission-scheme",
+  "jira.add-permission-grant",
+  "jira.delete-permission-grant",
+  "jira.set-permission-scheme-attribute",
+  "jira.create-role",
+  "jira.update-role",
+  "jira.replace-role",
+  "jira.delete-role",
+  "jira.add-role-default-actors",
+  "jira.delete-role-default-actor",
+  "jira.add-project-role-actors",
+  "jira.set-project-role-actors",
+  "jira.delete-project-role-actor",
+  "jira.create-project-category",
+  "jira.update-project-category",
+  "jira.delete-project-category",
+  "jira.add-default-screen-field",
+  "jira.add-screen-tab-field",
+  "jira.remove-screen-tab-field",
+  "jira.move-screen-tab-field",
+  "jira.set-screen-field-show-when-empty",
+  "jira.move-screen-tab",
+  "jira.unmap-all-sprints",
+  "jira.anonymization-validation",
+  "jira.anonymization-rerun-validation",
+  "jira.anonymization-progress",
+  "jira.create-filter",
+  "jira.set-filter-share-scope",
+  "jira.add-filter-permission",
+  "jira.delete-filter-permission",
+  "jira.set-app-monitoring",
+  "jira.set-ipd-monitoring",
+  "jira.start-jmx-metrics",
+  "jira.stop-jmx-metrics",
+  "jira.create-screen-tab",
+  "jira.rename-screen-tab",
+  "jira.delete-screen-tab",
+  "jira.set-issue-type-property",
+  "jira.delete-issue-type-property",
 ] as const;
 
 describe("explicit Jira instance administration authority", () => {
@@ -127,35 +158,77 @@ describe("explicit Jira instance administration authority", () => {
     expect(jiraRequiredConnectorScope(tool)).toBe("issue-tracker.admin");
     expect(ATLASSIAN_CONNECTOR_ACTION_CLASS[action]).toBe("connector-admin");
     for (const mode of CODING_WORKBENCH_MODES) {
-      expect(decideAtlassianConnectorAction(action, mode,
-        ["issue-tracker.read", "issue-tracker.write"], ["connector-access"]))
-        .toMatchObject({ disposition: "denied", denyReason: "connector-write-denied" });
-      expect(decideAtlassianConnectorAction(action, mode,
-        ["issue-tracker.read", "issue-tracker.write", "issue-tracker.admin"], ["connector-access"]))
-        .toMatchObject({ disposition: mode === "autonomous-delivery" ? "allowed" : "review-required" });
+      expect(
+        decideAtlassianConnectorAction(
+          action,
+          mode,
+          ["issue-tracker.read", "issue-tracker.write"],
+          ["connector-access"],
+        ),
+      ).toMatchObject({ disposition: "denied", denyReason: "connector-write-denied" });
+      expect(
+        decideAtlassianConnectorAction(
+          action,
+          mode,
+          ["issue-tracker.read", "issue-tracker.write", "issue-tracker.admin"],
+          ["connector-access"],
+        ),
+      ).toMatchObject({
+        disposition: mode === "autonomous-delivery" ? "allowed" : "review-required",
+      });
     }
   });
 
   it.each([
-    "jira.pin-comment", "jira.notify-issue",
-    "jira.epic-remove-issues", "jira.rank-epic", "jira.rank-issues", "jira.set-issue-estimation", "jira.delete-version-remote-link", "jira.delete-version-remote-links", "jira.upsert-version-remote-link", "jira.upsert-version-remote-link-by-global-id",
-    "jira.delete-board", "jira.set-board-refined-velocity", "jira.replace-sprint",
-    "jira.delete-sprint", "jira.swap-sprints", "jira.unmap-sprints",
+    "jira.pin-comment",
+    "jira.notify-issue",
+    "jira.epic-remove-issues",
+    "jira.rank-epic",
+    "jira.rank-issues",
+    "jira.set-issue-estimation",
+    "jira.delete-version-remote-link",
+    "jira.delete-version-remote-links",
+    "jira.upsert-version-remote-link",
+    "jira.upsert-version-remote-link-by-global-id",
+    "jira.delete-board",
+    "jira.set-board-refined-velocity",
+    "jira.replace-sprint",
+    "jira.delete-sprint",
+    "jira.swap-sprints",
+    "jira.unmap-sprints",
   ] as const)("keeps %s on its independently required ordinary-write grant", (tool) => {
     expect(jiraRequiredConnectorScope(tool)).toBe("issue-tracker.write");
-    expect(ATLASSIAN_CONNECTOR_ACTION_CLASS[JIRA_MANAGED_ACTION_TYPES[tool]])
-      .toBe("connector-write");
-    expect(decideAtlassianConnectorAction(JIRA_MANAGED_ACTION_TYPES[tool],
-      "autonomous-delivery", ["issue-tracker.admin"], ["connector-access"]).disposition)
-      .toBe("denied");
+    expect(ATLASSIAN_CONNECTOR_ACTION_CLASS[JIRA_MANAGED_ACTION_TYPES[tool]]).toBe(
+      "connector-write",
+    );
+    expect(
+      decideAtlassianConnectorAction(
+        JIRA_MANAGED_ACTION_TYPES[tool],
+        "autonomous-delivery",
+        ["issue-tracker.admin"],
+        ["connector-access"],
+      ).disposition,
+    ).toBe("denied");
   });
 
   it("keeps ordinary writes distinct and still requires the envelope action class", () => {
     expect(jiraRequiredConnectorScope("jira.set-issue-property")).toBe("issue-tracker.write");
     expect(jiraRequiredConnectorScope("jira.set-project-property")).toBe("issue-tracker.write");
-    expect(decideAtlassianConnectorAction("update-issue-fields", "autonomous-delivery",
-      ["issue-tracker.admin"], ["connector-access"]).disposition).toBe("denied");
-    expect(decideAtlassianConnectorAction("set-app-monitoring", "autonomous-delivery",
-      ["issue-tracker.admin"], []).disposition).toBe("denied");
+    expect(
+      decideAtlassianConnectorAction(
+        "update-issue-fields",
+        "autonomous-delivery",
+        ["issue-tracker.admin"],
+        ["connector-access"],
+      ).disposition,
+    ).toBe("denied");
+    expect(
+      decideAtlassianConnectorAction(
+        "set-app-monitoring",
+        "autonomous-delivery",
+        ["issue-tracker.admin"],
+        [],
+      ).disposition,
+    ).toBe("denied");
   });
 });

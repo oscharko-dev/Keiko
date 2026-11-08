@@ -15,14 +15,35 @@ import { jiraNamed, jiraNameOf, NO_JIRA_NAMES, restatesTarget, type JiraNames } 
 import { jiraAgileArgumentLabel } from "./jira-agile-presentation";
 import { jiraProjectMetadataArgumentLabel } from "./jira-project-metadata-presentation";
 import { jiraScreenTabArgumentLabel } from "./jira-administration-presentation";
-import { jiraMonitoringArgumentLabel, jiraMonitoringFixedTarget } from "./jira-monitoring-presentation";
+import {
+  jiraMonitoringArgumentLabel,
+  jiraMonitoringFixedTarget,
+} from "./jira-monitoring-presentation";
 import { jiraPropertyMutationFacts } from "./jira-property-mutation-presentation";
-import { jiraSavedConfigurationFacts, jiraSavedConfigurationContextFacts } from "./jira-saved-configuration-approval";
-import { jiraStructuralMutationFacts, jiraStructuralMutationContextFacts } from "./jira-structural-mutation-approval";
-import { jiraConfigurationMutationFacts, jiraConfigurationMutationContextFacts } from "./jira-configuration-mutation-approval";
-import { jiraPlanningMutationFacts, jiraPlanningMutationContextFacts } from "./jira-planning-mutation-approval";
-import { jiraAccessConfigurationFacts, jiraAccessConfigurationContextFacts } from "./jira-access-configuration-approval";
-import { jiraAdministrativeMutationFacts, jiraAdministrativeMutationContextFacts } from "./jira-administrative-mutation-approval";
+import {
+  jiraSavedConfigurationFacts,
+  jiraSavedConfigurationContextFacts,
+} from "./jira-saved-configuration-approval";
+import {
+  jiraStructuralMutationFacts,
+  jiraStructuralMutationContextFacts,
+} from "./jira-structural-mutation-approval";
+import {
+  jiraConfigurationMutationFacts,
+  jiraConfigurationMutationContextFacts,
+} from "./jira-configuration-mutation-approval";
+import {
+  jiraPlanningMutationFacts,
+  jiraPlanningMutationContextFacts,
+} from "./jira-planning-mutation-approval";
+import {
+  jiraAccessConfigurationFacts,
+  jiraAccessConfigurationContextFacts,
+} from "./jira-access-configuration-approval";
+import {
+  jiraAdministrativeMutationFacts,
+  jiraAdministrativeMutationContextFacts,
+} from "./jira-administrative-mutation-approval";
 import { jiraSystemActionFacts, jiraSystemActionContextFacts } from "./jira-system-action-approval";
 
 type Raw = Readonly<Record<string, unknown>>;
@@ -215,26 +236,69 @@ function sourceValue(source: unknown): JiraDraftValue {
   const path = record(source)?.path;
   return typeof path === "string" ? textValue(path) : jiraDraftValueOf(source);
 }
-function screenTabFacts(operation: string | undefined, key: string, value: unknown, t: OptionalWidgetTranslate): readonly Fact[] | undefined {
+function screenTabFacts(
+  operation: string | undefined,
+  key: string,
+  value: unknown,
+  t: OptionalWidgetTranslate,
+): readonly Fact[] | undefined {
   const label = jiraScreenTabArgumentLabel(operation, key);
   if (label === undefined) return undefined;
   if (key !== "expectedFieldIds") return [{ id: t(label), value: jiraDraftValueOf(value) }];
-  return [{ id: t(label), value: Array.isArray(value) && value.length === 0
-    ? textValue(t("chat.jira.screenTabs.reviewedEmptyFields")) : Array.isArray(value)
-      ? listOf(value.map((entry: unknown) => jiraDraftValueOf(entry))) : jiraDraftValueOf(value) }];
+  return [
+    {
+      id: t(label),
+      value:
+        Array.isArray(value) && value.length === 0
+          ? textValue(t("chat.jira.screenTabs.reviewedEmptyFields"))
+          : Array.isArray(value)
+            ? listOf(value.map((entry: unknown) => jiraDraftValueOf(entry)))
+            : jiraDraftValueOf(value),
+    },
+  ];
 }
-function monitoringFacts(operation: string | undefined, key: string, value: unknown, t: OptionalWidgetTranslate): readonly Fact[] | undefined {
+function monitoringFacts(
+  operation: string | undefined,
+  key: string,
+  value: unknown,
+  t: OptionalWidgetTranslate,
+): readonly Fact[] | undefined {
   const label = jiraMonitoringArgumentLabel(operation, key);
   if (label === undefined) return undefined;
-  return [{ id: t(label), value: typeof value === "boolean"
-    ? textValue(t(value ? "chat.jira.monitoring.enabled" : "chat.jira.monitoring.disabled")) : jiraDraftValueOf(value) }];
+  return [
+    {
+      id: t(label),
+      value:
+        typeof value === "boolean"
+          ? textValue(t(value ? "chat.jira.monitoring.enabled" : "chat.jira.monitoring.disabled"))
+          : jiraDraftValueOf(value),
+    },
+  ];
 }
-function monitoringContextFacts(operation: string | undefined, t: OptionalWidgetTranslate): readonly Fact[] {
+function monitoringContextFacts(
+  operation: string | undefined,
+  t: OptionalWidgetTranslate,
+): readonly Fact[] {
   if (jiraMonitoringArgumentLabel(operation, "expectedEnabled") === undefined) return [];
   const target = jiraMonitoringFixedTarget(operation);
-  const targetFacts: readonly Fact[] = target === undefined ? [] : [{ id: t("chat.jira.monitoring.requestedState"),
-    value: textValue(t(target ? "chat.jira.monitoring.enabled" : "chat.jira.monitoring.disabled")) }];
-  return [...targetFacts, { id: t("chat.jira.monitoring.scope"), value: textValue(t("chat.jira.monitoring.instanceScope")) }];
+  const targetFacts: readonly Fact[] =
+    target === undefined
+      ? []
+      : [
+          {
+            id: t("chat.jira.monitoring.requestedState"),
+            value: textValue(
+              t(target ? "chat.jira.monitoring.enabled" : "chat.jira.monitoring.disabled"),
+            ),
+          },
+        ];
+  return [
+    ...targetFacts,
+    {
+      id: t("chat.jira.monitoring.scope"),
+      value: textValue(t("chat.jira.monitoring.instanceScope")),
+    },
+  ];
 }
 
 /** One argument of a managed Jira write as one or more facts, in request order. */
@@ -271,10 +335,25 @@ function jiraFacts(key: string, value: unknown, t: OptionalWidgetTranslate): rea
   }
 }
 
-const OPERATION_FACTS = [jiraSystemActionFacts, deletionFacts, jiraPropertyMutationFacts, jiraSavedConfigurationFacts,
-  jiraStructuralMutationFacts, jiraConfigurationMutationFacts, jiraAccessConfigurationFacts, jiraAdministrativeMutationFacts,
-  jiraPlanningMutationFacts, screenTabFacts, monitoringFacts] as const;
-function operationFacts(operation: string | undefined, key: string, value: unknown, t: OptionalWidgetTranslate): readonly Fact[] | undefined {
+const OPERATION_FACTS = [
+  jiraSystemActionFacts,
+  deletionFacts,
+  jiraPropertyMutationFacts,
+  jiraSavedConfigurationFacts,
+  jiraStructuralMutationFacts,
+  jiraConfigurationMutationFacts,
+  jiraAccessConfigurationFacts,
+  jiraAdministrativeMutationFacts,
+  jiraPlanningMutationFacts,
+  screenTabFacts,
+  monitoringFacts,
+] as const;
+function operationFacts(
+  operation: string | undefined,
+  key: string,
+  value: unknown,
+  t: OptionalWidgetTranslate,
+): readonly Fact[] | undefined {
   for (const present of OPERATION_FACTS) {
     const facts = present(operation, key, value, t);
     if (facts !== undefined) return facts;
@@ -313,10 +392,20 @@ export function jiraActionFacts(
       ? managedFacts(key, value, raw, t, names)
       : [{ id: t(label), value: jiraDraftValueOf(value) }];
   });
-  return managed ? [...facts, ...deletionContextFacts(raw, operation, t), ...monitoringContextFacts(operation, t),
-    ...jiraSavedConfigurationContextFacts(operation, raw, t), ...jiraStructuralMutationContextFacts(operation, t),
-    ...jiraConfigurationMutationContextFacts(operation, t), ...jiraPlanningMutationContextFacts(operation, t),
-    ...jiraAccessConfigurationContextFacts(operation, raw, t), ...jiraAdministrativeMutationContextFacts(operation, raw, t), ...jiraSystemActionContextFacts(operation, t)] : facts;
+  return managed
+    ? [
+        ...facts,
+        ...deletionContextFacts(raw, operation, t),
+        ...monitoringContextFacts(operation, t),
+        ...jiraSavedConfigurationContextFacts(operation, raw, t),
+        ...jiraStructuralMutationContextFacts(operation, t),
+        ...jiraConfigurationMutationContextFacts(operation, t),
+        ...jiraPlanningMutationContextFacts(operation, t),
+        ...jiraAccessConfigurationContextFacts(operation, raw, t),
+        ...jiraAdministrativeMutationContextFacts(operation, raw, t),
+        ...jiraSystemActionContextFacts(operation, t),
+      ]
+    : facts;
 }
 /** Jira's own names where this turn read them; a field that repeats the target is said once. */
 function managedFacts(

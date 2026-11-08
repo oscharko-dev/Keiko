@@ -28,7 +28,9 @@ it.each([
   ["jira.advanced-settings", {}],
   ["jira.my-preference", { key: "user.notify.own.changes" }],
 ] as const)("admits the typed %s selection", (name, args) => {
-  expect(describeCatalogSchemaMismatch(declaration(name).descriptor.inputSchema, args)).toBeUndefined();
+  expect(
+    describeCatalogSchemaMismatch(declaration(name).descriptor.inputSchema, args),
+  ).toBeUndefined();
 });
 it.each([
   ["jira.application-properties", {}],
@@ -42,7 +44,9 @@ it.each([
   ["jira.my-preference", { key: "jira.user.locale", username: "another-user" }],
   ["jira.my-preference", { key: "jira.user.locale", value: "de_DE" }],
 ] as const)("refuses ambiguous or writable %s selectors", (name, args) => {
-  expect(describeCatalogSchemaMismatch(declaration(name).descriptor.inputSchema, args)).toBeDefined();
+  expect(
+    describeCatalogSchemaMismatch(declaration(name).descriptor.inputSchema, args),
+  ).toBeDefined();
 });
 it.each([
   { key: "jira.clone.prefix", valueState: "observed", valueType: "string", stringValue: "" },
@@ -50,29 +54,60 @@ it.each([
   { key: "jira.clone.prefix", valueState: "unknown", valueType: "string" },
   { key: "jira.home", valueState: "withheld" },
 ] as const)("retains only typed readable list metadata: %j", (item) => {
-  expect(describeCatalogSchemaMismatch(declaration("jira.advanced-settings").descriptor.resultSchema, {
-    outcome: "succeeded", settingsScope: "advanced-settings", items: [item], startAt: 0, total: 1,
-  })).toBeUndefined();
+  expect(
+    describeCatalogSchemaMismatch(declaration("jira.advanced-settings").descriptor.resultSchema, {
+      outcome: "succeeded",
+      settingsScope: "advanced-settings",
+      items: [item],
+      startAt: 0,
+      total: 1,
+    }),
+  ).toBeUndefined();
 });
 it.each([
   { key: "jira.home", valueState: "withheld", stringValue: "private native value" },
   { key: "jira.home", valueState: "withheld", defaultValue: "private default" },
   { key: "jira.home", valueState: "withheld", example: "private example" },
   { key: "jira.home", valueState: "withheld", allowedValues: ["private option"] },
-  { key: "jira.clone.prefix", valueState: "unknown", valueType: "string", stringValue: "invented default" },
-  { key: "jira.option.voting", valueState: "observed", valueType: "boolean", booleanValue: "false" },
+  {
+    key: "jira.clone.prefix",
+    valueState: "unknown",
+    valueType: "string",
+    stringValue: "invented default",
+  },
+  {
+    key: "jira.option.voting",
+    valueState: "observed",
+    valueType: "boolean",
+    booleanValue: "false",
+  },
 ] as const)("refuses value leakage or fabricated defaults in list rows: %j", (item) => {
-  expect(describeCatalogSchemaMismatch(declaration("jira.advanced-settings").descriptor.resultSchema, {
-    outcome: "succeeded", settingsScope: "advanced-settings", items: [item], startAt: 0, total: 1,
-  })).toBeDefined();
+  expect(
+    describeCatalogSchemaMismatch(declaration("jira.advanced-settings").descriptor.resultSchema, {
+      outcome: "succeeded",
+      settingsScope: "advanced-settings",
+      items: [item],
+      startAt: 0,
+      total: 1,
+    }),
+  ).toBeDefined();
 });
 it("preserves zero as an integer preference observation, without a quota claim", () => {
   const schema = declaration("jira.my-preference").descriptor.resultSchema;
-  const result = { outcome: "succeeded", settingsScope: "current-user-preference", key: "user.issues.per.page", valueState: "observed", valueType: "integer", integerValue: 0 };
+  const result = {
+    outcome: "succeeded",
+    settingsScope: "current-user-preference",
+    key: "user.issues.per.page",
+    valueState: "observed",
+    valueType: "integer",
+    integerValue: 0,
+  };
   expect(describeCatalogSchemaMismatch(schema, result)).toBeUndefined();
   expect(describeCatalogSchemaMismatch(schema, { ...result, integerValue: 0.5 })).toBeDefined();
   expect(describeCatalogSchemaMismatch(schema, { ...result, unlimited: true })).toBeDefined();
-  expect(describeCatalogSchemaMismatch(schema, { ...result, effectivePermission: "SYSADMIN" })).toBeDefined();
+  expect(
+    describeCatalogSchemaMismatch(schema, { ...result, effectivePermission: "SYSADMIN" }),
+  ).toBeDefined();
 });
 it.each([
   { valueState: "withheld", stringValue: "private" },
@@ -84,20 +119,42 @@ it.each([
   { valueState: "observed", valueType: "boolean", stringValue: "false" },
   { valueState: "observed", valueType: "integer", integerValue: 0, stringValue: "leak" },
 ] as const)("refuses incoherent singleton settings values %j", (fields) => {
-  for (const [name, scope] of [["jira.my-preference", "current-user-preference"], ["jira.application-properties", "application-properties"]] as const) {
-    expect(describeCatalogSchemaMismatch(declaration(name).descriptor.resultSchema, {
-      outcome: "succeeded", settingsScope: scope, key: "jira.user.locale", ...fields,
-    })).toBeDefined();
+  for (const [name, scope] of [
+    ["jira.my-preference", "current-user-preference"],
+    ["jira.application-properties", "application-properties"],
+  ] as const) {
+    expect(
+      describeCatalogSchemaMismatch(declaration(name).descriptor.resultSchema, {
+        outcome: "succeeded",
+        settingsScope: scope,
+        key: "jira.user.locale",
+        ...fields,
+      }),
+    ).toBeDefined();
   }
 });
 it("does not allow the list-only advanced endpoint or singleton preference to switch shapes", () => {
-  expect(describeCatalogSchemaMismatch(declaration("jira.advanced-settings").descriptor.resultSchema, {
-    outcome: "succeeded", settingsScope: "advanced-settings", key: "jira.clone.prefix", valueState: "withheld",
-  })).toBeDefined();
-  expect(describeCatalogSchemaMismatch(declaration("jira.my-preference").descriptor.resultSchema, {
-    outcome: "succeeded", settingsScope: "current-user-preference", items: [], startAt: 0, total: 0,
-  })).toBeDefined();
-  expect(describeCatalogSchemaMismatch(declaration("jira.my-preference").descriptor.resultSchema, {
-    outcome: "failed", reason: "permission-denied",
-  })).toBeUndefined();
+  expect(
+    describeCatalogSchemaMismatch(declaration("jira.advanced-settings").descriptor.resultSchema, {
+      outcome: "succeeded",
+      settingsScope: "advanced-settings",
+      key: "jira.clone.prefix",
+      valueState: "withheld",
+    }),
+  ).toBeDefined();
+  expect(
+    describeCatalogSchemaMismatch(declaration("jira.my-preference").descriptor.resultSchema, {
+      outcome: "succeeded",
+      settingsScope: "current-user-preference",
+      items: [],
+      startAt: 0,
+      total: 0,
+    }),
+  ).toBeDefined();
+  expect(
+    describeCatalogSchemaMismatch(declaration("jira.my-preference").descriptor.resultSchema, {
+      outcome: "failed",
+      reason: "permission-denied",
+    }),
+  ).toBeUndefined();
 });

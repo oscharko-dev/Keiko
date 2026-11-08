@@ -16,17 +16,33 @@ import {
 
 const COUNT = { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER };
 const COUNT_SCOPE = { type: "string", enum: ["jira-response"] };
-const CUSTOM_FIELD_USAGE = object({
-  customFieldId: ID,
-  fieldName: { ...text(255), minLength: 1 },
-  issueCountWithVersionInCustomField: COUNT,
-}, ["customFieldId", "fieldName"]);
-const VERSION = object({ ...jiraNativeVersionFields, versionId: ID, projectId: ID }, ["versionId", "name"]);
+const CUSTOM_FIELD_USAGE = object(
+  {
+    customFieldId: ID,
+    fieldName: { ...text(255), minLength: 1 },
+    issueCountWithVersionInCustomField: COUNT,
+  },
+  ["customFieldId", "fieldName"],
+);
+const VERSION = object({ ...jiraNativeVersionFields, versionId: ID, projectId: ID }, [
+  "versionId",
+  "name",
+]);
 const ORDER_BY = {
   type: "string",
   enum: [
-    "sequence", "+sequence", "-sequence", "name", "+name", "-name",
-    "startDate", "+startDate", "-startDate", "releaseDate", "+releaseDate", "-releaseDate",
+    "sequence",
+    "+sequence",
+    "-sequence",
+    "name",
+    "+name",
+    "-name",
+    "startDate",
+    "+startDate",
+    "-startDate",
+    "releaseDate",
+    "+releaseDate",
+    "-releaseDate",
   ],
 };
 function read(

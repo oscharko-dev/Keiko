@@ -95,13 +95,32 @@ const AMBIGUOUS_NATIVE_WRITES: readonly (readonly [Request["method"], readonly s
   ["POST", ["screens", "$id", "tabs", "$id", "fields"]],
   ["DELETE", ["screens", "$id", "tabs", "$id", "fields", "$segment"]],
   ["POST", ["screens", "$id", "tabs", "$id", "fields", "$segment", "move"]],
-  ["PUT", ["screens", "$id", "tabs", "$id", "fields", "$segment", "updateShowWhenEmptyIndicator", "$boolean"]],
+  [
+    "PUT",
+    [
+      "screens",
+      "$id",
+      "tabs",
+      "$id",
+      "fields",
+      "$segment",
+      "updateShowWhenEmptyIndicator",
+      "$boolean",
+    ],
+  ],
   ["POST", ["screens", "$id", "tabs", "$id", "move", "$position"]],
 ];
 function nativeTextSegment(value: string): boolean {
   const decoded = decodeCanonicalUriSegment(value);
-  return decoded !== undefined && decoded.trim().length > 0 && decoded.length <= 255 && decoded === decoded.trim() && decoded !== "." && decoded !== ".." &&
-    !/[\\/%?#\p{Cc}\p{Surrogate}]/u.test(decoded);
+  return (
+    decoded !== undefined &&
+    decoded.trim().length > 0 &&
+    decoded.length <= 255 &&
+    decoded === decoded.trim() &&
+    decoded !== "." &&
+    decoded !== ".." &&
+    !/[\\/%?#\p{Cc}\p{Surrogate}]/u.test(decoded)
+  );
 }
 function nativeNodeSegment(value: string): boolean {
   const decoded = decodeCanonicalUriSegment(value);
@@ -110,17 +129,27 @@ function nativeNodeSegment(value: string): boolean {
 
 function nativeWriteSegment(expected: string, actual: string): boolean {
   switch (expected) {
-    case "$node": return nativeNodeSegment(actual);
-    case "$id": return /^[1-9]\d{0,18}$/u.test(actual) && BigInt(actual) <= 9223372036854775807n;
-    case "$segment": return nativeTextSegment(actual);
-    case "$boolean": return actual === "true" || actual === "false";
-    case "$position": return /^(?:0|[1-9]\d{0,9})$/u.test(actual) && Number(actual) <= 2147483647;
-    default: return expected === actual;
+    case "$node":
+      return nativeNodeSegment(actual);
+    case "$id":
+      return /^[1-9]\d{0,18}$/u.test(actual) && BigInt(actual) <= 9223372036854775807n;
+    case "$segment":
+      return nativeTextSegment(actual);
+    case "$boolean":
+      return actual === "true" || actual === "false";
+    case "$position":
+      return /^(?:0|[1-9]\d{0,9})$/u.test(actual) && Number(actual) <= 2147483647;
+    default:
+      return expected === actual;
   }
 }
 function ambiguousNativeWrite(method: Request["method"], parts: readonly string[]): boolean {
-  return AMBIGUOUS_NATIVE_WRITES.some(([candidate, path]) => candidate === method && path.length === parts.length &&
-    path.every((part, index) => nativeWriteSegment(part, parts[index] ?? "")));
+  return AMBIGUOUS_NATIVE_WRITES.some(
+    ([candidate, path]) =>
+      candidate === method &&
+      path.length === parts.length &&
+      path.every((part, index) => nativeWriteSegment(part, parts[index] ?? "")),
+  );
 }
 
 export function ambiguousJiraAuthenticationResponse(
@@ -139,7 +168,11 @@ export function ambiguousJiraAuthenticationResponse(
   if (target.origin !== base.origin || !target.pathname.startsWith(prefix)) return false;
   const parts = target.pathname.slice(prefix.length).split("/");
   if (request.method !== "GET")
-    return ambiguousTabWrite(request.method, parts) || ambiguousIssueLinkWrite(request.method, parts) || ambiguousNativeWrite(request.method, parts);
+    return (
+      ambiguousTabWrite(request.method, parts) ||
+      ambiguousIssueLinkWrite(request.method, parts) ||
+      ambiguousNativeWrite(request.method, parts)
+    );
   return AMBIGUOUS_PATHS.some(
     (path) =>
       path.length === parts.length &&

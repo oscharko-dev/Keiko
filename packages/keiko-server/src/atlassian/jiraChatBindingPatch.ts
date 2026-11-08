@@ -55,9 +55,12 @@ function parseJiraChatPatchFields(
   const mcpServers = requestedMcpServers(body.mcpServers);
   const jiraAdministrationEnabled = requestedAdministration(body.jiraAdministrationEnabled);
   if (
-    podId === undefined && mode === undefined && mcpServers === undefined &&
+    podId === undefined &&
+    mode === undefined &&
+    mcpServers === undefined &&
     jiraAdministrationEnabled === undefined
-  ) return {};
+  )
+    return {};
   if (expectedIdentity === undefined)
     throw invalidRequest("A current chat scope identity is required.");
   return {
@@ -87,7 +90,8 @@ export function jiraChatUpdateOptions(
   chat: Chat,
   correlationId: string | undefined,
 ): Pick<UpdateChatOptions, "verifiedJiraPod"> {
-  const podId = patch.jiraPodId ??
+  const podId =
+    patch.jiraPodId ??
     (patch.jiraAdministrationEnabled === true ? chat.jiraPodBinding?.podId : undefined);
   if (podId === undefined) {
     if (patch.jiraAdministrationEnabled === true) {

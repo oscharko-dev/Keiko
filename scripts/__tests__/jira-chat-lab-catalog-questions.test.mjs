@@ -5,7 +5,10 @@ import { completeCatalogCase } from "../testing/jira-chat-lab/catalog-chat.mjs";
 import { privateJson } from "../testing/jira-chat-lab/private-json.mjs";
 
 vi.mock("../testing/jira-chat-lab/private-json.mjs", () => ({ privateJson: vi.fn() }));
-afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); });
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.clearAllMocks();
+});
 
 const OBSERVED = {
   decisions: { grants: 1, approvals: 0 },
@@ -16,7 +19,9 @@ it("records a catalog case only after its independent native oracle has complete
   const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
   const group = { results: [], pendingPath: "/synthetic/catalog.pending.json" };
   let release;
-  const oracle = new Promise((resolve) => { release = resolve; });
+  const oracle = new Promise((resolve) => {
+    release = resolve;
+  });
   const pending = completeCatalogCase(group, "jira.issue", OBSERVED, async (exchange) => {
     expect(exchange).toBe(OBSERVED.exchange);
     await oracle;
@@ -26,17 +31,29 @@ it("records a catalog case only after its independent native oracle has complete
   expect(log).not.toHaveBeenCalled();
   release();
   expect(await pending).toBe(OBSERVED.exchange);
-  expect(group.results).toEqual([{ operation: "jira.issue", decisions: OBSERVED.decisions, transcriptOutcome: "succeeded" }]);
+  expect(group.results).toEqual([
+    { operation: "jira.issue", decisions: OBSERVED.decisions, transcriptOutcome: "succeeded" },
+  ]);
   expect(privateJson).toHaveBeenCalledWith(group.pendingPath, group);
-  expect(log).toHaveBeenCalledWith(JSON.stringify({ qualification: "jira-chat-catalog", operation: "jira.issue", completed: true, ...OBSERVED.decisions }));
+  expect(log).toHaveBeenCalledWith(
+    JSON.stringify({
+      qualification: "jira-chat-catalog",
+      operation: "jira.issue",
+      completed: true,
+      ...OBSERVED.decisions,
+    }),
+  );
 });
 
 it("does not persist or emit a completed catalog case when native readback fails", async () => {
   const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
   const group = { results: [], pendingPath: "/synthetic/catalog.pending.json" };
   const failure = new TypeError("Synthetic independent readback failure");
-  await expect(completeCatalogCase(group, "jira.create", OBSERVED, async () => { throw failure; }))
-    .rejects.toBe(failure);
+  await expect(
+    completeCatalogCase(group, "jira.create", OBSERVED, async () => {
+      throw failure;
+    }),
+  ).rejects.toBe(failure);
   expect(group.results).toEqual([]);
   expect(privateJson).not.toHaveBeenCalled();
   expect(log).not.toHaveBeenCalled();

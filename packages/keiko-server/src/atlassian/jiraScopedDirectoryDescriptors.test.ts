@@ -18,23 +18,71 @@ it("admits all seven scoped directory/field declarations through unchanged schem
   }
 });
 it.each([
-  ["jira.multi-project-assignable-users", { projectKeys: ["SYN"] }, { items: [USER], searchLimit: 100 }],
-  ["jira.permission-users", { permissions: ["EDIT_ISSUES"], issueKey: "SYN-1", startAt: 1, maxResults: 1 }, { items: [USER], searchLimit: 100, startAt: 1, nextStartAt: 2 }],
-  ["jira.browse-permission-users", { projectKey: "SYN", query: "Synthetic" }, { items: [USER], searchLimit: 100 }],
-  ["jira.group-user-picker", { fieldId: "customfield_123", projectId: "12" }, { users: [USER], usersTotal: 2, groups: [], groupsTotal: 0 }],
-  ["jira.project-picker", { allowEmptyQuery: true }, { items: [{ id: "12", key: "SYN", name: "Synthetic" }] }],
-  ["jira.fields", { maxResults: 1 }, { items: [{ id: "customfield_123", name: "Synthetic", custom: true, searchable: false, schema: { type: "string", customId: "123" } }], startAt: 0, total: 1 }],
-  ["jira.custom-field-option", { optionId: "42" }, { id: "42", value: "", disabled: false, childrenIds: [] }],
-] as const)("declares %s without inventing authority or native continuation", (name, args, result) => {
-  const declaration = jiraScopedDirectoryDeclarationForTool(name);
-  if (declaration === undefined) throw new TypeError("Missing scoped-directory declaration");
-  expect(declaration.risk).toBe("read");
-  expect(describeCatalogSchemaMismatch(declaration.descriptor.inputSchema, args)).toBeUndefined();
-  expect(describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, { outcome: "succeeded", ...result })).toBeUndefined();
-  const connection = vi.fn();
-  expect(createJiraProviderForCatalog(connection, [name]).tools()).toHaveLength(1);
-  expect(connection).not.toHaveBeenCalled();
-});
+  [
+    "jira.multi-project-assignable-users",
+    { projectKeys: ["SYN"] },
+    { items: [USER], searchLimit: 100 },
+  ],
+  [
+    "jira.permission-users",
+    { permissions: ["EDIT_ISSUES"], issueKey: "SYN-1", startAt: 1, maxResults: 1 },
+    { items: [USER], searchLimit: 100, startAt: 1, nextStartAt: 2 },
+  ],
+  [
+    "jira.browse-permission-users",
+    { projectKey: "SYN", query: "Synthetic" },
+    { items: [USER], searchLimit: 100 },
+  ],
+  [
+    "jira.group-user-picker",
+    { fieldId: "customfield_123", projectId: "12" },
+    { users: [USER], usersTotal: 2, groups: [], groupsTotal: 0 },
+  ],
+  [
+    "jira.project-picker",
+    { allowEmptyQuery: true },
+    { items: [{ id: "12", key: "SYN", name: "Synthetic" }] },
+  ],
+  [
+    "jira.fields",
+    { maxResults: 1 },
+    {
+      items: [
+        {
+          id: "customfield_123",
+          name: "Synthetic",
+          custom: true,
+          searchable: false,
+          schema: { type: "string", customId: "123" },
+        },
+      ],
+      startAt: 0,
+      total: 1,
+    },
+  ],
+  [
+    "jira.custom-field-option",
+    { optionId: "42" },
+    { id: "42", value: "", disabled: false, childrenIds: [] },
+  ],
+] as const)(
+  "declares %s without inventing authority or native continuation",
+  (name, args, result) => {
+    const declaration = jiraScopedDirectoryDeclarationForTool(name);
+    if (declaration === undefined) throw new TypeError("Missing scoped-directory declaration");
+    expect(declaration.risk).toBe("read");
+    expect(describeCatalogSchemaMismatch(declaration.descriptor.inputSchema, args)).toBeUndefined();
+    expect(
+      describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, {
+        outcome: "succeeded",
+        ...result,
+      }),
+    ).toBeUndefined();
+    const connection = vi.fn();
+    expect(createJiraProviderForCatalog(connection, [name]).tools()).toHaveLength(1);
+    expect(connection).not.toHaveBeenCalled();
+  },
+);
 it.each([
   ["jira.multi-project-assignable-users", { projectKeys: [] }],
   ["jira.multi-project-assignable-users", { projectKeys: ["SYN", "SYN"] }],
@@ -57,20 +105,45 @@ it.each([
   ["jira.browse-permission-users", { items: [USER], searchLimit: 100, total: 1 }],
   ["jira.group-user-picker", { users: [USER], groups: [], total: 1 }],
   ["jira.group-user-picker", { groups: [{ name: "Synthetic", html: "Synthetic" }] }],
-  ["jira.project-picker", { items: [{ id: "12", key: "SYN", name: "Synthetic", avatar: "https://synthetic.invalid/avatar" }] }],
-  ["jira.fields", { items: [{ id: "summary", name: "Summary", required: true }], startAt: 0, total: 1 }],
+  [
+    "jira.project-picker",
+    {
+      items: [
+        { id: "12", key: "SYN", name: "Synthetic", avatar: "https://synthetic.invalid/avatar" },
+      ],
+    },
+  ],
+  [
+    "jira.fields",
+    { items: [{ id: "summary", name: "Summary", required: true }], startAt: 0, total: 1 },
+  ],
   ["jira.custom-field-option", { id: "42", value: "Synthetic", childrenIds: [12] }],
 ] as const)("refuses unprojected %s evidence", (name, result) => {
   const declaration = jiraScopedDirectoryDeclarationForTool(name);
   if (declaration === undefined) throw new TypeError("Missing scoped-directory declaration");
-  expect(describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, { outcome: "succeeded", ...result })).toBeDefined();
+  expect(
+    describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, {
+      outcome: "succeeded",
+      ...result,
+    }),
+  ).toBeDefined();
 });
 it.each([
-  "summary", "customfield_1", "customfield_1234567890123456", "customfield123", "a1",
-  "", "_summary", "customfield_", "customfield_12345678901234567", "customfield_1x", "field/name",
+  "summary",
+  "customfield_1",
+  "customfield_1234567890123456",
+  "customfield123",
+  "a1",
+  "",
+  "_summary",
+  "customfield_",
+  "customfield_12345678901234567",
+  "customfield_1x",
+  "field/name",
 ])("keeps the catalog field-ID grammar aligned with existing field admission: %s", (fieldId) => {
   const declaration = jiraScopedDirectoryDeclarationForTool("jira.group-user-picker");
   if (declaration === undefined) throw new TypeError("Missing picker declaration");
-  const admitted = describeCatalogSchemaMismatch(declaration.descriptor.inputSchema, { fieldId }) === undefined;
+  const admitted =
+    describeCatalogSchemaMismatch(declaration.descriptor.inputSchema, { fieldId }) === undefined;
   expect(admitted).toBe(fieldId.length <= 64 && new RegExp(JIRA_FIELD_ID_PATTERN).test(fieldId));
 });

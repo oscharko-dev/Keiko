@@ -123,10 +123,11 @@ async function qualifyComment(context, group, key) {
     "jira.comment",
     { issueKey: key, body: marker },
     await projectState(context.session),
-    async () => assert.deepEqual(await commentState(context.session, key, marker), {
-      total: before.total + 1,
-      matches: 1,
-    }),
+    async () =>
+      assert.deepEqual(await commentState(context.session, key, marker), {
+        total: before.total + 1,
+        matches: 1,
+      }),
   );
 }
 
@@ -215,14 +216,17 @@ async function main() {
   stage("all", true, { operations: 14, transport });
 }
 
-if (isMainModule(import.meta.url)) await main().catch((error) => {
-  const location =
-    error instanceof Error
-      ? (error.stack?.match(/catalog-(?:chat|state)\.mjs:\d+:\d+/g) ?? [])
-      : [];
-  console.error(JSON.stringify({ qualification: "jira-chat-catalog", completed: false, location }));
-  console.error(
-    "jira-chat-catalog: incomplete group retained privately; independently reconcile remote state before another group; never replay pending writes",
-  );
-  process.exitCode = 1;
-});
+if (isMainModule(import.meta.url))
+  await main().catch((error) => {
+    const location =
+      error instanceof Error
+        ? (error.stack?.match(/catalog-(?:chat|state)\.mjs:\d+:\d+/g) ?? [])
+        : [];
+    console.error(
+      JSON.stringify({ qualification: "jira-chat-catalog", completed: false, location }),
+    );
+    console.error(
+      "jira-chat-catalog: incomplete group retained privately; independently reconcile remote state before another group; never replay pending writes",
+    );
+    process.exitCode = 1;
+  });

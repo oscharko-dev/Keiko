@@ -165,11 +165,33 @@ const TOKEN = [
 // Review (#4176): a signature alone proves nothing about what rides inside or behind the image.
 describe("an image is allowed only when its bytes hold nothing hidden", () => {
   it("returns avatar MIME only after complete existing content admission", async () => {
-    expect(await admitJiraAvatarImage({ bytes: png(), name: "not-a-type.txt", secrets: [SECRET] })).toEqual({ ok: true, mimeType: "image/png" });
-    expect(await admitJiraAvatarImage({ bytes: jpeg(), name: "image", secrets: [SECRET] })).toEqual({ ok: true, mimeType: "image/jpeg" });
-    expect(await admitJiraAvatarImage({ bytes: text("ordinary readable text"), name: "image.png", secrets: [SECRET] })).toEqual(UNSCANNABLE);
-    expect(await admitJiraAvatarImage({ bytes: Uint8Array.from(PNG_SIGNATURE), name: "image.png", secrets: [SECRET] })).toEqual(UNSCANNABLE);
-    expect(await admitJiraAvatarImage({ bytes: png(pngChunk("tEXt", text(SECRET))), name: "image.png", secrets: [SECRET] })).toEqual(CREDENTIAL);
+    expect(
+      await admitJiraAvatarImage({ bytes: png(), name: "not-a-type.txt", secrets: [SECRET] }),
+    ).toEqual({ ok: true, mimeType: "image/png" });
+    expect(await admitJiraAvatarImage({ bytes: jpeg(), name: "image", secrets: [SECRET] })).toEqual(
+      { ok: true, mimeType: "image/jpeg" },
+    );
+    expect(
+      await admitJiraAvatarImage({
+        bytes: text("ordinary readable text"),
+        name: "image.png",
+        secrets: [SECRET],
+      }),
+    ).toEqual(UNSCANNABLE);
+    expect(
+      await admitJiraAvatarImage({
+        bytes: Uint8Array.from(PNG_SIGNATURE),
+        name: "image.png",
+        secrets: [SECRET],
+      }),
+    ).toEqual(UNSCANNABLE);
+    expect(
+      await admitJiraAvatarImage({
+        bytes: png(pngChunk("tEXt", text(SECRET))),
+        name: "image.png",
+        secrets: [SECRET],
+      }),
+    ).toEqual(CREDENTIAL);
   });
   it.each([
     [

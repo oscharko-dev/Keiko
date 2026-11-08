@@ -84,8 +84,11 @@ function validAdministrationState(value: Record<string, unknown>): boolean {
   const selected = value.jiraAdministrationEnabled;
   if (selected === undefined) return true;
   // Schema 1 predates the selection and can never carry an explicit administration grant.
-  return value.schemaVersion === 2 && typeof selected === "boolean" &&
-    (selected === false || value.binding !== undefined);
+  return (
+    value.schemaVersion === 2 &&
+    typeof selected === "boolean" &&
+    (selected === false || value.binding !== undefined)
+  );
 }
 
 function validMcpSelection(value: unknown): boolean {
@@ -126,7 +129,11 @@ export function jiraChatFields(
   state: JiraChatState,
 ): Pick<
   Chat,
-  "toolMode" | "jiraBindingGeneration" | "jiraPodBinding" | "mcpServers" | "jiraAdministrationEnabled"
+  | "toolMode"
+  | "jiraBindingGeneration"
+  | "jiraPodBinding"
+  | "mcpServers"
+  | "jiraAdministrationEnabled"
 > {
   return {
     toolMode: state.mode,
@@ -202,7 +209,7 @@ function nextAdministrationSelection(
       throw invalidRequest("The Jira Pod credential generation has changed.");
   }
   if (binding === undefined || binding !== existing.jiraPodBinding) return false;
-  return requested ?? (existing.jiraAdministrationEnabled === true);
+  return requested ?? existing.jiraAdministrationEnabled === true;
 }
 
 export function updatedJiraChatState(

@@ -509,10 +509,16 @@ function readParent(reader: Reader, entries: readonly RawEntry[]): JiraIssueTemp
   const link = reader.scalar("parentLink", JIRA_ISSUE_TEMPLATE_LIMITS.textChars);
   const entry = entryOf(entries, "parentIssueTypes");
   const issueTypes = reader.list(
-    "parentIssueTypes", JIRA_ISSUE_TEMPLATE_LIMITS.listItems, JIRA_ISSUE_TEMPLATE_LIMITS.textChars,
+    "parentIssueTypes",
+    JIRA_ISSUE_TEMPLATE_LIMITS.listItems,
+    JIRA_ISSUE_TEMPLATE_LIMITS.textChars,
   );
-  if (entry !== undefined && (field === undefined || issueTypes.length === 0 ||
-    issueTypes.some((type) => type.trim().length === 0))) {
+  if (
+    entry !== undefined &&
+    (field === undefined ||
+      issueTypes.length === 0 ||
+      issueTypes.some((type) => type.trim().length === 0))
+  ) {
     reader.errors.push({ code: "invalid-value", key: "parentIssueTypes", line: entry.line });
   }
   return {

@@ -57,7 +57,9 @@ export type JiraChatAuthorityDeps = JiraPodAccessDeps &
 
 export type JiraChatAuthorityEnvelope = ChatToolAuthorityEnvelope & {
   readonly subject: JiraChatToolAuthoritySubject;
-  readonly connectorScopes: readonly ("issue-tracker.read" | "issue-tracker.write" | "issue-tracker.admin")[];
+  readonly connectorScopes: readonly (
+    "issue-tracker.read" | "issue-tracker.write" | "issue-tracker.admin"
+  )[];
 };
 export function isJiraEnvelope(
   envelope: ChatToolAuthorityEnvelope,
@@ -65,7 +67,9 @@ export function isJiraEnvelope(
   return (
     envelope.subject.kind === undefined &&
     envelope.connectorScopes.every(
-      (scope) => scope === "issue-tracker.read" || scope === "issue-tracker.write" ||
+      (scope) =>
+        scope === "issue-tracker.read" ||
+        scope === "issue-tracker.write" ||
         scope === "issue-tracker.admin",
     )
   );
@@ -214,9 +218,11 @@ export function resolveCurrentJiraChatAuthority(
       correlationId,
     );
   if (!isJiraEnvelope(resolution.envelope)) return { ok: false, reason: "invalid" };
-  if (!isRequestedChatToolModeCurrent(resolution.envelope, facts.chat) ||
-      resolution.envelope.connectorScopes.includes("issue-tracker.admin") !==
-        (facts.chat.jiraAdministrationEnabled === true)) {
+  if (
+    !isRequestedChatToolModeCurrent(resolution.envelope, facts.chat) ||
+    resolution.envelope.connectorScopes.includes("issue-tracker.admin") !==
+      (facts.chat.jiraAdministrationEnabled === true)
+  ) {
     return recordChatAuthorityResult(
       "current-state",
       { ok: false, reason: "invalid" },

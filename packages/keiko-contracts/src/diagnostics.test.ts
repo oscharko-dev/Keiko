@@ -705,10 +705,14 @@ describe("isClientStageIngestRequest", () => {
     const report = { ...startedRequest(), stage: "jira human input" };
     expect(isClientStageIngestRequest(report)).toBe(true);
     for (const extra of [
-      { password: "synthetic-private-entry" }, { values: { license: "synthetic-license" } },
-      { requestId: `jhi_${"a".repeat(64)}` }, { username: "Private User" },
-      { host: "private.example.invalid" }, { error: "reflected private response body" },
-    ]) expect(isClientStageIngestRequest({ ...report, ...extra })).toBe(false);
+      { password: "synthetic-private-entry" },
+      { values: { license: "synthetic-license" } },
+      { requestId: `jhi_${"a".repeat(64)}` },
+      { username: "Private User" },
+      { host: "private.example.invalid" },
+      { error: "reflected private response body" },
+    ])
+      expect(isClientStageIngestRequest({ ...report, ...extra })).toBe(false);
   });
 
   it("accepts body-free deletion counts and rejects content, missing counts and impossible settlements", () => {

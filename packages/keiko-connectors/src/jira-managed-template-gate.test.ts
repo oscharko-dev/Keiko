@@ -65,70 +65,192 @@ function template(frontMatter: readonly string[], body = SECTIONS): JiraIssueTem
 const ALL_POINTS = ["activateOn: [create, edit, transition:Ready]"];
 
 describe("schema impacts on saved formal rules", () => {
-  const request = (): ReturnType<typeof vi.fn<JiraMutationRequest>> => vi.fn<JiraMutationRequest>().mockResolvedValue({ ok: true, status: 200, body: undefined,
-    items: [{ id: "summary", name: "Summary" }, { id: "customfield_10016", name: "Story Points" }, { id: "customfield_10017", name: "Other" }] });
-  it.each(["create", "edit", "transition:Ready"])("does not limit type-selection migration checks to edit: %s", async (activation) => {
-    const rule = template([`activateOn: [${activation}]`, "summaryMinLength: 8"]);
-    expect(await gateJiraSchemaRuleImpact({ request: request(), source: () => ({ templates: [rule], unreadable: 0 }),
-      impact: { kind: "issue-type", types: [{ id: "7", name: "Story" }] } })).toMatchObject({ ok: false, violations: [{ ruleId: "template-unreadable" }] });
-  });
+  const request = (): ReturnType<typeof vi.fn<JiraMutationRequest>> =>
+    vi.fn<JiraMutationRequest>().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: undefined,
+      items: [
+        { id: "summary", name: "Summary" },
+        { id: "customfield_10016", name: "Story Points" },
+        { id: "customfield_10017", name: "Other" },
+      ],
+    });
+  it.each(["create", "edit", "transition:Ready"])(
+    "does not limit type-selection migration checks to edit: %s",
+    async (activation) => {
+      const rule = template([`activateOn: [${activation}]`, "summaryMinLength: 8"]);
+      expect(
+        await gateJiraSchemaRuleImpact({
+          request: request(),
+          source: () => ({ templates: [rule], unreadable: 0 }),
+          impact: { kind: "issue-type", types: [{ id: "7", name: "Story" }] },
+        }),
+      ).toMatchObject({ ok: false, violations: [{ ruleId: "template-unreadable" }] });
+    },
+  );
   it("includes a migration target's rule selection and leaves unrelated types alone", async () => {
-    const source = () => ({ templates: [template(["activateOn: [transition:Ready]"])], unreadable: 0 });
-    const types = [{ id: "1", name: "Task" }, { id: "7", name: "Story" }];
-    expect(await gateJiraSchemaRuleImpact({ request: request(), source, impact: { kind: "issue-type", types } })).toMatchObject({ ok: false });
-    expect(await gateJiraSchemaRuleImpact({ request: request(), source, impact: { kind: "issue-type", types: [{ id: "1", name: "Task" }] } })).toEqual({ ok: true });
+    const source = () => ({
+      templates: [template(["activateOn: [transition:Ready]"])],
+      unreadable: 0,
+    });
+    const types = [
+      { id: "1", name: "Task" },
+      { id: "7", name: "Story" },
+    ];
+    expect(
+      await gateJiraSchemaRuleImpact({
+        request: request(),
+        source,
+        impact: { kind: "issue-type", types },
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      await gateJiraSchemaRuleImpact({
+        request: request(),
+        source,
+        impact: { kind: "issue-type", types: [{ id: "1", name: "Task" }] },
+      }),
+    ).toEqual({ ok: true });
   });
-  it.each(["requiredFields: [Story Points]", "parentField: Story Points"])("recognizes deleted custom-field references in %s", async (line) => {
-    const source = () => ({ templates: [template(["activateOn: [create]", line])], unreadable: 0 });
-    expect(await gateJiraSchemaRuleImpact({ request: request(), source, impact: { kind: "custom-fields", fields: [{ id: "customfield_10016", name: "Story Points" }] } })).toMatchObject({ ok: false });
-    expect(await gateJiraSchemaRuleImpact({ request: request(), source, impact: { kind: "custom-fields", fields: [{ id: "customfield_10017", name: "Other" }] } })).toEqual({ ok: true });
-  });
+  it.each(["requiredFields: [Story Points]", "parentField: Story Points"])(
+    "recognizes deleted custom-field references in %s",
+    async (line) => {
+      const source = () => ({
+        templates: [template(["activateOn: [create]", line])],
+        unreadable: 0,
+      });
+      expect(
+        await gateJiraSchemaRuleImpact({
+          request: request(),
+          source,
+          impact: {
+            kind: "custom-fields",
+            fields: [{ id: "customfield_10016", name: "Story Points" }],
+          },
+        }),
+      ).toMatchObject({ ok: false });
+      expect(
+        await gateJiraSchemaRuleImpact({
+          request: request(),
+          source,
+          impact: { kind: "custom-fields", fields: [{ id: "customfield_10017", name: "Other" }] },
+        }),
+      ).toEqual({ ok: true });
+    },
+  );
   it("refuses required parent-link removal without broadening a prose skill into enforcement", async () => {
     const impact = { kind: "link-type" as const, names: ["Blocks", "blocks", "is blocked by"] };
-    expect(await gateJiraSchemaRuleImpact({ request: request(), impact, source: () => ({ templates: [template(["activateOn: [create]", "parentLink: Blocks"])], unreadable: 0 }) })).toMatchObject({ ok: false });
-    expect(await gateJiraSchemaRuleImpact({ request: request(), impact, source: () => ({ templates: [], unreadable: 0 }) })).toEqual({ ok: true });
+    expect(
+      await gateJiraSchemaRuleImpact({
+        request: request(),
+        impact,
+        source: () => ({
+          templates: [template(["activateOn: [create]", "parentLink: Blocks"])],
+          unreadable: 0,
+        }),
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      await gateJiraSchemaRuleImpact({
+        request: request(),
+        impact,
+        source: () => ({ templates: [], unreadable: 0 }),
+      }),
+    ).toEqual({ ok: true });
   });
   it("does not downgrade unreadable saved rules to an empty rule set", async () => {
-    expect(await gateJiraSchemaRuleImpact({ request: request(), impact: { kind: "issue-type", types: [{ id: "7", name: "Story" }] },
-      source: () => ({ templates: [], unreadable: 1, unreadableNames: ["Synthetic formal record"] }) })).toMatchObject({ ok: false, violations: [{ ruleId: "template-unreadable" }] });
+    expect(
+      await gateJiraSchemaRuleImpact({
+        request: request(),
+        impact: { kind: "issue-type", types: [{ id: "7", name: "Story" }] },
+        source: () => ({
+          templates: [],
+          unreadable: 1,
+          unreadableNames: ["Synthetic formal record"],
+        }),
+      }),
+    ).toMatchObject({ ok: false, violations: [{ ruleId: "template-unreadable" }] });
   });
 });
 
 describe("issue deletion impacts on surviving formal references", () => {
   function admission(rule: JiraIssueTemplate, items: readonly unknown[] = []) {
-    const request = vi.fn<JiraMutationRequest>().mockResolvedValue({ ok: true, status: 200, body: undefined, items });
-    return { request, source: () => ({ templates: [rule], unreadable: 0 }), impact: { kind: "issue-deletion" as const } };
+    const request = vi
+      .fn<JiraMutationRequest>()
+      .mockResolvedValue({ ok: true, status: 200, body: undefined, items });
+    return {
+      request,
+      source: () => ({ templates: [rule], unreadable: 0 }),
+      impact: { kind: "issue-deletion" as const },
+    };
   }
-  it.each(["parentLink: Blocks", "parentField: parent", "requiredFields: [issuelinks]", "requiredFields: [subtasks]"])("refuses an unproved surviving reference: %s", async (line) => {
-    expect(await gateJiraSchemaRuleImpact(admission(template(["activateOn: [create]", line]))))
-      .toMatchObject({ ok: false, violations: [{ ruleId: "template-unreadable" }] });
+  it.each([
+    "parentLink: Blocks",
+    "parentField: parent",
+    "requiredFields: [issuelinks]",
+    "requiredFields: [subtasks]",
+  ])("refuses an unproved surviving reference: %s", async (line) => {
+    expect(
+      await gateJiraSchemaRuleImpact(admission(template(["activateOn: [create]", line]))),
+    ).toMatchObject({ ok: false, violations: [{ ruleId: "template-unreadable" }] });
   });
   it("does not apply the deleted object's content requirements as a surviving field state", async () => {
-    const input = admission(template(["activateOn: [create, transition:Ready]", "summaryMinLength: 8", "requiredLabels: [reviewed]", "requiredFields: [Summary]"]));
+    const input = admission(
+      template([
+        "activateOn: [create, transition:Ready]",
+        "summaryMinLength: 8",
+        "requiredLabels: [reviewed]",
+        "requiredFields: [Summary]",
+      ]),
+    );
     expect(await gateJiraSchemaRuleImpact(input)).toEqual({ ok: true });
     expect(input.request).not.toHaveBeenCalled();
   });
   it("uses observed scalar metadata to establish disjoint impact", async () => {
     const input = admission(template(["activateOn: [edit]", "requiredFields: [Story Points]"]), [
-      { id: "customfield_10016", name: "Story Points", schema: { type: "number", custom: "com.atlassian.jira.plugin.system.customfieldtypes:float" } },
+      {
+        id: "customfield_10016",
+        name: "Story Points",
+        schema: {
+          type: "number",
+          custom: "com.atlassian.jira.plugin.system.customfieldtypes:float",
+        },
+      },
     ]);
     expect(await gateJiraSchemaRuleImpact(input)).toEqual({ ok: true });
     expect(input.request).toHaveBeenCalledWith("field", "GET", undefined, "json-array");
   });
-  it.each([undefined, { type: "string", custom: "plugin:issue-picker" }, { type: "issue" }])("does not invent disjointness from opaque/missing issue-reference metadata", async (schema) => {
-    const input = admission(template(["activateOn: [create]", "parentField: Related Issue"]), [
-      { id: "customfield_10100", name: "Related Issue", ...(schema === undefined ? {} : { schema }) },
-    ]);
-    expect(await gateJiraSchemaRuleImpact(input)).toMatchObject({ ok: false });
-  });
+  it.each([undefined, { type: "string", custom: "plugin:issue-picker" }, { type: "issue" }])(
+    "does not invent disjointness from opaque/missing issue-reference metadata",
+    async (schema) => {
+      const input = admission(template(["activateOn: [create]", "parentField: Related Issue"]), [
+        {
+          id: "customfield_10100",
+          name: "Related Issue",
+          ...(schema === undefined ? {} : { schema }),
+        },
+      ]);
+      expect(await gateJiraSchemaRuleImpact(input)).toMatchObject({ ok: false });
+    },
+  );
   it("keeps an unreadable catalog fail-closed while unrelated content rules remain usable", async () => {
     const input = admission(template(["activateOn: [edit]", "requiredFields: [Related Issue]"]));
     input.request.mockResolvedValue({ ok: false, reason: "permission-denied" });
-    expect(await gateJiraSchemaRuleImpact(input)).toMatchObject({ ok: false, violations: [{ ruleId: "template-unreadable" }] });
+    expect(await gateJiraSchemaRuleImpact(input)).toMatchObject({
+      ok: false,
+      violations: [{ ruleId: "template-unreadable" }],
+    });
   });
   it("does not convert prose-only/no-formal-rule sources into a deletion gate", async () => {
     const request = vi.fn<JiraMutationRequest>();
-    expect(await gateJiraSchemaRuleImpact({ request, source: () => ({ templates: [], unreadable: 0 }), impact: { kind: "issue-deletion" } })).toEqual({ ok: true });
+    expect(
+      await gateJiraSchemaRuleImpact({
+        request,
+        source: () => ({ templates: [], unreadable: 0 }),
+        impact: { kind: "issue-deletion" },
+      }),
+    ).toEqual({ ok: true });
     expect(request).not.toHaveBeenCalled();
   });
 });
@@ -167,7 +289,14 @@ function readRoutes(remote: Remote): readonly ReadRoute[] {
       ? { suffix: "/field", body: [{ id: "customfield_10016", name: "Story Points" }] }
       : { suffix: "/field", body: {}, status: 404 },
     { suffix: "/issue/SYN-1", body: { id: "10001", key: "SYN-1", fields: remote.issue } },
-    { suffix: "/issue/SYN-2", body: { id: "10002", key: "SYN-2", fields: { issuetype: remote.parentType ?? { id: "7", name: "Task" } } } },
+    {
+      suffix: "/issue/SYN-2",
+      body: {
+        id: "10002",
+        key: "SYN-2",
+        fields: { issuetype: remote.parentType ?? { id: "7", name: "Task" } },
+      },
+    },
   ];
 }
 interface Remote {
@@ -263,10 +392,18 @@ const SET = (...templates: JiraIssueTemplate[]): JiraIssueTemplateSet => ({
 
 describe("create", () => {
   it("blocks a disallowed independently read parent type before the real create dispatch", async () => {
-    const saved = SET(template(["activateOn: [create]", "parentField: parent", "parentIssueTypes: [Task]"]));
-    const invalid = fixture(saved, { issue: {}, fieldCatalog: true, parentType: { id: "8", name: "Epic" } });
+    const saved = SET(
+      template(["activateOn: [create]", "parentField: parent", "parentIssueTypes: [Task]"]),
+    );
+    const invalid = fixture(saved, {
+      issue: {},
+      fieldCatalog: true,
+      parentType: { id: "8", name: "Epic" },
+    });
     const args = { ...CREATE, fields: { ...CREATE.fields, parent: { key: "SYN-2" } } };
-    expect(await invalid.run("jira.create", args)).toMatchObject({ ok: false, reason: "field-validation",
+    expect(await invalid.run("jira.create", args)).toMatchObject({
+      ok: false,
+      reason: "field-validation",
       violations: [{ ruleId: "parent-type-mismatch", template: "SYN/Story" }],
     });
     expect(invalid.writes()).toEqual([]);
@@ -553,7 +690,9 @@ describe("dry run before approval", () => {
     );
     for (const operation of [f.check, f.run]) {
       expect(await operation("jira.create", CREATE)).toMatchObject({
-        ok: false, reason: "malformed-payload", violations: [{ ruleId: "template-unreadable" }],
+        ok: false,
+        reason: "malformed-payload",
+        violations: [{ ruleId: "template-unreadable" }],
       });
     }
     expect(f.writes()).toEqual([]);
@@ -563,36 +702,57 @@ describe("dry run before approval", () => {
     expect(f.writes()).toEqual(["POST /context/rest/api/2/issue"]);
   });
 
-  it.each(["jira.edit", "jira.transition"] as const)("keeps %s unsent when the complete field read changes type", async (operation) => {
-    const f = fixture(SET(template([...ALL_POINTS, "requiredFields: [Story Points]"])), {
-      fieldCatalog: true,
-      issue: {
-        project: { key: "SYN" }, issuetype: { id: "10001", name: "Story" },
-        summary: "Native task", description: FULL_DESCRIPTION, labels: [], customfield_10016: 5,
-        status: { id: "1", name: "To Do" },
-      },
-    });
-    const native = f.http.getMockImplementation();
-    if (native === undefined) throw new TypeError("Missing native fixture");
-    f.http.mockImplementation((request) => {
-      const url = new URL(request.url);
-      return url.pathname.endsWith("/issue/SYN-1") && url.searchParams.get("fields")?.includes("customfield_10016")
-        ? Promise.resolve(response({ id: "10001", key: "SYN-1", fields: {
-            project: { key: "SYN" }, issuetype: { id: "10002", name: "Bug" }, customfield_10016: 5,
-          } }))
-        : native(request);
-    });
-    const args: CatalogJsonObject = operation === "jira.edit"
-      ? { issueKey: "SYN-1", fields: { summary: "Corrected native work" } }
-      : { issueKey: "SYN-1", transitionId: "31" };
-    expect(await f.check(operation, args)).toMatchObject({ ok: false, reason: "conflict", violations: [{ ruleId: "template-unreadable" }] });
-    expect(await f.run(operation, args)).toMatchObject({ ok: false, reason: "conflict" });
-    expect(f.writes()).toEqual([]);
-    f.http.mockImplementation(native);
-    expect(await f.check(operation, args)).toEqual({ ok: true });
-    await f.run(operation, args);
-    expect(f.writes()).toHaveLength(1);
-  });
+  it.each(["jira.edit", "jira.transition"] as const)(
+    "keeps %s unsent when the complete field read changes type",
+    async (operation) => {
+      const f = fixture(SET(template([...ALL_POINTS, "requiredFields: [Story Points]"])), {
+        fieldCatalog: true,
+        issue: {
+          project: { key: "SYN" },
+          issuetype: { id: "10001", name: "Story" },
+          summary: "Native task",
+          description: FULL_DESCRIPTION,
+          labels: [],
+          customfield_10016: 5,
+          status: { id: "1", name: "To Do" },
+        },
+      });
+      const native = f.http.getMockImplementation();
+      if (native === undefined) throw new TypeError("Missing native fixture");
+      f.http.mockImplementation((request) => {
+        const url = new URL(request.url);
+        return url.pathname.endsWith("/issue/SYN-1") &&
+          url.searchParams.get("fields")?.includes("customfield_10016")
+          ? Promise.resolve(
+              response({
+                id: "10001",
+                key: "SYN-1",
+                fields: {
+                  project: { key: "SYN" },
+                  issuetype: { id: "10002", name: "Bug" },
+                  customfield_10016: 5,
+                },
+              }),
+            )
+          : native(request);
+      });
+      const args: CatalogJsonObject =
+        operation === "jira.edit"
+          ? { issueKey: "SYN-1", fields: { summary: "Corrected native work" } }
+          : { issueKey: "SYN-1", transitionId: "31" };
+      expect(await f.check(operation, args)).toMatchObject({
+        ok: false,
+        reason: "conflict",
+        violations: [{ ruleId: "template-unreadable" }],
+      });
+      expect(await f.run(operation, args)).toMatchObject({ ok: false, reason: "conflict" });
+      expect(f.writes()).toEqual([]);
+      f.http.mockImplementation(native);
+      expect(await f.check(operation, args)).toEqual({ ok: true });
+      await f.run(operation, args);
+      expect(f.writes()).toHaveLength(1);
+    },
+  );
 
   it("reports violations and performs no write", async () => {
     const f = fixture(SET(template(ALL_POINTS)));

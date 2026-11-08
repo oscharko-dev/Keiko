@@ -5096,7 +5096,10 @@ function installCodingJiraPods(
   pods: CodingJiraPods | undefined,
 ): UiHandlerDeps {
   if (pods === undefined) return deps;
-  pods.attach({ ...deps, emailTemplateInspection: (signal) => jiraEmailTemplateInspection(deps, signal) });
+  pods.attach({
+    ...deps,
+    emailTemplateInspection: (signal) => jiraEmailTemplateInspection(deps, signal),
+  });
   const previousDispose = deps.dispose;
   return Object.assign(deps, {
     codingJiraInputContext: pods.currentInputContext,

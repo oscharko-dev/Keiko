@@ -135,12 +135,14 @@ export function readCodingJiraMutationMessage(
 ): readonly ChatToolMutationRecord[] {
   if (invocationIds.length === 0) return [];
   if (invocationIds.length > CHAT_TOOL_TURN_BUDGET.maxToolCalls) throw journalConflict();
-  return db.prepare(
-    `SELECT ${COLUMNS} FROM chat_tool_mutations
+  return db
+    .prepare(
+      `SELECT ${COLUMNS} FROM chat_tool_mutations
      WHERE chat_id = ? AND user_message_id = ? AND consumer_kind = 'coding'
        AND source_kind = 'configured-mcp' AND server_name = 'jira'
        AND invocation_id IN (${invocationIds.map(() => "?").join(",")})`,
-  ).all(chatId, userMessageId, ...invocationIds)
+    )
+    .all(chatId, userMessageId, ...invocationIds)
     .map((row) => rowRecord(row))
     .filter((row): row is ChatToolMutationRecord => row !== undefined);
 }

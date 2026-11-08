@@ -5,7 +5,8 @@ services:
     depends_on:
       jira: { condition: service_started }
     ports: ["127.0.0.1:${KEIKO_JIRA_LAB_HTTPS_PORT:-18443}:${KEIKO_JIRA_LAB_HTTPS_PORT:-18443}"]
-    command: [node, /opt/tls-front.mjs, /tls, "${KEIKO_JIRA_LAB_HTTPS_PORT:-18443}", "8080", compose]
+    command:
+      [node, /opt/tls-front.mjs, /tls, "${KEIKO_JIRA_LAB_HTTPS_PORT:-18443}", "8080", compose]
     volumes:
       - ./tls-front.mjs:/opt/tls-front.mjs:ro
       - ${KEIKO_JIRA_LAB_STATE_DIR:?private laboratory state directory required}/secrets/tls/server.key:/tls/server.key:ro

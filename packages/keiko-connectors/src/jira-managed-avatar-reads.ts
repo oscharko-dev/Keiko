@@ -80,7 +80,10 @@ function avatarAttributes(raw: Record<string, unknown>): CatalogJsonObject | und
   }
   return result;
 }
-export function projectJiraAvatar(value: unknown, category: Category): CatalogJsonObject | undefined {
+export function projectJiraAvatar(
+  value: unknown,
+  category: Category,
+): CatalogJsonObject | undefined {
   const raw = asRecord(value);
   const id = typeof raw?.id === "number" && Number.isSafeInteger(raw.id) ? String(raw.id) : raw?.id;
   if (raw === undefined || !jiraNativeId(id)) return undefined;

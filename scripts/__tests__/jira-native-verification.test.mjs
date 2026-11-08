@@ -1,10 +1,23 @@
 import { expect, it, vi, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, statSync, symlinkSync, chmodSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  chmodSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  labRequest, DEFAULT_LAB_CONNECTION, labSessionConnection, normalizeLabSession,
-  loadSession, assertSessionServerInfo,
+  labRequest,
+  DEFAULT_LAB_CONNECTION,
+  labSessionConnection,
+  normalizeLabSession,
+  loadSession,
+  assertSessionServerInfo,
 } from "../testing/jira-chat-lab/lab-client.mjs";
 import { sessionVerificationPort } from "../testing/jira-chat-lab/product-port.mjs";
 import {
@@ -149,21 +162,26 @@ function containers(session) {
     Image: `sha256:${"a".repeat(64)}`,
     State: { Running: true },
     Config: {
-      Image:
-        service === "jira"
-          ? selected.jiraImage
-          : service,
-      Cmd: service === "tls"
-        ? ["node", "/opt/tls-front.mjs", "/tls", String(selected.httpsPort), "8080", "compose"]
-        : [],
+      Image: service === "jira" ? selected.jiraImage : service,
+      Cmd:
+        service === "tls"
+          ? ["node", "/opt/tls-front.mjs", "/tls", String(selected.httpsPort), "8080", "compose"]
+          : [],
       Labels: {
         "com.docker.compose.project": "keiko-jira-4081-test",
         "com.docker.compose.service": service,
       },
     },
-    NetworkSettings: { Ports: service === "tls"
-      ? { [`${selected.httpsPort}/tcp`]: [{ HostIp: "127.0.0.1", HostPort: String(selected.httpsPort) }] }
-      : { "8080/tcp": [{ HostIp: "127.0.0.1", HostPort: "18084" }] } },
+    NetworkSettings: {
+      Ports:
+        service === "tls"
+          ? {
+              [`${selected.httpsPort}/tcp`]: [
+                { HostIp: "127.0.0.1", HostPort: String(selected.httpsPort) },
+              ],
+            }
+          : { "8080/tcp": [{ HostIp: "127.0.0.1", HostPort: "18084" }] },
+    },
   }));
 }
 
@@ -179,9 +197,19 @@ it("selects only the exact synthetic Jira service and its existing running peers
   ).toThrow();
 });
 
-const OLD_SESSION = { schemaVersion: 1, project: "keiko-jira-4081-test", httpPort: 18084, syntheticOnly: true };
+const OLD_SESSION = {
+  schemaVersion: 1,
+  project: "keiko-jira-4081-test",
+  httpPort: 18084,
+  syntheticOnly: true,
+};
 // Synthetic digest tests admission only; it is not a published or qualified Jira image pin.
-const PINNED_SESSION = { ...OLD_SESSION, httpsPort: 19443, jiraVersion: "11.3.0", jiraImageDigest: "b".repeat(64) };
+const PINNED_SESSION = {
+  ...OLD_SESSION,
+  httpsPort: 19443,
+  jiraVersion: "11.3.0",
+  jiraImageDigest: "b".repeat(64),
+};
 
 it("normalizes legacy defaults without rewriting the original private manifest", () => {
   const directory = mkdtempSync(join(tmpdir(), "keiko-session-pins-"));
@@ -190,8 +218,10 @@ it("normalizes legacy defaults without rewriting the original private manifest",
   const path = join(directory, "session.json");
   writeFileSync(path, original, { mode: 0o600 });
   expect(loadSession(directory)).toMatchObject({
-    ...DEFAULT_LAB_CONNECTION, httpPort: 18084,
-    origin: "http://127.0.0.1:18084", httpsOrigin: "https://127.0.0.1:18443",
+    ...DEFAULT_LAB_CONNECTION,
+    httpPort: 18084,
+    origin: "http://127.0.0.1:18084",
+    httpsOrigin: "https://127.0.0.1:18443",
   });
   expect(readFileSync(path, "utf8")).toBe(original);
 });
@@ -210,15 +240,24 @@ it("refuses a non-private or symlinked session manifest before any service acces
   expect(() => loadSession(directory)).toThrow("private regular file");
 });
 
-it.each(["10.3.26", "10.4.0", "11.2.0", "11.3.0"])("binds an explicitly pinned %s session without a registry/tag lookup", (jiraVersion) => {
-  const session = normalizeLabSession({ ...PINNED_SESSION, jiraVersion }, "/private/session");
-  expect(session.jiraImage).toBe(`atlassian/jira-software:${jiraVersion}@sha256:${"b".repeat(64)}`);
-  expect(session.httpsOrigin).toBe("https://127.0.0.1:19443");
-  expect(Object.isFrozen(session)).toBe(true);
-  expect(() => assertSessionServerInfo(session, {
-    version: jiraVersion, versionNumbers: jiraVersion.split(".").map(Number), deploymentType: "Data Center",
-  })).not.toThrow();
-});
+it.each(["10.3.26", "10.4.0", "11.2.0", "11.3.0"])(
+  "binds an explicitly pinned %s session without a registry/tag lookup",
+  (jiraVersion) => {
+    const session = normalizeLabSession({ ...PINNED_SESSION, jiraVersion }, "/private/session");
+    expect(session.jiraImage).toBe(
+      `atlassian/jira-software:${jiraVersion}@sha256:${"b".repeat(64)}`,
+    );
+    expect(session.httpsOrigin).toBe("https://127.0.0.1:19443");
+    expect(Object.isFrozen(session)).toBe(true);
+    expect(() =>
+      assertSessionServerInfo(session, {
+        version: jiraVersion,
+        versionNumbers: jiraVersion.split(".").map(Number),
+        deploymentType: "Data Center",
+      }),
+    ).not.toThrow();
+  },
+);
 
 it.each([
   { ...OLD_SESSION, httpsPort: 19443 },
@@ -252,23 +291,46 @@ it("checks the selected TLS port at publication and inside the Host-guarded fron
 
 it("binds the running image ID and immutable repository digest, not merely Config.Image", () => {
   const [container] = containers(PINNED_SESSION);
-  const image = { Id: container.Image, RepoDigests: [`atlassian/jira-software@sha256:${PINNED_SESSION.jiraImageDigest}`] };
+  const image = {
+    Id: container.Image,
+    RepoDigests: [`atlassian/jira-software@sha256:${PINNED_SESSION.jiraImageDigest}`],
+  };
   expect(() => validateLabImage(PINNED_SESSION, container, image)).not.toThrow();
-  expect(() => validateLabImage(PINNED_SESSION, { ...container, Image: `sha256:${"c".repeat(64)}` }, image)).toThrow();
-  expect(() => validateLabImage(PINNED_SESSION, container, { ...image, RepoDigests: [`foreign/jira@sha256:${PINNED_SESSION.jiraImageDigest}`] })).toThrow();
-  expect(() => validateLabImage(PINNED_SESSION, container, { ...image, RepoDigests: [`atlassian/jira-software@sha256:${"c".repeat(64)}`] })).toThrow();
+  expect(() =>
+    validateLabImage(PINNED_SESSION, { ...container, Image: `sha256:${"c".repeat(64)}` }, image),
+  ).toThrow();
+  expect(() =>
+    validateLabImage(PINNED_SESSION, container, {
+      ...image,
+      RepoDigests: [`foreign/jira@sha256:${PINNED_SESSION.jiraImageDigest}`],
+    }),
+  ).toThrow();
+  expect(() =>
+    validateLabImage(PINNED_SESSION, container, {
+      ...image,
+      RepoDigests: [`atlassian/jira-software@sha256:${"c".repeat(64)}`],
+    }),
+  ).toThrow();
 });
 
 it("compares the actual native verification response to the selected release without issuing another request", async () => {
   const body = { version: "11.3.0", versionNumbers: [11, 3, 0], deploymentType: "Data Center" };
-  const response = { kind: "response", status: 200, truncated: false, bodyText: JSON.stringify(body) };
+  const response = {
+    kind: "response",
+    status: 200,
+    truncated: false,
+    bodyText: JSON.stringify(body),
+  };
   const native = vi.fn(async () => response);
   const port = sessionVerificationPort(PINNED_SESSION, native);
   const request = { method: "GET", url: "https://127.0.0.1:19443/rest/api/2/serverInfo" };
   expect(await port(request)).toBe(response);
   expect(native).toHaveBeenCalledOnce();
   expect(native).toHaveBeenCalledWith(request);
-  native.mockResolvedValueOnce({ ...response, bodyText: JSON.stringify({ ...body, version: "11.2.0", versionNumbers: [11, 2, 0] }) });
+  native.mockResolvedValueOnce({
+    ...response,
+    bodyText: JSON.stringify({ ...body, version: "11.2.0", versionNumbers: [11, 2, 0] }),
+  });
   await expect(port(request)).rejects.toThrow("does not match");
 });
 
@@ -281,7 +343,12 @@ it("does not manufacture success or replace native errors when observing the sel
   const truncated = { kind: "response", status: 200, truncated: true, bodyText: "{}" };
   native.mockResolvedValueOnce(truncated);
   expect(await port(request)).toBe(truncated);
-  const malformed = { kind: "response", status: 200, truncated: false, bodyText: "synthetic-invalid-json" };
+  const malformed = {
+    kind: "response",
+    status: 200,
+    truncated: false,
+    bodyText: "synthetic-invalid-json",
+  };
   native.mockResolvedValueOnce(malformed);
   expect(await port(request)).toBe(malformed);
   native.mockResolvedValueOnce({ kind: "response", status: 200, truncated: false, bodyText: "{}" });
@@ -294,8 +361,9 @@ it("does not manufacture success or replace native errors when observing the sel
 it("refuses a stale session destination before calling the production HTTP port", async () => {
   const native = vi.fn();
   const port = sessionVerificationPort(PINNED_SESSION, native);
-  await expect(port({ method: "GET", url: "https://127.0.0.1:18443/rest/api/2/serverInfo" }))
-    .rejects.toThrow("selected session");
+  await expect(
+    port({ method: "GET", url: "https://127.0.0.1:18443/rest/api/2/serverInfo" }),
+  ).rejects.toThrow("selected session");
   expect(native).not.toHaveBeenCalled();
 });
 

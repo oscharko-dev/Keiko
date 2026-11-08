@@ -1,14 +1,24 @@
 import { JIRA_READ_TOOL_FAMILIES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import { TOOL_CATALOG_LIMITS, type CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  TOOL_CATALOG_LIMITS,
+  type CatalogJsonObject,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import {
-  jiraMaintenanceIndex, jiraMaintenanceNode, jiraMaintenanceSnapshot, jiraMaintenanceUpgrade,
+  jiraMaintenanceIndex,
+  jiraMaintenanceNode,
+  jiraMaintenanceSnapshot,
+  jiraMaintenanceUpgrade,
   type JiraMaintenanceProjection,
 } from "./jira-maintenance-values.js";
 import { boundJiraReadResult } from "./jira-managed-issue-reads.js";
 import { jiraReadFailure, localJiraPage } from "./jira-managed-metadata.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
-import { executeJiraSelectedRead, selectJiraReadPage, type JiraReadResponse } from "./jira-managed-read-request.js";
+import {
+  executeJiraSelectedRead,
+  selectJiraReadPage,
+  type JiraReadResponse,
+} from "./jira-managed-read-request.js";
 
 export const JIRA_MAINTENANCE_READS = JIRA_READ_TOOL_FAMILIES.maintenance;
 type MaintenanceRead = (typeof JIRA_MAINTENANCE_READS)[number];
@@ -23,7 +33,10 @@ interface Selection extends Definition {
 const DEFINITIONS: Readonly<Record<MaintenanceRead, Definition>> = {
   "jira.cluster-nodes": { path: "cluster/nodes", project: jiraMaintenanceNode },
   "jira.cluster-upgrade-state": { path: "cluster/zdu/state", project: jiraMaintenanceUpgrade },
-  "jira.index-snapshot-status": { path: "index-snapshot/isRunning", project: jiraMaintenanceSnapshot },
+  "jira.index-snapshot-status": {
+    path: "index-snapshot/isRunning",
+    project: jiraMaintenanceSnapshot,
+  },
   "jira.index-summary": { path: "index/summary", project: jiraMaintenanceIndex },
 };
 function selection(name: MaintenanceRead, args: CatalogJsonObject): Selection | undefined {
@@ -41,7 +54,8 @@ function nodes(response: JiraReadResponse, selected: Selection): ManagedMcpToolR
     const result = selected.project(value);
     if (!result.ok) return jiraReadFailure(result.reason);
     const nodeId = result.value.nodeId;
-    if (typeof nodeId !== "string" || identities.has(nodeId)) return jiraReadFailure("malformed-payload");
+    if (typeof nodeId !== "string" || identities.has(nodeId))
+      return jiraReadFailure("malformed-payload");
     identities.add(nodeId);
     items.push(result.value);
   }
@@ -62,7 +76,10 @@ export function executeJiraMaintenanceRead(
   args: CatalogJsonObject,
   request: JiraMutationRequest,
 ): Promise<ManagedMcpToolResult> {
-  return executeJiraSelectedRead(selection(name, args), request,
+  return executeJiraSelectedRead(
+    selection(name, args),
+    request,
     name === "jira.cluster-nodes" ? "json-array" : "json",
-    name === "jira.cluster-nodes" ? nodes : single);
+    name === "jira.cluster-nodes" ? nodes : single,
+  );
 }

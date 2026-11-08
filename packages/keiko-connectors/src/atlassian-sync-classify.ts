@@ -43,15 +43,21 @@ export function parseJsonArray(bodyText: string): readonly unknown[] | undefined
 /** Explicit primitive mode; false, zero, empty text and null are observations, not parse failures. */
 export function parseJsonScalar(bodyText: string): string | number | boolean | null | undefined {
   const value = parseAtlassianJsonValue(bodyText);
-  return value === null || typeof value === "string" || typeof value === "boolean" ||
-    (typeof value === "number" && Number.isFinite(value)) ? value : undefined;
+  return value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+    ? value
+    : undefined;
 }
 
 /** Some native versioned resources document both a wrapper object and an older bare collection. */
-export function parseJsonObjectOrArray(bodyText: string): {
-  readonly body: Record<string, unknown> | undefined;
-  readonly items?: readonly unknown[];
-} | undefined {
+export function parseJsonObjectOrArray(bodyText: string):
+  | {
+      readonly body: Record<string, unknown> | undefined;
+      readonly items?: readonly unknown[];
+    }
+  | undefined {
   const value = parseAtlassianJsonValue(bodyText);
   const items = asArray(value);
   if (items !== undefined) return { body: undefined, items };

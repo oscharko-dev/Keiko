@@ -13,21 +13,44 @@ export function codingJiraCatalogFits(input: {
   readonly promptFits: ((promptTokens: number) => boolean) | undefined;
 }): boolean | undefined {
   const { usage, geometry, promptFits } = input;
-  if (usage?.state !== "available" || usage.source !== "provider-reported" || promptFits === undefined) return undefined;
+  if (
+    usage?.state !== "available" ||
+    usage.source !== "provider-reported" ||
+    promptFits === undefined
+  )
+    return undefined;
   // A sample from different model geometry cannot establish this run's remaining context.
-  if (usage.capacityTokens !== geometry.contextWindowTokens ||
-      usage.reservedOutputTokens !== geometry.maxOutputTokens) return undefined;
-  const metadataTokens = countGatewayPromptTokens({
-    tools: input.tools.map((tool) => ({ name: tool.name, description: tool.description ?? "",
-      parameters: tool.inputSchema })),
-    messages: [{ role: "tool", toolCallId: "jira-catalog-selection", content: JSON.stringify(input.result) }],
-  }, undefined, { contextWindow: geometry.contextWindowTokens });
+  if (
+    usage.capacityTokens !== geometry.contextWindowTokens ||
+    usage.reservedOutputTokens !== geometry.maxOutputTokens
+  )
+    return undefined;
+  const metadataTokens = countGatewayPromptTokens(
+    {
+      tools: input.tools.map((tool) => ({
+        name: tool.name,
+        description: tool.description ?? "",
+        parameters: tool.inputSchema,
+      })),
+      messages: [
+        {
+          role: "tool",
+          toolCallId: "jira-catalog-selection",
+          content: JSON.stringify(input.result),
+        },
+      ],
+    },
+    undefined,
+    { contextWindow: geometry.contextWindowTokens },
+  );
   // Keep the observed input, including other tools/history, and conservatively retain all of
   // that response's reserved output. Do not subtract old schemas or invent a compaction gain.
   // The next gateway request still performs its own complete accounting and reservation.
   const promptTokens = usage.usedInputTokens + usage.reservedOutputTokens + metadataTokens;
-  return Number.isSafeInteger(promptTokens) &&
+  return (
+    Number.isSafeInteger(promptTokens) &&
     promptTokens <= geometry.maxInputTokens &&
     promptTokens + geometry.maxOutputTokens <= geometry.contextWindowTokens &&
-    promptFits(promptTokens);
+    promptFits(promptTokens)
+  );
 }

@@ -55,10 +55,10 @@ export async function createPod(page, session, options = {}) {
   stage("hub-open");
   const form = hub.getByTestId("acx-add-form");
   await form.getByLabel("Label", { exact: true }).fill(label);
-  await form.getByLabel("Base URL", { exact: true }).fill(labSessionConnection(session).httpsOrigin);
   await form
-    .getByLabel("API token", { exact: true })
-    .fill(readPrivateFile(tokenFile).trim());
+    .getByLabel("Base URL", { exact: true })
+    .fill(labSessionConnection(session).httpsOrigin);
+  await form.getByLabel("API token", { exact: true }).fill(readPrivateFile(tokenFile).trim());
   const verified = await verifyPodAction(page, () =>
     form.getByRole("button", { name: "Create Jira Pod", exact: true }).click(),
   );

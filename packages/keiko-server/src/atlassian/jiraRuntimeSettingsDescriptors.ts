@@ -1,11 +1,25 @@
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { object } from "./jiraManagedSchemas.js";
-import { jiraNativeDeclaration, jiraNativeReadResult, type JiraNativeDefinition } from "./jiraProjectStructureDescriptors.js";
+import {
+  jiraNativeDeclaration,
+  jiraNativeReadResult,
+  type JiraNativeDefinition,
+} from "./jiraProjectStructureDescriptors.js";
 
-const LIMIT = { type: "integer", minimum: Number.MIN_SAFE_INTEGER, maximum: Number.MAX_SAFE_INTEGER };
+const LIMIT = {
+  type: "integer",
+  minimum: Number.MIN_SAFE_INTEGER,
+  maximum: Number.MAX_SAFE_INTEGER,
+};
 function read(description: string, result: CatalogJsonObject): JiraNativeDefinition {
-  return { description, input: object({}), result: jiraNativeReadResult(result), risk: "read", maxResultCount: 1 };
+  return {
+    description,
+    input: object({}),
+    result: jiraNativeReadResult(result),
+    risk: "read",
+    maxResultCount: 1,
+  };
 }
 export const JIRA_RUNTIME_SETTINGS_READ_DEFINITIONS = {
   "jira.jmx-metrics-exposed": read(
@@ -22,8 +36,11 @@ export const JIRA_RUNTIME_SETTINGS_READ_DEFINITIONS = {
   ),
 } as const satisfies Readonly<Record<string, JiraNativeDefinition>>;
 
-export function jiraRuntimeSettingsDeclarationForTool(name: string): ManagedMcpToolDeclaration | undefined {
-  const definitions: Readonly<Record<string, JiraNativeDefinition>> = JIRA_RUNTIME_SETTINGS_READ_DEFINITIONS;
+export function jiraRuntimeSettingsDeclarationForTool(
+  name: string,
+): ManagedMcpToolDeclaration | undefined {
+  const definitions: Readonly<Record<string, JiraNativeDefinition>> =
+    JIRA_RUNTIME_SETTINGS_READ_DEFINITIONS;
   const selected = Object.hasOwn(definitions, name) ? definitions[name] : undefined;
   return selected === undefined ? undefined : jiraNativeDeclaration(name, selected);
 }

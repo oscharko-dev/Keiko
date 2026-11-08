@@ -28,12 +28,14 @@ export interface ManagedMcpInvocationContext {
       }) => ManagedMcpMutationInvocation | undefined)
     | undefined;
   /** Local Jira read-result retention; no mutation permit or journal acknowledgement. */
-  readonly beginReadCapture?: ((input: {
-    readonly toolName: string;
-    readonly argumentsValue: CatalogJsonObject;
-    readonly signal: AbortSignal;
-    readonly localProvider: "jira";
-  }) => ManagedMcpReadCapture | undefined) | undefined;
+  readonly beginReadCapture?:
+    | ((input: {
+        readonly toolName: string;
+        readonly argumentsValue: CatalogJsonObject;
+        readonly signal: AbortSignal;
+        readonly localProvider: "jira";
+      }) => ManagedMcpReadCapture | undefined)
+    | undefined;
   /** Server-private recovery fence; never supplied by model tool arguments. */
   readonly onUncertainMutation?: (() => void | Promise<void>) | undefined;
   /**

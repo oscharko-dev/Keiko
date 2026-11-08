@@ -2880,7 +2880,10 @@ describe("final request preparation for governed effects", () => {
     const events: string[] = [];
     const secret = ["synthetic", "private", "input"].join("-");
     const logged: unknown[] = [];
-    const prepareBody = vi.fn(() => { events.push("body"); return JSON.stringify({ password: secret }); });
+    const prepareBody = vi.fn(() => {
+      events.push("body");
+      return JSON.stringify({ password: secret });
+    });
     const fetchImpl = vi.fn<typeof fetch>((_url, init) => {
       events.push("fetch");
       expect(init).not.toHaveProperty("prepareBody");
@@ -2888,66 +2891,139 @@ describe("final request preparation for governed effects", () => {
       expect(init?.body).toBe(JSON.stringify({ password: secret }));
       return Promise.resolve(new Response(null, { status: 204 }));
     });
-    await gatewayFetch("https://example.test/action", { method: "POST", singleAttempt: true, fetchImpl,
-      prepareHeaders: () => { events.push("admission"); return new Headers({ "content-type": "application/json" }); },
-      prepareBody, log: { write: (event) => { logged.push(event); } },
+    await gatewayFetch("https://example.test/action", {
+      method: "POST",
+      singleAttempt: true,
+      fetchImpl,
+      prepareHeaders: () => {
+        events.push("admission");
+        return new Headers({ "content-type": "application/json" });
+      },
+      prepareBody,
+      log: {
+        write: (event) => {
+          logged.push(event);
+        },
+      },
     });
     expect(events).toEqual(["admission", "body", "fetch"]);
     expect(prepareBody).toHaveBeenCalledOnce();
     expect(JSON.stringify(logged)).not.toContain(secret);
   });
 
-  it.each([false, true])("sends exact deferred bytes through the existing native HTTP path (proxy=%s)", async (proxy) => {
-    const observed: string[] = [];
-    const events: string[] = [];
-    const server = createHttpServer((request, response) => {
-      const chunks: Buffer[] = [];
-      request.on("data", (chunk: Buffer) => chunks.push(chunk));
-      request.on("end", () => { observed.push(Buffer.concat(chunks).toString("utf8")); response.writeHead(204); response.end(); });
-    });
-    const port = await listen(server);
-    const url = `http://127.0.0.1:${String(port)}/private-body`;
-    try {
-      await gatewayFetch(url, { method: "POST", singleAttempt: true,
-        prepareHeaders: () => { events.push("headers"); return new Headers({ "content-type": "application/json" }); },
-        prepareBody: () => { events.push("body"); return JSON.stringify({ value: "synthetic café\nvalue" }); },
-        ...(proxy ? { egress: { httpProxy: `http://127.0.0.1:${String(port)}` } } : {}),
+  it.each([false, true])(
+    "sends exact deferred bytes through the existing native HTTP path (proxy=%s)",
+    async (proxy) => {
+      const observed: string[] = [];
+      const events: string[] = [];
+      const server = createHttpServer((request, response) => {
+        const chunks: Buffer[] = [];
+        request.on("data", (chunk: Buffer) => chunks.push(chunk));
+        request.on("end", () => {
+          observed.push(Buffer.concat(chunks).toString("utf8"));
+          response.writeHead(204);
+          response.end();
+        });
       });
-      expect(events).toEqual(["headers", "body"]);
-      expect(observed).toEqual([JSON.stringify({ value: "synthetic café\nvalue" })]);
-    } finally { await close(server); }
-  });
+      const port = await listen(server);
+      const url = `http://127.0.0.1:${String(port)}/private-body`;
+      try {
+        await gatewayFetch(url, {
+          method: "POST",
+          singleAttempt: true,
+          prepareHeaders: () => {
+            events.push("headers");
+            return new Headers({ "content-type": "application/json" });
+          },
+          prepareBody: () => {
+            events.push("body");
+            return JSON.stringify({ value: "synthetic café\nvalue" });
+          },
+          ...(proxy ? { egress: { httpProxy: `http://127.0.0.1:${String(port)}` } } : {}),
+        });
+        expect(events).toEqual(["headers", "body"]);
+        expect(observed).toEqual([JSON.stringify({ value: "synthetic café\nvalue" })]);
+      } finally {
+        await close(server);
+      }
+    },
+  );
 
-  it.each(["static-body", "retryable", "missing-admission"] as const)("refuses invalid deferred body configuration %s before materializing credentials", async (mode) => {
-    const prepareHeaders = vi.fn(() => new Headers()); const prepareBody = vi.fn(() => "{}"); const fetchImpl = vi.fn<typeof fetch>();
-    await expect(gatewayFetch("https://example.test/action", {
-      method: "POST", prepareBody, fetchImpl,
-      ...(mode === "static-body" ? { body: "{}" } : {}),
-      ...(mode === "retryable" ? {} : { singleAttempt: true }),
-      ...(mode === "missing-admission" ? {} : { prepareHeaders }),
-    })).rejects.toThrow("Private body preparation");
-    expect(prepareHeaders).not.toHaveBeenCalled(); expect(prepareBody).not.toHaveBeenCalled(); expect(fetchImpl).not.toHaveBeenCalled();
-  });
+  it.each(["static-body", "retryable", "missing-admission"] as const)(
+    "refuses invalid deferred body configuration %s before materializing credentials",
+    async (mode) => {
+      const prepareHeaders = vi.fn(() => new Headers());
+      const prepareBody = vi.fn(() => "{}");
+      const fetchImpl = vi.fn<typeof fetch>();
+      await expect(
+        gatewayFetch("https://example.test/action", {
+          method: "POST",
+          prepareBody,
+          fetchImpl,
+          ...(mode === "static-body" ? { body: "{}" } : {}),
+          ...(mode === "retryable" ? {} : { singleAttempt: true }),
+          ...(mode === "missing-admission" ? {} : { prepareHeaders }),
+        }),
+      ).rejects.toThrow("Private body preparation");
+      expect(prepareHeaders).not.toHaveBeenCalled();
+      expect(prepareBody).not.toHaveBeenCalled();
+      expect(fetchImpl).not.toHaveBeenCalled();
+    },
+  );
 
   it("never claims a body when final header admission refuses or cancels", async () => {
-    const prepareBody = vi.fn(() => "{}"); const fetchImpl = vi.fn<typeof fetch>();
-    await expect(gatewayFetch("https://example.test/action", { method: "POST", singleAttempt: true, prepareBody, fetchImpl,
-      prepareHeaders: () => { throw new Error("synthetic-authority-refused"); },
-    })).rejects.toThrow("synthetic-authority-refused");
+    const prepareBody = vi.fn(() => "{}");
+    const fetchImpl = vi.fn<typeof fetch>();
+    await expect(
+      gatewayFetch("https://example.test/action", {
+        method: "POST",
+        singleAttempt: true,
+        prepareBody,
+        fetchImpl,
+        prepareHeaders: () => {
+          throw new Error("synthetic-authority-refused");
+        },
+      }),
+    ).rejects.toThrow("synthetic-authority-refused");
     const controller = new AbortController();
-    await expect(gatewayFetch("https://example.test/action", { method: "POST", singleAttempt: true, prepareBody, fetchImpl, signal: controller.signal,
-      prepareHeaders: () => { controller.abort(); return new Headers(); },
-    })).rejects.toMatchObject({ name: "AbortError" });
-    expect(prepareBody).not.toHaveBeenCalled(); expect(fetchImpl).not.toHaveBeenCalled();
+    await expect(
+      gatewayFetch("https://example.test/action", {
+        method: "POST",
+        singleAttempt: true,
+        prepareBody,
+        fetchImpl,
+        signal: controller.signal,
+        prepareHeaders: () => {
+          controller.abort();
+          return new Headers();
+        },
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(prepareBody).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("does not replay a claimed body after a physical TLS-shaped failure", async () => {
     const prepareBody = vi.fn(() => "{}");
-    const fetchImpl = vi.fn<typeof fetch>(() => Promise.reject(Object.assign(new Error("synthetic-tls-failure"), { code: "UNABLE_TO_VERIFY_LEAF_SIGNATURE" })));
-    await expect(gatewayFetch("https://example.test/action", { method: "POST", singleAttempt: true, useCaFallback: true,
-      prepareHeaders: () => new Headers(), prepareBody, fetchImpl,
-    })).rejects.toMatchObject({ code: "TLS_CA_FAILURE" });
-    expect(prepareBody).toHaveBeenCalledOnce(); expect(fetchImpl).toHaveBeenCalledOnce();
+    const fetchImpl = vi.fn<typeof fetch>(() =>
+      Promise.reject(
+        Object.assign(new Error("synthetic-tls-failure"), {
+          code: "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+        }),
+      ),
+    );
+    await expect(
+      gatewayFetch("https://example.test/action", {
+        method: "POST",
+        singleAttempt: true,
+        useCaFallback: true,
+        prepareHeaders: () => new Headers(),
+        prepareBody,
+        fetchImpl,
+      }),
+    ).rejects.toMatchObject({ code: "TLS_CA_FAILURE" });
+    expect(prepareBody).toHaveBeenCalledOnce();
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   it("prepares private headers once and never forwards its callback to injected fetch", async () => {

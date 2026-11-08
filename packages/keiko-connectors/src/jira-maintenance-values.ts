@@ -1,10 +1,15 @@
-import { TOOL_CATALOG_LIMITS, type CatalogJsonObject, type CatalogJsonValue } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  TOOL_CATALOG_LIMITS,
+  type CatalogJsonObject,
+  type CatalogJsonValue,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { asRecord } from "./atlassian-sync-classify.js";
 import { jiraNativeNumericId, jiraNativeText } from "./jira-native-values.js";
 
 type Refusal = { readonly ok: false; readonly reason: "malformed-payload" | "bounds-exceeded" };
 type Value = { readonly ok: true; readonly value: CatalogJsonValue } | Refusal;
-export type JiraMaintenanceProjection = { readonly ok: true; readonly value: CatalogJsonObject } | Refusal;
+export type JiraMaintenanceProjection =
+  { readonly ok: true; readonly value: CatalogJsonObject } | Refusal;
 type Projector = (value: unknown) => Value;
 const MALFORMED: Refusal = { ok: false, reason: "malformed-payload" };
 const BOUNDS: Refusal = { ok: false, reason: "bounds-exceeded" };
@@ -28,7 +33,10 @@ function count(value: unknown): Value {
   return typeof result.value === "number" && result.value >= 0 ? result : MALFORMED;
 }
 /** The field set is fixed by each published DTO below; unknown native properties never enter results. */
-function fields(value: unknown, projectors: Readonly<Record<string, Projector>>): JiraMaintenanceProjection {
+function fields(
+  value: unknown,
+  projectors: Readonly<Record<string, Projector>>,
+): JiraMaintenanceProjection {
   const raw = asRecord(value);
   if (raw === undefined) return MALFORMED;
   const projected: Record<string, CatalogJsonValue> = {};
@@ -47,8 +55,11 @@ export function jiraMaintenanceNode(value: unknown): JiraMaintenanceProjection {
   const nodeId = text(255)(raw?.nodeId);
   if (!nodeId.ok) return nodeId;
   const result = fields(value, {
-    state: text(128), alive: boolean, nodeBuildNumber: integer,
-    nodeVersion: text(255), lastStateChangeTimestamp: integer,
+    state: text(128),
+    alive: boolean,
+    nodeBuildNumber: integer,
+    nodeVersion: text(255),
+    lastStateChangeTimestamp: integer,
   });
   return result.ok ? { ok: true, value: { nodeId: nodeId.value, ...result.value } } : result;
 }
@@ -64,8 +75,12 @@ export function jiraMaintenanceSnapshot(value: unknown): JiraMaintenanceProjecti
 }
 function issueIndex(value: unknown): JiraMaintenanceProjection {
   return fields(value, {
-    indexReadable: boolean, countInArchive: count, countInDatabase: count, countInIndex: count,
-    lastUpdatedInDatabase: text(128), lastUpdatedInIndex: text(128),
+    indexReadable: boolean,
+    countInArchive: count,
+    countInDatabase: count,
+    countInIndex: count,
+    lastUpdatedInDatabase: text(128),
+    lastUpdatedInIndex: text(128),
   });
 }
 function replicationOperation(value: unknown): JiraMaintenanceProjection {
@@ -84,7 +99,9 @@ function queues(value: unknown, operation: Projector): Value {
     const nodeId = text(255)(key);
     if (!nodeId.ok) return nodeId;
     const projected = fields(queue, {
-      queueSize: count, lastConsumedOperation: operation, lastOperationInQueue: operation,
+      queueSize: count,
+      lastConsumedOperation: operation,
+      lastOperationInQueue: operation,
     });
     if (!projected.ok) return projected;
     items.push({ nodeId: nodeId.value, ...projected.value });
@@ -93,7 +110,9 @@ function queues(value: unknown, operation: Projector): Value {
 }
 export function jiraMaintenanceIndex(value: unknown): JiraMaintenanceProjection {
   return fields(value, {
-    nodeId: text(255), reportTime: text(128), issueIndex,
+    nodeId: text(255),
+    reportTime: text(128),
+    issueIndex,
     replicationQueues: (raw) => queues(raw, replicationOperation),
     externalPlatformIndexReplay: (raw) => queues(raw, replayOperation),
   });

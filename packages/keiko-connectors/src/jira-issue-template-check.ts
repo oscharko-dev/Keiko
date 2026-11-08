@@ -30,7 +30,9 @@ export interface JiraTemplateSubject {
   /** Names of the link types the issue carries; only meaningful for edit and transition. */
   readonly linkTypes?: readonly string[] | undefined;
   /** Independently read parent types, keyed by the resolved parent field ID; never input facts. */
-  readonly parentIssueTypes?: Readonly<Record<string, { readonly id: string; readonly name: string }>>;
+  readonly parentIssueTypes?: Readonly<
+    Record<string, { readonly id: string; readonly name: string }>
+  >;
 }
 
 export interface JiraFieldCatalogEntry {
@@ -258,12 +260,16 @@ function checkParentType(context: Context): void {
     raise(context, "parent-type-mismatch", `${field}: ${issueTypes.join(", ")}`);
 }
 
-function observedParentType(context: Context, field: string): { readonly id: string; readonly name: string } | undefined {
+function observedParentType(
+  context: Context,
+  field: string,
+): { readonly id: string; readonly name: string } | undefined {
   const ids = resolveJiraTemplateFieldIds(field, context.catalog);
   const id = ids.length === 1 ? ids[0] : undefined;
   const evidence = context.subject.parentIssueTypes;
   return id !== undefined && evidence !== undefined && Object.hasOwn(evidence, id)
-    ? evidence[id] : undefined;
+    ? evidence[id]
+    : undefined;
 }
 
 function labelsOf(context: Context): readonly string[] {
@@ -434,7 +440,9 @@ function parentTypeFindings(
 ): readonly JiraTemplateFinding[] {
   return (template.parent.issueTypes ?? []).flatMap((reference): readonly JiraTemplateFinding[] =>
     instance.parentIssueTypes?.some((type) => type.id === reference || same(type.name, reference))
-      ? [] : [{ code: "unknown-issue-type", subject: `parentIssueTypes: ${reference}` }]);
+      ? []
+      : [{ code: "unknown-issue-type", subject: `parentIssueTypes: ${reference}` }],
+  );
 }
 
 const SECTION_RULES: ReadonlySet<JiraTemplateViolation["ruleId"]> = new Set([
@@ -450,9 +458,11 @@ export function jiraTemplateViolationGuidance(
 ): string | undefined {
   if (violations.length === 0) return undefined;
   if (violations.some((violation) => violation.ruleId === "template-unreadable")) {
-    return "Nothing was changed: the formal rule or its current Jira evidence could not be read completely and bound to this issue. " +
+    return (
+      "Nothing was changed: the formal rule or its current Jira evidence could not be read completely and bound to this issue. " +
       "Refresh the named native fields and project/issue-type metadata, or repair an unreadable formal skill, then check the corrected request again. " +
-      "Missing evidence does not establish a rule violation or permission to write.";
+      "Missing evidence does not establish a rule violation or permission to write."
+    );
   }
   const sections = violations.some((violation) => SECTION_RULES.has(violation.ruleId))
     ? " A section is a line of its own, h2. Title, with its text below; subject is its title."

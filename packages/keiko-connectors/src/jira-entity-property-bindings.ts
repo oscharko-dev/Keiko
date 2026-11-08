@@ -51,9 +51,13 @@ async function agileEntity(
   const id = jiraNativeNumericId(response.body?.id);
   if (response.status !== 200 || id === undefined) return malformed();
   if (id !== entity.id) return failed(jiraReadFailure("conflict"));
-  return { ok: true, request, path: `${entity.kind}/${id}/properties`,
+  return {
+    ok: true,
+    request,
+    path: `${entity.kind}/${id}/properties`,
     entity: { kind: entity.kind, id },
-    context: entity.kind === "board" ? { boardId: id } : { sprintId: id } };
+    context: entity.kind === "board" ? { boardId: id } : { sprintId: id },
+  };
 }
 async function commentEntity(
   entity: Extract<JiraPropertyEntity, { readonly kind: "comment" }>,
@@ -64,25 +68,40 @@ async function commentEntity(
   if (!issue.ok) return failed(jiraReadFailure(issue.reason, issue.detail));
   const comment = await readJiraBoundComment(ports.platform, input, issue.binding);
   if (!comment.ok) return failed(jiraReadFailure(comment.reason, comment.detail));
-  return { ok: true, request: ports.platform, path: `comment/${entity.commentId}/properties`,
+  return {
+    ok: true,
+    request: ports.platform,
+    path: `comment/${entity.commentId}/properties`,
     entity: { kind: "comment", issueIdOrKey: issue.binding.issueId, commentId: entity.commentId },
-    context: { issueId: issue.binding.issueId, issueKey: issue.issueKey, commentId: entity.commentId } };
+    context: {
+      issueId: issue.binding.issueId,
+      issueKey: issue.issueKey,
+      commentId: entity.commentId,
+    },
+  };
 }
 async function dashboardItemEntity(
   entity: Extract<JiraPropertyEntity, { readonly kind: "dashboard-item" }>,
   request: JiraMutationRequest,
 ): Promise<JiraPropertyBinding> {
-  const result = await executeJiraSavedViewRead("jira.dashboard", { dashboardId: entity.dashboardId }, request);
+  const result = await executeJiraSavedViewRead(
+    "jira.dashboard",
+    { dashboardId: entity.dashboardId },
+    request,
+  );
   if (result.isError) return failed(result);
   const items = result.data.items;
   const dashboard = Array.isArray(items) && items.length === 1 ? asRecord(items[0]) : undefined;
   if (dashboard?.id !== entity.dashboardId) return malformed();
   // Jira has no independent item-detail GET here. The property route owns item existence/access;
   // selectedItemId is explicitly requested context, never an independently observed item identity.
-  return { ok: true, request,
+  return {
+    ok: true,
+    request,
     entity: { kind: "dashboard-item", dashboardId: entity.dashboardId, itemId: entity.itemId },
     path: `dashboard/${entity.dashboardId}/items/${entity.itemId}/properties`,
-    context: { dashboardId: entity.dashboardId, selectedItemId: entity.itemId } };
+    context: { dashboardId: entity.dashboardId, selectedItemId: entity.itemId },
+  };
 }
 async function issueEntity(
   target: string,
@@ -91,38 +110,65 @@ async function issueEntity(
   const issue = await readJiraMutationIssue(request, target, ["summary"]);
   if (!issue.ok) return failed(jiraReadFailure(issue.reason, issue.detail));
   if (!jiraNativeId(issue.id) || !isSafeAtlassianIdentifier(issue.key)) return malformed();
-  return { ok: true, request, path: `issue/${issue.id}/properties`,
+  return {
+    ok: true,
+    request,
+    path: `issue/${issue.id}/properties`,
     entity: { kind: "issue", issueIdOrKey: issue.id },
-    context: { issueId: issue.id, issueKey: issue.key } };
+    context: { issueId: issue.id, issueKey: issue.key },
+  };
 }
-async function projectEntity(target: string, request: JiraMutationRequest): Promise<JiraPropertyBinding> {
+async function projectEntity(
+  target: string,
+  request: JiraMutationRequest,
+): Promise<JiraPropertyBinding> {
   const result = await readJiraBoundProject(request, target);
   if (!result.ok) return failed(jiraReadFailure(result.reason, result.detail));
   const project = result.project;
-  return { ok: true, request, path: `project/${project.projectId}/properties`,
+  return {
+    ok: true,
+    request,
+    path: `project/${project.projectId}/properties`,
     entity: { kind: "project", projectIdOrKey: project.projectId },
-    context: { projectId: project.projectId, projectKey: project.projectKey } };
+    context: { projectId: project.projectId, projectKey: project.projectKey },
+  };
 }
-async function userEntity(args: CatalogJsonObject, request: JiraMutationRequest): Promise<JiraPropertyBinding> {
+async function userEntity(
+  args: CatalogJsonObject,
+  request: JiraMutationRequest,
+): Promise<JiraPropertyBinding> {
   const result = await executeJiraUserRead("jira.user", args, request);
   if (result.isError) return failed(result);
   const { key, name } = result.data;
   if (!jiraPropertyUserText(key) || !jiraPropertyUserText(name)) return malformed();
-  return { ok: true, request, path: "user/properties", query: new URLSearchParams({ userKey: key }).toString(),
+  return {
+    ok: true,
+    request,
+    path: "user/properties",
+    query: new URLSearchParams({ userKey: key }).toString(),
     entity: { kind: "user", user: { userKey: key } },
-    context: { userKey: key, username: name } };
+    context: { userKey: key, username: name },
+  };
 }
 
 async function issueTypeEntity(
   entity: Extract<JiraPropertyEntity, { readonly kind: "issue-type" }>,
   request: JiraMutationRequest,
 ): Promise<JiraPropertyBinding> {
-  const result = await executeJiraCoreMetadataRead("jira.issue-type", { issueTypeId: entity.issueTypeId }, request);
+  const result = await executeJiraCoreMetadataRead(
+    "jira.issue-type",
+    { issueTypeId: entity.issueTypeId },
+    request,
+  );
   if (result.isError) return failed(result);
   if (result.data.id !== entity.issueTypeId) return malformed();
-  return { ok: true, request, path: `issuetype/${entity.issueTypeId}/properties`,
+  return {
+    ok: true,
+    request,
+    path: `issuetype/${entity.issueTypeId}/properties`,
     entity: { kind: "issue-type", issueTypeId: entity.issueTypeId },
-    context: { issueTypeId: entity.issueTypeId } };
+    context: { issueTypeId: entity.issueTypeId },
+  };
 }
 
 /** Reuse the native entity's admission owner before choosing its fixed property resource. */
@@ -132,12 +178,19 @@ export async function bindJiraPropertyEntity(
 ): Promise<JiraPropertyBinding> {
   switch (entity.kind) {
     case "board":
-    case "sprint": return agileEntity(entity, ports.agile);
-    case "comment": return commentEntity(entity, ports);
-    case "dashboard-item": return dashboardItemEntity(entity, ports.platform);
-    case "issue": return issueEntity(entity.issueIdOrKey, ports.platform);
-    case "project": return projectEntity(entity.projectIdOrKey, ports.platform);
-    case "user": return userEntity(entity.user, ports.platform);
-    case "issue-type": return issueTypeEntity(entity, ports.platform);
+    case "sprint":
+      return agileEntity(entity, ports.agile);
+    case "comment":
+      return commentEntity(entity, ports);
+    case "dashboard-item":
+      return dashboardItemEntity(entity, ports.platform);
+    case "issue":
+      return issueEntity(entity.issueIdOrKey, ports.platform);
+    case "project":
+      return projectEntity(entity.projectIdOrKey, ports.platform);
+    case "user":
+      return userEntity(entity.user, ports.platform);
+    case "issue-type":
+      return issueTypeEntity(entity, ports.platform);
   }
 }

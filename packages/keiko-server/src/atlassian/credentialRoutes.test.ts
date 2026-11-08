@@ -436,20 +436,46 @@ describe("POST /api/atlassian-connectors/credentials", () => {
     expect(noJson.status).toBe(415);
   });
 
-  const privateInputGuardCases: readonly { readonly name: string; readonly headers: Readonly<Record<string, string>>; readonly status: number }[] = [
+  const privateInputGuardCases: readonly {
+    readonly name: string;
+    readonly headers: Readonly<Record<string, string>>;
+    readonly status: number;
+  }[] = [
     { name: "missing CSRF", headers: { "Content-Type": "application/json" }, status: 403 },
-    { name: "non-JSON content", headers: { "Content-Type": "text/plain", "X-Keiko-CSRF": "1" }, status: 415 },
-    { name: "cross-origin submission", headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1", Origin: "https://foreign.example.invalid" }, status: 403 },
+    {
+      name: "non-JSON content",
+      headers: { "Content-Type": "text/plain", "X-Keiko-CSRF": "1" },
+      status: 415,
+    },
+    {
+      name: "cross-origin submission",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Keiko-CSRF": "1",
+        Origin: "https://foreign.example.invalid",
+      },
+      status: 403,
+    },
   ];
-  it.each(privateInputGuardCases)("protects private Jira input from $name before accessing a held request", async ({ headers, status }) => {
-    const privateValue = "synthetic-protected-route-value";
-    const response = await fetch(`${baseUrl()}/api/atlassian-connectors/human-inputs/jhi_${"a".repeat(64)}`, {
-      method: "POST", headers,
-      body: JSON.stringify({ expectedRevision: "7765d9e4-fc9a-46d5-aea4-24880fec5e1e", values: { password: privateValue } }),
-    });
-    expect(response.status).toBe(status);
-    expect(await response.text()).not.toContain(privateValue);
-  });
+  it.each(privateInputGuardCases)(
+    "protects private Jira input from $name before accessing a held request",
+    async ({ headers, status }) => {
+      const privateValue = "synthetic-protected-route-value";
+      const response = await fetch(
+        `${baseUrl()}/api/atlassian-connectors/human-inputs/jhi_${"a".repeat(64)}`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            expectedRevision: "7765d9e4-fc9a-46d5-aea4-24880fec5e1e",
+            values: { password: privateValue },
+          }),
+        },
+      );
+      expect(response.status).toBe(status);
+      expect(await response.text()).not.toContain(privateValue);
+    },
+  );
 
   // KEIKO-0826: the domain layer caps stored credentials at
   // ATLASSIAN_CREDENTIAL_CUSTODY_MAX_ENTRIES and throws credential-limit-exceeded once the cap is

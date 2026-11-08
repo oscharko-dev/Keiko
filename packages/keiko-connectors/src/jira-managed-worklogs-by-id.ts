@@ -1,4 +1,7 @@
-import { TOOL_CATALOG_LIMITS, type CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  TOOL_CATALOG_LIMITS,
+  type CatalogJsonObject,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { asRecord } from "./atlassian-sync-classify.js";
 import { jiraNativeId } from "./jira-native-values.js";
@@ -21,7 +24,10 @@ function selectedIds(args: CatalogJsonObject): readonly string[] | undefined {
   return new Set(ids).size === ids.length ? [...ids] : undefined;
 }
 
-interface IssueReference { readonly id: string; readonly key: string }
+interface IssueReference {
+  readonly id: string;
+  readonly key: string;
+}
 interface ProjectionContext {
   readonly request: JiraMutationRequest;
   readonly requested: ReadonlySet<string>;
@@ -57,10 +63,14 @@ export async function executeJiraWorklogsByIdRead(
   if (ids === undefined) return jiraReadFailure("invalid-input");
   const response = await request("worklog/list", "POST", { ids: ids.map(Number) }, "json-array");
   if (!response.ok) return jiraReadFailure(response.reason, response.remote);
-  if (response.status !== 200 || !Array.isArray(response.items)) return jiraReadFailure("malformed-payload");
+  if (response.status !== 200 || !Array.isArray(response.items))
+    return jiraReadFailure("malformed-payload");
   if (response.items.length > ids.length) return jiraReadFailure("conflict");
   const context: ProjectionContext = {
-    request, requested: new Set(ids), seen: new Set(), issues: new Map(),
+    request,
+    requested: new Set(ids),
+    seen: new Set(),
+    issues: new Map(),
   };
   const items: CatalogJsonObject[] = [];
   for (const row of response.items) {
@@ -68,9 +78,14 @@ export async function executeJiraWorklogsByIdRead(
     if ("failure" in projected) return projected.failure;
     items.push(projected.item);
   }
-  return boundJiraReadResult({ data: {
-    outcome: "succeeded", selectionScope: "native-visible-requested-worklogs",
-    requestedCount: ids.length, returnedCount: items.length,
-    unreturnedWorklogIds: ids.filter((id) => !context.seen.has(id)), items,
-  } });
+  return boundJiraReadResult({
+    data: {
+      outcome: "succeeded",
+      selectionScope: "native-visible-requested-worklogs",
+      requestedCount: ids.length,
+      returnedCount: items.length,
+      unreturnedWorklogIds: ids.filter((id) => !context.seen.has(id)),
+      items,
+    },
+  });
 }

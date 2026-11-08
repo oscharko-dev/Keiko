@@ -53,8 +53,7 @@ export function jiraDirectoryUsers(
   const keys = new Set<string>();
   for (const entry of values) {
     const user = jiraDirectoryUser(entry);
-    if (user === undefined || typeof user.key !== "string" || keys.has(user.key))
-      return undefined;
+    if (user === undefined || typeof user.key !== "string" || keys.has(user.key)) return undefined;
     keys.add(user.key);
     items.push(user);
   }
@@ -75,9 +74,6 @@ export function jiraDirectoryTotal(value: unknown, count: number): boolean {
   return (
     value === undefined ||
     value === null ||
-    (typeof value === "number" &&
-      Number.isInteger(value) &&
-      value >= count &&
-      value <= 2147483647)
+    (typeof value === "number" && Number.isInteger(value) && value >= count && value <= 2147483647)
   );
 }

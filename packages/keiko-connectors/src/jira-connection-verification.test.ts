@@ -103,20 +103,36 @@ describe("identity-only observation within an existing request", () => {
     vi.useFakeTimers();
     vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) => {
       const controller = new AbortController();
-      setTimeout(() => controller.abort(new DOMException("deadline", "TimeoutError")), milliseconds);
+      setTimeout(
+        () => controller.abort(new DOMException("deadline", "TimeoutError")),
+        milliseconds,
+      );
       return controller.signal;
     });
     try {
       let settled = false;
-      const port: AtlassianHttpBodyPort = (request) => new Promise((resolve) => {
-        const floorTimer = setTimeout(() => resolve(response(user)), Math.max(1000, request.timeoutMs));
-        request.signal?.addEventListener("abort", () => {
-          clearTimeout(floorTimer);
-          settled = true;
-          resolve({ kind: "timeout" });
-        }, { once: true });
-      });
-      const pending = verifyJiraDataCenterIdentity(port, "https://jira.example", { deadlineAt: 1010 }, () => 1000);
+      const port: AtlassianHttpBodyPort = (request) =>
+        new Promise((resolve) => {
+          const floorTimer = setTimeout(
+            () => resolve(response(user)),
+            Math.max(1000, request.timeoutMs),
+          );
+          request.signal?.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(floorTimer);
+              settled = true;
+              resolve({ kind: "timeout" });
+            },
+            { once: true },
+          );
+        });
+      const pending = verifyJiraDataCenterIdentity(
+        port,
+        "https://jira.example",
+        { deadlineAt: 1010 },
+        () => 1000,
+      );
       await vi.advanceTimersByTimeAsync(9);
       expect(settled).toBe(false);
       await vi.advanceTimersByTimeAsync(1);

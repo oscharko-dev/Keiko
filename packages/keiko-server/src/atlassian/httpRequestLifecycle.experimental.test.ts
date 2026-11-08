@@ -6,16 +6,23 @@ import {
 import { atlassianHttpRequestLifecycle } from "./httpRequestLifecycle.js";
 
 const REQUEST: AtlassianHttpBodyRequest = {
-  method: "PUT", url: "https://jira.example.invalid/context/rest/agile/1.0/sprint/unmap",
-  timeoutMs: 1000, maxBodyBytes: 1024, bodyJson: '{"sprintIds":[12]}',
+  method: "PUT",
+  url: "https://jira.example.invalid/context/rest/agile/1.0/sprint/unmap",
+  timeoutMs: 1000,
+  maxBodyBytes: 1024,
+  bodyJson: '{"sprintIds":[12]}',
 };
 function options() {
   return {
-    authRef: "synthetic-credential-reference", correlationId: "experimental-transport",
+    authRef: "synthetic-credential-reference",
+    correlationId: "experimental-transport",
     beforeDispatch: vi.fn(() => true),
-    credentials: { resolveForExecution: vi.fn(() => ({
-      scheme: "bearer-pat" as const, apiToken: "synthetic-experimental-token",
-    })) },
+    credentials: {
+      resolveForExecution: vi.fn(() => ({
+        scheme: "bearer-pat" as const,
+        apiToken: "synthetic-experimental-token",
+      })),
+    },
   };
 }
 /** Exercise hostile runtime values without relaxing the production request contract. */
@@ -28,8 +35,11 @@ function requestWithFlag(value: unknown): AtlassianHttpBodyRequest {
 describe("experimental Jira header custody", () => {
   it.each(["unmap", "unmap-all"])("materialises the single fixed header for PUT %s", (suffix) => {
     const deps = options();
-    const request = { ...REQUEST, jiraExperimental: true as const,
-      url: `https://jira.example.invalid/context/rest/agile/1.0/sprint/${suffix}` };
+    const request = {
+      ...REQUEST,
+      jiraExperimental: true as const,
+      url: `https://jira.example.invalid/context/rest/agile/1.0/sprint/${suffix}`,
+    };
     const lifecycle = atlassianHttpRequestLifecycle(deps, request);
     expect(deps.beforeDispatch).not.toHaveBeenCalled();
     expect(deps.credentials.resolveForExecution).not.toHaveBeenCalled();
@@ -40,13 +50,17 @@ describe("experimental Jira header custody", () => {
     expect(deps.credentials.resolveForExecution).toHaveBeenCalledExactlyOnceWith(deps.authRef);
   });
 
-  it.each([false, "true", 1, null, {}])("refuses non-literal opt-in %j before admission and custody", (value) => {
-    const deps = options();
-    expect(() => atlassianHttpRequestLifecycle(deps, requestWithFlag(value)))
-      .toThrow(AtlassianCredentialCustodyError);
-    expect(deps.beforeDispatch).not.toHaveBeenCalled();
-    expect(deps.credentials.resolveForExecution).not.toHaveBeenCalled();
-  });
+  it.each([false, "true", 1, null, {}])(
+    "refuses non-literal opt-in %j before admission and custody",
+    (value) => {
+      const deps = options();
+      expect(() => atlassianHttpRequestLifecycle(deps, requestWithFlag(value))).toThrow(
+        AtlassianCredentialCustodyError,
+      );
+      expect(deps.beforeDispatch).not.toHaveBeenCalled();
+      expect(deps.credentials.resolveForExecution).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     { method: "GET", url: REQUEST.url },
@@ -61,9 +75,13 @@ describe("experimental Jira header custody", () => {
     { method: "PUT", url: "not-a-url" },
   ] as const)("refuses unsupported $method $url before admission", (target) => {
     const deps = options();
-    expect(() => atlassianHttpRequestLifecycle(deps, {
-      ...REQUEST, ...target, jiraExperimental: true,
-    })).toThrow(AtlassianCredentialCustodyError);
+    expect(() =>
+      atlassianHttpRequestLifecycle(deps, {
+        ...REQUEST,
+        ...target,
+        jiraExperimental: true,
+      }),
+    ).toThrow(AtlassianCredentialCustodyError);
     expect(deps.beforeDispatch).not.toHaveBeenCalled();
     expect(deps.credentials.resolveForExecution).not.toHaveBeenCalled();
   });

@@ -3,7 +3,10 @@ import type {
   JiraFieldReference,
   JiraMutationFailureDetail,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import type { CatalogJsonObject, CatalogJsonValue } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import type {
+  CatalogJsonObject,
+  CatalogJsonValue,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import {

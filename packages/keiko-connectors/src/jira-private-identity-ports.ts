@@ -12,7 +12,13 @@ export interface JiraHumanInputHttpRequest {
 /** Per-invocation server composition binds the input selection and actual private session.
  * Nonsecret native fields only; no passwords, license text, cookies, URLs or header options. */
 export interface JiraPrivateIdentityPorts {
-  readonly perform: (purpose: JiraHumanInputPurpose, fields: CatalogJsonObject) => Promise<AtlassianWriteHttpOutcome>;
-  readonly session: (action: "logout" | "release-websudo", expectedActorKey: string) => Promise<AtlassianWriteHttpOutcome>;
+  readonly perform: (
+    purpose: JiraHumanInputPurpose,
+    fields: CatalogJsonObject,
+  ) => Promise<AtlassianWriteHttpOutcome>;
+  readonly session: (
+    action: "logout" | "release-websudo",
+    expectedActorKey: string,
+  ) => Promise<AtlassianWriteHttpOutcome>;
   readonly unlock: (expectedActorKey: string) => Promise<AtlassianWriteHttpOutcome>;
 }

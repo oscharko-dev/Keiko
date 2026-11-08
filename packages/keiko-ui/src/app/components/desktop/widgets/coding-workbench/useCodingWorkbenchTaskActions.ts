@@ -1,7 +1,10 @@
 "use client";
 
 import { useRef } from "react";
-import type { CodingWorkbenchConnectorScope, CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchConnectorScope,
+  CodingWorkbenchMode,
+} from "@oscharko-dev/keiko-contracts";
 
 import type { CodingWorkbenchFollowUpInputs } from "@/lib/coding-workbench-runtime-mutations";
 import type { CodingWorkbenchStartOptions } from "@/lib/coding-workbench-runtime-actions";

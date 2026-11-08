@@ -69,20 +69,51 @@ const CASES: readonly {
 ];
 describe("published native workflow-scheme reads", () => {
   it("adds a complete strict review snapshot without changing ordinary null/omission facts", async () => {
-    const result = await read("jira.workflow-scheme", { ...SCHEME, description: null, defaultWorkflow: null });
+    const result = await read("jira.workflow-scheme", {
+      ...SCHEME,
+      description: null,
+      defaultWorkflow: null,
+    });
     expect(result.data).not.toHaveProperty("description");
     expect(result.data).not.toHaveProperty("defaultWorkflow");
-    expect(result.data.reviewSnapshot).toEqual({ id: "37", draft: false, name: "Delivery", description: null, defaultWorkflow: null,
-      mappings: [{ issueTypeId: "1", workflow: "Flow" }, { issueTypeId: "2", workflow: "Second" }] });
+    expect(result.data.reviewSnapshot).toEqual({
+      id: "37",
+      draft: false,
+      name: "Delivery",
+      description: null,
+      defaultWorkflow: null,
+      mappings: [
+        { issueTypeId: "1", workflow: "Flow" },
+        { issueTypeId: "2", workflow: "Second" },
+      ],
+    });
     expect((await read("jira.workflow-scheme", SCHEME)).data).not.toHaveProperty("reviewSnapshot");
   });
   it("retains complete draft originals separately from the requested parent ID", async () => {
-    const result = await read("jira.workflow-scheme-draft", { ...SCHEME, id: "9007199254740993", draft: true, description: "",
-      originalDefaultWorkflow: null, originalIssueTypeMappings: {} });
-    expect(result.data).toMatchObject({ schemeId: "37", id: "9007199254740993", reviewSnapshot: {
-      id: "9007199254740993", draft: true, description: "", originalDefaultWorkflow: null, originalMappings: [],
-    } });
-    const unknown = await read("jira.workflow-scheme-draft", { ...SCHEME, draft: true, description: "" });
+    const result = await read("jira.workflow-scheme-draft", {
+      ...SCHEME,
+      id: "9007199254740993",
+      draft: true,
+      description: "",
+      originalDefaultWorkflow: null,
+      originalIssueTypeMappings: {},
+    });
+    expect(result.data).toMatchObject({
+      schemeId: "37",
+      id: "9007199254740993",
+      reviewSnapshot: {
+        id: "9007199254740993",
+        draft: true,
+        description: "",
+        originalDefaultWorkflow: null,
+        originalMappings: [],
+      },
+    });
+    const unknown = await read("jira.workflow-scheme-draft", {
+      ...SCHEME,
+      draft: true,
+      description: "",
+    });
     expect(unknown.data).not.toHaveProperty("reviewSnapshot");
     expect(unknown.data.outcome).toBe("succeeded");
   });

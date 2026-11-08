@@ -19,8 +19,22 @@ const BOOL = { type: "boolean" };
 const DESCRIPTION = text(32768);
 const COLOR = { ...text(128), minLength: 1 };
 const NAMED_FIELDS = { id: ID, name: NAME, description: DESCRIPTION };
-export const jiraIssueTypeReviewSnapshotSchema = object({ id: ID, name: NAME, description: { anyOf: [DESCRIPTION, { type: "null" }] }, subtask: BOOL, avatarId: ID }, ["id", "name", "description", "subtask"]);
-const ISSUE_TYPE_FIELDS = { ...NAMED_FIELDS, subtask: BOOL, avatarId: ID, reviewSnapshot: jiraIssueTypeReviewSnapshotSchema };
+export const jiraIssueTypeReviewSnapshotSchema = object(
+  {
+    id: ID,
+    name: NAME,
+    description: { anyOf: [DESCRIPTION, { type: "null" }] },
+    subtask: BOOL,
+    avatarId: ID,
+  },
+  ["id", "name", "description", "subtask"],
+);
+const ISSUE_TYPE_FIELDS = {
+  ...NAMED_FIELDS,
+  subtask: BOOL,
+  avatarId: ID,
+  reviewSnapshot: jiraIssueTypeReviewSnapshotSchema,
+};
 const ISSUE_TYPE = object(ISSUE_TYPE_FIELDS, ["id", "name"]);
 const PRIORITY_FIELDS = { ...NAMED_FIELDS, statusColor: COLOR };
 const PRIORITY = object(PRIORITY_FIELDS, ["id", "name"]);
@@ -32,14 +46,21 @@ const STATUS_FIELDS = { ...NAMED_FIELDS, statusColor: COLOR, statusCategory: STA
 const STATUS = object(STATUS_FIELDS, ["id", "name"]);
 const PROJECT_CATEGORY = object(NAMED_FIELDS, ["id", "name"]);
 const PROJECT_TYPE_FIELDS = {
-  key: KEY, formattedKey: NAME,
-  descriptionI18nKey: { ...text(1024), minLength: 1 }, color: COLOR,
+  key: KEY,
+  formattedKey: NAME,
+  descriptionI18nKey: { ...text(1024), minLength: 1 },
+  color: COLOR,
 };
 const PROJECT_TYPE = object(PROJECT_TYPE_FIELDS, ["key"]);
-const PROJECT_STATUSES = object({
-  id: ID, name: NAME, subtask: BOOL,
-  statuses: { type: "array", maxItems: MAX, items: STATUS },
-}, ["id", "name"]);
+const PROJECT_STATUSES = object(
+  {
+    id: ID,
+    name: NAME,
+    subtask: BOOL,
+    statuses: { type: "array", maxItems: MAX, items: STATUS },
+  },
+  ["id", "name"],
+);
 const IDS = { type: "array", uniqueItems: true, maxItems: MAX, items: ID };
 const QUERY_PAGE = { ...PAGING, query: text(255) };
 function page(item: CatalogJsonObject, local = false): CatalogJsonObject {
@@ -59,11 +80,20 @@ function read(
 ): JiraNativeDefinition {
   const schema = jiraNativeReadResult(result);
   return {
-    description, input, risk: "read", maxResultCount,
-    result: requiredSuccessFields.length === 0 ? schema : {
-      ...schema,
-      anyOf: [{ properties: { outcome: { enum: ["failed"] } } }, { required: requiredSuccessFields }],
-    },
+    description,
+    input,
+    risk: "read",
+    maxResultCount,
+    result:
+      requiredSuccessFields.length === 0
+        ? schema
+        : {
+            ...schema,
+            anyOf: [
+              { properties: { outcome: { enum: ["failed"] } } },
+              { required: requiredSuccessFields },
+            ],
+          },
   };
 }
 
@@ -178,8 +208,11 @@ export const JIRA_CORE_METADATA_READ_DEFINITIONS = {
   ),
 } as const satisfies Readonly<Record<string, JiraNativeDefinition>>;
 
-export function jiraCoreMetadataDeclarationForTool(name: string): ManagedMcpToolDeclaration | undefined {
-  const definitions: Readonly<Record<string, JiraNativeDefinition>> = JIRA_CORE_METADATA_READ_DEFINITIONS;
+export function jiraCoreMetadataDeclarationForTool(
+  name: string,
+): ManagedMcpToolDeclaration | undefined {
+  const definitions: Readonly<Record<string, JiraNativeDefinition>> =
+    JIRA_CORE_METADATA_READ_DEFINITIONS;
   const selected = Object.hasOwn(definitions, name) ? definitions[name] : undefined;
   return selected === undefined ? undefined : jiraNativeDeclaration(name, selected);
 }

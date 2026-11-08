@@ -11,7 +11,10 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
-import { expectActivityLogProof, formatActivityLogProofLine } from "../../../../tests/support/activity-log-proof.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
 import { createServerLogger, setServerLogger } from "../observability/index.js";
 import { recordAtlassianActionOutcome } from "./actionOutcomeActivity.js";
@@ -22,22 +25,77 @@ import { recordCodingJiraPod } from "../coding-runtime/codingJiraPodBinding.js";
 
 afterEach(resetServerLogger);
 const PROOFS = [
-  { op: "jira.operation.issues", count: 41, prove: (line: string) => expectActivityLogProof("jira.operation.issues.line", line) },
-  { op: "jira.operation.planning", count: 31, prove: (line: string) => expectActivityLogProof("jira.operation.planning.line", line) },
-  { op: "jira.operation.projects", count: 34, prove: (line: string) => expectActivityLogProof("jira.operation.projects.line", line) },
-  { op: "jira.operation.metadata", count: 42, prove: (line: string) => expectActivityLogProof("jira.operation.metadata.line", line) },
-  { op: "jira.operation.schemes", count: 62, prove: (line: string) => expectActivityLogProof("jira.operation.schemes.line", line) },
-  { op: "jira.operation.identities", count: 61, prove: (line: string) => expectActivityLogProof("jira.operation.identities.line", line) },
-  { op: "jira.operation.avatars", count: 19, prove: (line: string) => expectActivityLogProof("jira.operation.avatars.line", line) },
-  { op: "jira.operation.properties", count: 32, prove: (line: string) => expectActivityLogProof("jira.operation.properties.line", line) },
-  { op: "jira.operation.configuration", count: 39, prove: (line: string) => expectActivityLogProof("jira.operation.configuration.line", line) },
-  { op: "jira.operation.maintenance", count: 25, prove: (line: string) => expectActivityLogProof("jira.operation.maintenance.line", line) },
-  { op: "jira.operation.saved-views", count: 17, prove: (line: string) => expectActivityLogProof("jira.operation.saved-views.line", line) },
-  { op: "jira.operation.core", count: 37, prove: (line: string) => expectActivityLogProof("jira.operation.core.line", line) },
-  { op: "jira.operation.local", count: 2, prove: (line: string) => expectActivityLogProof("jira.operation.local.line", line) },
+  {
+    op: "jira.operation.issues",
+    count: 41,
+    prove: (line: string) => expectActivityLogProof("jira.operation.issues.line", line),
+  },
+  {
+    op: "jira.operation.planning",
+    count: 31,
+    prove: (line: string) => expectActivityLogProof("jira.operation.planning.line", line),
+  },
+  {
+    op: "jira.operation.projects",
+    count: 34,
+    prove: (line: string) => expectActivityLogProof("jira.operation.projects.line", line),
+  },
+  {
+    op: "jira.operation.metadata",
+    count: 42,
+    prove: (line: string) => expectActivityLogProof("jira.operation.metadata.line", line),
+  },
+  {
+    op: "jira.operation.schemes",
+    count: 62,
+    prove: (line: string) => expectActivityLogProof("jira.operation.schemes.line", line),
+  },
+  {
+    op: "jira.operation.identities",
+    count: 61,
+    prove: (line: string) => expectActivityLogProof("jira.operation.identities.line", line),
+  },
+  {
+    op: "jira.operation.avatars",
+    count: 19,
+    prove: (line: string) => expectActivityLogProof("jira.operation.avatars.line", line),
+  },
+  {
+    op: "jira.operation.properties",
+    count: 32,
+    prove: (line: string) => expectActivityLogProof("jira.operation.properties.line", line),
+  },
+  {
+    op: "jira.operation.configuration",
+    count: 39,
+    prove: (line: string) => expectActivityLogProof("jira.operation.configuration.line", line),
+  },
+  {
+    op: "jira.operation.maintenance",
+    count: 25,
+    prove: (line: string) => expectActivityLogProof("jira.operation.maintenance.line", line),
+  },
+  {
+    op: "jira.operation.saved-views",
+    count: 17,
+    prove: (line: string) => expectActivityLogProof("jira.operation.saved-views.line", line),
+  },
+  {
+    op: "jira.operation.core",
+    count: 37,
+    prove: (line: string) => expectActivityLogProof("jira.operation.core.line", line),
+  },
+  {
+    op: "jira.operation.local",
+    count: 2,
+    prove: (line: string) => expectActivityLogProof("jira.operation.local.line", line),
+  },
 ] as const;
 const AMBIGUOUS_ACTION_TOOLS: ReadonlySet<string> = new Set([
-  "jira.create", "jira.draft", "jira.edit", "jira.attach",
+  "jira.create",
+  "jira.draft",
+  "jira.edit",
+  "jira.attach",
 ]);
 function proveFact(events: readonly ServerLogEvent[]): Record<string, unknown> {
   const facts = events.filter((event) => event.op.startsWith("jira.operation."));
@@ -48,7 +106,9 @@ function proveFact(events: readonly ServerLogEvent[]): Record<string, unknown> {
   if (proof === undefined) throw new TypeError("Unknown operation proof");
   const line = formatActivityLogProofLine(event);
   const record = proof.prove(line);
-  expect(line).not.toMatch(/private-connector|private-activity|synthetic-secret-value|SYN-7|jira\.example|projectId|issueKey|actorUserKey|browseUrl/u);
+  expect(line).not.toMatch(
+    /private-connector|private-activity|synthetic-secret-value|SYN-7|jira\.example|projectId|issueKey|actorUserKey|browseUrl/u,
+  );
   return record;
 }
 
@@ -65,67 +125,143 @@ describe("exact Jira operation facts through existing log owners", () => {
     });
     const definitions = jiraOperationDefinitions();
     expect(definitions.filter(({ kind }) => kind === "native")).toHaveLength(439);
-    expect(definitions.filter(({ kind }) => kind === "composite").map(({ tool }) => tool).sort())
-      .toEqual(["jira.draft", "jira.draft-stage", "jira.report"]);
+    expect(
+      definitions
+        .filter(({ kind }) => kind === "composite")
+        .map(({ tool }) => tool)
+        .sort(),
+    ).toEqual(["jira.draft", "jira.draft-stage", "jira.report"]);
     expect(new Set(members).size).toBe(members.length);
     expect(new Set(members)).toEqual(new Set(definitions.map(({ tool }) => tool)));
-    expect(new Set(members)).toEqual(new Set([...JIRA_MANAGED_READ_TOOLS, ...JIRA_MUTATION_OPERATIONS]));
+    expect(new Set(members)).toEqual(
+      new Set([...JIRA_MANAGED_READ_TOOLS, ...JIRA_MUTATION_OPERATIONS]),
+    );
     expect(members).not.toContain("jira.discover");
     expect(members).not.toContain("jira.describe");
   });
 
-  it.each([...JIRA_MANAGED_READ_TOOLS, ...JIRA_MUTATION_OPERATIONS].filter((tool) => !AMBIGUOUS_ACTION_TOOLS.has(tool)))(
-    "persists the exact bound %s identity and permission failure beside the historical action line", (tool) => {
+  it.each(
+    [...JIRA_MANAGED_READ_TOOLS, ...JIRA_MUTATION_OPERATIONS].filter(
+      (tool) => !AMBIGUOUS_ACTION_TOOLS.has(tool),
+    ),
+  )(
+    "persists the exact bound %s identity and permission failure beside the historical action line",
+    (tool) => {
       const sink = createBufferedServerLogSink();
       const actionType = JIRA_MANAGED_ACTION_TYPES[tool];
-      recordAtlassianActionOutcome({ activityLog: sink }, {
-        schemaVersion: "1", activityId: "private-activity", occurredAt: 0,
-        connectorId: "private-connector", provider: "jira", actionType,
-        actionClass: ATLASSIAN_CONNECTOR_ACTION_CLASS[actionType], disposition: "allowed",
-        outcome: "failed", reasonCode: "permission-denied", correlationId: "operation-proof", durationMs: 1,
-      }, "governed-assist");
+      recordAtlassianActionOutcome(
+        { activityLog: sink },
+        {
+          schemaVersion: "1",
+          activityId: "private-activity",
+          occurredAt: 0,
+          connectorId: "private-connector",
+          provider: "jira",
+          actionType,
+          actionClass: ATLASSIAN_CONNECTOR_ACTION_CLASS[actionType],
+          disposition: "allowed",
+          outcome: "failed",
+          reasonCode: "permission-denied",
+          correlationId: "operation-proof",
+          durationMs: 1,
+        },
+        "governed-assist",
+      );
       expect(sink.events.filter(({ op }) => op === "atlassian.action.outcome")).toHaveLength(1);
-      expect(proveFact(sink.events)).toMatchObject({ operation: tool, stage: "action-outcome",
-        outcome: "failed", reason: "permission-denied", correlationId: "operation-proof" });
+      expect(proveFact(sink.events)).toMatchObject({
+        operation: tool,
+        stage: "action-outcome",
+        outcome: "failed",
+        reason: "permission-denied",
+        correlationId: "operation-proof",
+      });
     },
   );
 
   it.each(["create-issue", "update-issue-fields"] as const)(
-    "keeps legacy %s without guessing one of its two canonical tool aliases", (actionType) => {
+    "keeps legacy %s without guessing one of its two canonical tool aliases",
+    (actionType) => {
       const sink = createBufferedServerLogSink();
-      recordAtlassianActionOutcome({ activityLog: sink }, {
-        schemaVersion: "1", activityId: "private-activity", occurredAt: 0,
-        connectorId: "private-connector", provider: "jira", actionType,
-        actionClass: ATLASSIAN_CONNECTOR_ACTION_CLASS[actionType], disposition: "allowed",
-        outcome: "failed", reasonCode: "permission-denied", correlationId: "alias-proof", durationMs: 1,
-      }, "governed-assist");
+      recordAtlassianActionOutcome(
+        { activityLog: sink },
+        {
+          schemaVersion: "1",
+          activityId: "private-activity",
+          occurredAt: 0,
+          connectorId: "private-connector",
+          provider: "jira",
+          actionType,
+          actionClass: ATLASSIAN_CONNECTOR_ACTION_CLASS[actionType],
+          disposition: "allowed",
+          outcome: "failed",
+          reasonCode: "permission-denied",
+          correlationId: "alias-proof",
+          durationMs: 1,
+        },
+        "governed-assist",
+      );
       expect(sink.events.map(({ op }) => op)).toEqual(["atlassian.action.outcome"]);
     },
   );
 
-  it.each([...JIRA_MANAGED_READ_TOOLS.filter((tool) => tool !== "jira.draft-batch"), ...JIRA_MUTATION_OPERATIONS.filter((tool) => tool !== "jira.draft" && tool !== "jira.attach")])(
-    "binds Coding %s to the same family without treating its envelope completion as a Jira acknowledgement", (tool) => {
+  it.each([
+    ...JIRA_MANAGED_READ_TOOLS.filter((tool) => tool !== "jira.draft-batch"),
+    ...JIRA_MUTATION_OPERATIONS.filter((tool) => tool !== "jira.draft" && tool !== "jira.attach"),
+  ])(
+    "binds Coding %s to the same family without treating its envelope completion as a Jira acknowledgement",
+    (tool) => {
       const sink = createBufferedServerLogSink();
-      recordCodingJiraPod(sink, "coding-proof", { action: "call", outcome: "failed", tool, reason: "scope-missing" });
+      recordCodingJiraPod(sink, "coding-proof", {
+        action: "call",
+        outcome: "failed",
+        tool,
+        reason: "scope-missing",
+      });
       expect(sink.events.filter(({ op }) => op === "coding-runtime.jira-pod")).toHaveLength(1);
-      expect(proveFact(sink.events)).toMatchObject({ operation: tool, stage: "coding-call", outcome: "failed", reason: "scope-missing" });
+      expect(proveFact(sink.events)).toMatchObject({
+        operation: tool,
+        stage: "coding-call",
+        outcome: "failed",
+        reason: "scope-missing",
+      });
     },
   );
 
-  it.each(JIRA_MUTATION_OPERATIONS)("records pre-effect field refusal for %s with its exact identity", (operation) => {
-    const sink = createBufferedServerLogSink();
-    setServerLogger(createServerLogger({ sink, level: "debug" }));
-    recordJiraFieldRefusal("field-proof", { operation, refusedCount: 1, validations: ["invalid-field"] });
-    expect(sink.events.filter(({ op }) => op === "jira.field.admission")).toHaveLength(1);
-    expect(proveFact(sink.events)).toMatchObject({ operation, stage: "field-admission", outcome: "refused", reason: "field-validation" });
-  });
-
-  it.each(["jira.discover", "jira.describe", "jira.proxy", "jira.create secret", "https://jira.example.invalid/issue/SYN-7", "constructor"])(
-    "does not turn unknown or local metadata name %s into a native fact", (name) => {
+  it.each(JIRA_MUTATION_OPERATIONS)(
+    "records pre-effect field refusal for %s with its exact identity",
+    (operation) => {
       const sink = createBufferedServerLogSink();
-      Reflect.apply(recordJiraOperationActivity, undefined, [sink, { correlationId: "unknown-proof" }, name,
-        { stage: "action-outcome", outcome: "failed", reason: "other" }]);
-      expect(sink.events).toEqual([]);
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      recordJiraFieldRefusal("field-proof", {
+        operation,
+        refusedCount: 1,
+        validations: ["invalid-field"],
+      });
+      expect(sink.events.filter(({ op }) => op === "jira.field.admission")).toHaveLength(1);
+      expect(proveFact(sink.events)).toMatchObject({
+        operation,
+        stage: "field-admission",
+        outcome: "refused",
+        reason: "field-validation",
+      });
     },
   );
+
+  it.each([
+    "jira.discover",
+    "jira.describe",
+    "jira.proxy",
+    "jira.create secret",
+    "https://jira.example.invalid/issue/SYN-7",
+    "constructor",
+  ])("does not turn unknown or local metadata name %s into a native fact", (name) => {
+    const sink = createBufferedServerLogSink();
+    Reflect.apply(recordJiraOperationActivity, undefined, [
+      sink,
+      { correlationId: "unknown-proof" },
+      name,
+      { stage: "action-outcome", outcome: "failed", reason: "other" },
+    ]);
+    expect(sink.events).toEqual([]);
+  });
 });

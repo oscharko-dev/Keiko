@@ -2639,10 +2639,15 @@ describe("CodingRuntimeOrchestrator", () => {
     const issued = f.manager.issueApproval.mock.calls.length;
     await f.orchestrator.refreshHistory("run-1");
     expect(f.rows.get("run-1")).toEqual({
-      ...before, revision: before.revision + 1, updatedAt: "2026-01-01T00:00:00.000Z",
+      ...before,
+      revision: before.revision + 1,
+      updatedAt: "2026-01-01T00:00:00.000Z",
     });
     expect(f.eventHub.publish).toHaveBeenCalledExactlyOnceWith({
-      schemaVersion: "1", kind: "status", runId: "run-1", state: "running",
+      schemaVersion: "1",
+      kind: "status",
+      runId: "run-1",
+      state: "running",
       revision: before.revision + 1,
     });
     expect(f.manager.issueApproval).toHaveBeenCalledTimes(issued);
@@ -2650,8 +2655,13 @@ describe("CodingRuntimeOrchestrator", () => {
     await f.orchestrator.refreshHistory("unrelated-run");
     expect(f.rows.get("run-1")?.revision).toBe(before.revision + 1);
     expect(f.eventHub.publish).not.toHaveBeenCalled();
-    await f.orchestrator.ingest({ schemaVersion: "1", kind: "runtime-stopped",
-      runId: "run-1", eventId: "history-refresh-stopped", occurredAt: "2026-01-01T00:00:00.000Z" });
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      kind: "runtime-stopped",
+      runId: "run-1",
+      eventId: "history-refresh-stopped",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+    });
     const stopped = structuredClone(f.rows.get("run-1"));
     f.eventHub.publish.mockClear();
     await f.orchestrator.refreshHistory("run-1");
@@ -2913,7 +2923,9 @@ describe("CodingRuntimeOrchestrator", () => {
 
       await f.orchestrator.start({ ...start, jiraPodId, connectorScopes: ["issue-tracker.admin"] });
 
-      expect(f.launchResolver.resolve).toHaveBeenCalledWith(expect.objectContaining({ jiraPodId, connectorScopes: ["issue-tracker.admin"] }));
+      expect(f.launchResolver.resolve).toHaveBeenCalledWith(
+        expect.objectContaining({ jiraPodId, connectorScopes: ["issue-tracker.admin"] }),
+      );
       const bare = fixture();
       await bare.orchestrator.start(start);
       expect(bare.launchResolver.resolve.mock.calls[0]?.[0]).not.toHaveProperty("jiraPodId");

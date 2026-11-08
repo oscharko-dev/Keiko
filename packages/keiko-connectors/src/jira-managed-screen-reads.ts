@@ -11,7 +11,11 @@ import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import { boundJiraReadResult } from "./jira-managed-issue-reads.js";
 import { jiraReadFailure, localJiraPage, projectJiraCollection } from "./jira-managed-metadata.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
-import { executeJiraSelectedRead, selectJiraReadPage, type JiraReadResponse } from "./jira-managed-read-request.js";
+import {
+  executeJiraSelectedRead,
+  selectJiraReadPage,
+  type JiraReadResponse,
+} from "./jira-managed-read-request.js";
 import { jiraNativeId, jiraNativeText } from "./jira-native-values.js";
 
 export const JIRA_SCREEN_READS = JIRA_READ_TOOL_FAMILIES.screens;
@@ -111,6 +115,10 @@ export function executeJiraScreenRead(
   args: CatalogJsonObject,
   request: JiraMutationRequest,
 ): Promise<ManagedMcpToolResult> {
-  return executeJiraSelectedRead(selection(name, args), request, "json-array",
-    (response, selected) => projectResponse(name, response, selected));
+  return executeJiraSelectedRead(
+    selection(name, args),
+    request,
+    "json-array",
+    (response, selected) => projectResponse(name, response, selected),
+  );
 }

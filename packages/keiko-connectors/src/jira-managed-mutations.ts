@@ -1,48 +1,149 @@
-import { executeJiraAnonymizationUnlock, isJiraAnonymizationUnlock } from "./jira-managed-anonymization-unlock.js";
-import { executeJiraAvatarMutation, isJiraAvatarMutation } from "./jira-managed-avatar-mutations.js";
-import { executeJiraIdentityMutation, isJiraIdentityMutation } from "./jira-managed-identity-mutations.js";
+import {
+  executeJiraAnonymizationUnlock,
+  isJiraAnonymizationUnlock,
+} from "./jira-managed-anonymization-unlock.js";
+import {
+  executeJiraAvatarMutation,
+  isJiraAvatarMutation,
+} from "./jira-managed-avatar-mutations.js";
+import {
+  executeJiraIdentityMutation,
+  isJiraIdentityMutation,
+} from "./jira-managed-identity-mutations.js";
 import { jiraIdentityRequests } from "./jira-identity-request.js";
-import { executeJiraIssueLifecycleMutation, isJiraIssueLifecycleMutation, jiraIssueDeletionAdmission } from "./jira-managed-issue-lifecycle.js";
-import { executeJiraProjectLifecycleMutation, isJiraProjectLifecycleMutation } from "./jira-managed-project-lifecycle.js";
+import {
+  executeJiraIssueLifecycleMutation,
+  isJiraIssueLifecycleMutation,
+  jiraIssueDeletionAdmission,
+} from "./jira-managed-issue-lifecycle.js";
+import {
+  executeJiraProjectLifecycleMutation,
+  isJiraProjectLifecycleMutation,
+} from "./jira-managed-project-lifecycle.js";
 import { jiraProjectLifecycleRequests } from "./jira-project-lifecycle-request.js";
 import { executeJiraReciprocalRemoteLink } from "./jira-managed-reciprocal-link.js";
 import { jiraReciprocalConfigurationRequests } from "./jira-reciprocal-configuration-request.js";
 import { executeJiraBulkCreate, isJiraBulkCreate } from "./jira-managed-bulk-create.js";
-import { executeJiraPrivateAccountMutation, isJiraPrivateAccountMutation } from "./jira-managed-private-account.js";
+import {
+  executeJiraPrivateAccountMutation,
+  isJiraPrivateAccountMutation,
+} from "./jira-managed-private-account.js";
 import type { JiraCreatePreparation, PreparedJiraCreate } from "./jira-create-preparation.js";
-import { executeJiraDirectoryAccessMutation, isJiraDirectoryAccessMutation } from "./jira-managed-directory-access-mutations.js";
-import { executeJiraMaintenanceMutation, isJiraMaintenanceMutation } from "./jira-managed-maintenance-mutations.js";
-import { executeJiraSchemaMutation, isJiraSchemaMutation } from "./jira-managed-schema-mutations.js";
+import {
+  executeJiraDirectoryAccessMutation,
+  isJiraDirectoryAccessMutation,
+} from "./jira-managed-directory-access-mutations.js";
+import {
+  executeJiraMaintenanceMutation,
+  isJiraMaintenanceMutation,
+} from "./jira-managed-maintenance-mutations.js";
+import {
+  executeJiraSchemaMutation,
+  isJiraSchemaMutation,
+} from "./jira-managed-schema-mutations.js";
 import { executeJiraGroupMutation, isJiraGroupMutation } from "./jira-managed-group-mutations.js";
-import { executeJiraIssueActionMutation, isJiraIssueActionMutation } from "./jira-managed-issue-action-mutations.js";
+import {
+  executeJiraIssueActionMutation,
+  isJiraIssueActionMutation,
+} from "./jira-managed-issue-action-mutations.js";
 import { jiraDirectoryAccessRequests } from "./jira-directory-access-request.js";
-import { executeJiraPermissionSchemeMutation, isJiraPermissionSchemeMutation } from "./jira-managed-permission-scheme-mutations.js";
+import {
+  executeJiraPermissionSchemeMutation,
+  isJiraPermissionSchemeMutation,
+} from "./jira-managed-permission-scheme-mutations.js";
 import { executeJiraRoleMutation, isJiraRoleMutation } from "./jira-managed-role-mutations.js";
-import { executeJiraOptionSchemeMutation, isJiraOptionSchemeMutation } from "./jira-managed-option-scheme-mutations.js";
-import { executeJiraWorkflowSchemeMutation, isJiraWorkflowSchemeMutation } from "./jira-managed-workflow-scheme-mutations.js";
-import { executeJiraInstanceSettingMutation, isJiraInstanceSettingMutation } from "./jira-managed-instance-setting-mutations.js";
-import { executeJiraEmailTemplateMutation, isJiraEmailTemplateMutation } from "./jira-managed-email-templates.js";
+import {
+  executeJiraOptionSchemeMutation,
+  isJiraOptionSchemeMutation,
+} from "./jira-managed-option-scheme-mutations.js";
+import {
+  executeJiraWorkflowSchemeMutation,
+  isJiraWorkflowSchemeMutation,
+} from "./jira-managed-workflow-scheme-mutations.js";
+import {
+  executeJiraInstanceSettingMutation,
+  isJiraInstanceSettingMutation,
+} from "./jira-managed-instance-setting-mutations.js";
+import {
+  executeJiraEmailTemplateMutation,
+  isJiraEmailTemplateMutation,
+} from "./jira-managed-email-templates.js";
 import { jiraManagedEmailTemplatePorts } from "./jira-managed-email-template-ports.js";
 import { jiraPermissionAttributeRequest } from "./jira-permission-attribute-request.js";
-import { executeJiraScreenTabMutation, isJiraScreenTabMutation } from "./jira-managed-screen-tab-mutations.js";
-import { executeJiraScreenConfigurationMutation, isJiraScreenConfigurationMutation } from "./jira-managed-screen-configuration.js";
-import { executeJiraBoardConfigurationMutation, isJiraBoardConfigurationMutation } from "./jira-managed-board-configuration-mutations.js";
-import { executeJiraSprintLifecycleMutation, isJiraSprintLifecycleMutation } from "./jira-managed-sprint-lifecycle.js";
-import { executeJiraAgilePlanningMutation, isJiraAgilePlanningMutation } from "./jira-managed-agile-planning.js";
-import { executeJiraVersionLinkMutation, isJiraVersionLinkMutation } from "./jira-managed-version-link-mutations.js";
-import { executeJiraProjectCategoryMutation, isJiraProjectCategoryMutation } from "./jira-managed-project-category-mutations.js";
-import { executeJiraMonitoringMutation, isJiraMonitoringMutation } from "./jira-managed-monitoring-mutations.js";
-import { executeJiraEntityPropertyMutation, isJiraEntityPropertyMutation } from "./jira-managed-entity-property-mutations.js";
-import { executeJiraFilterMutation, isJiraFilterMutation } from "./jira-managed-filter-mutations.js";
-import { executeJiraFilterPermissionMutation, isJiraFilterPermissionMutation } from "./jira-managed-filter-permission-mutations.js";
-import { executeJiraFilterColumnMutation, isJiraFilterColumnMutation } from "./jira-managed-filter-column-mutations.js";
-import { executeJiraPreferenceMutation, isJiraPreferenceMutation } from "./jira-managed-preference-mutations.js";
-import { executeJiraComponentDelete, isJiraComponentDelete } from "./jira-managed-component-delete.js";
-import { executeJiraVersionLifecycleMutation, isJiraVersionLifecycleMutation } from "./jira-managed-version-lifecycle.js";
-import { executeJiraIssueLinkMutation, isJiraIssueLinkMutation } from "./jira-managed-issue-link-mutations.js";
-import { executeJiraRemoteLinkMutation, isJiraRemoteLinkMutation } from "./jira-managed-remote-link-mutations.js";
+import {
+  executeJiraScreenTabMutation,
+  isJiraScreenTabMutation,
+} from "./jira-managed-screen-tab-mutations.js";
+import {
+  executeJiraScreenConfigurationMutation,
+  isJiraScreenConfigurationMutation,
+} from "./jira-managed-screen-configuration.js";
+import {
+  executeJiraBoardConfigurationMutation,
+  isJiraBoardConfigurationMutation,
+} from "./jira-managed-board-configuration-mutations.js";
+import {
+  executeJiraSprintLifecycleMutation,
+  isJiraSprintLifecycleMutation,
+} from "./jira-managed-sprint-lifecycle.js";
+import {
+  executeJiraAgilePlanningMutation,
+  isJiraAgilePlanningMutation,
+} from "./jira-managed-agile-planning.js";
+import {
+  executeJiraVersionLinkMutation,
+  isJiraVersionLinkMutation,
+} from "./jira-managed-version-link-mutations.js";
+import {
+  executeJiraProjectCategoryMutation,
+  isJiraProjectCategoryMutation,
+} from "./jira-managed-project-category-mutations.js";
+import {
+  executeJiraMonitoringMutation,
+  isJiraMonitoringMutation,
+} from "./jira-managed-monitoring-mutations.js";
+import {
+  executeJiraEntityPropertyMutation,
+  isJiraEntityPropertyMutation,
+} from "./jira-managed-entity-property-mutations.js";
+import {
+  executeJiraFilterMutation,
+  isJiraFilterMutation,
+} from "./jira-managed-filter-mutations.js";
+import {
+  executeJiraFilterPermissionMutation,
+  isJiraFilterPermissionMutation,
+} from "./jira-managed-filter-permission-mutations.js";
+import {
+  executeJiraFilterColumnMutation,
+  isJiraFilterColumnMutation,
+} from "./jira-managed-filter-column-mutations.js";
+import {
+  executeJiraPreferenceMutation,
+  isJiraPreferenceMutation,
+} from "./jira-managed-preference-mutations.js";
+import {
+  executeJiraComponentDelete,
+  isJiraComponentDelete,
+} from "./jira-managed-component-delete.js";
+import {
+  executeJiraVersionLifecycleMutation,
+  isJiraVersionLifecycleMutation,
+} from "./jira-managed-version-lifecycle.js";
+import {
+  executeJiraIssueLinkMutation,
+  isJiraIssueLinkMutation,
+} from "./jira-managed-issue-link-mutations.js";
+import {
+  executeJiraRemoteLinkMutation,
+  isJiraRemoteLinkMutation,
+} from "./jira-managed-remote-link-mutations.js";
 import { jiraFilterBrowseUrl } from "./jira-browse-url.js";
-import { jiraAgileRequest, jiraAgileRequests, jiraExperimentalAgileRequest } from "./jira-agile-request.js";
+import {
+  jiraAgileRequest,
+  jiraAgileRequests,
+  jiraExperimentalAgileRequest,
+} from "./jira-agile-request.js";
 import {
   executeJiraParticipationMutation,
   isJiraParticipationMutation,
@@ -296,16 +397,13 @@ export function requestFor(
   ]);
   const endpoints = atlassianApiEndpointsFor(baseUrl, "/rest/api/2/");
   return (path, method, body, expect, upload) =>
-    executeAdmittedJiraRequest(
-      connection, context, signal,
-      {
-        method: method ?? "GET",
-        url: atlassianApiUrl(endpoints, path),
-        expect: expect ?? "json",
-        ...(body === undefined ? {} : { bodyJson: JSON.stringify(body) }),
-        ...(upload === undefined ? {} : { upload }),
-      },
-    );
+    executeAdmittedJiraRequest(connection, context, signal, {
+      method: method ?? "GET",
+      url: atlassianApiUrl(endpoints, path),
+      expect: expect ?? "json",
+      ...(body === undefined ? {} : { bodyJson: JSON.stringify(body) }),
+      ...(upload === undefined ? {} : { upload }),
+    });
 }
 async function statusMutation(
   request: JiraMutationRequest,
@@ -420,7 +518,9 @@ export async function prepareJiraCreate(
     metadata.fields,
     templates,
   );
-  return admitted.ok && twin.identity !== undefined ? { ...admitted, draftIdentity: twin.identity } : admitted;
+  return admitted.ok && twin.identity !== undefined
+    ? { ...admitted, draftIdentity: twin.identity }
+    : admitted;
 }
 async function createIssue(
   request: JiraMutationRequest,
@@ -593,10 +693,15 @@ async function prepareCreateWithMetadata(
   const links = gate.links ?? create.links;
   const plan = planJiraIssueLinks(links, undefined, jiraIssueLinksOffered(metadata) === undefined);
   return {
-    ok: true, projectId: create.projectId, issueTypeId: create.issueTypeId,
+    ok: true,
+    projectId: create.projectId,
+    issueTypeId: create.issueTypeId,
     body: { fields: validated.fields, update: linkedUpdate(validated, plan) },
-    metadata, values: withLinks(validated, links), plan,
-    ...descriptionMetric(validated), ...descriptionMetric(create),
+    metadata,
+    values: withLinks(validated, links),
+    plan,
+    ...descriptionMetric(validated),
+    ...descriptionMetric(create),
   };
 }
 async function dispatchPreparedCreate(
@@ -606,7 +711,14 @@ async function dispatchPreparedCreate(
 ): Promise<JiraMutationAttempt> {
   const response = await request("issue", "POST", prepared.body);
   const attempt = response.ok
-    ? await confirmCreatedIssue(request, response, prepared.metadata, prepared.values, prepared.plan, onAcknowledged)
+    ? await confirmCreatedIssue(
+        request,
+        response,
+        prepared.metadata,
+        prepared.values,
+        prepared.plan,
+        onAcknowledged,
+      )
     : dispatchFailure(response, prepared.metadata);
   return withDescriptionFormatting(attempt, descriptionMetric(prepared));
 }
@@ -1410,10 +1522,14 @@ function savedConfigurationMutation(
   baseUrl: string,
 ): Promise<JiraMutationAttempt> | undefined {
   let attempt: Promise<JiraMutationAttempt> | undefined;
-  if (isJiraFilterMutation(operation)) attempt = executeJiraFilterMutation(operation, args, request, check);
-  else if (isJiraFilterPermissionMutation(operation)) attempt = executeJiraFilterPermissionMutation(operation, args, request, check);
-  else if (isJiraFilterColumnMutation(operation)) attempt = executeJiraFilterColumnMutation(operation, args, request, check);
-  else if (isJiraPreferenceMutation(operation)) attempt = executeJiraPreferenceMutation(operation, args, request, check);
+  if (isJiraFilterMutation(operation))
+    attempt = executeJiraFilterMutation(operation, args, request, check);
+  else if (isJiraFilterPermissionMutation(operation))
+    attempt = executeJiraFilterPermissionMutation(operation, args, request, check);
+  else if (isJiraFilterColumnMutation(operation))
+    attempt = executeJiraFilterColumnMutation(operation, args, request, check);
+  else if (isJiraPreferenceMutation(operation))
+    attempt = executeJiraPreferenceMutation(operation, args, request, check);
   return attempt?.then((value) => savedFilterLink(value, baseUrl));
 }
 function savedFilterLink(attempt: JiraMutationAttempt, baseUrl: string): JiraMutationAttempt {
@@ -1433,11 +1549,16 @@ function configurationMutation(
   check: boolean,
 ): Promise<JiraMutationAttempt> | undefined {
   if (isJiraEntityPropertyMutation(operation))
-    return executeJiraEntityPropertyMutation(operation, args, {
-      platform: request,
-      agile: jiraAgileRequest(connection, context),
-      baseUrl: connection.baseUrl,
-    }, check);
+    return executeJiraEntityPropertyMutation(
+      operation,
+      args,
+      {
+        platform: request,
+        agile: jiraAgileRequest(connection, context),
+        baseUrl: connection.baseUrl,
+      },
+      check,
+    );
   if (isJiraMonitoringMutation(operation))
     return executeJiraMonitoringMutation(operation, args, request, check);
   if (isJiraScreenTabMutation(operation))
@@ -1445,18 +1566,37 @@ function configurationMutation(
   if (isJiraScreenConfigurationMutation(operation))
     return executeJiraScreenConfigurationMutation(operation, args, request, check);
   if (isJiraBoardConfigurationMutation(operation))
-    return executeJiraBoardConfigurationMutation(operation, args, jiraAgileRequests(connection, context), check);
+    return executeJiraBoardConfigurationMutation(
+      operation,
+      args,
+      jiraAgileRequests(connection, context),
+      check,
+    );
   if (isJiraSprintLifecycleMutation(operation))
-    return executeJiraSprintLifecycleMutation(operation, args, {
-      requests: jiraAgileRequests(connection, context),
-      ...(connection.issueTemplates === undefined ? {} : { templates: connection.issueTemplates }),
-      experimentalAgile: jiraExperimentalAgileRequest(connection, context),
-    }, check);
+    return executeJiraSprintLifecycleMutation(
+      operation,
+      args,
+      {
+        requests: jiraAgileRequests(connection, context),
+        ...(connection.issueTemplates === undefined
+          ? {}
+          : { templates: connection.issueTemplates }),
+        experimentalAgile: jiraExperimentalAgileRequest(connection, context),
+      },
+      check,
+    );
   if (isJiraAgilePlanningMutation(operation))
-    return executeJiraAgilePlanningMutation(operation, args, {
-      requests: jiraAgileRequests(connection, context),
-      ...(connection.issueTemplates === undefined ? {} : { templates: connection.issueTemplates }),
-    }, check);
+    return executeJiraAgilePlanningMutation(
+      operation,
+      args,
+      {
+        requests: jiraAgileRequests(connection, context),
+        ...(connection.issueTemplates === undefined
+          ? {}
+          : { templates: connection.issueTemplates }),
+      },
+      check,
+    );
   return savedConfigurationMutation(operation, args, request, check, connection.baseUrl);
 }
 function nativeLifecycleMutation(
@@ -1473,10 +1613,24 @@ function nativeLifecycleMutation(
   if (isJiraIssueLinkMutation(operation))
     return executeJiraIssueLinkMutation(operation, args, request, check, connection.issueTemplates);
   if (isJiraRemoteLinkMutation(operation))
-    return executeJiraRemoteLinkMutation(operation, args, request, check, connection.issueTemplates);
-  if (isJiraComponentDelete(operation)) return executeJiraComponentDelete(args, request, check, connection.issueTemplates);
+    return executeJiraRemoteLinkMutation(
+      operation,
+      args,
+      request,
+      check,
+      connection.issueTemplates,
+    );
+  if (isJiraComponentDelete(operation))
+    return executeJiraComponentDelete(args, request, check, connection.issueTemplates);
   if (isJiraVersionLifecycleMutation(operation))
-    return executeJiraVersionLifecycleMutation(operation, args, request, check, connection.issueTemplates, connection.baseUrl);
+    return executeJiraVersionLifecycleMutation(
+      operation,
+      args,
+      request,
+      check,
+      connection.issueTemplates,
+      connection.baseUrl,
+    );
   return undefined;
 }
 function permissionRoleMutation(
@@ -1488,11 +1642,17 @@ function permissionRoleMutation(
   check: boolean,
 ): Promise<JiraMutationAttempt> | undefined {
   if (isJiraPermissionSchemeMutation(operation))
-    return executeJiraPermissionSchemeMutation(operation, args, {
-      request,
-      setAttribute: jiraPermissionAttributeRequest(connection, context),
-    }, check);
-  if (isJiraRoleMutation(operation)) return executeJiraRoleMutation(operation, args, request, check);
+    return executeJiraPermissionSchemeMutation(
+      operation,
+      args,
+      {
+        request,
+        setAttribute: jiraPermissionAttributeRequest(connection, context),
+      },
+      check,
+    );
+  if (isJiraRoleMutation(operation))
+    return executeJiraRoleMutation(operation, args, request, check);
   return undefined;
 }
 function systemAdministrationMutation(
@@ -1504,14 +1664,28 @@ function systemAdministrationMutation(
   check: boolean,
 ): Promise<JiraMutationAttempt> | undefined {
   if (isJiraDirectoryAccessMutation(operation))
-    return executeJiraDirectoryAccessMutation(operation, args, request, jiraDirectoryAccessRequests(connection, context), check);
-  if (isJiraMaintenanceMutation(operation)) return executeJiraMaintenanceMutation(operation, args, request, check);
-  if (isJiraSchemaMutation(operation)) return executeJiraSchemaMutation(operation, args, request, check, connection.issueTemplates);
-  if (isJiraGroupMutation(operation)) return executeJiraGroupMutation(operation, args, request, check);
-  if (isJiraIssueActionMutation(operation)) return executeJiraIssueActionMutation(operation, args, request, check, connection.baseUrl);
+    return executeJiraDirectoryAccessMutation(
+      operation,
+      args,
+      request,
+      jiraDirectoryAccessRequests(connection, context),
+      check,
+    );
+  if (isJiraMaintenanceMutation(operation))
+    return executeJiraMaintenanceMutation(operation, args, request, check);
+  if (isJiraSchemaMutation(operation))
+    return executeJiraSchemaMutation(operation, args, request, check, connection.issueTemplates);
+  if (isJiraGroupMutation(operation))
+    return executeJiraGroupMutation(operation, args, request, check);
+  if (isJiraIssueActionMutation(operation))
+    return executeJiraIssueActionMutation(operation, args, request, check, connection.baseUrl);
   return undefined;
 }
-function avatarPortsForMutation(connection: JiraManagedConnection, request: JiraMutationRequest, check: boolean): Parameters<typeof executeJiraAvatarMutation>[2] {
+function avatarPortsForMutation(
+  connection: JiraManagedConnection,
+  request: JiraMutationRequest,
+  check: boolean,
+): Parameters<typeof executeJiraAvatarMutation>[2] {
   const { inspectImage, sourceFor, withSession, legacyTemporaryRelease } = connection.avatars ?? {};
   const source = sourceFor?.(check);
   return {
@@ -1523,21 +1697,76 @@ function avatarPortsForMutation(connection: JiraManagedConnection, request: Jira
   };
 }
 function resourceAndIdentityMutation(
-  operation: JiraMutationOperation, args: CatalogJsonObject, request: JiraMutationRequest,
-  connection: JiraManagedConnection, context: ManagedMcpInvocationContext, check: boolean, trace?: JiraTraceRequest,
+  operation: JiraMutationOperation,
+  args: CatalogJsonObject,
+  request: JiraMutationRequest,
+  connection: JiraManagedConnection,
+  context: ManagedMcpInvocationContext,
+  check: boolean,
+  trace?: JiraTraceRequest,
 ): Promise<JiraMutationAttempt> | undefined {
-  if (isJiraAnonymizationUnlock(operation)) return executeJiraAnonymizationUnlock(args, request, connection.privateIdentity, check);
-  if (isJiraAvatarMutation(operation)) return executeJiraAvatarMutation(operation, args, avatarPortsForMutation(connection, request, check), check);
-  if (isJiraIdentityMutation(operation)) return executeJiraIdentityMutation(operation, args, request, jiraIdentityRequests(connection, context), check);
-  if (isJiraPrivateAccountMutation(operation)) return executeJiraPrivateAccountMutation(operation, args, request, connection.privateIdentity, check);
-  if (isJiraIssueLifecycleMutation(operation)) return executeJiraIssueLifecycleMutation(operation, args, request, jiraIssueDeletionAdmission(request, connection.issueTemplates), check);
-  if (isJiraProjectLifecycleMutation(operation)) return executeJiraProjectLifecycleMutation(operation, args, request, jiraProjectLifecycleRequests(connection, context), check, connection.issueTemplates);
-  if (operation === "jira.create-reciprocal-remote-link") return executeJiraReciprocalRemoteLink(args, request,
-    jiraReciprocalConfigurationRequests(connection, context), check, connection.issueTemplates);
-  if (isJiraBulkCreate(operation)) return executeJiraBulkCreate(operation, args, request, {
-    prepare: (item, selectedTrace) => prepareJiraCreate(request, item, connection.issueTemplates, selectedTrace),
-    ...(trace === undefined ? {} : { trace }),
-  }, check);
+  if (isJiraAnonymizationUnlock(operation))
+    return executeJiraAnonymizationUnlock(args, request, connection.privateIdentity, check);
+  if (isJiraAvatarMutation(operation))
+    return executeJiraAvatarMutation(
+      operation,
+      args,
+      avatarPortsForMutation(connection, request, check),
+      check,
+    );
+  if (isJiraIdentityMutation(operation))
+    return executeJiraIdentityMutation(
+      operation,
+      args,
+      request,
+      jiraIdentityRequests(connection, context),
+      check,
+    );
+  if (isJiraPrivateAccountMutation(operation))
+    return executeJiraPrivateAccountMutation(
+      operation,
+      args,
+      request,
+      connection.privateIdentity,
+      check,
+    );
+  if (isJiraIssueLifecycleMutation(operation))
+    return executeJiraIssueLifecycleMutation(
+      operation,
+      args,
+      request,
+      jiraIssueDeletionAdmission(request, connection.issueTemplates),
+      check,
+    );
+  if (isJiraProjectLifecycleMutation(operation))
+    return executeJiraProjectLifecycleMutation(
+      operation,
+      args,
+      request,
+      jiraProjectLifecycleRequests(connection, context),
+      check,
+      connection.issueTemplates,
+    );
+  if (operation === "jira.create-reciprocal-remote-link")
+    return executeJiraReciprocalRemoteLink(
+      args,
+      request,
+      jiraReciprocalConfigurationRequests(connection, context),
+      check,
+      connection.issueTemplates,
+    );
+  if (isJiraBulkCreate(operation))
+    return executeJiraBulkCreate(
+      operation,
+      args,
+      request,
+      {
+        prepare: (item, selectedTrace) =>
+          prepareJiraCreate(request, item, connection.issueTemplates, selectedTrace),
+        ...(trace === undefined ? {} : { trace }),
+      },
+      check,
+    );
   return undefined;
 }
 function dedicatedMutation(
@@ -1550,13 +1779,14 @@ function dedicatedMutation(
 ): Promise<JiraMutationAttempt> | undefined {
   const args = structuredClone(source);
   const request = requestFor(connection, context);
-  const specialized = resourceAndIdentityMutation(operation, args, request, connection, context, check, trace)
-    ?? systemAdministrationMutation(operation, args, request, connection, context, check)
-    ?? instanceConfigurationMutation(operation, args, request, connection, context, check)
-    ?? permissionRoleMutation(operation, args, request, connection, context, check)
-    ?? configurationMutation(operation, args, request, context, connection, check)
-    ?? deletionMutation(operation, args, request, connection, check)
-    ?? nativeLifecycleMutation(operation, args, request, connection, check);
+  const specialized =
+    resourceAndIdentityMutation(operation, args, request, connection, context, check, trace) ??
+    systemAdministrationMutation(operation, args, request, connection, context, check) ??
+    instanceConfigurationMutation(operation, args, request, connection, context, check) ??
+    permissionRoleMutation(operation, args, request, connection, context, check) ??
+    configurationMutation(operation, args, request, context, connection, check) ??
+    deletionMutation(operation, args, request, connection, check) ??
+    nativeLifecycleMutation(operation, args, request, connection, check);
   if (specialized !== undefined) return specialized;
   if (isJiraParticipationMutation(operation))
     return executeJiraParticipationMutation(operation, args, request, check, connection.baseUrl);
@@ -1581,17 +1811,25 @@ function instanceConfigurationMutation(
   context: ManagedMcpInvocationContext,
   check: boolean,
 ): Promise<JiraMutationAttempt> | undefined {
-  if (isJiraOptionSchemeMutation(operation)) return executeJiraOptionSchemeMutation(operation, args, request, check);
-  if (isJiraWorkflowSchemeMutation(operation)) return executeJiraWorkflowSchemeMutation(operation, args, request, check);
-  if (isJiraInstanceSettingMutation(operation)) return executeJiraInstanceSettingMutation(operation, args, request, check);
+  if (isJiraOptionSchemeMutation(operation))
+    return executeJiraOptionSchemeMutation(operation, args, request, check);
+  if (isJiraWorkflowSchemeMutation(operation))
+    return executeJiraWorkflowSchemeMutation(operation, args, request, check);
+  if (isJiraInstanceSettingMutation(operation))
+    return executeJiraInstanceSettingMutation(operation, args, request, check);
   if (!isJiraEmailTemplateMutation(operation)) return undefined;
   const ports = jiraManagedEmailTemplatePorts(connection, context, request, check);
   if (ports === undefined) return Promise.resolve({ ok: false, reason: "unavailable" });
-  if (operation === "jira.upload-email-template-pack" && ports.source === undefined) return Promise.resolve({
-    ok: false, reason: "unavailable", detail: { messages: [
-      "Email-template upload requires a Chat with a connected file or folder and the existing file review. No archive was uploaded.",
-    ] },
-  });
+  if (operation === "jira.upload-email-template-pack" && ports.source === undefined)
+    return Promise.resolve({
+      ok: false,
+      reason: "unavailable",
+      detail: {
+        messages: [
+          "Email-template upload requires a Chat with a connected file or folder and the existing file review. No archive was uploaded.",
+        ],
+      },
+    });
   return executeJiraEmailTemplateMutation(operation, args, ports, check);
 }
 
@@ -1672,24 +1910,54 @@ export type JiraMutationCheckResult =
     };
 
 function isSavedConfigurationMutation(operation: JiraMutationOperation): boolean {
-  return [isJiraFilterMutation, isJiraFilterPermissionMutation, isJiraFilterColumnMutation, isJiraPreferenceMutation]
-    .some((accepts) => accepts(operation));
+  return [
+    isJiraFilterMutation,
+    isJiraFilterPermissionMutation,
+    isJiraFilterColumnMutation,
+    isJiraPreferenceMutation,
+  ].some((accepts) => accepts(operation));
 }
 function isNativeLifecycleMutation(operation: JiraMutationOperation): boolean {
-  return [isJiraComponentDelete, isJiraVersionLifecycleMutation, isJiraIssueLinkMutation, isJiraRemoteLinkMutation,
-    isJiraVersionLinkMutation, isJiraProjectCategoryMutation]
-    .some((accepts) => accepts(operation));
+  return [
+    isJiraComponentDelete,
+    isJiraVersionLifecycleMutation,
+    isJiraIssueLinkMutation,
+    isJiraRemoteLinkMutation,
+    isJiraVersionLinkMutation,
+    isJiraProjectCategoryMutation,
+  ].some((accepts) => accepts(operation));
 }
 function isReviewedConfigurationMutation(operation: JiraMutationOperation): boolean {
-  return operation === "jira.create-reciprocal-remote-link" ||
-    [isJiraEntityPropertyMutation, isJiraScreenTabMutation, isJiraScreenConfigurationMutation,
-    isJiraBoardConfigurationMutation, isJiraSprintLifecycleMutation, isJiraAgilePlanningMutation,
-    isJiraMonitoringMutation, isJiraPermissionSchemeMutation, isJiraRoleMutation,
-    isJiraOptionSchemeMutation, isJiraWorkflowSchemeMutation, isJiraInstanceSettingMutation,
-    isJiraAnonymizationUnlock, isJiraAvatarMutation, isJiraIdentityMutation, isJiraPrivateAccountMutation, isJiraIssueLifecycleMutation,
-    isJiraProjectLifecycleMutation, isJiraBulkCreate,
-    isJiraEmailTemplateMutation, isJiraDirectoryAccessMutation, isJiraMaintenanceMutation,
-    isJiraSchemaMutation, isJiraGroupMutation, isJiraIssueActionMutation].some((accepts) => accepts(operation));
+  return (
+    operation === "jira.create-reciprocal-remote-link" ||
+    [
+      isJiraEntityPropertyMutation,
+      isJiraScreenTabMutation,
+      isJiraScreenConfigurationMutation,
+      isJiraBoardConfigurationMutation,
+      isJiraSprintLifecycleMutation,
+      isJiraAgilePlanningMutation,
+      isJiraMonitoringMutation,
+      isJiraPermissionSchemeMutation,
+      isJiraRoleMutation,
+      isJiraOptionSchemeMutation,
+      isJiraWorkflowSchemeMutation,
+      isJiraInstanceSettingMutation,
+      isJiraAnonymizationUnlock,
+      isJiraAvatarMutation,
+      isJiraIdentityMutation,
+      isJiraPrivateAccountMutation,
+      isJiraIssueLifecycleMutation,
+      isJiraProjectLifecycleMutation,
+      isJiraBulkCreate,
+      isJiraEmailTemplateMutation,
+      isJiraDirectoryAccessMutation,
+      isJiraMaintenanceMutation,
+      isJiraSchemaMutation,
+      isJiraGroupMutation,
+      isJiraIssueActionMutation,
+    ].some((accepts) => accepts(operation))
+  );
 }
 function requiresSuccessfulPreflight(operation: JiraMutationOperation): boolean {
   return (

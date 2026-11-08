@@ -2,14 +2,25 @@ import { expect, it, vi } from "vitest";
 import { JIRA_READ_TOOL_FAMILIES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
 import { isBoundedExternalJsonSchema } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import { JIRA_ENTITY_PROPERTY_READ_DEFINITIONS, jiraEntityPropertyDeclarationForTool } from "./jiraEntityPropertyDescriptors.js";
+import {
+  JIRA_ENTITY_PROPERTY_READ_DEFINITIONS,
+  jiraEntityPropertyDeclarationForTool,
+} from "./jiraEntityPropertyDescriptors.js";
 import { createJiraProviderForCatalog, jiraOperationForTool } from "./jiraManagedProvider.js";
 
 const ENTITIES = [
   ["board", { boardId: "7" }, { boardId: "7" }],
   ["sprint", { sprintId: "8" }, { sprintId: "8" }],
-  ["comment", { issueIdOrKey: "SYN-1", commentId: "9" }, { issueId: "10001", issueKey: "SYN-1", commentId: "9" }],
-  ["dashboard-item", { dashboardId: "10", itemId: "11" }, { dashboardId: "10", selectedItemId: "11" }],
+  [
+    "comment",
+    { issueIdOrKey: "SYN-1", commentId: "9" },
+    { issueId: "10001", issueKey: "SYN-1", commentId: "9" },
+  ],
+  [
+    "dashboard-item",
+    { dashboardId: "10", itemId: "11" },
+    { dashboardId: "10", selectedItemId: "11" },
+  ],
   ["issue", { issueIdOrKey: "SYN-1" }, { issueId: "10001", issueKey: "SYN-1" }],
   ["issue-type", { issueTypeId: "12" }, { issueTypeId: "12" }],
   ["project", { projectIdOrKey: "SYN" }, { projectId: "10000", projectKey: "SYN" }],
@@ -27,33 +38,58 @@ it("admits all sixteen entity-property definitions through the unchanged bounded
     expect(connection).not.toHaveBeenCalled();
   }
 });
-it.each(ENTITIES)("keeps %s observed key metadata separate from path selection", (entity, args, context) => {
-  const declaration = jiraEntityPropertyDeclarationForTool(`jira.${entity}-property-keys`);
-  if (declaration === undefined) throw new TypeError("Missing property declaration");
-  expect(declaration.risk).toBe("read");
-  expect(describeCatalogSchemaMismatch(declaration.descriptor.inputSchema, { ...args, maxResults: 2 })).toBeUndefined();
-  expect(describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, {
-    outcome: "succeeded", entityType: entity, ...context,
-    items: [{ key: "ordinary" }, { key: "remote/slash%key" }], startAt: 0, total: 2,
-  })).toBeUndefined();
-});
-it.each(ENTITIES)("declares %s complete typed values without raw JSON or pagination", (entity, args, context) => {
-  const declaration = jiraEntityPropertyDeclarationForTool(`jira.${entity}-property`);
-  if (declaration === undefined) throw new TypeError("Missing property declaration");
-  expect(describeCatalogSchemaMismatch(declaration.descriptor.inputSchema, { ...args, propertyKey: "display ~key" })).toBeUndefined();
-  expect(describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, {
-    outcome: "succeeded", entityType: entity, ...context, propertyKey: "display ~key", nodeCount: 7,
-    items: [
-      { path: "", kind: "object", childCount: 6 },
-      { path: "/a~1b", kind: "null" },
-      { path: "/~0key", kind: "string", textValue: "" },
-      { path: "/zero", kind: "number", numberValue: 0 },
-      { path: "/false", kind: "boolean", booleanValue: false },
-      { path: "/list", kind: "array", childCount: 0 },
-      { path: "/map", kind: "object", childCount: 0 },
-    ],
-  })).toBeUndefined();
-});
+it.each(ENTITIES)(
+  "keeps %s observed key metadata separate from path selection",
+  (entity, args, context) => {
+    const declaration = jiraEntityPropertyDeclarationForTool(`jira.${entity}-property-keys`);
+    if (declaration === undefined) throw new TypeError("Missing property declaration");
+    expect(declaration.risk).toBe("read");
+    expect(
+      describeCatalogSchemaMismatch(declaration.descriptor.inputSchema, { ...args, maxResults: 2 }),
+    ).toBeUndefined();
+    expect(
+      describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, {
+        outcome: "succeeded",
+        entityType: entity,
+        ...context,
+        items: [{ key: "ordinary" }, { key: "remote/slash%key" }],
+        startAt: 0,
+        total: 2,
+      }),
+    ).toBeUndefined();
+  },
+);
+it.each(ENTITIES)(
+  "declares %s complete typed values without raw JSON or pagination",
+  (entity, args, context) => {
+    const declaration = jiraEntityPropertyDeclarationForTool(`jira.${entity}-property`);
+    if (declaration === undefined) throw new TypeError("Missing property declaration");
+    expect(
+      describeCatalogSchemaMismatch(declaration.descriptor.inputSchema, {
+        ...args,
+        propertyKey: "display ~key",
+      }),
+    ).toBeUndefined();
+    expect(
+      describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, {
+        outcome: "succeeded",
+        entityType: entity,
+        ...context,
+        propertyKey: "display ~key",
+        nodeCount: 7,
+        items: [
+          { path: "", kind: "object", childCount: 6 },
+          { path: "/a~1b", kind: "null" },
+          { path: "/~0key", kind: "string", textValue: "" },
+          { path: "/zero", kind: "number", numberValue: 0 },
+          { path: "/false", kind: "boolean", booleanValue: false },
+          { path: "/list", kind: "array", childCount: 0 },
+          { path: "/map", kind: "object", childCount: 0 },
+        ],
+      }),
+    ).toBeUndefined();
+  },
+);
 it.each([
   ["jira.issue-property", { issueIdOrKey: "SYN-1", propertyKey: "." }],
   ["jira.issue-property", { issueIdOrKey: "SYN-1", propertyKey: ".." }],
@@ -85,18 +121,32 @@ it.each([
 ])("refuses malformed property node %j", (item) => {
   const declaration = jiraEntityPropertyDeclarationForTool("jira.issue-property");
   if (declaration === undefined) throw new TypeError("Missing property declaration");
-  expect(describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, {
-    outcome: "succeeded", entityType: "issue", issueId: "10001", issueKey: "SYN-1",
-    propertyKey: "key", items: [item], nodeCount: 1,
-  })).toBeDefined();
+  expect(
+    describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, {
+      outcome: "succeeded",
+      entityType: "issue",
+      issueId: "10001",
+      issueKey: "SYN-1",
+      propertyKey: "key",
+      items: [item],
+      nodeCount: 1,
+    }),
+  ).toBeDefined();
 });
 it("keeps dashboard selected item context explicit and refuses invented observed item identity", () => {
   const declaration = jiraEntityPropertyDeclarationForTool("jira.dashboard-item-property");
   if (declaration === undefined) throw new TypeError("Missing property declaration");
-  expect(describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, {
-    outcome: "succeeded", entityType: "dashboard-item", dashboardId: "10", itemId: "11",
-    propertyKey: "key", items: [{ path: "", kind: "null" }], nodeCount: 1,
-  })).toBeDefined();
+  expect(
+    describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, {
+      outcome: "succeeded",
+      entityType: "dashboard-item",
+      dashboardId: "10",
+      itemId: "11",
+      propertyKey: "key",
+      items: [{ path: "", kind: "null" }],
+      nodeCount: 1,
+    }),
+  ).toBeDefined();
 });
 it.each([
   ["board", "/rest/agile/1.0", "/board/{boardId}/properties"],
@@ -107,10 +157,20 @@ it.each([
   ["issue-type", "/rest/api/2", "/issuetype/{issueTypeId}/properties"],
   ["project", "/rest/api/2", "/project/{projectIdOrKey}/properties"],
   ["user", "/rest/api/2", "/user/properties"],
-] as const)("binds both %s property reads to fixed native GET identities", (entity, apiRoot, path) => {
-  for (const [suffix, pathTemplate] of [["property-keys", path], ["property", `${path}/{propertyKey}`]]) {
-    expect(jiraOperationForTool(`jira.${entity}-${suffix}`)?.definition).toMatchObject({
-      kind: "native", method: "GET", apiRoot, pathTemplate, effects: ["remote-read"],
-    });
-  }
-});
+] as const)(
+  "binds both %s property reads to fixed native GET identities",
+  (entity, apiRoot, path) => {
+    for (const [suffix, pathTemplate] of [
+      ["property-keys", path],
+      ["property", `${path}/{propertyKey}`],
+    ]) {
+      expect(jiraOperationForTool(`jira.${entity}-${suffix}`)?.definition).toMatchObject({
+        kind: "native",
+        method: "GET",
+        apiRoot,
+        pathTemplate,
+        effects: ["remote-read"],
+      });
+    }
+  },
+);

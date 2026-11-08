@@ -7,7 +7,10 @@ import {
 } from "./jiraProjectStructureDescriptors.js";
 
 const BOOL = { type: "boolean" };
-const STATE_CHANGE = object({ expectedEnabled: BOOL, enabled: BOOL }, ["expectedEnabled", "enabled"]);
+const STATE_CHANGE = object({ expectedEnabled: BOOL, enabled: BOOL }, [
+  "expectedEnabled",
+  "enabled",
+]);
 const EXPECTED_STATE = object({ expectedEnabled: BOOL }, ["expectedEnabled"]);
 const MONITORING_RESULT = jiraNativeWriteResult({ monitoringEnabled: BOOL });
 const JMX_RESULT = jiraNativeWriteResult({ jmxMetricsExposed: BOOL });
@@ -47,8 +50,11 @@ export const JIRA_MONITORING_WRITE_DEFINITIONS = {
   },
 } as const satisfies Readonly<Record<string, JiraNativeDefinition>>;
 
-export function jiraMonitoringDeclarationForTool(name: string): ManagedMcpToolDeclaration | undefined {
-  const definitions: Readonly<Record<string, JiraNativeDefinition>> = JIRA_MONITORING_WRITE_DEFINITIONS;
+export function jiraMonitoringDeclarationForTool(
+  name: string,
+): ManagedMcpToolDeclaration | undefined {
+  const definitions: Readonly<Record<string, JiraNativeDefinition>> =
+    JIRA_MONITORING_WRITE_DEFINITIONS;
   const selected = Object.hasOwn(definitions, name) ? definitions[name] : undefined;
   return selected === undefined ? undefined : jiraNativeDeclaration(name, selected);
 }

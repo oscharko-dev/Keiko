@@ -12,73 +12,125 @@ import type {
 import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { response } from "../../../../tests/support/jira-managed-remote.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
-import { expectActivityLogProof, formatActivityLogProofLine } from "../../../../tests/support/activity-log-proof.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
 import { createServerLogger, setServerLogger } from "../observability/index.js";
 
 afterEach(resetServerLogger);
 
 it.each(["jira.create", "jira.draft", "jira.edit", "jira.attach"] as const)(
-  "records the selected %s provider identity independently of its shared authority action", async (operation) => {
+  "records the selected %s provider identity independently of its shared authority action",
+  async (operation) => {
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "debug" }));
     const executor = vi.fn<JiraManagedMutationExecutor<ManagedMcpInvocationContext>>(async () => ({
       data: { outcome: "unconfirmed", issueKey: "SYN-1", operation: "jira.proxy" },
     }));
-    const provider = createJiraProviderForCatalog(() => ({
-      deployment: "data-center", baseUrl: "https://jira.example.invalid/context", http: vi.fn(),
-    }), [operation], executor);
+    const provider = createJiraProviderForCatalog(
+      () => ({
+        deployment: "data-center",
+        baseUrl: "https://jira.example.invalid/context",
+        http: vi.fn(),
+      }),
+      [operation],
+      executor,
+    );
     const tool = provider.tools()[0];
     if (tool === undefined) throw new TypeError("Missing selected provider tool");
-    const result = await tool.execute({}, {
-      invocationId: "provider-alias", correlationId: "provider-alias", signal: new AbortController().signal,
-      beforeEffect: () => true,
-    });
+    const result = await tool.execute(
+      {},
+      {
+        invocationId: "provider-alias",
+        correlationId: "provider-alias",
+        signal: new AbortController().signal,
+        beforeEffect: () => true,
+      },
+    );
     expect(executor.mock.calls.map(([name]) => name)).toEqual([operation]);
     expect(result.data).toMatchObject({ outcome: "unconfirmed", issueKey: "SYN-1" });
     const events = sink.events.filter(({ op }) => op.startsWith("jira.operation."));
     expect(events).toHaveLength(1);
     const line = formatActivityLogProofLine(events[0] ?? {});
     expect(expectActivityLogProof("jira.operation.core.line", line)).toMatchObject({
-      operation, stage: "provider-call", outcome: "completed", reason: "none", correlationId: "provider-alias",
+      operation,
+      stage: "provider-call",
+      outcome: "completed",
+      reason: "none",
+      correlationId: "provider-alias",
     });
     expect(line).not.toMatch(/jira\.proxy|SYN-1|jira\.example/u);
   },
 );
 
 it("preserves a known unconfirmed receipt when the provider activity sink fails", async () => {
-  const write = vi.fn(() => { throw new Error("Synthetic private sink failure"); });
+  const write = vi.fn(() => {
+    throw new Error("Synthetic private sink failure");
+  });
   setServerLogger(createServerLogger({ sink: { write }, level: "debug" }));
-  const provider = createJiraProviderForCatalog(() => ({
-    deployment: "data-center", baseUrl: "https://jira.example.invalid/context", http: vi.fn(),
-  }), ["jira.attach"], async () => ({ data: { outcome: "unconfirmed", issueKey: "SYN-1", attachmentId: "10001" } }));
+  const provider = createJiraProviderForCatalog(
+    () => ({
+      deployment: "data-center",
+      baseUrl: "https://jira.example.invalid/context",
+      http: vi.fn(),
+    }),
+    ["jira.attach"],
+    async () => ({ data: { outcome: "unconfirmed", issueKey: "SYN-1", attachmentId: "10001" } }),
+  );
   const tool = provider.tools()[0];
   if (tool === undefined) throw new TypeError("Missing attachment provider");
-  const result = await tool.execute({}, {
-    invocationId: "provider-loss", correlationId: "provider-loss", signal: new AbortController().signal,
-    beforeEffect: () => true,
-  });
+  const result = await tool.execute(
+    {},
+    {
+      invocationId: "provider-loss",
+      correlationId: "provider-loss",
+      signal: new AbortController().signal,
+      beforeEffect: () => true,
+    },
+  );
   expect(write).toHaveBeenCalled();
-  expect(result.data).toMatchObject({ outcome: "unconfirmed", issueKey: "SYN-1", attachmentId: "10001" });
+  expect(result.data).toMatchObject({
+    outcome: "unconfirmed",
+    issueKey: "SYN-1",
+    attachmentId: "10001",
+  });
 });
 
 it("logs a provider exception without replacing the original error or inferring an effect", async () => {
   const sink = createBufferedServerLogSink();
   setServerLogger(createServerLogger({ sink, level: "debug" }));
   const failure = new Error("Synthetic private provider failure");
-  const provider = createJiraProviderForCatalog(() => ({
-    deployment: "data-center", baseUrl: "https://jira.example.invalid/context", http: vi.fn(),
-  }), ["jira.attach"], () => Promise.reject(failure));
+  const provider = createJiraProviderForCatalog(
+    () => ({
+      deployment: "data-center",
+      baseUrl: "https://jira.example.invalid/context",
+      http: vi.fn(),
+    }),
+    ["jira.attach"],
+    () => Promise.reject(failure),
+  );
   const tool = provider.tools()[0];
   if (tool === undefined) throw new TypeError("Missing attachment provider");
-  await expect(tool.execute({}, {
-    invocationId: "provider-failure", correlationId: "provider-failure", signal: new AbortController().signal,
-    beforeEffect: () => true,
-  })).rejects.toBe(failure);
+  await expect(
+    tool.execute(
+      {},
+      {
+        invocationId: "provider-failure",
+        correlationId: "provider-failure",
+        signal: new AbortController().signal,
+        beforeEffect: () => true,
+      },
+    ),
+  ).rejects.toBe(failure);
   const event = sink.events.find(({ op }) => op === "jira.operation.core");
   const line = formatActivityLogProofLine(event ?? {});
   expect(expectActivityLogProof("jira.operation.core.line", line)).toMatchObject({
-    operation: "jira.attach", stage: "provider-call", outcome: "failed", reason: "tool-failed",
+    operation: "jira.attach",
+    stage: "provider-call",
+    outcome: "failed",
+    reason: "tool-failed",
   });
   expect(line).not.toMatch(/Synthetic|private|provider failure/u);
 });

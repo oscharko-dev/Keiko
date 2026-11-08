@@ -1,7 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { jiraMutationToolId } from "../atlassian/jiraMutationToolId.js";
 import type { ChatToolExchange, ChatToolTranscript } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { JIRA_MUTATION_OPERATIONS, type JiraMutationOperation } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  JIRA_MUTATION_OPERATIONS,
+  type JiraMutationOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ChatToolReadGrant, ChatToolReadGrantView } from "@oscharko-dev/keiko-contracts";
 import {
   activityLogEvent,
@@ -118,13 +121,20 @@ function validCodingObservation(
   binding: JiraOperationBinding | undefined,
   nativeArgumentsDigest: string | undefined,
 ): boolean {
-  if (record.sourceKind !== "configured-mcp" || record.serverName !== "jira" ||
-      record.consumer?.kind !== "coding" || binding === undefined) return false;
+  if (
+    record.sourceKind !== "configured-mcp" ||
+    record.serverName !== "jira" ||
+    record.consumer?.kind !== "coding" ||
+    binding === undefined
+  )
+    return false;
   const operation = JIRA_MUTATION_OPERATIONS.find((name) => name === record.toolName);
-  return operation !== undefined &&
+  return (
+    operation !== undefined &&
     codingCallMatches(message, exchange, record, nativeArgumentsDigest) &&
     codingResultMatches(exchange, operation, binding) &&
-    mutationIntentError({ ...record, userMessageId: message.id }) === undefined;
+    mutationIntentError({ ...record, userMessageId: message.id }) === undefined
+  );
 }
 function codingCallMatches(
   message: ChatMessage,
@@ -132,9 +142,13 @@ function codingCallMatches(
   record: ChatToolMutationRecord,
   nativeArgumentsDigest: string | undefined,
 ): boolean {
-  return record.chatId === message.chatId && record.userMessageId === message.id &&
+  return (
+    record.chatId === message.chatId &&
+    record.userMessageId === message.id &&
     record.invocationId === exchange.call.id &&
-    nativeArgumentsDigest !== undefined && nativeArgumentsDigest === record.consumer?.argumentsDigest;
+    nativeArgumentsDigest !== undefined &&
+    nativeArgumentsDigest === record.consumer?.argumentsDigest
+  );
 }
 function codingResultMatches(
   exchange: ChatToolExchange,
@@ -143,11 +157,13 @@ function codingResultMatches(
 ): boolean {
   const result = exchange.result;
   if (result === undefined) return false;
-  return exchange.call.name === operation.replace(/[.-]/gu, "_") &&
+  return (
+    exchange.call.name === operation.replace(/[.-]/gu, "_") &&
     result.toolRef?.canonicalId === jiraMutationToolId(operation) &&
     (isResultObject(result.data)
       ? canonicalise(result.data.operationBinding) === canonicalise(binding)
-      : result.status === "denied" && result.reason === "effect-denied" && result.data === null);
+      : result.status === "denied" && result.reason === "effect-denied" && result.data === null)
+  );
 }
 function isResultObject(value: unknown): value is CatalogJsonObject {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -190,13 +206,16 @@ export function projectChatToolMutationHistory(
 ): ChatMessage {
   const message = projectChatReadConsentHistory(db, input);
   const transcript = message.toolTranscript;
-  if (message.role !== "user" || transcript === undefined)
-    return message;
-  const chatRecords = message.canonicalTurnRef === undefined ? [] :
-    readChatToolMutationTurn(db, message.chatId, message.canonicalTurnRef);
+  if (message.role !== "user" || transcript === undefined) return message;
+  const chatRecords =
+    message.canonicalTurnRef === undefined
+      ? []
+      : readChatToolMutationTurn(db, message.chatId, message.canonicalTurnRef);
   // This prefix only preselects a lookup; validCodingObservation proves its full stored identity.
-  const codingIds = transcript.exchanges.filter((exchange) =>
-    exchange.call.id.startsWith("mcp-") && operationBindings.has(exchange.call.id))
+  const codingIds = transcript.exchanges
+    .filter(
+      (exchange) => exchange.call.id.startsWith("mcp-") && operationBindings.has(exchange.call.id),
+    )
     .map((exchange) => exchange.call.id);
   const codingRecords = readCodingJiraMutationMessage(db, message.chatId, message.id, codingIds);
   const records = [...chatRecords, ...codingRecords];

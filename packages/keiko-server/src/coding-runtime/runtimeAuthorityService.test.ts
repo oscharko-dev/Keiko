@@ -914,7 +914,13 @@ describe("CodingRuntimeAuthorityService", () => {
         "delivery-substrate",
         "connector-access",
       ],
-      connectorScopes: ["source-control.read", "source-control.write", "issue-tracker.read", "issue-tracker.write", "issue-tracker.admin"],
+      connectorScopes: [
+        "source-control.read",
+        "source-control.write",
+        "issue-tracker.read",
+        "issue-tracker.write",
+        "issue-tracker.admin",
+      ],
       commandPolicy: { mode: "governed", requirePerCommandApproval: true },
       networkPolicy: { mode: "deny-all", allowLoopback: false, connectorScopes: [] },
     });
@@ -928,7 +934,13 @@ describe("CodingRuntimeAuthorityService", () => {
         "delivery-substrate",
         "connector-access",
       ],
-      connectorScopes: ["source-control.read", "source-control.write", "issue-tracker.read", "issue-tracker.write", "issue-tracker.admin"],
+      connectorScopes: [
+        "source-control.read",
+        "source-control.write",
+        "issue-tracker.read",
+        "issue-tracker.write",
+        "issue-tracker.admin",
+      ],
       commandPolicy: { mode: "governed", requirePerCommandApproval: true },
       networkPolicy: { mode: "deny-all", allowLoopback: false, connectorScopes: [] },
     });

@@ -1,4 +1,8 @@
-import { jiraPropertyUserText, jiraPropertyPathKey, jiraTemplateViolationGuidance } from "@oscharko-dev/keiko-connectors";
+import {
+  jiraPropertyUserText,
+  jiraPropertyPathKey,
+  jiraTemplateViolationGuidance,
+} from "@oscharko-dev/keiko-connectors";
 import {
   ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS,
   JIRA_TEMPLATE_RULE_IDS,
@@ -31,36 +35,52 @@ import {
   canConfirmJiraRelationLifecycle,
 } from "./jiraRelationLifecycleReceipts.js";
 import {
-  JIRA_CONFIGURATION_MUTATION_RECEIPTS, isJiraConfigurationReceiptOperation,
-  validJiraConfigurationReceipt, canConfirmJiraConfiguration,
+  JIRA_CONFIGURATION_MUTATION_RECEIPTS,
+  isJiraConfigurationReceiptOperation,
+  validJiraConfigurationReceipt,
+  canConfirmJiraConfiguration,
 } from "./jiraConfigurationMutationReceipts.js";
 import {
-  JIRA_PLANNING_LIFECYCLE_RECEIPTS, isJiraPlanningLifecycleOperation,
-  validJiraPlanningLifecycleReceipt, canConfirmJiraPlanningLifecycle,
+  JIRA_PLANNING_LIFECYCLE_RECEIPTS,
+  isJiraPlanningLifecycleOperation,
+  validJiraPlanningLifecycleReceipt,
+  canConfirmJiraPlanningLifecycle,
 } from "./jiraPlanningLifecycleReceipts.js";
 import {
-  JIRA_ACCESS_CONFIGURATION_RECEIPTS, isJiraAccessConfigurationOperation,
-  validJiraAccessConfigurationReceipt, canConfirmJiraAccessConfiguration,
+  JIRA_ACCESS_CONFIGURATION_RECEIPTS,
+  isJiraAccessConfigurationOperation,
+  validJiraAccessConfigurationReceipt,
+  canConfirmJiraAccessConfiguration,
 } from "./jiraAccessConfigurationReceipts.js";
 import {
-  JIRA_SCHEME_INSTANCE_RECEIPTS, isJiraSchemeInstanceOperation,
-  validJiraSchemeInstanceReceipt, canConfirmJiraSchemeInstance,
+  JIRA_SCHEME_INSTANCE_RECEIPTS,
+  isJiraSchemeInstanceOperation,
+  validJiraSchemeInstanceReceipt,
+  canConfirmJiraSchemeInstance,
 } from "./jiraSchemeInstanceReceipts.js";
 import {
-  JIRA_SYSTEM_ACTION_RECEIPTS, isJiraSystemActionOperation,
-  validJiraSystemActionReceipt, canConfirmJiraSystemAction,
+  JIRA_SYSTEM_ACTION_RECEIPTS,
+  isJiraSystemActionOperation,
+  validJiraSystemActionReceipt,
+  canConfirmJiraSystemAction,
 } from "./jiraSystemActionReceipts.js";
 import {
-  JIRA_RESOURCE_LIFECYCLE_RECEIPTS, isJiraResourceLifecycleOperation,
-  validJiraResourceLifecycleReceipt, canConfirmJiraResourceLifecycle,
+  JIRA_RESOURCE_LIFECYCLE_RECEIPTS,
+  isJiraResourceLifecycleOperation,
+  validJiraResourceLifecycleReceipt,
+  canConfirmJiraResourceLifecycle,
 } from "./jiraResourceLifecycleReceipts.js";
 import {
-  JIRA_IDENTITY_AVATAR_RECEIPTS, isJiraIdentityAvatarOperation,
-  validJiraIdentityAvatarReceipt, canConfirmJiraIdentityAvatar,
+  JIRA_IDENTITY_AVATAR_RECEIPTS,
+  isJiraIdentityAvatarOperation,
+  validJiraIdentityAvatarReceipt,
+  canConfirmJiraIdentityAvatar,
 } from "./jiraIdentityAvatarReceipts.js";
 import {
-  JIRA_PRIVATE_ACCOUNT_RECEIPTS, isJiraPrivateAccountOperation,
-  validJiraPrivateAccountReceipt, canConfirmJiraPrivateAccount,
+  JIRA_PRIVATE_ACCOUNT_RECEIPTS,
+  isJiraPrivateAccountOperation,
+  validJiraPrivateAccountReceipt,
+  canConfirmJiraPrivateAccount,
 } from "./jiraPrivateAccountReceipts.js";
 
 /**
@@ -81,10 +101,32 @@ const PROPERTY_RECEIPTS = {
   "jira.delete-board-property": ["propertyKey", "propertyPresent", "boardId"],
   "jira.set-sprint-property": ["propertyKey", "propertyPresent", "sprintId"],
   "jira.delete-sprint-property": ["propertyKey", "propertyPresent", "sprintId"],
-  "jira.set-comment-property": ["propertyKey", "propertyPresent", "issueId", "issueKey", "commentId"],
-  "jira.delete-comment-property": ["propertyKey", "propertyPresent", "issueId", "issueKey", "commentId"],
-  "jira.set-dashboard-item-property": ["propertyKey", "propertyPresent", "dashboardId", "selectedItemId"],
-  "jira.delete-dashboard-item-property": ["propertyKey", "propertyPresent", "dashboardId", "selectedItemId"],
+  "jira.set-comment-property": [
+    "propertyKey",
+    "propertyPresent",
+    "issueId",
+    "issueKey",
+    "commentId",
+  ],
+  "jira.delete-comment-property": [
+    "propertyKey",
+    "propertyPresent",
+    "issueId",
+    "issueKey",
+    "commentId",
+  ],
+  "jira.set-dashboard-item-property": [
+    "propertyKey",
+    "propertyPresent",
+    "dashboardId",
+    "selectedItemId",
+  ],
+  "jira.delete-dashboard-item-property": [
+    "propertyKey",
+    "propertyPresent",
+    "dashboardId",
+    "selectedItemId",
+  ],
   "jira.set-issue-property": ["propertyKey", "propertyPresent", "issueId", "issueKey"],
   "jira.delete-issue-property": ["propertyKey", "propertyPresent", "issueId", "issueKey"],
   "jira.set-issue-type-property": ["propertyKey", "propertyPresent", "issueTypeId"],
@@ -93,7 +135,9 @@ const PROPERTY_RECEIPTS = {
   "jira.delete-project-property": ["propertyKey", "propertyPresent", "projectId", "projectKey"],
   "jira.set-user-property": ["propertyKey", "propertyPresent", "userKey", "username"],
   "jira.delete-user-property": ["propertyKey", "propertyPresent", "userKey", "username"],
-} as const satisfies Readonly<Record<JiraEntityPropertyMutation, readonly (keyof JiraMutationReceipt)[]>>;
+} as const satisfies Readonly<
+  Record<JiraEntityPropertyMutation, readonly (keyof JiraMutationReceipt)[]>
+>;
 const MONITORING_RECEIPTS = {
   "jira.set-app-monitoring": ["monitoringEnabled"],
   "jira.set-ipd-monitoring": ["monitoringEnabled"],
@@ -171,30 +215,43 @@ const REQUIRED_RECEIPTS: Readonly<
 function confirmed(value: unknown): boolean {
   return value === true;
 }
-function propertyOperation(operation: JiraMutationOperation): operation is JiraEntityPropertyMutation {
+function propertyOperation(
+  operation: JiraMutationOperation,
+): operation is JiraEntityPropertyMutation {
   return Object.hasOwn(PROPERTY_RECEIPTS, operation);
 }
 function propertyContextValue(key: keyof JiraMutationReceipt, value: unknown): boolean {
   if (key === "propertyKey") return jiraPropertyPathKey(value);
   if (key === "propertyPresent") return typeof value === "boolean";
   if (key === "issueKey" || key === "projectKey") return isSafeAtlassianIdentifier(value);
-  if (key === "userKey" || key === "username")
-    return jiraPropertyUserText(value);
+  if (key === "userKey" || key === "username") return jiraPropertyUserText(value);
   return int64Identity(value);
 }
-function validPropertyReceipt(receipt: JiraMutationReceipt, operation: JiraEntityPropertyMutation): boolean {
+function validPropertyReceipt(
+  receipt: JiraMutationReceipt,
+  operation: JiraEntityPropertyMutation,
+): boolean {
   const keys = PROPERTY_RECEIPTS[operation];
-  return Reflect.ownKeys(receipt).length === keys.length &&
+  return (
+    Reflect.ownKeys(receipt).length === keys.length &&
     keys.every((key) => {
       const field = Object.getOwnPropertyDescriptor(receipt, key);
-      return field !== undefined && "value" in field && propertyContextValue(key, field.value) &&
-        (key !== "propertyPresent" || field.value === operation.startsWith("jira.set-"));
-    });
+      return (
+        field !== undefined &&
+        "value" in field &&
+        propertyContextValue(key, field.value) &&
+        (key !== "propertyPresent" || field.value === operation.startsWith("jira.set-"))
+      );
+    })
+  );
 }
 function monitoringOperation(operation: JiraMutationOperation): operation is MonitoringOperation {
   return Object.hasOwn(MONITORING_RECEIPTS, operation);
 }
-function validMonitoringReceipt(receipt: JiraMutationReceipt, operation: MonitoringOperation): boolean {
+function validMonitoringReceipt(
+  receipt: JiraMutationReceipt,
+  operation: MonitoringOperation,
+): boolean {
   const [key] = MONITORING_RECEIPTS[operation];
   if (Object.keys(receipt).length !== 1 || typeof receipt[key] !== "boolean") return false;
   if (operation === "jira.start-jmx-metrics") return receipt.jmxMetricsExposed === true;
@@ -364,21 +421,38 @@ function validProjectReceipt(receipt: JiraMutationReceipt): boolean {
     return isSafeAtlassianIdentifier(value);
   });
 }
-function resourceAccountIdentities(receipt: JiraMutationReceipt, operation: JiraMutationOperation): boolean | undefined {
-  if (isJiraResourceLifecycleOperation(operation)) return validJiraResourceLifecycleReceipt(receipt, operation);
-  if (isJiraIdentityAvatarOperation(operation)) return validJiraIdentityAvatarReceipt(receipt, operation);
-  return isJiraPrivateAccountOperation(operation) ? validJiraPrivateAccountReceipt(receipt, operation) : undefined;
+function resourceAccountIdentities(
+  receipt: JiraMutationReceipt,
+  operation: JiraMutationOperation,
+): boolean | undefined {
+  if (isJiraResourceLifecycleOperation(operation))
+    return validJiraResourceLifecycleReceipt(receipt, operation);
+  if (isJiraIdentityAvatarOperation(operation))
+    return validJiraIdentityAvatarReceipt(receipt, operation);
+  return isJiraPrivateAccountOperation(operation)
+    ? validJiraPrivateAccountReceipt(receipt, operation)
+    : undefined;
 }
-function specificIdentities(receipt: JiraMutationReceipt, operation: JiraMutationOperation): boolean | undefined {
+function specificIdentities(
+  receipt: JiraMutationReceipt,
+  operation: JiraMutationOperation,
+): boolean | undefined {
   const resource = resourceAccountIdentities(receipt, operation);
   if (resource !== undefined) return resource;
-  if (isJiraSystemActionOperation(operation)) return validJiraSystemActionReceipt(receipt, operation);
-  if (isJiraSchemeInstanceOperation(operation)) return validJiraSchemeInstanceReceipt(receipt, operation);
-  if (isJiraAccessConfigurationOperation(operation)) return validJiraAccessConfigurationReceipt(receipt, operation);
-  if (isJiraPlanningLifecycleOperation(operation)) return validJiraPlanningLifecycleReceipt(receipt, operation);
-  if (isJiraConfigurationReceiptOperation(operation)) return validJiraConfigurationReceipt(receipt, operation);
-  if (isJiraRelationLifecycleOperation(operation)) return validJiraRelationLifecycleReceipt(receipt, operation);
-  if (isJiraSavedConfigurationOperation(operation)) return validJiraSavedConfigurationReceipt(receipt, operation);
+  if (isJiraSystemActionOperation(operation))
+    return validJiraSystemActionReceipt(receipt, operation);
+  if (isJiraSchemeInstanceOperation(operation))
+    return validJiraSchemeInstanceReceipt(receipt, operation);
+  if (isJiraAccessConfigurationOperation(operation))
+    return validJiraAccessConfigurationReceipt(receipt, operation);
+  if (isJiraPlanningLifecycleOperation(operation))
+    return validJiraPlanningLifecycleReceipt(receipt, operation);
+  if (isJiraConfigurationReceiptOperation(operation))
+    return validJiraConfigurationReceipt(receipt, operation);
+  if (isJiraRelationLifecycleOperation(operation))
+    return validJiraRelationLifecycleReceipt(receipt, operation);
+  if (isJiraSavedConfigurationOperation(operation))
+    return validJiraSavedConfigurationReceipt(receipt, operation);
   return undefined;
 }
 function validIdentities(receipt: JiraMutationReceipt, operation: JiraMutationOperation): boolean {
@@ -419,20 +493,53 @@ function partialIdentity(receipt: JiraMutationReceipt, operation: JiraMutationOp
   );
 }
 function exactReceiptFamily(operation: JiraMutationOperation): boolean {
-  return resourceAccountOperation(operation) || isJiraSystemActionOperation(operation) || isJiraSchemeInstanceOperation(operation) || isJiraAccessConfigurationOperation(operation) || isJiraPlanningLifecycleOperation(operation) || isJiraConfigurationReceiptOperation(operation) ||
-    isJiraRelationLifecycleOperation(operation) || isJiraSavedConfigurationOperation(operation);
+  return (
+    resourceAccountOperation(operation) ||
+    isJiraSystemActionOperation(operation) ||
+    isJiraSchemeInstanceOperation(operation) ||
+    isJiraAccessConfigurationOperation(operation) ||
+    isJiraPlanningLifecycleOperation(operation) ||
+    isJiraConfigurationReceiptOperation(operation) ||
+    isJiraRelationLifecycleOperation(operation) ||
+    isJiraSavedConfigurationOperation(operation)
+  );
 }
 function resourceAccountOperation(operation: JiraMutationOperation): boolean {
-  return isJiraResourceLifecycleOperation(operation) || isJiraIdentityAvatarOperation(operation) || isJiraPrivateAccountOperation(operation);
+  return (
+    isJiraResourceLifecycleOperation(operation) ||
+    isJiraIdentityAvatarOperation(operation) ||
+    isJiraPrivateAccountOperation(operation)
+  );
 }
-const RECEIPT_ARRAY_KEYS = ["issueKeys", "replacementVersionIds", "sprintIds", "issueIds", "globalIds", "actorUserKeys", "actorGroupNames", "projectIds", "projectKeys", "columnIds",
-  "reindexRequestIds", "recipientUserKeys", "applicationRoleKeys", "fieldIds", "linkTypeIds", "subtaskIds"] as const;
-function ownReceiptArray(receipt: JiraMutationReceipt, key: (typeof RECEIPT_ARRAY_KEYS)[number]): readonly string[] | undefined {
+const RECEIPT_ARRAY_KEYS = [
+  "issueKeys",
+  "replacementVersionIds",
+  "sprintIds",
+  "issueIds",
+  "globalIds",
+  "actorUserKeys",
+  "actorGroupNames",
+  "projectIds",
+  "projectKeys",
+  "columnIds",
+  "reindexRequestIds",
+  "recipientUserKeys",
+  "applicationRoleKeys",
+  "fieldIds",
+  "linkTypeIds",
+  "subtaskIds",
+] as const;
+function ownReceiptArray(
+  receipt: JiraMutationReceipt,
+  key: (typeof RECEIPT_ARRAY_KEYS)[number],
+): readonly string[] | undefined {
   const own = Object.getOwnPropertyDescriptor(receipt, key);
   return own !== undefined && "value" in own ? receipt[key] : undefined;
 }
 function snapshotReceipt(receipt: JiraMutationReceipt): JiraMutationReceipt {
-  const snapshot: { -readonly [K in keyof JiraMutationReceipt]: JiraMutationReceipt[K] } = { ...receipt };
+  const snapshot: { -readonly [K in keyof JiraMutationReceipt]: JiraMutationReceipt[K] } = {
+    ...receipt,
+  };
   for (const key of RECEIPT_ARRAY_KEYS) {
     const values = ownReceiptArray(receipt, key);
     if (values !== undefined) snapshot[key] = Object.freeze([...values]);
@@ -443,7 +550,10 @@ function snapshotReceipt(receipt: JiraMutationReceipt): JiraMutationReceipt {
   snapshotReceiptMetadata(receipt, snapshot);
   return Object.freeze(snapshot);
 }
-function snapshotReceiptMetadata(receipt: JiraMutationReceipt, snapshot: { -readonly [K in keyof JiraMutationReceipt]: JiraMutationReceipt[K] }): void {
+function snapshotReceiptMetadata(
+  receipt: JiraMutationReceipt,
+  snapshot: { -readonly [K in keyof JiraMutationReceipt]: JiraMutationReceipt[K] },
+): void {
   for (const key of ["bulkFailedElementNumbers", "bulkFailureStatuses"] as const) {
     const own = Object.getOwnPropertyDescriptor(receipt, key);
     const values = own !== undefined && "value" in own ? receipt[key] : undefined;
@@ -519,18 +629,45 @@ function boundedViolations(
 }
 
 /** Families with own-data constraints validate the original object before any spread. */
-function validOriginalReceipt(receipt: JiraMutationReceipt, operation: JiraMutationOperation): boolean {
+function validOriginalReceipt(
+  receipt: JiraMutationReceipt,
+  operation: JiraMutationOperation,
+): boolean {
   return specificIdentities(receipt, operation) ?? true;
 }
-function canConfirmResourceAccount(operation: JiraMutationOperation, receipt: JiraMutationReceipt): boolean {
-  return canConfirmJiraResourceLifecycle(operation) && canConfirmJiraIdentityAvatar(operation, receipt) && canConfirmJiraPrivateAccount(operation, receipt);
+function canConfirmResourceAccount(
+  operation: JiraMutationOperation,
+  receipt: JiraMutationReceipt,
+): boolean {
+  return (
+    canConfirmJiraResourceLifecycle(operation) &&
+    canConfirmJiraIdentityAvatar(operation, receipt) &&
+    canConfirmJiraPrivateAccount(operation, receipt)
+  );
 }
-function canConfirmOperation(operation: JiraMutationOperation, receipt: JiraMutationReceipt): boolean {
-  return canConfirmResourceAccount(operation, receipt) && canConfirmJiraSystemAction(operation) && canConfirmJiraSavedConfiguration(operation) && canConfirmJiraRelationLifecycle(operation) &&
-    canConfirmJiraConfiguration(operation) && canConfirmJiraPlanningLifecycle(operation) && canConfirmJiraAccessConfiguration(operation) && canConfirmJiraSchemeInstance(operation, receipt);
+function canConfirmOperation(
+  operation: JiraMutationOperation,
+  receipt: JiraMutationReceipt,
+): boolean {
+  return (
+    canConfirmResourceAccount(operation, receipt) &&
+    canConfirmJiraSystemAction(operation) &&
+    canConfirmJiraSavedConfiguration(operation) &&
+    canConfirmJiraRelationLifecycle(operation) &&
+    canConfirmJiraConfiguration(operation) &&
+    canConfirmJiraPlanningLifecycle(operation) &&
+    canConfirmJiraAccessConfiguration(operation) &&
+    canConfirmJiraSchemeInstance(operation, receipt)
+  );
 }
 function retainMissingAcknowledgement(operation: JiraMutationOperation): boolean {
-  return resourceAccountOperation(operation) || isJiraSystemActionOperation(operation) || isJiraRelationLifecycleOperation(operation) || isJiraAccessConfigurationOperation(operation) || isJiraSchemeInstanceOperation(operation);
+  return (
+    resourceAccountOperation(operation) ||
+    isJiraSystemActionOperation(operation) ||
+    isJiraRelationLifecycleOperation(operation) ||
+    isJiraAccessConfigurationOperation(operation) ||
+    isJiraSchemeInstanceOperation(operation)
+  );
 }
 
 /** An attempt is a success only with the validated identities its operation must return. */
@@ -542,15 +679,19 @@ export function validJiraMutationAttempt(
   if (!validOriginalReceipt(value.receipt, operation))
     return { ok: false, reason: "malformed-payload" };
   if (!canConfirmOperation(operation, value.receipt))
-    return failedAttempt({ ok: false, reason: "malformed-payload", receipt: value.receipt }, operation);
+    return failedAttempt(
+      { ok: false, reason: "malformed-payload", receipt: value.receipt },
+      operation,
+    );
   const receipt = Object.freeze({ ...value.receipt });
   const valid =
     confirmed(value.ok) &&
     REQUIRED_RECEIPTS[operation].every((key) => receipt[key] !== undefined) &&
     validIdentities(receipt, operation);
-  if (!valid) return retainMissingAcknowledgement(operation)
-    ? failedAttempt({ ok: false, reason: "malformed-payload", receipt: value.receipt }, operation)
-    : { ok: false, reason: "malformed-payload" };
+  if (!valid)
+    return retainMissingAcknowledgement(operation)
+      ? failedAttempt({ ok: false, reason: "malformed-payload", receipt: value.receipt }, operation)
+      : { ok: false, reason: "malformed-payload" };
   const links = sanitizeJiraMutationLinkAccount(value.links);
   return {
     ok: true,
@@ -612,10 +753,15 @@ export const JIRA_ALREADY_REFUSED_GUIDANCE =
 export const JIRA_UNCERTAIN_GUIDANCE =
   "Whether this change reached Jira is uncertain. Do not repeat it and make no further change in this turn. Tell the user in plain language that the change may or may not have been applied and ask them to check its outcome in Jira before deciding whether to try again.";
 
-function localRefusalGuidance(outcome: JiraMutationResultState, reason: AtlassianConnectorWriteFailureReason | undefined): string | undefined {
+function localRefusalGuidance(
+  outcome: JiraMutationResultState,
+  reason: AtlassianConnectorWriteFailureReason | undefined,
+): string | undefined {
   if (outcome !== "rejected" && outcome !== "not-dispatched") return undefined;
-  if (reason === "effect-denied") return "Local authority no longer permits this Jira request. Stop and tell the user to review the selected Pod and allowed connector scopes together with the recorded outcome before deciding on another request. Do not retry automatically.";
-  if (reason === "cancelled") return "This Jira request was cancelled. Stop and tell the user to review the recorded outcome before deciding on another request. Cancellation does not undo a change already acknowledged by Jira. Do not retry automatically.";
+  if (reason === "effect-denied")
+    return "Local authority no longer permits this Jira request. Stop and tell the user to review the selected Pod and allowed connector scopes together with the recorded outcome before deciding on another request. Do not retry automatically.";
+  if (reason === "cancelled")
+    return "This Jira request was cancelled. Stop and tell the user to review the recorded outcome before deciding on another request. Cancellation does not undo a change already acknowledged by Jira. Do not retry automatically.";
   return undefined;
 }
 

@@ -14,7 +14,10 @@ interface Selection {
 }
 const DEFINITIONS: Readonly<Record<RuntimeRead, Selection>> = {
   "jira.jmx-metrics-exposed": { path: "monitoring/jmx/areMetricsExposed", kind: "exposure" },
-  "jira.search-max-aggregation-buckets": { path: "searchLimits/maxAggregationBuckets", kind: "limit" },
+  "jira.search-max-aggregation-buckets": {
+    path: "searchLimits/maxAggregationBuckets",
+    kind: "limit",
+  },
   "jira.search-max-result-window": { path: "searchLimits/maxResultWindow", kind: "limit" },
 };
 function projectResponse(response: JiraReadResponse, selected: Selection): ManagedMcpToolResult {

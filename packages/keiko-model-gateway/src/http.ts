@@ -238,7 +238,8 @@ export interface GatewayFetchOptions extends RequestInit {
   readonly logContext?: ModelGatewayLogContext | undefined;
 }
 
-type PreparedRequestInit = RequestInit & Pick<GatewayFetchOptions, "prepareHeaders" | "prepareBody">;
+type PreparedRequestInit = RequestInit &
+  Pick<GatewayFetchOptions, "prepareHeaders" | "prepareBody">;
 
 function dispatchHeaderRecord(init: PreparedRequestInit): Record<string, string> {
   init.signal?.throwIfAborted();
@@ -260,13 +261,15 @@ function preparedFetchInit(init: PreparedRequestInit): RequestInit {
 function preparedBody(init: PreparedRequestInit): string {
   init.signal?.throwIfAborted();
   const body = init.prepareBody?.();
-  if (typeof body !== "string") throw new TypeError("Request body preparation must return a string synchronously.");
+  if (typeof body !== "string")
+    throw new TypeError("Request body preparation must return a string synchronously.");
   init.signal?.throwIfAborted();
   return body;
 }
 
 async function preparedWire(init: PreparedRequestInit): Promise<{
-  readonly headers: Record<string, string>; readonly body: Awaited<ReturnType<typeof bodyToWire>>;
+  readonly headers: Record<string, string>;
+  readonly body: Awaited<ReturnType<typeof bodyToWire>>;
 }> {
   // Preserve static-body validation before credential materialization for every existing caller.
   if (init.prepareBody === undefined) {
@@ -1822,8 +1825,15 @@ function gatewayRequestInit(
 function oneUseBody(options: GatewayFetchOptions): GatewayFetchOptions["prepareBody"] {
   const prepare = options.prepareBody;
   if (prepare === undefined) return undefined;
-  if (typeof prepare !== "function" || typeof options.prepareHeaders !== "function" || options.singleAttempt !== true ||
-      (options.body !== undefined && options.body !== null)) throw new TypeError("Private body preparation requires one admitted attempt and no static body.");
+  if (
+    typeof prepare !== "function" ||
+    typeof options.prepareHeaders !== "function" ||
+    options.singleAttempt !== true ||
+    (options.body !== undefined && options.body !== null)
+  )
+    throw new TypeError(
+      "Private body preparation requires one admitted attempt and no static body.",
+    );
   let consumed = false;
   return () => {
     if (consumed) throw new TypeError("Private request body was already prepared.");
@@ -1848,7 +1858,12 @@ async function performGatewayFetch(url: string, options: GatewayFetchOptions): P
     ...rest
   } = options;
   const log = resolveLogSink(logOption);
-  const init = gatewayRequestInit(rest, timeoutMs, prepareHeaders, oneUseBody({ ...options, prepareBody }));
+  const init = gatewayRequestInit(
+    rest,
+    timeoutMs,
+    prepareHeaders,
+    oneUseBody({ ...options, prepareBody }),
+  );
   const plan = planGatewayProxy(url, fetchImpl, egress, log);
   refuseUndelegatedProxiedHostnameEgress(plan.target, plan.proxy, egress);
   refuseUnpinnableResearchEgress(plan.proxy, egress);

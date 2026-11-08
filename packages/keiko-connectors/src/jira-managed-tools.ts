@@ -1,8 +1,17 @@
 import { isJiraProjectLifecycleMutation } from "./jira-project-lifecycle-values.js";
-import { isJiraPrivateAccountRead, executeJiraPrivateAccountRead } from "./jira-managed-private-account.js";
+import {
+  isJiraPrivateAccountRead,
+  executeJiraPrivateAccountRead,
+} from "./jira-managed-private-account.js";
 import { executeJiraSearchPostRead, isJiraSearchPostRead } from "./jira-managed-search-post.js";
-import { executeJiraWorklogsByIdRead, isJiraWorklogsByIdRead } from "./jira-managed-worklogs-by-id.js";
-import { executeJiraAnonymizationRead, isJiraAnonymizationRead } from "./jira-managed-anonymization-reads.js";
+import {
+  executeJiraWorklogsByIdRead,
+  isJiraWorklogsByIdRead,
+} from "./jira-managed-worklogs-by-id.js";
+import {
+  executeJiraAnonymizationRead,
+  isJiraAnonymizationRead,
+} from "./jira-managed-anonymization-reads.js";
 import { executeJiraSessionRead, isJiraSessionRead } from "./jira-managed-session-read.js";
 import { executeJiraEmailTemplateRead } from "./jira-managed-email-templates.js";
 import { jiraManagedEmailTemplatePorts } from "./jira-managed-email-template-ports.js";
@@ -17,30 +26,84 @@ import {
 import { executeJiraScreenRead, isJiraScreenRead } from "./jira-managed-screen-reads.js";
 import { executeJiraUserRead, isJiraUserRead } from "./jira-managed-user-reads.js";
 import { executeJiraDirectoryRead, isJiraDirectoryRead } from "./jira-managed-directory-reads.js";
-import { executeJiraAccessSchemeRead, isJiraAccessSchemeRead } from "./jira-managed-access-schemes.js";
-import { executeJiraNotificationSchemeRead, isJiraNotificationSchemeRead } from "./jira-managed-notification-schemes.js";
-import { executeJiraProjectAssociationRead, isJiraProjectAssociationRead } from "./jira-managed-project-associations.js";
+import {
+  executeJiraAccessSchemeRead,
+  isJiraAccessSchemeRead,
+} from "./jira-managed-access-schemes.js";
+import {
+  executeJiraNotificationSchemeRead,
+  isJiraNotificationSchemeRead,
+} from "./jira-managed-notification-schemes.js";
+import {
+  executeJiraProjectAssociationRead,
+  isJiraProjectAssociationRead,
+} from "./jira-managed-project-associations.js";
 import { jiraProjectLifecycleRequests } from "./jira-project-lifecycle-request.js";
-import { executeJiraCoreMetadataRead, isJiraCoreMetadataRead } from "./jira-managed-core-metadata.js";
+import {
+  executeJiraCoreMetadataRead,
+  isJiraCoreMetadataRead,
+} from "./jira-managed-core-metadata.js";
 import { executeJiraInstanceRead, isJiraInstanceRead } from "./jira-managed-instance-reads.js";
-import { executeJiraConfigurationRead, isJiraConfigurationRead } from "./jira-managed-configuration-reads.js";
-import { executeJiraRuntimeSettingsRead, isJiraRuntimeSettingsRead } from "./jira-managed-runtime-settings.js";
-import { executeJiraMaintenanceRead, isJiraMaintenanceRead } from "./jira-managed-maintenance-reads.js";
-import { executeJiraJobObservationRead, isJiraJobObservationRead } from "./jira-managed-job-observations.js";
-import { executeJiraAccountDiagnosticRead, isJiraAccountDiagnosticRead } from "./jira-managed-account-diagnostics.js";
-import { executeJiraApplicationSettingsRead, isJiraApplicationSettingsRead } from "./jira-managed-application-settings.js";
-import { executeJiraAdministrativeObservationRead, isJiraAdministrativeObservationRead } from "./jira-managed-administrative-observations.js";
-import { executeJiraRemoteVersionLinkRead, isJiraRemoteVersionLinkRead } from "./jira-managed-remote-version-links.js";
+import {
+  executeJiraConfigurationRead,
+  isJiraConfigurationRead,
+} from "./jira-managed-configuration-reads.js";
+import {
+  executeJiraRuntimeSettingsRead,
+  isJiraRuntimeSettingsRead,
+} from "./jira-managed-runtime-settings.js";
+import {
+  executeJiraMaintenanceRead,
+  isJiraMaintenanceRead,
+} from "./jira-managed-maintenance-reads.js";
+import {
+  executeJiraJobObservationRead,
+  isJiraJobObservationRead,
+} from "./jira-managed-job-observations.js";
+import {
+  executeJiraAccountDiagnosticRead,
+  isJiraAccountDiagnosticRead,
+} from "./jira-managed-account-diagnostics.js";
+import {
+  executeJiraApplicationSettingsRead,
+  isJiraApplicationSettingsRead,
+} from "./jira-managed-application-settings.js";
+import {
+  executeJiraAdministrativeObservationRead,
+  isJiraAdministrativeObservationRead,
+} from "./jira-managed-administrative-observations.js";
+import {
+  executeJiraRemoteVersionLinkRead,
+  isJiraRemoteVersionLinkRead,
+} from "./jira-managed-remote-version-links.js";
 import { executeJiraWorklogFeedRead, isJiraWorklogFeedRead } from "./jira-managed-worklog-feeds.js";
-import { executeJiraEntityPropertyRead, isJiraEntityPropertyRead } from "./jira-managed-entity-properties.js";
-import { executeJiraIssueContextRead, isJiraIssueContextRead } from "./jira-managed-issue-context-reads.js";
-import { executeJiraResourceLookupRead, isJiraResourceLookupRead } from "./jira-managed-resource-lookups.js";
+import {
+  executeJiraEntityPropertyRead,
+  isJiraEntityPropertyRead,
+} from "./jira-managed-entity-properties.js";
+import {
+  executeJiraIssueContextRead,
+  isJiraIssueContextRead,
+} from "./jira-managed-issue-context-reads.js";
+import {
+  executeJiraResourceLookupRead,
+  isJiraResourceLookupRead,
+} from "./jira-managed-resource-lookups.js";
 import { executeJiraColumnRead, isJiraColumnRead } from "./jira-managed-column-reads.js";
 import { executeJiraRoleRead, isJiraRoleRead } from "./jira-managed-role-reads.js";
-import { executeJiraPrioritySchemeRead, isJiraPrioritySchemeRead } from "./jira-managed-priority-schemes.js";
+import {
+  executeJiraPrioritySchemeRead,
+  isJiraPrioritySchemeRead,
+} from "./jira-managed-priority-schemes.js";
 import { executeJiraReleaseRead, isJiraReleaseRead } from "./jira-managed-release-reads.js";
-import { executeJiraScopedDirectoryRead, isJiraScopedDirectoryRead } from "./jira-managed-scoped-directory.js";
-import { executeJiraFieldDirectoryRead, isJiraFieldDirectoryRead } from "./jira-managed-field-directory.js";
+import {
+  executeJiraScopedDirectoryRead,
+  isJiraScopedDirectoryRead,
+} from "./jira-managed-scoped-directory.js";
+import {
+  executeJiraFieldDirectoryRead,
+  isJiraFieldDirectoryRead,
+} from "./jira-managed-field-directory.js";
 import { executeJiraJqlMetadataRead, isJiraJqlMetadataRead } from "./jira-managed-jql-metadata.js";
 import {
   executeJiraParticipationRead,
@@ -151,8 +214,11 @@ export type JiraManagedMutationExecutor<Context extends ManagedMcpInvocationCont
   operation: JiraMutationOperation,
   args: CatalogJsonObject,
   context: Context,
-  execute: (http: AtlassianHttpBodyPort, trace?: JiraTraceRequest,
-    privatePorts?: Pick<JiraManagedConnection, "privateIdentity" | "avatars">) => Promise<JiraMutationAttempt>,
+  execute: (
+    http: AtlassianHttpBodyPort,
+    trace?: JiraTraceRequest,
+    privatePorts?: Pick<JiraManagedConnection, "privateIdentity" | "avatars">,
+  ) => Promise<JiraMutationAttempt>,
 ) => Promise<ManagedMcpToolResult>;
 
 interface Project extends CatalogJsonObject {
@@ -367,7 +433,8 @@ async function read<Context extends ManagedMcpInvocationContext>(
   if (agile !== undefined || agileContext !== undefined || filter !== undefined) {
     const connected = await connection(context);
     if (connected.deployment !== "data-center") return failure("unsupported-deployment");
-    if (agileContext !== undefined) return executeJiraAgileContextRead(agileContext, args, context, connected);
+    if (agileContext !== undefined)
+      return executeJiraAgileContextRead(agileContext, args, context, connected);
     return agile !== undefined
       ? executeJiraAgileRead(agile, args, context, connected)
       : executeJiraFilterRead(name, args, context, connected);
@@ -425,7 +492,11 @@ type NativeDetailRead =
 function isNativeDetailRead(name: string): name is NativeDetailRead {
   if (name === "jira.email-template-pack") return true;
   return [
-    isJiraPrivateAccountRead, isJiraSearchPostRead, isJiraWorklogsByIdRead, isJiraAnonymizationRead, isJiraSessionRead,
+    isJiraPrivateAccountRead,
+    isJiraSearchPostRead,
+    isJiraWorklogsByIdRead,
+    isJiraAnonymizationRead,
+    isJiraSessionRead,
     isJiraRemoteVersionLinkRead,
     isJiraWorklogFeedRead,
     isJiraAdministrativeObservationRead,
@@ -463,14 +534,21 @@ function isNativeDetailRead(name: string): name is NativeDetailRead {
     isJiraJqlMetadataRead,
   ].some((accepts) => accepts(name));
 }
-type NativeReadHandler = (name: NativeDetailRead, args: CatalogJsonObject,
-  request: ReturnType<typeof requestFor>) => Promise<ManagedMcpToolResult> | undefined;
+type NativeReadHandler = (
+  name: NativeDetailRead,
+  args: CatalogJsonObject,
+  request: ReturnType<typeof requestFor>,
+) => Promise<ManagedMcpToolResult> | undefined;
 /** Keep family narrowing at the call site without duplicating the dispatch chain. */
 function nativeReadHandler<Name extends NativeDetailRead>(
   accepts: (name: string) => name is Name,
-  execute: (name: Name, args: CatalogJsonObject, request: ReturnType<typeof requestFor>) => Promise<ManagedMcpToolResult>,
+  execute: (
+    name: Name,
+    args: CatalogJsonObject,
+    request: ReturnType<typeof requestFor>,
+  ) => Promise<ManagedMcpToolResult>,
 ): NativeReadHandler {
-  return (name, args, request) => accepts(name) ? execute(name, args, request) : undefined;
+  return (name, args, request) => (accepts(name) ? execute(name, args, request) : undefined);
 }
 const ADMINISTRATION_READS: readonly NativeReadHandler[] = [
   nativeReadHandler(isJiraAdministrativeObservationRead, executeJiraAdministrativeObservationRead),
@@ -518,7 +596,8 @@ function linkedIssueDetailRead(
   request: ReturnType<typeof requestFor>,
   baseUrl: string,
 ): Promise<ManagedMcpToolResult> {
-  if (isJiraIssueContextRead(name)) return executeJiraIssueContextRead(name, args, request, baseUrl);
+  if (isJiraIssueContextRead(name))
+    return executeJiraIssueContextRead(name, args, request, baseUrl);
   if (isJiraCommentRead(name)) return executeJiraCommentRead(name, args, request, baseUrl);
   if (isJiraIssueDetailRead(name)) return executeJiraIssueDetailRead(name, args, request);
   throw new TypeError("Unsupported Jira detail read");
@@ -531,13 +610,22 @@ function selectedObservationRead(
   request: ReturnType<typeof requestFor>,
 ): Promise<ManagedMcpToolResult> | undefined {
   if (name === "jira.project-priority-scheme")
-    return executeJiraProjectAssociationRead(name, args, request, jiraProjectLifecycleRequests(connection, context).priority.read);
+    return executeJiraProjectAssociationRead(
+      name,
+      args,
+      request,
+      jiraProjectLifecycleRequests(connection, context).priority.read,
+    );
   if (name === "jira.email-template-pack") {
     const ports = jiraManagedEmailTemplatePorts(connection, context, request, true);
-    return ports === undefined ? Promise.resolve(failure("unavailable")) : executeJiraEmailTemplateRead(args, ports);
+    return ports === undefined
+      ? Promise.resolve(failure("unavailable"))
+      : executeJiraEmailTemplateRead(args, ports);
   }
-  if (isJiraPrivateAccountRead(name)) return executeJiraPrivateAccountRead(name, args, request, connection.privateIdentity);
-  if (isJiraSearchPostRead(name)) return executeJiraSearchPostRead(args, request, connection.baseUrl);
+  if (isJiraPrivateAccountRead(name))
+    return executeJiraPrivateAccountRead(name, args, request, connection.privateIdentity);
+  if (isJiraSearchPostRead(name))
+    return executeJiraSearchPostRead(args, request, connection.baseUrl);
   if (isJiraWorklogsByIdRead(name)) return executeJiraWorklogsByIdRead(args, request);
   if (isJiraAnonymizationRead(name)) return executeJiraAnonymizationRead(name, args, request);
   if (isJiraSessionRead(name)) return executeJiraSessionRead(args, context, connection);
@@ -554,11 +642,12 @@ async function nativeDetailRead<Context extends ManagedMcpInvocationContext>(
   const request = requestFor(connected, context);
   const selectedObservation = selectedObservationRead(name, args, context, connected, request);
   if (selectedObservation !== undefined) return selectedObservation;
-  if (isJiraEntityPropertyRead(name)) return executeJiraEntityPropertyRead(name, args, {
-    platform: request,
-    agile: jiraAgileRequest(connected, context),
-    baseUrl: connected.baseUrl,
-  });
+  if (isJiraEntityPropertyRead(name))
+    return executeJiraEntityPropertyRead(name, args, {
+      platform: request,
+      agile: jiraAgileRequest(connected, context),
+      baseUrl: connected.baseUrl,
+    });
   const administration = administrationRead(name, args, request);
   if (administration !== undefined) return administration;
   if (isJiraParticipationRead(name))
@@ -597,10 +686,11 @@ async function readIssueOrMetadata<Context extends ManagedMcpInvocationContext>(
   const { deployment, baseUrl } = connected;
   if (deployment !== "data-center") return failure("unsupported-deployment");
   const url = atlassianApiUrl(atlassianApiEndpointsFor(baseUrl, "/rest/api/2/"), selected.path);
-  const outcome = await executeAdmittedJiraRequest(
-    connected, context, context.signal,
-    { method: "GET", url, expect: ARRAY_READ_NAMES.has(name) ? "json-array" : "json" },
-  );
+  const outcome = await executeAdmittedJiraRequest(connected, context, context.signal, {
+    method: "GET",
+    url,
+    expect: ARRAY_READ_NAMES.has(name) ? "json-array" : "json",
+  });
   if (!outcome.ok) return failure(outcome.reason, outcome.remote);
   const { startAt, maxResults } = selected;
   if (ARRAY_READ_NAMES.has(name))
@@ -705,10 +795,19 @@ function managedTool<Context extends ManagedMcpInvocationContext>(
         operation,
         structuredClone(snapshot),
         context,
-        (http, trace, privatePorts) => executeJiraManagedMutation(operation, snapshot, context, {
-          ...selected, http, ...privatePorts,
-          avatars: { ...selected.avatars, ...privatePorts?.avatars },
-        }, trace),
+        (http, trace, privatePorts) =>
+          executeJiraManagedMutation(
+            operation,
+            snapshot,
+            context,
+            {
+              ...selected,
+              http,
+              ...privatePorts,
+              avatars: { ...selected.avatars, ...privatePorts?.avatars },
+            },
+            trace,
+          ),
       );
       if (isJiraProjectMutation(operation) || isJiraProjectLifecycleMutation(operation))
         return withProjectLink(result, selected.baseUrl);

@@ -44,7 +44,9 @@ export interface Observation {
   readonly definition: Extract<JiraOperationDefinition, { readonly kind: "native" }>;
 }
 const UNCONFIRMED_NATIVE_OPERATIONS: ReadonlySet<string> = new Set([
-  ...Object.entries(FINAL_EXPECTED_OUTCOMES).filter(([, outcome]) => outcome === "succeeded-unconfirmed").map(([name]) => name),
+  ...Object.entries(FINAL_EXPECTED_OUTCOMES)
+    .filter(([, outcome]) => outcome === "succeeded-unconfirmed")
+    .map(([name]) => name),
   "jira.add-group-user",
   "jira.add-user-application",
   "jira.approve-cluster-upgrade",
@@ -74,20 +76,43 @@ const UNCONFIRMED_NATIVE_OPERATIONS: ReadonlySet<string> = new Set([
   "jira.start-cluster-upgrade",
   "jira.start-reindex",
 
-  "jira.delete-issue-type-scheme", "jira.add-issue-type-scheme-projects", "jira.set-issue-type-scheme-projects",
-  "jira.clear-issue-type-scheme-projects", "jira.remove-issue-type-scheme-project", "jira.delete-priority-scheme",
-  "jira.delete-workflow-scheme", "jira.set-workflow-scheme-default", "jira.delete-workflow-scheme-default",
-  "jira.set-workflow-scheme-issue-type", "jira.delete-workflow-scheme-issue-type",
-  "jira.set-workflow-scheme-workflow", "jira.delete-workflow-scheme-workflow", "jira.set-instance-base-url",
-  "jira.upload-email-template-pack", "jira.apply-email-template-pack", "jira.revert-email-template-pack",
-  "jira.delete-filter", "jira.delete-my-preference", "jira.delete-component",
-  "jira.merge-version", "jira.remove-and-swap-version",
-  "jira.add-default-screen-field", "jira.delete-board",
-  "jira.delete-sprint", "jira.swap-sprints", "jira.unmap-all-sprints",
-  "jira.delete-project-category", "jira.rank-epic", "jira.rank-issues",
-  "jira.delete-permission-scheme", "jira.delete-role", "jira.add-role-default-actors",
-  "jira.delete-role-default-actor", "jira.add-project-role-actors",
-  "jira.set-project-role-actors", "jira.delete-project-role-actor",
+  "jira.delete-issue-type-scheme",
+  "jira.add-issue-type-scheme-projects",
+  "jira.set-issue-type-scheme-projects",
+  "jira.clear-issue-type-scheme-projects",
+  "jira.remove-issue-type-scheme-project",
+  "jira.delete-priority-scheme",
+  "jira.delete-workflow-scheme",
+  "jira.set-workflow-scheme-default",
+  "jira.delete-workflow-scheme-default",
+  "jira.set-workflow-scheme-issue-type",
+  "jira.delete-workflow-scheme-issue-type",
+  "jira.set-workflow-scheme-workflow",
+  "jira.delete-workflow-scheme-workflow",
+  "jira.set-instance-base-url",
+  "jira.upload-email-template-pack",
+  "jira.apply-email-template-pack",
+  "jira.revert-email-template-pack",
+  "jira.delete-filter",
+  "jira.delete-my-preference",
+  "jira.delete-component",
+  "jira.merge-version",
+  "jira.remove-and-swap-version",
+  "jira.add-default-screen-field",
+  "jira.delete-board",
+  "jira.delete-sprint",
+  "jira.swap-sprints",
+  "jira.unmap-all-sprints",
+  "jira.delete-project-category",
+  "jira.rank-epic",
+  "jira.rank-issues",
+  "jira.delete-permission-scheme",
+  "jira.delete-role",
+  "jira.add-role-default-actors",
+  "jira.delete-role-default-actor",
+  "jira.add-project-role-actors",
+  "jira.set-project-role-actors",
+  "jira.delete-project-role-actor",
 ]);
 export async function observeNativeJiraOperation(
   scenario: Scenario,
@@ -168,13 +193,21 @@ export function assertNativeJiraPrimary(observation: Observation, scenario: Scen
     .filter((request) => request.method === expected.method)
     .at(scenario.primaryMethodIndex ?? 0);
   if (primary === undefined) throw new TypeError("No independent native operation was dispatched");
-  expect([primary.method, primary.url]).toEqual([expected.method,
-    `https://jira.example.invalid/context${expected.apiRoot}/${expected.path}`]);
-  expect([observation.definition.method, observation.definition.apiRoot]).toEqual([expected.method, expected.apiRoot]);
+  expect([primary.method, primary.url]).toEqual([
+    expected.method,
+    `https://jira.example.invalid/context${expected.apiRoot}/${expected.path}`,
+  ]);
+  expect([observation.definition.method, observation.definition.apiRoot]).toEqual([
+    expected.method,
+    expected.apiRoot,
+  ]);
 }
 
 /** Registry agreement is additional consistency evidence, never an independent native oracle. */
-export function assertNativeJiraRegistryAgreement(observation: Observation, scenario: Scenario): void {
+export function assertNativeJiraRegistryAgreement(
+  observation: Observation,
+  scenario: Scenario,
+): void {
   const { definition, requests } = observation;
   const primary = requests
     .filter((request) => request.method === definition.method)

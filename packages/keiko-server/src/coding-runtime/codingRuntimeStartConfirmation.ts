@@ -85,7 +85,9 @@ export function codingRuntimeStartConfirmationClaim(
           ? {}
           : { issueBindingDigest: facts.issueBindingDigest }),
         ...(facts.jiraPod === undefined ? {} : { jiraPod: facts.jiraPod }),
-        ...(facts.connectorScopes === undefined ? {} : { connectorScopes: [...new Set(facts.connectorScopes)].sort() }),
+        ...(facts.connectorScopes === undefined
+          ? {}
+          : { connectorScopes: [...new Set(facts.connectorScopes)].sort() }),
         project: { id: facts.projectId, digest: facts.projectDigest },
         ...(facts.repositoryIdentity === undefined
           ? {}

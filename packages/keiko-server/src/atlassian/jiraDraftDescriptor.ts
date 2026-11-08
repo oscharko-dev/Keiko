@@ -27,59 +27,59 @@ const DESCRIPTION =
 
 export function jiraDraftStageDeclaration(): ManagedMcpToolDeclaration {
   return Object.freeze({
-  name: "jira.draft-stage",
-  risk: "read",
-  descriptor: createToolDescriptor({
-    toolRef: createToolRef("keiko.jira.draft.stage", 1),
-    description: DESCRIPTION,
-    inputSchema: compileExternalCatalogSchema(
-      object(
-        {
-          draftId: JIRA_DRAFT_ID_SCHEMA,
-          items: {
-            type: "array",
-            minItems: 1,
-            maxItems: JIRA_DRAFT_PAGE_ITEMS_MAX,
-            items: JIRA_DRAFT_ITEM_SCHEMA,
+    name: "jira.draft-stage",
+    risk: "read",
+    descriptor: createToolDescriptor({
+      toolRef: createToolRef("keiko.jira.draft.stage", 1),
+      description: DESCRIPTION,
+      inputSchema: compileExternalCatalogSchema(
+        object(
+          {
+            draftId: JIRA_DRAFT_ID_SCHEMA,
+            items: {
+              type: "array",
+              minItems: 1,
+              maxItems: JIRA_DRAFT_PAGE_ITEMS_MAX,
+              items: JIRA_DRAFT_ITEM_SCHEMA,
+            },
           },
-        },
-        ["items"],
+          ["items"],
+        ),
       ),
-    ),
-    resultSchema: object(
-      {
-        outcome: { type: "string", enum: ["succeeded", "failed", "rejected"] },
-        reason: text(64),
-        requirementRefusal: REQUIREMENT_REFUSAL,
-        requirementProblems: REQUIREMENT_PROBLEMS,
-        draftId: text(64),
-        draftDigest: text(64),
-        newDraft: { type: "boolean" },
-        itemCount: { type: "integer", minimum: 0 },
-        pageCount: { type: "integer", minimum: 0 },
-        guidance: text(1024),
-        unresolvedRefCount: { type: "integer", minimum: 0 },
-        unresolvedRefs: { type: "array", maxItems: 32, items: text(32) },
-        ref: text(32),
-        violations: JIRA_VIOLATIONS_SCHEMA,
-        fieldId: text(64),
-        validation: { type: "string", enum: JIRA_FIELD_VALIDATION_FAILURES },
-        messages: JIRA_FAILURE_MESSAGES_SCHEMA,
+      resultSchema: object(
+        {
+          outcome: { type: "string", enum: ["succeeded", "failed", "rejected"] },
+          reason: text(64),
+          requirementRefusal: REQUIREMENT_REFUSAL,
+          requirementProblems: REQUIREMENT_PROBLEMS,
+          draftId: text(64),
+          draftDigest: text(64),
+          newDraft: { type: "boolean" },
+          itemCount: { type: "integer", minimum: 0 },
+          pageCount: { type: "integer", minimum: 0 },
+          guidance: text(1024),
+          unresolvedRefCount: { type: "integer", minimum: 0 },
+          unresolvedRefs: { type: "array", maxItems: 32, items: text(32) },
+          ref: text(32),
+          violations: JIRA_VIOLATIONS_SCHEMA,
+          fieldId: text(64),
+          validation: { type: "string", enum: JIRA_FIELD_VALIDATION_FAILURES },
+          messages: JIRA_FAILURE_MESSAGES_SCHEMA,
+        },
+        ["outcome"],
+      ),
+      effects: ["connector-access"],
+      actionMapping: [{ action: "jira.draft-stage", effects: ["connector-access"] }],
+      policyReferences: ["adr-0128.d4"],
+      handlerRequirement: { id: "jira.draft-stage", contractVersion: 1 },
+      bounds: {
+        maxArgumentBytes: 262144,
+        maxResultBytes: 16384,
+        maxResultCount: 1,
+        maxDurationMs: 300000,
       },
-      ["outcome"],
-    ),
-    effects: ["connector-access"],
-    actionMapping: [{ action: "jira.draft-stage", effects: ["connector-access"] }],
-    policyReferences: ["adr-0128.d4"],
-    handlerRequirement: { id: "jira.draft-stage", contractVersion: 1 },
-    bounds: {
-      maxArgumentBytes: 262144,
-      maxResultBytes: 16384,
-      maxResultCount: 1,
-      maxDurationMs: 300000,
-    },
-    idempotency: "server-key-required",
-    cancellation: "before-effect",
-  }),
+      idempotency: "server-key-required",
+      cancellation: "before-effect",
+    }),
   });
 }

@@ -9,7 +9,10 @@ import {
   type JiraPresentationSource as Source,
 } from "./jira-presentation-values";
 const ISSUE_TYPES = new Set([
-  "jira_global_issue_types", "jira_issue_type", "jira_issue_type_page", "jira_issue_type_alternatives",
+  "jira_global_issue_types",
+  "jira_issue_type",
+  "jira_issue_type_page",
+  "jira_issue_type_alternatives",
 ]);
 const PRIORITIES = new Set(["jira_priorities", "jira_priority", "jira_priority_page"]);
 const RESOLUTIONS = new Set(["jira_resolutions", "jira_resolution", "jira_resolution_page"]);
@@ -34,7 +37,8 @@ function records(value: unknown): readonly Source[] | undefined {
   return items.every((item) => item !== undefined) ? items : undefined;
 }
 function identityLabel(tool: string): WidgetMessageKey {
-  if (ISSUE_TYPES.has(tool) || tool === "jira_project_statuses") return "chat.jira.fact.issueTypeId";
+  if (ISSUE_TYPES.has(tool) || tool === "jira_project_statuses")
+    return "chat.jira.fact.issueTypeId";
   if (PRIORITIES.has(tool)) return "chat.jira.core.priorityId";
   if (RESOLUTIONS.has(tool)) return "chat.jira.core.resolutionId";
   if (STATUSES.has(tool)) return "chat.jira.core.statusId";
@@ -70,19 +74,31 @@ function statusDetails(source: Source): {
     labels: category === undefined ? ["chat.jira.core.statusCategoryUnknown"] : [],
   };
 }
-function extraDetails(tool: string, source: Source): {
+function extraDetails(
+  tool: string,
+  source: Source,
+): {
   readonly facts: readonly JiraOutcomeFact[];
   readonly labels: readonly WidgetMessageKey[];
 } {
   if (tool === "jira_project_statuses") return { facts: [], labels: [subtypeLabel(source)] };
   if (ISSUE_TYPES.has(tool)) {
     const review = jiraIssueTypeReviewDetails(source);
-    return { facts: [...fact("chat.jira.fact.avatarId", source.avatarId), ...review.facts], labels: [subtypeLabel(source), ...review.labels] };
+    return {
+      facts: [...fact("chat.jira.fact.avatarId", source.avatarId), ...review.facts],
+      labels: [subtypeLabel(source), ...review.labels],
+    };
   }
   if (STATUSES.has(tool)) return statusDetails(source);
   if (STATUS_CATEGORIES.has(tool))
-    return { facts: categoryFacts(source).filter(({ label }) => label !== "chat.jira.core.statusCategoryId"), labels: [] };
-  if (PRIORITIES.has(tool)) return { facts: fact("chat.jira.core.statusColor", source.statusColor), labels: [] };
+    return {
+      facts: categoryFacts(source).filter(
+        ({ label }) => label !== "chat.jira.core.statusCategoryId",
+      ),
+      labels: [],
+    };
+  if (PRIORITIES.has(tool))
+    return { facts: fact("chat.jira.core.statusColor", source.statusColor), labels: [] };
   return { facts: [], labels: [] };
 }
 function named(tool: string, source: Source): JiraAgileDetails | undefined {
@@ -97,7 +113,9 @@ function named(tool: string, source: Source): JiraAgileDetails | undefined {
     facts: [...fact(identityLabel(tool), id), ...details.facts],
     labels: [
       ...details.labels,
-      ...(RESOLUTIONS.has(tool) && id === undefined ? ["chat.jira.core.resolutionIdUnknown"] as const : []),
+      ...(RESOLUTIONS.has(tool) && id === undefined
+        ? (["chat.jira.core.resolutionIdUnknown"] as const)
+        : []),
     ],
   };
 }
@@ -132,10 +150,21 @@ function issueTypeStatuses(source: Source): readonly JiraAgileDetails[] {
   return [
     {
       ...head,
-      facts: [...head.facts, ...(children === undefined ? [] : [{
-        label: "chat.jira.core.configuredStatusCount", value: String(children.length),
-      } satisfies JiraOutcomeFact])],
-      labels: [...head.labels, ...(children === undefined ? ["chat.jira.core.statusesUnknown"] as const : [])],
+      facts: [
+        ...head.facts,
+        ...(children === undefined
+          ? []
+          : [
+              {
+                label: "chat.jira.core.configuredStatusCount",
+                value: String(children.length),
+              } satisfies JiraOutcomeFact,
+            ]),
+      ],
+      labels: [
+        ...head.labels,
+        ...(children === undefined ? (["chat.jira.core.statusesUnknown"] as const) : []),
+      ],
     },
     ...(children ?? []).map((child) => ({
       ...child,
@@ -149,9 +178,14 @@ function projectStatuses(data: Source): readonly JiraAgileDetails[] {
     ...fact("chat.jira.fact.projectKey", data.projectKey),
   ];
   return [
-    ...(context.length === 0 ? [] : [{
-      facts: context, labels: ["chat.jira.core.projectStatusesScope"] satisfies WidgetMessageKey[],
-    }]),
+    ...(context.length === 0
+      ? []
+      : [
+          {
+            facts: context,
+            labels: ["chat.jira.core.projectStatusesScope"] satisfies WidgetMessageKey[],
+          },
+        ]),
     ...(records(data.items) ?? [data]).flatMap(issueTypeStatuses),
   ];
 }
@@ -159,9 +193,12 @@ function projectStatuses(data: Source): readonly JiraAgileDetails[] {
 export function jiraCoreMetadataDetails(tool: string, data: Source): readonly JiraAgileDetails[] {
   if (!JIRA_CORE_METADATA_TOOLS.has(tool)) return [];
   if (tool === "jira_project_statuses") return projectStatuses(data);
-  const context = tool === "jira_issue_type_alternatives"
-    ? fact("chat.jira.core.sourceIssueTypeId", data.issueTypeId)
-    : tool === "jira_resolution" ? fact("chat.jira.core.requestedResolutionId", data.resolutionId) : [];
+  const context =
+    tool === "jira_issue_type_alternatives"
+      ? fact("chat.jira.core.sourceIssueTypeId", data.issueTypeId)
+      : tool === "jira_resolution"
+        ? fact("chat.jira.core.requestedResolutionId", data.resolutionId)
+        : [];
   const cards = (records(data.items) ?? [data]).flatMap((source) => {
     const item = PROJECT_TYPES.has(tool) ? projectType(source) : named(tool, source);
     if (item === undefined) return [];

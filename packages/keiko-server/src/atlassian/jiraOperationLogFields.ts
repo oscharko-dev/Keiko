@@ -23,8 +23,9 @@ const OTHER_ACTIONS = [
 type ActionClass = "jira-read" | "jira-write" | (typeof OTHER_ACTIONS)[number];
 
 /** A legacy action cannot identify a tool when multiple canonical tools share its policy row. */
-export function jiraToolForAction(actionType: AtlassianConnectorActionType):
-  JiraManagedReadToolName | JiraMutationOperation | undefined {
+export function jiraToolForAction(
+  actionType: AtlassianConnectorActionType,
+): JiraManagedReadToolName | JiraMutationOperation | undefined {
   const matches = TOOLS.filter((tool) => JIRA_MANAGED_ACTION_TYPES[tool] === actionType);
   return matches.length === 1 ? matches[0] : undefined;
 }

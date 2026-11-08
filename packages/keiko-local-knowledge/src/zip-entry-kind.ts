@@ -1,5 +1,8 @@
 /** Pure ZIP attribute classification; neither this helper nor its callers follow links. */
-export interface ZipEntryAttributes { readonly fileName: string; readonly externalFileAttributes: number }
+export interface ZipEntryAttributes {
+  readonly fileName: string;
+  readonly externalFileAttributes: number;
+}
 export function zipEntryKind(entry: ZipEntryAttributes): "directory" | "file" | "unsafe" {
   if (entry.fileName.endsWith("/")) return "directory";
   const type = (entry.externalFileAttributes >>> 16) & 0o170000;

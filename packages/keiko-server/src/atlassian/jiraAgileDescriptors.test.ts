@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { compileExternalCatalogSchema, describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
+import {
+  compileExternalCatalogSchema,
+  describeCatalogSchemaMismatch,
+} from "@oscharko-dev/keiko-tool-catalog";
 import { isBoundedExternalJsonSchema } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import {
   JIRA_AGILE_READ_DEFINITIONS,
@@ -14,12 +17,32 @@ describe("native Agile declarations", () => {
     const base = { id: "9", name: "Sprint", state: "future" };
     expect(isBoundedExternalJsonSchema(schema)).toBe(true);
     expect(describeCatalogSchemaMismatch(schema, base)).toBeUndefined();
-    expect(describeCatalogSchemaMismatch(schema, { ...base, reviewSnapshot: {
-      ...base, originBoardId: "7", synced: false, autoStartStop: false,
-      startDate: null, endDate: null, goal: "", incompleteIssuesDestinationId: null,
-    } })).toBeUndefined();
-    expect(describeCatalogSchemaMismatch(schema, { ...base, reviewSnapshot: { ...base, originBoardId: "7" } })).toBeUndefined();
-    for (const reviewSnapshot of [null, { ...base, originBoardId: "7", synced: null }, { ...base, originBoardId: "7", self: "https://metadata.invalid" }])
+    expect(
+      describeCatalogSchemaMismatch(schema, {
+        ...base,
+        reviewSnapshot: {
+          ...base,
+          originBoardId: "7",
+          synced: false,
+          autoStartStop: false,
+          startDate: null,
+          endDate: null,
+          goal: "",
+          incompleteIssuesDestinationId: null,
+        },
+      }),
+    ).toBeUndefined();
+    expect(
+      describeCatalogSchemaMismatch(schema, {
+        ...base,
+        reviewSnapshot: { ...base, originBoardId: "7" },
+      }),
+    ).toBeUndefined();
+    for (const reviewSnapshot of [
+      null,
+      { ...base, originBoardId: "7", synced: null },
+      { ...base, originBoardId: "7", self: "https://metadata.invalid" },
+    ])
       expect(describeCatalogSchemaMismatch(schema, { ...base, reviewSnapshot })).toBeDefined();
   });
   it("declares actual board and Epic destinations while sprint links name only board context", () => {

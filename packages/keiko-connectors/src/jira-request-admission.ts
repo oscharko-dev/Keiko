@@ -33,11 +33,16 @@ function admittedHttp(
 ): AtlassianHttpBodyPort {
   let observed: Extract<AtlassianHttpBodyResult, { readonly kind: "response" }> | undefined;
   return async (request) => {
-    try { requireAdmission(context, signal); }
-    catch (error) {
+    try {
+      requireAdmission(context, signal);
+    } catch (error) {
       // Cancellation between the retry owner's check and this callback must not erase the
       // preceding real HTTP failure. Returning it makes the existing aborted retry loop settle.
-      if (error instanceof JiraRequestRefusal && error.reason !== "effect-denied" && observed !== undefined)
+      if (
+        error instanceof JiraRequestRefusal &&
+        error.reason !== "effect-denied" &&
+        observed !== undefined
+      )
         return observed;
       throw error;
     }
@@ -62,10 +67,14 @@ export async function executeAdmittedJiraRequest(
 ): Promise<AtlassianWriteHttpOutcome> {
   try {
     requireActive(context, signal);
-    return await executeAtlassianWriteRequest({
-      ...(timing.sleep === undefined ? {} : { sleep: timing.sleep }),
-      signal, http: admittedHttp(connection, context, signal),
-    }, request);
+    return await executeAtlassianWriteRequest(
+      {
+        ...(timing.sleep === undefined ? {} : { sleep: timing.sleep }),
+        signal,
+        http: admittedHttp(connection, context, signal),
+      },
+      request,
+    );
   } catch (error) {
     if (error instanceof JiraRequestRefusal) return { ok: false, reason: error.reason };
     throw error;

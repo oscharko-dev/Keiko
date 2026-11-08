@@ -8,23 +8,50 @@ export function receiptPlainObject(value: unknown): value is object {
   const prototype: unknown = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 }
-export function receiptFields(value: unknown, required: readonly PropertyKey[], optional: readonly PropertyKey[] = []): value is object {
+export function receiptFields(
+  value: unknown,
+  required: readonly PropertyKey[],
+  optional: readonly PropertyKey[] = [],
+): value is object {
   if (!receiptPlainObject(value)) return false;
-  return Reflect.ownKeys(value).every((key) => (required.includes(key) || optional.includes(key)) && receiptOwnData(value, key) !== undefined) &&
-    required.every((key) => receiptOwnData(value, key) !== undefined);
+  return (
+    Reflect.ownKeys(value).every(
+      (key) =>
+        (required.includes(key) || optional.includes(key)) &&
+        receiptOwnData(value, key) !== undefined,
+    ) && required.every((key) => receiptOwnData(value, key) !== undefined)
+  );
 }
 export function receiptNativeId(value: unknown): value is string {
-  return typeof value === "string" && /^[1-9][0-9]{0,18}$/u.test(value) && BigInt(value) <= 9223372036854775807n;
+  return (
+    typeof value === "string" &&
+    /^[1-9][0-9]{0,18}$/u.test(value) &&
+    BigInt(value) <= 9223372036854775807n
+  );
 }
 export function receiptInteger(value: unknown, minimum: number, maximum: number): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= minimum && value <= maximum;
+  return (
+    typeof value === "number" && Number.isSafeInteger(value) && value >= minimum && value <= maximum
+  );
 }
 export function receiptDigest(value: unknown): value is string {
   return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
 }
-export function receiptArray(value: unknown, minimum: number, maximum: number, item: (value: unknown) => boolean, unique = true): value is readonly unknown[] {
-  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length < minimum || value.length > maximum ||
-      Reflect.ownKeys(value).length !== value.length + 1) return false;
+export function receiptArray(
+  value: unknown,
+  minimum: number,
+  maximum: number,
+  item: (value: unknown) => boolean,
+  unique = true,
+): value is readonly unknown[] {
+  if (
+    !Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Array.prototype ||
+    value.length < minimum ||
+    value.length > maximum ||
+    Reflect.ownKeys(value).length !== value.length + 1
+  )
+    return false;
   const seen = new Set<unknown>();
   for (let index = 0; index < value.length; index++) {
     const current = receiptOwnData(value, String(index));

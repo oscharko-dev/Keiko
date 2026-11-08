@@ -136,7 +136,12 @@ async function reviewedIdentity(
   action: JiraChatCatalogAction,
   identity: JiraChatWriteActionIdentity,
 ): Promise<JiraChatWriteActionIdentity | undefined> {
-  if (identity.operation !== "jira.attach" && identity.operation !== "jira.upload-email-template-pack" && !isJiraAvatarUploadOperation(identity.operation)) return identity;
+  if (
+    identity.operation !== "jira.attach" &&
+    identity.operation !== "jira.upload-email-template-pack" &&
+    !isJiraAvatarUploadOperation(identity.operation)
+  )
+    return identity;
   const attachment = await options.attachmentPreview?.(action);
   return attachment === undefined ? undefined : { ...identity, attachment };
 }

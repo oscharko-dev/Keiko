@@ -8,7 +8,10 @@ import type {
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { UiStore } from "./types.js";
 import { invalidRequest, notFound } from "./errors.js";
-import { chatToolTranscriptOccupancy, type ChatToolTranscriptUpdate } from "./chatToolTranscript.js";
+import {
+  chatToolTranscriptOccupancy,
+  type ChatToolTranscriptUpdate,
+} from "./chatToolTranscript.js";
 
 export interface CodingNativeTurn {
   readonly chatId: string;
@@ -145,7 +148,10 @@ export interface CodingHistoryStore {
     | { readonly chatId: string; readonly userMessageId: string; readonly turnRef: string }
     | undefined;
   /** Private run/turn-bound access; generic Chat methods remain unable to reach Coding rows. */
-  readonly nativeToolTranscript: (runId: string, expected: CodingNativeTurn) => CodingNativeToolTranscript;
+  readonly nativeToolTranscript: (
+    runId: string,
+    expected: CodingNativeTurn,
+  ) => CodingNativeToolTranscript;
   readonly bindRun: (id: string, runId: string) => void;
   readonly update: (
     id: string,
@@ -760,10 +766,15 @@ function nativeToolTranscript(
   const bound = Object.freeze({ ...expected });
   const requireBound = (): void => {
     const current = nativeTurn(db, runId);
-    if (current === undefined || current.chatId !== bound.chatId ||
-        current.userMessageId !== bound.userMessageId || current.turnRef !== bound.turnRef)
+    if (
+      current === undefined ||
+      current.chatId !== bound.chatId ||
+      current.userMessageId !== bound.userMessageId ||
+      current.turnRef !== bound.turnRef
+    )
       throw invalidRequest("Coding tool result owner changed.");
-    const message = db.prepare("SELECT 1 FROM chat_messages WHERE id=? AND chat_id=? AND role='user'")
+    const message = db
+      .prepare("SELECT 1 FROM chat_messages WHERE id=? AND chat_id=? AND role='user'")
       .get(bound.userMessageId, bound.chatId);
     if (message === undefined) throw invalidRequest("Coding tool result owner changed.");
   };
@@ -773,16 +784,23 @@ function nativeToolTranscript(
       requireBound();
       return chatToolTranscriptOccupancy(db, bound.userMessageId);
     },
-    capture: (update, correlationId) => withImmediateTransaction(db, () => {
-      requireBound();
-      store.updateChatToolTranscript(bound.userMessageId, update, correlationId);
-    }),
-    humanInput: (started, view, correlationId) => withImmediateTransaction(db, () => {
-      requireBound();
-      if (!started.call.id.startsWith("mcp-")) throw invalidRequest("Invalid pending native call.");
-      store.updateChatToolTranscript(bound.userMessageId, started, correlationId);
-      store.updateChatToolTranscript(bound.userMessageId, { kind: "human-input", callId: started.call.id, view }, correlationId);
-    }),
+    capture: (update, correlationId) =>
+      withImmediateTransaction(db, () => {
+        requireBound();
+        store.updateChatToolTranscript(bound.userMessageId, update, correlationId);
+      }),
+    humanInput: (started, view, correlationId) =>
+      withImmediateTransaction(db, () => {
+        requireBound();
+        if (!started.call.id.startsWith("mcp-"))
+          throw invalidRequest("Invalid pending native call.");
+        store.updateChatToolTranscript(bound.userMessageId, started, correlationId);
+        store.updateChatToolTranscript(
+          bound.userMessageId,
+          { kind: "human-input", callId: started.call.id, view },
+          correlationId,
+        );
+      }),
   };
 }
 

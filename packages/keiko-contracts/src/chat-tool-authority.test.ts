@@ -118,10 +118,19 @@ describe("ordinary Chat tool authority contract (#4084)", () => {
     const connectorScopes = ["issue-tracker.read", "issue-tracker.write", "issue-tracker.admin"];
     expect(validateChatToolAuthorityEnvelope({ ...envelope(), connectorScopes }).ok).toBe(true);
     for (const kind of ["configured-mcp", "knowledge-pods"]) {
-      const subject = { kind, actorDigest: "a".repeat(64), chatId: "chat-1",
-        configurationDigest: "b".repeat(64) };
-      expect(validateChatToolAuthorityEnvelope({ ...envelope(), subject,
-        connectorScopes: ["issue-tracker.admin"] }).ok).toBe(false);
+      const subject = {
+        kind,
+        actorDigest: "a".repeat(64),
+        chatId: "chat-1",
+        configurationDigest: "b".repeat(64),
+      };
+      expect(
+        validateChatToolAuthorityEnvelope({
+          ...envelope(),
+          subject,
+          connectorScopes: ["issue-tracker.admin"],
+        }).ok,
+      ).toBe(false);
     }
   });
 

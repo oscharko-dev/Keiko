@@ -157,7 +157,9 @@ function checkerOf(
 ): JiraReportComplianceChecker {
   return {
     fieldIds: fieldIdsOf(templates, catalog),
-    ...(templates.some((template) => template.parent.issueTypes !== undefined) ? { requiresNativeEvidence: true as const } : {}),
+    ...(templates.some((template) => template.parent.issueTypes !== undefined)
+      ? { requiresNativeEvidence: true as const }
+      : {}),
     covers: (facts) => matchingJiraIssueTemplates(templates, subjectOf(facts)).length > 0,
     check: (facts, request) => checkSubject(templates, catalog, subjectOf(facts), request),
   };
@@ -173,8 +175,10 @@ async function checkSubject(
   const needsParent = matching.some((template) => template.parent.issueTypes !== undefined);
   if (!parentFieldsObserved(matching, subject, catalog)) return "unavailable";
   if (needsParent && request === undefined) return "unavailable";
-  const bound = needsParent && request !== undefined
-    ? await bindJiraTemplateParentTypes(request, subject, matching, catalog) : subject;
+  const bound =
+    needsParent && request !== undefined
+      ? await bindJiraTemplateParentTypes(request, subject, matching, catalog)
+      : subject;
   const violations = checkJiraIssueTemplates(matching, bound, catalog);
   if (violations.some(({ ruleId }) => ruleId === "template-unreadable")) return "unavailable";
   return violations.map((violation) => deviation(violation, catalog));

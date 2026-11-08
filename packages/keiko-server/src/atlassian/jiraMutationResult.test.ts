@@ -22,51 +22,149 @@ const PARTIAL: JiraMutationAttempt = {
 
 describe("typed entity property mutation receipts", () => {
   it.each([
-    { set: "jira.set-board-property", remove: "jira.delete-board-property", context: { boardId: "7" } },
-    { set: "jira.set-sprint-property", remove: "jira.delete-sprint-property", context: { sprintId: "9" } },
-    { set: "jira.set-comment-property", remove: "jira.delete-comment-property", context: { issueId: "10001", issueKey: "SYN-1", commentId: "10002" } },
-    { set: "jira.set-dashboard-item-property", remove: "jira.delete-dashboard-item-property", context: { dashboardId: "71", selectedItemId: "81" } },
-    { set: "jira.set-issue-property", remove: "jira.delete-issue-property", context: { issueId: "10001", issueKey: "SYN-1" } },
-    { set: "jira.set-issue-type-property", remove: "jira.delete-issue-type-property", context: { issueTypeId: "10001" } },
-    { set: "jira.set-project-property", remove: "jira.delete-project-property", context: { projectId: "10000", projectKey: "SYN" } },
-    { set: "jira.set-user-property", remove: "jira.delete-user-property", context: { userKey: "JIRAUSER10100", username: "Synthetic-User" } },
-  ] as const)("requires the selected canonical context and property target for $set", ({ set, remove, context }) => {
-    for (const operation of [set, remove]) {
-      const propertyPresent = operation === set;
-      const receipt = { ...context, propertyKey: "view ~settings", propertyPresent };
-      expect(validJiraMutationAttempt({ ok: true, receipt }, operation)).toEqual({ ok: true, receipt });
-      const pending = validJiraMutationAttempt({ ok: false, reason: "timeout", receipt }, operation);
-      for (const outcome of ["unknown", "succeeded-unconfirmed"] as const)
-        expect(jiraAttemptToolResult(outcome, pending).data).toMatchObject({ outcome, ...receipt });
-      for (const field of [...Object.keys(context), "propertyKey", "propertyPresent"]) {
-        const partial = Object.fromEntries(Object.entries(receipt).filter(([key]) => key !== field));
-        expect(validJiraMutationAttempt({ ok: true, receipt: partial }, operation)).toEqual({ ok: false, reason: "malformed-payload" });
-        expect(validJiraMutationAttempt({ ok: false, reason: "timeout", receipt: partial }, operation)).not.toHaveProperty("receipt");
+    {
+      set: "jira.set-board-property",
+      remove: "jira.delete-board-property",
+      context: { boardId: "7" },
+    },
+    {
+      set: "jira.set-sprint-property",
+      remove: "jira.delete-sprint-property",
+      context: { sprintId: "9" },
+    },
+    {
+      set: "jira.set-comment-property",
+      remove: "jira.delete-comment-property",
+      context: { issueId: "10001", issueKey: "SYN-1", commentId: "10002" },
+    },
+    {
+      set: "jira.set-dashboard-item-property",
+      remove: "jira.delete-dashboard-item-property",
+      context: { dashboardId: "71", selectedItemId: "81" },
+    },
+    {
+      set: "jira.set-issue-property",
+      remove: "jira.delete-issue-property",
+      context: { issueId: "10001", issueKey: "SYN-1" },
+    },
+    {
+      set: "jira.set-issue-type-property",
+      remove: "jira.delete-issue-type-property",
+      context: { issueTypeId: "10001" },
+    },
+    {
+      set: "jira.set-project-property",
+      remove: "jira.delete-project-property",
+      context: { projectId: "10000", projectKey: "SYN" },
+    },
+    {
+      set: "jira.set-user-property",
+      remove: "jira.delete-user-property",
+      context: { userKey: "JIRAUSER10100", username: "Synthetic-User" },
+    },
+  ] as const)(
+    "requires the selected canonical context and property target for $set",
+    ({ set, remove, context }) => {
+      for (const operation of [set, remove]) {
+        const propertyPresent = operation === set;
+        const receipt = { ...context, propertyKey: "view ~settings", propertyPresent };
+        expect(validJiraMutationAttempt({ ok: true, receipt }, operation)).toEqual({
+          ok: true,
+          receipt,
+        });
+        const pending = validJiraMutationAttempt(
+          { ok: false, reason: "timeout", receipt },
+          operation,
+        );
+        for (const outcome of ["unknown", "succeeded-unconfirmed"] as const)
+          expect(jiraAttemptToolResult(outcome, pending).data).toMatchObject({
+            outcome,
+            ...receipt,
+          });
+        for (const field of [...Object.keys(context), "propertyKey", "propertyPresent"]) {
+          const partial = Object.fromEntries(
+            Object.entries(receipt).filter(([key]) => key !== field),
+          );
+          expect(validJiraMutationAttempt({ ok: true, receipt: partial }, operation)).toEqual({
+            ok: false,
+            reason: "malformed-payload",
+          });
+          expect(
+            validJiraMutationAttempt({ ok: false, reason: "timeout", receipt: partial }, operation),
+          ).not.toHaveProperty("receipt");
+        }
+        for (const extra of [
+          { propertyPresent: !propertyPresent },
+          { propertyKey: "" },
+          { browseUrl: "https://untrusted.invalid/property" },
+          { entityType: "issue" },
+          { valueNodes: [{ path: "", kind: "null" }] },
+        ]) {
+          const invalid = { ...receipt, ...extra };
+          expect(validJiraMutationAttempt({ ok: true, receipt: invalid }, operation)).toEqual({
+            ok: false,
+            reason: "malformed-payload",
+          });
+          expect(
+            validJiraMutationAttempt({ ok: false, reason: "timeout", receipt: invalid }, operation),
+          ).not.toHaveProperty("receipt");
+        }
       }
-      for (const extra of [{ propertyPresent: !propertyPresent }, { propertyKey: "" }, { browseUrl: "https://untrusted.invalid/property" },
-        { entityType: "issue" }, { valueNodes: [{ path: "", kind: "null" }] }]) {
-        const invalid = { ...receipt, ...extra };
-        expect(validJiraMutationAttempt({ ok: true, receipt: invalid }, operation)).toEqual({ ok: false, reason: "malformed-payload" });
-        expect(validJiraMutationAttempt({ ok: false, reason: "timeout", receipt: invalid }, operation)).not.toHaveProperty("receipt");
-      }
-    }
-  });
+    },
+  );
   it("does not reinterpret an observed unchanged value as a write", () => {
-    const attempt = validJiraMutationAttempt({ ok: false, reason: "conflict", receipt: {
-      issueId: "10001", issueKey: "SYN-1", propertyKey: "view.settings", propertyPresent: true,
-    }, detail: { unchanged: true } }, "jira.set-issue-property");
-    expect(jiraAttemptToolResult("rejected", attempt).data).toMatchObject({ outcome: "rejected", unchanged: true, propertyPresent: true });
+    const attempt = validJiraMutationAttempt(
+      {
+        ok: false,
+        reason: "conflict",
+        receipt: {
+          issueId: "10001",
+          issueKey: "SYN-1",
+          propertyKey: "view.settings",
+          propertyPresent: true,
+        },
+        detail: { unchanged: true },
+      },
+      "jira.set-issue-property",
+    );
+    expect(jiraAttemptToolResult("rejected", attempt).data).toMatchObject({
+      outcome: "rejected",
+      unchanged: true,
+      propertyPresent: true,
+    });
   });
   it("refuses an inherited required property receipt field instead of treating it as observed", () => {
-    const receipt: Record<string, unknown> = { issueKey: "SYN-1", propertyKey: "view.settings", propertyPresent: true };
+    const receipt: Record<string, unknown> = {
+      issueKey: "SYN-1",
+      propertyKey: "view.settings",
+      propertyPresent: true,
+    };
     Object.setPrototypeOf(receipt, { issueId: "10001" });
-    expect(validJiraMutationAttempt({ ok: true, receipt }, "jira.set-issue-property")).toEqual({ ok: false, reason: "malformed-payload" });
-    expect(validJiraMutationAttempt({ ok: false, reason: "timeout", receipt }, "jira.set-issue-property")).not.toHaveProperty("receipt");
+    expect(validJiraMutationAttempt({ ok: true, receipt }, "jira.set-issue-property")).toEqual({
+      ok: false,
+      reason: "malformed-payload",
+    });
+    expect(
+      validJiraMutationAttempt(
+        { ok: false, reason: "timeout", receipt },
+        "jira.set-issue-property",
+      ),
+    ).not.toHaveProperty("receipt");
   });
   it("refuses a user receipt with an unpaired surrogate rather than inventing a canonical username", () => {
-    const receipt = { userKey: "JIRAUSER10100", username: "synthetic\ud800", propertyKey: "view.settings", propertyPresent: true };
-    expect(validJiraMutationAttempt({ ok: true, receipt }, "jira.set-user-property")).toEqual({ ok: false, reason: "malformed-payload" });
-    expect(validJiraMutationAttempt({ ok: false, reason: "timeout", receipt }, "jira.set-user-property")).not.toHaveProperty("receipt");
+    const receipt = {
+      userKey: "JIRAUSER10100",
+      username: "synthetic\ud800",
+      propertyKey: "view.settings",
+      propertyPresent: true,
+    };
+    expect(validJiraMutationAttempt({ ok: true, receipt }, "jira.set-user-property")).toEqual({
+      ok: false,
+      reason: "malformed-payload",
+    });
+    expect(
+      validJiraMutationAttempt({ ok: false, reason: "timeout", receipt }, "jira.set-user-property"),
+    ).not.toHaveProperty("receipt");
   });
 });
 
@@ -76,49 +174,120 @@ describe("monitoring setting receipts", () => {
     ["jira.set-ipd-monitoring", "monitoringEnabled", true],
     ["jira.start-jmx-metrics", "jmxMetricsExposed", true],
     ["jira.stop-jmx-metrics", "jmxMetricsExposed", false],
-  ] as const)("preserves the exact confirmed or requested boolean for %s", (operation, field, value) => {
-    const receipt = { [field]: value };
-    const confirmed = validJiraMutationAttempt({ ok: true, receipt }, operation);
-    expect(confirmed).toEqual({ ok: true, receipt });
-    expect(jiraAttemptToolResult("succeeded", confirmed).data).toMatchObject({ outcome: "succeeded", ...receipt });
-    const uncertain = validJiraMutationAttempt({ ok: false, reason: "timeout", receipt }, operation);
-    expect(uncertain).toEqual({ ok: false, reason: "timeout", receipt });
-    for (const outcome of ["unknown", "succeeded-unconfirmed"] as const)
-      expect(jiraAttemptToolResult(outcome, uncertain).data).toMatchObject({ outcome, ...receipt });
-    expect(validJiraMutationAttempt({ ok: true, receipt: {} }, operation)).toEqual({ ok: false, reason: "malformed-payload" });
-    for (const extra of [{ issueKey: "SYN-1" }, { screenId: "71" }, { browseUrl: "https://untrusted.invalid/monitoring" }, { monitoringEnabled: true, jmxMetricsExposed: true }]) {
-      const contaminated = { ...receipt, ...extra };
-      expect(validJiraMutationAttempt({ ok: true, receipt: contaminated }, operation)).toEqual({ ok: false, reason: "malformed-payload" });
-      expect(validJiraMutationAttempt({ ok: false, reason: "timeout", receipt: contaminated }, operation)).not.toHaveProperty("receipt");
-    }
-    expect(validJiraMutationAttempt({ ok: true, receipt: { [field]: "false" } }, operation)).toEqual({ ok: false, reason: "malformed-payload" });
-  });
+  ] as const)(
+    "preserves the exact confirmed or requested boolean for %s",
+    (operation, field, value) => {
+      const receipt = { [field]: value };
+      const confirmed = validJiraMutationAttempt({ ok: true, receipt }, operation);
+      expect(confirmed).toEqual({ ok: true, receipt });
+      expect(jiraAttemptToolResult("succeeded", confirmed).data).toMatchObject({
+        outcome: "succeeded",
+        ...receipt,
+      });
+      const uncertain = validJiraMutationAttempt(
+        { ok: false, reason: "timeout", receipt },
+        operation,
+      );
+      expect(uncertain).toEqual({ ok: false, reason: "timeout", receipt });
+      for (const outcome of ["unknown", "succeeded-unconfirmed"] as const)
+        expect(jiraAttemptToolResult(outcome, uncertain).data).toMatchObject({
+          outcome,
+          ...receipt,
+        });
+      expect(validJiraMutationAttempt({ ok: true, receipt: {} }, operation)).toEqual({
+        ok: false,
+        reason: "malformed-payload",
+      });
+      for (const extra of [
+        { issueKey: "SYN-1" },
+        { screenId: "71" },
+        { browseUrl: "https://untrusted.invalid/monitoring" },
+        { monitoringEnabled: true, jmxMetricsExposed: true },
+      ]) {
+        const contaminated = { ...receipt, ...extra };
+        expect(validJiraMutationAttempt({ ok: true, receipt: contaminated }, operation)).toEqual({
+          ok: false,
+          reason: "malformed-payload",
+        });
+        expect(
+          validJiraMutationAttempt(
+            { ok: false, reason: "timeout", receipt: contaminated },
+            operation,
+          ),
+        ).not.toHaveProperty("receipt");
+      }
+      expect(
+        validJiraMutationAttempt({ ok: true, receipt: { [field]: "false" } }, operation),
+      ).toEqual({ ok: false, reason: "malformed-payload" });
+    },
+  );
   it.each([
-    ["jira.start-jmx-metrics", false], ["jira.stop-jmx-metrics", true],
-  ] as const)("refuses a receipt that contradicts the fixed target of %s", (operation, jmxMetricsExposed) => {
-    expect(validJiraMutationAttempt({ ok: true, receipt: { jmxMetricsExposed } }, operation)).toEqual({ ok: false, reason: "malformed-payload" });
-    expect(validJiraMutationAttempt({ ok: false, reason: "timeout", receipt: { jmxMetricsExposed } }, operation)).not.toHaveProperty("receipt");
-  });
+    ["jira.start-jmx-metrics", false],
+    ["jira.stop-jmx-metrics", true],
+  ] as const)(
+    "refuses a receipt that contradicts the fixed target of %s",
+    (operation, jmxMetricsExposed) => {
+      expect(
+        validJiraMutationAttempt({ ok: true, receipt: { jmxMetricsExposed } }, operation),
+      ).toEqual({ ok: false, reason: "malformed-payload" });
+      expect(
+        validJiraMutationAttempt(
+          { ok: false, reason: "timeout", receipt: { jmxMetricsExposed } },
+          operation,
+        ),
+      ).not.toHaveProperty("receipt");
+    },
+  );
   it("retains observed disabled no-op without reporting an applied write", () => {
-    const attempt = validJiraMutationAttempt({ ok: false, reason: "conflict", receipt: { monitoringEnabled: false }, detail: { unchanged: true } }, "jira.set-app-monitoring");
-    expect(jiraAttemptToolResult("rejected", attempt).data).toMatchObject({ outcome: "rejected", reason: "conflict", unchanged: true, monitoringEnabled: false });
+    const attempt = validJiraMutationAttempt(
+      {
+        ok: false,
+        reason: "conflict",
+        receipt: { monitoringEnabled: false },
+        detail: { unchanged: true },
+      },
+      "jira.set-app-monitoring",
+    );
+    expect(jiraAttemptToolResult("rejected", attempt).data).toMatchObject({
+      outcome: "rejected",
+      reason: "conflict",
+      unchanged: true,
+      monitoringEnabled: false,
+    });
   });
 });
 
 describe("screen tab receipts", () => {
   it.each(["jira.create-screen-tab", "jira.rename-screen-tab", "jira.delete-screen-tab"] as const)(
-    "requires both exact screen and tab identities for confirmed %s", (operation) => {
+    "requires both exact screen and tab identities for confirmed %s",
+    (operation) => {
       const receipt = { screenId: "9223372036854775807", tabId: "9007199254740993" };
-      expect(validJiraMutationAttempt({ ok: true, receipt }, operation)).toEqual({ ok: true, receipt });
-      expect(validJiraMutationAttempt({ ok: true, receipt: { screenId: "71" } }, operation))
-        .toEqual({ ok: false, reason: "malformed-payload" });
-      expect(jiraAttemptToolResult("succeeded", { ok: true, receipt }).data).toMatchObject({ outcome: "succeeded", ...receipt });
-      const uncertain = validJiraMutationAttempt({ ok: false, reason: "timeout", receipt }, operation);
-      expect(jiraAttemptToolResult("succeeded-unconfirmed", uncertain).data).toMatchObject({ outcome: "succeeded-unconfirmed", ...receipt });
+      expect(validJiraMutationAttempt({ ok: true, receipt }, operation)).toEqual({
+        ok: true,
+        receipt,
+      });
+      expect(
+        validJiraMutationAttempt({ ok: true, receipt: { screenId: "71" } }, operation),
+      ).toEqual({ ok: false, reason: "malformed-payload" });
+      expect(jiraAttemptToolResult("succeeded", { ok: true, receipt }).data).toMatchObject({
+        outcome: "succeeded",
+        ...receipt,
+      });
+      const uncertain = validJiraMutationAttempt(
+        { ok: false, reason: "timeout", receipt },
+        operation,
+      );
+      expect(jiraAttemptToolResult("succeeded-unconfirmed", uncertain).data).toMatchObject({
+        outcome: "succeeded-unconfirmed",
+        ...receipt,
+      });
     },
   );
   it("retains only known screen context when create acknowledgement was lost", () => {
-    const attempt = validJiraMutationAttempt({ ok: false, reason: "timeout", receipt: { screenId: "71" } }, "jira.create-screen-tab");
+    const attempt = validJiraMutationAttempt(
+      { ok: false, reason: "timeout", receipt: { screenId: "71" } },
+      "jira.create-screen-tab",
+    );
     expect(attempt).toEqual({ ok: false, reason: "timeout", receipt: { screenId: "71" } });
     const result = jiraAttemptToolResult("unknown", attempt);
     expect(result.data).toMatchObject({ outcome: "unknown", screenId: "71" });
@@ -126,21 +295,39 @@ describe("screen tab receipts", () => {
     expect(result.data).not.toHaveProperty("name");
   });
   it.each([
-    { tabId: "81" }, { screenId: "0", tabId: "81" }, { screenId: "71", tabId: "9223372036854775808" },
-    { screenId: "71", tabId: "81", issueKey: "SYN-1" }, { screenId: "71", tabId: "81", projectId: "10000" },
+    { tabId: "81" },
+    { screenId: "0", tabId: "81" },
+    { screenId: "71", tabId: "9223372036854775808" },
+    { screenId: "71", tabId: "81", issueKey: "SYN-1" },
+    { screenId: "71", tabId: "81", projectId: "10000" },
     { screenId: "71", tabId: "81", browseUrl: "https://untrusted.invalid/screen" },
     { screenId: "71", tabId: "81", name: "Unobserved tab" },
   ])("refuses malformed or cross-entity tab receipt fields %j", (receipt) => {
-    expect(validJiraMutationAttempt({ ok: true, receipt }, "jira.create-screen-tab"))
-      .toEqual({ ok: false, reason: "malformed-payload" });
-    expect(validJiraMutationAttempt({ ok: false, reason: "timeout", receipt }, "jira.create-screen-tab"))
-      .not.toHaveProperty("receipt");
+    expect(validJiraMutationAttempt({ ok: true, receipt }, "jira.create-screen-tab")).toEqual({
+      ok: false,
+      reason: "malformed-payload",
+    });
+    expect(
+      validJiraMutationAttempt({ ok: false, reason: "timeout", receipt }, "jira.create-screen-tab"),
+    ).not.toHaveProperty("receipt");
   });
   it("retains the exact already-current target without promoting it to a successful write", () => {
-    const attempt = validJiraMutationAttempt({ ok: false, reason: "conflict", receipt: { screenId: "71", tabId: "81" },
-      detail: { unchanged: true } }, "jira.rename-screen-tab");
-    expect(jiraAttemptToolResult("rejected", attempt).data).toMatchObject({ outcome: "rejected", reason: "conflict",
-      unchanged: true, screenId: "71", tabId: "81" });
+    const attempt = validJiraMutationAttempt(
+      {
+        ok: false,
+        reason: "conflict",
+        receipt: { screenId: "71", tabId: "81" },
+        detail: { unchanged: true },
+      },
+      "jira.rename-screen-tab",
+    );
+    expect(jiraAttemptToolResult("rejected", attempt).data).toMatchObject({
+      outcome: "rejected",
+      reason: "conflict",
+      unchanged: true,
+      screenId: "71",
+      tabId: "81",
+    });
   });
 });
 
@@ -710,19 +897,22 @@ describe("Jira's own field errors (#4176)", () => {
 });
 
 describe("what the model is told to do next (#4176)", () => {
-  it.each(["effect-denied", "cancelled"] as const)("preserves local %s guidance without overriding uncertain effects", (reason) => {
-    for (const outcome of ["rejected", "not-dispatched"] as const) {
-      const data = jiraMutationToolResult(outcome, reason).data;
-      expect(data.guidance).toMatch(/Do not retry automatically/u);
-      expect(data.guidance).not.toMatch(/Jira refused|nothing was changed|network/iu);
-    }
-    for (const outcome of ["unknown", "succeeded-unconfirmed"] as const) {
-      const data = jiraMutationToolResult(outcome, reason, { issueKey: "SYN-1" }).data;
-      expect(data.guidance).toBe(JIRA_UNCERTAIN_GUIDANCE);
-      expect(data.issueKey).toBe("SYN-1");
-    }
-    expect(jiraMutationToolResult("succeeded", reason).data).not.toHaveProperty("guidance");
-  });
+  it.each(["effect-denied", "cancelled"] as const)(
+    "preserves local %s guidance without overriding uncertain effects",
+    (reason) => {
+      for (const outcome of ["rejected", "not-dispatched"] as const) {
+        const data = jiraMutationToolResult(outcome, reason).data;
+        expect(data.guidance).toMatch(/Do not retry automatically/u);
+        expect(data.guidance).not.toMatch(/Jira refused|nothing was changed|network/iu);
+      }
+      for (const outcome of ["unknown", "succeeded-unconfirmed"] as const) {
+        const data = jiraMutationToolResult(outcome, reason, { issueKey: "SYN-1" }).data;
+        expect(data.guidance).toBe(JIRA_UNCERTAIN_GUIDANCE);
+        expect(data.issueKey).toBe("SYN-1");
+      }
+      expect(jiraMutationToolResult("succeeded", reason).data).not.toHaveProperty("guidance");
+    },
+  );
   it.each([
     ["unknown", undefined],
     ["succeeded-unconfirmed", undefined],

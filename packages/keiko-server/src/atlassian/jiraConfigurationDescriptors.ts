@@ -1,4 +1,7 @@
-import { TOOL_CATALOG_LIMITS, type CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  TOOL_CATALOG_LIMITS,
+  type CatalogJsonObject,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { object, text } from "./jiraManagedSchemas.js";
 import {
@@ -17,42 +20,54 @@ const COUNT = { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER };
 const INT32_COUNT = { type: "integer", minimum: 0, maximum: 2147483647 };
 const PAGE = { type: "integer", minimum: 1, maximum: 10_000 };
 const FIELD_ID = {
-  anyOf: [ID, {
-    ...text(31),
-    allOf: [{ pattern: "^customfield_[1-9]" }, { pattern: String.raw`^customfield_\d+$` }],
-  }],
+  anyOf: [
+    ID,
+    {
+      ...text(31),
+      allOf: [{ pattern: "^customfield_[1-9]" }, { pattern: String.raw`^customfield_\d+$` }],
+    },
+  ],
 };
 function array(item: CatalogJsonObject, maxItems: number = MAX): CatalogJsonObject {
   return { type: "array", maxItems, items: item };
 }
 const IDS = { ...array(ID), uniqueItems: true };
 const INPUT_IDS = { ...IDS, minItems: 1 };
-const SCREEN = object({ id: ID, name: NAME, description: text(32768), deletable: BOOL }, ["id", "name"]);
-const WORKFLOW = object({
-  name: NAME,
-  description: text(32768),
-  steps: INT32_COUNT,
-  isDefault: BOOL,
-  lastModifiedDate: text(255),
-}, ["name"]);
-const FIELD = object({
-  id: FIELD_ID,
-  name: NAME,
-  description: text(32768),
-  type: { ...text(1024), minLength: 1 },
-  searcherKey: { ...text(1024), minLength: 1 },
-  numericId: ID,
-  isAllProjects: BOOL,
-  isLocked: BOOL,
-  isManaged: BOOL,
-  isTrusted: BOOL,
-  issueTypeIds: IDS,
-  projectIds: IDS,
-  issuesWithValue: COUNT,
-  projectsCount: COUNT,
-  screensCount: COUNT,
-  lastValueUpdate: text(128),
-}, ["id", "name"]);
+const SCREEN = object({ id: ID, name: NAME, description: text(32768), deletable: BOOL }, [
+  "id",
+  "name",
+]);
+const WORKFLOW = object(
+  {
+    name: NAME,
+    description: text(32768),
+    steps: INT32_COUNT,
+    isDefault: BOOL,
+    lastModifiedDate: text(255),
+  },
+  ["name"],
+);
+const FIELD = object(
+  {
+    id: FIELD_ID,
+    name: NAME,
+    description: text(32768),
+    type: { ...text(1024), minLength: 1 },
+    searcherKey: { ...text(1024), minLength: 1 },
+    numericId: ID,
+    isAllProjects: BOOL,
+    isLocked: BOOL,
+    isManaged: BOOL,
+    isTrusted: BOOL,
+    issueTypeIds: IDS,
+    projectIds: IDS,
+    issuesWithValue: COUNT,
+    projectsCount: COUNT,
+    screensCount: COUNT,
+    lastValueUpdate: text(128),
+  },
+  ["id", "name"],
+);
 const TERM_FIELDS = {
   originalName: NAME,
   originalNamePlural: NAME,
@@ -61,9 +76,19 @@ const TERM_FIELDS = {
   isDefault: BOOL,
 };
 function page(item: CatalogJsonObject): CatalogJsonObject {
-  return { items: array(item, 100), startAt: PAGING.startAt, total: { type: "integer", minimum: 0, maximum: 1_000_000 }, nextStartAt: PAGING.startAt };
+  return {
+    items: array(item, 100),
+    startAt: PAGING.startAt,
+    total: { type: "integer", minimum: 0, maximum: 1_000_000 },
+    nextStartAt: PAGING.startAt,
+  };
 }
-function read(description: string, input: CatalogJsonObject, result: CatalogJsonObject, maxResultCount = 100): JiraNativeDefinition {
+function read(
+  description: string,
+  input: CatalogJsonObject,
+  result: CatalogJsonObject,
+  maxResultCount = 100,
+): JiraNativeDefinition {
   return { description, input, result: jiraNativeReadResult(result), risk: "read", maxResultCount };
 }
 const WORKFLOW_INPUT = {
@@ -74,16 +99,19 @@ const WORKFLOW_INPUT = {
   },
 };
 const OPTIONS_INPUT = {
-  ...object({
-    customFieldId: ID,
-    page: PAGE,
-    maxResults: PAGING.maxResults,
-    projectIds: INPUT_IDS,
-    issueTypeIds: INPUT_IDS,
-    query: text(255),
-    useAllContexts: BOOL,
-    sortByOptionName: BOOL,
-  }, ["customFieldId"]),
+  ...object(
+    {
+      customFieldId: ID,
+      page: PAGE,
+      maxResults: PAGING.maxResults,
+      projectIds: INPUT_IDS,
+      issueTypeIds: INPUT_IDS,
+      query: text(255),
+      useAllContexts: BOOL,
+      sortByOptionName: BOOL,
+    },
+    ["customFieldId"],
+  ),
   not: {
     required: ["useAllContexts"],
     properties: { useAllContexts: { type: "boolean", enum: [true] } },
@@ -139,8 +167,11 @@ export const JIRA_CONFIGURATION_READ_DEFINITIONS = {
   ),
 } as const satisfies Readonly<Record<string, JiraNativeDefinition>>;
 
-export function jiraConfigurationDeclarationForTool(name: string): ManagedMcpToolDeclaration | undefined {
-  const definitions: Readonly<Record<string, JiraNativeDefinition>> = JIRA_CONFIGURATION_READ_DEFINITIONS;
+export function jiraConfigurationDeclarationForTool(
+  name: string,
+): ManagedMcpToolDeclaration | undefined {
+  const definitions: Readonly<Record<string, JiraNativeDefinition>> =
+    JIRA_CONFIGURATION_READ_DEFINITIONS;
   const selected = Object.hasOwn(definitions, name) ? definitions[name] : undefined;
   return selected === undefined ? undefined : jiraNativeDeclaration(name, selected);
 }

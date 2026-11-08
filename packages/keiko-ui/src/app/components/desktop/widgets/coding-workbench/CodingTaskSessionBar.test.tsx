@@ -127,14 +127,16 @@ function inputMessage(
     turnState,
     toolTranscript: {
       schemaVersion: 1,
-      exchanges: [{
-        call: {
-          id: "mcp-private-input",
-          name: "jira_login",
-          arguments: { expectedActorKey: "synthetic-actor" },
+      exchanges: [
+        {
+          call: {
+            id: "mcp-private-input",
+            name: "jira_login",
+            arguments: { expectedActorKey: "synthetic-actor" },
+          },
+          humanInput: view,
         },
-        humanInput: view,
-      }],
+      ],
     },
   };
 }
@@ -160,8 +162,11 @@ describe.each(["en", "de"] as const)("pending native Coding input in %s", (local
       optionalFields: [],
       review: {
         jiraBaseUrl: "https://jira.example.invalid/context",
-        actorUserKey: "synthetic-actor", actorUsername: "synthetic-operator",
-        targetKind: "user", targetUserKey: "synthetic-actor", targetUsername: "synthetic-operator",
+        actorUserKey: "synthetic-actor",
+        actorUsername: "synthetic-operator",
+        targetKind: "user",
+        targetUserKey: "synthetic-actor",
+        targetUsername: "synthetic-operator",
       },
     };
     const empty = sessionWith([]).detail;
@@ -171,20 +176,32 @@ describe.each(["en", "de"] as const)("pending native Coding input in %s", (local
     vi.mocked(inputApi.getJiraHumanInput).mockResolvedValue(view);
     vi.mocked(inputApi.submitJiraHumanInput).mockResolvedValue({ ...view, state: "ready" });
     const first = render(
-      <I18nProvider><LiveTaskTranscript snapshot={liveTaskSnapshot(1)} /></I18nProvider>,
+      <I18nProvider>
+        <LiveTaskTranscript snapshot={liveTaskSnapshot(1)} />
+      </I18nProvider>,
     );
     await waitFor(() => expect(historyApi.fetchCodingTask).toHaveBeenCalledTimes(1));
     expect(screen.queryByLabelText(password)).toBeNull();
-    first.rerender(<I18nProvider><LiveTaskTranscript snapshot={liveTaskSnapshot(2)} /></I18nProvider>);
+    first.rerender(
+      <I18nProvider>
+        <LiveTaskTranscript snapshot={liveTaskSnapshot(2)} />
+      </I18nProvider>,
+    );
     await waitFor(() => expect(screen.getByLabelText(password)).toBeEnabled());
     expect(historyApi.fetchCodingTask).toHaveBeenCalledTimes(2);
     expect(screen.queryByText("Request already shown in the live feed")).toBeNull();
-    first.rerender(<I18nProvider><LiveTaskTranscript snapshot={liveTaskSnapshot(2)} /></I18nProvider>);
+    first.rerender(
+      <I18nProvider>
+        <LiveTaskTranscript snapshot={liveTaskSnapshot(2)} />
+      </I18nProvider>,
+    );
     expect(historyApi.fetchCodingTask).toHaveBeenCalledTimes(2);
     expect(await axe(first.container)).toHaveNoViolations();
     first.unmount();
     const restored = render(
-      <I18nProvider><LiveTaskTranscript snapshot={liveTaskSnapshot(2)} /></I18nProvider>,
+      <I18nProvider>
+        <LiveTaskTranscript snapshot={liveTaskSnapshot(2)} />
+      </I18nProvider>,
     );
     await waitFor(() => expect(screen.getByLabelText(password)).toBeEnabled());
     const user = userEvent.setup();
@@ -200,7 +217,8 @@ describe.each(["en", "de"] as const)("pending native Coding input in %s", (local
   });
 
   it.each([undefined, "completed", "failed", "cancelled"] as const)(
-    "does not infer pending input from a saved view with turnState %s", async (turnState) => {
+    "does not infer pending input from a saved view with turnState %s",
+    async (turnState) => {
       const view: JiraHumanInputView = {
         requestId: `jhi_${"c".repeat(64)}`,
         revision: "12345678-1234-4123-8123-123456789abc",
@@ -211,8 +229,11 @@ describe.each(["en", "de"] as const)("pending native Coding input in %s", (local
         optionalFields: [],
         review: {
           jiraBaseUrl: "https://jira.example.invalid/context",
-          actorUserKey: "synthetic-actor", actorUsername: "synthetic-operator",
-          targetKind: "user", targetUserKey: "synthetic-actor", targetUsername: "synthetic-operator",
+          actorUserKey: "synthetic-actor",
+          actorUsername: "synthetic-operator",
+          targetKind: "user",
+          targetUserKey: "synthetic-actor",
+          targetUsername: "synthetic-operator",
         },
       };
       vi.mocked(inputApi.getJiraHumanInput).mockResolvedValue(view);
@@ -399,25 +420,28 @@ function jiraHistoryMessage(): HistoryMessage {
 
 describe.each(["en", "de"] as const)("stored Coding Jira results in %s", (locale) => {
   const wholeRun: ShownRun = { runId: "run-7", overflowMessageIds: new Set() };
-  const labels = locale === "en" ? {
-    transcript: "Previous conversation",
-    you: "You",
-    confirmed: "Jira change confirmed",
-    rejected: "Jira action rejected",
-    unknown: "Jira outcome unknown",
-    unconfirmed: "Jira accepted the change; confirmation incomplete",
-    requested: "Requested target: disabled",
-    observed: "Confirmed state: disabled",
-  } : {
-    transcript: "Bisheriger Verlauf",
-    you: "Du",
-    confirmed: "Jira-Änderung bestätigt",
-    rejected: "Jira-Aktion abgelehnt",
-    unknown: "Ausgang der Jira-Aktion unbekannt",
-    unconfirmed: "Jira hat die Änderung angenommen; Bestätigung unvollständig",
-    requested: "Angeforderter Zielzustand: deaktiviert",
-    observed: "Bestätigter Zustand: deaktiviert",
-  };
+  const labels =
+    locale === "en"
+      ? {
+          transcript: "Previous conversation",
+          you: "You",
+          confirmed: "Jira change confirmed",
+          rejected: "Jira action rejected",
+          unknown: "Jira outcome unknown",
+          unconfirmed: "Jira accepted the change; confirmation incomplete",
+          requested: "Requested target: disabled",
+          observed: "Confirmed state: disabled",
+        }
+      : {
+          transcript: "Bisheriger Verlauf",
+          you: "Du",
+          confirmed: "Jira-Änderung bestätigt",
+          rejected: "Jira-Aktion abgelehnt",
+          unknown: "Ausgang der Jira-Aktion unbekannt",
+          unconfirmed: "Jira hat die Änderung angenommen; Bestätigung unvollständig",
+          requested: "Angeforderter Zielzustand: deaktiviert",
+          observed: "Bestätigter Zustand: deaktiviert",
+        };
   beforeEach(async () => {
     await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
     localStorage.setItem(I18N_STORAGE_KEY, locale);
@@ -480,31 +504,54 @@ describe.each(["en", "de"] as const)("stored Coding Jira results in %s", (locale
   it("restores report read progress and a partial read page without inventing totals or mutation state", async () => {
     const message: HistoryMessage = {
       ...historyMessage("read-turn", "run-7", "The live feed already carries the reading request"),
-      toolTranscript: { schemaVersion: 1, exchanges: [
-        savedJiraResult("report-read", "jira_report", undefined, {
-          outcome: "succeeded", status: "reading", reportId: "11111111-2222-4333-8444-555555555555",
-          progress: { issuesRead: 25, pageCount: 2, elapsedMs: 10 },
-        }),
-        savedJiraResult("version-read", "jira_global_version_page", undefined, {
-          outcome: "succeeded", startAt: 1, nextStartAt: 2,
-          items: [{ versionId: "9001", name: "Observed release", released: false }],
-        }),
-      ] },
+      toolTranscript: {
+        schemaVersion: 1,
+        exchanges: [
+          savedJiraResult("report-read", "jira_report", undefined, {
+            outcome: "succeeded",
+            status: "reading",
+            reportId: "11111111-2222-4333-8444-555555555555",
+            progress: { issuesRead: 25, pageCount: 2, elapsedMs: 10 },
+          }),
+          savedJiraResult("version-read", "jira_global_version_page", undefined, {
+            outcome: "succeeded",
+            startAt: 1,
+            nextStartAt: 2,
+            items: [{ versionId: "9001", name: "Observed release", released: false }],
+          }),
+        ],
+      },
     };
-    const detail = JSON.parse(JSON.stringify(sessionWith([message]).detail)) as NonNullable<CodingTaskSession["detail"]>;
-    const show = (): ReturnType<typeof render> => render(<I18nProvider>
-      <CodingTaskTranscript session={{ ...session(), detail }} shownRun={wholeRun} />
-    </I18nProvider>);
+    const detail = JSON.parse(JSON.stringify(sessionWith([message]).detail)) as NonNullable<
+      CodingTaskSession["detail"]
+    >;
+    const show = (): ReturnType<typeof render> =>
+      render(
+        <I18nProvider>
+          <CodingTaskTranscript session={{ ...session(), detail }} shownRun={wholeRun} />
+        </I18nProvider>,
+      );
     const first = show();
     const savedText = first.container.textContent;
     first.unmount();
     const { container } = show();
     expect(container.textContent).toBe(savedText);
-    expect(screen.getByText(locale === "en" ? "Reading Jira: 25 issues" : "Jira wird gelesen: 25 Vorgänge")).toBeVisible();
-    expect(screen.getByText(locale === "en" ? "Partial Jira result. Some available data is not included."
-      : "Jira-Teilergebnis. Nicht alle verfügbaren Daten sind enthalten.")).toBeVisible();
+    expect(
+      screen.getByText(
+        locale === "en" ? "Reading Jira: 25 issues" : "Jira wird gelesen: 25 Vorgänge",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        locale === "en"
+          ? "Partial Jira result. Some available data is not included."
+          : "Jira-Teilergebnis. Nicht alle verfügbaren Daten sind enthalten.",
+      ),
+    ).toBeVisible();
     expect(container.textContent).toContain("Observed release");
-    expect(container.textContent).not.toContain("The live feed already carries the reading request");
+    expect(container.textContent).not.toContain(
+      "The live feed already carries the reading request",
+    );
     expect(screen.queryByText(labels.confirmed)).toBeNull();
     expect(screen.queryByText(labels.unknown)).toBeNull();
     expect(container.querySelector("pre, button")).toBeNull();

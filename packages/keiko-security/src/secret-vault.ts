@@ -386,9 +386,16 @@ export interface ResolveLocalVaultKeyOptions {
 
 export interface LocalSecretVault {
   /** Atomic across all writers of this vault, including other processes. No implicit retry. */
-  readonly compareAndSet?: (reference: string, expected: string | undefined, next: string | undefined) => boolean;
+  readonly compareAndSet?: (
+    reference: string,
+    expected: string | undefined,
+    next: string | undefined,
+  ) => boolean;
   /** Private asynchronous-use lease. Kernel-owned until release/process exit, no stored payload. */
-  readonly acquireLease?: (reference: string, scope?: "record" | "collection") => (() => void) | undefined;
+  readonly acquireLease?: (
+    reference: string,
+    scope?: "record" | "collection",
+  ) => (() => void) | undefined;
   // Returns the decrypted secret for `reference`, or undefined when no entry exists. Throws a
   // SecretboxError when an entry exists but cannot be opened (wrong key or tampered store).
   readonly get: (reference: string) => string | undefined;

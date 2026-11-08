@@ -127,9 +127,11 @@ function statusNames(types: readonly unknown[], wantedId: string | undefined): r
   return [...names];
 }
 
-async function readParentIssueTypes(request: JiraMutationRequest): Promise<JiraTemplateInstanceRead<{
-  readonly types: readonly { readonly id: string; readonly name: string }[];
-}>> {
+async function readParentIssueTypes(request: JiraMutationRequest): Promise<
+  JiraTemplateInstanceRead<{
+    readonly types: readonly { readonly id: string; readonly name: string }[];
+  }>
+> {
   const response = await request("issuetype", "GET", undefined, "json-array");
   if (!response.ok) return response;
   if (response.status !== 200 || response.items === undefined) return MALFORMED;
@@ -154,8 +156,8 @@ export async function readJiraTemplateInstanceMetadata(
   const read = await readProject(request, template.project);
   if (!read.ok) return read;
   const { project } = read;
-  const parentTypes = template.parent.issueTypes === undefined
-    ? undefined : await readParentIssueTypes(request);
+  const parentTypes =
+    template.parent.issueTypes === undefined ? undefined : await readParentIssueTypes(request);
   if (parentTypes !== undefined && !parentTypes.ok) return parentTypes;
   const fields = await readJiraFieldCatalog(request);
   const linkTypes = await readLinkTypes(request);

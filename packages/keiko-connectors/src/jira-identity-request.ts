@@ -7,18 +7,31 @@ import { executeAdmittedJiraRequest } from "./jira-request-admission.js";
 import { savedName } from "./jira-saved-configuration-values.js";
 
 /** ExperimentalApi is fixed by the native UserResource, never selected by the model. */
-export function jiraIdentityRequests(connection: JiraManagedConnection, context: ManagedMcpInvocationContext): JiraIdentityPorts {
+export function jiraIdentityRequests(
+  connection: JiraManagedConnection,
+  context: ManagedMcpInvocationContext,
+): JiraIdentityPorts {
   const endpoints = atlassianApiEndpointsFor(connection.baseUrl, "/rest/api/2/");
-  const signal = AbortSignal.any([context.signal, AbortSignal.timeout(ATLASSIAN_WRITE_ACTION_TOTAL_TIMEOUT_MS)]);
-  return { user: (method, key, body) => {
-    if ((method === "POST" && (key !== undefined || body === undefined)) ||
-        (method !== "POST" && !savedName(key)) || (method === "DELETE") !== (body === undefined))
-      return Promise.resolve({ ok: false, reason: "field-validation" });
-    const query = key === undefined ? "" : `?${new URLSearchParams({ key }).toString()}`;
-    return executeAdmittedJiraRequest(connection, context, signal, {
-      method, url: atlassianApiUrl(endpoints, `user${query}`),
-      ...(body === undefined ? {} : { bodyJson: JSON.stringify(body) }),
-      jiraIdentityExperimental: true, expect: method === "POST" ? "json" : "none",
-    });
-  } };
+  const signal = AbortSignal.any([
+    context.signal,
+    AbortSignal.timeout(ATLASSIAN_WRITE_ACTION_TOTAL_TIMEOUT_MS),
+  ]);
+  return {
+    user: (method, key, body) => {
+      if (
+        (method === "POST" && (key !== undefined || body === undefined)) ||
+        (method !== "POST" && !savedName(key)) ||
+        (method === "DELETE") !== (body === undefined)
+      )
+        return Promise.resolve({ ok: false, reason: "field-validation" });
+      const query = key === undefined ? "" : `?${new URLSearchParams({ key }).toString()}`;
+      return executeAdmittedJiraRequest(connection, context, signal, {
+        method,
+        url: atlassianApiUrl(endpoints, `user${query}`),
+        ...(body === undefined ? {} : { bodyJson: JSON.stringify(body) }),
+        jiraIdentityExperimental: true,
+        expect: method === "POST" ? "json" : "none",
+      });
+    },
+  };
 }

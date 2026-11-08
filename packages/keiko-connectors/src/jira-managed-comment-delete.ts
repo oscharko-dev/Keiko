@@ -59,22 +59,44 @@ interface CommentPage {
   readonly comments: readonly unknown[];
   readonly last: boolean;
 }
-function pageMetadata(raw: Record<string, unknown> | undefined, start: number): raw is Record<string, unknown> & { readonly total: number; readonly maxResults: number } {
-  return raw?.startAt === start && typeof raw.total === "number" && Number.isSafeInteger(raw.total) && raw.total >= start &&
-    typeof raw.maxResults === "number" && Number.isSafeInteger(raw.maxResults) && raw.maxResults >= 1;
+function pageMetadata(
+  raw: Record<string, unknown> | undefined,
+  start: number,
+): raw is Record<string, unknown> & { readonly total: number; readonly maxResults: number } {
+  return (
+    raw?.startAt === start &&
+    typeof raw.total === "number" &&
+    Number.isSafeInteger(raw.total) &&
+    raw.total >= start &&
+    typeof raw.maxResults === "number" &&
+    Number.isSafeInteger(raw.maxResults) &&
+    raw.maxResults >= 1
+  );
 }
-function commentPage(response: Extract<AtlassianWriteHttpOutcome, { readonly ok: true }>, start: number,
-  total: number | undefined): Failure | CommentPage {
+function commentPage(
+  response: Extract<AtlassianWriteHttpOutcome, { readonly ok: true }>,
+  start: number,
+  total: number | undefined,
+): Failure | CommentPage {
   const raw = response.body;
   const comments = asArray(raw?.comments);
-  if (response.status !== 200 || !pageMetadata(raw, start) || comments === undefined) return MALFORMED;
+  if (response.status !== 200 || !pageMetadata(raw, start) || comments === undefined)
+    return MALFORMED;
   if (total !== undefined && raw.total !== total) return CONFLICT;
-  if (comments.length > Math.min(raw.maxResults, TOOL_CATALOG_LIMITS.maxArrayItems) || start + comments.length > raw.total) return MALFORMED;
+  if (
+    comments.length > Math.min(raw.maxResults, TOOL_CATALOG_LIMITS.maxArrayItems) ||
+    start + comments.length > raw.total
+  )
+    return MALFORMED;
   const last = start + comments.length === raw.total;
   if (!last && comments.length === 0) return MALFORMED;
   return { ok: true, comments, total: raw.total, last };
 }
-function collectCommentIds(comments: readonly unknown[], ids: Set<string>, binding: JiraCommentBinding): Failure | undefined {
+function collectCommentIds(
+  comments: readonly unknown[],
+  ids: Set<string>,
+  binding: JiraCommentBinding,
+): Failure | undefined {
   for (const comment of comments) {
     const item = asRecord(comment);
     if (!jiraNativeId(item?.id) || ids.has(item.id)) return MALFORMED;
@@ -87,11 +109,16 @@ function collectCommentIds(comments: readonly unknown[], ids: Set<string>, bindi
  * per-array bound limits each response, not the number of comments allowed on an issue.
  * A changed total, repeated identity, missing page or budget refusal never establishes absence.
  */
-async function commentIds(request: JiraMutationRequest, binding: JiraCommentBinding): Promise<Failure | { readonly ok: true; readonly ids: ReadonlySet<string> }> {
+async function commentIds(
+  request: JiraMutationRequest,
+  binding: JiraCommentBinding,
+): Promise<Failure | { readonly ok: true; readonly ids: ReadonlySet<string> }> {
   const ids = new Set<string>();
   let total: number | undefined;
   for (;;) {
-    const response = await request(`issue/${binding.issueId}/comment?startAt=${String(ids.size)}&maxResults=${String(TOOL_CATALOG_LIMITS.maxArrayItems)}`);
+    const response = await request(
+      `issue/${binding.issueId}/comment?startAt=${String(ids.size)}&maxResults=${String(TOOL_CATALOG_LIMITS.maxArrayItems)}`,
+    );
     if (!response.ok) return dispatchFailure(response);
     const page = commentPage(response, ids.size, total);
     if (!page.ok) return page;
@@ -107,11 +134,12 @@ async function inspect(
   selected: Input,
   baseUrl: string | undefined,
 ): Promise<
-  Failure | {
-    readonly ok: true;
-    readonly issueKey: string;
-    readonly binding: JiraCommentBinding;
-  }
+  | Failure
+  | {
+      readonly ok: true;
+      readonly issueKey: string;
+      readonly binding: JiraCommentBinding;
+    }
 > {
   const bound = await bindJiraCommentIssue(request, selected, baseUrl);
   if (!bound.ok) return bound;

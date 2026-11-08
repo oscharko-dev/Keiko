@@ -45,8 +45,14 @@ export type AttachmentContentVerdict =
   | { readonly ok: false; readonly refusal: "unscannable" | "contains-credential" };
 
 const ALLOWED = { ok: true } as const satisfies AttachmentContentVerdict;
-const UNSCANNABLE = { ok: false, refusal: "unscannable" } as const satisfies AttachmentContentVerdict;
-const CREDENTIAL = { ok: false, refusal: "contains-credential" } as const satisfies AttachmentContentVerdict;
+const UNSCANNABLE = {
+  ok: false,
+  refusal: "unscannable",
+} as const satisfies AttachmentContentVerdict;
+const CREDENTIAL = {
+  ok: false,
+  refusal: "contains-credential",
+} as const satisfies AttachmentContentVerdict;
 
 // A literal shorter than this is an ordinary word, not a secret the redaction layer would mask.
 const MIN_SECRET_LITERAL_BYTES = 8;
@@ -308,22 +314,36 @@ export async function admitJiraEmailTemplateParts(
   bytes: Uint8Array,
   parts: ReadonlyMap<string, Uint8Array>,
   secrets: readonly string[],
-  options: { readonly deadlineAt: number; readonly now: () => number; readonly signal?: AbortSignal },
-): Promise<AttachmentContentVerdict | { readonly ok: false; readonly refusal: "cancelled" | "bounds-exceeded" }> {
-  const stopped = (): { readonly ok: false; readonly refusal: "cancelled" | "bounds-exceeded" } | undefined => {
+  options: {
+    readonly deadlineAt: number;
+    readonly now: () => number;
+    readonly signal?: AbortSignal;
+  },
+): Promise<
+  | AttachmentContentVerdict
+  | { readonly ok: false; readonly refusal: "cancelled" | "bounds-exceeded" }
+> {
+  const stopped = ():
+    { readonly ok: false; readonly refusal: "cancelled" | "bounds-exceeded" } | undefined => {
     if (options.signal?.aborted) return { ok: false, refusal: "cancelled" };
-    return options.now() >= options.deadlineAt ? { ok: false, refusal: "bounds-exceeded" } : undefined;
+    return options.now() >= options.deadlineAt
+      ? { ok: false, refusal: "bounds-exceeded" }
+      : undefined;
   };
-  let refused = stopped(); if (refused !== undefined) return refused;
-  if (containsLiteral(bytes, secrets) || textHoldsCredential(latin1Of(bytes), secrets)) return CREDENTIAL;
+  let refused = stopped();
+  if (refused !== undefined) return refused;
+  if (containsLiteral(bytes, secrets) || textHoldsCredential(latin1Of(bytes), secrets))
+    return CREDENTIAL;
   const budget: InflateBudget = { remaining: INFLATE_MAX_BYTES };
   for (const part of parts.values()) {
     // Yield between complete parts; splitting markup or a credential token would weaken scanning.
     await yieldToEventLoop();
-    refused = stopped(); if (refused !== undefined) return refused;
+    refused = stopped();
+    if (refused !== undefined) return refused;
     if (containsLiteral(part, secrets)) return CREDENTIAL;
     const verdict = packagePartVerdict(part, secrets, budget);
-    refused = stopped(); if (refused !== undefined) return refused;
+    refused = stopped();
+    if (refused !== undefined) return refused;
     if (!verdict.ok) return verdict;
   }
   return stopped() ?? ALLOWED;
@@ -528,11 +548,18 @@ export async function admitAttachmentContent(input: {
  * Signature recognition alone never grants egress or implies valid decoded pixel content. */
 export async function admitJiraAvatarImage(
   input: Parameters<typeof admitAttachmentContent>[0],
-): Promise<Exclude<AttachmentContentVerdict, { readonly ok: true }> | {
-  readonly ok: true;
-  readonly mimeType: "image/png" | "image/jpeg";
-}> {
-  const mimeType = startsWith(input.bytes, PNG) ? "image/png" : startsWith(input.bytes, JPEG) ? "image/jpeg" : undefined;
+): Promise<
+  | Exclude<AttachmentContentVerdict, { readonly ok: true }>
+  | {
+      readonly ok: true;
+      readonly mimeType: "image/png" | "image/jpeg";
+    }
+> {
+  const mimeType = startsWith(input.bytes, PNG)
+    ? "image/png"
+    : startsWith(input.bytes, JPEG)
+      ? "image/jpeg"
+      : undefined;
   if (mimeType === undefined) return UNSCANNABLE;
   const admitted = await admitAttachmentContent(input);
   if (!admitted.ok) return admitted;

@@ -141,9 +141,16 @@ describe("starting a task", () => {
     act(() => ordinary.result.current.composer.onStart("inspect the ticket"));
     await waitFor(() => expect(opted.actions.start).toHaveBeenCalledOnce());
     await waitFor(() => expect(ordinary.actions.start).toHaveBeenCalledOnce());
-    expect(vi.mocked(opted.actions.start).mock.calls[0]?.[1]).toMatchObject({ jiraPodId, connectorScopes: ["issue-tracker.admin"] });
-    expect(vi.mocked(ordinary.actions.start).mock.calls[0]?.[1]).not.toHaveProperty("connectorScopes");
-    expect(vi.mocked(opted.actions.start).mock.calls[0]?.[1]).not.toHaveProperty("jiraAdministrationEnabled");
+    expect(vi.mocked(opted.actions.start).mock.calls[0]?.[1]).toMatchObject({
+      jiraPodId,
+      connectorScopes: ["issue-tracker.admin"],
+    });
+    expect(vi.mocked(ordinary.actions.start).mock.calls[0]?.[1]).not.toHaveProperty(
+      "connectorScopes",
+    );
+    expect(vi.mocked(opted.actions.start).mock.calls[0]?.[1]).not.toHaveProperty(
+      "jiraAdministrationEnabled",
+    );
   });
 
   it("sends the first prompt's referenced files with the start", async () => {

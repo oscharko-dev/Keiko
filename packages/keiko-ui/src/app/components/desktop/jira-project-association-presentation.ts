@@ -23,7 +23,10 @@ function projectFacts(source: Source): JiraOutcomeFact[] {
     ...fact("chat.jira.fact.projectKey", source.projectKey),
   ];
 }
-function withProject(cards: readonly JiraAgileDetails[], source: Source): readonly JiraAgileDetails[] {
+function withProject(
+  cards: readonly JiraAgileDetails[],
+  source: Source,
+): readonly JiraAgileDetails[] {
   const context = projectFacts(source);
   const labels = new Set(context.map(({ label }) => label));
   return cards.map((card, index) =>
@@ -46,9 +49,14 @@ function mappings(source: Source): readonly JiraAgileDetails[] {
     },
     ...rows.flatMap((value: unknown) => {
       const row = record(value);
-      return row === undefined ? [] : [jiraAdministrationDetails("jira_workflow_scheme", {
-        ...row, schemeId: source.schemeId,
-      })];
+      return row === undefined
+        ? []
+        : [
+            jiraAdministrationDetails("jira_workflow_scheme", {
+              ...row,
+              schemeId: source.schemeId,
+            }),
+          ];
     }),
   ];
 }
@@ -57,16 +65,18 @@ function accessibleLevels(source: Source): readonly JiraAgileDetails[] {
   const rows = source.items;
   const total = source.total;
   const knownScope = source.levelsScope === "accessible";
-  const facts: JiraOutcomeFact[] = knownScope && typeof total === "number" &&
-    Number.isSafeInteger(total) && total >= 0
-    ? [{ label: "chat.jira.association.accessibleLevelCount", value: String(total) }]
-    : [];
+  const facts: JiraOutcomeFact[] =
+    knownScope && typeof total === "number" && Number.isSafeInteger(total) && total >= 0
+      ? [{ label: "chat.jira.association.accessibleLevelCount", value: String(total) }]
+      : [];
   return [
     {
       facts,
-      labels: [knownScope
-        ? "chat.jira.association.accessibleLevelsScope"
-        : "chat.jira.association.levelsScopeUnknown"],
+      labels: [
+        knownScope
+          ? "chat.jira.association.accessibleLevelsScope"
+          : "chat.jira.association.levelsScopeUnknown",
+      ],
     },
     ...rows.flatMap((value: unknown) => {
       const level = record(value);
@@ -78,22 +88,26 @@ function priority(source: Source): JiraAgileDetails {
   const name = text(source.name);
   const body = text(source.description);
   const options = source.optionIds;
-  const knownOptions = Array.isArray(options) && options.every((value: unknown) => typeof value === "string");
+  const knownOptions =
+    Array.isArray(options) && options.every((value: unknown) => typeof value === "string");
   const review = jiraSchemeReviewDetails("priority", source);
   const labels: WidgetMessageKey[] = ["chat.jira.access.configurationOnly"];
   if (!knownOptions) labels.push("chat.jira.association.priorityOptionsUnknown");
   if (typeof source.defaultScheme === "boolean")
-    labels.push(source.defaultScheme
-      ? "chat.jira.association.defaultPriorityScheme"
-      : "chat.jira.association.notDefaultPriorityScheme");
+    labels.push(
+      source.defaultScheme
+        ? "chat.jira.association.defaultPriorityScheme"
+        : "chat.jira.association.notDefaultPriorityScheme",
+    );
   const facts = [
     ...fact("chat.jira.access.schemeId", source.id),
     ...fact("chat.jira.association.defaultPriorityId", source.defaultOptionId),
   ];
-  if (knownOptions) facts.push(
-    ...fact("chat.jira.association.priorityIds", options.join(", ")),
-    { label: "chat.jira.association.priorityCount", value: String(options.length) },
-  );
+  if (knownOptions)
+    facts.push(...fact("chat.jira.association.priorityIds", options.join(", ")), {
+      label: "chat.jira.association.priorityCount",
+      value: String(options.length),
+    });
   return {
     ...(name === undefined ? {} : { name }),
     ...(body === undefined ? {} : { body }),
@@ -102,7 +116,10 @@ function priority(source: Source): JiraAgileDetails {
   };
 }
 /** Project context is observed independently; association metadata does not grant permission. */
-export function jiraProjectAssociationDetails(tool: string, source: Source): readonly JiraAgileDetails[] {
+export function jiraProjectAssociationDetails(
+  tool: string,
+  source: Source,
+): readonly JiraAgileDetails[] {
   let cards: readonly JiraAgileDetails[];
   switch (tool) {
     case "jira_project_permission_scheme":

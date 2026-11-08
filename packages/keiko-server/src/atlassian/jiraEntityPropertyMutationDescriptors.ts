@@ -1,4 +1,7 @@
-import { TOOL_CATALOG_LIMITS, type CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  TOOL_CATALOG_LIMITS,
+  type CatalogJsonObject,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { JiraEntityPropertyMutation } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import {
@@ -16,20 +19,29 @@ import {
 } from "./jiraProjectStructureDescriptors.js";
 
 const NODES = {
-  type: "array", minItems: 1, maxItems: TOOL_CATALOG_LIMITS.maxArrayItems,
+  type: "array",
+  minItems: 1,
+  maxItems: TOOL_CATALOG_LIMITS.maxArrayItems,
   items: jiraPropertyValueRowSchema,
-  description: "Complete existing typed JSON Pointer projection in traversal order. Root path is empty; null, false, zero, empty strings and empty collections are explicit values, never absence. The native JSON value must fit 32768 UTF-8 bytes and all existing depth/node bounds.",
+  description:
+    "Complete existing typed JSON Pointer projection in traversal order. Root path is empty; null, false, zero, empty strings and empty collections are explicit values, never absence. The native JSON value must fit 32768 UTF-8 bytes and all existing depth/node bounds.",
 };
 function input(entity: JiraPropertyEntityDescriptor, set: boolean): CatalogJsonObject {
-  const schema = jiraPropertyEntityInputSchema(entity, {
-    propertyKey: jiraPropertySelectorSchema,
-    expectedValueNodes: NODES,
-    ...(set ? { valueNodes: NODES, expectAbsent: { type: "boolean", enum: [true] } } : {}),
-  }, set ? ["propertyKey", "valueNodes"] : ["propertyKey", "expectedValueNodes"]);
-  return set ? {
-    ...schema,
-    allOf: [{ oneOf: [{ required: ["expectedValueNodes"] }, { required: ["expectAbsent"] }] }],
-  } : schema;
+  const schema = jiraPropertyEntityInputSchema(
+    entity,
+    {
+      propertyKey: jiraPropertySelectorSchema,
+      expectedValueNodes: NODES,
+      ...(set ? { valueNodes: NODES, expectAbsent: { type: "boolean", enum: [true] } } : {}),
+    },
+    set ? ["propertyKey", "valueNodes"] : ["propertyKey", "expectedValueNodes"],
+  );
+  return set
+    ? {
+        ...schema,
+        allOf: [{ oneOf: [{ required: ["expectedValueNodes"] }, { required: ["expectAbsent"] }] }],
+      }
+    : schema;
 }
 function definition(entity: JiraPropertyEntityDescriptor, set: boolean): JiraNativeDefinition {
   const action = set
@@ -56,7 +68,10 @@ export const JIRA_ENTITY_PROPERTY_WRITE_DEFINITIONS = {
   "jira.set-comment-property": definition(JIRA_PROPERTY_ENTITIES.comment, true),
   "jira.delete-comment-property": definition(JIRA_PROPERTY_ENTITIES.comment, false),
   "jira.set-dashboard-item-property": definition(JIRA_PROPERTY_ENTITIES["dashboard-item"], true),
-  "jira.delete-dashboard-item-property": definition(JIRA_PROPERTY_ENTITIES["dashboard-item"], false),
+  "jira.delete-dashboard-item-property": definition(
+    JIRA_PROPERTY_ENTITIES["dashboard-item"],
+    false,
+  ),
   "jira.set-issue-property": definition(JIRA_PROPERTY_ENTITIES.issue, true),
   "jira.delete-issue-property": definition(JIRA_PROPERTY_ENTITIES.issue, false),
   "jira.set-issue-type-property": definition(JIRA_PROPERTY_ENTITIES["issue-type"], true),
@@ -67,8 +82,11 @@ export const JIRA_ENTITY_PROPERTY_WRITE_DEFINITIONS = {
   "jira.delete-user-property": definition(JIRA_PROPERTY_ENTITIES.user, false),
 } as const satisfies Readonly<Record<JiraEntityPropertyMutation, JiraNativeDefinition>>;
 
-export function jiraEntityPropertyMutationDeclarationForTool(name: string): ManagedMcpToolDeclaration | undefined {
-  const definitions: Readonly<Record<string, JiraNativeDefinition>> = JIRA_ENTITY_PROPERTY_WRITE_DEFINITIONS;
+export function jiraEntityPropertyMutationDeclarationForTool(
+  name: string,
+): ManagedMcpToolDeclaration | undefined {
+  const definitions: Readonly<Record<string, JiraNativeDefinition>> =
+    JIRA_ENTITY_PROPERTY_WRITE_DEFINITIONS;
   const selected = Object.hasOwn(definitions, name) ? definitions[name] : undefined;
   return selected === undefined ? undefined : jiraNativeDeclaration(name, selected);
 }

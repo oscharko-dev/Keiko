@@ -26,7 +26,13 @@ export const JIRA_SCREEN_TAB_WRITE_DEFINITIONS = {
   "jira.rename-screen-tab": {
     description:
       "Rename one exact native screen tab after matching the observed screen ID/name, tab ID and reviewed tab name. Supply the exact new nonempty name without outer whitespace. A changed snapshot or another tab with that name refuses before PUT; an already equal name reports unchanged without writing. Send at most one PUT and independently confirm the same tab's name on the same readable screen. Unknown outcomes are never replayed.",
-    input: object({ ...TAB, name: NAME }, ["screenId", "expectedScreenName", "tabId", "expectedName", "name"]),
+    input: object({ ...TAB, name: NAME }, [
+      "screenId",
+      "expectedScreenName",
+      "tabId",
+      "expectedName",
+      "name",
+    ]),
     result: RECEIPT,
     risk: "write",
     maxResultCount: 1,
@@ -34,18 +40,29 @@ export const JIRA_SCREEN_TAB_WRITE_DEFINITIONS = {
   "jira.delete-screen-tab": {
     description:
       "Delete one exact native screen tab only after matching its reviewed screen name, tab name and complete ordered field-ID snapshot. expectedFieldIds may explicitly be empty but must contain no duplicates. Require at least one other tab before DELETE. Send at most one DELETE, then confirm exact tab absence and a remaining tab under the same readable screen; missing or inaccessible parent state is not proof of deletion. Unknown outcomes are never replayed.",
-    input: object({
-      ...TAB,
-      expectedFieldIds: { type: "array", maxItems: TOOL_CATALOG_LIMITS.maxArrayItems, uniqueItems: true, items: FIELD_ID },
-    }, ["screenId", "expectedScreenName", "tabId", "expectedName", "expectedFieldIds"]),
+    input: object(
+      {
+        ...TAB,
+        expectedFieldIds: {
+          type: "array",
+          maxItems: TOOL_CATALOG_LIMITS.maxArrayItems,
+          uniqueItems: true,
+          items: FIELD_ID,
+        },
+      },
+      ["screenId", "expectedScreenName", "tabId", "expectedName", "expectedFieldIds"],
+    ),
     result: RECEIPT,
     risk: "write",
     maxResultCount: 1,
   },
 } as const satisfies Readonly<Record<string, JiraNativeDefinition>>;
 
-export function jiraScreenTabDeclarationForTool(name: string): ManagedMcpToolDeclaration | undefined {
-  const definitions: Readonly<Record<string, JiraNativeDefinition>> = JIRA_SCREEN_TAB_WRITE_DEFINITIONS;
+export function jiraScreenTabDeclarationForTool(
+  name: string,
+): ManagedMcpToolDeclaration | undefined {
+  const definitions: Readonly<Record<string, JiraNativeDefinition>> =
+    JIRA_SCREEN_TAB_WRITE_DEFINITIONS;
   const selected = Object.hasOwn(definitions, name) ? definitions[name] : undefined;
   return selected === undefined ? undefined : jiraNativeDeclaration(name, selected);
 }

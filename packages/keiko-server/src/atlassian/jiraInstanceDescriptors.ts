@@ -18,12 +18,15 @@ const BOOL = { type: "boolean" };
 const MAX = TOOL_CATALOG_LIMITS.maxArrayItems;
 const BUILD_NUMBER = {
   anyOf: [{ type: "string", enum: ["0"] }, POSITIVE_ID],
-  description: "Observed canonical decimal build number from 0 through 9223372036854775807; never rounded from an unsafe JSON number.",
+  description:
+    "Observed canonical decimal build number from 0 through 9223372036854775807; never rounded from an unsafe JSON number.",
 };
 const SERVER_FIELDS = {
   version: { ...text(128), minLength: 1 },
   versionNumbers: {
-    type: "array", minItems: 1, maxItems: MAX,
+    type: "array",
+    minItems: 1,
+    maxItems: MAX,
     items: { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
   },
   serverTitle: NAME,
@@ -32,7 +35,12 @@ const SERVER_FIELDS = {
   buildNumber: BUILD_NUMBER,
   databaseBuildNumber: BUILD_NUMBER,
   configuredBaseUrlState: { type: "string", enum: ["observed", "unavailable"] },
-  configuredBaseUrl: { ...text(2048), minLength: 1, description: "Comparison-only observed configuration. Never follow, render as a navigation link or use as the trusted connection URL." },
+  configuredBaseUrl: {
+    ...text(2048),
+    minLength: 1,
+    description:
+      "Comparison-only observed configuration. Never follow, render as a navigation link or use as the trusted connection URL.",
+  },
 };
 const WORKING_TIME = { type: "number", minimum: 0, maximum: Number.MAX_SAFE_INTEGER };
 const CONFIGURATION_FIELDS = {
@@ -50,14 +58,17 @@ const CONFIGURATION_FIELDS = {
     timeFormat: { type: "string", enum: ["pretty", "days", "hours"] },
   }),
 };
-const PERMISSION = object({
-  key: NAME,
-  nativeKey: NAME,
-  id: NAME,
-  name: NAME,
-  type: { type: "string", enum: ["GLOBAL", "PROJECT"] },
-  description: text(32768),
-}, ["key"]);
+const PERMISSION = object(
+  {
+    key: NAME,
+    nativeKey: NAME,
+    id: NAME,
+    name: NAME,
+    type: { type: "string", enum: ["GLOBAL", "PROJECT"] },
+    description: text(32768),
+  },
+  ["key"],
+);
 function read(
   description: string,
   input: CatalogJsonObject,
@@ -98,8 +109,11 @@ export const JIRA_INSTANCE_READ_DEFINITIONS = {
   },
 } as const satisfies Readonly<Record<string, JiraNativeDefinition>>;
 
-export function jiraInstanceDeclarationForTool(name: string): ManagedMcpToolDeclaration | undefined {
-  const definitions: Readonly<Record<string, JiraNativeDefinition>> = JIRA_INSTANCE_READ_DEFINITIONS;
+export function jiraInstanceDeclarationForTool(
+  name: string,
+): ManagedMcpToolDeclaration | undefined {
+  const definitions: Readonly<Record<string, JiraNativeDefinition>> =
+    JIRA_INSTANCE_READ_DEFINITIONS;
   const selected = Object.hasOwn(definitions, name) ? definitions[name] : undefined;
   return selected === undefined ? undefined : jiraNativeDeclaration(name, selected);
 }

@@ -574,7 +574,8 @@ function literalDeepFrozenValue(expression, context, seen) {
     return literalDeepFrozenValue(initializer, context, new Set([...seen, initializer]));
   }
   if (ts.isPropertyAccessExpression(value)) return literalRegistryProperty(value, context, seen);
-  if (!ts.isCallExpression(value) || !isCanonicalDeepFreeze(value.expression, context)) return undefined;
+  if (!ts.isCallExpression(value) || !isCanonicalDeepFreeze(value.expression, context))
+    return undefined;
   return literalRegistryFreeze(value, context, seen);
 }
 
@@ -590,34 +591,60 @@ function isCanonicalDeepFreeze(expression, context) {
   const declarations = directSymbol(context.checker, expression)?.declarations ?? [];
   if (declarations.length !== 1) return false;
   const declaration = declarations[0];
-  if (!ts.isFunctionDeclaration(declaration) || declaration.name?.text !== "deepFreeze") return false;
+  if (!ts.isFunctionDeclaration(declaration) || declaration.name?.text !== "deepFreeze")
+    return false;
   const source = declaration.getSourceFile().fileName.replaceAll("\\", "/");
-  return source === join(context.repoRoot, "packages/keiko-contracts/src/deep-freeze.ts").replaceAll("\\", "/") ||
-    source === join(context.repoRoot, "packages/keiko-contracts/dist/deep-freeze.d.ts").replaceAll("\\", "/");
+  return (
+    source ===
+      join(context.repoRoot, "packages/keiko-contracts/src/deep-freeze.ts").replaceAll("\\", "/") ||
+    source ===
+      join(context.repoRoot, "packages/keiko-contracts/dist/deep-freeze.d.ts").replaceAll("\\", "/")
+  );
 }
 
 function isGlobalObjectFreeze(expression, checker) {
-  if (!ts.isPropertyAccessExpression(expression) || expression.questionDotToken !== undefined) return false;
-  if (!ts.isIdentifier(expression.expression) || expression.expression.text !== "Object" || expression.name.text !== "freeze")
+  if (!ts.isPropertyAccessExpression(expression) || expression.questionDotToken !== undefined)
+    return false;
+  if (
+    !ts.isIdentifier(expression.expression) ||
+    expression.expression.text !== "Object" ||
+    expression.name.text !== "freeze"
+  )
     return false;
   const library = join(dirname(ts.getDefaultLibFilePath({})), "lib.es5.d.ts").replaceAll("\\", "/");
   const globals = directSymbol(checker, expression.expression)?.declarations ?? [];
   const functions = directSymbol(checker, expression.name)?.declarations ?? [];
-  return globals.some((declaration) => ts.isVariableDeclaration(declaration) && declaration.getSourceFile().fileName.replaceAll("\\", "/") === library) &&
-    functions.length > 0 && functions.every((declaration) => declaration.getSourceFile().fileName.replaceAll("\\", "/") === library);
+  return (
+    globals.some(
+      (declaration) =>
+        ts.isVariableDeclaration(declaration) &&
+        declaration.getSourceFile().fileName.replaceAll("\\", "/") === library,
+    ) &&
+    functions.length > 0 &&
+    functions.every(
+      (declaration) => declaration.getSourceFile().fileName.replaceAll("\\", "/") === library,
+    )
+  );
 }
 
 function primitiveArrayLiteral(expression) {
   const value = unwrapExpression(expression);
-  return ts.isArrayLiteralExpression(value) && value.elements.every((item) =>
-    literalPrimitive(unwrapExpression(item)) !== undefined);
+  return (
+    ts.isArrayLiteralExpression(value) &&
+    value.elements.every((item) => literalPrimitive(unwrapExpression(item)) !== undefined)
+  );
 }
 
 /** Only identity wrappers around independently readable literals; never invoke source code. */
 function literalRegistryFreeze(value, context, seen) {
   if (value.arguments.length !== 1 || value.questionDotToken !== undefined) return undefined;
-  if (!isCanonicalDeepFreeze(value.expression, context) &&
-      !(isGlobalObjectFreeze(value.expression, context.checker) && primitiveArrayLiteral(value.arguments[0])))
+  if (
+    !isCanonicalDeepFreeze(value.expression, context) &&
+    !(
+      isGlobalObjectFreeze(value.expression, context.checker) &&
+      primitiveArrayLiteral(value.arguments[0])
+    )
+  )
     return undefined;
   // A borrowed mutable object could have changed before it was frozen. Only a literal tree
   // created by this exact call is evidence; the generator never simulates intervening writes.
@@ -630,7 +657,9 @@ function literalRegistryValue(expression, context, seen = new Set()) {
   if (primitive !== undefined) return primitive.value;
   if (context.literalOnly === true) {
     if (ts.isArrayLiteralExpression(value)) return literalRegistryArray(value, context, seen);
-    return ts.isObjectLiteralExpression(value) ? literalRegistryObject(value, context, seen) : undefined;
+    return ts.isObjectLiteralExpression(value)
+      ? literalRegistryObject(value, context, seen)
+      : undefined;
   }
   if (ts.isIdentifier(value)) return literalRegistryIdentifier(value, context, seen);
   if (ts.isArrayLiteralExpression(value)) return literalRegistryArray(value, context, seen);
@@ -1049,8 +1078,7 @@ function rejectInvalidRegistrationField(context, site, value) {
 
 function registrationLiteral(context, node, site) {
   const argument = node.arguments[0];
-  const value =
-    argument === undefined ? undefined : literalRegistryValue(argument, context);
+  const value = argument === undefined ? undefined : literalRegistryValue(argument, context);
   if (value !== undefined && typeof value.op === "string") return value;
   context.violations.push(
     registryViolation(

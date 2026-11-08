@@ -40,7 +40,9 @@ function identityLabel(tool: string): WidgetMessageKey {
   if (COMMENTS.has(tool)) return "chat.jira.fact.commentId";
   if (WORKLOGS.has(tool)) return "chat.jira.fact.worklogId";
   if (ATTACHMENTS.has(tool)) return "chat.jira.fact.attachmentId";
-  return tool === "jira_link_types" || tool === "jira_link_type" ? "chat.jira.fact.linkTypeId" : "chat.jira.fact.linkId";
+  return tool === "jira_link_types" || tool === "jira_link_type"
+    ? "chat.jira.fact.linkTypeId"
+    : "chat.jira.fact.linkId";
 }
 function identity(tool: string, source: Source): JiraOutcomeFact[] {
   const value = text(identityValue(tool, source));

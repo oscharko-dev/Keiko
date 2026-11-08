@@ -27,9 +27,11 @@ describe("formal admission guidance", () => {
     expect(guidance).not.toContain("this breaks the issue template");
   });
   it("keeps correctable known violations on the existing payload correction path", () => {
-    expect(jiraTemplateViolationGuidance([
-      { ruleId: "field-missing", subject: "Story Points", template: "SYN/Task" },
-    ])).toContain("Correct what violations name");
+    expect(
+      jiraTemplateViolationGuidance([
+        { ruleId: "field-missing", subject: "Story Points", template: "SYN/Task" },
+      ]),
+    ).toContain("Correct what violations name");
   });
 });
 

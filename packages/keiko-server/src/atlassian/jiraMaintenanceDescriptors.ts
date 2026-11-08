@@ -1,4 +1,7 @@
-import { TOOL_CATALOG_LIMITS, type CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  TOOL_CATALOG_LIMITS,
+  type CatalogJsonObject,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { object, text } from "./jiraManagedSchemas.js";
 import {
@@ -12,16 +15,23 @@ const MAX = TOOL_CATALOG_LIMITS.maxArrayItems;
 const NAME = { ...text(255), minLength: 1 };
 const OBSERVED_TEXT = { ...text(128), minLength: 1 };
 const BOOL = { type: "boolean" };
-const INTEGER = { type: "integer", minimum: Number.MIN_SAFE_INTEGER, maximum: Number.MAX_SAFE_INTEGER };
+const INTEGER = {
+  type: "integer",
+  minimum: Number.MIN_SAFE_INTEGER,
+  maximum: Number.MAX_SAFE_INTEGER,
+};
 const COUNT = { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER };
-const NODE = object({
-  nodeId: NAME,
-  state: OBSERVED_TEXT,
-  alive: BOOL,
-  nodeBuildNumber: INTEGER,
-  nodeVersion: NAME,
-  lastStateChangeTimestamp: INTEGER,
-}, ["nodeId"]);
+const NODE = object(
+  {
+    nodeId: NAME,
+    state: OBSERVED_TEXT,
+    alive: BOOL,
+    nodeBuildNumber: INTEGER,
+    nodeVersion: NAME,
+    lastStateChangeTimestamp: INTEGER,
+  },
+  ["nodeId"],
+);
 const BUILD = object({ buildNumber: INTEGER, version: NAME });
 const ISSUE_INDEX = object({
   indexReadable: BOOL,
@@ -36,15 +46,23 @@ function queues(timestamp: "replicationTime" | "journalWriteTime"): CatalogJsonO
   return {
     type: "array",
     maxItems: MAX,
-    items: object({
-      nodeId: NAME,
-      queueSize: COUNT,
-      lastConsumedOperation: operation,
-      lastOperationInQueue: operation,
-    }, ["nodeId"]),
+    items: object(
+      {
+        nodeId: NAME,
+        queueSize: COUNT,
+        lastConsumedOperation: operation,
+        lastOperationInQueue: operation,
+      },
+      ["nodeId"],
+    ),
   };
 }
-function read(description: string, input: CatalogJsonObject, result: CatalogJsonObject, maxResultCount = 1): JiraNativeDefinition {
+function read(
+  description: string,
+  input: CatalogJsonObject,
+  result: CatalogJsonObject,
+  maxResultCount = 1,
+): JiraNativeDefinition {
   return { description, input, result: jiraNativeReadResult(result), risk: "read", maxResultCount };
 }
 export const JIRA_MAINTENANCE_READ_DEFINITIONS = {
@@ -82,8 +100,11 @@ export const JIRA_MAINTENANCE_READ_DEFINITIONS = {
   ),
 } as const satisfies Readonly<Record<string, JiraNativeDefinition>>;
 
-export function jiraMaintenanceDeclarationForTool(name: string): ManagedMcpToolDeclaration | undefined {
-  const definitions: Readonly<Record<string, JiraNativeDefinition>> = JIRA_MAINTENANCE_READ_DEFINITIONS;
+export function jiraMaintenanceDeclarationForTool(
+  name: string,
+): ManagedMcpToolDeclaration | undefined {
+  const definitions: Readonly<Record<string, JiraNativeDefinition>> =
+    JIRA_MAINTENANCE_READ_DEFINITIONS;
   const selected = Object.hasOwn(definitions, name) ? definitions[name] : undefined;
   return selected === undefined ? undefined : jiraNativeDeclaration(name, selected);
 }
