@@ -447,10 +447,12 @@ export function jiraAgileDeclarationForTool(name: string): ManagedMcpToolDeclara
     ...JIRA_FILTER_READ_DEFINITIONS,
   };
   const writes: Readonly<Record<string, WriteDefinition>> = JIRA_AGILE_WRITE_DEFINITIONS;
-  const definition = Object.hasOwn(reads, name)
-    ? reads[name]
-    : Object.hasOwn(writes, name)
-      ? writes[name]
-      : undefined;
+  if (Object.hasOwn(reads, name)) return declarationOf(name, reads[name]);
+  return Object.hasOwn(writes, name) ? declarationOf(name, writes[name]) : undefined;
+}
+function declarationOf(
+  name: string,
+  definition: ReadDefinition | WriteDefinition | undefined,
+): ManagedMcpToolDeclaration | undefined {
   return definition === undefined ? undefined : declaration(name, definition);
 }

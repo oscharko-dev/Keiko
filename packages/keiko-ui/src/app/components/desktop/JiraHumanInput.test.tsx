@@ -8,6 +8,13 @@ import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
 import { JiraHumanInput } from "./JiraHumanInput";
+import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
+
+// The component takes no model-call prop. A caller that still forwards the model's call must not
+// influence the reviewed target, so these tests hand it over as an untyped extra prop.
+function untrustedModelCall(call: ChatToolExchange["call"]): object {
+  return { call };
+}
 vi.mock("@/lib/jira-human-input-api", () => ({
   getJiraHumanInput: vi.fn(),
   submitJiraHumanInput: vi.fn(),
@@ -142,11 +149,11 @@ describe("Jira human-only input", () => {
           <JiraHumanInput
             initial={initial}
             turnState="pending"
-            call={{
+            {...untrustedModelCall({
               id: "untrusted-call",
               name: "jira_update_user_password",
               arguments: { username: "Model target", baseUrl: "https://untrusted.example.invalid" },
-            }}
+            })}
           />
         </I18nProvider>,
       );
@@ -446,11 +453,11 @@ it("requires a human checkbox naming the exact reviewed executing node for unloc
     <JiraHumanInput
       initial={initial}
       turnState="pending"
-      call={{
+      {...untrustedModelCall({
         id: "unlock-call",
         name: "jira_unlock_user_anonymization",
         arguments: { expectedTask: { executingNode: "untrusted-model-node" } },
-      }}
+      })}
     />,
   );
   const checkbox = screen.getByRole("checkbox", { name: /reviewed-node-2/u });

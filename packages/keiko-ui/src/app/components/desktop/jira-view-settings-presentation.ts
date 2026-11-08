@@ -81,9 +81,10 @@ function layoutContext(data: Source): JiraAgileDetails {
 export function jiraViewSettingsDetails(tool: string, data: Source): readonly JiraAgileDetails[] {
   if (!JIRA_VIEW_SETTINGS_TOOLS.has(tool) || data.outcome === "failed") return [];
   const a11y = tool === "jira_accessibility_settings";
+  const present = a11y ? accessibility : column;
   const items = (Array.isArray(data.items) ? data.items : [data]).flatMap((value: unknown) => {
     const source = record(value);
-    const item = source === undefined ? undefined : viewItem(a11y, source);
+    const item = source === undefined ? undefined : present(source);
     return item === undefined ? [] : [item];
   });
   if (!a11y)
@@ -110,7 +111,4 @@ function triState<T extends string>(value: unknown, yes: T, no: T, unknown: T): 
   if (value === true) return yes;
   if (value === false) return no;
   return unknown;
-}
-function viewItem(a11y: boolean, source: Source): JiraAgileDetails | undefined {
-  return a11y ? accessibility(source) : column(source);
 }

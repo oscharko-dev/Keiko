@@ -67,7 +67,7 @@ function validStateGeneration(value: Record<string, unknown>): boolean {
   return (
     (value.schemaVersion === 1 || value.schemaVersion === 2) &&
     Number.isSafeInteger(value.generation) &&
-    !(Number(value.generation) < 0) &&
+    Number(value.generation) >= 0 &&
     isCodingWorkbenchMode(value.mode)
   );
 }

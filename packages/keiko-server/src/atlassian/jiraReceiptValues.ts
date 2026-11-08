@@ -25,7 +25,7 @@ export function receiptFields(
 export function receiptNativeId(value: unknown): value is string {
   return (
     typeof value === "string" &&
-    /^[1-9][0-9]{0,18}$/u.test(value) &&
+    /^[1-9]\d{0,18}$/u.test(value) &&
     BigInt(value) <= 9223372036854775807n
   );
 }

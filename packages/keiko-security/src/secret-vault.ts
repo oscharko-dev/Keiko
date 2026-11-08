@@ -1284,6 +1284,7 @@ export function createShardedLocalSecretVault(deps: ShardedLocalSecretVaultDeps)
     const filePath = optionalShardPath(storeDir, reference);
     return filePath === undefined ? undefined : readShardEnvelope(filePath, sink);
   };
+  const shardPathFor = (reference: string): string => requiredShardPath(storeDir, reference);
 
   return serializedSecretVault(storeDir, assertNoSymlinkedPathSegments, (guarded) => ({
     get: (reference): string | undefined => {
@@ -1295,13 +1296,7 @@ export function createShardedLocalSecretVault(deps: ShardedLocalSecretVaultDeps)
     },
     setMany: (next): void => {
       guardedSetMany(guarded, sink, next, (entries) => {
-        mergeShardEntries(
-          storeDir,
-          (reference) => requiredShardPath(storeDir, reference),
-          key,
-          entries,
-          sink,
-        );
+        mergeShardEntries(storeDir, shardPathFor, key, entries, sink);
       });
     },
     replaceAll: (next): void => {

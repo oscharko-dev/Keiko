@@ -471,11 +471,9 @@ function validUploadMedia(
   request: AtlassianHttpBodyRequest,
   upload: NonNullable<AtlassianHttpBodyRequest["upload"]>,
 ): boolean {
-  return request.jiraEmailTemplateArchive === true
-    ? upload.contentType === "application/zip"
-    : request.jiraAvatarImage === true
-      ? privateAvatarMediaType(upload)
-      : MULTIPART_CONTENT_TYPE.test(upload.contentType);
+  if (request.jiraEmailTemplateArchive === true) return upload.contentType === "application/zip";
+  if (request.jiraAvatarImage === true) return privateAvatarMediaType(upload);
+  return MULTIPART_CONTENT_TYPE.test(upload.contentType);
 }
 function assertValidUpload(request: AtlassianHttpBodyRequest): void {
   const upload = request.upload;

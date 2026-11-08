@@ -549,7 +549,6 @@ function ToolExchangeCards({
           key={exchange.humanInput.requestId}
           initial={exchange.humanInput}
           turnState={turnState}
-          call={exchange.call}
         />
       )}
       {exchange.approval === undefined ? null : (

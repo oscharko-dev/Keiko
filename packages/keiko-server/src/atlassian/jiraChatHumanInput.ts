@@ -86,7 +86,7 @@ interface BindingContext {
 function selectInput(call: ChatToolExchange["call"]): SelectedInput | undefined {
   const purpose = ALIASES.get(call.name);
   if (purpose === undefined) return undefined;
-  const contract = jiraOperationForTool(["jira", purpose].join("."));
+  const contract = jiraOperationForTool(`jira.${purpose}`);
   // The catalog owns the final typed refusal. Do not ask for private values for invalid args.
   const args = captureCatalogJson(call.arguments, TOOL_CATALOG_LIMITS.maxArgumentBytes);
   if (

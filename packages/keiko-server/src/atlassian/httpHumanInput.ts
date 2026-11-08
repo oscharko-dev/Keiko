@@ -76,6 +76,10 @@ function nativeFields(purpose: JiraHumanInputPurpose, value: unknown): CatalogJs
 function passwordUserQuery(value: unknown): string {
   return `?${new URLSearchParams({ key: String(value) }).toString()}`;
 }
+function humanInputMethod(purpose: JiraHumanInputPurpose): "POST" | "PUT" | "DELETE" {
+  if (purpose === "unlock-user-anonymization") return "DELETE";
+  return purpose.startsWith("update-") ? "PUT" : "POST";
+}
 export function humanInputRoute(
   purpose: JiraHumanInputPurpose,
   fields: CatalogJsonObject,
@@ -83,12 +87,7 @@ export function humanInputRoute(
   const query = purpose === "update-user-password" ? passwordUserQuery(fields.userKey) : "";
   return {
     path: `${PATHS[purpose]}${query}`,
-    method:
-      purpose === "unlock-user-anonymization"
-        ? "DELETE"
-        : purpose.startsWith("update-")
-          ? "PUT"
-          : "POST",
+    method: humanInputMethod(purpose),
   };
 }
 function selectedBinding(

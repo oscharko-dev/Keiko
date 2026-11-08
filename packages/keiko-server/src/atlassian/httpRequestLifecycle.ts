@@ -142,7 +142,7 @@ function canonicalAttributeKey(encoded: string | undefined): boolean {
 }
 function permissionAttributeUrl(url: URL): boolean {
   if (!closedJiraUrl(url)) return false;
-  const match = /\/rest\/api\/2\/permissionscheme\/([1-9][0-9]{0,18})\/attribute\/([^/]+)$/u.exec(
+  const match = /\/rest\/api\/2\/permissionscheme\/([1-9]\d{0,18})\/attribute\/([^/]+)$/u.exec(
     url.pathname,
   );
   const id = match?.[1];

@@ -95,11 +95,15 @@ function persistLocalFailure(
     },
     snapshot.binding,
   );
-  persistCaptured(
-    snapshot,
-    result,
-    snapshot.mutation ? (dispatched ? "unknown" : "not-dispatched") : undefined,
-  );
+  persistCaptured(snapshot, result, capturedMutationOutcome(snapshot.mutation, dispatched));
+}
+
+function capturedMutationOutcome(
+  mutation: boolean,
+  dispatched: boolean,
+): JiraMutationOutcome | undefined {
+  if (!mutation) return undefined;
+  return dispatched ? "unknown" : "not-dispatched";
 }
 
 function dispatchedFrom(

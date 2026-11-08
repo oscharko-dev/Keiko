@@ -14,7 +14,7 @@ import type {
   JiraHumanInputPurpose,
   JiraHumanInputView,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import type { ChatToolExchange, ChatTurnState } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { ChatTurnState } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   getJiraHumanInput,
   submitJiraHumanInput,
@@ -515,7 +515,6 @@ function PrivateInputRefresh({
 interface JiraHumanInputProps {
   readonly initial: JiraHumanInputView;
   readonly turnState: ChatTurnState | undefined;
-  readonly call?: ChatToolExchange["call"];
 }
 export function JiraHumanInput({ initial, turnState }: JiraHumanInputProps): ReactNode {
   const t = useTranslate();

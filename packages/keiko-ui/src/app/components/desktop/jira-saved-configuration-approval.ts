@@ -51,18 +51,21 @@ function typedValue(value: unknown, t: OptionalWidgetTranslate): JiraDraftValue 
   if (value === "") return literal(t("chat.jira.propertyMutation.emptyText"));
   return jiraDraftValueOf(value);
 }
+function reviewedList(
+  value: unknown,
+  emptyLabel: WidgetMessageKey,
+  t: OptionalWidgetTranslate,
+  present: (entry: unknown) => JiraDraftValue,
+): JiraDraftValue {
+  if (!Array.isArray(value)) return jiraDraftValueOf(value);
+  if (value.length === 0) return literal(t(emptyLabel));
+  return {
+    kind: "list",
+    items: value.map((entry: unknown, index) => ({ position: index + 1, value: present(entry) })),
+  };
+}
 function orderedList(value: unknown, t: OptionalWidgetTranslate): JiraDraftValue {
-  return Array.isArray(value)
-    ? value.length === 0
-      ? literal(t("chat.jira.savedConfiguration.reviewedEmptyList"))
-      : {
-          kind: "list",
-          items: value.map((entry: unknown, index) => ({
-            position: index + 1,
-            value: jiraDraftValueOf(entry),
-          })),
-        }
-    : jiraDraftValueOf(value);
+  return reviewedList(value, "chat.jira.savedConfiguration.reviewedEmptyList", t, jiraDraftValueOf);
 }
 const KNOWN_PERMISSION_FIELDS = new Set([
   "id",
@@ -77,22 +80,38 @@ const KNOWN_PERMISSION_FIELDS = new Set([
   "view",
   "edit",
 ]);
+interface RightLabels {
+  readonly unknown: WidgetMessageKey;
+  readonly granted: WidgetMessageKey;
+  readonly notGranted: WidgetMessageKey;
+}
+const VIEW_RIGHT_LABELS: RightLabels = {
+  unknown: "chat.jira.savedConfiguration.viewUnknown",
+  granted: "chat.jira.savedView.viewGranted",
+  notGranted: "chat.jira.savedView.viewNotGranted",
+};
+const EDIT_RIGHT_LABELS: RightLabels = {
+  unknown: "chat.jira.savedConfiguration.editUnknown",
+  granted: "chat.jira.savedView.editGranted",
+  notGranted: "chat.jira.savedView.editNotGranted",
+};
+function rightLabel(value: unknown, labels: RightLabels): WidgetMessageKey {
+  if (typeof value !== "boolean") return labels.unknown;
+  return value ? labels.granted : labels.notGranted;
+}
+function permissionFieldName(field: string, t: OptionalWidgetTranslate): string {
+  if (field === "userKey") return t("chat.jira.fact.userKey");
+  if (field === "expectedUsername") return t("chat.jira.savedConfiguration.reviewedUsername");
+  return field;
+}
 function permission(value: unknown, t: OptionalWidgetTranslate): JiraDraftValue {
   const source = record(value);
   if (source === undefined) return jiraDraftValueOf(value);
   const details = jiraSavedViewDetails("jira_filter_permission", source);
   const labels: WidgetMessageKey[] = [
     "chat.jira.savedView.permissionHelp",
-    typeof source.view !== "boolean"
-      ? "chat.jira.savedConfiguration.viewUnknown"
-      : source.view
-        ? "chat.jira.savedView.viewGranted"
-        : "chat.jira.savedView.viewNotGranted",
-    typeof source.edit !== "boolean"
-      ? "chat.jira.savedConfiguration.editUnknown"
-      : source.edit
-        ? "chat.jira.savedView.editGranted"
-        : "chat.jira.savedView.editNotGranted",
+    rightLabel(source.view, VIEW_RIGHT_LABELS),
+    rightLabel(source.edit, EDIT_RIGHT_LABELS),
   ];
   return {
     kind: "group",
@@ -105,29 +124,16 @@ function permission(value: unknown, t: OptionalWidgetTranslate): JiraDraftValue 
       ...Object.entries(source)
         .filter(([field]) => !KNOWN_PERMISSION_FIELDS.has(field))
         .map(([field, entry]) => ({
-          name:
-            field === "userKey"
-              ? t("chat.jira.fact.userKey")
-              : field === "expectedUsername"
-                ? t("chat.jira.savedConfiguration.reviewedUsername")
-                : field,
+          name: permissionFieldName(field, t),
           value: jiraDraftValueOf(entry),
         })),
     ],
   };
 }
 function permissionList(value: unknown, t: OptionalWidgetTranslate): JiraDraftValue {
-  return Array.isArray(value)
-    ? value.length === 0
-      ? literal(t("chat.jira.savedConfiguration.reviewedEmptyPermissions"))
-      : {
-          kind: "list",
-          items: value.map((entry: unknown, index) => ({
-            position: index + 1,
-            value: permission(entry, t),
-          })),
-        }
-    : jiraDraftValueOf(value);
+  return reviewedList(value, "chat.jira.savedConfiguration.reviewedEmptyPermissions", t, (entry) =>
+    permission(entry, t),
+  );
 }
 const VALUE_PRESENTERS: Readonly<
   Record<string, (value: unknown, t: OptionalWidgetTranslate) => JiraDraftValue>
@@ -150,8 +156,12 @@ const EMPTY_LABELS: Readonly<Record<string, WidgetMessageKey>> = {
 function specialValue(key: string, value: unknown, t: OptionalWidgetTranslate): JiraDraftValue {
   const presenter = Object.hasOwn(VALUE_PRESENTERS, key) ? VALUE_PRESENTERS[key] : undefined;
   if (presenter !== undefined) return presenter(value, t);
-  const label = value === null ? NULL_LABELS[key] : value === "" ? EMPTY_LABELS[key] : undefined;
+  const label = specialLabel(key, value);
   return label === undefined ? jiraDraftValueOf(value) : literal(t(label));
+}
+function specialLabel(key: string, value: unknown): WidgetMessageKey | undefined {
+  if (value === null) return NULL_LABELS[key];
+  return value === "" ? EMPTY_LABELS[key] : undefined;
 }
 /** Every approved snapshot leaf remains visible, including unknown rights and repeated ordered columns. */
 export function jiraSavedConfigurationFacts(
