@@ -9,6 +9,8 @@
  * heading belongs to the enclosing section; the next heading of the same or a shallower level
  * ends it. Nothing backtracks: every line is classified in time linear in its bounded length.
  */
+import { markdownBlocksToJiraWiki, readsAsMarkdownOnly } from "./jira-markdown-wiki.js";
+
 export const JIRA_HEADING_LINE_CHARS_MAX = 512;
 export const JIRA_HEADING_TITLE_CHARS_MAX = 200;
 const DESCRIPTION_CHARS_MAX = 1 << 20;
@@ -410,9 +412,25 @@ function markdownDescriptionData(value: object): string | undefined {
 export function projectJiraDescriptionInput(
   value: unknown,
 ): JiraDescriptionHeadingSerialization | undefined {
-  if (typeof value === "string") return { text: value, convertedHeadingCount: 0 };
+  if (typeof value === "string")
+    return readsAsMarkdownOnly(value)
+      ? serializeJiraMarkdownDescription(value)
+      : { text: value, convertedHeadingCount: 0 };
   const markdown = readJiraMarkdownDescription(value);
-  return markdown === undefined ? undefined : serializeJiraDescriptionHeadings(markdown);
+  return markdown === undefined ? undefined : serializeJiraMarkdownDescription(markdown);
+}
+
+/**
+ * Markdown as Data Center wiki markup: headings through the shared reader, then emphasis, links,
+ * lists, quotes, tables and fences (#4173 AC2). An open fence keeps the heading-only result.
+ */
+export function serializeJiraMarkdownDescription(
+  text: string,
+): JiraDescriptionHeadingSerialization {
+  const headings = serializeJiraDescriptionHeadings(text);
+  if (text.length > DESCRIPTION_CHARS_MAX) return headings;
+  const wiki = markdownBlocksToJiraWiki(headings.text);
+  return wiki === undefined ? headings : { ...headings, text: wiki };
 }
 
 function writableSetextTitle(line: string): boolean {

@@ -1,4 +1,8 @@
-import type { ChatToolExchange, ChatTurnState } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  CHAT_TOOL_BATCH_TOOL_NAME,
+  type ChatToolExchange,
+  type ChatTurnState,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   JIRA_MANAGED_READ_TOOLS,
   JIRA_MANAGED_ACTION_TYPES,
@@ -8,6 +12,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
 import { actionTypeLabelKey } from "./widgets/connectors/connector-labels";
+import { REQUIREMENTS_TOOL_ALIAS, requirementsReadGroups } from "./jira-tool-progress";
 
 const OUTCOME_KEYS: Readonly<Record<JiraMutationResultState, WidgetMessageKey>> = {
   "not-dispatched": "chat.jira.write.notDispatched",
@@ -26,23 +31,10 @@ const MCP_OUTCOME_KEYS: Readonly<Record<JiraMutationResultState, WidgetMessageKe
   pending: "chat.mcp.write.pending",
 };
 const MANAGED_TOOLS = [...JIRA_MANAGED_READ_TOOLS, ...JIRA_MUTATION_OPERATIONS];
-/** The Chat alias of the local `knowledge.requirements` read (#4179). */
-const REQUIREMENTS_TOOL_ALIAS = "knowledge_requirements";
-const KNOWLEDGE_TOOLS: Readonly<
-  Record<string, { readonly label: WidgetMessageKey; readonly details: WidgetMessageKey }>
-> = {
-  knowledge_requirements: {
-    label: "chat.requirements.tool",
-    details: "chat.requirements.details",
-  },
-  knowledge_documents: {
-    label: "chat.documents.tool",
-    details: "chat.documents.details",
-  },
-  knowledge_review: {
-    label: "chat.review.tool",
-    details: "chat.review.details",
-  },
+const KNOWLEDGE_TOOLS: Readonly<Record<string, { readonly label: WidgetMessageKey }>> = {
+  knowledge_requirements: { label: "chat.requirements.tool" },
+  knowledge_documents: { label: "chat.documents.tool" },
+  knowledge_review: { label: "chat.review.tool" },
 };
 const REQUIREMENTS_CUT_COUNTS = ["unitsOmitted", "documentsOmitted", "documentsNotExtracted"];
 
@@ -72,6 +64,8 @@ export function jiraCallLabel(
     : jiraOperationLabel(operation);
 }
 export function jiraToolLabel(exchange: ChatToolExchange): WidgetMessageKey {
+  if (exchange.call.name === CHAT_TOOL_BATCH_TOOL_NAME)
+    return actionTypeLabelKey("jira.draft-batch");
   const knowledge = KNOWLEDGE_TOOLS[exchange.call.name];
   if (knowledge !== undefined) return knowledge.label;
   const operation = MANAGED_TOOLS.find(
@@ -86,23 +80,17 @@ export function jiraToolRegionLabel(exchange: ChatToolExchange): WidgetMessageKe
   if (knowledge !== undefined) return knowledge.label;
   return exchange.call.name.startsWith("mcp_") ? "chat.mcp.tool" : "chat.jira.tool";
 }
-export function jiraToolDetailsLabel(exchange: ChatToolExchange): WidgetMessageKey {
-  const knowledge = KNOWLEDGE_TOOLS[exchange.call.name];
-  if (knowledge !== undefined) return knowledge.details;
-  return exchange.call.name.startsWith("mcp_") ? "chat.mcp.details" : "chat.jira.details";
-}
 function plainRecord(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? Object.fromEntries(Object.entries(value))
     : undefined;
 }
-/** The inventory is cut when the tool's own totals name an omission, or a further page remains. */
+/** The inventory is cut only when the tool's own totals name an omission; a further page is not. */
 type CompletedResult = Extract<NonNullable<ChatToolExchange["result"]>, { status: "completed" }>;
 function requirementsCut(result: CompletedResult): boolean {
   const totals = plainRecord(plainRecord(result.data)?.totals);
   const reasons = totals?.cutReasons;
   return (
-    result.page.truncated ||
     (Array.isArray(reasons) && reasons.length > 0) ||
     REQUIREMENTS_CUT_COUNTS.some((name) => {
       const value = totals?.[name];
@@ -114,8 +102,11 @@ function requirementsCut(result: CompletedResult): boolean {
 export function jiraToolPartialNotice(exchange: ChatToolExchange): WidgetMessageKey | undefined {
   if (exchange.call.name.startsWith("mcp_") || exchange.result?.status !== "completed")
     return undefined;
+  // Paged unit reads are counted by the consolidated card, which names what a cut left out.
   if (exchange.call.name === REQUIREMENTS_TOOL_ALIAS)
-    return requirementsCut(exchange.result) ? "chat.requirements.partial" : undefined;
+    return requirementsReadGroups([exchange]).members.size === 0 && requirementsCut(exchange.result)
+      ? "chat.requirements.partial"
+      : undefined;
   if (KNOWLEDGE_TOOLS[exchange.call.name] !== undefined)
     return exchange.result.page.truncated ? "chat.knowledge.partial" : undefined;
   return exchange.result.page.truncated ? "chat.jira.partial" : undefined;
@@ -133,22 +124,42 @@ function isMutation(exchange: ChatToolExchange): boolean {
     (name) => name.replace(/[.-]/gu, "_") === exchange.call.name,
   );
 }
+/** Why a draft batch was refused, in words a business user reads; any other reason stays generic. */
+const BATCH_REFUSAL_KEYS: Readonly<Record<string, WidgetMessageKey>> = {
+  "no-requirements": "chat.jira.batch.refused.noRequirements",
+  "no-knowledge-pod": "chat.jira.batch.refused.noKnowledgePod",
+  "project-not-found": "chat.jira.batch.refused.projectNotFound",
+  "issue-type-not-found": "chat.jira.batch.refused.issueTypeNotFound",
+  "no-usable-issue-type": "chat.jira.batch.refused.noUsableIssueType",
+};
+function batchRefusalState(exchange: ChatToolExchange): WidgetMessageKey | undefined {
+  const { result } = exchange;
+  if (exchange.call.name !== CHAT_TOOL_BATCH_TOOL_NAME || result?.status !== "failed")
+    return undefined;
+  const reason = plainRecord(result.data)?.reason;
+  return typeof reason === "string" ? BATCH_REFUSAL_KEYS[reason] : undefined;
+}
+function mutationState(
+  exchange: ChatToolExchange,
+  turnState: ChatTurnState | undefined,
+): WidgetMessageKey {
+  const outcome = mutationOutcome(exchange);
+  if (outcome !== undefined) return OUTCOME_KEYS[outcome];
+  return exchange.result === undefined && turnState === "pending"
+    ? OUTCOME_KEYS.pending
+    : OUTCOME_KEYS.unknown;
+}
 export function jiraToolState(
   exchange: ChatToolExchange,
   turnState: ChatTurnState | undefined,
 ): WidgetMessageKey {
   if (exchange.call.name.startsWith("mcp_") && exchange.mutationOutcome !== undefined)
     return MCP_OUTCOME_KEYS[exchange.mutationOutcome];
-  if (isMutation(exchange)) {
-    const outcome = mutationOutcome(exchange);
-    if (outcome !== undefined) return OUTCOME_KEYS[outcome];
-    return exchange.result === undefined && turnState === "pending"
-      ? OUTCOME_KEYS.pending
-      : OUTCOME_KEYS.unknown;
-  }
+  if (isMutation(exchange)) return mutationState(exchange, turnState);
   if (exchange.result === undefined)
     return turnState === "pending" ? "chat.jira.running" : "chat.jira.resultUnavailable";
-  return exchange.result.status === "completed" ? "chat.jira.complete" : "chat.jira.unavailable";
+  if (exchange.result.status === "completed") return "chat.jira.complete";
+  return batchRefusalState(exchange) ?? "chat.jira.unavailable";
 }
 export function jiraToolOutcomeHelp(state: WidgetMessageKey): WidgetMessageKey | undefined {
   switch (state) {

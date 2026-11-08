@@ -11,7 +11,7 @@ import {
 import { join, relative, resolve } from "node:path";
 import {
   createShardedLocalSecretVault,
-  resolveLocalVaultKey,
+  resolveLocalVaultKeyOnce,
   type LocalSecretVault,
   type LocalVaultKeychainAccess,
 } from "@oscharko-dev/keiko-security/secret-vault";
@@ -569,7 +569,7 @@ function privateIndexValue(
 
 function createVault(options: CreateEditorLocalHistoryStoreOptions, dir: string): LocalSecretVault {
   if (options.vaultFactory !== undefined) return options.vaultFactory(dir);
-  const resolved = resolveLocalVaultKey({
+  const resolved = resolveLocalVaultKeyOnce({
     env: options.env,
     vaultDir: dir,
     envVarName: HISTORY_KEY_ENV,

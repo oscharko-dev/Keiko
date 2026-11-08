@@ -275,3 +275,18 @@ selectors; all 14 editor references and 108 running-app captures completed witho
 seven-mode accessibility proof has zero serious/critical violations and zero unresolved incomplete
 findings. No producer assertion, tolerance, budget or source stylesheet changed. These remain
 synthetic historical fixtures; they do not qualify model behavior.
+
+## PR #4292 PDF citation frame input refresh — 2026-11-07
+
+The PDF citation preview gained two prefixed classes (`.cmpPageLayer`, `.cmpCitationBox`) in
+`PdfCitationPreviewWindow.module.css`, a declared producer input. All four original producers were
+rerun on macOS arm64, Node 24.22.0, npm 11.19.1 and Playwright 1.64.1. Since #4260 the desktop boot
+boundary reads `GET /api/workspace/state` and scopes the persisted layout keys by its `storageId`, so
+the running-app capture fixture now answers that one path with a fixed storage identity and no
+server-side layout and seeds its windows under the scoped keys; every other path and method still
+fails closed. Component fidelity passed with 427 probes and zero gated or recorded differences and no
+missing selectors; editor fidelity passed with zero gated differences and all 14 reference captures;
+the seven-mode accessibility proof has zero serious/critical violations and zero unresolved
+incomplete findings; all 108 running-app captures have zero page errors, unexpected API requests,
+missing selectors, crashed windows or unavailable workspace-trust states. No producer assertion,
+tolerance or budget changed.

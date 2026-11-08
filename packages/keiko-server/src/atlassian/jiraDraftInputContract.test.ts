@@ -211,6 +211,7 @@ describe("the Jira draft schema actually offered to Chat", () => {
     const addedAliases = [KNOWLEDGE_DOCUMENTS_TOOL, KNOWLEDGE_REVIEW_TOOL].map((name) =>
       name.replaceAll(".", "_"),
     );
+    addedAliases.push("jira_draft_batch");
     expect(
       runtime
         .toolDefinitions()

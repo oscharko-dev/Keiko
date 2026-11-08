@@ -22,6 +22,7 @@ import {
   GROUNDING_LIMIT_CEILINGS,
   isExpandableDirectory,
   isGroundedRerankerFailureKind,
+  isChatToolBatchProgress,
   isDesktopChatStreamEvent,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENT_MIME_BYTES,
@@ -1702,4 +1703,41 @@ it("admits a running tool call as it starts and settles, and nothing else on tha
     frame({ messageId: "message-1", exchange: { call, mutationOutcome: 1 } }),
   ])
     expect(isDesktopChatStreamEvent(hostile)).toBe(false);
+});
+
+it("admits counted batch progress on the draft batch exchange only, and nothing malformed", () => {
+  const progress = {
+    phase: "drafting",
+    draftedCount: 4,
+    plannedCount: 10,
+    coveredRequirementCount: 8,
+    requirementCount: 30,
+    failedCount: 1,
+  };
+  const frame = (name: string, batchProgress: unknown): unknown => ({
+    event: "tool-exchange",
+    data: {
+      messageId: "message-1",
+      exchange: { call: { id: "call-1", name, arguments: {} }, batchProgress },
+    },
+  });
+  expect(isChatToolBatchProgress(progress)).toBe(true);
+  expect(isDesktopChatStreamEvent(frame("jira_draft_batch", progress))).toBe(true);
+  expect(isDesktopChatStreamEvent(frame("jira_search", progress))).toBe(false);
+  expect(isDesktopChatStreamEvent(frame("jira_draft", progress))).toBe(false);
+  for (const hostile of [
+    { ...progress, phase: "finished" },
+    { ...progress, draftedCount: -1 },
+    { ...progress, draftedCount: 1.5 },
+    { ...progress, plannedCount: 5001 },
+    { ...progress, draftedCount: 10, failedCount: 1 },
+    { ...progress, coveredRequirementCount: 31 },
+    { ...progress, extra: "text" },
+    { phase: "drafting" },
+    [],
+    null,
+  ]) {
+    expect(isChatToolBatchProgress(hostile)).toBe(false);
+    expect(isDesktopChatStreamEvent(frame("jira_draft_batch", hostile))).toBe(false);
+  }
 });

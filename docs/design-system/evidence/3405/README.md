@@ -325,3 +325,10 @@ real-BFF outage case. All 14 PNGs differ in bytes from the preceding macOS set b
 rendering; their dimensions are unchanged and they were visually inspected. The three JSON records
 bind the current sources and harness inputs, and `npm run check:update-ui-evidence` passes. The
 update window itself did not change.
+
+The Jira tool-turn progress poll for #4292 changed `packages/keiko-ui/src/lib/api.ts`, a bound
+source. The original nine-case producer ran again in the local gates container (Linux, Node
+24.18.0, Chromium build 1248, with an init process). All nine cases passed in 1.6 minutes,
+including the real-BFF outage case, and `npm run check:update-ui-evidence` passes. The three JSON
+records bind the new API digest. Two screenshots changed bytes, without a visible change to the update window:
+`06-update-window-forced-colors.png` and `13-reconnecting-state-mocked.png`.

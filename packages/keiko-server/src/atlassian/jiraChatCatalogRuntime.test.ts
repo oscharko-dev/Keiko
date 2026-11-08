@@ -90,6 +90,26 @@ describe("application-owned Jira catalog initialization", () => {
     await f.runtime.close();
   });
 
+  it("offers the draft batch only to a Chat with Knowledge scopes", async () => {
+    const f = fixture();
+    const scoped = await f.runtime.get({ knowledgeScoped: true });
+    const unscoped = await f.runtime.get({ knowledgeScoped: false });
+    expect(await f.runtime.get()).toBe(scoped);
+    expect(await f.runtime.get({ knowledgeScoped: false })).toBe(unscoped);
+    const batch = (tools: readonly { readonly name: string }[]): number =>
+      tools.filter((tool) => tool.name === "jira_draft_batch").length;
+    expect(batch(f.runtime.toolDefinitions())).toBe(1);
+    expect(batch(f.runtime.toolDefinitions({ knowledgeScoped: true }))).toBe(1);
+    expect(batch(f.runtime.toolDefinitions({ knowledgeScoped: false }))).toBe(0);
+    expect(unscoped.catalog.descriptors).toHaveLength(scoped.catalog.descriptors.length - 1);
+    expect(unscoped.projection.tools.map((tool) => tool.alias)).not.toContain("jira_draft_batch");
+    expect(unscoped.handlerBindings).toHaveLength(scoped.handlerBindings.length - 1);
+    expect(f.runtime.toolDefinitions({ knowledgeScoped: false })).toHaveLength(
+      f.runtime.toolDefinitions().length - 1,
+    );
+    await f.runtime.close();
+  });
+
   it("closes idempotently after the initializer has disposed its failed host", async () => {
     const f = fixture();
     f.write.mockImplementationOnce(() => {

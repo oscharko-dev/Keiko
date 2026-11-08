@@ -36,8 +36,17 @@ import {
 /** The server name the run's Jira tools reach the native policy under: `jira_<tool>`. */
 export const CODING_JIRA_SERVER_NAME = "jira";
 
+/**
+ * A draft batch reads the Chat's Knowledge Pods and runs on the Chat turn's model, neither of which
+ * a Coding run has; its staged drafts are a Chat surface (#4173).
+ */
+export const CODING_JIRA_READS = JIRA_MANAGED_READ_TOOLS.filter(
+  (tool): tool is Exclude<(typeof JIRA_MANAGED_READ_TOOLS)[number], "jira.draft-batch"> =>
+    tool !== "jira.draft-batch",
+);
+
 export type CodingJiraTool =
-  (typeof JIRA_MANAGED_READ_TOOLS)[number] | (typeof JIRA_MUTATION_OPERATIONS)[number];
+  (typeof CODING_JIRA_READS)[number] | (typeof JIRA_MUTATION_OPERATIONS)[number];
 /**
  * A backlog draft (#4178) is reviewed as a tree in Chat; Coding runs create issues one by one. An
  * attachment (#4176) reads a file the Chat's connected folders govern; a Coding run's files are
@@ -50,7 +59,7 @@ const CODING_JIRA_MUTATIONS = JIRA_MUTATION_OPERATIONS.filter(
 /** Reads are the human's grant; writes keep following the run's autonomy mode. */
 export const CODING_JIRA_TOOL_RISKS: Readonly<Record<string, McpToolRisk>> = Object.freeze(
   Object.fromEntries([
-    ...JIRA_MANAGED_READ_TOOLS.map((tool): [string, McpToolRisk] => [tool, "read"]),
+    ...CODING_JIRA_READS.map((tool): [string, McpToolRisk] => [tool, "read"]),
     ...CODING_JIRA_MUTATIONS.map((tool): [string, McpToolRisk] => [tool, "write"]),
   ]),
 );
@@ -295,7 +304,7 @@ export interface CodingJiraPodLine
       | "descriptionConvertedHeadingCount"
     > {
   readonly tool?:
-    (typeof JIRA_MANAGED_READ_TOOLS)[number] | (typeof CODING_JIRA_MUTATIONS)[number] | undefined;
+    (typeof CODING_JIRA_READS)[number] | (typeof CODING_JIRA_MUTATIONS)[number] | undefined;
   readonly risk?: McpToolRisk | undefined;
 }
 

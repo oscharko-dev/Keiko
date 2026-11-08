@@ -42,27 +42,40 @@ function requirementsRead(totals: Record<string, unknown>, nextCursor?: string):
 const COPY = {
   en: {
     label: "Requirements",
-    partial: "Partial list. Some requirements are not included.",
-    details: "View requirements",
+    partial: "Not all requirements were read.",
+    unitsOmitted: "Requirements left out: 2",
+    documentsOmitted: "Documents left out: 1",
+    notExtracted: "Documents that could not be read: 1",
+    paged: "Requirements read: 1 of 3",
   },
   de: {
     label: "Anforderungen",
-    partial: "Teilliste. Nicht alle Anforderungen sind enthalten.",
-    details: "Anforderungen ansehen",
+    partial: "Nicht alle Anforderungen wurden gelesen.",
+    unitsOmitted: "Ausgelassene Anforderungen: 2",
+    documentsOmitted: "Ausgelassene Dokumente: 1",
+    notExtracted: "Dokumente, die nicht gelesen werden konnten: 1",
+    paged: "Anforderungen gelesen: 1 von 3",
   },
 } as const;
 
 describe("knowledge.requirements transcript row", () => {
   it.each([
-    ["en", "an omitted unit", { unitsOmitted: 2 }, undefined],
-    ["en", "a named cut reason", { cutReasons: ["byte-budget"] }, undefined],
-    ["en", "an omitted document", { documentsOmitted: 1 }, undefined],
-    ["en", "a document that was not extracted", { documentsNotExtracted: 1 }, undefined],
-    ["en", "a further page", {}, "cursor-2"],
-    ["de", "an omitted unit", { unitsOmitted: 2 }, undefined],
+    ["en", "an omitted unit", { unitsOmitted: 2 }, undefined, "unitsOmitted"],
+    ["en", "a named cut reason", { cutReasons: ["byte-budget"] }, undefined, "partial"],
+    ["en", "an omitted document", { documentsOmitted: 1 }, undefined, "documentsOmitted"],
+    [
+      "en",
+      "a document that was not extracted",
+      { documentsNotExtracted: 1 },
+      undefined,
+      "notExtracted",
+    ],
+    ["en", "a further page only", {}, "cursor-2", "paged"],
+    ["de", "an omitted unit", { unitsOmitted: 2 }, undefined, "unitsOmitted"],
+    ["de", "a further page only", {}, "cursor-2", "paged"],
   ] as const)(
-    "names the tool and shows a truncated inventory in %s: %s",
-    async (locale, _case, totals, nextCursor) => {
+    "counts the read and names only a real cut in %s: %s",
+    async (locale, _case, totals, nextCursor, expected) => {
       await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
       localStorage.setItem(I18N_STORAGE_KEY, locale);
       try {
@@ -74,10 +87,24 @@ describe("knowledge.requirements transcript row", () => {
             />
           </I18nProvider>,
         );
-        expect(screen.getByText(COPY[locale].label)).toBeVisible();
-        expect(screen.getByText(COPY[locale].partial)).toBeVisible();
-        expect(screen.getByRole("region", { name: COPY[locale].label })).toBeVisible();
-        expect(screen.getByText(COPY[locale].details)).toBeVisible();
+        const card = screen.getByRole("region", { name: COPY[locale].label });
+        expect(within(card).getByText(COPY[locale].paged)).toBeVisible();
+        expect(within(card).getByRole("progressbar")).toHaveAttribute("aria-valuenow", "1");
+        if (expected === "paged") {
+          // A further page is progress, not a cut: nothing is said to be missing.
+          expect(
+            within(card).queryByText(
+              /left out|Ausgelassene|could not|nicht gelesen|Not all|Nicht alle/u,
+            ),
+          ).toBeNull();
+        } else {
+          expect(within(card).getByText(COPY[locale][expected])).toBeVisible();
+        }
+        expect(card.querySelector("[data-tone]")).toHaveAttribute(
+          "data-tone",
+          expected === "paged" ? "info" : "warning",
+        );
+        expect(document.querySelector("details, pre")).toBeNull();
         expect(screen.queryByText(/Jira/u)).not.toBeInTheDocument();
       } finally {
         localStorage.removeItem(I18N_STORAGE_KEY);
@@ -97,7 +124,8 @@ describe("knowledge.requirements transcript row", () => {
           />
         </I18nProvider>,
       );
-      expect(screen.getByText(COPY.en.label)).toBeVisible();
+      // A complete inventory earns no card: the progress already shows the step as done.
+      expect(screen.queryByText(COPY.en.label)).toBeNull();
       expect(screen.queryByText(COPY.en.partial)).toBeNull();
       expect(screen.queryByText(/Partial Jira result/)).toBeNull();
     } finally {

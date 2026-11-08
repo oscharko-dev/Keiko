@@ -52,12 +52,7 @@ function mountConsumers(): void {
       <TranslatorEffect />
       <EditorRuntimeWidget root="/repo" file="src/app.ts" />
       <PromptEnhancerPanel fetchModelsImpl={fetchModels} />
-      <PdfCitationPreviewWindow
-        cfg={{}}
-        focusWindow={vi.fn()}
-        updateCfg={vi.fn()}
-        windowId="locale-preview"
-      />
+      <PdfCitationPreviewWindow cfg={{}} updateCfg={vi.fn()} windowId="locale-preview" />
     </I18nProvider>,
   );
 }
@@ -102,7 +97,7 @@ it("refreshes memoized consumer labels after delayed German loading without repe
     expect(screen.getByLabelText("Call hierarchy title")).toHaveTextContent("Call hierarchy"),
   );
   expect(screen.getByText("No connected Files source")).toBeVisible();
-  expect(screen.getByRole("heading", { name: "PDF Preview" })).toBeVisible();
+  expect(screen.getByText("Preview requires re-verification")).toBeVisible();
   const effectsBeforeLoad = effect.mock.calls.length;
   const readsBeforeLoad = vi.mocked(fetchFilesContent).mock.calls.length;
   await act(async () => {
@@ -112,7 +107,7 @@ it("refreshes memoized consumer labels after delayed German loading without repe
   await screen.findByText("Grounding-Kontext");
   expect.soft(screen.getByLabelText("Call hierarchy title")).toHaveTextContent("Aufrufhierarchie");
   expect.soft(screen.queryByText("Keine verbundene Datei-Quelle")).toBeVisible();
-  expect.soft(screen.queryByRole("heading", { name: "PDF-Vorschau" })).toBeVisible();
+  expect.soft(screen.queryByText("Vorschau erfordert erneute Verifizierung")).toBeVisible();
   expect(effect).toHaveBeenCalledTimes(effectsBeforeLoad);
   expect(fetchFilesContent).toHaveBeenCalledTimes(readsBeforeLoad);
   expect(fetchModels).toHaveBeenCalledTimes(1);

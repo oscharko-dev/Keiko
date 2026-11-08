@@ -12,8 +12,10 @@ import {
   type JiraDraft,
   type JiraDraftActivity,
   type JiraDraftItem,
+  type JiraDraftReadCounts,
   type JiraManagedConnection,
   type JiraTraceOutcome,
+  withJiraCreateMetadataMemo,
 } from "@oscharko-dev/keiko-connectors";
 import {
   JIRA_DRAFT_RESULT_ROWS_MAX,
@@ -41,7 +43,7 @@ import type {
 import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
 import { executeJiraChatMutation } from "./jiraChatMutation.js";
 import { jiraDraftProblemGuidance } from "./jiraChatDraftArguments.js";
-import { listIssueKeys } from "./jiraDraftKeyRanges.js";
+import { JIRA_DRAFT_UNLISTED_GUIDANCE, listIssueKeys } from "./jiraDraftKeyRanges.js";
 import {
   JIRA_ALREADY_REFUSED_GUIDANCE,
   JIRA_REJECTED_GUIDANCE,
@@ -98,6 +100,11 @@ export interface JiraChatDraftExecution {
   readonly retainProgress?: ((snapshot: () => CatalogJsonObject) => void) | undefined;
   /** Test seam: how long a run may create, and how long it may take in all. */
   readonly budget?: JiraDraftRunBudget | undefined;
+  /**
+   * Owned by the run: the Jira GETs its items sent and the metadata GETs answered once for all
+   * items of this invocation. Supplied by `runDraft`; callers leave it unset.
+   */
+  readonly createReads?: JiraDraftReadCounts | undefined;
 }
 
 /**
@@ -118,7 +125,7 @@ export const JIRA_DRAFT_RUN_BUDGET: JiraDraftRunBudget = Object.freeze({
 /** A progress line is written to the Activity Log after this many items were attempted. */
 const PROGRESS_EVERY = 100;
 
-interface DraftItemResult {
+export interface DraftItemResult {
   readonly ref: string;
   readonly state: JiraDraftItemState;
   readonly issueKey?: string;
@@ -234,6 +241,22 @@ async function runItem(
   return data === undefined ? settled : { ...settled, trace: data };
 }
 
+/** The item's connection: batch-wide create metadata is read once per invocation, the rest live. */
+function createConnection(
+  input: JiraChatDraftExecution,
+  http: AtlassianHttpBodyPort,
+): JiraManagedConnection {
+  const connection = { ...input.connection, http };
+  return input.createReads === undefined
+    ? connection
+    : withJiraCreateMetadataMemo(
+        connection,
+        input.context,
+        input.httpPortFactory,
+        input.createReads,
+      );
+}
+
 async function runTracedItem(
   input: JiraChatDraftExecution,
   item: JiraDraftItem,
@@ -252,7 +275,7 @@ async function runTracedItem(
         item,
         keys,
         input.context,
-        { ...input.connection, http },
+        createConnection(input, http),
         trace,
       );
       return attempt;
@@ -366,6 +389,9 @@ function reportRun(
     settledCount: settledCount(results),
     // Before the end, every item not yet looked at counts as still to do.
     pendingCount: phase === "executed" ? pendingCount(results) : total - results.length,
+    ...(input.createReads === undefined
+      ? {}
+      : { readCount: input.createReads.made, readReusedCount: input.createReads.reused }),
     durationMs,
   });
 }
@@ -427,12 +453,14 @@ function acknowledgingInput(
   };
 }
 async function runDraft(
-  input: JiraChatDraftExecution,
+  callerInput: JiraChatDraftExecution,
   draft: JiraDraft,
   traces: ReadonlyMap<string, ItemTrace>,
   tally: TraceTally,
   excluded: ReadonlySet<string>,
 ): Promise<readonly DraftItemResult[]> {
+  // One invocation, one set of create metadata reads; a new run always starts empty.
+  const input: JiraChatDraftExecution = { ...callerInput, createReads: { made: 0, reused: 0 } };
   const now = input.now ?? Date.now;
   const clock = { now, startedAt: now(), budget: input.budget ?? JIRA_DRAFT_RUN_BUDGET };
   const run: RunState = {
@@ -552,13 +580,6 @@ export const JIRA_DRAFT_PARTLY_REJECTED_GUIDANCE =
   "Correct the fields named in each failed item's fieldErrors or messages, then send the corrected draft once: " +
   "issues already in Jira are recognised, so nothing is created twice. " +
   "Tell the user in plain language which issues were created and which item Jira refused and why.";
-/**
- * Created or found issues whose keys the bounded result could not list: the model states the counts
- * and only the keys shown, never a guessed one.
- */
-export const JIRA_DRAFT_UNLISTED_GUIDANCE =
-  "Not every created or found key fits this result: createdRanges and existingRanges list the keys that fit and unlistedKeyCount counts the rest. " +
-  "Tell the user in plain language how many issues were created (createdCount) and name only the keys shown; never guess a key. Do not show this message.";
 /** What failed items without Jira's own words need: why, or that the same request cannot help. */
 function refusedAgainGuidance(failed: readonly DraftItemResult[]): string | undefined {
   if (failed.some((item) => item.detail?.replayed === true)) return JIRA_ALREADY_REFUSED_GUIDANCE;
@@ -628,7 +649,16 @@ function keysOf(items: readonly DraftItemResult[], state: "created" | "existing"
     item.state === state && item.issueKey !== undefined ? [item.issueKey] : [],
   );
 }
+/**
+ * The browse prefix every listed key shares (`https://jira.example/browse/`): the compact lists carry
+ * keys without rows, so the viewer links them as prefix plus key. Never stored in activity evidence.
+ */
+function browsePrefix(baseUrl: string): string | undefined {
+  const probe = jiraBrowseUrl(baseUrl, "KEIKO-1");
+  return probe?.endsWith("KEIKO-1") === true ? probe.slice(0, -"KEIKO-1".length) : undefined;
+}
 function compactData(
+  baseUrl: string,
   items: readonly DraftItemResult[],
   projected: ProjectedRows,
 ): CatalogJsonObject {
@@ -637,15 +667,20 @@ function compactData(
     RESULT_DATA_BYTES - jsonBytes(projected.rows),
     JIRA_DRAFT_RESULT_ROWS_MAX,
   );
+  const prefix = browsePrefix(baseUrl);
   return {
     compact: true,
+    ...(prefix === undefined ? {} : { browseUrlPrefix: prefix }),
     omittedRowCount: projected.omitted,
     createdRanges: listed.created.map((entry) => entry.text),
     existingRanges: listed.existing.map((entry) => entry.text),
     ...(listed.unlisted === 0 ? {} : { rangesTruncated: true, unlistedKeyCount: listed.unlisted }),
   };
 }
-function draftResult(baseUrl: string, items: readonly DraftItemResult[]): ManagedMcpToolResult {
+export function draftResult(
+  baseUrl: string,
+  items: readonly DraftItemResult[],
+): ManagedMcpToolResult {
   const counts: Record<string, number> = Object.fromEntries(
     Object.values(STATE_COUNTS).map((name) => [name, 0]),
   );
@@ -659,7 +694,7 @@ function draftResult(baseUrl: string, items: readonly DraftItemResult[]): Manage
   // is still no error. An item that did not land (failed, uncertain, skipped, pending) makes it one.
   const complete = items.every((item) => SETTLED_STATES.has(item.state));
   const projected = projectRows(baseUrl, items);
-  const compact = projected.compact ? compactData(items, projected) : {};
+  const compact = projected.compact ? compactData(baseUrl, items, projected) : {};
   const guidance =
     draftGuidance(items) ??
     (compact.rangesTruncated === true ? JIRA_DRAFT_UNLISTED_GUIDANCE : undefined);

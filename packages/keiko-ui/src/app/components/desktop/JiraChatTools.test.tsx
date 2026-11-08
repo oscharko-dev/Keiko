@@ -93,10 +93,10 @@ describe("Jira Chat tools without a read consent card", () => {
       />,
     );
     expectNoReadConsent();
-    expect(screen.getByText("mcp_lab_search")).toBeVisible();
+    // A running read only repeats the progress, so it earns no card of its own.
+    expect(screen.queryByText("mcp_lab_search")).toBeNull();
     expect(screen.getByRole("button", { name: "Approve this action" })).toBeVisible();
-    expect(screen.getAllByText("Running")).toHaveLength(1);
-    expect(screen.getByRole("region", { name: "MCP action" })).toBeVisible();
+    expect(screen.queryByRole("region", { name: "MCP action" })).toBeNull();
     // The card already says what the undecided action waits for; no second row repeats it.
     expect(screen.getByRole("region", { name: "Review Jira action" })).toBeVisible();
     expect(screen.queryByRole("region", { name: "Jira action" })).toBeNull();
@@ -110,7 +110,7 @@ describe("Jira Chat tools without a read consent card", () => {
     connectors.observe.mockResolvedValue(writeApproval);
     render(<JiraChatTools transcript={transcript([])} turnState="pending" />);
     expectNoReadConsent();
-    expect(screen.getByText("mcp_lab_search")).toBeVisible();
+    expect(screen.queryByText("mcp_lab_search")).toBeNull();
     expect(screen.getByRole("button", { name: "Approve this action" })).toBeVisible();
   });
 

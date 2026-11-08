@@ -1,0 +1,323 @@
+import { describe, expect, it } from "vitest";
+import {
+  LINEAR_RATIO_MAX,
+  measureScaling,
+  scalingRatio,
+} from "../../../tests/support/property-testing.js";
+import {
+  markdownBlocksToJiraWiki,
+  markdownInlineToJiraWiki,
+  readsAsMarkdownOnly,
+} from "./jira-markdown-wiki.js";
+import {
+  projectJiraDescriptionInput,
+  serializeJiraMarkdownDescription,
+} from "./jira-description-sections.js";
+
+// The description of KER-1 as Gemma wrote it (#4173 AC2): Markdown sent as a plain string, which
+// Data Center rendered with literal asterisks. Synthetic project text, no customer data.
+const EPIC = [
+  "**Ziel**",
+  "Die förmliche Initiierung des Programms.",
+  "",
+  "**Umfang**",
+  "* **Organisatorisches Setup:** Etablierung der Programmstruktur.",
+  "* **Planung & Governance:** Abstimmung über den Phasenplan.",
+].join("\n");
+
+describe("Markdown written as Jira Data Center wiki markup", () => {
+  it("converts the KER-1 description so Jira shows bold text instead of asterisks", () => {
+    expect(projectJiraDescriptionInput(EPIC)?.text).toBe(
+      [
+        "*Ziel*",
+        "Die förmliche Initiierung des Programms.",
+        "",
+        "*Umfang*",
+        "* *Organisatorisches Setup:* Etablierung der Programmstruktur.",
+        "* *Planung & Governance:* Abstimmung über den Phasenplan.",
+      ].join("\n"),
+    );
+  });
+
+  it("converts headings, lists, rules, links and inline code of tagged Markdown", () => {
+    const source = [
+      "## Ziel",
+      "Text mit *Betonung*, `code`, ~~alt~~ und [Lastenheft](https://example.invalid/doc).",
+      "- eins",
+      "  - zwei",
+      "1. erstens",
+      "   1. zweitens",
+      "> Zitat **wörtlich**",
+      "---",
+      "![Bild](https://example.invalid/a.png)",
+    ].join("\n");
+    expect(projectJiraDescriptionInput({ format: "markdown", text: source })).toEqual({
+      text: [
+        "h2. Ziel",
+        "Text mit _Betonung_, {{code}}, -alt- und [Lastenheft|https://example.invalid/doc].",
+        "* eins",
+        "** zwei",
+        "# erstens",
+        "## zweitens",
+        "> Zitat **wörtlich**",
+        "----",
+        "!https://example.invalid/a.png!",
+      ].join("\n"),
+      convertedHeadingCount: 1,
+    });
+  });
+
+  it("writes a Markdown table with a header row and drops the rule line", () => {
+    expect(markdownBlocksToJiraWiki("| A | B |\n|---|:---:|\n| **1** | 2 |\nnach")).toBe(
+      "||A||B||\n|*1*|2|\nnach",
+    );
+  });
+
+  it("keeps fenced code verbatim inside a code macro and leaves wiki macros untouched", () => {
+    expect(markdownBlocksToJiraWiki("```ts\nconst a = **b**;\n```\n**x**")).toBe(
+      "{code:ts}\nconst a = **b**;\n{code}\n*x*",
+    );
+    expect(markdownBlocksToJiraWiki("{noformat}\n**raw**\n{noformat}\n**x**")).toBe(
+      "{noformat}\n**raw**\n{noformat}\n*x*",
+    );
+  });
+
+  it("keeps the heading-only result when a fence is left open", () => {
+    expect(markdownBlocksToJiraWiki("```\n**x**")).toBeUndefined();
+    expect(serializeJiraMarkdownDescription("## A\n```\n**x**")).toEqual({
+      text: "h2. A\n```\n**x**",
+      convertedHeadingCount: 1,
+    });
+  });
+
+  it("preserves every line ending", () => {
+    expect(markdownBlocksToJiraWiki("**a**\r\n- b\r\n| x |\r\n|---|\r\nend")).toBe(
+      "*a*\r\n* b\r\n||x||\r\nend",
+    );
+  });
+
+  it("converts inline Markdown without touching code spans", () => {
+    expect(markdownInlineToJiraWiki("**a** und `**b**` und __c__")).toBe(
+      "*a* und {{**b**}} und *c*",
+    );
+  });
+});
+
+describe("ordinary technical text survives the conversion", () => {
+  it.each([
+    ["**Datei** `__init__.py` und __init__.py", "*Datei* {{__init__.py}} und __init__.py"],
+    ["**Glob** src/*.ts und lib/*.ts", "*Glob* src/*.ts und lib/*.ts"],
+    [
+      "**Siehe** [Foo](https://example.invalid/wiki/Foo_(bar)) und [x](https://example.invalid/a__b__c)",
+      "*Siehe* [Foo|https://example.invalid/wiki/Foo_(bar)] und [x|https://example.invalid/a__b__c]",
+    ],
+    ['**JSON** `{"a":1}`', '*JSON* {{\\{"a":1\\}}}'],
+  ])("%j", (source, expected) => {
+    expect(markdownBlocksToJiraWiki(source)).toBe(expected);
+  });
+
+  it("reads a fence whose info string carries attributes and nests tab-indented items", () => {
+    expect(markdownBlocksToJiraWiki("```js title=x\n**a**\n```\n- eins\n\t- zwei")).toBe(
+      "{code:js}\n**a**\n{code}\n* eins\n** zwei",
+    );
+  });
+
+  it("keeps a horizontal rule after a table row", () => {
+    expect(markdownBlocksToJiraWiki("| a |\n---\nnach")).toBe("|a|\n----\nnach");
+  });
+});
+
+describe("a plain string is Markdown only when it uses what wiki markup never writes", () => {
+  it.each([
+    ["**Ziel**\nText", true],
+    ["Siehe [Dokument](https://example.invalid/d).", true],
+    ["```\ncode\n```", true],
+    ["# criterion one\n# criterion two", false],
+    ["## nested criterion", false],
+    ["h2. Ziel\n**fett** bleibt wiki", false],
+    ["*fett* und [Link|https://example.invalid]", false],
+    ["** nested item", false],
+    ["{code}\n**x**\n{code}", false],
+    ["# erstens\n# zweitens\n**fett**", false],
+  ])("%j reads as Markdown: %s", (text, expected) => {
+    expect(readsAsMarkdownOnly(text)).toBe(expected);
+  });
+
+  it("leaves native wiki strings byte for byte", () => {
+    for (const text of [
+      "h2. Ziel\n* eins\n# zwei",
+      "*fett* _kursiv_ [Link|https://example.invalid]",
+    ]) {
+      expect(projectJiraDescriptionInput(text)).toEqual({ text, convertedHeadingCount: 0 });
+    }
+  });
+});
+
+// CodeQL alerts 106-111: each input made one pattern backtrack quadratically; at this size the old
+// patterns took seconds per input, the linear ones take milliseconds.
+describe("hostile input converts in linear time", () => {
+  const repeats = 60_000;
+  const hostile: readonly (readonly [string, string])[] = [
+    ["bullet", `*\t${"\t\t".repeat(repeats)}`],
+    ["ordered item", `1.\t${"\t\t".repeat(repeats)}`],
+    ["fence", `\`\`\`${"\t".repeat(repeats * 2)}\``],
+    ["table rule", `|---${"\t".repeat(repeats * 2)}x\n|a|`],
+    ["Markdown link target", `[\\](/${"[!](#".repeat(repeats)}`],
+    ["link label", "[".repeat(repeats * 2)],
+    ["wiki link", "[\\|".repeat(repeats)],
+  ];
+
+  for (const [name, text] of hostile) {
+    it(`finishes a hostile ${name} quickly`, { timeout: 2_000 }, () => {
+      const started = performance.now();
+      markdownBlocksToJiraWiki(text);
+      readsAsMarkdownOnly(text);
+      expect(performance.now() - started).toBeLessThan(1_000);
+    });
+  }
+
+  it("keeps the meaning of the rewritten patterns", () => {
+    expect(markdownBlocksToJiraWiki("-\t\titem\n1.  first\n- ")).toBe("* item\n# first\n* ");
+    expect(markdownBlocksToJiraWiki("~~~ ts {x}\nconst a = 1;\n~~~")).toBe(
+      "{code:ts}\nconst a = 1;\n{code}",
+    );
+    // A backtick in the info string makes it no fence: the line stays prose with a code span.
+    expect(markdownBlocksToJiraWiki("``` a`b\ntext")).toBe("``{{ a}}b\ntext");
+    expect(markdownBlocksToJiraWiki("| A | B |\n| :--- | ---: |\n| 1 | 2 |")).toBe(
+      "||A||B||\n|1|2|",
+    );
+    expect(markdownBlocksToJiraWiki("| A |\n||---|")).toBe("|A|\n||---|");
+    expect(markdownInlineToJiraWiki("[Docs](https://example.test/a_(b))")).toBe(
+      "[Docs|https://example.test/a_(b)]",
+    );
+    expect(readsAsMarkdownOnly("See [Docs](https://example.test/x).")).toBe(true);
+    expect(readsAsMarkdownOnly("See [Docs|https://example.test/x] and **this**.")).toBe(false);
+  });
+});
+
+describe("an active code block keeps its content literal (F5)", () => {
+  it("keeps a fenced example inside a {code} macro literal", () => {
+    const text = "# Goal\n\n{code}\n```js\n**literal**\n```\n{code}";
+    expect(projectJiraDescriptionInput({ format: "markdown", text })?.text).toBe(
+      "h1. Goal\n\n{code}\n```js\n**literal**\n```\n{code}",
+    );
+  });
+
+  it("keeps fence lines inside a {noformat} block literal", () => {
+    expect(markdownBlocksToJiraWiki("{noformat}\n~~~\n**x**\n```\n{noformat}\n**y**")).toBe(
+      "{noformat}\n~~~\n**x**\n```\n{noformat}\n*y*",
+    );
+  });
+
+  it("does not close a fence with another marker character or trailing text", () => {
+    expect(markdownBlocksToJiraWiki("```\ncode\n```~\n~~~\n``` x\n```")).toBe(
+      "{code}\ncode\n```~\n~~~\n``` x\n{code}",
+    );
+    expect(markdownBlocksToJiraWiki("```\ncode\n```~")).toBeUndefined();
+  });
+
+  it("closes a fence with the same character at an equal or longer length only", () => {
+    expect(markdownBlocksToJiraWiki("````\n```\n````\n**a**")).toBe("{code}\n```\n{code}\n*a*");
+    expect(markdownBlocksToJiraWiki("```\nx\n`````  \n**a**")).toBe("{code}\nx\n{code}\n*a*");
+    expect(markdownBlocksToJiraWiki("~~~~\nx\n~~~\n")).toBeUndefined();
+  });
+});
+
+describe("nested lists keep the ancestor marker path (F6)", () => {
+  it.each([
+    ["- Parent\n  1. First step\n  2. Second step", "* Parent\n*# First step\n*# Second step"],
+    ["1. Parent\n   - a\n   - b", "# Parent\n#* a\n#* b"],
+    ["- a\n  1. b\n     - c\n       1. d", "* a\n*# b\n*#* c\n*#*# d"],
+    ["- a\n  1. b\n     - c\n- e\n  - f", "* a\n*# b\n*#* c\n* e\n** f"],
+    ["- a\n  1. b\n     - c\n  2. d", "* a\n*# b\n*#* c\n*# d"],
+    ["10. ten\n    - child\n1. one\n   - child", "# ten\n#* child\n# one\n#* child"],
+  ])("%j", (markdown, wiki) => {
+    expect(markdownBlocksToJiraWiki(markdown)).toBe(wiki);
+  });
+
+  it("keeps the list open across a wrapped continuation line", () => {
+    expect(markdownBlocksToJiraWiki("- a\n  wrapped\n  - b")).toBe("* a\n  wrapped\n** b");
+    expect(markdownBlocksToJiraWiki("- a\n\n  - b")).toBe("* a\n\n** b");
+  });
+
+  it.each([
+    ["a wiki heading", "- a\n\nh2. T\n  - b", "* a\n\nh2. T\n* b"],
+    ["a rule", "- a\n---\n  - b", "* a\n----\n* b"],
+    ["a quote", "- a\n> q\n  - b", "* a\n> q\n* b"],
+    ["unindented prose", "- a\ntext\n  - b", "* a\ntext\n* b"],
+  ])("ends the list at %s", (_name, markdown, wiki) => {
+    expect(markdownBlocksToJiraWiki(markdown)).toBe(wiki);
+  });
+
+  it("starts a new list after a paragraph", () => {
+    expect(markdownBlocksToJiraWiki("1. a\ntext\n  - b")).toBe("# a\ntext\n* b");
+  });
+});
+
+describe("a link with balanced URL parentheses is Markdown (F11)", () => {
+  it("projects the balanced URL the converter already supports", () => {
+    expect(projectJiraDescriptionInput("See [Docs](https://example.test/a_(b)).")?.text).toBe(
+      "See [Docs|https://example.test/a_(b)].",
+    );
+  });
+
+  it.each([
+    ["See [Docs](https://example.test/x).", true],
+    ["[Docs](/a_(b)(c)) tail", true],
+    ["[Docs](#top)", true],
+    ["[Docs](mailto:a@example.test)", true],
+    ["[Docs](https://example.test/a_(b(c)))", false],
+    ["[Docs](https://example.test/a_(b)", false],
+    ["[Docs](ftp://example.test/x)", false],
+    ["[](https://example.test/x)", false],
+    ["[a [b](https://example.test/x)", true],
+    ["[a\nb](https://example.test/x)", false],
+    ["[Docs](https://example.test/a b)", false],
+  ])("%j reads as Markdown: %s", (text, expected) => {
+    expect(readsAsMarkdownOnly(text)).toBe(expected);
+  });
+
+  it.each([
+    ["a balanced-URL link", "[Docs](https://example.test/a_(b)) "],
+    ["nested link openers", "[a](/("],
+    ["closers without openers", "](/("],
+    ["empty labels", "[](("],
+    ["unclosed labels", "[a"],
+    ["unclosed targets", "[a](/b("],
+  ])("reads %s in linear time", { timeout: 60_000 }, (_name, piece) => {
+    const scaling = measureScaling({
+      build: (size) => piece.repeat(Math.ceil(size / piece.length)),
+      run: (text) => {
+        readsAsMarkdownOnly(text);
+        return markdownBlocksToJiraWiki(text);
+      },
+      size: 1_000,
+      maximumSize: 400_000,
+    });
+    expect(scaling.measurable, JSON.stringify(scaling)).toBe(true);
+    expect(scalingRatio(scaling), JSON.stringify(scaling)).toBeLessThan(LINEAR_RATIO_MAX);
+  });
+});
+
+describe("a typical batch description renders as Jira wiki", () => {
+  it("renders sections, acceptance criteria with bold and code", () => {
+    const text = [
+      "## Ziel",
+      "Das **Login** funktioniert.",
+      "",
+      "## Akzeptanzkriterien",
+      "- Der Nutzer sieht **Willkommen** nach `POST /login`",
+      "- Fehler liefern `401`",
+    ].join("\n");
+    expect(projectJiraDescriptionInput({ format: "markdown", text })?.text).toBe(
+      [
+        "h2. Ziel",
+        "Das *Login* funktioniert.",
+        "",
+        "h2. Akzeptanzkriterien",
+        "* Der Nutzer sieht *Willkommen* nach {{POST /login}}",
+        "* Fehler liefern {{401}}",
+      ].join("\n"),
+    );
+  });
+});

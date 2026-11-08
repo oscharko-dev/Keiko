@@ -160,6 +160,72 @@ describe("jira.draft-stage (#4178)", () => {
     ]);
   });
 
+  it("projects every page before the checks, the store and the digest see it (F7)", async () => {
+    const h = harness();
+    const projectItems = vi.fn((items: readonly Record<string, unknown>[]) =>
+      items.map((entry) => ({
+        ...entry,
+        fields: { ...(entry.fields as object), description: `projected ${String(entry.ref)}` },
+      })),
+    );
+    const checkRequirements = vi.fn((_items: readonly unknown[]) => undefined);
+    const deps = { ...h.deps, projectItems, checkRequirements };
+    const first = await executeJiraDraftStageTool(pageOf("a"), CONTEXT, connection(), deps);
+    const second = await executeJiraDraftStageTool(
+      { draftId: text(first.data.draftId), ...pageOf("b") },
+      CONTEXT,
+      connection(),
+      deps,
+    );
+    expect(checkRequirements.mock.calls[0]?.[0]).toMatchObject([
+      { fields: { description: "projected a" } },
+    ]);
+    const resolved = resolveJiraDraftArguments(
+      { draftId: text(first.data.draftId), draftDigest: text(second.data.draftDigest) },
+      (id) => h.deps.store.get(id, "chat-1"),
+    );
+    expect(resolved?.ok === true ? JSON.stringify(resolved.arguments) : "").toContain(
+      "projected a",
+    );
+    expect(resolved?.ok === true ? JSON.stringify(resolved.arguments) : "").not.toContain(
+      "acceptance criteria\n* works",
+    );
+    expect(resolved?.ok === true ? JSON.stringify(resolved.arguments) : "").toContain(
+      "projected b",
+    );
+  });
+
+  it("refuses a page whose projection pushes a description past its limit, staging nothing (F7)", async () => {
+    const h = harness();
+    const nearLimit = "x".repeat(32_760);
+    const lengthen = (items: readonly Record<string, unknown>[]): Record<string, unknown>[] =>
+      items.map((entry) => ({
+        ...entry,
+        fields: { ...(entry.fields as object), description: `${nearLimit} (a long source label)` },
+      }));
+    const append = vi.spyOn(h.deps.store, "append");
+    const fits = await executeJiraDraftStageTool(
+      { items: [{ ...item("ok"), fields: { summary: "ok", description: nearLimit } }] },
+      CONTEXT,
+      connection(),
+      h.deps,
+    );
+    expect(fits.isError).toBeUndefined();
+    append.mockClear();
+    const refused = await executeJiraDraftStageTool(pageOf("long"), CONTEXT, connection(), {
+      ...h.deps,
+      projectItems: lengthen,
+    });
+    expect(refused.isError).toBe(true);
+    expect(refused.data).toMatchObject({
+      reason: "field-validation",
+      ref: "long",
+      fieldId: "description",
+    });
+    expect(append).not.toHaveBeenCalled();
+    expect(h.activity.at(-1)).toMatchObject({ phase: "refused", refusal: "invalid-fields" });
+  });
+
   it("assembles a 70-item draft in pages and resolves to exactly those items", async () => {
     const h = harness();
     const first = await h.stage({ items: page(0, JIRA_DRAFT_PAGE_ITEMS_MAX) });
@@ -533,5 +599,62 @@ describe("native staged description rendering contract", () => {
     expect(
       h.deps.store.peek(text(accepted.data.draftId), "chat-1")?.items[0]?.fields,
     ).toMatchObject({ description: explicit });
+  });
+});
+
+describe("jira.draft-stage read reuse", () => {
+  const fifteen = (): CatalogJsonObject =>
+    pageOf(...Array.from({ length: 15 }, (_, index) => `r${String(index)}`));
+
+  it("reads Jira metadata a bounded number of times, not once per item", async () => {
+    const h = harness();
+    const target = connection();
+    const context = { ...CONTEXT };
+    const staged = await executeJiraDraftStageTool(fifteen(), context, target, h.deps);
+    expect(staged.data.outcome).toBe("succeeded");
+    const single = vi.mocked(target.http).mock.calls.length;
+
+    const unshared = connection();
+    await executeJiraDraftStageTool(pageOf("only"), { ...CONTEXT }, unshared, h.deps);
+    const onePerItem = vi.mocked(unshared.http).mock.calls.length;
+
+    // Fifteen items read no more than one item does (one metadata read per resource).
+    expect(single).toBeLessThanOrEqual(onePerItem);
+  });
+
+  it("serves a later page of the same invocation from the reads of the first", async () => {
+    const h = harness();
+    const target = connection();
+    const context = { ...CONTEXT };
+    const first = await executeJiraDraftStageTool(pageOf("a1", "a2"), context, target, h.deps);
+    const afterFirst = vi.mocked(target.http).mock.calls.length;
+    await executeJiraDraftStageTool(
+      { draftId: text(first.data.draftId), ...pageOf("b1", "b2") },
+      context,
+      target,
+      h.deps,
+    );
+    expect(vi.mocked(target.http).mock.calls).toHaveLength(afterFirst);
+  });
+
+  it("never serves a read to another invocation", async () => {
+    const h = harness();
+    const target = connection();
+    await executeJiraDraftStageTool(pageOf("a"), { ...CONTEXT }, target, h.deps);
+    const afterFirst = vi.mocked(target.http).mock.calls.length;
+    await executeJiraDraftStageTool(pageOf("b"), { ...CONTEXT }, target, h.deps);
+    expect(vi.mocked(target.http).mock.calls).toHaveLength(afterFirst * 2);
+  });
+
+  it("reports the reads it sent and reused on the staged and refused activity", async () => {
+    const h = harness();
+    const target = connection();
+    const context = { ...CONTEXT };
+    await executeJiraDraftStageTool(fifteen(), context, target, h.deps);
+    const staged = h.activity.find((entry) => entry.phase === "staged");
+    expect(staged?.readCount).toBe(vi.mocked(target.http).mock.calls.length);
+    expect(staged?.readReusedCount).toBeGreaterThan(0);
+    await executeJiraDraftStageTool({ items: "nope" }, context, target, h.deps);
+    expect(h.activity.at(-1)).toMatchObject({ phase: "refused", readCount: 0, readReusedCount: 0 });
   });
 });

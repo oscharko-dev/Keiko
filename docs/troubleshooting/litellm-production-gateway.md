@@ -1031,6 +1031,11 @@ configuration sets `codingStreaming: "off"`, when the model's capability does no
 coding runtime sent its request without `stream: true`, or when a proxy between Keiko and the model
 ignores `stream` and answers with one JSON body.
 
+Keiko's own mechanical page calls (the Jira draft batch) ask for no reasoning with the wire value
+`reasoning_effort: "none"` (the internal `reasoningPreference: "off"`; never a user-selectable
+effort). A route that rejects the parameter is answered once without it, the deployment remembers
+that, and `chat.request.compatibility-retry` records `omittedField: "reasoning_effort"`.
+
 A turn the gateway streams can still reach the timeline in one piece when the runtime's delta
 events do not reach it. OpenCode persists a streamed reasoning or answer part only empty, when its
 block starts, and complete, when the response ends, so the timeline cannot read the words in

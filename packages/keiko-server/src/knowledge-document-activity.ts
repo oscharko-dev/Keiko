@@ -55,6 +55,8 @@ export interface KnowledgeDocumentActivity extends KnowledgeReviewObservation {
   readonly readRequirementCount?: number;
   readonly reviewedDocumentCount?: number;
   readonly pendingPageCount?: number;
+  /** Coverage only: requirements a completed draft batch of the turn covered, all it selected. */
+  readonly draftBatchCoveredRequirementCount?: number;
 }
 const COUNT = { type: "integer", dataClass: "count", required: true } as const;
 const OPERATION = defineActivityLogOperation({
@@ -86,6 +88,7 @@ const OPERATION = defineActivityLogOperation({
     readRequirementCount: { ...COUNT, required: false },
     reviewedDocumentCount: { ...COUNT, required: false },
     pendingPageCount: { ...COUNT, required: false },
+    draftBatchCoveredRequirementCount: { ...COUNT, required: false },
     reviewFailureStage: {
       type: "string",
       dataClass: "closed-enum",

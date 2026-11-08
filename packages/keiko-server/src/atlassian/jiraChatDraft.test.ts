@@ -532,6 +532,46 @@ describe("executeJiraChatDraft (#4178)", () => {
     expect(observedJiraDraftOutcome(input.journal, input.intent, args)).toBe("succeeded");
   });
 
+  describe("create metadata is read once per invocation", () => {
+    const getUrls = (jira: SyntheticJira): string[] =>
+      jira.fetch.mock.calls
+        .filter(([, init]) => (init?.method ?? "GET") === "GET")
+        .map(([url]) => (typeof url === "string" ? url : url instanceof URL ? url.href : url.url));
+    const countOf = (urls: readonly string[], part: string): number =>
+      urls.filter((url) => url.includes(part)).length;
+    const looseDraft = (count: number): CatalogJsonObject =>
+      ({
+        items: Array.from({ length: count }, (_, index) => item(`loose${String(index)}`)),
+      }) as unknown as CatalogJsonObject;
+
+    it("reads metadata once for N items but searches and reads back every item live", async () => {
+      const jira = syntheticJira();
+      const activity: JiraDraftActivity[] = [];
+      const result = await executeJiraChatDraft({
+        ...execution(jira, looseDraft(6)),
+        activity: (entry) => activity.push(entry),
+      });
+      expect(result.data).toMatchObject({ createdCount: 6 });
+      const urls = getUrls(jira);
+      expect(countOf(urls, "/issue/createmeta/")).toBe(1);
+      expect(countOf(urls, "/search?")).toBeGreaterThanOrEqual(6);
+      expect(urls.filter((url) => /\/issue\/[A-Z]+-\d+/u.test(url)).length).toBeGreaterThanOrEqual(
+        6,
+      );
+      const last = activity.at(-1);
+      expect(last?.phase).toBe("executed");
+      expect(last?.readReusedCount).toBe(5);
+      expect(last?.readCount).toBe(urls.length);
+    });
+
+    it("starts the next invocation empty", async () => {
+      const jira = syntheticJira();
+      await executeJiraChatDraft(execution(jira, looseDraft(2)));
+      await executeJiraChatDraft(execution(jira, looseDraft(2)));
+      expect(countOf(getUrls(jira), "/issue/createmeta/")).toBe(2);
+    });
+  });
+
   it("creates no new issue when an executed 70-item draft is run again", async () => {
     // Epic #4173 AC "Re-running an executed draft creates zero new issues": a fresh journal replays
     // nothing, so only the items' deterministic identities can tell Jira already holds them.

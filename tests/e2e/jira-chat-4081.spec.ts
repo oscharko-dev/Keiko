@@ -303,8 +303,13 @@ async function expectDeadlineReceipt(page: Page, region: Locator, key: string): 
   });
   await expect(region.getByText("Jira change confirmed", { exact: true })).toHaveCount(0);
   await expect(region.locator('[data-role="assistant"] .chat-msg-content')).toContainText(key);
-  await region.getByText("View Jira result", { exact: true }).last().click();
-  await expect(region.locator("pre").last()).toContainText(key);
+  // The readable outcome names the accepted issue and links to it in Jira.
+  const outcome = region.getByRole("list", { name: "Jira issues", exact: true }).last();
+  await expect(outcome).toContainText(key);
+  const link = outcome.getByRole("link", { name: new RegExp(`^${key}\\b`, "u") });
+  await expect(link).toHaveCount(1);
+  await expect(link).toHaveAttribute("href", new RegExp(`/browse/${key}$`, "u"));
+  await expect(link).toHaveAttribute("target", "_blank");
 }
 
 async function reconcileDeadlineDraft(page: Page, region: Locator, writes: number): Promise<void> {
