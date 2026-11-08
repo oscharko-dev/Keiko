@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "81ab52760699b54b4a06f2aa1c04a18dd11b4a7fb3b69924c0f49e753df5683c",
+    "catalogDigest": "e87abfc4e56f82145950c3c141155c24f3e3a3f3e03e0453cdd707da4b6cde82",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -3752,7 +3752,8 @@
               "not-offered",
               "budget-exhausted",
               "turn-ended",
-              "no-stored-result"
+              "no-stored-result",
+              "selection-incomplete"
             ]
           }
         },
@@ -32757,8 +32758,8 @@
         "failureClasses": ["atlassian-action-execution"],
         "proofIds": ["jira.citation.markers.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraCitationMarkers.ts:387",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraCitationMarkers.ts:424"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraCitationMarkers.ts:479",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraCitationMarkers.ts:516"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -112308,7 +112309,7 @@
     {
       "op": "chat.tool-turn.batch-progress",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-tool-turn.ts:312",
+      "site": "packages/keiko-server/src/chat-tool-turn.ts:320",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -114855,7 +114856,7 @@
     {
       "op": "jira.citation.markers",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraCitationMarkers.ts:390",
+      "site": "packages/keiko-server/src/atlassian/jiraCitationMarkers.ts:482",
       "package": "keiko-server"
     },
     {
@@ -114920,7 +114921,7 @@
     {
       "op": "knowledge.requirement-trace",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/requirement-trace.ts:212",
+      "site": "packages/keiko-server/src/requirement-trace.ts:213",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

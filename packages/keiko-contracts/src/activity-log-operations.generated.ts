@@ -3625,6 +3625,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "budget-exhausted",
           "turn-ended",
           "no-stored-result",
+          "selection-incomplete",
         ],
       },
     },
