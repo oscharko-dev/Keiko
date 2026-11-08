@@ -2261,7 +2261,10 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   other credential name keeps its rule, and whether the file is readable at all stays with the
   read allowlist and the denied roots. The system and Homebrew bundles stay unwritable because they
   lie outside the writable roots; a certifi bundle in the workspace's own `site-packages` stays
-  writable, so installing a package into a project environment works.
+  writable, so installing a package into a project environment works. That adds no trust a run
+  lacks: the same run already writes the environment's code that names the bundle. A named file is
+  admitted by its path alone; Keiko does not inspect its content, so naming a private key there
+  would expose it to the run: the operator's own environment owns that choice.
   The tool-state half of `isDenied` (`.git`, `node_modules`, caches, `.gitconfig`, `.config`)
   stays a policy guard only, because Git, npm and the build need those paths. A symlink in the
   workspace to a file outside it, and the `/System/Volumes/Data` spelling of a home path, are
