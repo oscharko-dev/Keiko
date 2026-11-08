@@ -7,6 +7,7 @@ import { object, text } from "./jiraManagedSchemas.js";
 import { JIRA_WORKFLOW_SCHEME_RESULT_FIELDS } from "./jiraAdministrationDescriptors.js";
 import {
   jiraNativeIdentitySchema as ID,
+  jiraNativePermissionSchemeIdentitySchema as PERMISSION_ID,
   jiraNativeProjectSchema as KEY,
   jiraNativePagingSchema as PAGING,
   jiraNativeReadResult,
@@ -28,7 +29,7 @@ const GRANT = object(GRANT_FIELDS, ["id", "permission", "holder"]);
 function array(item: CatalogJsonObject, maxItems: number = MAX): CatalogJsonObject {
   return { type: "array", maxItems, items: item };
 }
-const PERMISSION_FIELDS = { ...NAMED_FIELDS, permissions: array(GRANT) };
+const PERMISSION_FIELDS = { ...NAMED_FIELDS, id: PERMISSION_ID, permissions: array(GRANT) };
 const SECURITY_FIELDS = { ...NAMED_FIELDS, defaultSecurityLevelId: ID, levels: array(LEVEL) };
 export const JIRA_PRIORITY_SCHEME_RESULT_FIELDS = {
   ...NAMED_FIELDS,
@@ -59,34 +60,59 @@ const RECIPIENT_ID = {
   pattern: "^[A-Za-z0-9~]",
   not: { pattern: "[^A-Za-z0-9._~-]" },
 };
-const RECIPIENT = object({
-  id: ID,
-  notificationType: { type: "string", enum: [
-    "CurrentAssignee", "Reporter", "CurrentUser", "ProjectLead", "ComponentLead",
-    "AllWatchers", "User", "Group", "EmailAddress", "UserCustomField", "GroupCustomField", "ProjectRole",
-  ] },
-  parameter: text(1024),
-  emailAddress: text(320),
-  recipientKind: { type: "string", enum: ["user", "group", "projectRole", "field"] },
-  recipientId: RECIPIENT_ID,
-  recipientKey: text(255),
-  recipientName: text(255),
-  recipientDisplayName: text(255),
-  recipientDescription: text(32768),
-  recipientActive: BOOL,
-}, ["id", "notificationType"]);
+const RECIPIENT = object(
+  {
+    id: ID,
+    notificationType: {
+      type: "string",
+      enum: [
+        "CurrentAssignee",
+        "Reporter",
+        "CurrentUser",
+        "ProjectLead",
+        "ComponentLead",
+        "AllWatchers",
+        "User",
+        "Group",
+        "EmailAddress",
+        "UserCustomField",
+        "GroupCustomField",
+        "ProjectRole",
+      ],
+    },
+    parameter: text(1024),
+    emailAddress: text(320),
+    recipientKind: { type: "string", enum: ["user", "group", "projectRole", "field"] },
+    recipientId: RECIPIENT_ID,
+    recipientKey: text(255),
+    recipientName: text(255),
+    recipientDisplayName: text(255),
+    recipientDescription: text(32768),
+    recipientActive: BOOL,
+  },
+  ["id", "notificationType"],
+);
 const EVENT_FIELDS = { id: ID, name: text(255), description: text(32768) };
-const EVENT = object({
-  ...EVENT_FIELDS,
-  // Ordered immediate template to ancestor; root plus seven templates is the existing eight-node bound.
-  templateEvents: array(object(EVENT_FIELDS, ["id"]), 7),
-  notifications: array(RECIPIENT),
-}, ["id"]);
-const NOTIFICATION_SCHEME = object({
-  ...NAMED_FIELDS, eventsAvailable: BOOL, events: array(EVENT),
-}, ["id", "name"]);
+const EVENT = object(
+  {
+    ...EVENT_FIELDS,
+    // Ordered immediate template to ancestor; root plus seven templates is the existing eight-node bound.
+    templateEvents: array(object(EVENT_FIELDS, ["id"]), 7),
+    notifications: array(RECIPIENT),
+  },
+  ["id"],
+);
+const NOTIFICATION_SCHEME = object(
+  {
+    ...NAMED_FIELDS,
+    eventsAvailable: BOOL,
+    events: array(EVENT),
+  },
+  ["id", "name"],
+);
 const NOTIFICATION_SINGLE = {
-  eventsRequested: BOOL, items: array(NOTIFICATION_SCHEME, 1),
+  eventsRequested: BOOL,
+  items: array(NOTIFICATION_SCHEME, 1),
 };
 const INCLUDE_EVENTS = { includeEvents: BOOL };
 const INCLUDE_PERMISSIONS = { includePermissions: BOOL };
@@ -108,12 +134,20 @@ export const JIRA_ACCESS_READ_DEFINITIONS = {
   "jira.project-security-levels": read(
     "Resolve an existing project's identity and locally page security levels accessible to the current Jira actor. The accessible scope is explicit: an empty list can also reflect missing Set Issue Security permission and never proves that no levels are configured. No visibility changes.",
     object({ projectIdOrKey: KEY, ...PAGING }, ["projectIdOrKey"]),
-    { ...PROJECT_CONTEXT, levelsScope: { type: "string", enum: ["accessible"] }, ...localPage(LEVEL) },
+    {
+      ...PROJECT_CONTEXT,
+      levelsScope: { type: "string", enum: ["accessible"] },
+      ...localPage(LEVEL),
+    },
   ),
   "jira.project-workflow-scheme": read(
     "Resolve an existing project's canonical identity and inspect its associated active workflow scheme. Locally page observed current/original issue-type mappings; absent mappings remain unknown. A draft response is refused rather than presented as the active association. No migration, draft creation or association changes.",
     object({ projectIdOrKey: KEY, ...PAGING }, ["projectIdOrKey"]),
-    { ...PROJECT_CONTEXT, ...JIRA_WORKFLOW_SCHEME_RESULT_FIELDS, draft: { type: "boolean", enum: [false] } },
+    {
+      ...PROJECT_CONTEXT,
+      ...JIRA_WORKFLOW_SCHEME_RESULT_FIELDS,
+      draft: { type: "boolean", enum: [false] },
+    },
   ),
   "jira.project-priority-scheme": read(
     "Resolve an existing project's canonical identity and inspect its associated native priority scheme. Preserve only supplied default-scheme state, default priority ID and priority membership IDs. Missing optional metadata is unknown; no priorities or project associations change.",
@@ -128,19 +162,19 @@ export const JIRA_ACCESS_READ_DEFINITIONS = {
   ),
   "jira.permission-scheme": read(
     "Inspect one exact native permission scheme, optionally requesting documented grant metadata. Holder type/parameter are native configuration facts, not proof that a user can perform an operation. No grants or associations change.",
-    object({ schemeId: ID, ...INCLUDE_PERMISSIONS }, ["schemeId"]),
+    object({ schemeId: PERMISSION_ID, ...INCLUDE_PERMISSIONS }, ["schemeId"]),
     PERMISSION_FIELDS,
     1,
   ),
   "jira.permission-grants": read(
     "Read and locally page native grants in the selected permission scheme. Return exact grant IDs, permission names and observed holder type/parameter without expanding people or inferring effective access. Requires Jira's native viewing permission.",
-    object({ schemeId: ID, ...PAGING }, ["schemeId"]),
-    { schemeId: ID, ...localPage(GRANT) },
+    object({ schemeId: PERMISSION_ID, ...PAGING }, ["schemeId"]),
+    { schemeId: PERMISSION_ID, ...localPage(GRANT) },
   ),
   "jira.permission-grant": read(
     "Inspect the exact grant in the selected native permission scheme. Validate the returned grant identity; missing holder metadata is a failure, never an empty or public grant. This is configuration inspection only.",
-    object({ schemeId: ID, permissionId: ID }, ["schemeId", "permissionId"]),
-    { schemeId: ID, ...GRANT_FIELDS },
+    object({ schemeId: PERMISSION_ID, permissionId: ID }, ["schemeId", "permissionId"]),
+    { schemeId: PERMISSION_ID, ...GRANT_FIELDS },
     1,
   ),
   "jira.issue-security-schemes": read(
@@ -162,10 +196,17 @@ export const JIRA_ACCESS_READ_DEFINITIONS = {
   ),
   "jira.notification-schemes": read(
     "Read a native page of visible notification schemes. includeEvents requests the fixed documented event/recipient expansions. Events not returned remain unavailable; an observed empty list remains empty. Preserve native paging and optional total. This reads configuration, never sends notifications or changes subscriptions.",
-    object({ ...INCLUDE_EVENTS, startAt: PAGING.startAt, maxResults: { type: "integer", minimum: 1, maximum: 50 } }),
+    object({
+      ...INCLUDE_EVENTS,
+      startAt: PAGING.startAt,
+      maxResults: { type: "integer", minimum: 1, maximum: 50 },
+    }),
     {
-      eventsRequested: BOOL, items: array(NOTIFICATION_SCHEME, 50),
-      startAt: PAGING.startAt, isLast: BOOL, nextStartAt: PAGING.startAt,
+      eventsRequested: BOOL,
+      items: array(NOTIFICATION_SCHEME, 50),
+      startAt: PAGING.startAt,
+      isLast: BOOL,
+      nextStartAt: PAGING.startAt,
       total: { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
     },
     50,

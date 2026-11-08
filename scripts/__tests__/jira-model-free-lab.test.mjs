@@ -1,4 +1,12 @@
-import { mkdtempSync, readdirSync, rmSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  existsSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+} from "node:fs";
 import { Buffer } from "node:buffer";
 import { URL } from "node:url";
 import { tmpdir } from "node:os";
@@ -11,6 +19,7 @@ import {
 } from "../testing/jira-chat-lab/api-qualification-runtime.mjs";
 import { DEFAULT_LAB_CONNECTION } from "../testing/jira-chat-lab/lab-client.mjs";
 import { runQualificationBatches } from "../testing/jira-chat-lab/api-qualification.mjs";
+import { jiraOperationForTool } from "../../packages/keiko-server/dist/atlassian/jiraManagedProvider.js";
 
 vi.mock("../testing/jira-chat-lab/lab-client.mjs", async (original) => ({
   ...(await original()),
@@ -51,6 +60,59 @@ it("uses the paired product server with an empty provider catalog and no model p
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+it("admits all 439 native contracts through the production selected provider", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "keiko-model-free-selection-"));
+  const session = {
+    ...DEFAULT_LAB_CONNECTION,
+    directory,
+    project: "keiko-jira-4081-unit",
+    schemaVersion: 1,
+    syntheticOnly: true,
+  };
+  try {
+    await withModelFreeJira({
+      session,
+      run: async (context) => {
+        const ledger = JSON.parse(
+          readFileSync(
+            new URL(
+              "../../docs/local-knowledge/jira-api-coverage/operations.json",
+              import.meta.url,
+            ),
+            "utf8",
+          ),
+        );
+        const failures = [];
+        for (const row of ledger.operations) {
+          let selected;
+          try {
+            selected = await context.deps.jiraChatCatalog.select([row.identity]);
+          } catch (error) {
+            failures.push({ identity: row.identity, reason: error.reason, effect: error.effect });
+            continue;
+          }
+          const operation = jiraOperationForTool(row.currentCapabilityIds[0]);
+          expect(
+            selected.catalog.descriptors.some(
+              (descriptor) =>
+                descriptor.toolRef.canonicalId ===
+                operation.declaration.descriptor.toolRef.canonicalId,
+            ),
+          ).toBe(true);
+          await selected.close();
+        }
+        expect(
+          failures
+            .map((failure) => `${failure.identity}: ${failure.reason}/${failure.effect}`)
+            .join("\n"),
+        ).toBe("");
+      },
+    });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}, 120000);
 
 function syntheticNativeTransport(request, actor = "api") {
   const path = new URL(request.url).pathname;

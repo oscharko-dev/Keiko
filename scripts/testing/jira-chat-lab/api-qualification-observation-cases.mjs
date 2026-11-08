@@ -225,7 +225,7 @@ export const API_QUALIFICATION_OBSERVATION_CASES = [
   }),
   readCase("jira.system-avatars", "/rest/api/2/avatar/user/system", ["id", "category"], {
     args: () => ({ avatarType: "user", maxResults: 100 }),
-    nativeRoot: avatars,
+    nativeRoot: (value) => value.system.map((entry) => ({ ...entry, category: "system" })),
   }),
   readCase("jira.project-avatars", "/rest/api/2/project/KEIKO/avatars", ["id", "category"], {
     args: project,

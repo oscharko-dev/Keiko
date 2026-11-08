@@ -9,8 +9,18 @@ import { jiraProjectionTextFits } from "./jira-managed-field-reads.js";
 import { boundJiraReadResult } from "./jira-managed-issue-reads.js";
 import { jiraReadFailure, localJiraPage, projectJiraCollection } from "./jira-managed-metadata.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
-import { executeJiraSelectedRead, selectJiraReadPage, type JiraReadResponse } from "./jira-managed-read-request.js";
-import { jiraNativeId, jiraNativeNumericId, jiraNativeText } from "./jira-native-values.js";
+import {
+  executeJiraSelectedRead,
+  selectJiraReadPage,
+  type JiraReadResponse,
+} from "./jira-managed-read-request.js";
+import {
+  jiraNativeId,
+  jiraNativeNumericId,
+  jiraNativeText,
+  jiraNativePermissionSchemeId,
+  jiraNativePermissionSchemeNumericId,
+} from "./jira-native-values.js";
 
 export const JIRA_ACCESS_SCHEME_READS = JIRA_READ_TOOL_FAMILIES.accessSchemes;
 type AccessRead = (typeof JIRA_ACCESS_SCHEME_READS)[number];
@@ -31,6 +41,23 @@ interface Selection {
   readonly schemeId?: string;
   readonly targetId?: string;
 }
+function schemeRoute(
+  name: AccessRead,
+  args: CatalogJsonObject,
+  schemeId: string,
+  expand: string,
+): Pick<Selection, "path" | "schemeId" | "targetId"> | undefined {
+  if (name === "jira.issue-security-scheme")
+    return schemeId === "0"
+      ? undefined
+      : { path: `issuesecurityschemes/${schemeId}`, targetId: schemeId };
+  const root = `permissionscheme/${schemeId}`;
+  if (name === "jira.permission-scheme") return { path: `${root}${expand}`, targetId: schemeId };
+  if (name === "jira.permission-grants") return { path: `${root}/permission`, schemeId };
+  return jiraNativeId(args.permissionId)
+    ? { path: `${root}/permission/${args.permissionId}`, schemeId, targetId: args.permissionId }
+    : undefined;
+}
 function route(
   name: AccessRead,
   args: CatalogJsonObject,
@@ -42,16 +69,8 @@ function route(
     return jiraNativeId(args.levelId)
       ? { path: `securitylevel/${args.levelId}`, targetId: args.levelId }
       : undefined;
-  if (!jiraNativeId(args.schemeId)) return undefined;
-  const schemeId = args.schemeId;
-  if (name === "jira.issue-security-scheme")
-    return { path: `issuesecurityschemes/${schemeId}`, targetId: schemeId };
-  const root = `permissionscheme/${schemeId}`;
-  if (name === "jira.permission-scheme") return { path: `${root}${expand}`, targetId: schemeId };
-  if (name === "jira.permission-grants") return { path: `${root}/permission`, schemeId };
-  return jiraNativeId(args.permissionId)
-    ? { path: `${root}/permission/${args.permissionId}`, schemeId, targetId: args.permissionId }
-    : undefined;
+  if (!jiraNativePermissionSchemeId(args.schemeId)) return undefined;
+  return schemeRoute(name, args, args.schemeId, expand);
 }
 function selection(name: AccessRead, args: CatalogJsonObject): Selection | undefined {
   const page = selectJiraReadPage(args, new Set(FIELDS[name]));
@@ -61,9 +80,12 @@ function selection(name: AccessRead, args: CatalogJsonObject): Selection | undef
   const selected = route(name, args);
   return selected === undefined ? undefined : { ...selected, ...page };
 }
-function namedResource(value: unknown): CatalogJsonObject | undefined {
+function namedResourceWithIdentity(
+  value: unknown,
+  identity: (value: unknown) => string | undefined,
+): CatalogJsonObject | undefined {
   const raw = asRecord(value);
-  const id = jiraNativeNumericId(raw?.id);
+  const id = identity(raw?.id);
   if (raw === undefined || id === undefined || !jiraNativeText(raw.name, 255)) return undefined;
   if (raw.description !== undefined && raw.description !== null) {
     if (!jiraNativeText(raw.description, 32768, true)) return undefined;
@@ -71,28 +93,32 @@ function namedResource(value: unknown): CatalogJsonObject | undefined {
   }
   return { id, name: raw.name };
 }
+function namedResource(value: unknown): CatalogJsonObject | undefined {
+  return namedResourceWithIdentity(value, jiraNativeNumericId);
+}
+function permissionHolder(value: unknown): CatalogJsonObject | undefined {
+  const holder = asRecord(value);
+  if (holder === undefined || !jiraNativeText(holder.type, 128)) return undefined;
+  const parameter = holder.parameter;
+  if (parameter !== undefined && parameter !== null && !jiraNativeText(parameter, 255, true))
+    return undefined;
+  return { type: holder.type, ...(typeof parameter === "string" ? { parameter } : {}) };
+}
 function grant(value: unknown): CatalogJsonObject | undefined {
   const raw = asRecord(value);
   const id = jiraNativeNumericId(raw?.id);
-  const holder = asRecord(raw?.holder);
+  const holder = permissionHolder(raw?.holder);
   if (
     raw === undefined ||
     id === undefined ||
     !jiraNativeText(raw.permission, 255) ||
-    holder === undefined ||
-    !jiraNativeText(holder.type, 128)
+    holder === undefined
   )
-    return undefined;
-  const parameter = holder.parameter;
-  if (parameter !== undefined && parameter !== null && !jiraNativeText(parameter, 255, true))
     return undefined;
   return {
     id,
     permission: raw.permission,
-    holder: {
-      type: holder.type,
-      ...(typeof parameter === "string" ? { parameter } : {}),
-    },
+    holder,
   };
 }
 function nestedItems(
@@ -110,7 +136,7 @@ function nestedItems(
 }
 function permissionScheme(value: unknown): CatalogJsonObject | undefined {
   const raw = asRecord(value);
-  const metadata = namedResource(value);
+  const metadata = namedResourceWithIdentity(value, jiraNativePermissionSchemeNumericId);
   if (raw === undefined || metadata === undefined) return undefined;
   const permissions = nestedItems(raw.permissions, "permissions", grant);
   return permissions === undefined ? undefined : { ...metadata, ...permissions };
@@ -143,8 +169,10 @@ function collectionKey(
 }
 function descriptionExceedsBounds(value: unknown): boolean {
   const description = asRecord(value)?.description;
-  return typeof description === "string" &&
-    (description.length > 32768 || !jiraProjectionTextFits(description));
+  return (
+    typeof description === "string" &&
+    (description.length > 32768 || !jiraProjectionTextFits(description))
+  );
 }
 function resourceExceedsBounds(value: unknown): boolean {
   const raw = asRecord(value);
@@ -183,7 +211,15 @@ function projectResponse(
       ? jiraReadFailure("malformed-payload")
       : boundJiraReadResult({ data: { outcome: "succeeded", ...context, ...item } });
   }
-  const values = asArray(response.body[key]);
+  return projectCollection(response.body[key], project, selected, context);
+}
+function projectCollection(
+  value: unknown,
+  project: (value: unknown) => CatalogJsonObject | undefined,
+  selected: Selection,
+  context: CatalogJsonObject,
+): ManagedMcpToolResult {
+  const values = asArray(value);
   if (values === undefined) return jiraReadFailure("malformed-payload");
   if (values.length > TOOL_CATALOG_LIMITS.maxArrayItems) return jiraReadFailure("bounds-exceeded");
   if (values.some(resourceExceedsBounds)) return jiraReadFailure("bounds-exceeded");
@@ -198,6 +234,7 @@ export function executeJiraAccessSchemeRead(
   args: CatalogJsonObject,
   request: JiraMutationRequest,
 ): Promise<ManagedMcpToolResult> {
-  return executeJiraSelectedRead(selection(name, args), request, "json",
-    (response, selected) => projectResponse(name, response, selected));
+  return executeJiraSelectedRead(selection(name, args), request, "json", (response, selected) =>
+    projectResponse(name, response, selected),
+  );
 }

@@ -1,10 +1,34 @@
 // Explicit independent oracles; specification documents never become HTTP dispatch authority.
 import assert from "node:assert/strict";
 import { URLSearchParams } from "node:url";
-import { basicAuth, labRequest } from "./lab-client.mjs";
+import { assertSessionServerInfo, basicAuth, labRequest } from "./lab-client.mjs";
 
 async function nativeRead(context, path) {
   return labRequest(context.session, "GET", path, basicAuth(context.session, context.actor));
+}
+const VERSION_SCOPED_READS = new Map([
+  ["jira.search-max-aggregation-buckets", "/rest/api/2/searchLimits/maxAggregationBuckets"],
+  ["jira.search-max-result-window", "/rest/api/2/searchLimits/maxResultWindow"],
+]);
+async function missingVersionCapability(context, tool, path, response) {
+  if (response.status !== 404 || VERSION_SCOPED_READS.get(tool) !== path) return undefined;
+  const family = context.session.jiraVersion?.split(".").slice(0, 2).join(".");
+  if (!new Set(["10.3", "10.4"]).has(family)) return undefined;
+  // These two static identities occur only in the 11.2/11.3 source inventories.
+  // A resource-specific 404 never enters this proof. Verify the running release again.
+  const observed = await nativeRead(context, "/rest/api/2/serverInfo");
+  assert.equal(observed.status, 200);
+  assertSessionServerInfo(context.session, observed.value);
+  return {
+    capabilityAbsent: true,
+    status: response.status,
+    release: observed.value.version,
+    reason: "absent-in-release-inventory",
+    sourceReferences: [
+      "docs/local-knowledge/jira-api-coverage/operations.json",
+      "docs/local-knowledge/jira-api-coverage/provenance.json",
+    ],
+  };
 }
 function nativeRows(value, root) {
   if (typeof root === "function") return root(value);
@@ -38,8 +62,11 @@ export function readCase(
     tool,
     arguments: args,
     readback: async (context, data, fixture) => {
-      const response = await nativeRead(context, typeof path === "function" ? path(fixture) : path);
+      const selectedPath = typeof path === "function" ? path(fixture) : path;
+      const response = await nativeRead(context, selectedPath);
       if (response.status === 403) return { permissionDenied: true, status: response.status };
+      const absent = await missingVersionCapability(context, tool, selectedPath, response);
+      if (absent !== undefined) return absent;
       assert.equal(response.status, 200);
       const native = nativeRows(response.value, nativeRoot);
       const projected = projectRows(data, productRoot);

@@ -12,7 +12,11 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
-import { createToolDescriptor, createToolRef, ToolCatalogError } from "@oscharko-dev/keiko-tool-catalog";
+import {
+  createToolDescriptor,
+  createToolRef,
+  ToolCatalogError,
+} from "@oscharko-dev/keiko-tool-catalog";
 
 export type JiraOperationTool = JiraManagedReadToolName | JiraMutationOperation;
 type CompositeTool = "jira.report" | "jira.draft-stage" | "jira.draft-batch" | "jira.draft";
@@ -112,7 +116,6 @@ type JiraPermissionPolicy =
   | "version-merge-and-reference-uncertainty"
   | "version-order-and-readback"
   | "version-delete-swap-and-reference-uncertainty"
-
   | "native-visible-requested-worklogs"
   | "instance-admin-anonymization-observation"
   | "bound-current-session"
@@ -277,7 +280,9 @@ function writes<const K extends NativeTool>(
   return result as NativeGroup<K>;
 }
 const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
-  ...writes("instance-admin-human-attested-anonymization-unlock", { "jira.unlock-user-anonymization": ["DELETE", "/user/anonymization/unlock"] }),
+  ...writes("instance-admin-human-attested-anonymization-unlock", {
+    "jira.unlock-user-anonymization": ["DELETE", "/user/anonymization/unlock"],
+  }),
   ...writes("instance-admin-avatar-session-and-uncertainty", {
     "jira.upload-temporary-avatar": ["POST", "/avatar/{type}/temporary"],
     "jira.crop-temporary-avatar": ["POST", "/avatar/{type}/temporaryCrop"],
@@ -287,9 +292,18 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
     "jira.create-project-avatar": ["POST", "/project/{projectIdOrKey}/avatar"],
     "jira.set-project-avatar": ["PUT", "/project/{projectIdOrKey}/avatar"],
     "jira.delete-project-avatar": ["DELETE", "/project/{projectIdOrKey}/avatar/{id}"],
-    "jira.upload-owned-avatar": ["POST", "/universal_avatar/type/{type}/owner/{owningObjectId}/temp"],
-    "jira.create-owned-avatar": ["POST", "/universal_avatar/type/{type}/owner/{owningObjectId}/avatar"],
-    "jira.delete-owned-avatar": ["DELETE", "/universal_avatar/type/{type}/owner/{owningObjectId}/avatar/{id}"],
+    "jira.upload-owned-avatar": [
+      "POST",
+      "/universal_avatar/type/{type}/owner/{owningObjectId}/temp",
+    ],
+    "jira.create-owned-avatar": [
+      "POST",
+      "/universal_avatar/type/{type}/owner/{owningObjectId}/avatar",
+    ],
+    "jira.delete-owned-avatar": [
+      "DELETE",
+      "/universal_avatar/type/{type}/owner/{owningObjectId}/avatar/{id}",
+    ],
     "jira.upload-user-avatar": ["POST", "/user/avatar/temporary"],
     "jira.create-user-avatar": ["POST", "/user/avatar"],
     "jira.set-user-avatar": ["PUT", "/user/avatar"],
@@ -310,8 +324,12 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
     "jira.restore-issue": ["PUT", "/issue/{issueIdOrKey}/restore"],
     "jira.move-subtask": ["POST", "/issue/{issueIdOrKey}/subtask/move"],
   }),
-  ...writes("bulk-current-metadata-and-uncertainty", { "jira.create-issues": ["POST", "/issue/bulk"] }),
-  ...writes("instance-admin-configured-reciprocal-link-and-uncertainty", { "jira.create-reciprocal-remote-link": ["POST", "/issue/remotelink/reciprocal"] }),
+  ...writes("bulk-current-metadata-and-uncertainty", {
+    "jira.create-issues": ["POST", "/issue/bulk"],
+  }),
+  ...writes("instance-admin-configured-reciprocal-link-and-uncertainty", {
+    "jira.create-reciprocal-remote-link": ["POST", "/issue/remotelink/reciprocal"],
+  }),
   ...writes("instance-admin-project-lifecycle-and-uncertainty", {
     "jira.delete-project": ["DELETE", "/project/{projectIdOrKey}"],
     "jira.archive-project": ["PUT", "/project/{projectIdOrKey}/archive"],
@@ -319,21 +337,48 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
     "jira.update-project-type": ["PUT", "/project/{projectIdOrKey}/type/{newProjectTypeKey}"],
     "jira.set-project-permission-scheme": ["PUT", "/project/{projectKeyOrId}/permissionscheme"],
     "jira.set-project-priority-scheme": ["PUT", "/project/{projectKeyOrId}/priorityscheme"],
-    "jira.remove-project-priority-scheme": ["DELETE", "/project/{projectKeyOrId}/priorityscheme/{schemeId}"],
+    "jira.remove-project-priority-scheme": [
+      "DELETE",
+      "/project/{projectKeyOrId}/priorityscheme/{schemeId}",
+    ],
   }),
   ...writes("bound-protected-account-and-readback", {
     "jira.update-myself": ["PUT", "/myself"],
     "jira.update-my-password": ["PUT", "/myself/password"],
   }),
-  ...writes("instance-admin-user-lifecycle-and-uncertainty", { "jira.update-user-password": ["PUT", "/user/password"] }),
-  ...writes("bound-private-session-and-uncertainty", {
-    "jira.login": ["POST", "/session"],
-    "jira.logout": ["DELETE", "/session"],
-    "jira.release-websudo": ["DELETE", "/websudo"],
-  }, "/rest/auth/1"),
-  "jira.validate-create-user-password": ["POST", "read", "/password/policy/createUser", "bound-protected-password-policy", "/rest/api/2"],
-  "jira.validate-update-user-password": ["POST", "read", "/password/policy/updateUser", "bound-protected-password-policy", "/rest/api/2"],
-  "jira.validate-license": ["POST", "read", "/licenseValidator", "instance-admin-protected-license-validation", "/rest/api/2"],
+  ...writes("instance-admin-user-lifecycle-and-uncertainty", {
+    "jira.update-user-password": ["PUT", "/user/password"],
+  }),
+  ...writes(
+    "bound-private-session-and-uncertainty",
+    {
+      "jira.login": ["POST", "/session"],
+      "jira.logout": ["DELETE", "/session"],
+      "jira.release-websudo": ["DELETE", "/websudo"],
+    },
+    "/rest/auth/1",
+  ),
+  "jira.validate-create-user-password": [
+    "POST",
+    "read",
+    "/password/policy/createUser",
+    "bound-protected-password-policy",
+    "/rest/api/2",
+  ],
+  "jira.validate-update-user-password": [
+    "POST",
+    "read",
+    "/password/policy/updateUser",
+    "bound-protected-password-policy",
+    "/rest/api/2",
+  ],
+  "jira.validate-license": [
+    "POST",
+    "read",
+    "/licenseValidator",
+    "instance-admin-protected-license-validation",
+    "/rest/api/2",
+  ],
   ...writes("instance-admin-group-create-and-readback", {
     "jira.create-group": ["POST", "/group"],
   }),
@@ -420,7 +465,10 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
     "jira.add-issue-type-scheme-projects": ["POST", "/issuetypescheme/{schemeId}/associations"],
     "jira.set-issue-type-scheme-projects": ["PUT", "/issuetypescheme/{schemeId}/associations"],
     "jira.clear-issue-type-scheme-projects": ["DELETE", "/issuetypescheme/{schemeId}/associations"],
-    "jira.remove-issue-type-scheme-project": ["DELETE", "/issuetypescheme/{schemeId}/associations/{projIdOrKey}"],
+    "jira.remove-issue-type-scheme-project": [
+      "DELETE",
+      "/issuetypescheme/{schemeId}/associations/{projIdOrKey}",
+    ],
   }),
   ...writes("instance-admin-priority-scheme-config-and-readback", {
     "jira.create-priority-scheme": ["POST", "/priorityschemes"],
@@ -455,11 +503,20 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
   }),
   ...writes("instance-admin-workflow-scheme-mapping-unconfirmed", {
     "jira.set-workflow-scheme-issue-type": ["PUT", "/workflowscheme/{id}/issuetype/{issueType}"],
-    "jira.delete-workflow-scheme-issue-type": ["DELETE", "/workflowscheme/{id}/issuetype/{issueType}"],
+    "jira.delete-workflow-scheme-issue-type": [
+      "DELETE",
+      "/workflowscheme/{id}/issuetype/{issueType}",
+    ],
   }),
   ...writes("instance-admin-workflow-draft-config-and-readback", {
-    "jira.set-workflow-scheme-draft-issue-type": ["PUT", "/workflowscheme/{id}/draft/issuetype/{issueType}"],
-    "jira.delete-workflow-scheme-draft-issue-type": ["DELETE", "/workflowscheme/{id}/draft/issuetype/{issueType}"],
+    "jira.set-workflow-scheme-draft-issue-type": [
+      "PUT",
+      "/workflowscheme/{id}/draft/issuetype/{issueType}",
+    ],
+    "jira.delete-workflow-scheme-draft-issue-type": [
+      "DELETE",
+      "/workflowscheme/{id}/draft/issuetype/{issueType}",
+    ],
   }),
   ...writes("instance-admin-workflow-scheme-mapping-unconfirmed", {
     "jira.set-workflow-scheme-workflow": ["PUT", "/workflowscheme/{id}/workflow"],
@@ -506,10 +563,16 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
     "jira.add-permission-grant": ["POST", "/permissionscheme/{schemeId}/permission"],
   }),
   ...writes("instance-admin-permission-grant-delete-and-absence", {
-    "jira.delete-permission-grant": ["DELETE", "/permissionscheme/{schemeId}/permission/{permissionId}"],
+    "jira.delete-permission-grant": [
+      "DELETE",
+      "/permissionscheme/{schemeId}/permission/{permissionId}",
+    ],
   }),
   ...writes("instance-admin-permission-attribute-and-readback", {
-    "jira.set-permission-scheme-attribute": ["PUT", "/permissionscheme/{permissionSchemeId}/attribute/{key}"],
+    "jira.set-permission-scheme-attribute": [
+      "PUT",
+      "/permissionscheme/{permissionSchemeId}/attribute/{key}",
+    ],
   }),
   ...writes("instance-admin-role-create-and-readback", {
     "jira.create-role": ["POST", "/role"],
@@ -543,7 +606,10 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
   }),
   ...writes("version-remote-link-upsert-and-readback", {
     "jira.upsert-version-remote-link": ["POST", "/version/{versionId}/remotelink"],
-    "jira.upsert-version-remote-link-by-global-id": ["POST", "/version/{versionId}/remotelink/{globalId}"],
+    "jira.upsert-version-remote-link-by-global-id": [
+      "POST",
+      "/version/{versionId}/remotelink/{globalId}",
+    ],
   }),
   ...writes("version-remote-link-delete-and-absence", {
     "jira.delete-version-remote-link": ["DELETE", "/version/{versionId}/remotelink/{globalId}"],
@@ -551,16 +617,28 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
   ...writes("version-remote-links-delete-and-absence", {
     "jira.delete-version-remote-links": ["DELETE", "/version/{versionId}/remotelink"],
   }),
-  ...writes("epic-removal-and-readback", {
-    "jira.epic-remove-issues": ["POST", "/epic/none/issue"],
-  }, "/rest/agile/1.0"),
-  ...writes("rank-and-position-uncertainty", {
-    "jira.rank-epic": ["PUT", "/epic/{epicIdOrKey}/rank"],
-    "jira.rank-issues": ["PUT", "/issue/rank"],
-  }, "/rest/agile/1.0"),
-  ...writes("issue-estimation-and-readback", {
-    "jira.set-issue-estimation": ["PUT", "/issue/{issueIdOrKey}/estimation"],
-  }, "/rest/agile/1.0"),
+  ...writes(
+    "epic-removal-and-readback",
+    {
+      "jira.epic-remove-issues": ["POST", "/epic/none/issue"],
+    },
+    "/rest/agile/1.0",
+  ),
+  ...writes(
+    "rank-and-position-uncertainty",
+    {
+      "jira.rank-epic": ["PUT", "/epic/{epicIdOrKey}/rank"],
+      "jira.rank-issues": ["PUT", "/issue/rank"],
+    },
+    "/rest/agile/1.0",
+  ),
+  ...writes(
+    "issue-estimation-and-readback",
+    {
+      "jira.set-issue-estimation": ["PUT", "/issue/{issueIdOrKey}/estimation"],
+    },
+    "/rest/agile/1.0",
+  ),
   ...writes("instance-admin-default-screen-field-unconfirmed", {
     "jira.add-default-screen-field": ["POST", "/screens/addToDefault/{fieldId}"],
   }),
@@ -574,32 +652,63 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
     "jira.move-screen-tab-field": ["POST", "/screens/{screenId}/tabs/{tabId}/fields/{id}/move"],
   }),
   ...writes("instance-admin-screen-field-display-and-readback", {
-    "jira.set-screen-field-show-when-empty": ["PUT", "/screens/{screenId}/tabs/{tabId}/fields/{id}/updateShowWhenEmptyIndicator/{newValue}"],
+    "jira.set-screen-field-show-when-empty": [
+      "PUT",
+      "/screens/{screenId}/tabs/{tabId}/fields/{id}/updateShowWhenEmptyIndicator/{newValue}",
+    ],
   }),
   ...writes("instance-admin-screen-tab-order-and-readback", {
     "jira.move-screen-tab": ["POST", "/screens/{screenId}/tabs/{tabId}/move/{pos}"],
   }),
-  ...writes("board-delete-unconfirmed", {
-    "jira.delete-board": ["DELETE", "/board/{boardId}"],
-  }, "/rest/agile/1.0"),
-  ...writes("board-refined-velocity-and-readback", {
-    "jira.set-board-refined-velocity": ["PUT", "/board/{boardId}/settings/refined-velocity"],
-  }, "/rest/agile/1.0"),
-  ...writes("sprint-replace-and-readback", {
-    "jira.replace-sprint": ["PUT", "/sprint/{sprintId}"],
-  }, "/rest/agile/1.0"),
-  ...writes("sprint-delete-and-membership-uncertainty", {
-    "jira.delete-sprint": ["DELETE", "/sprint/{sprintId}"],
-  }, "/rest/agile/1.0"),
-  ...writes("sprint-swap-and-position-uncertainty", {
-    "jira.swap-sprints": ["POST", "/sprint/{sprintId}/swap"],
-  }, "/rest/agile/1.0"),
-  ...writes("sprint-unmap-and-readback", {
-    "jira.unmap-sprints": ["PUT", "/sprint/unmap"],
-  }, "/rest/agile/1.0"),
-  ...writes("instance-admin-sprint-unmap-all-unconfirmed", {
-    "jira.unmap-all-sprints": ["PUT", "/sprint/unmap-all"],
-  }, "/rest/agile/1.0"),
+  ...writes(
+    "board-delete-unconfirmed",
+    {
+      "jira.delete-board": ["DELETE", "/board/{boardId}"],
+    },
+    "/rest/agile/1.0",
+  ),
+  ...writes(
+    "board-refined-velocity-and-readback",
+    {
+      "jira.set-board-refined-velocity": ["PUT", "/board/{boardId}/settings/refined-velocity"],
+    },
+    "/rest/agile/1.0",
+  ),
+  ...writes(
+    "sprint-replace-and-readback",
+    {
+      "jira.replace-sprint": ["PUT", "/sprint/{sprintId}"],
+    },
+    "/rest/agile/1.0",
+  ),
+  ...writes(
+    "sprint-delete-and-membership-uncertainty",
+    {
+      "jira.delete-sprint": ["DELETE", "/sprint/{sprintId}"],
+    },
+    "/rest/agile/1.0",
+  ),
+  ...writes(
+    "sprint-swap-and-position-uncertainty",
+    {
+      "jira.swap-sprints": ["POST", "/sprint/{sprintId}/swap"],
+    },
+    "/rest/agile/1.0",
+  ),
+  ...writes(
+    "sprint-unmap-and-readback",
+    {
+      "jira.unmap-sprints": ["PUT", "/sprint/unmap"],
+    },
+    "/rest/agile/1.0",
+  ),
+  ...writes(
+    "instance-admin-sprint-unmap-all-unconfirmed",
+    {
+      "jira.unmap-all-sprints": ["PUT", "/sprint/unmap-all"],
+    },
+    "/rest/agile/1.0",
+  ),
   ...writes("issue-link-create-and-readback", {
     "jira.create-issue-link": ["POST", "/issueLink"],
   }),
@@ -672,7 +781,8 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
     "jira.version-remote-link": "/version/{versionId}/remotelink/{globalId}",
   }),
   ...reads("visible-permission-configuration", {
-    "jira.permission-scheme-attribute": "/permissionscheme/{permissionSchemeId}/attribute/{attributeKey}",
+    "jira.permission-scheme-attribute":
+      "/permissionscheme/{permissionSchemeId}/attribute/{attributeKey}",
   }),
   ...reads("admin-email-template-metadata", {
     "jira.email-template-types": "/email-templates/types",
@@ -688,27 +798,43 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
     "jira.duplicate-users": "/user/duplicated/list",
     "jira.search-error": "/search/error/lookup",
   }),
-  ...writes("entity-property-and-readback", {
-    "jira.set-board-property": ["PUT", "/board/{boardId}/properties/{propertyKey}"],
-    "jira.delete-board-property": ["DELETE", "/board/{boardId}/properties/{propertyKey}"],
-    "jira.set-sprint-property": ["PUT", "/sprint/{sprintId}/properties/{propertyKey}"],
-    "jira.delete-sprint-property": ["DELETE", "/sprint/{sprintId}/properties/{propertyKey}"],
-  }, "/rest/agile/1.0"),
+  ...writes(
+    "entity-property-and-readback",
+    {
+      "jira.set-board-property": ["PUT", "/board/{boardId}/properties/{propertyKey}"],
+      "jira.delete-board-property": ["DELETE", "/board/{boardId}/properties/{propertyKey}"],
+      "jira.set-sprint-property": ["PUT", "/sprint/{sprintId}/properties/{propertyKey}"],
+      "jira.delete-sprint-property": ["DELETE", "/sprint/{sprintId}/properties/{propertyKey}"],
+    },
+    "/rest/agile/1.0",
+  ),
   ...writes("entity-property-and-readback", {
     "jira.set-comment-property": ["PUT", "/comment/{commentId}/properties/{propertyKey}"],
     "jira.delete-comment-property": ["DELETE", "/comment/{commentId}/properties/{propertyKey}"],
-    "jira.set-dashboard-item-property": ["PUT", "/dashboard/{dashboardId}/items/{itemId}/properties/{propertyKey}"],
-    "jira.delete-dashboard-item-property": ["DELETE", "/dashboard/{dashboardId}/items/{itemId}/properties/{propertyKey}"],
+    "jira.set-dashboard-item-property": [
+      "PUT",
+      "/dashboard/{dashboardId}/items/{itemId}/properties/{propertyKey}",
+    ],
+    "jira.delete-dashboard-item-property": [
+      "DELETE",
+      "/dashboard/{dashboardId}/items/{itemId}/properties/{propertyKey}",
+    ],
     "jira.set-issue-property": ["PUT", "/issue/{issueIdOrKey}/properties/{propertyKey}"],
     "jira.delete-issue-property": ["DELETE", "/issue/{issueIdOrKey}/properties/{propertyKey}"],
     "jira.set-project-property": ["PUT", "/project/{projectIdOrKey}/properties/{propertyKey}"],
-    "jira.delete-project-property": ["DELETE", "/project/{projectIdOrKey}/properties/{propertyKey}"],
+    "jira.delete-project-property": [
+      "DELETE",
+      "/project/{projectIdOrKey}/properties/{propertyKey}",
+    ],
     "jira.set-user-property": ["PUT", "/user/properties/{propertyKey}"],
     "jira.delete-user-property": ["DELETE", "/user/properties/{propertyKey}"],
   }),
   ...writes("instance-admin-entity-property-and-readback", {
     "jira.set-issue-type-property": ["PUT", "/issuetype/{issueTypeId}/properties/{propertyKey}"],
-    "jira.delete-issue-type-property": ["DELETE", "/issuetype/{issueTypeId}/properties/{propertyKey}"],
+    "jira.delete-issue-type-property": [
+      "DELETE",
+      "/issuetype/{issueTypeId}/properties/{propertyKey}",
+    ],
   }),
   ...writes("instance-admin-monitoring-state-and-readback", {
     "jira.set-app-monitoring": ["POST", "/monitoring/app"],
@@ -716,9 +842,15 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
     "jira.start-jmx-metrics": ["POST", "/monitoring/jmx/startExposing"],
     "jira.stop-jmx-metrics": ["POST", "/monitoring/jmx/stopExposing"],
   }),
-  ...writes("instance-admin-screen-tab-create-and-readback", { "jira.create-screen-tab": ["POST", "/screens/{screenId}/tabs"] }),
-  ...writes("instance-admin-screen-tab-rename-and-readback", { "jira.rename-screen-tab": ["PUT", "/screens/{screenId}/tabs/{tabId}"] }),
-  ...writes("instance-admin-screen-tab-delete-and-absence", { "jira.delete-screen-tab": ["DELETE", "/screens/{screenId}/tabs/{tabId}"] }),
+  ...writes("instance-admin-screen-tab-create-and-readback", {
+    "jira.create-screen-tab": ["POST", "/screens/{screenId}/tabs"],
+  }),
+  ...writes("instance-admin-screen-tab-rename-and-readback", {
+    "jira.rename-screen-tab": ["PUT", "/screens/{screenId}/tabs/{tabId}"],
+  }),
+  ...writes("instance-admin-screen-tab-delete-and-absence", {
+    "jira.delete-screen-tab": ["DELETE", "/screens/{screenId}/tabs/{tabId}"],
+  }),
   ...reads("observed-column-layout", {
     "jira.system-columns": "/settings/columns",
     "jira.user-columns": "/user/columns",
@@ -873,9 +1005,11 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
     "jira.avatars": "/universal_avatar/type/{type}/owner/{owningObjectId}",
   }),
   ...reads("visible-dashboards", {
-    "jira.dashboards": "/dashboard", "jira.dashboard": "/dashboard/{id}",
+    "jira.dashboards": "/dashboard",
+    "jira.dashboard": "/dashboard/{id}",
     "jira.dashboard-item-property-keys": "/dashboard/{dashboardId}/items/{itemId}/properties",
-    "jira.dashboard-item-property": "/dashboard/{dashboardId}/items/{itemId}/properties/{propertyKey}",
+    "jira.dashboard-item-property":
+      "/dashboard/{dashboardId}/items/{itemId}/properties/{propertyKey}",
   }),
   ...reads("authenticated-user-preferences", {
     "jira.filter-share-scope": "/filter/defaultShareScope",
@@ -918,45 +1052,76 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
     "jira.version-unresolved-issue-count": "/version/{id}/unresolvedIssueCount",
     "jira.project-version-page": "/project/{projectIdOrKey}/version",
   }),
-  ...reads("visible-boards", {
-    "jira.board-property-keys": "/board/{boardId}/properties",
-    "jira.board-property": "/board/{boardId}/properties/{propertyKey}",
-    "jira.boards": "/board",
-    "jira.board": "/board/{boardId}",
-    "jira.board-configuration": "/board/{boardId}/configuration",
-    "jira.board-refined-velocity": "/board/{boardId}/settings/refined-velocity",
-  }, "/rest/agile/1.0"),
-  ...reads("visible-issues", {
-    "jira.board-backlog": "/board/{boardId}/backlog",
-    "jira.board-issues": "/board/{boardId}/issue",
-    "jira.epic-issues": "/epic/{epicIdOrKey}/issue",
-    "jira.sprint-issues": "/sprint/{sprintId}/issue",
-    "jira.board-epicless-issues": "/board/{boardId}/epic/none/issue",
-    "jira.board-epic-issues": "/board/{boardId}/epic/{epicId}/issue",
-    "jira.board-sprint-issues": "/board/{boardId}/sprint/{sprintId}/issue",
-    "jira.epicless-issues": "/epic/none/issue",
-    "jira.agile-issue": "/issue/{issueIdOrKey}",
-  }, "/rest/agile/1.0"),
-  ...reads("visible-projects", {
-    "jira.board-projects": "/board/{boardId}/project",
-  }, "/rest/agile/1.0"),
-  ...reads("visible-versions", {
-    "jira.board-versions": "/board/{boardId}/version",
-  }, "/rest/agile/1.0"),
-  ...reads("board-issue-estimation", {
-    "jira.issue-estimation": "/issue/{issueIdOrKey}/estimation",
-  }, "/rest/agile/1.0"),
-  ...reads("visible-epics", {
-    "jira.board-epics": "/board/{boardId}/epic",
-    "jira.epic": "/epic/{epicIdOrKey}",
-  }, "/rest/agile/1.0"),
-  ...reads("visible-sprints", {
-    "jira.sprint-property-keys": "/sprint/{sprintId}/properties",
-    "jira.sprint-property": "/sprint/{sprintId}/properties/{propertyKey}",
-    "jira.sprints": "/board/{boardId}/sprint",
-    "jira.sprint": "/sprint/{sprintId}",
-  }, "/rest/agile/1.0"),
-  ...reads("visible-filters", { "jira.filter": "/filter/{id}", "jira.favourite-filters": "/filter/favourite" }),
+  ...reads(
+    "visible-boards",
+    {
+      "jira.board-property-keys": "/board/{boardId}/properties",
+      "jira.board-property": "/board/{boardId}/properties/{propertyKey}",
+      "jira.boards": "/board",
+      "jira.board": "/board/{boardId}",
+      "jira.board-configuration": "/board/{boardId}/configuration",
+      "jira.board-refined-velocity": "/board/{boardId}/settings/refined-velocity",
+    },
+    "/rest/agile/1.0",
+  ),
+  ...reads(
+    "visible-issues",
+    {
+      "jira.board-backlog": "/board/{boardId}/backlog",
+      "jira.board-issues": "/board/{boardId}/issue",
+      "jira.epic-issues": "/epic/{epicIdOrKey}/issue",
+      "jira.sprint-issues": "/sprint/{sprintId}/issue",
+      "jira.board-epicless-issues": "/board/{boardId}/epic/none/issue",
+      "jira.board-epic-issues": "/board/{boardId}/epic/{epicId}/issue",
+      "jira.board-sprint-issues": "/board/{boardId}/sprint/{sprintId}/issue",
+      "jira.epicless-issues": "/epic/none/issue",
+      "jira.agile-issue": "/issue/{issueIdOrKey}",
+    },
+    "/rest/agile/1.0",
+  ),
+  ...reads(
+    "visible-projects",
+    {
+      "jira.board-projects": "/board/{boardId}/project",
+    },
+    "/rest/agile/1.0",
+  ),
+  ...reads(
+    "visible-versions",
+    {
+      "jira.board-versions": "/board/{boardId}/version",
+    },
+    "/rest/agile/1.0",
+  ),
+  ...reads(
+    "board-issue-estimation",
+    {
+      "jira.issue-estimation": "/issue/{issueIdOrKey}/estimation",
+    },
+    "/rest/agile/1.0",
+  ),
+  ...reads(
+    "visible-epics",
+    {
+      "jira.board-epics": "/board/{boardId}/epic",
+      "jira.epic": "/epic/{epicIdOrKey}",
+    },
+    "/rest/agile/1.0",
+  ),
+  ...reads(
+    "visible-sprints",
+    {
+      "jira.sprint-property-keys": "/sprint/{sprintId}/properties",
+      "jira.sprint-property": "/sprint/{sprintId}/properties/{propertyKey}",
+      "jira.sprints": "/board/{boardId}/sprint",
+      "jira.sprint": "/sprint/{sprintId}",
+    },
+    "/rest/agile/1.0",
+  ),
+  ...reads("visible-filters", {
+    "jira.filter": "/filter/{id}",
+    "jira.favourite-filters": "/filter/favourite",
+  }),
   ...reads("visible-projects", {
     "jira.projects": "/project",
     "jira.project-property-keys": "/project/{projectIdOrKey}/properties",
@@ -973,9 +1138,13 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
     "jira.project-workflow-scheme": "/project/{projectKeyOrId}/workflowscheme",
     "jira.project-priority-scheme": "/project/{projectKeyOrId}/priorityscheme",
   }),
-  ...reads("native-project-key-validation", { "jira.validate-project-key": "/projectvalidate/key" }),
+  ...reads("native-project-key-validation", {
+    "jira.validate-project-key": "/projectvalidate/key",
+  }),
   ...reads("explicit-project-permissions", { "jira.project-permissions": "/mypermissions" }),
-  ...reads("accessible-project-type", { "jira.project-type": "/project/type/{projectTypeKey}/accessible" }),
+  ...reads("accessible-project-type", {
+    "jira.project-type": "/project/type/{projectTypeKey}/accessible",
+  }),
   ...reads("current-create-metadata", {
     "jira.issue-types": "/issue/createmeta/{projectIdOrKey}/issuetypes",
     "jira.create-fields": "/issue/createmeta/{projectIdOrKey}/issuetypes/{issueTypeId}",
@@ -1001,33 +1170,77 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
     "jira.vote": ["POST", "/issue/{issueIdOrKey}/votes"],
     "jira.unvote": ["DELETE", "/issue/{issueIdOrKey}/votes"],
   }),
-  ...writes("worklog-create-and-readback", { "jira.create-worklog": ["POST", "/issue/{issueIdOrKey}/worklog"] }),
-  ...writes("worklog-update-and-readback", { "jira.update-worklog": ["PUT", "/issue/{issueIdOrKey}/worklog/{id}"] }),
-  ...writes("worklog-delete-and-absence", { "jira.delete-worklog": ["DELETE", "/issue/{issueIdOrKey}/worklog/{id}"] }),
-  ...writes("attachment-delete-and-absence", { "jira.delete-attachment": ["DELETE", "/attachment/{id}"] }),
-  ...writes("comment-update-and-readback", { "jira.update-comment": ["PUT", "/issue/{issueIdOrKey}/comment/{id}"] }),
-  ...writes("comment-delete-and-absence", { "jira.delete-comment": ["DELETE", "/issue/{issueIdOrKey}/comment/{id}"] }),
+  ...writes("worklog-create-and-readback", {
+    "jira.create-worklog": ["POST", "/issue/{issueIdOrKey}/worklog"],
+  }),
+  ...writes("worklog-update-and-readback", {
+    "jira.update-worklog": ["PUT", "/issue/{issueIdOrKey}/worklog/{id}"],
+  }),
+  ...writes("worklog-delete-and-absence", {
+    "jira.delete-worklog": ["DELETE", "/issue/{issueIdOrKey}/worklog/{id}"],
+  }),
+  ...writes("attachment-delete-and-absence", {
+    "jira.delete-attachment": ["DELETE", "/attachment/{id}"],
+  }),
+  ...writes("comment-update-and-readback", {
+    "jira.update-comment": ["PUT", "/issue/{issueIdOrKey}/comment/{id}"],
+  }),
+  ...writes("comment-delete-and-absence", {
+    "jira.delete-comment": ["DELETE", "/issue/{issueIdOrKey}/comment/{id}"],
+  }),
   ...writes("component-create-and-readback", { "jira.create-component": ["POST", "/component"] }),
-  ...writes("component-update-and-readback", { "jira.update-component": ["PUT", "/component/{id}"] }),
+  ...writes("component-update-and-readback", {
+    "jira.update-component": ["PUT", "/component/{id}"],
+  }),
   ...writes("version-create-and-readback", { "jira.create-version": ["POST", "/version"] }),
   ...writes("version-update-and-readback", { "jira.update-version": ["PUT", "/version/{id}"] }),
-  ...writes("board-create-and-readback", { "jira.board-create": ["POST", "/board"] }, "/rest/agile/1.0"),
-  ...writes("sprint-create-and-readback", { "jira.sprint-create": ["POST", "/sprint"] }, "/rest/agile/1.0"),
-  ...writes("sprint-update-and-readback", { "jira.sprint-update": ["POST", "/sprint/{sprintId}"] }, "/rest/agile/1.0"),
-  ...writes("issue-membership-and-readback", {
-    "jira.sprint-move-issues": ["POST", "/sprint/{sprintId}/issue"],
-    "jira.backlog-move-issues": ["POST", "/backlog/issue"],
-    "jira.epic-move-issues": ["POST", "/epic/{epicIdOrKey}/issue"],
-  }, "/rest/agile/1.0"),
-  ...writes("epic-update-and-readback", { "jira.epic-update": ["POST", "/epic/{epicIdOrKey}"] }, "/rest/agile/1.0"),
+  ...writes(
+    "board-create-and-readback",
+    { "jira.board-create": ["POST", "/board"] },
+    "/rest/agile/1.0",
+  ),
+  ...writes(
+    "sprint-create-and-readback",
+    { "jira.sprint-create": ["POST", "/sprint"] },
+    "/rest/agile/1.0",
+  ),
+  ...writes(
+    "sprint-update-and-readback",
+    { "jira.sprint-update": ["POST", "/sprint/{sprintId}"] },
+    "/rest/agile/1.0",
+  ),
+  ...writes(
+    "issue-membership-and-readback",
+    {
+      "jira.sprint-move-issues": ["POST", "/sprint/{sprintId}/issue"],
+      "jira.backlog-move-issues": ["POST", "/backlog/issue"],
+      "jira.epic-move-issues": ["POST", "/epic/{epicIdOrKey}/issue"],
+    },
+    "/rest/agile/1.0",
+  ),
+  ...writes(
+    "epic-update-and-readback",
+    { "jira.epic-update": ["POST", "/epic/{epicIdOrKey}"] },
+    "/rest/agile/1.0",
+  ),
   ...writes("project-create-and-readback", { "jira.create-project": ["POST", "/project"] }),
-  ...writes("project-update-and-readback", { "jira.update-project": ["PUT", "/project/{projectIdOrKey}"] }),
+  ...writes("project-update-and-readback", {
+    "jira.update-project": ["PUT", "/project/{projectIdOrKey}"],
+  }),
   ...writes("current-create-metadata", { "jira.create": ["POST", "/issue"] }),
   ...writes("current-edit-metadata", { "jira.edit": ["PUT", "/issue/{issueIdOrKey}"] }),
-  ...writes("current-assignable-users", { "jira.assign": ["PUT", "/issue/{issueIdOrKey}/assignee"] }),
-  ...writes("comment-create-and-readback", { "jira.comment": ["POST", "/issue/{issueIdOrKey}/comment"] }),
-  ...writes("current-transitions", { "jira.transition": ["POST", "/issue/{issueIdOrKey}/transitions"] }),
-  ...writes("attachment-create-and-readback", { "jira.attach": ["POST", "/issue/{issueIdOrKey}/attachments"] }),
+  ...writes("current-assignable-users", {
+    "jira.assign": ["PUT", "/issue/{issueIdOrKey}/assignee"],
+  }),
+  ...writes("comment-create-and-readback", {
+    "jira.comment": ["POST", "/issue/{issueIdOrKey}/comment"],
+  }),
+  ...writes("current-transitions", {
+    "jira.transition": ["POST", "/issue/{issueIdOrKey}/transitions"],
+  }),
+  ...writes("attachment-create-and-readback", {
+    "jira.attach": ["POST", "/issue/{issueIdOrKey}/attachments"],
+  }),
 };
 const COMPOSITES: Readonly<
   Record<
@@ -1127,13 +1340,17 @@ function boundResultSchema(schema: CatalogJsonObject): CatalogJsonObject {
   // against the new field; lifting properties would erase the branch-specific requirements.
   const keyword = schema.anyOf === undefined ? "oneOf" : "anyOf";
   const alternatives = schema[keyword];
-  const allowed = new Set(["$schema", "description", keyword]);
+  const allowed = new Set(["$schema", "description", "type", keyword]);
   if (
-    !Array.isArray(alternatives) || alternatives.length === 0 ||
+    (schema.type !== undefined && schema.type !== "object") ||
+    !Array.isArray(alternatives) ||
+    alternatives.length === 0 ||
     !Object.keys(schema).every((key) => allowed.has(key))
-  ) throw new ToolCatalogError("invalid-schema");
+  )
+    throw new ToolCatalogError("invalid-schema");
   return {
     ...schema,
+    type: "object",
     [keyword]: alternatives.map((alternative: CatalogJsonValue) => {
       if (!schemaObject(alternative)) throw new ToolCatalogError("invalid-schema");
       return boundResultSchema(alternative);
