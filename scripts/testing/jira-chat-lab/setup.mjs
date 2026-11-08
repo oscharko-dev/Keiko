@@ -34,7 +34,14 @@ async function waitForFirstRun(session) {
   throw new TypeError("Laboratory first-run readiness timed out");
 }
 
-async function submitSetup(page, session, action, fields, expectedRedirect, timeoutMs = 30_000) {
+export async function submitSetup(
+  page,
+  session,
+  action,
+  fields,
+  expectedRedirect,
+  timeoutMs = 30_000,
+) {
   const csrf = await page.locator("input[name=atl_token]").first().inputValue();
   const response = await page.request.post(`${session.origin}/secure/${action}.jspa`, {
     form: { ...fields, atl_token: csrf },
@@ -105,7 +112,7 @@ export async function applicationProperties(page, session) {
   await page.locator("#licenseKey").first().waitFor();
 }
 
-async function administrator(page, session) {
+export async function administrator(page, session) {
   const password = readPrivateFile(join(session.directory, "secrets", "admin-password"));
   for (const [name, value] of Object.entries({
     fullname: "Keiko laboratory administrator",
