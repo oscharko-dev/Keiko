@@ -23,6 +23,7 @@ import {
 } from "./activity-log-events.mjs";
 import { BUMP_SET, historyCheck, judge } from "./bump-set-oracles.mjs";
 import {
+  errorMessage,
   labBaseUrl,
   log,
   openApiSession,
@@ -152,7 +153,9 @@ function filesContaining(repo, value) {
   return found;
 }
 
-async function readHistory(session, repo) {
+/** A fresh paired session per read: a session held across a long run may have expired. */
+async function readHistory(baseUrl, repo) {
+  const session = await openApiSession(labBaseUrl(baseUrl));
   const list = await session.request("GET", "/api/coding-workbench/history");
   const task = (list.json.tasks ?? []).find((item) => item.projectPath === repo);
   if (task === undefined) return { listed: false, messageCount: 0, status: list.status };
@@ -189,7 +192,17 @@ function oracleContext(task, run, events) {
   };
 }
 
-async function runEntry(entry, options, session, cache) {
+async function runEntry(entry, options, cache) {
+  try {
+    return await judgeEntry(entry, options, cache);
+  } catch (error) {
+    log("bump-set", `${entry.id}: ${errorMessage(error)}`);
+    const checks = [{ name: "harness", ok: false, reason: errorMessage(error).slice(0, 200) }];
+    return { id: entry.id, runId: undefined, driverExit: undefined, checks, ok: false };
+  }
+}
+
+async function judgeEntry(entry, options, cache) {
   log("bump-set", `${entry.id}: preparing`);
   const task = prepareTask(options.workDir, entry, cache);
   log("bump-set", `${entry.id}: running (approve ${entry.approve})`);
@@ -199,7 +212,7 @@ async function runEntry(entry, options, session, cache) {
     run.runId === undefined
       ? [{ name: "run", ok: false, reason: "no run started" }]
       : judge(entry, oracleContext(task, run, events));
-  const history = await readHistory(session, task.repo);
+  const history = await readHistory(options.baseUrl, task.repo);
   checks.push({ name: "history", ...historyCheck(history) });
   return {
     id: entry.id,
@@ -266,10 +279,7 @@ async function main() {
   const cache = new Map();
   // One task at a time: the dev server holds one checkout, and the lab runs one model.
   const results = await entries.reduce(
-    async (previous, entry) => [
-      ...(await previous),
-      await runEntry(entry, options, session, cache),
-    ],
+    async (previous, entry) => [...(await previous), await runEntry(entry, options, cache)],
     Promise.resolve([]),
   );
   writeFileSync(join(workDir, "verdicts.json"), `${JSON.stringify(results, null, 2)}\n`, {
