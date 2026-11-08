@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
   "supportedClassCount": 394,
-  "completeClassCount": 393,
-  "completeness": "incomplete",
+  "completeClassCount": 394,
+  "completeness": "complete",
   "classes": [
     {
       "failureClass": "activity-log-contract",
@@ -3129,13 +3129,8 @@
           "missingObligations": []
         }
       ],
-      "missingObligations": [
-        "causal-edges",
-        "executable-proof",
-        "lifecycle-state",
-        "resource-signals"
-      ],
-      "completeness": "incomplete"
+      "missingObligations": [],
+      "completeness": "complete"
     },
     {
       "failureClass": "browser-handoff",
@@ -8622,7 +8617,7 @@
       "failureClass": "coding-app-session-pairing",
       "requirementContract": "coding-app-session-pairing",
       "productSurfaces": ["keiko-server"],
-      "lifecycleTransitions": ["end", "state"],
+      "lifecycleTransitions": ["end", "failure", "state"],
       "lifecycleOperations": {
         "start": [],
         "state": [
@@ -8635,7 +8630,7 @@
           "coding-app-session.local-session.confirmed",
           "coding-app-session.paired"
         ],
-        "failure": [],
+        "failure": ["coding-app-session.local-session.denied"],
         "loss": []
       },
       "causalEdges": [
@@ -8653,6 +8648,10 @@
         },
         {
           "op": "coding-app-session.local-session.confirmed",
+          "mode": "correlation"
+        },
+        {
+          "op": "coding-app-session.local-session.denied",
           "mode": "correlation"
         },
         {
@@ -8820,6 +8819,30 @@
           "missingObligations": []
         },
         {
+          "op": "coding-app-session.local-session.denied",
+          "owner": "keiko-server",
+          "category": "http",
+          "lifecycle": "failure",
+          "causal": "correlation",
+          "analyzerProjection": "failure-cluster",
+          "safeContextFields": [
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["coding-app-session.local-session.denied.request"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
           "op": "coding-app-session.operation.state",
           "owner": "keiko-server",
           "category": "diagnostic",
@@ -8917,10 +8940,10 @@
       "failureClass": "coding-app-session-rotation",
       "requirementContract": "coding-app-session-rotation",
       "productSurfaces": ["keiko-server"],
-      "lifecycleTransitions": ["end"],
+      "lifecycleTransitions": ["end", "state"],
       "lifecycleOperations": {
         "start": [],
-        "state": [],
+        "state": ["coding-app-session.rotation.state"],
         "end": ["coding-app-session.rotated"],
         "failure": [],
         "loss": []
@@ -8929,10 +8952,14 @@
         {
           "op": "coding-app-session.rotated",
           "mode": "correlation"
+        },
+        {
+          "op": "coding-app-session.rotation.state",
+          "mode": "correlation"
         }
       ],
       "lossSignals": [],
-      "resourceSignals": ["coding-app-session.rotated"],
+      "resourceSignals": ["coding-app-session.rotated", "coding-app-session.rotation.state"],
       "replayReferences": [],
       "operations": [
         {
@@ -8956,6 +8983,36 @@
             "causeChain": false
           },
           "proofIds": ["coding-app-session.rotated.request"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "coding-app-session.rotation.state",
+          "owner": "keiko-server",
+          "category": "http",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "activeOperationCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["coding-app-session.rotation.state.observation"],
           "replayReferences": [],
           "missingObligations": []
         }

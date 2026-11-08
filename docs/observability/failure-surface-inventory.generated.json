@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "7200d1e614811360f8fab60f2e929bf9741b46e595c33f2ff1b8e970e8d98cf5"
+    "catalogDigest": "d553cc38a194a276e0d9a0ce80bb021e04adbc013ed5fd54f7e7ff936a6c9a41"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -71,9 +71,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 673,
-    "proofCount": 696,
-    "resolvedProofCount": 695,
+    "operationCount": 675,
+    "proofCount": 698,
+    "resolvedProofCount": 698,
     "failureClassCount": 394,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -363,9 +363,11 @@
         "coding-app-session.channel.opened",
         "coding-app-session.expired",
         "coding-app-session.local-session.confirmed",
+        "coding-app-session.local-session.denied",
         "coding-app-session.operation.state",
         "coding-app-session.paired",
         "coding-app-session.rotated",
+        "coding-app-session.rotation.state",
         "coding-app-session.signed-out",
         "coding-context.github-authorization.changed",
         "coding-context.github-authorization.evaluated",
@@ -919,7 +921,7 @@
     "client-session-repair": ["client-diagnostics.dependency-failure"],
     "client-stage": ["client-diagnostics.dependency-failure"],
     "coding-app-session-channel": ["tools-workflows.dependency-failure"],
-    "coding-app-session-pairing": ["tools-workflows.dependency-failure"],
+    "coding-app-session-pairing": ["tools-workflows.rejection"],
     "coding-app-session-rotation": ["tools-workflows.dependency-failure"],
     "coding-app-session-sign-out": ["tools-workflows.dependency-failure"],
     "coding-context-linked-issue": ["tools-workflows.dependency-failure"],
@@ -1343,7 +1345,9 @@
       "packages/keiko-server/src/atlassian/jiraReportRoutes.test.ts",
       "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.test.ts"
     ],
-    "atlassian.jira.human-input.line": [],
+    "atlassian.jira.human-input.line": [
+      "packages/keiko-server/src/atlassian/wiring.target-admission.test.ts"
+    ],
     "atlassian.target.admission.line": [
       "packages/keiko-server/src/atlassian/wiring.target-admission.test.ts"
     ],
@@ -1622,6 +1626,9 @@
     "coding-app-session.local-session.confirmed.request": [
       "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.test.ts"
     ],
+    "coding-app-session.local-session.denied.request": [
+      "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.test.ts"
+    ],
     "coding-app-session.operation.state.line": [
       "packages/keiko-server/src/coding-app-session/appSessionReadAuthority.test.ts",
       "packages/keiko-server/src/coding-app-session/codingRunSessionLease.test.ts"
@@ -1631,6 +1638,9 @@
     ],
     "coding-app-session.rotated.request": [
       "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.test.ts"
+    ],
+    "coding-app-session.rotation.state.observation": [
+      "packages/keiko-server/src/coding-app-session/sessionRegistry.test.ts"
     ],
     "coding-app-session.signed-out.request": [
       "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.test.ts"
@@ -3350,12 +3360,5 @@
     "ui.crash": ["tests/activity-log-scenarios/client-diagnostics-ui.test.ts"],
     "ui.dependency-failure": ["tests/activity-log-scenarios/client-diagnostics-ui.test.ts"]
   },
-  "violations": [
-    {
-      "code": "proof-unresolved",
-      "site": "proofs.atlassian.jira.human-input.line",
-      "detail": "atlassian.jira.human-input",
-      "correctiveAction": "Add an owning-package test that calls expectActivityLogProof with a production-persisted line."
-    }
-  ]
+  "violations": []
 }

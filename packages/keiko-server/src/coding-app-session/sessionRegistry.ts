@@ -56,7 +56,11 @@ export interface SessionRegistry {
   readonly inspectOperationCount: (cookieToken: string | undefined) => number | undefined;
   /** Protect a valid session from idle expiry only while an explicit operation remains active. */
   readonly beginOperation: (cookieToken: string | undefined) => (() => void) | undefined;
-  readonly rotate: (sessionId: string) => SessionMint | undefined;
+  /** Approval retries defer atomically while a browser operation still owns its current bearer. */
+  readonly rotate: (
+    sessionId: string,
+    options?: { readonly onlyIfIdle: boolean },
+  ) => SessionMint | undefined;
   readonly revoke: (sessionId: string) => void;
   readonly revokeApproval: (approvalId: string) => number;
   /** Share an expiry observed by the browser-approval owner with every associated live session. */
@@ -95,6 +99,7 @@ interface StoredSession {
 }
 
 interface SessionIssue {
+  readonly activeOperationCount?: number;
   readonly sessionId: string;
   readonly principalLabel: string;
   readonly rotationCount: number;
@@ -141,6 +146,44 @@ const EXPIRY_OPERATION = defineActivityLogOperation({
   proofIds: ["coding-app-session.expired.observation"],
   releaseImpact: "patch",
 });
+
+const ROTATION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-app-session.rotation.state",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "coding-app-session.sessionRegistry.recordRotation",
+  fields: {
+    activeOperationCount: { type: "integer", dataClass: "count", required: true },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["active-operation", "cookie-response"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-app-session-rotation"],
+  proofIds: ["coding-app-session.rotation.state.observation"],
+  releaseImpact: "patch",
+});
+
+function recordRotation(
+  state: RegistryState,
+  activeOperationCount: number,
+  reason: "active-operation" | "cookie-response",
+): void {
+  state.activityLog?.write(
+    activityLogEvent(
+      ROTATION_OPERATION,
+      { level: "info", correlationId: UNKNOWN_CORRELATION_ID },
+      { activeOperationCount, reason },
+    ),
+  );
+}
 
 type ExpiryReason = "approval" | "lifetime" | "inactivity" | "invalid-clock";
 
@@ -260,7 +303,7 @@ function storeSession(state: RegistryState, issue: SessionIssue): SessionMint {
   const stored: StoredSession = {
     ...issue,
     secretHash: saltedHash(state.salt, secret),
-    activeOperationCount: 0,
+    activeOperationCount: issue.activeOperationCount ?? 0,
     ...(issue.approval === undefined ? {} : { approval: { ...issue.approval } }),
   };
   state.sessions.set(issue.sessionId, stored);
@@ -353,7 +396,11 @@ function inspectOwnedSession(state: RegistryState, sessionId: string): AppSessio
   return describe(stored);
 }
 
-function rotateSession(state: RegistryState, sessionId: string): SessionMint | undefined {
+function rotateSession(
+  state: RegistryState,
+  sessionId: string,
+  onlyIfIdle: boolean,
+): SessionMint | undefined {
   const stored = state.sessions.get(sessionId);
   if (stored === undefined) return undefined;
   const nowMs = state.now();
@@ -361,8 +408,12 @@ function rotateSession(state: RegistryState, sessionId: string): SessionMint | u
     expireStoredSession(state, stored, nowMs);
     return undefined;
   }
-  state.sessions.delete(sessionId);
-  return storeSession(state, {
+  if (onlyIfIdle && stored.activeOperationCount > 0) {
+    recordRotation(state, stored.activeOperationCount, "active-operation");
+    return undefined;
+  }
+  const mint = storeSession(state, {
+    activeOperationCount: stored.activeOperationCount,
     sessionId,
     principalLabel: stored.principalLabel,
     rotationCount: stored.rotationCount + 1,
@@ -370,6 +421,13 @@ function rotateSession(state: RegistryState, sessionId: string): SessionMint | u
     lastSeenAtMs: nowMs,
     ...(stored.approval === undefined ? {} : { approval: stored.approval }),
   });
+  try {
+    recordRotation(state, stored.activeOperationCount, "cookie-response");
+  } catch (error) {
+    state.sessions.set(sessionId, stored);
+    throw error;
+  }
+  return mint;
 }
 
 function beginSessionOperation(
@@ -385,14 +443,15 @@ function beginSessionOperation(
   return (): void => {
     if (released) return;
     released = true;
-    stored.activeOperationCount -= 1;
+    const live = state.sessions.get(session.sessionId);
+    if (live === undefined) return;
+    live.activeOperationCount -= 1;
     const nowMs = state.now();
-    if (state.sessions.get(stored.sessionId) !== stored) return;
-    if (approvalExpired(stored, nowMs) || nowMs - stored.issuedAtMs >= state.absoluteTtlMs) {
-      expireStoredSession(state, stored, nowMs);
+    if (approvalExpired(live, nowMs) || nowMs - live.issuedAtMs >= state.absoluteTtlMs) {
+      expireStoredSession(state, live, nowMs);
       return;
     }
-    stored.lastSeenAtMs = nowMs;
+    live.lastSeenAtMs = nowMs;
   };
 }
 
@@ -429,7 +488,8 @@ export function createSessionRegistry(deps: SessionRegistryDeps = {}): SessionRe
       verifyForCookieRepair(state, cookieToken),
     beginOperation: (cookieToken: string | undefined): (() => void) | undefined =>
       beginSessionOperation(state, cookieToken),
-    rotate: (sessionId: string): SessionMint | undefined => rotateSession(state, sessionId),
+    rotate: (sessionId, options): SessionMint | undefined =>
+      rotateSession(state, sessionId, options?.onlyIfIdle === true),
     revoke: (sessionId: string): void => {
       state.sessions.delete(sessionId);
     },

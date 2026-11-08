@@ -89,7 +89,8 @@ function createDataCenter(
     },
     "a".repeat(64),
   );
-  if (created.deployment !== "data-center") throw new TypeError("Missing Data Center fixture metadata");
+  if (created.deployment !== "data-center")
+    throw new TypeError("Missing Data Center fixture metadata");
   return created;
 }
 
@@ -124,47 +125,105 @@ describe("stored Data Center admission through real custody, wiring and verifica
     { versionNumbers: [10, 4, 0], expected: "10.4" },
     { versionNumbers: [11, 2, 1], expected: undefined },
     { versionNumbers: [11, 3, 13], expected: undefined },
-  ] as const)("binds legacy avatar ports only to the current persisted release $versionNumbers", ({ versionNumbers, expected }) => {
-    const f = fixture(); const deps = f.build(); const created = createDataCenter(deps, PRIVATE_BASE);
-    const verification = deps.custody.beginVerification(created.authRef);
-    if (verification === undefined || created.livePod === undefined) throw new TypeError("Missing verified Pod");
-    deps.custody.finishVerification(created.authRef, created.generation, verification.revision, "ok", undefined,
-      { schemaVersion: 1, deploymentType: "Data Center", versionNumbers, restApi: "v2", agileApi: "unverified" });
-    const current = selected(deps, created.authRef);
-    const factory = deps.jiraPrivatePortFactory; if (factory === undefined) throw new TypeError("Missing private port factory");
-    const context = { invocationId: "legacy-avatar", correlationId: "legacy-avatar", signal: new AbortController().signal, beforeEffect: () => true };
-    const options = { legacyTemporaryRelease: "10.3" as const, sessionScope: {
-      context: { kind: "chat" as const, chatId: "synthetic-chat", podId: created.livePod.podId, bindingGeneration: 1 },
-      authority: { runId: "synthetic-run", envelopeDigest: "a".repeat(64) }, principalDigest: "a".repeat(64),
-      authRef: created.authRef, authenticationGeneration: created.generation, verificationRevision: verification.revision,
-      expiresAt: Date.now() + 60_000,
-    } };
-    expect(factory(current, context, options).legacyTemporaryRelease).toBe(expected);
-    // A supplied hint never substitutes for the current native verification.
-    deps.custody.beginVerification(created.authRef, created.generation);
-    expect(factory(current, context, options).legacyTemporaryRelease).toBeUndefined();
-    expect(f.fetchImpl).not.toHaveBeenCalled();
-  });
+  ] as const)(
+    "binds legacy avatar ports only to the current persisted release $versionNumbers",
+    ({ versionNumbers, expected }) => {
+      const f = fixture();
+      const deps = f.build();
+      const created = createDataCenter(deps, PRIVATE_BASE);
+      const verification = deps.custody.beginVerification(created.authRef);
+      if (verification === undefined || created.livePod === undefined)
+        throw new TypeError("Missing verified Pod");
+      deps.custody.finishVerification(
+        created.authRef,
+        created.generation,
+        verification.revision,
+        "ok",
+        undefined,
+        {
+          schemaVersion: 1,
+          deploymentType: "Data Center",
+          versionNumbers,
+          restApi: "v2",
+          agileApi: "unverified",
+        },
+      );
+      const current = selected(deps, created.authRef);
+      const factory = deps.jiraPrivatePortFactory;
+      if (factory === undefined) throw new TypeError("Missing private port factory");
+      const context = {
+        invocationId: "legacy-avatar",
+        correlationId: "legacy-avatar",
+        signal: new AbortController().signal,
+        beforeEffect: (): boolean => true,
+      };
+      const options = {
+        legacyTemporaryRelease: "10.3" as const,
+        sessionScope: {
+          context: {
+            kind: "chat" as const,
+            chatId: "synthetic-chat",
+            podId: created.livePod.podId,
+            bindingGeneration: 1,
+          },
+          authority: { runId: "synthetic-run", envelopeDigest: "a".repeat(64) },
+          principalDigest: "a".repeat(64),
+          authRef: created.authRef,
+          authenticationGeneration: created.generation,
+          verificationRevision: verification.revision,
+          expiresAt: Date.now() + 60_000,
+        },
+      };
+      expect(factory(current, context, options).legacyTemporaryRelease).toBe(expected);
+      // A supplied hint never substitutes for the current native verification.
+      deps.custody.beginVerification(created.authRef, created.generation);
+      expect(factory(current, context, options).legacyTemporaryRelease).toBeUndefined();
+      expect(f.fetchImpl).not.toHaveBeenCalled();
+    },
+  );
   it("sweeps expired ready input once on the first legitimate vault use after restart, never during construction", () => {
-    const f = fixture(); const deps = f.build();
+    const f = fixture();
+    const deps = f.build();
     const created = createDataCenter(deps, PRIVATE_BASE);
     const verification = deps.custody.beginVerification(created.authRef);
-    if (verification === undefined || created.livePod === undefined) throw new TypeError("Missing verified Pod");
-    deps.custody.finishVerification(created.authRef, created.generation, verification.revision, "ok");
+    if (verification === undefined || created.livePod === undefined)
+      throw new TypeError("Missing verified Pod");
+    deps.custody.finishVerification(
+      created.authRef,
+      created.generation,
+      verification.revision,
+      "ok",
+    );
     const binding: JiraHumanInputBinding = {
-      context: { kind: "chat", chatId: "synthetic-chat", messageId: "synthetic-message", callId: "synthetic-call",
-        podId: created.livePod.podId, bindingGeneration: 1 },
-      authority: { runId: "synthetic-input-run", envelopeDigest: "a".repeat(64) }, principalDigest: "a".repeat(64),
-      authRef: created.authRef, authenticationGeneration: created.generation, verificationRevision: verification.revision,
-      operation: "jira.login", argumentsDigest: "b".repeat(64), actorUserKey: "synthetic-key", actorUsername: "synthetic-user",
+      context: {
+        kind: "chat",
+        chatId: "synthetic-chat",
+        messageId: "synthetic-message",
+        callId: "synthetic-call",
+        podId: created.livePod.podId,
+        bindingGeneration: 1,
+      },
+      authority: { runId: "synthetic-input-run", envelopeDigest: "a".repeat(64) },
+      principalDigest: "a".repeat(64),
+      authRef: created.authRef,
+      authenticationGeneration: created.generation,
+      verificationRevision: verification.revision,
+      operation: "jira.login",
+      argumentsDigest: "b".repeat(64),
+      actorUserKey: "synthetic-key",
+      actorUsername: "synthetic-user",
       expiresAt: Date.now() + 1000,
     };
-    const inputs = deps.custody.humanInputs; if (inputs === undefined) throw new TypeError("Missing input custody");
+    const inputs = deps.custody.humanInputs;
+    if (inputs === undefined) throw new TypeError("Missing input custody");
     const pending = inputs.prepare(binding);
-    inputs.submit(pending.requestId, binding, pending.revision, { password: "synthetic-expired-private-input" });
+    inputs.submit(pending.requestId, binding, pending.revision, {
+      password: "synthetic-expired-private-input",
+    });
     const clock = vi.spyOn(Date, "now").mockReturnValue(binding.expiresAt);
     try {
-      const restarted = f.build(); const restoredInputs = restarted.custody.humanInputs;
+      const restarted = f.build();
+      const restoredInputs = restarted.custody.humanInputs;
       if (restoredInputs === undefined) throw new TypeError("Missing restored input custody");
       const sweep = vi.spyOn(restoredInputs, "sweepExpired");
       expect(restarted.custody.list()).toHaveLength(1);
@@ -172,10 +231,16 @@ describe("stored Data Center admission through real custody, wiring and verifica
       expect(restoredInputs.inspect(pending.requestId, binding)).toBeUndefined();
       expect(restoredInputs.inspect(pending.requestId, binding)).toBeUndefined();
       expect(sweep).toHaveBeenCalledTimes(1);
-      const phases = persistedActivityLogLines(readPersistedActivityLog(f.directory), "atlassian.jira.human-input")
-        .map((line) => JSON.parse(line) as { phase?: string });
+      const humanInputLines = persistedActivityLogLines(
+        readPersistedActivityLog(f.directory),
+        "atlassian.jira.human-input",
+      );
+      expectActivityLogProof("atlassian.jira.human-input.line", humanInputLines[0] ?? "");
+      const phases = humanInputLines.map((line) => JSON.parse(line) as { phase?: string });
       expect(phases.filter((line) => line.phase === "expired")).toHaveLength(1);
-    } finally { clock.mockRestore(); }
+    } finally {
+      clock.mockRestore();
+    }
   });
   it.each([
     [PRIVATE_BASE, "private"],

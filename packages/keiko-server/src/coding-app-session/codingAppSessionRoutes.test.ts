@@ -28,6 +28,7 @@ import {
   APP_SESSION_ACTIVE_COOKIE_COUNT,
   serializeSessionCookies,
 } from "./sessionCookie.js";
+import { CodingAppSessionDenialWindows } from "./denialWindows.js";
 import { createSessionRegistry } from "./sessionRegistry.js";
 import { type ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
@@ -99,8 +100,10 @@ describe("app-session route handlers (fail-closed defensive branches)", () => {
     expect(result.headers).toBeUndefined();
   });
 
-  it("local-session without a composed channel acknowledges without issuing a cookie", () => {
+  it("local-session without a composed channel refuses without issuing a cookie", () => {
     const result = handleCodingAppSessionLocalSession(ctx(), deps());
+    expect(result.status).toBe(401);
+    expect(result.body).toEqual({ status: "unavailable" });
     expect(result.headers).toBeUndefined();
   });
 
@@ -114,6 +117,10 @@ describe("app-session route handlers (fail-closed defensive branches)", () => {
       expect(
         handleCodingAppSessionLocalSession(ctx(cookie), deps(channel)).headers,
       ).toBeUndefined();
+      expect(handleCodingAppSessionLocalSession(ctx(cookie), deps(channel))).toMatchObject({
+        status: 401,
+        body: { status: "unavailable" },
+      });
       expect(channel.sessionCount()).toBe(0);
     },
   );
@@ -259,7 +266,11 @@ describe("app-session lifecycle lines (F65)", () => {
   } {
     const activityLog = createBufferedServerLogSink();
     return {
-      deps: { codingAppSessionChannel: channel, activityLog } as unknown as UiHandlerDeps,
+      deps: {
+        codingAppSessionChannel: channel,
+        activityLog,
+        codingAppSessionDenialWindows: new CodingAppSessionDenialWindows(),
+      } as unknown as UiHandlerDeps,
       events: activityLog.events,
     };
   }
@@ -380,9 +391,15 @@ describe("app-session lifecycle lines (F65)", () => {
         },
         logDeps,
       );
-      expect(result.status).toBe(200);
+      expect(result.status).toBe(401);
+      expect(result.body).toEqual({ status: "unavailable" });
       expect(result.headers).toBeUndefined();
-      expect(events).toEqual([]);
+      expect(events).toMatchObject([
+        {
+          op: "coding-app-session.local-session.denied",
+          extra: { reason: "authority-unavailable" },
+        },
+      ]);
       expect(channel.ensureLocalSession(mint.cookieToken)).toEqual({ status: "unavailable" });
     },
   );
@@ -451,11 +468,20 @@ describe("app-session lifecycle lines (F65)", () => {
       formatActivityLogProofLine(events[0] ?? {}),
     );
   });
-  it("does not log attacker-controlled local-session denials individually", () => {
+  it("logs local-session denials with a closed reason and no bearer material", () => {
     const { channel } = pairedChannel();
     const { deps: logDeps, events } = logged(channel);
     handleCodingAppSessionLocalSession(ctx(), logDeps);
-    expect(events).toEqual([]);
+    expect(events).toMatchObject([
+      { op: "coding-app-session.local-session.denied", extra: { reason: "authority-unavailable" } },
+    ]);
+    expectActivityLogProof(
+      "coding-app-session.local-session.denied.request",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(JSON.stringify(events)).not.toContain("sess_");
+    handleCodingAppSessionLocalSession(ctx("attacker-private-cookie"), logDeps);
+    expect(events).toHaveLength(1);
   });
 
   it("writes no line of its own for a denied pairing; denials stay aggregated (KEIKO-0838)", async () => {

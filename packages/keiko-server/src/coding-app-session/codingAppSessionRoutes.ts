@@ -128,6 +128,42 @@ const CODING_APP_SESSION_LOCAL_SESSION_CONFIRMED_OPERATION = defineActivityLogOp
   releaseImpact: "patch",
 });
 
+const LOCAL_SESSION_DENIED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-app-session.local-session.denied",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "coding-app-session.codingAppSessionRoutes.localSessionDenied",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["authority-unavailable"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-app-session-pairing"],
+  proofIds: ["coding-app-session.local-session.denied.request"],
+  releaseImpact: "patch",
+});
+
+function localSessionDenied(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+  resolveCodingAppSessionDenialWindows(deps).recordLocalSessionDenial(Date.now(), () => {
+    appSessionActivity(deps).write(
+      activityLogEvent(
+        LOCAL_SESSION_DENIED_OPERATION,
+        { level: "info", correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID },
+        { reason: "authority-unavailable" },
+      ),
+    );
+  });
+  return { status: 401, body: { status: "unavailable" } };
+}
+
 const CODING_APP_SESSION_ROTATED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -324,7 +360,8 @@ export function handleCodingAppSessionLocalSession(
 ): RouteResult {
   const cookieToken = readSessionCookie(ctx.req);
   const result = deps.codingAppSessionChannel?.ensureLocalSession(cookieToken);
-  if (result?.status !== "active" || cookieToken === undefined) return ackResult();
+  if (result?.status !== "active" || cookieToken === undefined)
+    return localSessionDenied(ctx, deps);
   const maxAgeSeconds = Math.min(APP_SESSION_COOKIE_MAX_AGE_SECONDS, result.maxAgeSeconds);
   const headers = issuedCookie(ctx.req, cookieToken, maxAgeSeconds);
   appSessionActivity(deps).write(

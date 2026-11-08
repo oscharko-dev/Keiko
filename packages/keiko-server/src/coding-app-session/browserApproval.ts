@@ -313,7 +313,7 @@ function finishRequest(
   const mint =
     request.sessionId === undefined
       ? state.registry.mintForApproval("Approved browser", decision)
-      : state.registry.rotate(request.sessionId);
+      : state.registry.rotate(request.sessionId, { onlyIfIdle: true });
   if (mint === undefined) return { state: "unavailable" };
   request.sessionId = mint.session.sessionId;
   const touched = approval === undefined ? undefined : { ...approval, lastUsedAtMs: now };
