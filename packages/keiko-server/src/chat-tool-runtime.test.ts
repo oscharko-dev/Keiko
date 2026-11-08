@@ -537,7 +537,11 @@ function privateProfileFixture(defaultMode: boolean, unchanged = false) {
     principal,
   );
   const verification = credentials.custody.beginVerification(created.authRef);
-  if (created.livePod === undefined || verification === undefined)
+  if (
+    created.deployment !== "data-center" ||
+    created.livePod === undefined ||
+    verification === undefined
+  )
     throw new TypeError("Missing private Pod");
   createAtlassianCredentialMetadataStore({ configPath }).bindTargetAdmission(created, {
     baseUrl: created.baseUrl,

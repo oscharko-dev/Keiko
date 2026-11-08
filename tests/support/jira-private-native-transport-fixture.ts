@@ -131,8 +131,9 @@ function avatarRead(path: string, rows: readonly CatalogJsonObject[]): Response 
   return Response.json({ system: rows.filter((row) => row.category === "system"), custom: rows.filter((row) => row.category === "custom") });
 }
 function avatarController(selected: PrivateNativeCase): NativeController | undefined {
-  const item = AVATAR_MUTATION_FIXTURE_CASES.find((row) => row.name === selected.tool);
-  if (item === undefined) return undefined;
+  const found = AVATAR_MUTATION_FIXTURE_CASES.find((row) => row.name === selected.tool);
+  if (found === undefined) return undefined;
+  const item = found;
   const target = item.target;
   let rows: readonly CatalogJsonObject[] = privateAvatarRows(selected.tool);
   let effects = 0; let rawUploadBytes = 0;

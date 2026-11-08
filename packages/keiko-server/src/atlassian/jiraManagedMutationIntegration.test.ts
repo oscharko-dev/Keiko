@@ -20,6 +20,7 @@ import {
   JIRA_MUTATION_OPERATIONS,
   jiraRequiredConnectorScope,
   type JiraMutationOperation,
+  type JiraLivePodMetadata,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CodingWorkbenchConnectorScope } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -384,6 +385,11 @@ async function mutationCredentials(
   expect(verified).toMatchObject({ livePod: { verificationStatus: "ok" } });
   return { credentials, metadata: verified };
 }
+function privateFixturePod(metadata: AtlassianCredentialMetadata): JiraLivePodMetadata {
+  if (metadata.deployment !== "data-center" || metadata.livePod === undefined)
+    throw new TypeError("Missing real private Pod binding");
+  return metadata.livePod;
+}
 async function fixture(
   mode: RemoteMode = "confirmed",
   afterAcknowledgement?: "binding-revoked" | "cancelled",
@@ -435,7 +441,7 @@ async function fixture(
   function httpPort(lifecycle: AtlassianHttpLifecycleOptions, correlationId: string): AtlassianHttpBodyPort {
     if (privateComposition !== undefined) return privateComposition.http(lifecycle);
     if (ordinaryCredentials === undefined) throw new TypeError("Missing ordinary native fixture credentials");
-    return ordinaryCredentials.credentials.httpBodyPortFactory(metadata, correlationId, lifecycle);
+    return ordinaryCredentials.credentials.httpBodyPortFactory(ordinaryCredentials.metadata, correlationId, lifecycle);
   }
   function observedLifecycle(lifecycle: AtlassianHttpLifecycleOptions): AtlassianHttpLifecycleOptions {
     return { ...lifecycle, onResponse: (request, status) => {
@@ -454,7 +460,7 @@ async function fixture(
       userMessageId: db.userMessageId,
       turnRef: db.turnRef,
       actorId: context.actorId,
-      podId: privateComposition?.metadata.livePod?.podId ?? "synthetic-pod",
+      podId: privateComposition === undefined ? "synthetic-pod" : privateFixturePod(privateComposition.metadata).podId,
       bindingGeneration: context.binding.generation,
       credentialGeneration: 1,
       authorityDigest: sha256Hex(canonicalise({ authority: context.authority, connectorScopes: [...connectorScopes] })),
@@ -472,8 +478,7 @@ async function fixture(
     };
     if (operation !== "jira.draft") return executeJiraChatMutation({ ...shared, execute: async (http, lifecycle) => {
       if (privateComposition === undefined) return execute(http);
-      const livePod = privateComposition.metadata.livePod;
-      if (livePod === undefined) throw new TypeError("Missing real private Pod binding");
+      const livePod = privateFixturePod(privateComposition.metadata);
       const ports = await privateComposition.ports(context, args, observedLifecycle(lifecycle), {
         context: { kind: "chat", chatId: context.chatId, messageId: db.userMessageId, callId: context.invocationId,
           podId: livePod.podId, bindingGeneration: context.binding.generation },
@@ -645,7 +650,7 @@ it.each(PRIVATE_ACCOUNT_READ_CASES)("keeps $name a native POST read through the 
   });
   const provider = createJiraProviderForCatalog<CatalogHandlerContext<ConversationConsumer>>(async (context) => {
     invocation = context.invocationId;
-    const pod = composition.metadata.livePod; if (pod === undefined) throw new TypeError("Missing validator Pod");
+    const pod = privateFixturePod(composition.metadata);
     const ports = await composition.ports(context, selected.args, {}, {
       context: { kind: "chat", chatId: context.chatId, messageId: db.userMessageId, callId: context.invocationId,
         podId: pod.podId, bindingGeneration: context.binding.generation },

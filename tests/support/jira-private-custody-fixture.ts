@@ -1,12 +1,28 @@
-import { createAtlassianCredentialCustody, type AtlassianCredentialMetadata } from "../../packages/keiko-connectors/src/atlassian-credential-custody.js";
+import { createAtlassianCredentialCustody, type AtlassianCredentialMetadata, type AtlassianCredentialVaultPort,
+  type CreatedAtlassianCredentialCustody } from "../../packages/keiko-connectors/src/atlassian-credential-custody.js";
 import type { JiraHumanInputBinding } from "../../packages/keiko-connectors/src/jira-human-input-values.js";
 import type { JiraDataCenterCompatibilityFacts } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+
+type PrivateFixtureVault = {
+  -readonly [Key in keyof AtlassianCredentialVaultPort]-?: NonNullable<AtlassianCredentialVaultPort[Key]>;
+};
+export interface PrivateJiraCustodyFixture extends CreatedAtlassianCredentialCustody {
+  readonly inputs: NonNullable<CreatedAtlassianCredentialCustody["custody"]["humanInputs"]>;
+  readonly privateInputs: NonNullable<CreatedAtlassianCredentialCustody["executionResolver"]["humanInputs"]>;
+  readonly sessions: NonNullable<CreatedAtlassianCredentialCustody["executionResolver"]["sessions"]>;
+  readonly binding: JiraHumanInputBinding;
+  readonly sealedPortEntries: Map<string, string>;
+  readonly vault: PrivateFixtureVault;
+  readonly fork: () => CreatedAtlassianCredentialCustody;
+  readonly clearedPhases: ("cancelled" | "expired")[];
+  readonly advance: (milliseconds: number) => void;
+}
 
 /** Private synthetic custody over one shared port; production kernel guards have separate sources. */
 export function privateJiraCustodyFixture(operation: JiraHumanInputBinding["operation"] = "jira.update-my-password", principal = "a".repeat(64), options: {
   readonly baseUrl?: string; readonly actorKey?: string; readonly actorUsername?: string;
   readonly compatibility?: JiraDataCenterCompatibilityFacts;
-} = {}) {
+} = {}): PrivateJiraCustodyFixture {
   let now = 1_800_000_000_000;
   const clearedPhases: ("cancelled" | "expired")[] = [];
   const entries = new Map<string, string>(); const leases = new Set<string>();

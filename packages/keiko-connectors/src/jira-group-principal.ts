@@ -1,15 +1,13 @@
-import type { JiraMutationAttempt } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { asArray } from "./atlassian-sync-classify.js";
 import { jiraDirectoryGroup, jiraDirectoryTotal } from "./jira-directory-values.js";
 import { projectJiraCollection } from "./jira-managed-metadata.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
-import { dispatchFailure } from "./jira-mutation-failure.js";
+import { dispatchFailure, type JiraObservationFailure } from "./jira-mutation-failure.js";
 
-type GroupPrincipalFailure = Extract<JiraMutationAttempt, { ok: false }>;
 /** Jira 11.3 removed GET group. Bind only an exact observed name from the supported picker.
  * A missing/truncated fuzzy result is unavailable, never proof that the selected group is absent.
  */
-export async function bindJiraGroupPrincipal(request: JiraMutationRequest, name: string): Promise<GroupPrincipalFailure | undefined> {
+export async function bindJiraGroupPrincipal(request: JiraMutationRequest, name: string): Promise<JiraObservationFailure | undefined> {
   const query = new URLSearchParams({ query: name, maxResults: "100" });
   const response = await request(`groups/picker?${query.toString()}`, "GET", undefined, "json");
   if (!response.ok) return dispatchFailure(response);

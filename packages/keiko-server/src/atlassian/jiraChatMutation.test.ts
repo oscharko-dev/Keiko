@@ -909,13 +909,13 @@ it("retains a truncated 201 acknowledgement and replays the canonical action wit
     ),
   );
   const observedResponses: boolean[] = [];
-  const execute: JiraChatMutationExecution["execute"] = (http) =>
+  const execute: JiraChatMutationExecution["execute"] = (http, lifecycle) =>
     f.input.execute(async (request) => {
       const response = await http(request);
       expect(response).toMatchObject({ kind: "response", status: 201, truncated: true });
       observedResponses.push(response.kind === "response" && response.truncated);
       return response;
-    });
+    }, lifecycle);
   const input = { ...f.input, execute };
   expect(await executeJiraChatMutation(input)).toMatchObject({
     data: { outcome: "succeeded-unconfirmed" },
@@ -983,9 +983,10 @@ it("revalidates admission at final dispatch after initial authority admission", 
     beforeEffect: (): boolean => admitted,
     execute: async (
       http: Parameters<JiraChatMutationExecution["execute"]>[0],
+      lifecycle: Parameters<JiraChatMutationExecution["execute"]>[1],
     ): Promise<JiraMutationAttempt> => {
       admitted = false;
-      return f.input.execute(http);
+      return f.input.execute(http, lifecycle);
     },
   };
   expect(await executeJiraChatMutation(input)).toMatchObject({ data: { outcome: "rejected" } });
@@ -1006,10 +1007,11 @@ it("does not take ownership of a concurrent duplicate while the first invocation
     ...f.input,
     execute: async (
       http: Parameters<JiraChatMutationExecution["execute"]>[0],
+      lifecycle: Parameters<JiraChatMutationExecution["execute"]>[1],
     ): Promise<JiraMutationAttempt> => {
       entered?.();
       await held;
-      return f.input.execute(http);
+      return f.input.execute(http, lifecycle);
     },
   };
   const first = executeJiraChatMutation(input);
@@ -1029,9 +1031,9 @@ it("does not take ownership of a concurrent duplicate while the first invocation
 });
 it("admits at most one mutation HTTP request from a provider invocation", async () => {
   const f = fixture();
-  const execute: JiraChatMutationExecution["execute"] = async (http) => {
-    await f.input.execute(http);
-    return f.input.execute(http);
+  const execute: JiraChatMutationExecution["execute"] = async (http, lifecycle) => {
+    await f.input.execute(http, lifecycle);
+    return f.input.execute(http, lifecycle);
   };
   expect(await executeJiraChatMutation({ ...f.input, execute })).toMatchObject({
     data: { outcome: "succeeded-unconfirmed" },
@@ -1077,7 +1079,7 @@ it("does not treat metadata responses as mutation acknowledgements", async () =>
     if (calls === undefined) throw new Error("Expected fetch implementation");
     return calls(url, init);
   });
-  const execute: JiraChatMutationExecution["execute"] = async (http) => {
+  const execute: JiraChatMutationExecution["execute"] = async (http, lifecycle) => {
     await http({
       method: "GET",
       url: "https://jira.example.invalid/rest/api/2/issue/createmeta",
@@ -1088,7 +1090,7 @@ it("does not treat metadata responses as mutation acknowledgements", async () =>
       phase: "prepared",
       httpStatus: null,
     });
-    return f.input.execute(http);
+    return f.input.execute(http, lifecycle);
   };
   expect(await executeJiraChatMutation({ ...f.input, execute })).toMatchObject({
     data: { outcome: "succeeded" },
@@ -1112,7 +1114,7 @@ it("claims only the mutation, keeping metadata, confirmation and replay separate
   const input: JiraChatMutationExecution = {
     ...f.input,
     beforeMutation,
-    execute: async (http) => {
+    execute: async (http, lifecycle) => {
       const read = {
         method: "GET",
         url: "https://jira.example.invalid/rest/api/2/issue/createmeta",
@@ -1121,7 +1123,7 @@ it("claims only the mutation, keeping metadata, confirmation and replay separate
       } as const;
       await http(read);
       expect(beforeMutation).not.toHaveBeenCalled();
-      const outcome = await f.input.execute(http);
+      const outcome = await f.input.execute(http, lifecycle);
       await http(read);
       return outcome;
     },
@@ -1158,8 +1160,8 @@ it("retains acknowledged success uncertainty when authority is lost before confi
           return observed === true;
         },
       }),
-    execute: async (http) => {
-      const result = await f.input.execute(http);
+    execute: async (http, lifecycle) => {
+      const result = await f.input.execute(http, lifecycle);
       await http({
         method: "GET",
         url: "https://jira.example.invalid/rest/api/2/issue/SYN-1",
@@ -1255,10 +1257,10 @@ it("keeps a replay pending until the owner settles a pre-dispatch cancellation",
   });
   const input: JiraChatMutationExecution = {
     ...f.input,
-    execute: async (http) => {
+    execute: async (http, lifecycle) => {
       entered?.();
       await held;
-      return f.input.execute((request) => http({ ...request, signal: controller.signal }));
+      return f.input.execute((request) => http({ ...request, signal: controller.signal }), lifecycle);
     },
   };
   const owner = executeJiraChatMutation(input);

@@ -111,7 +111,7 @@ describe.each(["en", "de"] as const)("closed result fallback in %s", (locale) =>
   it("does not claim a fallback presentation when there is no result body to render", () => {
     const report = vi.spyOn(diagnostics, "reportClientDiagnostic");
     const exchange = result("mcp_foreign_tool");
-    if (exchange.result === undefined) throw new TypeError("Missing result fixture");
+    if (exchange.result?.status !== "completed") throw new TypeError("Expected completed result fixture");
     try {
       render(<I18nProvider><JiraChatTools messageId="private-fallback-parent" turnState="pending"
         transcript={{ schemaVersion: 1, exchanges: [{ ...exchange, result: { ...exchange.result, data: null } }] }}

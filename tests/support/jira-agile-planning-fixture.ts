@@ -3,6 +3,7 @@ import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/go
 import type { JiraMutationRequest } from "../../packages/keiko-connectors/src/jira-managed-mutation-metadata.js";
 import type { JiraAgilePlanningPorts } from "../../packages/keiko-connectors/src/jira-managed-agile-planning.js";
 import type { AtlassianWriteHttpOutcome } from "../../packages/keiko-connectors/src/atlassian-write-http.js";
+import { asRecord } from "../../packages/keiko-connectors/src/atlassian-sync-classify.js";
 
 const ACTOR = "synthetic-actor";
 const BOARD = { expectedActorKey: ACTOR, boardId: "7", expectedBoardName: "Synthetic board" };
@@ -81,7 +82,7 @@ export function agilePlanningFixture() {
     throw new TypeError("Unexpected synthetic planning read");
   }
   function effect(path: string, method: string, body: Parameters<JiraMutationRequest>[2]): AtlassianWriteHttpOutcome {
-    const raw = body !== null && typeof body === "object" && !Array.isArray(body) ? body : undefined;
+    const raw = asRecord(body);
     assert.ok(raw);
     const first = issues.get("10001");
     assert.ok(first);

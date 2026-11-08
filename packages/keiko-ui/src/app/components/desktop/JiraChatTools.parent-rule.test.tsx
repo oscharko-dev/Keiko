@@ -20,7 +20,7 @@ describe.each(["en", "de"] as const)("saved parent-type refusal in %s", (locale)
         result: {
           schemaVersion: 1, invocationId: "parent-type-refusal", toolRef: null, projectionDigest: null,
           effectStarted: false, metrics: { inputBytes: 0, outputBytes: 0, resultCount: 0, durationMs: 0 },
-          status: "failed", reason: "handler-failed", page: null,
+          status: "failed", reason: "provider-reported-error", page: null,
           data: { outcome: "rejected", reason: "field-validation", violations: [{
             ruleId: "parent-type-mismatch", subject: "parent: Task", template: "SYN/Sub-task",
           }] },

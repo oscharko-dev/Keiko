@@ -115,8 +115,8 @@ describe("hierarchy discovery depends on the schema shape, never on an app's fie
 
   it("states an unreadable field list as unavailable with its closed reason", async () => {
     const outcome = await discoverHierarchyFields({
+      ...listing([]),
       getArray: () => Promise.resolve({ ok: false, reason: "permission-denied" }),
-      getRecord: () => Promise.resolve({ ok: false, reason: "not-found" }),
     });
     expect(outcome).toMatchObject({
       discovery: "unavailable",

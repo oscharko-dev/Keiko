@@ -275,7 +275,7 @@ async function invokeRelayTool(input: RelayCall): Promise<CallToolResult> {
     const { reason, effect } = failureOf(error);
     await settleFailedCall(input, context, permit, effect);
     // The SDK delivers a thrown error's message to the model as an error result.
-    throwRelayCallFailure(input, readCapture, observation, reason, effect, error);
+    return throwRelayCallFailure(input, readCapture, observation, reason, effect, error);
   } finally {
     readCapture?.release();
   }

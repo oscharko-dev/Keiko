@@ -115,7 +115,7 @@ describe("fixed native schema mutations", () => {
     expect(await execute("jira.update-issue-type", { expectedActorKey: "synthetic-actor", expectedIssueType: SCHEMA_TYPE, name: "Task" }, f.request)).toMatchObject({ ok: false, detail: { unchanged: true } });
     expect(f.calls.every((call) => call.method === "GET")).toBe(true);
   });
-  it.each([[], ["9007199254740993"], ["01"]])("refuses implicit/global or unsafe numeric project contexts %j", async (projectIds) => {
+  it.each([{ projectIds: [] }, { projectIds: ["9007199254740993"] }, { projectIds: ["01"] }])("refuses implicit/global or unsafe numeric project contexts %j", async ({ projectIds }) => {
     const f = schemaMutationFixture(); const scenario = SCHEMA_MUTATION_FIXTURE_CASES[0];
     expect(await execute(scenario.name, { ...scenario.args, projectIds }, f.request)).toMatchObject({ ok: false, reason: "field-validation" }); expect(f.calls).toEqual([]);
   });
@@ -145,6 +145,8 @@ describe("fixed native schema mutations", () => {
   });
   it("preserves false/default state and rejects incomplete terminology review", async () => {
     const f = schemaMutationFixture();
-    expect(await execute("jira.set-terminology", { expectedActorKey: "synthetic-actor", expectedEntries: [SCHEMA_TERMS[0]], entries: [{ originalName: "epic", newName: "goal", newNamePlural: "goals" }] }, f.request)).toMatchObject({ ok: false }); expect(f.calls).toEqual([]);
+    const epic = SCHEMA_TERMS.find((entry) => entry.originalName === "epic");
+    if (epic === undefined) throw new TypeError("Missing native epic terminology fixture");
+    expect(await execute("jira.set-terminology", { expectedActorKey: "synthetic-actor", expectedEntries: [epic], entries: [{ originalName: "epic", newName: "goal", newNamePlural: "goals" }] }, f.request)).toMatchObject({ ok: false }); expect(f.calls).toEqual([]);
   });
 });
