@@ -116,6 +116,13 @@ const INVALID_DESCRIPTION = {
     "Use only exact operation identities returned by jira.discover, each at most once. The current tool selection was not changed.",
 } as const;
 
+/** More operations than one tool host or catalog can carry; nothing was selected. */
+const TOO_LARGE_SELECTION = {
+  reason: "selection-too-large",
+  guidance:
+    "Too many operations were selected at once. Select only the operations needed for the next step, then select others in a later round. The current tool selection was not changed.",
+} as const;
+
 async function selectedDescription(
   select: NonNullable<Context["selectJiraOperations"]>,
   identities: readonly string[],
@@ -127,6 +134,8 @@ async function selectedDescription(
   } catch (error) {
     if (!(error instanceof CatalogDispatchFault) && !(error instanceof ToolCatalogError))
       throw error;
+    if (error.reason === "input-bound")
+      return { isError: true, data: { outcome: "failed", items: [], ...TOO_LARGE_SELECTION } };
     return {
       isError: true,
       data: {
@@ -181,7 +190,12 @@ const RESULT_SCHEMA = object(
   {
     reason: {
       type: "string",
-      enum: ["budget-exhausted", "selection-unavailable", "invalid-arguments"],
+      enum: [
+        "budget-exhausted",
+        "selection-unavailable",
+        "selection-too-large",
+        "invalid-arguments",
+      ],
     },
     guidance: text(512),
     outcome: { type: "string", enum: ["succeeded", "failed"] },

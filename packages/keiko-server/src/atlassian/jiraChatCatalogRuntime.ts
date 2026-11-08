@@ -1,6 +1,8 @@
 import { jiraChatPrivatePorts } from "./jiraChatPrivatePorts.js";
 import { createManagedChatCatalogRuntime } from "../tool-catalog/managedChatCatalogRuntime.js";
 import { randomUUID } from "node:crypto";
+import { MANAGED_MCP_TOOLS_MAX } from "@oscharko-dev/keiko-mcp";
+import { ToolCatalogError } from "@oscharko-dev/keiko-tool-catalog";
 import { jiraChatEmailTemplateComposition } from "./jiraEmailTemplateComposition.js";
 import { jiraChatAvatarComposition } from "./jiraAvatarComposition.js";
 import {
@@ -716,6 +718,15 @@ function staticToolDefinitions(
 }
 
 type SelectedRuntime = ReturnType<typeof createManagedChatCatalogRuntime<JiraChatCatalogConsumer>>;
+/** Every tool the selected catalog's providers register: base, selection, batch, discovery, Knowledge. */
+function hostedToolCount(selection: typeof JIRA_CHAT_TOOLS): number {
+  return (
+    withBatchTools([...new Set([...JIRA_BASE_TOOLS, ...selection])]).length +
+    JIRA_CATALOG_DISCOVERY_TOOLS.length +
+    KNOWLEDGE_CHAT_TOOLS.length
+  );
+}
+
 async function admitSelectedCatalog(
   identities: readonly string[],
   initialize: (tools: typeof JIRA_CHAT_TOOLS) => Promise<ChatCatalog>,
@@ -725,6 +736,8 @@ async function admitSelectedCatalog(
   const names = new Set(jiraToolsForIdentities(identities));
   const tools = JIRA_CHAT_TOOLS.filter((name) => names.has(name));
   requireDispatch(tools.length === names.size, "invalid", "invalid-arguments");
+  // One host carries a bounded registry: refuse an oversized selection before building any host.
+  if (hostedToolCount(tools) > MANAGED_MCP_TOOLS_MAX) throw new ToolCatalogError("input-bound");
   const selected = createManagedChatCatalogRuntime<JiraChatCatalogConsumer>(
     () => [],
     () => initialize([...new Set([...JIRA_BASE_TOOLS, ...tools])]),

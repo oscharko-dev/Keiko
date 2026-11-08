@@ -12,6 +12,7 @@ import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import * as managedProvider from "../tool-catalog/managedProviderCatalog.js";
 import { createJiraChatCatalogRuntime, untracedAdvisory } from "./jiraChatCatalogRuntime.js";
+import { jiraOperationContracts } from "./jiraManagedProvider.js";
 import { KNOWLEDGE_CHAT_TOOLS } from "../requirementsToolName.js";
 
 const CURATED_JIRA_ALIASES = [
@@ -254,6 +255,23 @@ describe("application-owned Jira catalog initialization", () => {
     await expect(closed).resolves.toBeUndefined();
     await expect(f.runtime.get()).rejects.toMatchObject({ reason: "handler-unavailable" });
     expect(f.record).toHaveBeenCalledOnce();
+  });
+
+  it("refuses a selection larger than one host carries before any host is built", async () => {
+    const f = fixture();
+    try {
+      const everything = jiraOperationContracts().map((entry) => entry.binding.identity);
+      expect(everything.length).toBeGreaterThan(320);
+      await expect(f.runtime.select(everything)).rejects.toMatchObject({
+        name: "ToolCatalogError",
+        reason: "input-bound",
+      });
+      expect(
+        (await f.runtime.select(["GET /rest/api/2/serverInfo"])).projection.tools.length,
+      ).toBeGreaterThan(0);
+    } finally {
+      await f.runtime.close();
+    }
   });
 
   it("keeps concurrent selected schema sets isolated and the initial advertisement unchanged", async () => {

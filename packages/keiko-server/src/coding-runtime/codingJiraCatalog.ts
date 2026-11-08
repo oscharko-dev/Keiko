@@ -9,7 +9,12 @@ import type {
   ManagedMcpLogPort,
   ManagedMcpProvider,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import { createManagedMcpHost, ManagedMcpError } from "@oscharko-dev/keiko-mcp";
+import {
+  createManagedMcpHost,
+  ManagedMcpError,
+  MANAGED_MCP_TOOLS_MAX,
+} from "@oscharko-dev/keiko-mcp";
+import { ToolCatalogError } from "@oscharko-dev/keiko-tool-catalog";
 import {
   createJiraCatalogDiscoveryProvider,
   JIRA_CATALOG_DISCOVERY_TOOLS,
@@ -132,6 +137,8 @@ export function createCodingJiraCatalog<Context extends ManagedMcpInvocationCont
     requireCurrent(context);
     requireDispatch(!selecting, "denied", "effect-denied");
     const narrowed = selectedNames(identities, context);
+    // The same refusal as the Chat catalog: an oversized selection never reaches a host.
+    if (narrowed.length > MANAGED_MCP_TOOLS_MAX) throw new ToolCatalogError("input-bound");
     selecting = true;
     let candidate: ManagedMcpHost<Context> | undefined;
     try {

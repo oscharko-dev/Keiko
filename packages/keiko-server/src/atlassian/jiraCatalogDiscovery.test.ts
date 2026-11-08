@@ -236,6 +236,17 @@ describe("local Jira operation discovery", () => {
     });
   });
 
+  it("tells the model an oversized selection is too large and how to narrow it", async () => {
+    const f = fixture();
+    f.select.mockRejectedValueOnce(new ToolCatalogError("input-bound"));
+    const result = await f.describe.execute({ identities: ["GET /rest/api/2/project"] }, f.context);
+    expect(result).toMatchObject({
+      isError: true,
+      data: { outcome: "failed", reason: "selection-too-large", items: [] },
+    });
+    expect(JSON.stringify(result.data)).toContain("Select only the operations needed");
+  });
+
   it("refuses a selected invalid schema while preserving unrelated programming failures", async () => {
     const f = fixture();
     f.select.mockRejectedValueOnce(new ToolCatalogError("invalid-schema"));
