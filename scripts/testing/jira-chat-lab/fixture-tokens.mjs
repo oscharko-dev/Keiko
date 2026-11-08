@@ -14,6 +14,8 @@ import { privateJson, privateText } from "./private-json.mjs";
 import { enterActive, withExclusiveRestart } from "./requirements/lab-lanes.mjs";
 
 const TOKEN_NAME = "Keiko synthetic 4081 session";
+// Native Jira refuses PAT names over 40 characters; the 11-hex nonce keeps a renewal name at 40.
+const NONCE_LENGTH = 40 - TOKEN_NAME.length - 1;
 const TOKEN_PATH = "/rest/pat/latest/tokens";
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 class TokenRecoveryRefusal extends TypeError {
@@ -44,7 +46,8 @@ function parseOptional(path) {
 function ownedName(name) {
   return (
     name === TOKEN_NAME ||
-    (typeof name === "string" && new RegExp(`^${TOKEN_NAME}-[a-f0-9]{12}$`, "u").test(name))
+    (typeof name === "string" &&
+      new RegExp(`^${TOKEN_NAME}-[a-f0-9]{${NONCE_LENGTH}}$`, "u").test(name))
   );
 }
 function tokenExpiry(token) {
@@ -345,7 +348,7 @@ function prepareIntent(context, state) {
     schemaVersion: 2,
     actor: context.actor,
     phase: "prepared",
-    targetName: `${TOKEN_NAME}-${randomUUID().replaceAll("-", "").slice(0, 12)}`,
+    targetName: `${TOKEN_NAME}-${randomUUID().replaceAll("-", "").slice(0, NONCE_LENGTH)}`,
     priorIds: state.inventory.map((row) => row.id),
     prior:
       state.prior === undefined

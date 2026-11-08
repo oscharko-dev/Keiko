@@ -117,7 +117,7 @@ async function revalidateStoredTemplates(ctx, region, stored) {
         .getByRole("listitem")
         .filter({ hasText: skill.name })
         .filter({
-          has: dialog.getByRole("button", { name: "Validate against Jira", exact: true }),
+          has: ctx.page.getByRole("button", { name: "Validate against Jira", exact: true }),
         });
       assert.equal(await row.count(), 1);
       const validated = await responseAfter(

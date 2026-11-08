@@ -197,7 +197,7 @@ function installOwners(page) {
     target.chats.set(id, chat);
     target.windows.set(id, `window-${id}`);
     target.historyVisible = true;
-    target.emit(response("POST", "/api/chats", { chat }, 201));
+    target.emit(response("POST", "/api/desktop/chats", { chat }, 201));
   });
   owners.createPod.mockImplementation(async (target, _session, options) => {
     let podId = options.podId;
@@ -477,6 +477,18 @@ describe("one ordinary browser owner for the three limit-run Chats", () => {
     expect(owners.bind.mock.calls[0][2]).toBe("Browser Jira");
   });
 
+  it("observes the Chat History creator route, never the API creator", async () => {
+    const page = uiPage();
+    installOwners(page);
+    await openWorkflowBrowser(CONTEXT);
+    const creation = page.waitForResponse.mock.calls
+      .map(([predicate]) => predicate)
+      .find((predicate) => predicate(response("POST", "/api/desktop/chats", {}, 201)));
+    expect(creation).toBeDefined();
+    expect(creation(response("POST", "/api/chats", {}, 201))).toBe(false);
+    expect(creation(response("GET", "/api/desktop/chats", {}))).toBe(false);
+  });
+
   it("selects the requested model through its visible UI rather than an API write", async () => {
     const page = uiPage();
     page.initialModel = "other-fixture-model";
@@ -560,7 +572,7 @@ describe("existing browser bootstrap and Pod verification owners", () => {
     };
     const control = { click: vi.fn(), waitFor: vi.fn(), press: vi.fn() };
     const card = {
-      filter: () => card,
+      filter: vi.fn(() => card),
       count: async () => 1,
       getAttribute: async () => credential.authRef,
       getByRole: () => control,
@@ -568,8 +580,10 @@ describe("existing browser bootstrap and Pod verification owners", () => {
     };
     const trigger = { click: vi.fn() };
     const hub = { getByTestId: () => card, getByText: vi.fn() };
+    const title = { exactTitle: "Limit Run Restricted" };
     const page = {
       getByRole: (role) => (role === "button" ? trigger : hub),
+      getByText: vi.fn(() => title),
       request: {
         get: async () =>
           response("GET", "/api/atlassian-connectors/credentials", { credentials: [credential] }),
@@ -591,5 +605,9 @@ describe("existing browser bootstrap and Pod verification owners", () => {
     expect(onPod).toHaveBeenCalledExactlyOnceWith({ podId: "restricted-pod" });
     expect(trigger.click).toHaveBeenCalledTimes(2);
     expect(control.click).toHaveBeenCalledOnce();
+    // Playwright resolves a `has` locator inside the card, so it must be rooted at the page.
+    expect(card.filter).toHaveBeenCalledExactlyOnceWith({ has: title });
+    expect(page.getByText).toHaveBeenCalledExactlyOnceWith("Limit Run Restricted", { exact: true });
+    expect(hub.getByText).not.toHaveBeenCalled();
   });
 });

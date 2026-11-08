@@ -125,6 +125,9 @@ async function renameWorkflowChat(page, chatId, title) {
   await trigger.click();
 }
 
+// Chat History's New button creates through the desktop canvas route (`createDesktopChat`).
+const UI_CHAT_CREATION_PATH = "/api/desktop/chats";
+
 /** The existing ordinary UI creator owns the POST; this owner only observes its identity. */
 export async function openWorkflowChat(page, context, options = {}) {
   if (options.chatId !== undefined) return focusWorkflowChat(page, context, options.chatId);
@@ -133,7 +136,7 @@ export async function openWorkflowChat(page, context, options = {}) {
     page.waitForResponse(
       (candidate) =>
         candidate.request().method() === "POST" &&
-        new URL(candidate.url()).pathname === "/api/chats",
+        new URL(candidate.url()).pathname === UI_CHAT_CREATION_PATH,
     ),
     openChatComposer(page),
   ]);

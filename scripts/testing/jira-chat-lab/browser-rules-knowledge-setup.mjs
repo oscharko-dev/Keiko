@@ -37,7 +37,7 @@ export async function uploadBrowserSkill(page, region, markdown, fileName, forma
   if (formal) await inspectBrowserTemplate(page, dialog, skill, formal);
   else {
     const row = dialog.getByRole("listitem").filter({
-      has: dialog.getByRole("button", { name: skill.name, exact: true }),
+      has: page.getByRole("button", { name: skill.name, exact: true }),
     });
     await row.getByRole("button", { name: "Select", exact: true }).click();
     await row.getByRole("button", { name: "Active in this chat", exact: true }).waitFor();
@@ -69,7 +69,7 @@ async function inspectBrowserTemplate(page, dialog, skill, formal) {
     .getByRole("listitem")
     .filter({ hasText: skill.name })
     .filter({
-      has: dialog.getByRole("button", { name: "Validate against Jira", exact: true }),
+      has: page.getByRole("button", { name: "Validate against Jira", exact: true }),
     });
   await row
     .getByText(`${formal.project} · ${formal.issueType} · create`, { exact: true })

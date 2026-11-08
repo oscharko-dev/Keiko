@@ -18,17 +18,20 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   vi.clearAllMocks();
 });
+function createdTokenResponse(state, token, body) {
+  if (state.failCreation) throw new TypeError("Synthetic lost response");
+  // Native Jira Data Center refuses a PAT name longer than 40 characters with 400 (observed live).
+  if (body.name.length > 40) return { status: 400, value: {} };
+  const next = { ...token(state.nextId++, state.replacementSeconds), name: body.name };
+  state.tokens.push(next);
+  if (state.loseCreationResponse) throw new TypeError("Synthetic committed lost creation response");
+  return { status: 201, value: { ...next, rawToken: "synthetic-new-private-token" } };
+}
 function tokenResponse(state, token, method, target, body) {
   if (target === "/rest/pat/latest/tokens" && method === "GET")
     return { status: 200, value: structuredClone(state.tokens) };
-  if (target === "/rest/pat/latest/tokens" && method === "POST") {
-    if (state.failCreation) throw new TypeError("Synthetic lost response");
-    const next = { ...token(state.nextId++, state.replacementSeconds), name: body.name };
-    state.tokens.push(next);
-    if (state.loseCreationResponse)
-      throw new TypeError("Synthetic committed lost creation response");
-    return { status: 201, value: { ...next, rawToken: "synthetic-new-private-token" } };
-  }
+  if (target === "/rest/pat/latest/tokens" && method === "POST")
+    return createdTokenResponse(state, token, body);
   if (target.startsWith("/rest/pat/latest/tokens/") && method === "DELETE") {
     const id = Number(target.split("/").at(-1));
     state.tokens = state.tokens.filter((row) => row.id !== id);

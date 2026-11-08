@@ -74,7 +74,7 @@ export async function createPod(page, session, options = {}) {
         ? await createPodThroughForm(page, hub, session, options, label)
         : { podId: options.podId };
     const card = hub.getByTestId("acx-connector").filter({
-      has: hub.getByText(label, { exact: true }),
+      has: page.getByText(label, { exact: true }),
     });
     assert.equal(await card.count(), 1, "The verified Pod has one exact Hub card");
     const credential = await assertVerifiedPod(page, card, { ...identity, displayName: label });
