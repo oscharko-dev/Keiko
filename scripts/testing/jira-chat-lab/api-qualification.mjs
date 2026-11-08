@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { resolveHostExecutable } from "../../lib/host-executable.mjs";
 import { withModelFreeJira, prepareModelFreeChat } from "./chat-read.mjs";
 import { reportFaultQualificationFailure } from "./chat-lifecycle.mjs";
 import {
@@ -16,13 +17,11 @@ import {
 } from "./lab-client.mjs";
 import { privateJson } from "./private-json.mjs";
 import { observeQualificationFixtures } from "./api-qualification-cases.mjs";
+import { dispatchQualification, qualificationWitness } from "./api-qualification-runtime.mjs";
 import {
-  closeQualificationTurn,
-  dispatchQualification,
-  openQualificationTurn,
-  qualificationWitness,
-} from "./api-qualification-runtime.mjs";
-import { API_QUALIFICATION_ALL_CASES } from "./api-qualification-case-list.mjs";
+  API_QUALIFICATION_ALL_CASES,
+  assertQualificationRecipeCoverage,
+} from "./api-qualification-case-list.mjs";
 import { requireQualificationSnapshot } from "./api-qualification-snapshot.mjs";
 import { decidedQualificationDeferrals, ownerDeferredRow } from "./api-qualification-policy.mjs";
 import {
@@ -60,13 +59,17 @@ export async function runQualificationBatches({
 
 function sourceRevision() {
   const options = { cwd: repository, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] };
-  const dirty = execFileSync("git", ["status", "--porcelain", "--untracked-files=normal"], options);
+  const dirty = execFileSync(
+    resolveHostExecutable("git"),
+    ["status", "--porcelain", "--untracked-files=normal"],
+    options,
+  );
   assert.equal(
     dirty,
     "",
     "Commit the complete qualification sources before recording native evidence",
   );
-  return execFileSync("git", ["rev-parse", "HEAD"], options).trim();
+  return execFileSync(resolveHostExecutable("git"), ["rev-parse", "HEAD"], options).trim();
 }
 
 function caseRows(ledger, cases) {
@@ -86,7 +89,9 @@ function caseRows(ledger, cases) {
 async function observeReadback(context, specification, attempted, fixture) {
   try {
     return {
-      readback: await specification.readback(context, attempted.dispatch.result?.data, fixture),
+      readback:
+        attempted.readback ??
+        (await specification.readback(context, attempted.dispatch.result?.data, fixture)),
     };
   } catch (error) {
     return {
@@ -106,7 +111,7 @@ function caseEvidence(specification, attempted, observation, readback, failure, 
     sourceRevision: report.sourceRevision,
     release: report.release,
     imageDigest: report.imageDigest,
-    id: specification.fixtureId ?? qualificationDigest(specification.identity).slice(0, 24),
+    id: caseId(specification),
     identity: specification.identity,
     tool: specification.tool,
     runtimeAvailability,
@@ -187,27 +192,79 @@ async function prepareCase(context, chat, specification, fixture) {
   }
 }
 async function dispatchCase(context, chat, specification, fixture, witness, pending) {
-  const provide = specification.humanInput
-    ? () => specification.humanInput(context, fixture)
-    : undefined;
   try {
     return {
-      attempted: await dispatchQualification(
-        context,
-        chat,
-        specification,
+      attempted: await dispatchQualification(context, chat, specification, () =>
         specification.arguments(fixture),
-        provide,
       ),
     };
   } catch {
     // Before any native effect started, a refusal or local failure proves nothing about Jira.
-    if (witness.snapshot().effects > 0) throw new ReconcileRequiredError();
+    if (witness.effectsStarted() > 0) throw new ReconcileRequiredError();
     rmSync(pending);
     return { failure: "dispatch-failed" };
   }
 }
-async function runGradedCase(context, chat, specification, fixture, witness, directory, report) {
+function recordAuxiliaries(attempted, directory, report) {
+  return (attempted.auxiliaries ?? []).map((auxiliary) => {
+    const specification = {
+      tool: auxiliary.tool,
+      identity: auxiliary.identity,
+      mutation: auxiliary.attempted.mutation,
+      fixtureId: `fixture-${randomUUID()}`,
+    };
+    const row = caseEvidence(
+      specification,
+      auxiliary.attempted,
+      auxiliary.attempted.witness,
+      auxiliary.readback,
+      undefined,
+      report,
+    );
+    assert.equal(row.runtimeAvailability, "executable", "Auxiliary evidence must remain verified");
+    privateJson(join(directory, `${row.id}.json`), row, true);
+    return `${row.id}.json`;
+  });
+}
+async function gradeCase(
+  { context, specification, fixture, witness, directory, report },
+  attempted,
+) {
+  const { readback, failure: readbackFailure } = await observeReadback(
+    context,
+    specification,
+    attempted,
+    fixture,
+  );
+  const evidence = caseEvidence(
+    specification,
+    attempted,
+    attempted.witness ?? witness.snapshot(),
+    readback,
+    readbackFailure,
+    report,
+  );
+  evidence.auxiliaryReferences = recordAuxiliaries(attempted, directory, report);
+  privateJson(join(directory, `${evidence.id}.json`), evidence, true);
+  if (attempted.journal?.outcome === "unknown" || attempted.journal?.phase === "dispatched")
+    throw new ReconcileRequiredError();
+  rmSync(join(directory, `${evidence.id}.pending.json`));
+  stage({
+    identity: specification.identity,
+    runtimeAvailability: evidence.runtimeAvailability,
+    ...(readbackFailure ? { failure: readbackFailure } : {}),
+  });
+  return evidence;
+}
+export async function runQualificationCase(
+  context,
+  chat,
+  specification,
+  fixture,
+  witness,
+  directory,
+  report,
+) {
   const failure = await prepareCase(context, chat, specification, fixture);
   if (failure !== undefined)
     return recordUngraded(
@@ -230,45 +287,10 @@ async function runGradedCase(context, chat, specification, fixture, witness, dir
       directory,
       ungradedEvidence(specification, report, dispatched.failure, witness.effectsStarted()),
     );
-  const { attempted } = dispatched;
-  const { readback, failure: readbackFailure } = await observeReadback(
-    context,
-    specification,
-    attempted,
-    fixture,
+  return gradeCase(
+    { context, specification, fixture, witness, directory, report },
+    dispatched.attempted,
   );
-  const evidence = caseEvidence(
-    specification,
-    attempted,
-    witness.snapshot(),
-    readback,
-    readbackFailure,
-    report,
-  );
-  privateJson(join(directory, `${id}.json`), evidence, true);
-  if (attempted.journal?.outcome === "unknown" || attempted.journal?.phase === "dispatched")
-    throw new ReconcileRequiredError();
-  rmSync(pending);
-  stage({
-    identity: specification.identity,
-    runtimeAvailability: evidence.runtimeAvailability,
-    ...(readbackFailure ? { failure: readbackFailure } : {}),
-  });
-  return evidence;
-}
-
-/** A case that keeps one private session across fixtures and its own dispatch holds one turn. */
-async function runCase(context, chat, specification, fixture, witness, directory, report) {
-  if (specification.privateSession !== true)
-    return runGradedCase(context, chat, specification, fixture, witness, directory, report);
-  const held = await openQualificationTurn(context, chat);
-  context.heldQualificationTurn = held;
-  try {
-    return await runGradedCase(context, chat, specification, fixture, witness, directory, report);
-  } finally {
-    delete context.heldQualificationTurn;
-    await closeQualificationTurn(context, held);
-  }
 }
 
 function attachFixtureDispatcher(
@@ -284,7 +306,7 @@ function attachFixtureDispatcher(
     tool,
     arguments: argumentsForFixture,
     readback,
-    humanInput,
+    publishHumanInput,
   }) => {
     const operation = JSON.parse(readFileSync(ledgerPath, "utf8")).currentCapabilities[tool];
     assert.ok(operation && operation.effect === "write");
@@ -298,9 +320,17 @@ function attachFixtureDispatcher(
       fixtureId: `fixture-${randomUUID()}`,
       arguments: () => argumentsForFixture,
       readback,
-      ...(humanInput === undefined ? {} : { humanInput }),
+      ...(publishHumanInput === undefined ? {} : { publishHumanInput }),
     };
-    const evidence = await runCase(context, chat, fixtureCase, fixture, witness, directory, report);
+    const evidence = await runQualificationCase(
+      context,
+      chat,
+      fixtureCase,
+      fixture,
+      witness,
+      directory,
+      report,
+    );
     assert.equal(
       evidence.runtimeAvailability,
       "executable",
@@ -319,6 +349,8 @@ async function executeCases(context, specifications, report, directory, witness,
       JSON.parse(readFileSync(join(context.session.directory, "fixture.json"), "utf8")),
     ));
   fixture.runId = report.runId;
+  context.qualificationFixtureState = fixture;
+  context.qualificationWitness = witness;
   const chats = new Map();
   for (const specification of specifications) {
     await requireLicense(context.session);
@@ -330,9 +362,10 @@ async function executeCases(context, specifications, report, directory, witness,
         await prepareModelFreeChat(context, context.actor, specification.administration === true),
       );
     const chat = chats.get(binding);
+    context.qualificationChat = chat;
     attachFixtureDispatcher(context, chat, specification, fixture, witness, directory, report);
     witness.reset();
-    const evidence = await runCase(
+    const evidence = await runQualificationCase(
       context,
       chat,
       specification,
@@ -428,15 +461,32 @@ async function admitSnapshot(session, selected, report, snapshotId) {
   const snapshot = await requireQualificationSnapshot(session, snapshotId);
   report.snapshotId = snapshot.id;
 }
-export async function qualifyApi(directory, only, snapshotId) {
+function qualificationPlan(directory, only) {
   const session = loadSession(directory);
   const ledger = JSON.parse(readFileSync(ledgerPath, "utf8"));
   assert.equal(ledger.operations.length, 439);
   const revision = sourceRevision();
+  if (only === undefined)
+    assertQualificationRecipeCoverage(
+      ledger,
+      decidedQualificationDeferrals(
+        JSON.parse(readFileSync(join(repository, proposalPath), "utf8")),
+        ledger,
+      ),
+    );
   const selected = caseRows(ledger, API_QUALIFICATION_ALL_CASES).filter(
     (entry) => only === undefined || only.includes(entry.tool),
   );
   assert.ok(selected.length > 0);
+  return { session, ledger, revision, selected };
+}
+export async function qualifyApi(
+  directory,
+  only,
+  snapshotId,
+  { reciprocalPeer, temporaryAvatarOracle, emailDefaultOracle } = {},
+) {
+  const { session, ledger, revision, selected } = qualificationPlan(directory, only);
   await observeRelease(session);
   const { report, output, pending } = prepareRun(session, ledger, revision);
   await admitSnapshot(session, selected, report, snapshotId);
@@ -450,10 +500,14 @@ export async function qualifyApi(directory, only, snapshotId) {
     stateReady: (root, batch) => {
       const file = batch === 0 ? "product-state.json" : `product-state-${batch}.json`;
       privateJson(join(output, file), { root }, true);
-      (report.productStateFiles ??= []).push(file);
+      report.productStateFiles ??= [];
+      report.productStateFiles.push(file);
       privateJson(join(output, report.file), report);
     },
     run: async (context, selected) => {
+      context.qualificationReciprocalPeer = reciprocalPeer;
+      context.qualificationTemporaryAvatarOracle = temporaryAvatarOracle;
+      context.qualificationEmailDefaultOracle = emailDefaultOracle;
       fixture = await executeCases(context, selected, report, output, witness, fixture);
     },
   });

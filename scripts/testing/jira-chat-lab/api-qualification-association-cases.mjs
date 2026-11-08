@@ -46,8 +46,15 @@ async function priority(c, f) {
 }
 async function attributes(c, f) {
   await observeAdminActor(c, f);
-  assert.match(f.permissionAttributeSchemeId, /^(?:0|[1-9][0-9]*)$/u);
-  assert.match(f.permissionAttributeKey, /^[a-zA-Z0-9_.-]+$/u);
+  assert.ok(
+    typeof f.permissionAttributeSchemeId === "string" &&
+      /^(?:0|[1-9]\d*)$/u.test(f.permissionAttributeSchemeId),
+    "Permission-scheme attribute qualification requires an operator-supplied native permissionAttributeSchemeId in the owned lab fixture",
+  );
+  assert.ok(
+    typeof f.permissionAttributeKey === "string" && /^[\w.-]+$/u.test(f.permissionAttributeKey),
+    "Permission-scheme attribute qualification requires an operator-supplied permissionAttributeKey with an existing native Boolean value",
+  );
   f.attributeParent = await permissionSchemeReview(c, f.permissionAttributeSchemeId);
   const value = await read(c, attributePath(f));
   assert.equal(value.key, f.permissionAttributeKey);
@@ -56,20 +63,23 @@ async function attributes(c, f) {
 }
 const attributePath = (f) =>
   `/rest/api/2/permissionscheme/${f.permissionAttributeSchemeId}/attribute/${encodeURIComponent(f.permissionAttributeKey)}`;
+/** The project's current association (by scheme id) and its own identity, read independently. */
+async function assertProjectScheme(c, f, kind, expectedId) {
+  assert.equal(String((await read(c, `${projectPath(f)}/${kind}`)).id), expectedId);
+  assert.deepEqual(projectReview(await read(c, projectPath(f))), f.associationProject);
+}
+/** A set operation names the scheme it expects to replace and the one it selects. */
+const setSchemeArguments = (kind) => (f) => ({
+  ...args(f),
+  expectedScheme: f[`association${kind}Before`],
+  scheme: f[`association${kind}Target`],
+});
 export const API_QUALIFICATION_ASSOCIATION_CASES = [
   adminMutationCase(
     "jira.set-project-priority-scheme",
-    (f) => ({
-      ...args(f),
-      expectedScheme: f.associationPriorityBefore,
-      scheme: f.associationPriorityTarget,
-    }),
+    setSchemeArguments("Priority"),
     async (c, _data, f) => {
-      assert.equal(
-        String((await read(c, `${projectPath(f)}/priorityscheme`)).id),
-        f.associationPriorityTarget.id,
-      );
-      assert.deepEqual(projectReview(await read(c, projectPath(f))), f.associationProject);
+      await assertProjectScheme(c, f, "priorityscheme", f.associationPriorityTarget.id);
       assert.deepEqual(
         optionSchemeReview(
           await read(c, `/rest/api/2/priorityschemes/${f.associationPriorityTarget.id}`),
@@ -97,28 +107,16 @@ export const API_QUALIFICATION_ASSOCIATION_CASES = [
     "jira.remove-project-priority-scheme",
     (f) => ({ ...args(f), expectedScheme: f.associationPriorityBefore }),
     async (c, _data, f) => {
-      assert.equal(
-        String((await read(c, `${projectPath(f)}/priorityscheme`)).id),
-        f.associationPriorityOriginal.id,
-      );
-      assert.deepEqual(projectReview(await read(c, projectPath(f))), f.associationProject);
+      await assertProjectScheme(c, f, "priorityscheme", f.associationPriorityOriginal.id);
       return proof(5);
     },
     priority,
   ),
   adminMutationCase(
     "jira.set-project-permission-scheme",
-    (f) => ({
-      ...args(f),
-      expectedScheme: f.associationPermissionBefore,
-      scheme: f.associationPermissionTarget,
-    }),
+    setSchemeArguments("Permission"),
     async (c, _data, f) => {
-      assert.equal(
-        String((await read(c, `${projectPath(f)}/permissionscheme`)).id),
-        f.associationPermissionTarget.id,
-      );
-      assert.deepEqual(projectReview(await read(c, projectPath(f))), f.associationProject);
+      await assertProjectScheme(c, f, "permissionscheme", f.associationPermissionTarget.id);
       assert.deepEqual(
         await permissionSchemeReview(c, f.associationPermissionTarget.id),
         f.associationPermissionTarget,
@@ -141,7 +139,7 @@ export const API_QUALIFICATION_ASSOCIATION_CASES = [
           ),
         },
         async (context, data) => {
-          assert.match(data.schemeId, /^[1-9][0-9]*$/u);
+          assert.match(data.schemeId, /^[1-9]\d*$/u);
           f.associationPermissionTarget = await permissionSchemeReview(context, data.schemeId);
           assert.deepEqual(
             f.associationPermissionTarget.permissions.map(({ id: _id, ...grant }) => grant),

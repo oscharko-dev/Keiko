@@ -38,15 +38,38 @@ export const OPTION_SCHEMES = [
   },
 ];
 export function optionSchemeReview(value, spec) {
-  const result = nativeSnapshot(value, ["id", "name", "description", spec.ids, spec.defaultId]);
-  assert.ok(Array.isArray(result[spec.ids]) && result[spec.ids].length > 0);
-  result[spec.ids] = result[spec.ids].map(String);
-  result[spec.defaultId] = String(result[spec.defaultId]);
+  const result = nativeSnapshot(value, ["id", "name", "description"]);
+  result.id = nativeOptionId(value.id);
+  const options = nativeSchemeOptions(value, spec);
+  assert.ok(Array.isArray(options.ids) && options.ids.length > 0);
+  result[spec.ids] = options.ids.map(nativeOptionId);
+  assert.equal(new Set(result[spec.ids]).size, result[spec.ids].length);
+  result[spec.defaultId] = options.defaultId === null ? null : nativeOptionId(options.defaultId);
+  assert.ok(result[spec.defaultId] === null || result[spec.ids].includes(result[spec.defaultId]));
   if (spec.kind === "priority") {
     assert.equal(typeof value.defaultScheme, "boolean");
     result.defaultScheme = value.defaultScheme;
   }
   return result;
+}
+function nativeOptionId(value) {
+  assert.ok(typeof value === "string" || Number.isSafeInteger(value));
+  const id = String(value);
+  assert.match(id, /^[1-9]\d{0,18}$/u);
+  assert.ok(BigInt(id) <= 9223372036854775807n);
+  return id;
+}
+function nativeSchemeOptions(value, spec) {
+  if (spec.kind === "issue-type") {
+    const raw = nativeSnapshot(value, ["issueTypes", "defaultIssueType"]);
+    assert.ok(Array.isArray(raw.issueTypes));
+    return {
+      ids: raw.issueTypes.map((row) => row.id),
+      defaultId: raw.defaultIssueType === null ? null : raw.defaultIssueType.id,
+    };
+  }
+  const raw = nativeSnapshot(value, [spec.ids, spec.defaultId]);
+  return { ids: raw[spec.ids], defaultId: raw[spec.defaultId] };
 }
 const schemePath = (f, spec) => `/rest/api/2/${spec.path}/${f.optionSchemeIds[spec.kind]}`;
 async function scheme(c, f, spec) {
@@ -65,8 +88,9 @@ function optionCases(spec) {
         [spec.defaultId]: f.optionIdForScheme,
       }),
       async (c, data, f) => {
-        assert.match(data.schemeId, /^[1-9][0-9]*$/u);
-        (f.optionSchemeIds ??= {})[spec.kind] = data.schemeId;
+        assert.match(data.schemeId, /^[1-9]\d*$/u);
+        f.optionSchemeIds ??= {};
+        f.optionSchemeIds[spec.kind] = data.schemeId;
         const actual = optionSchemeReview(await read(c, schemePath(f, spec)), spec);
         assert.equal(actual.name, title(f, spec.kind));
         assert.equal(actual.description, "Synthetic AC7 scheme");
@@ -169,10 +193,20 @@ function associationCase(action, present) {
 }
 const optionFixture = async (c, f) => {
   await observeAdminActor(c, f);
-  assert.match(f.optionFieldId, /^customfield_[1-9][0-9]*$/u);
-  assert.match(f.optionId, /^[1-9][0-9]*$/u);
+  assert.ok(
+    typeof f.optionFieldId === "string" && /^customfield_[1-9]\d*$/u.test(f.optionFieldId),
+    "Custom-field option qualification requires an operator-supplied native optionFieldId in the owned lab fixture",
+  );
+  assert.ok(
+    typeof f.optionId === "string" && /^[1-9]\d*$/u.test(f.optionId),
+    "Custom-field option qualification requires an operator-supplied native optionId for the selected optionFieldId",
+  );
   const fields = await read(c, "/rest/api/2/field");
-  assert.equal(fields.filter((row) => row.id === f.optionFieldId && row.custom === true).length, 1);
+  assert.equal(
+    fields.filter((row) => row.id === f.optionFieldId && row.custom === true).length,
+    1,
+    "The operator-supplied optionFieldId must identify one independently observed native custom field",
+  );
 };
 export const API_QUALIFICATION_SCHEMA_CASES = [
   adminMutationCase(
@@ -184,7 +218,7 @@ export const API_QUALIFICATION_SCHEMA_CASES = [
       type: "standard",
     }),
     async (c, data, f) => {
-      assert.match(data.issueTypeId, /^[1-9][0-9]*$/u);
+      assert.match(data.issueTypeId, /^[1-9]\d*$/u);
       f.qualificationTypeId = data.issueTypeId;
       const value = issueTypeReview(await read(c, typePath(f)));
       assert.equal(value.name, title(f, "issue type"));
@@ -236,7 +270,7 @@ export const API_QUALIFICATION_SCHEMA_CASES = [
       issueTypeIds: [f.issueTypeId],
     }),
     async (c, data, f) => {
-      assert.match(data.fieldId, /^customfield_[1-9][0-9]*$/u);
+      assert.match(data.fieldId, /^customfield_[1-9]\d*$/u);
       f.qualificationCustomFieldId = data.fieldId;
       const found = (await read(c, "/rest/api/2/field")).filter((row) => row.id === data.fieldId);
       assert.equal(found.length, 1);

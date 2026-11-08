@@ -174,12 +174,11 @@ function selectedGatewayProvider(modelId) {
   if (selected === undefined) throw new TypeError("Selected laboratory model is not configured");
   if (!new Set(["127.0.0.1", "localhost", "[::1]"]).has(new URL(selected.baseUrl).hostname))
     throw new TypeError("Jira qualification requires a local model Gateway");
-  const {
-    apiKey,
-    apiKeySecretRef: _reference,
-    apiKeySourceModelId: _source,
-    ...provider
-  } = selected;
+  const apiKey = selected.apiKey;
+  const provider = { ...selected };
+  delete provider.apiKey;
+  delete provider.apiKeySecretRef;
+  delete provider.apiKeySourceModelId;
   if (typeof apiKey !== "string" || apiKey.length === 0)
     throw new TypeError("Configured laboratory model credential is unavailable");
   const token = modelId.replace(/[^A-Za-z0-9]/gu, "_").toUpperCase();
@@ -572,12 +571,11 @@ async function pairedCookie(origin, secret, signal) {
 function liveStateDirectory(session, retainState, restoreState) {
   if (restoreState !== undefined && !retainState)
     throw new TypeError("A reopened laboratory state must be retained");
-  const root =
-    restoreState === undefined
-      ? mkdtempSync(
-          join(retainState ? session.directory : realpathSync(tmpdir()), "keiko-jira-live-chat-"),
-        )
-      : realpathSync(restoreState);
+  let root;
+  if (restoreState === undefined) {
+    const parent = retainState ? session.directory : realpathSync(tmpdir());
+    root = mkdtempSync(join(parent, "keiko-jira-live-chat-"));
+  } else root = realpathSync(restoreState);
   if (
     restoreState !== undefined &&
     !root.startsWith(`${realpathSync(session.directory)}/keiko-jira-live-chat-`)
@@ -586,19 +584,33 @@ function liveStateDirectory(session, retainState, restoreState) {
   return root;
 }
 
-function decorateCredentialTransport(deps, decorate, session, decoratePrivate) {
+function decorateCredentialTransport(deps, decorate, session) {
   const credentials = deps.atlassianConnectorCredentials;
   assert.ok(credentials);
   const factory = credentials.httpBodyPortFactory.bind(credentials);
   const observed = (metadata, correlationId, lifecycle) =>
     sessionVerificationPort(session, factory(metadata, correlationId, lifecycle));
   credentials.httpBodyPortFactory = decorate === undefined ? observed : decorate(observed);
-  // The private session and avatar transport takes only the product's lifecycle hooks; an
-  // observer wraps them without changing a request, a response or the custody it belongs to.
-  const privateFactory = credentials.jiraPrivatePortFactory;
-  if (decoratePrivate !== undefined && privateFactory !== undefined)
-    credentials.jiraPrivatePortFactory = (metadata, context, options, lifecycle) =>
-      privateFactory(metadata, context, options, decoratePrivate(lifecycle));
+  const privateFactory = credentials.jiraPrivatePortFactory?.bind(credentials);
+  if (privateFactory === undefined) return;
+  credentials.jiraPrivatePortFactory = (metadata, context, options, lifecycle) =>
+    privateFactory(
+      metadata,
+      context,
+      {
+        ...options,
+        decorateHttpBodyPort: (port, observation) => {
+          const native = sessionVerificationPort(session, port);
+          return decorate === undefined
+            ? native
+            : decorate(() => native)(metadata, context.correlationId, {
+                ...lifecycle,
+                canonicalPrivateFinalizer: observation.kind === "session-finalizer",
+              });
+        },
+      },
+      lifecycle,
+    );
 }
 
 function createLiveUiServer({ port, deps, root, browser, configureServer }) {
@@ -630,7 +642,6 @@ async function startLiveProduct({
   model,
   browser,
   decorateAtlassianHttp,
-  decoratePrivateLifecycle,
   configureServer,
   port,
 }) {
@@ -639,7 +650,7 @@ async function startLiveProduct({
   const deps = createLiveDeps(root, session, secret, retainState, restoring, model.env);
   let server;
   try {
-    decorateCredentialTransport(deps, decorateAtlassianHttp, session, decoratePrivateLifecycle);
+    decorateCredentialTransport(deps, decorateAtlassianHttp, session);
     await model.configure(deps);
     if (!deps.store.listProjects().some((project) => project.path === projectPath))
       deps.store.createProject(projectPath);
@@ -820,19 +831,12 @@ export async function withLiveChat({
 }
 
 /** Same paired server/vault/transport as the Chat lab, with no provider or model probe. */
-export async function withModelFreeJira({
-  session,
-  run,
-  stateReady,
-  decorateAtlassianHttp,
-  decoratePrivateLifecycle,
-}) {
+export async function withModelFreeJira({ session, run, stateReady, decorateAtlassianHttp }) {
   return withLabProduct({
     session,
     run,
     stateReady,
     decorateAtlassianHttp,
-    decoratePrivateLifecycle,
     modelId: undefined,
     retainState: true,
     browser: false,
@@ -861,7 +865,6 @@ async function runLabProduct({
   browser,
   restoreState,
   decorateAtlassianHttp,
-  decoratePrivateLifecycle,
   configureServer,
   prepareModel,
 }) {
@@ -883,7 +886,6 @@ async function runLabProduct({
       model,
       browser,
       decorateAtlassianHttp,
-      decoratePrivateLifecycle,
       configureServer,
     });
     const origin = `http://127.0.0.1:${product.port}`;

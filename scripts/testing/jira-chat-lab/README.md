@@ -52,10 +52,45 @@ timeout, resource 404 or mismatching readback remains unknown. Native denials an
 missing capabilities require their own independent evidence. No policy deferral
 is decided by this driver.
 
-`docs/local-knowledge/jira-api-coverage/qualification-proposals.json` collects
-owner-pending fixture/policy proposals for Claude's combined review. They do not
-change runtime availability, authorize a different lab topology or count as
-native execution evidence. Only the owner decides their disposition.
+`docs/local-knowledge/jira-api-coverage/qualification-proposals.json` records the
+integrator's 2026-11-08 decision: seven cluster mutations, upgrade execution and
+notification delivery are deferred. Those nine rows carry the decision reference,
+never a native receipt or passing readback. Cluster reads and filter deletion still
+need native qualification; deletion preserves the product's unconfirmed outcome.
+Additional exceptions require another explicit owner decision.
+
+The planning, application-role, asset, filter, link and index case modules supply
+the first 51 entries in the shared AC7 split. Preparatory writes use the same
+governed provider and produce separate private receipts, settled journals and native
+readbacks. Declared same-turn prerequisites share one bounded accepted authority
+and private lifetime; their evidence cannot replace the frozen primary witness.
+File sources are attached to the actual Chat through its protected Files scope.
+
+Some recipes require genuine operator fixtures in the owned session's `fixture.json`:
+`planningSyncedSprintIds` and `planningAllSyncedSprintIds` identify real synced sprints;
+`assetDashboard: { id, itemId, name }` identifies a disposable dashboard/item created
+through native Jira UI, with a name beginning `Synthetic AC7 `; `optionFieldId` and
+`optionId` identify a real editable option; `permissionAttributeSchemeId` and
+`permissionAttributeKey` identify a real permission-scheme attribute. Native reads
+verify these bindings before any corresponding effect. Missing bindings fail closed.
+
+The programmatic entry point is
+`qualifyApi(directory, only, snapshotId, { reciprocalPeer, temporaryAvatarOracle, emailDefaultOracle })`.
+`reciprocalPeer: { session, issueKey }` must refer to an explicitly owned second
+session with real mutual application links and authentication. It never starts or
+discovers another lab; the normal one-lab limit still applies. Without that
+precondition the reciprocal recipe cannot qualify. The generic temporary-avatar
+recipes need a genuine independent native `temporaryAvatarOracle`; an actor or
+unchanged public avatar list proves no temporary persistence. Its observation must
+include `actorUserKey`, `avatarType`, `uploadSha256`, `uploadBytes`, `crop` and
+`needsCropping`; cropping additionally requires independently observed
+`geometry: { width, height, nextCrop }` with a different valid crop. Supply a
+synthetic `assets/avatar.png` large enough to permit that change; the existing
+one-pixel fixture can only exercise upload. Avatar readback runs inside the held
+private lifetime before its canonical logout. `emailDefaultOracle`
+must bind the fresh owned image's complete native default template manifest before
+synthetic uploads. The ordinary CLI supplies none of these optional bindings, so
+missing required oracles remain failures, without creating new deferrals.
 
 The issue lifecycle cases in `api-qualification-issue-cases.mjs` use their own
 newly created issue and native acknowledgement IDs. Property lifecycle cases in

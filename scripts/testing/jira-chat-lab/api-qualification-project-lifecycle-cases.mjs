@@ -36,7 +36,7 @@ export const API_QUALIFICATION_PROJECT_LIFECYCLE_CASES = [
       assigneeType: "UNASSIGNED",
     }),
     async (c, data, f) => {
-      assert.match(data.projectId, /^[1-9][0-9]*$/u);
+      assert.match(data.projectId, /^[1-9]\d*$/u);
       f.lifecycleProjectId = data.projectId;
       const actual = await read(c, projectPath(f));
       assert.equal(String(actual.id), data.projectId);
@@ -75,7 +75,8 @@ export const API_QUALIFICATION_PROJECT_LIFECYCLE_CASES = [
     async (c, _data, f) => {
       const actual = await read(c, projectPath(f));
       assert.equal(actual.projectTypeKey, "business");
-      const { projectTypeKey: _oldType, ...prior } = f.lifecycleProjectReview;
+      const prior = { ...f.lifecycleProjectReview };
+      delete prior.projectTypeKey;
       assert.deepEqual(projectReview(actual), prior);
       return proof(5);
     },

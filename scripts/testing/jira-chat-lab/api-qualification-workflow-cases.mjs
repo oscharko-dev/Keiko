@@ -223,6 +223,7 @@ export const API_QUALIFICATION_WORKFLOW_CASES = [
   draftRead("jira.workflow-scheme-draft-workflows", "/workflow", ["workflow", "issueTypeIds"], {
     nativeRoot: undefined,
     productRoot: undefined,
+    nativeNames: { issueTypeIds: "issueTypes" },
   }),
   mappingCase("workflow", true, true),
   deleteCase(true),

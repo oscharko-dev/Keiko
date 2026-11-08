@@ -114,7 +114,7 @@ export const API_QUALIFICATION_AGILE_CASES = [
     "jira.board-create",
     (f) => ({ name: filterName(f), type: "scrum", filterId: f.agileFilterId }),
     async (c, d, f) => {
-      assert.match(d.boardId, /^[1-9][0-9]*$/u);
+      assert.match(d.boardId, /^[1-9]\d*$/u);
       f.agileBoardId = d.boardId;
       const v = await read(c, `${boardPath(f)}/configuration`);
       assert.equal(String(v.id), f.agileBoardId);
@@ -188,7 +188,7 @@ export const API_QUALIFICATION_AGILE_CASES = [
     "jira.sprint-create",
     (f) => ({ originBoardId: f.agileBoardId, name: sprintName(f), goal: "Synthetic AC7 sprint" }),
     async (c, d, f) => {
-      assert.match(d.sprintId, /^[1-9][0-9]*$/u);
+      assert.match(d.sprintId, /^[1-9]\d*$/u);
       f.agileSprintId = d.sprintId;
       const v = await read(c, sprintPath(f));
       assert.equal(v.name, sprintName(f));

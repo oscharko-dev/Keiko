@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { format, resolveConfig } from "prettier";
+import { resolveHostExecutable } from "../../lib/host-executable.mjs";
 import { readPrivateFile } from "./lab-client.mjs";
 import { privateText } from "./private-json.mjs";
 import {
@@ -198,9 +199,13 @@ export async function writeQualificationLedger({
 function cleanRevision(repository) {
   const options = { cwd: repository, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] };
   requireEvidence(
-    execFileSync("git", ["status", "--porcelain", "--untracked-files=normal"], options) === "",
+    execFileSync(
+      resolveHostExecutable("git"),
+      ["status", "--porcelain", "--untracked-files=normal"],
+      options,
+    ) === "",
   );
-  return execFileSync("git", ["rev-parse", "HEAD"], options).trim();
+  return execFileSync(resolveHostExecutable("git"), ["rev-parse", "HEAD"], options).trim();
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {
