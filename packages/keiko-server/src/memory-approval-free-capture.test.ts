@@ -217,7 +217,7 @@ describe("a routine fact needs no approval (#4206)", () => {
     await learn(learner, sentence, "governed-assist");
     const [record] = stored(learner);
     expect(record?.status).toBe("accepted");
-    expect(new Date(record?.validity.validUntil ?? 0).getUTCFullYear()).toBe(2027);
+    expect(new Date(record?.validity.validUntil ?? 0).getFullYear()).toBe(2027);
   });
 
   it("is accepted under the production default, which names no configured ceiling", async () => {

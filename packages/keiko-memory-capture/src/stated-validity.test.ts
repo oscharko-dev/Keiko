@@ -1,10 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { statedReason, statedValidUntil } from "./stated-validity.js";
 
 const NOW = Date.UTC(2026, 10, 5);
+// A stated day ends where the person lives: Keiko runs on their own machine.
 const endOfMonth = (year: number, month: number): number =>
-  Date.UTC(year, month + 1, 0, 23, 59, 59, 999);
+  new Date(year, month + 1, 0, 23, 59, 59, 999).getTime();
+const endOfDay = (year: number, month: number, day: number): number =>
+  new Date(year, month, day, 23, 59, 59, 999).getTime();
 
 describe("statedValidUntil", () => {
   it.each([
@@ -13,9 +16,9 @@ describe("statedValidUntil", () => {
     ["Ich nutze Slack bis Ende März 2028.", endOfMonth(2028, 2)],
     ["I use Slack until March.", endOfMonth(2027, 2)],
     ["I use Slack until the end of June 2027.", endOfMonth(2027, 5)],
-    ["Ich nutze Slack bis zum 31.03.2027.", Date.UTC(2027, 2, 31, 23, 59, 59, 999)],
-    ["Ich nutze Slack bis 15.2.", Date.UTC(2027, 1, 15, 23, 59, 59, 999)],
-    ["I use Slack until 2027-03-31.", Date.UTC(2027, 2, 31, 23, 59, 59, 999)],
+    ["Ich nutze Slack bis zum 31.03.2027.", endOfDay(2027, 2, 31)],
+    ["Ich nutze Slack bis 15.2.", endOfDay(2027, 1, 15)],
+    ["I use Slack until 2027-03-31.", endOfDay(2027, 2, 31)],
   ])("reads %s", (sentence, expected) => {
     expect(statedValidUntil(sentence, NOW)).toBe(expected);
   });
@@ -30,6 +33,29 @@ describe("statedValidUntil", () => {
   ])("reads no end in %s", (sentence) => {
     expect(statedValidUntil(sentence, NOW)).toBeNull();
   });
+});
+
+describe("statedValidUntil in the person's time zone (#4206)", () => {
+  const original = process.env.TZ;
+  afterEach(() => {
+    if (original === undefined) delete process.env.TZ;
+    else process.env.TZ = original;
+  });
+
+  // UI walk: "bis zum 31.03.2027" showed "Valid until 4/1/2027, 1:59:59 AM" in Berlin, and west of
+  // UTC the fact would end on the afternoon of the 31st.
+  it.each(["Europe/Berlin", "America/New_York", "Asia/Tokyo"])(
+    "ends a stated day and month at local midnight in %s",
+    (zone) => {
+      process.env.TZ = zone;
+      const day = new Date(statedValidUntil("Ich bin bis zum 31.03.2027 im Projekt.", NOW) ?? 0);
+      expect([day.getFullYear(), day.getMonth(), day.getDate(), day.getHours()]).toEqual([
+        2027, 2, 31, 23,
+      ]);
+      const month = new Date(statedValidUntil("Ich nutze Slack bis Ende März 2028.", NOW) ?? 0);
+      expect([month.getMonth(), month.getDate(), month.getHours()]).toEqual([2, 31, 23]);
+    },
+  );
 });
 
 describe("statedReason", () => {
