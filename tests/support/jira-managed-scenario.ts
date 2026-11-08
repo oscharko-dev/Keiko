@@ -26,7 +26,13 @@ function project<Operation extends string, Value>(
 export function jiraManagedScenarios<Operation extends string>(
   rows: Readonly<Record<Operation, JiraManagedScenario>>,
   expectedActorKey: string,
-) {
+): {
+  readonly arguments: Readonly<Record<Operation, CatalogJsonObject>>;
+  readonly receipts: Readonly<Record<Operation, CatalogJsonObject>>;
+  readonly remoteState: Readonly<Record<Operation, object>>;
+  readonly outcomes: Readonly<Record<Operation, ScenarioOutcome>>;
+  readonly expectedOutcome: (operation: string) => ScenarioOutcome | undefined;
+} {
   const outcomes = project(rows, (row) => row.outcome);
   const lookup: Readonly<Record<string, ScenarioOutcome>> = outcomes;
   return {

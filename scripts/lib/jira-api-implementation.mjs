@@ -11,7 +11,10 @@ export const JIRA_REGISTRY_FILE = new URL(`../../${JIRA_REGISTRY_SOURCE}`, impor
 const BUILDER_FORMS = {
   read: { parameters: 3, returned: ["GET", "read", 0, 1, 2] },
   write: { parameters: 4, returned: [0, "write", 1, 2, 3] },
-  issueRead: { parameters: 2, returned: ["GET", "read", 0, "visible-issues", 1] },
+  issueRead: {
+    parameters: 2,
+    returned: ["GET", "read", 0, "visible-issues", 1],
+  },
 };
 // These are parsed as syntax only. Keep the reviewed helper semantics closed: no execution,
 // identifier substitution, arbitrary callbacks, or imported runtime declarations are accepted.
@@ -327,6 +330,41 @@ function groupMember(property, method, policy, root) {
     root,
   ]);
 }
+function nativeGroupArguments(call) {
+  const [method, groups, root] = call.arguments;
+  requireValid(
+    new Set([2, 3]).has(call.arguments.length) &&
+      method !== undefined &&
+      ts.isStringLiteralLike(method) &&
+      new Set(["GET", "POST", "PUT", "DELETE"]).has(method.text) &&
+      groups !== undefined &&
+      ts.isObjectLiteralExpression(groups) &&
+      groups.properties.length > 0 &&
+      (root === undefined || ts.isStringLiteralLike(root)),
+    "registry-native-group-arguments",
+  );
+  return {
+    method: method.text,
+    groups,
+    root: root === undefined ? "/rest/api/2" : root.text,
+  };
+}
+function nativePolicyGroup(group, method, root, policies) {
+  requireValid(
+    ts.isPropertyAssignment(group) &&
+      ts.isStringLiteralLike(group.name) &&
+      group.name.text.length > 0 &&
+      group.name.text !== "__proto__" &&
+      !policies.has(group.name.text) &&
+      ts.isObjectLiteralExpression(group.initializer) &&
+      group.initializer.properties.length > 0,
+    "registry-native-group-policy",
+  );
+  policies.add(group.name.text);
+  return group.initializer.properties.map((member) =>
+    groupMember(member, method, group.name.text, root),
+  );
+}
 function nativeGroup(property, ast, verified) {
   const call = property.expression;
   requireValid(
@@ -337,31 +375,9 @@ function nativeGroup(property, ast, verified) {
     "registry-native-property",
   );
   verifyGroupBuilder(ast, call.expression.text, verified);
-  const [method, groups, root] = call.arguments;
-  requireValid(
-    (call.arguments.length === 2 || call.arguments.length === 3) &&
-      method !== undefined &&
-      ts.isStringLiteralLike(method) &&
-      new Set(["GET", "POST", "PUT", "DELETE"]).has(method.text) &&
-      groups !== undefined &&
-      ts.isObjectLiteralExpression(groups) &&
-      groups.properties.length > 0 &&
-      (root === undefined || ts.isStringLiteralLike(root)),
-    "registry-native-group-arguments",
-  );
-  return groups.properties.flatMap((group) => {
-    requireValid(
-      ts.isPropertyAssignment(group) &&
-        ts.isStringLiteralLike(group.name) &&
-        group.name.text.length > 0 &&
-        ts.isObjectLiteralExpression(group.initializer) &&
-        group.initializer.properties.length > 0,
-      "registry-native-group-policy",
-    );
-    return group.initializer.properties.map((member) =>
-      groupMember(member, method.text, group.name.text, root?.text ?? "/rest/api/2"),
-    );
-  });
+  const { method, groups, root } = nativeGroupArguments(call);
+  const policies = new Set();
+  return groups.properties.flatMap((group) => nativePolicyGroup(group, method, root, policies));
 }
 /** Parse only literals and verified closed builder declarations. Never import/evaluate the runtime. */
 export function readJiraNativeRegistry(file = JIRA_REGISTRY_FILE) {

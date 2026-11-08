@@ -12,6 +12,7 @@ import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { projectJiraFilterPermissions } from "./jira-managed-saved-views.js";
 import {
   dispatchFailure,
+  jiraFieldValidationFailure,
   jiraConflictFailure as savedConflict,
   type JiraObservationFailure,
 } from "./jira-mutation-failure.js";
@@ -83,11 +84,12 @@ export async function readSavedActor(
 }
 export function projectSavedFilter(value: unknown): SavedFilter | undefined {
   const raw = asRecord(value);
-  const owner = jiraDirectoryUser(raw?.owner);
-  if (raw === undefined || !jiraNativeId(raw.id) || typeof owner?.key !== "string")
+  if (raw === undefined) return undefined;
+  const owner = jiraDirectoryUser(raw.owner);
+  if (!jiraNativeId(raw.id) || typeof owner?.key !== "string")
     return undefined;
   if (!savedName(raw.name) || !savedText(raw.jql, 2048)) return undefined;
-  const description = raw.description ?? null;
+  const { description = null } = raw;
   if (description !== null && !savedText(description, 32768, true)) return undefined;
   return { id: raw.id, ownerKey: owner.key, name: raw.name, jql: raw.jql, description };
 }
@@ -99,35 +101,42 @@ export async function readOwnedFilter(
   const response = await request(`filter/${id}`, "GET", undefined, "json");
   if (!response.ok) return dispatchFailure(response);
   const filter = response.status === 200 ? projectSavedFilter(response.body) : undefined;
-  if (filter === undefined || filter.id !== id) return SAVED_MALFORMED;
+  if (filter?.id !== id) return SAVED_MALFORMED;
   if (filter.ownerKey !== actorKey)
     return savedConflict(
       "The filter no longer has the reviewed connected-user owner. Ownership changed or is different; an acknowledged operation remains unconfirmed and must not be replayed.",
     );
   return { ok: true, value: filter };
 }
-export function bindSavedFilterOwner(
-  request: JiraMutationRequest,
-  filterId: string,
-  actorKey: string,
-): Promise<SavedObservation<true>>;
-export function bindSavedFilterOwner<Value>(
-  request: JiraMutationRequest,
-  filterId: string,
-  actorKey: string,
+interface SavedFilterSelection {
+  readonly filterId: string;
+  readonly actorKey: string;
+}
+type BoundFilter<Selection, Value> = JiraObservationFailure | {
+  readonly ok: true; readonly selected: Selection; readonly value: Value;
+};
+export function bindSavedFilterOwner<Selection extends SavedFilterSelection>(
+  request: JiraMutationRequest, selected: Selection,
+): Promise<BoundFilter<Selection, true>>;
+export function bindSavedFilterOwner<Selection extends SavedFilterSelection, Value>(
+  request: JiraMutationRequest, selected: Selection | undefined,
   observe: (request: JiraMutationRequest, filterId: string) => Promise<SavedObservation<Value>>,
-): Promise<SavedObservation<Value>>;
-export async function bindSavedFilterOwner(
-  request: JiraMutationRequest,
-  filterId: string,
-  actorKey: string,
-  observe?: (request: JiraMutationRequest, filterId: string) => Promise<SavedObservation<unknown>>,
-): Promise<SavedObservation<unknown>> {
+  invalidMessage: string,
+): Promise<BoundFilter<Selection, Value>>;
+export async function bindSavedFilterOwner<Selection extends SavedFilterSelection, Value>(
+  request: JiraMutationRequest, selected: Selection | undefined,
+  observe?: (request: JiraMutationRequest, filterId: string) => Promise<SavedObservation<Value>>,
+  invalidMessage = "Review the filter and connected owner. Nothing was written.",
+): Promise<BoundFilter<Selection, Value | true>> {
+  if (selected === undefined) return jiraFieldValidationFailure(invalidMessage);
+  const { filterId, actorKey } = selected;
   const actor = await readSavedActor(request, actorKey);
   if (!actor.ok) return actor;
   const filter = await readOwnedFilter(request, filterId, actorKey);
   if (!filter.ok) return filter;
-  return observe === undefined ? { ok: true, value: true } : observe(request, filterId);
+  const current = observe === undefined ? { ok: true as const, value: true as const }
+    : await observe(request, filterId);
+  return current.ok ? { ...current, selected } : current;
 }
 export function sameSavedFilter(actual: SavedFilter, expected: SavedFilter): boolean {
   return (

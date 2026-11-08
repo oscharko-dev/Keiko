@@ -1,5 +1,4 @@
 import {
-  JIRA_BOARD_CONFIGURATION_MUTATIONS,
   type JiraBoardConfigurationMutation,
   type JiraMutationAttempt,
   type JiraMutationReceipt,
@@ -11,7 +10,6 @@ import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { dispatchFailure, JiraAcknowledgedMutationError } from "./jira-mutation-failure.js";
 import { readSavedActor, savedExactKeys, savedText } from "./jira-saved-configuration-values.js";
 
-const OPERATIONS = JIRA_BOARD_CONFIGURATION_MUTATIONS;
 type Operation = JiraBoardConfigurationMutation;
 export interface JiraBoardConfigurationReceipt extends JiraMutationReceipt {
   /** Requested target until independently confirmed; board deletion cannot prove full absence. */

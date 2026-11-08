@@ -363,7 +363,7 @@ function requestBodyRefusal(
   request: AtlassianWriteHttpRequest,
 ): Extract<AtlassianWriteHttpOutcome, { ok: false }> | undefined {
   if (!validArchiveRequest(request)) return { ok: false, reason: "malformed-payload" };
-  if (request.bodyJson !== undefined && request.method !== "POST" && request.method !== "PUT")
+  if (request.bodyJson !== undefined && !new Set(["POST", "PUT"]).has(request.method))
     return { ok: false, reason: "malformed-payload" };
   if (request.upload !== undefined) {
     if (request.method !== "POST" || request.bodyJson !== undefined)
@@ -378,7 +378,9 @@ function requestBodyRefusal(
     : undefined;
 }
 
-function validArchiveRequest(request: AtlassianWriteHttpRequest): boolean {
+function validArchiveRequest(request: Omit<AtlassianWriteHttpRequest, "jiraEmailTemplateArchive"> & {
+  readonly jiraEmailTemplateArchive?: unknown;
+}): boolean {
   if (request.jiraEmailTemplateArchive === undefined)
     return request.expect !== "jira-email-template-zip";
   if (
@@ -390,7 +392,7 @@ function validArchiveRequest(request: AtlassianWriteHttpRequest): boolean {
     return false;
   return archiveRequestShape(request);
 }
-function archiveRequestShape(request: AtlassianWriteHttpRequest): boolean {
+function archiveRequestShape(request: Pick<AtlassianWriteHttpRequest, "method" | "expect" | "upload">): boolean {
   if (request.method === "GET")
     return request.expect === "jira-email-template-zip" && request.upload === undefined;
   return (

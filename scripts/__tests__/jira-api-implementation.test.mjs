@@ -23,30 +23,23 @@ function issueRead(path: string, root = "/rest/api/2"): NativeTuple {
   return ["GET", "read", path, "visible-issues", root];
 }`;
 const GROUP_BUILDERS = `
-function reads<const K extends NativeTool>(
-  permissionPolicy: JiraPermissionPolicy,
-  paths: Readonly<Record<K, string>>,
+function operations<const K extends NativeTool, const Policy extends string>(
+  method: "GET" | "POST" | "PUT" | "DELETE",
+  groups: Readonly<Record<Policy, Readonly<Partial<Record<K, string>>>>>,
   root: JiraApiRoot = "/rest/api/2",
-): NativeGroup<K> {
-  const result: Partial<Record<K, NativeSpecification>> = {};
-  for (const tool in paths) {
-    if (Object.hasOwn(paths, tool))
-      result[tool] = ["GET", "read", paths[tool], permissionPolicy, root];
+): Readonly<Record<K, NativeSpecification<Policy>>> {
+  const result: Partial<Record<K, NativeSpecification<Policy>>> = {};
+  for (const permissionPolicy in groups) {
+    if (!Object.hasOwn(groups, permissionPolicy)) continue;
+    const paths: Readonly<Partial<Record<K, string>>> = groups[permissionPolicy];
+    for (const tool in paths) {
+      if (!Object.hasOwn(paths, tool)) continue;
+      const path = paths[tool];
+      if (path !== undefined)
+        result[tool] = [method, method === "GET" ? "read" : "write", path, permissionPolicy, root];
+    }
   }
-  return result as NativeGroup<K>;
-}
-function writes<const K extends NativeTool>(
-  permissionPolicy: JiraPermissionPolicy,
-  paths: Readonly<Record<K, readonly ["POST" | "PUT" | "DELETE", string]>>,
-  root: JiraApiRoot = "/rest/api/2",
-): NativeGroup<K> {
-  const result: Partial<Record<K, NativeSpecification>> = {};
-  for (const tool in paths) {
-    if (!Object.hasOwn(paths, tool)) continue;
-    const [method, path] = paths[tool];
-    result[tool] = [method, "write", path, permissionPolicy, root];
-  }
-  return result as NativeGroup<K>;
+  return result as Readonly<Record<K, NativeSpecification<Policy>>>;
 }`;
 function fixture() {
   const directory = mkdtempSync(join(tmpdir(), "keiko-jira-implementation-"));
@@ -60,53 +53,101 @@ afterEach(() => {
 describe("current Jira implementation accounting", () => {
   it("keeps exact native tool keys through grouped helper spreads at the type boundary", () => {
     const f = fixture();
-    const source = ts.createSourceFile("registry.ts", readFileSync(JIRA_REGISTRY_FILE, "utf8"), ts.ScriptTarget.Latest, true);
-    const helpers = source.statements.filter((node) =>
-      ts.isFunctionDeclaration(node) && (node.name?.text === "reads" || node.name?.text === "writes"),
-    ).map((node) => node.getText(source)).join("\n");
+    const source = ts.createSourceFile(
+      "registry.ts",
+      readFileSync(JIRA_REGISTRY_FILE, "utf8"),
+      ts.ScriptTarget.Latest,
+      true,
+    );
+    const helpers = source.statements
+      .filter((node) => ts.isFunctionDeclaration(node) && node.name?.text === "operations")
+      .map((node) => node.getText(source))
+      .join("\n");
     const file = join(f.directory, "native-group-types.ts");
-    writeFileSync(file, `
+    writeFileSync(
+      file,
+      `
       type NativeTool = "jira.user" | "jira.edit";
       type JiraPermissionPolicy = "visible-users" | "write";
       type JiraApiRoot = "/rest/api/2" | "/rest/agile/1.0";
-      type NativeSpecification = readonly ["GET" | "POST" | "PUT" | "DELETE", "read" | "write", string, JiraPermissionPolicy, JiraApiRoot?];
-      type NativeGroup<K extends NativeTool> = Readonly<Record<K, NativeSpecification>>;
+      type NativeSpecification<Policy extends string = JiraPermissionPolicy> = readonly ["GET" | "POST" | "PUT" | "DELETE", "read" | "write", string, Policy, JiraApiRoot?];
+
       ${helpers}
-      const knownRead = reads("visible-users", { "jira.user": "/user" });
-      const knownWrite = writes("write", { "jira.edit": ["PUT", "/issue/{id}"] });
+      const knownRead = operations("GET", { "visible-users": { "jira.user": "/user" } });
+      const knownWrite = operations("PUT", { "write": { "jira.edit": "/issue/{id}" } });
       const complete: Readonly<Record<NativeTool, NativeSpecification>> = { ...knownRead, ...knownWrite };
       // @ts-expect-error Unknown read keys must not escape through a spread.
-      const unknownRead = { ...reads("visible-users", { "jira.user": "/user", "jira.usr": "/user" }) };
+      const unknownRead = { ...operations("GET", { "visible-users": { "jira.user": "/user", "jira.usr": "/user" } }) };
       // @ts-expect-error Unknown write keys must not escape through a spread.
-      const unknownWrite = { ...writes("write", { "jira.edti": ["PUT", "/issue/{id}"] }) };
+      const unknownWrite = { ...operations("PUT", { "write": { "jira.edti": "/issue/{id}" } }) };
       // @ts-expect-error The returned read keys stay exact rather than widening to every tool.
       knownRead["jira.edit"];
       // @ts-expect-error The returned write keys stay exact rather than widening to every tool.
       knownWrite["jira.user"];
-    `);
-    const program = ts.createProgram([file], { strict: true, noEmit: true, target: ts.ScriptTarget.ES2022, types: [], skipLibCheck: true });
-    expect(ts.getPreEmitDiagnostics(program).map((diagnostic) =>
-      ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"),
-    )).toEqual([]);
+    `,
+    );
+    const program = ts.createProgram([file], {
+      strict: true,
+      noEmit: true,
+      target: ts.ScriptTarget.ES2022,
+      types: [],
+      skipLibCheck: true,
+    });
+    expect(
+      ts
+        .getPreEmitDiagnostics(program)
+        .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")),
+    ).toEqual([]);
   });
   it("reads policy groups with unchanged native identities without executing helpers", () => {
     const f = fixture();
-    writeFileSync(f.registryFile, `${GROUP_BUILDERS}\nconst NATIVE = {
-      ...reads("visible-users", { "jira.user": "/user", "jira.users": "/user/search" }),
-      ...reads("visible-boards", { "jira.boards": "/board" }, "/rest/agile/1.0"),
-      ...writes("current-user-watch-and-readback", {
-        "jira.watch": ["POST", "/issue/{issueIdOrKey}/watchers"],
-        "jira.unwatch": ["DELETE", "/issue/{issueIdOrKey}/watchers"]
-      }),
+    writeFileSync(
+      f.registryFile,
+      `${GROUP_BUILDERS}\nconst NATIVE = {
+      ...operations("GET", { "visible-users": { "jira.user": "/user", "jira.users": "/user/search" } }),
+      ...operations("GET", { "visible-boards": { "jira.boards": "/board" } }, "/rest/agile/1.0"),
+      ...operations("POST", { "current-user-watch-and-readback": { "jira.watch": "/issue/{issueIdOrKey}/watchers" } }),
+      ...operations("DELETE", { "current-user-watch-and-readback": { "jira.unwatch": "/issue/{issueIdOrKey}/watchers" } }),
       "jira.legacy": ["GET", "read", "/legacy", "visible-legacy"]
-    };`);
+    };`,
+    );
     expect(readJiraNativeRegistry(f.registryFile).entries).toEqual([
-      { tool: "jira.boards", identity: "GET /rest/agile/1.0/board", effect: "read", permissionPolicy: "visible-boards" },
-      { tool: "jira.legacy", identity: "GET /rest/api/2/legacy", effect: "read", permissionPolicy: "visible-legacy" },
-      { tool: "jira.unwatch", identity: "DELETE /rest/api/2/issue/{issueIdOrKey}/watchers", effect: "write", permissionPolicy: "current-user-watch-and-readback" },
-      { tool: "jira.user", identity: "GET /rest/api/2/user", effect: "read", permissionPolicy: "visible-users" },
-      { tool: "jira.users", identity: "GET /rest/api/2/user/search", effect: "read", permissionPolicy: "visible-users" },
-      { tool: "jira.watch", identity: "POST /rest/api/2/issue/{issueIdOrKey}/watchers", effect: "write", permissionPolicy: "current-user-watch-and-readback" },
+      {
+        tool: "jira.boards",
+        identity: "GET /rest/agile/1.0/board",
+        effect: "read",
+        permissionPolicy: "visible-boards",
+      },
+      {
+        tool: "jira.legacy",
+        identity: "GET /rest/api/2/legacy",
+        effect: "read",
+        permissionPolicy: "visible-legacy",
+      },
+      {
+        tool: "jira.unwatch",
+        identity: "DELETE /rest/api/2/issue/{issueIdOrKey}/watchers",
+        effect: "write",
+        permissionPolicy: "current-user-watch-and-readback",
+      },
+      {
+        tool: "jira.user",
+        identity: "GET /rest/api/2/user",
+        effect: "read",
+        permissionPolicy: "visible-users",
+      },
+      {
+        tool: "jira.users",
+        identity: "GET /rest/api/2/user/search",
+        effect: "read",
+        permissionPolicy: "visible-users",
+      },
+      {
+        tool: "jira.watch",
+        identity: "POST /rest/api/2/issue/{issueIdOrKey}/watchers",
+        effect: "write",
+        permissionPolicy: "current-user-watch-and-readback",
+      },
     ]);
   });
   it("compares helper syntax independently of whitespace, comments and trailing commas", () => {
@@ -114,53 +155,71 @@ describe("current Jira implementation accounting", () => {
     const builders = GROUP_BUILDERS.replaceAll(",\n):", "\n):")
       .replaceAll(",\n  )", "\n  )")
       .replace("return result", "/* reviewed */ return    result");
-    writeFileSync(f.registryFile, `${builders}\nconst NATIVE = { ...reads("visible-users", { "jira.user": "/user" }) };`);
+    writeFileSync(
+      f.registryFile,
+      `${builders}\nconst NATIVE = { ...operations("GET", { "visible-users": { "jira.user": "/user" } }) };`,
+    );
     expect(readJiraNativeRegistry(f.registryFile).entries[0].identity).toBe("GET /rest/api/2/user");
   });
   it.each([
-    [GROUP_BUILDERS.replaceAll("const K extends NativeTool", "const K extends string"), '...reads("visible-users", { "jira.user": "/user" })'],
-    [GROUP_BUILDERS.replaceAll("const K extends NativeTool", "const K extends string"), '...writes("write", { "jira.edit": ["PUT", "/issue/{id}"] })'],
-    [GROUP_BUILDERS.replace("Object.hasOwn(paths, tool)", "true"), '...reads("visible-users", { "jira.user": "/user" })'],
-    [GROUP_BUILDERS.replace("if (!Object.hasOwn(paths, tool)) continue;", ""), '...writes("write", { "jira.edit": ["PUT", "/issue/{id}"] })'],
-    [GROUP_BUILDERS.replace('"GET", "read"', '"POST", "read"'), '...reads("visible-users", { "jira.user": "/user" })'],
-    [GROUP_BUILDERS.replace('"GET", "read"', '"GET", "write"'), '...reads("visible-users", { "jira.user": "/user" })'],
-    [GROUP_BUILDERS.replace("paths[tool], permissionPolicy, root", "root, permissionPolicy, paths[tool]"), '...reads("visible-users", { "jira.user": "/user" })'],
-    [GROUP_BUILDERS.replace("paths[tool], permissionPolicy, root", 'paths[tool], "other", root'), '...reads("visible-users", { "jira.user": "/user" })'],
-    [GROUP_BUILDERS.replace('root: JiraApiRoot = "/rest/api/2"', 'root: JiraApiRoot = "/rest/api/3"'), '...reads("visible-users", { "jira.user": "/user" })'],
-    [GROUP_BUILDERS.replace("return result", "untrusted(); return result"), '...reads("visible-users", { "jira.user": "/user" })'],
-    [GROUP_BUILDERS.replace("function reads", "async function reads"), '...reads("visible-users", { "jira.user": "/user" })'],
-    [GROUP_BUILDERS.replace('method, "write"', '"GET", "write"'), '...writes("write", { "jira.edit": ["PUT", "/issue/{id}"] })'],
-    [GROUP_BUILDERS.replace('method, "write"', 'method, "read"'), '...writes("write", { "jira.edit": ["PUT", "/issue/{id}"] })'],
-    [GROUP_BUILDERS + "\nreads = other;", '...reads("visible-users", { "jira.user": "/user" })'],
-    [GROUP_BUILDERS + "\nconst alias = reads;", '...reads("visible-users", { "jira.user": "/user" })'],
-    [GROUP_BUILDERS + "\nfunction shadow(reads) {}", '...reads("visible-users", { "jira.user": "/user" })'],
-    [GROUP_BUILDERS + "\nfunction shadow() { const reads = other; }", '...reads("visible-users", { "jira.user": "/user" })'],
-    [GROUP_BUILDERS + "\nconst Object = other;", '...reads("visible-users", { "jira.user": "/user" })'],
-    [GROUP_BUILDERS + "\nObject.fromEntries = other;", '...reads("visible-users", { "jira.user": "/user" })'],
-    [GROUP_BUILDERS + "\nObject.hasOwn = other;", '...reads("visible-users", { "jira.user": "/user" })'],
-    [GROUP_BUILDERS + "\nmutate(Object);", '...reads("visible-users", { "jira.user": "/user" })'],
-    [GROUP_BUILDERS, '...reads(policy, { "jira.user": "/user" })'],
-    [GROUP_BUILDERS, '...reads("visible-users", source)'],
-    [GROUP_BUILDERS, '...reads("visible-users", { ["jira.user"]: "/user" })'],
-    [GROUP_BUILDERS, '...reads("visible-users", { ...source })'],
-    [GROUP_BUILDERS, '...reads("visible-users", { "jira.user": untrusted() })'],
-    [GROUP_BUILDERS, '...reads("visible-users", { "jira.user": "/user" }, root)'],
-    [GROUP_BUILDERS, '...reads("visible-users", { "jira.user": "/user" }, "/rest/api/3")'],
-    [GROUP_BUILDERS, '...reads("visible-users", { "jira.user": "/user" }, "/rest/api/2", "extra")'],
-    [GROUP_BUILDERS, '...reads("visible-users", {})'],
-    [GROUP_BUILDERS, '...reads("visible-users", { "__proto__": "/user" })'],
-    [GROUP_BUILDERS, '...writes("write", { "jira.edit": ["GET", "/issue/{id}"] })'],
-    [GROUP_BUILDERS, '...writes("write", { "jira.edit": ["PATCH", "/issue/{id}"] })'],
-    [GROUP_BUILDERS, '...writes("write", { "jira.edit": ["PUT", "/issue/{id}", "extra"] })'],
-    [GROUP_BUILDERS, '...writes("write", { "jira.edit": [method, "/issue/{id}"] })'],
-    [GROUP_BUILDERS, '...writes("write", { "jira.edit": "/issue/{id}" })'],
-    [GROUP_BUILDERS, '...other("visible-users", { "jira.user": "/user" })'],
-    [GROUP_BUILDERS, '...reads<string>("visible-users", { "jira.user": "/user" })'],
-    [GROUP_BUILDERS, '...reads("visible-users", { "jira.user": "/user", "jira.user": "/other" })'],
-    [GROUP_BUILDERS, '...reads("visible-users", { "jira.user": "/user" }), ...reads("visible-users", { "jira.user": "/other" })'],
-  ])("refuses changed group semantics, escaped builders and dynamic maps (%#)", (builders, group) => {
+    GROUP_BUILDERS.replace("const K extends NativeTool", "const K extends string"),
+    GROUP_BUILDERS.replace("Object.hasOwn(paths, tool)", "true"),
+    GROUP_BUILDERS.replace("if (!Object.hasOwn(paths, tool)) continue;", ""),
+    GROUP_BUILDERS.replace("if (!Object.hasOwn(groups, permissionPolicy)) continue;", ""),
+    GROUP_BUILDERS.replace('method === "GET" ? "read" : "write"', '"read"'),
+    GROUP_BUILDERS.replace('method === "GET" ? "read" : "write"', '"write"'),
+    GROUP_BUILDERS.replace("path, permissionPolicy, root", "root, permissionPolicy, path"),
+    GROUP_BUILDERS.replace("path, permissionPolicy, root", 'path, "other", root'),
+    GROUP_BUILDERS.replace(
+      'root: JiraApiRoot = "/rest/api/2"',
+      'root: JiraApiRoot = "/rest/api/3"',
+    ),
+    GROUP_BUILDERS.replace("return result", "untrusted(); return result"),
+    GROUP_BUILDERS.replace("function operations", "async function operations"),
+    GROUP_BUILDERS.replace("[method, method ===", '["GET", method ==='),
+    GROUP_BUILDERS + "\noperations = other;",
+    GROUP_BUILDERS + "\nconst alias = operations;",
+    GROUP_BUILDERS + "\nfunction shadow(operations) {}",
+    GROUP_BUILDERS + "\nfunction shadow() { const operations = other; }",
+    GROUP_BUILDERS + "\nconst Object = other;",
+    GROUP_BUILDERS + "\nObject.fromEntries = other;",
+    GROUP_BUILDERS + "\nObject.hasOwn = other;",
+    GROUP_BUILDERS + "\nmutate(Object);",
+  ])("refuses changed group semantics and escaped builders (%#)", (builders) => {
     const f = fixture();
-    writeFileSync(f.registryFile, `${builders}\nconst NATIVE = { ${group} };`);
+    writeFileSync(
+      f.registryFile,
+      `${builders}\nconst NATIVE = { ...operations("GET", { "visible-users": { "jira.user": "/user" } }) };`,
+    );
+    expect(() => readJiraNativeRegistry(f.registryFile)).toThrow(/registry-native-/u);
+  });
+  it.each([
+    '...operations(method, { "visible-users": { "jira.user": "/user" } })',
+    '...operations("PATCH", { "visible-users": { "jira.user": "/user" } })',
+    '...operations("GET", source)',
+    '...operations("GET", { ["visible-users"]: { "jira.user": "/user" } })',
+    '...operations("GET", { "visible-users": source })',
+    '...operations("GET", { ...source })',
+    '...operations("GET", { "visible-users": { ["jira.user"]: "/user" } })',
+    '...operations("GET", { "visible-users": { ...source } })',
+    '...operations("GET", { "visible-users": { "jira.user": untrusted() } })',
+    '...operations("GET", { "visible-users": { "jira.user": "/user" } }, root)',
+    '...operations("GET", { "visible-users": { "jira.user": "/user" } }, "/rest/api/3")',
+    '...operations("GET", { "visible-users": { "jira.user": "/user" } }, "/rest/api/2", "extra")',
+    '...operations("GET", {})',
+    '...operations("GET", { "visible-users": {} })',
+    '...operations("GET", { "": { "jira.user": "/user" } })',
+    '...operations("GET", { "__proto__": { "jira.user": "/user" } })',
+    '...operations("GET", { "visible-users": { "__proto__": "/user" } })',
+    '...operations("GET", { "visible-users": { "jira.user": "/user", "jira.user": "/other" } })',
+    '...operations("GET", { "visible-users": { "jira.user": "/user" }, "visible-users": { "jira.users": "/other" } })',
+    '...operations("GET", { "visible-users": { "jira.user": "/user" } }), ...operations("GET", { "visible-users": { "jira.user": "/other" } })',
+    '...operations("PUT", { "write": { "jira.edit": ["PUT", "/issue/{id}"] } })',
+    '...other("GET", { "visible-users": { "jira.user": "/user" } })',
+    '...operations<string>("GET", { "visible-users": { "jira.user": "/user" } })',
+  ])("refuses nonliteral, ambiguous and dynamic group calls (%#)", (group) => {
+    const f = fixture();
+    writeFileSync(f.registryFile, `${GROUP_BUILDERS}\nconst NATIVE = { ${group} };`);
     expect(() => readJiraNativeRegistry(f.registryFile)).toThrow(/registry-native-/u);
   });
   it("accounts for a closed DELETE write without allowing arbitrary methods", () => {

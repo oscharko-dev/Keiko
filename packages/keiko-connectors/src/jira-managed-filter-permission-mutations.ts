@@ -57,11 +57,15 @@ function input(operation: PermissionMutation, args: CatalogJsonObject): Input | 
   const expected = filterPermissionSnapshots(args.expectedPermissions);
   if (expected === undefined) return undefined;
   const base = { filterId: args.filterId, actorKey: args.expectedOwnerKey, expected };
+  const replacement = requestedPermission(operation, args);
+  return replacement === undefined ? undefined : { ...base, ...replacement };
+}
+function requestedPermission(operation: PermissionMutation, args: CatalogJsonObject): Pick<Input, "permissionId" | "target"> | undefined {
   if (operation === "jira.delete-filter-permission")
     return jiraNativeId(args.permissionId) &&
       args.permission === undefined &&
       args.acceptGlobalReplacement === undefined
-      ? { ...base, permissionId: args.permissionId }
+      ? { permissionId: args.permissionId }
       : undefined;
   if (args.permissionId !== undefined) return undefined;
   const target = filterPermissionTarget(args.permission);
@@ -72,7 +76,7 @@ function input(operation: PermissionMutation, args: CatalogJsonObject): Input | 
       : args.acceptGlobalReplacement !== undefined
   )
     return undefined;
-  return { ...base, target };
+  return { target };
 }
 function removedPermissionRefusal(
   selected: Input,
@@ -185,13 +189,24 @@ function acknowledgedPermission(
   const id = matches.length === 1 ? matches[0]?.id : undefined;
   return typeof id === "string" ? id : undefined;
 }
-async function confirm(
+async function write(
   request: JiraMutationRequest,
   selected: Input,
   receipt: JiraSavedConfigurationReceipt,
 ): Promise<JiraSavedConfigurationAttempt> {
+  const path = `filter/${selected.filterId}/permission${selected.permissionId === undefined ? "" : `/${selected.permissionId}`}`;
+  const response = await request(
+    path,
+    selected.target === undefined ? "DELETE" : "POST",
+    selected.target === undefined ? undefined : filterPermissionBody(selected.target),
+    selected.target === undefined ? "none" : "json-object-or-array",
+  );
+  if (!response.ok) return { ...dispatchFailure(response), receipt };
+  if (response.status < 200 || response.status >= 300) return { ...SAVED_MALFORMED, receipt };
+  const permissionId = acknowledgedPermission(response, selected.target);
+  receipt = permissionId === undefined ? receipt : { ...receipt, permissionId };
   return JiraAcknowledgedMutationError.observe(receipt, async () => {
-    const rebound = await bindSavedFilterOwner(request, selected.filterId, selected.actorKey);
+    const rebound = await bindSavedFilterOwner(request, selected);
     if (!rebound.ok) return { ...rebound, receipt };
     if (selected.target !== undefined) {
       const recipient = await bindFilterPermissionRecipient(request, selected.target);
@@ -212,18 +227,14 @@ export async function executeJiraFilterPermissionMutation(
   request: JiraMutationRequest,
   check = false,
 ): Promise<JiraSavedConfigurationAttempt> {
-  const selected = input(operation, args);
-  if (selected === undefined)
-    return savedInvalid(
-      "Review the owned filter and its complete permission rows. Add uses one closed recipient with explicit view/edit booleans; global requires acceptGlobalReplacement:true because Jira removes all prior shares. Delete names one exact permission ID. Nothing was written.",
-    );
   const current = await bindSavedFilterOwner(
     request,
-    selected.filterId,
-    selected.actorKey,
+    input(operation, args),
     readSavedPermissions,
+    "Review the owned filter and its complete permission rows. Add uses one closed recipient with explicit view/edit booleans; global requires acceptGlobalReplacement:true because Jira removes all prior shares. Delete names one exact permission ID. Nothing was written.",
   );
   if (!current.ok) return current;
+  const { selected } = current;
   const refusal = beforeEffect(selected, current.value);
   if (refusal !== undefined) return refusal;
   if (selected.target !== undefined) {
@@ -236,19 +247,5 @@ export async function executeJiraFilterPermissionMutation(
     userKey: selected.actorKey,
     ...(selected.permissionId === undefined ? {} : { permissionId: selected.permissionId }),
   };
-  const path = `filter/${selected.filterId}/permission${selected.permissionId === undefined ? "" : `/${selected.permissionId}`}`;
-  const response = await request(
-    path,
-    selected.target === undefined ? "DELETE" : "POST",
-    selected.target === undefined ? undefined : filterPermissionBody(selected.target),
-    selected.target === undefined ? "none" : "json-object-or-array",
-  );
-  if (!response.ok) return { ...dispatchFailure(response), receipt };
-  if (response.status < 200 || response.status >= 300) return { ...SAVED_MALFORMED, receipt };
-  const permissionId = acknowledgedPermission(response, selected.target);
-  return confirm(
-    request,
-    selected,
-    permissionId === undefined ? receipt : { ...receipt, permissionId },
-  );
+  return write(request, selected, receipt);
 }

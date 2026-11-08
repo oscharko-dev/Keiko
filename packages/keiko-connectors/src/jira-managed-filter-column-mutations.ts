@@ -10,7 +10,6 @@ import {
   bindSavedFilterOwner,
   savedConflict,
   savedExactKeys,
-  savedInvalid,
   savedText,
   savedUnchanged,
   savedUnconfirmed,
@@ -69,10 +68,14 @@ function input(operation: ColumnMutation, args: CatalogJsonObject): Input | unde
     actorKey: args.expectedOwnerKey,
     expected: { columns: args.expectedColumns, columnConfig: configuration },
   };
+  const replacement = requestedColumns(operation, args);
+  return replacement === undefined ? undefined : { ...selected, ...replacement };
+}
+function requestedColumns(operation: ColumnMutation, args: CatalogJsonObject): Pick<Input, "columns"> | undefined {
   if (operation === "jira.reset-filter-columns")
-    return Object.hasOwn(args, "columns") ? undefined : selected;
+    return Object.hasOwn(args, "columns") ? undefined : {};
   return fieldList(args.columns) && args.columns.length > 0
-    ? { ...selected, columns: args.columns }
+    ? { columns: args.columns }
     : undefined;
 }
 async function readColumns(
@@ -104,13 +107,23 @@ function exactOwnColumns(state: ColumnState, columns: readonly string[]): boolea
     equalColumns(state.columns, columns)
   );
 }
-async function confirm(
+async function write(
   request: JiraMutationRequest,
   selected: Input,
   receipt: JiraSavedConfigurationReceipt,
 ): Promise<JiraSavedConfigurationAttempt> {
+  // Published JSON overload: FilterResource#setColumns(Long, ColumnsBean), not FormParam.
+  // https://docs.atlassian.com/software/jira/docs/api/11.3.3/com/atlassian/jira/rest/v2/search/FilterResource.html
+  const response = await request(
+    `filter/${selected.filterId}/columns`,
+    selected.columns === undefined ? "DELETE" : "PUT",
+    selected.columns === undefined ? undefined : { columns: selected.columns },
+    "none",
+  );
+  if (!response.ok) return { ...dispatchFailure(response), receipt };
+  if (response.status < 200 || response.status >= 300) return { ...SAVED_MALFORMED, receipt };
   return JiraAcknowledgedMutationError.observe(receipt, async () => {
-    const bound = await bindSavedFilterOwner(request, selected.filterId, selected.actorKey);
+    const bound = await bindSavedFilterOwner(request, selected);
     if (!bound.ok) return { ...bound, receipt };
     const current = await readColumns(request, selected.filterId);
     if (!current.ok) return { ...current, receipt };
@@ -135,18 +148,14 @@ export async function executeJiraFilterColumnMutation(
   request: JiraMutationRequest,
   check = false,
 ): Promise<JiraSavedConfigurationAttempt> {
-  const selected = input(operation, args);
-  if (selected === undefined)
-    return savedInvalid(
-      "Review the filter owner, full ordered expectedColumns and expectedColumnConfig (null means native provenance was omitted). Set needs a nonempty ordered columns list. Reset accepts no replacement list. Nothing was written.",
-    );
   const current = await bindSavedFilterOwner(
     request,
-    selected.filterId,
-    selected.actorKey,
+    input(operation, args),
     readColumns,
+    "Review the filter owner, full ordered expectedColumns and expectedColumnConfig (null means native provenance was omitted). Set needs a nonempty ordered columns list. Reset accepts no replacement list. Nothing was written.",
   );
   if (!current.ok) return current;
+  const { selected } = current;
   if (
     current.value.columnConfig !== selected.expected.columnConfig ||
     !equalColumns(current.value.columns, selected.expected.columns)
@@ -165,15 +174,5 @@ export async function executeJiraFilterColumnMutation(
       receipt,
     );
   if (check) return { ok: true, receipt: {} };
-  // Published JSON overload: FilterResource#setColumns(Long, ColumnsBean), not its FormParam overload.
-  // https://docs.atlassian.com/software/jira/docs/api/11.3.3/com/atlassian/jira/rest/v2/search/FilterResource.html
-  const response = await request(
-    `filter/${selected.filterId}/columns`,
-    selected.columns === undefined ? "DELETE" : "PUT",
-    selected.columns === undefined ? undefined : { columns: selected.columns },
-    "none",
-  );
-  if (!response.ok) return { ...dispatchFailure(response), receipt };
-  if (response.status < 200 || response.status >= 300) return { ...SAVED_MALFORMED, receipt };
-  return confirm(request, selected, receipt);
+  return write(request, selected, receipt);
 }

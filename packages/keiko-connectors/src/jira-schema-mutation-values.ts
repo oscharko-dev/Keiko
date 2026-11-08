@@ -97,8 +97,7 @@ export interface FieldSnapshot {
 export function schemaFieldSnapshot(value: unknown): FieldSnapshot | undefined {
   const field = jiraFieldDirectoryProjection(value);
   if (
-    field === undefined ||
-    field.custom !== true ||
+    field?.custom !== true ||
     typeof field.id !== "string" ||
     !field.id.startsWith("customfield_")
   )
