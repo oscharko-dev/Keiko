@@ -181,10 +181,69 @@ class NextIndex {
   }
 }
 
+/**
+ * The Markdown code regions, kept consistent with the Jira macros accepted so far. Delimiters are
+ * recognised according to the outer code context: a macro tag inside Markdown code is literal, and
+ * a macro that opens in prose makes the Markdown delimiters inside it literal.
+ */
+class MarkdownContext {
+  private position = 0;
+  private rereads = 0;
+  /** Where Markdown could no longer be told apart from macros; everything after is protected. */
+  protectedFrom: number | undefined;
+  constructor(
+    private readonly text: string,
+    private ranges: Span[],
+  ) {}
+  get spans(): readonly Span[] {
+    return this.ranges;
+  }
+  rewind(): void {
+    this.position = 0;
+  }
+  /** Whether `at` lies inside a region; `at` must not decrease between calls after a rewind. */
+  contains(at: number): boolean {
+    let range = this.ranges[this.position];
+    while (range !== undefined && range.end <= at) range = this.ranges[++this.position];
+    return range !== undefined && range.start <= at;
+  }
+  /** A macro accepted at `[start, end)`: Markdown regions that began inside it no longer exist. */
+  supersede(start: number, end: number): void {
+    let count = 0;
+    let overflow = false;
+    for (
+      let range = this.ranges[this.position];
+      range !== undefined && range.start < end;
+      range = this.ranges[this.position + count]
+    ) {
+      if (range.start >= start && range.end > end) overflow = true;
+      count++;
+    }
+    if (count === 0) return;
+    this.ranges.splice(this.position, count);
+    if (!overflow) return;
+    // Parsing ran on through the macro under the wrong state: read the rest afresh. A bounded
+    // number of rereads keeps hostile input linear; past it the rest stays unresolved, as written.
+    if (this.rereads >= REREAD_MAX) {
+      this.protectedFrom = Math.min(this.protectedFrom ?? end, end);
+      this.ranges = this.ranges.slice(0, this.position);
+      return;
+    }
+    this.rereads++;
+    const kept = this.ranges.slice(0, this.position);
+    const rest = markdownCodeRanges(this.text.slice(end)).map((range) => ({
+      start: range.start + end,
+      end: range.end + end,
+    }));
+    this.ranges = [...kept, ...rest];
+  }
+}
+
+const REREAD_MAX = 16;
 const BLOCK_MACRO_OPEN = /\{(code|noformat)(?=[:}])/gu;
 
 /** A `{code}` or `{noformat}` macro up to its closing tag, or to the end of an unclosed one. */
-function blockMacroSpans(text: string): Span[] {
+function blockMacroSpans(text: string, markdown: MarkdownContext): Span[] {
   const spans: Span[] = [];
   const brace = new NextIndex(text, "}");
   let cursor = 0;
@@ -192,6 +251,10 @@ function blockMacroSpans(text: string): Span[] {
     BLOCK_MACRO_OPEN.lastIndex = cursor;
     const open = BLOCK_MACRO_OPEN.exec(text);
     if (open === null) return spans;
+    if (markdown.contains(open.index)) {
+      cursor = open.index + 1;
+      continue;
+    }
     const headEnd = open.index + open[0].length;
     const close = text.charAt(headEnd) === ":" ? brace.at(headEnd) : headEnd;
     if (close === -1) {
@@ -202,12 +265,13 @@ function blockMacroSpans(text: string): Span[] {
     const closing = text.indexOf(tag, close + 1);
     const end = closing === -1 ? text.length : closing + tag.length;
     spans.push({ start: open.index, end });
+    markdown.supersede(open.index, end);
     cursor = end;
   }
 }
 
 /** An inline `{{monospace}}` span: no closing brace or line break before its `}}`. */
-function inlineMacroSpans(text: string): Span[] {
+function inlineMacroSpans(text: string, markdown: MarkdownContext): Span[] {
   const spans: Span[] = [];
   const brace = new NextIndex(text, "}");
   const newline = new NextIndex(text, "\n");
@@ -215,7 +279,9 @@ function inlineMacroSpans(text: string): Span[] {
   while (start !== -1) {
     const close = brace.at(start + 2);
     const line = newline.at(start + 2);
-    const closed = close !== -1 && (line === -1 || close < line) && text[close + 1] === "}";
+    const literal = markdown.contains(start);
+    const closed =
+      !literal && close !== -1 && (line === -1 || close < line) && text[close + 1] === "}";
     if (closed) spans.push({ start, end: close + 2 });
     start = text.indexOf("{{", closed ? close + 2 : start + 1);
   }
@@ -224,7 +290,15 @@ function inlineMacroSpans(text: string): Span[] {
 
 /** Every region whose brackets are code: Markdown fences and inline code, and Jira macros. */
 function codeSpans(text: string): readonly Span[] {
-  const all = [...markdownCodeRanges(text), ...blockMacroSpans(text), ...inlineMacroSpans(text)];
+  const markdown = new MarkdownContext(
+    text,
+    markdownCodeRanges(text).map((range) => ({ start: range.start, end: range.end })),
+  );
+  const blocks = blockMacroSpans(text, markdown);
+  markdown.rewind();
+  const all = [...markdown.spans, ...blocks, ...inlineMacroSpans(text, markdown)];
+  if (markdown.protectedFrom !== undefined)
+    all.push({ start: markdown.protectedFrom, end: text.length });
   all.sort((left, right) => left.start - right.start || right.end - left.end);
   const merged: Span[] = [];
   for (const span of all) {
@@ -236,10 +310,28 @@ function codeSpans(text: string): readonly Span[] {
   return merged;
 }
 
+const CODE_MASK = "\u0001";
+
+/**
+ * The text with every code region blanked at the same offsets. The shared grammar reads Markdown
+ * code on its own; masking hands it the regions decided here, so a delimiter that is literal in an
+ * outer context cannot start a region that hides later prose.
+ */
+function maskCode(text: string, code: readonly Span[]): string {
+  let out = "";
+  let cursor = 0;
+  for (const span of code) {
+    out += text.slice(cursor, span.start);
+    out += text.slice(span.start, span.end).replaceAll(/[^\n]/gu, CODE_MASK);
+    cursor = span.end;
+  }
+  return out + text.slice(cursor);
+}
+
 /** The shared marker grammar's groups that stand in prose, never inside code. */
 function proseMarkerGroups(text: string, code: readonly Span[]): readonly CitationMarkerGroup[] {
   let next = 0;
-  return findCitationMarkerGroups(text).filter((group) => {
+  return findCitationMarkerGroups(maskCode(text, code)).filter((group) => {
     while (code[next] !== undefined && (code[next]?.end ?? 0) <= group.start) next++;
     const inCode = code[next] !== undefined && (code[next]?.start ?? 0) < group.end;
     return !inCode && group.indices.every((index) => index <= MARKER_INDEX_MAX);

@@ -56,6 +56,7 @@ export interface ChatSourcesContext extends ToolConsumerContext {
   readonly retainDraftProgress?: JiraChatCatalogContext["retainDraftProgress"];
   readonly reportBatchProgress?: JiraChatCatalogContext["reportBatchProgress"];
   readonly remainingModelCalls?: JiraChatCatalogContext["remainingModelCalls"];
+  readonly citationSources?: JiraChatCatalogContext["citationSources"];
   readonly jira: JiraChatCatalogContext;
   readonly mcp: McpChatCatalogContext;
 }
@@ -106,6 +107,7 @@ const OPTIONAL_INVOCATION_KEYS = [
   "remainingModelCalls",
   "knowledgeReviewModelId",
   "confirmModelOperation",
+  "citationSources",
 ] as const;
 type OptionalInvocationKey = (typeof OPTIONAL_INVOCATION_KEYS)[number];
 
@@ -124,6 +126,7 @@ function invocationFields(
   | "retainDraftProgress"
   | "reportBatchProgress"
   | "remainingModelCalls"
+  | "citationSources"
 > {
   const optional: Partial<Pick<CatalogHandlerContext<ChatSourcesConsumer>, OptionalInvocationKey>> =
     {};

@@ -245,6 +245,40 @@ describe("Jira text names the sources of the grounded answer it was written from
       });
     });
 
+    // F14: a delimiter is recognised according to the outer code context it stands in.
+    it.each([
+      ["a {code} tag inside Markdown inline code", "Use `{code}` literally. Goal [1]."],
+      ["a {noformat} tag inside a Markdown fence", "```\n{noformat}\n```\nGoal [1]."],
+      ["a {{ opener inside Markdown inline code", "Use `{{` literally. Goal [1]."],
+    ])("does not let %s protect later prose", (_name, text) => {
+      const rewrite = resolveJiraCitationMarkers({ description: text }, spec);
+      expect(rewrite.resolvedCount).toBe(1);
+      expect(rewrite.arguments).toEqual({
+        description: text.replace("Goal [1].", "Goal (Spec A)."),
+      });
+    });
+
+    it.each([
+      ["a fence inside a {code} macro", "{code}\n```\n{code}\nGoal [1]."],
+      ["a backtick pair inside a {noformat} macro", "{noformat}`a{noformat} `b` Goal [1]."],
+      ["an unclosed backtick run inside a {code} macro", "{code}``{code}\nGoal [1]."],
+    ])("does not let Markdown delimiters in %s swallow the macro tag", (_name, text) => {
+      const rewrite = resolveJiraCitationMarkers({ description: text }, spec);
+      expect(rewrite.resolvedCount).toBe(1);
+      expect(rewrite.arguments).toEqual({
+        description: text.replace("Goal [1].", "Goal (Spec A)."),
+      });
+    });
+
+    it("keeps the code of both kinds unchanged while naming the prose between", () => {
+      const text =
+        "`a [1]` {code}b [1]{code} `{code}` c [1] {{d [1]}}\n```\n{noformat}[1]\n```\ne [1]";
+      expect(resolve(text)).toEqual({
+        description:
+          "`a [1]` {code}b [1]{code} `{code}` c (Spec A) {{d [1]}}\n```\n{noformat}[1]\n```\ne (Spec A)",
+      });
+    });
+
     it("removes a summary marker with the blank before it", () => {
       expect(resolveJiraCitationMarkers({ summary: "Titel  [1]" }, spec).arguments).toEqual({
         summary: "Titel",
@@ -294,6 +328,9 @@ describe("Jira text names the sources of the grounded answer it was written from
       ["many opening {{ without a close", repeating("{{")],
       ["{{ spans broken by a line end", repeating("{{x\n")],
       ["{{ followed by single braces", repeating("{{}")],
+      ["literal {code} inside inline code", repeating("`{code}` ")],
+      ["Markdown code inside closed macros", repeating("{code}`a`{code}")],
+      ["backticks inside an unclosed macro", repeating("{code}``")],
     ])("scales linearly for %s", { timeout: 60_000 }, (_name, build) => {
       expect(ratio(build)).toBeLessThan(LINEAR_RATIO_MAX);
     });
