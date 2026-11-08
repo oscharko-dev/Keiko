@@ -53,7 +53,10 @@ export interface ReindexFlags {
   readonly indexChangeHistory: boolean;
   readonly indexWorklogs: boolean;
 }
-interface Common { readonly operation: JiraMaintenanceMutation; readonly actor: string }
+interface Common {
+  readonly operation: JiraMaintenanceMutation;
+  readonly actor: string;
+}
 export type MaintenanceInput = Common &
   (
     | { readonly kind: "node"; readonly nodeId: string; readonly expected: CatalogJsonObject }

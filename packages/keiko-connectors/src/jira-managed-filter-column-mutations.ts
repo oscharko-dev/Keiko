@@ -71,12 +71,13 @@ function input(operation: ColumnMutation, args: CatalogJsonObject): Input | unde
   const replacement = requestedColumns(operation, args);
   return replacement === undefined ? undefined : { ...selected, ...replacement };
 }
-function requestedColumns(operation: ColumnMutation, args: CatalogJsonObject): Pick<Input, "columns"> | undefined {
+function requestedColumns(
+  operation: ColumnMutation,
+  args: CatalogJsonObject,
+): Pick<Input, "columns"> | undefined {
   if (operation === "jira.reset-filter-columns")
     return Object.hasOwn(args, "columns") ? undefined : {};
-  return fieldList(args.columns) && args.columns.length > 0
-    ? { columns: args.columns }
-    : undefined;
+  return fieldList(args.columns) && args.columns.length > 0 ? { columns: args.columns } : undefined;
 }
 async function readColumns(
   request: JiraMutationRequest,

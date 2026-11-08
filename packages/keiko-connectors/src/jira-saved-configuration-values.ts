@@ -86,8 +86,7 @@ export function projectSavedFilter(value: unknown): SavedFilter | undefined {
   const raw = asRecord(value);
   if (raw === undefined) return undefined;
   const owner = jiraDirectoryUser(raw.owner);
-  if (!jiraNativeId(raw.id) || typeof owner?.key !== "string")
-    return undefined;
+  if (!jiraNativeId(raw.id) || typeof owner?.key !== "string") return undefined;
   if (!savedName(raw.name) || !savedText(raw.jql, 2048)) return undefined;
   const { description = null } = raw;
   if (description !== null && !savedText(description, 32768, true)) return undefined;
@@ -112,19 +111,26 @@ interface SavedFilterSelection {
   readonly filterId: string;
   readonly actorKey: string;
 }
-type BoundFilter<Selection, Value> = JiraObservationFailure | {
-  readonly ok: true; readonly selected: Selection; readonly value: Value;
-};
+type BoundFilter<Selection, Value> =
+  | JiraObservationFailure
+  | {
+      readonly ok: true;
+      readonly selected: Selection;
+      readonly value: Value;
+    };
 export function bindSavedFilterOwner<Selection extends SavedFilterSelection>(
-  request: JiraMutationRequest, selected: Selection,
+  request: JiraMutationRequest,
+  selected: Selection,
 ): Promise<BoundFilter<Selection, true>>;
 export function bindSavedFilterOwner<Selection extends SavedFilterSelection, Value>(
-  request: JiraMutationRequest, selected: Selection | undefined,
+  request: JiraMutationRequest,
+  selected: Selection | undefined,
   observe: (request: JiraMutationRequest, filterId: string) => Promise<SavedObservation<Value>>,
   invalidMessage: string,
 ): Promise<BoundFilter<Selection, Value>>;
 export async function bindSavedFilterOwner<Selection extends SavedFilterSelection, Value>(
-  request: JiraMutationRequest, selected: Selection | undefined,
+  request: JiraMutationRequest,
+  selected: Selection | undefined,
   observe?: (request: JiraMutationRequest, filterId: string) => Promise<SavedObservation<Value>>,
   invalidMessage = "Review the filter and connected owner. Nothing was written.",
 ): Promise<BoundFilter<Selection, Value | true>> {
@@ -134,8 +140,10 @@ export async function bindSavedFilterOwner<Selection extends SavedFilterSelectio
   if (!actor.ok) return actor;
   const filter = await readOwnedFilter(request, filterId, actorKey);
   if (!filter.ok) return filter;
-  const current = observe === undefined ? { ok: true as const, value: true as const }
-    : await observe(request, filterId);
+  const current =
+    observe === undefined
+      ? { ok: true as const, value: true as const }
+      : await observe(request, filterId);
   return current.ok ? { ...current, selected } : current;
 }
 export function sameSavedFilter(actual: SavedFilter, expected: SavedFilter): boolean {

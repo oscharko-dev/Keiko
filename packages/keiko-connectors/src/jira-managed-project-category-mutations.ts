@@ -237,12 +237,11 @@ function effect(input: Selection): Effect | undefined {
 async function write(request: JiraMutationRequest, input: Selection): Promise<JiraMutationAttempt> {
   const native = effect(input);
   if (native === undefined) return MALFORMED;
-  const receipt = input.expected === undefined ? {} : { receipt: knownReceipt(input, input.expected.id) };
+  const receipt =
+    input.expected === undefined ? {} : { receipt: knownReceipt(input, input.expected.id) };
   const response = await request(native.path, native.method, native.body, native.expect);
-  if (!response.ok)
-    return { ...dispatchFailure(response), ...receipt };
-  if (response.status !== native.status)
-    return { ...MALFORMED, ...receipt };
+  if (!response.ok) return { ...dispatchFailure(response), ...receipt };
+  if (response.status !== native.status) return { ...MALFORMED, ...receipt };
   const actualId: unknown = input.expected?.id ?? response.body?.id;
   if (!jiraNativeId(actualId)) return MALFORMED;
   // The ACK's exact ID survives a missing/malformed ACK description. Only a fresh native

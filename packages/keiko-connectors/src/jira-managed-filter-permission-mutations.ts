@@ -60,7 +60,10 @@ function input(operation: PermissionMutation, args: CatalogJsonObject): Input | 
   const replacement = requestedPermission(operation, args);
   return replacement === undefined ? undefined : { ...base, ...replacement };
 }
-function requestedPermission(operation: PermissionMutation, args: CatalogJsonObject): Pick<Input, "permissionId" | "target"> | undefined {
+function requestedPermission(
+  operation: PermissionMutation,
+  args: CatalogJsonObject,
+): Pick<Input, "permissionId" | "target"> | undefined {
   if (operation === "jira.delete-filter-permission")
     return jiraNativeId(args.permissionId) &&
       args.permission === undefined &&

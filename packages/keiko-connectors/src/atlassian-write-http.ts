@@ -378,9 +378,11 @@ function requestBodyRefusal(
     : undefined;
 }
 
-function validArchiveRequest(request: Omit<AtlassianWriteHttpRequest, "jiraEmailTemplateArchive"> & {
-  readonly jiraEmailTemplateArchive?: unknown;
-}): boolean {
+function validArchiveRequest(
+  request: Omit<AtlassianWriteHttpRequest, "jiraEmailTemplateArchive"> & {
+    readonly jiraEmailTemplateArchive?: unknown;
+  },
+): boolean {
   if (request.jiraEmailTemplateArchive === undefined)
     return request.expect !== "jira-email-template-zip";
   if (
@@ -392,7 +394,9 @@ function validArchiveRequest(request: Omit<AtlassianWriteHttpRequest, "jiraEmail
     return false;
   return archiveRequestShape(request);
 }
-function archiveRequestShape(request: Pick<AtlassianWriteHttpRequest, "method" | "expect" | "upload">): boolean {
+function archiveRequestShape(
+  request: Pick<AtlassianWriteHttpRequest, "method" | "expect" | "upload">,
+): boolean {
   if (request.method === "GET")
     return request.expect === "jira-email-template-zip" && request.upload === undefined;
   return (
