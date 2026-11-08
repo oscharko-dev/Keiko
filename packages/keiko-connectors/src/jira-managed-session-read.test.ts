@@ -93,6 +93,17 @@ it("refuses an already cancelled invocation before sending either GET", async ()
   expect((await read({}, { ...context(), signal: controller.signal }, connection(http))).data).toEqual({ outcome: "failed", reason: "cancelled" });
   expect(http).not.toHaveBeenCalled();
 });
+it("observes caller cancellation during an awaited identity failure", async () => {
+  const controller = new AbortController();
+  const http = vi.fn<AtlassianHttpBodyPort>(async () => {
+    await Promise.resolve();
+    controller.abort();
+    throw new TypeError("Synthetic transport interruption");
+  });
+  const result = await read({}, { ...context(), signal: controller.signal }, connection(http));
+  expect(result.data).toEqual({ outcome: "failed", reason: "cancelled" });
+  expect(http).toHaveBeenCalledTimes(1);
+});
 it("labels a refused current permit without inventing a network failure", async () => {
   const http = remote({ name: "Canonical-Name" });
   const result = await read({}, context(() => false), connection(http));

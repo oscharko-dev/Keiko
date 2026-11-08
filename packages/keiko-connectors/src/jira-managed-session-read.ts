@@ -70,6 +70,10 @@ function fixedGet(
 export function isJiraSessionRead(name: string): name is "jira.current-session" {
   return name === "jira.current-session";
 }
+/** The caller can abort while an awaited native observation is in progress. */
+function sessionCancelled(signal: AbortSignal): boolean {
+  return signal.aborted;
+}
 /** Login.currentUser is GET; no login/logout/session-cookie operation is exposed.
  * https://docs.atlassian.com/software/jira/docs/api/11.3.3/com/atlassian/jira/rest/auth/Login.html
  * CurrentUser is opaque in the retained11.3 OpenAPI. Its exact name/loginInfo fields are documented at
@@ -82,12 +86,12 @@ export async function executeJiraSessionRead(
 ): Promise<ManagedMcpToolResult> {
   if (Object.keys(args).length !== 0) return jiraReadFailure("invalid-input");
   if (connection.deployment !== "data-center") return jiraReadFailure("unavailable");
-  if (context.signal.aborted) return jiraReadFailure("cancelled");
+  if (sessionCancelled(context.signal)) return jiraReadFailure("cancelled");
   const signal = AbortSignal.any([context.signal, AbortSignal.timeout(ATLASSIAN_WRITE_ACTION_TOTAL_TIMEOUT_MS)]);
   const http = admittedSessionHttp(connection, context, signal);
   try { return sessionResult(await readSession(connection, signal, http), context.signal); }
   catch (error) {
-    if (context.signal.aborted) return jiraReadFailure("cancelled");
+    if (sessionCancelled(context.signal)) return jiraReadFailure("cancelled");
     if (error instanceof SessionReadRefusal) return jiraReadFailure(error.reason);
     throw error;
   }
