@@ -490,7 +490,7 @@ function refusedRow(source: UnknownRecord): boolean {
   return (
     text(source.ref) !== undefined &&
     text(source.issueKey) === undefined &&
-    (JIRA_FIELD_VALIDATION_FAILURES.some((value) => value === source.validation) ||
+    ((JIRA_FIELD_VALIDATION_FAILURES as readonly unknown[]).includes(source.validation) ||
       problemsOf(source).length > 0)
   );
 }
@@ -1059,7 +1059,8 @@ function knowledgeReviewSources(source: UnknownRecord): JiraOutcomeFact[] | unde
     const range = knowledgeRange(citation);
     if (document === undefined || range === undefined) return undefined;
     const quote = text(citation.quote);
-    references.push(`${document} · ${range}${quote === undefined ? "" : `\n${quote}`}`);
+    const quoteSuffix = quote === undefined ? "" : `\n${quote}`;
+    references.push(`${document} · ${range}${quoteSuffix}`);
   }
   return [{ label: "chat.knowledge.outcome.sources", value: references.join("\n\n") }];
 }
@@ -1322,11 +1323,7 @@ function resultItemsView(
   const items = issueList ? issueListItems(own, projection) : own;
   return {
     items,
-    ...(JIRA_CATALOG_TOOLS.has(exchange.call.name)
-      ? { resultsLabel: "chat.jira.catalog.actions" as const }
-      : issueList
-        ? { resultsLabel: "chat.jira.outcome.issues" as const }
-        : {}),
+    ...resultsLabelOf(exchange.call.name, issueList),
     overflow: issueList ? "count" : "disclosure",
     unlistedItemCount: issueList
       ? Math.max(0, projection.listed.count - projection.listed.shown.length)
@@ -1356,4 +1353,11 @@ export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcome
     itemValidations: privateAccount(exchange.call.name) ? [] : itemValidationsOf(data),
     failure: failureMessage(exchange, data),
   };
+}
+function resultsLabelOf(
+  tool: string,
+  issueList: boolean,
+): { readonly resultsLabel: WidgetMessageKey } | Record<string, never> {
+  if (JIRA_CATALOG_TOOLS.has(tool)) return { resultsLabel: "chat.jira.catalog.actions" };
+  return issueList ? { resultsLabel: "chat.jira.outcome.issues" } : {};
 }

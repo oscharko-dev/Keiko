@@ -58,7 +58,8 @@ function optionSnapshot(kind: Kind, snapshot: Source): boolean {
   const ids = kind === "issue-type" ? snapshot.issueTypeIds : snapshot.optionIds;
   const selected = kind === "issue-type" ? snapshot.defaultIssueTypeId : snapshot.defaultOptionId;
   if (!idList(ids) || !(selected === null || identity(selected) !== undefined)) return false;
-  if (selected !== null && !ids.includes(String(selected))) return false;
+  const selectedId = identity(selected);
+  if (selected !== null && (selectedId === undefined || !ids.includes(selectedId))) return false;
   return kind !== "priority" || typeof snapshot.defaultScheme === "boolean";
 }
 function workflowSnapshot(snapshot: Source): boolean {

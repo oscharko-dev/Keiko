@@ -248,12 +248,7 @@ function screenTabFacts(
   return [
     {
       id: t(label),
-      value:
-        Array.isArray(value) && value.length === 0
-          ? textValue(t("chat.jira.screenTabs.reviewedEmptyFields"))
-          : Array.isArray(value)
-            ? listOf(value.map((entry: unknown) => jiraDraftValueOf(entry)))
-            : jiraDraftValueOf(value),
+      value: reviewedFieldValue(value, t),
     },
   ];
 }
@@ -268,10 +263,7 @@ function monitoringFacts(
   return [
     {
       id: t(label),
-      value:
-        typeof value === "boolean"
-          ? textValue(t(value ? "chat.jira.monitoring.enabled" : "chat.jira.monitoring.disabled"))
-          : jiraDraftValueOf(value),
+      value: monitoringValue(value, t),
     },
   ];
 }
@@ -430,4 +422,13 @@ function managedFacts(
 }
 function stringOf(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+function reviewedFieldValue(value: unknown, t: OptionalWidgetTranslate): JiraDraftValue {
+  if (!Array.isArray(value)) return jiraDraftValueOf(value);
+  if (value.length === 0) return textValue(t("chat.jira.screenTabs.reviewedEmptyFields"));
+  return listOf(value.map((entry: unknown) => jiraDraftValueOf(entry)));
+}
+function monitoringValue(value: unknown, t: OptionalWidgetTranslate): JiraDraftValue {
+  if (typeof value !== "boolean") return jiraDraftValueOf(value);
+  return textValue(t(value ? "chat.jira.monitoring.enabled" : "chat.jira.monitoring.disabled"));
 }

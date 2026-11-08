@@ -66,7 +66,7 @@ function field(source: Source): JiraAgileDetails | undefined {
     "chat.jira.lookup.clauseCount",
   );
   const labels = Object.entries(FLAGS).map(([key, [yes, no, unknown]]) =>
-    source[key] === true ? yes : source[key] === false ? no : unknown,
+    triState(source[key], yes, no, unknown),
   );
   if (clauses === undefined) labels.push("chat.jira.lookup.clausesUnknown");
   if (schema === undefined) labels.push("chat.jira.lookup.schemaUnknown");
@@ -89,11 +89,12 @@ export function jiraFieldOptionDetails(source: Source): JiraAgileDetails | undef
     "chat.jira.lookup.childOptionCount",
   );
   const labels: WidgetMessageKey[] = [
-    source.disabled === true
-      ? "chat.jira.lookup.optionDisabled"
-      : source.disabled === false
-        ? "chat.jira.lookup.optionEnabled"
-        : "chat.jira.lookup.optionStateUnknown",
+    triState(
+      source.disabled,
+      "chat.jira.lookup.optionDisabled",
+      "chat.jira.lookup.optionEnabled",
+      "chat.jira.lookup.optionStateUnknown",
+    ),
   ];
   if (children === undefined) labels.push("chat.jira.lookup.childrenUnknown");
   if (source.value.length === 0) labels.push("chat.jira.lookup.emptyOptionValue");
@@ -174,13 +175,7 @@ export function jiraLookupDetails(tool: string, data: Source): readonly JiraAgil
   return (Array.isArray(data.items) ? data.items : [data]).flatMap((value: unknown) => {
     const source = record(value);
     if (source === undefined) return [];
-    const item = USERS.has(tool)
-      ? directoryItem(source, true)
-      : tool === "jira_project_picker"
-        ? project(source)
-        : tool === "jira_fields"
-          ? field(source)
-          : jiraFieldOptionDetails(source);
+    const item = lookupItem(tool, source);
     return item === undefined ? [] : [item];
   });
 }
@@ -199,4 +194,16 @@ export function jiraLookupNotice(tool: string, data: Source): WidgetMessageKey |
   if (tool !== "jira_project_picker") return undefined;
   if (count(data.total) === undefined) return "chat.jira.directory.pickerTotalUnknown";
   return branchPartial(data.items, data.total) ? "chat.jira.partial" : undefined;
+}
+
+function triState<T extends string>(value: unknown, yes: T, no: T, unknown: T): T {
+  if (value === true) return yes;
+  if (value === false) return no;
+  return unknown;
+}
+function lookupItem(tool: string, source: Source): JiraAgileDetails | undefined {
+  if (USERS.has(tool)) return directoryItem(source, true);
+  if (tool === "jira_project_picker") return project(source);
+  if (tool === "jira_fields") return field(source);
+  return jiraFieldOptionDetails(source);
 }

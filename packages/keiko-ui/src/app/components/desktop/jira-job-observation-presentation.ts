@@ -38,19 +38,16 @@ function progress(source: Source): JiraAgileDetails {
   const value = integerFact("chat.jira.jobs.nativeProgress", source.currentProgress);
   const labels: WidgetMessageKey[] = [
     "chat.jira.jobs.observation",
-    source.taskSelection === "selected-task"
-      ? "chat.jira.jobs.selectedTask"
-      : source.taskSelection === "active-or-latest"
-        ? "chat.jira.jobs.activeOrLatest"
-        : "chat.jira.jobs.taskSelectionUnknown",
+    taskSelectionLabel(source.taskSelection),
   ];
   if (value.length === 0) labels.push("chat.jira.jobs.progressUnknown");
   labels.push(
-    source.success === true
-      ? "chat.jira.jobs.successTrue"
-      : source.success === false
-        ? "chat.jira.jobs.successFalse"
-        : "chat.jira.jobs.successUnknown",
+    triState(
+      source.success,
+      "chat.jira.jobs.successTrue",
+      "chat.jira.jobs.successFalse",
+      "chat.jira.jobs.successUnknown",
+    ),
   );
   return {
     facts: [
@@ -173,11 +170,12 @@ function monitoring(tool: string, data: Source): JiraAgileDetails {
       tool === "jira_app_monitoring"
         ? "chat.jira.jobs.appMonitoring"
         : "chat.jira.jobs.ipdMonitoring",
-      data.enabled === true
-        ? "chat.jira.jobs.monitoringEnabled"
-        : data.enabled === false
-          ? "chat.jira.jobs.monitoringDisabled"
-          : "chat.jira.jobs.monitoringUnknown",
+      triState(
+        data.enabled,
+        "chat.jira.jobs.monitoringEnabled",
+        "chat.jira.jobs.monitoringDisabled",
+        "chat.jira.jobs.monitoringUnknown",
+      ),
     ],
   };
 }
@@ -221,4 +219,15 @@ function jobObservation(tool: string, data: Source): readonly JiraAgileDetails[]
     default:
       return [];
   }
+}
+
+function triState<T extends string>(value: unknown, yes: T, no: T, unknown: T): T {
+  if (value === true) return yes;
+  if (value === false) return no;
+  return unknown;
+}
+function taskSelectionLabel(selection: unknown): WidgetMessageKey {
+  if (selection === "selected-task") return "chat.jira.jobs.selectedTask";
+  if (selection === "active-or-latest") return "chat.jira.jobs.activeOrLatest";
+  return "chat.jira.jobs.taskSelectionUnknown";
 }

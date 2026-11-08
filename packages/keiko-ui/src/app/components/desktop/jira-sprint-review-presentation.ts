@@ -83,13 +83,13 @@ function sprintDetails(source: Source): readonly JiraAgileDetails[] {
 /** Retain the saved native snapshot and its missing fields; never re-fetch or infer hidden issues. */
 export function jiraSprintReviewDetails(tool: string, source: Source): readonly JiraAgileDetails[] {
   if (!JIRA_SPRINT_REVIEW_TOOLS.has(tool)) return [];
-  const items = Array.isArray(source.items)
-    ? source.items
-    : source.id === undefined
-      ? []
-      : [source];
+  const items = sprintItems(source);
   return items.flatMap((item: unknown) => {
     const value = record(item);
     return value === undefined ? [] : sprintDetails(value);
   });
+}
+function sprintItems(source: Source): readonly unknown[] {
+  if (Array.isArray(source.items)) return source.items;
+  return source.id === undefined ? [] : [source];
 }

@@ -54,7 +54,7 @@ function item(source: Source, category: unknown): JiraAgileDetails | undefined {
     else facts.push(...operators);
     labels.push(
       ...Object.entries(FIELD_FLAGS).map(([key, [yes, no, unknown]]) =>
-        source[key] === true ? yes : source[key] === false ? no : unknown,
+        triState(source[key], yes, no, unknown),
       ),
     );
   }
@@ -96,4 +96,10 @@ export function jiraJqlDetails(tool: string, data: Source): readonly JiraAgileDe
       return result === undefined ? [] : [result];
     }),
   ];
+}
+
+function triState<T extends string>(value: unknown, yes: T, no: T, unknown: T): T {
+  if (value === true) return yes;
+  if (value === false) return no;
+  return unknown;
 }

@@ -18,27 +18,28 @@ const INDEX_COUNTS: Readonly<Record<string, WidgetMessageKey>> = {
   countInDatabase: "chat.jira.maintenance.databaseCount",
   countInIndex: "chat.jira.maintenance.indexCount",
 };
-function integerFact(label: WidgetMessageKey, value: unknown, signed = false): JiraOutcomeFact[] {
-  return typeof value === "number" && Number.isSafeInteger(value) && (signed || value >= 0)
-    ? fact(label, String(value))
-    : [];
+function signedIntegerFact(label: WidgetMessageKey, value: unknown): JiraOutcomeFact[] {
+  return typeof value === "number" && Number.isSafeInteger(value) ? fact(label, String(value)) : [];
+}
+function integerFact(label: WidgetMessageKey, value: unknown): JiraOutcomeFact[] {
+  return typeof value === "number" && value >= 0 ? signedIntegerFact(label, value) : [];
 }
 function node(source: Source): JiraAgileDetails | undefined {
   const id = text(source.nodeId);
   if (id === undefined) return undefined;
   const labels: WidgetMessageKey[] = [
     "chat.jira.maintenance.observation",
-    source.alive === true
-      ? "chat.jira.maintenance.alive"
-      : source.alive === false
-        ? "chat.jira.maintenance.notAlive"
-        : "chat.jira.maintenance.aliveUnknown",
+    triState(
+      source.alive,
+      "chat.jira.maintenance.alive",
+      "chat.jira.maintenance.notAlive",
+      "chat.jira.maintenance.aliveUnknown",
+    ),
   ];
   if (text(source.state) === undefined) labels.push("chat.jira.maintenance.stateUnknown");
-  const timestamp = integerFact(
+  const timestamp = signedIntegerFact(
     "chat.jira.maintenance.stateTimestamp",
     source.lastStateChangeTimestamp,
-    true,
   );
   if (timestamp.length === 0) labels.push("chat.jira.maintenance.stateTimestampUnknown");
   return {
@@ -46,7 +47,7 @@ function node(source: Source): JiraAgileDetails | undefined {
       { label: "chat.jira.maintenance.nodeId", value: id },
       ...fact("chat.jira.maintenance.state", source.state),
       ...fact("chat.jira.maintenance.version", source.nodeVersion),
-      ...integerFact("chat.jira.maintenance.build", source.nodeBuildNumber, true),
+      ...signedIntegerFact("chat.jira.maintenance.build", source.nodeBuildNumber),
       ...timestamp,
     ],
     labels,
@@ -58,7 +59,7 @@ function upgrade(source: Source): JiraAgileDetails {
     facts: [
       ...fact("chat.jira.maintenance.state", source.state),
       ...fact("chat.jira.maintenance.version", build?.version),
-      ...integerFact("chat.jira.maintenance.build", build?.buildNumber, true),
+      ...signedIntegerFact("chat.jira.maintenance.build", build?.buildNumber),
     ],
     labels: [
       "chat.jira.maintenance.observation",
@@ -73,11 +74,12 @@ function snapshot(source: Source): JiraAgileDetails {
     facts: [],
     labels: [
       "chat.jira.maintenance.observation",
-      source.running === true
-        ? "chat.jira.maintenance.snapshotRunning"
-        : source.running === false
-          ? "chat.jira.maintenance.snapshotNotRunning"
-          : "chat.jira.maintenance.snapshotUnknown",
+      triState(
+        source.running,
+        "chat.jira.maintenance.snapshotRunning",
+        "chat.jira.maintenance.snapshotNotRunning",
+        "chat.jira.maintenance.snapshotUnknown",
+      ),
     ],
   };
 }
@@ -87,11 +89,12 @@ function index(source: Source): JiraAgileDetails {
   );
   const labels: WidgetMessageKey[] = [
     "chat.jira.maintenance.indexCountsScope",
-    source.indexReadable === true
-      ? "chat.jira.maintenance.indexReadable"
-      : source.indexReadable === false
-        ? "chat.jira.maintenance.indexUnreadable"
-        : "chat.jira.maintenance.indexReadableUnknown",
+    triState(
+      source.indexReadable,
+      "chat.jira.maintenance.indexReadable",
+      "chat.jira.maintenance.indexUnreadable",
+      "chat.jira.maintenance.indexReadableUnknown",
+    ),
   ];
   if (counts.length !== Object.keys(INDEX_COUNTS).length)
     labels.push("chat.jira.maintenance.countsUnknown");
@@ -104,10 +107,9 @@ function index(source: Source): JiraAgileDetails {
 }
 function operationFacts(source: Source | undefined, consumed: boolean): JiraOutcomeFact[] {
   return [
-    ...integerFact(
+    ...signedIntegerFact(
       consumed ? "chat.jira.maintenance.consumedId" : "chat.jira.maintenance.queuedId",
       source?.id,
-      true,
     ),
     ...fact(
       consumed
@@ -160,7 +162,7 @@ function queues(value: unknown, replay: boolean): readonly JiraAgileDetails[] {
       },
     ];
   const entries = value.map((entry: unknown) => queue(entry, replay));
-  if (entries.some((entry) => entry === undefined))
+  if (entries.includes(undefined))
     return [
       {
         facts: [],
@@ -227,4 +229,10 @@ export function jiraMaintenanceDetails(tool: string, data: Source): readonly Jir
   if (data.outcome !== "succeeded" && Object.keys(data).length === 0) return [];
   if (tool === "jira_cluster_upgrade_state") return [upgrade(data)];
   return tool === "jira_index_snapshot_status" ? [snapshot(data)] : summary(data);
+}
+
+function triState<T extends string>(value: unknown, yes: T, no: T, unknown: T): T {
+  if (value === true) return yes;
+  if (value === false) return no;
+  return unknown;
 }

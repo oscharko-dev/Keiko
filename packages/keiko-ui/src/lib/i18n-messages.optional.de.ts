@@ -1637,8 +1637,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Diese Liste beschreibt die von Jira für die ausgewählte Entität zurückgegebenen Schlüssel; sie belegt keine Sichtbarkeit weiterer Properties.",
   "chat.jira.properties.pointerHelp":
     "Wurzel bedeutet den gesamten Wert. Ein JSON Pointer adressiert einen untergeordneten Wert: ~1 steht für / und ~0 für ~. Der Pfad / allein bezeichnet einen leeren Objektschlüssel. Array-Positionen beginnen bei 0.",
-  "chat.jira.properties.visibleEscapes":
-    "Sichtbare Escape-Darstellung: \\u0000 steht für das entsprechende Steuerzeichen; \\\\ steht für einen wörtlichen Backslash. Der gespeicherte Text und Pointer bleiben unverändert.",
+  "chat.jira.properties.visibleEscapes": String.raw`Sichtbare Escape-Darstellung: \u0000 steht für das entsprechende Steuerzeichen; \\ steht für einen wörtlichen Backslash. Der gespeicherte Text und Pointer bleiben unverändert.`,
   "chat.jira.properties.issueId": "Vorgangs-ID",
   "chat.jira.properties.selectedItemId": "Angefragte Dashboard-Element-ID",
   "chat.jira.properties.requestedItemContext":

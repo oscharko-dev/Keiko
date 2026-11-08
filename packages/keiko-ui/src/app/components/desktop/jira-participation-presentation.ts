@@ -10,16 +10,18 @@ export const JIRA_PARTICIPATION_TOOLS: ReadonlySet<string> = new Set([
 ]);
 function stateLabel(watching: boolean, state: unknown): WidgetMessageKey {
   if (watching)
-    return state === true
-      ? "chat.jira.participation.watching"
-      : state === false
-        ? "chat.jira.participation.notWatching"
-        : "chat.jira.participation.watchingUnknown";
-  return state === true
-    ? "chat.jira.participation.voted"
-    : state === false
-      ? "chat.jira.participation.notVoted"
-      : "chat.jira.participation.voteUnknown";
+    return triState(
+      state,
+      "chat.jira.participation.watching",
+      "chat.jira.participation.notWatching",
+      "chat.jira.participation.watchingUnknown",
+    );
+  return triState(
+    state,
+    "chat.jira.participation.voted",
+    "chat.jira.participation.notVoted",
+    "chat.jira.participation.voteUnknown",
+  );
 }
 function countFact(label: WidgetMessageKey, value: unknown): JiraOutcomeFact[] {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
@@ -44,4 +46,10 @@ export function jiraParticipationDetails(
     facts: countFact(watching ? "chat.jira.fact.watchCount" : "chat.jira.fact.voteCount", count),
     labels,
   };
+}
+
+function triState<T extends string>(value: unknown, yes: T, no: T, unknown: T): T {
+  if (value === true) return yes;
+  if (value === false) return no;
+  return unknown;
 }

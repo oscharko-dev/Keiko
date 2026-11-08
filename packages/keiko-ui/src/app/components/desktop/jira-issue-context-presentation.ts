@@ -38,11 +38,12 @@ function remoteLink(source: Source): JiraAgileDetails {
   const summary = text(source.summary);
   const labels: WidgetMessageKey[] = [
     "chat.jira.issueContext.linkObservation",
-    source.resolved === true
-      ? "chat.jira.issueContext.resolved"
-      : source.resolved === false
-        ? "chat.jira.issueContext.notResolved"
-        : "chat.jira.issueContext.resolvedUnknown",
+    triState(
+      source.resolved,
+      "chat.jira.issueContext.resolved",
+      "chat.jira.issueContext.notResolved",
+      "chat.jira.issueContext.resolvedUnknown",
+    ),
   ];
   return {
     ...(title === undefined ? {} : { name: title }),
@@ -101,11 +102,12 @@ export function jiraIssueContextDetails(tool: string, source: Source): readonly 
       facts: parentFacts(source),
       labels: [
         "chat.jira.issueContext.reorderScope",
-        source.canReorderSubtasks === true
-          ? "chat.jira.issueContext.reorderAllowed"
-          : source.canReorderSubtasks === false
-            ? "chat.jira.issueContext.reorderUnavailable"
-            : "chat.jira.issueContext.reorderUnknown",
+        triState(
+          source.canReorderSubtasks,
+          "chat.jira.issueContext.reorderAllowed",
+          "chat.jira.issueContext.reorderUnavailable",
+          "chat.jira.issueContext.reorderUnknown",
+        ),
       ],
     },
   ];
@@ -165,4 +167,10 @@ export function jiraIssuePickerGroups(source: Source): readonly JiraIssuePickerG
       })
     : [];
   return [{ details: { facts: [], labels }, issues: [] }, ...sections];
+}
+
+function triState<T extends string>(value: unknown, yes: T, no: T, unknown: T): T {
+  if (value === true) return yes;
+  if (value === false) return no;
+  return unknown;
 }

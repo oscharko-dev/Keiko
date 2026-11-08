@@ -27,11 +27,12 @@ function accessibility(source: Source): JiraAgileDetails | undefined {
         name,
         facts: [],
         labels: [
-          source.enabled === true
-            ? "chat.jira.viewSettings.enabled"
-            : source.enabled === false
-              ? "chat.jira.viewSettings.disabled"
-              : "chat.jira.viewSettings.enabledUnknown",
+          triState(
+            source.enabled,
+            "chat.jira.viewSettings.enabled",
+            "chat.jira.viewSettings.disabled",
+            "chat.jira.viewSettings.enabledUnknown",
+          ),
         ],
       };
 }
@@ -82,7 +83,7 @@ export function jiraViewSettingsDetails(tool: string, data: Source): readonly Ji
   const a11y = tool === "jira_accessibility_settings";
   const items = (Array.isArray(data.items) ? data.items : [data]).flatMap((value: unknown) => {
     const source = record(value);
-    const item = source === undefined ? undefined : a11y ? accessibility(source) : column(source);
+    const item = source === undefined ? undefined : viewItem(a11y, source);
     return item === undefined ? [] : [item];
   });
   if (!a11y)
@@ -103,4 +104,13 @@ export function jiraViewSettingsDetails(tool: string, data: Source): readonly Ji
         ...items,
       ]
     : items;
+}
+
+function triState<T extends string>(value: unknown, yes: T, no: T, unknown: T): T {
+  if (value === true) return yes;
+  if (value === false) return no;
+  return unknown;
+}
+function viewItem(a11y: boolean, source: Source): JiraAgileDetails | undefined {
+  return a11y ? accessibility(source) : column(source);
 }

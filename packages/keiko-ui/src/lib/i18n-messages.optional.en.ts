@@ -1536,8 +1536,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "This list describes keys returned by Jira for the selected entity; it does not establish visibility of other properties.",
   "chat.jira.properties.pointerHelp":
     "Root means the whole value. A JSON Pointer identifies a child: ~1 stands for / and ~0 for ~. The path / alone names an empty object key. Array positions start at 0.",
-  "chat.jira.properties.visibleEscapes":
-    "Display escapes: \\u0000 represents the corresponding control character; \\\\ represents one literal backslash. The stored text and pointer are unchanged.",
+  "chat.jira.properties.visibleEscapes": String.raw`Display escapes: \u0000 represents the corresponding control character; \\ represents one literal backslash. The stored text and pointer are unchanged.`,
   "chat.jira.properties.issueId": "Issue ID",
   "chat.jira.properties.selectedItemId": "Requested dashboard item ID",
   "chat.jira.properties.requestedItemContext":

@@ -11,11 +11,12 @@ function exposureDetails(data: Source): JiraAgileDetails {
     facts: [],
     labels: [
       "chat.jira.runtimeSettings.exposureObservation",
-      data.exposed === true
-        ? "chat.jira.runtimeSettings.exposed"
-        : data.exposed === false
-          ? "chat.jira.runtimeSettings.notExposed"
-          : "chat.jira.runtimeSettings.exposureUnknown",
+      triState(
+        data.exposed,
+        "chat.jira.runtimeSettings.exposed",
+        "chat.jira.runtimeSettings.notExposed",
+        "chat.jira.runtimeSettings.exposureUnknown",
+      ),
     ],
   };
 }
@@ -53,4 +54,10 @@ export function jiraRuntimeSettingsDetails(
       labels: ["chat.jira.runtimeSettings.limitObservation"],
     },
   ];
+}
+
+function triState<T extends string>(value: unknown, yes: T, no: T, unknown: T): T {
+  if (value === true) return yes;
+  if (value === false) return no;
+  return unknown;
 }

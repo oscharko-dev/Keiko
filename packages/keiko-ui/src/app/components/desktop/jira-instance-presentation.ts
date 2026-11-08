@@ -153,7 +153,7 @@ function configuration(source: Source): readonly JiraAgileDetails[] {
     return [];
   const time = timeSettings(source.timeTrackingConfiguration);
   const labels = Object.entries(FEATURES).map(([field, [yes, no, unknown]]) =>
-    source[field] === true ? yes : source[field] === false ? no : unknown,
+    triState(source[field], yes, no, unknown),
   );
   return [{ facts: time.facts, labels: [...labels, ...time.labels] }];
 }
@@ -202,4 +202,10 @@ export function jiraInstanceDetails(tool: string, data: Source): readonly JiraAg
     default:
       return [];
   }
+}
+
+function triState<T extends string>(value: unknown, yes: T, no: T, unknown: T): T {
+  if (value === true) return yes;
+  if (value === false) return no;
+  return unknown;
 }

@@ -69,10 +69,7 @@ export function jiraPropertyContextComplete(entity: string, data: Source): boole
   )
     return false;
   const fields = ENTITY_CONTEXT[entity];
-  if (
-    fields === undefined ||
-    !fields.every((field) => Object.hasOwn(data, field) && contextIdentity(field, data[field]))
-  )
+  if (!fields?.every((field) => Object.hasOwn(data, field) && contextIdentity(field, data[field])))
     return false;
   return Object.keys(CONTEXT).every(
     (field) => !Object.hasOwn(data, field) || fields.includes(field),
@@ -98,9 +95,9 @@ function countFact(label: WidgetMessageKey, value: unknown): JiraOutcomeFact[] {
 function visiblePropertyText(value: string): string {
   return Array.from(value, (character) => {
     if (character === "\\") return "\\\\";
-    const code = character.charCodeAt(0);
+    const code = character.codePointAt(0) ?? 0;
     return code <= 0x1f || (code >= 0x7f && code <= 0x9f)
-      ? `\\u${code.toString(16).padStart(4, "0")}`
+      ? String.raw`\u${code.toString(16).padStart(4, "0")}`
       : character;
   }).join("");
 }
@@ -160,16 +157,7 @@ function stringValueFacts(source: Source): JiraAgileDetails {
 }
 function containerValueFacts(source: Source): JiraAgileDetails {
   const facts = countFact("chat.jira.properties.children", source.childCount);
-  const labels: WidgetMessageKey[] =
-    facts.length === 0
-      ? ["chat.jira.properties.childrenUnknown"]
-      : source.childCount === 0
-        ? [
-            source.kind === "array"
-              ? "chat.jira.properties.emptyArray"
-              : "chat.jira.properties.emptyObject",
-          ]
-        : [];
+  const labels = containerLabels(facts, source);
   return { facts, labels };
 }
 function booleanValueFacts(source: Source): JiraAgileDetails {
@@ -203,15 +191,7 @@ function valueFacts(source: Source): JiraAgileDetails {
 }
 export function jiraPropertyValueDetails(source: Source): JiraAgileDetails {
   const path = source.path;
-  const position: JiraAgileDetails =
-    path === ""
-      ? { facts: [], labels: ["chat.jira.properties.root"] }
-      : typeof path === "string" && path.startsWith("/") && !/~(?![01])/u.test(path)
-        ? {
-            facts: [{ label: "chat.jira.properties.pointer", value: visiblePropertyText(path) }],
-            labels: escapeLabels(path, visiblePropertyText(path)),
-          }
-        : { facts: [], labels: ["chat.jira.properties.pathUnknown"] };
+  const position = pathPosition(path);
   const kind =
     typeof source.kind === "string" && Object.hasOwn(KINDS, source.kind)
       ? KINDS[source.kind]
@@ -239,4 +219,22 @@ export function jiraPropertyDetails(tool: string, data: Source): readonly JiraAg
       })
     : [];
   return [header(tool, data), ...items];
+}
+function containerLabels(facts: readonly JiraOutcomeFact[], source: Source): WidgetMessageKey[] {
+  if (facts.length === 0) return ["chat.jira.properties.childrenUnknown"];
+  if (source.childCount !== 0) return [];
+  return [
+    source.kind === "array"
+      ? "chat.jira.properties.emptyArray"
+      : "chat.jira.properties.emptyObject",
+  ];
+}
+function pathPosition(path: unknown): JiraAgileDetails {
+  if (path === "") return { facts: [], labels: ["chat.jira.properties.root"] };
+  if (typeof path === "string" && path.startsWith("/") && !/~(?![01])/u.test(path))
+    return {
+      facts: [{ label: "chat.jira.properties.pointer", value: visiblePropertyText(path) }],
+      labels: escapeLabels(path, visiblePropertyText(path)),
+    };
+  return { facts: [], labels: ["chat.jira.properties.pathUnknown"] };
 }

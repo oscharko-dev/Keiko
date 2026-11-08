@@ -334,13 +334,13 @@ export function systemActionCase(operation: SystemOperation): SystemActionCase {
 }
 export function systemActionExchange(
   fixture: SystemActionCase,
-  data: CatalogJsonObject = { ...fixture.receipt, outcome: "succeeded" },
+  data?: CatalogJsonObject,
   index = 0,
   journal?: ChatToolExchange["mutationOutcome"],
 ): ChatToolExchange {
   const exchange = configurationExchange(
     fixture.operation.replace(/[.-]/gu, "_"),
-    data,
+    data ?? { ...fixture.receipt, outcome: "succeeded" },
     index,
     journal,
   );

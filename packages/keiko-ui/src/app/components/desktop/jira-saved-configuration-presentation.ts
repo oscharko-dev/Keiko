@@ -108,11 +108,7 @@ function familyLabels(family: Family, source: Source): WidgetMessageKey[] {
   if (family === "preference" || family === "delete-preference")
     return [
       "chat.jira.savedConfiguration.currentUserOnly",
-      ...(source.preferencePresent === true
-        ? ["chat.jira.savedConfiguration.targetPresent" as const]
-        : source.preferencePresent === false
-          ? ["chat.jira.savedConfiguration.targetAbsent" as const]
-          : []),
+      ...preferenceTargetLabels(source.preferencePresent),
     ];
   return [];
 }
@@ -144,4 +140,9 @@ export function jiraSavedConfigurationDetails(
       ],
     },
   ];
+}
+function preferenceTargetLabels(present: unknown): readonly WidgetMessageKey[] {
+  if (present === true) return ["chat.jira.savedConfiguration.targetPresent"];
+  if (present === false) return ["chat.jira.savedConfiguration.targetAbsent"];
+  return [];
 }

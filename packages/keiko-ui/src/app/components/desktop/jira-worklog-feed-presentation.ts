@@ -24,11 +24,12 @@ function header(tool: string, data: Source): JiraAgileDetails {
       : "chat.jira.worklogFeed.updated",
   ];
   labels.push(
-    typeof data.isLastPage !== "boolean"
-      ? "chat.jira.worklogFeed.pageUnknown"
-      : data.isLastPage
-        ? "chat.jira.worklogFeed.lastPage"
-        : "chat.jira.worklogFeed.morePages",
+    triState(
+      data.isLastPage,
+      "chat.jira.worklogFeed.lastPage",
+      "chat.jira.worklogFeed.morePages",
+      "chat.jira.worklogFeed.pageUnknown",
+    ),
   );
   if (data.isLastPage === false) {
     labels.push("chat.jira.worklogFeed.inclusiveCursor");
@@ -66,4 +67,10 @@ function change(value: unknown): JiraAgileDetails {
 export function jiraWorklogFeedDetails(tool: string, data: Source): readonly JiraAgileDetails[] {
   if (!JIRA_WORKLOG_FEED_TOOLS.has(tool) || data.outcome === "failed") return [];
   return [header(tool, data), ...(Array.isArray(data.items) ? data.items.map(change) : [])];
+}
+
+function triState<T extends string>(value: unknown, yes: T, no: T, unknown: T): T {
+  if (value === true) return yes;
+  if (value === false) return no;
+  return unknown;
 }

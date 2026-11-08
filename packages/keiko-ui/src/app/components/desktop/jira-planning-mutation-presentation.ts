@@ -215,12 +215,7 @@ function estimationDetails(tool: string, source: Source): JiraAgileDetails {
           : "chat.jira.planning.requestedEstimate",
       value: String(source.estimationValue),
     });
-  const unit: WidgetMessageKey = !complete
-    ? "chat.jira.planning.unitUnknown"
-    : source.estimationUnit === "seconds"
-      ? "chat.jira.planning.seconds"
-      : "chat.jira.planning.nativeBoardNumber";
-  return { facts, labels: [...outcome(tool, source), unit] };
+  return { facts, labels: [...outcome(tool, source), estimationUnitLabel(complete, source)] };
 }
 function issueDetails(tool: string, source: Source): JiraAgileDetails {
   const rank = tool !== "jira_epic_remove_issues";
@@ -254,4 +249,10 @@ export function jiraPlanningMutationDetails(
       ? estimationDetails(tool, source)
       : issueDetails(tool, source),
   ];
+}
+function estimationUnitLabel(complete: boolean, source: Source): WidgetMessageKey {
+  if (!complete) return "chat.jira.planning.unitUnknown";
+  return source.estimationUnit === "seconds"
+    ? "chat.jira.planning.seconds"
+    : "chat.jira.planning.nativeBoardNumber";
 }

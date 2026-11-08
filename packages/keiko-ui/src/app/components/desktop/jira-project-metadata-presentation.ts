@@ -27,7 +27,7 @@ export const JIRA_PROJECT_METADATA_TOOLS: ReadonlySet<string> = new Set([
 
 function identity(value: unknown): string | undefined {
   return typeof value === "string" &&
-    /^[1-9][0-9]{0,18}$/u.test(value) &&
+    /^[1-9]\d{0,18}$/u.test(value) &&
     BigInt(value) <= 9223372036854775807n
     ? value
     : undefined;
@@ -38,7 +38,9 @@ function state(
   no: WidgetMessageKey,
   unknown: WidgetMessageKey,
 ): WidgetMessageKey {
-  return value === true ? yes : value === false ? no : unknown;
+  if (value === true) return yes;
+  if (value === false) return no;
+  return unknown;
 }
 const ASSIGNEES: Readonly<Record<string, WidgetMessageKey>> = {
   PROJECT_DEFAULT: "chat.jira.metadata.assigneeProjectDefault",
