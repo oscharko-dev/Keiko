@@ -397,6 +397,15 @@ function directRead(
   selection: ReadSelection,
 ): NormalizedResponse | undefined {
   if (selection.read) return undefined;
+  const canonicalId = `keiko.${selection.name}`;
+  if (request.toolCatalog?.kind !== "bound")
+    throw new Error(`Direct Jira read requires a bound base catalog: ${canonicalId}`);
+  if (
+    !request.toolCatalog.projection.tools.some((tool) => tool.toolRef.canonicalId === canonicalId)
+  )
+    throw new Error(
+      `Base catalog must directly offer ${canonicalId}; discover/describe is not a fallback`,
+    );
   selection.read = true;
   return readCall(request, selection.name, selection.args);
 }
@@ -583,6 +592,20 @@ it("keeps the Jira-only tool answer when no Knowledge Pod is connected", async (
   const f = await fixture(false);
   const result = await handleSendDesktopChat(context(f, "golden-no-knowledge"), f.deps);
   expect(result.status, JSON.stringify(result.body)).toBe(200);
+  const initial = f.script.calls[0];
+  if (initial === undefined) throw new Error("Missing initial base-catalog request");
+  const report: ReadSelection = { name: "jira.report", args: { projectKey: "KERD" }, read: false };
+  expect(() => directRead({ ...initial, toolCatalog: undefined }, report)).toThrow(
+    "Direct Jira read requires a bound base catalog",
+  );
+  expect(report.read).toBe(false);
+  // Bind a proposal from the real initial catalog without executing another native read.
+  const proposal = directRead(initial, report);
+  expect(proposal?.toolCalls).toHaveLength(1);
+  expect(proposal?.toolCalls[0]?.invocation).toMatchObject({
+    kind: "bound",
+    toolRef: { canonicalId: "keiko.jira.report" },
+  });
   expect(f.native.requests).toHaveLength(1);
   expectDirectRead(f, "jira_projects");
   expect(f.script.answers).toHaveLength(1);
