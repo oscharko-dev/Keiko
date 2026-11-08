@@ -31,7 +31,12 @@ export interface Scenario {
   readonly expectedOutcome?: "succeeded-unconfirmed";
   readonly expectedReceipt?: CatalogJsonObject;
   /** Independent literal native fixture route, never constructed from the production registry. */
-  readonly expectedPrimary?: { readonly method: "POST" | "PUT" | "DELETE"; readonly apiRoot: "/rest/api/2" | "/rest/auth/1"; readonly path: string };
+  readonly expectedPrimary?: {
+    readonly method: "GET" | "POST" | "PUT" | "DELETE";
+    readonly apiRoot: "/rest/api/2" | "/rest/auth/1" | "/rest/agile/1.0";
+    /** Independent concrete route, including its complete query when present. */
+    readonly path: string;
+  };
 }
 export interface Observation {
   readonly requests: readonly AtlassianHttpBodyRequest[];
@@ -157,18 +162,24 @@ export async function observeNativeJiraOperation(
   };
 }
 export function assertNativeJiraPrimary(observation: Observation, scenario: Scenario): void {
+  const expected = scenario.expectedPrimary;
+  if (expected === undefined) throw new TypeError("Missing independent native primary expectation");
+  const primary = observation.requests
+    .filter((request) => request.method === expected.method)
+    .at(scenario.primaryMethodIndex ?? 0);
+  if (primary === undefined) throw new TypeError("No independent native operation was dispatched");
+  expect([primary.method, primary.url]).toEqual([expected.method,
+    `https://jira.example.invalid/context${expected.apiRoot}/${expected.path}`]);
+  expect([observation.definition.method, observation.definition.apiRoot]).toEqual([expected.method, expected.apiRoot]);
+}
+
+/** Registry agreement is additional consistency evidence, never an independent native oracle. */
+export function assertNativeJiraRegistryAgreement(observation: Observation, scenario: Scenario): void {
   const { definition, requests } = observation;
   const primary = requests
     .filter((request) => request.method === definition.method)
     .at(scenario.primaryMethodIndex ?? 0);
   if (primary === undefined) throw new TypeError("No native operation was dispatched");
-  if (scenario.expectedPrimary !== undefined) {
-    const expected = scenario.expectedPrimary;
-    expect([primary.method, primary.url]).toEqual([expected.method,
-      `https://jira.example.invalid/context${expected.apiRoot}/${expected.path}`]);
-    expect([definition.method, definition.apiRoot]).toEqual([expected.method, expected.apiRoot]);
-    return;
-  }
   const expectedPath =
     definition.apiRoot +
     definition.pathTemplate.replaceAll(/\{([^{}]+)\}/gu, (_match, parameter: string) => {

@@ -7,6 +7,7 @@ import { actorDetails, loadSession, requireLicense } from "./lab-client.mjs";
 import { prepareChat, withLiveChat } from "./chat-read.mjs";
 import { commentState, privateJson, runChatToolTurn } from "./chat-write.mjs";
 import { issueState, projectState, readCases, remoteRead, verifyRead } from "./catalog-state.mjs";
+import { isMainModule } from "../../lib/is-main-module.mjs";
 
 function stage(operation, completed, extra = {}) {
   console.log(
@@ -14,7 +15,19 @@ function stage(operation, completed, extra = {}) {
   );
 }
 
-async function runCase(context, group, operation, args, before) {
+export async function completeCatalogCase(group, operation, observed, verify) {
+  await verify(observed.exchange);
+  group.results.push({
+    operation,
+    decisions: observed.decisions,
+    transcriptOutcome: observed.exchange.result.data.outcome,
+  });
+  privateJson(group.pendingPath, group);
+  stage(operation, true, observed.decisions);
+  return observed.exchange;
+}
+
+async function runCase(context, group, operation, args, before, verify) {
   await requireLicense(context.session);
   const intent = {
     operation,
@@ -40,21 +53,16 @@ async function runCase(context, group, operation, args, before) {
     ...intent,
     assertUnchanged: async () => assert.deepEqual(await projectState(context.session), before),
   });
-  group.results.push({
-    operation,
-    decisions: observed.decisions,
-    transcriptOutcome: observed.exchange.result.data.outcome,
-  });
-  privateJson(group.pendingPath, group);
-  stage(operation, true, observed.decisions);
-  return observed.exchange;
+  return completeCatalogCase(group, operation, observed, verify);
 }
 
 async function qualifyReads(context, group, fixture) {
   for (const [operation, args, expected] of readCases(fixture, actorDetails("assignee").name)) {
     const before = await projectState(context.session);
-    verifyRead(await runCase(context, group, operation, args, before), expected);
-    assert.deepEqual(await projectState(context.session), before);
+    await runCase(context, group, operation, args, before, async (exchange) => {
+      verifyRead(exchange, expected);
+      assert.deepEqual(await projectState(context.session), before);
+    });
   }
 }
 
@@ -64,7 +72,8 @@ async function qualifyCreate(context, group, fixture) {
   const marker = `Synthetic catalog ${group.id}`;
   assert.equal(before.issues.filter((issue) => issue.fields.summary === marker).length, 0);
   const fields = { summary: marker, [fixture.requiredFieldId]: "Synthetic required value" };
-  const exchange = await runCase(
+  let key;
+  await runCase(
     context,
     group,
     "jira.create",
@@ -74,32 +83,34 @@ async function qualifyCreate(context, group, fixture) {
       fields,
     },
     before,
+    async (exchange) => {
+      const after = await projectState(context.session);
+      const matching = after.issues.filter((issue) => issue.fields.summary === marker);
+      assert.equal(after.count, before.count + 1);
+      assert.equal(matching.length, 1);
+      key = matching[0].key;
+      assert.ok(JSON.stringify(exchange.result.data).includes(key));
+      assert.equal(
+        (await issueState(context.session, key, fixture.requiredFieldId)).fields[
+          fixture.requiredFieldId
+        ],
+        fields[fixture.requiredFieldId],
+      );
+      group.issueKey = key;
+    },
   );
-  const after = await projectState(context.session);
-  const matching = after.issues.filter((issue) => issue.fields.summary === marker);
-  assert.equal(after.count, before.count + 1);
-  assert.equal(matching.length, 1);
-  const key = matching[0].key;
-  assert.ok(JSON.stringify(exchange.result.data).includes(key));
-  assert.equal(
-    (await issueState(context.session, key, fixture.requiredFieldId)).fields[
-      fixture.requiredFieldId
-    ],
-    fields[fixture.requiredFieldId],
-  );
-  group.issueKey = key;
-  privateJson(group.pendingPath, group);
   return key;
 }
 
 async function qualifyFieldMutation(context, group, fixture, key, operation, args, verify) {
   const before = await projectState(context.session);
   const original = await issueState(context.session, key, fixture.requiredFieldId);
-  await runCase(context, group, operation, { issueKey: key, ...args }, before);
-  const observed = await issueState(context.session, key, fixture.requiredFieldId);
-  verify(observed.fields);
-  assert.equal(observed.historyCount, original.historyCount + 1);
-  assert.equal((await projectState(context.session)).count, before.count);
+  await runCase(context, group, operation, { issueKey: key, ...args }, before, async () => {
+    const observed = await issueState(context.session, key, fixture.requiredFieldId);
+    verify(observed.fields);
+    assert.equal(observed.historyCount, original.historyCount + 1);
+    assert.equal((await projectState(context.session)).count, before.count);
+  });
 }
 
 async function qualifyComment(context, group, key) {
@@ -112,11 +123,11 @@ async function qualifyComment(context, group, key) {
     "jira.comment",
     { issueKey: key, body: marker },
     await projectState(context.session),
+    async () => assert.deepEqual(await commentState(context.session, key, marker), {
+      total: before.total + 1,
+      matches: 1,
+    }),
   );
-  assert.deepEqual(await commentState(context.session, key, marker), {
-    total: before.total + 1,
-    matches: 1,
-  });
 }
 
 async function qualifyWrites(context, group, fixture) {
@@ -204,7 +215,7 @@ async function main() {
   stage("all", true, { operations: 14, transport });
 }
 
-await main().catch((error) => {
+if (isMainModule(import.meta.url)) await main().catch((error) => {
   const location =
     error instanceof Error
       ? (error.stack?.match(/catalog-(?:chat|state)\.mjs:\d+:\d+/g) ?? [])
