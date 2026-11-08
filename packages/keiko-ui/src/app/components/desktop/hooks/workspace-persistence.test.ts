@@ -278,6 +278,43 @@ describe("workspace-persistence", () => {
     ).toEqual({});
   });
 
+  // #4271: the Workbench's repository, branch and location selection lived only in memory. After a
+  // reload the window fell back to whichever of the shell's project and the active task binding
+  // loaded first, and bound that root in place of the person's choice.
+  it("retains the Coding Workbench's repository, branch and location selection", () => {
+    const selection = {
+      repositoryPath: "/repos/selected",
+      targetBranch: "feature/x",
+      targetBranchRoot: "/repos/selected",
+      executionLocation: "worktree",
+    };
+    const [retained] = sanitizePersistedWindows([
+      win({
+        id: "coding-1",
+        type: "coding",
+        cfg: { ...selection, historySelection: "task-1", unknownKey: "dropped" },
+      }),
+    ]);
+    expect(retained?.cfg).toEqual(selection);
+    for (const repositoryPath of [
+      "/repos/ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "/repos/.env",
+      "x".repeat(2_049),
+      42,
+    ]) {
+      const [dropped] = sanitizePersistedWindows([
+        { ...win({ id: "coding-1", type: "coding" }), cfg: { repositoryPath } },
+      ]);
+      expect(dropped?.cfg).toEqual({});
+    }
+    for (const executionLocation of ["remote", "", true, 1, { location: "local" }]) {
+      const [rejected] = sanitizePersistedWindows([
+        { ...win({ id: "coding-1", type: "coding" }), cfg: { executionLocation } },
+      ]);
+      expect(rejected?.cfg).toEqual({});
+    }
+  });
+
   it("retains only the closed Coding Workbench Git binding marker", () => {
     const retained = sanitizePersistedWindows([
       win({

@@ -6,7 +6,7 @@
 // review of Ask for approval and the package-script trust pause for you. The driver acts as the
 // operator, so it is fail-closed: the approval policy and the lab repository are always named, and
 // the repository must be a lab copy.
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { chromium } from "@playwright/test";
@@ -89,7 +89,11 @@ const SETTLE_MS = 1500;
 const POLL_MS = 3000;
 const UI_TIMEOUT_MS = 60_000;
 
-/** Opens the Workbench window bound to the lab repository, as the desktop would restore it. */
+/**
+ * Opens the Workbench window bound to the lab repository, as the desktop would restore it. The
+ * window keeps the canonical path, as Keiko registers a project: an alias such as macOS's `/var`
+ * for `/private/var` never matches the canonical root of the task workspace bound to it (#4271).
+ */
 export async function seedWorkbenchWindow(page, repo) {
   await page.addInitScript(
     ({ argument: root, storageKeys }) => {
@@ -107,7 +111,7 @@ export async function seedWorkbenchWindow(page, repo) {
       };
       globalThis.localStorage.setItem(storageKeys.workspace, JSON.stringify([windowState]));
     },
-    await workspaceStorageArgs(page, repo),
+    await workspaceStorageArgs(page, realpathSync(repo)),
   );
 }
 

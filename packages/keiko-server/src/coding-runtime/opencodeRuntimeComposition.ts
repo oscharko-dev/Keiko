@@ -105,6 +105,7 @@ import type {
 } from "./codingToolFacadePorts.js";
 import {
   codingToolEditPresentation,
+  codingToolGitPresentation,
   codingToolVerificationPresentation,
   humanDecisionFeedback,
   humanDecisionToolResult,
@@ -117,7 +118,6 @@ import {
 import {
   isCodingSafeActivityPresentationPath,
   type CodingSafeActivityToolPresentation,
-  type CodingSafeActivityVerificationOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import type { OpenCodeQuestionRequest } from "./opencodeHttpClient.js";
 import {
@@ -5222,8 +5222,7 @@ function responseForToolResult(
       deps.diagnostics,
       actionId,
       result,
-      presentation.bridgeDurationMs,
-      presentation.verificationOutcome,
+      presentation,
     );
   }
   return { status: 200, body: responseBody };
@@ -5240,16 +5239,16 @@ function recordRenderedToolResult(
   diagnostics: ServerDiagnosticSink | undefined,
   actionId: string | undefined,
   result: CodingToolResult,
-  bridgeDurationMs: number | undefined,
-  verificationOutcome: CodingSafeActivityVerificationOutcome | undefined,
+  presentation: CodingSafeActivityToolPresentation,
 ): void {
   try {
     recordGovernedToolModelContent(
       rendered.sink,
       rendered.correlationId,
       result,
-      bridgeDurationMs,
-      verificationOutcome,
+      presentation.bridgeDurationMs,
+      presentation.verificationOutcome,
+      presentation.gitOutcome,
     );
   } catch (error) {
     emitServerDiagnostic(diagnostics, {
@@ -5375,12 +5374,17 @@ function bridgeServicePresentation(
   });
 }
 
+function isGitStepRequest(request: CodingToolActionRequest): boolean {
+  return request.action === "git" || request.action === "delivery";
+}
+
 function governedToolPresentation(
   request: CodingToolActionRequest,
   result: CodingToolResult,
 ): CodingSafeActivityToolPresentation {
   if (request.action === "edit") return codingToolEditPresentation(result);
   if (request.action === "verification") return codingToolVerificationPresentation(result);
+  if (isGitStepRequest(request)) return codingToolGitPresentation(result);
   if (result.status !== "completed" || !("read" in result)) return {};
   if (request.action === "discover") {
     return "returnedPathCount" in result.read && typeof result.read.returnedPathCount === "number"

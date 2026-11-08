@@ -40,6 +40,7 @@ import type {
 import {
   CODING_SAFE_ACTIVITY_EDIT_REFUSAL_REASON_CODES,
   isCodingSafeActivityPresentationPath,
+  type CodingSafeActivityGitOutcome,
   type CodingSafeActivityToolPresentation,
   type CodingSafeActivityVerificationOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
@@ -173,6 +174,7 @@ import type {
   CodingToolInvocationRegistry,
   CodingToolInvocationTakeResult,
 } from "./codingToolInvocationRegistry.js";
+import { SHELL_VERIFICATION_STATUS_RULE } from "./codingRuntimeVerificationContinuation.js";
 import {
   openCodeToolMayAwaitOperator,
   type CanonicalCatalogFacadeBridge,
@@ -403,6 +405,62 @@ export function codingToolVerificationPresentation(
       ? undefined
       : VERIFICATION_OUTCOME_BY_REASON.get(result.reasonCode);
   return verificationOutcome === undefined ? {} : Object.freeze({ verificationOutcome });
+}
+
+// The shared lifecycle statuses of a stage, an unstage, a branch and the verified commit. A status
+// this table does not name fails closed to `not-done`: an unknown outcome never reads "Succeeded".
+const GIT_STEP_OUTCOME_BY_STATUS: ReadonlyMap<string, CodingSafeActivityGitOutcome> = new Map([
+  ["succeeded", "completed"],
+  ["approval-required", "waiting-for-approval"],
+  ["blocked", "blocked"],
+  ["drift", "changed"],
+  ["failed", "not-done"],
+  ["recovery-required", "not-done"],
+  ["verification-failed", "verification-missing"],
+]);
+
+// Commit refusals whose cause the card names exactly (lab T37 audit, #4271): a failed check, a
+// change only partly staged, and open editor files with unsaved changes. Every other reason keeps
+// its status word.
+const COMMIT_OUTCOME_BY_REASON: ReadonlyMap<string, CodingSafeActivityGitOutcome> = new Map([
+  ["verification-failed", "verification-failed"],
+  ["candidate-not-staged", "not-staged"],
+  ["buffers-dirty", "unsaved-changes"],
+]);
+
+const GIT_SYNC_COMPLETED_STATUSES: ReadonlySet<string> = new Set(["succeeded", "up-to-date"]);
+
+function gitStepOutcome(status: string): CodingSafeActivityGitOutcome {
+  return GIT_STEP_OUTCOME_BY_STATUS.get(status) ?? "not-done";
+}
+
+function commitOutcome(commit: VerifiedCommitResult): CodingSafeActivityGitOutcome {
+  return COMMIT_OUTCOME_BY_REASON.get(commit.reason) ?? gitStepOutcome(commit.status);
+}
+
+// `ready` is a stage or unstage proposal prepared but not yet carried out: it claims no outcome.
+function gitResultOutcome(git: CodingRuntimeGitResult): CodingSafeActivityGitOutcome | undefined {
+  if (git.kind === "fetch" || git.kind === "pull")
+    return GIT_SYNC_COMPLETED_STATUSES.has(git.status) ? "completed" : "not-done";
+  if (git.kind !== "stage" && git.kind !== "unstage" && git.kind !== "branch") return undefined;
+  return git.status === "ready" ? undefined : gitStepOutcome(git.status);
+}
+
+/**
+ * Server-private live presentation of one answered Git step (stage, unstage, fetch, pull, branch or
+ * the verified commit): how it really ended, in the contract's closed words, from the result the
+ * model received. The facade answers a refusal as a completed call that carries it, so without this
+ * the card reads "Succeeded" for a commit that never happened (lab T37, #4271). A read, a prepared
+ * proposal and every other result present nothing.
+ */
+export function codingToolGitPresentation(
+  result: CodingToolResult,
+): CodingSafeActivityToolPresentation {
+  if (result.status !== "completed") return {};
+  let gitOutcome: CodingSafeActivityGitOutcome | undefined;
+  if ("verifiedCommit" in result) gitOutcome = commitOutcome(result.verifiedCommit);
+  else if ("git" in result) gitOutcome = gitResultOutcome(result.git);
+  return gitOutcome === undefined ? {} : Object.freeze({ gitOutcome });
 }
 
 async function executeAdmitted(
@@ -788,8 +846,7 @@ const PROTECTED_BRANCH_COMMIT_GUIDANCE =
 // AC3 lab T17 (round I, #3907): the staged candidate had no verification, the governed verifier could
 // not run on the host and named the shell instead, and the model, seeing only `verification-missing`
 // on every commit, restaged and re-proposed until the deadline. The refusal names the model's step.
-const UNVERIFIED_COMMIT_GUIDANCE =
-  "The staged change has no verification yet; it is already staged. Do not stage again and do not retry this commit unchanged. Verify the staged change first: run keiko_verification, or, when it says to run the check in your shell, run the repository's own test command in your shell, where it counts for the staged change. Then propose the commit again.";
+const UNVERIFIED_COMMIT_GUIDANCE = `The staged change has no verification yet; it is already staged. Do not stage again and do not retry this commit unchanged. Verify the staged change first: run keiko_verification, or, when it says to run the check in your shell, run the repository's own test command in your shell, where it counts for the staged change. ${SHELL_VERIFICATION_STATUS_RULE} Then propose the commit again.`;
 
 function commitBlockGuidance(result: VerifiedCommitResult): { readonly guidance?: string } {
   if (result.status === "blocked" && result.blockReason === "protected-branch")
@@ -887,8 +944,10 @@ const GOVERNED_FAILURE_GUIDANCE: Readonly<Record<string, Readonly<Record<string,
     // step still checked something, so the guidance claims no more than the named steps (PR #3452).
     // A Python repository read "add the script" as an order and gained a package.json the task
     // forbade (AC3 lab T19, #3907); the shell command is the verification that already counts.
-    VERIFICATION_NOT_RUN:
-      "Not every verification step ran; where the detail names a step, it says why. A missing script means package.json defines no script for that verifier, or the repository has no package.json at all: choose a verifier the repository defines, or run the repository's own command for that check in your shell (for example python3 -m unittest or pytest), where its result counts as that verification. Never add a package.json or a script only to satisfy this verifier. A step to run in your own shell cannot run in the isolated verifier on this host: run the repository's own command for that check (its package script, or the tool itself) in your shell, where its result counts as that verification. Dependencies that did not install, a policy denial or a cancellation are blockers to report. Do not retry the same verifier unchanged.",
+    VERIFICATION_NOT_RUN: `Not every verification step ran; where the detail names a step, it says why. A missing script means package.json defines no script for that verifier, or the repository has no package.json at all: choose a verifier the repository defines, or run the repository's own command for that check in your shell (for example python3 -m unittest or pytest), where its result counts as that verification. Never add a package.json or a script only to satisfy this verifier. A step to run in your own shell cannot run in the isolated verifier on this host: run the repository's own command for that check (its package script, or the tool itself) in your shell, where its result counts as that verification. ${SHELL_VERIFICATION_STATUS_RULE} Dependencies that did not install, a policy denial or a cancellation are blockers to report. Do not retry the same verifier unchanged.`,
+    // #4271 lab (T39): a verifier with no step for the package it resolved answered a bare code,
+    // and the model gave up instead of running the build tool the repository already uses.
+    NO_RUNNABLE_STEPS: `This verifier has nothing to run for that package. Where the detail names several packages, pass one as packageDir. Otherwise run the repository's own test command for the changed code in your shell (for example mvn test, ./gradlew test, npm test or pytest), where its result counts as that verification. ${SHELL_VERIFICATION_STATUS_RULE} Never add a script or build file only to satisfy this verifier, and do not retry the same verifier unchanged.`,
   },
   // Push and pull request proposals (CodingRuntimeDeliveryResult, contracts). Each names the true
   // cause and the one next step that is the model's to take; none suggests another remote or URL.

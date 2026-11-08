@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { workspaceStorageKey } from "../../packages/keiko-ui/src/app/components/desktop/hooks/workspace-storage.ts";
 import { workspaceStorageArgs } from "../../tests/e2e/support/workspace-storage.ts";
 import { seedWorkbenchWindow } from "../testing/coding-workbench-lab/wb-ui.mjs";
@@ -113,19 +116,31 @@ describe("workspace fixture storage ownership", () => {
     ).rejects.toThrow("Invalid workspace fixture storage identity");
   });
 
-  it("opens the Workbench through its owned key without creating a legacy layout", async () => {
-    const storage = new Map();
-    vi.stubGlobal("localStorage", { setItem: (key, value) => storage.set(key, value) });
-    const page = fixturePage();
-    await seedWorkbenchWindow(page, "/synthetic/ledger-lab");
-    expect(page.request.get).toHaveBeenCalledExactlyOnceWith("/api/workspace/state");
-    expect(storage.has("keiko.workspace.v4")).toBe(false);
-    expect(JSON.parse(storage.get(workspaceStorageKey("keiko.workspace.v4", STORAGE_ID)))).toEqual([
-      expect.objectContaining({
-        id: "lab-workbench",
-        type: "coding",
-        cfg: { repositoryPath: "/synthetic/ledger-lab" },
-      }),
-    ]);
+  // #4271: the window names the canonical repository, as Keiko registers a project; an alias
+  // (macOS's `/var` for `/private/var`) never matches the canonical root of its task workspace.
+  it("opens the Workbench through its owned key on the canonical repository path", async () => {
+    const base = mkdtempSync(join(tmpdir(), "keiko-wb-ui-seed-"));
+    try {
+      const repository = join(base, "ledger-lab");
+      mkdirSync(repository);
+      const alias = join(base, "alias");
+      symlinkSync(repository, alias);
+      const storage = new Map();
+      vi.stubGlobal("localStorage", { setItem: (key, value) => storage.set(key, value) });
+      const page = fixturePage();
+      await seedWorkbenchWindow(page, alias);
+      expect(page.request.get).toHaveBeenCalledExactlyOnceWith("/api/workspace/state");
+      expect(storage.has("keiko.workspace.v4")).toBe(false);
+      const stored = JSON.parse(storage.get(workspaceStorageKey("keiko.workspace.v4", STORAGE_ID)));
+      expect(stored).toEqual([
+        expect.objectContaining({
+          id: "lab-workbench",
+          type: "coding",
+          cfg: { repositoryPath: realpathSync(repository) },
+        }),
+      ]);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 });

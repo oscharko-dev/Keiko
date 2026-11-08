@@ -745,6 +745,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.toolState.waiting-for-trust": "Wartet auf Freigabe",
   "codingWorkbench.activity.toolState.no-runnable-steps": "Nichts auszuführen",
   "codingWorkbench.activity.toolState.not-run": "Nicht ausgeführt",
+  "codingWorkbench.activity.toolState.not-done": "Nicht durchgeführt",
+  "codingWorkbench.activity.toolState.waiting-for-approval": "Wartet auf Freigabe",
   "codingWorkbench.activity.toolState.denied": "Abgelehnt",
   "codingWorkbench.activity.toolState.cancelled": "Abgebrochen",
   "codingWorkbench.activity.plan.title": "Aktueller Plan",
@@ -1342,9 +1344,25 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.verification.waiting-for-trust":
     "Die Verifizierung ist nicht gelaufen: Die Paket-Skripte dieses Workspace sind noch nicht zugelassen. Lasse im Kopfbereich der Coding Workbench die Paket-Skripte für die Verifizierung zu und verifiziere dann erneut.",
   "codingWorkbench.activity.verification.no-runnable-steps":
-    "Die Verifizierung ist nicht gelaufen: Dieses Repository definiert kein Skript, das der Verifizierer ausführen kann, etwa test, lint oder build. Das ist keine fehlgeschlagene Prüfung.",
+    "Die Verifizierung ist nicht gelaufen: Der Verifizierer hat für diese Anfrage nichts gefunden, was er ausführen kann, etwa weil das gewählte Paket kein test-, lint- oder build-Skript hat. Das ist keine fehlgeschlagene Prüfung.",
   "codingWorkbench.activity.verification.not-run":
     "Die Verifizierung ist nicht vollständig gelaufen: Ein Schritt wurde übersprungen, abgelehnt oder abgebrochen. Das ist keine fehlgeschlagene Prüfung.",
+  "codingWorkbench.activity.git.waiting-for-approval":
+    "Wartet auf eine Entscheidung, bevor dieser Schritt ausgeführt wird.",
+  "codingWorkbench.activity.git.verification-failed":
+    "Nicht committet: Die Verifizierung der vorgemerkten Änderung ist fehlgeschlagen. Behebe die fehlgeschlagene Prüfung, verifiziere erneut und committe dann.",
+  "codingWorkbench.activity.git.verification-missing":
+    "Nicht committet: Noch keine bestandene Verifizierung deckt die vorgemerkte Änderung ab. Verifiziere die vorgemerkte Änderung und committe dann.",
+  "codingWorkbench.activity.git.not-staged":
+    "Nicht committet: Ein Teil der Änderung ist noch nicht vorgemerkt. Merke die ganze Änderung vor, verifiziere die vorgemerkte Änderung und committe dann.",
+  "codingWorkbench.activity.git.unsaved-changes":
+    "Nicht committet: Im Editor geöffnete Dateien enthalten ungespeicherte Änderungen. Speichere sie, verifiziere die vorgemerkte Änderung und committe dann.",
+  "codingWorkbench.activity.git.blocked":
+    "Nicht durchgeführt: Die Richtlinien- oder Berechtigungsprüfung von Keiko hat diesen Schritt abgelehnt.",
+  "codingWorkbench.activity.git.changed":
+    "Nicht durchgeführt: Die Änderung oder das Repository hat sich verändert, nachdem dieser Schritt vorgeschlagen wurde.",
+  "codingWorkbench.activity.git.not-done":
+    "Nicht durchgeführt: Der Schritt ist fehlgeschlagen oder sein Ergebnis ist unklar.",
   "codingWorkbench.event.detailOutcome": "Ergebnis: {outcome}.",
   "codingWorkbench.event.detailUntrustedContent":
     "Nicht vertrauenswürdiger Inhalt: Die abgerufene Seite wurde als Daten isoliert, nicht als Anweisungen.",

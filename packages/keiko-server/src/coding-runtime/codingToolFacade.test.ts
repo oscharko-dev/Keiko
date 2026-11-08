@@ -21,6 +21,7 @@ import {
 import {
   createCodingToolFacade,
   codingToolEditPresentation,
+  codingToolGitPresentation,
   codingToolVerificationPresentation,
   humanDecisionFeedback,
   humanDecisionToolResult,
@@ -33,7 +34,8 @@ import type {
   CodingToolMutationGuard,
 } from "./codingToolFacadePorts.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
-import type { CodingToolActionRequest } from "./codingToolIpc.js";
+import { SHELL_VERIFICATION_STATUS_RULE } from "./codingRuntimeVerificationContinuation.js";
+import type { CodingToolActionRequest, CodingToolResult } from "./codingToolIpc.js";
 import { codingToolDiscoveryText } from "./codingToolIpc.js";
 import { createCodingToolReadEditPorts } from "./codingToolReadEditPorts.js";
 import { createCodingToolGovernedDelegate } from "./codingToolGovernedDelegate.js";
@@ -949,6 +951,8 @@ describe("CodingToolFacade", () => {
     expect(guidance).toContain("keiko_verification");
     expect(guidance).toContain("in your shell");
     expect(guidance).toContain("Do not stage again");
+    // #4271 lab: a check piped into `tail` passed and did not count; the refusal says why.
+    expect(guidance).toContain(SHELL_VERIFICATION_STATUS_RULE);
 
     verifiedCommit.reason = "verification-failed";
     expect(await propose()).not.toHaveProperty("guidance");
@@ -1298,6 +1302,33 @@ describe("CodingToolFacade", () => {
         "run the repository's own command for that check (its package script, or the tool itself) in your shell, where its result counts as that verification",
       ) as string,
     });
+  });
+
+  // #4271 lab (T39): a verifier with nothing to run for the resolved package answered a bare code,
+  // and the model ended without running the repository's own build tool in its shell.
+  it("tells the model how a verifier without runnable steps is still evidenced", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "failed", reasonCode: "NO_RUNNABLE_STEPS" }),
+    );
+    const subject = createCodingToolFacade(ports);
+    const result = (await subject.execute({
+      body: requestBody({ action: "verification", verifierId: "unit" }),
+      capability,
+    })) as { readonly reasonCode?: string; readonly guidance?: string; readonly detail?: string };
+    expect(result.reasonCode).toBe("NO_RUNNABLE_STEPS");
+    expect(result.detail).toBeUndefined();
+    expect(result.guidance).toContain("run the repository's own test command");
+    expect(result.guidance).toContain("pass one as packageDir");
+    expect(result.guidance).toContain(SHELL_VERIFICATION_STATUS_RULE);
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "failed", reasonCode: "VERIFICATION_NOT_RUN", notRun: [] }),
+    );
+    const notRun = (await createCodingToolFacade(ports).execute({
+      body: requestBody({ action: "verification", verifierId: "unit" }),
+      capability,
+    })) as { readonly guidance?: string };
+    expect(notRun.guidance).toContain(SHELL_VERIFICATION_STATUS_RULE);
   });
 
   // An empty not-run list names no step, so the facade forwards no detail; the guidance still stands
@@ -1728,14 +1759,18 @@ describe("CodingToolFacade", () => {
       status: "failed",
       reasonCode: code,
       evidence: [{ kind: "governed-delegate", code }],
-      // Two refusals carry guidance: the trust refusal is the operator's decision to change, not the
-      // model's (ADR-0147 D3, 2026-09-10), and a run that left a step unexecuted tells the model
-      // what that means for its next step (F74). Every other code stays bare.
+      // Three refusals carry guidance: the trust refusal is the operator's decision to change, not
+      // the model's (ADR-0147 D3, 2026-09-10), a run that left a step unexecuted tells the model
+      // what that means for its next step (F74), and a verifier with nothing to run names the
+      // shell check that still counts (#4271). Every other code stays bare.
       ...(code === "WORKSPACE_TRUST_REQUIRED"
         ? { guidance: expect.stringContaining("Only the operator can allow them") as unknown }
         : {}),
       ...(code === "VERIFICATION_NOT_RUN"
         ? { guidance: expect.stringContaining("Not every verification step ran") as unknown }
+        : {}),
+      ...(code === "NO_RUNNABLE_STEPS"
+        ? { guidance: expect.stringContaining("This verifier has nothing to run") as unknown }
         : {}),
     });
   });
@@ -2355,6 +2390,87 @@ describe("CodingToolFacade verification presentation (#3579)", () => {
     ).toEqual({});
     for (const status of ["denied", "cancelled", "timeout", "busy"] as const) {
       expect(codingToolVerificationPresentation({ status, evidence: [] })).toEqual({});
+    }
+  });
+});
+
+// Lab T37 (2026-11-07, #4271): the facade answers a refused Git step as a completed call that
+// carries the refusal, so the Workbench card read "Succeeded" for a commit that never happened. The
+// presentation names, in the contract's closed words, how the step the model received really ended.
+describe("CodingToolFacade Git presentation (#4271)", () => {
+  const completedWith = (field: "verifiedCommit" | "git", value: unknown): CodingToolResult =>
+    ({
+      status: "completed",
+      evidence: [{ kind: "governed-delegate", code: "completed" }],
+      [field]: value,
+    }) as unknown as CodingToolResult;
+
+  it.each([
+    ["succeeded", "completed", "completed"],
+    ["approval-required", "approval-required", "waiting-for-approval"],
+    ["blocked", "policy-block", "blocked"],
+    ["blocked", "message-policy", "blocked"],
+    ["verification-failed", "verification-failed", "verification-failed"],
+    ["verification-failed", "verification-missing", "verification-missing"],
+    ["verification-failed", "candidate-not-staged", "not-staged"],
+    ["blocked", "buffers-dirty", "unsaved-changes"],
+    ["drift", "verification-stale", "changed"],
+    ["failed", "execution-failed", "not-done"],
+    ["recovery-required", "execution-uncertain", "not-done"],
+  ] as const)("presents a commit answered %s/%s as %s", (status, reason, gitOutcome) => {
+    expect(codingToolGitPresentation(completedWith("verifiedCommit", { status, reason }))).toEqual({
+      gitOutcome,
+    });
+  });
+
+  it.each([
+    [{ kind: "stage", status: "succeeded", reason: "none" }, "completed"],
+    [{ kind: "stage", status: "blocked", reason: "scope-denied" }, "blocked"],
+    [{ kind: "unstage", status: "drift", reason: "candidate-drift" }, "changed"],
+    [
+      { kind: "stage", status: "approval-required", reason: "approval-required" },
+      "waiting-for-approval",
+    ],
+    [{ kind: "stage", status: "failed", reason: "execution-failed" }, "not-done"],
+    [{ kind: "branch", status: "succeeded", reason: "none" }, "completed"],
+    [{ kind: "branch", status: "blocked", reason: "branch-exists" }, "blocked"],
+    [{ kind: "branch", status: "failed", reason: "rebind-failed" }, "not-done"],
+    [{ kind: "fetch", status: "succeeded" }, "completed"],
+    [{ kind: "pull", status: "up-to-date" }, "completed"],
+    [{ kind: "pull", status: "not-fast-forward" }, "not-done"],
+    [{ kind: "fetch", status: "auth-failed" }, "not-done"],
+  ] as const)("presents the Git result %j as %s", (git, gitOutcome) => {
+    expect(codingToolGitPresentation(completedWith("git", git))).toEqual({ gitOutcome });
+  });
+
+  it("fails closed to not done for a Git or commit status it does not know", () => {
+    expect(
+      codingToolGitPresentation(completedWith("git", { kind: "stage", status: "unexpected" })),
+    ).toEqual({ gitOutcome: "not-done" });
+    expect(
+      codingToolGitPresentation(
+        completedWith("verifiedCommit", { status: "unexpected", reason: "unexpected" }),
+      ),
+    ).toEqual({ gitOutcome: "not-done" });
+  });
+
+  it("presents nothing for reads, an unprepared proposal, other results and other statuses", () => {
+    expect(codingToolGitPresentation(completedWith("git", { kind: "status" }))).toEqual({});
+    expect(codingToolGitPresentation(completedWith("git", { kind: "diff" }))).toEqual({});
+    expect(
+      codingToolGitPresentation(
+        completedWith("git", { kind: "stage", status: "ready", reason: "none" }),
+      ),
+    ).toEqual({});
+    expect(
+      codingToolGitPresentation({
+        status: "completed",
+        evidence: [],
+        verification: {},
+      } as unknown as CodingToolResult),
+    ).toEqual({});
+    for (const status of ["failed", "denied", "cancelled", "timeout", "busy"] as const) {
+      expect(codingToolGitPresentation({ status, evidence: [] })).toEqual({});
     }
   });
 });

@@ -11959,11 +11959,13 @@
         "start": [],
         "state": [
           "coding-runtime.native-build-settings.admitted",
+          "coding-runtime.native-certificates.admitted",
           "coding-runtime.native-external-roots.resolved",
           "coding-runtime.native-formatter.bound",
           "coding-runtime.native-narrowing.refused",
           "coding-runtime.native-policy.decided",
           "coding-runtime.native-step.changed",
+          "coding-runtime.native-tool.denied",
           "coding-runtime.provider-policy.bound"
         ],
         "end": [],
@@ -11973,6 +11975,10 @@
       "causalEdges": [
         {
           "op": "coding-runtime.native-build-settings.admitted",
+          "mode": "correlation"
+        },
+        {
+          "op": "coding-runtime.native-certificates.admitted",
           "mode": "correlation"
         },
         {
@@ -11996,6 +12002,10 @@
           "mode": "correlation"
         },
         {
+          "op": "coding-runtime.native-tool.denied",
+          "mode": "correlation"
+        },
+        {
           "op": "coding-runtime.provider-policy.bound",
           "mode": "correlation"
         }
@@ -12003,11 +12013,13 @@
       "lossSignals": [],
       "resourceSignals": [
         "coding-runtime.native-build-settings.admitted",
+        "coding-runtime.native-certificates.admitted",
         "coding-runtime.native-external-roots.resolved",
         "coding-runtime.native-formatter.bound",
         "coding-runtime.native-narrowing.refused",
         "coding-runtime.native-policy.decided",
         "coding-runtime.native-step.changed",
+        "coding-runtime.native-tool.denied",
         "coding-runtime.provider-policy.bound"
       ],
       "replayReferences": [],
@@ -12087,6 +12099,42 @@
             "causeChain": false
           },
           "proofIds": ["coding-runtime.native-build-settings.admitted.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "coding-runtime.native-certificates.admitted",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "capability",
+          "safeContextFields": [
+            {
+              "name": "admittedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "fileCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "namedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["coding-runtime.native-certificates.admitted.emitted-line"],
           "replayReferences": [],
           "missingObligations": []
         },
@@ -12388,6 +12436,42 @@
             "causeChain": false
           },
           "proofIds": ["coding-runtime.native-step.changed.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "coding-runtime.native-tool.denied",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "callIdSha256",
+              "type": "string",
+              "dataClass": "digest",
+              "required": true
+            },
+            {
+              "name": "occurrenceCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "tool",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["coding-runtime.native-tool.denied.emitted-line"],
           "replayReferences": [],
           "missingObligations": []
         },
@@ -16174,6 +16258,12 @@
               "required": true
             },
             {
+              "name": "gitOutcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "resultStatus",
               "type": "string",
               "dataClass": "closed-enum",
@@ -16357,6 +16447,12 @@
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "blockedReason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             },
             {
               "name": "causeChain",

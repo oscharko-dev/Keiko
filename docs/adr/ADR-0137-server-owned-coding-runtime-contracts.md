@@ -720,8 +720,9 @@ facts come from the governed producer, remain bounded by the existing aggregate 
 survive native restatement and immutable replay. Raw arguments/results, unknown refusal strings,
 unknown outcomes and unsafe paths are rejected. The verification outcome is derived from the closed
 result code the model received (`codingToolVerificationPresentation`), so the timeline shows a
-package-script decision still waiting on the operator, a repository with nothing the verifier can
-run and a run whose steps were skipped, denied or cancelled as what they were and not as a failed
+package-script decision still waiting on the operator, a request for which the verifier found
+nothing it can run (the selected package or target has no test, lint or build script; the repository
+may define others) and a run whose steps were skipped, denied or cancelled as what they were and not as a failed
 check; only a check that ran and went red keeps the failed badge, and a timeout, a resource ceiling
 or a refusal before the runner claim nothing beyond the generic failure.
 Paths never enter Activity Log evidence, model-facing edit refusal replies or Coding History;
@@ -729,6 +730,20 @@ the existing tool-result operation records service duration through its standard
 and the existing `coding-runtime.tool-result-rendered` operation records the closed verification
 outcome as an optional field, declared `diagnosticWhen` for every outcome but `passed` so a support
 report keeps a verification that did not pass.
+
+The same projection carries a governed Git step's closed outcome (`gitOutcome`: `completed`,
+`waiting-for-approval`, `verification-failed`, `verification-missing`, `not-staged`,
+`unsaved-changes`, `blocked`, `changed`, `not-done`; lab T37, #4271). The facade answers a refused
+stage, unstage, branch, fetch, pull or verified commit as a completed call that carries the
+refusal, so the call state alone painted a commit that never happened as "Succeeded".
+`codingToolGitPresentation` derives the word from the result the model received (never from a
+message or path): a commit's exact cause where the card can name it (a failed check, a change only
+partly staged, unsaved editor files), otherwise its status, and a status it does not know fails
+closed to `not-done`. A prepared stage or unstage proposal (`ready`) claims no outcome. The timeline
+shows every word but `completed` as not done or waiting for approval, with a one-line reason, and
+keeps such a card out of the collapsed group of succeeded steps; a carried-out step adds no
+sentence to its badge. The same field is recorded body-free on `coding-runtime.tool-result-rendered`,
+declared `diagnosticWhen` for every word but `completed` and `waiting-for-approval`.
 
 An explicit Stop or takeover keeps the run's live safe-activity feed, as standalone OpenCode keeps
 the tool steps of an aborted session (owner decision 2026-10-30, #3907 F3). Until then both ends
@@ -1214,7 +1229,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   mode-independent `external_directory` escape (admitting the run's own plan directory), keeps
   `update` and `share` off (a session is never published, and OpenCode has no share operation;
   the equivalent is the human's local export and import of a task's Coding History, D4), keeps the single `keiko-runtime` provider behind the Model
-  Gateway, and enables native snapshots. The producer appends configured rules after each built-in agent's own
+  Gateway, and enables native snapshots. A call the producer settles with its closed `permission.rejected` error type (a configured rule such as this escape deny, Keiko's policy hook replying reject, or a person pressing Deny; the token names no origin, and its message is never read) projects as a denied card, live and in Coding History, and `coding-runtime.native-tool.denied` records it once per call (#4271); a matching `coding-runtime.native-policy.decided` line exists only when Keiko's policy hook made or relayed the decision. The producer appends configured rules after each built-in agent's own
   rules and the last match wins, so any configured rule naming an ordinary action would replace an
   agent's own denial: the earlier blanket `allow` (and a blanket `ask`) let the Plan agent write
   project files in Full access (#3897 review). Without it every built-in agent keeps the producer's
@@ -2235,6 +2250,21 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   `keiko-contracts` (`.env`, `.env.*` except `.env.example`, keys, certificates, token and history
   files, `.npmrc`, ...) is the single list that the native read tool's `isDenied` and the kernel
   rule both read, and the kernel translates it into the last Seatbelt rule, after every re-allow.
+  That rule leaves exactly two kinds of `*.pem` leaf to the earlier rules (#4271): the public
+  certificate-authority bundles every TLS client reads (`/private/etc/ssl/cert.pem`, Homebrew's
+  `ca-certificates` bundle and the `cert.pem` link of each Homebrew OpenSSL, and an installed
+  certifi's `site-packages/certifi/cacert.pem`, also as pip's vendored copy), without which no HTTPS client of a native shell verified a server, and
+  the exact files the operator names with `SSL_CERT_FILE` or `NODE_EXTRA_CA_CERTS`
+  (`certificateReadFiles`, at the spelled and the real location, read-only, bound into the policy
+  digest and recorded as counts on `coding-runtime.native-certificates.admitted`). The carve-out
+  is a leaf exception only: a credential-named directory above such a file still denies it, every
+  other credential name keeps its rule, and whether the file is readable at all stays with the
+  read allowlist and the denied roots. The system and Homebrew bundles stay unwritable because they
+  lie outside the writable roots; a certifi bundle in the workspace's own `site-packages` stays
+  writable, so installing a package into a project environment works. That adds no trust a run
+  lacks: the same run already writes the environment's code that names the bundle. A named file is
+  admitted by its path alone; Keiko does not inspect its content, so naming a private key there
+  would expose it to the run: the operator's own environment owns that choice.
   The tool-state half of `isDenied` (`.git`, `node_modules`, caches, `.gitconfig`, `.config`)
   stays a policy guard only, because Git, npm and the build need those paths. A symlink in the
   workspace to a file outside it, and the `/System/Volumes/Data` spelling of a home path, are

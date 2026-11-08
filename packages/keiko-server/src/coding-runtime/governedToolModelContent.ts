@@ -24,7 +24,9 @@
 
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
+  CODING_SAFE_ACTIVITY_GIT_OUTCOMES,
   CODING_SAFE_ACTIVITY_VERIFICATION_OUTCOMES,
+  type CodingSafeActivityGitOutcome,
   type CodingSafeActivityVerificationOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import {
@@ -76,6 +78,15 @@ const CODING_RUNTIME_TOOL_RESULT_RENDERED_OPERATION = defineActivityLogOperation
       required: false,
       values: CODING_SAFE_ACTIVITY_VERIFICATION_OUTCOMES,
     },
+    // Lab T37 (#4271): how a governed Git step really ended. The facade answers a refused commit,
+    // stage or branch as a completed call, so `resultStatus` alone cannot tell the log what the card
+    // shows. Absent on every other tool and on a Git read.
+    gitOutcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: CODING_SAFE_ACTIVITY_GIT_OUTCOMES,
+    },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -86,6 +97,20 @@ const CODING_RUNTIME_TOOL_RESULT_RENDERED_OPERATION = defineActivityLogOperation
     {
       field: "verificationOutcome",
       values: ["failed-check", "waiting-for-trust", "no-runnable-steps", "not-run"],
+    },
+    // A Git step that was refused or did not complete is a failure fact; one still waiting on the
+    // human, like a completed one, stays optional context.
+    {
+      field: "gitOutcome",
+      values: [
+        "verification-failed",
+        "verification-missing",
+        "not-staged",
+        "unsaved-changes",
+        "blocked",
+        "changed",
+        "not-done",
+      ],
     },
   ],
   failureClasses: ["coding-runtime-tool-result"],
@@ -152,6 +177,7 @@ export function recordGovernedToolModelContent(
   result: unknown,
   bridgeDurationMs?: number,
   verificationOutcome?: CodingSafeActivityVerificationOutcome,
+  gitOutcome?: CodingSafeActivityGitOutcome,
 ): void {
   const status =
     typeof result === "object" && result !== null && "status" in result ? result.status : undefined;
@@ -170,6 +196,7 @@ export function recordGovernedToolModelContent(
         textBlockCount: facts.textBlockCount,
         resultStatus,
         ...(verificationOutcome === undefined ? {} : { verificationOutcome }),
+        ...(gitOutcome === undefined ? {} : { gitOutcome }),
       },
     ),
   );
