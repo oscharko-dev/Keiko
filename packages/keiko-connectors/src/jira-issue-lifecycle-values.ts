@@ -27,7 +27,9 @@ export interface IssueLifecycleSubtask { readonly id: string; readonly key: stri
 type Common = { readonly actor: string };
 export type IssueLifecycleInput = Common & (
   | { readonly kind: "archive-many"; readonly issues: readonly IssueLifecycleReview[] }
-  | { readonly kind: "archive" | "restore" | "delete"; readonly issue: IssueLifecycleReview }
+  | { readonly kind: "archive"; readonly issue: IssueLifecycleReview }
+  | { readonly kind: "restore"; readonly issue: IssueLifecycleReview }
+  | { readonly kind: "delete"; readonly issue: IssueLifecycleReview }
   | { readonly kind: "reorder"; readonly issue: IssueLifecycleReview; readonly subtasks: readonly IssueLifecycleSubtask[]; readonly original: number; readonly current: number }
 );
 export const ISSUE_LIFECYCLE_MALFORMED: IssueLifecycleFailure = { ok: false, reason: "malformed-payload" };

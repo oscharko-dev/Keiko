@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { JiraMutationRequest } from "../../packages/keiko-connectors/src/jira-managed-mutation-metadata.js";
 import type { JiraSprintLifecyclePorts } from "../../packages/keiko-connectors/src/jira-managed-sprint-lifecycle.js";
+import { asRecord } from "../../packages/keiko-connectors/src/atlassian-sync-classify.js";
 
 export const SPRINT_LIFECYCLE_FIRST = { id: "11", originBoardId: "7", name: "Synthetic first", state: "future",
   startDate: "2027-01-01T09:00:00.000Z", endDate: "2027-01-15T09:00:00.000Z", goal: null,
@@ -48,7 +49,7 @@ export function sprintLifecycleFixture() {
       if (value === undefined) return { ok: false, reason: "not-found", httpStatus: 404 };
       return { ok: true, status: 200, body: readback && controls.malformedReadback ? { id: value.id } : { ...value, id: Number(value.id), originBoardId: 7 } };
     }
-    const raw = body !== null && typeof body === "object" && !Array.isArray(body) ? body : undefined;
+    const raw = asRecord(body);
     if (path === "sprint/11" && method === "PUT") {
       assert.ok(raw);
       assert.equal(raw.id, 11);

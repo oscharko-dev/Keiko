@@ -8,8 +8,10 @@ import type { JiraAvatarCrop, JiraAvatarMutation, JiraAvatarReview, JiraAvatarTa
 
 interface AvatarBase { readonly actor: string; readonly target: JiraAvatarTarget }
 export interface AvatarUploadInput extends AvatarBase { readonly kind: "upload"; readonly path: string; readonly expectedFile: JiraAttachmentPreview }
-export interface AvatarCropInput extends AvatarBase { readonly kind: "crop" | "create"; readonly expectedTemporary: Omit<JiraAvatarTemporarySnapshot, "actorKey" | "target">; readonly crop: JiraAvatarCrop; readonly expectedAvatars: readonly JiraAvatarReview[] }
-export interface AvatarSelectionInput extends AvatarBase { readonly kind: "set" | "delete"; readonly avatarId: string; readonly expectedAvatars: readonly JiraAvatarReview[] }
+export type AvatarCropInput = AvatarBase & { readonly expectedTemporary: Omit<JiraAvatarTemporarySnapshot, "actorKey" | "target">; readonly crop: JiraAvatarCrop; readonly expectedAvatars: readonly JiraAvatarReview[] } &
+  ({ readonly kind: "crop" } | { readonly kind: "create" });
+export type AvatarSelectionInput = AvatarBase & { readonly avatarId: string; readonly expectedAvatars: readonly JiraAvatarReview[] } &
+  ({ readonly kind: "set" } | { readonly kind: "delete" });
 export type AvatarInput = AvatarUploadInput | AvatarCropInput | AvatarSelectionInput;
 const FIELDS: Readonly<Record<JiraAvatarMutation, JiraAvatarTarget["kind"] | "owned">> = {
   "jira.upload-temporary-avatar": "session", "jira.crop-temporary-avatar": "session",
@@ -71,8 +73,9 @@ function upload(args: CatalogJsonObject, base: AvatarBase): AvatarUploadInput | 
   if (!exact(args, ["expectedActorKey", "target", "source", "expectedFile", "acceptTemporaryReplacement"]) || args.acceptTemporaryReplacement !== true) return undefined;
   const source = asRecord(args.source);
   if (source === undefined || !exact(source, ["kind", "path"]) || source.kind !== "connected-file" || !isPortableWorkspaceRelativePath(source.path)) return undefined;
-  if (!isJiraAttachmentPreview(args.expectedFile) || !exact(args.expectedFile, ["name", "sizeBytes", "sha256"])) return undefined;
-  return { ...base, kind: "upload", path: source.path, expectedFile: { ...args.expectedFile } };
+  const expectedFile = args.expectedFile;
+  if (!isJiraAttachmentPreview(expectedFile) || !exact(expectedFile, ["name", "sizeBytes", "sha256"])) return undefined;
+  return { ...base, kind: "upload", path: source.path, expectedFile: { name: expectedFile.name, sizeBytes: expectedFile.sizeBytes, sha256: expectedFile.sha256 } };
 }
 function temporary(value: unknown): AvatarCropInput["expectedTemporary"] | undefined {
   const raw = asRecord(value); if (raw === undefined || !exact(raw, ["uploadSha256", "uploadBytes", "crop", "needsCropping"])) return undefined;
