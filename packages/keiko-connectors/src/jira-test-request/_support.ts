@@ -8,11 +8,12 @@ export function scriptedJiraMutationRequest(
   script: readonly (AtlassianWriteHttpOutcome | Error)[],
 ): ReturnType<typeof vi.fn<JiraMutationRequest>> {
   let index = 0;
-  return vi.fn<JiraMutationRequest>().mockImplementation(async () => {
+  return vi.fn<JiraMutationRequest>().mockImplementation(() => {
     const next = script[index++];
-    if (next instanceof Error) throw next;
-    if (next === undefined) throw new TypeError("Unexpected scripted Jira mutation request");
-    return next;
+    if (next instanceof Error) return Promise.reject(next);
+    if (next === undefined)
+      return Promise.reject(new TypeError("Unexpected scripted Jira mutation request"));
+    return Promise.resolve(next);
   });
 }
 

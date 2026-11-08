@@ -12,7 +12,16 @@ const GET: AtlassianWriteHttpRequest = {
   url: "https://jira.example.invalid/context/rest/api/2/project",
   expect: "json",
 };
-function fixture() {
+function fixture(): {
+  caller: AbortController;
+  deadline: AbortController;
+  signal: AbortSignal;
+  beforeEffect: ReturnType<typeof vi.fn<() => boolean>>;
+  context: ManagedMcpInvocationContext;
+  http: ReturnType<typeof vi.fn<AtlassianHttpBodyPort>>;
+  connection: { deployment: "data-center"; baseUrl: string; http: AtlassianHttpBodyPort };
+  run: (request?: AtlassianWriteHttpRequest) => ReturnType<typeof executeAdmittedJiraRequest>;
+} {
   const caller = new AbortController();
   const deadline = new AbortController();
   const signal = AbortSignal.any([caller.signal, deadline.signal]);
@@ -37,7 +46,9 @@ function fixture() {
     context,
     http,
     connection,
-    run: (request: AtlassianWriteHttpRequest = GET) =>
+    run: (
+      request: AtlassianWriteHttpRequest = GET,
+    ): ReturnType<typeof executeAdmittedJiraRequest> =>
       executeAdmittedJiraRequest(connection, context, signal, request),
   };
 }
@@ -148,9 +159,11 @@ describe("private Jira request admission over the existing HTTP owner", () => {
     "retains a native HTTP%s after late cancellation and never replays a write",
     async (status) => {
       const f = fixture();
-      f.http.mockImplementation(async () => {
+      f.http.mockImplementation(() => {
         f.caller.abort();
-        return response({ id: "10001", errorMessages: ["Native refusal"] }, status);
+        return Promise.resolve(
+          response({ id: "10001", errorMessages: ["Native refusal"] }, status),
+        );
       });
       const result = await f.run({
         ...GET,
@@ -178,9 +191,9 @@ describe("private Jira request admission over the existing HTTP owner", () => {
   it("does not swallow a programmer defect just because cancellation happened too", async () => {
     const f = fixture();
     const defect = new TypeError("Synthetic implementation defect");
-    f.http.mockImplementation(async () => {
+    f.http.mockImplementation(() => {
       f.caller.abort();
-      throw defect;
+      return Promise.reject(defect);
     });
     await expect(f.run()).rejects.toBe(defect);
     expect(f.http).toHaveBeenCalledTimes(1);
@@ -210,9 +223,9 @@ describe("private Jira request admission over the existing HTTP owner", () => {
 describe("fixed Jira request constructors", () => {
   it("keeps an acknowledged platform write and refuses its next request without replay", async () => {
     const f = fixture();
-    f.http.mockImplementation(async () => {
+    f.http.mockImplementation(() => {
       f.beforeEffect.mockReturnValue(false);
-      return response({ id: "10001" }, 201);
+      return Promise.resolve(response({ id: "10001" }, 201));
     });
     const request = requestFor(f.connection, f.context);
     expect(await request("project", "POST", { name: "Synthetic" })).toMatchObject({

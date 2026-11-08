@@ -4,7 +4,10 @@ import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/go
 import { executeJiraSprintLifecycleMutation } from "./jira-managed-sprint-lifecycle.js";
 import { JiraAcknowledgedMutationError } from "./jira-mutation-failure.js";
 import { jiraSprintLifecycleSnapshot } from "./jira-sprint-lifecycle-values.js";
-import { gateJiraBulkReferenceChange } from "./jira-managed-template-gate.js";
+import {
+  gateJiraBulkReferenceChange,
+  type JiraIssueTemplateSet,
+} from "./jira-managed-template-gate.js";
 import {
   SPRINT_LIFECYCLE_FIXTURE_CASES as CASES,
   SPRINT_LIFECYCLE_FIRST as FIRST,
@@ -26,7 +29,7 @@ function formal(requiredFields: string, activation = "edit", project = "HIDDEN")
     ].join("\n"),
   );
   if (!parsed.ok) throw new Error("Synthetic formal template must parse");
-  return () => ({ templates: [parsed.template], unreadable: 0 });
+  return (): JiraIssueTemplateSet => ({ templates: [parsed.template], unreadable: 0 });
 }
 const SPRINT_FIELD = {
   id: "customfield_10020",
@@ -140,7 +143,7 @@ describe("fixed sprint lifecycle effects", () => {
     const readback = missing.ports.requests.readback;
     const requests = {
       ...missing.ports.requests,
-      readback: () => {
+      readback: (): ReturnType<typeof readback> => {
         const sprint = missing.sprints.get("11");
         if (sprint !== undefined) delete sprint.goal;
         return readback();
@@ -270,7 +273,7 @@ describe("formal sprint-field bulk impact", () => {
   it("refuses an unreadable formal library and unresolved affected field without inventing zero impact", async () => {
     const f = sprintLifecycleFixture();
     for (const source of [
-      () => ({ templates: [], unreadable: 1 }),
+      (): JiraIssueTemplateSet => ({ templates: [], unreadable: 1 }),
       formal("Unresolved custom field"),
     ]) {
       expect(

@@ -106,6 +106,24 @@ async function confirm(
     throw new JiraAcknowledgedMutationError(error, receipt);
   }
 }
+async function writeVersionLink(
+  request: JiraMutationRequest,
+  input: VersionLinkInput,
+  before: ReleaseContext,
+  receipt: JiraVersionLinkReceipt,
+): Promise<JiraVersionLinkAttempt> {
+  const response = await request(
+    resource(input),
+    input.value === undefined ? "DELETE" : "POST",
+    input.value,
+    "none",
+  );
+  if (!response.ok) return { ...dispatchFailure(response), receipt };
+  if (response.status < 200 || response.status >= 300)
+    return { ...VERSION_LINK_MALFORMED, receipt };
+  // ACK Location is not followed or used to infer a generated or different identity.
+  return confirm(request, input, before, receipt);
+}
 /** VersionResource/RemoteVersionLinkService 11.3.3 accept the raw JSON link value.
  * A collection POST takes globalId from that value; explicit-path POST selects it by path.
  * Neither changes issue fields, fixVersions, version metadata or formal issue relations.
@@ -145,15 +163,5 @@ export async function executeJiraVersionLinkMutation(
       detail: { unchanged: true },
     };
   if (check) return { ok: true, receipt: {} };
-  const response = await request(
-    resource(input),
-    input.value === undefined ? "DELETE" : "POST",
-    input.value,
-    "none",
-  );
-  if (!response.ok) return { ...dispatchFailure(response), receipt };
-  if (response.status < 200 || response.status >= 300)
-    return { ...VERSION_LINK_MALFORMED, receipt };
-  // ACK Location is not followed or used to infer a generated or different identity.
-  return confirm(request, input, context.value, receipt);
+  return writeVersionLink(request, input, context.value, receipt);
 }

@@ -69,43 +69,82 @@ interface Options {
   readonly afterFailure?: AtlassianWriteHttpOutcome;
   readonly throwAfter?: boolean;
 }
+interface FixtureState {
+  effected: boolean;
+  move: boolean;
+}
+function sourceVersionId(options: Options): string {
+  const id = options.sourceVersion?.id;
+  return typeof id === "string" || typeof id === "number" ? String(id) : "81";
+}
+function actorRoute(
+  options: Options,
+  state: FixtureState,
+  path: string,
+): AtlassianWriteHttpOutcome | undefined {
+  if (path === "myself")
+    return objectResponse(
+      state.effected ? (options.afterActor ?? options.actor ?? ACTOR) : (options.actor ?? ACTOR),
+    );
+  return path === "project/10000" ? objectResponse(options.project ?? PROJECT) : undefined;
+}
+function entityRoute(options: Options, path: string): AtlassianWriteHttpOutcome | undefined {
+  if (path === `version/${sourceVersionId(options)}`)
+    return objectResponse(options.sourceVersion ?? version("81"));
+  if (path === "version/82") return objectResponse(options.targetVersion ?? version("82"));
+  if (path === "component/71") return objectResponse(options.sourceComponent ?? component("71"));
+  if (path === "component/72") return objectResponse(options.targetComponent ?? component("72"));
+  return undefined;
+}
+function listRoute(
+  options: Options,
+  state: FixtureState,
+  path: string,
+): AtlassianWriteHttpOutcome | undefined {
+  if (path === "project/10000/versions")
+    return arrayResponse(
+      state.effected
+        ? (options.afterVersions ?? (state.move ? [version("82"), version("81")] : [version("82")]))
+        : (options.beforeVersions ?? [version("81"), version("82")]),
+    );
+  if (path === "project/10000/components")
+    return arrayResponse(options.afterComponents ?? [component("72")]);
+  if (path === "field")
+    return arrayResponse(
+      options.fields ?? [
+        { id: "customfield_10001", schema: { type: "array", items: "version", customId: 10001 } },
+      ],
+    );
+  return undefined;
+}
+function respond(
+  options: Options,
+  state: FixtureState,
+  path: string,
+  method: string,
+): AtlassianWriteHttpOutcome {
+  if (method !== "GET") {
+    state.effected = true;
+    state.move = path.endsWith("/move");
+    return options.write ?? { ok: true, status: 204, body: undefined };
+  }
+  if (state.effected && options.throwAfter) throw new TypeError("Independent read interrupted");
+  if (state.effected && options.afterFailure !== undefined) return options.afterFailure;
+  const routed =
+    actorRoute(options, state, path) ??
+    entityRoute(options, path) ??
+    listRoute(options, state, path);
+  if (routed === undefined) throw new TypeError(`Unexpected synthetic native route: ${path}`);
+  return routed;
+}
 function fixture(options: Options = {}): ReturnType<typeof vi.fn<JiraMutationRequest>> {
-  let effected = false;
-  let move = false;
-  return vi.fn<JiraMutationRequest>(async (path, method = "GET") => {
-    if (method !== "GET") {
-      effected = true;
-      move = path.endsWith("/move");
-      return options.write ?? { ok: true, status: 204, body: undefined };
-    }
-    if (effected && options.throwAfter) throw new TypeError("Independent read interrupted");
-    if (effected && options.afterFailure !== undefined) return options.afterFailure;
-    if (path === "myself")
-      return objectResponse(
-        effected ? (options.afterActor ?? options.actor ?? ACTOR) : (options.actor ?? ACTOR),
-      );
-    if (path === "project/10000") return objectResponse(options.project ?? PROJECT);
-    if (path === `version/${String(options.sourceVersion?.id ?? "81")}`)
-      return objectResponse(options.sourceVersion ?? version("81"));
-    if (path === "version/82") return objectResponse(options.targetVersion ?? version("82"));
-    if (path === "component/71") return objectResponse(options.sourceComponent ?? component("71"));
-    if (path === "component/72") return objectResponse(options.targetComponent ?? component("72"));
-    if (path === "project/10000/versions")
-      return arrayResponse(
-        effected
-          ? (options.afterVersions ?? (move ? [version("82"), version("81")] : [version("82")]))
-          : (options.beforeVersions ?? [version("81"), version("82")]),
-      );
-    if (path === "project/10000/components")
-      return arrayResponse(options.afterComponents ?? [component("72")]);
-    if (path === "field")
-      return arrayResponse(
-        options.fields ?? [
-          { id: "customfield_10001", schema: { type: "array", items: "version", customId: 10001 } },
-        ],
-      );
-    throw new TypeError(`Unexpected synthetic native route: ${path}`);
-  });
+  const state: FixtureState = { effected: false, move: false };
+  return vi.fn<JiraMutationRequest>(
+    (path, method = "GET") =>
+      new Promise<AtlassianWriteHttpOutcome>((resolve) => {
+        resolve(respond(options, state, path, method));
+      }),
+  );
 }
 const effects = (request: ReturnType<typeof fixture>): readonly unknown[] =>
   request.mock.calls.filter((call) => call[1] !== undefined && call[1] !== "GET");
@@ -114,7 +153,7 @@ const reorder = (
   args: CatalogJsonObject = MOVE_ARGS,
   check = false,
   baseUrl: string | undefined = BASE_URL,
-) =>
+): ReturnType<typeof executeJiraVersionLifecycleMutation> =>
   executeJiraVersionLifecycleMutation(
     "jira.move-version",
     args,

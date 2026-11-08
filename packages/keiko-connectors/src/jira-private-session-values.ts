@@ -48,30 +48,66 @@ const KEYS = new Set([
 function positive(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
-function context(value: unknown): JiraPrivateSessionContext | undefined {
-  const raw = asRecord(value);
-  if (raw === undefined) return undefined;
-  if (
-    raw.kind === "chat" &&
-    savedExactKeys(raw, new Set(["kind", "chatId", "podId", "bindingGeneration"])) &&
+function chatContext(raw: Record<string, unknown>): JiraPrivateSessionContext | undefined {
+  return savedExactKeys(raw, new Set(["kind", "chatId", "podId", "bindingGeneration"])) &&
     savedName(raw.chatId) &&
     isChatJiraPodId(raw.podId) &&
     positive(raw.bindingGeneration)
-  )
-    return {
-      kind: "chat",
-      chatId: raw.chatId,
-      podId: raw.podId,
-      bindingGeneration: raw.bindingGeneration,
-    };
-  if (
-    raw.kind === "coding" &&
-    savedExactKeys(raw, new Set(["kind", "taskId", "runId"])) &&
+    ? {
+        kind: "chat",
+        chatId: raw.chatId,
+        podId: raw.podId,
+        bindingGeneration: raw.bindingGeneration,
+      }
+    : undefined;
+}
+function codingContext(raw: Record<string, unknown>): JiraPrivateSessionContext | undefined {
+  return savedExactKeys(raw, new Set(["kind", "taskId", "runId"])) &&
     savedName(raw.taskId) &&
     savedName(raw.runId)
+    ? { kind: "coding", taskId: raw.taskId, runId: raw.runId }
+    : undefined;
+}
+function context(value: unknown): JiraPrivateSessionContext | undefined {
+  const raw = asRecord(value);
+  if (raw === undefined) return undefined;
+  if (raw.kind === "chat") return chatContext(raw);
+  return raw.kind === "coding" ? codingContext(raw) : undefined;
+}
+type SessionIdentity = Pick<
+  JiraPrivateSessionBinding,
+  "principalDigest" | "authRef" | "actorUserKey" | "actorUsername"
+>;
+type SessionCounters = Pick<
+  JiraPrivateSessionBinding,
+  "authenticationGeneration" | "verificationRevision" | "expiresAt"
+>;
+function sessionIdentity(raw: Record<string, unknown>): SessionIdentity | undefined {
+  if (
+    !isAtlassianConnectorAuthRef(raw.authRef) ||
+    typeof raw.principalDigest !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(raw.principalDigest) ||
+    !savedName(raw.actorUserKey) ||
+    !savedName(raw.actorUsername)
   )
-    return { kind: "coding", taskId: raw.taskId, runId: raw.runId };
-  return undefined;
+    return undefined;
+  return {
+    principalDigest: raw.principalDigest,
+    authRef: raw.authRef,
+    actorUserKey: raw.actorUserKey,
+    actorUsername: raw.actorUsername,
+  };
+}
+function sessionCounters(raw: Record<string, unknown>): SessionCounters | undefined {
+  return positive(raw.authenticationGeneration) &&
+    positive(raw.verificationRevision) &&
+    positive(raw.expiresAt)
+    ? {
+        authenticationGeneration: raw.authenticationGeneration,
+        verificationRevision: raw.verificationRevision,
+        expiresAt: raw.expiresAt,
+      }
+    : undefined;
 }
 export function copyJiraSessionBinding(value: unknown): JiraPrivateSessionBinding | undefined {
   const raw = asRecord(value);
@@ -81,27 +117,22 @@ export function copyJiraSessionBinding(value: unknown): JiraPrivateSessionBindin
     raw === undefined ||
     selected === undefined ||
     authority === undefined ||
-    !savedExactKeys(raw, KEYS) ||
-    !isAtlassianConnectorAuthRef(raw.authRef) ||
-    typeof raw.principalDigest !== "string" ||
-    !/^[a-f0-9]{64}$/u.test(raw.principalDigest) ||
-    !positive(raw.authenticationGeneration) ||
-    !positive(raw.verificationRevision) ||
-    !positive(raw.expiresAt) ||
-    !savedName(raw.actorUserKey) ||
-    !savedName(raw.actorUsername)
+    !savedExactKeys(raw, KEYS)
   )
     return undefined;
+  const identity = sessionIdentity(raw);
+  const counters = sessionCounters(raw);
+  if (identity === undefined || counters === undefined) return undefined;
   return Object.freeze({
     context: Object.freeze(selected),
     authority,
-    principalDigest: raw.principalDigest,
-    authRef: raw.authRef,
-    authenticationGeneration: raw.authenticationGeneration,
-    verificationRevision: raw.verificationRevision,
-    actorUserKey: raw.actorUserKey,
-    actorUsername: raw.actorUsername,
-    expiresAt: raw.expiresAt,
+    principalDigest: identity.principalDigest,
+    authRef: identity.authRef,
+    authenticationGeneration: counters.authenticationGeneration,
+    verificationRevision: counters.verificationRevision,
+    actorUserKey: identity.actorUserKey,
+    actorUsername: identity.actorUsername,
+    expiresAt: counters.expiresAt,
   });
 }
 export function jiraSessionBindingForInput(

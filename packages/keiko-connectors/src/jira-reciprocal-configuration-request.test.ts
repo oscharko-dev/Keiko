@@ -15,7 +15,7 @@ describe("fixed local application-link prerequisites", () => {
       invocationId: "synthetic",
       correlationId: "synthetic",
       signal: new AbortController().signal,
-      beforeEffect: () => true,
+      beforeEffect: (): boolean => true,
     };
     const ports = jiraReciprocalConfigurationRequests(
       { baseUrl: "https://local.example.invalid/context", deployment: "data-center", http },

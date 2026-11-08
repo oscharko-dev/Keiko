@@ -267,7 +267,7 @@ describe("native resource pages and connected-user accessibility metadata", () =
   });
   it("refuses an excessive accessibility collection before claiming a subset is complete", async () => {
     const items = Array.from({ length: TOOL_CATALOG_LIMITS.maxArrayItems + 1 }, (_, i) => ({
-      key: `setting-${i}`,
+      key: `setting-${String(i)}`,
     }));
     expect((await read("jira.accessibility-settings", {}, settings(items))).data.reason).toBe(
       "bounds-exceeded",

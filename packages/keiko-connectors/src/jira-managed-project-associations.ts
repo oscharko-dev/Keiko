@@ -58,11 +58,9 @@ function selection(name: AssociationRead, args: CatalogJsonObject): Selection | 
     ? { project: args.projectIdOrKey, startAt, maxResults }
     : undefined;
 }
-export function jiraPrioritySchemeProjection(
+function priorityDefaults(
   body: Record<string, unknown>,
-): CatalogJsonObject | undefined {
-  const named = jiraSecurityLevelProjection(body);
-  if (named === undefined) return undefined;
+): Record<string, CatalogJsonValue> | undefined {
   const optional: Record<string, CatalogJsonValue> = {};
   if (body.defaultScheme !== undefined && body.defaultScheme !== null) {
     if (typeof body.defaultScheme !== "boolean") return undefined;
@@ -72,18 +70,31 @@ export function jiraPrioritySchemeProjection(
     if (!jiraNativeId(body.defaultOptionId)) return undefined;
     optional.defaultOptionId = body.defaultOptionId;
   }
-  if (body.optionIds !== undefined && body.optionIds !== null) {
-    const values = asArray(body.optionIds);
-    if (
-      values === undefined ||
-      values.length > TOOL_CATALOG_LIMITS.maxArrayItems ||
-      !values.every(jiraNativeId) ||
-      new Set(values).size !== values.length
-    )
-      return undefined;
-    optional.optionIds = values;
-  }
-  return { ...named, ...optional };
+  return optional;
+}
+function priorityOptionIds(
+  body: Record<string, unknown>,
+): Record<string, CatalogJsonValue> | undefined {
+  if (body.optionIds === undefined || body.optionIds === null) return {};
+  const values = asArray(body.optionIds);
+  if (
+    values === undefined ||
+    values.length > TOOL_CATALOG_LIMITS.maxArrayItems ||
+    !values.every(jiraNativeId) ||
+    new Set(values).size !== values.length
+  )
+    return undefined;
+  return { optionIds: values };
+}
+export function jiraPrioritySchemeProjection(
+  body: Record<string, unknown>,
+): CatalogJsonObject | undefined {
+  const named = jiraSecurityLevelProjection(body);
+  if (named === undefined) return undefined;
+  const defaults = priorityDefaults(body);
+  const optionIds = priorityOptionIds(body);
+  if (defaults === undefined || optionIds === undefined) return undefined;
+  return { ...named, ...defaults, ...optionIds };
 }
 function accessibleLevels(
   body: Record<string, unknown>,
@@ -149,7 +160,7 @@ export async function executeJiraProjectAssociationRead(
   const read =
     name === "jira.project-priority-scheme"
       ? priorityRead
-      : (projectId: string) =>
+      : (projectId: string): ReturnType<JiraMutationRequest> =>
           request(`project/${projectId}/${SUFFIX[name]}`, "GET", undefined, "json");
   if (read === undefined) return jiraReadFailure("unavailable");
   const current = await readJiraBoundProject(request, selected.project);

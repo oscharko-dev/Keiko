@@ -1,4 +1,5 @@
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { jiraIdentifierText } from "./jira-identifier-text.js";
 import { jiraCoreMetadataProjection } from "./jira-core-metadata-values.js";
 import { jiraFieldDirectoryProjection } from "./jira-managed-field-directory.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
@@ -92,7 +93,9 @@ export async function readSchemaFields(
   if (response.items.length > TOOL_CATALOG_LIMITS.maxArrayItems)
     return { ok: false, reason: "bounds-exceeded" };
   // Validate every field first. System fields are deliberately outside the deletion selection.
-  const all = schemaList(response.items, jiraFieldDirectoryProjection, (item) => String(item.id));
+  const all = schemaList(response.items, jiraFieldDirectoryProjection, (item) =>
+    jiraIdentifierText(item.id),
+  );
   if (all === undefined) return SCHEMA_MALFORMED;
   const custom = schemaList(
     all.filter((item) => item.custom === true),
@@ -136,7 +139,7 @@ export async function readSchemaCreationIds(
     "issuetype",
     undefined,
     (raw) => jiraCoreMetadataProjection("issue-type", raw),
-    (item) => String(item.id),
+    (item) => jiraIdentifierText(item.id),
   );
   if (!observed.ok) return observed;
   if (observed.value.some((item) => item.name === input.name))
@@ -144,7 +147,7 @@ export async function readSchemaCreationIds(
       "The reviewed issue-type name already exists. Review the existing ID instead of attempting creation.",
       "conflict",
     );
-  return { ok: true, value: observed.value.map((item) => String(item.id)) };
+  return { ok: true, value: observed.value.map((item) => jiraIdentifierText(item.id)) };
 }
 function changed(): SchemaFailure {
   return schemaRefusal(
@@ -165,7 +168,7 @@ async function bindAlternative(
     `issuetype/${input.expected.id}/alternatives`,
     undefined,
     (raw) => jiraCoreMetadataProjection("issue-type", raw),
-    (item) => String(item.id),
+    (item) => jiraIdentifierText(item.id),
   );
   if (!alternatives.ok) return alternatives;
   return alternatives.value.some((item) => item.id === input.alternative?.id)

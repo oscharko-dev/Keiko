@@ -165,6 +165,14 @@ function schemeEvent(value: unknown): CatalogJsonObject | undefined {
   return notifications === undefined ? undefined : { ...observed, notifications };
 }
 
+function withSchemeEvents(
+  value: unknown,
+  metadata: CatalogJsonObject,
+): CatalogJsonObject | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const events = projectJiraCollection(value, MAX, schemeEvent, "id");
+  return events === undefined ? undefined : { ...metadata, eventsAvailable: true, events };
+}
 /** Project the documented DTOs, never their self/avatar/HTML fields or arbitrary nested objects. */
 export function jiraNotificationScheme(
   value: unknown,
@@ -179,7 +187,5 @@ export function jiraNotificationScheme(
   if (!includeEvents) return metadata;
   if (raw.notificationSchemeEvents === undefined || raw.notificationSchemeEvents === null)
     return { ...metadata, eventsAvailable: false };
-  if (!Array.isArray(raw.notificationSchemeEvents)) return undefined;
-  const events = projectJiraCollection(raw.notificationSchemeEvents, MAX, schemeEvent, "id");
-  return events === undefined ? undefined : { ...metadata, eventsAvailable: true, events };
+  return withSchemeEvents(raw.notificationSchemeEvents, metadata);
 }

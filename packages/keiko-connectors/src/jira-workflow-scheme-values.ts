@@ -6,17 +6,17 @@ import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import { jiraNativeId, jiraNativeNumericId, jiraNativeText } from "./jira-native-values.js";
 import { savedExactKeys, savedName, savedText } from "./jira-saved-configuration-values.js";
 
-export type WorkflowSchemeMapping = { readonly issueTypeId: string; readonly workflow: string };
-export type WorkflowSchemeSnapshot = {
-  readonly id: string;
-  readonly draft: boolean;
-  readonly name: string;
-  readonly description: string | null;
-  readonly defaultWorkflow: string | null;
-  readonly mappings: readonly WorkflowSchemeMapping[];
-  readonly originalDefaultWorkflow?: string | null;
-  readonly originalMappings?: readonly WorkflowSchemeMapping[];
-};
+export type WorkflowSchemeMapping = Readonly<{ issueTypeId: string; workflow: string }>;
+export type WorkflowSchemeSnapshot = Readonly<{
+  id: string;
+  draft: boolean;
+  name: string;
+  description: string | null;
+  defaultWorkflow: string | null;
+  mappings: readonly WorkflowSchemeMapping[];
+  originalDefaultWorkflow?: string | null;
+  originalMappings?: readonly WorkflowSchemeMapping[];
+}>;
 /** Existing read projection: null/absence is handled by its caller, not invented here. */
 export function jiraWorkflowSchemeMappings(
   value: unknown,
@@ -130,27 +130,23 @@ const SNAPSHOT_FIELDS = new Set([
   "originalDefaultWorkflow",
   "originalMappings",
 ]);
+function snapshotShapeValid(raw: Record<string, unknown>, draft: boolean): boolean {
+  return savedExactKeys(raw, SNAPSHOT_FIELDS) && jiraNativeId(raw.id) && raw.draft === draft;
+}
+function hasOriginalFields(raw: Record<string, unknown>): boolean {
+  return Object.hasOwn(raw, "originalMappings") || Object.hasOwn(raw, "originalDefaultWorkflow");
+}
 export function workflowSchemeInputSnapshot(
   value: unknown,
   draft: boolean,
 ): WorkflowSchemeSnapshot | undefined {
   const raw = asRecord(value);
-  if (
-    raw === undefined ||
-    !savedExactKeys(raw, SNAPSHOT_FIELDS) ||
-    !jiraNativeId(raw.id) ||
-    raw.draft !== draft
-  )
-    return undefined;
+  if (raw === undefined || !snapshotShapeValid(raw, draft)) return undefined;
   const mappings = workflowSchemeInputMappings(raw.mappings);
   if (mappings === undefined) return undefined;
   const originalMappings = draft ? workflowSchemeInputMappings(raw.originalMappings) : undefined;
   if (draft && originalMappings === undefined) return undefined;
-  if (
-    !draft &&
-    (Object.hasOwn(raw, "originalMappings") || Object.hasOwn(raw, "originalDefaultWorkflow"))
-  )
-    return undefined;
+  if (!draft && hasOriginalFields(raw)) return undefined;
   return jiraWorkflowSchemeReviewSnapshot({
     ...raw,
     issueTypeMappings: workflowSchemeNativeMappings(mappings),

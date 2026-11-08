@@ -83,14 +83,14 @@ describe("schema impacts on saved formal rules", () => {
       expect(
         await gateJiraSchemaRuleImpact({
           request: request(),
-          source: () => ({ templates: [rule], unreadable: 0 }),
+          source: (): JiraIssueTemplateSet => ({ templates: [rule], unreadable: 0 }),
           impact: { kind: "issue-type", types: [{ id: "7", name: "Story" }] },
         }),
       ).toMatchObject({ ok: false, violations: [{ ruleId: "template-unreadable" }] });
     },
   );
   it("includes a migration target's rule selection and leaves unrelated types alone", async () => {
-    const source = () => ({
+    const source = (): JiraIssueTemplateSet => ({
       templates: [template(["activateOn: [transition:Ready]"])],
       unreadable: 0,
     });
@@ -116,7 +116,7 @@ describe("schema impacts on saved formal rules", () => {
   it.each(["requiredFields: [Story Points]", "parentField: Story Points"])(
     "recognizes deleted custom-field references in %s",
     async (line) => {
-      const source = () => ({
+      const source = (): JiraIssueTemplateSet => ({
         templates: [template(["activateOn: [create]", line])],
         unreadable: 0,
       });
@@ -175,13 +175,20 @@ describe("schema impacts on saved formal rules", () => {
 });
 
 describe("issue deletion impacts on surviving formal references", () => {
-  function admission(rule: JiraIssueTemplate, items: readonly unknown[] = []) {
+  function admission(
+    rule: JiraIssueTemplate,
+    items: readonly unknown[] = [],
+  ): {
+    request: ReturnType<typeof vi.fn<JiraMutationRequest>>;
+    source: () => JiraIssueTemplateSet;
+    impact: { kind: "issue-deletion" };
+  } {
     const request = vi
       .fn<JiraMutationRequest>()
       .mockResolvedValue({ ok: true, status: 200, body: undefined, items });
     return {
       request,
-      source: () => ({ templates: [rule], unreadable: 0 }),
+      source: (): JiraIssueTemplateSet => ({ templates: [rule], unreadable: 0 }),
       impact: { kind: "issue-deletion" as const },
     };
   }

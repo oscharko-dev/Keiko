@@ -196,7 +196,7 @@ describe("bounded scoped user and picker reads", () => {
   });
   it("retains a true group bound failure without truncation", async () => {
     const groups = Array.from({ length: TOOL_CATALOG_LIMITS.maxArrayItems + 1 }, (_, index) => ({
-      name: `Group-${index}`,
+      name: `Group-${String(index)}`,
     }));
     expect(
       (

@@ -219,6 +219,17 @@ async function validationAdmission(
   const user = await bindIdentityUser(request, input.user);
   return user.ok ? undefined : privateAccountFailure(user);
 }
+function validationScope(input: PrivateValidationInput): string {
+  return input.purpose === "validate-license"
+    ? "native-license-validation-only"
+    : "native-password-policy-only";
+}
+function validationSubject(input: PrivateValidationInput): CatalogJsonObject {
+  if (input.purpose === "validate-create-user-password") return { username: input.username };
+  return input.purpose === "validate-update-user-password"
+    ? { userKey: input.user.key, username: input.user.name }
+    : {};
+}
 function validationResult(
   input: PrivateValidationInput,
   response: Extract<AtlassianWriteHttpOutcome, { ok: true }>,
@@ -238,17 +249,11 @@ function validationResult(
   return boundJiraReadResult({
     data: {
       outcome: "succeeded",
-      validationScope:
-        input.purpose === "validate-license"
-          ? "native-license-validation-only"
-          : "native-password-policy-only",
+      validationScope: validationScope(input),
       actorUserKey: input.actor,
       accepted: body.accepted,
       violationCount: count,
-      ...(input.purpose === "validate-create-user-password" ? { username: input.username } : {}),
-      ...(input.purpose === "validate-update-user-password"
-        ? { userKey: input.user.key, username: input.user.name }
-        : {}),
+      ...validationSubject(input),
     },
   });
 }

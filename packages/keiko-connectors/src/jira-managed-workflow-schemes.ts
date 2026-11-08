@@ -149,6 +149,14 @@ function schemeIdentityMatches(
   if (raw.draft === true) return selected.returnDraft;
   return id === selected.schemeId;
 }
+function draftFlagValid(raw: Record<string, unknown>): boolean {
+  return raw.draft === undefined || raw.draft === null || typeof raw.draft === "boolean";
+}
+function hasMappings(raw: Record<string, unknown>): boolean {
+  return [raw.issueTypeMappings, raw.originalIssueTypeMappings].some(
+    (value) => value !== undefined && value !== null,
+  );
+}
 export function jiraWorkflowSchemeResult(
   raw: Record<string, unknown>,
   selected: Pick<Selection, "draft" | "returnDraft" | "schemeId" | "startAt" | "maxResults">,
@@ -161,11 +169,7 @@ export function jiraWorkflowSchemeResult(
     originalDefaultWorkflow: 255,
     lastModified: 128,
   });
-  if (
-    id === undefined ||
-    text === undefined ||
-    (raw.draft !== undefined && raw.draft !== null && typeof raw.draft !== "boolean")
-  )
+  if (id === undefined || text === undefined || !draftFlagValid(raw))
     return jiraReadFailure("malformed-payload");
   if (!schemeIdentityMatches(raw, id, selected)) return jiraReadFailure("malformed-payload");
   const reviewSnapshot = jiraWorkflowSchemeReviewSnapshot(raw);
@@ -177,12 +181,7 @@ export function jiraWorkflowSchemeResult(
     ...(typeof raw.draft === "boolean" ? { draft: raw.draft } : {}),
     ...(reviewSnapshot === undefined ? {} : { reviewSnapshot }),
   };
-  if (
-    ![raw.issueTypeMappings, raw.originalIssueTypeMappings].some(
-      (value) => value !== undefined && value !== null,
-    )
-  )
-    return boundJiraReadResult({ data });
+  if (!hasMappings(raw)) return boundJiraReadResult({ data });
   const items = schemeMappings(raw);
   return items === undefined
     ? jiraReadFailure("malformed-payload")

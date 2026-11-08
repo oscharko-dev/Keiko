@@ -39,12 +39,15 @@ function optionalBoolean(args: CatalogJsonObject, key: string, query: URLSearchP
   query.set(key, String(value));
   return true;
 }
+function identityValid(username: unknown, userKey: unknown): boolean {
+  if ((username === undefined) === (userKey === undefined)) return false;
+  if (username !== undefined && !jiraNativeText(username, 255)) return false;
+  return userKey === undefined || jiraNativeText(userKey, 255);
+}
 function singleSelection(args: CatalogJsonObject): Selection | undefined {
   const username = args.username;
   const userKey = args.userKey;
-  if ((username === undefined) === (userKey === undefined)) return undefined;
-  if (username !== undefined && !jiraNativeText(username, 255)) return undefined;
-  if (userKey !== undefined && !jiraNativeText(userKey, 255)) return undefined;
+  if (!identityValid(username, userKey)) return undefined;
   const query = new URLSearchParams();
   if (typeof username === "string") query.set("username", username);
   if (typeof userKey === "string") query.set("key", userKey);
@@ -115,31 +118,39 @@ function single(body: Record<string, unknown>, selected: Selection): ManagedMcpT
     return jiraReadFailure("malformed-payload");
   return boundJiraReadResult({ data: { outcome: "succeeded", ...item } });
 }
+function cursorValid(cursor: unknown, isLast: boolean, selected: Selection): boolean {
+  if (cursor !== undefined && cursor !== null && !jiraDirectoryCursor(cursor)) return false;
+  return isLast || (jiraDirectoryCursor(cursor) && cursor !== selected.cursor);
+}
+function directoryIsLast(
+  body: Record<string, unknown>,
+  itemCount: number,
+  selected: Selection,
+): boolean | undefined {
+  const isLast = body.isLast;
+  const size = body.maxResults;
+  if (
+    typeof isLast !== "boolean" ||
+    typeof size !== "number" ||
+    !Number.isSafeInteger(size) ||
+    size < itemCount ||
+    size < 1 ||
+    size > selected.maxResults
+  )
+    return undefined;
+  return cursorValid(body.nextCursor, isLast, selected) ? isLast : undefined;
+}
 function directory(body: Record<string, unknown>, selected: Selection): ManagedMcpToolResult {
   const items = jiraDirectoryUsers(body.values, selected.maxResults);
-  if (
-    items === undefined ||
-    typeof body.isLast !== "boolean" ||
-    typeof body.maxResults !== "number" ||
-    !Number.isSafeInteger(body.maxResults) ||
-    body.maxResults < items.length ||
-    body.maxResults < 1 ||
-    body.maxResults > selected.maxResults ||
-    (body.nextCursor !== undefined &&
-      body.nextCursor !== null &&
-      !jiraDirectoryCursor(body.nextCursor)) ||
-    (!body.isLast && (!jiraDirectoryCursor(body.nextCursor) || body.nextCursor === selected.cursor))
-  )
-    return jiraReadFailure("malformed-payload");
+  const isLast = items === undefined ? undefined : directoryIsLast(body, items.length, selected);
+  if (items === undefined || isLast === undefined) return jiraReadFailure("malformed-payload");
   // A cursor resumes after the entire native page. Never fit a prefix and skip its remainder.
   return boundJiraReadResult({
     data: {
       outcome: "succeeded",
       items,
-      isLast: body.isLast,
-      ...(!body.isLast && typeof body.nextCursor === "string"
-        ? { nextCursor: body.nextCursor }
-        : {}),
+      isLast,
+      ...(!isLast && typeof body.nextCursor === "string" ? { nextCursor: body.nextCursor } : {}),
     },
   });
 }

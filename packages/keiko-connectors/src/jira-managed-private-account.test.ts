@@ -266,9 +266,7 @@ describe("private actor-bound account operations", () => {
     const defect = new TypeError("Private port defect");
     const ports = {
       ...f.ports,
-      perform: async () => {
-        throw defect;
-      },
+      perform: (): Promise<never> => Promise.reject(defect),
     };
     await expect(execute(WRITES[1].name, WRITES[1].args, f.request, ports)).rejects.toBe(defect);
     expect(f.calls).toEqual([]);

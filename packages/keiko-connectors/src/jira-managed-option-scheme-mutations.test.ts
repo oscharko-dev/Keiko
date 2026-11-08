@@ -138,7 +138,7 @@ describe("native issue-type and priority scheme mutation admission", () => {
       const native = optionSchemeFixture();
       const scheme = native.issueSchemes.get("7");
       if (scheme === undefined) throw new TypeError("Missing scheme");
-      delete scheme[field];
+      Reflect.deleteProperty(scheme, field);
       expect(
         await executeJiraOptionSchemeMutation(scenario.tool, scenario.args, native.request),
       ).toMatchObject({ ok: false });

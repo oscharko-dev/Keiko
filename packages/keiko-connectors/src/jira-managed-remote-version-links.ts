@@ -103,21 +103,29 @@ export function projectJiraRemoteVersionLinkValue(value: unknown): Projected {
     ? { item: { valueAvailable: true, valueNodes: nodes.items } }
     : { reason: nodes.reason };
 }
-function reviewIdentity(
+function reviewCandidate(
   raw: Record<string, unknown>,
   selected: Selection,
   item: CatalogJsonObject,
-): CatalogJsonObject {
+): string | undefined {
   const nodes = asArray(item.valueNodes);
   const field = nodes
     ?.map(asRecord)
     .find((node) => node?.path === "/globalId" && node.kind === "string");
   const candidate = selected.globalId ?? field?.textValue;
-  if (
-    !jiraRemoteVersionLinkGlobalId(candidate, false) ||
-    typeof raw.self !== "string" ||
-    !URL.canParse(raw.self)
-  )
+  return jiraRemoteVersionLinkGlobalId(candidate, false) &&
+    typeof raw.self === "string" &&
+    URL.canParse(raw.self)
+    ? candidate
+    : undefined;
+}
+function reviewIdentity(
+  raw: Record<string, unknown>,
+  selected: Selection,
+  item: CatalogJsonObject,
+): CatalogJsonObject {
+  const candidate = reviewCandidate(raw, selected, item);
+  if (candidate === undefined || typeof raw.self !== "string")
     return { reviewIdentityAvailable: false };
   const observed = remoteLinkIdentity(raw.self);
   const versionId = selected.versionId ?? observed?.versionId;

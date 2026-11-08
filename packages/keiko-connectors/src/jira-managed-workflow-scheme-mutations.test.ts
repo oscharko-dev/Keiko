@@ -246,7 +246,7 @@ describe("reviewed workflow scheme configuration and explicit drafts", () => {
     });
     for (const field of ["description", "defaultWorkflow", "issueTypeMappings"]) {
       const missing: Record<string, unknown> = { ...native };
-      delete missing[field];
+      Reflect.deleteProperty(missing, field);
       expect(jiraWorkflowSchemeReviewSnapshot(missing)).toBeUndefined();
     }
     expect(

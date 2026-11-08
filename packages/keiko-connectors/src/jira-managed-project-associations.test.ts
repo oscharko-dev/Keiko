@@ -44,7 +44,9 @@ function requestFor(
     .mockResolvedValueOnce({ ok: true, status: 200, body: project })
     .mockResolvedValue({ ok: true, status: 200, body });
 }
-function priorityFor(body: Record<string, unknown>) {
+function priorityFor(
+  body: Record<string, unknown>,
+): ReturnType<typeof vi.fn<JiraProjectLifecyclePorts["priority"]["read"]>> {
   return vi
     .fn<JiraProjectLifecyclePorts["priority"]["read"]>()
     .mockResolvedValue({ ok: true, status: 200, body });

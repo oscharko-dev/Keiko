@@ -5,7 +5,7 @@ import type { AtlassianHttpBodyPort, AtlassianHttpBodyResult } from "./atlassian
 import { executeJiraSessionRead as read, isJiraSessionRead } from "./jira-managed-session-read.js";
 
 function response(body: unknown, status = 200): AtlassianHttpBodyResult {
-  const bodyText = JSON.stringify(body) ?? "";
+  const bodyText = body === undefined ? "" : JSON.stringify(body);
   return {
     kind: "response",
     status,
@@ -22,7 +22,7 @@ function context(beforeEffect: () => boolean = () => true): ManagedMcpInvocation
     beforeEffect,
   };
 }
-function connection(http: AtlassianHttpBodyPort) {
+function connection(http: AtlassianHttpBodyPort): Parameters<typeof read>[2] {
   return {
     deployment: "data-center" as const,
     baseUrl: "https://jira.example.invalid/context",
@@ -30,7 +30,7 @@ function connection(http: AtlassianHttpBodyPort) {
     http,
   };
 }
-function remote(body: unknown, status = 200) {
+function remote(body: unknown, status = 200): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> {
   return vi
     .fn<AtlassianHttpBodyPort>()
     .mockResolvedValueOnce(response({ key: "U1", name: "Canonical-Name" }))
@@ -153,9 +153,9 @@ it("does not dispatch session when the prerequisite current-user identity is una
 });
 it("rechecks current authority before the second native request", async () => {
   let allowed = true;
-  const http = vi.fn<AtlassianHttpBodyPort>(async () => {
+  const http = vi.fn<AtlassianHttpBodyPort>(() => {
     allowed = false;
-    return response({ key: "U1", name: "Canonical-Name" });
+    return Promise.resolve(response({ key: "U1", name: "Canonical-Name" }));
   });
   expect(
     (
@@ -191,9 +191,9 @@ it("observes caller cancellation during an awaited transport interruption", asyn
 it("does not reinterpret a programmer defect after abort as ordinary cancellation", async () => {
   const controller = new AbortController();
   const defect = new TypeError("Synthetic implementation defect");
-  const http = vi.fn<AtlassianHttpBodyPort>(async () => {
+  const http = vi.fn<AtlassianHttpBodyPort>(() => {
     controller.abort();
-    throw defect;
+    return Promise.reject(defect);
   });
   await expect(
     read({}, { ...context(), signal: controller.signal }, connection(http)),
@@ -204,11 +204,11 @@ it.each(["identity", "session"] as const)(
   "retains a native401 from %s after late cancellation",
   async (phase) => {
     const controller = new AbortController();
-    const http = vi.fn<AtlassianHttpBodyPort>(async (request) => {
+    const http = vi.fn<AtlassianHttpBodyPort>((request) => {
       if (phase === "session" && request.url.endsWith("/myself"))
-        return response({ key: "U1", name: "Canonical-Name" });
+        return Promise.resolve(response({ key: "U1", name: "Canonical-Name" }));
       controller.abort();
-      return response({ errorMessages: ["Native authentication refusal"] }, 401);
+      return Promise.resolve(response({ errorMessages: ["Native authentication refusal"] }, 401));
     });
     expect(
       (await read({}, { ...context(), signal: controller.signal }, connection(http))).data,

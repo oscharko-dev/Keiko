@@ -64,47 +64,64 @@ interface Scenario {
   readonly afterDetail?: Record<string, unknown>;
   readonly heldChange?: boolean;
 }
+interface FixtureState {
+  written: boolean;
+  collections: number;
+}
+function listResponse(options: Scenario, state: FixtureState): AtlassianWriteHttpOutcome {
+  state.collections++;
+  if (state.written && options.afterList !== undefined) {
+    if (options.afterList instanceof Error) throw options.afterList;
+    return options.afterList;
+  }
+  if (!state.written && options.heldChange && state.collections > 1) return collection([AFTER]);
+  return collection(listedLinks(options, state.written));
+}
+function listedLinks(options: Scenario, written: boolean): readonly unknown[] {
+  if (!written) return options.before ?? (options.existing ? [NATIVE] : []);
+  return options.after ?? (options.deleting ? [] : options.existing ? [AFTER] : [NATIVE]);
+}
+function actorKey(options: Scenario, written: boolean): string {
+  return written ? (options.afterActor ?? "synthetic-actor") : (options.actor ?? "synthetic-actor");
+}
+function detailBody(options: Scenario, written: boolean): Record<string, unknown> {
+  if (!written) return options.detail ?? NATIVE;
+  return options.afterDetail ?? (options.existing ? AFTER : NATIVE);
+}
+function readResponse(
+  options: Scenario,
+  state: FixtureState,
+  path: string,
+): AtlassianWriteHttpOutcome {
+  if (path === "myself")
+    return response({ key: actorKey(options, state.written), name: "synthetic.user" });
+  if (path.endsWith("?fields=summary"))
+    return response(state.written ? (options.afterIssue ?? ISSUE) : ISSUE);
+  if (path === LIST) return listResponse(options, state);
+  if (path === `${LIST}/${ID}`) return response(detailBody(options, state.written));
+  throw new TypeError(`Unexpected fixed native path: ${path}`);
+}
+function respond(
+  options: Scenario,
+  state: FixtureState,
+  path: string,
+  method: string,
+): AtlassianWriteHttpOutcome {
+  if (method === "GET") return readResponse(options, state, path);
+  state.written = true;
+  return (
+    options.write ??
+    response(method === "POST" ? { id: ID } : undefined, method === "POST" ? 201 : 204)
+  );
+}
 function fixture(options: Scenario = {}): ReturnType<typeof vi.fn<JiraMutationRequest>> {
-  let written = false;
-  let collections = 0;
-  return vi.fn<JiraMutationRequest>(async (path, method = "GET") => {
-    if (method !== "GET") {
-      written = true;
-      return (
-        options.write ??
-        response(method === "POST" ? { id: ID } : undefined, method === "POST" ? 201 : 204)
-      );
-    }
-    if (path === "myself")
-      return response({
-        key: written
-          ? (options.afterActor ?? "synthetic-actor")
-          : (options.actor ?? "synthetic-actor"),
-        name: "synthetic.user",
-      });
-    if (path.endsWith("?fields=summary"))
-      return response(written ? (options.afterIssue ?? ISSUE) : ISSUE);
-    if (path === LIST) {
-      collections++;
-      if (written && options.afterList !== undefined) {
-        if (options.afterList instanceof Error) throw options.afterList;
-        return options.afterList;
-      }
-      if (!written && options.heldChange && collections > 1) return collection([AFTER]);
-      return collection(
-        written
-          ? (options.after ?? (options.deleting ? [] : options.existing ? [AFTER] : [NATIVE]))
-          : (options.before ?? (options.existing ? [NATIVE] : [])),
-      );
-    }
-    if (path === `${LIST}/${ID}`)
-      return response(
-        written
-          ? (options.afterDetail ?? (options.existing ? AFTER : NATIVE))
-          : (options.detail ?? NATIVE),
-      );
-    throw new TypeError(`Unexpected fixed native path: ${path}`);
-  });
+  const state: FixtureState = { written: false, collections: 0 };
+  return vi.fn<JiraMutationRequest>(
+    (path, method = "GET") =>
+      new Promise<AtlassianWriteHttpOutcome>((resolve) => {
+        resolve(respond(options, state, path, method));
+      }),
+  );
 }
 function effects(request: ReturnType<typeof fixture>): readonly Parameters<JiraMutationRequest>[] {
   return request.mock.calls.filter(([, method = "GET"]) => method !== "GET");
@@ -114,7 +131,7 @@ function run(
   operation: Operation = "jira.upsert-remote-link",
   args: CatalogJsonObject = CREATE,
   check = false,
-) {
+): ReturnType<typeof executeJiraRemoteLinkMutation> {
   return executeJiraRemoteLinkMutation(operation, args, request, check);
 }
 

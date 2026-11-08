@@ -89,29 +89,32 @@ interface NativeEffect {
   readonly method: "POST" | "PUT" | "DELETE";
   readonly body?: CatalogJsonObject;
 }
+function replaceEffect(
+  input: SprintLifecycleInput,
+  first: SprintLifecycleInput["sprints"][number],
+): NativeEffect | undefined {
+  if (input.replacement === undefined || typeof first.synced !== "boolean") return undefined;
+  return {
+    path: `sprint/${first.id}`,
+    method: "PUT",
+    body: {
+      ...input.replacement,
+      id: Number(first.id),
+      originBoardId: Number(first.originBoardId),
+      synced: first.synced,
+      incompleteIssuesDestinationId:
+        input.replacement.incompleteIssuesDestinationId === null
+          ? null
+          : Number(input.replacement.incompleteIssuesDestinationId),
+    },
+  };
+}
 function nativeEffect(input: SprintLifecycleInput): NativeEffect | undefined {
   const first = input.sprints[0];
   if (first === undefined) return undefined;
   switch (input.operation) {
-    case "jira.replace-sprint": {
-      if (input.replacement === undefined || typeof first.synced !== "boolean") {
-        return undefined;
-      }
-      return {
-        path: `sprint/${first.id}`,
-        method: "PUT",
-        body: {
-          ...input.replacement,
-          id: Number(first.id),
-          originBoardId: Number(first.originBoardId),
-          synced: first.synced,
-          incompleteIssuesDestinationId:
-            input.replacement.incompleteIssuesDestinationId === null
-              ? null
-              : Number(input.replacement.incompleteIssuesDestinationId),
-        },
-      };
-    }
+    case "jira.replace-sprint":
+      return replaceEffect(input, first);
     case "jira.delete-sprint":
       return { path: `sprint/${first.id}`, method: "DELETE" };
     case "jira.swap-sprints":

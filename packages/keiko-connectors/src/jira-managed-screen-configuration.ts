@@ -28,13 +28,17 @@ function effect(input: ScreenConfigurationInput): Effect {
   if (input.kind === "default")
     return { path: `screens/addToDefault/${encodeURIComponent(input.fieldId)}`, method: "POST" };
   const tab = `screens/${input.screenId}/tabs/${input.tabId}`;
-  if (input.kind === "tab-move") return { path: `${tab}/move/${input.position}`, method: "POST" };
+  if (input.kind === "tab-move")
+    return { path: `${tab}/move/${String(input.position)}`, method: "POST" };
   if (input.kind === "add")
     return { path: `${tab}/fields`, method: "POST", body: { fieldId: input.fieldId } };
   const field = `${tab}/fields/${encodeURIComponent(input.fieldId)}`;
   if (input.kind === "remove") return { path: field, method: "DELETE" };
   return input.kind === "show"
-    ? { path: `${field}/updateShowWhenEmptyIndicator/${input.showWhenEmpty}`, method: "PUT" }
+    ? {
+        path: `${field}/updateShowWhenEmptyIndicator/${String(input.showWhenEmpty)}`,
+        method: "PUT",
+      }
     : { path: `${field}/move`, method: "POST", body: input.body };
 }
 async function confirm(

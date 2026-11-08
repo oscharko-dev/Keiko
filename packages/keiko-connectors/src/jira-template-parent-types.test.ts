@@ -3,6 +3,7 @@ import {
   parseJiraIssueTemplate,
   type JiraIssueTemplate,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type { AtlassianWriteHttpOutcome } from "./atlassian-write-http.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import {
   gateJiraMutationByTemplates,
@@ -16,7 +17,7 @@ import {
 import { readJiraTemplateInstanceMetadata } from "./jira-issue-template-instance.js";
 import { createJiraReportTemplateChecker } from "./jira-report-template-checker.js";
 
-function rule(types: string | undefined = "Task"): JiraIssueTemplate {
+function rule(types = "Task"): JiraIssueTemplate {
   const parsed = parseJiraIssueTemplate(
     [
       "---",
@@ -26,7 +27,7 @@ function rule(types: string | undefined = "Task"): JiraIssueTemplate {
       "issueType: Sub-task",
       "activateOn: [create, edit, transition]",
       "parentField: parent",
-      ...(types === undefined ? [] : [`parentIssueTypes: [${types}]`]),
+      `parentIssueTypes: [${types}]`,
       "---",
     ].join("\n"),
   );
@@ -34,41 +35,48 @@ function rule(types: string | undefined = "Task"): JiraIssueTemplate {
   return parsed.template;
 }
 const PARENT = { id: "10002", key: "SYN-2", fields: { issuetype: { id: "7", name: "Task" } } };
-function fixture(parent: Record<string, unknown> | "denied" = PARENT) {
-  const request = vi.fn<JiraMutationRequest>(async (path, method = "GET") => {
-    expect(method).toBe("GET");
-    if (path === "project/10000")
-      return { ok: true, status: 200, body: { id: "10000", key: "SYN" } };
-    if (path === "issuetype/10003")
-      return { ok: true, status: 200, body: { id: "10003", name: "Sub-task" } };
-    if (path.startsWith("issue/SYN-1?"))
-      return {
-        ok: true,
-        status: 200,
-        body: {
-          id: "10001",
-          key: "SYN-1",
-          fields: {
-            project: { key: "SYN" },
-            issuetype: { id: "10003", name: "Sub-task" },
-            parent: { id: "10002", key: "SYN-2" },
-            issuelinks: [],
-          },
+function respond(
+  parent: Record<string, unknown> | "denied",
+  path: string,
+  method: string,
+): AtlassianWriteHttpOutcome {
+  expect(method).toBe("GET");
+  if (path === "project/10000") return { ok: true, status: 200, body: { id: "10000", key: "SYN" } };
+  if (path === "issuetype/10003")
+    return { ok: true, status: 200, body: { id: "10003", name: "Sub-task" } };
+  if (path.startsWith("issue/SYN-1?"))
+    return {
+      ok: true,
+      status: 200,
+      body: {
+        id: "10001",
+        key: "SYN-1",
+        fields: {
+          project: { key: "SYN" },
+          issuetype: { id: "10003", name: "Sub-task" },
+          parent: { id: "10002", key: "SYN-2" },
+          issuelinks: [],
         },
-      };
-    expect(path).toMatch(/^issue\/(?:10002|SYN-2)\?fields=issuetype$/u);
-    return parent === "denied"
-      ? { ok: false, reason: "permission-denied" }
-      : { ok: true, status: 200, body: parent };
-  });
-  return request;
+      },
+    };
+  expect(path).toMatch(/^issue\/(?:10002|SYN-2)\?fields=issuetype$/u);
+  return parent === "denied"
+    ? { ok: false, reason: "permission-denied" }
+    : { ok: true, status: 200, body: parent };
+}
+function fixture(
+  parent: Record<string, unknown> | "denied" = PARENT,
+): ReturnType<typeof vi.fn<JiraMutationRequest>> {
+  return vi.fn<JiraMutationRequest>((path, method = "GET") =>
+    Promise.resolve(respond(parent, path, method)),
+  );
 }
 function gate(
   request: JiraMutationRequest,
   template = rule(),
   parent: unknown = { key: "SYN-2" },
   operation: JiraTemplateGateInput["operation"] = "create",
-) {
+): ReturnType<typeof gateJiraMutationByTemplates> {
   return gateJiraMutationByTemplates({
     request,
     source: () => ({ templates: [template], unreadable: 0 }),
@@ -206,18 +214,20 @@ describe("native parent issue-type admission", () => {
 
 describe("native validation of a saved parent-type clause", () => {
   it("reports an oversized native parent-type catalog as a bounds failure", async () => {
-    const request = vi.fn<JiraMutationRequest>(async (path) =>
-      path === "project/SYN"
-        ? { ok: true, status: 200, body: { id: "10000", key: "SYN", issueTypes: [] } }
-        : {
-            ok: true,
-            status: 200,
-            body: undefined,
-            items: Array.from({ length: 1001 }, (_, index) => ({
-              id: String(index + 1),
-              name: "Task",
-            })),
-          },
+    const request = vi.fn<JiraMutationRequest>((path) =>
+      Promise.resolve<AtlassianWriteHttpOutcome>(
+        path === "project/SYN"
+          ? { ok: true, status: 200, body: { id: "10000", key: "SYN", issueTypes: [] } }
+          : {
+              ok: true,
+              status: 200,
+              body: undefined,
+              items: Array.from({ length: 1001 }, (_, index) => ({
+                id: String(index + 1),
+                name: "Task",
+              })),
+            },
+      ),
     );
     expect(await readJiraTemplateInstanceMetadata(request, rule())).toEqual({
       ok: false,
@@ -226,16 +236,24 @@ describe("native validation of a saved parent-type clause", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
   it("uses the global type catalog, not the child project's available types, and never defaults unknown IDs", async () => {
-    const request = vi.fn<JiraMutationRequest>(async (path) => {
+    const request = vi.fn<JiraMutationRequest>((path) => {
       if (path === "project/SYN")
-        return {
+        return Promise.resolve<AtlassianWriteHttpOutcome>({
           ok: true,
           status: 200,
           body: { id: "10000", key: "SYN", issueTypes: [{ id: "10003", name: "Sub-task" }] },
-        };
+        });
       if (path === "issuetype")
-        return { ok: true, status: 200, body: undefined, items: [{ id: "7", name: "Task" }] };
-      return { ok: false, reason: "permission-denied" };
+        return Promise.resolve<AtlassianWriteHttpOutcome>({
+          ok: true,
+          status: 200,
+          body: undefined,
+          items: [{ id: "7", name: "Task" }],
+        });
+      return Promise.resolve<AtlassianWriteHttpOutcome>({
+        ok: false,
+        reason: "permission-denied",
+      });
     });
     const read = await readJiraTemplateInstanceMetadata(request, rule());
     if (!read.ok) throw new TypeError("Expected independently read validation metadata");
@@ -247,10 +265,12 @@ describe("native validation of a saved parent-type clause", () => {
     expect(request).toHaveBeenCalledWith("issuetype", "GET", undefined, "json-array");
   });
   it("refuses unavailable global type metadata instead of displaying a successful validation", async () => {
-    const request = vi.fn<JiraMutationRequest>(async (path) =>
-      path === "project/SYN"
-        ? { ok: true, status: 200, body: { id: "10000", key: "SYN", issueTypes: [] } }
-        : { ok: false, reason: "permission-denied" },
+    const request = vi.fn<JiraMutationRequest>((path) =>
+      Promise.resolve<AtlassianWriteHttpOutcome>(
+        path === "project/SYN"
+          ? { ok: true, status: 200, body: { id: "10000", key: "SYN", issueTypes: [] } }
+          : { ok: false, reason: "permission-denied" },
+      ),
     );
     expect(await readJiraTemplateInstanceMetadata(request, rule())).toEqual({
       ok: false,

@@ -161,6 +161,14 @@ export function jiraSprintLifecycleSnapshot(
   }
   return { ...result, id, originBoardId: board, name, state };
 }
+function replacementValuesValid(raw: Record<string, unknown>): boolean {
+  for (const key of ["startDate", "endDate", "goal", "incompleteIssuesDestinationId"])
+    if (!snapshotOptional(key, raw[key])) return false;
+  return (
+    raw.incompleteIssuesDestinationId === null ||
+    agileInputId(raw.incompleteIssuesDestinationId) !== undefined
+  );
+}
 function replacement(value: unknown): SprintReplacement | undefined {
   const raw = asRecord(value);
   if (
@@ -171,13 +179,7 @@ function replacement(value: unknown): SprintReplacement | undefined {
     return undefined;
   if (!savedName(raw.name) || !sprintState(raw.state) || typeof raw.autoStartStop !== "boolean")
     return undefined;
-  for (const key of ["startDate", "endDate", "goal", "incompleteIssuesDestinationId"])
-    if (!snapshotOptional(key, raw[key])) return undefined;
-  if (
-    raw.incompleteIssuesDestinationId !== null &&
-    agileInputId(raw.incompleteIssuesDestinationId) === undefined
-  )
-    return undefined;
+  if (!replacementValuesValid(raw)) return undefined;
   return Object.fromEntries(
     [...REPLACEMENT_KEYS].map((key) => [key, raw[key]]),
   ) as SprintReplacement;

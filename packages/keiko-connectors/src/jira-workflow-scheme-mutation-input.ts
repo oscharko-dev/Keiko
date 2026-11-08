@@ -161,13 +161,24 @@ function metadataTarget(
   const target = { ...text, ...mapping };
   return Object.keys(target).length === 0 ? undefined : Object.freeze(target);
 }
+function mappingNamesValid(base: WorkflowSchemeInput, args: CatalogJsonObject): boolean {
+  if (base.kind === "issue-type" && !jiraNativeId(args.issueTypeId)) return false;
+  const needName = base.kind === "workflow" || !base.remove;
+  return !needName || savedText(args.workflowName, 255);
+}
+function issueTypeIdsValid(ids: unknown): ids is readonly string[] {
+  return (
+    Array.isArray(ids) &&
+    ids.length <= TOOL_CATALOG_LIMITS.maxArrayItems &&
+    ids.every(jiraNativeId) &&
+    new Set(ids).size === ids.length
+  );
+}
 function mappingInput(
   base: WorkflowSchemeInput,
   args: CatalogJsonObject,
 ): WorkflowSchemeInput | undefined {
-  if (base.kind === "issue-type" && !jiraNativeId(args.issueTypeId)) return undefined;
-  const needName = base.kind === "workflow" || !base.remove;
-  if (needName && !savedText(args.workflowName, 255)) return undefined;
+  if (!mappingNamesValid(base, args)) return undefined;
   const selected = {
     ...base,
     ...(jiraNativeId(args.issueTypeId) ? { issueTypeId: args.issueTypeId } : {}),
@@ -175,14 +186,7 @@ function mappingInput(
   };
   if (base.kind !== "workflow" || base.remove) return selected;
   const ids = args.issueTypeIds;
-  if (
-    !Array.isArray(ids) ||
-    ids.length > TOOL_CATALOG_LIMITS.maxArrayItems ||
-    !ids.every(jiraNativeId) ||
-    new Set(ids).size !== ids.length ||
-    typeof args.defaultMapping !== "boolean"
-  )
-    return undefined;
+  if (!issueTypeIdsValid(ids) || typeof args.defaultMapping !== "boolean") return undefined;
   return {
     ...selected,
     issueTypeIds: Object.freeze([...ids]),
@@ -201,17 +205,15 @@ function operationInput(
   if (base.kind === "create-draft") return base;
   return mappingInput(base, args);
 }
-export function parseWorkflowSchemeInput(
-  operation: JiraWorkflowSchemeMutation,
+function expectedSnapshots(
+  definition: (typeof WORKFLOW_SCHEME_MUTATIONS)[JiraWorkflowSchemeMutation],
   args: CatalogJsonObject,
-): WorkflowSchemeInput | undefined {
-  const definition = WORKFLOW_SCHEME_MUTATIONS[operation];
-  if (!savedExactKeys(args, fields(definition)) || !savedText(args.expectedActorKey, 255))
-    return undefined;
-  if (
-    new TextEncoder().encode(JSON.stringify(args)).byteLength > TOOL_CATALOG_LIMITS.maxArgumentBytes
-  )
-    return undefined;
+):
+  | {
+      expectedScheme: WorkflowSchemeSnapshot | undefined;
+      expectedDraft: WorkflowSchemeSnapshot | undefined;
+    }
+  | undefined {
   const expectedScheme =
     definition.kind === "create"
       ? undefined
@@ -225,6 +227,22 @@ export function parseWorkflowSchemeInput(
     (needsDraft && expectedDraft === undefined)
   )
     return undefined;
+  return { expectedScheme, expectedDraft };
+}
+export function parseWorkflowSchemeInput(
+  operation: JiraWorkflowSchemeMutation,
+  args: CatalogJsonObject,
+): WorkflowSchemeInput | undefined {
+  const definition = WORKFLOW_SCHEME_MUTATIONS[operation];
+  if (!savedExactKeys(args, fields(definition)) || !savedText(args.expectedActorKey, 255))
+    return undefined;
+  if (
+    new TextEncoder().encode(JSON.stringify(args)).byteLength > TOOL_CATALOG_LIMITS.maxArgumentBytes
+  )
+    return undefined;
+  const expected = expectedSnapshots(definition, args);
+  if (expected === undefined) return undefined;
+  const { expectedScheme, expectedDraft } = expected;
   return operationInput(
     {
       operation,

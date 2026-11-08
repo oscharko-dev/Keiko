@@ -31,11 +31,16 @@ interface Input {
   readonly value?: string;
 }
 const FIELDS = new Set(["key", "expectedActorKey", "expectedValue", "value"]);
+function preferenceText(value: CatalogJsonValue | undefined): string | undefined {
+  if (typeof value === "string") return value;
+  return typeof value === "number" || typeof value === "boolean" ? String(value) : undefined;
+}
 function nativeValue(key: string, value: CatalogJsonValue | undefined): string | undefined {
   const kinds: Readonly<Record<string, string>> = JIRA_NONSECRET_PREFERENCE_KINDS;
   const kind = kinds[key];
   if (typeof value !== kind && !(kind === "integer" && typeof value === "number")) return undefined;
-  const native = typeof value === "string" ? value : String(value);
+  const native = preferenceText(value);
+  if (native === undefined) return undefined;
   const projected = projectJiraPreferenceValue(key, native);
   return "item" in projected && projected.item.valueState === "observed" ? native : undefined;
 }
@@ -138,6 +143,13 @@ export async function executeJiraPreferenceMutation(
       receipt,
     );
   if (check) return { ok: true, receipt: {} };
+  return writePreference(request, selected, receipt);
+}
+async function writePreference(
+  request: JiraMutationRequest,
+  selected: Input,
+  receipt: JiraSavedConfigurationReceipt,
+): Promise<JiraSavedConfigurationAttempt> {
   const rebound = await readSavedActor(request, selected.actorKey);
   if (!rebound.ok) return rebound;
   const response = await request(

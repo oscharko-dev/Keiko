@@ -84,7 +84,7 @@ function versionIds(value: unknown): readonly string[] | undefined {
     value.length > TOOL_CATALOG_LIMITS.maxArrayItems
   )
     return undefined;
-  const ids: unknown[] = [...value];
+  const ids: unknown[] = value;
   if (!ids.every(jiraNativeId)) return undefined;
   return new Set(ids).size === ids.length ? ids : undefined;
 }

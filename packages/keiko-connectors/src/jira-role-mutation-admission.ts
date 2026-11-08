@@ -68,7 +68,7 @@ export function desiredRoleActors(
   if (selected === undefined) return before;
   const names = principalNames(selected);
   if (input.operation === "jira.set-project-role-actors") return names;
-  const included = (actor: Pick<RoleActor, "type" | "name">) =>
+  const included = (actor: Pick<RoleActor, "type" | "name">): boolean =>
     names.some((item) => item.type === actor.type && item.name === actor.name);
   if (input.operation.startsWith("jira.delete-")) return before.filter((actor) => !included(actor));
   return [

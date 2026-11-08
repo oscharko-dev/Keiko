@@ -12,6 +12,7 @@ import {
   projectJiraCollection,
 } from "./jira-managed-metadata.js";
 import { readJiraBoundProject } from "./jira-managed-projects.js";
+import { jiraIdentifierText } from "./jira-identifier-text.js";
 import { jiraNativeId } from "./jira-native-values.js";
 import { jiraNotificationScheme } from "./jira-notification-scheme-values.js";
 
@@ -84,6 +85,22 @@ async function single(
     },
   });
 }
+function listData(
+  selection: Selection,
+  items: readonly CatalogJsonObject[],
+  last: boolean,
+  total: unknown,
+): CatalogJsonObject {
+  return {
+    outcome: "succeeded",
+    items,
+    startAt: selection.startAt,
+    isLast: last,
+    eventsRequested: selection.includeEvents,
+    ...(typeof total === "number" ? { total } : {}),
+    ...(last ? {} : { nextStartAt: selection.startAt + items.length }),
+  };
+}
 async function list(
   selection: Selection,
   request: JiraMutationRequest,
@@ -109,17 +126,7 @@ async function list(
     selection.maxResults,
   );
   if (last === undefined) return jiraReadFailure("malformed-payload");
-  return boundJiraReadResult({
-    data: {
-      outcome: "succeeded",
-      items,
-      startAt: selection.startAt,
-      isLast: last,
-      eventsRequested: selection.includeEvents,
-      ...(typeof body.total === "number" ? { total: body.total } : {}),
-      ...(last ? {} : { nextStartAt: selection.startAt + items.length }),
-    },
-  });
+  return boundJiraReadResult({ data: listData(selection, items, last, body.total) });
 }
 /** Scheme visibility follows Jira actor permissions; no notification or subscription is changed. */
 export async function executeJiraNotificationSchemeRead(
@@ -132,12 +139,12 @@ export async function executeJiraNotificationSchemeRead(
   if (operation === "jira.notification-schemes") return list(selection, request);
   if (operation === "jira.notification-scheme")
     return single(
-      `notificationscheme/${String(args.schemeId)}`,
+      `notificationscheme/${jiraIdentifierText(args.schemeId)}`,
       selection,
       request,
-      String(args.schemeId),
+      jiraIdentifierText(args.schemeId),
     );
-  const project = await readJiraBoundProject(request, String(args.projectIdOrKey));
+  const project = await readJiraBoundProject(request, jiraIdentifierText(args.projectIdOrKey));
   if (!project.ok) return jiraReadFailure(project.reason, project.detail);
   if (!jiraNativeId(project.project.projectId)) return jiraReadFailure("malformed-payload");
   return single(

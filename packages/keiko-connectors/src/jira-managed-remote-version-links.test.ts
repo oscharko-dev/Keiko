@@ -7,14 +7,19 @@ import {
 } from "./jira-managed-remote-version-links.js";
 
 const VERSION = { id: "42", name: "Release", projectId: 10000 };
-function port(body: Record<string, unknown>, version: Record<string, unknown> = VERSION) {
-  return vi.fn<JiraMutationRequest>(async (path) => ({
-    ok: true,
-    status: 200,
-    body: path === "version/42" ? version : body,
-  }));
+function port(
+  body: Record<string, unknown>,
+  version: Record<string, unknown> = VERSION,
+): ReturnType<typeof vi.fn<JiraMutationRequest>> {
+  return vi.fn<JiraMutationRequest>((path) =>
+    Promise.resolve({
+      ok: true,
+      status: 200,
+      body: path === "version/42" ? version : body,
+    }),
+  );
 }
-function link(value: unknown, extra: Record<string, unknown> = {}) {
+function link(value: unknown, extra: Record<string, unknown> = {}): Record<string, unknown> {
   return { name: "Observed link", link: JSON.stringify(value), ...extra };
 }
 it("binds a version before reading its fixed link resource and preserves typed null/empty/false/zero", async () => {

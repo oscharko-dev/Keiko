@@ -174,6 +174,21 @@ function allowedKeys(operation: JiraOptionSchemeMutation, kind: SchemeKind): Rea
     return new Set([...common, "confirmUnverifiedConsequences"]);
   return new Set([...common, "expectedProjects", "projects", "confirmUnverifiedConsequences"]);
 }
+function projectCountValid(
+  change: SchemeSelection["change"],
+  expectedProjects: readonly SchemeProject[],
+  projects: readonly SchemeProject[],
+): boolean {
+  if (change === "add") {
+    return (
+      projects.length !== 0 &&
+      new Set([...expectedProjects, ...projects].map((project) => project.id)).size <=
+        JIRA_SCHEME_PROJECTS_MAX
+    );
+  }
+  if (change === "clear") return projects.length === 0;
+  return change !== "remove" || projects.length === 1;
+}
 function association(raw: CatalogJsonObject, base: SchemeSelection): SchemeSelection | undefined {
   const expectedProjects = schemeProjects(raw.expectedProjects);
   const projects = schemeProjects(raw.projects);
@@ -183,16 +198,9 @@ function association(raw: CatalogJsonObject, base: SchemeSelection): SchemeSelec
     raw.confirmUnverifiedConsequences !== true
   )
     return undefined;
-  if (base.change === "add" && projects.length === 0) return undefined;
-  if (
-    base.change === "add" &&
-    new Set([...expectedProjects, ...projects].map((project) => project.id)).size >
-      JIRA_SCHEME_PROJECTS_MAX
-  )
-    return undefined;
-  if (base.change === "clear" && projects.length !== 0) return undefined;
-  if (base.change === "remove" && projects.length !== 1) return undefined;
-  return { ...base, expectedProjects, projects };
+  return projectCountValid(base.change, expectedProjects, projects)
+    ? { ...base, expectedProjects, projects }
+    : undefined;
 }
 export function isJiraOptionSchemeMutation(value: string): value is JiraOptionSchemeMutation {
   return (JIRA_OPTION_SCHEME_MUTATIONS as readonly string[]).includes(value);

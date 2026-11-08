@@ -247,9 +247,11 @@ it.each([200, 401])(
   "retains ordinary Jira issue HTTP%s after late cancellation",
   async (status) => {
     const f = fixture(ISSUE);
-    f.http.mockImplementation(async () => {
+    f.http.mockImplementation(() => {
       f.controller.abort();
-      return response(status === 200 ? ISSUE : { errorMessages: ["Native refusal"] }, status);
+      return Promise.resolve(
+        response(status === 200 ? ISSUE : { errorMessages: ["Native refusal"] }, status),
+      );
     });
     const result = await f.run("jira.issue", { issueKey: "SYN-1" });
     expect(result.data.outcome).toBe(status === 200 ? "succeeded" : "failed");

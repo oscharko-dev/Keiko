@@ -74,27 +74,29 @@ function groupPicker(args: CatalogJsonObject, query: URLSearchParams): boolean {
   }
   return true;
 }
+function multiProjectRoute(args: CatalogJsonObject, query: URLSearchParams): string | undefined {
+  const keys = identifiers(args.projectKeys);
+  if (keys === undefined) return undefined;
+  query.set("projectKeys", keys.join(","));
+  return "user/assignable/multiProjectSearch";
+}
+function projectPickerRoute(args: CatalogJsonObject, query: URLSearchParams): string | undefined {
+  if (args.allowEmptyQuery !== undefined) {
+    if (typeof args.allowEmptyQuery !== "boolean") return undefined;
+    query.set("allowEmptyQuery", String(args.allowEmptyQuery));
+  }
+  return "projects/picker";
+}
 function route(
   name: ScopedRead,
   args: CatalogJsonObject,
   query: URLSearchParams,
   startAt: number,
 ): string | undefined {
-  if (name === "jira.multi-project-assignable-users") {
-    const keys = identifiers(args.projectKeys);
-    if (keys === undefined) return undefined;
-    query.set("projectKeys", keys.join(","));
-    return "user/assignable/multiProjectSearch";
-  }
+  if (name === "jira.multi-project-assignable-users") return multiProjectRoute(args, query);
   if (name === "jira.group-user-picker")
     return groupPicker(args, query) ? "groupuserpicker" : undefined;
-  if (name === "jira.project-picker") {
-    if (args.allowEmptyQuery !== undefined) {
-      if (typeof args.allowEmptyQuery !== "boolean") return undefined;
-      query.set("allowEmptyQuery", String(args.allowEmptyQuery));
-    }
-    return "projects/picker";
-  }
+  if (name === "jira.project-picker") return projectPickerRoute(args, query);
   if (!selectedScope(args, query)) return undefined;
   if (name === "jira.browse-permission-users") return "user/viewissue/search";
   const permissions = identifiers(args.permissions);
@@ -103,6 +105,10 @@ function route(
   query.set("startAt", String(startAt));
   return "user/permission/search";
 }
+function queryArgumentValid(name: ScopedRead, args: CatalogJsonObject): boolean {
+  if (args.query !== undefined && !jiraNativeText(args.query, 255, true)) return false;
+  return name !== "jira.browse-permission-users" || jiraNativeText(args.query, 255);
+}
 function selection(name: ScopedRead, args: CatalogJsonObject): Selection | undefined {
   const allowed = new Set(FIELDS[name]);
   if (Object.keys(args).some((key) => !allowed.has(key))) return undefined;
@@ -110,8 +116,7 @@ function selection(name: ScopedRead, args: CatalogJsonObject): Selection | undef
   const startAt = jiraDirectoryNumber(args.startAt, 0, 99);
   if (maxResults === undefined || startAt === undefined || startAt + maxResults > 100)
     return undefined;
-  if (args.query !== undefined && !jiraNativeText(args.query, 255, true)) return undefined;
-  if (name === "jira.browse-permission-users" && !jiraNativeText(args.query, 255)) return undefined;
+  if (!queryArgumentValid(name, args)) return undefined;
   const query = new URLSearchParams({ maxResults: String(maxResults) });
   if (typeof args.query === "string")
     query.set(
@@ -136,6 +141,27 @@ function group(value: unknown): CatalogJsonObject | undefined {
   const raw = asRecord(value);
   return raw !== undefined && jiraNativeText(raw.name, 255) ? { name: raw.name } : undefined;
 }
+function pickerData(
+  key: "users" | "groups",
+  branch: Record<string, unknown>,
+  items: readonly CatalogJsonObject[],
+): ManagedMcpToolResult {
+  return {
+    data: {
+      [key]: items,
+      ...(typeof branch.total === "number" ? { [`${key}Total`]: branch.total } : {}),
+    },
+  };
+}
+function pickerItems(
+  key: "users" | "groups",
+  values: readonly unknown[],
+  maximum: number,
+): readonly CatalogJsonObject[] | undefined {
+  return key === "users"
+    ? jiraDirectoryUsers(values, maximum)
+    : projectJiraCollection(values, maximum, group, "name");
+}
 function pickerBranch(
   body: Record<string, unknown>,
   key: "users" | "groups",
@@ -147,18 +173,10 @@ function pickerBranch(
   if (branch === undefined || values === undefined) return jiraReadFailure("malformed-payload");
   const maximum = key === "users" ? selected.maxResults : TOOL_CATALOG_LIMITS.maxArrayItems;
   if (values.length > maximum) return jiraReadFailure("bounds-exceeded");
-  const items =
-    key === "users"
-      ? jiraDirectoryUsers(values, maximum)
-      : projectJiraCollection(values, maximum, group, "name");
+  const items = pickerItems(key, values, maximum);
   if (items === undefined || !jiraDirectoryTotal(branch.total, items.length))
     return jiraReadFailure("malformed-payload");
-  return {
-    data: {
-      [key]: items,
-      ...(typeof branch.total === "number" ? { [`${key}Total`]: branch.total } : {}),
-    },
-  };
+  return pickerData(key, branch, items);
 }
 function projectPicker(body: Record<string, unknown>, selected: Selection): ManagedMcpToolResult {
   const values = asArray(body.projects);

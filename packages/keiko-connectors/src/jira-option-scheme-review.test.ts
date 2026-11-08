@@ -59,7 +59,7 @@ it.each(["description", "defaultIssueType", "issueTypes"])(
     const native = optionSchemeFixture();
     const current = native.issueSchemes.get("7");
     if (current === undefined) throw new TypeError("Missing issue scheme");
-    delete current[field];
+    Reflect.deleteProperty(current, field);
     const result = await executeJiraIssueTypeSchemeRead(
       "jira.issue-type-scheme",
       { schemeId: "7" },

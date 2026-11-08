@@ -17,6 +17,19 @@ import {
   type PermissionSchemeFailure,
 } from "./jira-permission-scheme-mutation-values.js";
 
+async function readPermissionGrants(
+  request: JiraMutationRequest,
+  id: string,
+): Promise<PermissionSchemeObservation<PermissionSchemeSnapshot["permissions"]>> {
+  const response = await request(`permissionscheme/${id}/permission`, "GET", undefined, "json");
+  if (!response.ok) return dispatchFailure(response);
+  const rows = asArray(response.body?.permissions);
+  if (response.status !== 200 || rows === undefined) return PERMISSION_SCHEME_MALFORMED;
+  if (rows.length > TOOL_CATALOG_LIMITS.maxArrayItems)
+    return { ok: false, reason: "bounds-exceeded" };
+  const permissions = permissionGrantSnapshots(rows);
+  return permissions === undefined ? PERMISSION_SCHEME_MALFORMED : { ok: true, value: permissions };
+}
 /** The native grant endpoint returns ALL grants; an omitted collection is never an empty set.
  * https://docs.atlassian.com/software/jira/docs/api/11.3.3/com/atlassian/jira/rest/v2/admin/permissionscheme/PermissionSchemeResource.html
  */
@@ -28,16 +41,8 @@ export async function readPermissionSchemeSnapshot(
   if (!parent.ok) return dispatchFailure(parent);
   const metadata = parent.status === 200 ? permissionSchemeMetadata(parent.body) : undefined;
   if (metadata?.id !== id) return PERMISSION_SCHEME_MALFORMED;
-  const response = await request(`permissionscheme/${id}/permission`, "GET", undefined, "json");
-  if (!response.ok) return dispatchFailure(response);
-  const rows = asArray(response.body?.permissions);
-  if (response.status !== 200 || rows === undefined) return PERMISSION_SCHEME_MALFORMED;
-  if (rows.length > TOOL_CATALOG_LIMITS.maxArrayItems)
-    return { ok: false, reason: "bounds-exceeded" };
-  const permissions = permissionGrantSnapshots(rows);
-  return permissions === undefined
-    ? PERMISSION_SCHEME_MALFORMED
-    : { ok: true, value: { ...metadata, permissions } };
+  const grants = await readPermissionGrants(request, id);
+  return grants.ok ? { ok: true, value: { ...metadata, permissions: grants.value } } : grants;
 }
 export function samePermissionSchemeMetadata(
   actual: PermissionSchemeMetadata,

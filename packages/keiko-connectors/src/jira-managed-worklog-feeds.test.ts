@@ -9,7 +9,7 @@ import {
   isJiraWorklogFeedRead,
 } from "./jira-managed-worklog-feeds.js";
 
-function port(body: Record<string, unknown>) {
+function port(body: Record<string, unknown>): ReturnType<typeof vi.fn<JiraMutationRequest>> {
   return vi.fn<JiraMutationRequest>().mockResolvedValue({ ok: true, status: 200, body });
 }
 function page(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -111,7 +111,7 @@ it.each([
       .mockResolvedValue({ ok: false, reason: "permission-denied" });
     await read("jira.updated-worklogs", args, request);
     expect(request).toHaveBeenCalledWith(
-      `worklog/updated?since=${String(args.since ?? "0")}`,
+      `worklog/updated?since=${args.since ?? "0"}`,
       "GET",
       undefined,
       "json",

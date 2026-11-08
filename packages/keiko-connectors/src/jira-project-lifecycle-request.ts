@@ -32,7 +32,7 @@ export function jiraProjectLifecycleRequests(
               expect: "json",
             })
           : Promise.resolve(INVALID),
-      assign: (projectId, schemeId) => {
+      assign: (projectId, schemeId): ReturnType<typeof executeAdmittedJiraRequest> => {
         const id = safeSchemeBodyId(schemeId);
         return jiraNativeId(projectId) && id !== undefined
           ? executeAdmittedJiraRequest(connection, context, signal, {

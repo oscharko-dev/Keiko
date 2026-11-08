@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import { jiraPermissionAttributeRequest } from "./jira-permission-attribute-request.js";
 
-function fixture(allowed = true) {
+function fixture(allowed = true): {
+  http: ReturnType<typeof vi.fn<AtlassianHttpBodyPort>>;
+  beforeEffect: ReturnType<typeof vi.fn<() => boolean>>;
+  controller: AbortController;
+  request: ReturnType<typeof jiraPermissionAttributeRequest>;
+} {
   const http = vi.fn<AtlassianHttpBodyPort>(() =>
     Promise.resolve({
       kind: "response",

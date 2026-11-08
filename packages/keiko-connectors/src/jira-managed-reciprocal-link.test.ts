@@ -10,7 +10,7 @@ const RECEIPT = {
   issueId: "10001",
   issueKey: "SYN-1",
   applicationLinkId: "22222222-2222-4222-8222-222222222222",
-  applicationLinkDestinationDigest: expect.stringMatching(/^[0-9a-f]{64}$/u),
+  applicationLinkDestinationDigest: expect.stringMatching(/^[0-9a-f]{64}$/u) as string,
   selectedRemoteIssueId: "9223372036854775807",
   delegatedEffectRequested: true,
 };

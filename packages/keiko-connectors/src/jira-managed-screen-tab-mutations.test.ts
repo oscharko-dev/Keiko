@@ -9,6 +9,7 @@ import {
   isJiraScreenTabMutation,
 } from "./jira-managed-screen-tab-mutations.js";
 import { JiraAcknowledgedMutationError } from "./jira-mutation-failure.js";
+import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { scriptedJiraMutationRequest as port } from "./jira-test-request/_support.js";
 
 const SELECTED = { screenId: "11", expectedScreenName: "Review screen" };
@@ -30,7 +31,7 @@ const ORIGINAL = [
   { id: 21, name: "Fields" },
   { id: 22, name: "Other" },
 ];
-function writes(request: ReturnType<typeof port>) {
+function writes(request: ReturnType<typeof port>): readonly Parameters<JiraMutationRequest>[] {
   return request.mock.calls.filter(([, method]) => method !== undefined && method !== "GET");
 }
 
@@ -180,7 +181,7 @@ it("does not create a duplicate named tab", async () => {
 it("refuses a creation whose known result could not fit the existing tab collection bound", async () => {
   const items = Array.from({ length: TOOL_CATALOG_LIMITS.maxArrayItems }, (_, index) => ({
     id: index + 1,
-    name: `Tab ${index}`,
+    name: `Tab ${String(index)}`,
   }));
   const request = port([SCREEN, rows(items)]);
   expect(await mutate("jira.create-screen-tab", { ...SELECTED, name: "New tab" }, request)).toEqual(

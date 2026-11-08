@@ -146,10 +146,7 @@ function replacementTransition(
     return { ok: false, reason: "invalid-transition" };
   return undefined;
 }
-function replacementDates(
-  current: SprintSnapshot,
-  desired: SprintReplacement,
-): SprintFailure | undefined {
+function scheduledDatesRefusal(desired: SprintReplacement): SprintFailure | undefined {
   if (
     (desired.state === "active" || desired.autoStartStop) &&
     (!agileDate(desired.startDate) || !agileDate(desired.endDate))
@@ -163,6 +160,14 @@ function replacementDates(
     Date.parse(desired.startDate) >= Date.parse(desired.endDate)
   )
     return sprintRefusal("The sprint end date must follow its start date.");
+  return undefined;
+}
+function replacementDates(
+  current: SprintSnapshot,
+  desired: SprintReplacement,
+): SprintFailure | undefined {
+  const scheduled = scheduledDatesRefusal(desired);
+  if (scheduled !== undefined) return scheduled;
   if (
     current.synced &&
     (current.startDate !== desired.startDate || current.endDate !== desired.endDate)

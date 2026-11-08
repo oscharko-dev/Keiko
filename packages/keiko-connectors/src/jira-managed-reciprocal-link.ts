@@ -57,16 +57,25 @@ async function admit(
     validated: { fields: {}, update: {} },
   });
   if (!gate.ok) return reciprocalFailure(gate);
+  return recheck(request, ports, input, configuration.value, prior.value);
+}
+async function recheck(
+  request: JiraMutationRequest,
+  ports: JiraReciprocalConfigurationPorts,
+  input: ReciprocalInput,
+  configuration: ReciprocalManifest,
+  prior: Parameters<typeof sameRemoteLinks>[0],
+): Promise<Admitted | ReciprocalFailure> {
   const current = await observeReciprocalLinks(request, input);
   if (!current.ok) return current;
-  if (!sameRemoteLinks(prior.value, current.value))
+  if (!sameRemoteLinks(prior, current.value))
     return reciprocalRefusal(
       "The complete local remote-link state changed during admission; no request was sent.",
       "conflict",
     );
   const currentConfiguration = await observeReciprocalConfiguration(ports, input);
   if (!currentConfiguration.ok) return currentConfiguration;
-  if (!sameManifest(configuration.value, currentConfiguration.value))
+  if (!sameManifest(configuration, currentConfiguration.value))
     return reciprocalRefusal(
       "The local manifest changed during admission; no request was sent.",
       "conflict",

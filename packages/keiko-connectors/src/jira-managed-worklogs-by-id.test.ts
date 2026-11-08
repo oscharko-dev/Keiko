@@ -3,6 +3,7 @@ import {
   TOOL_CATALOG_LIMITS,
   type CatalogJsonObject,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import type { AtlassianWriteHttpOutcome } from "./atlassian-write-http.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { executeJiraWorklogsByIdRead as read } from "./jira-managed-worklogs-by-id.js";
 
@@ -18,17 +19,24 @@ const WORKLOG = {
   },
   self: "https://untrusted.invalid/worklog/7",
 };
-function port(items: readonly Record<string, unknown>[]) {
-  return vi.fn<JiraMutationRequest>(async (path, method) => {
+function port(
+  items: readonly Record<string, unknown>[],
+): ReturnType<typeof vi.fn<JiraMutationRequest>> {
+  return vi.fn<JiraMutationRequest>((path, method) => {
     if (path === "worklog/list" && method === "POST")
-      return { ok: true, status: 200, body: undefined, items };
+      return Promise.resolve<AtlassianWriteHttpOutcome>({
+        ok: true,
+        status: 200,
+        body: undefined,
+        items,
+      });
     if (path === "issue/10001?fields=summary")
-      return {
+      return Promise.resolve<AtlassianWriteHttpOutcome>({
         ok: true,
         status: 200,
         body: { id: "10001", key: "SYN-1", fields: { summary: "Issue" } },
-      };
-    throw new TypeError("Unexpected requested worklog route");
+      });
+    return Promise.reject(new TypeError("Unexpected requested worklog route"));
   });
 }
 it("reads only selected visible IDs, preserves zero/empty values and independently binds each returned parent", async () => {
@@ -115,10 +123,12 @@ it.each([
 });
 it("does not expose orphaned worklogs after parent access or identity changes", async () => {
   const request = port([WORKLOG]);
-  request.mockImplementation(async (path) =>
-    path === "worklog/list"
-      ? { ok: true, status: 200, body: undefined, items: [WORKLOG] }
-      : { ok: false, reason: "permission-denied" },
+  request.mockImplementation((path) =>
+    Promise.resolve<AtlassianWriteHttpOutcome>(
+      path === "worklog/list"
+        ? { ok: true, status: 200, body: undefined, items: [WORKLOG] }
+        : { ok: false, reason: "permission-denied" },
+    ),
   );
   const result = await read({ worklogIds: ["7"] }, request);
   expect(result.data.reason).toBe("permission-denied");

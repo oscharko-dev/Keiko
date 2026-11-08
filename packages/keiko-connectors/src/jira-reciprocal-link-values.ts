@@ -108,6 +108,23 @@ const INPUT_KEYS = new Set([
   "expectLocalLinkAbsent",
   "acceptNativeDelegatedEffect",
 ]);
+function remoteFields(
+  args: CatalogJsonObject,
+):
+  | Pick<ReciprocalInput, "remoteId" | "remoteTitle" | "sourceRelationship" | "targetRelationship">
+  | undefined {
+  return jiraNativeId(args.remoteIssueId) &&
+    savedText(args.remoteIssueTitle, 255) &&
+    savedText(args.sourceRelationship, 255) &&
+    savedText(args.targetRelationship, 255)
+    ? {
+        remoteId: args.remoteIssueId,
+        remoteTitle: args.remoteIssueTitle,
+        sourceRelationship: args.sourceRelationship,
+        targetRelationship: args.targetRelationship,
+      }
+    : undefined;
+}
 export function parseReciprocalInput(args: CatalogJsonObject): ReciprocalInput | undefined {
   if (
     !savedExactKeys(args, INPUT_KEYS) ||
@@ -118,26 +135,11 @@ export function parseReciprocalInput(args: CatalogJsonObject): ReciprocalInput |
     return undefined;
   const issue = issueLifecycleReview(args.expectedIssue);
   const application = reciprocalApplication(args.expectedApplication, true);
-  if (
-    issue === undefined ||
-    application === undefined ||
-    !jiraNativeId(args.remoteIssueId) ||
-    !savedText(args.remoteIssueTitle, 255) ||
-    !savedText(args.sourceRelationship, 255) ||
-    !savedText(args.targetRelationship, 255)
-  )
-    return undefined;
+  const remote = remoteFields(args);
+  if (issue === undefined || application === undefined || remote === undefined) return undefined;
   return new TextEncoder().encode(JSON.stringify(args)).byteLength <=
     TOOL_CATALOG_LIMITS.maxArgumentBytes
-    ? {
-        actor: args.expectedActorKey,
-        issue,
-        application,
-        remoteId: args.remoteIssueId,
-        remoteTitle: args.remoteIssueTitle,
-        sourceRelationship: args.sourceRelationship,
-        targetRelationship: args.targetRelationship,
-      }
+    ? { actor: args.expectedActorKey, issue, application, ...remote }
     : undefined;
 }
 export function reciprocalGlobalId(applicationId: string, issueId: string): string {

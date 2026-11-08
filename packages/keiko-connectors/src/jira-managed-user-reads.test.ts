@@ -210,7 +210,7 @@ describe("closed Data Center user reads", () => {
   });
   it("retains the entire largest declared directory page with its native cursor", async () => {
     const values = Array.from({ length: 100 }, (_, index) => ({
-      key: `user-${index}${"界".repeat(240)}`,
+      key: `user-${String(index)}${"界".repeat(240)}`,
       name: "界".repeat(255),
       displayName: "界".repeat(255),
     }));

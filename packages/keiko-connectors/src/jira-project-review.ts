@@ -12,34 +12,34 @@ export interface JiraProjectReview {
   readonly projectTypeKey?: string;
 }
 const REVIEW_KEYS = new Set(["id", "key", "name", "archived", "projectTypeKey"]);
+function projectTypeKeyValid(raw: Record<string, unknown>, exact: boolean): boolean {
+  if (exact && Object.hasOwn(raw, "projectTypeKey"))
+    return isSafeAtlassianIdentifier(raw.projectTypeKey);
+  return (
+    raw.projectTypeKey === undefined ||
+    raw.projectTypeKey === null ||
+    isSafeAtlassianIdentifier(raw.projectTypeKey)
+  );
+}
+function reviewScalars(
+  raw: Record<string, unknown>,
+): Pick<JiraProjectReview, "id" | "key" | "name" | "archived"> | undefined {
+  return jiraNativeId(raw.id) &&
+    isSafeAtlassianIdentifier(raw.key) &&
+    savedName(raw.name) &&
+    typeof raw.archived === "boolean"
+    ? { id: raw.id, key: raw.key, name: raw.name, archived: raw.archived }
+    : undefined;
+}
 /** ProjectBean explicitly exposes archived. Omitted/null is unavailable, never false. */
 export function jiraProjectReview(value: unknown, exact = false): JiraProjectReview | undefined {
   const raw = asRecord(value);
   if (raw === undefined || (exact && !savedExactKeys(raw, REVIEW_KEYS))) return undefined;
-  if (
-    exact &&
-    Object.hasOwn(raw, "projectTypeKey") &&
-    !isSafeAtlassianIdentifier(raw.projectTypeKey)
-  )
-    return undefined;
-  if (
-    !jiraNativeId(raw.id) ||
-    !isSafeAtlassianIdentifier(raw.key) ||
-    !savedName(raw.name) ||
-    typeof raw.archived !== "boolean"
-  )
-    return undefined;
-  if (
-    raw.projectTypeKey !== undefined &&
-    raw.projectTypeKey !== null &&
-    !isSafeAtlassianIdentifier(raw.projectTypeKey)
-  )
-    return undefined;
+  if (!projectTypeKeyValid(raw, exact)) return undefined;
+  const scalars = reviewScalars(raw);
+  if (scalars === undefined) return undefined;
   return {
-    id: raw.id,
-    key: raw.key,
-    name: raw.name,
-    archived: raw.archived,
+    ...scalars,
     ...(isSafeAtlassianIdentifier(raw.projectTypeKey)
       ? { projectTypeKey: raw.projectTypeKey }
       : {}),

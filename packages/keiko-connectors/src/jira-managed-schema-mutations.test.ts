@@ -206,8 +206,8 @@ describe("fixed native schema mutations", () => {
       await execute(scenario.name, { ...scenario.args, expectedFields: duplicate }, f.request),
     ).toMatchObject({ ok: false });
     const oversized = Array.from({ length: 51 }, (_, i) => ({
-      id: `customfield_${i + 1}`,
-      name: `Field ${i + 1}`,
+      id: `customfield_${String(i + 1)}`,
+      name: `Field ${String(i + 1)}`,
       custom: true,
     }));
     expect(

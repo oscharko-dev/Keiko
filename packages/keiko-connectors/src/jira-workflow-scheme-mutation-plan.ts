@@ -9,6 +9,16 @@ import type {
   WorkflowSchemeMutationReceipt,
 } from "./jira-workflow-scheme-mutation-input.js";
 
+function mappingChangedReceipt(
+  input: WorkflowSchemeInput,
+): { readonly workflowMappingChanged: boolean } | Record<string, never> {
+  return input.kind === "update" && !input.draft
+    ? {
+        workflowMappingChanged:
+          input.target?.defaultWorkflow !== undefined || input.target?.mappings !== undefined,
+      }
+    : {};
+}
 export function workflowSchemeReceipt(
   input: WorkflowSchemeInput,
   schemeId = input.expectedScheme?.id,
@@ -21,12 +31,7 @@ export function workflowSchemeReceipt(
     ...(schemeId === undefined ? {} : { schemeId }),
     ...(draftId === undefined ? {} : { draftSchemeId: draftId }),
     ...mappingReceipt(input),
-    ...(input.kind === "update" && !input.draft
-      ? {
-          workflowMappingChanged:
-            input.target?.defaultWorkflow !== undefined || input.target?.mappings !== undefined,
-        }
-      : {}),
+    ...mappingChangedReceipt(input),
   });
 }
 function mappingPresent(input: WorkflowSchemeInput): boolean {
@@ -93,42 +98,48 @@ function workflowDefault(input: WorkflowSchemeInput, prior: string | null): stri
     return input.workflowName;
   return prior === input.workflowName ? null : prior;
 }
+function createdScheme(
+  target: WorkflowSchemeInput["target"],
+  id: string | undefined,
+): WorkflowSchemeSnapshot | undefined {
+  if (
+    id === undefined ||
+    target?.name === undefined ||
+    target.description === undefined ||
+    target.defaultWorkflow === undefined ||
+    target.mappings === undefined
+  )
+    return undefined;
+  return {
+    id,
+    draft: false,
+    name: target.name,
+    description: target.description,
+    defaultWorkflow: target.defaultWorkflow,
+    mappings: target.mappings,
+  };
+}
+function createdDraft(
+  parent: WorkflowSchemeSnapshot | undefined,
+  id: string | undefined,
+): WorkflowSchemeSnapshot | undefined {
+  return parent === undefined || id === undefined
+    ? undefined
+    : {
+        ...parent,
+        id,
+        draft: true,
+        originalDefaultWorkflow: parent.defaultWorkflow,
+        originalMappings: parent.mappings,
+      };
+}
 export function desiredWorkflowScheme(
   input: WorkflowSchemeInput,
   id?: string,
 ): WorkflowSchemeSnapshot | undefined {
   const before = selectedWorkflowScheme(input);
-  if (input.kind === "create") {
-    const target = input.target;
-    if (
-      id === undefined ||
-      target?.name === undefined ||
-      target.description === undefined ||
-      target.defaultWorkflow === undefined ||
-      target.mappings === undefined
-    )
-      return undefined;
-    return {
-      id,
-      draft: false,
-      name: target.name,
-      description: target.description,
-      defaultWorkflow: target.defaultWorkflow,
-      mappings: target.mappings,
-    };
-  }
-  if (input.kind === "create-draft") {
-    const parent = input.expectedScheme;
-    return parent === undefined || id === undefined
-      ? undefined
-      : {
-          ...parent,
-          id,
-          draft: true,
-          originalDefaultWorkflow: parent.defaultWorkflow,
-          originalMappings: parent.mappings,
-        };
-  }
+  if (input.kind === "create") return createdScheme(input.target, id);
+  if (input.kind === "create-draft") return createdDraft(input.expectedScheme, id);
   if (before === undefined || input.kind === "delete") return undefined;
   if (input.kind === "update") return { ...before, ...input.target };
   return { ...before, ...mappingTarget(input, before) };
@@ -167,7 +178,7 @@ function mappingBody(input: WorkflowSchemeInput): CatalogJsonObject | undefined 
 }
 function relativePath(input: WorkflowSchemeInput, base: string): string {
   if (input.kind === "default") return `${base}/default`;
-  if (input.kind === "issue-type") return `${base}/issuetype/${input.issueTypeId}`;
+  if (input.kind === "issue-type") return `${base}/issuetype/${String(input.issueTypeId)}`;
   return input.kind === "workflow" ? `${base}/workflow` : base;
 }
 export function workflowSchemeEffect(input: WorkflowSchemeInput): WorkflowSchemeEffect | undefined {

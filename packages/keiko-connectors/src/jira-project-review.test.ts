@@ -15,7 +15,7 @@ const REVIEW = {
   projectTypeKey: "software",
 } as const;
 function native(body: Record<string, unknown>): JiraMutationRequest {
-  return async () => ({ ok: true, status: 200, body });
+  return () => Promise.resolve({ ok: true, status: 200, body });
 }
 
 describe("native ProjectBean review evidence", () => {

@@ -155,7 +155,7 @@ it("refuses over-budget custom-field usage without returning a prefix", async ()
     { length: TOOL_CATALOG_LIMITS.maxArrayItems + 1 },
     (_, index) => ({
       customFieldId: index + 1,
-      fieldName: `Field ${index}`,
+      fieldName: `Field ${String(index)}`,
     }),
   );
   expect(

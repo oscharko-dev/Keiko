@@ -6,14 +6,14 @@ import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import { jiraNativeId } from "./jira-native-values.js";
 import { savedName, savedText } from "./jira-saved-configuration-values.js";
 export type SchemeKind = "issue-type" | "priority";
-export type SchemeSnapshot = {
+export interface SchemeSnapshot {
   readonly id: string;
   readonly name: string;
   readonly description: string | null;
   readonly ids: readonly string[];
   readonly defaultId: string | null;
   readonly defaultScheme?: boolean;
-};
+}
 export function schemeIds(value: unknown): readonly string[] | undefined {
   return Array.isArray(value) &&
     value.length > 0 &&

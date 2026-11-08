@@ -421,24 +421,32 @@ function arrayResult(
     ? projectPage(values, startAt, maxResults)
     : jiraAssignableUsersResult(values, startAt, maxResults);
 }
+async function agileOrFilterRead<Context extends ManagedMcpInvocationContext>(
+  name: JiraManagedReadToolName,
+  args: CatalogJsonObject,
+  context: Context,
+  connection: JiraManagedProviderDeps<Context>["connection"],
+): Promise<ManagedMcpToolResult | undefined> {
+  const agile = JIRA_AGILE_READ_OPERATIONS.find((operation) => operation === name);
+  const agileContext = isJiraAgileContextRead(name) ? name : undefined;
+  const filter = JIRA_FILTER_READ_OPERATIONS.find((operation) => operation === name);
+  if (agile === undefined && agileContext === undefined && filter === undefined) return undefined;
+  const connected = await connection(context);
+  if (connected.deployment !== "data-center") return failure("unsupported-deployment");
+  if (agileContext !== undefined)
+    return executeJiraAgileContextRead(agileContext, args, context, connected);
+  return agile !== undefined
+    ? executeJiraAgileRead(agile, args, context, connected)
+    : executeJiraFilterRead(name, args, context, connected);
+}
 async function read<Context extends ManagedMcpInvocationContext>(
   name: JiraManagedReadToolName,
   args: CatalogJsonObject,
   context: Context,
   connection: JiraManagedProviderDeps<Context>["connection"],
 ): Promise<ManagedMcpToolResult> {
-  const agile = JIRA_AGILE_READ_OPERATIONS.find((operation) => operation === name);
-  const agileContext = isJiraAgileContextRead(name) ? name : undefined;
-  const filter = JIRA_FILTER_READ_OPERATIONS.find((operation) => operation === name);
-  if (agile !== undefined || agileContext !== undefined || filter !== undefined) {
-    const connected = await connection(context);
-    if (connected.deployment !== "data-center") return failure("unsupported-deployment");
-    if (agileContext !== undefined)
-      return executeJiraAgileContextRead(agileContext, args, context, connected);
-    return agile !== undefined
-      ? executeJiraAgileRead(agile, args, context, connected)
-      : executeJiraFilterRead(name, args, context, connected);
-  }
+  const connected = await agileOrFilterRead(name, args, context, connection);
+  if (connected !== undefined) return connected;
   if (isJiraComponentRead(name) || isJiraVersionRead(name))
     return projectMetadataRead(name, args, context, connection);
   if (isNativeDetailRead(name)) return nativeDetailRead(name, args, context, connection);
@@ -756,36 +764,12 @@ function batchTool<Context extends ManagedMcpInvocationContext>(
   });
 }
 
-/** Private connection/context stays outside the MCP declaration and arguments. */
-function managedTool<Context extends ManagedMcpInvocationContext>(
+function mutationTool<Context extends ManagedMcpInvocationContext>(
   declaration: ManagedMcpToolDeclaration,
+  operation: (typeof JIRA_MUTATION_OPERATIONS)[number],
   connection: JiraManagedProviderDeps<Context>["connection"],
-  executeMutation: JiraManagedMutationExecutor<Context> | undefined,
-  report: JiraReportToolDeps<Context>,
-  draft: JiraDraftToolDeps<Context>,
+  executeMutation: JiraManagedMutationExecutor<Context>,
 ): ManagedMcpTool<Context> {
-  if (declaration.name === "jira.draft-stage" && declaration.risk === "read")
-    return Object.freeze({
-      ...declaration,
-      execute: async (args: CatalogJsonObject, context: Context): Promise<ManagedMcpToolResult> =>
-        executeJiraDraftStageTool(args, context, await connection(context), draft),
-    });
-  if (declaration.name === "jira.report" && declaration.risk === "read")
-    return Object.freeze({
-      ...declaration,
-      execute: async (args: CatalogJsonObject, context: Context): Promise<ManagedMcpToolResult> =>
-        executeJiraReportTool(args, context, await connection(context), report),
-    });
-  const readName = JIRA_MANAGED_READ_TOOLS.find((name) => name === declaration.name);
-  if (readName !== undefined && declaration.risk === "read")
-    return Object.freeze({
-      ...declaration,
-      execute: (args: CatalogJsonObject, context: Context): Promise<ManagedMcpToolResult> =>
-        read(readName, args, context, connection),
-    });
-  const operation = JIRA_MUTATION_OPERATIONS.find((name) => name === declaration.name);
-  if (operation === undefined || declaration.risk !== "write" || executeMutation === undefined)
-    throw new TypeError("Unsupported Jira declaration");
   return Object.freeze({
     ...declaration,
     execute: async (args: CatalogJsonObject, context: Context): Promise<ManagedMcpToolResult> => {
@@ -818,6 +802,38 @@ function managedTool<Context extends ManagedMcpInvocationContext>(
       );
     },
   });
+}
+/** Private connection/context stays outside the MCP declaration and arguments. */
+function managedTool<Context extends ManagedMcpInvocationContext>(
+  declaration: ManagedMcpToolDeclaration,
+  connection: JiraManagedProviderDeps<Context>["connection"],
+  executeMutation: JiraManagedMutationExecutor<Context> | undefined,
+  report: JiraReportToolDeps<Context>,
+  draft: JiraDraftToolDeps<Context>,
+): ManagedMcpTool<Context> {
+  if (declaration.name === "jira.draft-stage" && declaration.risk === "read")
+    return Object.freeze({
+      ...declaration,
+      execute: async (args: CatalogJsonObject, context: Context): Promise<ManagedMcpToolResult> =>
+        executeJiraDraftStageTool(args, context, await connection(context), draft),
+    });
+  if (declaration.name === "jira.report" && declaration.risk === "read")
+    return Object.freeze({
+      ...declaration,
+      execute: async (args: CatalogJsonObject, context: Context): Promise<ManagedMcpToolResult> =>
+        executeJiraReportTool(args, context, await connection(context), report),
+    });
+  const readName = JIRA_MANAGED_READ_TOOLS.find((name) => name === declaration.name);
+  if (readName !== undefined && declaration.risk === "read")
+    return Object.freeze({
+      ...declaration,
+      execute: (args: CatalogJsonObject, context: Context): Promise<ManagedMcpToolResult> =>
+        read(readName, args, context, connection),
+    });
+  const operation = JIRA_MUTATION_OPERATIONS.find((name) => name === declaration.name);
+  if (operation === undefined || declaration.risk !== "write" || executeMutation === undefined)
+    throw new TypeError("Unsupported Jira declaration");
+  return mutationTool(declaration, operation, connection, executeMutation);
 }
 
 export function createJiraManagedProvider<Context extends ManagedMcpInvocationContext>(

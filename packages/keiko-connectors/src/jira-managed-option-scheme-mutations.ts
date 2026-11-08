@@ -88,15 +88,21 @@ async function admitAssociations(
   const projects = [...input.expectedProjects, ...(input.projects ?? [])];
   const bound = await bindSchemeProjects(request, projects);
   if (bound !== undefined) return bound;
+  return associationChangeRefusal(input, current.value);
+}
+function associationChangeRefusal(
+  input: SchemeSelection,
+  current: readonly SchemeProject[],
+): SchemeFailure | undefined {
   if (
     input.change === "remove" &&
-    !current.value.some((project) => project.id === input.projects?.[0]?.id)
+    !current.some((project) => project.id === input.projects?.[0]?.id)
   )
     return schemeRefusal(
       "The selected project is not associated with this reviewed scheme.",
       "conflict",
     );
-  return sameSchemeProjects(current.value, desiredProjects(input))
+  return sameSchemeProjects(current, desiredProjects(input))
     ? {
         ...schemeRefusal(
           "The reviewed association configuration is already current.",
@@ -167,12 +173,7 @@ function configurationEffect(input: SchemeSelection): SchemeEffect | undefined {
     ? { path: base, method: "POST", body, expect: "json" }
     : { path: `${base}/${id}`, method: "PUT", body, expect: "none" };
 }
-function effect(input: SchemeSelection): SchemeEffect | undefined {
-  if (input.target !== undefined) return configurationEffect(input);
-  const id = input.expected?.id;
-  if (id === undefined) return undefined;
-  const base = `${schemePath(input.kind)}/${id}`;
-  if (input.change === undefined) return { path: base, method: "DELETE", expect: "none" };
+function associationEffect(input: SchemeSelection, base: string): SchemeEffect | undefined {
   const path = `${base}/associations`;
   if (input.change === "remove") {
     const project = input.projects?.[0];
@@ -187,6 +188,14 @@ function effect(input: SchemeSelection): SchemeEffect | undefined {
     body: { idsOrKeys: (input.projects ?? []).map((project) => project.id) },
     expect: "none",
   };
+}
+function effect(input: SchemeSelection): SchemeEffect | undefined {
+  if (input.target !== undefined) return configurationEffect(input);
+  const id = input.expected?.id;
+  if (id === undefined) return undefined;
+  const base = `${schemePath(input.kind)}/${id}`;
+  if (input.change === undefined) return { path: base, method: "DELETE", expect: "none" };
+  return associationEffect(input, base);
 }
 function unconfirmed(known: SchemeReceipt, message: string): SchemeFailure {
   return schemeRefusal(
@@ -288,6 +297,12 @@ export async function executeJiraOptionSchemeMutation(
   const refusal = await admit(request, input);
   if (refusal !== undefined) return refusal;
   if (check) return { ok: true, receipt: {} };
+  return dispatchSelected(request, input);
+}
+async function dispatchSelected(
+  request: JiraMutationRequest,
+  input: SchemeSelection,
+): Promise<SchemeAttempt> {
   const selected = effect(input);
   if (selected === undefined) return SCHEME_MALFORMED;
   const known = receipt(input);

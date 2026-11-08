@@ -77,6 +77,11 @@ function password(
     ? { kind: "password", actor, self, user }
     : undefined;
 }
+const SESSION_ACTIONS = {
+  "jira.login": "login",
+  "jira.logout": "logout",
+  "jira.release-websudo": "release-websudo",
+} as const;
 export function privateAccountInput(
   operation: JiraPrivateAccountMutation,
   args: CatalogJsonObject,
@@ -90,17 +95,9 @@ export function privateAccountInput(
       return password(args, actor, true);
     case "jira.update-user-password":
       return password(args, actor, false);
-    case "jira.login":
+    default:
       return exact(args, ["expectedActorKey"])
-        ? { kind: "session", actor, action: "login" }
-        : undefined;
-    case "jira.logout":
-      return exact(args, ["expectedActorKey"])
-        ? { kind: "session", actor, action: "logout" }
-        : undefined;
-    case "jira.release-websudo":
-      return exact(args, ["expectedActorKey"])
-        ? { kind: "session", actor, action: "release-websudo" }
+        ? { kind: "session", actor, action: SESSION_ACTIONS[operation] }
         : undefined;
   }
 }

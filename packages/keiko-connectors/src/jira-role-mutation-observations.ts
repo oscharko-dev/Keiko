@@ -75,6 +75,24 @@ export async function readRoleActors(
       )
     : { ok: true, value: actors };
 }
+function visibleRoleRefusal(
+  items: readonly unknown[],
+  targetName: string | undefined,
+): RoleObservation<RoleContext> | undefined {
+  const ids = new Set<string>();
+  for (const value of items) {
+    const role = jiraRoleSummary(value);
+    if (role === undefined || typeof role.id !== "string" || ids.has(role.id))
+      return ROLE_MALFORMED;
+    ids.add(role.id);
+    if (role.name === targetName)
+      return roleRefusal(
+        "A visible role already has the reviewed name. Inspect it rather than create a second role.",
+        "conflict",
+      );
+  }
+  return undefined;
+}
 async function createContext(
   request: JiraMutationRequest,
   input: RoleSelection,
@@ -84,19 +102,8 @@ async function createContext(
   if (response.status !== 200 || response.items === undefined) return ROLE_MALFORMED;
   if (response.items.length > TOOL_CATALOG_LIMITS.maxArrayItems)
     return { ok: false, reason: "bounds-exceeded" };
-  const ids = new Set<string>();
-  for (const value of response.items) {
-    const role = jiraRoleSummary(value);
-    if (role === undefined || typeof role.id !== "string" || ids.has(role.id))
-      return ROLE_MALFORMED;
-    ids.add(role.id);
-    if (role.name === input.target?.name)
-      return roleRefusal(
-        "A visible role already has the reviewed name. Inspect it rather than create a second role.",
-        "conflict",
-      );
-  }
-  return { ok: true, value: { actors: [], path: "role" } };
+  const refusal = visibleRoleRefusal(response.items, input.target?.name);
+  return refusal ?? { ok: true, value: { actors: [], path: "role" } };
 }
 async function projectContext(
   request: JiraMutationRequest,

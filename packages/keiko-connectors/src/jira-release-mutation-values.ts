@@ -171,6 +171,21 @@ function versionParent(
     (isSafeAtlassianIdentifier(raw.project) && raw.project === context.projectKey)
   );
 }
+function selfMismatch(self: unknown, expected: string): boolean {
+  return self !== undefined && self !== null && !jiraResourceSelfMatches(self, expected);
+}
+function summarySnapshot(
+  kind: ReleaseEntityKind,
+  summary: NonNullable<
+    ReturnType<typeof jiraComponentSummary> | ReturnType<typeof jiraVersionSummary>
+  >,
+): ReturnType<typeof releaseSnapshot> {
+  const fields = kind === "component" ? COMPONENT_FIELDS : VERSION_FIELDS;
+  return releaseSnapshot(
+    kind,
+    Object.fromEntries(fields.map((field) => [field, summary[field] ?? null])),
+  );
+}
 function entity(
   kind: ReleaseEntityKind,
   value: unknown,
@@ -186,18 +201,8 @@ function entity(
     kind === "component"
       ? summary.project === context.projectKey
       : versionParent(raw, context, collection);
-  if (
-    !parent ||
-    (raw.self !== undefined &&
-      raw.self !== null &&
-      !jiraResourceSelfMatches(raw.self, `${kind}/${id}`))
-  )
-    return undefined;
-  const fields = kind === "component" ? COMPONENT_FIELDS : VERSION_FIELDS;
-  const snapshot = releaseSnapshot(
-    kind,
-    Object.fromEntries(fields.map((field) => [field, summary[field] ?? null])),
-  );
+  if (!parent || selfMismatch(raw.self, `${kind}/${id}`)) return undefined;
+  const snapshot = summarySnapshot(kind, summary);
   return snapshot === undefined ? undefined : { id, snapshot };
 }
 export async function readReleaseEntity(

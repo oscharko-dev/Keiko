@@ -40,6 +40,15 @@ function unconfirmed(receipt: WorkflowSchemeMutationReceipt): WorkflowSchemeFail
     receipt,
   );
 }
+function confirmDeletedDraft(
+  selected: Parameters<typeof sameWorkflowScheme>[0],
+  parent: Parameters<typeof sameWorkflowScheme>[1],
+  receipt: WorkflowSchemeMutationReceipt,
+): WorkflowSchemeAttempt {
+  return !selected.draft && sameWorkflowScheme(selected, parent)
+    ? { ok: true, receipt }
+    : unconfirmed(receipt);
+}
 async function confirmDraft(
   request: JiraMutationRequest,
   input: WorkflowSchemeInput,
@@ -51,10 +60,7 @@ async function confirmDraft(
   if (unchangedParent !== undefined) return { ...unchangedParent, receipt };
   const selected = await readSchemeDraftSelection(request, parent);
   if (!selected.ok) return { ...selected, receipt };
-  if (input.kind === "delete")
-    return !selected.value.draft && sameWorkflowScheme(selected.value, parent)
-      ? { ok: true, receipt }
-      : unconfirmed(receipt);
+  if (input.kind === "delete") return confirmDeletedDraft(selected.value, parent, receipt);
   const desired = desiredWorkflowScheme(input, receipt.draftSchemeId);
   if (
     desired === undefined ||
@@ -140,6 +146,14 @@ async function dispatch(
     throw new JiraAcknowledgedMutationError(error, receipt);
   }
 }
+function reservedReceiptTooLarge(input: WorkflowSchemeInput): boolean {
+  const reserved = workflowSchemeReceipt(
+    input,
+    input.expectedScheme?.id ?? "9223372036854775807",
+    input.draft ? (input.expectedDraft?.id ?? "9223372036854775807") : undefined,
+  );
+  return new TextEncoder().encode(JSON.stringify(reserved)).byteLength > 16384;
+}
 /** WorkflowSchemeResource only. No publishing, workflow definition editing or status migration.
  * Base writes fix updateDraftIfNeeded:false; existing drafts require explicit reviewed snapshots.
  * Native Jira decides whether the base is active/editable; draft:false is not activity evidence.
@@ -155,12 +169,7 @@ export async function executeJiraWorkflowSchemeMutation(
     return workflowSchemeRefusal(
       "Use the exact connected actor key and complete current parent/draft review snapshots. Configured default and description must be explicitly observed, including null. Supply only fixed mapping selectors; draft creation is separate, and no publish or migration input is accepted.",
     );
-  const reserved = workflowSchemeReceipt(
-    input,
-    input.expectedScheme?.id ?? "9223372036854775807",
-    input.draft ? (input.expectedDraft?.id ?? "9223372036854775807") : undefined,
-  );
-  if (new TextEncoder().encode(JSON.stringify(reserved)).byteLength > 16384)
+  if (reservedReceiptTooLarge(input))
     return workflowSchemeRefusal(
       "The known configuration receipt exceeds the existing 16 KiB bound. Reduce selected metadata before any request.",
     );

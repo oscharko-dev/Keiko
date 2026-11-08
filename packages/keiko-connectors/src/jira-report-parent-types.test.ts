@@ -14,7 +14,17 @@ import { response } from "../../../tests/support/jira-managed-remote.js";
 
 const NATIVE_PARENT = { id: "1", key: "REP-1", fields: { issuetype: { id: "10", name: "Epic" } } };
 
-function fixture(parent: Record<string, unknown> | "denied" = NATIVE_PARENT) {
+interface ParentFixture {
+  session: ReturnType<typeof createJiraReportSession>;
+  deps: JiraReportReadDeps;
+  http: ReturnType<typeof vi.fn<AtlassianHttpBodyPort>>;
+  parentReads: string[];
+  clock: { now: number; expireAfterParent: boolean };
+  controller: AbortController;
+  beforeEffect: ReturnType<typeof vi.fn<() => boolean>>;
+  native: ReturnType<typeof fixtureJira>;
+}
+function fixture(parent: Record<string, unknown> | "denied" = NATIVE_PARENT): ParentFixture {
   const parsed = parseJiraIssueTemplate(
     [
       "---",
@@ -31,7 +41,11 @@ function fixture(parent: Record<string, unknown> | "denied" = NATIVE_PARENT) {
   if (!parsed.ok) throw new TypeError("Expected formal parent template");
   const sample = syntheticProject(8).find(({ type }) => type === "Story");
   if (sample === undefined) throw new TypeError("Expected synthetic Story");
-  const issues = [5, 6, 7].map((index) => ({ ...sample, key: `REP-${index}`, epic: "REP-1" }));
+  const issues = [5, 6, 7].map((index) => ({
+    ...sample,
+    key: `REP-${String(index)}`,
+    epic: "REP-1",
+  }));
   const native = fixtureJira({ issues, noRequiredFields: true, pageClamp: 2 });
   const clock = { now: 0, expireAfterParent: false };
   const controller = new AbortController();
@@ -74,7 +88,7 @@ function fixture(parent: Record<string, unknown> | "denied" = NATIVE_PARENT) {
       templates: [parsed.template],
       unreadable: 0,
     })),
-    sleep: async () => undefined,
+    sleep: () => Promise.resolve(),
   };
   return { session, deps, http, parentReads, clock, controller, beforeEffect, native };
 }
@@ -188,7 +202,7 @@ describe("report parent types reuse independently bound native evidence", () => 
   it("does not count an omitted requested parent property as an absent parent", async () => {
     const f = fixture();
     editSearchFields(f, (fields) => {
-      delete fields[EPIC_LINK];
+      Reflect.deleteProperty(fields, EPIC_LINK);
     });
     await advanceJiraReportSession(f.session, f.deps);
     expect(f.session.report?.completeness).toMatchObject({
