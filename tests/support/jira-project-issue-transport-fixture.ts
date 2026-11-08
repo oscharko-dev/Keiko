@@ -83,6 +83,7 @@ export const BULK_CREATE_NATIVE_BODY = {
   ],
 } as const;
 
+type HandleRequest = (request: Request) => Promise<AtlassianHttpBodyResult | undefined>;
 interface TransportController {
   readonly read: (
     request: AtlassianHttpBodyRequest,
@@ -134,7 +135,7 @@ function platformController(
   let writes = 0;
   return {
     snapshot,
-    async read(request) {
+    async read(request): Promise<AtlassianHttpBodyResult | undefined> {
       const path = relativePath(request);
       if (path === undefined || !Object.hasOwn(reads, path)) return undefined;
       const codec = reads[path];
@@ -144,7 +145,7 @@ function platformController(
       requestFlags(request, projectPriorityPath(path));
       return nativeResponse(await native(path, "GET", undefined, codec));
     },
-    async write(request) {
+    async write(request): Promise<AtlassianHttpBodyResult | undefined> {
       if (relativePath(request) !== selected.path) return undefined;
       expect(request.method).toBe(selected.method);
       requestFlags(request, projectPriorityPath(selected.path));
@@ -185,7 +186,7 @@ function reciprocalController(actorKey: string, baseUrl: string): TransportContr
   return {
     snapshot: native.snapshot,
     write: local.write,
-    async read(request) {
+    async read(request): Promise<AtlassianHttpBodyResult | undefined> {
       const configuration = relativePath(request, APP_LINKS_ROOT);
       if (configuration !== "manifest" && configuration !== "listApplicationlinks")
         return local.read(request);
@@ -222,9 +223,9 @@ function controller(
     native.actor.key = actorKey;
     return platformController(
       { ...issue, body: "body" in issue ? issue.body : undefined, acknowledgement: "none" },
-      native.request,
+      (path, method, body, codec) => native.request(path, method, body, codec),
       ISSUE_READS,
-      native.snapshot,
+      () => native.snapshot(),
     );
   }
   if (operation === "jira.create-issues") {
@@ -237,14 +238,31 @@ function controller(
         body: BULK_CREATE_NATIVE_BODY,
         acknowledgement: "json",
       },
-      native.request,
+      (path, method, body, codec) => native.request(path, method, body, codec),
       BULK_READS,
-      native.snapshot,
+      () => native.snapshot(),
     );
   }
   return operation === "jira.create-reciprocal-remote-link"
     ? reciprocalController(actorKey, baseUrl)
     : undefined;
+}
+async function nativeInput(
+  request: Request,
+  method: "GET" | "POST" | "PUT" | "DELETE",
+): Promise<AtlassianHttpBodyRequest> {
+  const path = relativePath({ method, url: request.url, timeoutMs: 1000, maxBodyBytes: 262144 });
+  const priority = path !== undefined && projectPriorityPath(path);
+  expect(request.headers.get("X-ExperimentalApi")).toBe(priority ? "true" : null);
+  const body = method === "GET" ? "" : await request.clone().text();
+  return {
+    method,
+    url: request.url,
+    timeoutMs: 1000,
+    maxBodyBytes: 262144,
+    ...(priority ? { jiraProjectPriority: true } : {}),
+    ...(body.length === 0 ? {} : { bodyJson: body }),
+  };
 }
 async function nativeRequest(
   selected: TransportController,
@@ -253,18 +271,7 @@ async function nativeRequest(
   const method = request.method;
   if (method !== "GET" && method !== "POST" && method !== "PUT" && method !== "DELETE")
     return undefined;
-  const path = relativePath({ method, url: request.url, timeoutMs: 1000, maxBodyBytes: 262144 });
-  const priority = path !== undefined && projectPriorityPath(path);
-  expect(request.headers.get("X-ExperimentalApi")).toBe(priority ? "true" : null);
-  const body = method === "GET" ? "" : await request.clone().text();
-  const input: AtlassianHttpBodyRequest = {
-    method,
-    url: request.url,
-    timeoutMs: 1000,
-    maxBodyBytes: 262144,
-    ...(priority ? { jiraProjectPriority: true } : {}),
-    ...(body.length === 0 ? {} : { bodyJson: body }),
-  };
+  const input = await nativeInput(request, method);
   return method === "GET" ? selected.read(input) : selected.write(input);
 }
 /** Fixed routes, literal bodies, native JSON/array/scalar acknowledgements and independent state.
@@ -274,13 +281,14 @@ export function projectIssueTransportController(
   operation: string | undefined,
   actorKey = "synthetic-actor",
   baseUrl = "https://local.example.invalid/context",
-) {
+): (TransportController & { readonly handle: HandleRequest }) | undefined {
   const selected = controller(operation, actorKey, baseUrl);
   return selected === undefined
     ? undefined
     : {
         ...selected,
-        handle: (request: Request) => nativeRequest(selected, request),
+        handle: (request: Request): Promise<AtlassianHttpBodyResult | undefined> =>
+          nativeRequest(selected, request),
       };
 }
 

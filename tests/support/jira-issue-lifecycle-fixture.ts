@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { actorReadback, readbackFault, reviewedWriteRefusal } from "./jira-fixture-readback.js";
+import { settleSync } from "./jira-fixture-settle.js";
 import type { AtlassianWriteHttpOutcome } from "../../packages/keiko-connectors/src/atlassian-write-http.js";
 import type { JiraMutationRequest } from "../../packages/keiko-connectors/src/jira-managed-mutation-metadata.js";
 import type { JiraIssueLifecyclePorts } from "../../packages/keiko-connectors/src/jira-managed-issue-lifecycle.js";
@@ -96,93 +97,150 @@ export const ISSUE_LIFECYCLE_FIXTURE_CASES = [
   },
 ] as const satisfies readonly LifecycleCase[];
 
-export function issueLifecycleFixture(selected: LifecycleCase) {
-  const actor = { key: ACTOR, name: "operator" };
-  const calls: { path: string; method: string; body: unknown; expect: unknown }[] = [];
-  const controls = {
-    lostAck: false,
-    denyReadback: false,
-    throwReadback: false,
-    missingReadback: false,
-    reject: false,
-    actorChangesBefore: false,
-    actorChangesAfter: false,
-    issueDrift: false,
-    canMove: true,
-    formalRefusal: false,
-  };
-  let effects = 0;
-  let formalCalls = 0;
-  let subtasks: readonly unknown[] =
-    selected.name === "jira.move-subtask" ? ISSUE_LIFECYCLE_SUBTASKS : [];
-  const ok = (body: Readonly<Record<string, unknown>>): AtlassianWriteHttpOutcome => ({
-    ok: true,
-    status: 200,
-    body,
-  });
-  function read(path: string): AtlassianWriteHttpOutcome {
-    if (path === "myself") {
-      const count = calls.filter((call) => call.path === "myself").length;
-      return actorReadback(
-        actor,
-        "different-actor",
-        (effects > 0 && controls.actorChangesAfter) || (count > 1 && controls.actorChangesBefore),
-      );
-    }
-    if (path === "issue/10001/subtask")
-      return { ok: true, status: 200, body: undefined, items: structuredClone(subtasks) };
-    if (path === "issue/10001/subtask/move")
-      return { ok: true, status: 200, body: undefined, scalar: controls.canMove };
-    const url = new URL(path, "https://synthetic.invalid/");
-    assert.equal(url.searchParams.get("fields"), "issuetype,project,summary");
-    const issue = url.pathname === "/issue/10001" ? ISSUE_LIFECYCLE_REVIEW : ISSUE_LIFECYCLE_OTHER;
-    assert.equal(url.pathname, `/issue/${issue.id}`);
-    return ok({
-      id: issue.id,
-      key: issue.key,
-      fields: {
-        summary: controls.issueDrift ? "Changed review" : issue.summary,
-        project: { id: issue.projectId },
-        issuetype: { id: issue.issueTypeId },
-      },
-    });
-  }
-  const request: JiraMutationRequest = async (path, method = "GET", body, expect) => {
-    calls.push({ path, method, body: structuredClone(body), expect });
-    const fault = readbackFault(controls, effects, path, "Synthetic lifecycle readback fault");
-    if (fault !== undefined) return fault;
-    if (method === "GET") return read(path);
-    const refusal = reviewedWriteRefusal(selected, controls, { path, method, body, expect });
-    if (refusal !== undefined) return refusal;
-    assert.equal(++effects, 1);
-    if (controls.lostAck) return { ok: false, reason: "timeout" };
-    return {
-      ok: true,
-      status: selected.name === "jira.archive-issues" ? 200 : 204,
-      body: undefined,
-    };
-  };
-  const ports: JiraIssueLifecyclePorts = {
-    deletionAdmission: async () => {
-      formalCalls++;
-      return controls.formalRefusal
-        ? {
-            ok: false,
-            reason: "field-validation",
-            detail: { messages: ["Synthetic incoming-reference rule cannot be proved."] },
-          }
-        : undefined;
+interface IssueLifecycleControls {
+  lostAck: boolean;
+  denyReadback: boolean;
+  throwReadback: boolean;
+  missingReadback: boolean;
+  reject: boolean;
+  actorChangesBefore: boolean;
+  actorChangesAfter: boolean;
+  issueDrift: boolean;
+  canMove: boolean;
+  formalRefusal: boolean;
+}
+interface IssueLifecycleCall {
+  path: string;
+  method: string;
+  body: unknown;
+  expect: unknown;
+}
+interface IssueLifecycleState {
+  readonly selected: LifecycleCase;
+  readonly actor: { key: string; name: string };
+  readonly calls: IssueLifecycleCall[];
+  readonly controls: IssueLifecycleControls;
+  effects: number;
+  formalCalls: number;
+  subtasks: readonly unknown[];
+}
+export interface IssueLifecycleFixture {
+  readonly request: JiraMutationRequest;
+  readonly ports: JiraIssueLifecyclePorts;
+  readonly actor: { key: string; name: string };
+  readonly calls: IssueLifecycleCall[];
+  readonly controls: IssueLifecycleControls;
+  setSubtasks(value: readonly unknown[]): void;
+  snapshot(): CatalogJsonObject;
+}
+const lifecycleOk = (body: Readonly<Record<string, unknown>>): AtlassianWriteHttpOutcome => ({
+  ok: true,
+  status: 200,
+  body,
+});
+function lifecycleIssueRead(state: IssueLifecycleState, path: string): AtlassianWriteHttpOutcome {
+  const url = new URL(path, "https://synthetic.invalid/");
+  assert.equal(url.searchParams.get("fields"), "issuetype,project,summary");
+  const issue = url.pathname === "/issue/10001" ? ISSUE_LIFECYCLE_REVIEW : ISSUE_LIFECYCLE_OTHER;
+  assert.equal(url.pathname, `/issue/${issue.id}`);
+  return lifecycleOk({
+    id: issue.id,
+    key: issue.key,
+    fields: {
+      summary: state.controls.issueDrift ? "Changed review" : issue.summary,
+      project: { id: issue.projectId },
+      issuetype: { id: issue.issueTypeId },
     },
+  });
+}
+function lifecycleRead(state: IssueLifecycleState, path: string): AtlassianWriteHttpOutcome {
+  const { controls } = state;
+  if (path === "myself") {
+    const count = state.calls.filter((call) => call.path === "myself").length;
+    return actorReadback(
+      state.actor,
+      "different-actor",
+      (state.effects > 0 && controls.actorChangesAfter) ||
+        (count > 1 && controls.actorChangesBefore),
+    );
+  }
+  if (path === "issue/10001/subtask")
+    return { ok: true, status: 200, body: undefined, items: structuredClone(state.subtasks) };
+  if (path === "issue/10001/subtask/move")
+    return { ok: true, status: 200, body: undefined, scalar: controls.canMove };
+  return lifecycleIssueRead(state, path);
+}
+function lifecycleRequest(
+  state: IssueLifecycleState,
+  call: IssueLifecycleCall,
+): AtlassianWriteHttpOutcome {
+  const { selected, controls } = state;
+  const { path, method, body, expect } = call;
+  state.calls.push({ path, method, body: structuredClone(body), expect });
+  const fault = readbackFault(controls, state.effects, path, "Synthetic lifecycle readback fault");
+  if (fault !== undefined) return fault;
+  if (method === "GET") return lifecycleRead(state, path);
+  const refusal = reviewedWriteRefusal(selected, controls, { path, method, body, expect });
+  if (refusal !== undefined) return refusal;
+  assert.equal(++state.effects, 1);
+  if (controls.lostAck) return { ok: false, reason: "timeout" };
+  return {
+    ok: true,
+    status: selected.name === "jira.archive-issues" ? 200 : 204,
+    body: undefined,
+  };
+}
+function lifecycleState(selected: LifecycleCase): IssueLifecycleState {
+  return {
+    selected,
+    actor: { key: ACTOR, name: "operator" },
+    calls: [],
+    controls: {
+      lostAck: false,
+      denyReadback: false,
+      throwReadback: false,
+      missingReadback: false,
+      reject: false,
+      actorChangesBefore: false,
+      actorChangesAfter: false,
+      issueDrift: false,
+      canMove: true,
+      formalRefusal: false,
+    },
+    effects: 0,
+    formalCalls: 0,
+    subtasks: selected.name === "jira.move-subtask" ? ISSUE_LIFECYCLE_SUBTASKS : [],
+  };
+}
+export function issueLifecycleFixture(selected: LifecycleCase): IssueLifecycleFixture {
+  const state = lifecycleState(selected);
+  const request: JiraMutationRequest = (path, method = "GET", body, expect) =>
+    settleSync(() => lifecycleRequest(state, { path, method, body, expect }));
+  const ports: JiraIssueLifecyclePorts = {
+    deletionAdmission: () =>
+      settleSync(() => {
+        state.formalCalls++;
+        return state.controls.formalRefusal
+          ? {
+              ok: false as const,
+              reason: "field-validation" as const,
+              detail: { messages: ["Synthetic incoming-reference rule cannot be proved."] },
+            }
+          : undefined;
+      }),
   };
   return {
     request,
     ports,
-    actor,
-    calls,
-    controls,
+    actor: state.actor,
+    calls: state.calls,
+    controls: state.controls,
     setSubtasks(value: readonly unknown[]): void {
-      subtasks = value;
+      state.subtasks = value;
     },
-    snapshot: (): CatalogJsonObject => ({ effects, formalCalls }),
+    snapshot: (): CatalogJsonObject => ({
+      effects: state.effects,
+      formalCalls: state.formalCalls,
+    }),
   };
 }

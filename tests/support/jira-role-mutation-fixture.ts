@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { AtlassianWriteHttpOutcome } from "../../packages/keiko-connectors/src/atlassian-write-http.js";
 import type { JiraMutationRequest } from "../../packages/keiko-connectors/src/jira-managed-mutation-metadata.js";
+import { settleSync } from "./jira-fixture-settle.js";
 import { asRecord } from "../../packages/keiko-connectors/src/atlassian-sync-classify.js";
 
 const USER = "synthetic-actor";
@@ -143,173 +144,251 @@ interface Actor {
   type: string;
   name: string;
 }
-export function roleMutationFixture() {
-  const actor = { key: USER, name: "operator" };
-  const roles = new Map<string, Record<string, unknown>>([
-    ["7", { ...ROLE }],
-    ["9", { id: "9", name: "Replacement", description: "Replacement role" }],
-  ]);
-  const defaults = new Map<string, Actor[]>([
-    ["7", structuredClone(DEFAULTS)],
-    ["9", []],
-  ]);
-  let projectActors: Actor[] = structuredClone(MEMBERS);
-  const project = { id: "10000", key: "SYN", name: "Synthetic project" };
-  const users = [
-    { key: "current-key", name: "current-user" },
-    { key: "next-key", name: "next-user" },
-  ];
-  const groups = new Set(["current-group", "next-group"]);
-  const controls = {
-    lostAck: false,
-    denyReadback: false,
-    throwReadback: false,
-    omitActors: false,
-    omitActorType: false,
-    malformedAck: false,
-    unsafeAck: false,
-    wrongUserKey: false,
-    wrongReadback: false,
-    changeProjectAfter: false,
-    acknowledgementStatus: 200,
+interface RoleControls {
+  lostAck: boolean;
+  denyReadback: boolean;
+  throwReadback: boolean;
+  omitActors: boolean;
+  omitActorType: boolean;
+  malformedAck: boolean;
+  unsafeAck: boolean;
+  wrongUserKey: boolean;
+  wrongReadback: boolean;
+  changeProjectAfter: boolean;
+  acknowledgementStatus: number;
+}
+interface RoleCall {
+  path: string;
+  method: string;
+  body: Parameters<JiraMutationRequest>[2];
+  expect: unknown;
+}
+interface RoleState {
+  readonly actor: { key: string; name: string };
+  readonly roles: Map<string, Record<string, unknown>>;
+  readonly defaults: Map<string, Actor[]>;
+  readonly project: { id: string; key: string; name: string };
+  readonly users: { key: string; name: string }[];
+  readonly groups: Set<string>;
+  readonly controls: RoleControls;
+  readonly calls: RoleCall[];
+  projectActors: Actor[];
+  wrote: boolean;
+  nextActor: number;
+}
+function roleOk(body: Readonly<Record<string, unknown>>): AtlassianWriteHttpOutcome {
+  return { ok: true, status: 200, body };
+}
+function roleMissing(): AtlassianWriteHttpOutcome {
+  return { ok: false, reason: "not-found", httpStatus: 404 };
+}
+function roleState(): RoleState {
+  return {
+    actor: { key: USER, name: "operator" },
+    roles: new Map<string, Record<string, unknown>>([
+      ["7", { ...ROLE }],
+      ["9", { id: "9", name: "Replacement", description: "Replacement role" }],
+    ]),
+    defaults: new Map<string, Actor[]>([
+      ["7", structuredClone(DEFAULTS)],
+      ["9", []],
+    ]),
+    project: { id: "10000", key: "SYN", name: "Synthetic project" },
+    users: [
+      { key: "current-key", name: "current-user" },
+      { key: "next-key", name: "next-user" },
+    ],
+    groups: new Set(["current-group", "next-group"]),
+    controls: {
+      lostAck: false,
+      denyReadback: false,
+      throwReadback: false,
+      omitActors: false,
+      omitActorType: false,
+      malformedAck: false,
+      unsafeAck: false,
+      wrongUserKey: false,
+      wrongReadback: false,
+      changeProjectAfter: false,
+      acknowledgementStatus: 200,
+    },
+    calls: [],
+    projectActors: structuredClone(MEMBERS),
+    wrote: false,
+    nextActor: 100,
   };
-  const calls: { path: string; method: string; body: unknown; expect: unknown }[] = [];
-  let wrote = false;
-  let nextActor = 100;
-  const ok = (body: Readonly<Record<string, unknown>>): AtlassianWriteHttpOutcome => ({
-    ok: true,
-    status: 200,
-    body,
-  });
-  const missing = (): AtlassianWriteHttpOutcome => ({
-    ok: false,
-    reason: "not-found",
-    httpStatus: 404,
-  });
-  function actorEnvelope(actors: readonly Actor[]): Readonly<Record<string, unknown>> {
-    if (controls.omitActors) return {};
-    return {
-      actors: actors.map(({ id, type, name }) => ({
-        id,
-        name,
-        ...(controls.omitActorType ? {} : { type }),
-      })),
-    };
+}
+function roleActorEnvelope(
+  state: RoleState,
+  actors: readonly Actor[],
+): Readonly<Record<string, unknown>> {
+  const { controls } = state;
+  if (controls.omitActors) return {};
+  return {
+    actors: actors.map(({ id, type, name }) => ({
+      id,
+      name,
+      ...(controls.omitActorType ? {} : { type }),
+    })),
+  };
+}
+function rolePrincipalRead(state: RoleState, url: URL): AtlassianWriteHttpOutcome | undefined {
+  const { users, groups, controls } = state;
+  if (url.pathname === "/user") {
+    const user = users.find(
+      (item) =>
+        item.name === url.searchParams.get("username") || item.key === url.searchParams.get("key"),
+    );
+    return user === undefined
+      ? roleMissing()
+      : roleOk({ ...user, ...(controls.wrongUserKey ? { key: "other-key" } : {}) });
   }
-  function principalRead(url: URL): AtlassianWriteHttpOutcome | undefined {
-    if (url.pathname === "/user") {
-      const user = users.find(
-        (item) =>
-          item.name === url.searchParams.get("username") ||
-          item.key === url.searchParams.get("key"),
-      );
-      return user === undefined
-        ? missing()
-        : ok({ ...user, ...(controls.wrongUserKey ? { key: "other-key" } : {}) });
-    }
-    if (url.pathname === "/groups/picker") {
-      const query = url.searchParams.get("query") ?? "";
-      const found = [...groups].filter((name) => name.includes(query));
-      return ok({ groups: found.map((name) => ({ name })), total: found.length });
-    }
-    return undefined;
+  if (url.pathname === "/groups/picker") {
+    const query = url.searchParams.get("query") ?? "";
+    const found = [...groups].filter((name) => name.includes(query));
+    return roleOk({ groups: found.map((name) => ({ name })), total: found.length });
   }
-  function read(url: URL): AtlassianWriteHttpOutcome {
-    if (url.pathname === "/myself") return ok(actor);
-    if (url.pathname === "/role")
-      return { ok: true, status: 200, body: undefined, items: [...roles.values()] };
-    const principal = principalRead(url);
-    if (principal !== undefined) return principal;
-    if (url.pathname === "/project/SYN" || url.pathname === "/project/10000")
-      return ok({ ...project, ...(wrote && controls.changeProjectAfter ? { key: "OTHER" } : {}) });
-    if (url.pathname === "/project/10000/role/7")
-      return ok({ ...roles.get("7"), ...actorEnvelope(projectActors) });
-    const selected = /^\/role\/(\d+)(\/actors)?$/u.exec(url.pathname);
-    const id = selected?.[1];
-    const role = id === undefined ? undefined : roles.get(id);
-    if (role === undefined || id === undefined) return missing();
-    if (selected?.[2] !== undefined) return ok(actorEnvelope(defaults.get(id) ?? []));
-    return ok({
-      ...role,
-      ...(wrote && controls.wrongReadback ? { name: "Concurrent rename" } : {}),
+  return undefined;
+}
+function roleProjectRead(state: RoleState, url: URL): AtlassianWriteHttpOutcome | undefined {
+  if (url.pathname === "/project/SYN" || url.pathname === "/project/10000")
+    return roleOk({
+      ...state.project,
+      ...(state.wrote && state.controls.changeProjectAfter ? { key: "OTHER" } : {}),
     });
-  }
-  function additions(body: Readonly<Record<string, unknown>>): Actor[] {
-    const result: Actor[] = [];
-    for (const [key, type] of [
-      ["user", "atlassian-user-role-actor"],
-      ["group", "atlassian-group-role-actor"],
-    ] as const) {
-      const names = body[key];
-      if (names === undefined) continue;
-      assert.ok(Array.isArray(names));
-      for (const name of names) {
-        assert.ok(typeof name === "string");
-        result.push({ id: String(nextActor++), type, name });
-      }
+  if (url.pathname === "/project/10000/role/7")
+    return roleOk({
+      ...state.roles.get("7"),
+      ...roleActorEnvelope(state, state.projectActors),
+    });
+  return undefined;
+}
+function roleByIdRead(state: RoleState, url: URL): AtlassianWriteHttpOutcome {
+  const selected = /^\/role\/(\d+)(\/actors)?$/u.exec(url.pathname);
+  const id = selected?.[1];
+  const role = id === undefined ? undefined : state.roles.get(id);
+  if (role === undefined || id === undefined) return roleMissing();
+  if (selected?.[2] !== undefined)
+    return roleOk(roleActorEnvelope(state, state.defaults.get(id) ?? []));
+  return roleOk({
+    ...role,
+    ...(state.wrote && state.controls.wrongReadback ? { name: "Concurrent rename" } : {}),
+  });
+}
+function roleRead(state: RoleState, url: URL): AtlassianWriteHttpOutcome {
+  if (url.pathname === "/myself") return roleOk(state.actor);
+  if (url.pathname === "/role")
+    return { ok: true, status: 200, body: undefined, items: [...state.roles.values()] };
+  return rolePrincipalRead(state, url) ?? roleProjectRead(state, url) ?? roleByIdRead(state, url);
+}
+function roleAdditions(state: RoleState, body: Readonly<Record<string, unknown>>): Actor[] {
+  const result: Actor[] = [];
+  for (const [key, type] of [
+    ["user", "atlassian-user-role-actor"],
+    ["group", "atlassian-group-role-actor"],
+  ] as const) {
+    const names = body[key];
+    if (names === undefined) continue;
+    assert.ok(Array.isArray(names));
+    for (const name of names) {
+      assert.ok(typeof name === "string");
+      result.push({ id: String(state.nextActor++), type, name });
     }
-    return result;
   }
-  function modifyActors(
-    old: readonly Actor[],
-    url: URL,
-    method: string,
-    raw: Readonly<Record<string, unknown>> | undefined,
-  ): Actor[] {
-    if (method === "DELETE")
-      return old.filter(
-        (item) =>
-          item.name !==
-          url.searchParams.get(item.type === "atlassian-user-role-actor" ? "user" : "group"),
-      );
+  return result;
+}
+function roleModifyActors(
+  state: RoleState,
+  old: readonly Actor[],
+  url: URL,
+  method: string,
+  raw: Readonly<Record<string, unknown>> | undefined,
+): Actor[] {
+  if (method === "DELETE")
+    return old.filter(
+      (item) =>
+        item.name !==
+        url.searchParams.get(item.type === "atlassian-user-role-actor" ? "user" : "group"),
+    );
+  assert.ok(raw);
+  if (method === "POST") return [...old, ...roleAdditions(state, raw)];
+  assert.equal(raw.id, 7);
+  const categorised = asRecord(raw.categorisedActors);
+  assert.ok(categorised);
+  return roleAdditions(state, {
+    user: categorised["atlassian-user-role-actor"],
+    group: categorised["atlassian-group-role-actor"],
+  });
+}
+function roleApplyEffect(
+  state: RoleState,
+  url: URL,
+  method: string,
+  raw: Readonly<Record<string, unknown>> | undefined,
+): void {
+  const { roles, defaults } = state;
+  if (url.pathname === "/role" && method === "POST") {
     assert.ok(raw);
-    if (method === "POST") return [...old, ...additions(raw)];
-    assert.equal(raw.id, 7);
-    const categorised = asRecord(raw.categorisedActors);
-    assert.ok(categorised);
-    return additions({
-      user: categorised["atlassian-user-role-actor"],
-      group: categorised["atlassian-group-role-actor"],
-    });
-  }
-  function effect(
-    url: URL,
-    method: string,
-    body: Parameters<JiraMutationRequest>[2],
-  ): AtlassianWriteHttpOutcome {
-    const raw = asRecord(body);
-    if (url.pathname === "/role" && method === "POST") {
-      assert.ok(raw);
-      roles.set("9007199254740993", { id: "9007199254740993", ...raw });
-      defaults.set("9007199254740993", []);
-    } else if (url.pathname === "/role/7/actors")
-      defaults.set("7", modifyActors(defaults.get("7") ?? [], url, method, raw));
-    else if (url.pathname === "/project/10000/role/7")
-      projectActors = modifyActors(projectActors, url, method, raw);
-    else if (url.pathname === "/role/7" && method === "DELETE") {
-      roles.delete("7");
-      defaults.delete("7");
-    } else if (url.pathname === "/role/7") {
-      assert.ok(raw);
-      roles.set("7", { ...roles.get("7"), ...raw });
-    } else throw new TypeError("Unexpected synthetic role effect");
-    wrote = true;
-    if (controls.lostAck) return { ok: false, reason: "timeout" };
-    const id = controls.unsafeAck ? 9007199254740992 : "9007199254740993";
-    return {
-      ok: true,
-      status: controls.acknowledgementStatus,
-      body: url.pathname === "/role" && !controls.malformedAck ? { id } : undefined,
-    };
-  }
-  const request: JiraMutationRequest = async (path, method = "GET", body, expect) => {
-    calls.push({ path, method, body, expect });
-    if (wrote && controls.throwReadback) throw new Error("Synthetic role readback defect");
-    if (wrote && controls.denyReadback)
-      return { ok: false, reason: "permission-denied", httpStatus: 403 };
-    const url = new URL(path, "https://synthetic.invalid/");
-    return method === "GET" ? read(url) : effect(url, method, body);
+    roles.set("9007199254740993", { id: "9007199254740993", ...raw });
+    defaults.set("9007199254740993", []);
+  } else if (url.pathname === "/role/7/actors")
+    defaults.set("7", roleModifyActors(state, defaults.get("7") ?? [], url, method, raw));
+  else if (url.pathname === "/project/10000/role/7")
+    state.projectActors = roleModifyActors(state, state.projectActors, url, method, raw);
+  else if (url.pathname === "/role/7" && method === "DELETE") {
+    roles.delete("7");
+    defaults.delete("7");
+  } else if (url.pathname === "/role/7") {
+    assert.ok(raw);
+    roles.set("7", { ...roles.get("7"), ...raw });
+  } else throw new TypeError("Unexpected synthetic role effect");
+}
+function roleEffect(
+  state: RoleState,
+  url: URL,
+  method: string,
+  body: Parameters<JiraMutationRequest>[2],
+): AtlassianWriteHttpOutcome {
+  const { controls } = state;
+  roleApplyEffect(state, url, method, asRecord(body));
+  state.wrote = true;
+  if (controls.lostAck) return { ok: false, reason: "timeout" };
+  const id = controls.unsafeAck ? 9007199254740992 : "9007199254740993";
+  return {
+    ok: true,
+    status: controls.acknowledgementStatus,
+    body: url.pathname === "/role" && !controls.malformedAck ? { id } : undefined,
   };
+}
+function roleDispatch(state: RoleState, call: RoleCall): AtlassianWriteHttpOutcome {
+  const { path, method, body } = call;
+  const { controls } = state;
+  if (state.wrote && controls.throwReadback) throw new Error("Synthetic role readback defect");
+  if (state.wrote && controls.denyReadback)
+    return { ok: false, reason: "permission-denied", httpStatus: 403 };
+  const url = new URL(path, "https://synthetic.invalid/");
+  return method === "GET" ? roleRead(state, url) : roleEffect(state, url, method, body);
+}
+export function roleMutationFixture(): {
+  readonly request: JiraMutationRequest;
+  readonly calls: RoleCall[];
+  readonly controls: RoleControls;
+  readonly actor: { key: string; name: string };
+  readonly roles: Map<string, Record<string, unknown>>;
+  readonly defaults: Map<string, Actor[]>;
+  readonly project: { id: string; key: string; name: string };
+  readonly users: { key: string; name: string }[];
+  readonly groups: Set<string>;
+  readonly snapshot: () => CatalogJsonObject;
+} {
+  const state = roleState();
+  const { actor, roles, defaults, project, users, groups, controls, calls } = state;
+  const request: JiraMutationRequest = (path, method = "GET", body, expect) =>
+    settleSync(() => {
+      const call = { path, method, body, expect };
+      calls.push(call);
+      return roleDispatch(state, call);
+    });
   return {
     request,
     calls,
@@ -323,7 +402,7 @@ export function roleMutationFixture() {
     snapshot: (): CatalogJsonObject => ({
       roles: [...roles.values()].map((role) => ({ id: String(role.id), name: String(role.name) })),
       defaultActors: (defaults.get("7") ?? []).map(({ id, name, type }) => ({ id, name, type })),
-      projectActors: projectActors.map(({ id, name, type }) => ({ id, name, type })),
+      projectActors: state.projectActors.map(({ id, name, type }) => ({ id, name, type })),
     }),
   };
 }

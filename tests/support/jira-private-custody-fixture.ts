@@ -28,68 +28,70 @@ export interface PrivateJiraCustodyFixture extends CreatedAtlassianCredentialCus
   readonly advance: (milliseconds: number) => void;
 }
 
-/** Private synthetic custody over one shared port; production kernel guards have separate sources. */
-export function privateJiraCustodyFixture(
-  operation: JiraHumanInputBinding["operation"] = "jira.update-my-password",
-  principal = "a".repeat(64),
-  options: {
-    readonly baseUrl?: string;
-    readonly actorKey?: string;
-    readonly actorUsername?: string;
-    readonly compatibility?: JiraDataCenterCompatibilityFacts;
-  } = {},
-): PrivateJiraCustodyFixture {
-  let now = 1_800_000_000_000;
-  const clearedPhases: ("cancelled" | "expired")[] = [];
-  const entries = new Map<string, string>();
+interface CustodyOptions {
+  readonly baseUrl?: string;
+  readonly actorKey?: string;
+  readonly actorUsername?: string;
+  readonly compatibility?: JiraDataCenterCompatibilityFacts;
+}
+type CustodyMetadataStore = Parameters<typeof createAtlassianCredentialCustody>[0]["metadataStore"];
+function acquireCustodyLease(
+  leases: Set<string>,
+  id: string,
+  scope = "record",
+): (() => void) | undefined {
+  const key = `${scope}:${id}`;
+  if (leases.has(key)) return undefined;
+  leases.add(key);
+  let held = true;
+  return (): void => {
+    if (held) {
+      held = false;
+      leases.delete(key);
+    }
+  };
+}
+function custodyVault(entries: Map<string, string>): PrivateFixtureVault {
   const leases = new Set<string>();
-  const metadata = new Map<string, AtlassianCredentialMetadata>();
-  const vault = {
-    list: () => [...entries.keys()],
-    get: (id: string) => entries.get(id),
-    set: (id: string, value: string) => {
+  return {
+    list: (): string[] => [...entries.keys()],
+    get: (id: string): string | undefined => entries.get(id),
+    set: (id: string, value: string): void => {
       entries.set(id, value);
     },
-    delete: (id: string) => {
+    delete: (id: string): void => {
       entries.delete(id);
     },
-    compareAndSet: (id: string, expected: string | undefined, next: string | undefined) => {
+    compareAndSet: (
+      id: string,
+      expected: string | undefined,
+      next: string | undefined,
+    ): boolean => {
       if (entries.get(id) !== expected) return false;
       if (next === undefined) entries.delete(id);
       else entries.set(id, next);
       return true;
     },
-    acquireLease: (id: string, scope = "record") => {
-      const key = `${scope}:${id}`;
-      if (leases.has(key)) return undefined;
-      leases.add(key);
-      let held = true;
-      return () => {
-        if (held) {
-          held = false;
-          leases.delete(key);
-        }
-      };
-    },
+    acquireLease: (id: string, scope?: string) => acquireCustodyLease(leases, id, scope),
   };
-  const metadataStore = {
-    get: (id: string) => metadata.get(id),
-    list: () => [...metadata.values()],
-    insert: (value: AtlassianCredentialMetadata) => {
+}
+function custodyMetadataStore(
+  metadata: Map<string, AtlassianCredentialMetadata>,
+): CustodyMetadataStore {
+  return {
+    get: (id: string): AtlassianCredentialMetadata | undefined => metadata.get(id),
+    list: (): AtlassianCredentialMetadata[] => [...metadata.values()],
+    insert: (value: AtlassianCredentialMetadata): void => {
       metadata.set(value.authRef, value);
     },
-    delete: (id: string) => metadata.delete(id),
+    delete: (id: string): boolean => metadata.delete(id),
   };
-  const fork = () =>
-    createAtlassianCredentialCustody({
-      now: () => now,
-      vault,
-      metadataStore,
-      onHumanInputCleared: (_correlationId, phase) => {
-        clearedPhases.push(phase);
-      },
-    });
-  const { custody, executionResolver } = fork();
+}
+function verifiedCustodyPod(
+  { custody }: CreatedAtlassianCredentialCustody,
+  principal: string,
+  options: CustodyOptions,
+): { authRef: string; podId: string; revision: number } {
   const created = custody.create(
     {
       provider: "jira",
@@ -117,31 +119,70 @@ export function privateJiraCustodyFixture(
     undefined,
     options.compatibility,
   );
-  const inputs = custody.humanInputs;
-  const privateInputs = executionResolver.humanInputs;
-  const sessions = executionResolver.sessions;
-  if (inputs === undefined || privateInputs === undefined || sessions === undefined)
-    throw new TypeError("Missing real private custody facets");
-  const binding: JiraHumanInputBinding = {
+  return {
+    authRef: created.authRef,
+    podId: created.livePod.podId,
+    revision: verification.revision,
+  };
+}
+function custodyBinding(input: {
+  readonly operation: JiraHumanInputBinding["operation"];
+  readonly principal: string;
+  readonly options: CustodyOptions;
+  readonly pod: { authRef: string; podId: string; revision: number };
+  readonly expiresAt: number;
+}): JiraHumanInputBinding {
+  const { operation, principal, options, pod, expiresAt } = input;
+  return {
     context: {
       kind: "chat",
       chatId: "chat-1",
       messageId: "message-1",
       callId: "call-1",
-      podId: created.livePod.podId,
+      podId: pod.podId,
       bindingGeneration: 1,
     },
     authority: { runId: "authority-run-1", envelopeDigest: "d".repeat(64) },
     principalDigest: principal,
-    authRef: created.authRef,
+    authRef: pod.authRef,
     authenticationGeneration: 1,
-    verificationRevision: verification.revision,
+    verificationRevision: pod.revision,
     operation,
     argumentsDigest: "b".repeat(64),
     actorUserKey: options.actorKey ?? "actor-key",
     actorUsername: options.actorUsername ?? "Native Actor",
-    expiresAt: now + 60_000,
+    expiresAt,
   };
+}
+/** Private synthetic custody over one shared port; production kernel guards have separate sources. */
+export function privateJiraCustodyFixture(
+  operation: JiraHumanInputBinding["operation"] = "jira.update-my-password",
+  principal = "a".repeat(64),
+  options: CustodyOptions = {},
+): PrivateJiraCustodyFixture {
+  let now = 1_800_000_000_000;
+  const clearedPhases: ("cancelled" | "expired")[] = [];
+  const entries = new Map<string, string>();
+  const vault = custodyVault(entries);
+  const metadataStore = custodyMetadataStore(new Map<string, AtlassianCredentialMetadata>());
+  const fork = (): CreatedAtlassianCredentialCustody =>
+    createAtlassianCredentialCustody({
+      now: () => now,
+      vault,
+      metadataStore,
+      onHumanInputCleared: (_correlationId, phase) => {
+        clearedPhases.push(phase);
+      },
+    });
+  const forked = fork();
+  const { custody, executionResolver } = forked;
+  const pod = verifiedCustodyPod(forked, principal, options);
+  const inputs = custody.humanInputs;
+  const privateInputs = executionResolver.humanInputs;
+  const sessions = executionResolver.sessions;
+  if (inputs === undefined || privateInputs === undefined || sessions === undefined)
+    throw new TypeError("Missing real private custody facets");
+  const binding = custodyBinding({ operation, principal, options, pod, expiresAt: now + 60_000 });
   return {
     custody,
     executionResolver,
@@ -153,7 +194,7 @@ export function privateJiraCustodyFixture(
     vault,
     fork,
     clearedPhases,
-    advance: (milliseconds: number) => {
+    advance: (milliseconds: number): void => {
       now += milliseconds;
     },
   };

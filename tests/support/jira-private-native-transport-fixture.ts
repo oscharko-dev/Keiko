@@ -97,8 +97,8 @@ function identityController(selected: PrivateNativeCase): NativeController | und
   const native = identityMutationFixture(item);
   Object.assign(native.actor, ACTOR);
   return {
-    snapshot: native.snapshot,
-    async handle(request) {
+    snapshot: () => native.snapshot(),
+    async handle(request): Promise<Response> {
       authentication(request, false);
       const url = new URL(request.url);
       const path = url.pathname.slice(API.length) + url.search;
@@ -192,7 +192,7 @@ function accountController(selected: PrivateNativeCase): NativeController | unde
       read === undefined
         ? { effects, profileName: native.actor.displayName, sessionActive }
         : { validations },
-    async handle(request) {
+    async handle(request): Promise<Response> {
       const session = request.headers.has("cookie");
       authentication(request, session, selected.tool === "jira.login" && request.method === "POST");
       if (request.method === "GET") return readAccount(request);
@@ -233,83 +233,109 @@ function avatarRead(path: string, rows: readonly CatalogJsonObject[]): Response 
     custom: rows.filter((row) => row.category === "custom"),
   });
 }
-function avatarController(selected: PrivateNativeCase): NativeController | undefined {
-  const found = AVATAR_MUTATION_FIXTURE_CASES.find((row) => row.name === selected.tool);
-  if (found === undefined) return undefined;
-  const item = found;
+interface AvatarState {
+  rows: readonly CatalogJsonObject[];
+  effects: number;
+  rawUploadBytes: number;
+}
+type AvatarCase = (typeof AVATAR_MUTATION_FIXTURE_CASES)[number];
+async function avatarUpload(request: Request, state: AvatarState): Promise<Response> {
+  expect(request.headers.get("content-type")).toBe("image/png");
+  expect(request.headers.get("x-atlassian-token")).toBe("no-check");
+  const bytes = new Uint8Array(await request.arrayBuffer());
+  expect(bytes).toEqual(new Uint8Array(PRIVATE_NATIVE_IMAGE));
+  state.rawUploadBytes = bytes.byteLength;
+  return Response.json({ ...PRIVATE_NATIVE_CROP, needsCropping: false }, { status: 201 });
+}
+async function avatarCreate(
+  request: Request,
+  item: AvatarCase,
+  state: AvatarState,
+): Promise<Response> {
   const target = item.target;
-  let rows: readonly CatalogJsonObject[] = privateAvatarRows(selected.tool);
-  let effects = 0;
-  let rawUploadBytes = 0;
-  async function write(request: Request): Promise<Response> {
-    exactEffect(request, selected);
-    expect(++effects).toBe(1);
-    if ("upload" in item) {
-      expect(request.headers.get("content-type")).toBe("image/png");
-      expect(request.headers.get("x-atlassian-token")).toBe("no-check");
-      const bytes = new Uint8Array(await request.arrayBuffer());
-      expect(bytes).toEqual(new Uint8Array(PRIVATE_NATIVE_IMAGE));
-      rawUploadBytes = bytes.byteLength;
-      return Response.json({ ...PRIVATE_NATIVE_CROP, needsCropping: false }, { status: 201 });
-    }
-    if (item.method === "POST") {
-      expect(await request.text()).toBe(JSON.stringify(PRIVATE_NATIVE_CROP));
-      if (item.name === "jira.crop-temporary-avatar")
-        return Response.json({ ...PRIVATE_NATIVE_CROP, needsCropping: false });
-      const owner =
-        target.kind === "user" ? target.key : target.kind === "session" ? ACTOR.key : target.id;
-      const created = { id: "43", category: "custom", owner, selected: false };
-      rows = [...rows, created];
-      return Response.json(created, { status: 201 });
-    }
-    if (item.method === "PUT") {
-      expect(await request.text()).toBe('{"id":"42"}');
-      rows = rows.map((row) => ({ ...row, selected: row.id === "42" }));
-    } else {
-      await emptyBody(request);
-      rows = rows.filter((row) => row.id !== "42");
-    }
-    return new Response(null, { status: 204 });
+  expect(await request.text()).toBe(JSON.stringify(PRIVATE_NATIVE_CROP));
+  if (item.name === "jira.crop-temporary-avatar")
+    return Response.json({ ...PRIVATE_NATIVE_CROP, needsCropping: false });
+  const owner =
+    target.kind === "user" ? target.key : target.kind === "session" ? ACTOR.key : target.id;
+  const created = { id: "43", category: "custom", owner, selected: false };
+  state.rows = [...state.rows, created];
+  return Response.json(created, { status: 201 });
+}
+async function avatarWrite(
+  request: Request,
+  selected: PrivateNativeCase,
+  item: AvatarCase,
+  state: AvatarState,
+): Promise<Response> {
+  exactEffect(request, selected);
+  expect(++state.effects).toBe(1);
+  if ("upload" in item) return avatarUpload(request, state);
+  if (item.method === "POST") return avatarCreate(request, item, state);
+  if (item.method === "PUT") {
+    expect(await request.text()).toBe('{"id":"42"}');
+    state.rows = state.rows.map((row) => ({ ...row, selected: row.id === "42" }));
+  } else {
+    await emptyBody(request);
+    state.rows = state.rows.filter((row) => row.id !== "42");
   }
+  return new Response(null, { status: 204 });
+}
+async function avatarServerInfo(request: Request, selected: PrivateNativeCase): Promise<Response> {
+  authentication(request, false);
+  expect(new URL(request.url).search).toBe("");
+  await emptyBody(request);
+  if (selected.tool === "jira.upload-temporary-avatar")
+    return Response.json({
+      version: "10.3.26",
+      versionNumbers: [10, 3, 26],
+      deploymentType: "Data Center",
+    });
+  expect(selected.tool).toBe("jira.crop-temporary-avatar");
+  return Response.json({
+    version: "10.4.0",
+    versionNumbers: [10, 4, 0],
+    deploymentType: "Data Center",
+  });
+}
+async function avatarHandle(
+  request: Request,
+  selected: PrivateNativeCase,
+  item: AvatarCase,
+  state: AvatarState,
+): Promise<Response> {
+  const session = item.method === "POST";
+  // The factory uses PAT only for its independent initial actor lookup; all session reads/effects use cookies.
+  authentication(request, request.method === "GET" ? request.headers.has("cookie") : session);
+  const url = new URL(request.url);
+  if (url.pathname === `${AUTH}session` && request.method === "GET") {
+    expect(request.headers.has("cookie")).toBe(true);
+    await emptyBody(request);
+    return Response.json({ name: ACTOR.name });
+  }
+  if (url.pathname === `${API}serverInfo` && request.method === "GET")
+    return avatarServerInfo(request, selected);
+  if (request.method !== "GET") return avatarWrite(request, selected, item, state);
+  expect(url.pathname.startsWith(API)).toBe(true);
+  await emptyBody(request);
+  return avatarRead(url.pathname.slice(API.length) + url.search, state.rows);
+}
+function avatarController(selected: PrivateNativeCase): NativeController | undefined {
+  const item = AVATAR_MUTATION_FIXTURE_CASES.find((row) => row.name === selected.tool);
+  if (item === undefined) return undefined;
+  const state: AvatarState = {
+    rows: privateAvatarRows(selected.tool),
+    effects: 0,
+    rawUploadBytes: 0,
+  };
   return {
     snapshot: () => ({
-      effects,
-      avatarIds: rows.map((row) => row.id),
-      selectedAvatarId: rows.find((row) => row.selected)?.id,
-      rawUploadBytes,
+      effects: state.effects,
+      avatarIds: state.rows.map((row) => row.id),
+      selectedAvatarId: state.rows.find((row) => row.selected)?.id,
+      rawUploadBytes: state.rawUploadBytes,
     }),
-    async handle(request) {
-      const session = item.method === "POST";
-      // The factory uses PAT only for its independent initial actor lookup; all session reads/effects use cookies.
-      authentication(request, request.method === "GET" ? request.headers.has("cookie") : session);
-      const url = new URL(request.url);
-      if (url.pathname === `${AUTH}session` && request.method === "GET") {
-        expect(request.headers.has("cookie")).toBe(true);
-        await emptyBody(request);
-        return Response.json({ name: ACTOR.name });
-      }
-      if (url.pathname === `${API}serverInfo` && request.method === "GET") {
-        authentication(request, false);
-        expect(url.search).toBe("");
-        await emptyBody(request);
-        if (selected.tool === "jira.upload-temporary-avatar")
-          return Response.json({
-            version: "10.3.26",
-            versionNumbers: [10, 3, 26],
-            deploymentType: "Data Center",
-          });
-        expect(selected.tool).toBe("jira.crop-temporary-avatar");
-        return Response.json({
-          version: "10.4.0",
-          versionNumbers: [10, 4, 0],
-          deploymentType: "Data Center",
-        });
-      }
-      if (request.method !== "GET") return write(request);
-      expect(url.pathname.startsWith(API)).toBe(true);
-      await emptyBody(request);
-      return avatarRead(url.pathname.slice(API.length) + url.search, rows);
-    },
+    handle: (request) => avatarHandle(request, selected, item, state),
   };
 }
 function unlockController(selected: PrivateNativeCase): NativeController | undefined {
@@ -321,7 +347,7 @@ function unlockController(selected: PrivateNativeCase): NativeController | undef
       effects: native.effects.length,
       unlockRequested: native.effects.length === 1,
     }),
-    async handle(request) {
+    async handle(request): Promise<Response> {
       authentication(request, false);
       await emptyBody(request);
       if (request.method === "GET") {

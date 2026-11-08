@@ -15,8 +15,7 @@ const SCHEMA = jiraMutationDeclaration("jira.draft").descriptor.resultSchema;
 
 // keiko-ui is type-checked by its own bundler program (`@/` paths, extensionless imports), so the
 // root program loads the card's view at run time instead of compiling the UI sources a second time.
-const UI_OUTCOME_MODULE: string =
-  "../../packages/keiko-ui/src/app/components/desktop/jira-tool-outcome.ts";
+const UI_OUTCOME_MODULE = "../../packages/keiko-ui/src/app/components/desktop/jira-tool-outcome.ts";
 
 interface OutcomeView {
   readonly issues: readonly { readonly key: string; readonly href?: string }[];
@@ -46,7 +45,7 @@ beforeAll(async () => {
 
 function viewOf(items: readonly DraftItemResult[]): OutcomeView {
   const { data } = draftResult(BASE_URL, items);
-  expect(describeCatalogSchemaMismatch(SCHEMA ?? {}, data)).toBeUndefined();
+  expect(describeCatalogSchemaMismatch(SCHEMA, data)).toBeUndefined();
   const exchange = {
     call: { id: "draft-1", name: "jira_draft", arguments: {} },
     result: { status: "completed", data },

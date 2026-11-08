@@ -5,7 +5,10 @@ import {
   permissionSchemeMutationFixture,
 } from "./jira-permission-scheme-mutation-fixture.js";
 import { ROLE_MUTATION_FIXTURE_CASES, roleMutationFixture } from "./jira-role-mutation-fixture.js";
-import { reviewedPlatformTransportFixture } from "./jira-reviewed-platform-transport-fixture.js";
+import {
+  reviewedPlatformTransportFixture,
+  type ReviewedTransportFixture,
+} from "./jira-reviewed-platform-transport-fixture.js";
 
 /** Fixed fixture routes, including the independently selected principal query identities. */
 const ROLE_READS = new Set([
@@ -40,7 +43,7 @@ export function permissionSchemeTransportFixture(
   apiRoot: string,
   selected: (typeof PERMISSION_SCHEME_MUTATION_CASES)[number],
   actorKey = "synthetic-actor",
-) {
+): ReviewedTransportFixture {
   const native = permissionSchemeMutationFixture();
   native.actor.key = actorKey;
   const attribute = selected.tool === "jira.set-permission-scheme-attribute";
@@ -65,14 +68,14 @@ export function permissionSchemeTransportFixture(
     },
     request,
     (path) => PERMISSION_READS.has(path),
-    native.snapshot,
+    () => native.snapshot(),
   );
 }
 export function roleTransportFixture(
   apiRoot: string,
   selected: (typeof ROLE_MUTATION_FIXTURE_CASES)[number],
   actorKey = "synthetic-actor",
-) {
+): ReviewedTransportFixture {
   const native = roleMutationFixture();
   native.actor.key = actorKey;
   return reviewedPlatformTransportFixture(
@@ -83,15 +86,15 @@ export function roleTransportFixture(
       body: selected.body,
       acknowledgement: selected.name === "jira.create-role" ? "json" : "none",
     },
-    native.request,
+    (path, method, body, responseMode) => native.request(path, method, body, responseMode),
     (path) => ROLE_READS.has(path),
-    native.snapshot,
+    () => native.snapshot(),
   );
 }
 export function permissionRoleTransportController(
   operation: string | undefined,
   actorKey = "synthetic-actor",
-) {
+): ReviewedTransportFixture | undefined {
   const scheme = PERMISSION_SCHEME_MUTATION_CASES.find((item) => item.tool === operation);
   if (scheme !== undefined)
     return permissionSchemeTransportFixture("/context/rest/api/2", scheme, actorKey);

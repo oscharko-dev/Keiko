@@ -138,6 +138,79 @@ function controller(operation: string | undefined): Controller | undefined {
   const selected = links.find((item) => item.tool === operation);
   return selected === undefined ? undefined : linkMutationTransportFixture(API_ROOT, selected);
 }
+type LifecycleController = NonNullable<ReturnType<typeof controller>>;
+
+function lifecycleReadFlags(
+  url: string,
+  operation: string | undefined,
+): Pick<
+  AtlassianHttpBodyRequest,
+  "jiraProjectPriority" | "jiraApplicationRole" | "jiraEmailTemplateArchive"
+> {
+  const path = new URL(url).pathname;
+  const priority =
+    operation === "jira.set-project-priority-scheme" ||
+    operation === "jira.remove-project-priority-scheme";
+  const role =
+    operation === "jira.set-application-role" || operation === "jira.set-application-roles";
+  return {
+    ...(path === "/context/rest/api/2/project/10000/priorityscheme" && priority
+      ? { jiraProjectPriority: true as const }
+      : {}),
+    ...(path === "/context/rest/api/2/applicationrole" && role
+      ? { jiraApplicationRole: "version" as const }
+      : {}),
+    ...(path === "/context/rest/api/2/email-templates"
+      ? { jiraEmailTemplateArchive: true as const }
+      : {}),
+  };
+}
+
+async function lifecycleRead(
+  selected: LifecycleController | undefined,
+  operation: string | undefined,
+  url: string,
+): Promise<AtlassianHttpBodyResult | undefined> {
+  return selected?.read({
+    method: "GET",
+    url,
+    timeoutMs: 1000,
+    maxBodyBytes: 262144,
+    ...lifecycleReadFlags(url, operation),
+  });
+}
+
+async function lifecycleWrite(
+  selected: LifecycleController | undefined,
+  request: Request,
+): Promise<AtlassianHttpBodyResult | undefined> {
+  if (selected === undefined) return undefined;
+  const method = request.method;
+  if (method !== "POST" && method !== "PUT" && method !== "DELETE") return undefined;
+  const archive = request.headers.get("content-type") === "application/zip";
+  const bodyJson = archive ? "" : await request.clone().text();
+  return selected.write({
+    method,
+    url: request.url,
+    timeoutMs: 1000,
+    maxBodyBytes: 262144,
+    ...directoryRequestFlags(request),
+    ...(request.headers.get("content-type") === "text/plain"
+      ? { jiraPermissionAttribute: true }
+      : {}),
+    ...(archive
+      ? {
+          jiraEmailTemplateArchive: true,
+          upload: {
+            contentType: "application/zip",
+            bytes: new Uint8Array(await request.clone().arrayBuffer()),
+          },
+        }
+      : {}),
+    ...(bodyJson === "" ? {} : { bodyJson }),
+  });
+}
+
 export function lifecycleRemoteFixture(operation: string | undefined): {
   readonly read: (url: string) => Promise<AtlassianHttpBodyResult | undefined>;
   readonly write: (request: Request) => Promise<AtlassianHttpBodyResult | undefined>;
@@ -145,52 +218,8 @@ export function lifecycleRemoteFixture(operation: string | undefined): {
 } {
   const selected = controller(operation);
   return {
-    read: async (url) =>
-      selected?.read({
-        method: "GET",
-        url,
-        timeoutMs: 1000,
-        maxBodyBytes: 262144,
-        ...(new URL(url).pathname === "/context/rest/api/2/project/10000/priorityscheme" &&
-        (operation === "jira.set-project-priority-scheme" ||
-          operation === "jira.remove-project-priority-scheme")
-          ? { jiraProjectPriority: true }
-          : {}),
-        ...(new URL(url).pathname === "/context/rest/api/2/applicationrole" &&
-        (operation === "jira.set-application-role" || operation === "jira.set-application-roles")
-          ? { jiraApplicationRole: "version" }
-          : {}),
-        ...(new URL(url).pathname === "/context/rest/api/2/email-templates"
-          ? { jiraEmailTemplateArchive: true }
-          : {}),
-      }),
-    async write(request) {
-      if (selected === undefined) return undefined;
-      const method = request.method;
-      if (method !== "POST" && method !== "PUT" && method !== "DELETE") return undefined;
-      const archive = request.headers.get("content-type") === "application/zip";
-      const bodyJson = archive ? "" : await request.clone().text();
-      return selected.write({
-        method,
-        url: request.url,
-        timeoutMs: 1000,
-        maxBodyBytes: 262144,
-        ...directoryRequestFlags(request),
-        ...(request.headers.get("content-type") === "text/plain"
-          ? { jiraPermissionAttribute: true }
-          : {}),
-        ...(archive
-          ? {
-              jiraEmailTemplateArchive: true,
-              upload: {
-                contentType: "application/zip",
-                bytes: new Uint8Array(await request.clone().arrayBuffer()),
-              },
-            }
-          : {}),
-        ...(bodyJson === "" ? {} : { bodyJson }),
-      });
-    },
+    read: (url) => lifecycleRead(selected, operation, url),
+    write: (request) => lifecycleWrite(selected, request),
     snapshot: () => selected?.snapshot(),
   };
 }
@@ -208,28 +237,40 @@ function directoryRequestFlags(
   | "jiraProjectPriority"
 > {
   const path = new URL(request.url).pathname;
-  const experimental = request.headers.get("x-experimentalapi") === "true";
-  const ifMatch = request.headers.get("if-match");
-  const projectPriority =
-    /^\/context\/rest\/api\/2\/project\/[1-9][0-9]*\/priorityscheme(?:\/[1-9][0-9]*)?$/u.test(path);
   return {
-    ...(experimental && path === "/context/rest/api/2/user/application"
-      ? { jiraUserApplication: true }
-      : {}),
-    ...(experimental && projectPriority ? { jiraProjectPriority: true } : {}),
-    ...(experimental && !projectPriority && path !== "/context/rest/api/2/user/application"
-      ? { jiraExperimental: true }
-      : {}),
-    ...(request.method === "PUT" &&
-    (path === "/context/rest/api/2/applicationrole" ||
-      path === "/context/rest/api/2/applicationrole/jira-software") &&
-    ifMatch !== null
-      ? { jiraApplicationRole: { ifMatch } }
-      : {}),
+    ...experimentalFlags(request, path),
+    ...applicationRoleFlag(request, path),
     ...(request.method === "PUT" &&
     path === "/context/rest/api/2/user/columns" &&
     request.headers.get("content-type") === "application/x-www-form-urlencoded"
       ? { jiraUserColumns: true }
       : {}),
   };
+}
+
+function applicationRoleFlag(
+  request: Request,
+  path: string,
+): Pick<AtlassianHttpBodyRequest, "jiraApplicationRole"> {
+  const ifMatch = request.headers.get("if-match");
+  const roleRoute =
+    path === "/context/rest/api/2/applicationrole" ||
+    path === "/context/rest/api/2/applicationrole/jira-software";
+  return request.method === "PUT" && roleRoute && ifMatch !== null
+    ? { jiraApplicationRole: { ifMatch } }
+    : {};
+}
+
+function experimentalFlags(
+  request: Request,
+  path: string,
+): Pick<
+  AtlassianHttpBodyRequest,
+  "jiraUserApplication" | "jiraProjectPriority" | "jiraExperimental"
+> {
+  if (request.headers.get("x-experimentalapi") !== "true") return {};
+  const projectPriority =
+    /^\/context\/rest\/api\/2\/project\/[1-9][0-9]*\/priorityscheme(?:\/[1-9][0-9]*)?$/u.test(path);
+  if (path === "/context/rest/api/2/user/application") return { jiraUserApplication: true };
+  return projectPriority ? { jiraProjectPriority: true } : { jiraExperimental: true };
 }

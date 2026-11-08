@@ -337,7 +337,7 @@ export function mutationRemoteState(): MutationRemoteState {
 }
 function nativeAttachmentRead(state: MutationRemoteState): ReturnType<typeof response> {
   const attachments = state.fields.attachment;
-  const found = Array.isArray(attachments)
+  const found: unknown = Array.isArray(attachments)
     ? attachments.find(
         (item: unknown) =>
           typeof item === "object" && item !== null && "id" in item && item.id === "10300",
@@ -375,7 +375,7 @@ function nativeDeletionRead(
   };
   return Object.hasOwn(resources, path) ? response(resources[path]) : undefined;
 }
-export function nativeRead(
+function nativeDelegatedRead(
   path: string,
   state: MutationRemoteState,
 ): ReturnType<typeof response> | undefined {
@@ -383,8 +383,14 @@ export function nativeRead(
   if (savedConfiguration !== undefined) return savedConfiguration;
   const administration = nativeAdministrationRead(path, state.administration);
   if (administration !== undefined) return administration;
-  const deletion = nativeDeletionRead(path, state);
-  if (deletion !== undefined) return deletion;
+  return nativeDeletionRead(path, state);
+}
+export function nativeRead(
+  path: string,
+  state: MutationRemoteState,
+): ReturnType<typeof response> | undefined {
+  const delegated = nativeDelegatedRead(path, state);
+  if (delegated !== undefined) return delegated;
   if (path === `/context/rest/api/2/issue/10001/worklog/${String(state.worklog.id)}`)
     return state.worklogDeleted ? response({}, 404) : response(state.worklog);
   const person = { name: "synthetic-user", active: true };

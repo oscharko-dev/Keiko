@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { settleSync } from "./jira-fixture-settle.js";
 import type { JiraMutationRequest } from "../../packages/keiko-connectors/src/jira-managed-mutation-metadata.js";
 import type { JiraPermissionSchemePorts } from "../../packages/keiko-connectors/src/jira-managed-permission-scheme-mutations.js";
 import type { AtlassianWriteHttpOutcome } from "../../packages/keiko-connectors/src/atlassian-write-http.js";
@@ -96,172 +97,248 @@ function nativeArray(value: unknown): Record<string, unknown>[] {
 function success(body?: Record<string, unknown>, status = 200): AtlassianWriteHttpOutcome {
   return { ok: true, status, body };
 }
-/** Independent mutable remote state. No product parser determines expected values or receipts. */
-export function permissionSchemeMutationFixture() {
-  const actor = { key: "synthetic-actor", name: "synthetic-user", active: true };
-  const schemes = new Map<string, Record<string, unknown>>([
-    ["7", nativeObject(PERMISSION_SCHEME_SNAPSHOT)],
-  ]);
-  const grants = new Map<string, Record<string, unknown>[]>([
-    ["7", structuredClone(PERMISSION_SCHEME_SNAPSHOT.permissions).map(nativeObject)],
-  ]);
-  const attributes = new Map<string, unknown>([["ADMINISTER_PROJECTS.extended.enabled", "true"]]);
-  const calls: { path: string; method: string; body?: unknown; bodyText?: string }[] = [];
-  const controls: {
-    denyReadback: boolean;
-    absentReadback: boolean;
-    throwReadback: boolean;
-    missingGrants: boolean;
-    wrongScheme: boolean;
-    missingDescription: boolean;
-    omitAckId: boolean;
-    loseAck: boolean;
-    writeStatus: number;
-    afterWrite?: () => void;
-  } = {
-    denyReadback: false,
-    absentReadback: false,
-    throwReadback: false,
-    missingGrants: false,
-    wrongScheme: false,
-    missingDescription: false,
-    omitAckId: false,
-    loseAck: false,
-    writeStatus: 204,
+type PermissionRecord = Record<string, unknown>;
+interface PermissionSchemeControls {
+  denyReadback: boolean;
+  absentReadback: boolean;
+  throwReadback: boolean;
+  missingGrants: boolean;
+  wrongScheme: boolean;
+  missingDescription: boolean;
+  omitAckId: boolean;
+  loseAck: boolean;
+  writeStatus: number;
+  afterWrite?: () => void;
+}
+interface PermissionSchemeState {
+  readonly actor: { key: string; name: string; active: boolean };
+  readonly schemes: Map<string, PermissionRecord>;
+  readonly grants: Map<string, PermissionRecord[]>;
+  readonly attributes: Map<string, unknown>;
+  readonly calls: { path: string; method: string; body?: unknown; bodyText?: string }[];
+  readonly controls: PermissionSchemeControls;
+  writes: number;
+}
+export interface PermissionSchemeMutationFixture {
+  readonly ports: JiraPermissionSchemePorts;
+  readonly calls: PermissionSchemeState["calls"];
+  readonly actor: PermissionSchemeState["actor"];
+  readonly schemes: Map<string, PermissionRecord>;
+  readonly grants: Map<string, PermissionRecord[]>;
+  readonly attributes: Map<string, unknown>;
+  readonly controls: PermissionSchemeControls;
+  writes(): number;
+  snapshot(): {
+    schemes: PermissionRecord[];
+    grants: [string, PermissionRecord[]][];
+    attributes: [string, unknown][];
+    writes: number;
   };
-  let writes = 0;
-  function failureAfterWrite(): AtlassianWriteHttpOutcome | undefined {
-    if (!writes) return undefined;
-    if (controls.throwReadback) throw new Error("Synthetic independent scheme readback failed");
-    if (controls.denyReadback) return { ok: false, reason: "permission-denied", httpStatus: 403 };
-    if (controls.absentReadback) return { ok: false, reason: "not-found", httpStatus: 404 };
-    return undefined;
+}
+function permissionFailureAfterWrite(
+  state: PermissionSchemeState,
+): AtlassianWriteHttpOutcome | undefined {
+  const { controls } = state;
+  if (!state.writes) return undefined;
+  if (controls.throwReadback) throw new Error("Synthetic independent scheme readback failed");
+  if (controls.denyReadback) return { ok: false, reason: "permission-denied", httpStatus: 403 };
+  if (controls.absentReadback) return { ok: false, reason: "not-found", httpStatus: 404 };
+  return undefined;
+}
+function permissionSchemeDetail(
+  state: PermissionSchemeState,
+  scheme: PermissionRecord,
+  id: string,
+  parts: readonly string[],
+): AtlassianWriteHttpOutcome {
+  const { controls } = state;
+  if (parts[2] === "attribute") {
+    const key = decodeURIComponent(parts[3] ?? "");
+    return success({ key, value: state.attributes.get(key) });
   }
-  function read(path: string): AtlassianWriteHttpOutcome {
-    const refused = failureAfterWrite();
-    if (refused !== undefined) return refused;
-    if (path === "myself") return success({ ...actor });
-    if (path === "permissionscheme")
-      return success({
-        permissionSchemes: [...schemes.values()].map((scheme) => ({
-          id: scheme.id,
-          name: scheme.name,
-          description: scheme.description,
-        })),
-      });
-    const parts = path.split("/");
-    const id = parts[1];
-    const scheme = id === undefined ? undefined : schemes.get(id);
-    if (parts[0] !== "permissionscheme" || scheme === undefined || id === undefined)
-      return { ok: false, reason: "not-found", httpStatus: 404 };
-    if (parts[2] === "attribute") {
-      const key = decodeURIComponent(parts[3] ?? "");
-      return success({ key, value: attributes.get(key) });
-    }
-    if (parts[2] === "permission")
-      return success(
-        controls.missingGrants ? {} : { permissions: structuredClone(grants.get(id)) },
-      );
-    const metadata: Record<string, unknown> = {
-      id: scheme.id,
-      name: scheme.name,
-      description: scheme.description,
-    };
-    if (controls.missingDescription) delete metadata.description;
-    return success({ ...metadata, ...(controls.wrongScheme ? { id: "99" } : {}) });
-  }
-  function ack(body?: Record<string, unknown>): AtlassianWriteHttpOutcome {
-    controls.afterWrite?.();
-    if (controls.loseAck) return { ok: false, reason: "timeout" };
-    return success(controls.omitAckId ? {} : body, body === undefined ? controls.writeStatus : 201);
-  }
-  function create(body: unknown): AtlassianWriteHttpOutcome {
-    const target = nativeObject(body);
-    const id = "9007199254740993";
-    schemes.set(id, { id, name: target.name, description: target.description });
-    grants.set(
-      id,
-      nativeArray(target.permissions).map((grant, index) => ({ ...grant, id: String(31 + index) })),
+  if (parts[2] === "permission")
+    return success(
+      controls.missingGrants ? {} : { permissions: structuredClone(state.grants.get(id)) },
     );
-    return ack({ id });
-  }
-  function modify(path: string, method: string, body: unknown): AtlassianWriteHttpOutcome {
-    const parts = path.split("/");
-    const id = parts[1];
-    const scheme = id === undefined ? undefined : schemes.get(id);
-    assert.ok(id !== undefined && scheme !== undefined);
-    if (parts[2] === "permission") {
-      const current = grants.get(id);
-      assert.ok(current);
-      if (method === "POST") {
-        current.push({ ...nativeObject(body), id: "23" });
-        return ack({ id: "23" });
-      }
-      assert.equal(method, "DELETE");
-      grants.set(
-        id,
-        current.filter((grant) => grant.id !== parts[3]),
-      );
-      return ack();
-    }
-    if (method === "DELETE") {
-      schemes.delete(id);
-      grants.delete(id);
-      return ack();
-    }
-    assert.equal(method, "PUT");
-    const target = nativeObject(body);
-    if (Object.hasOwn(target, "name")) scheme.name = target.name;
-    if (Object.hasOwn(target, "description")) scheme.description = target.description;
-    if (Object.hasOwn(target, "permissions"))
-      grants.set(
-        id,
-        nativeArray(target.permissions).map((grant, index) => ({
-          ...grant,
-          id: String(41 + index),
-        })),
-      );
-    return ack();
-  }
-  const request: JiraMutationRequest = async (path, method = "GET", body) => {
-    calls.push({ path, method, ...(body === undefined ? {} : { body: structuredClone(body) }) });
-    if (method === "GET") return read(path);
-    assert.ok(!path.includes("/attribute/"), "Attribute body must use the fixed text/plain port");
-    assert.equal(++writes, 1);
-    if (controls.writeStatus >= 300)
-      return { ok: false, reason: "permission-denied", httpStatus: controls.writeStatus };
-    return method === "POST" && path === "permissionscheme"
-      ? create(body)
-      : modify(path, method, body);
+  const metadata: PermissionRecord = {
+    id: scheme.id,
+    name: scheme.name,
+    description: scheme.description,
   };
+  if (controls.missingDescription) delete metadata.description;
+  return success({ ...metadata, ...(controls.wrongScheme ? { id: "99" } : {}) });
+}
+function permissionRead(state: PermissionSchemeState, path: string): AtlassianWriteHttpOutcome {
+  const refused = permissionFailureAfterWrite(state);
+  if (refused !== undefined) return refused;
+  if (path === "myself") return success({ ...state.actor });
+  if (path === "permissionscheme")
+    return success({
+      permissionSchemes: [...state.schemes.values()].map((scheme) => ({
+        id: scheme.id,
+        name: scheme.name,
+        description: scheme.description,
+      })),
+    });
+  const parts = path.split("/");
+  const id = parts[1];
+  const scheme = id === undefined ? undefined : state.schemes.get(id);
+  if (parts[0] !== "permissionscheme" || scheme === undefined || id === undefined)
+    return { ok: false, reason: "not-found", httpStatus: 404 };
+  return permissionSchemeDetail(state, scheme, id, parts);
+}
+function permissionAck(
+  state: PermissionSchemeState,
+  body?: PermissionRecord,
+): AtlassianWriteHttpOutcome {
+  const { controls } = state;
+  controls.afterWrite?.();
+  if (controls.loseAck) return { ok: false, reason: "timeout" };
+  return success(controls.omitAckId ? {} : body, body === undefined ? controls.writeStatus : 201);
+}
+function permissionCreate(state: PermissionSchemeState, body: unknown): AtlassianWriteHttpOutcome {
+  const target = nativeObject(body);
+  const id = "9007199254740993";
+  state.schemes.set(id, { id, name: target.name, description: target.description });
+  state.grants.set(
+    id,
+    nativeArray(target.permissions).map((grant, index) => ({ ...grant, id: String(31 + index) })),
+  );
+  return permissionAck(state, { id });
+}
+function permissionGrantChange(
+  state: PermissionSchemeState,
+  id: string,
+  parts: readonly string[],
+  method: string,
+  body: unknown,
+): AtlassianWriteHttpOutcome {
+  const current = state.grants.get(id);
+  assert.ok(current);
+  if (method === "POST") {
+    current.push({ ...nativeObject(body), id: "23" });
+    return permissionAck(state, { id: "23" });
+  }
+  assert.equal(method, "DELETE");
+  state.grants.set(
+    id,
+    current.filter((grant) => grant.id !== parts[3]),
+  );
+  return permissionAck(state);
+}
+function permissionModify(
+  state: PermissionSchemeState,
+  path: string,
+  method: string,
+  body: unknown,
+): AtlassianWriteHttpOutcome {
+  const parts = path.split("/");
+  const id = parts[1];
+  const scheme = id === undefined ? undefined : state.schemes.get(id);
+  assert.ok(id !== undefined && scheme !== undefined);
+  if (parts[2] === "permission") return permissionGrantChange(state, id, parts, method, body);
+  if (method === "DELETE") {
+    state.schemes.delete(id);
+    state.grants.delete(id);
+    return permissionAck(state);
+  }
+  assert.equal(method, "PUT");
+  const target = nativeObject(body);
+  if (Object.hasOwn(target, "name")) scheme.name = target.name;
+  if (Object.hasOwn(target, "description")) scheme.description = target.description;
+  if (Object.hasOwn(target, "permissions"))
+    state.grants.set(
+      id,
+      nativeArray(target.permissions).map((grant, index) => ({
+        ...grant,
+        id: String(41 + index),
+      })),
+    );
+  return permissionAck(state);
+}
+function permissionRequest(
+  state: PermissionSchemeState,
+  path: string,
+  method: string,
+  body: Parameters<JiraMutationRequest>[2],
+): AtlassianWriteHttpOutcome {
+  state.calls.push({
+    path,
+    method,
+    ...(body === undefined ? {} : { body: structuredClone(body) }),
+  });
+  if (method === "GET") return permissionRead(state, path);
+  assert.ok(!path.includes("/attribute/"), "Attribute body must use the fixed text/plain port");
+  assert.equal(++state.writes, 1);
+  if (state.controls.writeStatus >= 300)
+    return { ok: false, reason: "permission-denied", httpStatus: state.controls.writeStatus };
+  return method === "POST" && path === "permissionscheme"
+    ? permissionCreate(state, body)
+    : permissionModify(state, path, method, body);
+}
+function permissionSetAttribute(
+  state: PermissionSchemeState,
+  id: string,
+  key: string,
+  enabled: boolean,
+): AtlassianWriteHttpOutcome {
+  state.calls.push({
+    path: `permissionscheme/${id}/attribute/${encodeURIComponent(key)}`,
+    method: "PUT",
+    bodyText: String(enabled),
+  });
+  assert.ok(state.schemes.has(id));
+  assert.equal(++state.writes, 1);
+  state.attributes.set(key, String(enabled));
+  return permissionAck(state);
+}
+function permissionSchemeState(): PermissionSchemeState {
+  return {
+    actor: { key: "synthetic-actor", name: "synthetic-user", active: true },
+    schemes: new Map<string, PermissionRecord>([["7", nativeObject(PERMISSION_SCHEME_SNAPSHOT)]]),
+    grants: new Map<string, PermissionRecord[]>([
+      ["7", structuredClone(PERMISSION_SCHEME_SNAPSHOT.permissions).map(nativeObject)],
+    ]),
+    attributes: new Map<string, unknown>([["ADMINISTER_PROJECTS.extended.enabled", "true"]]),
+    calls: [],
+    controls: {
+      denyReadback: false,
+      absentReadback: false,
+      throwReadback: false,
+      missingGrants: false,
+      wrongScheme: false,
+      missingDescription: false,
+      omitAckId: false,
+      loseAck: false,
+      writeStatus: 204,
+    },
+    writes: 0,
+  };
+}
+/** Independent mutable remote state. No product parser determines expected values or receipts. */
+export function permissionSchemeMutationFixture(): PermissionSchemeMutationFixture {
+  const state = permissionSchemeState();
+  const request: JiraMutationRequest = (path, method = "GET", body) =>
+    settleSync(() => permissionRequest(state, path, method, body));
   const ports: JiraPermissionSchemePorts = {
     request,
-    setAttribute: async (id, key, enabled) => {
-      calls.push({
-        path: `permissionscheme/${id}/attribute/${encodeURIComponent(key)}`,
-        method: "PUT",
-        bodyText: String(enabled),
-      });
-      assert.ok(schemes.has(id));
-      assert.equal(++writes, 1);
-      attributes.set(key, String(enabled));
-      return ack();
-    },
+    setAttribute: (id, key, enabled) =>
+      settleSync(() => permissionSetAttribute(state, id, key, enabled)),
   };
   return {
     ports,
-    calls,
-    actor,
-    schemes,
-    grants,
-    attributes,
-    controls,
-    writes: () => writes,
+    calls: state.calls,
+    actor: state.actor,
+    schemes: state.schemes,
+    grants: state.grants,
+    attributes: state.attributes,
+    controls: state.controls,
+    writes: () => state.writes,
     snapshot: () => ({
-      schemes: structuredClone([...schemes.values()]),
-      grants: structuredClone([...grants]),
-      attributes: structuredClone([...attributes]),
-      writes,
+      schemes: structuredClone([...state.schemes.values()]),
+      grants: structuredClone([...state.grants]),
+      attributes: structuredClone([...state.attributes]),
+      writes: state.writes,
     }),
   };
 }

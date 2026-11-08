@@ -1,6 +1,11 @@
 import { expect } from "vitest";
-import type { AtlassianHttpBodyPort } from "@oscharko-dev/keiko-connectors";
+import type {
+  AtlassianHttpBodyPort,
+  AtlassianHttpBodyRequest,
+  AtlassianHttpBodyResult,
+} from "@oscharko-dev/keiko-connectors";
 import type { Scenario } from "./jira-operation-transport-contract.js";
+import { settleSync } from "./jira-fixture-settle.js";
 import { response } from "./jira-managed-remote.js";
 
 // Literal native inputs and replies; neither is derived from the production registry or schemas.
@@ -48,7 +53,7 @@ const GET_REPLIES: Readonly<Record<string, Record<string, unknown>>> = {
   },
 };
 
-export const postAndIdentityReadTransport: AtlassianHttpBodyPort = async (request) => {
+function postAndIdentityRead(request: AtlassianHttpBodyRequest): AtlassianHttpBodyResult {
   const url = new URL(request.url);
   expect(url.origin).toBe("https://jira.example.invalid");
   if (request.method === "GET") {
@@ -95,4 +100,7 @@ export const postAndIdentityReadTransport: AtlassianHttpBodyPort = async (reques
     return response([{ id: "7", issueId: "10001", timeSpentSeconds: 0, comment: "" }]);
   }
   throw new TypeError("Unexpected method or POST observation route");
-};
+}
+
+export const postAndIdentityReadTransport: AtlassianHttpBodyPort = (request) =>
+  settleSync(() => postAndIdentityRead(request));

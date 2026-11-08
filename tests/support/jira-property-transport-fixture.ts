@@ -12,19 +12,20 @@ export const REQUESTED_PROPERTY_NODES = [
 export const PROPERTY_FIXTURE_KEY = "view ~settings";
 
 /** One independently selected synthetic property; parent identity stays with each existing fixture. */
+interface PropertyTransportFixture {
+  readonly read: (request: AtlassianHttpBodyRequest) => AtlassianHttpBodyResult | undefined;
+  readonly write: (request: AtlassianHttpBodyRequest) => AtlassianHttpBodyResult | undefined;
+}
 export function propertyTransportFixture(
   root: string | undefined,
   initiallyPresent = true,
-): {
-  readonly read: (request: AtlassianHttpBodyRequest) => AtlassianHttpBodyResult | undefined;
-  readonly write: (request: AtlassianHttpBodyRequest) => AtlassianHttpBodyResult | undefined;
-} {
+): PropertyTransportFixture {
   let present = initiallyPresent;
   let value: unknown = null;
   const selected =
     root === undefined ? undefined : `${root}/${encodeURIComponent(PROPERTY_FIXTURE_KEY)}`;
   return {
-    read(request) {
+    read(request: AtlassianHttpBodyRequest): AtlassianHttpBodyResult | undefined {
       if (root === undefined) return undefined;
       const path = new URL(request.url).pathname;
       if (path === root)
@@ -36,7 +37,7 @@ export function propertyTransportFixture(
       if (path !== selected) return undefined;
       return present ? response({ key: PROPERTY_FIXTURE_KEY, value }) : response({}, 404);
     },
-    write(request) {
+    write(request: AtlassianHttpBodyRequest): AtlassianHttpBodyResult | undefined {
       if (selected === undefined || new URL(request.url).pathname !== selected) return undefined;
       if (request.method === "PUT") {
         if (request.bodyJson === undefined) throw new TypeError("Missing native property body");

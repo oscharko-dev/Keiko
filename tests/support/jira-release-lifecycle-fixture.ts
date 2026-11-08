@@ -93,16 +93,98 @@ export const RELEASE_LIFECYCLE_FIXTURE_CASES = [
   },
 ] as const;
 
-/** Independent native HTTP fixtures for the primary-wire suite. Not registered until the owner
- * adds these four closed operations. All paths use a selected connection's context root. */
-export function releaseLifecycleTransportFixture(apiRoot: string): {
+interface ReleaseTransportFixture {
   readonly read: (request: AtlassianHttpBodyRequest) => AtlassianHttpBodyResult | undefined;
   readonly write: (request: AtlassianHttpBodyRequest) => AtlassianHttpBodyResult | undefined;
   readonly snapshot: () => {
     readonly versionIds: readonly string[];
     readonly componentIds: readonly string[];
   };
-} {
+}
+interface ReleaseVersion {
+  readonly id: string;
+  readonly projectId: number;
+  readonly name: string;
+}
+interface ReleaseComponent {
+  readonly id: string;
+  readonly project: string;
+  readonly name: string;
+  readonly description: string;
+  readonly archived: boolean;
+  readonly deleted: boolean;
+}
+interface ReleaseState {
+  readonly version: ReleaseVersion;
+  readonly target: ReleaseVersion;
+  readonly component: ReleaseComponent;
+  readonly replacement: ReleaseComponent;
+  versions: readonly ReleaseVersion[];
+  components: readonly ReleaseComponent[];
+}
+
+function releaseRead(
+  state: ReleaseState,
+  apiRoot: string,
+  request: AtlassianHttpBodyRequest,
+): AtlassianHttpBodyResult | undefined {
+  const { pathname } = new URL(request.url);
+  const bodies = new Map<string, unknown>([
+    ["myself", RELEASE_FIXTURE_ACTOR],
+    ["project/10000", RELEASE_FIXTURE_PROJECT],
+    ["project/10000/versions", state.versions],
+    ["project/10000/components", state.components],
+    ["version/81", state.version],
+    ["version/82", state.target],
+    ["component/71", state.component],
+    ["component/72", state.replacement],
+    [
+      "field",
+      [{ id: "customfield_10001", schema: { type: "array", items: "version", customId: 10001 } }],
+    ],
+  ]);
+  const key = pathname.startsWith(`${apiRoot}/`) ? pathname.slice(apiRoot.length + 1) : undefined;
+  return key !== undefined && bodies.has(key) ? response(bodies.get(key)) : undefined;
+}
+
+function releaseWrite(
+  state: ReleaseState,
+  apiRoot: string,
+  request: AtlassianHttpBodyRequest,
+): AtlassianHttpBodyResult | undefined {
+  const url = new URL(request.url);
+  const { version, target } = state;
+  if (url.pathname === `${apiRoot}/component/71`) {
+    expect(request.method).toBe("DELETE");
+    expect(url.search).toBe("?moveIssuesTo=72");
+    expect(request.bodyJson).toBeUndefined();
+    state.components = [state.replacement];
+  } else if (url.pathname === `${apiRoot}/version/81/mergeto/82`) {
+    expect(request.method).toBe("PUT");
+    expect(url.search).toBe("");
+    expect(request.bodyJson).toBeUndefined();
+    state.versions = [target];
+  } else if (url.pathname === `${apiRoot}/version/81/move`) {
+    expect(request.method).toBe("POST");
+    expect(url.search).toBe("");
+    expect(request.bodyJson).toBe(JSON.stringify({ after: `${url.origin}${apiRoot}/version/82` }));
+    state.versions = [target, version];
+  } else if (url.pathname === `${apiRoot}/version/81/removeAndSwap`) {
+    expect(request.method).toBe("POST");
+    expect(url.search).toBe("");
+    expect(request.bodyJson).toBe(
+      JSON.stringify({
+        moveFixIssuesTo: 82,
+        moveAffectedIssuesTo: null,
+        customFieldReplacementList: [{ customFieldId: 10001, moveTo: 82 }],
+      }),
+    );
+    state.versions = [target];
+  } else return undefined;
+  return response(undefined, 204);
+}
+
+function releaseState(): ReleaseState {
   const version = { id: "81", projectId: 10000, ...RELEASE_FIXTURE_VERSION };
   const target = {
     id: "82",
@@ -119,61 +201,26 @@ export function releaseLifecycleTransportFixture(apiRoot: string): {
     deleted: false,
   };
   const replacement = { ...component, id: "72", name: "Retained component" };
-  let versions = [version, target];
-  let components = [component, replacement];
+  return {
+    version,
+    target,
+    component,
+    replacement,
+    versions: [version, target],
+    components: [component, replacement],
+  };
+}
+
+/** Independent native HTTP fixtures for the primary-wire suite. Not registered until the owner
+ * adds these four closed operations. All paths use a selected connection's context root. */
+export function releaseLifecycleTransportFixture(apiRoot: string): ReleaseTransportFixture {
+  const state = releaseState();
   return {
     snapshot: () => ({
-      versionIds: versions.map((item) => item.id),
-      componentIds: components.map((item) => item.id),
+      versionIds: state.versions.map((item) => item.id),
+      componentIds: state.components.map((item) => item.id),
     }),
-    read(request) {
-      const url = new URL(request.url);
-      if (url.pathname === `${apiRoot}/myself`) return response(RELEASE_FIXTURE_ACTOR);
-      if (url.pathname === `${apiRoot}/project/10000`) return response(RELEASE_FIXTURE_PROJECT);
-      if (url.pathname === `${apiRoot}/project/10000/versions`) return response(versions);
-      if (url.pathname === `${apiRoot}/project/10000/components`) return response(components);
-      if (url.pathname === `${apiRoot}/version/81`) return response(version);
-      if (url.pathname === `${apiRoot}/version/82`) return response(target);
-      if (url.pathname === `${apiRoot}/component/71`) return response(component);
-      if (url.pathname === `${apiRoot}/component/72`) return response(replacement);
-      if (url.pathname === `${apiRoot}/field`)
-        return response([
-          { id: "customfield_10001", schema: { type: "array", items: "version", customId: 10001 } },
-        ]);
-      return undefined;
-    },
-    write(request) {
-      const url = new URL(request.url);
-      if (url.pathname === `${apiRoot}/component/71`) {
-        expect(request.method).toBe("DELETE");
-        expect(url.search).toBe("?moveIssuesTo=72");
-        expect(request.bodyJson).toBeUndefined();
-        components = [replacement];
-      } else if (url.pathname === `${apiRoot}/version/81/mergeto/82`) {
-        expect(request.method).toBe("PUT");
-        expect(url.search).toBe("");
-        expect(request.bodyJson).toBeUndefined();
-        versions = [target];
-      } else if (url.pathname === `${apiRoot}/version/81/move`) {
-        expect(request.method).toBe("POST");
-        expect(url.search).toBe("");
-        expect(request.bodyJson).toBe(
-          JSON.stringify({ after: `${url.origin}${apiRoot}/version/82` }),
-        );
-        versions = [target, version];
-      } else if (url.pathname === `${apiRoot}/version/81/removeAndSwap`) {
-        expect(request.method).toBe("POST");
-        expect(url.search).toBe("");
-        expect(request.bodyJson).toBe(
-          JSON.stringify({
-            moveFixIssuesTo: 82,
-            moveAffectedIssuesTo: null,
-            customFieldReplacementList: [{ customFieldId: 10001, moveTo: 82 }],
-          }),
-        );
-        versions = [target];
-      } else return undefined;
-      return response(undefined, 204);
-    },
+    read: (request) => releaseRead(state, apiRoot, request),
+    write: (request) => releaseWrite(state, apiRoot, request),
   };
 }

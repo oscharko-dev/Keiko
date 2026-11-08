@@ -10,7 +10,45 @@ export const EMAIL_TEMPLATE_ENTRIES = [
 export function emailTemplateHash(bytes: Uint8Array | string): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
-export function emailTemplateFixture() {
+// Mapped alias, not an interface: the value is passed as JSON tool arguments and an interface
+// has no implicit index signature.
+export type EmailTemplateExpectedFile = Readonly<{
+  name: string;
+  sizeBytes: number;
+  sha256: string;
+}>;
+export interface EmailTemplateFixture {
+  readonly bytes: ReturnType<typeof zipTextEntries>;
+  readonly pack: {
+    readonly archiveBytes: number;
+    readonly archiveSha256: string;
+    readonly manifestSha256: string;
+    readonly entries: readonly {
+      readonly path: string;
+      readonly sizeBytes: number;
+      readonly sha256: string;
+    }[];
+  };
+  readonly expectedFile: EmailTemplateExpectedFile;
+  readonly uploadArgs: {
+    readonly expectedActorKey: string;
+    readonly source: { readonly kind: string; readonly path: string };
+    readonly expectedFile: EmailTemplateExpectedFile;
+    readonly acceptStagedTemplateReplacement: boolean;
+  };
+  readonly applyArgs: {
+    readonly expectedActorKey: string;
+    readonly expectedActiveManifestSha256: string;
+    readonly acceptGlobalTemplateChange: boolean;
+    readonly acceptUnverifiedStagedPack: boolean;
+  };
+  readonly revertArgs: {
+    readonly expectedActorKey: string;
+    readonly expectedActiveManifestSha256: string;
+    readonly acceptGlobalTemplateChange: boolean;
+  };
+}
+export function emailTemplateFixture(): EmailTemplateFixture {
   const bytes = zipTextEntries(EMAIL_TEMPLATE_ENTRIES);
   const entries = EMAIL_TEMPLATE_ENTRIES.map(({ name, content }) => ({
     path: name,

@@ -42,7 +42,7 @@ export function reviewedPlatformTransportFixture(
   let writes = 0;
   return {
     snapshot,
-    async read(request) {
+    async read(request: AtlassianHttpBodyRequest): Promise<AtlassianHttpBodyResult | undefined> {
       const url = new URL(request.url);
       if (!url.pathname.startsWith(`${apiRoot}/`)) return undefined;
       const path = url.pathname.slice(apiRoot.length + 1) + url.search;
@@ -57,7 +57,7 @@ export function reviewedPlatformTransportFixture(
         ? response(result.items ?? result.body, result.status)
         : response({}, result.httpStatus ?? 503);
     },
-    async write(request) {
+    async write(request: AtlassianHttpBodyRequest): Promise<AtlassianHttpBodyResult | undefined> {
       const url = new URL(request.url);
       if (`${url.pathname}${url.search}` !== `${apiRoot}/${selected.path}`) return undefined;
       expect(request.method).toBe(selected.method);

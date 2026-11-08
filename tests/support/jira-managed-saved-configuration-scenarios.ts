@@ -198,6 +198,12 @@ export function nativeSavedConfigurationRead(
       columnConfig: state.columnConfig,
       columnLayoutItems: state.columns.map((id) => ({ id })),
     });
+  return nativeFilterRead(path, state);
+}
+function nativeFilterRead(
+  path: string,
+  state: SavedConfigurationRemoteState,
+): ReturnType<typeof response> | undefined {
   if (
     path === "/context/rest/api/2/filter/37/permission" ||
     path === "/context/rest/api/2/filter/38/permission"

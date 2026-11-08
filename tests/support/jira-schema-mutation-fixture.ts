@@ -3,6 +3,7 @@ import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/go
 import type { JiraSchemaMutation } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { AtlassianWriteHttpOutcome } from "../../packages/keiko-connectors/src/atlassian-write-http.js";
 import type { JiraMutationRequest } from "../../packages/keiko-connectors/src/jira-managed-mutation-metadata.js";
+import { settleSync } from "./jira-fixture-settle.js";
 import { asRecord } from "../../packages/keiko-connectors/src/atlassian-sync-classify.js";
 
 const ACTOR = "synthetic-actor";
@@ -184,195 +185,266 @@ export const SCHEMA_MUTATION_FIXTURE_CASES = [
   },
 ] as const satisfies readonly Scenario[];
 
-export function schemaMutationFixture() {
-  const actor = { key: ACTOR, name: "operator" };
-  const types = new Map<string, Record<string, unknown>>([
-    ["1", { ...SCHEMA_TYPE }],
-    ["2", { ...SCHEMA_ALTERNATIVE }],
-  ]);
-  const links = new Map<string, Record<string, unknown>>([
-    ["7", { ...SCHEMA_LINK }],
-    ["8", { ...SCHEMA_OTHER_LINK }],
-  ]);
-  const fields = new Map<string, Record<string, unknown>>([[SCHEMA_FIELD.id, { ...SCHEMA_FIELD }]]);
-  const terms: Record<string, unknown>[] = structuredClone(SCHEMA_TERMS);
-  const controls = {
-    lostAck: false,
-    denyReadback: false,
-    throwReadback: false,
-    wrongReadback: false,
-    absentAckId: false,
-    preexistingAckId: false,
-    malformed2xx: false,
-    permissionDenied: false,
-    incompatibleAlternative: false,
-    partialFieldDeletion: false,
-    omitDescription: false,
-    status: 200,
+interface SchemaControls {
+  lostAck: boolean;
+  denyReadback: boolean;
+  throwReadback: boolean;
+  wrongReadback: boolean;
+  absentAckId: boolean;
+  preexistingAckId: boolean;
+  malformed2xx: boolean;
+  permissionDenied: boolean;
+  incompatibleAlternative: boolean;
+  partialFieldDeletion: boolean;
+  omitDescription: boolean;
+  status: number;
+}
+interface SchemaCall {
+  path: string;
+  method: string;
+  body: unknown;
+  expect: unknown;
+}
+interface SchemaState {
+  readonly actor: { key: string; name: string };
+  readonly types: Map<string, Record<string, unknown>>;
+  readonly links: Map<string, Record<string, unknown>>;
+  readonly fields: Map<string, Record<string, unknown>>;
+  readonly terms: Record<string, unknown>[];
+  readonly controls: SchemaControls;
+  readonly calls: SchemaCall[];
+  wrote: boolean;
+}
+function schemaState(): SchemaState {
+  return {
+    actor: { key: ACTOR, name: "operator" },
+    types: new Map<string, Record<string, unknown>>([
+      ["1", { ...SCHEMA_TYPE }],
+      ["2", { ...SCHEMA_ALTERNATIVE }],
+    ]),
+    links: new Map<string, Record<string, unknown>>([
+      ["7", { ...SCHEMA_LINK }],
+      ["8", { ...SCHEMA_OTHER_LINK }],
+    ]),
+    fields: new Map<string, Record<string, unknown>>([[SCHEMA_FIELD.id, { ...SCHEMA_FIELD }]]),
+    terms: structuredClone(SCHEMA_TERMS),
+    controls: {
+      lostAck: false,
+      denyReadback: false,
+      throwReadback: false,
+      wrongReadback: false,
+      absentAckId: false,
+      preexistingAckId: false,
+      malformed2xx: false,
+      permissionDenied: false,
+      incompatibleAlternative: false,
+      partialFieldDeletion: false,
+      omitDescription: false,
+      status: 200,
+    },
+    calls: [],
+    wrote: false,
   };
-  const calls: { path: string; method: string; body: unknown; expect: unknown }[] = [];
-  let wrote = false;
-  const ok = (body: Readonly<Record<string, unknown>>): AtlassianWriteHttpOutcome => ({
-    ok: true,
-    status: 200,
-    body: { ...body },
-  });
-  const array = (items: readonly unknown[]): AtlassianWriteHttpOutcome => ({
-    ok: true,
-    status: 200,
-    body: undefined,
-    items: structuredClone(items),
-  });
-  const missing = (): AtlassianWriteHttpOutcome => ({
-    ok: false,
-    reason: "not-found",
-    httpStatus: 404,
-  });
-  function typeRead(path: string): AtlassianWriteHttpOutcome | undefined {
-    if (path === "/issuetype") return array([...types.values()]);
-    if (path === "/issuetype/1/alternatives")
-      return array(controls.incompatibleAlternative ? [] : [SCHEMA_ALTERNATIVE]);
-    const match = /^\/issuetype\/(\d+)$/u.exec(path);
-    if (match === null) return undefined;
-    const item = types.get(match[1] ?? "");
-    if (item === undefined) return missing();
-    const body = { ...item };
-    if (controls.omitDescription) delete body.description;
-    if (wrote && controls.wrongReadback) body.name = "Concurrent type";
-    return ok(body);
-  }
-  function read(url: URL): AtlassianWriteHttpOutcome {
-    if (url.pathname === "/myself") return ok(actor);
-    if (url.pathname === "/project/10000")
-      return ok({ id: "10000", key: "SYN", name: "Synthetic" });
-    if (url.pathname === "/field")
-      return array([{ id: "summary", name: "Summary", custom: false }, ...fields.values()]);
-    if (url.pathname === "/terminology/entries") return array(terms);
-    const type = typeRead(url.pathname);
-    if (type !== undefined) return type;
-    if (url.pathname === "/issueLinkType") return ok({ issueLinkTypes: [...links.values()] });
-    const id = /^\/issueLinkType\/(\d+)$/u.exec(url.pathname)?.[1];
-    const link = id === undefined ? undefined : links.get(id);
-    if (link !== undefined)
-      return ok({
-        ...link,
-        ...(wrote && controls.wrongReadback ? { name: "Concurrent link" } : {}),
-      });
-    return missing();
-  }
-  function typeEffect(
-    url: URL,
-    method: string,
-    body: Record<string, unknown> | undefined,
-  ): Record<string, unknown> | undefined {
-    if (url.pathname === "/issuetype") {
-      assert.ok(body);
-      types.set(NEW_ID, {
-        id: NEW_ID,
-        name: body.name,
-        description: body.description,
-        subtask: body.type === "subtask",
-      });
-      return { id: controls.preexistingAckId ? "1" : NEW_ID };
-    }
-    const id = /^\/issuetype\/(\d+)$/u.exec(url.pathname)?.[1];
-    if (id === undefined) return undefined;
-    if (method === "DELETE") {
-      assert.ok(types.delete(id));
-      return {};
-    }
-    const current = types.get(id);
-    assert.ok(current);
+}
+function schemaOk(body: Readonly<Record<string, unknown>>): AtlassianWriteHttpOutcome {
+  return { ok: true, status: 200, body: { ...body } };
+}
+function schemaArray(items: readonly unknown[]): AtlassianWriteHttpOutcome {
+  return { ok: true, status: 200, body: undefined, items: structuredClone(items) };
+}
+function schemaMissing(): AtlassianWriteHttpOutcome {
+  return { ok: false, reason: "not-found", httpStatus: 404 };
+}
+function schemaTypeRead(state: SchemaState, path: string): AtlassianWriteHttpOutcome | undefined {
+  const { types, controls } = state;
+  if (path === "/issuetype") return schemaArray([...types.values()]);
+  if (path === "/issuetype/1/alternatives")
+    return schemaArray(controls.incompatibleAlternative ? [] : [SCHEMA_ALTERNATIVE]);
+  const match = /^\/issuetype\/(\d+)$/u.exec(path);
+  if (match === null) return undefined;
+  const item = types.get(match[1] ?? "");
+  if (item === undefined) return schemaMissing();
+  const body = { ...item };
+  if (controls.omitDescription) delete body.description;
+  if (state.wrote && controls.wrongReadback) body.name = "Concurrent type";
+  return schemaOk(body);
+}
+function schemaLinkRead(state: SchemaState, path: string): AtlassianWriteHttpOutcome {
+  const { links, controls } = state;
+  if (path === "/issueLinkType") return schemaOk({ issueLinkTypes: [...links.values()] });
+  const id = /^\/issueLinkType\/(\d+)$/u.exec(path)?.[1];
+  const link = id === undefined ? undefined : links.get(id);
+  if (link !== undefined)
+    return schemaOk({
+      ...link,
+      ...(state.wrote && controls.wrongReadback ? { name: "Concurrent link" } : {}),
+    });
+  return schemaMissing();
+}
+function schemaRead(state: SchemaState, url: URL): AtlassianWriteHttpOutcome {
+  if (url.pathname === "/myself") return schemaOk(state.actor);
+  if (url.pathname === "/project/10000")
+    return schemaOk({ id: "10000", key: "SYN", name: "Synthetic" });
+  if (url.pathname === "/field")
+    return schemaArray([
+      { id: "summary", name: "Summary", custom: false },
+      ...state.fields.values(),
+    ]);
+  if (url.pathname === "/terminology/entries") return schemaArray(state.terms);
+  return schemaTypeRead(state, url.pathname) ?? schemaLinkRead(state, url.pathname);
+}
+function schemaTypeEffect(
+  state: SchemaState,
+  url: URL,
+  method: string,
+  body: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  const { types, controls } = state;
+  if (url.pathname === "/issuetype") {
     assert.ok(body);
-    Object.assign(current, body);
+    types.set(NEW_ID, {
+      id: NEW_ID,
+      name: body.name,
+      description: body.description,
+      subtask: body.type === "subtask",
+    });
+    return { id: controls.preexistingAckId ? "1" : NEW_ID };
+  }
+  const id = /^\/issuetype\/(\d+)$/u.exec(url.pathname)?.[1];
+  if (id === undefined) return undefined;
+  if (method === "DELETE") {
+    assert.ok(types.delete(id));
     return {};
   }
-  function linkEffect(
-    url: URL,
-    method: string,
-    body: Record<string, unknown> | undefined,
-  ): Record<string, unknown> | undefined {
-    if (url.pathname === "/issueLinkType") {
-      assert.ok(body);
-      links.set(NEW_ID, { ...body, id: NEW_ID });
-      return { id: controls.preexistingAckId ? "7" : NEW_ID };
-    }
-    if (
-      url.pathname === "/issueLinkType/order" ||
-      /^\/issueLinkType\/\d+\/order$/u.test(url.pathname)
-    )
-      return {};
-    const id = /^\/issueLinkType\/(\d+)$/u.exec(url.pathname)?.[1];
-    if (id === undefined) return undefined;
-    if (method === "DELETE") {
-      assert.ok(links.delete(id));
-      return {};
-    }
-    const current = links.get(id);
-    assert.ok(current);
+  const current = types.get(id);
+  assert.ok(current);
+  assert.ok(body);
+  Object.assign(current, body);
+  return {};
+}
+function schemaLinkEffect(
+  state: SchemaState,
+  url: URL,
+  method: string,
+  body: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  const { links, controls } = state;
+  if (url.pathname === "/issueLinkType") {
     assert.ok(body);
-    Object.assign(current, body);
+    links.set(NEW_ID, { ...body, id: NEW_ID });
+    return { id: controls.preexistingAckId ? "7" : NEW_ID };
+  }
+  if (
+    url.pathname === "/issueLinkType/order" ||
+    /^\/issueLinkType\/\d+\/order$/u.test(url.pathname)
+  )
+    return {};
+  const id = /^\/issueLinkType\/(\d+)$/u.exec(url.pathname)?.[1];
+  if (id === undefined) return undefined;
+  if (method === "DELETE") {
+    assert.ok(links.delete(id));
     return {};
   }
-  function effect(url: URL, method: string, value: unknown): Record<string, unknown> {
-    const body = asRecord(value);
-    if (url.pathname === "/field") {
-      assert.ok(body);
-      fields.set(`customfield_${NEW_ID}`, {
-        id: `customfield_${NEW_ID}`,
-        name: body.name,
-        custom: true,
-      });
-      return { id: `customfield_${NEW_ID}` };
-    }
-    if (url.pathname === "/customFields") {
-      if (!controls.partialFieldDeletion)
-        for (const id of url.searchParams.getAll("ids")) fields.delete(id);
-      return { deletedCustomFields: [], notDeletedCustomFields: {} };
-    }
-    if (url.pathname === "/terminology/entries") {
-      assert.ok(Array.isArray(value));
-      for (const item of value) {
-        const entry = asRecord(item);
-        assert.ok(entry);
-        const prior = terms.find((term) => term.originalName === entry.originalName);
-        assert.ok(prior);
-        Object.assign(prior, entry, { isDefault: entry.newName === entry.originalName });
-      }
-      return {};
-    }
-    const type = typeEffect(url, method, body);
-    if (type !== undefined) return type;
-    const link = linkEffect(url, method, body);
-    if (link !== undefined) return link;
-    throw new TypeError(`Unexpected synthetic schema route ${method} ${url.pathname}`);
+  const current = links.get(id);
+  assert.ok(current);
+  assert.ok(body);
+  Object.assign(current, body);
+  return {};
+}
+function schemaFieldEffect(
+  state: SchemaState,
+  url: URL,
+  body: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (url.pathname === "/field") {
+    assert.ok(body);
+    state.fields.set(`customfield_${NEW_ID}`, {
+      id: `customfield_${NEW_ID}`,
+      name: body.name,
+      custom: true,
+    });
+    return { id: `customfield_${NEW_ID}` };
   }
-  function readback(url: URL): AtlassianWriteHttpOutcome {
-    if (wrote && controls.throwReadback) throw new TypeError("Synthetic schema readback defect");
-    if (wrote && controls.denyReadback)
-      return { ok: false, reason: "permission-denied", httpStatus: 403 };
-    return read(url);
+  if (url.pathname === "/customFields") {
+    if (!state.controls.partialFieldDeletion)
+      for (const id of url.searchParams.getAll("ids")) state.fields.delete(id);
+    return { deletedCustomFields: [], notDeletedCustomFields: {} };
   }
-  const request: JiraMutationRequest = async (path, method = "GET", body, expect = "json") => {
-    calls.push({ path, method, body: structuredClone(body), expect });
-    const url = new URL(path, "https://synthetic.invalid/");
-    if (method === "GET") return readback(url);
-    if (controls.permissionDenied)
-      return {
-        ok: false,
-        reason: "permission-denied",
-        httpStatus: 403,
-        remote: { messages: ["Synthetic refusal"] },
-      };
-    const acknowledgement = effect(url, method, body);
-    wrote = true;
-    if (controls.lostAck) return { ok: false, reason: "timeout" };
-    if (controls.malformed2xx) return { ok: false, reason: "malformed-payload", httpStatus: 201 };
+  return undefined;
+}
+function schemaTerminologyEffect(state: SchemaState, value: unknown): Record<string, unknown> {
+  assert.ok(Array.isArray(value));
+  for (const item of value) {
+    const entry = asRecord(item);
+    assert.ok(entry);
+    const prior = state.terms.find((term) => term.originalName === entry.originalName);
+    assert.ok(prior);
+    Object.assign(prior, entry, { isDefault: entry.newName === entry.originalName });
+  }
+  return {};
+}
+function schemaEffect(
+  state: SchemaState,
+  url: URL,
+  method: string,
+  value: unknown,
+): Record<string, unknown> {
+  const body = asRecord(value);
+  const field = schemaFieldEffect(state, url, body);
+  if (field !== undefined) return field;
+  if (url.pathname === "/terminology/entries") return schemaTerminologyEffect(state, value);
+  const type = schemaTypeEffect(state, url, method, body);
+  if (type !== undefined) return type;
+  const link = schemaLinkEffect(state, url, method, body);
+  if (link !== undefined) return link;
+  throw new TypeError(`Unexpected synthetic schema route ${method} ${url.pathname}`);
+}
+function schemaReadback(state: SchemaState, url: URL): AtlassianWriteHttpOutcome {
+  const { controls } = state;
+  if (state.wrote && controls.throwReadback)
+    throw new TypeError("Synthetic schema readback defect");
+  if (state.wrote && controls.denyReadback)
+    return { ok: false, reason: "permission-denied", httpStatus: 403 };
+  return schemaRead(state, url);
+}
+function schemaDispatch(state: SchemaState, call: SchemaCall): AtlassianWriteHttpOutcome {
+  const { path, method, body, expect } = call;
+  const { controls } = state;
+  const url = new URL(path, "https://synthetic.invalid/");
+  if (method === "GET") return schemaReadback(state, url);
+  if (controls.permissionDenied)
     return {
-      ok: true,
-      status: controls.status,
-      body: expect === "none" || controls.absentAckId ? undefined : acknowledgement,
+      ok: false,
+      reason: "permission-denied",
+      httpStatus: 403,
+      remote: { messages: ["Synthetic refusal"] },
     };
+  const acknowledgement = schemaEffect(state, url, method, body);
+  state.wrote = true;
+  if (controls.lostAck) return { ok: false, reason: "timeout" };
+  if (controls.malformed2xx) return { ok: false, reason: "malformed-payload", httpStatus: 201 };
+  return {
+    ok: true,
+    status: controls.status,
+    body: expect === "none" || controls.absentAckId ? undefined : acknowledgement,
   };
+}
+export function schemaMutationFixture(): {
+  readonly actor: { key: string; name: string };
+  readonly types: Map<string, Record<string, unknown>>;
+  readonly links: Map<string, Record<string, unknown>>;
+  readonly fields: Map<string, Record<string, unknown>>;
+  readonly terms: Record<string, unknown>[];
+  readonly controls: SchemaControls;
+  readonly calls: SchemaCall[];
+  readonly request: JiraMutationRequest;
+} {
+  const state = schemaState();
+  const { actor, types, links, fields, terms, controls, calls } = state;
+  const request: JiraMutationRequest = (path, method = "GET", body, expect = "json") =>
+    settleSync(() => {
+      calls.push({ path, method, body: structuredClone(body), expect });
+      return schemaDispatch(state, { path, method, body, expect });
+    });
   return { actor, types, links, fields, terms, controls, calls, request };
 }

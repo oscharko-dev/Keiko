@@ -87,12 +87,7 @@ interface NativeField {
   readonly showWhenEmpty?: boolean;
 }
 
-/** Synthetic native wire fixture. Assertions concern actual method/URL/body; there is no
- * fabricated HTTP-port expect field and no implementation-derived expected receipt. */
-export function screenConfigurationTransportFixture(
-  apiRoot: string,
-  selected: Case,
-): {
+interface ScreenTransportFixture {
   readonly read: (request: AtlassianHttpBodyRequest) => AtlassianHttpBodyResult | undefined;
   readonly write: (request: AtlassianHttpBodyRequest) => AtlassianHttpBodyResult | undefined;
   readonly snapshot: () => {
@@ -100,81 +95,110 @@ export function screenConfigurationTransportFixture(
     readonly tabIds: readonly string[];
     readonly writes: number;
   };
-} {
-  let fields: readonly NativeField[] = [
-    { id: "summary", name: "Summary", type: "system", showWhenEmpty: false },
-    { id: "description", name: "Description", type: "system" },
-  ];
-  let tabs: readonly { readonly id: number; readonly name: string }[] = [
-    { id: 21, name: "Fields" },
-    { id: 22, name: "Other" },
-  ];
-  const added = { id: "customfield_10001", name: "Review", type: "custom" };
-  let writes = 0;
-  function change(request: AtlassianHttpBodyRequest): void {
-    switch (selected.tool) {
-      case "jira.add-screen-tab-field":
-        expect(request.bodyJson).toBe(JSON.stringify({ fieldId: "customfield_10001" }));
-        fields = [...fields, added];
-        break;
-      case "jira.remove-screen-tab-field":
-        expect(request.bodyJson).toBeUndefined();
-        fields = fields.filter((field) => field.id !== "description");
-        break;
-      case "jira.move-screen-tab-field":
-        expect(request.bodyJson).toBe(JSON.stringify({ position: "Last" }));
-        fields = [...fields].reverse();
-        break;
-      case "jira.set-screen-field-show-when-empty":
-        expect(request.bodyJson).toBeUndefined();
-        fields = fields.map((field) =>
-          field.id === "summary" ? { ...field, showWhenEmpty: true } : field,
-        );
-        break;
-      case "jira.move-screen-tab":
-        expect(request.bodyJson).toBeUndefined();
-        tabs = [...tabs].reverse();
-        break;
-      default:
-        expect(request.bodyJson).toBeUndefined();
-    }
+}
+interface ScreenState {
+  fields: readonly NativeField[];
+  tabs: readonly { readonly id: number; readonly name: string }[];
+  writes: number;
+}
+
+const ADDED_FIELD = { id: "customfield_10001", name: "Review", type: "custom" };
+
+function screenChange(state: ScreenState, selected: Case, request: AtlassianHttpBodyRequest): void {
+  switch (selected.tool) {
+    case "jira.add-screen-tab-field":
+      expect(request.bodyJson).toBe(JSON.stringify({ fieldId: "customfield_10001" }));
+      state.fields = [...state.fields, ADDED_FIELD];
+      break;
+    case "jira.remove-screen-tab-field":
+      expect(request.bodyJson).toBeUndefined();
+      state.fields = state.fields.filter((field) => field.id !== "description");
+      break;
+    case "jira.move-screen-tab-field":
+      expect(request.bodyJson).toBe(JSON.stringify({ position: "Last" }));
+      state.fields = [...state.fields].reverse();
+      break;
+    case "jira.set-screen-field-show-when-empty":
+      expect(request.bodyJson).toBeUndefined();
+      state.fields = state.fields.map((field) =>
+        field.id === "summary" ? { ...field, showWhenEmpty: true } : field,
+      );
+      break;
+    case "jira.move-screen-tab":
+      expect(request.bodyJson).toBeUndefined();
+      state.tabs = [...state.tabs].reverse();
+      break;
+    default:
+      expect(request.bodyJson).toBeUndefined();
   }
+}
+
+function screenRead(
+  state: ScreenState,
+  apiRoot: string,
+  request: AtlassianHttpBodyRequest,
+): AtlassianHttpBodyResult | undefined {
+  const url = new URL(request.url);
+  if (url.pathname === `${apiRoot}/screens`) {
+    expect(url.search).toBe("?startAt=0&maxResults=100&search=Review+screen");
+    return response({
+      startAt: 0,
+      maxResults: 100,
+      total: 1,
+      isLast: true,
+      screens: [{ id: 11, name: "Review screen" }],
+    });
+  }
+  if (url.pathname === `${apiRoot}/screens/11/tabs`) return response(state.tabs);
+  if (url.pathname === `${apiRoot}/screens/11/tabs/21/fields`) return response(state.fields);
+  if (
+    url.pathname === `${apiRoot}/screens/11/availableFields` ||
+    url.pathname === `${apiRoot}/field`
+  )
+    return response([ADDED_FIELD]);
+  return undefined;
+}
+
+function screenWrite(
+  state: ScreenState,
+  apiRoot: string,
+  selected: Case,
+  request: AtlassianHttpBodyRequest,
+): AtlassianHttpBodyResult | undefined {
+  const url = new URL(request.url);
+  if (url.pathname !== `${apiRoot}${selected.path}`) return undefined;
+  expect(request.method).toBe(selected.method);
+  expect(url.search).toBe("");
+  state.writes++;
+  expect(state.writes).toBe(1);
+  screenChange(state, selected, request);
+  return response(undefined, 204);
+}
+
+/** Synthetic native wire fixture. Assertions concern actual method/URL/body; there is no
+ * fabricated HTTP-port expect field and no implementation-derived expected receipt. */
+export function screenConfigurationTransportFixture(
+  apiRoot: string,
+  selected: Case,
+): ScreenTransportFixture {
+  const state: ScreenState = {
+    fields: [
+      { id: "summary", name: "Summary", type: "system", showWhenEmpty: false },
+      { id: "description", name: "Description", type: "system" },
+    ],
+    tabs: [
+      { id: 21, name: "Fields" },
+      { id: 22, name: "Other" },
+    ],
+    writes: 0,
+  };
   return {
     snapshot: () => ({
-      fieldIds: fields.map((field) => field.id),
-      tabIds: tabs.map((tab) => String(tab.id)),
-      writes,
+      fieldIds: state.fields.map((field) => field.id),
+      tabIds: state.tabs.map((tab) => String(tab.id)),
+      writes: state.writes,
     }),
-    read(request) {
-      const url = new URL(request.url);
-      if (url.pathname === `${apiRoot}/screens`) {
-        expect(url.search).toBe("?startAt=0&maxResults=100&search=Review+screen");
-        return response({
-          startAt: 0,
-          maxResults: 100,
-          total: 1,
-          isLast: true,
-          screens: [{ id: 11, name: "Review screen" }],
-        });
-      }
-      if (url.pathname === `${apiRoot}/screens/11/tabs`) return response(tabs);
-      if (url.pathname === `${apiRoot}/screens/11/tabs/21/fields`) return response(fields);
-      if (
-        url.pathname === `${apiRoot}/screens/11/availableFields` ||
-        url.pathname === `${apiRoot}/field`
-      )
-        return response([added]);
-      return undefined;
-    },
-    write(request) {
-      const url = new URL(request.url);
-      if (url.pathname !== `${apiRoot}${selected.path}`) return undefined;
-      expect(request.method).toBe(selected.method);
-      expect(url.search).toBe("");
-      writes++;
-      expect(writes).toBe(1);
-      change(request);
-      return response(undefined, 204);
-    },
+    read: (request) => screenRead(state, apiRoot, request),
+    write: (request) => screenWrite(state, apiRoot, selected, request),
   };
 }

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { AtlassianWriteHttpOutcome } from "../../packages/keiko-connectors/src/atlassian-write-http.js";
 import type { JiraMutationRequest } from "../../packages/keiko-connectors/src/jira-managed-mutation-metadata.js";
+import { settleSync } from "./jira-fixture-settle.js";
 import type {
   JiraIdentityMutation,
   JiraIdentityPorts,
@@ -137,108 +138,195 @@ export const IDENTITY_MUTATION_FIXTURE_CASES = [
   },
 ] as const satisfies readonly IdentityCase[];
 
-/** Synthetic native identity state, deliberately independent from the production plans. */
-export function identityMutationFixture(selected: IdentityCase) {
-  const actor = { key: ACTOR, name: "operator" };
-  const user: Record<string, unknown> = { ...IDENTITY_USER_REVIEW };
-  const owner: Record<string, unknown> = { ...OWNER, displayName: "New owner", active: true };
-  const created: Record<string, unknown> = {
-    key: "created-key",
-    name: "new-user",
-    displayName: "New user",
-    active: true,
+interface IdentityControls {
+  lostAck: boolean;
+  missingAckIdentity: boolean;
+  wrongUser: boolean;
+  denyReadback: boolean;
+  throwReadback: boolean;
+  staleUser: boolean;
+  refused: boolean;
+  shadowDeletedUser: boolean;
+  wrongReadback: boolean;
+}
+interface IdentityState {
+  readonly selected: IdentityCase;
+  readonly actor: { key: string; name: string };
+  readonly user: Record<string, unknown>;
+  readonly owner: Record<string, unknown>;
+  readonly created: Record<string, unknown>;
+  readonly validation: Record<string, unknown>;
+  readonly calls: { path: string; method: string; body: unknown; expect: unknown }[];
+  readonly controls: IdentityControls;
+  effects: number;
+  deleted: boolean;
+  sessionInvalidated: boolean;
+  scheduled: boolean;
+}
+export interface IdentityMutationFixture {
+  readonly request: JiraMutationRequest;
+  readonly ports: JiraIdentityPorts;
+  readonly actor: IdentityState["actor"];
+  readonly user: Record<string, unknown>;
+  readonly owner: Record<string, unknown>;
+  readonly validation: Record<string, unknown>;
+  readonly created: Record<string, unknown>;
+  readonly calls: IdentityState["calls"];
+  readonly controls: IdentityControls;
+  snapshot(): {
+    effects: number;
+    user: Record<string, unknown>;
+    deleted: boolean;
+    sessionInvalidated: boolean;
+    scheduled: boolean;
   };
-  const validation: Record<string, unknown> = {
-    userKey: "target-user",
-    userName: "Target User",
-    deleted: false,
-    success: true,
-    businessLogicValidationFailed: false,
-    operations: [...IDENTITY_OPERATIONS],
-    errors: {},
-    warnings: {},
-  };
-  const calls: { path: string; method: string; body: unknown; expect: unknown }[] = [];
-  const controls = {
-    lostAck: false,
-    missingAckIdentity: false,
-    wrongUser: false,
-    denyReadback: false,
-    throwReadback: false,
-    staleUser: false,
-    refused: false,
-    shadowDeletedUser: false,
-    wrongReadback: false,
-  };
-  let effects = 0;
-  let deleted = false;
-  let sessionInvalidated = false;
-  let scheduled = false;
-  const ok = (body: Record<string, unknown>): AtlassianWriteHttpOutcome => ({
-    ok: true,
-    status: 200,
-    body: structuredClone(body),
+}
+
+function identityOk(body: Record<string, unknown>): AtlassianWriteHttpOutcome {
+  return { ok: true, status: 200, body: structuredClone(body) };
+}
+
+function identityAnonymizationRead(state: IdentityState, url: URL): AtlassianWriteHttpOutcome {
+  assert.equal(url.searchParams.get("userKey"), "target-user");
+  if (url.pathname.endsWith("/rerun")) {
+    assert.equal(url.searchParams.get("oldUserKey"), "before-key");
+    assert.equal(url.searchParams.get("oldUserName"), "Before User");
+  }
+  return identityOk(state.validation);
+}
+
+function identityDirectoryUser(
+  state: IdentityState,
+  key: string | null,
+  name: string | null,
+): AtlassianWriteHttpOutcome | undefined {
+  const { owner, created } = state;
+  if (key === owner.key || name === owner.name) return identityOk(owner);
+  if (key === created.key || name === created.name) return identityOk(created);
+  return undefined;
+}
+
+function identityReviewedUser(state: IdentityState): AtlassianWriteHttpOutcome {
+  const { controls, user } = state;
+  if (state.deleted && !controls.shadowDeletedUser)
+    return { ok: false, reason: "not-found", httpStatus: 404 };
+  return identityOk({
+    ...user,
+    ...(controls.wrongUser || (state.deleted && controls.shadowDeletedUser)
+      ? { key: "shadow-key" }
+      : {}),
+    ...(controls.staleUser ? { displayName: "Concurrent user" } : {}),
   });
-  function read(path: string): AtlassianWriteHttpOutcome {
-    if (effects > 0 && controls.throwReadback)
-      throw new TypeError("Synthetic identity readback fault");
-    if (effects > 0 && controls.denyReadback)
-      return { ok: false, reason: "permission-denied", httpStatus: 403 };
-    if (path === "myself") return ok(actor);
-    const url = new URL(path, "https://fixture.invalid/");
-    if (url.pathname.startsWith("/user/anonymization")) {
-      assert.equal(url.searchParams.get("userKey"), "target-user");
-      if (url.pathname.endsWith("/rerun")) {
-        assert.equal(url.searchParams.get("oldUserKey"), "before-key");
-        assert.equal(url.searchParams.get("oldUserName"), "Before User");
-      }
-      return ok(validation);
-    }
-    assert.equal(url.pathname, "/user");
-    const key = url.searchParams.get("key");
-    const name = url.searchParams.get("username");
-    if (key === owner.key || name === owner.name) return ok(owner);
-    if (key === created.key || name === created.name) return ok(created);
-    assert.ok(key === IDENTITY_USER_REVIEW.key || name === IDENTITY_USER_REVIEW.name);
-    if (deleted && !controls.shadowDeletedUser)
-      return { ok: false, reason: "not-found", httpStatus: 404 };
-    return ok({
-      ...user,
-      ...(controls.wrongUser || (deleted && controls.shadowDeletedUser)
-        ? { key: "shadow-key" }
-        : {}),
-      ...(controls.staleUser ? { displayName: "Concurrent user" } : {}),
-    });
-  }
-  function apply(body: Parameters<JiraMutationRequest>[2]): void {
-    if (selected.name === "jira.delete-user") deleted = true;
-    if (selected.name === "jira.invalidate-user-session") sessionInvalidated = true;
-    if (
-      selected.name === "jira.schedule-user-anonymization" ||
-      selected.name === "jira.rerun-user-anonymization"
-    )
-      scheduled = true;
-    if (selected.name === "jira.update-user" && !controls.wrongReadback) Object.assign(user, body);
-  }
-  const request: JiraMutationRequest = async (path, method = "GET", body, expect = "json") => {
-    calls.push({ path, method, body: structuredClone(body), expect });
-    if (method === "GET") return read(path);
-    assert.equal(path, selected.path);
-    assert.equal(method, selected.method);
-    assert.deepEqual(body, selected.body);
-    assert.equal(expect, selected.name === "jira.create-user" ? "json" : "none");
-    if (controls.refused) return { ok: false, reason: "permission-denied", httpStatus: 403 };
-    assert.equal(++effects, 1);
-    apply(body);
-    if (controls.lostAck) return { ok: false, reason: "timeout" };
-    if (selected.name === "jira.create-user")
-      return {
-        ok: true,
-        status: 201,
-        body: controls.missingAckIdentity ? {} : { key: created.key, name: created.name },
-      };
-    return { ok: true, status: scheduled ? 202 : 204, body: undefined };
+}
+
+function identityUserRead(state: IdentityState, url: URL): AtlassianWriteHttpOutcome {
+  assert.equal(url.pathname, "/user");
+  const key = url.searchParams.get("key");
+  const name = url.searchParams.get("username");
+  const known = identityDirectoryUser(state, key, name);
+  if (known !== undefined) return known;
+  assert.ok(key === IDENTITY_USER_REVIEW.key || name === IDENTITY_USER_REVIEW.name);
+  return identityReviewedUser(state);
+}
+
+function identityReadbackFault(state: IdentityState): AtlassianWriteHttpOutcome | undefined {
+  if (state.effects === 0) return undefined;
+  if (state.controls.throwReadback) throw new TypeError("Synthetic identity readback fault");
+  if (state.controls.denyReadback)
+    return { ok: false, reason: "permission-denied", httpStatus: 403 };
+  return undefined;
+}
+
+function identityRead(state: IdentityState, path: string): AtlassianWriteHttpOutcome {
+  const fault = identityReadbackFault(state);
+  if (fault !== undefined) return fault;
+  if (path === "myself") return identityOk(state.actor);
+  const url = new URL(path, "https://fixture.invalid/");
+  return url.pathname.startsWith("/user/anonymization")
+    ? identityAnonymizationRead(state, url)
+    : identityUserRead(state, url);
+}
+
+function applyIdentityEffect(state: IdentityState, body: Parameters<JiraMutationRequest>[2]): void {
+  const { name } = state.selected;
+  if (name === "jira.delete-user") state.deleted = true;
+  if (name === "jira.invalidate-user-session") state.sessionInvalidated = true;
+  if (name === "jira.schedule-user-anonymization" || name === "jira.rerun-user-anonymization")
+    state.scheduled = true;
+  if (name === "jira.update-user" && !state.controls.wrongReadback) Object.assign(state.user, body);
+}
+
+function identityEffect(
+  state: IdentityState,
+  path: string,
+  method: string,
+  body: Parameters<JiraMutationRequest>[2],
+  expect: unknown,
+): AtlassianWriteHttpOutcome {
+  const { selected, controls, created } = state;
+  assert.equal(path, selected.path);
+  assert.equal(method, selected.method);
+  assert.deepEqual(body, selected.body);
+  assert.equal(expect, selected.name === "jira.create-user" ? "json" : "none");
+  if (controls.refused) return { ok: false, reason: "permission-denied", httpStatus: 403 };
+  assert.equal(++state.effects, 1);
+  applyIdentityEffect(state, body);
+  if (controls.lostAck) return { ok: false, reason: "timeout" };
+  if (selected.name === "jira.create-user")
+    return {
+      ok: true,
+      status: 201,
+      body: controls.missingAckIdentity ? {} : { key: created.key, name: created.name },
+    };
+  return { ok: true, status: state.scheduled ? 202 : 204, body: undefined };
+}
+
+function identityState(selected: IdentityCase): IdentityState {
+  return {
+    selected,
+    actor: { key: ACTOR, name: "operator" },
+    user: { ...IDENTITY_USER_REVIEW },
+    owner: { ...OWNER, displayName: "New owner", active: true },
+    created: { key: "created-key", name: "new-user", displayName: "New user", active: true },
+    validation: {
+      userKey: "target-user",
+      userName: "Target User",
+      deleted: false,
+      success: true,
+      businessLogicValidationFailed: false,
+      operations: [...IDENTITY_OPERATIONS],
+      errors: {},
+      warnings: {},
+    },
+    calls: [],
+    controls: {
+      lostAck: false,
+      missingAckIdentity: false,
+      wrongUser: false,
+      denyReadback: false,
+      throwReadback: false,
+      staleUser: false,
+      refused: false,
+      shadowDeletedUser: false,
+      wrongReadback: false,
+    },
+    effects: 0,
+    deleted: false,
+    sessionInvalidated: false,
+    scheduled: false,
   };
+}
+
+/** Synthetic native identity state, deliberately independent from the production plans. */
+export function identityMutationFixture(selected: IdentityCase): IdentityMutationFixture {
+  const state = identityState(selected);
+  const request: JiraMutationRequest = (path, method = "GET", body, expect = "json") =>
+    settleSync(() => {
+      state.calls.push({ path, method, body: structuredClone(body), expect });
+      return method === "GET"
+        ? identityRead(state, path)
+        : identityEffect(state, path, method, body, expect);
+    });
   const ports: JiraIdentityPorts = {
     user: (method, key, body) =>
       request(
@@ -251,19 +339,19 @@ export function identityMutationFixture(selected: IdentityCase) {
   return {
     request,
     ports,
-    actor,
-    user,
-    owner,
-    validation,
-    created,
-    calls,
-    controls,
+    actor: state.actor,
+    user: state.user,
+    owner: state.owner,
+    validation: state.validation,
+    created: state.created,
+    calls: state.calls,
+    controls: state.controls,
     snapshot: () => ({
-      effects,
-      user: structuredClone(user),
-      deleted,
-      sessionInvalidated,
-      scheduled,
+      effects: state.effects,
+      user: structuredClone(state.user),
+      deleted: state.deleted,
+      sessionInvalidated: state.sessionInvalidated,
+      scheduled: state.scheduled,
     }),
   };
 }

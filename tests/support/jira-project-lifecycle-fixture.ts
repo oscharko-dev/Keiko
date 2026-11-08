@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { settleSync } from "./jira-fixture-settle.js";
 import { readbackFault, reviewedWriteRefusal } from "./jira-fixture-readback.js";
+import type { AtlassianWriteHttpOutcome } from "../../packages/keiko-connectors/src/atlassian-write-http.js";
 import type { JiraMutationRequest } from "../../packages/keiko-connectors/src/jira-managed-mutation-metadata.js";
 import type { JiraProjectLifecyclePorts } from "../../packages/keiko-connectors/src/jira-project-lifecycle-ports.js";
 import type {
@@ -121,109 +123,153 @@ export const PROJECT_LIFECYCLE_FIXTURE_CASES = [
   },
 ] as const satisfies readonly ProjectCase[];
 
-export function projectLifecycleFixture(selected: ProjectCase) {
-  const actor = { key: "synthetic-actor", name: "operator" };
-  const project: Record<string, unknown> = {
-    ...PROJECT_LIFECYCLE_REVIEW,
-    archived: selected.name === "jira.restore-project",
-  };
-  const permission = new Map<string, Record<string, unknown>>([
-    ["7", structuredClone(PROJECT_PERMISSION_REVIEW)],
-    ["8", structuredClone(PROJECT_PERMISSION_TARGET)],
-  ]);
-  const priority = new Map<string, Record<string, unknown>>([
-    ["9", structuredClone(PROJECT_PRIORITY_REVIEW)],
-    ["10", structuredClone(PROJECT_PRIORITY_TARGET)],
-    ["1", { ...PROJECT_PRIORITY_REVIEW, id: "1", defaultScheme: true }],
-  ]);
-  const controls = {
-    lostAck: false,
-    reject: false,
-    denyReadback: false,
-    missingReadback: false,
-    throwReadback: false,
-    actorChanged: false,
-    wrongAssociation: false,
-    inaccessibleType: false,
-  };
-  const calls: { path: string; method: string; body: unknown; expect: unknown }[] = [];
-  let effects = 0;
-  let permissionId = "7";
-  let priorityId = "9";
-  function read(
-    path: string,
-  ):
-    | { readonly ok: true; readonly status: 200; readonly body: Record<string, unknown> }
-    | { readonly ok: false; readonly reason: "permission-denied"; readonly httpStatus: 403 } {
-    if (path === "myself")
-      return {
-        ok: true,
-        status: 200,
-        body: {
-          ...actor,
-          key:
-            controls.actorChanged && calls.filter((item) => item.path === "myself").length > 1
-              ? "changed-actor"
-              : actor.key,
-        },
-      };
-    if (path === "project/10000") return { ok: true, status: 200, body: structuredClone(project) };
-    if (path === "project/type/business/accessible")
-      return controls.inaccessibleType
-        ? { ok: false, reason: "permission-denied", httpStatus: 403 }
-        : { ok: true, status: 200, body: { key: "business", formattedKey: "Business" } };
-    if (path === "project/10000/permissionscheme") {
-      const scheme = permission.get(controls.wrongAssociation ? "8" : permissionId);
-      assert.ok(scheme);
-      return { ok: true, status: 200, body: structuredClone(scheme) };
-    }
-    if (path === "project/10000/priorityscheme") {
-      const scheme = priority.get(controls.wrongAssociation ? "10" : priorityId);
-      assert.ok(scheme);
-      return { ok: true, status: 200, body: structuredClone(scheme) };
-    }
-    const parts = path.split("/");
-    const id = parts[1];
-    assert.ok(id);
-    if (parts[0] === "permissionscheme") {
-      const scheme = permission.get(id);
-      assert.ok(scheme);
-      return {
-        ok: true,
-        status: 200,
-        body:
-          parts[2] === "permission"
-            ? { permissions: structuredClone(scheme.permissions) }
-            : structuredClone(scheme),
-      };
-    }
-    assert.equal(parts[0], "priorityschemes");
-    const scheme = priority.get(id);
+interface ProjectControls {
+  lostAck: boolean;
+  reject: boolean;
+  denyReadback: boolean;
+  missingReadback: boolean;
+  throwReadback: boolean;
+  actorChanged: boolean;
+  wrongAssociation: boolean;
+  inaccessibleType: boolean;
+}
+interface ProjectCall {
+  path: string;
+  method: string;
+  body: unknown;
+  expect: unknown;
+}
+interface ProjectState {
+  readonly actor: { key: string; name: string };
+  readonly project: Record<string, unknown>;
+  readonly permission: Map<string, Record<string, unknown>>;
+  readonly priority: Map<string, Record<string, unknown>>;
+  readonly controls: ProjectControls;
+  readonly calls: ProjectCall[];
+  effects: number;
+  permissionId: string;
+  priorityId: string;
+}
+type ProjectReadOutcome =
+  | { readonly ok: true; readonly status: 200; readonly body: Record<string, unknown> }
+  | { readonly ok: false; readonly reason: "permission-denied"; readonly httpStatus: 403 };
+
+function projectSchemeRead(state: ProjectState, path: string): ProjectReadOutcome | undefined {
+  const { permission, priority, controls } = state;
+  if (path === "project/10000/permissionscheme") {
+    const scheme = permission.get(controls.wrongAssociation ? "8" : state.permissionId);
     assert.ok(scheme);
     return { ok: true, status: 200, body: structuredClone(scheme) };
   }
-  const request: JiraMutationRequest = async (path, method = "GET", body, expect) => {
-    calls.push({ path, method, body: structuredClone(body), expect });
-    const fault = readbackFault(controls, effects, path, "Synthetic project readback failure");
-    if (fault !== undefined) return fault;
-    if (method === "GET") return read(path);
-    const refusal = reviewedWriteRefusal(selected, controls, { path, method, body, expect });
-    if (refusal !== undefined) return refusal;
-    assert.equal(++effects, 1);
-    if (selected.name === "jira.archive-project") project.archived = true;
-    if (selected.name === "jira.restore-project") project.archived = false;
-    if (selected.name === "jira.update-project-type") project.projectTypeKey = "business";
-    if (selected.name === "jira.set-project-permission-scheme") permissionId = "8";
-    if (selected.name === "jira.set-project-priority-scheme") priorityId = "10";
-    if (selected.name === "jira.remove-project-priority-scheme") priorityId = "1";
-    if (controls.lostAck) return { ok: false, reason: "timeout" };
+  if (path === "project/10000/priorityscheme") {
+    const scheme = priority.get(controls.wrongAssociation ? "10" : state.priorityId);
+    assert.ok(scheme);
+    return { ok: true, status: 200, body: structuredClone(scheme) };
+  }
+  return undefined;
+}
+function projectSchemeById(state: ProjectState, path: string): ProjectReadOutcome {
+  const parts = path.split("/");
+  const id = parts[1];
+  assert.ok(id);
+  if (parts[0] === "permissionscheme") {
+    const scheme = state.permission.get(id);
+    assert.ok(scheme);
     return {
       ok: true,
-      status: selected.name === "jira.restore-project" ? 202 : 204,
-      body: undefined,
+      status: 200,
+      body:
+        parts[2] === "permission"
+          ? { permissions: structuredClone(scheme.permissions) }
+          : structuredClone(scheme),
     };
+  }
+  assert.equal(parts[0], "priorityschemes");
+  const scheme = state.priority.get(id);
+  assert.ok(scheme);
+  return { ok: true, status: 200, body: structuredClone(scheme) };
+}
+function projectRead(state: ProjectState, path: string): ProjectReadOutcome {
+  const { actor, project, controls, calls } = state;
+  if (path === "myself")
+    return {
+      ok: true,
+      status: 200,
+      body: {
+        ...actor,
+        key:
+          controls.actorChanged && calls.filter((item) => item.path === "myself").length > 1
+            ? "changed-actor"
+            : actor.key,
+      },
+    };
+  if (path === "project/10000") return { ok: true, status: 200, body: structuredClone(project) };
+  if (path === "project/type/business/accessible")
+    return controls.inaccessibleType
+      ? { ok: false, reason: "permission-denied", httpStatus: 403 }
+      : { ok: true, status: 200, body: { key: "business", formattedKey: "Business" } };
+  return projectSchemeRead(state, path) ?? projectSchemeById(state, path);
+}
+function applyProjectEffect(state: ProjectState, name: string): void {
+  if (name === "jira.archive-project") state.project.archived = true;
+  if (name === "jira.restore-project") state.project.archived = false;
+  if (name === "jira.update-project-type") state.project.projectTypeKey = "business";
+  if (name === "jira.set-project-permission-scheme") state.permissionId = "8";
+  if (name === "jira.set-project-priority-scheme") state.priorityId = "10";
+  if (name === "jira.remove-project-priority-scheme") state.priorityId = "1";
+}
+function projectDispatch(
+  state: ProjectState,
+  selected: ProjectCase,
+  write: ProjectCall,
+): AtlassianWriteHttpOutcome {
+  const { path, method, body, expect } = write;
+  const { controls } = state;
+  const fault = readbackFault(controls, state.effects, path, "Synthetic project readback failure");
+  if (fault !== undefined) return fault;
+  if (method === "GET") return projectRead(state, path);
+  const refusal = reviewedWriteRefusal(selected, controls, { path, method, body, expect });
+  if (refusal !== undefined) return refusal;
+  assert.equal(++state.effects, 1);
+  applyProjectEffect(state, selected.name);
+  if (controls.lostAck) return { ok: false, reason: "timeout" };
+  return {
+    ok: true,
+    status: selected.name === "jira.restore-project" ? 202 : 204,
+    body: undefined,
   };
-  const ports: JiraProjectLifecyclePorts = {
+}
+function projectState(selected: ProjectCase): ProjectState {
+  return {
+    actor: { key: "synthetic-actor", name: "operator" },
+    project: { ...PROJECT_LIFECYCLE_REVIEW, archived: selected.name === "jira.restore-project" },
+    permission: new Map<string, Record<string, unknown>>([
+      ["7", structuredClone(PROJECT_PERMISSION_REVIEW)],
+      ["8", structuredClone(PROJECT_PERMISSION_TARGET)],
+    ]),
+    priority: new Map<string, Record<string, unknown>>([
+      ["9", structuredClone(PROJECT_PRIORITY_REVIEW)],
+      ["10", structuredClone(PROJECT_PRIORITY_TARGET)],
+      ["1", { ...PROJECT_PRIORITY_REVIEW, id: "1", defaultScheme: true }],
+    ]),
+    controls: {
+      lostAck: false,
+      reject: false,
+      denyReadback: false,
+      missingReadback: false,
+      throwReadback: false,
+      actorChanged: false,
+      wrongAssociation: false,
+      inaccessibleType: false,
+    },
+    calls: [],
+    effects: 0,
+    permissionId: "7",
+    priorityId: "9",
+  };
+}
+function projectPorts(request: JiraMutationRequest): JiraProjectLifecyclePorts {
+  return {
     priority: {
       read: (id) => request(`project/${id}/priorityscheme`, "GET", undefined, "json"),
       assign: (id, scheme) =>
@@ -232,9 +278,30 @@ export function projectLifecycleFixture(selected: ProjectCase) {
         request(`project/${id}/priorityscheme/${scheme}`, "DELETE", undefined, "none"),
     },
   };
+}
+
+export function projectLifecycleFixture(selected: ProjectCase): {
+  readonly request: JiraMutationRequest;
+  readonly ports: JiraProjectLifecyclePorts;
+  readonly actor: { key: string; name: string };
+  readonly project: Record<string, unknown>;
+  readonly permission: Map<string, Record<string, unknown>>;
+  readonly priority: Map<string, Record<string, unknown>>;
+  readonly controls: ProjectControls;
+  readonly calls: ProjectCall[];
+  readonly snapshot: () => CatalogJsonObject;
+} {
+  const state = projectState(selected);
+  const { actor, project, permission, priority, controls, calls } = state;
+  const request: JiraMutationRequest = (path, method = "GET", body, expect) =>
+    settleSync(() => {
+      const write = { path, method, body: structuredClone(body), expect };
+      calls.push(write);
+      return projectDispatch(state, selected, { ...write, body });
+    });
   return {
     request,
-    ports,
+    ports: projectPorts(request),
     actor,
     project,
     permission,
@@ -242,10 +309,10 @@ export function projectLifecycleFixture(selected: ProjectCase) {
     controls,
     calls,
     snapshot: (): CatalogJsonObject => ({
-      effects,
+      effects: state.effects,
       archived: project.archived === true,
-      permissionId,
-      priorityId,
+      permissionId: state.permissionId,
+      priorityId: state.priorityId,
       projectTypeKey: typeof project.projectTypeKey === "string" ? project.projectTypeKey : null,
     }),
   };

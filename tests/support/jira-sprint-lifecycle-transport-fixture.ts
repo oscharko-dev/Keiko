@@ -40,14 +40,7 @@ function selectedReadPath(url: URL, platformRoot: string, agileRoot: string): st
     ? path
     : undefined;
 }
-/** Reuses the independent synthetic sprint state. This adapter asserts the actual serialized
- * native wire before handing that known literal body to the existing fixture; no JSON recast. */
-export function sprintLifecycleTransportFixture(
-  platformRoot: string,
-  agileRoot: string,
-  selected: SprintCase,
-  actorKey = "synthetic-actor",
-): {
+interface SprintTransportFixture {
   readonly read: (
     request: AtlassianHttpBodyRequest,
   ) => Promise<AtlassianHttpBodyResult | undefined>;
@@ -55,29 +48,46 @@ export function sprintLifecycleTransportFixture(
     request: AtlassianHttpBodyRequest,
   ) => Promise<AtlassianHttpBodyResult | undefined>;
   readonly snapshot: () => CatalogJsonObject;
-} {
+}
+type SprintFixture = ReturnType<typeof sprintLifecycleFixture>;
+type SprintOutcome = Awaited<ReturnType<SprintFixture["ports"]["requests"]["agile"]>>;
+
+function sprintResponse(result: SprintOutcome): AtlassianHttpBodyResult {
+  return result.ok
+    ? response(result.items ?? result.body, result.status)
+    : response({}, result.httpStatus ?? 503);
+}
+
+async function sprintRead(
+  fixture: SprintFixture,
+  request: AtlassianHttpBodyRequest,
+  roots: readonly [string, string],
+): Promise<AtlassianHttpBodyResult | undefined> {
+  expect(request.jiraExperimental).toBeUndefined();
+  const url = new URL(request.url);
+  const path = selectedReadPath(url, roots[0], roots[1]);
+  if (path === undefined) return undefined;
+  expect(url.search).toBe(path === "board/7/sprint" ? "?startAt=0&maxResults=100" : "");
+  return sprintResponse(
+    await fixture.ports.requests.agile(`${path}${url.search}`, "GET", undefined, "json"),
+  );
+}
+
+/** Reuses the independent synthetic sprint state. This adapter asserts the actual serialized
+ * native wire before handing that known literal body to the existing fixture; no JSON recast. */
+export function sprintLifecycleTransportFixture(
+  platformRoot: string,
+  agileRoot: string,
+  selected: SprintCase,
+  actorKey = "synthetic-actor",
+): SprintTransportFixture {
   const fixture = sprintLifecycleFixture();
   fixture.actor.key = actorKey;
   let writes = 0;
   return {
     snapshot: fixture.snapshot,
-    async read(request) {
-      expect(request.jiraExperimental).toBeUndefined();
-      const url = new URL(request.url);
-      const path = selectedReadPath(url, platformRoot, agileRoot);
-      if (path === undefined) return undefined;
-      expect(url.search).toBe(path === "board/7/sprint" ? "?startAt=0&maxResults=100" : "");
-      const result = await fixture.ports.requests.agile(
-        `${path}${url.search}`,
-        "GET",
-        undefined,
-        "json",
-      );
-      return result.ok
-        ? response(result.items ?? result.body, result.status)
-        : response({}, result.httpStatus ?? 503);
-    },
-    async write(request) {
+    read: (request) => sprintRead(fixture, request, [platformRoot, agileRoot]),
+    async write(request: AtlassianHttpBodyRequest): Promise<AtlassianHttpBodyResult | undefined> {
       const url = new URL(request.url);
       if (url.pathname !== `${agileRoot}/${selected.path}`) return undefined;
       expect(request.method).toBe(selected.method);
@@ -90,15 +100,9 @@ export function sprintLifecycleTransportFixture(
       const body = NATIVE_BODIES[selected.name];
       expect(request.bodyJson).toBe(body === undefined ? undefined : JSON.stringify(body));
       expect(++writes).toBe(1);
-      const result = await fixture.ports.requests.agile(
-        selected.path,
-        selected.method,
-        body,
-        "none",
+      return sprintResponse(
+        await fixture.ports.requests.agile(selected.path, selected.method, body, "none"),
       );
-      return result.ok
-        ? response(result.items ?? result.body, result.status)
-        : response({}, result.httpStatus ?? 503);
     },
   };
 }

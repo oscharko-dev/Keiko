@@ -2,6 +2,7 @@ import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/go
 import type { JiraMutationRequest } from "../../packages/keiko-connectors/src/jira-managed-mutation-metadata.js";
 import type { JiraPrivateIdentityPorts } from "../../packages/keiko-connectors/src/jira-private-identity-ports.js";
 import type { AtlassianWriteHttpOutcome } from "../../packages/keiko-connectors/src/atlassian-write-http.js";
+import { settleSync } from "./jira-fixture-settle.js";
 
 export const ANONYMIZATION_UNLOCK_PROGRESS = {
   executingNode: "native-owner-node",
@@ -50,8 +51,20 @@ export const ANONYMIZATION_UNLOCK_CASE = {
     anonymizationSubmittedTime: "2026-11-08T12:00:00.000+0000",
   },
 } as const;
+export interface AnonymizationUnlockFixture {
+  readonly request: JiraMutationRequest;
+  readonly ports: JiraPrivateIdentityPorts;
+  readonly reads: string[];
+  readonly effects: string[];
+  readonly progress: Record<string, unknown>;
+  readonly actor: Record<string, unknown>;
+  readonly args: CatalogJsonObject;
+  setOutcome(value: AtlassianWriteHttpOutcome): void;
+  onProgress(callback: (index: number) => void): void;
+}
+
 /** Human attestation is supplied only by the composing private port, never args or this task DTO. */
-export function anonymizationUnlockFixture() {
+export function anonymizationUnlockFixture(): AnonymizationUnlockFixture {
   let outcome: AtlassianWriteHttpOutcome = { ok: true, status: 204, body: undefined };
   let beforeProgress: ((index: number) => void) | undefined;
   let progressReads = 0;
@@ -59,7 +72,7 @@ export function anonymizationUnlockFixture() {
   const actor: Record<string, unknown> = { key: "native-actor", name: "Native Actor" };
   const reads: string[] = [];
   const effects: string[] = [];
-  const request: JiraMutationRequest = async (path, method) => {
+  const read = (path: string, method: string | undefined): AtlassianWriteHttpOutcome => {
     if (method !== "GET") throw new TypeError("Only private port may dispatch unlock");
     reads.push(path);
     if (path === "myself") return { ok: true, status: 200, body: { ...actor } };
@@ -68,17 +81,15 @@ export function anonymizationUnlockFixture() {
     beforeProgress?.(++progressReads);
     return { ok: true, status: 200, body: structuredClone(progress) };
   };
+  const request: JiraMutationRequest = (path, method) => settleSync(() => read(path, method));
   const ports: JiraPrivateIdentityPorts = {
-    perform: async () => {
-      throw new TypeError("No password operation");
-    },
-    session: async () => {
-      throw new TypeError("No session mutation");
-    },
-    unlock: async (expectedActorKey) => {
-      effects.push(expectedActorKey);
-      return outcome;
-    },
+    perform: () => Promise.reject(new TypeError("No password operation")),
+    session: () => Promise.reject(new TypeError("No session mutation")),
+    unlock: (expectedActorKey) =>
+      settleSync(() => {
+        effects.push(expectedActorKey);
+        return outcome;
+      }),
   };
   return {
     request,
@@ -88,10 +99,10 @@ export function anonymizationUnlockFixture() {
     progress,
     actor,
     args: structuredClone(ANONYMIZATION_UNLOCK_CASE.args) satisfies CatalogJsonObject,
-    setOutcome(value: AtlassianWriteHttpOutcome) {
+    setOutcome(value: AtlassianWriteHttpOutcome): void {
       outcome = value;
     },
-    onProgress(callback: (index: number) => void) {
+    onProgress(callback: (index: number) => void): void {
       beforeProgress = callback;
     },
   };

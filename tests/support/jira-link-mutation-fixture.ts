@@ -76,11 +76,7 @@ export const LINK_MUTATION_FIXTURE_CASES = [
   },
 ] as const;
 type LinkCase = (typeof LINK_MUTATION_FIXTURE_CASES)[number];
-/** Independent primary-wire fixture: fixed native target, exact bodies, and post-effect reads. */
-export function linkMutationTransportFixture(
-  apiRoot: string,
-  selected: LinkCase,
-): {
+interface LinkTransportFixture {
   readonly read: (request: AtlassianHttpBodyRequest) => AtlassianHttpBodyResult | undefined;
   readonly write: (request: AtlassianHttpBodyRequest) => AtlassianHttpBodyResult | undefined;
   readonly snapshot: () => {
@@ -88,98 +84,141 @@ export function linkMutationTransportFixture(
     readonly remotePresent: boolean;
     readonly remoteTitle: string;
   };
-} {
-  let issueLinkPresent = selected.tool === "jira.delete-issue-link";
-  let remotePresent = selected.tool !== "jira.upsert-remote-link";
-  let remoteTitle = VALUE.title;
-  const remote = () => ({
+}
+interface LinkState {
+  issueLinkPresent: boolean;
+  remotePresent: boolean;
+  remoteTitle: string;
+}
+interface LinkRemoteBody {
+  readonly id: number;
+  readonly globalId: string;
+  readonly object: {
+    readonly url: string;
+    readonly title: string;
+    readonly status: { readonly resolved: boolean };
+  };
+}
+
+function linkRemote(state: LinkState): LinkRemoteBody {
+  return {
     id: 72,
     globalId: VALUE.globalId,
-    object: { url: VALUE.url, title: remoteTitle, status: { resolved: false } },
+    object: { url: VALUE.url, title: state.remoteTitle, status: { resolved: false } },
+  };
+}
+
+function linkIssueRead(state: LinkState, pathname: string): AtlassianHttpBodyResult {
+  const inward =
+    pathname.endsWith(`/issue/${FIRST.id}`) || pathname.endsWith(`/issue/${FIRST.key}`);
+  const edges = state.issueLinkPresent
+    ? [
+        {
+          id: "71",
+          type: TYPE,
+          [inward ? "outwardIssue" : "inwardIssue"]: inward ? SECOND : FIRST,
+        },
+      ]
+    : [];
+  return response({
+    ...(inward ? FIRST : SECOND),
+    fields: { summary: "Synthetic issue", issuelinks: edges },
   });
+}
+
+function linkStaticRead(apiRoot: string, pathname: string): AtlassianHttpBodyResult | undefined {
+  if (pathname === `${apiRoot}/myself`) return response(ACTOR);
+  if (pathname === `${apiRoot}/issueLinkType/9`) return response(TYPE);
+  if (pathname === `${apiRoot}/issueLink/71`)
+    return response({ id: "71", type: TYPE, inwardIssue: FIRST, outwardIssue: SECOND });
+  return undefined;
+}
+
+function linkRead(
+  state: LinkState,
+  apiRoot: string,
+  request: AtlassianHttpBodyRequest,
+): AtlassianHttpBodyResult | undefined {
+  const { pathname } = new URL(request.url);
+  const fixed = linkStaticRead(apiRoot, pathname);
+  if (fixed !== undefined) return fixed;
+  const issuePaths = [FIRST.id, FIRST.key, SECOND.id, SECOND.key].map(
+    (selector) => `${apiRoot}/issue/${selector}`,
+  );
+  if (issuePaths.includes(pathname)) return linkIssueRead(state, pathname);
+  if (pathname === `${apiRoot}/issue/10001/remotelink`)
+    return response(state.remotePresent ? [linkRemote(state)] : []);
+  if (pathname === `${apiRoot}/issue/10001/remotelink/72`) return response(linkRemote(state));
+  return undefined;
+}
+
+function linkRemoteWrite(
+  state: LinkState,
+  selected: LinkCase,
+  request: AtlassianHttpBodyRequest,
+): AtlassianHttpBodyResult {
+  const upsert = selected.tool === "jira.upsert-remote-link";
+  state.remoteTitle = selected.tool === "jira.update-remote-link" ? "Updated link" : VALUE.title;
+  expect(JSON.parse(request.bodyJson ?? "null")).toEqual({
+    globalId: VALUE.globalId,
+    application: { type: null, name: null },
+    relationship: null,
+    object: {
+      url: VALUE.url,
+      title: state.remoteTitle,
+      summary: null,
+      icon: { url16x16: null, title: null },
+      status: { resolved: false, icon: { url16x16: null, title: null, link: null } },
+    },
+  });
+  state.remotePresent = true;
+  return response(upsert ? { id: 72 } : undefined, upsert ? 201 : 204);
+}
+
+function linkWrite(
+  state: LinkState,
+  apiRoot: string,
+  selected: LinkCase,
+  request: AtlassianHttpBodyRequest,
+): AtlassianHttpBodyResult | undefined {
+  const url = new URL(request.url);
+  if (url.pathname !== `${apiRoot}${selected.path}`) return undefined;
+  expect(request.method).toBe(selected.method);
+  expect(url.search).toBe(selected.query);
+  if (selected.tool === "jira.create-issue-link") {
+    expect(JSON.parse(request.bodyJson ?? "null")).toEqual({
+      type: { id: "9" },
+      inwardIssue: { id: "10001" },
+      outwardIssue: { id: "10002" },
+    });
+    state.issueLinkPresent = true;
+    return response(undefined, 201);
+  }
+  if (selected.tool === "jira.delete-issue-link") {
+    expect(request.bodyJson).toBeUndefined();
+    state.issueLinkPresent = false;
+    return response(undefined, 204);
+  }
+  if (selected.tool === "jira.upsert-remote-link" || selected.tool === "jira.update-remote-link")
+    return linkRemoteWrite(state, selected, request);
+  expect(request.bodyJson).toBeUndefined();
+  state.remotePresent = false;
+  return response(undefined, 204);
+}
+
+/** Independent primary-wire fixture: fixed native target, exact bodies, and post-effect reads. */
+export function linkMutationTransportFixture(
+  apiRoot: string,
+  selected: LinkCase,
+): LinkTransportFixture {
+  const state: LinkState = {
+    issueLinkPresent: selected.tool === "jira.delete-issue-link",
+    remotePresent: selected.tool !== "jira.upsert-remote-link",
+    remoteTitle: VALUE.title,
+  };
   return {
-    snapshot: () => ({ issueLinkPresent, remotePresent, remoteTitle }),
-    read(request) {
-      const url = new URL(request.url);
-      if (url.pathname === `${apiRoot}/myself`) return response(ACTOR);
-      if (url.pathname === `${apiRoot}/issueLinkType/9`) return response(TYPE);
-      if (url.pathname === `${apiRoot}/issueLink/71`)
-        return response({ id: "71", type: TYPE, inwardIssue: FIRST, outwardIssue: SECOND });
-      if (
-        [
-          `${apiRoot}/issue/${FIRST.id}`,
-          `${apiRoot}/issue/${FIRST.key}`,
-          `${apiRoot}/issue/${SECOND.id}`,
-          `${apiRoot}/issue/${SECOND.key}`,
-        ].includes(url.pathname)
-      ) {
-        const inward =
-          url.pathname.endsWith(`/issue/${FIRST.id}`) ||
-          url.pathname.endsWith(`/issue/${FIRST.key}`);
-        const edges = issueLinkPresent
-          ? [
-              {
-                id: "71",
-                type: TYPE,
-                [inward ? "outwardIssue" : "inwardIssue"]: inward ? SECOND : FIRST,
-              },
-            ]
-          : [];
-        return response({
-          ...(inward ? FIRST : SECOND),
-          fields: { summary: "Synthetic issue", issuelinks: edges },
-        });
-      }
-      if (url.pathname === `${apiRoot}/issue/10001/remotelink`)
-        return response(remotePresent ? [remote()] : []);
-      if (url.pathname === `${apiRoot}/issue/10001/remotelink/72`) return response(remote());
-      return undefined;
-    },
-    write(request) {
-      const url = new URL(request.url);
-      if (url.pathname !== `${apiRoot}${selected.path}`) return undefined;
-      expect(request.method).toBe(selected.method);
-      expect(url.search).toBe(selected.query);
-      if (selected.tool === "jira.create-issue-link") {
-        expect(JSON.parse(request.bodyJson ?? "null")).toEqual({
-          type: { id: "9" },
-          inwardIssue: { id: "10001" },
-          outwardIssue: { id: "10002" },
-        });
-        issueLinkPresent = true;
-        return response(undefined, 201);
-      }
-      if (selected.tool === "jira.delete-issue-link") {
-        expect(request.bodyJson).toBeUndefined();
-        issueLinkPresent = false;
-        return response(undefined, 204);
-      }
-      if (
-        selected.tool === "jira.upsert-remote-link" ||
-        selected.tool === "jira.update-remote-link"
-      ) {
-        remoteTitle = selected.tool === "jira.update-remote-link" ? "Updated link" : VALUE.title;
-        expect(JSON.parse(request.bodyJson ?? "null")).toEqual({
-          globalId: VALUE.globalId,
-          application: { type: null, name: null },
-          relationship: null,
-          object: {
-            url: VALUE.url,
-            title: remoteTitle,
-            summary: null,
-            icon: { url16x16: null, title: null },
-            status: { resolved: false, icon: { url16x16: null, title: null, link: null } },
-          },
-        });
-        remotePresent = true;
-        return response(
-          selected.tool === "jira.upsert-remote-link" ? { id: 72 } : undefined,
-          selected.tool === "jira.upsert-remote-link" ? 201 : 204,
-        );
-      }
-      expect(request.bodyJson).toBeUndefined();
-      remotePresent = false;
-      return response(undefined, 204);
-    },
+    snapshot: () => ({ ...state }),
+    read: (request) => linkRead(state, apiRoot, request),
+    write: (request) => linkWrite(state, apiRoot, selected, request),
   };
 }

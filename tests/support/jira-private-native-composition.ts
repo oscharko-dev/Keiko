@@ -1,3 +1,4 @@
+import { settleSync } from "./jira-fixture-settle.js";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -41,7 +42,10 @@ import {
   privateNativeCase,
 } from "./jira-private-native-cases.js";
 
-type ConnectedChat = { readonly store: JiraChatAttachmentDeps["store"]; readonly chatId: string };
+interface ConnectedChat {
+  readonly store: JiraChatAttachmentDeps["store"];
+  readonly chatId: string;
+}
 type CurrentBinding = Pick<JiraHumanInputBinding, "context" | "authority">;
 type PrivatePorts = Pick<JiraManagedConnection, "privateIdentity" | "avatars">;
 interface Controls {
@@ -96,7 +100,7 @@ function connectedFiles(connected: ConnectedChat | undefined): Files {
   return {
     deps,
     chatId,
-    close: () => {
+    close: (): void => {
       if (connected === undefined) store.close();
       rmSync(root, { recursive: true, force: true });
     },
@@ -146,15 +150,17 @@ async function seedSession(
     fixture.tool === "jira.logout" ||
     fixture.tool === "jira.release-websudo";
   if (sessionRequired && fixture.controls.sessionAvailable)
-    await fixture.state.sessions.withLease(scope, async (session) => {
-      session.establish(PRIVATE_NATIVE_COOKIE);
-      if (avatar !== undefined && !("upload" in avatar))
-        session.rememberTemporary({
-          actorKey: ACTOR.key,
-          target: avatar.target,
-          ...PRIVATE_NATIVE_TEMP,
-        });
-    });
+    await fixture.state.sessions.withLease(scope, (session) =>
+      settleSync(() => {
+        session.establish(PRIVATE_NATIVE_COOKIE);
+        if (avatar !== undefined && !("upload" in avatar))
+          session.rememberTemporary({
+            actorKey: ACTOR.key,
+            target: avatar.target,
+            ...PRIVATE_NATIVE_TEMP,
+          });
+      }),
+    );
 }
 function inputSelection(
   fixture: PrivateFixture,
@@ -175,18 +181,22 @@ function inputSelection(
   const ready = state.inputs.submit(pending.requestId, binding, pending.revision, values);
   return { requestId: ready.requestId, revision: ready.revision, binding };
 }
-function observedLegacyRelease(fixture: PrivateFixture): "10.3" | "10.4" | undefined {
-  const metadata = fixture.state.custody.getMetadata(fixture.state.binding.authRef);
-  if (
-    metadata?.deployment !== "data-center" ||
-    metadata.livePod?.verificationStatus !== "ok" ||
-    metadata.livePod.verificationRevision !== fixture.state.binding.verificationRevision ||
-    metadata.generation !== fixture.state.binding.authenticationGeneration
-  )
-    return undefined;
-  const version = metadata.livePod.compatibility?.versionNumbers;
+function releaseOfVersion(version: readonly number[] | undefined): "10.3" | "10.4" | undefined {
   if (version?.[0] !== 10) return undefined;
   return version[1] === 3 ? "10.3" : version[1] === 4 ? "10.4" : undefined;
+}
+function observedLegacyRelease(fixture: PrivateFixture): "10.3" | "10.4" | undefined {
+  const { binding, custody } = fixture.state;
+  const metadata = custody.getMetadata(binding.authRef);
+  if (
+    metadata?.deployment !== "data-center" ||
+    metadata.generation !== binding.authenticationGeneration
+  )
+    return undefined;
+  const pod = metadata.livePod;
+  if (pod?.verificationStatus !== "ok" || pod.verificationRevision !== binding.verificationRevision)
+    return undefined;
+  return releaseOfVersion(pod.compatibility?.versionNumbers);
 }
 function legacyCompatibility(tool: string): JiraDataCenterCompatibilityFacts | undefined {
   // Literal native fixture choices, independent of registry declarations or result projections.

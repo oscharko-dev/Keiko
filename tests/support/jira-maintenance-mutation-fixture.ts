@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { actorReadback } from "./jira-fixture-readback.js";
+import { settleSync } from "./jira-fixture-settle.js";
 import type { AtlassianWriteHttpOutcome } from "../../packages/keiko-connectors/src/atlassian-write-http.js";
 import { asRecord } from "../../packages/keiko-connectors/src/atlassian-sync-classify.js";
 import type { JiraMutationRequest } from "../../packages/keiko-connectors/src/jira-managed-mutation-metadata.js";
@@ -164,148 +165,239 @@ export const MAINTENANCE_MUTATION_FIXTURE_CASES = [
   },
 ] as const satisfies readonly MaintenanceCase[];
 
-export function maintenanceMutationFixture(selected: MaintenanceCase) {
-  const actor = { key: ACTOR, name: "operator" };
-  let nodes: unknown[] = [structuredClone(selected.args.expectedNode ?? MAINTENANCE_NODE_REVIEW)];
-  let cluster: unknown = structuredClone(
-    selected.args.expectedClusterState ?? MAINTENANCE_CLUSTER_REVIEW,
+interface MaintenanceControls {
+  lostAck: boolean;
+  denyReadback: boolean;
+  throwReadback: boolean;
+  actorChangesAfter: boolean;
+  actorChangesBefore: boolean;
+  reject: boolean;
+  noPriorReindex: boolean;
+  upgradeRunning: boolean;
+  noPriorUpgrade: boolean;
+  wrongIssue: boolean;
+  missingRequest: boolean;
+  wrongRequest: boolean;
+  ackIds: readonly unknown[];
+  malformedAck: boolean;
+}
+interface MaintenanceCall {
+  path: string;
+  method: string;
+  body: unknown;
+  expect: unknown;
+}
+interface MaintenanceState {
+  readonly selected: MaintenanceCase;
+  readonly actor: { key: string; name: string };
+  readonly calls: MaintenanceCall[];
+  readonly controls: MaintenanceControls;
+  nodes: unknown[];
+  cluster: unknown;
+  reindex: unknown;
+  upgrade: unknown;
+  snapshot: unknown;
+  effects: number;
+}
+export interface MaintenanceMutationFixture {
+  readonly request: JiraMutationRequest;
+  readonly calls: MaintenanceCall[];
+  readonly actor: { key: string; name: string };
+  readonly controls: MaintenanceControls;
+  setNodes(value: readonly unknown[]): void;
+  setCluster(value: unknown): void;
+  setReindex(value: unknown): void;
+  setUpgrade(value: unknown): void;
+  setSnapshot(value: unknown): void;
+  snapshot(): CatalogJsonObject;
+}
+const maintenanceOk = (body: Readonly<Record<string, unknown>>): AtlassianWriteHttpOutcome => ({
+  ok: true,
+  status: 200,
+  body,
+});
+const maintenanceRecord = (value: unknown): Readonly<Record<string, unknown>> => {
+  const raw = asRecord(value);
+  assert.ok(raw);
+  return raw;
+};
+function maintenanceActorRead(state: MaintenanceState): AtlassianWriteHttpOutcome {
+  const { controls } = state;
+  const count = state.calls.filter((call) => call.path === "myself").length;
+  return actorReadback(
+    state.actor,
+    "other-actor",
+    (state.effects > 0 && controls.actorChangesAfter) || (count > 1 && controls.actorChangesBefore),
   );
-  let reindex: unknown = {
-    type: "BACKGROUND",
-    currentProgress: 100,
-    success: true,
-    finishTime: "native-finished",
-  };
-  let upgrade: unknown = {
-    outcome: "SUCCESS",
-    duration: 0,
-    startTime: "native-start",
-    message: "",
-  };
-  let snapshot: unknown = { running: false };
-  let effects = 0;
-  const calls: { path: string; method: string; body: unknown; expect: unknown }[] = [];
-  const controls = {
-    lostAck: false,
-    denyReadback: false,
-    throwReadback: false,
-    actorChangesAfter: false,
-    actorChangesBefore: false,
-    reject: false,
-    noPriorReindex: false,
-    upgradeRunning: false,
-    noPriorUpgrade: false,
-    wrongIssue: false,
-    missingRequest: false,
-    wrongRequest: false,
-    ackIds: [7, "9223372036854775807"] as readonly unknown[],
-    malformedAck: false,
-  };
-  const ok = (body: Readonly<Record<string, unknown>>): AtlassianWriteHttpOutcome => ({
-    ok: true,
-    status: 200,
-    body,
+}
+function maintenanceUpgradeRead(state: MaintenanceState): AtlassianWriteHttpOutcome {
+  if (state.controls.upgradeRunning) return { ok: true, status: 303, body: undefined };
+  if (state.controls.noPriorUpgrade) return { ok: false, reason: "not-found", httpStatus: 404 };
+  return maintenanceOk(maintenanceRecord(state.upgrade));
+}
+function maintenanceIssueRead(
+  controls: MaintenanceControls,
+  path: string,
+): AtlassianWriteHttpOutcome {
+  const url = new URL(path, "https://synthetic.invalid/");
+  if (url.pathname === "/reindex/request/bulk") {
+    const ids = url.searchParams.getAll("requestId");
+    const items = controls.missingRequest
+      ? []
+      : ids.map((id) => ({
+          id: controls.wrongRequest ? "99" : id,
+          status: "COMPLETE",
+          type: "IMMEDIATE",
+        }));
+    return { ok: true, status: 200, body: undefined, items };
+  }
+  assert.equal(url.searchParams.get("fields"), "summary");
+  const id = url.pathname.slice("/issue/".length);
+  assert.ok(id === "10001" || id === "9223372036854775807");
+  return maintenanceOk({
+    id: controls.wrongIssue ? "99" : id,
+    key: id === "10001" ? "SYN-1" : "SYN-2",
+    fields: { summary: "Synthetic" },
   });
-  const record = (value: unknown): Readonly<Record<string, unknown>> => {
-    const raw = asRecord(value);
-    assert.ok(raw);
-    return raw;
-  };
-  function read(path: string): AtlassianWriteHttpOutcome {
-    if (path === "myself") {
-      const count = calls.filter((call) => call.path === "myself").length;
-      return actorReadback(
-        actor,
-        "other-actor",
-        (effects > 0 && controls.actorChangesAfter) || (count > 1 && controls.actorChangesBefore),
-      );
-    }
-    if (path === "cluster/nodes")
-      return { ok: true, status: 200, body: undefined, items: structuredClone(nodes) };
-    if (path === "cluster/zdu/state") return ok(record(cluster));
-    if (path === "index-snapshot/isRunning") return ok(record(snapshot));
-    if (path === "reindex")
-      return controls.noPriorReindex
+}
+function maintenanceStateRead(
+  state: MaintenanceState,
+  path: string,
+): AtlassianWriteHttpOutcome | undefined {
+  switch (path) {
+    case "cluster/nodes":
+      return { ok: true, status: 200, body: undefined, items: structuredClone(state.nodes) };
+    case "cluster/zdu/state":
+      return maintenanceOk(maintenanceRecord(state.cluster));
+    case "index-snapshot/isRunning":
+      return maintenanceOk(maintenanceRecord(state.snapshot));
+    case "reindex":
+      return state.controls.noPriorReindex
         ? { ok: false, reason: "not-found", httpStatus: 404 }
-        : ok(record(reindex));
-    if (path === "upgrade") {
-      if (controls.upgradeRunning) return { ok: true, status: 303, body: undefined };
-      if (controls.noPriorUpgrade) return { ok: false, reason: "not-found", httpStatus: 404 };
-      return ok(record(upgrade));
-    }
-    const url = new URL(path, "https://synthetic.invalid/");
-    if (url.pathname === "/reindex/request/bulk") {
-      const ids = url.searchParams.getAll("requestId");
-      const items = controls.missingRequest
-        ? []
-        : ids.map((id) => ({
-            id: controls.wrongRequest ? "99" : id,
-            status: "COMPLETE",
-            type: "IMMEDIATE",
-          }));
-      return { ok: true, status: 200, body: undefined, items };
-    }
-    assert.equal(url.searchParams.get("fields"), "summary");
-    const id = url.pathname.slice("/issue/".length);
-    assert.ok(id === "10001" || id === "9223372036854775807");
-    return ok({
-      id: controls.wrongIssue ? "99" : id,
-      key: id === "10001" ? "SYN-1" : "SYN-2",
-      fields: { summary: "Synthetic" },
-    });
+        : maintenanceOk(maintenanceRecord(state.reindex));
+    case "upgrade":
+      return maintenanceUpgradeRead(state);
+    default:
+      return undefined;
   }
-  function apply(): void {
-    if (selected.name === "jira.delete-cluster-node") nodes = [];
-    if (selected.name === "jira.mark-cluster-node-offline")
-      nodes = [{ ...MAINTENANCE_NODE_REVIEW, state: "OFFLINE" }];
-    if (selected.path.startsWith("cluster/zdu/"))
-      cluster = { state: "FUTURE_NATIVE_STATE", build: { buildNumber: 113003, version: "11.3.3" } };
-    if (selected.name === "jira.create-index-snapshot") snapshot = { running: false };
-  }
-  const request: JiraMutationRequest = async (path, method = "GET", body, expect) => {
-    calls.push({ path, method, body: structuredClone(body), expect });
-    if (effects > 0 && controls.throwReadback)
-      throw new Error("Synthetic maintenance readback fault");
-    if (effects > 0 && controls.denyReadback)
-      return { ok: false, reason: "permission-denied", httpStatus: 403 };
-    if (method === "GET") return read(path);
-    assert.equal(method, selected.method);
-    assert.equal(path, selected.path);
-    assert.equal(body, undefined);
-    assert.equal(expect, selected.name === "jira.process-reindex-requests" ? "json-array" : "none");
-    if (controls.reject) return { ok: false, reason: "conflict", httpStatus: 409 };
-    assert.equal(++effects, 1);
-    apply();
-    if (controls.lostAck) return { ok: false, reason: "timeout" };
-    return selected.name === "jira.process-reindex-requests" && !controls.malformedAck
-      ? {
-          ok: true,
-          status: selected.status,
-          body: undefined,
-          items: structuredClone(controls.ackIds),
-        }
-      : { ok: true, status: selected.status, body: undefined };
+}
+function maintenanceRead(state: MaintenanceState, path: string): AtlassianWriteHttpOutcome {
+  if (path === "myself") return maintenanceActorRead(state);
+  return maintenanceStateRead(state, path) ?? maintenanceIssueRead(state.controls, path);
+}
+function maintenanceApply(state: MaintenanceState): void {
+  const { selected } = state;
+  if (selected.name === "jira.delete-cluster-node") state.nodes = [];
+  if (selected.name === "jira.mark-cluster-node-offline")
+    state.nodes = [{ ...MAINTENANCE_NODE_REVIEW, state: "OFFLINE" }];
+  if (selected.path.startsWith("cluster/zdu/"))
+    state.cluster = {
+      state: "FUTURE_NATIVE_STATE",
+      build: { buildNumber: 113003, version: "11.3.3" },
+    };
+  if (selected.name === "jira.create-index-snapshot") state.snapshot = { running: false };
+}
+function maintenanceReadbackFailure(
+  state: MaintenanceState,
+): AtlassianWriteHttpOutcome | undefined {
+  if (state.effects > 0 && state.controls.throwReadback)
+    throw new Error("Synthetic maintenance readback fault");
+  if (state.effects > 0 && state.controls.denyReadback)
+    return { ok: false, reason: "permission-denied", httpStatus: 403 };
+  return undefined;
+}
+function maintenanceWrite(
+  state: MaintenanceState,
+  call: MaintenanceCall,
+): AtlassianWriteHttpOutcome {
+  const { selected, controls } = state;
+  assert.equal(call.method, selected.method);
+  assert.equal(call.path, selected.path);
+  assert.equal(call.body, undefined);
+  assert.equal(
+    call.expect,
+    selected.name === "jira.process-reindex-requests" ? "json-array" : "none",
+  );
+  if (controls.reject) return { ok: false, reason: "conflict", httpStatus: 409 };
+  assert.equal(++state.effects, 1);
+  maintenanceApply(state);
+  if (controls.lostAck) return { ok: false, reason: "timeout" };
+  return selected.name === "jira.process-reindex-requests" && !controls.malformedAck
+    ? {
+        ok: true,
+        status: selected.status,
+        body: undefined,
+        items: structuredClone(controls.ackIds),
+      }
+    : { ok: true, status: selected.status, body: undefined };
+}
+function maintenanceRequest(
+  state: MaintenanceState,
+  call: MaintenanceCall,
+): AtlassianWriteHttpOutcome {
+  state.calls.push({ ...call, body: structuredClone(call.body) });
+  const failure = maintenanceReadbackFailure(state);
+  if (failure !== undefined) return failure;
+  return call.method === "GET" ? maintenanceRead(state, call.path) : maintenanceWrite(state, call);
+}
+function maintenanceState(selected: MaintenanceCase): MaintenanceState {
+  return {
+    selected,
+    actor: { key: ACTOR, name: "operator" },
+    calls: [],
+    controls: {
+      lostAck: false,
+      denyReadback: false,
+      throwReadback: false,
+      actorChangesAfter: false,
+      actorChangesBefore: false,
+      reject: false,
+      noPriorReindex: false,
+      upgradeRunning: false,
+      noPriorUpgrade: false,
+      wrongIssue: false,
+      missingRequest: false,
+      wrongRequest: false,
+      ackIds: [7, "9223372036854775807"],
+      malformedAck: false,
+    },
+    nodes: [structuredClone(selected.args.expectedNode ?? MAINTENANCE_NODE_REVIEW)],
+    cluster: structuredClone(selected.args.expectedClusterState ?? MAINTENANCE_CLUSTER_REVIEW),
+    reindex: {
+      type: "BACKGROUND",
+      currentProgress: 100,
+      success: true,
+      finishTime: "native-finished",
+    },
+    upgrade: { outcome: "SUCCESS", duration: 0, startTime: "native-start", message: "" },
+    snapshot: { running: false },
+    effects: 0,
   };
+}
+export function maintenanceMutationFixture(selected: MaintenanceCase): MaintenanceMutationFixture {
+  const state = maintenanceState(selected);
+  const request: JiraMutationRequest = (path, method = "GET", body, expect) =>
+    settleSync(() => maintenanceRequest(state, { path, method, body, expect }));
   return {
     request,
-    calls,
-    actor,
-    controls,
+    calls: state.calls,
+    actor: state.actor,
+    controls: state.controls,
     setNodes(value: readonly unknown[]): void {
-      nodes = [...value];
+      state.nodes = [...value];
     },
     setCluster(value: unknown): void {
-      cluster = value;
+      state.cluster = value;
     },
     setReindex(value: unknown): void {
-      reindex = value;
+      state.reindex = value;
     },
     setUpgrade(value: unknown): void {
-      upgrade = value;
+      state.upgrade = value;
     },
     setSnapshot(value: unknown): void {
-      snapshot = value;
+      state.snapshot = value;
     },
-    snapshot: (): CatalogJsonObject => ({ effects, nodeCount: nodes.length }),
+    snapshot: (): CatalogJsonObject => ({ effects: state.effects, nodeCount: state.nodes.length }),
   };
 }

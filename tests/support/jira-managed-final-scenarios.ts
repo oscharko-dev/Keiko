@@ -10,8 +10,7 @@ interface SelectedCase {
 }
 function selected(tool: string): SelectedCase {
   const value = privateNativeCase(tool);
-  if (value === undefined || value.receipt === undefined)
-    throw new TypeError("Missing independent native mutation case");
+  if (value?.receipt === undefined) throw new TypeError("Missing independent native mutation case");
   return {
     args: value.args,
     receipt: value.receipt,

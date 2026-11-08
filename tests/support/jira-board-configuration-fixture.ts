@@ -42,14 +42,7 @@ export const BOARD_CONFIGURATION_FIXTURE_CASES = [
 ] as const;
 type BoardCase = (typeof BOARD_CONFIGURATION_FIXTURE_CASES)[number];
 
-/** Independent native actor, configuration and BooleanSettingBean responses. No visible-board
- * collection is fabricated as proof of deletion, and zero-like/false values remain Booleans. */
-export function boardConfigurationTransportFixture(
-  platformRoot: string,
-  agileRoot: string,
-  selected: BoardCase,
-  requestedValue = false,
-): {
+interface BoardTransportFixture {
   readonly read: (request: AtlassianHttpBodyRequest) => AtlassianHttpBodyResult | undefined;
   readonly write: (request: AtlassianHttpBodyRequest) => AtlassianHttpBodyResult | undefined;
   readonly snapshot: () => {
@@ -57,48 +50,82 @@ export function boardConfigurationTransportFixture(
     readonly refinedVelocityEnabled: boolean;
     readonly writes: number;
   };
-} {
-  let boardPresent = true;
-  let refinedVelocityEnabled = !requestedValue;
-  let writes = 0;
-  const board = {
-    id: 7,
-    name: "Reviewed board",
-    type: "scrum",
-    filter: { id: 42 },
-    columnConfig: { columns: [] },
+}
+interface BoardState {
+  boardPresent: boolean;
+  refinedVelocityEnabled: boolean;
+  writes: number;
+}
+
+const BOARD = {
+  id: 7,
+  name: "Reviewed board",
+  type: "scrum",
+  filter: { id: 42 },
+  columnConfig: { columns: [] },
+};
+
+function boardRead(
+  state: BoardState,
+  request: AtlassianHttpBodyRequest,
+  roots: readonly [string, string],
+): AtlassianHttpBodyResult | undefined {
+  const [platformRoot, agileRoot] = roots;
+  const url = new URL(request.url);
+  expect(url.search).toBe("");
+  if (url.pathname === `${platformRoot}/myself`)
+    return response({ key: "synthetic-actor", name: "synthetic-user", active: true });
+  if (
+    url.pathname === `${agileRoot}/board/7/configuration` ||
+    url.pathname === `${agileRoot}/board/7`
+  )
+    return state.boardPresent ? response(BOARD) : response({}, 404);
+  if (url.pathname === `${agileRoot}/board/7/settings/refined-velocity`)
+    return state.boardPresent
+      ? response({ value: state.refinedVelocityEnabled })
+      : response({}, 404);
+  return undefined;
+}
+
+function boardWrite(
+  state: BoardState,
+  request: AtlassianHttpBodyRequest,
+  agileRoot: string,
+  selected: BoardCase,
+  requestedValue: boolean,
+): AtlassianHttpBodyResult | undefined {
+  const url = new URL(request.url);
+  if (url.pathname !== `${agileRoot}${selected.path}`) return undefined;
+  expect(request.method).toBe(selected.method);
+  expect(url.search).toBe("");
+  state.writes++;
+  expect(state.writes).toBe(1);
+  if (selected.tool === "jira.delete-board") {
+    expect(request.bodyJson).toBeUndefined();
+    state.boardPresent = false;
+  } else {
+    expect(request.bodyJson).toBe(JSON.stringify({ value: requestedValue }));
+    state.refinedVelocityEnabled = requestedValue;
+  }
+  return response(undefined, 204);
+}
+
+/** Independent native actor, configuration and BooleanSettingBean responses. No visible-board
+ * collection is fabricated as proof of deletion, and zero-like/false values remain Booleans. */
+export function boardConfigurationTransportFixture(
+  platformRoot: string,
+  agileRoot: string,
+  selected: BoardCase,
+  requestedValue = false,
+): BoardTransportFixture {
+  const state: BoardState = {
+    boardPresent: true,
+    refinedVelocityEnabled: !requestedValue,
+    writes: 0,
   };
   return {
-    snapshot: () => ({ boardPresent, refinedVelocityEnabled, writes }),
-    read(request) {
-      const url = new URL(request.url);
-      expect(url.search).toBe("");
-      if (url.pathname === `${platformRoot}/myself`)
-        return response({ key: "synthetic-actor", name: "synthetic-user", active: true });
-      if (
-        url.pathname === `${agileRoot}/board/7/configuration` ||
-        url.pathname === `${agileRoot}/board/7`
-      )
-        return boardPresent ? response(board) : response({}, 404);
-      if (url.pathname === `${agileRoot}/board/7/settings/refined-velocity`)
-        return boardPresent ? response({ value: refinedVelocityEnabled }) : response({}, 404);
-      return undefined;
-    },
-    write(request) {
-      const url = new URL(request.url);
-      if (url.pathname !== `${agileRoot}${selected.path}`) return undefined;
-      expect(request.method).toBe(selected.method);
-      expect(url.search).toBe("");
-      writes++;
-      expect(writes).toBe(1);
-      if (selected.tool === "jira.delete-board") {
-        expect(request.bodyJson).toBeUndefined();
-        boardPresent = false;
-      } else {
-        expect(request.bodyJson).toBe(JSON.stringify({ value: requestedValue }));
-        refinedVelocityEnabled = requestedValue;
-      }
-      return response(undefined, 204);
-    },
+    snapshot: () => ({ ...state }),
+    read: (request) => boardRead(state, request, [platformRoot, agileRoot]),
+    write: (request) => boardWrite(state, request, agileRoot, selected, requestedValue),
   };
 }

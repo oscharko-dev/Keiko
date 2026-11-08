@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { settleSync } from "./jira-fixture-settle.js";
 import type { JiraMutationRequest } from "../../packages/keiko-connectors/src/jira-managed-mutation-metadata.js";
 import type { AtlassianWriteHttpOutcome } from "../../packages/keiko-connectors/src/atlassian-write-http.js";
 import { asRecord } from "../../packages/keiko-connectors/src/atlassian-sync-classify.js";
@@ -187,17 +188,184 @@ export const OPTION_SCHEME_MUTATION_CASES = [
     receipt: { userKey: ACTOR, schemeId: "9", schemePresent: false },
   },
 ] as const;
-export function optionSchemeFixture() {
-  const actor = { key: ACTOR, name: "operator" };
-  const issueTypes = [
-    { id: "1", name: "Task", subtask: false },
-    { id: "2", name: "Bug", subtask: false },
-  ];
-  const priorities = [
-    { id: "1", name: "High" },
-    { id: "2", name: "Normal" },
-  ];
-  const issueSchemes = new Map<string, Record<string, unknown>>([
+type SchemeBody = Parameters<JiraMutationRequest>[2];
+type SchemeRecord = Record<string, unknown>;
+interface SchemeNamed {
+  id: string;
+  name: string;
+}
+interface OptionSchemeControls {
+  lostAck: boolean;
+  omitAckId: boolean;
+  wrongReadback: boolean;
+  denyReadback: boolean;
+  throwReadback: boolean;
+  missingAssociations: boolean;
+  ackStatus: number;
+}
+interface OptionSchemeState {
+  readonly actor: { key: string; name: string };
+  readonly issueTypes: { id: string; name: string; subtask: boolean }[];
+  readonly priorities: SchemeNamed[];
+  readonly issueSchemes: Map<string, SchemeRecord>;
+  readonly prioritySchemes: Map<string, SchemeRecord>;
+  readonly projects: Map<string, { id: string; key: string; name: string }>;
+  readonly calls: { path: string; method: string; body?: unknown }[];
+  readonly controls: OptionSchemeControls;
+  associations: string[];
+  writes: number;
+}
+export interface OptionSchemeFixture {
+  readonly request: JiraMutationRequest;
+  readonly actor: OptionSchemeState["actor"];
+  readonly issueSchemes: Map<string, SchemeRecord>;
+  readonly prioritySchemes: Map<string, SchemeRecord>;
+  readonly projects: OptionSchemeState["projects"];
+  readonly issueTypes: OptionSchemeState["issueTypes"];
+  readonly priorities: SchemeNamed[];
+  readonly controls: OptionSchemeControls;
+  readonly calls: OptionSchemeState["calls"];
+  snapshot(): {
+    issueSchemes: SchemeRecord[];
+    prioritySchemes: SchemeRecord[];
+    associations: string[];
+    writes: number;
+  };
+}
+const schemeOk = (body?: SchemeRecord, status = 200): AtlassianWriteHttpOutcome => ({
+  ok: true,
+  status,
+  body,
+});
+const schemeMissing = (): AtlassianWriteHttpOutcome => ({
+  ok: false,
+  reason: "not-found",
+  httpStatus: 404,
+});
+function schemeReadbackFailure(state: OptionSchemeState): AtlassianWriteHttpOutcome | undefined {
+  if (state.writes && state.controls.throwReadback)
+    throw new Error("Synthetic scheme readback defect");
+  if (state.writes && state.controls.denyReadback)
+    return { ok: false, reason: "permission-denied", httpStatus: 403 };
+  return undefined;
+}
+function schemeStaticRead(
+  state: OptionSchemeState,
+  path: string,
+): AtlassianWriteHttpOutcome | undefined {
+  if (path === "myself") return schemeOk({ ...state.actor });
+  if (path === "issuetype" || path === "priority")
+    return {
+      ok: true,
+      status: 200,
+      body: undefined,
+      items: path === "issuetype" ? state.issueTypes : state.priorities,
+    };
+  if (path.startsWith("project/")) {
+    const value = state.projects.get(path.slice("project/".length));
+    return value === undefined ? schemeMissing() : schemeOk(value);
+  }
+  return undefined;
+}
+function schemeRead(state: OptionSchemeState, path: string): AtlassianWriteHttpOutcome {
+  const failure = schemeReadbackFailure(state);
+  if (failure !== undefined) return failure;
+  const fixed = schemeStaticRead(state, path);
+  if (fixed !== undefined) return fixed;
+  const { controls } = state;
+  const parts = path.split("/");
+  const selected = parts[0] === "issuetypescheme" ? state.issueSchemes : state.prioritySchemes;
+  const item = selected.get(parts[1] ?? "");
+  if (item === undefined) return schemeMissing();
+  if (parts[2] === "associations")
+    return controls.missingAssociations
+      ? schemeOk()
+      : {
+          ok: true,
+          status: 200,
+          body: undefined,
+          items: state.associations.map((id) => ({ ...state.projects.get(id) })),
+        };
+  return schemeOk({
+    ...item,
+    ...(state.writes && controls.wrongReadback ? { name: "Concurrent scheme" } : {}),
+  });
+}
+function schemeAssociate(
+  state: OptionSchemeState,
+  parts: readonly string[],
+  method: string,
+  body: SchemeBody,
+): void {
+  if (method === "DELETE") {
+    state.associations =
+      parts[3] === undefined ? [] : state.associations.filter((id) => id !== parts[3]);
+    return;
+  }
+  const raw = asRecord(body);
+  assert.ok(raw);
+  assert.ok(Array.isArray(raw.idsOrKeys));
+  const ids: string[] = [];
+  for (const id of raw.idsOrKeys) {
+    assert.ok(typeof id === "string");
+    assert.ok(state.projects.has(id));
+    ids.push(id);
+  }
+  state.associations = method === "PUT" ? ids : [...new Set([...state.associations, ...ids])];
+}
+function schemeConfigure(
+  state: OptionSchemeState,
+  parts: readonly string[],
+  method: string,
+  body: SchemeBody,
+): SchemeRecord | undefined {
+  const selected = parts[0] === "issuetypescheme" ? state.issueSchemes : state.prioritySchemes;
+  const id = parts[1] ?? "9007199254740993";
+  if (method === "DELETE") {
+    selected.delete(id);
+    return undefined;
+  }
+  const raw = asRecord(body);
+  assert.ok(raw);
+  if (parts[0] === "issuetypescheme") {
+    assert.ok(Array.isArray(raw.issueTypeIds));
+    selected.set(id, {
+      id,
+      name: raw.name,
+      description: raw.description,
+      issueTypes: raw.issueTypeIds.map((value) =>
+        state.issueTypes.find((item) => item.id === value),
+      ),
+      defaultIssueType: state.issueTypes.find((item) => item.id === raw.defaultIssueTypeId),
+    });
+  } else selected.set(id, { id, ...raw, defaultScheme: false });
+  return parts[1] === undefined ? { id } : undefined;
+}
+function schemeRequest(
+  state: OptionSchemeState,
+  path: string,
+  method: string,
+  body: SchemeBody,
+): AtlassianWriteHttpOutcome {
+  state.calls.push({
+    path,
+    method,
+    ...(body === undefined ? {} : { body: structuredClone(body) }),
+  });
+  if (method === "GET") return schemeRead(state, path);
+  assert.equal(++state.writes, 1);
+  const parts = path.split("/");
+  let ack: SchemeRecord | undefined;
+  if (parts[2] === "associations") schemeAssociate(state, parts, method, body);
+  else ack = schemeConfigure(state, parts, method, body);
+  if (state.controls.lostAck) return { ok: false, reason: "timeout" };
+  return schemeOk(
+    state.controls.omitAckId ? {} : ack,
+    ack === undefined ? state.controls.ackStatus : 201,
+  );
+}
+function seedIssueSchemes(issueTypes: OptionSchemeState["issueTypes"]): Map<string, SchemeRecord> {
+  return new Map<string, SchemeRecord>([
     [
       "7",
       {
@@ -209,7 +377,9 @@ export function optionSchemeFixture() {
       },
     ],
   ]);
-  const prioritySchemes = new Map<string, Record<string, unknown>>([
+}
+function seedPrioritySchemes(): Map<string, SchemeRecord> {
+  return new Map<string, SchemeRecord>([
     [
       "9",
       {
@@ -222,137 +392,58 @@ export function optionSchemeFixture() {
       },
     ],
   ]);
-  const projects = new Map([
-    [CURRENT.id, { ...CURRENT }],
-    [OTHER.id, { ...OTHER }],
-  ]);
-  let associations: string[] = [CURRENT.id];
-  let writes = 0;
-  const calls: { path: string; method: string; body?: unknown }[] = [];
-  const controls = {
-    lostAck: false,
-    omitAckId: false,
-    wrongReadback: false,
-    denyReadback: false,
-    throwReadback: false,
-    missingAssociations: false,
-    ackStatus: 204,
+}
+function optionSchemeState(): OptionSchemeState {
+  const issueTypes = [
+    { id: "1", name: "Task", subtask: false },
+    { id: "2", name: "Bug", subtask: false },
+  ];
+  return {
+    actor: { key: ACTOR, name: "operator" },
+    issueTypes,
+    priorities: [
+      { id: "1", name: "High" },
+      { id: "2", name: "Normal" },
+    ],
+    issueSchemes: seedIssueSchemes(issueTypes),
+    prioritySchemes: seedPrioritySchemes(),
+    projects: new Map([
+      [CURRENT.id, { ...CURRENT }],
+      [OTHER.id, { ...OTHER }],
+    ]),
+    calls: [],
+    controls: {
+      lostAck: false,
+      omitAckId: false,
+      wrongReadback: false,
+      denyReadback: false,
+      throwReadback: false,
+      missingAssociations: false,
+      ackStatus: 204,
+    },
+    associations: [CURRENT.id],
+    writes: 0,
   };
-  const ok = (body?: Record<string, unknown>, status = 200): AtlassianWriteHttpOutcome => ({
-    ok: true,
-    status,
-    body,
-  });
-  const missing = (): AtlassianWriteHttpOutcome => ({
-    ok: false,
-    reason: "not-found",
-    httpStatus: 404,
-  });
-  function read(path: string): AtlassianWriteHttpOutcome {
-    if (writes && controls.throwReadback) throw new Error("Synthetic scheme readback defect");
-    if (writes && controls.denyReadback)
-      return { ok: false, reason: "permission-denied", httpStatus: 403 };
-    if (path === "myself") return ok({ ...actor });
-    if (path === "issuetype" || path === "priority")
-      return {
-        ok: true,
-        status: 200,
-        body: undefined,
-        items: path === "issuetype" ? issueTypes : priorities,
-      };
-    if (path.startsWith("project/")) {
-      const value = projects.get(path.slice("project/".length));
-      return value === undefined ? missing() : ok(value);
-    }
-    const parts = path.split("/");
-    const selected = parts[0] === "issuetypescheme" ? issueSchemes : prioritySchemes;
-    const item = selected.get(parts[1] ?? "");
-    if (item === undefined) return missing();
-    if (parts[2] === "associations")
-      return controls.missingAssociations
-        ? ok()
-        : {
-            ok: true,
-            status: 200,
-            body: undefined,
-            items: associations.map((id) => ({ ...projects.get(id) })),
-          };
-    return ok({
-      ...item,
-      ...(writes && controls.wrongReadback ? { name: "Concurrent scheme" } : {}),
-    });
-  }
-  function associate(
-    parts: readonly string[],
-    method: string,
-    body: Parameters<JiraMutationRequest>[2],
-  ): void {
-    if (method === "DELETE") {
-      associations = parts[3] === undefined ? [] : associations.filter((id) => id !== parts[3]);
-      return;
-    }
-    const raw = asRecord(body);
-    assert.ok(raw);
-    assert.ok(Array.isArray(raw.idsOrKeys));
-    const ids: string[] = [];
-    for (const id of raw.idsOrKeys) {
-      assert.ok(typeof id === "string");
-      assert.ok(projects.has(id));
-      ids.push(id);
-    }
-    associations = method === "PUT" ? ids : [...new Set([...associations, ...ids])];
-  }
-  function configure(
-    parts: readonly string[],
-    method: string,
-    body: Parameters<JiraMutationRequest>[2],
-  ): Record<string, unknown> | undefined {
-    const selected = parts[0] === "issuetypescheme" ? issueSchemes : prioritySchemes;
-    const id = parts[1] ?? "9007199254740993";
-    if (method === "DELETE") {
-      selected.delete(id);
-      return undefined;
-    }
-    const raw = asRecord(body);
-    assert.ok(raw);
-    if (parts[0] === "issuetypescheme") {
-      assert.ok(Array.isArray(raw.issueTypeIds));
-      selected.set(id, {
-        id,
-        name: raw.name,
-        description: raw.description,
-        issueTypes: raw.issueTypeIds.map((value) => issueTypes.find((item) => item.id === value)),
-        defaultIssueType: issueTypes.find((item) => item.id === raw.defaultIssueTypeId),
-      });
-    } else selected.set(id, { id, ...raw, defaultScheme: false });
-    return parts[1] === undefined ? { id } : undefined;
-  }
-  const request: JiraMutationRequest = async (path, method = "GET", body) => {
-    calls.push({ path, method, ...(body === undefined ? {} : { body: structuredClone(body) }) });
-    if (method === "GET") return read(path);
-    assert.equal(++writes, 1);
-    const parts = path.split("/");
-    let ack: Record<string, unknown> | undefined;
-    if (parts[2] === "associations") associate(parts, method, body);
-    else ack = configure(parts, method, body);
-    if (controls.lostAck) return { ok: false, reason: "timeout" };
-    return ok(controls.omitAckId ? {} : ack, ack === undefined ? controls.ackStatus : 201);
-  };
+}
+export function optionSchemeFixture(): OptionSchemeFixture {
+  const state = optionSchemeState();
+  const request: JiraMutationRequest = (path, method = "GET", body) =>
+    settleSync(() => schemeRequest(state, path, method, body));
   return {
     request,
-    actor,
-    issueSchemes,
-    prioritySchemes,
-    projects,
-    issueTypes,
-    priorities,
-    controls,
-    calls,
+    actor: state.actor,
+    issueSchemes: state.issueSchemes,
+    prioritySchemes: state.prioritySchemes,
+    projects: state.projects,
+    issueTypes: state.issueTypes,
+    priorities: state.priorities,
+    controls: state.controls,
+    calls: state.calls,
     snapshot: () => ({
-      issueSchemes: structuredClone([...issueSchemes.values()]),
-      prioritySchemes: structuredClone([...prioritySchemes.values()]),
-      associations: [...associations],
-      writes,
+      issueSchemes: structuredClone([...state.issueSchemes.values()]),
+      prioritySchemes: structuredClone([...state.prioritySchemes.values()]),
+      associations: [...state.associations],
+      writes: state.writes,
     }),
   };
 }
