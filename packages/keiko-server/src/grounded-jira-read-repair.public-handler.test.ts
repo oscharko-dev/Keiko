@@ -27,7 +27,6 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { jiraChatActorDigest } from "./atlassian/jiraPodAccess.js";
-import { jiraOperationDefinitions } from "./atlassian/jiraOperationRegistry.js";
 import { mockRequest, mockResponse } from "./_support.js";
 import { handleSendDesktopChat } from "./chat-handlers.js";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
@@ -171,10 +170,22 @@ function reportNativeBody(url: URL): unknown {
       return { values: [{ id: "10", name: "Task", subtask: false }], isLast: true, total: 1 };
     case "/rest/api/2/issue/createmeta/KERD/issuetypes/10":
       return {
-        values: [{ fieldId: "summary", required: true, hasDefaultValue: false }],
+        values: [
+          { fieldId: "summary", required: true, hasDefaultValue: false },
+          {
+            fieldId: "timetracking",
+            name: "Time Tracking",
+            required: false,
+            hasDefaultValue: false,
+            schema: { type: "timetracking", system: "timetracking" },
+          },
+        ],
         isLast: true,
-        total: 1,
+        total: 2,
       };
+    case "/rest/agile/1.0/board":
+      expect(url.searchParams.get("projectKeyOrId")).toBe("KERD");
+      return { startAt: 0, maxResults: 50, total: 0, isLast: true, values: [] };
     case "/rest/api/2/search":
       expect(url.searchParams.get("jql")).toBe('project = "KERD" ORDER BY key ASC');
       expect(url.searchParams.get("startAt")).toBe("0");
@@ -341,7 +352,7 @@ function toolEvidence(request: GatewayCallRequest): string {
 
 function readCall(
   request: GatewayCallRequest,
-  name: "jira.projects" | "jira.report" | "jira.discover" | "jira.describe",
+  name: "jira.projects" | "jira.report",
   args: CatalogJsonObject = {},
   id = "golden-current-read",
 ): NormalizedResponse {
@@ -378,79 +389,16 @@ interface ReadSelection {
   readonly name: "jira.projects" | "jira.report";
   readonly args: CatalogJsonObject;
   read: boolean;
-  described: boolean;
-  discoveryId?: string;
 }
 
-function metadataLabel(value: unknown): string {
-  return typeof value === "string" ? value : "missing";
-}
-
-function metadataResult(
-  request: GatewayCallRequest,
-  id: string,
-): Readonly<Record<string, unknown>> {
-  const message = request.messages.find(
-    (entry) => entry.role === "tool" && entry.toolCallId === id,
-  );
-  if (message === undefined) throw new Error("Missing actual metadata response");
-  const result: unknown = JSON.parse(message.content);
-  if (!record(result)) throw new Error("Malformed actual metadata response");
-  const data = record(result.data) ? result.data : undefined;
-  if (result.status !== "completed" || data?.outcome !== "succeeded")
-    throw new Error(
-      `Metadata ${id}: status=${metadataLabel(result.status)}, reason=${metadataLabel(result.reason)}, outcome=${metadataLabel(data?.outcome)}, dataReason=${metadataLabel(data?.reason)}`,
-    );
-  return data;
-}
-
-function discoveredIdentity(
-  page: Readonly<Record<string, unknown>> | undefined,
-  name: ReadSelection["name"],
-): string | undefined {
-  if (!Array.isArray(page?.items)) return undefined;
-  const item: unknown = page.items.find(
-    (value: unknown) => record(value) && value.tool === name.replaceAll(".", "_"),
-  );
-  return record(item) && typeof item.identity === "string" ? item.identity : undefined;
-}
-
-/** Start at this fixture's target; exercising catalog enumeration belongs to the P1 suite. */
-function selectedDiscovery(
-  request: GatewayCallRequest,
-  selection: ReadSelection,
-): NormalizedResponse {
-  const startAt = jiraOperationDefinitions().findIndex((entry) => entry.tool === selection.name);
-  if (startAt < 0) throw new Error("Requested read has no catalog definition");
-  selection.discoveryId = `golden-discover-${String(startAt)}`;
-  return readCall(request, "jira.discover", { startAt, maxResults: 1 }, selection.discoveryId);
-}
-
-/** Select only the identity actually returned by the current turn's real discovery tool. */
-function selectedRead(
+/** The curated read must be directly offered by the real base catalog. */
+function directRead(
   request: GatewayCallRequest,
   selection: ReadSelection,
 ): NormalizedResponse | undefined {
   if (selection.read) return undefined;
-  if (request.toolCatalog?.kind !== "bound") throw new Error("Missing bound selection catalog");
-  if (
-    request.toolCatalog.projection.tools.some(
-      (tool) => tool.toolRef.canonicalId === `keiko.${selection.name}`,
-    )
-  ) {
-    selection.read = true;
-    return readCall(request, selection.name, selection.args);
-  }
-  if (selection.described) {
-    metadataResult(request, "golden-describe");
-    throw new Error("Describe did not offer the selected read");
-  }
-  if (selection.discoveryId === undefined) return selectedDiscovery(request, selection);
-  const page = metadataResult(request, selection.discoveryId);
-  const identity = discoveredIdentity(page, selection.name);
-  if (identity === undefined) throw new Error("Discovery did not return the requested read");
-  selection.described = true;
-  return readCall(request, "jira.describe", { identities: [identity] }, "golden-describe");
+  selection.read = true;
+  return readCall(request, selection.name, selection.args);
 }
 
 function scriptedModel(
@@ -460,7 +408,7 @@ function scriptedModel(
 ): Script {
   const calls: GatewayCallRequest[] = [];
   const answers: GatewayCallRequest[] = [];
-  const selection: ReadSelection = { name, args, read: false, described: false };
+  const selection: ReadSelection = { name, args, read: false };
   const model: ModelPort = {
     call: (request): Promise<NormalizedResponse> => {
       // Background Memory/retrieval calls are not productive answer or repair calls.
@@ -470,7 +418,7 @@ function scriptedModel(
       )
         return Promise.resolve(response("[]"));
       calls.push(request);
-      const selected = selectedRead(request, selection);
+      const selected = directRead(request, selection);
       if (selected === undefined) answers.push(request);
       const result = selected ?? next(request, answers.length);
       const admitted = request.attemptAdmission?.({ promptTokens: 100, maxOutputTokens: 100 });
@@ -555,18 +503,15 @@ function currentExchange(f: Fixture): ChatToolTranscript | undefined {
     .at(-1)?.toolTranscript;
 }
 
-function expectSelection(f: Fixture, name: "jira_projects" | "jira_report"): void {
+function expectDirectRead(f: Fixture, name: "jira_projects" | "jira_report"): void {
   const exchanges = currentExchange(f)?.exchanges ?? [];
-  const discovery = exchanges.filter((entry) => entry.call.name === "jira_discover");
-  const description = exchanges.filter((entry) => entry.call.name === "jira_describe");
-  expect(discovery).toHaveLength(1);
-  expect(description).toHaveLength(1);
-  for (const entry of [...discovery, ...description])
-    expect(entry.result?.status).toBe("completed");
+  expect(
+    exchanges.filter(
+      (entry) => entry.call.name === "jira_discover" || entry.call.name === "jira_describe",
+    ),
+  ).toHaveLength(0);
   expect(exchanges.filter((entry) => entry.call.name === name)).toHaveLength(1);
-  expect(f.script.calls).toHaveLength(
-    discovery.length + description.length + 1 + f.script.answers.length,
-  );
+  expect(f.script.calls).toHaveLength(1 + f.script.answers.length);
 }
 
 it("retains this turn's validated Jira read evidence when repairing a Knowledge Pod answer", async () => {
@@ -582,7 +527,7 @@ it("retains this turn's validated Jira read evidence when repairing a Knowledge 
   });
   expect(JSON.stringify(exchange)).not.toContain(RAW);
   expect(f.native.requests).toHaveLength(1);
-  expectSelection(f, "jira_projects");
+  expectDirectRead(f, "jira_projects");
   expect(f.script.answers).toHaveLength(2);
   const initialAnswer = f.script.answers[0];
   const repair = f.script.answers[1];
@@ -609,7 +554,7 @@ it("does not promote prior, rejected or raw Jira payloads to current repair evid
   const first = await handleGroundedAsk(context(f, "golden-prior-turn"), f.deps);
   expect(first.status, JSON.stringify(first.body)).toBe(200);
   expect(answerContent(first.body)).toContain(PRIOR);
-  expectSelection(f, "jira_projects");
+  expectDirectRead(f, "jira_projects");
   expect(f.script.answers).toHaveLength(1);
   f.native.denied = true;
   f.script = script(CURRENT);
@@ -623,7 +568,7 @@ it("does not promote prior, rejected or raw Jira payloads to current repair evid
     data: { outcome: "failed", reason: "permission-denied" },
   });
   expect(f.native.requests).toHaveLength(2);
-  expectSelection(f, "jira_projects");
+  expectDirectRead(f, "jira_projects");
   expect(f.script.answers).toHaveLength(2);
   const repair = f.script.answers[1];
   if (repair === undefined) throw new Error("Missing denied-turn repair");
@@ -639,7 +584,7 @@ it("keeps the Jira-only tool answer when no Knowledge Pod is connected", async (
   const result = await handleSendDesktopChat(context(f, "golden-no-knowledge"), f.deps);
   expect(result.status, JSON.stringify(result.body)).toBe(200);
   expect(f.native.requests).toHaveLength(1);
-  expectSelection(f, "jira_projects");
+  expectDirectRead(f, "jira_projects");
   expect(f.script.answers).toHaveLength(1);
   const answer = f.deps.store.listMessages(f.chatId).at(-1);
   expect(answer?.role).toBe("assistant");
@@ -674,6 +619,7 @@ function observedReportFigures(f: Fixture): string {
     "/rest/api/2/field",
     "/rest/api/2/issue/createmeta/KERD/issuetypes",
     "/rest/api/2/issue/createmeta/KERD/issuetypes/10",
+    "/rest/agile/1.0/board",
     "/rest/api/2/search",
   ]);
   const initialAnswer = f.script.answers[0];
@@ -692,7 +638,7 @@ it("preserves real jira.report figures alongside Knowledge excerpts through fina
   const result = await handleGroundedAsk(context(f, "golden-report-turn"), f.deps);
   expect(result.status, JSON.stringify(result.body)).toBe(200);
   const figures = observedReportFigures(f);
-  expectSelection(f, "jira_report");
+  expectDirectRead(f, "jira_report");
   expect(f.script.answers).toHaveLength(2);
   const repair = f.script.answers[1];
   if (repair === undefined) throw new Error("Missing report repair call");
@@ -702,7 +648,7 @@ it("preserves real jira.report figures alongside Knowledge excerpts through fina
   expect(answerContent(result.body)).toContain(figures);
   expect(result.body).toMatchObject({ citations: [expect.anything()] });
   expect(answerContent(result.body)).toContain("KERD");
-  expect(f.native.requests).toHaveLength(4);
+  expect(f.native.requests).toHaveLength(5);
 });
 
 it.each([
@@ -729,7 +675,7 @@ it.each([
   f.script = report ? reportScript(altered) : script(CURRENT, false, altered);
   const result = await handleGroundedAsk(context(f, "golden-altered-repair"), f.deps);
   expect(result.status, JSON.stringify(result.body)).toBe(200);
-  expectSelection(f, report ? "jira_report" : "jira_projects");
+  expectDirectRead(f, report ? "jira_report" : "jira_projects");
   expect(f.script.answers).toHaveLength(2);
   const repair = f.script.answers[1];
   if (repair === undefined) throw new Error("Missing adversarial repair request");
@@ -740,5 +686,5 @@ it.each([
   expect(JSON.stringify(result.body)).not.toContain("Counterfeit project");
   expect(JSON.stringify(result.body)).not.toContain("KRED");
   expect(JSON.stringify(result.body)).not.toContain("99; done: 99");
-  expect(f.native.requests).toHaveLength(report ? 4 : 1);
+  expect(f.native.requests).toHaveLength(report ? 5 : 1);
 });
