@@ -13,6 +13,19 @@ import { jiraNativeText } from "./jira-native-values.js";
 
 const COUNTERS = ["failedLoginCount", "loginCount"] as const;
 const TIMES = ["lastFailedLoginTime", "previousLoginTime"] as const;
+class SessionReadRefusal extends Error {
+  constructor(readonly reason: "effect-denied" | "cancelled" | "timeout") {
+    super("The bound session observation was not admitted.");
+  }
+}
+function admittedSessionHttp(connection: JiraManagedConnection, context: ManagedMcpInvocationContext, signal: AbortSignal): AtlassianHttpBodyPort {
+  return (request) => {
+    if (context.signal.aborted) throw new SessionReadRefusal("cancelled");
+    if (signal.aborted) throw new SessionReadRefusal("timeout");
+    if (!context.beforeEffect()) throw new SessionReadRefusal("effect-denied");
+    return connection.http(request);
+  };
+}
 function loginInfo(value: unknown): JiraMaintenanceProjection {
   if (value === undefined || value === null) return { ok: true, value: {} };
   const raw = asRecord(value);
@@ -69,9 +82,20 @@ export async function executeJiraSessionRead(
 ): Promise<ManagedMcpToolResult> {
   if (Object.keys(args).length !== 0) return jiraReadFailure("invalid-input");
   if (connection.deployment !== "data-center") return jiraReadFailure("unavailable");
+  if (context.signal.aborted) return jiraReadFailure("cancelled");
   const signal = AbortSignal.any([context.signal, AbortSignal.timeout(ATLASSIAN_WRITE_ACTION_TOTAL_TIMEOUT_MS)]);
-  const http: AtlassianHttpBodyPort = (request) => signal.aborted || context.beforeEffect() !== true
-    ? Promise.resolve({ kind: "network-error" }) : connection.http(request);
+  const http = admittedSessionHttp(connection, context, signal);
+  try { return sessionResult(await readSession(connection, signal, http), context.signal); }
+  catch (error) {
+    if (context.signal.aborted) return jiraReadFailure("cancelled");
+    if (error instanceof SessionReadRefusal) return jiraReadFailure(error.reason);
+    throw error;
+  }
+}
+function sessionResult(result: ManagedMcpToolResult, signal: AbortSignal): ManagedMcpToolResult {
+  return result.isError === true && signal.aborted ? jiraReadFailure("cancelled") : result;
+}
+async function readSession(connection: JiraManagedConnection, signal: AbortSignal, http: AtlassianHttpBodyPort): Promise<ManagedMcpToolResult> {
   const identity = await fixedGet(connection, signal, http, "myself");
   if (!identity.ok) return jiraReadFailure(identity.reason, identity.remote);
   const actor = boundActor(identity);

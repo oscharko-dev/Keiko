@@ -5,7 +5,7 @@ import type { AtlassianHttpBodyPort, AtlassianHttpBodyResult } from "./atlassian
 import { executeJiraSessionRead as read, isJiraSessionRead } from "./jira-managed-session-read.js";
 
 function response(body: unknown, status = 200): AtlassianHttpBodyResult {
-  const bodyText = JSON.stringify(body);
+  const bodyText = JSON.stringify(body) ?? "";
   return { kind: "response", status, bodyText, bodyBytes: new TextEncoder().encode(bodyText).length, truncated: false };
 }
 function context(beforeEffect: () => boolean = () => true): ManagedMcpInvocationContext {
@@ -83,14 +83,20 @@ it("rechecks current authority before the second native request", async () => {
     allowed = false;
     return response({ key: "U1", name: "Canonical-Name" });
   });
-  expect((await read({}, context(() => allowed), connection(http))).data.outcome).toBe("failed");
+  expect((await read({}, context(() => allowed), connection(http))).data).toEqual({ outcome: "failed", reason: "effect-denied" });
   expect(http).toHaveBeenCalledTimes(1);
 });
 it("refuses an already cancelled invocation before sending either GET", async () => {
   const controller = new AbortController();
   controller.abort();
   const http = remote({ name: "Canonical-Name" });
-  expect((await read({}, { ...context(), signal: controller.signal }, connection(http))).data.outcome).toBe("failed");
+  expect((await read({}, { ...context(), signal: controller.signal }, connection(http))).data).toEqual({ outcome: "failed", reason: "cancelled" });
+  expect(http).not.toHaveBeenCalled();
+});
+it("labels a refused current permit without inventing a network failure", async () => {
+  const http = remote({ name: "Canonical-Name" });
+  const result = await read({}, context(() => false), connection(http));
+  expect(result.data).toEqual({ outcome: "failed", reason: "effect-denied" });
   expect(http).not.toHaveBeenCalled();
 });
 it("does not expose an authentication mutation or claim a Cloud transport", async () => {

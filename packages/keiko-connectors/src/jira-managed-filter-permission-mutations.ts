@@ -36,13 +36,13 @@ async function parent(request: JiraMutationRequest, selected: Input): Promise<Sa
   const filter = await readOwnedFilter(request, selected.filterId, selected.actorKey);
   return filter.ok ? { ok: true, value: true } : filter;
 }
-function beforeEffect(selected: Input, permissions: readonly CatalogJsonObject[]): JiraSavedConfigurationAttempt | undefined {
-  const receipt = { filterId: selected.filterId, userKey: selected.actorKey };
-  if (!sameFilterPermissions(permissions, selected.expected)) return savedConflict("The complete filter sharing list changed after review. Review every current permission before changing sharing. Nothing was written.");
-  if (!permissions.every(reviewableFilterPermission)) return savedInvalid("The native sharing list contains an unknown recipient or omitted view/edit rights. Its full effect cannot be reviewed; no sharing permission was changed.");
-  if (selected.target === undefined) return permissions.some((permission) => permission.id === selected.permissionId)
-    ? undefined : savedUnchanged("The reviewed permission is already absent from the complete owned-filter permission collection. Nothing was written.", { ...receipt, permissionId: selected.permissionId });
-  const target = selected.target;
+function removedPermissionRefusal(selected: Input, permissions: readonly CatalogJsonObject[], receipt: JiraSavedConfigurationReceipt): JiraSavedConfigurationAttempt | undefined {
+  const permissionId = selected.permissionId;
+  if (permissionId === undefined) return savedInvalid("Select an exact reviewed permission ID before requesting removal. Nothing was written.");
+  return permissions.some((permission) => permission.id === permissionId)
+    ? undefined : savedUnchanged("The reviewed permission is already absent from the complete owned-filter permission collection. Nothing was written.", { ...receipt, permissionId });
+}
+function existingRecipientRefusal(target: FilterPermissionTarget, permissions: readonly CatalogJsonObject[], receipt: JiraSavedConfigurationReceipt): JiraSavedConfigurationAttempt | undefined {
   const existing = permissions.filter((permission) => filterPermissionMatches(permission, target, false));
   if (existing.length === 0) return undefined;
   if (existing.length === 1 && existing[0] !== undefined && filterPermissionMatches(existing[0], target)) {
@@ -51,6 +51,13 @@ function beforeEffect(selected: Input, permissions: readonly CatalogJsonObject[]
       ...(typeof existing[0].id === "string" ? { permissionId: existing[0].id } : {}) });
   }
   return savedConflict("This recipient already has a different or ambiguous permission. Review and remove the exact existing permission before adding a different one. No implicit rights escalation was performed.");
+}
+function beforeEffect(selected: Input, permissions: readonly CatalogJsonObject[]): JiraSavedConfigurationAttempt | undefined {
+  const receipt = { filterId: selected.filterId, userKey: selected.actorKey };
+  if (!sameFilterPermissions(permissions, selected.expected)) return savedConflict("The complete filter sharing list changed after review. Review every current permission before changing sharing. Nothing was written.");
+  if (!permissions.every(reviewableFilterPermission)) return savedInvalid("The native sharing list contains an unknown recipient or omitted view/edit rights. Its full effect cannot be reviewed; no sharing permission was changed.");
+  return selected.target === undefined ? removedPermissionRefusal(selected, permissions, receipt)
+    : existingRecipientRefusal(selected.target, permissions, receipt);
 }
 function changedPermissions(selected: Input, actual: readonly CatalogJsonObject[], receipt: JiraSavedConfigurationReceipt): JiraSavedConfigurationAttempt {
   if (selected.target === undefined) {

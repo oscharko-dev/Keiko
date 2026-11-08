@@ -23,6 +23,7 @@ import { processServerLogSink } from "../process-log-sink.js";
 import { jiraMutationDeclarations } from "../atlassian/jiraManagedMutationDescriptors.js";
 import { CHAT_TOOL_TURN_BUDGET } from "../chat-tool-turn-budget.js";
 import { runMigrations } from "./schema.js";
+import { managedCatalogProjection } from "../tool-catalog/managedProviderCatalog.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import {
   formatActivityLogProofLine,
@@ -1074,7 +1075,11 @@ describe("persisted Jira operation approval contracts", () => {
     const f = fixture();
     const contract = jiraOperationForTool("jira.projects");
     if (contract === undefined) throw new Error("Expected read contract");
-    const binding = { descriptor: contract.declaration.descriptor, projectionDigest: "a".repeat(64) };
+    const projection = managedCatalogProjection(
+      [{ name: "jira.projects", alias: "jira_projects" }], [contract.declaration],
+      { id: "read-capture-fixture", version: 1 }, 0,
+    );
+    const binding = { descriptor: contract.declaration.descriptor, projectionDigest: projection.projectionDigest };
     const call = { id: "mcp-read-synthetic", name: "jira_projects", arguments: {} };
     const data = { outcome: "succeeded", items: [], startAt: 0, total: 0, operationBinding: contract.binding };
     const result = validateToolResultEnvelope({
