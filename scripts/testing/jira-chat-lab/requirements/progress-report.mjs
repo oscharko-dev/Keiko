@@ -275,7 +275,7 @@ function targetsUnavailableProject(exchange, projectKey) {
 
 function validUnavailableContinuation(exchange, current, reportId) {
   const data = exchange.result.data;
-  if (!data || !current) return false;
+  if (!data || !current?.report) return false;
   return (
     exchange.result.status === "completed" &&
     data.outcome === "succeeded" &&

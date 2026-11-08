@@ -108,6 +108,7 @@ export function largeTruth(plan, keys, fieldIds) {
   return {
     seedVersion: 2,
     project: LARGE_PROJECT,
+    templateScope: { issueTypes: ["Epic", "Task", "Bug"] },
     fieldIds,
     issueCount: plan.length,
     counts,

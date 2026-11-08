@@ -389,7 +389,7 @@ const LARGE_COMPLIANCE_OBLIGATIONS = [
 ];
 
 function largeComplianceTemplates(truth) {
-  return ["Epic", "Task", "Bug"].map((issueType) => ({
+  return truth.templateScope.issueTypes.map((issueType) => ({
     name: `${truth.project}-${issueType}`,
     markdown: templateMarkdown({
       project: truth.project,
@@ -405,13 +405,13 @@ function largeComplianceTemplates(truth) {
 async function observeLargeCompliance(ctx, chat, truth) {
   const turn = await ctx.turn(
     chat,
-    `Prüfe jeden Vorgang des Jira-Projekts ${truth.project} gegen die aktiven Vorlagen. Lies den vollständigen jira.report einschließlich ALLER Abweichungsseiten derselben reportId. Liste jeden abweichenden Vorgang mit seinem Schlüssel und allen konkreten Abweichungen auf. Keine Kürzung auf eine Beispielauswahl; nenne keine konformen Vorgänge als Abweichung.`,
+    `Prüfe jeden Vorgang des Jira-Projekts ${truth.project} gegen die aktiven Vorlagen. Lies den vollständigen jira.report einschließlich ALLER Abweichungsseiten derselben reportId. Liste jeden abweichenden Vorgang mit seinem Schlüssel und allen konkreten Abweichungen auf. Keine Kürzung auf eine Beispielauswahl; nenne keine konformen Vorgänge als Abweichung. Typen ohne Vorlage sind nicht vorlagengeprüft, nicht automatisch konform. Gib für jeden solchen Typ genau eine Zeile VORLAGENLÜCKE;<Typ>;<Anzahl> aus ohne daraus eine Labelpflicht abzuleiten.`,
   );
   let observed;
   try {
     observed = await ctx.searchPages(
       `project = ${truth.project} ORDER BY key ASC`,
-      `issuetype,status,labels,${truth.fieldIds.epicLink}`,
+      `issuetype,status,labels,parent,${truth.fieldIds.epicLink}`,
     );
   } catch (error) {
     if (!(error instanceof TypeError)) throw error;

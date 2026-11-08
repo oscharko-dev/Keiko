@@ -326,7 +326,11 @@ const sameStrings = (left, right) =>
   left.every((value) => typeof value === "string" && right.includes(value));
 
 function largeTruthFields(truth) {
-  return typeof truth.fieldIds?.epicLink === "string" && truth.issues.length === truth.issueCount;
+  return (
+    typeof truth.fieldIds?.epicLink === "string" &&
+    truth.issues.length === truth.issueCount &&
+    sameStrings(truth.templateScope?.issueTypes, ["Epic", "Task", "Bug"])
+  );
 }
 
 /** The versioned seed is a review snapshot, never evidence that Jira still holds those values. */
@@ -364,11 +368,14 @@ function completeNativePages(observed) {
   return offset === observed.issues.length;
 }
 
-function nativeDeviations(issue, epicLink, epics) {
+function nativeDeviations(issue, truth, epics) {
   const { fields } = issue;
-  if (!Array.isArray(fields?.labels) || !Object.hasOwn(fields, epicLink)) return undefined;
+  if (!truth.templateScope.issueTypes.includes(fields.issuetype.name)) return [];
+  if (!Array.isArray(fields.labels) || !Object.hasOwn(fields, truth.fieldIds.epicLink))
+    return undefined;
   const codes = fields.labels.includes("anforderung") ? [] : ["label:anforderung"];
-  if (fields.issuetype?.name === "Task" && !epics.has(fields[epicLink])) codes.push("parent");
+  if (fields.issuetype.name === "Task" && !epics.has(fields[truth.fieldIds.epicLink]))
+    codes.push("parent");
   return codes;
 }
 
@@ -383,13 +390,22 @@ function sameNativeMetadata(expected, actual, project) {
   );
 }
 
+function sameNativeParent(expected, fields, truth) {
+  if (fields.issuetype.subtask === true) {
+    return typeof expected.parent === "string" && fields.parent?.key === expected.parent;
+  }
+  if (expected.parent !== undefined && fields.parent?.key !== expected.parent) return false;
+  if (truth.templateScope.issueTypes.includes(expected.type))
+    return fields[truth.fieldIds.epicLink] === (expected.epic ?? null);
+  return expected.epic === undefined || fields[truth.fieldIds.epicLink] === expected.epic;
+}
+
 function sameNativeIssue(expected, actual, truth, epics) {
   if (!sameNativeMetadata(expected, actual, truth.project)) return false;
   const fields = actual.fields;
   if (!sameStrings(fields.labels, expected.labels)) return false;
-  const parent = fields[truth.fieldIds.epicLink];
-  if (parent !== (expected.epic ?? null)) return false;
-  return sameStrings(nativeDeviations(actual, truth.fieldIds.epicLink, epics), expected.deviations);
+  if (!sameNativeParent(expected, fields, truth)) return false;
+  return sameStrings(nativeDeviations(actual, truth, epics), expected.deviations);
 }
 
 function observedLargeTruth(observed, truth) {
@@ -467,11 +483,44 @@ function appendDeviationPage(page, state) {
   return true;
 }
 
-const completeComplianceScope = (compliance, count) =>
-  compliance.checker === "applied" &&
-  compliance.issuesChecked === count &&
-  compliance.issuesWithoutTemplate === 0 &&
-  compliance.issuesJudged === count;
+function templatePopulation(truth) {
+  const without = new Map();
+  for (const issue of truth.issues) {
+    if (!truth.templateScope.issueTypes.includes(issue.type))
+      without.set(issue.type, (without.get(issue.type) ?? 0) + 1);
+  }
+  const uncovered = [...without.values()].reduce((sum, count) => sum + count, 0);
+  return { checked: truth.issueCount - uncovered, uncovered, without };
+}
+
+function sameUncoveredTypes(rows, without) {
+  if (!Array.isArray(rows) || rows.length !== without.size) return false;
+  const names = new Set();
+  for (const row of rows) {
+    if (
+      !isRecord(row) ||
+      !without.has(row.typeName) ||
+      names.has(row.typeName) ||
+      row.count !== without.get(row.typeName)
+    )
+      return false;
+    names.add(row.typeName);
+  }
+  return true;
+}
+
+function completeComplianceScope(compliance, truth) {
+  const population = templatePopulation(truth);
+  if (compliance.checker !== "applied" || compliance.issuesChecked !== population.checked)
+    return false;
+  if (
+    compliance.issuesWithoutTemplate !== population.uncovered ||
+    compliance.issuesJudged !== truth.issueCount
+  )
+    return false;
+  if (population.uncovered > 0 && compliance.requiredFieldRules !== "applied") return false;
+  return sameUncoveredTypes(compliance.withoutTemplateByType, population.without);
+}
 
 function completeComplianceSummary(summary, truth) {
   if (typeof summary?.reportId !== "string" || !/^[a-f0-9]{64}$/u.test(summary.report.digest ?? ""))
@@ -479,7 +528,7 @@ function completeComplianceSummary(summary, truth) {
   const compliance = summary.report.compliance;
   const total = compliance.deviations?.total;
   if (!Number.isSafeInteger(total) || total < 0) return undefined;
-  if (!completeComplianceScope(compliance, truth.issueCount)) return undefined;
+  if (!completeComplianceScope(compliance, truth)) return undefined;
   return { compliance, total };
 }
 
@@ -516,21 +565,51 @@ function exactLargeEntries(issues, entries, epicLink) {
   });
 }
 
-const largeUnverified = (detail) => ({ status: "unverified", detail, counts: {} });
+const largeUnverified = (detail, counts = {}) => ({ status: "unverified", detail, counts });
 const largeGradeStatus = (grade, exact, falseFindings) =>
   grade.keysOk && grade.detailOk && exact && falseFindings === 0 ? "green" : "red";
 
-/** Shared S11b/limit-run oracle. The caller supplies this turn's answer and tool exchanges. */
-export function gradeLargeDeviationReport(exchanges, observed, value, answer) {
-  const truth = largeDeviationTruth(value);
-  if (truth === undefined) return largeUnverified("versioned large-project truth is unavailable");
-  if (!observedLargeTruth(observed, truth))
-    return largeUnverified("independent native pages or seed agreement are unavailable");
-  const report = completeLargeDeviations(Array.isArray(exchanges) ? exchanges : [], truth);
-  if (report === undefined)
-    return largeUnverified("a complete, coherent report deviation sequence is unavailable");
-  if (typeof answer !== "string")
-    return largeUnverified("this turn's readable report answer is unavailable");
+function templateGapsLabelled(answer, without) {
+  const rows = answer
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("VORLAGENLÜCKE;"));
+  const observed = new Map();
+  for (const row of rows) {
+    const cells = row.split(";");
+    if (cells.length !== 3 || observed.has(cells[1]) || !/^[1-9][0-9]*$/u.test(cells[2]))
+      return false;
+    observed.set(cells[1], Number(cells[2]));
+  }
+  return sameUncoveredTypes(
+    [...observed].map(([typeName, count]) => ({ typeName, count })),
+    without,
+  );
+}
+
+function exactLargeReport(report, grade, truth, answer) {
+  return (
+    report.compliance.issuesWithDeviations === grade.expected &&
+    report.compliance.deviationCount === grade.deviationCount &&
+    exactLargeEntries(truth.issues, report.entries, truth.fieldIds.epicLink) &&
+    templateGapsLabelled(answer, templatePopulation(truth).without)
+  );
+}
+
+function largeCoverageEvidence(observed, truth) {
+  const population = templatePopulation(truth);
+  return {
+    counts: {
+      issues: observed.issues.length,
+      pages: observed.pages.length,
+      templateCheckedIssues: population.checked,
+      issuesWithoutTemplate: population.uncovered,
+    },
+    detail: `${population.checked} template-checked issues; ${population.uncovered} issues without template`,
+  };
+}
+
+function gradeObservedLargeReport(report, truth, answer, coverage) {
   const grade = gradeDeviationReport(
     answer,
     truth.issues,
@@ -543,19 +622,36 @@ export function gradeLargeDeviationReport(exchanges, observed, value, answer) {
   );
   const extras = [...report.entries.keys()].filter((key) => !expectedKeys.has(key));
   const falseFindings = new Set([...grade.falseFindings, ...extras]).size;
-  const exact =
-    report.compliance.issuesWithDeviations === grade.expected &&
-    report.compliance.deviationCount === grade.deviationCount &&
-    exactLargeEntries(truth.issues, report.entries, truth.fieldIds.epicLink);
+  const exact = exactLargeReport(report, grade, truth, answer);
   return {
     status: largeGradeStatus(grade, exact, falseFindings),
-    detail: `${grade.found}/${grade.expected} deviating issues; ${grade.deviationCount} deviations; ${falseFindings} false findings; ${observed.pages.length} independent native pages`,
+    detail: `${grade.found}/${grade.expected} deviating issues; ${grade.deviationCount} deviations; ${falseFindings} false findings; ${coverage.counts.pages} independent native pages; ${coverage.detail}`,
     counts: {
-      issues: observed.issues.length,
-      pages: observed.pages.length,
+      ...coverage.counts,
       deviations: grade.deviationCount,
       deviatingIssues: grade.expected,
       falseFindings,
     },
   };
+}
+
+/** Shared S11b/limit-run oracle. The caller supplies this turn's answer and tool exchanges. */
+export function gradeLargeDeviationReport(exchanges, observed, value, answer) {
+  const truth = largeDeviationTruth(value);
+  if (truth === undefined) return largeUnverified("versioned large-project truth is unavailable");
+  if (!observedLargeTruth(observed, truth))
+    return largeUnverified("independent native pages or seed agreement are unavailable");
+  const coverage = largeCoverageEvidence(observed, truth);
+  const report = completeLargeDeviations(Array.isArray(exchanges) ? exchanges : [], truth);
+  if (report === undefined)
+    return largeUnverified(
+      `a complete, coherent report deviation sequence is unavailable; ${coverage.detail}`,
+      coverage.counts,
+    );
+  if (typeof answer !== "string")
+    return largeUnverified(
+      `this turn's readable report answer is unavailable; ${coverage.detail}`,
+      coverage.counts,
+    );
+  return gradeObservedLargeReport(report, truth, answer, coverage);
 }

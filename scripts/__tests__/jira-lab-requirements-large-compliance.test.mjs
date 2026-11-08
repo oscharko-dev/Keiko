@@ -109,9 +109,11 @@ function reportExchanges(issues, project) {
         scope: { projectKey: project },
         compliance: {
           checker: "applied",
+          requiredFieldRules: "applied",
           issuesChecked: issues.length,
           issuesJudged: issues.length,
           issuesWithoutTemplate: 0,
+          withoutTemplateByType: [],
           issuesWithDeviations: items.length,
           deviationCount: 536,
           deviations: {
@@ -166,6 +168,7 @@ function fixture(project = "LRG") {
         project,
         issueCount: 2490,
         fieldIds: { epicLink: EPIC_LINK },
+        templateScope: { issueTypes: ["Epic", "Task", "Bug"] },
         issues,
       },
     },
@@ -184,6 +187,40 @@ function fixture(project = "LRG") {
     },
   };
   return { ctx, turn, imports, deletes, turns: () => turns, run: () => JOURNEYS.S11b(ctx, CHAT) };
+}
+
+function subtaskFixture() {
+  const f = fixture();
+  const truth = f.ctx.truth.large;
+  for (const ordinal of [2491, 2492]) {
+    const key = `LRG-${ordinal}`;
+    native.issues.push({
+      id: String(10000 + ordinal),
+      key,
+      fields: {
+        issuetype: { name: "Sub-task", subtask: true },
+        status: { name: "To Do", statusCategory: { key: "new" } },
+        labels: [],
+        parent: { key: "LRG-46" },
+      },
+    });
+    truth.issues.push({
+      key,
+      type: "Sub-task",
+      status: "To Do",
+      labels: [],
+      parent: "LRG-46",
+      deviations: [],
+    });
+  }
+  truth.issueCount = 2492;
+  f.turn.toolExchanges = reportExchanges(truth.issues, truth.project);
+  const compliance = f.turn.toolExchanges[0].result.data.report.compliance;
+  compliance.issuesChecked = 2490;
+  compliance.issuesWithoutTemplate = 2;
+  compliance.withoutTemplateByType = [{ typeName: "Sub-task", count: 2 }];
+  f.turn.answer += "\nVORLAGENLÜCKE;Sub-task;2";
+  return { ...f, compliance };
 }
 
 beforeEach(() => {
@@ -361,4 +398,102 @@ describe("W8 existing independent JQL paging owner", () => {
       expect(native.requests).toHaveLength(2);
     },
   );
+});
+
+describe("W8 explicit template scope with unregulated subtasks", () => {
+  it("keeps every native issue while judging only the three declared template types", async () => {
+    const f = subtaskFixture();
+    expect(await f.run()).toMatchObject({ status: "green", covers: OBLIGATIONS });
+    expect(native.requests).toHaveLength(25);
+    expect(native.requests[0].url.searchParams.get("fields").split(",")).toContain("parent");
+    expect(f.imports).toHaveLength(3);
+    expect(f.imports.every((markdown) => !markdown.includes('issueType: "Sub-task"'))).toBe(true);
+    const observed = await f.ctx.searchPages(
+      "project = LRG ORDER BY key ASC",
+      `issuetype,status,labels,parent,${EPIC_LINK}`,
+    );
+    const grade = deviations.gradeLargeDeviationReport(
+      f.turn.toolExchanges,
+      observed,
+      f.ctx.truth.large,
+      f.turn.answer,
+    );
+    expect(grade).toMatchObject({
+      status: "green",
+      counts: {
+        issues: 2492,
+        pages: 25,
+        deviations: 536,
+        deviatingIssues: 510,
+        falseFindings: 0,
+        templateCheckedIssues: 2490,
+        issuesWithoutTemplate: 2,
+      },
+    });
+  });
+
+  it.each(["missing", "widened", "duplicate"])(
+    "does not invent the %s template scope",
+    async (kind) => {
+      const f = fixture();
+      if (kind === "missing") delete f.ctx.truth.large.templateScope;
+      if (kind === "widened") f.ctx.truth.large.templateScope.issueTypes.push("Sub-task");
+      if (kind === "duplicate") f.ctx.truth.large.templateScope.issueTypes.push("Task");
+      expect(await f.run()).toMatchObject({ status: "unverified", covers: [] });
+      expect(f.turns()).toBe(0);
+    },
+  );
+
+  it.each([
+    "checked-total",
+    "uncovered-total",
+    "wrong-type",
+    "duplicate-type",
+    "unjudged",
+    "partial-fields",
+  ])("refuses %s native coverage evidence", async (kind) => {
+    const f = subtaskFixture();
+    if (kind === "checked-total") f.compliance.issuesChecked = 2492;
+    if (kind === "uncovered-total") f.compliance.issuesWithoutTemplate = 0;
+    if (kind === "wrong-type") f.compliance.withoutTemplateByType = [{ typeName: "Bug", count: 2 }];
+    if (kind === "duplicate-type")
+      f.compliance.withoutTemplateByType = [
+        { typeName: "Sub-task", count: 1 },
+        { typeName: "Sub-task", count: 1 },
+      ];
+    if (kind === "unjudged") f.compliance.issuesJudged = 2490;
+    if (kind === "partial-fields") f.compliance.requiredFieldRules = "partial";
+    expect(await f.run()).toMatchObject({ status: "unverified", covers: [] });
+  });
+
+  it.each(["missing", "zero", "wrong-type", "duplicated"])(
+    "requires an exact readable scope gap instead of %s",
+    async (kind) => {
+      const f = subtaskFixture();
+      const rows = {
+        missing: "",
+        zero: "VORLAGENLÜCKE;Sub-task;0",
+        "wrong-type": "VORLAGENLÜCKE;Bug;2",
+        duplicated: "VORLAGENLÜCKE;Sub-task;2\nVORLAGENLÜCKE;Sub-task;2",
+      };
+      f.turn.answer = f.turn.answer.replace("VORLAGENLÜCKE;Sub-task;2", rows[kind]);
+      expect(await f.run()).toMatchObject({ status: "red", covers: [] });
+    },
+  );
+
+  it.each(["missing", "changed"])(
+    "does not substitute an Epic Link for a %s native system parent",
+    async (kind) => {
+      const f = subtaskFixture();
+      if (kind === "missing") delete native.issues.at(-1).fields.parent;
+      else native.issues.at(-1).fields.parent = { key: "LRG-47" };
+      expect(await f.run()).toMatchObject({ status: "unverified", covers: [] });
+    },
+  );
+
+  it("rejects an invented subtask label finding while retaining all real Task findings", async () => {
+    const f = subtaskFixture();
+    f.turn.toolExchanges.at(-1).result.data.section.items.at(-1).key = "LRG-2491";
+    expect(await f.run()).toMatchObject({ status: "red", covers: [] });
+  });
 });

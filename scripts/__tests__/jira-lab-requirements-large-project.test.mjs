@@ -93,6 +93,7 @@ describe("the large project plan", () => {
     const keys = plan.map((_, index) => `${LARGE_PROJECT}-${index + 1}`);
     const truth = largeTruth(plan, keys, { epicLink: "customfield_10001" });
     expect(truth.seedVersion).toBe(2);
+    expect(truth.templateScope).toEqual({ issueTypes: ["Epic", "Task", "Bug"] });
     expect(truth.issues).toHaveLength(2490);
     expect(truth.issues).toEqual(
       plan.map((item, index) => ({

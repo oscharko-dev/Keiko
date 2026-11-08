@@ -119,6 +119,25 @@ describe("W9 unavailable estimate evidence", () => {
     continuation.result.data.report.digest = "b".repeat(64);
     expect(grade(answer(), [exchange(), continuation]).ok).toBe(false);
   });
+  it("does not infer unavailable from an initial reading slice and a section without its final summary", () => {
+    const reading = exchange();
+    reading.result.data = { outcome: "succeeded", status: "reading", reportId: "native-report" };
+    const section = {
+      call: { arguments: { reportId: "native-report" } },
+      result: {
+        status: "completed",
+        toolRef: { canonicalId: "keiko.jira.report" },
+        data: {
+          outcome: "succeeded",
+          status: "complete",
+          reportId: "native-report",
+          report: { digest: "a".repeat(64) },
+          section: { name: "statuses", items: [] },
+        },
+      },
+    };
+    expect(grade(answer(), [reading, section]).ok).toBe(false);
+  });
   it.each([true, false])(
     "does not grade a lab timeout, even when a partial answer looks complete (%s)",
     async (completeAnswer) => {
