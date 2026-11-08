@@ -184,3 +184,26 @@ it.each([
   expect(() => validateToolArguments(valid, descriptor)).not.toThrow();
   expect(() => validateToolArguments({ ...valid, [field]: "" }, descriptor)).toThrow();
 });
+
+it.each([
+  "gh-simplified-scrum-classic",
+  "com.pyxis.greenhopper.jira:",
+  ":gh-scrum-template",
+  "com.pyxis.greenhopper.jira gh-scrum-template",
+])("refuses the incomplete project template module key %j before any Jira dispatch", (key) => {
+  // Jira resolves a template by complete module key and answers anything else with an opaque 500.
+  const declaration = jiraMutationDeclarations().find(
+    (entry) => entry.name === "jira.create-project",
+  );
+  if (declaration === undefined) throw new TypeError("Missing jira.create-project declaration");
+  const descriptor = createJiraOperationContract(declaration).declaration.descriptor;
+  const valid: CatalogJsonObject = {
+    key: "LIM1",
+    name: "Limit",
+    lead: "keiko-admin",
+    projectTypeKey: "software",
+    projectTemplateKey: "com.pyxis.greenhopper.jira:gh-scrum-template",
+  };
+  expect(() => validateToolArguments(valid, descriptor)).not.toThrow();
+  expect(() => validateToolArguments({ ...valid, projectTemplateKey: key }, descriptor)).toThrow();
+});

@@ -150,7 +150,7 @@ import {
   createToolDescriptor,
   createToolRef,
 } from "@oscharko-dev/keiko-tool-catalog";
-import { identifier, object, text } from "./jiraManagedSchemas.js";
+import { identifier, moduleKey, object, text } from "./jiraManagedSchemas.js";
 import {
   JIRA_ISSUE_LINKS_MAX,
   JIRA_METADATA_MAX_UPDATES,
@@ -573,7 +573,7 @@ const DEFINITIONS: Readonly<
         name: identifier(255),
         lead: identifier(JIRA_PROJECT_LEAD_MAX_CHARS),
         projectTypeKey: identifier(64),
-        projectTemplateKey: identifier(255),
+        projectTemplateKey: moduleKey(255),
         description: text(32768),
         url: text(JIRA_PROJECT_URL_MAX_CHARS),
         assigneeType: { type: "string", enum: ["PROJECT_LEAD", "UNASSIGNED"] },

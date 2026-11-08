@@ -16,8 +16,8 @@ import {
 } from "./project-agile-oracles.mjs";
 
 class SetupProofFailure extends TypeError {
-  constructor(detail) {
-    super(detail);
+  constructor(detail, options) {
+    super(detail, options);
     this.detail = detail;
   }
 }
@@ -227,7 +227,12 @@ function createPrompt(identity, actor, denied) {
   return (
     `Create exactly one Jira Software Scrum project with key ${key}, name "${name}", ` +
     `project lead ${actor.name}, using a currently supported native Scrum project template. ` +
-    "Inspect current options and permissions first. Do not create issues, change permissions, " +
+    "Inspect current options and permissions first. " +
+    (denied
+      ? "Then submit the creation exactly once even if a permission fact suggests a refusal: " +
+        "only Jira's own response to that request decides it. "
+      : "") +
+    "Do not create issues, change permissions, " +
     "create a replacement, retry a rejected or uncertain write, or correct a permission failure. " +
     "Show the actual project key and link or the precise native permission refusal."
   );
@@ -284,7 +289,12 @@ async function deniedProject(ctx, journal, actors, identity, session, counts) {
   );
   const after = await inventory(session);
   unchangedDenied(before, after);
-  permissionRefusal(turn);
+  try {
+    permissionRefusal(turn);
+  } catch (error) {
+    // A missing or unpreserved native refusal is a refusal proof failure, not a readback failure.
+    throw new SetupProofFailure("project-refusal-unverified", { cause: error });
+  }
   proof(
     turn.decisions === 0 && !turn.exchanges.some((exchange) => exchange.effectStarted === true),
     "project-refusal-unverified",
