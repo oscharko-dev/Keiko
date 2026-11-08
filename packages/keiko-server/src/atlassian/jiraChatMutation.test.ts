@@ -327,11 +327,65 @@ function propertyNodes(value: null | false): readonly CatalogJsonObject[] {
     ? [{ path: "", kind: "null" }]
     : [{ path: "", kind: "boolean", booleanValue: false }];
 }
+function fixtureJson(body: unknown, status = 200): Promise<Response> {
+  return Promise.resolve(new Response(JSON.stringify(body), { status }));
+}
+function propertyWriteResponse(
+  f: ReturnType<typeof fixture>,
+  scenario: PropertyJournalCase,
+  observation: PropertyObservation,
+  selectedPath: string,
+  resource: string,
+  init: RequestInit | undefined,
+): Promise<Response> {
+  expect(f.input.journal?.find(f.input.intent.invocationId)?.phase).toBe("dispatched");
+  expect(selectedPath).toBe(`${resource}/${JOURNAL_PROPERTY_KEY}`);
+  expect(init?.method).toBe(scenario.remove ? "DELETE" : "PUT");
+  expect(init?.body).toBe(scenario.remove ? undefined : JSON.stringify(scenario.after));
+  if (observation === "lost-ack")
+    return Promise.reject(new Error("Synthetic lost property acknowledgement"));
+  return Promise.resolve(new Response(null, { status: 204 }));
+}
+function observedPropertyValue(
+  scenario: PropertyJournalCase,
+  observation: PropertyObservation,
+  dispatched: boolean,
+): null | false {
+  if (dispatched || observation === "unchanged") return scenario.after;
+  if (observation === "stale") return scenario.before === null ? false : null;
+  return scenario.before;
+}
+function propertyReadResponse(
+  scenario: PropertyJournalCase,
+  observation: PropertyObservation,
+  dispatched: boolean,
+  selectedPath: string,
+  parent: string,
+  resource: string,
+): Promise<Response> {
+  if (dispatched && observation === "denied-readback")
+    return fixtureJson({ errorMessages: ["Readback denied"] }, 403);
+  if (selectedPath === parent || selectedPath === `${scenario.root}/issue/syn-1`)
+    return fixtureJson(
+      scenario.entity === "issue"
+        ? { id: scenario.id, key: "SYN-1", fields: { summary: "Synthetic issue" } }
+        : { id: Number(scenario.id), name: "Synthetic board" },
+    );
+  const present = !dispatched || !scenario.remove;
+  if (selectedPath === resource)
+    return fixtureJson({ keys: present ? [{ key: JOURNAL_PROPERTY_KEY }] : [] });
+  expect(selectedPath).toBe(`${resource}/${JOURNAL_PROPERTY_KEY}`);
+  if (!present) return fixtureJson({ errorMessages: ["Property missing"] }, 404);
+  return fixtureJson({
+    key: JOURNAL_PROPERTY_KEY,
+    value: observedPropertyValue(scenario, observation, dispatched),
+  });
+}
 function propertyJournalFixture(
   scenario: PropertyJournalCase,
   observation: PropertyObservation,
   path = ":memory:",
-) {
+): ReturnType<typeof fixture> & { readonly receipt: CatalogJsonObject } {
   const f = fixture(path);
   const parent = `${scenario.root}/${scenario.entity}/${scenario.id}`;
   const resource = `${parent}/properties`;
@@ -339,40 +393,11 @@ function propertyJournalFixture(
   f.effects.mockImplementation((input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     const selectedPath = decodeURIComponent(url.pathname);
-    const json = (body: unknown, status = 200) =>
-      Promise.resolve(new Response(JSON.stringify(body), { status }));
     if (init?.method !== "GET") {
-      expect(f.input.journal?.find(f.input.intent.invocationId)?.phase).toBe("dispatched");
-      expect(selectedPath).toBe(`${resource}/${JOURNAL_PROPERTY_KEY}`);
-      expect(init?.method).toBe(scenario.remove ? "DELETE" : "PUT");
-      expect(init?.body).toBe(scenario.remove ? undefined : JSON.stringify(scenario.after));
       dispatched = true;
-      if (observation === "lost-ack")
-        return Promise.reject(new Error("Synthetic lost property acknowledgement"));
-      return Promise.resolve(new Response(null, { status: 204 }));
+      return propertyWriteResponse(f, scenario, observation, selectedPath, resource, init);
     }
-    if (dispatched && observation === "denied-readback")
-      return json({ errorMessages: ["Readback denied"] }, 403);
-    if (selectedPath === parent || selectedPath === `${scenario.root}/issue/syn-1`)
-      return json(
-        scenario.entity === "issue"
-          ? { id: scenario.id, key: "SYN-1", fields: { summary: "Synthetic issue" } }
-          : { id: Number(scenario.id), name: "Synthetic board" },
-      );
-    const present = !dispatched || !scenario.remove;
-    if (selectedPath === resource)
-      return json({ keys: present ? [{ key: JOURNAL_PROPERTY_KEY }] : [] });
-    expect(selectedPath).toBe(`${resource}/${JOURNAL_PROPERTY_KEY}`);
-    if (!present) return json({ errorMessages: ["Property missing"] }, 404);
-    const value =
-      dispatched || observation === "unchanged"
-        ? scenario.after
-        : observation === "stale"
-          ? scenario.before === null
-            ? false
-            : null
-          : scenario.before;
-    return json({ key: JOURNAL_PROPERTY_KEY, value });
+    return propertyReadResponse(scenario, observation, dispatched, selectedPath, parent, resource);
   });
   const expected = observation === "unchanged" ? scenario.after : scenario.before;
   const args: CatalogJsonObject = {
@@ -395,6 +420,15 @@ function propertyJournalFixture(
     input: { ...f.input, intent: { ...f.input.intent, operation: scenario.operation }, execute },
   };
 }
+/** The private transcript keeps receipts; the durable journal proves only its outcome. */
+function expectJournalReplay(
+  result: Awaited<ReturnType<typeof executeJiraChatMutation>>,
+  outcome: "succeeded" | "succeeded-unconfirmed" | "unknown",
+): void {
+  expect(result).toMatchObject({ data: { outcome, replayed: true } });
+  for (const field of ["issueId", "issueKey", "boardId", "propertyKey", "propertyPresent"])
+    expect(result.data).not.toHaveProperty(field);
+}
 it.each(PROPERTY_JOURNAL_CASES)(
   "journals one $operation using its fixed root and complete same-parent property readback",
   async (scenario) => {
@@ -411,9 +445,7 @@ it.each(PROPERTY_JOURNAL_CASES)(
       "GET",
       "GET",
     ]);
-    expect(await executeJiraChatMutation(f.input)).toMatchObject({
-      data: { outcome: "succeeded", replayed: true, ...f.receipt },
-    });
+    expectJournalReplay(await executeJiraChatMutation(f.input), "succeeded");
     expect(f.effects).toHaveBeenCalledTimes(7);
     expect(f.logs.lines().join()).not.toMatch(
       /display|Synthetic issue|Synthetic board|jira\.example|propertyKey|valueNodes/u,
@@ -428,9 +460,7 @@ it.each(PROPERTY_JOURNAL_CASES)(
       data: { outcome: "succeeded-unconfirmed", ...f.receipt },
     });
     const requests = f.effects.mock.calls.length;
-    expect(await executeJiraChatMutation(f.input)).toMatchObject({
-      data: { outcome: "succeeded-unconfirmed", replayed: true, ...f.receipt },
-    });
+    expectJournalReplay(await executeJiraChatMutation(f.input), "succeeded-unconfirmed");
     expect(f.effects).toHaveBeenCalledTimes(requests);
     expect(f.effects.mock.calls.filter(([, init]) => init?.method !== "GET")).toHaveLength(1);
   },
@@ -449,13 +479,14 @@ it.each(PROPERTY_JOURNAL_CASES)(
       const reopened = createNodeUiStore(path);
       try {
         const execute = vi.fn(f.input.execute);
-        expect(
+        expectJournalReplay(
           await executeJiraChatMutation({
             ...f.input,
             journal: reopened.chatToolMutations,
             execute,
           }),
-        ).toMatchObject({ data: { outcome: "unknown", replayed: true, ...f.receipt } });
+          "unknown",
+        );
         expect(execute).not.toHaveBeenCalled();
         expect(f.effects.mock.calls.map(([, init]) => init?.method)).toEqual([
           "GET",
@@ -515,9 +546,7 @@ it.each(PROPERTY_JOURNAL_CASES)(
     expect(await executeJiraChatMutation(f.input)).toMatchObject({
       data: { outcome: "unknown", ...f.receipt },
     });
-    expect(await executeJiraChatMutation(f.input)).toMatchObject({
-      data: { outcome: "unknown", replayed: true, ...f.receipt },
-    });
+    expectJournalReplay(await executeJiraChatMutation(f.input), "unknown");
     expect(f.effects.mock.calls.filter(([, init]) => init?.method !== "GET")).toHaveLength(1);
   },
 );
@@ -562,37 +591,50 @@ const MONITORING_WRITES = [
 ] as const;
 type MonitoringCase = (typeof MONITORING_WRITES)[number];
 type MonitoringObservation = "confirmed" | "lost-ack" | "denied-readback" | "unchanged" | "stale";
+function monitoringWriteResponse(
+  f: ReturnType<typeof fixture>,
+  scenario: MonitoringCase,
+  observation: MonitoringObservation,
+  url: URL,
+  scalar: boolean,
+): Promise<Response> {
+  expect(f.input.journal?.find(f.input.intent.invocationId)?.phase).toBe("dispatched");
+  expect(url.pathname).toBe(`/rest/api/2/${scenario.path}`);
+  if (observation === "lost-ack")
+    return Promise.reject(new Error("Synthetic lost monitoring response"));
+  return Promise.resolve(new Response(null, { status: scalar ? 200 : 204 }));
+}
+function monitoringReadResponse(
+  scenario: MonitoringCase,
+  observation: MonitoringObservation,
+  dispatched: boolean,
+  scalar: boolean,
+): Promise<Response> {
+  if (dispatched && observation === "denied-readback")
+    return fixtureJson({ errorMessages: ["Readback denied"] }, 403);
+  const enabled =
+    dispatched || observation === "unchanged" || observation === "stale"
+      ? scenario.target
+      : scenario.before;
+  return fixtureJson(scalar ? enabled : { enabled });
+}
 function monitoringFixture(
   scenario: MonitoringCase,
   observation: MonitoringObservation,
   path = ":memory:",
-) {
+): ReturnType<typeof fixture> {
   const f = fixture(path);
   let dispatched = false;
   const scalar = scenario.read === "monitoring/jmx/areMetricsExposed";
   f.effects.mockImplementation((input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     if (init?.method === "POST") {
-      expect(f.input.journal?.find(f.input.intent.invocationId)?.phase).toBe("dispatched");
-      expect(url.pathname).toBe(`/rest/api/2/${scenario.path}`);
       dispatched = true;
-      if (observation === "lost-ack")
-        return Promise.reject(new Error("Synthetic lost monitoring response"));
-      return Promise.resolve(new Response(null, { status: scalar ? 200 : 204 }));
+      return monitoringWriteResponse(f, scenario, observation, url, scalar);
     }
     expect(init?.method).toBe("GET");
     expect(url.pathname).toBe(`/rest/api/2/${scenario.read}`);
-    if (dispatched && observation === "denied-readback")
-      return Promise.resolve(
-        new Response('{"errorMessages":["Readback denied"]}', { status: 403 }),
-      );
-    const enabled =
-      dispatched || observation === "unchanged" || observation === "stale"
-        ? scenario.target
-        : scenario.before;
-    return Promise.resolve(
-      new Response(JSON.stringify(scalar ? enabled : { enabled }), { status: 200 }),
-    );
+    return monitoringReadResponse(scenario, observation, dispatched, scalar);
   });
   const args: CatalogJsonObject =
     observation === "unchanged"
@@ -1575,54 +1617,76 @@ function managedAttempt(
     return attempted;
   };
 }
+type TabFixtureObservation = "confirmed" | "denied-readback" | "lost-ack";
+interface FixtureTab {
+  readonly id: number;
+  readonly name: string;
+}
+function tabWriteResponse(
+  f: ReturnType<typeof fixture>,
+  operation: TabWrite,
+  observation: TabFixtureObservation,
+): Promise<Response> {
+  expect(f.input.journal?.find(f.input.intent.invocationId)?.phase).toBe("dispatched");
+  if (observation === "lost-ack")
+    return Promise.reject(new Error("Synthetic lost screen-tab response"));
+  if (operation === "jira.delete-screen-tab")
+    return Promise.resolve(new Response(null, { status: 204 }));
+  return fixtureJson({
+    id: operation === "jira.create-screen-tab" ? 23 : 21,
+    name: "Implementation",
+  });
+}
+function observedTabs(
+  operation: TabWrite,
+  original: readonly FixtureTab[],
+  changed: boolean,
+): readonly (FixtureTab | undefined)[] {
+  if (!changed) return original;
+  if (operation === "jira.create-screen-tab")
+    return [...original, { id: 23, name: "Implementation" }];
+  if (operation === "jira.rename-screen-tab")
+    return [{ id: 21, name: "Implementation" }, original[1]];
+  return [original[1]];
+}
+function tabReadResponse(
+  url: URL,
+  operation: TabWrite,
+  original: readonly FixtureTab[],
+  changed: boolean,
+): Promise<Response> {
+  if (url.pathname.endsWith("/screens"))
+    return fixtureJson({
+      startAt: 0,
+      maxResults: 100,
+      total: 1,
+      isLast: true,
+      screens: [{ id: 11, name: "Review screen" }],
+    });
+  if (url.pathname.endsWith("/fields")) return fixtureJson([{ id: "summary", name: "Summary" }]);
+  return fixtureJson(observedTabs(operation, original, changed));
+}
 function tabFixture(
   operation: TabWrite,
-  observation: "confirmed" | "denied-readback" | "lost-ack",
+  observation: TabFixtureObservation,
   path = ":memory:",
-) {
+): ReturnType<typeof fixture> {
   const f = fixture(path);
   let changed = false;
   const original = [
     { id: 21, name: "Fields" },
     { id: 22, name: "Other" },
   ];
-  const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
   f.effects.mockImplementation((input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     const method = init?.method ?? "GET";
     if (method !== "GET") {
-      expect(f.input.journal?.find(f.input.intent.invocationId)?.phase).toBe("dispatched");
       changed = true;
-      if (observation === "lost-ack")
-        return Promise.reject(new Error("Synthetic lost screen-tab response"));
-      return Promise.resolve(
-        operation === "jira.delete-screen-tab"
-          ? new Response(null, { status: 204 })
-          : json({ id: operation === "jira.create-screen-tab" ? 23 : 21, name: "Implementation" }),
-      );
+      return tabWriteResponse(f, operation, observation);
     }
     if (changed && observation === "denied-readback")
-      return Promise.resolve(json({ errorMessages: ["Not permitted"] }, 403));
-    if (url.pathname.endsWith("/screens"))
-      return Promise.resolve(
-        json({
-          startAt: 0,
-          maxResults: 100,
-          total: 1,
-          isLast: true,
-          screens: [{ id: 11, name: "Review screen" }],
-        }),
-      );
-    if (url.pathname.endsWith("/fields"))
-      return Promise.resolve(json([{ id: "summary", name: "Summary" }]));
-    const tabs = !changed
-      ? original
-      : operation === "jira.create-screen-tab"
-        ? [...original, { id: 23, name: "Implementation" }]
-        : operation === "jira.rename-screen-tab"
-          ? [{ id: 21, name: "Implementation" }, original[1]]
-          : [original[1]];
-    return Promise.resolve(json(tabs));
+      return fixtureJson({ errorMessages: ["Not permitted"] }, 403);
+    return tabReadResponse(url, operation, original, changed);
   });
   const execute = managedAttempt(f, operation, tabArguments(operation));
   return { ...f, input: { ...f.input, intent: { ...f.input.intent, operation }, execute } };

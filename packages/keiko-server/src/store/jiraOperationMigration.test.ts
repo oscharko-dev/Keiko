@@ -195,8 +195,9 @@ describe("V63 journals the closed component and version operations", () => {
       "jira.draft",
       "jira.unknown",
     ]) {
+      const historical = priorDatabase(63);
       expect(() => {
-        insertMutation(db, invalid, invalid);
+        insertMutation(historical, invalid, invalid);
       }).toThrow(/CHECK/u);
     }
   });

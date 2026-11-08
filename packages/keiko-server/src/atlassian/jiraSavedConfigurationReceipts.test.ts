@@ -125,7 +125,8 @@ describe("saved Jira configuration receipt identities", () => {
           ok: false,
           reason: "malformed-payload",
         });
-        Object.setPrototypeOf(missing, { [key]: Reflect.get(receipt, key) });
+        const inherited: unknown = Reflect.get(receipt, key);
+        Object.setPrototypeOf(missing, { [key]: inherited });
         expect(validJiraMutationAttempt({ ok: true, receipt: missing }, operation)).toEqual({
           ok: false,
           reason: "malformed-payload",
@@ -246,8 +247,7 @@ describe("saved configuration receipt object boundaries", () => {
       "jira.update-filter",
     );
     expect(getter).not.toHaveBeenCalled();
-    expect(attempt.receipt).not.toHaveProperty("issueKeys");
-    if (attempt.receipt !== undefined) expect(attempt.receipt).toEqual(FILTER);
+    expect(attempt).toEqual({ ok: false, reason: "timeout" });
   });
 });
 

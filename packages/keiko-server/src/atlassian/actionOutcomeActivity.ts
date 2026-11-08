@@ -1,4 +1,8 @@
-import { jiraActionLogFields, jiraToolForAction } from "./jiraOperationLogFields.js";
+import {
+  jiraActionOutcomeLogFields,
+  jiraToolForAction,
+  LEGACY_JIRA_ACTION_LOG_TYPES,
+} from "./jiraOperationLogFields.js";
 import { recordJiraOperationActivity } from "./jiraOperationActivity.js";
 import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
@@ -37,6 +41,7 @@ const ACTION_OUTCOME = defineActivityLogOperation({
       values: [
         "jira-read",
         "jira-write",
+        ...LEGACY_JIRA_ACTION_LOG_TYPES,
         "sync-space",
         "sync-project",
         "search-issues-live",
@@ -124,6 +129,24 @@ function failureReason(
   return "none";
 }
 
+function recordOutcomeLogFailure(
+  deps: Pick<AtlassianConnectorCredentialDeps, "diagnostics">,
+  correlationId: string,
+  error: unknown,
+): void {
+  recordActivityLogLoss("port-sink-failed");
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId,
+      operation: "atlassian.action.log-failed",
+      source: "atlassian-action-activity",
+      error,
+      redact: () => "server-operation-failed",
+    }),
+  );
+}
+
 /** Project the existing action owner's result, excluding targets, credential refs and content. */
 export function recordAtlassianActionOutcome(
   deps: Pick<AtlassianConnectorCredentialDeps, "activityLog" | "diagnostics">,
@@ -142,7 +165,7 @@ export function recordAtlassianActionOutcome(
         },
         {
           provider: record.provider,
-          ...jiraActionLogFields(record.actionType),
+          ...jiraActionOutcomeLogFields(record.actionType),
           disposition: record.disposition,
           outcome,
           durationMs: record.durationMs,
@@ -167,16 +190,6 @@ export function recordAtlassianActionOutcome(
       );
     }
   } catch (error) {
-    recordActivityLogLoss("port-sink-failed");
-    emitServerDiagnostic(
-      deps.diagnostics,
-      serverDiagnosticFromError({
-        correlationId: record.correlationId,
-        operation: "atlassian.action.log-failed",
-        source: "atlassian-action-activity",
-        error,
-        redact: () => "server-operation-failed",
-      }),
-    );
+    recordOutcomeLogFailure(deps, record.correlationId, error);
   }
 }

@@ -14,9 +14,11 @@ import {
 } from "./jiraChatAttachment.js";
 import { jiraAvatarInspection, jiraChatAvatarComposition } from "./jiraAvatarComposition.js";
 
-const IMAGE = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jE0sAAAAASUVORK5CYII=",
-  "base64",
+const IMAGE = new Uint8Array(
+  Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jE0sAAAAASUVORK5CYII=",
+    "base64",
+  ),
 );
 const REQUEST = {
   kind: "connected-file",
@@ -29,7 +31,17 @@ afterEach(() => {
   vi.restoreAllMocks();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
-function fixture(review: () => JiraChatAttachmentReview) {
+type AvatarComposition = ReturnType<typeof jiraChatAvatarComposition>;
+type AvatarSource = NonNullable<ReturnType<NonNullable<AvatarComposition["sourceFor"]>>>;
+interface AvatarFixture {
+  readonly deps: JiraChatAttachmentDeps;
+  readonly options: Parameters<typeof jiraChatAvatarComposition>[1];
+  readonly composition: AvatarComposition;
+  readonly source: (check: boolean) => AvatarSource;
+  readonly path: string;
+  readonly logs: ReturnType<typeof createBufferedServerLogSink>;
+}
+function fixture(review: () => JiraChatAttachmentReview): AvatarFixture {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-avatar-composition-")));
   roots.push(root);
   mkdirSync(join(root, "images"));
@@ -59,7 +71,7 @@ function fixture(review: () => JiraChatAttachmentReview) {
   const logs = createBufferedServerLogSink();
   vi.spyOn(processServerLogSink(), "write").mockImplementation(logs.write);
   const composition = jiraChatAvatarComposition(deps, options);
-  function source(check: boolean) {
+  function source(check: boolean): AvatarSource {
     const value = composition.sourceFor?.(check);
     if (value === undefined) throw new TypeError("Missing composed source");
     return value;
@@ -87,9 +99,7 @@ it("server-mints exact image integrity in allowed mode without adding approval",
     content: { name: "avatar.png", bytes: IMAGE },
   });
   expect(
-    review.mock.results.every(
-      (result) => result.type === "return" && result.value.required === false,
-    ),
+    review.mock.results.every((result) => result.type === "return" && !result.value.required),
   ).toBe(true);
   expect(
     f.logs.events

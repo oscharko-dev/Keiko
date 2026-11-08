@@ -50,6 +50,31 @@ afterEach(() => {
 });
 
 describe("Footer — window status trigger", () => {
+  it.each([
+    {
+      reason: "vault-migration-failed",
+      explanation: "Memory is unavailable until its local vault is repaired.",
+    },
+    { reason: "vault-unreadable", explanation: "The saved Memory vault could not be opened." },
+  ] as const)(
+    "shows withheld Memory and its $reason cause independently of a healthy server",
+    ({ reason, explanation }) => {
+      renderFooter({
+        backendHealth: {
+          state: "loaded",
+          health: {
+            status: "ok",
+            version: "1.2.3",
+            memory: { readiness: "withheld", reason },
+          },
+        },
+      });
+      expect(screen.getByText("Memory unavailable")).toHaveAttribute(
+        "title",
+        expect.stringContaining(explanation),
+      );
+    },
+  );
   it("keeps diagnostic counts and report actions out of the centered footer", () => {
     renderFooter({
       winCount: 3,

@@ -28,67 +28,80 @@ const PROOFS = [
   {
     op: "jira.operation.issues",
     count: 41,
-    prove: (line: string) => expectActivityLogProof("jira.operation.issues.line", line),
+    prove: (line: string): ReturnType<typeof expectActivityLogProof> =>
+      expectActivityLogProof("jira.operation.issues.line", line),
   },
   {
     op: "jira.operation.planning",
     count: 31,
-    prove: (line: string) => expectActivityLogProof("jira.operation.planning.line", line),
+    prove: (line: string): ReturnType<typeof expectActivityLogProof> =>
+      expectActivityLogProof("jira.operation.planning.line", line),
   },
   {
     op: "jira.operation.projects",
     count: 34,
-    prove: (line: string) => expectActivityLogProof("jira.operation.projects.line", line),
+    prove: (line: string): ReturnType<typeof expectActivityLogProof> =>
+      expectActivityLogProof("jira.operation.projects.line", line),
   },
   {
     op: "jira.operation.metadata",
     count: 42,
-    prove: (line: string) => expectActivityLogProof("jira.operation.metadata.line", line),
+    prove: (line: string): ReturnType<typeof expectActivityLogProof> =>
+      expectActivityLogProof("jira.operation.metadata.line", line),
   },
   {
     op: "jira.operation.schemes",
     count: 62,
-    prove: (line: string) => expectActivityLogProof("jira.operation.schemes.line", line),
+    prove: (line: string): ReturnType<typeof expectActivityLogProof> =>
+      expectActivityLogProof("jira.operation.schemes.line", line),
   },
   {
     op: "jira.operation.identities",
     count: 61,
-    prove: (line: string) => expectActivityLogProof("jira.operation.identities.line", line),
+    prove: (line: string): ReturnType<typeof expectActivityLogProof> =>
+      expectActivityLogProof("jira.operation.identities.line", line),
   },
   {
     op: "jira.operation.avatars",
     count: 19,
-    prove: (line: string) => expectActivityLogProof("jira.operation.avatars.line", line),
+    prove: (line: string): ReturnType<typeof expectActivityLogProof> =>
+      expectActivityLogProof("jira.operation.avatars.line", line),
   },
   {
     op: "jira.operation.properties",
     count: 32,
-    prove: (line: string) => expectActivityLogProof("jira.operation.properties.line", line),
+    prove: (line: string): ReturnType<typeof expectActivityLogProof> =>
+      expectActivityLogProof("jira.operation.properties.line", line),
   },
   {
     op: "jira.operation.configuration",
     count: 39,
-    prove: (line: string) => expectActivityLogProof("jira.operation.configuration.line", line),
+    prove: (line: string): ReturnType<typeof expectActivityLogProof> =>
+      expectActivityLogProof("jira.operation.configuration.line", line),
   },
   {
     op: "jira.operation.maintenance",
     count: 25,
-    prove: (line: string) => expectActivityLogProof("jira.operation.maintenance.line", line),
+    prove: (line: string): ReturnType<typeof expectActivityLogProof> =>
+      expectActivityLogProof("jira.operation.maintenance.line", line),
   },
   {
     op: "jira.operation.saved-views",
     count: 17,
-    prove: (line: string) => expectActivityLogProof("jira.operation.saved-views.line", line),
+    prove: (line: string): ReturnType<typeof expectActivityLogProof> =>
+      expectActivityLogProof("jira.operation.saved-views.line", line),
   },
   {
     op: "jira.operation.core",
     count: 37,
-    prove: (line: string) => expectActivityLogProof("jira.operation.core.line", line),
+    prove: (line: string): ReturnType<typeof expectActivityLogProof> =>
+      expectActivityLogProof("jira.operation.core.line", line),
   },
   {
     op: "jira.operation.local",
-    count: 2,
-    prove: (line: string) => expectActivityLogProof("jira.operation.local.line", line),
+    count: 3,
+    prove: (line: string): ReturnType<typeof expectActivityLogProof> =>
+      expectActivityLogProof("jira.operation.local.line", line),
   },
 ] as const;
 const AMBIGUOUS_ACTION_TOOLS: ReadonlySet<string> = new Set([
@@ -130,7 +143,7 @@ describe("exact Jira operation facts through existing log owners", () => {
         .filter(({ kind }) => kind === "composite")
         .map(({ tool }) => tool)
         .sort(),
-    ).toEqual(["jira.draft", "jira.draft-stage", "jira.report"]);
+    ).toEqual(["jira.draft", "jira.draft-batch", "jira.draft-stage", "jira.report"]);
     expect(new Set(members).size).toBe(members.length);
     expect(new Set(members)).toEqual(new Set(definitions.map(({ tool }) => tool)));
     expect(new Set(members)).toEqual(

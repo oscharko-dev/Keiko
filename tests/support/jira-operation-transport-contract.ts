@@ -114,22 +114,11 @@ const UNCONFIRMED_NATIVE_OPERATIONS: ReadonlySet<string> = new Set([
   "jira.set-project-role-actors",
   "jira.delete-project-role-actor",
 ]);
-export async function observeNativeJiraOperation(
+function nativeExecutor(
   scenario: Scenario,
-  supplied: JiraManagedConnection,
-  privateRequests: readonly AtlassianHttpBodyRequest[] = [],
-): Promise<Observation> {
-  const requests: AtlassianHttpBodyRequest[] = [];
-  const http: AtlassianHttpBodyPort = (request) => {
-    requests.push(request);
-    return supplied.http(request);
-  };
-  const executor: JiraManagedMutationExecutor<ManagedMcpInvocationContext> = async (
-    operation,
-    _args,
-    _context,
-    execute,
-  ) => {
+  http: AtlassianHttpBodyPort,
+): JiraManagedMutationExecutor<ManagedMcpInvocationContext> {
+  return async (operation, _args, _context, execute) => {
     const attempt = await execute(http);
     if (scenario.expectedOutcome === "succeeded-unconfirmed") {
       if (!UNCONFIRMED_NATIVE_OPERATIONS.has(operation))
@@ -155,10 +144,22 @@ export async function observeNativeJiraOperation(
     expect(attempt).toMatchObject({ ok: true });
     return { data: { outcome: "succeeded", ...attempt.receipt } };
   };
+}
+
+export async function observeNativeJiraOperation(
+  scenario: Scenario,
+  supplied: JiraManagedConnection,
+  privateRequests: readonly AtlassianHttpBodyRequest[] = [],
+): Promise<Observation> {
+  const requests: AtlassianHttpBodyRequest[] = [];
+  const http: AtlassianHttpBodyPort = (request) => {
+    requests.push(request);
+    return supplied.http(request);
+  };
   const provider = createJiraProviderForCatalog(
     () => ({ ...supplied, http }),
     [scenario.tool],
-    executor,
+    nativeExecutor(scenario, http),
   );
   const tool = provider.tools()[0];
   const contract = jiraOperationForTool(scenario.tool);

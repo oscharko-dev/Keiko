@@ -500,6 +500,7 @@ function health(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
     status: "ok",
     version: SDK_VERSION,
     diagnostics: currentActivityLogReadiness(),
+    ...(deps.memoryReadiness === undefined ? {} : { memory: deps.memoryReadiness }),
     ...(isKeikoUiLaunchId(launchId) ? { launchId } : {}),
   };
   return { status: 200, body };

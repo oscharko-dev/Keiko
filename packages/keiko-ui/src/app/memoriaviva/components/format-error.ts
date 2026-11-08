@@ -13,7 +13,8 @@ const CODE_MESSAGES: Readonly<Record<string, string>> = {
   CONFLICT: "The memory changed in the meantime. Reload the page and try again.",
   GOVERNANCE_ERROR: "Governance rules blocked this action.",
   MEMORY_ERROR: "The memory store reported an error. Retry, or check the server log.",
-  MEMORY_UNAVAILABLE: "The memory store is currently unavailable. Retry in a moment.",
+  MEMORY_UNAVAILABLE:
+    "The memory store is unavailable for this session. Resolve the cause shown in Status, then restart Keiko.",
   PAYLOAD_TOO_LARGE: "The submitted content is too large. Shorten it and try again.",
   INTERNAL: "Something went wrong on the server. Retry, or check the server log.",
 };

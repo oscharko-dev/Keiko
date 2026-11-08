@@ -1,11 +1,11 @@
-import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createLocalSecretVault, createShardedLocalSecretVault } from "./secret-vault.js";
+import { secretVaultGuardPath } from "./secret-vault-serialization.js";
 
 const directories: string[] = [];
 function location(): string {
@@ -22,7 +22,7 @@ describe("existing sealed vault atomic ownership", () => {
     (layout) => {
       const path = join(location(), "secrets");
       const key = Buffer.alloc(32, 19);
-      const open = () =>
+      const open = (): ReturnType<typeof createLocalSecretVault> =>
         layout === "file"
           ? createLocalSecretVault({ key, storePath: path })
           : createShardedLocalSecretVault({ key, storeDir: path });
@@ -58,13 +58,7 @@ describe("existing sealed vault atomic ownership", () => {
     const key = Buffer.alloc(32, 19);
     const vault = createLocalSecretVault({ key, storePath });
     vault.set("one-use", "synthetic ready");
-    const digest = (value: string) => createHash("sha256").update(value).digest("hex");
-    const path = join(
-      dirname(storePath),
-      ".keiko-vault-guards",
-      digest(storePath),
-      `${digest("store-write")}.sqlite`,
-    );
+    const path = secretVaultGuardPath(storePath, "store-write");
     const child = spawn(
       process.execPath,
       [
@@ -86,7 +80,9 @@ describe("existing sealed vault atomic ownership", () => {
       expect(() => vault.compareAndSet?.("one-use", "synthetic ready", "consumed")).toThrow(
         "already in progress",
       );
-      expect(() => vault.set("one-use", "replacement")).toThrow("already in progress");
+      expect(() => {
+        vault.set("one-use", "replacement");
+      }).toThrow("already in progress");
       expect(vault.get("one-use")).toBe("synthetic ready");
     } finally {
       const exited = once(child, "exit");

@@ -81,6 +81,11 @@ export const EN_MESSAGES = {
   "editor.empty.opening": "Opening…",
   "supportReport.globalFailure": "Keiko encountered an error.",
   "supportReport.readinessUnavailable": "Error reports may currently be incomplete.",
+  "memory.readiness.withheld": "Memory unavailable",
+  "memory.readiness.migrationFailed":
+    "Memory is unavailable until its local vault is repaired. Chat remains available. Resolve the cause and restart Keiko.",
+  "memory.readiness.unreadable":
+    "The saved Memory vault could not be opened. Check the available key and restart Keiko. Chat remains available.",
   "supportReport.create": "Create error report",
   "supportReport.creating": "Creating report…",
   "supportReport.download": "Download report",

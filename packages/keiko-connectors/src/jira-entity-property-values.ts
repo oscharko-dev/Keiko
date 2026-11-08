@@ -10,7 +10,7 @@ export const JIRA_PROPERTY_KEY_MAX_BYTES = 255;
 export const JIRA_PROPERTY_VALUE_MAX_BYTES = 32768;
 /** Native username/key query text must round-trip without URLSearchParams replacing code units. */
 export function jiraPropertyUserText(value: unknown): value is string {
-  return jiraNativeText(value, 255) && !/\p{Surrogate}/u.test(value);
+  return jiraNativeText(value, 255) && !/[\p{Cc}\p{Surrogate}]/u.test(value);
 }
 type Refusal = "malformed-payload" | "bounds-exceeded";
 interface Projection {

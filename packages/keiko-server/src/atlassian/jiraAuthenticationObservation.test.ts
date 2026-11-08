@@ -119,7 +119,13 @@ function response(value: unknown = {}, status = 200, headers?: Record<string, st
   });
 }
 function request(path: string = PATHS[0]): AtlassianHttpBodyRequest {
-  return { method: "GET", url: `${BASE}/rest/api/2/${path}`, timeoutMs: 1000, maxBodyBytes: 4096 };
+  const relative = path.startsWith("/") ? path.slice(1) : path;
+  return {
+    method: "GET",
+    url: `${BASE}/rest/api/2/${relative}`,
+    timeoutMs: 1000,
+    maxBodyBytes: 4096,
+  };
 }
 it.each(PATHS)(
   "keeps a verified credential after ambiguous administrator401 on %s",
@@ -662,7 +668,13 @@ it("spends only the tab-write's subsecond remaining deadline on identity IO", as
     probeSignal = init?.signal;
     entered?.();
     return new Promise<Response>((_resolve, reject) => {
-      init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+      init?.signal?.addEventListener(
+        "abort",
+        () => {
+          reject(new Error("Synthetic identity probe aborted"));
+        },
+        { once: true },
+      );
     });
   });
   const pending = f.deps.httpBodyPortFactory(f.metadata)(tabRequest("POST", "screens/1/tabs"));
@@ -798,3 +810,17 @@ it.each([
     expect(f.invalidated).toEqual([2]);
   },
 );
+
+it("refuses an encoded slash before dispatch, authentication probing or credential revocation", async () => {
+  const f = fixture(() => response({}, 401));
+  await expect(
+    f.deps.httpBodyPortFactory(f.metadata)({
+      ...request("screens/addToDefault/unsafe%2Ffield"),
+      method: "POST",
+      bodyJson: "{}",
+    }),
+  ).rejects.toMatchObject({ code: "invalid-input" });
+  expect(f.urls).toEqual([]);
+  expect(f.invalidated).toEqual([]);
+  expect(f.current()).toEqual(f.metadata);
+});

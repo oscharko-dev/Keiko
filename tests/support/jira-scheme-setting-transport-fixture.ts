@@ -29,6 +29,8 @@ const WORKFLOW_READS = new Set([
   "workflowscheme/37?returnDraftIfExists=false",
   "workflowscheme/37/draft",
   "workflowscheme/9223372036854775807",
+  "workflowscheme/9223372036854775807?returnDraftIfExists=false",
+  "workflowscheme/9223372036854775807?returnDraftIfExists=true",
   "issuetype/1",
   "issuetype/2",
   "workflowscheme/9223372036854775807?returnDraftIfExists=true",
@@ -45,11 +47,12 @@ const INSTANCE_READS = new Set([
   "serverInfo",
   "readonly-mode",
 ]);
-/** Independent fixed native targets and states; no route derives from the production registry. */
-export function schemeSettingTransportController(
+type TransportFixture = ReturnType<typeof reviewedPlatformTransportFixture>;
+
+function optionTransportController(
   operation: string | undefined,
-  actorKey = "synthetic-actor",
-) {
+  actorKey: string,
+): TransportFixture | undefined {
   const option = OPTION_SCHEME_MUTATION_CASES.find((item) => item.tool === operation);
   if (option !== undefined) {
     const native = optionSchemeFixture();
@@ -69,6 +72,13 @@ export function schemeSettingTransportController(
       native.snapshot,
     );
   }
+  return undefined;
+}
+
+function workflowTransportController(
+  operation: string | undefined,
+  actorKey: string,
+): TransportFixture | undefined {
   const workflow = WORKFLOW_SCHEME_MUTATION_FIXTURE_CASES.find((item) => item.name === operation);
   if (workflow !== undefined) {
     const native = workflowSchemeMutationFixture(workflow.draft);
@@ -88,6 +98,13 @@ export function schemeSettingTransportController(
       native.snapshot,
     );
   }
+  return undefined;
+}
+
+function instanceTransportController(
+  operation: string | undefined,
+  actorKey: string,
+): TransportFixture | undefined {
   const instance = INSTANCE_SETTING_FIXTURE_CASES.find((item) => item.name === operation);
   if (instance === undefined) return undefined;
   const native = instanceSettingMutationFixture();
@@ -98,5 +115,17 @@ export function schemeSettingTransportController(
     native.request,
     (path) => INSTANCE_READS.has(path),
     native.snapshot,
+  );
+}
+
+/** Independent fixed native targets and states; no route derives from the production registry. */
+export function schemeSettingTransportController(
+  operation: string | undefined,
+  actorKey = "synthetic-actor",
+): TransportFixture | undefined {
+  return (
+    optionTransportController(operation, actorKey) ??
+    workflowTransportController(operation, actorKey) ??
+    instanceTransportController(operation, actorKey)
   );
 }

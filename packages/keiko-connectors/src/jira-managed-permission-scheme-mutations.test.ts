@@ -158,7 +158,9 @@ function changeReviewedFixture(changed: ReviewedChange, f: ReturnType<typeof fix
       grants.push({ id: "93", permission: "WORK_ON_ISSUES", holder: { type: "assignee" } });
     },
   };
-  changes[changed]();
+  const change = changes[changed];
+  if (change === undefined) throw new TypeError("Missing reviewed fixture change");
+  change();
 }
 it.each(REVIEWED_CHANGES)(
   "refuses a stale reviewed %s before a grant deletion",

@@ -3992,6 +3992,13 @@ function projectWrite(
     ? response({ id: 10000, key: "SYN" }, 201)
     : response(state.project);
 }
+function firstDefined<T>(observations: readonly (() => T | undefined)[]): T | undefined {
+  for (const observe of observations) {
+    const result = observe();
+    if (result !== undefined) return result;
+  }
+  return undefined;
+}
 function remoteRead(
   path: string,
   absolute: string,
@@ -3999,22 +4006,23 @@ function remoteRead(
   absoluteUrl: string,
 ): AtlassianHttpBodyResult {
   return (
-    monitoringRead(path, state) ??
-    screenTabRead(path, state) ??
-    projectRead(path, state) ??
-    structureRead(path, state) ??
-    collaborationRead(path, state) ??
-    participationRead(path, state) ??
-    filterRead(path) ??
-    savedViewRead(path) ??
-    assetRead(path, state) ??
-    administrationRead(path, absoluteUrl) ??
-    jobObservationRead(path) ??
-    ancillaryNativeRead(path) ??
-    entityPropertyRead(path) ??
-    issueContextRead(path, absoluteUrl) ??
-    issueMetadata(path, state) ??
-    fixtureRead(absolute, state)
+    firstDefined<AtlassianHttpBodyResult>([
+      (): AtlassianHttpBodyResult | undefined => monitoringRead(path, state),
+      (): AtlassianHttpBodyResult | undefined => screenTabRead(path, state),
+      (): AtlassianHttpBodyResult | undefined => projectRead(path, state),
+      (): AtlassianHttpBodyResult | undefined => structureRead(path, state),
+      (): AtlassianHttpBodyResult | undefined => collaborationRead(path, state),
+      (): AtlassianHttpBodyResult | undefined => participationRead(path, state),
+      (): AtlassianHttpBodyResult | undefined => filterRead(path),
+      (): AtlassianHttpBodyResult | undefined => savedViewRead(path),
+      (): AtlassianHttpBodyResult | undefined => assetRead(path, state),
+      (): AtlassianHttpBodyResult | undefined => administrationRead(path, absoluteUrl),
+      (): AtlassianHttpBodyResult | undefined => jobObservationRead(path),
+      (): AtlassianHttpBodyResult | undefined => ancillaryNativeRead(path),
+      (): AtlassianHttpBodyResult | undefined => entityPropertyRead(path),
+      (): AtlassianHttpBodyResult | undefined => issueContextRead(path, absoluteUrl),
+      (): AtlassianHttpBodyResult | undefined => issueMetadata(path, state),
+    ]) ?? fixtureRead(absolute, state)
   );
 }
 const PROPERTY_WRITE_ROOTS: Readonly<Record<string, string>> = {
@@ -4031,21 +4039,8 @@ const PROPERTY_WRITE_ROOTS: Readonly<Record<string, string>> = {
   "jira.set-user-property": "user/properties",
   "jira.delete-user-property": "user/properties",
 };
-function remote(
-  tool?: string,
-  initiallyPresent = true,
-): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> {
-  const lifecycle = lifecycleRemote(tool);
-  if (lifecycle !== undefined) return lifecycle;
-  if (POST_AND_IDENTITY_READ_TOOLS.has(tool ?? "")) return vi.fn(postAndIdentityReadTransport);
-  if (tool !== undefined && Object.hasOwn(SAVED_CONFIGURATION_ARGUMENTS, tool))
-    return savedConfigurationRemote(tool);
-  const propertyRoot = PROPERTY_WRITE_ROOTS[tool ?? ""];
-  const property = propertyTransportFixture(
-    propertyRoot === undefined ? undefined : `/context/rest/api/2/${propertyRoot}`,
-    initiallyPresent,
-  );
-  const state: RemoteState = {
+function initialRemoteState(tool: string | undefined): RemoteState {
+  return {
     monitoring: MONITORING_WRITES.has(tool ?? "")
       ? { app: false, ipd: true, jmx: tool === "jira.stop-jmx-metrics" }
       : undefined,
@@ -4087,6 +4082,41 @@ function remote(
       projectTypeKey: "software",
     },
   };
+}
+function remoteWrite(
+  path: string,
+  absolute: string,
+  request: AtlassianHttpBodyRequest,
+  state: RemoteState,
+): AtlassianHttpBodyResult {
+  if (path === "project" || path === "project/10000") return projectWrite(request, state);
+  return (
+    firstDefined<AtlassianHttpBodyResult>([
+      (): AtlassianHttpBodyResult | undefined => monitoringWrite(path, request, state),
+      (): AtlassianHttpBodyResult | undefined => screenTabWrite(path, request, state),
+      (): AtlassianHttpBodyResult | undefined => participationWrite(path, request.method, state),
+      (): AtlassianHttpBodyResult | undefined => assetWrite(path, request, state),
+      (): AtlassianHttpBodyResult | undefined => worklogWrite(path, request, state),
+      (): AtlassianHttpBodyResult | undefined => collaborationWrite(path, request, state),
+      (): AtlassianHttpBodyResult | undefined => structureWrite(path, request, state),
+    ]) ?? fixtureWrite(absolute, request.bodyJson, state, request.upload)
+  );
+}
+function remote(
+  tool?: string,
+  initiallyPresent = true,
+): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> {
+  const lifecycle = lifecycleRemote(tool);
+  if (lifecycle !== undefined) return lifecycle;
+  if (POST_AND_IDENTITY_READ_TOOLS.has(tool ?? "")) return vi.fn(postAndIdentityReadTransport);
+  if (tool !== undefined && Object.hasOwn(SAVED_CONFIGURATION_ARGUMENTS, tool))
+    return savedConfigurationRemote(tool);
+  const propertyRoot = PROPERTY_WRITE_ROOTS[tool ?? ""];
+  const property = propertyTransportFixture(
+    propertyRoot === undefined ? undefined : `/context/rest/api/2/${propertyRoot}`,
+    initiallyPresent,
+  );
+  const state = initialRemoteState(tool);
   return vi.fn<AtlassianHttpBodyPort>((request) => {
     const absolute = new URL(request.url).pathname;
     const path = absolute.replace("/context/rest/api/2/", "");
@@ -4094,22 +4124,18 @@ function remote(
       return Promise.resolve(
         property.read(request) ?? remoteRead(path, absolute, state, request.url),
       );
-    return Promise.resolve(
-      property.write(request) ??
-        (path === "project" || path === "project/10000"
-          ? projectWrite(request, state)
-          : (monitoringWrite(path, request, state) ??
-            screenTabWrite(path, request, state) ??
-            participationWrite(path, request.method, state) ??
-            assetWrite(path, request, state) ??
-            worklogWrite(path, request, state) ??
-            collaborationWrite(path, request, state) ??
-            structureWrite(path, request, state) ??
-            fixtureWrite(absolute, request.bodyJson, state, request.upload))),
-    );
+    return Promise.resolve(property.write(request) ?? remoteWrite(path, absolute, request, state));
   });
 }
-function reviewedPlatformFixture(tool: string | undefined) {
+interface LifecycleFixture {
+  readonly read: (
+    request: AtlassianHttpBodyRequest,
+  ) => AtlassianHttpBodyResult | undefined | Promise<AtlassianHttpBodyResult | undefined>;
+  readonly write: (
+    request: AtlassianHttpBodyRequest,
+  ) => AtlassianHttpBodyResult | undefined | Promise<AtlassianHttpBodyResult | undefined>;
+}
+function reviewedPlatformFixture(tool: string | undefined): LifecycleFixture | undefined {
   const selectedVersion = VERSION_LINK_CASES.find((item) => item.tool === tool);
   if (selectedVersion !== undefined)
     return versionLinkTransportFixture("/context/rest/api/2", selectedVersion);
@@ -4144,15 +4170,17 @@ function lifecycleRemote(
         ? releaseLifecycleTransportFixture("/context/rest/api/2")
         : undefined
       : linkMutationTransportFixture("/context/rest/api/2", selectedLink);
-  const fixture =
-    systemAdministrationTransportController(tool) ??
-    schemeSettingTransportController(tool) ??
-    emailTemplateTransportController(tool) ??
-    permissionRoleTransportController(tool) ??
-    reviewedPlatformFixture(tool) ??
-    (selectedScreen === undefined
-      ? related
-      : screenConfigurationTransportFixture("/context/rest/api/2", selectedScreen));
+  const fixture = firstDefined<LifecycleFixture>([
+    (): LifecycleFixture | undefined => systemAdministrationTransportController(tool),
+    (): LifecycleFixture | undefined => schemeSettingTransportController(tool),
+    (): LifecycleFixture | undefined => emailTemplateTransportController(tool),
+    (): LifecycleFixture | undefined => permissionRoleTransportController(tool),
+    (): LifecycleFixture | undefined => reviewedPlatformFixture(tool),
+    (): LifecycleFixture | undefined =>
+      selectedScreen === undefined
+        ? related
+        : screenConfigurationTransportFixture("/context/rest/api/2", selectedScreen),
+  ]);
   if (fixture === undefined) return undefined;
   return vi.fn<AtlassianHttpBodyPort>(async (request) => {
     const url = new URL(request.url);
@@ -4161,7 +4189,8 @@ function lifecycleRemote(
     const result = await (request.method === "GET"
       ? fixture.read(request)
       : fixture.write(request));
-    if (result === undefined) throw new TypeError("Unexpected lifecycle native route");
+    if (result === undefined)
+      throw new TypeError(`Unexpected lifecycle native route: ${url.pathname}${url.search}`);
     return result;
   });
 }
@@ -4225,7 +4254,7 @@ async function observe(scenario: Scenario): Promise<Observation> {
         invocationId: "transport-contract",
         correlationId: "transport-contract",
         signal: new AbortController().signal,
-        beforeEffect: () => true,
+        beforeEffect: (): boolean => true,
       };
       const privatePorts = await composition.ports(context, scenario.args, {
         beforeDispatch: (request) => {
@@ -4648,6 +4677,16 @@ describe("native Jira registry and real connector transport agreement", () => {
     expect(JSON.stringify(visible)).not.toContain("untrusted.invalid");
     expect(visible).not.toHaveProperty("url");
     expect(visible.browseUrl).toBe("https://jira.example.invalid/context/browse/SYN-1");
+    expect(observed.result.data).not.toHaveProperty("self");
+    expect(observed.result.data).toHaveProperty(
+      "reviewSnapshot.url",
+      "https://untrusted.invalid/target",
+    );
+    expect(
+      observed.requests.every(
+        (request) => new URL(request.url).origin === "https://jira.example.invalid",
+      ),
+    ).toBe(true);
   });
   it("keeps picker contexts bound while returning only plain suggestions and trusted browse URLs", async () => {
     const scenario = SCENARIOS.find(({ tool }) => tool === "jira.issue-picker");
@@ -4892,7 +4931,7 @@ describe("native Jira registry and real connector transport agreement", () => {
         { path: "/a~1b~0c/0", kind: "null" },
         { path: "/a~1b~0c/1", kind: "object", childCount: 0 },
         { path: "/a~1b~0c/2", kind: "array", childCount: 0 },
-      ]),
+      ]) as unknown,
     });
     const keys = await observe({
       tool: "jira.issue-property-keys",
@@ -4918,7 +4957,7 @@ describe("native Jira registry and real connector transport agreement", () => {
           invocationId: "property-refusal",
           correlationId: "property-refusal",
           signal: new AbortController().signal,
-          beforeEffect: () => true,
+          beforeEffect: (): boolean => true,
         },
       );
       expect(result.data).toMatchObject({ outcome: "failed", reason: "invalid-input" });
