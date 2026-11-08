@@ -525,8 +525,8 @@ class CodingJiraPodService implements CodingJiraPods {
         }
         return true;
       },
-      onResponse: (request) => {
-        if (isWrite(request)) dispatch.acknowledged = true;
+      onResponse: (request, status) => {
+        if (isWrite(request) && status >= 200 && status < 300) dispatch.acknowledged = true;
         return true;
       },
     });

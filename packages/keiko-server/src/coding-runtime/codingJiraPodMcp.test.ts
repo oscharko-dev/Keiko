@@ -35,6 +35,7 @@ import { buildUiStoreOverDatabase } from "../store/index.js";
 import { runMigrations } from "../store/schema.js";
 import { CODING_JIRA_TOOL_RISKS, type CodingJiraPodBinding } from "./codingJiraPodBinding.js";
 import { JIRA_TOOL_GUIDANCE } from "../atlassian/jiraToolGuidance.js";
+import { postAndIdentityReadTransport } from "../../../../tests/support/jira-post-and-identity-read-fixture.js";
 
 const POD = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
 const PRINCIPAL = "operator-principal";
@@ -942,6 +943,19 @@ describe("a Pod that is no longer the one the human chose", () => {
 });
 
 describe("a write that does not complete", () => {
+  it.each([400, 401, 403, 409, 429, 500])("never treats native HTTP %s as an acknowledged successful write", async (status) => {
+    const h = retainingHarness(harness());
+    h.http.mockImplementation(async (request) => request.method === "GET"
+      ? fixtureRead(new URL(request.url).pathname.replace("/context/rest/api/2", ""), h.state)
+      : response({ errorMessages: ["Native mutation refused"], errors: {} }, status));
+    const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
+    const result = await client.call("jira.comment", { issueKey: "SYN-1", body: "Reviewed comment" });
+    expect(result.isError).toBe(true);
+    expect(h.retained).toMatchObject([{ isError: true, data: { outcome: "unknown" } }]);
+    expect(h.http.mock.calls.filter(([request]) => request.method === "POST")).toHaveLength(1);
+    expect(h.recover).toHaveBeenCalledOnce();
+    expect(h.released).not.toHaveBeenCalled();
+  });
   it("reports a Jira refusal as an uncertain mutation to the relay's recovery owner", async () => {
     const h = harness();
     h.http.mockImplementation((request) =>
@@ -956,6 +970,49 @@ describe("a write that does not complete", () => {
     expect(result.isError).toBe(true);
     expect(h.http.mock.calls.filter(([request]) => request.method !== "GET")).toHaveLength(1);
     expect(h.recover).toHaveBeenCalledOnce();
+  });
+});
+
+describe("native POST reads and administration observations through the Coding relay", () => {
+  it.each([
+    { tool: "jira.search-post", args: { jql: "project = SYN" } },
+    { tool: "jira.worklogs-by-id", args: { worklogIds: ["7", "8"] } },
+  ] as const)("retains $tool under read scope without a mutation permit, acknowledgement or recovery", async ({ tool, args }) => {
+    const h = retainingHarness(harness());
+    h.http.mockImplementation(postAndIdentityReadTransport);
+    const client = connect(h, h.pods.connections(undefined, bound(h), {
+      runId: h.context.correlationId, currentScopes: () => ["issue-tracker.read"],
+    }));
+    const result = await client.call(tool, args);
+    expect(result.isError).not.toBe(true);
+    expect(h.retained).toEqual([{ data: result.structuredContent }]);
+    expect(h.retained[0]?.data.outcome).toBe("succeeded");
+    expect(h.begun).toEqual([]);
+    expect(h.dispatched).not.toHaveBeenCalled();
+    expect(h.recover).not.toHaveBeenCalled();
+    expect(h.http.mock.calls.filter(([request]) => request.method === "POST")).toHaveLength(1);
+  });
+
+  it.each([
+    { tool: "jira.anonymization-validation", args: { userKey: "USER1" } },
+    { tool: "jira.anonymization-rerun-validation", args: { userKey: "USER1", oldUserKey: "OLD1" } },
+    { tool: "jira.anonymization-progress", args: { taskId: "7" } },
+  ] as const)("requires the explicit additional grant for $tool while keeping its effect read-only", async ({ tool, args }) => {
+    const h = retainingHarness(harness());
+    const ordinary = connect(h, h.pods.connections(undefined, bound(h), {
+      runId: h.context.correlationId, currentScopes: () => ["issue-tracker.read", "issue-tracker.write"],
+    }));
+    expect(await ordinary.list()).not.toContain(tool);
+    expect((await ordinary.call(tool, args)).isError).toBe(true);
+    expect(h.http).not.toHaveBeenCalled();
+    h.http.mockImplementation(postAndIdentityReadTransport);
+    const admin = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
+    const result = await admin.call(tool, args);
+    expect(result.isError).not.toBe(true);
+    expect(h.retained.at(-1)?.data.outcome).toBe("succeeded");
+    expect(h.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
+    expect(h.begun).toEqual([]);
+    expect(h.dispatched).not.toHaveBeenCalled();
   });
 });
 
