@@ -2,7 +2,9 @@
 
 This development/qualification harness supports #4081/#4082. It uses synthetic
 data only and is independent of the product’s in-process MCP host. Jira Software
-Data Center 10.3.26, PostgreSQL 16 and the TLS frontend have digest-pinned images.
+Data Center 10.3.26 is the default digest-pinned release; PostgreSQL 16 and the TLS
+frontend also have digest-pinned images. A new isolated session can select an exact
+10.3/10.4/11.2/11.3 patch release with its independently verified image digest.
 Published ports bind loopback only; the frontend forwards to one fixed Jira service.
 
 Prerequisites: Docker Compose, the repository’s supported Node version, OpenSSL
@@ -159,9 +161,35 @@ Every initialization creates an independent Compose project, persistent volumes,
 three independent private passwords, and a private seven-day development CA and
 server certificate under `secrets/tls`. The frontend container receives only its
 server key/certificate as read-only mounts; the CA key remains on the host. System
-trust is unchanged. HTTP administration uses port 18081 (an optional final `init`
-argument changes it); product-path qualification uses HTTPS port 18443. Stop the
-previous session before starting another frontend on that port.
+trust is unchanged. HTTP administration defaults to port 18081; product-path
+qualification defaults to HTTPS port 18443. The existing initializer also accepts:
+
+`session.mjs init <private-directory> [http-port] [https-port] [exact-jira-version] [sha256-hex]`
+
+Supply version and digest together; the digest is 64 lowercase hexadecimal
+characters without a `sha256:` prefix. The repository remains fixed to
+`atlassian/jira-software`. New manifests persist the complete HTTPS/version/digest
+binding. Old manifests retain the original defaults without being rewritten;
+partial or malformed pins are refused. Start, stop and status use the saved
+manifest and accept no port/image overrides.
+
+Use a new private directory, separate Compose project/volumes and unused distinct
+HTTP/HTTPS ports for each release. Never reuse an existing Jira data volume for
+another release or stop another session to free its port. The TLS listener and its
+outside/inside port match, preserving the exact Host guard. Runtime inspection
+checks the selected image ID/repository digest and owned listener bindings. Normal
+production verification must independently observe the exact saved native Jira
+version; an image tag alone is insufficient.
+
+No additional 10.4/11.2/11.3 image digest or live compatibility is established by this
+parameterization. Obtain and verify each exact pin separately before a serial live
+run. Session isolation does not replace the coordinated machine/Gateway window.
+The direct connection probe additionally accepts the private session directory:
+
+`verify-connection.mjs <private-PAT-file> <private-TLS-directory> [private-session-directory]`
+
+Omitting that directory preserves the historical default release/HTTPS invocation.
+The ordinary preflight, Chat and browser groups use their loaded session binding.
 
 Save the published Jira Software Data Center test license in a private regular file
 (mode 0600) outside the repository, then run the normal first-run setup:

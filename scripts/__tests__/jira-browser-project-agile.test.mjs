@@ -97,6 +97,18 @@ describe("AC5/AC6 independent live-browser oracles", () => {
 });
 
 describe("AC5/AC6 pass-through native write witness", () => {
+  it("uses only the selected session TLS port and refuses the legacy origin on a different session", async () => {
+    const session = { httpPort: 19081, httpsPort: 19443,
+      jiraVersion: "11.3.0", jiraImageDigest: "b".repeat(64) };
+    const witness = projectAgileWitness(session);
+    witness.arm(TARGET);
+    const native = vi.fn(async () => RESPONSE);
+    const port = witness.decorate(() => native)({}, "id");
+    await expect(port(REQUEST)).rejects.toThrow();
+    expect(native).not.toHaveBeenCalled();
+    expect(await port({ ...REQUEST, url: "https://127.0.0.1:19443/rest/api/2/project" })).toBe(RESPONSE);
+    expect(native).toHaveBeenCalledOnce();
+  });
   it("preserves the real port/ACK and blocks a second mutation before forwarding", async () => {
     const witness = projectAgileWitness();
     witness.arm(TARGET);

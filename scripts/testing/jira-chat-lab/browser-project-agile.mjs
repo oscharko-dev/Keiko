@@ -87,7 +87,7 @@ async function main() {
     name: `Synthetic acceptance ${suffix}`, actorKey: permittedActor.key, modelId: selected.modelId, results: [] };
   privateJson(pendingPath, group, true);
   const persist = () => privateJson(pendingPath, group);
-  const witness = projectAgileWitness();
+  const witness = projectAgileWitness(session);
   const { withLiveChat } = await import("./chat-read.mjs");
   const { runProjectAgileJourney } = await import("./browser-project-agile-journey.mjs");
   await withLiveChat({ session, modelId: selected.modelId, browser: true, retainState: true,

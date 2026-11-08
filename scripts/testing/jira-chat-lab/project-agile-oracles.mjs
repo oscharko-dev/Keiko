@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { basicAuth, labRequest } from "./lab-client.mjs";
+import { basicAuth, labRequest, labSessionConnection } from "./lab-client.mjs";
 
 /** Read-only native oracle. No product receipt, model answer or fixture creation is ground truth. */
 export async function projectAgileRead(session, path, authorization = session.oracleAuthorization ?? basicAuth(session, "admin")) {
@@ -132,7 +132,8 @@ function readOnlyRequest(request, target) {
 }
 
 /** Exact per-step transport witness. Production transport, credentials and ACK stay untouched. */
-export function projectAgileWitness() {
+export function projectAgileWitness(session) {
+  const origin = labSessionConnection(session).httpsOrigin;
   let selected;
   let state = { attempted: 0, forwarded: 0, statuses: [], blocked: 0 };
   return {
@@ -145,7 +146,7 @@ export function projectAgileWitness() {
       const port = factory(metadata, correlation, lifecycle);
       return async (request) => {
         const target = new URL(request.url);
-        assert.equal(target.origin, "https://127.0.0.1:18443", "Only the existing selected synthetic TLS frontend is observed");
+        assert.equal(target.origin, origin, "Only the existing selected synthetic TLS frontend is observed");
         if (readOnlyRequest(request, target)) return port(request);
         state.attempted += 1;
         const body = request.bodyJson === undefined ? undefined : JSON.parse(request.bodyJson);

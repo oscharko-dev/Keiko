@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
+import { labSessionConnection } from "./lab-client.mjs";
 import { openWorkflowBrowser, sendBrowserTurn, workflowHistory } from "./browser-workflow-turn.mjs";
 import { projectAgileRead, projectInventory, nativePages, oneNewProject, unchangedProjects,
   exactIssue, epicRelation, exactSprint, exactMembership, completedOperation, permissionRefusal,
@@ -20,11 +21,11 @@ async function visibleReceipt(environment, text) {
 async function visibleLink(environment, key, path) {
   const link = environment.region.getByRole("link").filter({ hasText: key }).first();
   await link.waitFor();
-  assert.equal(await link.getAttribute("href"), `https://127.0.0.1:18443${path}`);
+  assert.equal(await link.getAttribute("href"), `${labSessionConnection(environment.context.session).httpsOrigin}${path}`);
 }
 
 async function visibleBoardLink(environment, boardId) {
-  const destination = `https://127.0.0.1:18443/secure/RapidBoard.jspa?rapidView=${boardId}`;
+  const destination = `${labSessionConnection(environment.context.session).httpsOrigin}/secure/RapidBoard.jspa?rapidView=${boardId}`;
   const link = environment.region.getByRole("region", { name: "Jira action", exact: true })
     .getByRole("link").and(environment.page.locator(`a[href="${destination}"]`)).first();
   await link.waitFor();

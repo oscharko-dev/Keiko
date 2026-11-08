@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { chromium } from "@playwright/test";
 import { workspaceStorageArgs } from "../../lib/workspace-storage-fixture.mjs";
-import { readPrivateFile } from "./lab-client.mjs";
+import { labSessionConnection, readPrivateFile } from "./lab-client.mjs";
 import { assertVerifiedPod, connectPodFromPanel, verifyPodAction } from "./browser-connections.mjs";
 import { consentCardCount, establishedReadGrant } from "./read-grant.mjs";
 
@@ -55,7 +55,7 @@ export async function createPod(page, session, options = {}) {
   stage("hub-open");
   const form = hub.getByTestId("acx-add-form");
   await form.getByLabel("Label", { exact: true }).fill(label);
-  await form.getByLabel("Base URL", { exact: true }).fill("https://127.0.0.1:18443");
+  await form.getByLabel("Base URL", { exact: true }).fill(labSessionConnection(session).httpsOrigin);
   await form
     .getByLabel("API token", { exact: true })
     .fill(readPrivateFile(tokenFile).trim());

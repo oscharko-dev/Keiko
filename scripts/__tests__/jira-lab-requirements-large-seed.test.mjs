@@ -159,8 +159,10 @@ async function laboratory() {
     JSON.stringify({
       schemaVersion: 1,
       syntheticOnly: true,
+      project: "keiko-jira-4081-seed-test",
       httpPort: jira.server.address().port,
     }),
+    { mode: 0o600 },
   );
   cleanup.push(async () => {
     await new Promise((resolve) => jira.server.close(resolve));

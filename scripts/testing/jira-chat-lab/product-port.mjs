@@ -2,13 +2,32 @@ import { randomBytes } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { URL } from "node:url";
 import { verifyStoredCredential } from "../../../packages/keiko-server/dist/atlassian/credentialVerification.js";
 import { buildAtlassianConnectorCredentialDeps } from "../../../packages/keiko-server/dist/atlassian/wiring.js";
-import { readPrivateFile } from "./lab-client.mjs";
+import { parseAtlassianVerificationProbe } from "../../../packages/keiko-connectors/dist/atlassian-verification-probe.js";
+import { assertSessionServerInfo, labSessionConnection, readPrivateFile } from "./lab-client.mjs";
 
-export async function withProductPort(tokenPath, tlsDirectory, run) {
+/** Observe the verifier's real response without changing requests, native failures or custody. */
+export function sessionVerificationPort(session, port) {
+  const origin = labSessionConnection(session).httpsOrigin;
+  const serverInfoUrl = `${origin}/rest/api/2/serverInfo`;
+  return async (request) => {
+    if (new URL(request.url).origin !== origin)
+      throw new TypeError("Laboratory product request does not belong to the selected session");
+    const result = await port(request);
+    if (request.method !== "GET" || request.url !== serverInfoUrl) return result;
+    if (result.kind !== "response" || result.status !== 200) return result;
+    const parsed = parseAtlassianVerificationProbe(result);
+    if ("failure" in parsed) return result;
+    assertSessionServerInfo(session, parsed.value);
+    return result;
+  };
+}
+
+export async function withProductPort(tokenPath, tlsDirectory, run, session) {
+  const baseUrl = labSessionConnection(session).httpsOrigin;
   const state = mkdtempSync(join(realpathSync(tmpdir()), "keiko-jira-4081-"));
-  const baseUrl = "https://127.0.0.1:18443";
   const network = { trusted: true };
   try {
     const deps = buildAtlassianConnectorCredentialDeps({
@@ -17,6 +36,9 @@ export async function withProductPort(tokenPath, tlsDirectory, run) {
       egress: () =>
         network.trusted ? { caBundlePath: join(resolve(tlsDirectory), "ca.pem") } : undefined,
     });
+    const factory = deps.httpBodyPortFactory.bind(deps);
+    deps.httpBodyPortFactory = (metadata, correlationId, lifecycle) =>
+      sessionVerificationPort(session, factory(metadata, correlationId, lifecycle));
     const metadata = deps.custody.create({
       provider: "jira",
       deployment: "data-center",

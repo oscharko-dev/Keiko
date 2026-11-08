@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { URL } from "node:url";
+import { labSessionConnection } from "./lab-client.mjs";
 import { expect } from "@playwright/test";
 import { openWorkflowBrowser, sendBrowserTurn } from "./browser-workflow-turn.mjs";
 import { selectAccessMode } from "./browser-connections.mjs";
@@ -208,14 +209,14 @@ async function epicVisibility(context, turn, created, boardId) {
   assert.equal(gradeEpicVisibility({ created, boardEpics, backlog, exchanges: answer.exchanges, boardId }), true);
 }
 
-async function retainedIssueLinks(opened, created) {
+async function retainedIssueLinks(opened, created, session) {
   await opened.page.reload();
   const lists = opened.region.getByRole("list", { name: "Jira results", exact: true });
   for (const issue of created) {
     const link = lists.getByRole("link").filter({ hasText: issue.key }).first();
     await link.waitFor();
     const url = new URL(await link.getAttribute("href"));
-    assert.equal(url.origin, "https://127.0.0.1:18443");
+    assert.equal(url.origin, labSessionConnection(session).httpsOrigin);
     assert.equal(url.pathname, `/browse/${issue.key}`);
     assert.equal(url.search + url.hash, "");
   }
@@ -236,7 +237,7 @@ export async function runBrowserRulesKnowledge(live, { boardId, intentPath }) {
     const documents = browserKnowledgeDocuments(context.projectPath);
     const epics = await derivedEpics(opened, context, turn, documents);
     await epicVisibility(context, turn, epics, boardId);
-    await retainedIssueLinks(opened, [...formal, ...prose, ...epics]);
+    await retainedIssueLinks(opened, [...formal, ...prose, ...epics], context.session);
     await opened.region.screenshot({ path: join(context.session.directory, "browser-rules-knowledge.png") });
     return { formalRefused: true, correctedAccepted: true, formalIssueTypes: 4, proseNotEnforced: true,
       observedSubtaskTaskEpicChain: true, taskParentTypeRuleSupported: true,

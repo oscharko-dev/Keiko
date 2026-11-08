@@ -31,7 +31,8 @@ import {
   SESSION_PAIRING_LAUNCHER_SECRET_ENV,
 } from "../../../packages/keiko-server/dist/coding-app-session/launcherSessionPairingPort.js";
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session-pairing";
-import { actorDetails, loadSession, readPrivateFile, requireLicense } from "./lab-client.mjs";
+import { actorDetails, labSessionConnection, loadSession, readPrivateFile, requireLicense } from "./lab-client.mjs";
+import { sessionVerificationPort } from "./product-port.mjs";
 import { establishedReadGrant } from "./read-grant.mjs";
 import { drainLiveChatTurns } from "./chat-lifecycle.mjs";
 
@@ -300,7 +301,7 @@ async function createVerifiedPod(origin, cookie, session, actor) {
       deployment: "data-center",
       authScheme: "bearer-pat",
       displayName: "Synthetic live Chat qualification",
-      baseUrl: "https://127.0.0.1:18443",
+      baseUrl: labSessionConnection(session).httpsOrigin,
       apiToken: readPrivateFile(join(session.directory, "secrets", `${actor}-token`)),
       livePodCreationRequestId: randomUUID(),
     },
@@ -532,11 +533,13 @@ function liveStateDirectory(session, retainState, restoreState) {
   return root;
 }
 
-function decorateCredentialTransport(deps, decorate) {
-  if (decorate === undefined) return;
+function decorateCredentialTransport(deps, decorate, session) {
   const credentials = deps.atlassianConnectorCredentials;
   assert.ok(credentials);
-  credentials.httpBodyPortFactory = decorate(credentials.httpBodyPortFactory.bind(credentials));
+  const factory = credentials.httpBodyPortFactory.bind(credentials);
+  const observed = (metadata, correlationId, lifecycle) =>
+    sessionVerificationPort(session, factory(metadata, correlationId, lifecycle));
+  credentials.httpBodyPortFactory = decorate === undefined ? observed : decorate(observed);
 }
 
 function createLiveUiServer({ port, deps, root, browser, configureServer }) {
@@ -570,7 +573,7 @@ export async function withLiveChat({
   const model = prepareLiveModel(root, session, modelId, { modelRetries, embeddingModelId });
   const restoring = restoreState !== undefined;
   const deps = createLiveDeps(root, session, secret, retainState, restoring, model.env);
-  decorateCredentialTransport(deps, decorateAtlassianHttp);
+  decorateCredentialTransport(deps, decorateAtlassianHttp, session);
   let server;
   try {
     await model.configure(deps);

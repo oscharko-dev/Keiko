@@ -12,13 +12,12 @@ import {
   basicAuth,
   labRequest,
   requireLicense,
+  labSessionConnection,
 } from "./lab-client.mjs";
 import { privateJson } from "./private-json.mjs";
 
 const SCRIPT = fileURLToPath(import.meta.url);
 const execute = promisify(execFile);
-const JIRA_IMAGE =
-  "atlassian/jira-software:10.3.26@sha256:ddcddc61ee43067fa274538b888d36408c47bc6a4ec14e41113dc304b8529168";
 const save = (group) => privateJson(group.pendingPath, group);
 const api = (context, path, body, method = "POST") =>
   jsonRequest(context.origin, context.cookie, "native-verification", path, body, method);
@@ -38,7 +37,7 @@ async function createCredential(context, token) {
     deployment: "data-center",
     authScheme: "bearer-pat",
     displayName: "Synthetic native verification",
-    baseUrl: "https://127.0.0.1:18443",
+    baseUrl: labSessionConnection(context.session).httpsOrigin,
     apiToken: token,
     livePodCreationRequestId: randomUUID(),
   });
@@ -228,8 +227,18 @@ async function qualifyPat(context, group, delay) {
   save(group);
 }
 
+function publishedPort(container, inside, outside) {
+  const published = Object.fromEntries(
+    Object.entries(container.NetworkSettings.Ports).filter(([, bindings]) => bindings !== null),
+  );
+  assert.deepEqual(published, {
+    [`${inside}/tcp`]: [{ HostIp: "127.0.0.1", HostPort: String(outside) }],
+  });
+}
+
 export function validateServices(session, containers) {
   assert.match(session.project, /^keiko-jira-4081-[a-z0-9-]{1,32}$/u);
+  const selected = labSessionConnection(session);
   const services = {};
   for (const container of containers) {
     assert.equal(container.Config.Labels["com.docker.compose.project"], session.project);
@@ -241,11 +250,24 @@ export function validateServices(session, containers) {
     services[service] = container;
   }
   assert.equal(Object.keys(services).length, 3);
-  assert.equal(services.jira.Config.Image, JIRA_IMAGE);
-  assert.deepEqual(services.jira.NetworkSettings.Ports["8080/tcp"], [
-    { HostIp: "127.0.0.1", HostPort: String(session.httpPort) },
+  assert.equal(services.jira.Config.Image, selected.jiraImage);
+  publishedPort(services.jira, 8080, selected.httpPort);
+  publishedPort(services.tls, selected.httpsPort, selected.httpsPort);
+  assert.deepEqual(services.tls.Config.Cmd, [
+    "node", "/opt/tls-front.mjs", "/tls", String(selected.httpsPort), "8080", "compose",
   ]);
   return services;
+}
+
+/** Config.Image alone is a label; bind the running image ID to the selected immutable digest. */
+export function validateLabImage(session, container, image) {
+  const selected = labSessionConnection(session);
+  assert.equal(container.Config.Image, selected.jiraImage);
+  assert.match(image.Id, /^sha256:[a-f0-9]{64}$/u);
+  assert.equal(container.Image, image.Id);
+  assert.ok(Array.isArray(image.RepoDigests));
+  const digest = `atlassian/jira-software@sha256:${selected.jiraImageDigest}`;
+  assert.ok(image.RepoDigests.some((entry) => entry === digest || entry === `docker.io/${digest}`));
 }
 
 async function docker(args) {
@@ -258,7 +280,11 @@ async function inspectServices(session) {
     await docker(["ps", "-q", "--filter", `label=com.docker.compose.project=${session.project}`])
   ).split("\n");
   assert.equal(ids.length, 3);
-  return validateServices(session, JSON.parse(await docker(["inspect", ...ids])));
+  const services = validateServices(session, JSON.parse(await docker(["inspect", ...ids])));
+  const images = JSON.parse(await docker(["image", "inspect", labSessionConnection(session).jiraImage]));
+  assert.equal(images.length, 1);
+  validateLabImage(session, services.jira, images[0]);
+  return services;
 }
 
 function volumes(container) {
