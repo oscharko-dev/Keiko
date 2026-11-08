@@ -122,11 +122,34 @@ export function readPrivateFile(path) {
   return readFileSync(path, "utf8").trim();
 }
 
+export function labNativeId(value) {
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value) || value < 1) throw new TypeError("Imprecise native identity");
+    return String(value);
+  }
+  if (
+    typeof value !== "string" ||
+    !/^[1-9]\d{0,18}$/u.test(value) ||
+    BigInt(value) > 9223372036854775807n
+  )
+    throw new TypeError("Missing native identity");
+  return value;
+}
+
 export function actorDetails(actor) {
-  const actors = new Set(["admin", "api", "restricted", "editor", "assignee"]);
+  const actors = new Set([
+    "admin",
+    "api",
+    "restricted",
+    "editor",
+    "assignee",
+    "projectLead",
+    "developer",
+    "techLead",
+  ]);
   if (!actors.has(actor)) throw new TypeError("Unknown synthetic actor");
   return {
-    name: `keiko-${actor}`,
+    name: `keiko-${actor.replaceAll(/[A-Z]/gu, (letter) => "-" + letter.toLowerCase())}`,
     passwordFile: actor === "api" ? "api-user-password" : `${actor}-password`,
   };
 }

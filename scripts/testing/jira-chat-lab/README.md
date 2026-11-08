@@ -206,6 +206,78 @@ window; never stop another session's instance. Source tests and a prepared drive
 are not live acceptance evidence. The finite fourteen-operation catalog group
 above is separate from the epic's 439-identity accounting.
 
+## Daily Jira role journeys through the visible Chat UI
+
+AC5/AC6/AC8/AC9 use three independent Chats and verified Jira Pods for project lead, developer and tech lead. Preparation uses only the administrative lab client: one fresh Scrum project derived from the reserved group identity, one board, two Epics, eight Stories, one Task and the real numeric Story Points field on the create/edit screens. The existing identity and permission seed owners provide separate PATs and native permission readback. The developer has no Manage Sprints permission; additional create/comment/link/resolve rights support the requested daily tasks.
+
+Run the group only in the integrator’s coordinated real Jira/Keiko/model window:
+
+```sh
+KEIKO_JIRA_LAB_GATEWAY_CONFIG=/absolute/private/keiko.config.json \
+  npm run jira:lab:browser-roles -- /absolute/private/session actual-model-id
+
+# Offline: print all thirty expected write signatures without opening a session.
+npm run jira:lab:browser-roles -- --plan
+
+# Observe retained remote targets only; never resume or replay an uncertain write.
+npm run jira:lab:browser-roles -- /absolute/private/session --reconcile
+```
+
+Each natural-language German/English prompt is one visible composer turn. PL1–PL7 run first, then all developer turns while sprint 1 is active, then PL8–PL11 and all tech-lead turns. The three Chat/Pod/authentication bindings are independently checked on opening and again before PL8. Read questions allow the existing search/report operations and require exactly the independently queried issue keys and numeric totals; they forward zero writes.
+
+Every write must match its ordered method/path/body admission and one visible approval per native forward. Fresh resource IDs come from independent Jira reads, including IDs needed by a later write in the same turn. Native readback verifies fields, relationships, membership and lifecycle state. A rejected developer delete is exactly one 403 with a single readable refusal and unchanged sprint. Generic visible “Jira action” and unavailable/raw result rows are counted as presentation findings. A complete read may correctly have no result card.
+
+Each opened role gets a reload/transcript/no-replay observation and a private screenshot; an unsettled turn is captured without replaying it and retains an unverified reload. Contradictory evidence stops later turns, whose initialized scorecard rows stay unverified. JSON and Markdown scorecards named roles-scorecard-<group>-<role> contain only static step descriptions, classifications, counts and digests. Screenshots and reports remain in the private lab session. Product receipts that remain unconfirmed, including rank/delete receipts, stay unverified despite separate native observations.
+
+The exclusive roles-browser.pending.json intent is persisted before setup and each turn. A failure retains both that marker and the product state. Reconciliation never clears the marker or issues writes. A completed group requires all steps/reloads verified and all three browsers closed; no automatic reset, retry, Jira restart or removal of project fixtures occurs. At least thirty minutes of license remain before starting. Offline stubs and prepared drivers are not live acceptance evidence.
+
+The following signatures count writes only; normal metadata/JQL reads are independently observed. PL8 closes sprint 1 before moving open issues to sprint 2; Dev10 targets that still-empty future sprint; PL11 creates and deletes only the new empty third sprint. Issue/version/component IDs are bound from the corresponding native observations.
+
+### Projektleitung
+
+| Schritt                                         | Writes | Signatur                                                                                                                       |
+| ----------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| 1. Create the first sprint                      | 1      | POST /rest/agile/1.0/sprint                                                                                                    |
+| 2. Rename the sprint and change its goal        | 1      | POST /rest/agile/1.0/sprint/{sprint1Id}                                                                                        |
+| 3. Create the second sprint                     | 1      | POST /rest/agile/1.0/sprint                                                                                                    |
+| 4. Plan four stories                            | 1      | POST /rest/agile/1.0/sprint/{sprint1Id}/issue                                                                                  |
+| 5. Rank one story before another                | 1      | PUT /rest/agile/1.0/issue/rank                                                                                                 |
+| 6. Create version 1.0 and assign three stories  | 4      | POST /rest/api/2/version; PUT /rest/api/2/issue/{issueKey}; PUT /rest/api/2/issue/{issueKey}; PUT /rest/api/2/issue/{issueKey} |
+| 7. Start the first sprint                       | 1      | POST /rest/agile/1.0/sprint/{sprint1Id}                                                                                        |
+| 8. Complete the sprint and move unfinished work | 2      | POST /rest/agile/1.0/sprint/{sprint1Id}; POST /rest/agile/1.0/sprint/{sprint2Id}/issue                                         |
+| 9. Release version 1.0                          | 1      | PUT /rest/api/2/version/{versionId}                                                                                            |
+| 10. Read the sprint report                      | 0      | keine                                                                                                                          |
+| 11. Create and delete an empty sprint           | 2      | POST /rest/agile/1.0/sprint; DELETE /rest/agile/1.0/sprint/{createdSprintId}                                                   |
+
+### Entwicklung
+
+| Schritt                                 | Writes | Signatur                                                      |
+| --------------------------------------- | ------ | ------------------------------------------------------------- |
+| 1. Read my current sprint issues        | 0      | keine                                                         |
+| 2. Assign a story to myself             | 1      | PUT /rest/api/2/issue/{issueKey}/assignee                     |
+| 3. Start the story                      | 1      | POST /rest/api/2/issue/{issueKey}/transitions                 |
+| 4. Log two hours                        | 1      | POST /rest/api/2/issue/{issueId}/worklog?adjustEstimate=leave |
+| 5. Comment on the story                 | 1      | POST /rest/api/2/issue/{issueKey}/comment                     |
+| 6. Create a subtask                     | 1      | POST /rest/api/2/issue                                        |
+| 7. Create a blocking bug                | 2      | POST /rest/api/2/issue; POST /rest/api/2/issueLink            |
+| 8. Finish the story with a resolution   | 1      | POST /rest/api/2/issue/{issueKey}/transitions                 |
+| 9. Watch the story                      | 1      | POST /rest/api/2/issue/{issueId}/watchers                     |
+| 10. Attempt to delete the future sprint | 1      | DELETE /rest/agile/1.0/sprint/{sprint2Id}                     |
+
+### Technikverantwortung
+
+| Schritt                                        | Writes | Signatur                                                                                             |
+| ---------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------- |
+| 1. Create the Backend component                | 1      | POST /rest/api/2/component                                                                           |
+| 2. Assign the component to three stories       | 3      | PUT /rest/api/2/issue/{issueKey}; PUT /rest/api/2/issue/{issueKey}; PUT /rest/api/2/issue/{issueKey} |
+| 3. Link two stories with a blocking dependency | 1      | POST /rest/api/2/issueLink                                                                           |
+| 4. Read blocked issues                         | 0      | keine                                                                                                |
+| 5. Label two stories as tech debt              | 2      | PUT /rest/api/2/issue/{issueKey}; PUT /rest/api/2/issue/{issueKey}                                   |
+| 6. Move a story to the other epic              | 1      | POST /rest/agile/1.0/epic/{epicId}/issue                                                             |
+| 7. Estimate three stories                      | 3      | PUT /rest/api/2/issue/{issueKey}; PUT /rest/api/2/issue/{issueKey}; PUT /rest/api/2/issue/{issueKey} |
+| 8. Read unfinished version work                | 0      | keine                                                                                                |
+| 9. Attach the pull request                     | 1      | POST /rest/api/2/issue/{issueId}/remotelink                                                          |
+
 ## Formal rules and knowledge-grounded authoring through the visible UI
 
 The AC1/AC2/AC4 source journey uses ordinary skill upload, validation and selection,

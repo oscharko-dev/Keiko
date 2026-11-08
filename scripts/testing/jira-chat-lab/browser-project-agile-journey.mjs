@@ -16,29 +16,8 @@ import {
   exactMembership,
   completedOperation,
   permissionRefusal,
-  oneObservedEffect,
 } from "./project-agile-oracles.mjs";
-
-function noUnexpectedEffect(snapshot) {
-  assert.equal(snapshot.blocked, 0, "A blocked extra dispatch is a failed qualification");
-  assert.ok(snapshot.forwarded <= 1);
-  assert.ok(snapshot.statuses.every((status) => status === 400 || status === 403));
-}
-
-async function visibleReceipt(environment, text) {
-  const cards = environment.region.getByRole("region", { name: "Jira action", exact: true });
-  await cards.filter({ hasText: text }).last().waitFor();
-  assert.equal(await cards.locator("pre").count(), 0);
-}
-
-async function visibleLink(environment, key, path) {
-  const link = environment.region.getByRole("link").filter({ hasText: key }).first();
-  await link.waitFor();
-  assert.equal(
-    await link.getAttribute("href"),
-    `${labSessionConnection(environment.context.session).httpsOrigin}${path}`,
-  );
-}
+import { step, visibleReceipt, visibleLink, issueRead } from "./browser-journey-step.mjs";
 
 async function visibleBoardLink(environment, boardId) {
   const destination = `${labSessionConnection(environment.context.session).httpsOrigin}/secure/RapidBoard.jspa?rapidView=${boardId}`;
@@ -51,57 +30,6 @@ async function visibleBoardLink(environment, boardId) {
   assert.ok(
     (await link.innerText()).trim().length > 0,
     "The actual board destination has a readable label",
-  );
-}
-
-async function step(environment, definition) {
-  const { context, group, witness, persist } = environment;
-  group.current = { name: definition.name, phase: "prepared", chatId: environment.chat.id };
-  witness.arm(definition.wire);
-  persist();
-  const turn = await sendBrowserTurn(
-    environment.page,
-    environment.region,
-    context,
-    environment.chat.id,
-    definition.prompt,
-    {
-      operations: [definition.operation],
-      reviewText: definition.reviewText ?? [],
-      allowFailure: definition.denied === true,
-      persist: (state) => {
-        Object.assign(group.current, state);
-        persist();
-      },
-      beforeDecision: () => assert.equal(witness.snapshot().forwarded, 0),
-    },
-  );
-  const wire = witness.snapshot();
-  if (definition.denied) noUnexpectedEffect(wire);
-  else oneObservedEffect(wire);
-  assert.equal(
-    turn.decisions,
-    wire.forwarded,
-    "Every forwarded write requires exactly its visible approval; preflight refusals require none",
-  );
-  const proof = await definition.verify(turn);
-  group.results.push({
-    name: definition.name,
-    clientTurnId: turn.clientTurnId,
-    userId: turn.user.id,
-    approvals: turn.decisions,
-    wire,
-    proof,
-  });
-  group.current.phase = "independently-observed";
-  persist();
-  return proof;
-}
-
-async function issueRead(context, key) {
-  return projectAgileRead(
-    context.session,
-    `/rest/api/2/issue/${encodeURIComponent(key)}?fields=*all`,
   );
 }
 
@@ -414,7 +342,11 @@ export async function runProjectAgileJourney(context, group, inputs, witness, pe
     administration: true,
   });
   try {
-    await createProject({ ...denied, context, group, witness, persist }, inputs.deniedActor, true);
+    await createProject(
+      { ...denied, context, group, witness, persist, sendTurn: sendBrowserTurn },
+      inputs.deniedActor,
+      true,
+    );
   } finally {
     await denied.browser.close();
   }
@@ -423,7 +355,7 @@ export async function runProjectAgileJourney(context, group, inputs, witness, pe
     tokenFile: inputs.permittedToken,
     administration: true,
   });
-  const environment = { ...permitted, context, group, witness, persist };
+  const environment = { ...permitted, context, group, witness, persist, sendTurn: sendBrowserTurn };
   try {
     group.project = await createProject(environment, inputs.permittedActor, false);
     group.epic = await createIssue(environment, "Epic", `${group.name} requirement`);

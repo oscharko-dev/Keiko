@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { ensureFixtureToken } from "./fixture-tokens.mjs";
 import { actorDetails, basicAuth, checked, labRequest, readPrivateFile } from "./lab-client.mjs";
 
-export async function ensureFixtureIdentity(session, actor) {
+export async function ensureFixtureIdentity(session, actor, lifecycle = {}) {
   if (actor === "admin") throw new TypeError("Administrator is provisioned by Jira setup");
   const details = actorDetails(actor);
   const path = join(session.directory, "secrets", details.passwordFile);
@@ -20,7 +20,7 @@ export async function ensureFixtureIdentity(session, actor) {
   if (result.status !== 200 && result.status !== 404)
     throw new TypeError("Unexpected synthetic identity state");
   if (result.status === 404)
-    await checked(session, "create-user", "POST", "/rest/api/2/user", admin, {
+    await identityWrite(session, actor, lifecycle, "create-user", "/rest/api/2/user", admin, {
       name: details.name,
       password: readPrivateFile(path),
       emailAddress: `${actor}@example.invalid`,
@@ -42,6 +42,14 @@ export async function ensureFixtureIdentity(session, actor) {
   if (permissions.permissions.ADMINISTER.havePermission !== false)
     throw new TypeError("Fixture actor is unexpectedly privileged");
   return auth;
+}
+
+async function identityWrite(session, actor, lifecycle, name, path, auth, body) {
+  const intent = { actor, name, method: "POST", path };
+  await lifecycle.beforeWrite?.(intent);
+  const value = await checked(session, name, "POST", path, auth, body);
+  await lifecycle.afterWrite?.(intent);
+  return value;
 }
 
 /** Own disposable qualification sessions only: reuse normal PAT creation and verify native admin. */
