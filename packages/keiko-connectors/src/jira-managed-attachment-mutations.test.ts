@@ -3,6 +3,7 @@ import {
   TOOL_CATALOG_LIMITS,
   type CatalogJsonObject,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { ATLASSIAN_WRITE_RESPONSE_MAX_BYTES } from "./atlassian-write-http.js";
 import type { AtlassianWriteHttpOutcome } from "./atlassian-write-http.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import {
@@ -155,11 +156,12 @@ describe("reviewed native attachment deletion", () => {
     expect(await remove(request)).toMatchObject({ ok: false, reason: "malformed-payload" });
     expect(request).toHaveBeenCalledTimes(1);
   });
-  it("refuses oversized complete-list claims before mutation", async () => {
+  it("refuses a complete-list claim exceeding the actual transport byte budget before mutation", async () => {
     const attachment = Array.from(
       { length: TOOL_CATALOG_LIMITS.maxArrayItems + 1 },
-      (_, index) => ({ ...FILE, id: String(index + 1) }),
+      (_, index) => ({ ...FILE, id: String(index + 1), filename: "x".repeat(1024) }),
     );
+    expect(new TextEncoder().encode(JSON.stringify(attachment)).byteLength).toBeGreaterThan(ATLASSIAN_WRITE_RESPONSE_MAX_BYTES);
     const request = fixture({ before: { ...ISSUE, fields: { attachment } } });
     expect(await remove(request)).toEqual({ ok: false, reason: "bounds-exceeded" });
     expect(request).toHaveBeenCalledTimes(1);
@@ -167,7 +169,7 @@ describe("reviewed native attachment deletion", () => {
   it("retains the acknowledged receipt with a bounds refusal for an oversized confirmation list", async () => {
     const attachment = Array.from(
       { length: TOOL_CATALOG_LIMITS.maxArrayItems + 1 },
-      (_, index) => ({ ...OTHER, id: String(index + 1) }),
+      (_, index) => ({ ...OTHER, id: String(index + 1), filename: "x".repeat(1024) }),
     );
     const request = fixture({ after: { ...ISSUE, fields: { attachment } } });
     expect(await remove(request)).toEqual({
@@ -262,4 +264,12 @@ describe("reviewed native attachment deletion", () => {
     expect(isJiraAttachmentMutation("jira.attach")).toBe(false);
     expect(isJiraAttachmentMutation("jira.delete-all-attachments")).toBe(false);
   });
+});
+
+it("admits and confirms exact attachment removal among more than a thousand bounded native rows", async () => {
+  const others = Array.from({ length: 1001 }, (_, index) => ({ ...OTHER, id: String(index + 1) }));
+  const request = fixture({ before: { ...ISSUE, fields: { attachment: [...others, FILE] } },
+    after: { ...ISSUE, fields: { attachment: others } } });
+  expect(await remove(request)).toEqual({ ok: true, receipt: RECEIPT });
+  expect(request.mock.calls.filter(([, method]) => method === "DELETE")).toHaveLength(1);
 });

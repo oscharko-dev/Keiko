@@ -8,6 +8,7 @@ import {
   type CatalogJsonObject,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
+import { ATLASSIAN_WRITE_RESPONSE_MAX_BYTES } from "./atlassian-write-http.js";
 import { asRecord } from "./atlassian-sync-classify.js";
 import { jiraNativeId, jiraNativeText } from "./jira-native-values.js";
 import { agileDate } from "./jira-agile-projection.js";
@@ -188,9 +189,13 @@ function completeWorklogItems(
         ],
       },
     };
+  // GET issue/{id}/worklog has no native page selectors. The real HTTP response budget,
+  // not the catalog's output page size, bounds this complete private observation.
+  if (new TextEncoder().encode(JSON.stringify(raw)).byteLength > ATLASSIAN_WRITE_RESPONSE_MAX_BYTES)
+    return { ok: false, reason: "bounds-exceeded" };
   const items = projectJiraCollection(
     raw.worklogs,
-    TOOL_CATALOG_LIMITS.maxArrayItems,
+    raw.worklogs.length,
     (value) => jiraWorklogProjection(value, issue),
     "id",
   );
@@ -201,8 +206,7 @@ function completeWorklogs(raw: Record<string, unknown>, items: readonly unknown[
     raw.startAt === 0 &&
     raw.total === items.length &&
     typeof raw.maxResults === "number" &&
-    raw.maxResults >= items.length &&
-    items.length <= TOOL_CATALOG_LIMITS.maxArrayItems
+    raw.maxResults >= items.length
   );
 }
 /** One native unpaged envelope, shared by readable pages and exact deletion membership proof. */

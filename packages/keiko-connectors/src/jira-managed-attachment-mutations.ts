@@ -4,9 +4,9 @@ import {
   type JiraMutationReceipt,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
-  TOOL_CATALOG_LIMITS,
   type CatalogJsonObject,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { ATLASSIAN_WRITE_RESPONSE_MAX_BYTES } from "./atlassian-write-http.js";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import { jiraAttachmentRecord } from "./jira-attachments.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
@@ -63,7 +63,9 @@ async function readIssue(
   if (!jiraNativeId(issue.id) || !isSafeAtlassianIdentifier(issue.key)) return MALFORMED;
   const items = asArray(issue.fields.attachment);
   if (items === undefined) return MALFORMED;
-  if (items.length > TOOL_CATALOG_LIMITS.maxArrayItems) return BOUNDS;
+  // Jira supplies this field as one unpaged array. Its actual admitted response-byte budget
+  // bounds the collection; the tool catalog's output-array count is not a resource limit here.
+  if (new TextEncoder().encode(JSON.stringify(items)).byteLength > ATLASSIAN_WRITE_RESPONSE_MAX_BYTES) return BOUNDS;
   const attachments = attachmentList(items);
   return attachments === undefined
     ? MALFORMED

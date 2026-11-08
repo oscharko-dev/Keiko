@@ -129,10 +129,12 @@ describe("native administration group lifecycle and direct membership", () => {
     expect(await execute(add.name, structuredClone(add.args), f.request)).toMatchObject({ ok: false });
     expect(f.calls.every((call) => call.method === "GET")).toBe(true);
   });
-  it("refuses oversized complete membership instead of using the visible prefix", async () => {
+  it("never uses a visible prefix when the next native membership page loses admission", async () => {
     const f = groupMutationFixture();
     f.members.push(...Array.from({ length: 1001 }, (_, index) => ({ key: `other-${String(index)}`, name: `name-${String(index)}` })));
-    expect(await execute(add.name, structuredClone(add.args), f.request)).toMatchObject({ ok: false });
+    const request: typeof f.request = (path, ...rest) => path.includes("startAt=50&")
+      ? Promise.resolve({ ok: false, reason: "effect-denied" }) : f.request(path, ...rest);
+    expect(await execute(add.name, structuredClone(add.args), request)).toMatchObject({ ok: false, reason: "effect-denied" });
     expect(f.calls.every((call) => call.method === "GET")).toBe(true);
   });
   it.each([
@@ -163,4 +165,22 @@ describe("group mutation self-access protection", () => {
       .toMatchObject({ ok: false, reason: "conflict" });
     expect(f.calls.every((call) => call.method === "GET")).toBe(true);
   });
+});
+
+it("completely reads group-and-subgroup membership beyond a thousand rows", async () => {
+  const f = groupMutationFixture();
+  f.members.push(...Array.from({ length: 1001 }, (_, index) => ({ key: `member-${String(index)}`, name: `member-${String(index)}` })), GROUP_MUTATION_USER);
+  expect(await readGroupMutationMembership(f.request, { kind: "membership", actor: "synthetic-actor", name: "R&D team",
+    user: GROUP_MUTATION_USER, expected: true, present: false })).toEqual({ ok: true, value: true });
+  expect(f.calls.at(-1)?.path).toBe("group/member?groupname=R%26D+team&includeInactiveUsers=true&startAt=1000&maxResults=50");
+  expect(f.calls).toHaveLength(21);
+});
+it("retains the actual request budget refusal after a partial large-group observation", async () => {
+  const f = groupMutationFixture();
+  f.members.push(...Array.from({ length: 1001 }, (_, index) => ({ key: `member-${String(index)}`, name: `member-${String(index)}` })));
+  const request: typeof f.request = (path, ...rest) => path.includes("startAt=1000&")
+    ? Promise.resolve({ ok: false, reason: "timeout" }) : f.request(path, ...rest);
+  expect(await readGroupMutationMembership(request, { kind: "membership", actor: "synthetic-actor", name: "R&D team",
+    user: GROUP_MUTATION_USER, expected: false, present: false })).toMatchObject({ ok: false, reason: "timeout" });
+  expect(f.calls.every((call) => call.method === "GET")).toBe(true);
 });

@@ -1,4 +1,5 @@
 import { bindJiraGroupPrincipal as bindMutationGroup } from "./jira-group-principal.js";
+import type { AtlassianWriteHttpOutcome } from "./atlassian-write-http.js";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { jiraDirectoryUsers } from "./jira-directory-values.js";
 import { jiraMetadataPageLast } from "./jira-managed-metadata.js";
@@ -24,26 +25,32 @@ function collectMembers(state: MembershipCursor, items: readonly CatalogJsonObje
 }
 function sameTotal(state: MembershipCursor, total: unknown): boolean {
   if (total === undefined) return state.count === 0 || state.total === undefined;
-  if (typeof total !== "number" || !Number.isSafeInteger(total) || total < 0 || total > 1000) return false;
+  if (typeof total !== "number" || !Number.isSafeInteger(total) || total < 0) return false;
   return state.count === 0 || state.total === total;
 }
-/** Complete bounded native membership only. No group picker, visible-user prefix or absent-page shortcut. */
+function collectPage(response: Extract<AtlassianWriteHttpOutcome, { ok: true }>, state: MembershipCursor,
+  input: Extract<GroupMutationInput, { kind: "membership" }>): GroupObservation<boolean> {
+  const body = response.status === 200 ? response.body : undefined;
+  const items = body === undefined ? undefined : jiraDirectoryUsers(body.values, 50);
+  if (body === undefined || items === undefined) return GROUP_MUTATION_MALFORMED;
+  const last = jiraMetadataPageLast(body, items.length, state.count, 50);
+  if (last === undefined || !sameTotal(state, body.total) || !collectMembers(state, items, input)) return GROUP_MUTATION_MALFORMED;
+  state.total = typeof body.total === "number" ? body.total : undefined;
+  return { ok: true, value: last };
+}
+/** Complete native pages share the admitted request's existing deadline/cancellation budget.
+ * The 50-row native page size is not a maximum group population. No visible prefix proves absence.
+ */
 export async function readGroupMutationMembership(request: JiraMutationRequest, input: Extract<GroupMutationInput, { kind: "membership" }>): Promise<GroupObservation<boolean>> {
   const state: MembershipCursor = { keys: new Set(), names: new Set(), count: 0, total: undefined, found: false };
-  for (let page = 0; page < 20; page++) {
+  for (;;) {
     const query = new URLSearchParams({ groupname: input.name, includeInactiveUsers: "true", startAt: String(state.count), maxResults: "50" });
     const response = await request(`group/member?${query.toString()}`, "GET", undefined, "json");
     if (!response.ok) return dispatchFailure(response);
-    const body = response.status === 200 ? response.body : undefined;
-    const items = body === undefined ? undefined : jiraDirectoryUsers(body.values, 50);
-    if (body === undefined || items === undefined) return GROUP_MUTATION_MALFORMED;
-    if (typeof body.total === "number" && Number.isSafeInteger(body.total) && body.total > 1000) return { ok: false, reason: "bounds-exceeded" };
-    const last = jiraMetadataPageLast(body, items.length, state.count, 50);
-    if (last === undefined || !sameTotal(state, body.total) || !collectMembers(state, items, input)) return GROUP_MUTATION_MALFORMED;
-    state.total = typeof body.total === "number" ? body.total : undefined;
-    if (last) return { ok: true, value: state.found };
+    const collected = collectPage(response, state, input);
+    if (!collected.ok) return collected;
+    if (collected.value) return { ok: true, value: state.found };
   }
-  return { ok: false, reason: "bounds-exceeded", detail: { messages: ["The complete group membership exceeds the existing 1000-entry bound. A visible prefix cannot establish absence. No write was sent."] } };
 }
 async function membershipAdmission(request: JiraMutationRequest, input: Extract<GroupMutationInput, { kind: "membership" }>): Promise<GroupMutationFailure | undefined> {
   const principal = await bindRolePrincipals(request, { users: [input.user], groups: [] });

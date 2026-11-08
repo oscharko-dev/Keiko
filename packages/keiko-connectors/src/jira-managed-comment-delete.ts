@@ -53,50 +53,53 @@ function input(args: CatalogJsonObject): Input | undefined {
     : undefined;
 }
 
-function hasCommentPageMetadata(
-  raw: Record<string, unknown> | undefined,
-): raw is Record<string, unknown> & { readonly total: number; readonly maxResults: number } {
-  return (
-    raw?.startAt === 0 &&
-    typeof raw.total === "number" &&
-    Number.isSafeInteger(raw.total) &&
-    raw.total >= 0 &&
-    typeof raw.maxResults === "number" &&
-    Number.isSafeInteger(raw.maxResults) &&
-    raw.maxResults >= 1
-  );
+interface CommentPage {
+  readonly ok: true;
+  readonly total: number;
+  readonly comments: readonly unknown[];
+  readonly last: boolean;
 }
-function completePage(
-  response: Extract<AtlassianWriteHttpOutcome, { readonly ok: true }>,
-): Failure | { readonly ok: true; readonly comments: readonly unknown[] } {
+function pageMetadata(raw: Record<string, unknown> | undefined, start: number): raw is Record<string, unknown> & { readonly total: number; readonly maxResults: number } {
+  return raw?.startAt === start && typeof raw.total === "number" && Number.isSafeInteger(raw.total) && raw.total >= start &&
+    typeof raw.maxResults === "number" && Number.isSafeInteger(raw.maxResults) && raw.maxResults >= 1;
+}
+function commentPage(response: Extract<AtlassianWriteHttpOutcome, { readonly ok: true }>, start: number,
+  total: number | undefined): Failure | CommentPage {
   const raw = response.body;
   const comments = asArray(raw?.comments);
-  if (response.status !== 200 || !hasCommentPageMetadata(raw) || comments === undefined)
-    return MALFORMED;
-  if (raw.total > TOOL_CATALOG_LIMITS.maxArrayItems)
-    return { ok: false, reason: "bounds-exceeded" };
-  if (comments.length !== raw.total || comments.length > raw.maxResults) return MALFORMED;
-  return { ok: true, comments };
+  if (response.status !== 200 || !pageMetadata(raw, start) || comments === undefined) return MALFORMED;
+  if (total !== undefined && raw.total !== total) return CONFLICT;
+  if (comments.length > Math.min(raw.maxResults, TOOL_CATALOG_LIMITS.maxArrayItems) || start + comments.length > raw.total) return MALFORMED;
+  const last = start + comments.length === raw.total;
+  if (!last && comments.length === 0) return MALFORMED;
+  return { ok: true, comments, total: raw.total, last };
 }
-/** Never infer absence from a truncated, permission-refused or partial native collection. */
-async function commentIds(
-  request: JiraMutationRequest,
-  binding: JiraCommentBinding,
-): Promise<Failure | { readonly ok: true; readonly ids: ReadonlySet<string> }> {
-  const response = await request(
-    `issue/${binding.issueId}/comment?startAt=0&maxResults=${String(TOOL_CATALOG_LIMITS.maxArrayItems)}`,
-  );
-  if (!response.ok) return dispatchFailure(response);
-  const page = completePage(response);
-  if (!page.ok) return page;
-  const ids = new Set<string>();
-  for (const comment of page.comments) {
+function collectCommentIds(comments: readonly unknown[], ids: Set<string>, binding: JiraCommentBinding): Failure | undefined {
+  for (const comment of comments) {
     const item = asRecord(comment);
     if (!jiraNativeId(item?.id) || ids.has(item.id)) return MALFORMED;
     if (!jiraCommentSelfMatches(item.self, item.id, binding)) return CONFLICT;
     ids.add(item.id);
   }
-  return { ok: true, ids };
+  return undefined;
+}
+/** Complete native pages share the caller's admitted request/deadline budget. The catalog's
+ * per-array bound limits each response, not the number of comments allowed on an issue.
+ * A changed total, repeated identity, missing page or budget refusal never establishes absence.
+ */
+async function commentIds(request: JiraMutationRequest, binding: JiraCommentBinding): Promise<Failure | { readonly ok: true; readonly ids: ReadonlySet<string> }> {
+  const ids = new Set<string>();
+  let total: number | undefined;
+  for (;;) {
+    const response = await request(`issue/${binding.issueId}/comment?startAt=${String(ids.size)}&maxResults=${String(TOOL_CATALOG_LIMITS.maxArrayItems)}`);
+    if (!response.ok) return dispatchFailure(response);
+    const page = commentPage(response, ids.size, total);
+    if (!page.ok) return page;
+    total = page.total;
+    const refused = collectCommentIds(page.comments, ids, binding);
+    if (refused !== undefined) return refused;
+    if (page.last) return { ok: true, ids };
+  }
 }
 
 async function inspect(

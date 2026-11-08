@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { DIRECTORY_ACCESS_FIXTURE_CASES as CASES, DIRECTORY_ROLE_REVIEW, DIRECTORY_ROLE_TARGET, directoryAccessFixture } from "../../../tests/support/jira-directory-access-fixture.js";
 import { executeJiraDirectoryAccessMutation as execute } from "./jira-managed-directory-access-mutations.js";
+import { guardJiraDirectorySelfAccess } from "./jira-directory-self-access.js";
+import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { JiraAcknowledgedMutationError } from "./jira-mutation-failure.js";
 import { parseDirectoryAccessInput } from "./jira-directory-access-values.js";
 
@@ -138,4 +140,31 @@ it.each([false, true])("refuses single/bulk role updates that remove the actor's
     : f.request(path, ...rest);
   expect(await execute(selected.name, args, request, f.ports)).toMatchObject({ ok: false, reason: "conflict" });
   expect(f.snapshot().effects).toBe(0);
+});
+
+const REMOVED_ROLE_GROUP = {
+  kind: "roles", actor: "synthetic-actor", bulk: false,
+  roles: [{ expected: DIRECTORY_ROLE_REVIEW, value: { key: "jira-software", groups: [], defaultGroups: [] } }],
+} as const;
+it.each([true, false])("independently checks inherited role-group membership when user expansion omits it (member=%s)", async (member) => {
+  const calls: string[] = [];
+  const request: JiraMutationRequest = async (path, method = "GET") => {
+    calls.push(path); expect(method).toBe("GET");
+    if (path === "user?key=synthetic-actor&expand=groups") return { ok: true, status: 200,
+      body: { key: "synthetic-actor", name: "operator", groups: { size: 0, items: [] } } };
+    expect(path).toBe("group/member?groupname=jira-users&includeInactiveUsers=true&startAt=0&maxResults=50");
+    return { ok: true, status: 200, body: { startAt: 0, maxResults: 50, total: member ? 1 : 0,
+      values: member ? [{ key: "synthetic-actor", name: "operator" }] : [] } };
+  };
+  const result = await guardJiraDirectorySelfAccess(request, REMOVED_ROLE_GROUP, { key: "synthetic-actor", name: "operator" });
+  if (member) expect(result).toMatchObject({ ok: false, reason: "conflict" });
+  else expect(result).toBeUndefined();
+  expect(calls).toHaveLength(2);
+});
+it("refuses removal when inherited-group membership cannot be completely read", async () => {
+  const request: JiraMutationRequest = async (path) => path === "user?key=synthetic-actor&expand=groups"
+    ? { ok: true, status: 200, body: { key: "synthetic-actor", name: "operator", groups: { size: 0, items: [] } } }
+    : { ok: false, reason: "permission-denied", httpStatus: 403 };
+  expect(await guardJiraDirectorySelfAccess(request, REMOVED_ROLE_GROUP, { key: "synthetic-actor", name: "operator" }))
+    .toMatchObject({ ok: false, reason: "permission-denied" });
 });

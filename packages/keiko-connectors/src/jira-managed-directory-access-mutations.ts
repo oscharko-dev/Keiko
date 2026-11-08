@@ -88,21 +88,21 @@ export async function executeJiraDirectoryAccessMutation(operation: JiraDirector
   if (ports === undefined) return directoryAccessRefusal("The bound directory CAS/form/experimental transport is unavailable. No native request was sent.", "unavailable");
   const receipt = directoryAccessReceipt(input);
   if (new TextEncoder().encode(JSON.stringify(receipt)).byteLength > 16384) return directoryAccessRefusal("The known directory target receipt exceeds the existing 16 KiB bound. Reduce the selection before any request.");
+  const refused = await admitDirectoryMutation(request, ports, input, receipt);
+  if (refused !== undefined) return refused;
+  if (check) return { ok: true, receipt: {} };
+  const current = await admitDirectoryMutation(request, ports, input, receipt);
+  if (current !== undefined) return current;
+  return dispatchDirectoryMutation(request, ports, input, receipt);
+}
+async function admitDirectoryMutation(request: JiraMutationRequest, ports: JiraDirectoryAccessPorts, input: DirectoryAccessInput, receipt: DirectoryAccessReceipt): Promise<DirectoryAccessFailure | undefined> {
   const actor = await readSavedActor(request, input.actor);
   if (!actor.ok) return actor;
   const refused = input.kind === "roles" ? await roleAdmission(request, ports, input, receipt) : await userAdmission(request, input, receipt);
   if (refused !== undefined) return refused;
-  if (input.kind === "roles") {
-    const selfAccess = await guardJiraDirectorySelfAccess(request, input, actor.value);
-    if (selfAccess !== undefined) return selfAccess;
-  }
-  if (check) return { ok: true, receipt: {} };
-  const reboundActor = await readSavedActor(request, input.actor);
-  if (!reboundActor.ok) return reboundActor;
-  if (input.kind === "roles") {
-    const selfAccess = await guardJiraDirectorySelfAccess(request, input, reboundActor.value);
-    if (selfAccess !== undefined) return selfAccess;
-  }
+  return input.kind === "roles" ? guardJiraDirectorySelfAccess(request, input, actor.value) : undefined;
+}
+async function dispatchDirectoryMutation(request: JiraMutationRequest, ports: JiraDirectoryAccessPorts, input: DirectoryAccessInput, receipt: DirectoryAccessReceipt): Promise<DirectoryAccessAttempt> {
   const dispatched = input.kind === "roles" ? await roleEffect(ports, input)
     : { ok: true, value: await userEffect(request, ports, input) } as const;
   if (!dispatched.ok) return dispatched;

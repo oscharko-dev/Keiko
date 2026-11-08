@@ -25,11 +25,9 @@ async function confirm(request: JiraMutationRequest, input: GroupMutationInput, 
   const group = await bindMutationGroup(request, input.name);
   if (group !== undefined) return { ...group, receipt };
   if (input.kind === "create") return { ok: true, receipt };
-  if (input.kind === "membership") {
-    const member = await readGroupMutationMembership(request, input);
-    if (!member.ok) return { ...member, receipt };
-    if (member.value !== input.present) return groupMutationRefusal("Jira acknowledged the request, but the native group-and-subgroup observation did not match the requested target. Inherited membership cannot establish a direct-assignment failure. Keep the known identities and do not replay.", "unavailable", receipt);
-  }
+  const member = await readGroupMutationMembership(request, input);
+  if (!member.ok) return { ...member, receipt };
+  if (member.value !== input.present) return groupMutationRefusal("Jira acknowledged the request, but the native group-and-subgroup observation did not match the requested target. Inherited membership cannot establish a direct-assignment failure. Keep the known identities and do not replay.", "unavailable", receipt);
   return groupMutationRefusal("Jira acknowledged the group change. Bounded group or direct-membership observations cannot prove every permission, application access, restriction-transfer or directory consequence. Keep the known target receipt and do not replay.", "unavailable", receipt);
 }
 /** Fixed GroupResource operations, independently bound principal namespaces and one native effect. */
@@ -43,6 +41,9 @@ export async function executeJiraGroupMutation(operation: JiraGroupMutation, arg
   if (check) return { ok: true, receipt: {} };
   const current = await admitGroupMutation(request, input);
   if (current !== undefined) return current;
+  return dispatch(request, input, receipt);
+}
+async function dispatch(request: JiraMutationRequest, input: GroupMutationInput, receipt: JiraGroupMutationReceipt): Promise<GroupMutationAttempt> {
   const target = effect(input);
   const response = await request(target.path, target.method, target.body, target.expect);
   if (!response.ok) return { ...dispatchFailure(response), receipt };

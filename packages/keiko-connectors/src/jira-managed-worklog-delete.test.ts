@@ -222,10 +222,10 @@ describe("reviewed worklog deletion with existing completeness and template owne
     expect(await remove(request)).toMatchObject({ ok: false, reason: "conflict" });
     expect(request).toHaveBeenCalledTimes(3);
   });
-  it("uses the existing total collection bound without remote page probing", async () => {
+  it("uses the actual response byte budget without inventing native worklog paging", async () => {
     const worklogs = Array.from({ length: TOOL_CATALOG_LIMITS.maxArrayItems + 1 }, (_, index) => ({
       ...WORKLOG,
-      id: String(index + 1),
+      id: String(index + 1), comment: "x".repeat(1024),
     }));
     const request = fixture({ before: collection(worklogs) });
     expect(await remove(request)).toMatchObject({ ok: false, reason: "bounds-exceeded" });
@@ -303,4 +303,12 @@ describe("reviewed worklog deletion with existing completeness and template owne
     expect(isJiraWorklogDelete("jira.delete-worklog")).toBe(true);
     expect(isJiraWorklogDelete("jira.delete-all-worklogs")).toBe(false);
   });
+});
+
+it("confirms exact deletion within a complete byte-bounded native worklog array larger than one thousand", async () => {
+  const others = Array.from({ length: 1001 }, (_, index) => ({ ...WORKLOG, id: String(index + 1), comment: "" }));
+  const request = fixture({ before: collection([...others, WORKLOG]), after: collection(others) });
+  expect(await remove(request)).toEqual({ ok: true, receipt: RECEIPT });
+  expect(request.mock.calls.filter(([, method]) => method === "DELETE")).toHaveLength(1);
+  expect(request.mock.calls.every(([path]) => !path.includes("startAt"))).toBe(true);
 });
