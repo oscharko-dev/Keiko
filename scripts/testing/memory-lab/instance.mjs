@@ -120,6 +120,21 @@ async function labEnvironment(dir, options, source = process.env) {
   return { project, env, foldedKeys };
 }
 
+// The product checks every configured chat model once at start and refuses a turn until that check
+// has passed. A person waits for the start; the lab does too, through the product's own settling
+// read, so a first turn never races the check. A model whose check failed ends the instance here
+// with a reason instead of failing every turn of the run.
+async function awaitStartupReadiness(bff, modelId) {
+  const result = await bff.request("GET", "/api/models?settleStartup=1");
+  if (result.status !== 200)
+    throw new Error(`startup model read failed with HTTP ${String(result.status)}`);
+  const model = result.json?.models?.find((entry) => entry.id === modelId);
+  if (model?.conversationReady !== true)
+    throw new LabConfigurationError(
+      `the answer model did not pass the product's startup readiness check (${model === undefined ? "not configured" : `conversationReady=${String(model.conversationReady)}`})`,
+    );
+}
+
 function stubProxy() {
   return {
     address: () => ({ port: 0 }),
@@ -188,6 +203,12 @@ export async function startLabInstance(options) {
     OFFLINE_CONTEXT_WINDOW,
     async () => ({ project: prepared.project, env: prepared.env }),
   );
+  try {
+    await awaitStartupReadiness(started.bff, answerModelId);
+  } catch (error) {
+    await started.close();
+    throw error;
+  }
   return {
     dir: options.dir,
     logDirectory: join(prepared.env.KEIKO_STATE_DIR, "logs"),
