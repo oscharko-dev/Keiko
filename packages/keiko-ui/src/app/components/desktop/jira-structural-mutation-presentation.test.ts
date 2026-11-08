@@ -136,7 +136,7 @@ it("does not repurpose a mutation's technical failure as a harmless read outcome
   const call: ChatToolExchange = { call: { id: "mutation-failed", name: "jira_create_issue_link", arguments: {} }, mutationOutcome: "unknown", result: {
     schemaVersion: 1, invocationId: "mutation-failed", toolRef: null, projectionDigest: null, effectStarted: true,
     metrics: { inputBytes: 10, outputBytes: 0, resultCount: 0, durationMs: 10 }, status: "failed", reason: "handler-failed",
-    page: { truncated: false, reason: "none", cursor: null }, data: null,
+    page: null, data: null,
   } };
   expect(jiraLocalReadFailureNotice(call)).toBeUndefined();
   expect(jiraToolState(call, "completed")).toBe("chat.jira.write.unknown");

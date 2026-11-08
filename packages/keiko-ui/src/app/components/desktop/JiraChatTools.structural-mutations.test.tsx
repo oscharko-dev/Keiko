@@ -68,7 +68,7 @@ function savedExchange(name: string, data: CatalogJsonObject, index: number, mut
 function technicalReads(): readonly ChatToolExchange[] {
   const base = { schemaVersion: 1, invocationId: "technical-read", toolRef: null, projectionDigest: null,
     effectStarted: false, metrics: { inputBytes: 10, outputBytes: 0, resultCount: 0, durationMs: 10 },
-    page: { truncated: false, reason: "none", cursor: null }, data: null } as const;
+    page: null, data: null } as const;
   const results: readonly ToolResultEnvelope[] = [
     { ...base, status: "denied", reason: "effect-denied" },
     { ...base, status: "failed", reason: "handler-failed" },

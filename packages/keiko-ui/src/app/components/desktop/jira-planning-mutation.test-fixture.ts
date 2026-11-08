@@ -1,7 +1,9 @@
 import type { ChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts";
+import type { JiraMutationReceipt } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 export type PlanningOperation = Extract<ChatToolWriteApprovalView, { kind: "jira-chat-write" }>["operation"];
-interface PlanningCase { readonly operation: PlanningOperation; readonly args: CatalogJsonObject; readonly receipt: CatalogJsonObject }
+type PlanningReceipt = CatalogJsonObject & JiraMutationReceipt;
+interface PlanningCase { readonly operation: PlanningOperation; readonly args: CatalogJsonObject; readonly receipt: PlanningReceipt }
 export const PLANNING_VALUE = [
   { path: "", kind: "object", childCount: 5 }, { path: "/empty", kind: "string", textValue: "" },
   { path: "/false", kind: "boolean", booleanValue: false }, { path: "/zero", kind: "number", numberValue: 0 },
@@ -14,7 +16,7 @@ const VERSION_RECEIPT = { versionId: VERSION_CONTEXT.versionId, projectId: "1000
 const BOARD = { expectedActorKey: "actor-key", boardId: "7", expectedBoardName: "Reviewed planning board" };
 const RANK = { ...BOARD, rankCustomFieldId: "10002", direction: "before", expectedAnchorRank: null };
 const RANK_RECEIPT = { userKey: "actor-key", boardId: "7", fieldId: "customfield_10002", issueIds: ["10001"], issueKeys: ["SYN-1"],
-  anchorIssueId: "10002", anchorIssueKey: "SYN-2", rankDirection: "before", outcome: "succeeded-unconfirmed", reason: "unavailable" };
+  anchorIssueId: "10002", anchorIssueKey: "SYN-2", rankDirection: "before", outcome: "succeeded-unconfirmed", reason: "unavailable" } satisfies PlanningReceipt;
 const CATEGORY = { id: "9007199254740993", name: "Reviewed category", description: "" };
 export const PLANNING_CASES: readonly PlanningCase[] = [
   { operation: "jira.upsert-version-remote-link", args: { ...VERSION_CONTEXT, globalId: "new-link", valueNodes: [
