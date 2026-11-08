@@ -170,6 +170,22 @@ function finalState(stdout) {
   }
 }
 
+const STALE_CONNECTION_CODES = new Set(["ECONNRESET", "UND_ERR_SOCKET", "EPIPE"]);
+
+/**
+ * Runs an idempotent read, once more on a fresh connection when the pooled one was reset. The
+ * fixture preparation blocks the event loop for seconds (Git, npm), and a keep-alive connection
+ * the server closed meanwhile is still in the pool when the next read is sent.
+ */
+async function idempotentRead(read) {
+  try {
+    return await read();
+  } catch (error) {
+    if (!STALE_CONNECTION_CODES.has(error?.cause?.code)) throw error;
+    return read();
+  }
+}
+
 /** A fresh paired session per read: a session held across a long run may have expired. */
 async function readHistory(baseUrl, repo) {
   const session = await openApiSession(labBaseUrl(baseUrl));
@@ -200,7 +216,7 @@ async function readCodingModel(baseUrl, model) {
 }
 
 async function pollCodingModel(baseUrl, model, deadline) {
-  const { ready, state } = await readCodingModel(baseUrl, model);
+  const { ready, state } = await idempotentRead(() => readCodingModel(baseUrl, model));
   if (ready) return;
   if (Date.now() >= deadline) throw new Error(`the coding model is not ready (${state})`);
   await sleep(5000);
@@ -288,7 +304,7 @@ async function judgeEntry(entry, options, cache) {
   log("bump-set", `${entry.id}: running (approve ${entry.approve})`);
   const run = await driveTask(entry, task, options);
   // History first: the oracles below block on npm and Maven.
-  const history = await readHistory(options.baseUrl, task.repo);
+  const history = await idempotentRead(() => readHistory(options.baseUrl, task.repo));
   const events = await readEventsAfterWake(entry, options.logDir, run.started);
   const checks =
     run.runId === undefined
