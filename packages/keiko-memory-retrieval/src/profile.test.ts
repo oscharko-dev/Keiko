@@ -1,0 +1,137 @@
+import { describe, expect, it } from "vitest";
+
+import type { MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
+
+import { estimateTokens } from "./context.js";
+import {
+  DEFAULT_STANDING_PROFILE_CAPS,
+  PROFILE_EXCLUDED_TAG,
+  selectStandingProfile,
+  type StandingProfileCandidate,
+} from "./profile.js";
+import { buildRecord, projectScope, type BuildRecordOptions } from "./_support.js";
+
+const NOW = 10_000;
+
+function candidate(options: BuildRecordOptions, confirmations = 0): StandingProfileCandidate {
+  return {
+    record: buildRecord({ status: "accepted", type: "preference", ...options }),
+    confirmations,
+  };
+}
+
+function ids(candidates: readonly StandingProfileCandidate[]): readonly string[] {
+  return selectStandingProfile(candidates, NOW).entries.map((entry) => entry.id);
+}
+
+describe("selectStandingProfile", () => {
+  it("orders by pin, then confirmations, then the newest statement, then the id", () => {
+    const candidates = [
+      candidate({ id: "b-old", createdAt: 100 }, 2),
+      candidate({ id: "pinned", createdAt: 50, pinned: true }),
+      candidate({ id: "a-new", createdAt: 300 }, 2),
+      candidate({ id: "z-tie", createdAt: 200 }, 1),
+      candidate({ id: "y-tie", createdAt: 200 }, 1),
+    ];
+    expect(ids(candidates)).toEqual(["pinned", "a-new", "b-old", "y-tie", "z-tie"]);
+    // Input order never changes the outcome.
+    expect(ids([...candidates].reverse())).toEqual(ids(candidates));
+  });
+
+  it("takes only the person's own accepted, unsuppressed facts of the standing types", () => {
+    const profile = selectStandingProfile(
+      [
+        candidate({ id: "keep", type: "procedural" }),
+        candidate({ id: "fact", type: "semantic-fact" }),
+        candidate({ id: "project", scope: projectScope() }),
+        candidate({ id: "episode", type: "episodic" }),
+        candidate({ id: "proposed", status: "proposed" }),
+        candidate({ id: "superseded", status: "superseded" }),
+        candidate({ id: "expired", validFrom: 0, validUntil: NOW }),
+        candidate({ id: "excluded", tags: [PROFILE_EXCLUDED_TAG] }),
+      ],
+      NOW,
+    );
+    expect(profile.entries.map((entry) => entry.id)).toEqual(["fact", "keep"]);
+    expect(profile.dropped).toEqual({
+      "not-private": 1,
+      "not-standing-type": 1,
+      "not-accepted": 2,
+      suppressed: 1,
+      excluded: 1,
+    });
+  });
+
+  it("lets a pinned fact in and keeps an unpinned, excluded fact out", () => {
+    const fact = (pinned: boolean, tags: readonly string[]): StandingProfileCandidate =>
+      candidate({ id: "tables", type: "episodic", pinned, tags });
+    expect(ids([fact(true, [])])).toEqual(["tables"]);
+    expect(ids([fact(false, [])])).toEqual([]);
+    const standing = (pinned: boolean, tags: readonly string[]): StandingProfileCandidate =>
+      candidate({ id: "tables", pinned, tags });
+    expect(ids([standing(false, [PROFILE_EXCLUDED_TAG])])).toEqual([]);
+    expect(ids([standing(true, [PROFILE_EXCLUDED_TAG])])).toEqual(["tables"]);
+  });
+
+  it("stays within its caps at every vault size", () => {
+    for (const size of [0, 1, 7, 8, 9, 100, 10_000]) {
+      const candidates = Array.from({ length: size }, (_, index) =>
+        candidate({ id: `m${String(index)}`, body: `Ich bevorzuge Format ${String(index)}.` }),
+      );
+      const profile = selectStandingProfile(candidates, NOW);
+      expect(profile.entries.length).toBeLessThanOrEqual(DEFAULT_STANDING_PROFILE_CAPS.maxEntries);
+      expect(profile.entries.length).toBe(Math.min(size, DEFAULT_STANDING_PROFILE_CAPS.maxEntries));
+      expect(profile.tokens).toBeLessThanOrEqual(DEFAULT_STANDING_PROFILE_CAPS.maxTokens);
+    }
+  });
+
+  it("counts pinned facts against the caps and clips a long fact to one line", () => {
+    const long = `Ich arbeite\n\nimmer ${"sehr ".repeat(200)}gründlich.`;
+    const profile = selectStandingProfile(
+      [candidate({ id: "long", body: long, pinned: true }), candidate({ id: "short" })],
+      NOW,
+      { maxEntries: 1, maxTokens: 100, entryMaxTokens: 10 },
+    );
+    expect(profile.entries.map((entry) => entry.id)).toEqual(["long"]);
+    const [entry] = profile.entries;
+    expect(entry?.text).not.toMatch(/\n/u);
+    expect(estimateTokens(entry?.text ?? "")).toBeLessThanOrEqual(10);
+    expect(profile.tokens).toBe(entry?.tokens);
+    expect(profile.dropped).toEqual({ "entry-cap": 1 });
+  });
+
+  it("skips a fact that does not fit the remaining token budget and keeps looking", () => {
+    const profile = selectStandingProfile(
+      [
+        candidate({ id: "big", body: "eins zwei drei vier fünf sechs" }, 2),
+        candidate({ id: "small", body: "Tabellen" }, 1),
+      ],
+      NOW,
+      { maxEntries: 5, maxTokens: 3, entryMaxTokens: 20 },
+    );
+    expect(profile.entries.map((entry) => entry.id)).toEqual(["small"]);
+    expect(profile.dropped).toEqual({ "token-cap": 1 });
+  });
+
+  it("counts a repeated candidate once", () => {
+    const record: MemoryRecord = buildRecord({ id: "same", status: "accepted" });
+    expect(
+      selectStandingProfile(
+        [
+          { record, confirmations: 1 },
+          { record, confirmations: 1 },
+        ],
+        NOW,
+      ).entries,
+    ).toHaveLength(1);
+  });
+
+  it("rejects caps that are not non-negative integers", () => {
+    expect(() =>
+      selectStandingProfile([], NOW, { maxEntries: -1, maxTokens: 1, entryMaxTokens: 1 }),
+    ).toThrow(RangeError);
+    expect(() =>
+      selectStandingProfile([], NOW, { maxEntries: 1, maxTokens: Number.NaN, entryMaxTokens: 1 }),
+    ).toThrow(RangeError);
+  });
+});

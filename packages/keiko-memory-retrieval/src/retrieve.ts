@@ -31,7 +31,7 @@ import type {
 import { assembleContextBlock } from "./context.js";
 import { DEFAULT_MMR_LAMBDA, reorderByMmr } from "./diversity.js";
 import { RetrievalError } from "./errors.js";
-import { tokenize } from "./relevance.js";
+import { sharedInformativeWordCount, tokenize } from "./relevance.js";
 import { rankMemories, type RankMemoriesQuery } from "./ranking.js";
 import { isMemorySuppressed } from "./suppression.js";
 import {
@@ -217,6 +217,10 @@ function applyFilters(
   const candidates: MemoryRecord[] = [];
   const omitted: OmittedMemory[] = [];
   for (const r of records) {
+    if (request.excludeMemoryIds?.has(r.id) === true) {
+      omitted.push({ memoryId: r.id, reason: "standing-profile" });
+      continue;
+    }
     if (typeFilter !== undefined && !typeFilter.includes(r.type)) {
       omitted.push({ memoryId: r.id, reason: "type-filtered" });
       continue;
@@ -344,10 +348,46 @@ interface ThresholdStep {
   readonly omitted: readonly OmittedMemory[];
 }
 
+function strictMinSharedWords(request: MemoryRetrievalRequest): number {
+  const value = request.lexicalMinSharedWords ?? 1;
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new RetrievalError(
+      "invalid-threshold",
+      `lexicalMinSharedWords must be a positive integer, got ${String(value)}`,
+    );
+  }
+  return value;
+}
+
+// The strict floor of #4228: only a memory the question is about is retrieved. The standing
+// profile carries standing facts to every answer, so no record-derived signal is exempt here.
+function applyStrictRelevanceFloor(
+  ranked: readonly IncludedMemory[],
+  request: MemoryRetrievalRequest,
+  candidates: readonly MemoryRecord[],
+): ThresholdStep {
+  const minShared = strictMinSharedWords(request);
+  const byId = new Map(candidates.map((record) => [record.id, record]));
+  const kept: IncludedMemory[] = [];
+  const omitted: OmittedMemory[] = [];
+  for (const entry of ranked) {
+    const record = byId.get(entry.memoryId);
+    const lexical =
+      record === undefined ? 0 : sharedInformativeWordCount(request.queryText, record);
+    if (entry.subscores.semantic > 0 || lexical >= minShared) kept.push(entry);
+    else omitted.push({ memoryId: entry.memoryId, reason: "below-threshold" });
+  }
+  return { ranked: kept, omitted };
+}
+
 function applyRelevanceFloor(
   ranked: readonly IncludedMemory[],
   request: MemoryRetrievalRequest,
+  candidates: readonly MemoryRecord[],
 ): ThresholdStep {
+  if (request.strictRelevanceFloor === true) {
+    return applyStrictRelevanceFloor(ranked, request, candidates);
+  }
   if (!hasQuerySignal(request)) {
     return { ranked, omitted: [] };
   }
@@ -433,7 +473,7 @@ export function retrieveMemoryContext(
     rankQuery,
     edgesByMemory === undefined ? {} : { edgesByMemory },
   );
-  const thresholded = applyRelevanceFloor(ranked, relevanceRequest);
+  const thresholded = applyRelevanceFloor(ranked, relevanceRequest, filtered.candidates);
   // MMR diversity (#204, O-F3): re-order the ranked candidates so near-duplicates do not all consume
   // the token budget. Inert (byte-identical greedy-by-rank) when the caller supplies no embeddings.
   const selectionOrder = reorderSelection(thresholded.ranked, request);

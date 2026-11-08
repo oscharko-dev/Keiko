@@ -158,6 +158,16 @@ export interface MemoryRetrievalRequest {
   // Signal-fusion strategy (#204, O-F2). Defaults to "weighted-sum" (byte-identical legacy ranking);
   // "rrf" opts into rank-based Reciprocal Rank Fusion.
   readonly fusion?: RankingFusionMode;
+  // Opt-in strict relevance floor for Chat (#4228). A memory is retrieved only when the question
+  // shares an informative word with it or its semantic score clears semanticMinScore; a turn
+  // without a query signal retrieves nothing, and pinned, correction and graph signals grant no
+  // exemption, because standing facts reach every answer through the standing profile instead.
+  // Without it, the long-standing permissive floor applies (workflows, the memory context route).
+  readonly strictRelevanceFloor?: boolean;
+  /** Informative words a memory must share with the question under the strict floor; default 1. */
+  readonly lexicalMinSharedWords?: number;
+  /** Memories already supplied as the standing profile; they are never retrieved a second time. */
+  readonly excludeMemoryIds?: ReadonlySet<MemoryId>;
 }
 
 // ─── Result + included/omitted ───────────────────────────────────────────────
@@ -211,7 +221,8 @@ export type OmittedReason =
   | "budget-exceeded"
   | "max-included-exceeded"
   | "out-of-scope"
-  | "type-filtered";
+  | "type-filtered"
+  | "standing-profile";
 
 export interface OmittedMemory {
   readonly memoryId: MemoryId;
