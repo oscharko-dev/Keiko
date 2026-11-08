@@ -9,6 +9,7 @@ import {
   parseClientTurnId,
   parseMemoryRequest,
   logChatRejection,
+  rememberRequestRefusedIn,
   runPostCommitCanonicalTurnMemorySideEffects,
   type CanonicalTurnMemoryRequest,
   type ParsedConversationMemoryRequest,
@@ -266,6 +267,7 @@ import {
   type ConversationMemoryRuntimeContext,
 } from "./memory-conversation-context.js";
 import {
+  CONVERSATION_REMEMBER_REFUSED_NOTICE,
   renderConversationMemoryContextBlock,
   renderStandingProfileBlock,
 } from "./conversation-prompt.js";
@@ -3266,17 +3268,31 @@ function persistGroundedContinuity(
 }
 
 // The grounded answer carries the standing profile ahead of the retrieved memories (#4228). Both
-// stay untrusted data; the sent evidence alone decides what a source says.
-function groundedAnswerContent(content: string, memory: ConversationMemoryResultWire): string {
-  if (!memory.context.enabled) return content;
+// stay untrusted data; the sent evidence alone decides what a source says. A refused "Merke dir"
+// travels with them, so a grounded answer cannot claim it was stored either (#4213).
+function groundedMemoryBlocks(memory: ConversationMemoryResultWire): {
+  readonly profile: readonly string[];
+  readonly recalled: readonly string[];
+} {
+  if (!memory.context.enabled) return { profile: [], recalled: [] };
   const memoryText = memory.context.text.trim();
   const profile = renderStandingProfileBlock(
     memory.context.profile?.entries.map((entry) => entry.text) ?? [],
   );
-  const blocks = [
-    ...(profile === undefined ? [] : [profile]),
-    ...(memoryText.length === 0 ? [] : [renderConversationMemoryContextBlock(memoryText)]),
-  ];
+  return {
+    profile: profile === undefined ? [] : [profile],
+    recalled: memoryText.length === 0 ? [] : [renderConversationMemoryContextBlock(memoryText)],
+  };
+}
+
+function groundedAnswerContent(
+  content: string,
+  memory: ConversationMemoryResultWire,
+  rememberRefused: boolean,
+): string {
+  const { profile, recalled } = groundedMemoryBlocks(memory);
+  const notice = rememberRefused ? [CONVERSATION_REMEMBER_REFUSED_NOTICE] : [];
+  const blocks = [...profile, ...notice, ...recalled];
   if (blocks.length === 0) return content;
   return ["User question:", content, "", blocks.join("\n\n")].join("\n");
 }
@@ -3294,6 +3310,7 @@ function withPreparedGroundedMemory(
   prepared: PreparedGroundedAsk,
   context: ConversationMemoryRuntimeContext,
   result: ConversationMemoryResultWire,
+  rememberRefused: boolean,
 ): PreparedGroundedAsk {
   return {
     ...prepared,
@@ -3302,6 +3319,7 @@ function withPreparedGroundedMemory(
       answerContent: groundedAnswerContent(
         prepared.input.answerContent ?? prepared.input.content,
         result,
+        rememberRefused,
       ),
     },
     memory: {
@@ -3332,21 +3350,19 @@ async function prepareGroundedMemory(
     );
   }
   try {
-    const result = await buildMemoryResult(
-      {
-        chatId: prepared.chat.id,
-        projectPath: prepared.chat.projectPath,
-        content: groundedSpokenContent(prepared),
-        modelId: prepared.input.modelId,
-        documentContext: [],
-        attachments: [],
-        memory: memoryRequest,
-        discussionMode: undefined,
-      },
-      deps,
-      context,
-    );
-    return withPreparedGroundedMemory(prepared, context, result);
+    const request = {
+      chatId: prepared.chat.id,
+      projectPath: prepared.chat.projectPath,
+      content: groundedSpokenContent(prepared),
+      modelId: prepared.input.modelId,
+      documentContext: [],
+      attachments: [],
+      memory: memoryRequest,
+      discussionMode: undefined,
+    };
+    const result = await buildMemoryResult(request, deps, context);
+    const refused = rememberRequestRefusedIn(deps, request, context);
+    return withPreparedGroundedMemory(prepared, context, result, refused);
   } catch (error) {
     return groundedMemoryPreparationFailure(prepared, deps, error);
   }

@@ -1848,12 +1848,22 @@ export function rememberRequestRefused(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
 ): boolean {
-  const vault = deps.memoryVault;
-  if (request.memory?.enabled !== true || vault === undefined) return false;
+  if (request.memory?.enabled !== true || deps.memoryVault === undefined) return false;
   const projectPath = normalizeDesktopProjectPath(request.projectPath, deps);
   if (isRouteResult(projectPath)) return false;
   const context = resolveConversationMemoryContext(deps, projectPath, request.chatId);
   if (isRouteResult(context)) return false;
+  return rememberRequestRefusedIn(deps, request, context);
+}
+
+// The same decision for a turn whose memory context is already resolved, such as a grounded answer.
+export function rememberRequestRefusedIn(
+  deps: UiHandlerDeps,
+  request: SendDesktopChatRequest,
+  context: ConversationMemoryRuntimeContext,
+): boolean {
+  const vault = deps.memoryVault;
+  if (request.memory?.enabled !== true || vault === undefined) return false;
   const outcomes = turnCaptureOutcomes(request, vault, deps, context);
   return (
     outcomes.some(asksToRemember) &&

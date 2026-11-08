@@ -19,6 +19,7 @@ import { buildRedactor, type UiHandlerDeps } from "./deps.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { createRunRegistry } from "./runs.js";
 import { handleGroundedAsk } from "./grounded-qa.js";
+import { CONVERSATION_REMEMBER_REFUSED_NOTICE } from "./conversation-prompt.js";
 import type { RouteContext } from "./routes.js";
 import * as multiSourceQa from "./grounded-qa-multi-source.js";
 import { mockRequest, mockResponse } from "./_support.js";
@@ -194,4 +195,25 @@ it("forwards actual governed memory authority through the public plural handler 
     expect(JSON.parse(deps.evidenceStore.get(runId) ?? "null")).not.toHaveProperty(
       "connectedContext",
     );
+});
+
+it("tells a grounded answer that a refused remember request was not stored (#4213)", async () => {
+  const sentFor = async (content: string): Promise<string> => {
+    const calls: GatewayCallRequest[] = [];
+    const { deps, root, chatId } = fixture(calls);
+    const result = await handleGroundedAsk(memoryRoute(root, chatId, content), deps);
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    return calls
+      .flatMap((request) => request.messages.map((message) => message.content))
+      .join("\n");
+  };
+  expect(await sentFor("Merke dir: Meine Telefonnummer ist 0171 2345678.")).toContain(
+    CONVERSATION_REMEMBER_REFUSED_NOTICE,
+  );
+  expect(await sentFor("Merke dir: Ich bevorzuge kurze Antworten.")).not.toContain(
+    CONVERSATION_REMEMBER_REFUSED_NOTICE,
+  );
+  expect(await sentFor("Which package manager should I use for installs?")).not.toContain(
+    CONVERSATION_REMEMBER_REFUSED_NOTICE,
+  );
 });
