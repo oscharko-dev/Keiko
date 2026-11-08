@@ -57,7 +57,7 @@ function fixture(): {
 }
 
 describe("application-owned Jira catalog initialization", () => {
-  it("advertises only local discovery and Knowledge schemas before an explicit selection", async () => {
+  it("advertises discovery, Knowledge and batch execution schemas before an explicit selection", async () => {
     const f = fixture();
     expect(
       f.runtime
@@ -66,6 +66,8 @@ describe("application-owned Jira catalog initialization", () => {
         .sort(),
     ).toEqual(
       [
+        "jira_draft",
+        "jira_draft_batch",
         "jira_discover",
         "jira_describe",
         ...KNOWLEDGE_CHAT_TOOLS.map((tool) => tool.replace(/[.-]/gu, "_")),
@@ -89,7 +91,7 @@ describe("application-owned Jira catalog initialization", () => {
     await expect(f.runtime.get()).rejects.toMatchObject({ reason: "log-unavailable" });
     const [first, second] = await Promise.all([f.runtime.get(), f.runtime.get()]);
     expect(second).toBe(first);
-    expect(first.catalog.descriptors).toHaveLength(2 + KNOWLEDGE_CHAT_TOOLS.length);
+    expect(first.catalog.descriptors).toHaveLength(4 + KNOWLEDGE_CHAT_TOOLS.length);
     expect(f.record).toHaveBeenCalledOnce();
     expect(JSON.stringify(f.record.mock.calls)).not.toContain("synthetic-private-sink-failure");
     const records = f.lines.map((line) =>
@@ -110,25 +112,80 @@ describe("application-owned Jira catalog initialization", () => {
     await f.runtime.close();
   });
 
-  it("offers the draft batch only to a Chat with Knowledge scopes", async () => {
+  it("offers the batch and its draft companion together only to a Chat with Knowledge scopes", async () => {
     const f = fixture();
-    const scoped = await f.runtime.get({ knowledgeScoped: true });
-    const unscoped = await f.runtime.get({ knowledgeScoped: false });
-    expect(await f.runtime.get()).toBe(scoped);
-    expect(await f.runtime.get({ knowledgeScoped: false })).toBe(unscoped);
-    const batch = (tools: readonly { readonly name: string }[]): number =>
-      tools.filter((tool) => tool.name === "jira_draft_batch").length;
-    expect(batch(f.runtime.toolDefinitions())).toBe(1);
-    expect(batch(f.runtime.toolDefinitions({ knowledgeScoped: true }))).toBe(1);
-    expect(batch(f.runtime.toolDefinitions({ knowledgeScoped: false }))).toBe(0);
-    expect(unscoped.catalog.descriptors).toHaveLength(scoped.catalog.descriptors.length - 1);
-    expect(unscoped.projection.tools.map((tool) => tool.alias)).not.toContain("jira_draft_batch");
-    expect(unscoped.handlerBindings).toHaveLength(scoped.handlerBindings.length - 1);
-    expect(f.runtime.toolDefinitions({ knowledgeScoped: false })).toHaveLength(
-      f.runtime.toolDefinitions().length - 1,
-    );
-    await f.runtime.close();
+    try {
+      const scoped = await f.runtime.get({ knowledgeScoped: true });
+      const unscoped = await f.runtime.get({ knowledgeScoped: false });
+      expect(await f.runtime.get()).toBe(scoped);
+      expect(await f.runtime.get({ knowledgeScoped: false })).toBe(unscoped);
+      for (const alias of ["jira_draft", "jira_draft_batch"]) {
+        const named = (tools: readonly { readonly name: string }[]): number =>
+          tools.filter((tool) => tool.name === alias).length;
+        expect(named(f.runtime.toolDefinitions())).toBe(1);
+        expect(named(f.runtime.toolDefinitions({ knowledgeScoped: true }))).toBe(1);
+        expect(named(f.runtime.toolDefinitions({ knowledgeScoped: false }))).toBe(0);
+        expect(scoped.projection.tools.filter((tool) => tool.alias === alias)).toHaveLength(1);
+        expect(unscoped.projection.tools.map((tool) => tool.alias)).not.toContain(alias);
+      }
+      expect(unscoped.catalog.descriptors).toHaveLength(scoped.catalog.descriptors.length - 2);
+      expect(unscoped.handlerBindings).toHaveLength(scoped.handlerBindings.length - 2);
+      expect(f.runtime.toolDefinitions({ knowledgeScoped: false })).toHaveLength(
+        f.runtime.toolDefinitions().length - 2,
+      );
+    } finally {
+      await f.runtime.close();
+    }
   });
+
+  it("keeps an explicitly selected draft without Knowledge scopes while omitting the batch", async () => {
+    const f = fixture();
+    try {
+      const selected = await f.runtime.select(["composite:jira.draft"], { knowledgeScoped: false });
+      const aliases = selected.projection.tools.map((tool) => tool.alias);
+      expect(aliases.filter((alias) => alias === "jira_draft")).toHaveLength(1);
+      expect(aliases).not.toContain("jira_draft_batch");
+      expect(
+        f.runtime.toolDefinitions({ knowledgeScoped: false }).map((tool) => tool.name),
+      ).not.toContain("jira_draft");
+    } finally {
+      await f.runtime.close();
+    }
+  });
+
+  it("omits the batch companion from an unrelated selection without Knowledge scopes", async () => {
+    const f = fixture();
+    try {
+      const selected = await f.runtime.select(["GET /rest/api/2/project"], {
+        knowledgeScoped: false,
+      });
+      const aliases = selected.projection.tools.map((tool) => tool.alias);
+      expect(aliases).toContain("jira_projects");
+      expect(aliases).not.toContain("jira_draft");
+      expect(aliases).not.toContain("jira_draft_batch");
+    } finally {
+      await f.runtime.close();
+    }
+  });
+
+  it.each([
+    { identities: ["composite:jira.draft"] },
+    { identities: ["composite:jira.draft-batch"] },
+    { identities: ["composite:jira.draft", "composite:jira.draft-batch"] },
+  ])(
+    "deduplicates the batch pair when explicitly selected: $identities",
+    async ({ identities }) => {
+      const f = fixture();
+      try {
+        const selected = await f.runtime.select(identities, { knowledgeScoped: true });
+        const aliases = selected.projection.tools.map((tool) => tool.alias);
+        for (const alias of ["jira_draft", "jira_draft_batch"])
+          expect(aliases.filter((offered) => offered === alias)).toHaveLength(1);
+      } finally {
+        await f.runtime.close();
+      }
+    },
+  );
 
   it("closes idempotently after the initializer has disposed its failed host", async () => {
     const f = fixture();

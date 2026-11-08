@@ -16,7 +16,8 @@ import { DatabaseSync } from "node:sqlite";
 import { createServer } from "node:http";
 import { JiraChatToolTurn } from "./jiraChatToolTurn.js";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import { createJiraDraftBatchExecutor } from "./jiraDraftBatchTool.js";
+import { createJiraDraftBatchExecutor, type JiraDraftBatchContext } from "./jiraDraftBatchTool.js";
+import { draftTool } from "./jiraChatCatalogRuntime.js";
 import type { ChatToolBatchProgress } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ChatReadGrantEntry } from "./chatReadGrantState.js";
 import { findMessageById as readStoredMessage } from "../store/messages.js";
@@ -52,9 +53,10 @@ import { handleRegenerateDesktopChat, handleSendDesktopChat } from "../chat-hand
 import { CatalogDispatchFault } from "../tool-catalog/catalogToolErrors.js";
 import { mockRequest, mockResponse } from "../_support.js";
 import type { RouteContext, RouteResult } from "../routes.js";
-import type {
-  AtlassianCredentialMetadata,
-  AtlassianHttpBodyPort,
+import {
+  executeJiraDraftStageTool,
+  type AtlassianCredentialMetadata,
+  type AtlassianHttpBodyPort,
 } from "@oscharko-dev/keiko-connectors";
 import { jiraChatActorDigest } from "./jiraPodAccess.js";
 import { JIRA_REJECTED_GUIDANCE, JIRA_UNCERTAIN_GUIDANCE } from "./jiraMutationResult.js";
@@ -934,13 +936,13 @@ function attachmentBody(method: string, path: string, uploads: readonly number[]
   });
 }
 /** Connects a ready Knowledge Pod with requirements to the fixture's Chat. */
-async function journeyPod(f: ReturnType<typeof fixture>): Promise<void> {
+async function journeyPod(f: ReturnType<typeof fixture>, requirementCount = 2): Promise<void> {
   const session = openKnowledgeStoreForDeps(f.deps);
   const { store } = session;
   try {
     const pod = await seedCapsuleWithVectors(store, {
       displayName: "Original requirements.md",
-      text: specification(2).text,
+      text: specification(requirementCount).text,
     });
     updateCapsuleState(store, pod.capsuleId, "ready");
     const chat = f.deps.store.findChatById(f.chatId);
@@ -3837,6 +3839,49 @@ describe("a clean draft batch is offered for approval by the turn itself (#4173)
     }
   }
 
+  /** The script stages through the production owner, including the private source binding. */
+  async function stageScriptedBatch(
+    f: ReturnType<typeof fixture>,
+    context: JiraDraftBatchContext,
+  ): Promise<ManagedMcpToolResult> {
+    const store = f.deps.jiraDraftStore;
+    const credentials = f.deps.atlassianConnectorCredentials;
+    if (store === undefined || credentials === undefined)
+      throw new TypeError("Missing draft owners");
+    const entries = batchRequirements(f);
+    const items = DRAFT_ARGUMENTS.items.map((item, index) => {
+      const entry = entries[index % Math.max(entries.length, 1)];
+      if (entry === undefined) return item;
+      const criteria = entry.acceptanceCriteria
+        .map((criterion) => `* ${criterion.text}`)
+        .join("\n");
+      return {
+        ...item,
+        fields: { ...item.fields, description: `${item.fields.summary}\n\n${criteria}` },
+        requirementIds: [requirementReference(entry)],
+      };
+    });
+    const credential = metadata(f.deps);
+    if (credential.provider !== "jira" || credential.deployment !== "data-center")
+      throw new TypeError("Expected Data Center fixture credential");
+    const staged = await executeJiraDraftStageTool(
+      { items },
+      context,
+      {
+        deployment: "data-center",
+        baseUrl: credential.baseUrl,
+        identity: `${credential.authRef}:${String(credential.generation)}`,
+        http: credentials.httpBodyPortFactory(credential, context.correlationId, {
+          beforeDispatch: () => context.beforeEffect(),
+        }),
+      },
+      draftTool(f.deps, store),
+    );
+    expect(staged.isError).not.toBe(true);
+    expect(staged.data.outcome).toBe("succeeded");
+    return staged;
+  }
+
   /** A scripted batch: it stages a real three-item draft, reports its pages and returns `data`. */
   function scriptBatch(
     f: ReturnType<typeof fixture>,
@@ -3846,22 +3891,7 @@ describe("a clean draft batch is offered for approval by the turn itself (#4173)
     vi.mocked(createJiraDraftBatchExecutor).mockImplementation(
       () =>
         async (_args, handlerContext): Promise<ManagedMcpToolResult> => {
-          const store = f.deps.jiraDraftStore;
-          if (store === undefined) throw new Error("Missing draft store");
-          // The batch derives its items from the Pod's requirements, so each names one.
-          const entries = batchRequirements(f);
-          const items = DRAFT_ARGUMENTS.items.map((item, index) => {
-            const entry = entries[index % Math.max(entries.length, 1)];
-            if (entry === undefined) return item;
-            const criteria = entry.acceptanceCriteria.map((c) => `* ${c.text}`).join("\n");
-            return {
-              ...item,
-              fields: { ...item.fields, description: `${item.fields.summary}\n\n${criteria}` },
-              requirementIds: [requirementReference(entry)],
-            };
-          });
-          const appended = store.append(f.chatId, undefined, "fingerprint", items);
-          if (!appended.ok) throw new Error("Expected the batch page to stage");
+          const staged = await stageScriptedBatch(f, handlerContext);
           for (const page of PAGES) {
             handlerContext.reportBatchProgress?.(page);
             reported += 1;
@@ -3872,14 +3902,7 @@ describe("a clean draft batch is offered for approval by the turn itself (#4173)
           }
           return Promise.resolve({
             data: {
-              outcome: "succeeded",
-              draftId: appended.draft.id,
-              draftDigest: appended.draft.digest,
-              newDraft: true,
-              itemCount: 3,
-              pageCount: 1,
-              unresolvedRefCount: 0,
-              unresolvedRefs: [],
+              ...staged.data,
               plannedCount: 3,
               draftedCount: 3,
               failedCount: 0,
@@ -3898,7 +3921,10 @@ describe("a clean draft batch is offered for approval by the turn itself (#4173)
     batchToSend = BATCH_ARGUMENTS;
     const f = fixture(false, undefined, true, false, () => ({}));
     // The batch drafts from Knowledge requirements, so only a Chat with a Knowledge scope offers it.
-    if (withPod) await journeyPod(f);
+    if (withPod) await journeyPod(f, 3);
+    const catalog = f.deps.jiraChatCatalog;
+    if (catalog === undefined) throw new TypeError("Missing Jira catalog");
+    vi.mocked(catalog.get).mockRestore();
     return f;
   }
   function exchanges(f: ReturnType<typeof fixture>): readonly ChatToolExchange[] {
@@ -3961,6 +3987,29 @@ describe("a clean draft batch is offered for approval by the turn itself (#4173)
     logs.events
       .filter((event) => event.op === "chat.tool-turn.batch-draft-offer")
       .map((event) => event.extra);
+
+  it("offers the staged batch for approval through the real discovery base catalog", async () => {
+    const logs = logsFor();
+    const f = await batchFixture();
+    const catalog = f.deps.jiraChatCatalog;
+    if (catalog === undefined) throw new TypeError("Missing Jira catalog");
+    scriptBatch(f);
+    const managed = await catalog.get({ knowledgeScoped: true });
+    expect(managed.projection.tools.map((tool) => tool.alias)).not.toContain("jira_create");
+    expect(vi.isMockFunction(catalog.get)).toBe(false);
+    const pending = send(f, "discovery-batch-companion");
+    void pending.catch(() => undefined);
+    await awaitReadGrantedForWrite(f);
+    await vi.waitFor(() => {
+      expect(offers(logs)).toEqual([expect.objectContaining({ outcome: "dispatched" })]);
+    });
+    const approval = await pendingOfferedApproval(f);
+    expect(approval.operation).toBe("jira.draft");
+    expect(f.writes()).toBe(0);
+    expect(await postWriteDecision(f, approval, "reject")).toBe(200);
+    expect((await pending).status).toBe(200);
+    expect(f.writes()).toBe(0);
+  });
 
   it("asks for the approval of exactly the staged draft, creates it once approved and tells the model", async () => {
     const logs = logsFor();

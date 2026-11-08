@@ -427,7 +427,35 @@ describe("lists and gaps ported from the parallel converter (#4288)", () => {
 
   it("escapes literal wiki control characters in prose", () => {
     expect(project("Literal {panel}, [42], a_b and \\*star\\*.")).toBe(
-      "Literal \\{panel\\}, \\[42\\], a\\_b and \\*star\\*.",
+      "Literal \\{panel\\}, \\[42\\], a_b and \\*star\\*.",
     );
+  });
+
+  it.each(["MIG_DAT-007", "snake_case", "a_b", "source_section_one", "__init__.py"])(
+    "preserves literal identifier underscores byte for byte: %s",
+    (identifier) => {
+      expect(markdownInlineToJiraWiki(identifier)).toBe(identifier);
+      expect(project(identifier)).toBe(identifier);
+    },
+  );
+
+  it.each([String.raw`\_word\_`, String.raw`(\_word\_), \_next\_.`])(
+    "keeps both delimiters of an escaped literal underscore pair inert: %s",
+    (text) => {
+      expect(markdownInlineToJiraWiki(text)).toBe(text);
+      expect(project(text)).toBe(text);
+    },
+  );
+
+  it.each([
+    ["*word*", "_word_"],
+    ["_word_", "_word_"],
+    ["*snake_case*", "_snake_case_"],
+    ["**MIG_DAT-007**", "*MIG_DAT-007*"],
+    ["__word__", "*word*"],
+    ["`MIG_DAT-007`", "{{MIG_DAT-007}}"],
+  ])("retains actual Markdown emphasis and code around identifiers: %s", (text, expected) => {
+    expect(markdownInlineToJiraWiki(text)).toBe(expected);
+    expect(project(text)).toBe(expected);
   });
 });

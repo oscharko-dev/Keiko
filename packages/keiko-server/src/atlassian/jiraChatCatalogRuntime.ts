@@ -104,7 +104,17 @@ export interface JiraChatToolScope {
   readonly knowledgeScoped: boolean;
 }
 const JIRA_DRAFT_BATCH_TOOL = "jira.draft-batch";
-const JIRA_DRAFT_BATCH_ALIAS = JIRA_DRAFT_BATCH_TOOL.replace(/[.-]/gu, "_");
+/** The draft run Keiko offers after a clean batch; a catalog that offers the batch hosts it too. */
+const JIRA_DRAFT_TOOL = "jira.draft";
+const JIRA_BATCH_TOOLS = [JIRA_DRAFT_BATCH_TOOL, JIRA_DRAFT_TOOL] as const;
+const toolAlias = (tool: string): string => tool.replace(/[.-]/gu, "_");
+const JIRA_BATCH_ALIASES: ReadonlySet<string> = new Set(JIRA_BATCH_TOOLS.map(toolAlias));
+const withBatchTools = (tools: typeof JIRA_CHAT_TOOLS): typeof JIRA_CHAT_TOOLS => [
+  ...new Set([...tools, ...JIRA_BATCH_TOOLS]),
+];
+/** Without the batch, its companion goes too unless the turn selected the draft run itself. */
+const batchOnlyTools = (tools: typeof JIRA_CHAT_TOOLS): readonly string[] =>
+  tools.includes(JIRA_DRAFT_TOOL) ? [JIRA_DRAFT_BATCH_TOOL] : JIRA_BATCH_TOOLS;
 const batchOffered = (scope: JiraChatToolScope | undefined): boolean =>
   scope?.knowledgeScoped ?? true;
 
@@ -455,15 +465,31 @@ function attachmentReview(
         )?.approval;
   return attachmentReviewFor(policy.kind, approval, operation);
 }
-function avatarAttachmentReview(
+function connectionAvatars(
   deps: UiHandlerDeps,
   envelope: Extract<ReturnType<typeof resolveCurrentJiraChatAuthority>, { ok: true }>["envelope"],
   context: CatalogHandlerContext<JiraChatCatalogConsumer>,
-): JiraChatAttachmentReview {
-  const operation = context.mutationGuard.write?.action.tool;
-  return operation !== undefined && isJiraAvatarUploadOperation(operation)
-    ? attachmentReview(deps, envelope, context, operation)
-    : { required: true, reviewed: undefined };
+  privatePorts: ReturnType<typeof jiraChatPrivatePorts>,
+): NonNullable<JiraManagedConnection["avatars"]> {
+  return {
+    ...jiraChatAvatarComposition(deps, {
+      chatId: context.chatId,
+      correlationId: context.correlationId,
+      signal: context.signal,
+      review: (): JiraChatAttachmentReview => {
+        const operation = context.mutationGuard.write?.action.tool;
+        return operation !== undefined && isJiraAvatarUploadOperation(operation)
+          ? attachmentReview(deps, envelope, context, operation)
+          : { required: true, reviewed: undefined };
+      },
+    }),
+    ...(privatePorts === undefined
+      ? {}
+      : {
+          withSession: privatePorts.withAvatarSession,
+          legacyTemporaryRelease: privatePorts.legacyTemporaryRelease,
+        }),
+  };
 }
 
 function connection(
@@ -500,20 +526,7 @@ function connection(
         attachmentReview(deps, current.envelope, context, "jira.upload-email-template-pack"),
     }),
     privateIdentity: privatePorts?.identity,
-    avatars: {
-      ...jiraChatAvatarComposition(deps, {
-        chatId: context.chatId,
-        correlationId: context.correlationId,
-        signal: context.signal,
-        review: () => avatarAttachmentReview(deps, current.envelope, context),
-      }),
-      ...(privatePorts === undefined
-        ? {}
-        : {
-            withSession: privatePorts.withAvatarSession,
-            legacyTemporaryRelease: privatePorts.legacyTemporaryRelease,
-          }),
-    },
+    avatars: connectionAvatars(deps, current.envelope, context, privatePorts),
     attachmentSource: jiraChatAttachmentSource(deps, {
       chatId: context.chatId,
       correlationId: context.correlationId,
@@ -622,7 +635,7 @@ function chatCatalogProviders(
   return [
     createJiraProviderForCatalog(
       (context: CatalogHandlerContext<JiraChatCatalogConsumer>) => connection(deps, context),
-      [...tools, JIRA_DRAFT_BATCH_TOOL],
+      withBatchTools(tools),
       mutationExecutor(deps),
       reportTool(deps, store),
       draft,
@@ -643,8 +656,7 @@ function initializeCatalog(
   return createManagedProviderCatalog<JiraChatCatalogConsumer>({
     providers: chatCatalogProviders(deps, store, draftStore, tools),
     routes: jiraChatCatalogRoutes([
-      ...tools,
-      JIRA_DRAFT_BATCH_TOOL,
+      ...withBatchTools(tools),
       ...JIRA_CATALOG_DISCOVERY_TOOLS,
       ...KNOWLEDGE_CHAT_TOOLS,
     ]),
@@ -665,7 +677,7 @@ function staticToolDefinitions(
   return () => {
     definitions ??= managedCatalogToolDefinitions(
       jiraChatCatalogRoutes([
-        JIRA_DRAFT_BATCH_TOOL,
+        ...JIRA_BATCH_TOOLS,
         ...JIRA_CATALOG_DISCOVERY_TOOLS,
         ...KNOWLEDGE_CHAT_TOOLS,
       ]),
@@ -695,7 +707,7 @@ async function admitSelectedCatalog(
   try {
     const full = await selected.get();
     const catalog =
-      withBatch || full.omitting === undefined ? full : full.omitting([JIRA_DRAFT_BATCH_TOOL]);
+      withBatch || full.omitting === undefined ? full : full.omitting(batchOnlyTools(tools));
     return {
       ...catalog,
       close: async (): Promise<void> => {
@@ -734,12 +746,12 @@ export function createJiraChatCatalogRuntime(
     toolDefinitions: (scope): readonly ToolDefinition[] =>
       batchOffered(scope)
         ? initial.toolDefinitions()
-        : initial.toolDefinitions().filter((tool) => tool.name !== JIRA_DRAFT_BATCH_ALIAS),
+        : initial.toolDefinitions().filter((tool) => !JIRA_BATCH_ALIASES.has(tool.name)),
     get: async (scope): Promise<ChatCatalog> => {
       const full = await initial.get();
       if (batchOffered(scope) || full.omitting === undefined) return full;
       if (withoutBatch?.of !== full)
-        withoutBatch = { of: full, value: full.omitting([JIRA_DRAFT_BATCH_TOOL]) };
+        withoutBatch = { of: full, value: full.omitting(JIRA_BATCH_TOOLS) };
       return withoutBatch.value;
     },
     select: async (identities, scope): Promise<ChatCatalog> => {

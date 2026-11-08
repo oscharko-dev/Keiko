@@ -84,8 +84,8 @@ function proseInline(text: string): string {
       .replaceAll(STRONG_OPEN, "*")
       .replaceAll(STRONG_CLOSE, "*")
       .replaceAll(/[{}[\]]/gu, (character) => "\\" + character)
-      // A lone underscore inside a word (`a_b`) is literal; `__init__.py` keeps its pairs as written.
-      .replaceAll(/(?<=[^\W_])_(?=[^\W_])/gu, "\\_")
+      // Wiki underscores inside identifiers are literal. Markdown `_word_` already uses the
+      // same delimiters, and escaped literal `\_word\_` keeps its backslashes.
       .replaceAll(PROTECTED, (_match, index: string) => kept[Number(index)] ?? "")
   );
 }
