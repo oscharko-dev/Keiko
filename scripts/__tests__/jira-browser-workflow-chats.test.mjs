@@ -573,6 +573,7 @@ describe("existing browser bootstrap and Pod verification owners", () => {
     const control = { click: vi.fn(), waitFor: vi.fn(), press: vi.fn() };
     const card = {
       filter: vi.fn(() => card),
+      first: () => control,
       count: async () => 1,
       getAttribute: async () => credential.authRef,
       getByRole: () => control,
