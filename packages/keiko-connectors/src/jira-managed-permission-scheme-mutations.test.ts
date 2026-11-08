@@ -119,12 +119,23 @@ it.each(CASES)(
     expect(f.writes()).toBe(1);
   },
 );
-function changeReviewedFixture(changed: string, f: ReturnType<typeof fixture>): void {
+const REVIEWED_CHANGES = [
+  "actor",
+  "name",
+  "description",
+  "permission",
+  "holder",
+  "grant-id",
+  "additional-grant",
+] as const;
+type ReviewedChange = (typeof REVIEWED_CHANGES)[number];
+function changeReviewedFixture(changed: ReviewedChange, f: ReturnType<typeof fixture>): void {
   const scheme = f.schemes.get("7");
   const grants = f.grants.get("7");
-  if (scheme === undefined || grants?.[0] === undefined)
+  const first = grants?.[0];
+  if (scheme === undefined || grants === undefined || first === undefined)
     throw new TypeError("Missing native fixture");
-  const changes: Record<string, () => void> = {
+  const changes: Record<ReviewedChange, () => void> = {
     actor: (): void => {
       f.actor.key = "other-actor";
     },
@@ -135,13 +146,13 @@ function changeReviewedFixture(changed: string, f: ReturnType<typeof fixture>): 
       scheme.description = "Concurrent value";
     },
     permission: (): void => {
-      grants[0].permission = "DELETE_ISSUES";
+      first.permission = "DELETE_ISSUES";
     },
     holder: (): void => {
-      grants[0].holder = { type: "anyone" };
+      first.holder = { type: "anyone" };
     },
     "grant-id": (): void => {
-      grants[0].id = "91";
+      first.id = "91";
     },
     "additional-grant": (): void => {
       grants.push({ id: "93", permission: "WORK_ON_ISSUES", holder: { type: "assignee" } });
@@ -149,7 +160,7 @@ function changeReviewedFixture(changed: string, f: ReturnType<typeof fixture>): 
   };
   changes[changed]();
 }
-it.each(["actor", "name", "description", "permission", "holder", "grant-id", "additional-grant"])(
+it.each(REVIEWED_CHANGES)(
   "refuses a stale reviewed %s before a grant deletion",
   async (changed) => {
     const f = fixture();
