@@ -448,6 +448,34 @@ describe("coding task selection", () => {
     await waitFor(() => expect(read).toHaveBeenCalledWith("chat-own", expect.any(String)));
   });
 
+  // Audit (#4271): a status read without any run already told the window there is no other run,
+  // so its own first run is followed even when the next read sees it settled.
+  it("follows the window's first run after a status read without any run", async () => {
+    read.mockImplementation((id: string) =>
+      Promise.resolve({ ...detail, task: { ...detail.task, id } }),
+    );
+    const { runId: _none, ...idle } = { ...snapshot(), state: "idle" as const };
+    const { result, rerender } = renderHook(
+      ({ run }: { readonly run: CodingWorkbenchRuntimeSnapshot | null }) =>
+        useCodingTaskSession({
+          snapshot: run,
+          active: run?.state === "running",
+          root: "/repo",
+          workspace: activeWorkspace(),
+          selection: "chat-two",
+        }),
+      { initialProps: { run: null as CodingWorkbenchRuntimeSnapshot | null } },
+    );
+    await waitFor(() => expect(result.current.conversationId).toBe("chat-two"));
+    rerender({ run: idle });
+    rerender({ run: { ...snapshot("chat-own"), runId: "run-own" } });
+    await waitFor(() => expect(read).toHaveBeenCalledWith("chat-own", expect.any(String)));
+    expect(reportClientDiagnostic).not.toHaveBeenCalledWith(
+      "[keiko] coding workbench interaction: history-run-held",
+      expect.anything(),
+    );
+  });
+
   it("keeps New task empty when a settled run of another task arrives afterwards", async () => {
     const { result, rerender } = renderHook(
       ({ run }: { readonly run: CodingWorkbenchRuntimeSnapshot | null }) =>
