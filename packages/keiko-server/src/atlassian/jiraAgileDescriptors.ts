@@ -11,7 +11,7 @@ import {
   type CatalogJsonObject,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import { createToolDescriptor, createToolRef } from "@oscharko-dev/keiko-tool-catalog";
+import { compileExternalCatalogSchema, createToolDescriptor, createToolRef } from "@oscharko-dev/keiko-tool-catalog";
 import { ATLASSIAN_ACTION_APPROVAL_TTL_MS } from "./actionApprovalLimits.js";
 import { object, text } from "./jiraManagedSchemas.js";
 import { jiraSprintLifecycleSnapshotSchema } from "./jiraSprintLifecycleDescriptors.js";
@@ -57,6 +57,8 @@ const ID = {
   pattern: "^[1-9][0-9]{0,15}$",
   description: "Canonical decimal Jira ID, no greater than 9007199254740991.",
 };
+// Same identity grammar in the bounded external dialect used by nullable review snapshots.
+const REVIEW_ID = { ...ID, pattern: String.raw`^[1-9]\d{0,15}$` };
 const KEY = { ...text(50), pattern: "^[A-Z][A-Z0-9_]{0,31}-[1-9][0-9]{0,15}$" };
 const EPIC_ID_OR_KEY = {
   ...text(50),
@@ -93,7 +95,8 @@ const SPRINT_FIELDS = {
     goal: text(2048),
 };
 const SPRINT = object(SPRINT_FIELDS, ["id", "name", "state"]);
-const SPRINT_DETAIL = object({ ...SPRINT_FIELDS, reviewSnapshot: jiraSprintLifecycleSnapshotSchema }, ["id", "name", "state"]);
+const SPRINT_DETAIL = object({ ...SPRINT_FIELDS, id: REVIEW_ID, originBoardId: REVIEW_ID,
+  reviewSnapshot: jiraSprintLifecycleSnapshotSchema }, ["id", "name", "state"]);
 const EPIC = object(
   {
     id: ID,
@@ -168,7 +171,7 @@ interface ReadDefinition {
 }
 const FILTER = object(
   {
-    id: ID,
+    id: REVIEW_ID,
     name: NAME,
     jql: text(TOOL_CATALOG_LIMITS.maxStringBytes),
     description: { anyOf: [text(32768), { type: "null" }] },
@@ -395,6 +398,7 @@ function declaration(
   definition: ReadDefinition | WriteDefinition,
 ): ManagedMcpToolDeclaration {
   const write = "input" in definition;
+  const result = write ? writeResult(definition) : readResult(definition);
   return Object.freeze({
     name,
     risk: write ? "write" : "read",
@@ -407,7 +411,9 @@ function declaration(
             { ...(definition.paged ? PAGING : {}), ...definition.parameters },
             definition.required,
           ),
-      resultSchema: write ? writeResult(definition) : readResult(definition),
+      resultSchema: name === "jira.sprint" || Object.hasOwn(JIRA_FILTER_READ_DEFINITIONS, name)
+        ? compileExternalCatalogSchema(result)
+        : result,
       effects: ["connector-access"],
       actionMapping: [{ action: name, effects: ["connector-access"] }],
       policyReferences: ["adr-0128.d4"],

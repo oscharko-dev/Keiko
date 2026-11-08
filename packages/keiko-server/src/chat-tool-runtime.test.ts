@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { PassThrough } from "node:stream";
+import type { IncomingMessage } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -39,7 +41,7 @@ import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { NO_LOCAL_VAULT_KEYCHAIN } from "@oscharko-dev/keiko-security/secret-vault";
 import { buildAtlassianConnectorCredentialDeps } from "./atlassian/wiring.js";
 import { createAtlassianCredentialMetadataStore } from "./atlassian/credentialMetadataStore.js";
-import { handleSubmitJiraHumanInput } from "./atlassian/jiraHumanInputRoutes.js";
+import { handleSubmitJiraHumanInput, handleGetJiraHumanInput, handleCancelJiraHumanInput } from "./atlassian/jiraHumanInputRoutes.js";
 import { jiraOperationActionDigest } from "./atlassian/jiraOperationRegistry.js";
 import * as requirementBinding from "./atlassian/jiraChatRequirementBinding.js";
 import { openKnowledgeStoreForDeps } from "./local-knowledge-store-open.js";
@@ -567,6 +569,55 @@ it("rejects mixed-Chat private input after the bound Jira scope is revoked", asy
   await pending;
   expect((await submitPrivateProfileInput(f, input)).status).not.toBe(200);
   expect(f.requests.every((request) => request.method === "GET")).toBe(true);
+  expect(JSON.stringify(f.deps.store.listMessages(f.chatId))).not.toContain(PRIVATE_PASSWORD);
+});
+
+it("keeps protected input metadata private from a different local principal", async () => {
+  const f = privateProfileFixture(true); const pending = send(f);
+  void pending.catch(() => undefined);
+  const input = await pendingPrivateInput(f);
+  const originalPrincipal = f.deps.serverPrincipal;
+  Object.assign(f.deps, { serverPrincipal: () => "different-private-input-owner" });
+  try {
+    const inspect = await handleGetJiraHumanInput(context({}, { requestId: input.requestId }), f.deps);
+    expect(inspect.status).toBe(404);
+    const submit = await submitPrivateProfileInput(f, input);
+    expect(submit.status).toBe(404);
+    expect(JSON.stringify({ inspect, submit })).not.toContain(PRIVATE_PASSWORD);
+  } finally { Object.assign(f.deps, { serverPrincipal: originalPrincipal }); }
+  await handleCancelJiraHumanInput(context({}, { requestId: input.requestId }), f.deps);
+  await pending;
+  expect(f.requests.every((request) => request.method === "GET")).toBe(true);
+});
+it("refuses a stale protected revision without replacing the held input", async () => {
+  const f = privateProfileFixture(true); const pending = send(f);
+  void pending.catch(() => undefined);
+  const input = await pendingPrivateInput(f);
+  expect((await submitPrivateProfileInput(f, { ...input, revision: "87654321-1234-4123-8123-123456789abc" })).status).toBe(409);
+  expect(privateProfileExchange(f)?.humanInput).toEqual(input);
+  expect((await submitPrivateProfileInput(f, input)).status).toBe(200);
+  await pending;
+  expect(f.requests.filter((request) => request.method === "PUT")).toHaveLength(1);
+  expect(JSON.stringify(f.deps.store.listMessages(f.chatId))).not.toContain(PRIVATE_PASSWORD);
+});
+it("rechecks the bound Pod after awaiting a delayed protected-input body", async () => {
+  const f = privateProfileFixture(true); const pending = send(f);
+  void pending.catch(() => undefined);
+  const input = await pendingPrivateInput(f);
+  const stream = new PassThrough();
+  const request = handleSubmitJiraHumanInput({
+    ...context({}, { requestId: input.requestId }), req: stream as unknown as IncomingMessage,
+  }, f.deps);
+  expect(stream.listenerCount("data")).toBe(1);
+  const chat = f.deps.store.findChatById(f.chatId);
+  if (chat === undefined) throw new TypeError("Missing delayed private-input Chat");
+  const update = context({ jiraPodId: null, expectedGroundingScopeIdentity: deriveChatGroundingScopeIdentity(chat) });
+  update.url.searchParams.set("id", f.chatId);
+  expect((await handleUpdateChat(update, f.deps)).status).toBe(200);
+  stream.end(JSON.stringify({ expectedRevision: input.revision, values: { password: PRIVATE_PASSWORD } }));
+  expect((await request).status).toBe(409);
+  await pending;
+  expect(f.requests.every((item) => item.method === "GET")).toBe(true);
   expect(JSON.stringify(f.deps.store.listMessages(f.chatId))).not.toContain(PRIVATE_PASSWORD);
 });
 

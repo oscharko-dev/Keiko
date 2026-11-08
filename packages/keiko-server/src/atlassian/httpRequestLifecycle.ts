@@ -93,6 +93,8 @@ function emailTemplateUrl(url: URL, raw: string): boolean {
   return closedJiraUrl(url) && url.toString() === raw &&
     url.pathname.endsWith("/rest/api/2/email-templates") && !/%(?:2e|2f|5c|25)/iu.test(url.pathname);
 }
+// The enclosing HTTP owner already binds the configured HTTPS origin and context path before
+// constructing this lifecycle. These fixed opt-ins retain that same floor, including loopback.
 function closedJiraUrl(url: URL): boolean {
   return url.protocol === "https:" && url.search === "" && url.hash === "" &&
     url.username === "" && url.password === "";

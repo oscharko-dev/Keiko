@@ -49,6 +49,7 @@ const TARGET_GRANT_FIELDS = new Set(["permission", "holder"]);
 const SNAPSHOT_FIELDS = new Set(["id", "name", "description", "permissions"]);
 const SIMPLE_HOLDERS = new Set(["anyone", "reporter", "projectLead", "assignee", "reporterWithCreatePermission", "assigneeWithAssignablePermission"]);
 const PARAMETER_HOLDERS = new Set(["group", "user", "projectRole", "userCustomField", "groupCustomField"]);
+const ANONYMOUS_READ_PERMISSIONS: ReadonlySet<string> = new Set(["BROWSE_PROJECTS", "VIEW_DEV_TOOLS", "VIEW_READONLY_WORKFLOW"]);
 const BROWSE_ONLY_HOLDERS = new Set(["reporterWithCreatePermission", "assigneeWithAssignablePermission"]);
 function holder(value: unknown): PermissionHolder | undefined {
   const raw = asRecord(value);
@@ -56,18 +57,20 @@ function holder(value: unknown): PermissionHolder | undefined {
   if (raw.parameter === undefined) return { type: raw.type };
   return savedText(raw.parameter, 255, true) ? { type: raw.type, parameter: raw.parameter } : undefined;
 }
+function simpleHolderAllowed(selected: PermissionHolder, permission: string): boolean {
+  // Native anyone grants access even without login. Observed grants stay readable/removable;
+  // a new grant must belong to the reviewed anonymous read set.
+  return selected.parameter === undefined &&
+    (!BROWSE_ONLY_HOLDERS.has(selected.type) || permission === "BROWSE_PROJECTS") &&
+    (selected.type !== "anyone" || ANONYMOUS_READ_PERMISSIONS.has(permission));
+}
 function newHolder(value: unknown, permission: string): PermissionHolder | undefined {
   const selected = holder(value);
   if (selected === undefined) return undefined;
-  if (SIMPLE_HOLDERS.has(selected.type)) {
-    if (selected.parameter !== undefined) return undefined;
-    if (BROWSE_ONLY_HOLDERS.has(selected.type) && permission !== "BROWSE_PROJECTS") return undefined;
-    return selected;
-  }
+  if (SIMPLE_HOLDERS.has(selected.type)) return simpleHolderAllowed(selected, permission) ? selected : undefined;
   if (!PARAMETER_HOLDERS.has(selected.type) || !savedText(selected.parameter, 255)) return undefined;
   if (selected.type === "projectRole" && !jiraNativeId(selected.parameter)) return undefined;
-  // Native custom-field parameters are exact reviewed field identifiers; do not invent a
-  // numeric/customfield prefix conversion. Jira validates the referenced field and its type.
+  // Preserve exact custom-field parameters; no numeric/customfield prefix conversion.
   return selected;
 }
 /** Native extension-holder observations remain readable; new grants support documented built-ins. */

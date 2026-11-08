@@ -8,14 +8,18 @@ import { jiraNativeDeclaration, jiraNativeIdentitySchema as ID, jiraNativeWriteR
 const NAME = { ...text(255), minLength: 1 };
 const DESCRIPTION = text(32768);
 const TRUE = { type: "boolean", enum: [true] };
-const FIELD_ID = { type: "string", pattern: "^customfield_[1-9][0-9]{0,18}$", minLength: 13, maxLength: 31 };
+const FIELD_ID = { type: "string", pattern: String.raw`^customfield_[1-9]\d{0,18}$`, minLength: 13, maxLength: 31 };
 export const jiraSchemaIssueTypeSnapshotSchema = jiraIssueTypeReviewSnapshotSchema;
 const LINK = object({ id: ID, name: NAME, inward: NAME, outward: NAME }, ["id", "name", "inward", "outward"]);
 const FIELD = object({ id: FIELD_ID, name: NAME, custom: TRUE }, ["id", "name", "custom"]);
 const TERM = { type: "string", enum: ["epic", "sprint"] };
 const TERM_SNAPSHOT = object({ originalName: NAME, originalNamePlural: NAME, newName: NAME, newNamePlural: NAME, isDefault: { type: "boolean" } }, ["originalName", "originalNamePlural", "newName", "newNamePlural", "isDefault"]);
-const CANONICAL_TERM = { type: "string", minLength: 1, maxLength: 100, pattern: "^[a-z0-9 ]+$" };
-const MODULE = { type: "string", minLength: 3, maxLength: 1024, pattern: "^[a-zA-Z0-9_.-]+:[a-zA-Z0-9_.-]+$" };
+const CANONICAL_TERM = { type: "string", minLength: 1, maxLength: 100, not: { pattern: "[^a-z0-9 ]" } };
+const MODULE = { type: "string", minLength: 3, maxLength: 1024, allOf: [
+  { not: { pattern: "[^a-zA-Z0-9_.:-]" } },
+  { pattern: ":" },
+  { not: { pattern: "^:|:$|:.*:" } },
+] };
 const ids = (max: number) => ({ type: "array", minItems: 1, maxItems: max, uniqueItems: true, items: ID });
 const LINKS = { type: "array", maxItems: TOOL_CATALOG_LIMITS.maxArrayItems, items: LINK };
 const ACTOR = { expectedActorKey: NAME };

@@ -19,9 +19,11 @@ async function confirmDeletion(request: JiraMutationRequest, input: RoleSelectio
   if (!actor.ok) return { ...actor, receipt };
   const replacement = await bindSwap(request, input);
   if (replacement !== undefined) return { ...replacement, receipt };
-  const response = await request(`role/${input.role?.id}`);
+  const role = input.role;
+  if (role === undefined) return { ...ROLE_MALFORMED, receipt };
+  const response = await request(`role/${role.id}`);
   if (!response.ok && response.reason !== "not-found") return { ...dispatchFailure(response), receipt };
-  return unconfirmed(receipt, "Jira acknowledged role deletion. A selected404 or visible role-list omission cannot prove all role deletion or scheme-reference replacement effects.");
+  return unconfirmed(receipt, "Jira acknowledged role deletion. A selected 404 or visible role-list omission cannot prove all role deletion or scheme-reference replacement effects.");
 }
 function sameContext(before: RoleContext, after: RoleContext): boolean {
   return before.projectId === after.projectId && before.projectKey === after.projectKey;

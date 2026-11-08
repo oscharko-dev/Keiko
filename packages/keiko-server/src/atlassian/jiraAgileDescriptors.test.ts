@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
+import { compileExternalCatalogSchema, describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
 import { isBoundedExternalJsonSchema } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import {
   JIRA_AGILE_READ_DEFINITIONS,
@@ -10,7 +10,7 @@ import {
 
 describe("native Agile declarations", () => {
   it("admits optional exact Sprint review facts without conflating null, missing or false", () => {
-    const schema = JIRA_AGILE_READ_DEFINITIONS["jira.sprint"].item;
+    const schema = compileExternalCatalogSchema(JIRA_AGILE_READ_DEFINITIONS["jira.sprint"].item);
     const base = { id: "9", name: "Sprint", state: "future" };
     expect(isBoundedExternalJsonSchema(schema)).toBe(true);
     expect(describeCatalogSchemaMismatch(schema, base)).toBeUndefined();

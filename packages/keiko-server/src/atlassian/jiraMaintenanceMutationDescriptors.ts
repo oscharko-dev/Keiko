@@ -6,7 +6,7 @@ import { jiraNativeDeclaration, jiraNativeWriteResult, type JiraNativeDefinition
 
 const NAME = { ...text(255), minLength: 1 };
 const STATE = { ...text(128), minLength: 1 };
-const ID = { type: "string", minLength: 1, maxLength: 19, pattern: "^[1-9][0-9]{0,18}$" };
+const ID = { type: "string", minLength: 1, maxLength: 19, pattern: String.raw`^[1-9]\d{0,18}$` };
 const ISSUE_KEY = { ...text(128), minLength: 1 };
 const BOOL = { type: "boolean" };
 const INTEGER = { type: "integer", minimum: Number.MIN_SAFE_INTEGER, maximum: Number.MAX_SAFE_INTEGER };

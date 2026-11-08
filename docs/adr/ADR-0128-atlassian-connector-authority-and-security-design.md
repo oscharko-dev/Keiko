@@ -246,6 +246,11 @@ additionally requires `egress.pinProxiedConnectTarget` when this connector's tra
 (ADR-0038 D6) — proxied deployments are first-class for this lane (below).
 
 **Saved Data Center target admission (owner correction, 2026-11-04; #4082).**
+Fixed native experimental and permission-attribute request opt-ins retain the same HTTPS floor,
+including for loopback. They do not introduce an HTTP exception. The concrete HTTP owner checks
+the configured origin and context-path containment before constructing the opt-in lifecycle or
+materializing credentials; a path suffix alone never authorizes an outbound target.
+
 The canonical HTTPS base URL explicitly saved through the authenticated Jira Data Center
 connection form is the target authority. A second entry in `atlassian.privateTargets` is
 not required. That legacy configuration block remains readable for compatibility but no
@@ -709,6 +714,10 @@ these operations, including in Full access. They retain high risk and the same W
 `connector-access` class, `internet` resource scope, supervised `connector-write` kind and existing
 approval/journal owners. The other entity-property writes retain ordinary write scope. Native
 permissions are checked independently; possessing a local scope never asserts Jira permissions.
+New anonymous `anyone` permission grants are restricted to the reviewed read permissions
+`BROWSE_PROJECTS`, `VIEW_DEV_TOOLS` and `VIEW_READONLY_WORKFLOW`; all other new anonymous grants
+fail before effects. Existing observed anonymous grants remain readable and removable, so this
+restriction does not prevent an administrator from repairing an unsafe native configuration.
 Issue-type property writes require the native issue-type edit permission
 ([resource](https://docs.atlassian.com/software/jira/docs/api/11.3.0/com/atlassian/jira/rest/v2/issue/IssueTypePropertyResource.html));
 its [permission helper](https://docs.atlassian.com/software/jira/docs/api/11.3.0/com/atlassian/jira/bc/issuetype/property/IssueTypePropertyHelper.html)

@@ -162,7 +162,7 @@ async function write(ports: JiraPermissionSchemePorts, input: PermissionSchemeIn
  */
 export async function executeJiraPermissionSchemeMutation(operation: JiraPermissionSchemeMutation, args: CatalogJsonObject, ports: JiraPermissionSchemePorts, check = false): Promise<PermissionSchemeAttempt> {
   const input = parsePermissionSchemeInput(operation, args);
-  if (input === undefined) return permissionSchemeRefusal("Use exact actor and complete native scheme/grant snapshots. New grants require documented holders with their exact parameter semantics; an empty permissions list explicitly clears all grants. Unknown descriptions or attributes are unavailable review facts.");
+  if (input === undefined) return permissionSchemeRefusal("Use exact actor and complete native scheme/grant snapshots. New grants require documented holders with their exact parameter semantics. Anonymous anyone grants are supported only for BROWSE_PROJECTS, VIEW_DEV_TOOLS and VIEW_READONLY_WORKFLOW; use an authenticated principal for other permissions; an empty permissions list explicitly clears all grants. Unknown descriptions or attributes are unavailable review facts.");
   if (input.attribute !== undefined && ports.setAttribute === undefined)
     return permissionSchemeRefusal("The host has not supplied the fixed native text/plain Boolean attribute writer. No lookup or effect was sent.", "unavailable");
   const refused = await admission(ports, input);

@@ -120,7 +120,7 @@ import type {
   ManagedMcpProvider,
   ManagedMcpToolDeclaration,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import { createToolDescriptor, createToolRef } from "@oscharko-dev/keiko-tool-catalog";
+import { compileExternalCatalogSchema, createToolDescriptor, createToolRef } from "@oscharko-dev/keiko-tool-catalog";
 
 import { text, object } from "./jiraManagedSchemas.js";
 import {
@@ -509,7 +509,7 @@ function coreDeclaration(name: CoreReadToolName): ManagedMcpToolDeclaration {
       },
       definition.required,
     ),
-    resultSchema: object(
+    resultSchema: coreResultSchema(name, object(
       {
         ...definition.rootResult,
         outcome: { type: "string", enum: ["succeeded", "failed"] },
@@ -527,7 +527,7 @@ function coreDeclaration(name: CoreReadToolName): ManagedMcpToolDeclaration {
         nextStartAt: PAGE_NUMBER,
       },
       ["outcome"],
-    ),
+    )),
     effects: ["connector-access"],
     actionMapping: [{ action: name, effects: ["connector-access"] }],
     policyReferences: ["adr-0128.d4"],
@@ -542,6 +542,9 @@ function coreDeclaration(name: CoreReadToolName): ManagedMcpToolDeclaration {
     cancellation: "before-effect",
   });
   return Object.freeze({ name, risk: "read", descriptor });
+}
+function coreResultSchema(name: CoreReadToolName, schema: CatalogJsonObject): CatalogJsonObject {
+  return name === "jira.project" ? compileExternalCatalogSchema(schema) : schema;
 }
 const OPERATION_CONTRACTS = new Map<string, JiraOperationContract>();
 const BUILDING_OPERATION_CONTRACTS = new Set<string>();

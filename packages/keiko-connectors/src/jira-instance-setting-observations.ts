@@ -15,7 +15,9 @@ async function property(request: JiraMutationRequest, key: string): Promise<Inst
   const response = await request(`application-properties?${new URLSearchParams({ key }).toString()}`, "GET", undefined, "json-object-or-array");
   if (!response.ok) return dispatchFailure(response);
   if (response.status !== 200 || (response.items !== undefined && response.items.length !== 1)) return INSTANCE_SETTING_MALFORMED;
-  const raw = asRecord(response.items === undefined ? response.body : response.items[0]);
+  return propertyValue(asRecord(response.items === undefined ? response.body : response.items[0]), key);
+}
+function propertyValue(raw: Record<string, unknown> | undefined, key: string): InstanceSettingObservation<string> {
   if (raw?.key !== key) return instanceSettingRefusal("The selected application-property response does not match the reviewed exact key.", "conflict");
   const projected = projectJiraApplicationValue(key, raw.value);
   if ("reason" in projected) return { ok: false, reason: projected.reason };

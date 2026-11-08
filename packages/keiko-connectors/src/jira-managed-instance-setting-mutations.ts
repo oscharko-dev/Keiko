@@ -55,6 +55,9 @@ export async function executeJiraInstanceSettingMutation(operation: JiraInstance
   if (check) return { ok: true, receipt: {} };
   const dispatchRefusal = await beforeEffect(request, input);
   if (dispatchRefusal !== undefined) return dispatchRefusal;
+  return dispatchInstanceSetting(request, input, receipt);
+}
+async function dispatchInstanceSetting(request: JiraMutationRequest, input: InstanceSettingInput, receipt: InstanceSettingReceipt): Promise<InstanceSettingAttempt> {
   const effect = nativeEffect(input);
   const response = await request(effect.path, "PUT", effect.body, "none");
   if (!response.ok) return { ...dispatchFailure(response), receipt };

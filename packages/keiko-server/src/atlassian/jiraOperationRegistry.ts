@@ -12,7 +12,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
-import { createToolDescriptor, createToolRef } from "@oscharko-dev/keiko-tool-catalog";
+import { createToolDescriptor, createToolRef, ToolCatalogError } from "@oscharko-dev/keiko-tool-catalog";
 
 export type JiraOperationTool = JiraManagedReadToolName | JiraMutationOperation;
 type CompositeTool = "jira.report" | "jira.draft-stage" | "jira.draft";
@@ -1132,6 +1132,16 @@ function definitionFor(tool: string): JiraOperationDefinition {
   };
 }
 
+const OPERATION_DEFINITIONS = deepFreeze([
+  ...Object.keys(NATIVE).map(definitionFor),
+  ...Object.keys(COMPOSITES).map(definitionFor),
+]);
+
+/** Discovery metadata only; selected declarations own schema compilation and contract binding. */
+export function jiraOperationDefinitions(): readonly JiraOperationDefinition[] {
+  return OPERATION_DEFINITIONS;
+}
+
 const BINDING_SCHEMA = {
   type: "object",
   properties: {
@@ -1153,20 +1163,40 @@ function schemaRequired(value: CatalogJsonValue | undefined): value is readonly 
   return Array.isArray(value) && value.every((item: unknown) => typeof item === "string");
 }
 
+function boundResultSchema(schema: CatalogJsonObject): CatalogJsonObject {
+  const { properties, required } = schema;
+  if (schema.type === "object" && schemaObject(properties) && schemaRequired(required)) {
+    return {
+      ...schema,
+      properties: { ...properties, operationBinding: BINDING_SCHEMA },
+      required: [...required, "operationBinding"],
+    };
+  }
+  // A disjunction is still a closed object result: bind each alternative at the same level
+  // as its own additionalProperties:false. An outer allOf would leave every branch closed
+  // against the new field; lifting properties would erase the branch-specific requirements.
+  const keyword = schema.anyOf === undefined ? "oneOf" : "anyOf";
+  const alternatives = schema[keyword];
+  const allowed = new Set(["$schema", "description", keyword]);
+  if (
+    !Array.isArray(alternatives) || alternatives.length === 0 ||
+    !Object.keys(schema).every((key) => allowed.has(key))
+  ) throw new ToolCatalogError("invalid-schema");
+  return {
+    ...schema,
+    [keyword]: alternatives.map((alternative: CatalogJsonValue) => {
+      if (!schemaObject(alternative)) throw new ToolCatalogError("invalid-schema");
+      return boundResultSchema(alternative);
+    }),
+  };
+}
+
 function resultDescriptor(descriptor: ToolDescriptor): ToolDescriptor {
   const { descriptorDigest: _digest, ...original } = descriptor;
-  const properties = descriptor.resultSchema.properties;
-  const required = descriptor.resultSchema.required;
-  if (!schemaObject(properties) || !schemaRequired(required))
-    throw new TypeError("Jira result must have an explicit object schema");
   return createToolDescriptor({
     ...original,
     toolRef: createToolRef(descriptor.toolRef.canonicalId, descriptor.toolRef.contractVersion + 1),
-    resultSchema: {
-      ...descriptor.resultSchema,
-      properties: { ...properties, operationBinding: BINDING_SCHEMA },
-      required: [...required, "operationBinding"],
-    },
+    resultSchema: boundResultSchema(descriptor.resultSchema),
     bounds: {
       ...descriptor.bounds,
       maxResultBytes: Math.min(

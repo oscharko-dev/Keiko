@@ -186,3 +186,26 @@ it("does not preserve unrelated newly-added grants as an apparently complete del
   expect(await execute(CASES[4].tool, CASES[4].args, f.ports)).toMatchObject({ ok: false, reason: "unavailable", receipt: CASES[4].receipt });
   expect(f.writes()).toBe(1);
 });
+
+it.each(["ADMINISTER_PROJECTS", "DELETE_ISSUES", "EDIT_ISSUES", "ADD_COMMENTS", "PLUGIN_UNKNOWN_PERMISSION"])("refuses a new anonymous %s grant before native reads or writes", async (permission) => {
+  const f = fixture();
+  expect(await execute("jira.add-permission-grant", { ...CASES[3].args,
+    grant: { permission, holder: { type: "anyone" } } }, f.ports)).toMatchObject({ ok: false, reason: "field-validation" });
+  expect(f.calls).toEqual([]);
+});
+it.each(["jira.create-permission-scheme", "jira.update-permission-scheme"] as const)("cannot smuggle anonymous writes in a complete %s grant replacement", async (operation) => {
+  const f = fixture(); const selected = operation === "jira.create-permission-scheme" ? CASES[0] : CASES[1];
+  expect(await execute(operation, { ...selected.args,
+    permissions: [{ permission: "ADMINISTER_PROJECTS", holder: { type: "anyone" } }] }, f.ports))
+    .toMatchObject({ ok: false, reason: "field-validation" });
+  expect(f.calls).toEqual([]);
+});
+it("keeps an existing anonymous write grant readable and removable", async () => {
+  const f = fixture();
+  const unsafe = { id: "29", permission: "DELETE_ISSUES", holder: { type: "anyone" } };
+  f.grants.set("7", [unsafe]);
+  expect(await execute("jira.delete-permission-grant", { expectedActorKey: "synthetic-actor",
+    expectedScheme: { ...SNAPSHOT, permissions: [unsafe] }, permissionId: "29" }, f.ports))
+    .toMatchObject({ ok: true, receipt: { permissionId: "29", grantPresent: false } });
+  expect(f.writes()).toBe(1);
+});

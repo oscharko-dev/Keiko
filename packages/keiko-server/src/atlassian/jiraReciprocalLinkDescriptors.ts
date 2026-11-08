@@ -2,10 +2,10 @@ import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/ru
 import { object, text } from "./jiraManagedSchemas.js";
 import { jiraNativeDeclaration, jiraNativeWriteResult, type JiraNativeDefinition } from "./jiraProjectStructureDescriptors.js";
 
-const ID = { type: "string", minLength: 1, maxLength: 19, pattern: "^[1-9][0-9]{0,18}$" };
+const ID = { type: "string", minLength: 1, maxLength: 19, pattern: String.raw`^[1-9]\d{0,18}$` };
 const KEY = { ...text(128), minLength: 1 };
 const NAME = { ...text(255), minLength: 1 };
-const APP_ID = { type: "string", minLength: 36, maxLength: 36, pattern: "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" };
+const APP_ID = { type: "string", minLength: 36, maxLength: 36, format: "uuid", pattern: "^[0-9a-fA-F-]{36}$" };
 const DIGEST = { type: "string", minLength: 64, maxLength: 64, pattern: "^[0-9a-f]{64}$" };
 const REQUIRED = ["expectedActorKey", "expectedIssue", "expectedApplication", "remoteIssueId", "remoteIssueTitle", "sourceRelationship", "targetRelationship", "expectLocalLinkAbsent", "acceptNativeDelegatedEffect"];
 export const JIRA_RECIPROCAL_LINK_DEFINITION: JiraNativeDefinition = {

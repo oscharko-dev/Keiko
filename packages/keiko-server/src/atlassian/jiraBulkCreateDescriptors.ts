@@ -4,7 +4,7 @@ import { object, text } from "./jiraManagedSchemas.js";
 import { jiraNativeDeclaration, jiraNativeWriteResult, type JiraNativeDefinition } from "./jiraProjectStructureDescriptors.js";
 
 const ID = { ...text(32), pattern: "^[0-9]{1,32}$" };
-const ACK_ID = { ...text(19), pattern: "^[1-9][0-9]{0,18}$" };
+const ACK_ID = { ...text(19), pattern: String.raw`^[1-9]\d{0,18}$` };
 const KEY = { ...text(128), minLength: 1 };
 const LINK = object({ type: { ...text(255), minLength: 1 }, direction: { type: "string", enum: ["inward", "outward"] }, issueKey: KEY }, ["type", "direction", "issueKey"]);
 const ITEM = object({ projectId: ID, issueTypeId: ID, fields: { ...object({}), additionalProperties: true },

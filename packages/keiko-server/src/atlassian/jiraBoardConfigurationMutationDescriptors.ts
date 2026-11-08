@@ -3,7 +3,7 @@ import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/ru
 import { object, text } from "./jiraManagedSchemas.js";
 import { jiraNativeDeclaration, jiraNativeWriteResult, type JiraNativeDefinition } from "./jiraProjectStructureDescriptors.js";
 
-const ID = { ...text(16), minLength: 1, pattern: "^[1-9][0-9]{0,15}$",
+const ID = { ...text(16), minLength: 1, pattern: String.raw`^[1-9]\d{0,15}$`,
   description: "Canonical positive decimal ID within the existing Agile safe-integer projection." };
 const NAME = { ...text(255), minLength: 1 };
 const BOOL = { type: "boolean" };

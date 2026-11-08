@@ -3,7 +3,7 @@ import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/ru
 import { object, text } from "./jiraManagedSchemas.js";
 import { jiraNativeDeclaration, jiraNativeWriteResult, type JiraNativeDefinition } from "./jiraProjectStructureDescriptors.js";
 
-const ID = { type: "string", minLength: 1, maxLength: 19, pattern: "^[1-9][0-9]{0,18}$" };
+const ID = { type: "string", minLength: 1, maxLength: 19, pattern: String.raw`^[1-9]\d{0,18}$` };
 const KEY = { ...text(128), minLength: 1 };
 const ACTOR = { ...text(255), minLength: 1 };
 const POSITION = { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER };

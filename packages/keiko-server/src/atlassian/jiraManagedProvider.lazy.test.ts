@@ -11,12 +11,13 @@ afterEach(() => {
 
 it("isolates an unrequested invalid read schema while preserving later fail-closed lookup", async () => {
   vi.resetModules();
+  const { ToolCatalogError } = await import("@oscharko-dev/keiko-tool-catalog");
   vi.doMock("./jiraAccessDescriptors.js", async (importOriginal) => {
     const actual = await importOriginal<typeof import("./jiraAccessDescriptors.js")>();
     return {
       ...actual,
       jiraAccessDeclarationForTool: (name: string): ManagedMcpToolDeclaration | undefined => {
-        if (name === "jira.notification-schemes") throw new TypeError("Synthetic invalid notification schema");
+        if (name === "jira.notification-schemes") throw new ToolCatalogError("invalid-schema");
         return actual.jiraAccessDeclarationForTool(name);
       },
     };
@@ -25,6 +26,8 @@ it("isolates an unrequested invalid read schema while preserving later fail-clos
   const bind = vi.spyOn(registry, "createJiraOperationContract");
   const provider = await import("./jiraManagedProvider.js");
   expect(bind).not.toHaveBeenCalled();
+  expect(registry.jiraOperationDefinitions().some((entry) => entry.tool === "jira.notification-schemes")).toBe(true);
+  expect(bind).not.toHaveBeenCalled();
   const selected = provider.jiraOperationForTool("jira.projects");
   expect(selected).toBeDefined();
   expect(provider.jiraOperationForTool("jira.projects")).toBe(selected);
@@ -32,8 +35,8 @@ it("isolates an unrequested invalid read schema while preserving later fail-clos
   const connection = vi.fn();
   expect(provider.createJiraProviderForCatalog(connection, ["jira.projects"]).tools()).toHaveLength(1);
   expect(connection).not.toHaveBeenCalled();
-  expect(() => provider.jiraOperationForTool("jira.notification-schemes")).toThrow("Synthetic invalid notification schema");
-  expect(() => provider.jiraOperationContracts()).toThrow("Synthetic invalid notification schema");
+  expect(() => provider.jiraOperationForTool("jira.notification-schemes")).toThrow(ToolCatalogError);
+  expect(() => provider.jiraOperationContracts()).toThrow(ToolCatalogError);
   expect(provider.jiraOperationForTool("jira.projects")).toBe(selected);
 });
 
@@ -76,7 +79,7 @@ it("memoizes composite members once and matches the complete raw-declaration bat
   const raw = complete.map((entry) => {
     const declaration = bind.mock.calls.find(([candidate]) => candidate.name === entry.definition.tool)?.[0];
     if (declaration === undefined) throw new TypeError("Missing captured raw declaration");
-    expect(declaration.descriptor.resultSchema.properties).not.toHaveProperty("operationBinding");
+    expect(JSON.stringify(declaration.descriptor.resultSchema)).not.toContain('"operationBinding"');
     return declaration;
   });
   const batch = registry.createJiraOperationContracts(raw);
