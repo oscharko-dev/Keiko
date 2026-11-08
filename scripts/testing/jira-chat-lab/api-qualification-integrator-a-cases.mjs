@@ -3,11 +3,6 @@
 // generates) or on the dedicated lab actors; no password, license text or image bytes appear in
 // arguments or evidence. Protected values come only from the product's human-input custody.
 import assert from "node:assert/strict";
-import { Buffer } from "node:buffer";
-import { createHash } from "node:crypto";
-import { writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { crc32, deflateSync } from "node:zlib";
 import { basicAuth, labRequest } from "./lab-client.mjs";
 import { read, proof } from "./api-qualification-read.mjs";
 import { readCase } from "./api-qualification-cases.mjs";
@@ -17,10 +12,15 @@ import {
   observeAdminActor,
 } from "./api-qualification-admin-cases.mjs";
 import {
+  bindQualificationFile,
   createQualificationIssue,
   createQualificationProject,
   fixtureWrite,
+  generatedSecret,
+  labActorPassword,
   projectReview,
+  qualificationPng,
+  releaseQualificationFile,
 } from "./api-qualification-fixtures.mjs";
 
 const adminRead = { actor: "admin", administration: true };
@@ -96,39 +96,11 @@ async function securityScheme(c, f) {
 }
 
 // ---- avatar fixtures --------------------------------------------------------------------
-function chunk(type, data) {
-  const body = Buffer.concat([Buffer.from(type, "latin1"), data]);
-  const length = Buffer.alloc(4);
-  length.writeUInt32BE(data.length);
-  const crc = Buffer.alloc(4);
-  crc.writeUInt32BE(crc32(body));
-  return Buffer.concat([length, body, crc]);
-}
-function solidPng(size, shade) {
-  const header = Buffer.alloc(13);
-  header.writeUInt32BE(size, 0);
-  header.writeUInt32BE(size, 4);
-  header[8] = 8;
-  header[9] = 2;
-  const row = Buffer.concat([Buffer.from([0]), Buffer.alloc(size * 3, shade)]);
-  return Buffer.concat([
-    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
-    chunk("IHDR", header),
-    chunk("IDAT", deflateSync(Buffer.concat(Array.from({ length: size }, () => row)))),
-    chunk("IEND", Buffer.alloc(0)),
-  ]);
-}
-/** A synthetic solid PNG written once per run into the private session directory. */
-function avatarFile(c, f) {
-  if (f.avatarFile) return f.avatarFile;
-  const png = solidPng(96, Number.parseInt(f.runId.slice(0, 2), 16));
-  const name = `ac7-avatar-${f.runId}.png`;
-  writeFileSync(join(c.session.directory, name), png, { mode: 0o600, flag: "wx" });
-  f.avatarFile = {
-    name,
-    sizeBytes: png.length,
-    sha256: createHash("sha256").update(png).digest("hex"),
-  };
+/** The generated PNG is a connected-file source of the dispatching Chat (shared fixture helper). */
+function avatarFile(c, f, chat) {
+  f.avatarFile = bindQualificationFile(c, f, chat, "avatar-a", () =>
+    qualificationPng(96, Number.parseInt(f.runId.slice(0, 2), 16)),
+  );
   return f.avatarFile;
 }
 const OWNERS = {
@@ -137,6 +109,12 @@ const OWNERS = {
     create: "jira.create-project-avatar",
     path: (owner) => `/rest/api/2/project/${owner.id}/avatars`,
     target: (owner) => ({ kind: "project", id: owner.id, key: owner.key }),
+  },
+  user: {
+    upload: "jira.upload-user-avatar",
+    create: "jira.create-user-avatar",
+    path: (owner) => `/rest/api/2/user/avatars?username=${encodeURIComponent(owner.name)}`,
+    target: (owner) => ({ kind: "user", key: owner.key, name: owner.name }),
   },
   issuetype: {
     upload: "jira.upload-issue-type-avatar",
@@ -189,8 +167,8 @@ const uploadArguments = (f, kind, owner) => ({
   acceptTemporaryReplacement: true,
 });
 /** Uploads through the governed tool; the native temporary slot is consumed by the next effect. */
-async function stageTemporary(c, f, kind, owner) {
-  avatarFile(c, f);
+async function stageTemporary(c, f, kind, owner, chat) {
+  avatarFile(c, f, chat);
   const before = await observeAvatars(c, kind, owner);
   await fixtureWrite(
     c,
@@ -216,9 +194,9 @@ const createArguments = (f, kind, owner) => ({
   crop: f.avatarTemporary.crop,
   expectedAvatars: f.avatarBefore,
 });
-async function creationPrepare(c, f, kind) {
+async function creationPrepare(c, f, kind, chat) {
   const owner = await avatarOwner(c, f, kind);
-  f.avatarBefore = await stageTemporary(c, f, kind, owner);
+  f.avatarBefore = await stageTemporary(c, f, kind, owner, chat);
   f.avatarOwner = owner;
 }
 function creationReadback(kind) {
@@ -244,9 +222,9 @@ const uploadCase = (tool, kind) =>
       assert.deepEqual(await observeAvatars(c, kind, f.avatarOwner), f.avatarBefore);
       return proof(2);
     },
-    async (c, f) => {
+    async (c, f, chat) => {
       f.avatarOwner = await avatarOwner(c, f, kind);
-      avatarFile(c, f);
+      avatarFile(c, f, chat);
       f.avatarBefore = await observeAvatars(c, kind, f.avatarOwner);
     },
   );
@@ -285,9 +263,9 @@ async function restoreProjectSelection(c, f) {
     },
   );
 }
-async function deletionPrepare(c, f) {
+async function deletionPrepare(c, f, chat) {
   await projectSelectionPrepare(c, f);
-  await stageTemporary(c, f, "project", f.avatarOwner);
+  await stageTemporary(c, f, "project", f.avatarOwner, chat);
   const known = new Set(f.avatarBefore.map((row) => row.id));
   await fixtureWrite(
     c,
@@ -408,13 +386,15 @@ export const API_QUALIFICATION_INTEGRATOR_A_CASES = [
     OWNERS.issuetype.create,
     (f) => createArguments(f, "issuetype", f.avatarOwner),
     creationReadback("issuetype"),
-    (c, f) => creationPrepare(c, f, "issuetype"),
+    (c, f, chat) => creationPrepare(c, f, "issuetype", chat),
   ),
   uploadCase(OWNERS.issuetype.upload, "issuetype"),
   {
     tool: "jira.validate-license",
     ...adminRead,
     arguments: actorArgs,
+    // Validation only: a runtime-generated text that is no license; nothing is activated.
+    humanInput: () => ({ license: generatedSecret() }),
     prepare: observeAdminActor,
     readback: validationReadback("native-license-validation-only", async (c, _data, f) => {
       assert.equal((await read(c, "/rest/api/2/myself")).key, f.adminActorKey);
@@ -434,6 +414,7 @@ export const API_QUALIFICATION_INTEGRATOR_A_CASES = [
       },
       myselfPrepare,
     ),
+    humanInput: (c) => ({ password: labActorPassword(c, "admin") }),
     cleanup: myselfCleanup,
   },
   {
@@ -453,6 +434,10 @@ export const API_QUALIFICATION_INTEGRATOR_A_CASES = [
     actor: "assignee",
     administration: false,
     destructiveAdministration: false,
+    humanInput: (c) => {
+      const password = labActorPassword(c, "assignee");
+      return { currentPassword: password, password };
+    },
   },
   {
     tool: "jira.validate-create-user-password",
@@ -467,6 +452,7 @@ export const API_QUALIFICATION_INTEGRATOR_A_CASES = [
       await observeAdminActor(c, f);
       f.policyUsername = `ac7-${f.runId.slice(0, 8)}`;
     },
+    humanInput: () => ({ password: generatedSecret() }),
     readback: validationReadback("native-password-policy-only", (c, data, f) =>
       passwordPolicyIdentity(c, f, data),
     ),
@@ -476,6 +462,7 @@ export const API_QUALIFICATION_INTEGRATOR_A_CASES = [
     ...adminRead,
     arguments: (f) => ({ ...actorArgs(f), user: f.policyUser }),
     prepare: policyUser,
+    humanInput: () => ({ newPassword: generatedSecret() }),
     readback: validationReadback("native-password-policy-only", async (c, data, f) => {
       assert.equal(data.userKey, f.policyUser.key);
       assert.equal(data.username, f.policyUser.name);
@@ -490,7 +477,7 @@ export const API_QUALIFICATION_INTEGRATOR_A_CASES = [
     OWNERS.project.create,
     (f) => createArguments(f, "project", f.avatarOwner),
     creationReadback("project"),
-    (c, f) => creationPrepare(c, f, "project"),
+    (c, f, chat) => creationPrepare(c, f, "project", chat),
   ),
   {
     ...adminMutationCase(
@@ -510,23 +497,26 @@ export const API_QUALIFICATION_INTEGRATOR_A_CASES = [
     cleanup: restoreProjectSelection,
   },
   uploadCase(OWNERS.project.upload, "project"),
-  adminMutationCase(
-    "jira.delete-project-avatar",
-    (f) => projectAvatarArguments(f, f.avatarDelete.id),
-    async (c, _data, f) => {
-      const after = await observeAvatars(c, "project", f.avatarOwner);
-      assert.equal(
-        after.some((row) => row.id === f.avatarDelete.id),
-        false,
-      );
-      assert.deepEqual(
-        withoutSelection(after),
-        withoutSelection(f.avatarBefore.filter((row) => row.id !== f.avatarDelete.id)),
-      );
-      return proof(3);
-    },
-    deletionPrepare,
-  ),
+  {
+    ...adminMutationCase(
+      "jira.delete-project-avatar",
+      (f) => projectAvatarArguments(f, f.avatarDelete.id),
+      async (c, _data, f) => {
+        const after = await observeAvatars(c, "project", f.avatarOwner);
+        assert.equal(
+          after.some((row) => row.id === f.avatarDelete.id),
+          false,
+        );
+        assert.deepEqual(
+          withoutSelection(after),
+          withoutSelection(f.avatarBefore.filter((row) => row.id !== f.avatarDelete.id)),
+        );
+        return proof(3);
+      },
+      deletionPrepare,
+    ),
+    cleanup: (c, f) => releaseQualificationFile(c, f, "avatar-a"),
+  },
   {
     ...readCase(
       "jira.project-issue-security-scheme",
@@ -542,3 +532,17 @@ export const API_QUALIFICATION_INTEGRATOR_A_CASES = [
     prepare: observeAdminActor,
   },
 ];
+
+/** The avatar machinery, shared with the user-avatar recipes that need a private session. */
+export const AVATAR_RECIPES = {
+  OWNERS,
+  avatarFile,
+  observeAvatars,
+  stageTemporary,
+  createArguments,
+  creationReadback,
+  uploadArguments,
+  identities,
+  withoutSelection,
+  selectedOf,
+};

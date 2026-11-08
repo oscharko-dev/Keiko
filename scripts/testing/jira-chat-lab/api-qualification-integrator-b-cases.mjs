@@ -1,21 +1,19 @@
 // AC7 recipes 66-78: reindex, search error lookup, security level, project-owned avatars and the
 // upgrade result. Every oracle reads Jira directly with the lab actor; evidence stays body-free.
 import assert from "node:assert/strict";
-import { Buffer } from "node:buffer";
-import { createHash } from "node:crypto";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { crc32, deflateSync } from "node:zlib";
 import { basicAuth, labRequest } from "./lab-client.mjs";
 import { readCase } from "./api-qualification-cases.mjs";
 import { proof, read } from "./api-qualification-read.mjs";
 import { adminMutationCase, observeAdminActor } from "./api-qualification-admin-cases.mjs";
 import {
+  bindQualificationFile,
   createQualificationIssue,
   createQualificationProject,
   issueReview,
   projectReview,
+  qualificationPng,
+  releaseQualificationFile,
 } from "./api-qualification-fixtures.mjs";
 
 const POLL_DEADLINE_MS = 120_000;
@@ -262,29 +260,6 @@ const upgradeResult = admin({
 });
 
 // ---- project-owned avatars ---------------------------------------------------------------------
-function pngImage() {
-  const size = 48;
-  const row = Buffer.alloc(1 + size * 3, 0x7f);
-  row[0] = 0;
-  const chunk = (type, body) => {
-    const head = Buffer.alloc(8);
-    head.writeUInt32BE(body.length, 0);
-    head.write(type, 4, "latin1");
-    const tail = Buffer.alloc(4);
-    tail.writeUInt32BE(crc32(Buffer.concat([head.subarray(4), body])), 0);
-    return Buffer.concat([head, body, tail]);
-  };
-  const header = Buffer.alloc(13);
-  header.writeUInt32BE(size, 0);
-  header.writeUInt32BE(size, 4);
-  header.set([8, 2, 0, 0, 0], 8);
-  return Buffer.concat([
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-    chunk("IHDR", header),
-    chunk("IDAT", deflateSync(Buffer.concat(Array.from({ length: size }, () => row)))),
-    chunk("IEND", Buffer.alloc(0)),
-  ]);
-}
 const avatarPath = (f) => `/rest/api/2/universal_avatar/type/project/owner/${f.avatarProject.id}`;
 async function avatarRows(c, f) {
   const value = await read(c, avatarPath(f));
@@ -301,25 +276,11 @@ const avatarTarget = (f) => ({ kind: "project", id: f.avatarProject.id, key: f.a
 async function prepareAvatarUpload(c, f, chat) {
   await observeAdminActor(c, f);
   f.avatarProject = projectReview(await createQualificationProject(c, f, "avatar-owner"));
-  const bytes = pngImage();
-  f.avatarFile = {
-    name: `ac7-avatar-${f.runId}.png`,
-    sizeBytes: bytes.length,
-    sha256: createHash("sha256").update(bytes).digest("hex"),
-  };
-  mkdirSync(c.projectPath, { recursive: true });
-  writeFileSync(join(c.projectPath, f.avatarFile.name), bytes, { flag: "wx" });
-  // The recipe's own file is the only connected source of this Chat while the avatar cases run.
-  f.avatarChatId = chat.id;
-  c.deps.store.updateChat(chat.id, {
-    connectedScopes: [
-      { kind: "files", relativePaths: [f.avatarFile.name], connectedAtMs: Date.now() },
-    ],
-  });
+  // The recipe's own file is the connected source of this Chat while the avatar cases run.
+  f.avatarFile = bindQualificationFile(c, f, chat, "avatar-b", () => qualificationPng(48, 0x7f));
 }
 function removeAvatarFixture(c, f) {
-  c.deps.store.updateChat(f.avatarChatId, { connectedScopes: null });
-  rmSync(join(c.projectPath, f.avatarFile.name), { force: true });
+  releaseQualificationFile(c, f, "avatar-b");
 }
 const uploadOwnedAvatar = adminMutationCase(
   "jira.upload-owned-avatar",

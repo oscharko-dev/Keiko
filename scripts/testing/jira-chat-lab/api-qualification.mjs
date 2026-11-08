@@ -16,7 +16,12 @@ import {
 } from "./lab-client.mjs";
 import { privateJson } from "./private-json.mjs";
 import { observeQualificationFixtures } from "./api-qualification-cases.mjs";
-import { dispatchQualification, qualificationWitness } from "./api-qualification-runtime.mjs";
+import {
+  closeQualificationTurn,
+  dispatchQualification,
+  openQualificationTurn,
+  qualificationWitness,
+} from "./api-qualification-runtime.mjs";
 import { API_QUALIFICATION_ALL_CASES } from "./api-qualification-case-list.mjs";
 import { requireQualificationSnapshot } from "./api-qualification-snapshot.mjs";
 import { decidedQualificationDeferrals, ownerDeferredRow } from "./api-qualification-policy.mjs";
@@ -46,6 +51,7 @@ export async function runQualificationBatches({
     await withModelFreeJira({
       session,
       decorateAtlassianHttp: witness?.decorate,
+      decoratePrivateLifecycle: witness?.privateLifecycle,
       stateReady: (root) => stateReady?.(root, batch),
       run: (context) => run(context, specifications.slice(start, start + 32), batch),
     });
@@ -133,9 +139,83 @@ function caseEvidence(specification, attempted, observation, readback, failure, 
     ...(failure === undefined ? {} : { failure }),
   };
 }
-async function runCase(context, chat, specification, fixture, witness, directory, report) {
-  await specification.prepare?.(context, fixture, chat);
-  const id = specification.fixtureId ?? qualificationDigest(specification.identity).slice(0, 24);
+/** The one intentional stop: a native effect whose outcome is not certain is never built upon. */
+class ReconcileRequiredError extends TypeError {
+  constructor() {
+    super("Uncertain native effect requires reconciliation before any further dispatch");
+    this.name = "ReconcileRequiredError";
+  }
+}
+const caseId = (specification) =>
+  specification.fixtureId ?? qualificationDigest(specification.identity).slice(0, 24);
+/** A case that could not be prepared or dispatched is graded unknown; it never aborts the run. */
+function ungradedEvidence(specification, report, failure, effects) {
+  return {
+    runId: report.runId,
+    sourceRevision: report.sourceRevision,
+    release: report.release,
+    imageDigest: report.imageDigest,
+    id: caseId(specification),
+    identity: specification.identity,
+    tool: specification.tool,
+    runtimeAvailability: "unknown",
+    mutation: specification.mutation === true,
+    failure,
+    // An effect that started before the failure needs reconciliation before it is trusted.
+    ...(effects > 0 ? { reconcileRequired: true } : {}),
+  };
+}
+function recordUngraded(specification, directory, evidence) {
+  privateJson(join(directory, `${evidence.id}.json`), evidence, true);
+  stage({
+    identity: specification.identity,
+    runtimeAvailability: "unknown",
+    failure: evidence.failure,
+    ...(evidence.reconcileRequired ? { reconcileRequired: true } : {}),
+  });
+  return evidence;
+}
+const prepareFailure = (error) =>
+  error instanceof assert.AssertionError ? "prepare-precondition" : "prepare-failed";
+async function prepareCase(context, chat, specification, fixture) {
+  try {
+    await specification.prepare?.(context, fixture, chat);
+    return undefined;
+  } catch (error) {
+    if (error instanceof ReconcileRequiredError) throw error;
+    return prepareFailure(error);
+  }
+}
+async function dispatchCase(context, chat, specification, fixture, witness, pending) {
+  const provide = specification.humanInput
+    ? () => specification.humanInput(context, fixture)
+    : undefined;
+  try {
+    return {
+      attempted: await dispatchQualification(
+        context,
+        chat,
+        specification,
+        specification.arguments(fixture),
+        provide,
+      ),
+    };
+  } catch {
+    // Before any native effect started, a refusal or local failure proves nothing about Jira.
+    if (witness.snapshot().effects > 0) throw new ReconcileRequiredError();
+    rmSync(pending);
+    return { failure: "dispatch-failed" };
+  }
+}
+async function runGradedCase(context, chat, specification, fixture, witness, directory, report) {
+  const failure = await prepareCase(context, chat, specification, fixture);
+  if (failure !== undefined)
+    return recordUngraded(
+      specification,
+      directory,
+      ungradedEvidence(specification, report, failure, witness.effectsStarted()),
+    );
+  const id = caseId(specification);
   const pending = join(directory, `${id}.pending.json`);
   privateJson(
     pending,
@@ -143,33 +223,52 @@ async function runCase(context, chat, specification, fixture, witness, directory
     true,
   );
   witness.arm(specification.identity, specification.mutation === true);
-  const attempted = await dispatchQualification(
+  const dispatched = await dispatchCase(context, chat, specification, fixture, witness, pending);
+  if (dispatched.attempted === undefined)
+    return recordUngraded(
+      specification,
+      directory,
+      ungradedEvidence(specification, report, dispatched.failure, witness.effectsStarted()),
+    );
+  const { attempted } = dispatched;
+  const { readback, failure: readbackFailure } = await observeReadback(
     context,
-    chat,
     specification,
-    specification.arguments(fixture),
+    attempted,
+    fixture,
   );
-  const { readback, failure } = await observeReadback(context, specification, attempted, fixture);
   const evidence = caseEvidence(
     specification,
     attempted,
     witness.snapshot(),
     readback,
-    failure,
+    readbackFailure,
     report,
   );
   privateJson(join(directory, `${id}.json`), evidence, true);
   if (attempted.journal?.outcome === "unknown" || attempted.journal?.phase === "dispatched")
-    throw new TypeError(
-      "Uncertain native effect requires reconciliation before any further dispatch",
-    );
+    throw new ReconcileRequiredError();
   rmSync(pending);
   stage({
     identity: specification.identity,
     runtimeAvailability: evidence.runtimeAvailability,
-    ...(failure ? { failure } : {}),
+    ...(readbackFailure ? { failure: readbackFailure } : {}),
   });
   return evidence;
+}
+
+/** A case that keeps one private session across fixtures and its own dispatch holds one turn. */
+async function runCase(context, chat, specification, fixture, witness, directory, report) {
+  if (specification.privateSession !== true)
+    return runGradedCase(context, chat, specification, fixture, witness, directory, report);
+  const held = await openQualificationTurn(context, chat);
+  context.heldQualificationTurn = held;
+  try {
+    return await runGradedCase(context, chat, specification, fixture, witness, directory, report);
+  } finally {
+    delete context.heldQualificationTurn;
+    await closeQualificationTurn(context, held);
+  }
 }
 
 function attachFixtureDispatcher(
@@ -181,7 +280,12 @@ function attachFixtureDispatcher(
   directory,
   report,
 ) {
-  context.qualificationFixture = async ({ tool, arguments: argumentsForFixture, readback }) => {
+  context.qualificationFixture = async ({
+    tool,
+    arguments: argumentsForFixture,
+    readback,
+    humanInput,
+  }) => {
     const operation = JSON.parse(readFileSync(ledgerPath, "utf8")).currentCapabilities[tool];
     assert.ok(operation && operation.effect === "write");
     assert.equal(context.actor, "admin", "Auxiliary effects use the existing explicit admin Chat");
@@ -194,6 +298,7 @@ function attachFixtureDispatcher(
       fixtureId: `fixture-${randomUUID()}`,
       arguments: () => argumentsForFixture,
       readback,
+      ...(humanInput === undefined ? {} : { humanInput }),
     };
     const evidence = await runCase(context, chat, fixtureCase, fixture, witness, directory, report);
     assert.equal(
@@ -201,6 +306,7 @@ function attachFixtureDispatcher(
       "executable",
       "An auxiliary fixture must have settled independently verified native evidence",
     );
+    witness.markVerified();
     return evidence;
   };
 }
@@ -225,6 +331,7 @@ async function executeCases(context, specifications, report, directory, witness,
       );
     const chat = chats.get(binding);
     attachFixtureDispatcher(context, chat, specification, fixture, witness, directory, report);
+    witness.reset();
     const evidence = await runCase(
       context,
       chat,
@@ -242,8 +349,9 @@ async function executeCases(context, specifications, report, directory, witness,
         evidence.runtimeAvailability === "unknown" ? [] : [`${report.file}#${evidence.id}`],
     });
     privateJson(join(directory, report.file), report);
-    if (specification.mutation && evidence.runtimeAvailability === "unknown")
-      throw new TypeError("Reconcile the failed mutation before dispatching dependent cases");
+    // A failure before any native effect leaves nothing to reconcile; the run continues.
+    if (evidence.runtimeAvailability === "unknown" && witness.effectsStarted() > 0)
+      throw new ReconcileRequiredError();
     if (evidence.runtimeAvailability === "executable")
       await specification.cleanup?.(context, fixture);
   }

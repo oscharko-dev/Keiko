@@ -18,12 +18,15 @@ import {
   observeJiraChatMutation,
 } from "../../../packages/keiko-server/dist/atlassian/jiraChatToolTurn.js";
 import { jiraOperationForTool } from "../../../packages/keiko-server/dist/atlassian/jiraManagedProvider.js";
+import { createJiraChatHumanInput } from "../../../packages/keiko-server/dist/atlassian/jiraChatHumanInput.js";
+import { createJiraPrivateLifetime } from "../../../packages/keiko-server/dist/atlassian/httpPrivateIdentity.js";
 import { createCatalogToolBinder } from "../../../packages/keiko-server/dist/tool-catalog/catalogToolDispatch.js";
 import { createCodingToolInvocationRegistry } from "../../../packages/keiko-server/dist/coding-runtime/codingToolInvocationRegistry.js";
 import { defaultServerDiagnosticSink } from "../../../packages/keiko-server/dist/diagnostics-log.js";
 import { acceptChatToolReadGrant } from "../../../packages/keiko-server/dist/chat-tool-approvals.js";
 import { matchesNativeIdentity, qualificationDigest } from "./api-qualification-evidence.mjs";
 import { labSessionConnection } from "./lab-client.mjs";
+import { request as productRequest } from "./chat-read.mjs";
 
 function readRequest(request, url) {
   return (
@@ -39,41 +42,104 @@ function readRequest(request, url) {
   );
 }
 
-/** Forward actual transport responses unchanged; never synthesize Jira outcomes. */
-export function qualificationWitness(session) {
-  const origin = labSessionConnection(session).httpsOrigin;
+// The product's own session bookkeeping (login, logout, websudo release) is not a data effect.
+const SESSION_MANAGEMENT_PATHS = new Set(["/rest/auth/1/session", "/rest/auth/1/websudo"]);
+
+function witnessCore() {
   let selected;
   let state = { blocked: 0, responses: [], effects: 0 };
+  let started = 0;
+  const targeted = (request, url) =>
+    selected !== undefined &&
+    matchesNativeIdentity(selected.identity, request.method, url.pathname);
+  // One decision for both transports: only the armed identity may write, and only once.
+  const admit = (request, url, sessionPaths) => {
+    if (readRequest(request, url)) return true;
+    if (!targeted(request, url) && sessionPaths?.has(url.pathname)) return true;
+    if (!targeted(request, url) || !selected.mutation || state.effects !== 0) {
+      state.blocked += 1;
+      return false;
+    }
+    state.effects += 1;
+    started += 1;
+    return true;
+  };
   return {
+    targeted,
+    admit,
+    record: (entry) => state.responses.push(entry),
     arm(identity, mutation) {
       selected = { identity, mutation };
       state = { blocked: 0, responses: [], effects: 0 };
     },
+    /** Start a case: nothing armed, and no earlier case's effects are attributed to it. */
+    reset() {
+      selected = undefined;
+      state = { blocked: 0, responses: [], effects: 0 };
+      started = 0;
+    },
+    /** Native effects begun and not yet independently verified since the last reset. */
+    effectsStarted: () => started,
+    /** An auxiliary fixture whose effect an independent readback matched leaves nothing open. */
+    markVerified() {
+      started = 0;
+    },
     snapshot: () => structuredClone(state),
+  };
+}
+const observedBody = (result) => ({
+  status: result.status,
+  truncated: result.truncated,
+  bodyBytes: result.bodyBytes,
+  responseDigest: qualificationDigest(result.bodyText),
+});
+function privateObserver(core, origin) {
+  return (lifecycle = {}) => ({
+    ...lifecycle,
+    beforeDispatch: (request) => {
+      const url = new URL(request.url);
+      if (url.origin !== origin || !core.admit(request, url, SESSION_MANAGEMENT_PATHS))
+        return false;
+      return lifecycle.beforeDispatch === undefined || lifecycle.beforeDispatch(request) === true;
+    },
+    onResponse: (request, status) => {
+      const url = new URL(request.url);
+      if (url.origin === origin && core.targeted(request, url))
+        core.record({ status, statusOnly: true });
+      return lifecycle.onResponse === undefined || lifecycle.onResponse(request, status) === true;
+    },
+  });
+}
+
+/** Forward actual transport responses unchanged; never synthesize Jira outcomes. */
+export function qualificationWitness(session) {
+  const origin = labSessionConnection(session).httpsOrigin;
+  const core = witnessCore();
+  return {
+    arm: core.arm,
+    reset: core.reset,
+    effectsStarted: core.effectsStarted,
+    markVerified: core.markVerified,
+    snapshot: core.snapshot,
     decorate: (factory) => (metadata, correlation, lifecycle) => {
       const port = factory(metadata, correlation, lifecycle);
       return async (request) => {
         const url = new URL(request.url);
         assert.equal(url.origin, origin);
-        const target =
-          selected && matchesNativeIdentity(selected.identity, request.method, url.pathname);
-        const read = readRequest(request, url);
-        if (!read && (!target || !selected.mutation || state.effects !== 0)) {
-          state.blocked += 1;
+        if (!core.admit(request, url))
           throw new TypeError("Qualification refused an unexpected or repeated native effect");
-        }
-        if (!read) state.effects += 1;
         const result = await port(request);
-        if (target && result.kind === "response")
-          state.responses.push({
-            status: result.status,
-            truncated: result.truncated,
-            bodyBytes: result.bodyBytes,
-            responseDigest: qualificationDigest(result.bodyText),
-          });
+        if (core.targeted(request, url) && result.kind === "response")
+          core.record(observedBody(result));
         return result;
       };
     },
+    /**
+     * The private session and avatar transport is not the ordinary body port. It exposes only the
+     * product's own lifecycle hooks, so its responses are status-only observations under the same
+     * single-effect admission. Responses are never altered.
+     */
+    privateLifecycle: privateObserver(core, origin),
   };
 }
 
@@ -163,7 +229,79 @@ function completeQualificationTurn(context, turn) {
   assert.equal(completed.kind, "completed");
 }
 
-function qualificationReview(context, current, options, call, actionId) {
+/**
+ * One accepted Chat turn with the product's own protected-input owner and private-session lifetime,
+ * composed exactly as the held Chat turn composes them. Nothing here stores a secret value.
+ */
+export async function openQualificationTurn(context, chat) {
+  const accepted = await acceptedContext(context, chat);
+  const { current, turn, authority } = accepted;
+  const lifetime = createJiraPrivateLifetime(current.signal, current.correlationId);
+  const humanInput = createJiraChatHumanInput(
+    {
+      deps: context.deps,
+      message: turn.message,
+      authority,
+      signal: current.signal,
+      correlationId: current.correlationId,
+    },
+    current,
+  );
+  Object.assign(current, {
+    privateLifetime: lifetime,
+    humanInputFor: (operation, digest) => humanInput.selectionFor(operation, digest),
+    activeHumanInput: () => humanInput.currentSelection(),
+  });
+  return { ...accepted, lifetime, humanInput };
+}
+/** Releases unclaimed input and ends every private session, then settles the turn. */
+export async function closeQualificationTurn(context, held) {
+  held.humanInput.finish();
+  try {
+    await held.lifetime.finish();
+  } finally {
+    completeQualificationTurn(context, held.turn);
+  }
+}
+
+/**
+ * The scripted human submission goes through the product's own authenticated route, so custody
+ * binds, revision-checks and consumes it exactly as for a person. Values never leave this call.
+ */
+function humanInputPorts(context, held, call, provideValues) {
+  const { turn, current } = held;
+  return {
+    requestReadConsent: (grant) =>
+      acceptChatToolReadGrant(
+        {
+          deps: context.deps,
+          message: turn.message,
+          correlationId: current.correlationId,
+          publish: async () => undefined,
+        },
+        grant,
+      ),
+    publishHumanInput: async (view) => {
+      context.deps.store.updateChatToolTranscript(
+        turn.message.id,
+        { kind: "human-input", callId: call.id, view },
+        current.correlationId,
+      );
+      if (view.state !== "awaiting-input") return;
+      const response = await productRequest(
+        context.origin,
+        context.cookie,
+        "qualification-human-input",
+        `/api/atlassian-connectors/human-inputs/${encodeURIComponent(view.requestId)}`,
+        { expectedRevision: view.revision, values: await provideValues() },
+      );
+      await response.body?.cancel();
+    },
+  };
+}
+
+function qualificationReview(context, held, options, call, actionId) {
+  const { current, humanInput } = held;
   const writeExchange = (id) =>
     context.deps.store
       .findMessageById(options.message.id)
@@ -182,7 +320,10 @@ function qualificationReview(context, current, options, call, actionId) {
   const sourcePreparation = jiraSourcePreparationForTurn(options, current);
   return {
     sourcePreparation,
-    consumerPort: createJiraChatCatalogConsumerPort(sourcePreparation.sourceDigestFor),
+    consumerPort: createJiraChatCatalogConsumerPort(
+      sourcePreparation.sourceDigestFor,
+      (id, digest) => humanInput.revisionFor(id, digest),
+    ),
     admission: {
       reviewableWrite,
       sourcePreparation,
@@ -250,8 +391,15 @@ function bind(context, current, managed, review) {
   return { binder, budget, counters };
 }
 
-async function prepareQualificationCall(context, accepted, managed, specification, args) {
-  const { current, turn, authority } = accepted;
+async function prepareQualificationCall(
+  context,
+  held,
+  managed,
+  specification,
+  args,
+  provideValues,
+) {
+  const { current, turn, authority } = held;
   const operation = jiraOperationForTool(specification.tool);
   const call = {
     id: randomUUID(),
@@ -276,12 +424,18 @@ async function prepareQualificationCall(context, accepted, managed, specificatio
     signal: current.signal,
     correlationId: current.correlationId,
   };
-  const review = qualificationReview(context, current, options, call, actionId);
+  const review = qualificationReview(context, held, options, call, actionId);
   await review.prepare();
+  if (provideValues !== undefined)
+    await held.humanInput.prepare(
+      call,
+      actionId,
+      humanInputPorts(context, held, call, provideValues),
+    );
   return { call, actionId, options, review, operation };
 }
 
-function retainQualificationResult(context, execution, dispatch, budget) {
+function retainQualificationResult(context, execution, dispatch, budget, humanInput) {
   if (dispatch.kind !== "settled") return;
   const { options, call, actionId, review, operation } = execution;
   budget.acceptReceipt(dispatch.receipt, operation.declaration.descriptor);
@@ -291,6 +445,7 @@ function retainQualificationResult(context, execution, dispatch, budget) {
     actionId,
     dispatch.result,
     review.sourcePreparation.sourceDigestFor(actionId, sha256Hex(canonicalise(call.arguments))),
+    humanInput.revisionFor(actionId, sha256Hex(canonicalise(call.arguments))),
   );
   context.deps.store.updateChatToolTranscript(
     options.message.id,
@@ -308,26 +463,21 @@ function retainQualificationResult(context, execution, dispatch, budget) {
   );
 }
 
-export async function dispatchQualification(context, chat, specification, args) {
+async function dispatchOnTurn(context, held, specification, args, provideValues) {
   const operation = jiraOperationForTool(specification.tool);
-  assert.equal(operation?.definition.identity, specification.identity);
-  assert.equal(
-    operation.definition.effects.includes("remote-write"),
-    specification.mutation === true,
-  );
-  const accepted = await acceptedContext(context, chat);
-  const { current, turn } = accepted;
   const managed = await context.deps.jiraChatCatalog.select([specification.identity]);
+  let actionId;
   try {
     const execution = await prepareQualificationCall(
       context,
-      accepted,
+      held,
       managed,
       specification,
       args,
+      provideValues,
     );
-    const { review, actionId } = execution;
-    const { binder, budget, counters } = bind(context, current, managed, review);
+    actionId = execution.actionId;
+    const { binder, budget, counters } = bind(context, held.current, managed, execution.review);
     const toolRef = operation.declaration.descriptor.toolRef;
     const offered = binder.offerTool(toolRef);
     const dispatch = await binder.dispatch(
@@ -340,9 +490,8 @@ export async function dispatchQualification(context, chat, specification, args) 
       },
       { actionId, idempotencyKey: actionId },
     );
-    retainQualificationResult(context, execution, dispatch, budget);
+    retainQualificationResult(context, execution, dispatch, budget, held.humanInput);
     assert.equal(counters.modelCalls, 0);
-    completeQualificationTurn(context, turn);
     return {
       dispatch,
       binding: operation.binding,
@@ -350,6 +499,35 @@ export async function dispatchQualification(context, chat, specification, args) 
       journal: context.deps.store.chatToolMutations.find(actionId),
     };
   } finally {
+    if (actionId !== undefined) held.humanInput.finalize(actionId);
     await managed.close();
+  }
+}
+
+/**
+ * Dispatches one operation. A case that holds a private session across several dispatches passes
+ * its own turn (`context.heldQualificationTurn`); otherwise the call owns a turn of its own.
+ * `provideValues` supplies the scripted protected-input submission; absent, none is ever supplied.
+ */
+export async function dispatchQualification(context, chat, specification, args, provideValues) {
+  const operation = jiraOperationForTool(specification.tool);
+  assert.equal(operation?.definition.identity, specification.identity);
+  assert.equal(
+    operation.definition.effects.includes("remote-write"),
+    specification.mutation === true,
+  );
+  const held = context.heldQualificationTurn;
+  if (held !== undefined) return dispatchOnTurn(context, held, specification, args, provideValues);
+  const own = await openQualificationTurn(context, chat);
+  let failed = true;
+  try {
+    const result = await dispatchOnTurn(context, own, specification, args, provideValues);
+    failed = false;
+    return result;
+  } finally {
+    // A refused or failed call must still free the Chat for the next case; never mask its error.
+    await closeQualificationTurn(context, own).catch((error) => {
+      if (!failed) throw error;
+    });
   }
 }

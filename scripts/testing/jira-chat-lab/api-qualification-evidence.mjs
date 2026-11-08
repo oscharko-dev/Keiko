@@ -33,7 +33,7 @@ function observedResponses(witness) {
     witness.responses.length > 0 &&
     witness.responses.every(
       (response) =>
-        response.truncated === false &&
+        (response.truncated === false || response.statusOnly === true) &&
         Number.isInteger(response.status) &&
         response.status >= 100 &&
         response.status < 600,
