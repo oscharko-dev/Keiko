@@ -1,7 +1,6 @@
 "use client";
 
 import { useId, type ReactNode } from "react";
-import type { MarkdownSkillMetadata } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 import type { ChatMarkdownSkill } from "../hooks/useChatMarkdownSkill";
 import { Icons } from "../Icons";
@@ -99,9 +98,7 @@ function TemplateGroup({
         library={library}
         openId={openId}
         onOpen={(item) => workspace.guard(() => workspace.open(item))}
-        rowAction={(item) => (
-          <SkillChatToggle item={item} skill={skill} library={library} disabled={disabled} />
-        )}
+        chat={{ skill, disabled }}
       />
       <button
         type="button"

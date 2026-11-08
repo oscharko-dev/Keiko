@@ -80,6 +80,8 @@
 /* View switch — the segmented grammar of the design system (.vsw). */
 .cmpMdeViews {
   display: inline-flex;
+  min-inline-size: 0;
+  margin: 0;
   flex: none;
   gap: 2px;
   padding: 3px;

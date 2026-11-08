@@ -46,7 +46,7 @@ function pasteMarker(body: string): string {
   let longestRun = 0;
   for (let at = body.indexOf(base); at >= 0; at = body.indexOf(base, at + base.length)) {
     let end = at + base.length;
-    while (body.charCodeAt(end) === 88) end += 1;
+    while (body.codePointAt(end) === 88) end += 1;
     longestRun = Math.max(longestRun, end - at - base.length);
   }
   return base + "X".repeat(longestRun + 1);
@@ -78,7 +78,7 @@ function joinAroundMarker(body: string, marker: string, text: string): string {
   const at = body.indexOf(marker);
   const parts = [
     body.slice(0, at).trimEnd(),
-    text.replace(/\s+$/u, ""),
+    text.trimEnd(),
     body.slice(at + marker.length).trimStart(),
   ];
   return parts.filter((part) => part.length > 0).join("\n\n");
@@ -90,7 +90,7 @@ const BLOCK_START = /^[ \t]*(?:[|>#]|[-*+][ \t]|\d+[.)][ \t]|`{3}|~{3})/mu;
 /** Continuation lines of a paste inside a list item or quote stay inside it. */
 function continuationIndent(linePrefix: string): string {
   const prefix = CONTAINER_PREFIX.exec(linePrefix)?.[0] ?? "";
-  return prefix.replace(/[-*+]|\d+[.)]/gu, (marker) => " ".repeat(marker.length));
+  return prefix.replace(/[-*+]|(?<!\d)\d+[.)]/gu, (marker) => " ".repeat(marker.length));
 }
 
 /** A paste inside a list item or quote: block syntax gets its own paragraph within that item. */
@@ -99,12 +99,13 @@ function pasteInContainer(before: string, text: string, after: string, indent: s
     .length;
   const lineStart = before.lastIndexOf("\n") + 1;
   const hasLead = before.slice(lineStart + (prefixLength ?? 0)).trim() !== "";
-  const lines = text.replace(/\s+$/u, "").replace(/\n/gu, `\n${indent}`);
-  if (!BLOCK_START.test(text) || !hasLead)
-    return `${before}${text.replace(/\n/gu, `\n${indent}`)}${after}`;
+  const newline = `\n${indent}`;
+  if (!BLOCK_START.test(text) || !hasLead) return before + text.replaceAll("\n", newline) + after;
+  const lines = text.trimEnd().replaceAll("\n", newline);
   const blank = `\n${indent.trimEnd()}\n`;
   const tail = after.trimStart();
-  return `${before.trimEnd()}${blank}${indent}${lines}${tail === "" ? "" : `${blank}${indent}${tail}`}`;
+  const trailing = tail === "" ? "" : blank + indent + tail;
+  return before.trimEnd() + blank + indent + lines + trailing;
 }
 
 /**
@@ -126,7 +127,7 @@ function bodyWithPaste(view: EditorView, text: string): string {
   if (!BLOCK_START.test(text)) return `${before}${text}${after}`;
   const blocks = bodyWithMarkerBlock(view, marker);
   if (blocks.includes(marker)) return joinAroundMarker(blocks, marker, text);
-  const parts = [before.trimEnd(), text.replace(/\s+$/u, ""), after.trimStart()];
+  const parts = [before.trimEnd(), text.trimEnd(), after.trimStart()];
   return parts.filter((part) => part.length > 0).join("\n\n");
 }
 

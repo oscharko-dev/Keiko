@@ -56,7 +56,7 @@ function newFileName(text: string, fallback: string): string {
   const slug = (skillHeading(text) ?? "")
     .normalize("NFKD")
     .replace(/[^A-Za-z0-9]+/gu, "-")
-    .replace(/^-+|-+$/gu, "")
+    .replace(/^-|-$/gu, "")
     .slice(0, 60);
   return slug.length > 0 ? `${slug.toLowerCase()}.md` : fallback;
 }
@@ -251,7 +251,7 @@ function workspaceActions(
   SkillWorkspace,
   "open" | "create" | "importFile" | "show" | "edit" | "save" | "discard" | "keepEditing"
 > {
-  const { document, drafts, expected, setView, setPending, pending } = context;
+  const { drafts, expected, setView, setPending, pending } = context;
   return {
     ...libraryActions(context),
     create: (text, fileName): void => {

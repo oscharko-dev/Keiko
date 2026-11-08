@@ -70,7 +70,6 @@ function DialogHeader({
  * Markdown file in the shared editor on the right two thirds.
  */
 export function MarkdownSkillDialog({ skill, disabled, onClose, modelId }: DialogProps): ReactNode {
-  const t = useTranslate();
   const titleId = useId();
   const dialog = useRef<HTMLDialogElement>(null);
   const library = useMarkdownSkillLibrary(skill.refresh);

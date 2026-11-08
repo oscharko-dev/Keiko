@@ -22,6 +22,8 @@ import {
 } from "./useAutomaticTemplateChecks";
 import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 import type { MarkdownSkillMetadata } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { ChatMarkdownSkill } from "../hooks/useChatMarkdownSkill";
+import { SkillChatToggle } from "./SkillChatToggle";
 import type { MarkdownSkillLibrary } from "./useMarkdownSkillLibrary";
 import styles from "./MarkdownSkillControl.module.css";
 
@@ -196,10 +198,10 @@ export function useJiraTemplates(library: MarkdownSkillLibrary): JiraTemplates {
   const podId = ready.find((pod) => pod.id === selected)?.id ?? ready[0]?.id;
   const tools = useJiraTemplateTools(podId, libraryVersion(library.skills));
   const ids = tools.templates.map((entry) => entry.id).join("|");
-  const templateIds = useMemo(
-    () => (tools.listed ? new Set(ids.length === 0 ? [] : ids.split("|")) : undefined),
-    [ids, tools.listed],
-  );
+  const templateIds = useMemo(() => {
+    if (!tools.listed) return undefined;
+    return new Set(ids.length === 0 ? [] : ids.split("|"));
+  }, [ids, tools.listed]);
   return { tools, pods: ready, podId, selectPod: setSelected, templateIds };
 }
 
@@ -225,20 +227,63 @@ export function PodSelect({ jira }: { readonly jira: JiraTemplates }): ReactNode
   );
 }
 
+function TemplateRow({
+  entry,
+  item,
+  library,
+  check,
+  open,
+  onOpen,
+  chat,
+}: {
+  readonly entry: JiraTemplateEntry;
+  readonly item: MarkdownSkillMetadata | undefined;
+  readonly library: MarkdownSkillLibrary;
+  readonly check: AutomaticTemplateCheck | undefined;
+  readonly open: boolean;
+  readonly onOpen: (skill: MarkdownSkillMetadata) => void;
+  readonly chat: { readonly skill: ChatMarkdownSkill; readonly disabled: boolean } | undefined;
+}): ReactNode {
+  return (
+    <li className={styles.cmpRow}>
+      <button
+        type="button"
+        className={styles.cmpItem}
+        aria-current={open ? "true" : undefined}
+        disabled={item === undefined}
+        onClick={() => {
+          if (item !== undefined) onOpen(item);
+        }}
+      >
+        <span className={styles.cmpItemName}>{entry.name}</span>
+        <TemplateStatus entry={entry} check={check} />
+      </button>
+      {item === undefined || chat === undefined ? null : (
+        <SkillChatToggle
+          item={item}
+          skill={chat.skill}
+          library={library}
+          disabled={chat.disabled}
+        />
+      )}
+    </li>
+  );
+}
+
 /** The templates in the library column; each opens in the editor. */
 export function JiraTemplateList({
   jira,
   library,
   openId,
   onOpen,
-  rowAction,
+  chat,
 }: {
   readonly jira: JiraTemplates;
   readonly library: MarkdownSkillLibrary;
   readonly openId: string | undefined;
   readonly onOpen: (skill: MarkdownSkillMetadata) => void;
-  /** An action shown beside a stored template, such as choosing it for the chat. */
-  readonly rowAction?: (skill: MarkdownSkillMetadata) => ReactNode;
+  /** Offers choosing a stored template for the chat beside its row. */
+  readonly chat?: { readonly skill: ChatMarkdownSkill; readonly disabled: boolean };
 }): ReactNode {
   const t = useTranslate();
   const { tools } = jira;
@@ -254,26 +299,18 @@ export function JiraTemplateList({
     return <p className={styles.cmpEmpty}>{t("chat.skills.jira.empty")}</p>;
   return (
     <ul className={styles.cmpItems}>
-      {tools.templates.map((entry) => {
-        const item = library.skills.find((skill) => skill.id === entry.id);
-        return (
-          <li key={entry.id} className={styles.cmpRow}>
-            <button
-              type="button"
-              className={styles.cmpItem}
-              aria-current={openId === entry.id ? "true" : undefined}
-              disabled={item === undefined}
-              onClick={() => {
-                if (item !== undefined) onOpen(item);
-              }}
-            >
-              <span className={styles.cmpItemName}>{entry.name}</span>
-              <TemplateStatus entry={entry} check={tools.checks.get(templateKey(entry))} />
-            </button>
-            {item === undefined ? null : rowAction?.(item)}
-          </li>
-        );
-      })}
+      {tools.templates.map((entry) => (
+        <TemplateRow
+          key={entry.id}
+          entry={entry}
+          item={library.skills.find((skill) => skill.id === entry.id)}
+          library={library}
+          check={tools.checks.get(templateKey(entry))}
+          open={openId === entry.id}
+          onOpen={onOpen}
+          chat={chat}
+        />
+      ))}
     </ul>
   );
 }

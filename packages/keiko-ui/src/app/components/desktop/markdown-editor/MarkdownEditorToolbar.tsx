@@ -214,7 +214,7 @@ export function MarkdownViewSwitch({
 }): ReactNode {
   const t = useTranslate();
   return (
-    <div className={styles.cmpMdeViews} role="group" aria-label={t("markdownEditor.view")}>
+    <fieldset className={styles.cmpMdeViews} aria-label={t("markdownEditor.view")}>
       {VIEWS.map((item) => {
         const Icon = Icons[item.icon];
         return (
@@ -235,6 +235,6 @@ export function MarkdownViewSwitch({
           </button>
         );
       })}
-    </div>
+    </fieldset>
   );
 }

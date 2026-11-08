@@ -226,7 +226,7 @@ function DeleteConfirm({
 }): ReactNode {
   const t = useTranslate();
   return (
-    <span className={styles.cmpConfirm} role="group" aria-label={t("chat.skills.delete")}>
+    <fieldset className={styles.cmpConfirm} aria-label={t("chat.skills.delete")}>
       <span>{t("chat.skills.deleteWarning")}</span>
       <button type="button" onClick={onCancel}>
         {t("chat.skills.cancel")}
@@ -241,7 +241,7 @@ function DeleteConfirm({
       >
         {t("chat.skills.confirmDelete")}
       </button>
-    </span>
+    </fieldset>
   );
 }
 
