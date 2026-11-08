@@ -126,8 +126,12 @@ it.each([
   { actor: "another-actor" }, { existing: true, heldChange: true },
   { existing: true, detail: { ...NATIVE, self: "https://proxy.example.invalid/context/rest/api/2/issue/999/remotelink/9007199254740993" } },
   { existing: true, before: [NATIVE, NATIVE] },
+  { existing: true, before: [NATIVE, { ...NATIVE, id: "88" }] },
   { existing: true, before: [{ ...NATIVE, unreviewedPluginField: true }] },
+  { existing: true, before: [{ ...NATIVE, application: { unreviewed: true } }] },
   { existing: true, before: [{ ...NATIVE, object: { ...NATIVE.object, icon: { unreviewed: true } } }] },
+  { existing: true, before: [{ ...NATIVE, object: { ...NATIVE.object, status: { resolved: false, unreviewed: true } } }] },
+  { existing: true, before: [{ ...NATIVE, object: { ...NATIVE.object, status: { resolved: false, icon: { unreviewed: true } } } }] },
 ])("refuses incomplete, changed or foreign pre-effect evidence: %j", async (options) => {
   const request = fixture(options);
   expect(await run(request, "jira.update-remote-link", UPDATE)).toMatchObject({ ok: false });
@@ -160,6 +164,12 @@ it("a contradictory POST acknowledgement cannot retarget a reviewed update", asy
   const request = fixture({ existing: true, write: response({ id: "88" }, 200) });
   expect(await run(request, "jira.upsert-remote-link", { ...BASE, expected: EXPECTED, value: UPDATED })).toMatchObject({ ok: false, reason: "conflict", receipt: { linkId: ID } });
   expect(request.mock.calls.some(([path]) => path === `${LIST}/88`)).toBe(false);
+});
+it("refuses a foreign acknowledgement self even when the new ID independently reads back", async () => {
+  const request = fixture({ write: response({ id: ID, self: `https://proxy.example.invalid/context/rest/api/2/issue/999/remotelink/${ID}` }, 201) });
+  expect(await run(request)).toMatchObject({ ok: false, reason: "conflict", receipt: { issueId: ISSUE.id, linkId: ID } });
+  expect(effects(request)).toHaveLength(1);
+  expect(request.mock.calls.at(-1)?.[0]).toBe(`${LIST}/${ID}`);
 });
 it.each(["invalid", "092", null, Number.MAX_SAFE_INTEGER + 1])("retains a reviewed ID but refuses explicit malformed ACK identity %s", async (id) => {
   const request = fixture({ existing: true, write: response({ id }, 200) });

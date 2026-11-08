@@ -25,7 +25,7 @@ interface Scenario {
   readonly afterActor?: string;
   readonly write?: AtlassianWriteHttpOutcome;
   readonly afterRead?: AtlassianWriteHttpOutcome | Error;
-  readonly direct?: Record<string, unknown>;
+  readonly direct?: Record<string, unknown> | Error;
   readonly extraRelation?: boolean;
   readonly recheckChanged?: boolean;
 }
@@ -43,7 +43,10 @@ function fixture(options: Scenario = {}): ReturnType<typeof vi.fn<JiraMutationRe
       return options.afterRead;
     }
     if (path === "issueLinkType/9") return response(options.type ?? TYPE);
-    if (path === `issueLink/${ID}`) return response(options.direct ?? { id: ID, type: TYPE, inwardIssue: FIRST, outwardIssue: SECOND });
+    if (path === `issueLink/${ID}`) {
+      if (options.direct instanceof Error) throw options.direct;
+      return response(options.direct ?? { id: ID, type: TYPE, inwardIssue: FIRST, outwardIssue: SECOND });
+    }
     const selected = path.split("?")[0];
     const inward = selected === `issue/${FIRST.id}` || selected?.toUpperCase() === `ISSUE/${FIRST.key}`;
     const outward = selected === `issue/${SECOND.id}` || selected?.toUpperCase() === `ISSUE/${SECOND.key}`;
@@ -135,6 +138,20 @@ it.each([false, true])("a denied or missing post-ACK state never proves success 
 it("retains a freshly observed native link ID when its independent detail contradicts the parents", async () => {
   const request = fixture({ direct: { id: ID, type: TYPE, inwardIssue: SECOND, outwardIssue: FIRST } });
   expect(await run(request)).toMatchObject({ ok: false, reason: "conflict", receipt: { linkId: ID } });
+});
+it("retains the newly observed link ID when the final detail read throws after ACK", async () => {
+  const cause = new TypeError("Synthetic link detail fault");
+  const request = fixture({ direct: cause });
+  await expect(run(request)).rejects.toMatchObject({ name: "JiraAcknowledgedMutationError", cause,
+    receipt: { issueId: FIRST.id, linkedIssueId: SECOND.id, linkId: ID, linkPresent: true } });
+  expect(effects(request)).toHaveLength(1);
+  expect(request.mock.calls.at(-1)?.[0]).toBe(`issueLink/${ID}`);
+});
+it("does not assign an acknowledgement to a pre-effect selected link detail fault", async () => {
+  const cause = new TypeError("Synthetic pre-effect link detail fault");
+  const request = fixture({ deleting: true, direct: cause });
+  await expect(run(request, true)).rejects.toBe(cause);
+  expect(effects(request)).toHaveLength(0);
 });
 it("does not swallow a post-ACK programming error or discard the known delete ID", async () => {
   const cause = new TypeError("Synthetic readback error");

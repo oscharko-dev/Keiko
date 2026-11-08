@@ -633,7 +633,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.linkMutation.requestedPresent": "Requested relation state: present",
   "chat.jira.linkMutation.snapshotAvailable": "Complete native remote-link review snapshot follows. Nullable fields are shown explicitly.",
   "chat.jira.linkMutation.snapshotUnavailable": "A complete native remote-link review snapshot is unavailable. Missing values must not be guessed before replacement or deletion.",
-  "chat.jira.linkMutation.urlsMetadata": "Remote and icon URLs are plain review text. They are not opened, fetched or offered as navigation links.",
+  "chat.jira.linkMutation.urlsMetadata": "Keiko displays these URLs as review text and does not open or fetch them. Jira can load icon URLs in each viewer's browser, disclosing their network address to that server.",
   "chat.jira.linkMutation.upsertHelp": "Jira POST creates or replaces the link with this global ID. It is not unconditional creation; review either exact absence or the complete existing value.",
   "chat.jira.linkMutation.fullReplacement": "Remote-link replacement includes every supported field. Explicit null means the requested field has no value; omitting prior metadata must never silently preserve it.",
   "chat.jira.linkMutation.requestedNull": "Requested field value: none (null).",

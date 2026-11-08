@@ -22,18 +22,24 @@ function upsertInput(args: CatalogJsonObject, base: Pick<Input, "issue" | "actor
   return args.expectAbsent === undefined && expected !== undefined && expected.globalId === value.globalId
     ? { ...base, value, expected, linkId: expected.id, globalId: value.globalId } : undefined;
 }
+function globalDeleteInput(args: CatalogJsonObject, base: Pick<Input, "issue" | "actorKey">, expected: RemoteLinkSnapshot): Input | undefined {
+  return args.linkId === undefined && args.value === undefined && savedText(args.globalId, 255) && expected.globalId === args.globalId
+    ? { ...base, expected, linkId: expected.id, globalId: args.globalId } : undefined;
+}
+function selectedLinkInput(operation: Operation, args: CatalogJsonObject, base: Pick<Input, "issue" | "actorKey">, expected: RemoteLinkSnapshot): Input | undefined {
+  if (!jiraNativeId(args.linkId) || args.linkId !== expected.id || args.globalId !== undefined) return undefined;
+  if (operation === "jira.delete-remote-link") return args.value === undefined ? { ...base, expected, linkId: args.linkId } : undefined;
+  const value = remoteLinkValue(args.value);
+  return value === undefined ? undefined : { ...base, expected, value, linkId: args.linkId };
+}
 function input(operation: Operation, args: CatalogJsonObject): Input | undefined {
   if (!linkActorInput(args, FIELDS) || !isSafeAtlassianIdentifier(args.issueIdOrKey)) return undefined;
   const base = { issue: args.issueIdOrKey, actorKey: args.expectedActorKey };
   if (operation === "jira.upsert-remote-link") return upsertInput(args, base);
   const expected = remoteLinkExpected(args.expected);
   if (expected === undefined || args.expectAbsent !== undefined) return undefined;
-  if (operation === "jira.delete-remote-link-by-global-id") return args.linkId === undefined && args.value === undefined && savedText(args.globalId, 255) && expected.globalId === args.globalId
-    ? { ...base, expected, linkId: expected.id, globalId: args.globalId } : undefined;
-  if (!jiraNativeId(args.linkId) || args.linkId !== expected.id || args.globalId !== undefined) return undefined;
-  if (operation === "jira.delete-remote-link") return args.value === undefined ? { ...base, expected, linkId: args.linkId } : undefined;
-  const value = remoteLinkValue(args.value);
-  return value === undefined ? undefined : { ...base, expected, value, linkId: args.linkId };
+  return operation === "jira.delete-remote-link-by-global-id" ? globalDeleteInput(args, base, expected)
+    : selectedLinkInput(operation, args, base, expected);
 }
 async function inspect(request: JiraMutationRequest, selected: Input): Promise<LinkObservation<State>> {
   const actor = await bindLinkActor(request, selected.actorKey);
@@ -47,16 +53,20 @@ function receiptFor(selected: Input, state: State): JiraLinkMutationReceipt {
   return { issueId: state.issue.id, issueKey: state.issue.key, userKey: selected.actorKey, linkPresent: selected.value !== undefined,
     ...(selected.linkId === undefined ? {} : { linkId: selected.linkId }) };
 }
+function replacementRefusal(selected: Input, state: State, current: RemoteLinkSnapshot): LinkFailure | undefined {
+  const value = selected.value;
+  if (value === undefined) return undefined;
+  if (value.globalId !== null && state.links.some((item) => item.id !== selected.linkId && item.globalId === value.globalId))
+    return linkConflict("Another remote link already owns the requested global ID. Nothing was written.");
+  return sameRemoteLinkValue(current, value) ? linkUnchanged("The exact remote link already has the reviewed replacement value. Nothing was written.", receiptFor(selected, state)) : undefined;
+}
 function beforeEffect(selected: Input, state: State): LinkFailure | undefined {
   const current = state.links.find((item) => item.id === selected.linkId);
   if (selected.expected === undefined) return state.links.some((item) => item.globalId === selected.globalId)
     ? linkConflict("The reviewed absent global ID is now present. POST would replace that link; read and review its full value first.") : undefined;
   if (current === undefined || !sameRemoteLinkValue(current, selected.expected))
     return linkConflict("The exact remote link changed or is absent from the complete same-parent list. Review its complete value before changing it.");
-  if (selected.value === undefined) return undefined;
-  if (selected.value.globalId !== null && state.links.some((item) => item.id !== selected.linkId && item.globalId === selected.value?.globalId))
-    return linkConflict("Another remote link already owns the requested global ID. Nothing was written.");
-  return sameRemoteLinkValue(current, selected.value) ? linkUnchanged("The exact remote link already has the reviewed replacement value. Nothing was written.", receiptFor(selected, state)) : undefined;
+  return replacementRefusal(selected, state, current);
 }
 async function currentSingle(request: JiraMutationRequest, state: State, expected: RemoteLinkSnapshot): Promise<LinkObservation<true>> {
   const response = await request(`issue/${state.issue.id}/remotelink/${expected.id}`);
@@ -99,10 +109,7 @@ function dispatchPath(operation: Operation, selected: Input, state: State): stri
 export function isJiraRemoteLinkMutation(name: string): name is Operation {
   return JIRA_REMOTE_LINK_MUTATIONS.some((candidate) => candidate === name);
 }
-/** Native POST is an explicitly reviewed upsert. No reciprocal endpoint or external HTTP request. */
-export async function executeJiraRemoteLinkMutation(operation: Operation, args: CatalogJsonObject, request: JiraMutationRequest, check = false, templates?: JiraIssueTemplateSource): Promise<JiraLinkMutationAttempt> {
-  const selected = input(operation, args);
-  if (selected === undefined) return linkInvalid("Review the exact native issue, connected actor and complete remote link value. POST requires globalId and either expectAbsent:true or the complete expected snapshot; update/delete require the exact existing snapshot. Every nullable replacement field must be explicit.");
+async function admitRemoteLink(request: JiraMutationRequest, selected: Input, templates: JiraIssueTemplateSource | undefined): Promise<LinkObservation<State>> {
   const prior = await inspect(request, selected);
   if (!prior.ok) return prior;
   const refusal = beforeEffect(selected, prior.value);
@@ -116,18 +123,41 @@ export async function executeJiraRemoteLinkMutation(operation: Operation, args: 
   const rechecked = await inspect(request, { ...selected, issue: prior.value.issue.id });
   if (!rechecked.ok) return rechecked;
   if (!sameLinkParent(prior.value.issue, rechecked.value.issue) || !sameRemoteLinks(prior.value.links, rechecked.value.links)) return linkConflict("The complete remote-link state changed during admission. No write was sent.");
+  return prior;
+}
+function dispatchRemoteLink(request: JiraMutationRequest, operation: Operation, selected: Input, state: State): ReturnType<JiraMutationRequest> {
+  const post = operation === "jira.upsert-remote-link";
+  return request(dispatchPath(operation, selected, state), post ? "POST" : selected.value === undefined ? "DELETE" : "PUT",
+    selected.value === undefined ? undefined : remoteLinkBody(selected.value), post ? "json" : "none");
+}
+function acknowledgedTargetMismatch(id: string, body: Readonly<Record<string, unknown>> | undefined, selected: Input, prior: State): boolean {
+  const changed = selected.linkId === undefined ? prior.links.some((item) => item.id === id) : selected.linkId !== id;
+  if (changed) return true;
+  const self = body?.self;
+  return self !== undefined && self !== null && !jiraResourceSelfMatches(self, `issue/${prior.issue.id}/remotelink/${id}`);
+}
+function malformedAcknowledgedId(body: Readonly<Record<string, unknown>> | undefined, id: string | undefined): boolean {
+  return body !== undefined && Object.hasOwn(body, "id") && id === undefined;
+}
+function remoteAcknowledgement(operation: Operation, selected: Input, prior: State, receipt: JiraLinkMutationReceipt, body: Readonly<Record<string, unknown>> | undefined): { readonly receipt: JiraLinkMutationReceipt; readonly mismatched: boolean } {
+  if (operation !== "jira.upsert-remote-link") return { receipt, mismatched: false };
+  const acknowledgedId = jiraNativeNumericId(body?.id);
+  const known = selected.linkId === undefined && acknowledgedId !== undefined ? { ...receipt, linkId: acknowledgedId } : receipt;
+  const mismatched = malformedAcknowledgedId(body, acknowledgedId) ||
+    (acknowledgedId !== undefined && acknowledgedTargetMismatch(acknowledgedId, body, selected, prior));
+  return { receipt: known, mismatched };
+}
+/** Native POST is an explicitly reviewed upsert. No reciprocal endpoint or external HTTP request. */
+export async function executeJiraRemoteLinkMutation(operation: Operation, args: CatalogJsonObject, request: JiraMutationRequest, check = false, templates?: JiraIssueTemplateSource): Promise<JiraLinkMutationAttempt> {
+  const selected = input(operation, args);
+  if (selected === undefined) return linkInvalid("Review the exact native issue, connected actor and complete remote link value. POST requires globalId and either expectAbsent:true or the complete expected snapshot; update/delete require the exact existing snapshot. Every nullable replacement field must be explicit.");
+  const prior = await admitRemoteLink(request, selected, templates);
+  if (!prior.ok) return prior;
   if (check) return { ok: true, receipt: {} };
   const receipt = receiptFor(selected, prior.value);
-  const post = operation === "jira.upsert-remote-link";
-  const response = await request(dispatchPath(operation, selected, prior.value), post ? "POST" : selected.value === undefined ? "DELETE" : "PUT",
-    selected.value === undefined ? undefined : remoteLinkBody(selected.value), post ? "json" : "none");
+  const response = await dispatchRemoteLink(request, operation, selected, prior.value);
   if (!response.ok) return { ...dispatchFailure(response), receipt };
   if (response.status < 200 || response.status >= 300) return { ...LINK_MALFORMED, receipt };
-  const acknowledgedId = post ? jiraNativeNumericId(response.body?.id) : undefined;
-  const known = selected.linkId === undefined && acknowledgedId !== undefined ? { ...receipt, linkId: acknowledgedId } : receipt;
-  const invalidAcknowledgedId = post && response.body !== undefined && Object.hasOwn(response.body, "id") && acknowledgedId === undefined;
-  const mismatch = invalidAcknowledgedId || (acknowledgedId !== undefined && ((selected.linkId === undefined
-    ? prior.value.links.some((item) => item.id === acknowledgedId) : selected.linkId !== acknowledgedId) ||
-    (response.body?.self !== undefined && response.body.self !== null && !jiraResourceSelfMatches(response.body.self, `issue/${prior.value.issue.id}/remotelink/${acknowledgedId}`))));
-  return confirm(request, selected, prior.value, known, mismatch);
+  const acknowledged = remoteAcknowledgement(operation, selected, prior.value, receipt, response.body);
+  return confirm(request, selected, prior.value, acknowledged.receipt, acknowledged.mismatched);
 }

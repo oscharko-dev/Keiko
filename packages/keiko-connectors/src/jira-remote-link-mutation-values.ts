@@ -59,21 +59,43 @@ function closedNative(value: unknown, keys: readonly string[]): Record<string, u
   const raw = asRecord(value);
   return raw !== undefined && Object.keys(raw).every((key) => keys.includes(key)) ? raw : undefined;
 }
+function remoteLinkIdentity(raw: Readonly<Record<string, unknown>>, issue: LinkIssue): string | undefined {
+  const id = jiraNativeNumericId(raw.id);
+  if (id === undefined) return undefined;
+  if (raw.self !== undefined && raw.self !== null && !jiraResourceSelfMatches(raw.self, `issue/${issue.id}/remotelink/${id}`)) return undefined;
+  return id;
+}
+function nativeRemoteApplication(value: unknown): Readonly<Record<string, unknown>> | undefined {
+  const application = closedNative(value, ["type", "name"]);
+  return application === undefined ? undefined
+    : { applicationType: application.type ?? null, applicationName: application.name ?? null };
+}
+function nativeRemoteStatus(value: unknown): Readonly<Record<string, unknown>> | undefined {
+  const status = closedNative(value, ["resolved", "icon"]);
+  if (status === undefined) return undefined;
+  const icon = closedNative(status.icon, ["url16x16", "title", "link"]);
+  if (icon === undefined) return undefined;
+  return { resolved: status.resolved ?? null, statusIconUrl: icon.url16x16 ?? null,
+    statusIconTitle: icon.title ?? null, statusIconLink: icon.link ?? null };
+}
+function nativeRemoteObject(value: unknown): Readonly<Record<string, unknown>> | undefined {
+  const object = closedNative(value, ["url", "title", "summary", "icon", "status"]);
+  if (object === undefined) return undefined;
+  const icon = closedNative(object.icon, ["url16x16", "title"]);
+  const status = nativeRemoteStatus(object.status);
+  if (icon === undefined || status === undefined) return undefined;
+  return { url: object.url, title: object.title, summary: object.summary ?? null,
+    iconUrl: icon.url16x16 ?? null, iconTitle: icon.title ?? null, ...status };
+}
 export function projectRemoteLinkSnapshot(value: unknown, issue: LinkIssue): RemoteLinkSnapshot | undefined {
   const raw = closedNative(value, ["id", "self", "globalId", "application", "relationship", "object"]);
-  const id = jiraNativeNumericId(raw?.id);
-  if (raw === undefined || id === undefined) return undefined;
-  if (raw.self !== undefined && raw.self !== null && !jiraResourceSelfMatches(raw.self, `issue/${issue.id}/remotelink/${id}`)) return undefined;
-  const application = closedNative(raw.application, ["type", "name"]);
-  const object = closedNative(raw.object, ["url", "title", "summary", "icon", "status"]);
-  const icon = closedNative(object?.icon, ["url16x16", "title"]);
-  const status = closedNative(object?.status, ["resolved", "icon"]);
-  const statusIcon = closedNative(status?.icon, ["url16x16", "title", "link"]);
-  if (application === undefined || object === undefined || icon === undefined || status === undefined || statusIcon === undefined) return undefined;
-  const selected = remoteLinkValue({ globalId: raw.globalId ?? null, applicationType: application.type ?? null, applicationName: application.name ?? null,
-    relationship: raw.relationship ?? null, url: object.url, title: object.title, summary: object.summary ?? null,
-    iconUrl: icon.url16x16 ?? null, iconTitle: icon.title ?? null,
-    resolved: status.resolved ?? null, statusIconUrl: statusIcon.url16x16 ?? null, statusIconTitle: statusIcon.title ?? null, statusIconLink: statusIcon.link ?? null });
+  if (raw === undefined) return undefined;
+  const id = remoteLinkIdentity(raw, issue);
+  if (id === undefined) return undefined;
+  const application = nativeRemoteApplication(raw.application);
+  const object = nativeRemoteObject(raw.object);
+  if (application === undefined || object === undefined) return undefined;
+  const selected = remoteLinkValue({ globalId: raw.globalId ?? null, relationship: raw.relationship ?? null, ...application, ...object });
   return selected === undefined ? undefined : { id, ...selected };
 }
 export function sameRemoteLinkValue(left: RemoteLinkValue, right: RemoteLinkValue): boolean {
@@ -81,6 +103,9 @@ export function sameRemoteLinkValue(left: RemoteLinkValue, right: RemoteLinkValu
 }
 export function sameRemoteLinks(left: readonly RemoteLinkSnapshot[], right: readonly RemoteLinkSnapshot[]): boolean {
   return left.length === right.length && left.every((item) => right.some((other) => item.id === other.id && sameRemoteLinkValue(item, other)));
+}
+function remoteLinkIdentitySeen(item: RemoteLinkSnapshot, ids: ReadonlySet<string>, globals: ReadonlySet<string>): boolean {
+  return ids.has(item.id) || (item.globalId !== null && globals.has(item.globalId));
 }
 export async function readCompleteRemoteLinks(request: JiraMutationRequest, issue: LinkIssue): Promise<LinkObservation<readonly RemoteLinkSnapshot[]>> {
   const response = await request(`issue/${issue.id}/remotelink`, "GET", undefined, "json-array");
@@ -92,7 +117,7 @@ export async function readCompleteRemoteLinks(request: JiraMutationRequest, issu
   const globals = new Set<string>();
   for (const raw of response.items) {
     const item = projectRemoteLinkSnapshot(raw, issue);
-    if (item === undefined || ids.has(item.id) || (item.globalId !== null && globals.has(item.globalId))) return LINK_MALFORMED;
+    if (item === undefined || remoteLinkIdentitySeen(item, ids, globals)) return LINK_MALFORMED;
     ids.add(item.id);
     if (item.globalId !== null) globals.add(item.globalId);
     items.push(item);

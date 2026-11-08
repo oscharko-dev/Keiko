@@ -27,17 +27,25 @@ export async function readLinkType(request: JiraMutationRequest, expected: Nativ
   return sameLinkType(type, expected) ? { ok: true, value: type }
     : linkConflict("The link type identity or relation labels changed after review. Read the current type before changing a relation.");
 }
+function linkSelfMatches(value: unknown, linkId: string): boolean {
+  return value === undefined || value === null || jiraResourceSelfMatches(value, `issueLink/${linkId}`);
+}
+function edgeEndpoint(value: unknown): Pick<NativeIssueEdge, "otherId" | "otherKey"> | undefined {
+  const raw = asRecord(value);
+  return jiraNativeId(raw?.id) && isSafeAtlassianIdentifier(raw.key)
+    ? { otherId: raw.id, otherKey: raw.key } : undefined;
+}
 function edge(value: unknown): NativeIssueEdge | undefined {
   const raw = asRecord(value);
-  const type = nativeLinkType(raw?.type);
-  if (!jiraNativeId(raw?.id) || type === undefined) return undefined;
-  if (raw.self !== undefined && raw.self !== null && !jiraResourceSelfMatches(raw.self, `issueLink/${raw.id}`)) return undefined;
+  if (raw === undefined) return undefined;
+  const type = nativeLinkType(raw.type);
+  if (!jiraNativeId(raw.id) || type === undefined) return undefined;
+  if (!linkSelfMatches(raw.self, raw.id)) return undefined;
   const inward = asRecord(raw.inwardIssue);
   const outward = asRecord(raw.outwardIssue);
   if ((inward === undefined) === (outward === undefined)) return undefined;
-  const other = inward ?? outward;
-  if (!jiraNativeId(other?.id) || !isSafeAtlassianIdentifier(other.key)) return undefined;
-  return { id: raw.id, type, direction: inward === undefined ? "outward" : "inward", otherId: other.id, otherKey: other.key };
+  const other = edgeEndpoint(inward ?? outward);
+  return other === undefined ? undefined : { id: raw.id, type, direction: inward === undefined ? "outward" : "inward", ...other };
 }
 export async function readIssueLinkState(request: JiraMutationRequest, target: string): Promise<LinkObservation<IssueLinkState>> {
   const bound = await bindLinkIssue(request, target, ["issuelinks"]);
@@ -69,15 +77,22 @@ function issueRefMatches(value: unknown, expected: LinkIssue): boolean {
   const raw = asRecord(value);
   return raw?.id === expected.id && raw.key === expected.key;
 }
+function linkDetail(raw: Record<string, unknown> | undefined, linkId: string): { readonly raw: Record<string, unknown>; readonly type: NativeLinkType } | undefined {
+  if (raw === undefined || raw.id !== linkId) return undefined;
+  const type = nativeLinkType(raw.type);
+  return type === undefined || !linkSelfMatches(raw.self, linkId) ? undefined : { raw, type };
+}
+function linkEndpointsMatch(raw: Readonly<Record<string, unknown>>, type: NativeLinkType, inward: LinkIssue, outward: LinkIssue): boolean {
+  const ordered = issueRefMatches(raw.inwardIssue, inward) && issueRefMatches(raw.outwardIssue, outward);
+  const symmetric = type.inward.toLowerCase() === type.outward.toLowerCase() && issueRefMatches(raw.inwardIssue, outward) && issueRefMatches(raw.outwardIssue, inward);
+  return ordered || symmetric;
+}
 export async function confirmIssueLinkIdentity(request: JiraMutationRequest, linkId: string, type: NativeLinkType, inward: LinkIssue, outward: LinkIssue): Promise<LinkObservation<true>> {
   const response = await request(`issueLink/${linkId}`);
   if (!response.ok) return dispatchFailure(response);
-  const raw = response.body;
-  const observed = nativeLinkType(raw?.type);
-  if (response.status !== 200 || raw?.id !== linkId || observed === undefined) return LINK_MALFORMED;
-  if (raw.self !== undefined && raw.self !== null && !jiraResourceSelfMatches(raw.self, `issueLink/${linkId}`)) return LINK_MALFORMED;
-  const ordered = issueRefMatches(raw.inwardIssue, inward) && issueRefMatches(raw.outwardIssue, outward);
-  const symmetric = type.inward.toLowerCase() === type.outward.toLowerCase() && issueRefMatches(raw.inwardIssue, outward) && issueRefMatches(raw.outwardIssue, inward);
-  return sameLinkType(type, observed) && (ordered || symmetric) ? { ok: true, value: true }
+  if (response.status !== 200) return LINK_MALFORMED;
+  const observed = linkDetail(response.body, linkId);
+  if (observed === undefined) return LINK_MALFORMED;
+  return sameLinkType(type, observed.type) && linkEndpointsMatch(observed.raw, type, inward, outward) ? { ok: true, value: true }
     : linkConflict("The exact link no longer binds the reviewed type and both native issues. No different relation is substituted.");
 }

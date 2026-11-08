@@ -6,7 +6,7 @@ import { dispatchFailure, JiraAcknowledgedMutationError } from "./jira-mutation-
 import { jiraNativeId } from "./jira-native-values.js";
 import { asRecord } from "./atlassian-sync-classify.js";
 import { bindLinkActor, linkActorInput, linkConflict, linkInvalid, linkUnchanged, LINK_MALFORMED, sameLinkParent, type JiraLinkMutationAttempt, type JiraLinkMutationReceipt, type LinkFailure, type LinkObservation } from "./jira-link-mutation-values.js";
-import { confirmIssueLinkIdentity, edgeFields, matchingIssueEdges, nativeLinkType, readIssueLinkState, readLinkType, sameIssueEdges, type IssueLinkState, type NativeLinkType } from "./jira-issue-link-mutation-state.js";
+import { confirmIssueLinkIdentity, edgeFields, matchingIssueEdges, nativeLinkType, readIssueLinkState, readLinkType, sameIssueEdges, type IssueLinkState, type NativeIssueEdge, type NativeLinkType } from "./jira-issue-link-mutation-state.js";
 
 export const JIRA_ISSUE_LINK_MUTATIONS = ["jira.create-issue-link", "jira.delete-issue-link"] as const;
 type Operation = (typeof JIRA_ISSUE_LINK_MUTATIONS)[number];
@@ -39,15 +39,19 @@ function receiptFor(selected: Input, state: State): JiraLinkMutationReceipt {
     linkTypeId: selected.type.id, userKey: selected.actorKey, linkPresent: selected.linkId === undefined,
     ...(selected.linkId === undefined ? {} : { linkId: selected.linkId }) };
 }
+function existingLinkId(forward: readonly NativeIssueEdge[], reverse: readonly NativeIssueEdge[]): string | undefined {
+  const existing = forward.length === 1 ? forward[0] : undefined;
+  return existing !== undefined && reverse.length === 1 && existing.id === reverse[0]?.id ? existing.id : undefined;
+}
 function beforeEffect(selected: Input, state: State): LinkFailure | undefined {
   const forward = matchingIssueEdges(state.inward, state.outward.issue, selected.type, "outward");
   const reverse = matchingIssueEdges(state.outward, state.inward.issue, selected.type, "inward");
   if (selected.linkId !== undefined) return forward.some((item) => item.id === selected.linkId) && reverse.some((item) => item.id === selected.linkId) ? undefined
     : linkConflict("Both complete native issue relations must contain the exact reviewed link before deletion.");
   if (forward.length === 0 && reverse.length === 0) return undefined;
-  const existing = forward.length === 1 ? forward[0] : undefined;
-  if (existing !== undefined && reverse.length === 1 && existing.id === reverse[0]?.id)
-    return linkUnchanged("This exact relation already exists on both issues. No duplicate was created.", { ...receiptFor(selected, state), linkId: existing.id });
+  const existing = existingLinkId(forward, reverse);
+  if (existing !== undefined)
+    return linkUnchanged("This exact relation already exists on both issues. No duplicate was created.", { ...receiptFor(selected, state), linkId: existing });
   return linkConflict("The relation is duplicated or the two complete issue link lists disagree. Review the native relations before creating another link.");
 }
 async function templateAdmission(request: JiraMutationRequest, selected: Input, state: State, source: JiraIssueTemplateSource | undefined): Promise<LinkObservation<true>> {
@@ -62,8 +66,11 @@ async function templateAdmission(request: JiraMutationRequest, selected: Input, 
   }
   return { ok: true, value: true };
 }
+function sameParents(left: State, right: State): boolean {
+  return sameLinkParent(left.inward.issue, right.inward.issue) && sameLinkParent(left.outward.issue, right.outward.issue);
+}
 function sameState(left: State, right: State): boolean {
-  return sameLinkParent(left.inward.issue, right.inward.issue) && sameLinkParent(left.outward.issue, right.outward.issue) &&
+  return sameParents(left, right) &&
     sameIssueEdges(left.inward.edges, right.inward.edges) && sameIssueEdges(left.outward.edges, right.outward.edges);
 }
 function remainingMatches(before: State, after: State, linkId: string, deleting: boolean): boolean {
@@ -73,33 +80,40 @@ function remainingMatches(before: State, after: State, linkId: string, deleting:
     return sameIssueEdges(prior, current);
   });
 }
+function confirmDeletedLink(prior: State, current: State, linkId: string, receipt: JiraLinkMutationReceipt): JiraLinkMutationAttempt {
+  return remainingMatches(prior, current, linkId, true) ? { ok: true, receipt }
+    : linkConflict("The complete same-parent relations did not confirm removal of only the reviewed link. Do not replay.", receipt);
+}
+function createdLinkId(selected: Input, prior: State, current: State): string | undefined {
+  const matches = matchingIssueEdges(current.inward, current.outward.issue, selected.type, "outward")
+    .filter((edge) => !prior.inward.edges.some((old) => old.id === edge.id));
+  return matches.length === 1 ? matches[0]?.id : undefined;
+}
+async function confirmCreatedLink(request: JiraMutationRequest, selected: Input, prior: State, current: State, linkId: string, receipt: JiraLinkMutationReceipt): Promise<JiraLinkMutationAttempt> {
+  const reverse = matchingIssueEdges(current.outward, current.inward.issue, selected.type, "inward");
+  if (reverse.length !== 1 || reverse[0]?.id !== linkId || !remainingMatches(prior, current, linkId, false))
+    return linkConflict("The new link ID is known, but both complete issue relations did not confirm the exact change. Do not replay.", receipt);
+  const detail = await confirmIssueLinkIdentity(request, linkId, selected.type, current.inward.issue, current.outward.issue);
+  return detail.ok ? { ok: true, receipt } : { ...detail, receipt };
+}
 async function confirm(request: JiraMutationRequest, selected: Input, prior: State, receipt: JiraLinkMutationReceipt): Promise<JiraLinkMutationAttempt> {
   let known = receipt;
   try {
     const current = await inspect(request, { ...selected, inward: prior.inward.issue.id, outward: prior.outward.issue.id });
     if (!current.ok) return { ...current, receipt: known };
-    if (!sameLinkParent(prior.inward.issue, current.value.inward.issue) || !sameLinkParent(prior.outward.issue, current.value.outward.issue)) return { ...LINK_MALFORMED, receipt: known };
-    if (selected.linkId !== undefined) return remainingMatches(prior, current.value, selected.linkId, true)
-      ? { ok: true, receipt: known } : linkConflict("The complete same-parent relations did not confirm removal of only the reviewed link. Do not replay.", known);
-    const matches = matchingIssueEdges(current.value.inward, current.value.outward.issue, selected.type, "outward")
-      .filter((edge) => !prior.inward.edges.some((old) => old.id === edge.id));
-    const added = matches.length === 1 ? matches[0] : undefined;
-    if (added === undefined) return linkConflict("The acknowledged creation has no unique new native relation in the complete issue list. Do not replay.", known);
-    known = { ...known, linkId: added.id };
-    const reverse = matchingIssueEdges(current.value.outward, current.value.inward.issue, selected.type, "inward");
-    if (reverse.length !== 1 || reverse[0]?.id !== added.id || !remainingMatches(prior, current.value, added.id, false))
-      return linkConflict("The new link ID is known, but both complete issue relations did not confirm the exact change. Do not replay.", known);
-    const detail = await confirmIssueLinkIdentity(request, added.id, selected.type, current.value.inward.issue, current.value.outward.issue);
-    return detail.ok ? { ok: true, receipt: known } : { ...detail, receipt: known };
+    if (!sameParents(prior, current.value)) return { ...LINK_MALFORMED, receipt: known };
+    if (selected.linkId !== undefined) return confirmDeletedLink(prior, current.value, selected.linkId, known);
+    const linkId = createdLinkId(selected, prior, current.value);
+    if (linkId === undefined) return linkConflict("The acknowledged creation has no unique new native relation in the complete issue list. Do not replay.", known);
+    known = { ...known, linkId };
+    // Keep detail failures inside this ACK boundary with the newly observed native ID.
+    return await confirmCreatedLink(request, selected, prior, current.value, linkId, known);
   } catch (error) { throw new JiraAcknowledgedMutationError(error, known); }
 }
 export function isJiraIssueLinkMutation(name: string): name is Operation {
   return name === "jira.create-issue-link" || name === "jira.delete-issue-link";
 }
-/** One relation effect, with the same saved-template gate as ordinary issue edits. */
-export async function executeJiraIssueLinkMutation(operation: Operation, args: CatalogJsonObject, request: JiraMutationRequest, check = false, templates?: JiraIssueTemplateSource): Promise<JiraLinkMutationAttempt> {
-  const selected = input(operation, args);
-  if (selected === undefined) return linkInvalid("Review both issues, the connected actor key and exact link type ID/name/inward/outward labels. Delete also requires the native link ID; optional comment side effects are unavailable.");
+async function admitIssueLink(request: JiraMutationRequest, selected: Input, templates: JiraIssueTemplateSource | undefined): Promise<LinkObservation<State>> {
   const prior = await inspect(request, selected);
   if (!prior.ok) return prior;
   const refusal = beforeEffect(selected, prior.value);
@@ -113,11 +127,22 @@ export async function executeJiraIssueLinkMutation(operation: Operation, args: C
   const rechecked = await inspect(request, { ...selected, inward: prior.value.inward.issue.id, outward: prior.value.outward.issue.id });
   if (!rechecked.ok) return rechecked;
   if (!sameState(prior.value, rechecked.value)) return linkConflict("The actor, issues or complete relation snapshot changed during admission. Nothing was written.");
+  return prior;
+}
+function dispatchIssueLink(request: JiraMutationRequest, selected: Input, state: State): ReturnType<JiraMutationRequest> {
+  return selected.linkId === undefined
+    ? request("issueLink", "POST", { type: { id: selected.type.id }, inwardIssue: { id: state.inward.issue.id }, outwardIssue: { id: state.outward.issue.id } }, "none")
+    : request(`issueLink/${selected.linkId}`, "DELETE", undefined, "none");
+}
+/** One relation effect, with the same saved-template gate as ordinary issue edits. */
+export async function executeJiraIssueLinkMutation(operation: Operation, args: CatalogJsonObject, request: JiraMutationRequest, check = false, templates?: JiraIssueTemplateSource): Promise<JiraLinkMutationAttempt> {
+  const selected = input(operation, args);
+  if (selected === undefined) return linkInvalid("Review both issues, the connected actor key and exact link type ID/name/inward/outward labels. Delete also requires the native link ID; optional comment side effects are unavailable.");
+  const prior = await admitIssueLink(request, selected, templates);
+  if (!prior.ok) return prior;
   if (check) return { ok: true, receipt: {} };
   const receipt = receiptFor(selected, prior.value);
-  const response = selected.linkId === undefined
-    ? await request("issueLink", "POST", { type: { id: selected.type.id }, inwardIssue: { id: prior.value.inward.issue.id }, outwardIssue: { id: prior.value.outward.issue.id } }, "none")
-    : await request(`issueLink/${selected.linkId}`, "DELETE", undefined, "none");
+  const response = await dispatchIssueLink(request, selected, prior.value);
   if (!response.ok) return { ...dispatchFailure(response), receipt };
   if (response.status < 200 || response.status >= 300) return { ...LINK_MALFORMED, receipt };
   return confirm(request, selected, prior.value, receipt);

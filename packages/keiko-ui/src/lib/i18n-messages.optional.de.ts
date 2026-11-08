@@ -634,7 +634,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.linkMutation.requestedPresent": "Angeforderter Verknüpfungszustand: vorhanden",
   "chat.jira.linkMutation.snapshotAvailable": "Es folgt der vollständige native Remote-Link-Prüfstand. Nullable-Felder werden ausdrücklich angezeigt.",
   "chat.jira.linkMutation.snapshotUnavailable": "Ein vollständiger nativer Remote-Link-Prüfstand ist nicht verfügbar. Fehlende Werte dürfen vor Ersetzung oder Löschung nicht geraten werden.",
-  "chat.jira.linkMutation.urlsMetadata": "Remote- und Symbol-URLs sind reiner Prüfdialogtext. Sie werden weder geöffnet noch abgerufen oder als Navigationslinks angeboten.",
+  "chat.jira.linkMutation.urlsMetadata": "Keiko zeigt diese URLs als Prüfdialogtext an und öffnet oder lädt sie nicht. Jira kann Symbol-URLs im Browser jeder betrachtenden Person laden und dabei deren Netzwerkadresse an diesen Server übertragen.",
   "chat.jira.linkMutation.upsertHelp": "Jira POST erstellt oder ersetzt den Link mit dieser globalen ID. Dies ist keine bedingungslose Erstellung; geprüft wird entweder die genaue Abwesenheit oder der vollständige bestehende Wert.",
   "chat.jira.linkMutation.fullReplacement": "Die Remote-Link-Ersetzung umfasst jedes unterstützte Feld. Explizites null bedeutet, dass das angeforderte Feld keinen Wert hat; das Weglassen früherer Metadaten darf sie niemals stillschweigend erhalten.",
   "chat.jira.linkMutation.requestedNull": "Angeforderter Feldwert: nicht vorhanden (null).",
