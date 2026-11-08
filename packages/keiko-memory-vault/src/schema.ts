@@ -25,7 +25,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import type { MemoryContentCipher } from "./cipher.js";
-import { classifyMemoryVaultOpenFailure } from "./migration-failure.js";
+import { memoryVaultOpenError } from "./migration-failure.js";
 import { emitEncryptionMigrated, sweepExistingContent } from "./migrate-encrypt.js";
 import {
   emitMemoryVaultLogEvent,
@@ -313,7 +313,7 @@ export function runMigrations(
   try {
     migrateMemoryDatabase(db, cipher, sink);
   } catch (error) {
-    classifyMemoryVaultOpenFailure(error, "migration", sink);
+    throw memoryVaultOpenError(error, "migration", sink);
   }
 }
 
@@ -324,7 +324,7 @@ function migrateMemoryDatabase(
 ): void {
   const start = currentUserVersion(db);
   if (start > MEMORY_VAULT_SCHEMA_VERSION) {
-    classifyMemoryVaultOpenFailure(undefined, "newer-schema", sink);
+    throw memoryVaultOpenError(undefined, "newer-schema", sink);
   }
   const pendingDdl = MIGRATIONS.filter((m) => m.version > start);
   const needsEncryption = start < ENCRYPTION_VERSION;

@@ -4122,7 +4122,14 @@ function remote(
     return Promise.resolve(property.write(request) ?? remoteWrite(path, absolute, request, state));
   });
 }
-type LifecycleFixture = NonNullable<ReturnType<typeof schemeSettingTransportController>>;
+interface LifecycleFixture {
+  readonly read: (
+    request: AtlassianHttpBodyRequest,
+  ) => AtlassianHttpBodyResult | undefined | Promise<AtlassianHttpBodyResult | undefined>;
+  readonly write: (
+    request: AtlassianHttpBodyRequest,
+  ) => AtlassianHttpBodyResult | undefined | Promise<AtlassianHttpBodyResult | undefined>;
+}
 function reviewedPlatformFixture(tool: string | undefined): LifecycleFixture | undefined {
   const selectedVersion = VERSION_LINK_CASES.find((item) => item.tool === tool);
   if (selectedVersion !== undefined)

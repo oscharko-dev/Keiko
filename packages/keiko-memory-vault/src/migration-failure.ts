@@ -15,7 +15,7 @@ const OPEN_FAILED = defineActivityLogOperation({
   op: "memory-vault.store.open-failed",
   category: "diagnostic",
   owner: "keiko-memory-vault",
-  emitter: "migration-failure.classifyMemoryVaultOpenFailure",
+  emitter: "migration-failure.memoryVaultOpenError",
   fields: {
     phase: {
       type: "string",
@@ -47,17 +47,17 @@ function openFailureMessage(error: unknown, phase: "open" | "migration" | "newer
 }
 
 /** Corruption keeps its existing quarantine owner; every other storage failure stays body-free. */
-export function classifyMemoryVaultOpenFailure(
+export function memoryVaultOpenError(
   error: unknown,
   phase: "open" | "migration" | "newer-schema",
   sink?: MemoryVaultLogSink,
-): never {
+): MemoryStorageError {
   if (isSqliteCorruptionError(error)) throw error;
   if (
     error instanceof MemoryStorageError &&
     (error.code === "vault-unreadable" || error.code === "vault-migration-failed")
   )
-    throw error;
+    return error;
   emitMemoryVaultLogEvent(
     sink,
     activityLogEvent(
@@ -69,5 +69,5 @@ export function classifyMemoryVaultOpenFailure(
       },
     ),
   );
-  throw new MemoryStorageError("vault-migration-failed", openFailureMessage(error, phase));
+  return new MemoryStorageError("vault-migration-failed", openFailureMessage(error, phase));
 }

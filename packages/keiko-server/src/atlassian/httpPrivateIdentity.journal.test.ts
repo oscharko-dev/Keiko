@@ -239,16 +239,17 @@ describe("private native ports share the real Chat mutation journal", () => {
             phase: "settled",
             outcome,
           });
-          expect(
-            await executeJiraChatMutation({
-              ...f.execution,
-              journal: reopened.chatToolMutations,
-              execute,
-            }),
-          ).toMatchObject({ data: { outcome: "pending", reason: "unavailable" } });
+          const replay = await executeJiraChatMutation({
+            ...f.execution,
+            journal: reopened.chatToolMutations,
+            execute,
+          });
+          expect(replay).toMatchObject({ data: { outcome, replayed: true } });
+          expect(replay.data).not.toHaveProperty("actorUserKey");
           expect(execute).not.toHaveBeenCalled();
-          // Restart recovery closes pending turns. Re-admit the same client request through the
-          // existing owner before asking the journal to replay; history alone grants no execution.
+          expect(f.writeCount()).toBe(1);
+          // Reading an exact durable outcome after recovery grants no execution. Re-admitting
+          // the same client request must still replay it without another private native effect.
           const resumed = reopened.admitChatTurn("private-native-turn", {
             chatId: f.execution.intent.chatId,
             role: "user",

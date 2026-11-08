@@ -122,7 +122,8 @@ it.each(CASES)(
 function changeReviewedFixture(changed: string, f: ReturnType<typeof fixture>): void {
   const scheme = f.schemes.get("7");
   const grants = f.grants.get("7");
-  if (scheme === undefined || grants?.[0] === undefined)
+  const grant = grants?.[0];
+  if (scheme === undefined || grants === undefined || grant === undefined)
     throw new TypeError("Missing native fixture");
   const changes: Record<string, () => void> = {
     actor: (): void => {
@@ -135,19 +136,21 @@ function changeReviewedFixture(changed: string, f: ReturnType<typeof fixture>): 
       scheme.description = "Concurrent value";
     },
     permission: (): void => {
-      grants[0].permission = "DELETE_ISSUES";
+      grant.permission = "DELETE_ISSUES";
     },
     holder: (): void => {
-      grants[0].holder = { type: "anyone" };
+      grant.holder = { type: "anyone" };
     },
     "grant-id": (): void => {
-      grants[0].id = "91";
+      grant.id = "91";
     },
     "additional-grant": (): void => {
       grants.push({ id: "93", permission: "WORK_ON_ISSUES", holder: { type: "assignee" } });
     },
   };
-  changes[changed]();
+  const change = changes[changed];
+  if (change === undefined) throw new TypeError("Missing reviewed fixture change");
+  change();
 }
 it.each(["actor", "name", "description", "permission", "holder", "grant-id", "additional-grant"])(
   "refuses a stale reviewed %s before a grant deletion",

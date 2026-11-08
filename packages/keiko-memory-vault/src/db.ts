@@ -28,7 +28,7 @@ import {
   isSqliteCorruptionError,
 } from "@oscharko-dev/keiko-security/sqlite-corruption";
 import { runMigrations } from "./schema.js";
-import { classifyMemoryVaultOpenFailure } from "./migration-failure.js";
+import { memoryVaultOpenError } from "./migration-failure.js";
 import type { MemoryContentCipher } from "./cipher.js";
 import {
   emitMemoryVaultLogEvent,
@@ -174,7 +174,7 @@ export function openMemoryDatabase(
   try {
     return openMemoryDatabaseOrThrow(dbPath, cipher, sink);
   } catch (error) {
-    classifyMemoryVaultOpenFailure(error, "open", sink);
+    throw memoryVaultOpenError(error, "open", sink);
   }
 }
 

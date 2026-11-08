@@ -34882,7 +34882,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     op: "memory-vault.store.open-failed",
     category: "diagnostic",
     owner: "keiko-memory-vault",
-    emitter: "migration-failure.classifyMemoryVaultOpenFailure",
+    emitter: "migration-failure.memoryVaultOpenError",
     fields: {
       completeness: {
         type: "string",

@@ -88,7 +88,7 @@ it("propagates an unrelated Memory factory TypeError instead of reporting a with
 
 it("reports withheld Memory in health and completes a Chat turn after a real V13 migration failure", async () => {
   const root = directory();
-  const memoryPath = resolveMemoryDbPath(root);
+  const memoryPath = resolveMemoryDbPath(root, {});
   seedBrokenV12MemoryVault(memoryPath);
   const before = memoryMigrationSnapshot(memoryPath);
   const deps = buildUiHandlerDeps({
