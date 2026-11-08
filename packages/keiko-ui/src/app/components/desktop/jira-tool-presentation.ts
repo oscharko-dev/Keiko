@@ -157,41 +157,39 @@ const KNOWLEDGE_TOOLS: Readonly<
     {
       readonly label: WidgetMessageKey;
       readonly details: WidgetMessageKey;
-      readonly canonicalId: string;
-      readonly version: number;
     }
   >
 > = {
   knowledge_requirements: {
     label: "chat.requirements.tool",
     details: "chat.requirements.details",
-    canonicalId: "keiko.knowledge.requirements",
-    version: 1,
   },
   knowledge_documents: {
     label: "chat.documents.tool",
     details: "chat.documents.details",
-    canonicalId: "keiko.knowledge.documents",
-    version: 1,
   },
   knowledge_review: {
     label: "chat.review.tool",
     details: "chat.review.details",
-    canonicalId: "keiko.knowledge.review",
-    version: 2,
   },
 };
 /** A saved alias alone cannot turn an external payload into a Knowledge receipt. */
 export function isCanonicalKnowledgeExchange(exchange: ChatToolExchange): boolean {
-  if (!Object.hasOwn(KNOWLEDGE_TOOLS, exchange.call.name)) return false;
-  const known = KNOWLEDGE_TOOLS[exchange.call.name];
   const ref = exchange.result?.toolRef;
-  return (
-    known !== undefined &&
-    ref?.canonicalId === known.canonicalId &&
-    ref.contractVersion === known.version
-  );
+  if (ref === undefined || ref === null) return false;
+  // Consumer compatibility checks do not declare a second tool registry beside the catalog.
+  switch (exchange.call.name) {
+    case "knowledge_requirements":
+      return ref.canonicalId === "keiko.knowledge.requirements" && ref.contractVersion === 1;
+    case "knowledge_documents":
+      return ref.canonicalId === "keiko.knowledge.documents" && ref.contractVersion === 1;
+    case "knowledge_review":
+      return ref.canonicalId === "keiko.knowledge.review" && ref.contractVersion === 2;
+    default:
+      return false;
+  }
 }
+
 const REQUIREMENTS_CUT_COUNTS = ["unitsOmitted", "documentsOmitted", "documentsNotExtracted"];
 
 /** A draft and an attachment are governed like a create and an edit, but are neither to the human. */
@@ -316,27 +314,40 @@ function knowledgeCut(result: CompletedResult): boolean {
     ].some((field) => coverage?.[field] === false)
   );
 }
+function requirementsPartialNotice(exchange: ChatToolExchange): WidgetMessageKey | undefined {
+  if (exchange.result?.status !== "completed") return undefined;
+  if (requirementsReadGroups([exchange]).members.size > 0 && knowledgeCut(exchange.result))
+    return "chat.requirements.partial";
+  return requirementsReadGroups([exchange]).members.size === 0 && requirementsCut(exchange.result)
+    ? "chat.requirements.partial"
+    : undefined;
+}
 /** The note a completed read of a partial result carries, or undefined for a complete one. */
 export function jiraToolPartialNotice(exchange: ChatToolExchange): WidgetMessageKey | undefined {
   if (exchange.call.name.startsWith("mcp_") || exchange.result?.status !== "completed")
     return undefined;
   // Paged unit reads are counted by the consolidated card, which names what a cut left out.
-  if (exchange.call.name === REQUIREMENTS_TOOL_ALIAS)
-    return requirementsReadGroups([exchange]).members.size === 0 && requirementsCut(exchange.result)
-      ? "chat.requirements.partial"
-      : undefined;
+  if (exchange.call.name === REQUIREMENTS_TOOL_ALIAS) return requirementsPartialNotice(exchange);
+
   if (KNOWLEDGE_TOOLS[exchange.call.name] !== undefined)
     return knowledgeCut(exchange.result) ? "chat.knowledge.partial" : undefined;
-  const data = plainRecord(exchange.result.data) ?? {};
+  return jiraReadPartialNotice(exchange, exchange.result);
+}
+function jiraReadPartialNotice(
+  exchange: ChatToolExchange,
+  result: CompletedResult,
+): WidgetMessageKey | undefined {
+  const data = plainRecord(result.data) ?? {};
   const directory =
     jiraDirectoryNotice(exchange.call.name, data) ??
     jiraLookupNotice(exchange.call.name, data) ??
     jiraAdminMetadataNotice(exchange.call.name, data);
   if (directory !== undefined) return directory;
-  return exchange.result.page.truncated || projectMetadataPageCut(exchange)
+  return result.page.truncated || projectMetadataPageCut(exchange)
     ? "chat.jira.partial"
     : undefined;
 }
+
 function projectMetadataPageCut(exchange: ChatToolExchange): boolean {
   if (!LOCALLY_PAGED_TOOLS.has(exchange.call.name)) return false;
   const data = plainRecord(exchange.result?.data);
@@ -447,20 +458,31 @@ function batchRefusalState(exchange: ChatToolExchange): WidgetMessageKey | undef
   const reason = plainRecord(result.data)?.reason;
   return typeof reason === "string" ? BATCH_REFUSAL_KEYS[reason] : undefined;
 }
+function succeededWithoutConfirmation(exchange: ChatToolExchange): boolean {
+  return mutationConfirmationUnavailable(
+    exchange.call.name,
+    exchange.call.arguments,
+    plainRecord(exchange.result?.data) ?? {},
+  );
+}
+function awaitsHumanInput(
+  exchange: ChatToolExchange,
+  turnState: ChatTurnState | undefined,
+): boolean {
+  return (
+    exchange.result === undefined &&
+    exchange.mutationOutcome === undefined &&
+    exchange.humanInput?.state === "awaiting-input" &&
+    turnState === "pending"
+  );
+}
 function managedMutationState(
   exchange: ChatToolExchange,
   turnState: ChatTurnState | undefined,
 ): WidgetMessageKey {
   const outcome = mutationOutcome(exchange);
   if (outcome === "succeeded" && mutationIdentityMissing(exchange)) return OUTCOME_KEYS.unknown;
-  if (
-    outcome === "succeeded" &&
-    mutationConfirmationUnavailable(
-      exchange.call.name,
-      exchange.call.arguments,
-      plainRecord(exchange.result?.data) ?? {},
-    )
-  )
+  if (outcome === "succeeded" && succeededWithoutConfirmation(exchange))
     return OUTCOME_KEYS["succeeded-unconfirmed"];
   if (outcome !== undefined)
     return jiraMutationUnchanged(exchange) ? "chat.jira.write.unchanged" : OUTCOME_KEYS[outcome];
@@ -472,13 +494,7 @@ export function jiraToolState(
   exchange: ChatToolExchange,
   turnState: ChatTurnState | undefined,
 ): WidgetMessageKey {
-  if (
-    exchange.result === undefined &&
-    exchange.mutationOutcome === undefined &&
-    exchange.humanInput?.state === "awaiting-input" &&
-    turnState === "pending"
-  )
-    return "chat.jira.humanInput.waiting";
+  if (awaitsHumanInput(exchange, turnState)) return "chat.jira.humanInput.waiting";
   if (exchange.call.name.startsWith("mcp_") && exchange.mutationOutcome !== undefined)
     return MCP_OUTCOME_KEYS[exchange.mutationOutcome];
   if (isMutation(exchange)) return managedMutationState(exchange, turnState);

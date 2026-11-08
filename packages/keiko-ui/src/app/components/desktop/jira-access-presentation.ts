@@ -70,10 +70,7 @@ function grant(source: Source, schemeId: unknown): JiraAgileDetails {
     labels: ["chat.jira.access.configurationOnly"],
   };
 }
-function schemeChildren(
-  source: Source,
-  security: boolean,
-): readonly JiraAgileDetails[] {
+function schemeChildren(source: Source, security: boolean): readonly JiraAgileDetails[] {
   const children = entries(security ? source.levels : source.permissions);
   const head = named(source, "chat.jira.access.schemeId");
   const labels: WidgetMessageKey[] = ["chat.jira.access.configurationOnly"];
@@ -82,38 +79,50 @@ function schemeChildren(
   const facts = [
     ...head.facts,
     ...(security ? fact("chat.jira.access.defaultLevelId", source.defaultSecurityLevelId) : []),
-    ...(children === undefined ? [] : [{
-      label: security ? "chat.jira.access.levelCount" : "chat.jira.access.grantCount",
-      value: String(children.length),
-    } satisfies JiraOutcomeFact]),
+    ...(children === undefined
+      ? []
+      : [
+          {
+            label: security ? "chat.jira.access.levelCount" : "chat.jira.access.grantCount",
+            value: String(children.length),
+          } satisfies JiraOutcomeFact,
+        ]),
   ];
   return [
     { ...head, facts, labels },
-    ...(children ?? []).map((child) => security
-      ? {
-          ...named(child, "chat.jira.access.levelId"),
-          facts: [
-            ...fact("chat.jira.access.levelId", child.id),
-            ...fact("chat.jira.access.schemeId", source.id),
-          ],
-          labels: ["chat.jira.access.configurationOnly"] satisfies WidgetMessageKey[],
-        }
-      : grant(child, source.id)),
+    ...(children ?? []).map((child) =>
+      security
+        ? {
+            ...named(child, "chat.jira.access.levelId"),
+            facts: [
+              ...fact("chat.jira.access.levelId", child.id),
+              ...fact("chat.jira.access.schemeId", source.id),
+            ],
+            labels: ["chat.jira.access.configurationOnly"] satisfies WidgetMessageKey[],
+          }
+        : grant(child, source.id),
+    ),
   ];
 }
-function recipientDetails(source: Source, kind: "user" | "group" | "projectRole" | "field"): Source | undefined {
+function recipientDetails(
+  source: Source,
+  kind: "user" | "group" | "projectRole" | "field",
+): Source | undefined {
   if (source.recipientKind === undefined) return record(source[kind]);
   if (source.recipientKind !== kind) return undefined;
   return {
-    id: source.recipientId, key: source.recipientKey, name: source.recipientName,
+    id: source.recipientId,
+    key: source.recipientKey,
+    name: source.recipientName,
     displayName: source.recipientDisplayName,
     description: kind === "field" ? undefined : source.recipientDescription,
     active: source.recipientActive,
   };
 }
-function recipientIdentity(source: Source, type: string): JiraOutcomeFact[] {
+function basicRecipientIdentity(source: Source, type: string): JiraOutcomeFact[] | undefined {
   if (type === "EmailAddress") return fact("chat.jira.access.recipientEmail", source.emailAddress);
-  if (type === "Group") return fact("chat.jira.fact.groupName", recipientDetails(source, "group")?.name);
+  if (type === "Group")
+    return fact("chat.jira.fact.groupName", recipientDetails(source, "group")?.name);
   if (type === "User") {
     const user = recipientDetails(source, "user");
     return [
@@ -122,23 +131,42 @@ function recipientIdentity(source: Source, type: string): JiraOutcomeFact[] {
       ...fact("chat.jira.fact.userDisplayName", user?.displayName),
     ];
   }
+  return undefined;
+}
+function recipientIdentity(source: Source, type: string): JiraOutcomeFact[] {
+  const basic = basicRecipientIdentity(source, type);
+  if (basic !== undefined) return basic;
   if (type !== "ProjectRole" && type !== "UserCustomField" && type !== "GroupCustomField")
     return [];
   const identity = recipientDetails(source, type === "ProjectRole" ? "projectRole" : "field");
   return [
-    ...fact(type === "ProjectRole" ? "chat.jira.fact.roleId" : "chat.jira.access.fieldId", identity?.id),
-    ...fact(type === "ProjectRole" ? "chat.jira.fact.roleName" : "chat.jira.access.fieldName", identity?.name),
+    ...fact(
+      type === "ProjectRole" ? "chat.jira.fact.roleId" : "chat.jira.access.fieldId",
+      identity?.id,
+    ),
+    ...fact(
+      type === "ProjectRole" ? "chat.jira.fact.roleName" : "chat.jira.access.fieldName",
+      identity?.name,
+    ),
   ];
 }
-function recipient(source: Source, eventId: unknown, schemeId: unknown): JiraAgileDetails {
-  const type = text(source.notificationType) ?? "";
+function recipientLabels(source: Source, type: string): WidgetMessageKey[] {
   const label = Object.hasOwn(RECIPIENT_LABELS, type) ? RECIPIENT_LABELS[type] : undefined;
   const labels: WidgetMessageKey[] = [label ?? "chat.jira.access.recipientUnknown"];
   const user = type === "User" ? recipientDetails(source, "user") : undefined;
   if (typeof user?.active === "boolean")
     labels.push(user.active ? "chat.jira.outcome.active" : "chat.jira.outcome.inactive");
-  const expanded = type === "ProjectRole" ? recipientDetails(source, "projectRole")
-    : type === "UserCustomField" || type === "GroupCustomField" ? recipientDetails(source, "field") : undefined;
+  return labels;
+}
+function recipient(source: Source, eventId: unknown, schemeId: unknown): JiraAgileDetails {
+  const type = text(source.notificationType) ?? "";
+  const labels = recipientLabels(source, type);
+  const expanded =
+    type === "ProjectRole"
+      ? recipientDetails(source, "projectRole")
+      : type === "UserCustomField" || type === "GroupCustomField"
+        ? recipientDetails(source, "field")
+        : undefined;
   const body = text(expanded?.description);
   return {
     ...(body === undefined ? {} : { body }),
@@ -162,7 +190,10 @@ function templateEvents(source: Source, schemeId: unknown): readonly JiraAgileDe
     facts: [
       ...fact("chat.jira.access.eventId", template.id),
       ...fact("chat.jira.access.schemeId", schemeId),
-      ...fact("chat.jira.access.parentEventId", index === 0 ? source.id : templates.at(index - 1)?.id),
+      ...fact(
+        "chat.jira.access.parentEventId",
+        index === 0 ? source.id : templates.at(index - 1)?.id,
+      ),
     ],
     labels: ["chat.jira.access.templateEvent"],
   }));
@@ -178,10 +209,14 @@ function notificationEvent(source: Source, schemeId: unknown): readonly JiraAgil
       facts: [
         ...head.facts,
         ...fact("chat.jira.access.schemeId", schemeId),
-        ...(recipients === undefined ? [] : [{
-          label: "chat.jira.access.recipientCount",
-          value: String(recipients.length),
-        } satisfies JiraOutcomeFact]),
+        ...(recipients === undefined
+          ? []
+          : [
+              {
+                label: "chat.jira.access.recipientCount",
+                value: String(recipients.length),
+              } satisfies JiraOutcomeFact,
+            ]),
       ],
       labels,
     },
@@ -191,13 +226,18 @@ function notificationEvent(source: Source, schemeId: unknown): readonly JiraAgil
 }
 function notificationScheme(source: Source, context: Source): readonly JiraAgileDetails[] {
   const head = named(source, "chat.jira.access.schemeId");
-  const events = context.eventsRequested === true && source.eventsAvailable === true
-    ? entries(source.events) : undefined;
+  const events =
+    context.eventsRequested === true && source.eventsAvailable === true
+      ? entries(source.events)
+      : undefined;
   const requested = context.eventsRequested;
   const labels: WidgetMessageKey[] = ["chat.jira.access.notificationsConfigurationOnly"];
   if (events === undefined)
-    labels.push(requested === false
-      ? "chat.jira.access.eventsNotRequested" : "chat.jira.access.eventsUnavailable");
+    labels.push(
+      requested === false
+        ? "chat.jira.access.eventsNotRequested"
+        : "chat.jira.access.eventsUnavailable",
+    );
   return [
     {
       ...head,
@@ -205,9 +245,14 @@ function notificationScheme(source: Source, context: Source): readonly JiraAgile
         ...head.facts,
         ...fact("chat.jira.fact.projectId", context.projectId),
         ...fact("chat.jira.fact.projectKey", context.projectKey),
-        ...(events === undefined ? [] : [{
-          label: "chat.jira.access.eventCount", value: String(events.length),
-        } satisfies JiraOutcomeFact]),
+        ...(events === undefined
+          ? []
+          : [
+              {
+                label: "chat.jira.access.eventCount",
+                value: String(events.length),
+              } satisfies JiraOutcomeFact,
+            ]),
       ],
       labels,
     },
@@ -224,7 +269,12 @@ export function jiraAccessDetails(tool: string, data: Source): readonly JiraAgil
     if (PERMISSION_SCHEMES.has(tool)) return schemeChildren(source, false);
     if (SECURITY_SCHEMES.has(tool)) return schemeChildren(source, true);
     return tool === "jira_security_level"
-      ? [{ ...named(source, "chat.jira.access.levelId"), labels: ["chat.jira.access.configurationOnly"] }]
+      ? [
+          {
+            ...named(source, "chat.jira.access.levelId"),
+            labels: ["chat.jira.access.configurationOnly"],
+          },
+        ]
       : [];
   });
 }

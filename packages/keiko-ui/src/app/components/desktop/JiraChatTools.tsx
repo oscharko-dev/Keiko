@@ -34,54 +34,10 @@ import { jiraReportView } from "./jira-report-view";
 import { ChatProcessingPipeline } from "./ChatProcessingPipeline";
 import { chatProcessingSteps } from "./chat-processing-pipeline";
 import { useJiraResultEvidence } from "./jira-result-evidence";
-import { JIRA_AGILE_TOOLS } from "./jira-agile-presentation";
-import { JIRA_PROJECT_METADATA_TOOLS } from "./jira-project-metadata-presentation";
-import { JIRA_COLLABORATION_TOOLS } from "./jira-collaboration-presentation";
-import { JIRA_ADMINISTRATION_TOOLS } from "./jira-administration-presentation";
-import { JIRA_DIRECTORY_TOOLS } from "./jira-directory-presentation";
-import { JIRA_ACCESS_TOOLS } from "./jira-access-presentation";
-import { JIRA_PROJECT_ASSOCIATION_TOOLS } from "./jira-project-association-presentation";
-import { JIRA_CORE_METADATA_TOOLS } from "./jira-core-metadata-presentation";
-import { JIRA_INSTANCE_TOOLS } from "./jira-instance-presentation";
-import { JIRA_ROLE_TOOLS } from "./jira-role-presentation";
-import { JIRA_RELEASE_TOOLS } from "./jira-release-presentation";
-import { JIRA_LOOKUP_TOOLS } from "./jira-lookup-presentation";
-import { JIRA_JQL_TOOLS } from "./jira-jql-presentation";
-import { JIRA_AGILE_CONTEXT_TOOLS } from "./jira-agile-context-presentation";
-import { JIRA_ADMIN_METADATA_TOOLS } from "./jira-admin-metadata-presentation";
-import { JIRA_RUNTIME_SETTINGS_TOOLS } from "./jira-runtime-settings-presentation";
-import { JIRA_MAINTENANCE_TOOLS } from "./jira-maintenance-presentation";
-import { JIRA_VIEW_SETTINGS_TOOLS } from "./jira-view-settings-presentation";
-import { JIRA_JOB_OBSERVATION_TOOLS } from "./jira-job-observation-presentation";
-import { JIRA_ADMINISTRATIVE_OBSERVATION_TOOLS } from "./jira-administrative-observation-presentation";
-import { JIRA_PROPERTY_TOOLS } from "./jira-property-presentation";
-import { JIRA_ISSUE_CONTEXT_TOOLS } from "./jira-issue-context-presentation";
-import { JIRA_MONITORING_WRITE_TOOLS } from "./jira-monitoring-presentation";
-import { JIRA_PROPERTY_MUTATION_TOOLS } from "./jira-property-mutation-presentation";
-import { JIRA_PARTICIPATION_TOOLS } from "./jira-participation-presentation";
-import { JIRA_FILE_METADATA_TOOLS } from "./jira-file-metadata-presentation";
-import { JIRA_SAVED_VIEW_TOOLS } from "./jira-saved-view-presentation";
-import { JIRA_ACCOUNT_DIAGNOSTIC_TOOLS } from "./jira-account-diagnostic-presentation";
-import { JIRA_APPLICATION_SETTINGS_TOOLS } from "./jira-application-settings-presentation";
-import { JIRA_REMOTE_VERSION_LINK_TOOLS } from "./jira-remote-version-link-presentation";
-import { JIRA_WORKLOG_FEED_TOOLS } from "./jira-worklog-feed-presentation";
-import { JIRA_IDENTITY_OBSERVATION_TOOLS } from "./jira-identity-observation-presentation";
-import { JIRA_SELECTED_WORKLOG_TOOLS } from "./jira-selected-worklog-presentation";
-import { JIRA_SAVED_CONFIGURATION_WRITE_TOOLS } from "./jira-saved-configuration-presentation";
-import { JIRA_RELEASE_LIFECYCLE_TOOLS } from "./jira-release-lifecycle-presentation";
-import { JIRA_LINK_MUTATION_TOOLS } from "./jira-link-mutation-presentation";
-import { JIRA_CONFIGURATION_MUTATION_TOOLS } from "./jira-configuration-mutation-presentation";
-import { JIRA_PLANNING_MUTATION_TOOLS } from "./jira-planning-mutation-presentation";
-import { JIRA_ACCESS_CONFIGURATION_TOOLS } from "./jira-access-configuration-presentation";
-import { JIRA_SCHEME_ADMINISTRATION_TOOLS } from "./jira-scheme-administration-presentation";
-import { JIRA_INSTANCE_ADMINISTRATION_TOOLS } from "./jira-instance-administration-presentation";
-import { JIRA_SYSTEM_ACTION_TOOLS } from "./jira-system-action-receipt";
-import { JIRA_ACCOUNT_RESOURCE_TOOLS } from "./jira-account-resource-presentation";
 import {
   jiraToolOutcomeView,
   knowledgeToolOutcomeView,
   JIRA_OUTCOME_ITEMS_SHOWN,
-  JIRA_PROJECT_TOOLS,
   type JiraOutcomeItem,
   type JiraOutcomeRule,
   type JiraToolOutcomeView,
@@ -166,6 +122,54 @@ function JiraContextLink({
     </a>
   );
 }
+function JiraResultTitle({ item }: { readonly item: JiraOutcomeItem }): ReactNode {
+  const t = useTranslate();
+  const title = (
+    <>
+      {item.key === undefined ? null : <strong>{item.key}</strong>}
+      {item.name === undefined ? null : (
+        <>
+          {" "}
+          <span>{item.name}</span>
+        </>
+      )}
+    </>
+  );
+  return (
+    <div className={styles.cmpResultTitle}>
+      {item.href === undefined ? (
+        title
+      ) : (
+        <a className="sm-link" href={item.href} target="_blank" rel="noopener noreferrer">
+          {title} <span className="sr-only">{t("chat.jira.outcome.newTab")}</span>
+        </a>
+      )}
+    </div>
+  );
+}
+function JiraResultItem({ item }: { readonly item: JiraOutcomeItem }): ReactNode {
+  const t = useTranslate();
+  return (
+    <>
+      <JiraResultTitle item={item} />
+      {item.projectId === undefined ? null : (
+        <p>{t("chat.jira.outcome.projectId", { id: item.projectId })}</p>
+      )}
+      {item.facts.map((fact) => (
+        <p key={fact.label} className={styles.cmpResultText}>
+          {t(fact.label)}: {fact.value}
+        </p>
+      ))}
+      <JiraContextLink href={item.boardHref} label="chat.jira.outcome.openBoard" />
+      <JiraContextLink href={item.filterHref} label="chat.jira.outcome.openFilter" />
+      {item.status === undefined ? null : <p>{item.status}</p>}
+      {item.labels.map((label) => (
+        <p key={label}>{t(label)}</p>
+      ))}
+      {item.body === undefined ? null : <p className={styles.cmpResultText}>{item.body}</p>}
+    </>
+  );
+}
 function JiraResultItems({
   items,
   label = "chat.jira.outcome.results",
@@ -179,43 +183,11 @@ function JiraResultItems({
   const t = useTranslate();
   return (
     <ul className={styles.cmpResultItems} aria-label={t(label)}>
-      {items.map((item, index) => {
-        const title = (
-          <>
-            {item.key === undefined ? null : <strong>{item.key}</strong>}
-            {item.name === undefined ? null : <span> {item.name}</span>}
-          </>
-        );
-        return (
-          <li key={`${item.key ?? item.name ?? ""}:${String(index)}`}>
-            <div className={styles.cmpResultTitle}>
-              {item.href === undefined ? (
-                title
-              ) : (
-                <a className="sm-link" href={item.href} target="_blank" rel="noopener noreferrer">
-                  {title}
-                  <span className="sr-only"> {t("chat.jira.outcome.newTab")}</span>
-                </a>
-              )}
-            </div>
-            {item.projectId === undefined ? null : (
-              <p>{t("chat.jira.outcome.projectId", { id: item.projectId })}</p>
-            )}
-            {item.facts.map((fact) => (
-              <p key={fact.label} className={styles.cmpResultText}>
-                {t(fact.label)}: {fact.value}
-              </p>
-            ))}
-            <JiraContextLink href={item.boardHref} label="chat.jira.outcome.openBoard" />
-            <JiraContextLink href={item.filterHref} label="chat.jira.outcome.openFilter" />
-            {item.status === undefined ? null : <p>{item.status}</p>}
-            {item.labels.map((label) => (
-              <p key={label}>{t(label)}</p>
-            ))}
-            {item.body === undefined ? null : <p className={styles.cmpResultText}>{item.body}</p>}
-          </li>
-        );
-      })}
+      {items.map((item, index) => (
+        <li key={`${item.key ?? item.name ?? ""}:${String(index)}`}>
+          <JiraResultItem item={item} />
+        </li>
+      ))}
       {more === 0 ? null : (
         <li className={styles.cmpMoreIssues}>{t("chat.jira.outcome.more", { count: more })}</li>
       )}
@@ -370,52 +342,7 @@ function resultCardSemantics(exchange: ChatToolExchange): {
   readonly role: "group" | undefined;
   readonly label: ReturnType<typeof jiraToolLabel>;
 } {
-  return [
-    JIRA_ACCOUNT_RESOURCE_TOOLS,
-    JIRA_IDENTITY_OBSERVATION_TOOLS,
-    JIRA_SELECTED_WORKLOG_TOOLS,
-    JIRA_SAVED_CONFIGURATION_WRITE_TOOLS,
-    JIRA_RELEASE_LIFECYCLE_TOOLS,
-    JIRA_LINK_MUTATION_TOOLS,
-    JIRA_CONFIGURATION_MUTATION_TOOLS,
-    JIRA_PLANNING_MUTATION_TOOLS,
-    JIRA_ACCESS_CONFIGURATION_TOOLS,
-    JIRA_SCHEME_ADMINISTRATION_TOOLS,
-    JIRA_INSTANCE_ADMINISTRATION_TOOLS,
-    JIRA_SYSTEM_ACTION_TOOLS,
-    JIRA_REMOTE_VERSION_LINK_TOOLS,
-    JIRA_WORKLOG_FEED_TOOLS,
-    JIRA_ACCOUNT_DIAGNOSTIC_TOOLS,
-    JIRA_APPLICATION_SETTINGS_TOOLS,
-    JIRA_PROJECT_TOOLS,
-    JIRA_AGILE_TOOLS,
-    JIRA_PROJECT_METADATA_TOOLS,
-    JIRA_COLLABORATION_TOOLS,
-    JIRA_SAVED_VIEW_TOOLS,
-    JIRA_FILE_METADATA_TOOLS,
-    JIRA_PARTICIPATION_TOOLS,
-    JIRA_ADMINISTRATION_TOOLS,
-    JIRA_DIRECTORY_TOOLS,
-    JIRA_ACCESS_TOOLS,
-    JIRA_PROJECT_ASSOCIATION_TOOLS,
-    JIRA_CORE_METADATA_TOOLS,
-    JIRA_INSTANCE_TOOLS,
-    JIRA_ROLE_TOOLS,
-    JIRA_RELEASE_TOOLS,
-    JIRA_LOOKUP_TOOLS,
-    JIRA_JQL_TOOLS,
-    JIRA_AGILE_CONTEXT_TOOLS,
-    JIRA_ADMIN_METADATA_TOOLS,
-    JIRA_RUNTIME_SETTINGS_TOOLS,
-    JIRA_MAINTENANCE_TOOLS,
-    JIRA_VIEW_SETTINGS_TOOLS,
-    JIRA_JOB_OBSERVATION_TOOLS,
-    JIRA_ADMINISTRATIVE_OBSERVATION_TOOLS,
-    JIRA_PROPERTY_TOOLS,
-    JIRA_ISSUE_CONTEXT_TOOLS,
-    JIRA_MONITORING_WRITE_TOOLS,
-    JIRA_PROPERTY_MUTATION_TOOLS,
-  ].some((tools) => tools.has(exchange.call.name))
+  return isKnownJiraToolAlias(exchange.call.name)
     ? { tag: "div", role: "group", label: jiraToolLabel(exchange) }
     : { tag: "section", role: undefined, label: jiraToolRegionLabel(exchange) };
 }
@@ -436,7 +363,6 @@ function JiraToolExchange({
     knowledgeReviewFailureNotice(exchange) ??
     (turnState === "pending" ? undefined : jiraToolOutcomeHelp(state));
   const report = jiraReportOf(exchange);
-  const partial = jiraToolPartialNotice(exchange);
   const localDenial = jiraLocalAccessDenialNotice(exchange);
   const { tag: Card, role, label } = resultCardSemantics(exchange);
   return (
@@ -445,17 +371,32 @@ function JiraToolExchange({
       <output>{t(state)}</output>
       {help === undefined ? null : <p>{t(help)}</p>}
       {localDenial === undefined ? null : <p>{t(localDenial)}</p>}
-      {report === undefined ? null : <JiraReportCard view={report} chatId={chatId} />}
-      {report === undefined && partial !== undefined ? <p>{t(partial)}</p> : null}
       <BatchProgress exchange={exchange} turnState={turnState} />
+      <JiraToolContents exchange={exchange} report={report} chatId={chatId} />
+    </Card>
+  );
+}
+function JiraToolContents({
+  exchange,
+  report,
+  chatId,
+}: {
+  readonly exchange: ChatToolExchange;
+  readonly report: ReturnType<typeof jiraReportView>;
+  readonly chatId: string | undefined;
+}): ReactNode {
+  const t = useTranslate();
+  if (report !== undefined) return <JiraReportCard view={report} chatId={chatId} />;
+  const partial = jiraToolPartialNotice(exchange);
+  return (
+    <>
+      {partial === undefined ? null : <p>{t(partial)}</p>}
       {readableResult(exchange) ? (
-        report === undefined ? (
-          <JiraToolOutcome exchange={exchange} />
-        ) : null
+        <JiraToolOutcome exchange={exchange} />
       ) : (
         <JiraToolResultDetails exchange={exchange} />
       )}
-    </Card>
+    </>
   );
 }
 /** A known Jira alias or a versioned Knowledge receipt has a readable view; anything else has none. */
@@ -469,12 +410,17 @@ const PROGRESS_ONLY_STATES: ReadonlySet<WidgetMessageKey> = new Set([
   "chat.jira.complete",
   "chat.jira.running",
 ]);
+const VALIDATION_TOOLS: ReadonlySet<string> = new Set([
+  "jira_validate_project_key",
+  "jira_validate_license",
+  "jira_validate_create_user_password",
+  "jira_validate_update_user_password",
+  "jira_anonymization_validation",
+  "jira_anonymization_rerun_validation",
+]);
+/** Ordinary read contents belong in the model answer; only caveats and draft facts earn a card. */
 function outcomeIsEmpty(view: JiraToolOutcomeView): boolean {
   return (
-    view.items.length === 0 &&
-    view.unlistedItemCount === 0 &&
-    (view.facts ?? []).length === 0 &&
-    (view.labels ?? []).length === 0 &&
     view.stagedCount === undefined &&
     view.unresolvedCount === undefined &&
     view.unreadableCount === 0 &&
@@ -485,21 +431,26 @@ function outcomeIsEmpty(view: JiraToolOutcomeView): boolean {
     view.failure === undefined
   );
 }
+function hasResultContent(exchange: ChatToolExchange): boolean {
+  return (
+    VALIDATION_TOOLS.has(exchange.call.name) ||
+    knowledgeReviewFailureNotice(exchange) !== undefined ||
+    jiraReportOf(exchange) !== undefined ||
+    jiraToolPartialNotice(exchange) !== undefined ||
+    !outcomeIsEmpty(jiraToolOutcomeView(exchange))
+  );
+}
 /** A tool card appears only when it tells the person something the progress does not. */
 function toolCardHasContent(
   exchange: ChatToolExchange,
   turnState: ChatTurnState | undefined,
 ): boolean {
   if (batchProgressOf(exchange) !== undefined) return true;
+  if (requirementsReadGroups([exchange]).cards.has(exchange.call.id)) return true;
   if (!PROGRESS_ONLY_STATES.has(jiraToolState(exchange, turnState))) return true;
   // A result without a readable view still explains that it has none.
   if (!readableResult(exchange)) return (exchange.result?.data ?? exchange.draftProgress) != null;
-  return (
-    knowledgeReviewFailureNotice(exchange) !== undefined ||
-    jiraReportOf(exchange) !== undefined ||
-    jiraToolPartialNotice(exchange) !== undefined ||
-    !outcomeIsEmpty(jiraToolOutcomeView(exchange))
-  );
+  return hasResultContent(exchange);
 }
 /** The card already says what an undecided action is waiting for. */
 function awaitsDecision(exchange: ChatToolExchange, turnState: ChatTurnState | undefined): boolean {
@@ -543,7 +494,7 @@ export function JiraChatTools({
   readonly showPending?: boolean | undefined;
   readonly waitingForDecision?: boolean | undefined;
 }): ReactNode {
-  useJiraResultEvidence(transcript, turnState, messageId);
+  useJiraResultEvidence(transcript, turnState, messageId, toolCardHasContent);
   const steps = chatProcessingSteps(transcript, turnState, showPending, waitingForDecision);
   if (steps.length === 0) return null;
   const { exchanges, cards } = visibleToolCards(transcript, turnState);

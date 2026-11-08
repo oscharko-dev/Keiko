@@ -69,7 +69,7 @@
     },
     {
       "path": "package.json",
-      "sha256": "6ebc1e3a379b4e06f0a1c4ebec971915a04f02797f07fe49bc7659a0d2e95ef1"
+      "sha256": "ffd167730a4ea05dabe42da5b95ae04a05d01fa93f649421b069c4beacac520d"
     },
     {
       "path": "packages/keiko-ui/design-tokens.mjs",
@@ -121,7 +121,7 @@
     }
   ],
   "postCssSha256": "a75653326a80e3d3ca9212fe75c233744952b1129d216cbb11741b094da870c2",
-  "renderedCssBundleSha256": "0c4a1124d469ac46654f4618d9e037f0e86bab00cb0b69a3fc414db0e3cde6a2",
+  "renderedCssBundleSha256": "918a92261fce916150e93fa206f22a4812c17c2a48afe0e1ddcbf00f782dbc13",
   "appPath": "packages/keiko-ui/out",
   "route": "/",
   "shotCount": 108,

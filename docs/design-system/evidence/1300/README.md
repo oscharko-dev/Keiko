@@ -290,3 +290,15 @@ the seven-mode accessibility proof has zero serious/critical violations and zero
 incomplete findings; all 108 running-app captures have zero page errors, unexpected API requests,
 missing selectors, crashed windows or unavailable workspace-trust states. No producer assertion,
 tolerance or budget changed.
+
+## Jira UI regression closeout — 2026-11-08
+
+The four original producers were rerun in the isolated Linux arm64 container with Node 24.18.0
+for PR #4288. The inherited `package.json` fingerprint was stale; no source-input list, fixture,
+assertion or threshold was relaxed. Component fidelity retains 427 probes with zero gated or
+recorded differences. Editor fidelity retains all 14 reference captures and zero gated differences;
+its previously documented accent and reference-only differences remain recorded. Accessibility
+retains zero serious/critical violations and zero unresolved incomplete findings. All 108 browser
+captures retain zero page errors, unexpected API requests, missing selectors, crashed windows,
+visible error notices and unavailable workspace-trust states. Representative browser and editor
+captures were visually inspected. These historical design fixtures do not qualify live Jira effects.

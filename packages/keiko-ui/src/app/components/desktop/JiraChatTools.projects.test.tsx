@@ -1,3 +1,4 @@
+import { partialJiraReadPage } from "./jira-result.test-fixture";
 import { render, screen } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -34,7 +35,7 @@ function projectExchange(
       metrics: { inputBytes: 10, outputBytes: 10, resultCount: 1, durationMs: 20 },
       status: "completed",
       reason: "none",
-      page: { truncated: false, reason: "none", cursor: null },
+      page: partialJiraReadPage(operation),
       data,
     },
   };
@@ -61,32 +62,71 @@ describe.each(["en", "de"] as const)("saved Jira project configuration in %s", (
   it("restores five project-bound association cards with accessible-only levels and original mappings", async () => {
     const context = { projectId: PROJECT_ID, projectKey: "SYN" };
     const cases: readonly [string, CatalogJsonObject, string, string][] = [
-      ["jira_project_permission_scheme", { id: "37", name: "Project access", permissions: [] },
-        "Read Jira project permission scheme", "Berechtigungsschema eines Jira-Projekts lesen"],
-      ["jira_project_issue_security_scheme", { id: "38", name: "Project security" },
-        "Read Jira project issue security scheme", "Vorgangssicherheitsschema eines Jira-Projekts lesen"],
-      ["jira_project_security_levels", { levelsScope: "accessible", items: [], startAt: 0, total: 0 },
-        "Read accessible Jira project security levels", "Zugängliche Sicherheitsstufen eines Jira-Projekts lesen"],
-      ["jira_project_workflow_scheme", {
-        id: "48", schemeId: "48", name: "Project workflow", draft: false,
-        items: [{ issueTypeId: "10001", workflow: "Story live", originalWorkflow: "Story original" },
-          { issueTypeId: "10002", originalWorkflow: "Original only" }], startAt: 0, total: 2,
-      }, "Read Jira project workflow scheme", "Workflowschema eines Jira-Projekts lesen"],
-      ["jira_project_priority_scheme", {
-        id: "49", name: "Project priorities", defaultScheme: false, defaultOptionId: "3", optionIds: ["1", "3"],
-        self: "https://untrusted.invalid/priority", browseUrl: PROJECT_URL,
-      }, "Read Jira project priority scheme", "Prioritätsschema eines Jira-Projekts lesen"],
+      [
+        "jira_project_permission_scheme",
+        { id: "37", name: "Project access", permissions: [] },
+        "Read Jira project permission scheme",
+        "Berechtigungsschema eines Jira-Projekts lesen",
+      ],
+      [
+        "jira_project_issue_security_scheme",
+        { id: "38", name: "Project security" },
+        "Read Jira project issue security scheme",
+        "Vorgangssicherheitsschema eines Jira-Projekts lesen",
+      ],
+      [
+        "jira_project_security_levels",
+        { levelsScope: "accessible", items: [], startAt: 0, total: 0 },
+        "Read accessible Jira project security levels",
+        "Zugängliche Sicherheitsstufen eines Jira-Projekts lesen",
+      ],
+      [
+        "jira_project_workflow_scheme",
+        {
+          id: "48",
+          schemeId: "48",
+          name: "Project workflow",
+          draft: false,
+          items: [
+            { issueTypeId: "10001", workflow: "Story live", originalWorkflow: "Story original" },
+            { issueTypeId: "10002", originalWorkflow: "Original only" },
+          ],
+          startAt: 0,
+          total: 2,
+        },
+        "Read Jira project workflow scheme",
+        "Workflowschema eines Jira-Projekts lesen",
+      ],
+      [
+        "jira_project_priority_scheme",
+        {
+          id: "49",
+          name: "Project priorities",
+          defaultScheme: false,
+          defaultOptionId: "3",
+          optionIds: ["1", "3"],
+          self: "https://untrusted.invalid/priority",
+          browseUrl: PROJECT_URL,
+        },
+        "Read Jira project priority scheme",
+        "Prioritätsschema eines Jira-Projekts lesen",
+      ],
     ];
-    const restored = JSON.parse(JSON.stringify({
-      schemaVersion: 1,
-      exchanges: cases.map(([operation, data], index) => ({
-        ...projectExchange({ outcome: "succeeded", ...context, ...data }, operation),
-        call: { id: `association-${String(index)}`, name: operation, arguments: {} },
-      })),
-    })) as ChatToolTranscript;
-    const renderReceipt = (): ReturnType<typeof render> => render(
-      <I18nProvider><JiraChatTools transcript={restored} turnState="completed" /></I18nProvider>,
-    );
+    const restored = JSON.parse(
+      JSON.stringify({
+        schemaVersion: 1,
+        exchanges: cases.map(([operation, data], index) => ({
+          ...projectExchange({ outcome: "succeeded", ...context, ...data }, operation),
+          call: { id: `association-${String(index)}`, name: operation, arguments: {} },
+        })),
+      }),
+    ) as ChatToolTranscript;
+    const renderReceipt = (): ReturnType<typeof render> =>
+      render(
+        <I18nProvider>
+          <JiraChatTools transcript={restored} turnState="completed" />
+        </I18nProvider>,
+      );
     const first = renderReceipt();
     const before = first.container.textContent;
     first.unmount();
@@ -98,36 +138,63 @@ describe.each(["en", "de"] as const)("saved Jira project configuration in %s", (
       expect(card.textContent).toContain(PROJECT_ID);
       expect(card.textContent).toContain("SYN");
     }
-    expect(container.textContent).toContain(locale === "en"
-      ? "Accessible security levels: 0" : "Zugängliche Sicherheitsstufen: 0");
-    expect(container.textContent).not.toContain(locale === "en"
-      ? "Configured security levels: 0" : "Konfigurierte Sicherheitsstufen: 0");
-    expect(container.textContent).toContain(locale === "en"
-      ? "An empty result does not mean that no levels are configured"
-      : "Ein leeres Ergebnis bedeutet nicht, dass keine Stufen konfiguriert sind");
+    expect(container.textContent).toContain(
+      locale === "en" ? "Accessible security levels: 0" : "Zugängliche Sicherheitsstufen: 0",
+    );
+    expect(container.textContent).not.toContain(
+      locale === "en" ? "Configured security levels: 0" : "Konfigurierte Sicherheitsstufen: 0",
+    );
+    expect(container.textContent).toContain(
+      locale === "en"
+        ? "An empty result does not mean that no levels are configured"
+        : "Ein leeres Ergebnis bedeutet nicht, dass keine Stufen konfiguriert sind",
+    );
     expect(container.textContent).toContain("Original only");
-    expect(container.textContent).toContain(locale === "en"
-      ? "The current mapping was not supplied; the original mapping is shown separately."
-      : "Die aktuelle Zuordnung wurde nicht geliefert; die ursprüngliche Zuordnung wird separat angezeigt.");
-    expect(container.textContent).toContain(locale === "en"
-      ? "Configured default priority ID: 3" : "Konfigurierte Standardprioritäts-ID: 3");
-    expect(container.textContent).toContain(locale === "en"
-      ? "This is not the default priority scheme." : "Dies ist nicht das Standardprioritätsschema.");
+    expect(container.textContent).toContain(
+      locale === "en"
+        ? "The current mapping was not supplied; the original mapping is shown separately."
+        : "Die aktuelle Zuordnung wurde nicht geliefert; die ursprüngliche Zuordnung wird separat angezeigt.",
+    );
+    expect(container.textContent).toContain(
+      locale === "en"
+        ? "Configured default priority ID: 3"
+        : "Konfigurierte Standardprioritäts-ID: 3",
+    );
+    expect(container.textContent).toContain(
+      locale === "en"
+        ? "This is not the default priority scheme."
+        : "Dies ist nicht das Standardprioritätsschema.",
+    );
     expect(container.querySelector("pre, img, a")).toBeNull();
     expect(container.textContent).not.toContain("untrusted.invalid");
     expect(await axe(container)).toHaveNoViolations();
   });
   it("restores an unknown priority configuration without a false default or zero count", () => {
-    const { container } = show(projectExchange({
-      outcome: "succeeded", projectId: PROJECT_ID, projectKey: "SYN", id: "49", name: "Unknown priorities",
-    }, "jira_project_priority_scheme"));
-    expect(container.textContent).toContain(locale === "en"
-      ? "Configured priority options were not provided."
-      : "Konfigurierte Prioritätsoptionen wurden nicht bereitgestellt.");
-    expect(container.textContent).not.toContain(locale === "en"
-      ? "Configured priority count: 0" : "Anzahl konfigurierter Prioritäten: 0");
-    expect(container.textContent).not.toContain(locale === "en"
-      ? "This is not the default priority scheme." : "Dies ist nicht das Standardprioritätsschema.");
+    const { container } = show(
+      projectExchange(
+        {
+          outcome: "succeeded",
+          projectId: PROJECT_ID,
+          projectKey: "SYN",
+          id: "49",
+          name: "Unknown priorities",
+        },
+        "jira_project_priority_scheme",
+      ),
+    );
+    expect(container.textContent).toContain(
+      locale === "en"
+        ? "Configured priority options were not provided."
+        : "Konfigurierte Prioritätsoptionen wurden nicht bereitgestellt.",
+    );
+    expect(container.textContent).not.toContain(
+      locale === "en" ? "Configured priority count: 0" : "Anzahl konfigurierter Prioritäten: 0",
+    );
+    expect(container.textContent).not.toContain(
+      locale === "en"
+        ? "This is not the default priority scheme."
+        : "Dies ist nicht das Standardprioritätsschema.",
+    );
   });
 });
 
@@ -137,41 +204,132 @@ describe.each(["en", "de"] as const)("saved Jira access configuration in %s", (l
     localStorage.setItem(I18N_STORAGE_KEY, locale);
   });
   it("restores ten named configuration reads with explicit unknown and empty details", async () => {
-    const grant = { id: "81", permission: "BROWSE_PROJECTS", holder: { type: "group", parameter: "Developers" } };
+    const grant = {
+      id: "81",
+      permission: "BROWSE_PROJECTS",
+      holder: { type: "group", parameter: "Developers" },
+    };
     const scheme = { id: "37", name: "Engineering access" };
     const security = { id: "38", name: "Engineering security" };
     const notification = {
-      id: "47", name: "Notifications", eventsAvailable: true,
-      events: [{
-        id: "1", name: "Issue updated", templateEvents: [{ id: "2", name: "Template event name" }],
-        notifications: [
-          { id: "61", notificationType: "User", recipientKind: "user", recipientKey: "U1", recipientName: "Configured person", recipientActive: false, user: { emailAddress: "hidden@example.invalid", self: "https://untrusted.invalid/user" } },
-          { id: "62", notificationType: "EmailAddress", emailAddress: "configured@example.invalid" },
-        ],
-      }],
+      id: "47",
+      name: "Notifications",
+      eventsAvailable: true,
+      events: [
+        {
+          id: "1",
+          name: "Issue updated",
+          templateEvents: [{ id: "2", name: "Template event name" }],
+          notifications: [
+            {
+              id: "61",
+              notificationType: "User",
+              recipientKind: "user",
+              recipientKey: "U1",
+              recipientName: "Configured person",
+              recipientActive: false,
+              user: {
+                emailAddress: "hidden@example.invalid",
+                self: "https://untrusted.invalid/user",
+              },
+            },
+            {
+              id: "62",
+              notificationType: "EmailAddress",
+              emailAddress: "configured@example.invalid",
+            },
+          ],
+        },
+      ],
     };
     const cases: readonly [string, CatalogJsonObject, string, string][] = [
-      ["jira_permission_schemes", { items: [{ ...scheme, permissions: [] }], startAt: 0, total: 1 }, "Read Jira permission schemes", "Jira-Berechtigungsschemata lesen"],
-      ["jira_permission_scheme", { ...scheme, permissions: [grant] }, "Read Jira permission scheme", "Jira-Berechtigungsschema lesen"],
-      ["jira_permission_grants", { schemeId: "37", items: [grant], startAt: 0, total: 1 }, "Read Jira permission grants", "Jira-Berechtigungszuweisungen lesen"],
-      ["jira_permission_grant", { schemeId: "37", ...grant }, "Read Jira permission grant", "Jira-Berechtigungszuweisung lesen"],
-      ["jira_issue_security_schemes", { items: [security], startAt: 0, total: 1 }, "Read Jira issue security schemes", "Sicherheitsschemata für Jira-Vorgänge lesen"],
-      ["jira_issue_security_scheme", { ...security, levels: [] }, "Read Jira issue security scheme", "Sicherheitsschema für Jira-Vorgänge lesen"],
-      ["jira_security_level", { id: "91", name: "Restricted", description: "Configured level" }, "Read Jira security level", "Jira-Sicherheitsstufe lesen"],
-      ["jira_notification_schemes", { items: [{ id: "47", name: "Unavailable events", eventsAvailable: false }], eventsRequested: true, startAt: 0, isLast: false, nextStartAt: 1 }, "Read Jira notification schemes", "Jira-Benachrichtigungsschemata lesen"],
-      ["jira_notification_scheme", { items: [notification], eventsRequested: true }, "Read Jira notification scheme", "Jira-Benachrichtigungsschema lesen"],
-      ["jira_project_notification_scheme", { projectId: "10000", projectKey: "SYN", eventsRequested: false, items: [{ id: "47", name: "Project notifications" }] }, "Read Jira project notification scheme", "Benachrichtigungsschema eines Jira-Projekts lesen"],
+      [
+        "jira_permission_schemes",
+        { items: [{ ...scheme, permissions: [] }], startAt: 0, total: 1 },
+        "Read Jira permission schemes",
+        "Jira-Berechtigungsschemata lesen",
+      ],
+      [
+        "jira_permission_scheme",
+        { ...scheme, permissions: [grant] },
+        "Read Jira permission scheme",
+        "Jira-Berechtigungsschema lesen",
+      ],
+      [
+        "jira_permission_grants",
+        { schemeId: "37", items: [grant], startAt: 0, total: 1 },
+        "Read Jira permission grants",
+        "Jira-Berechtigungszuweisungen lesen",
+      ],
+      [
+        "jira_permission_grant",
+        { schemeId: "37", ...grant },
+        "Read Jira permission grant",
+        "Jira-Berechtigungszuweisung lesen",
+      ],
+      [
+        "jira_issue_security_schemes",
+        { items: [security], startAt: 0, total: 1 },
+        "Read Jira issue security schemes",
+        "Sicherheitsschemata für Jira-Vorgänge lesen",
+      ],
+      [
+        "jira_issue_security_scheme",
+        { ...security, levels: [] },
+        "Read Jira issue security scheme",
+        "Sicherheitsschema für Jira-Vorgänge lesen",
+      ],
+      [
+        "jira_security_level",
+        { id: "91", name: "Restricted", description: "Configured level" },
+        "Read Jira security level",
+        "Jira-Sicherheitsstufe lesen",
+      ],
+      [
+        "jira_notification_schemes",
+        {
+          items: [{ id: "47", name: "Unavailable events", eventsAvailable: false }],
+          eventsRequested: true,
+          startAt: 0,
+          isLast: false,
+          nextStartAt: 1,
+        },
+        "Read Jira notification schemes",
+        "Jira-Benachrichtigungsschemata lesen",
+      ],
+      [
+        "jira_notification_scheme",
+        { items: [notification], eventsRequested: true },
+        "Read Jira notification scheme",
+        "Jira-Benachrichtigungsschema lesen",
+      ],
+      [
+        "jira_project_notification_scheme",
+        {
+          projectId: "10000",
+          projectKey: "SYN",
+          eventsRequested: false,
+          items: [{ id: "47", name: "Project notifications" }],
+        },
+        "Read Jira project notification scheme",
+        "Benachrichtigungsschema eines Jira-Projekts lesen",
+      ],
     ];
-    const restored = JSON.parse(JSON.stringify({
-      schemaVersion: 1,
-      exchanges: cases.map(([operation, data], index) => ({
-        ...projectExchange({ outcome: "succeeded", ...data }, operation),
-        call: { id: `access-${String(index)}`, name: operation, arguments: {} },
-      })),
-    })) as ChatToolTranscript;
-    const renderReceipt = (): ReturnType<typeof render> => render(
-      <I18nProvider><JiraChatTools transcript={restored} turnState="completed" /></I18nProvider>,
-    );
+    const restored = JSON.parse(
+      JSON.stringify({
+        schemaVersion: 1,
+        exchanges: cases.map(([operation, data], index) => ({
+          ...projectExchange({ outcome: "succeeded", ...data }, operation),
+          call: { id: `access-${String(index)}`, name: operation, arguments: {} },
+        })),
+      }),
+    ) as ChatToolTranscript;
+    const renderReceipt = (): ReturnType<typeof render> =>
+      render(
+        <I18nProvider>
+          <JiraChatTools transcript={restored} turnState="completed" />
+        </I18nProvider>,
+      );
     const first = renderReceipt();
     const before = first.container.textContent;
     first.unmount();
@@ -179,25 +337,45 @@ describe.each(["en", "de"] as const)("saved Jira access configuration in %s", (l
     expect(container.textContent).toBe(before);
     for (const [, , en, de] of cases)
       expect(screen.getByRole("group", { name: locale === "en" ? en : de })).toBeVisible();
-    for (const value of ["BROWSE_PROJECTS", "Developers", "Configured person", "Template event name", "configured@example.invalid", "SYN"])
+    for (const value of [
+      "BROWSE_PROJECTS",
+      "Developers",
+      "Configured person",
+      "Template event name",
+      "configured@example.invalid",
+      "SYN",
+    ])
       expect(container.textContent).toContain(value);
     expect(container.textContent).not.toContain("hidden@example.invalid");
     expect(container.textContent).not.toContain("untrusted.invalid");
-    expect(container.textContent).toContain(locale === "en"
-      ? "Configured permission grants: 0" : "Konfigurierte Berechtigungszuweisungen: 0");
-    expect(container.textContent).toContain(locale === "en"
-      ? "Security level details were not provided." : "Details der Sicherheitsstufen wurden nicht bereitgestellt.");
-    expect(container.textContent).toContain(locale === "en"
-      ? "Configured security levels: 0" : "Konfigurierte Sicherheitsstufen: 0");
-    expect(container.textContent).toContain(locale === "en"
-      ? "Requested notification event details are unavailable."
-      : "Angeforderte Details der Benachrichtigungsereignisse sind nicht verfügbar.");
-    expect(container.textContent).toContain(locale === "en"
-      ? "Notification event details were not requested."
-      : "Details der Benachrichtigungsereignisse wurden nicht angefordert.");
-    expect(container.textContent).toContain(locale === "en"
-      ? "Effective permissions for the current user have not been determined."
-      : "Wirksame Berechtigungen des aktuellen Benutzers wurden nicht ermittelt.");
+    expect(container.textContent).toContain(
+      locale === "en"
+        ? "Configured permission grants: 0"
+        : "Konfigurierte Berechtigungszuweisungen: 0",
+    );
+    expect(container.textContent).toContain(
+      locale === "en"
+        ? "Security level details were not provided."
+        : "Details der Sicherheitsstufen wurden nicht bereitgestellt.",
+    );
+    expect(container.textContent).toContain(
+      locale === "en" ? "Configured security levels: 0" : "Konfigurierte Sicherheitsstufen: 0",
+    );
+    expect(container.textContent).toContain(
+      locale === "en"
+        ? "Requested notification event details are unavailable."
+        : "Angeforderte Details der Benachrichtigungsereignisse sind nicht verfügbar.",
+    );
+    expect(container.textContent).toContain(
+      locale === "en"
+        ? "Notification event details were not requested."
+        : "Details der Benachrichtigungsereignisse wurden nicht angefordert.",
+    );
+    expect(container.textContent).toContain(
+      locale === "en"
+        ? "Effective permissions for the current user have not been determined."
+        : "Wirksame Berechtigungen des aktuellen Benutzers wurden nicht ermittelt.",
+    );
     expect(container.querySelector("pre, img, a")).toBeNull();
     expect(await axe(container)).toHaveNoViolations();
   });
@@ -234,26 +412,59 @@ describe.each(["en", "de"] as const)("private Jira directory results in %s", (lo
     };
     const cases: readonly [string, CatalogJsonObject, string, string][] = [
       ["jira_user", user, "Read Jira user", "Jira-Benutzer lesen"],
-      ["jira_users", { items: [user], startAt: 0, searchLimit: 100 }, "Search Jira users", "Jira-Benutzer suchen"],
-      ["jira_user_directory", { items: [user], isLast: false, nextCursor: "9223372036854775807" }, "Read a Jira user directory page", "Eine Jira-Benutzerverzeichnisseite lesen"],
-      ["jira_user_picker", { items: [user], total: 4 }, "Suggest Jira users", "Jira-Benutzer vorschlagen"],
-      ["jira_group_members", { groupName: "R&D team", items: [user], startAt: 0, total: 1 }, "Read Jira group members", "Jira-Gruppenmitglieder lesen"],
-      ["jira_groups", { items: [{ name: "Developers", html: "<b>Untrusted HTML</b>" }] }, "Suggest Jira groups", "Jira-Gruppen vorschlagen"],
-      ["jira_application_roles", { items: [role], startAt: 0, total: 1 }, "Read Jira application roles", "Jira-Anwendungsrollen lesen"],
+      [
+        "jira_users",
+        { items: [user], startAt: 0, searchLimit: 100 },
+        "Search Jira users",
+        "Jira-Benutzer suchen",
+      ],
+      [
+        "jira_user_directory",
+        { items: [user], isLast: false, nextCursor: "9223372036854775807" },
+        "Read a Jira user directory page",
+        "Eine Jira-Benutzerverzeichnisseite lesen",
+      ],
+      [
+        "jira_user_picker",
+        { items: [user], total: 4 },
+        "Suggest Jira users",
+        "Jira-Benutzer vorschlagen",
+      ],
+      [
+        "jira_group_members",
+        { groupName: "R&D team", items: [user], startAt: 0, total: 1 },
+        "Read Jira group members",
+        "Jira-Gruppenmitglieder lesen",
+      ],
+      [
+        "jira_groups",
+        { items: [{ name: "Developers", html: "<b>Untrusted HTML</b>" }] },
+        "Suggest Jira groups",
+        "Jira-Gruppen vorschlagen",
+      ],
+      [
+        "jira_application_roles",
+        { items: [role], startAt: 0, total: 1 },
+        "Read Jira application roles",
+        "Jira-Anwendungsrollen lesen",
+      ],
       ["jira_application_role", role, "Read Jira application role", "Jira-Anwendungsrolle lesen"],
     ];
-    const restored = JSON.parse(JSON.stringify({
-      schemaVersion: 1,
-      exchanges: cases.map(([operation, data], index) => ({
-        ...projectExchange({ outcome: "succeeded", ...data }, operation),
-        call: { id: `directory-${String(index)}`, name: operation, arguments: {} },
-      })),
-    })) as ChatToolTranscript;
-    const renderReceipt = (): ReturnType<typeof render> => render(
-      <I18nProvider>
-        <JiraChatTools transcript={restored} turnState="completed" />
-      </I18nProvider>,
-    );
+    const restored = JSON.parse(
+      JSON.stringify({
+        schemaVersion: 1,
+        exchanges: cases.map(([operation, data], index) => ({
+          ...projectExchange({ outcome: "succeeded", ...data }, operation),
+          call: { id: `directory-${String(index)}`, name: operation, arguments: {} },
+        })),
+      }),
+    ) as ChatToolTranscript;
+    const renderReceipt = (): ReturnType<typeof render> =>
+      render(
+        <I18nProvider>
+          <JiraChatTools transcript={restored} turnState="completed" />
+        </I18nProvider>,
+      );
     const first = renderReceipt();
     const before = first.container.textContent;
     first.unmount();
@@ -261,51 +472,106 @@ describe.each(["en", "de"] as const)("private Jira directory results in %s", (lo
     expect(container.textContent).toBe(before);
     for (const [, , en, de] of cases)
       expect(screen.getByRole("group", { name: locale === "en" ? en : de })).toBeVisible();
-    for (const value of ["JIRAUSER10100", "Synthetic-User", "Synthetic User", "Developers", "R&D team"])
+    for (const value of [
+      "JIRAUSER10100",
+      "Synthetic-User",
+      "Synthetic User",
+      "Developers",
+      "R&D team",
+    ])
       expect(container.textContent).toContain(value);
-    for (const value of ["private@example.invalid", "untrusted.invalid", "Untrusted HTML", "9223372036854775807"])
+    for (const value of [
+      "private@example.invalid",
+      "untrusted.invalid",
+      "Untrusted HTML",
+      "9223372036854775807",
+    ])
       expect(container.textContent).not.toContain(value);
     const roleCard = screen.getByRole("group", {
       name: locale === "en" ? "Read Jira application role" : "Jira-Anwendungsrolle lesen",
     });
-    for (const value of [": -1", ": -7", ": 12", ": 0"])
-      expect(roleCard).toHaveTextContent(value);
+    for (const value of [": -1", ": -7", ": 12", ": 0"]) expect(roleCard).toHaveTextContent(value);
     expect(roleCard).toHaveTextContent(locale === "en" ? "Unlimited seats" : "Unbegrenzte Plätze");
-    expect(roleCard).toHaveTextContent(locale === "en"
-      ? "Not selected by default for new users"
-      : "Für neue Benutzer nicht standardmäßig ausgewählt");
+    expect(roleCard).toHaveTextContent(
+      locale === "en"
+        ? "Not selected by default for new users"
+        : "Für neue Benutzer nicht standardmäßig ausgewählt",
+    );
     expect(container.querySelector("pre, img, a")).toBeNull();
     expect(await axe(container)).toHaveNoViolations();
   });
   it("keeps a bounded user search distinct from the complete user directory", () => {
-    const { container } = show(projectExchange({
-      outcome: "succeeded",
-      items: [{ key: "U1", name: "Unknown status" }],
-      startAt: 99,
-      searchLimit: 100,
-    }, "jira_users"));
-    expect(container.textContent).toContain(locale === "en"
-      ? "This search covers at most the first 100 matching users. It is not a complete user directory."
-      : "Diese Suche umfasst höchstens die ersten 100 passenden Benutzer. Sie ist kein vollständiges Benutzerverzeichnis.");
-    expect(container.textContent).toContain(locale === "en" ? "Account activity was not provided" : "Kontoaktivität wurde nicht angegeben");
-    expect(container.textContent).toContain(locale === "en" ? "Account deletion state was not provided" : "Löschstatus des Kontos wurde nicht angegeben");
+    const { container } = show(
+      projectExchange(
+        {
+          outcome: "succeeded",
+          items: [{ key: "U1", name: "Unknown status" }],
+          startAt: 99,
+          searchLimit: 100,
+        },
+        "jira_users",
+      ),
+    );
+    expect(container.textContent).toContain(
+      locale === "en"
+        ? "This search covers at most the first 100 matching users. It is not a complete user directory."
+        : "Diese Suche umfasst höchstens die ersten 100 passenden Benutzer. Sie ist kein vollständiges Benutzerverzeichnis.",
+    );
+    expect(container.textContent).toContain(
+      locale === "en"
+        ? "Account activity was not provided"
+        : "Kontoaktivität wurde nicht angegeben",
+    );
+    expect(container.textContent).toContain(
+      locale === "en"
+        ? "Account deletion state was not provided"
+        : "Löschstatus des Kontos wurde nicht angegeben",
+    );
   });
-  it.each([true, false, undefined])("keeps the directory page state %s without displaying a cursor as an identity", (isLast) => {
-    const { container } = show(projectExchange({
-      outcome: "succeeded", items: [], ...(isLast === undefined ? {} : { isLast }),
-      nextCursor: "-9223372036854775808",
-    }, "jira_user_directory"));
-    const labels = locale === "en"
-      ? ["This is the last page of this directory read.", "More directory pages are available.", "Jira did not confirm whether more directory pages exist."]
-      : ["Dies ist die letzte Seite dieser Verzeichnisabfrage.", "Weitere Verzeichnisseiten sind verfügbar.", "Jira hat nicht bestätigt, ob weitere Verzeichnisseiten existieren."];
-    expect(container.textContent).toContain(labels[isLast === true ? 0 : isLast === false ? 1 : 2]);
-    expect(container.textContent).not.toContain("-9223372036854775808");
-    expect(container.querySelector("a")).toBeNull();
-  });
+  it.each([true, false, undefined])(
+    "keeps the directory page state %s without displaying a cursor as an identity",
+    (isLast) => {
+      const { container } = show(
+        projectExchange(
+          {
+            outcome: "succeeded",
+            items: [],
+            ...(isLast === undefined ? {} : { isLast }),
+            nextCursor: "-9223372036854775808",
+          },
+          "jira_user_directory",
+        ),
+      );
+      const labels =
+        locale === "en"
+          ? [
+              "This is the last page of this directory read.",
+              "More directory pages are available.",
+              "Jira did not confirm whether more directory pages exist.",
+            ]
+          : [
+              "Dies ist die letzte Seite dieser Verzeichnisabfrage.",
+              "Weitere Verzeichnisseiten sind verfügbar.",
+              "Jira hat nicht bestätigt, ob weitere Verzeichnisseiten existieren.",
+            ];
+      expect(container.textContent).toContain(
+        labels[isLast === true ? 0 : isLast === false ? 1 : 2],
+      );
+      expect(container.textContent).not.toContain("-9223372036854775808");
+      expect(container.querySelector("a")).toBeNull();
+    },
+  );
   it("does not infer unlimited seats or missing group counts from negative metrics", () => {
-    const { container } = show(projectExchange({
-      outcome: "succeeded", key: "jira-core", numberOfSeats: -1,
-    }, "jira_application_role"));
+    const { container } = show(
+      projectExchange(
+        {
+          outcome: "succeeded",
+          key: "jira-core",
+          numberOfSeats: -1,
+        },
+        "jira_application_role",
+      ),
+    );
     expect(container.textContent).toContain(": -1");
     for (const value of locale === "en"
       ? ["Unlimited seats", "Limited seats", "Group count:", "Default group count:"]
@@ -368,7 +634,8 @@ describe.each(["en", "de"] as const)("persistent Jira deletion receipts in %s", 
             }
           : {
               succeeded: "Jira-Änderung bestätigt",
-              "succeeded-unconfirmed": "Jira hat die Änderung angenommen; Bestätigung unvollständig",
+              "succeeded-unconfirmed":
+                "Jira hat die Änderung angenommen; Bestätigung unvollständig",
               unknown: "Ausgang der Jira-Aktion unbekannt",
             };
       expect(screen.getAllByText(labels[state])).toHaveLength(3);

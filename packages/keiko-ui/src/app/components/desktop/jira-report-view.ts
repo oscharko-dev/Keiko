@@ -84,6 +84,14 @@ function figuresOf(report: Record<string, unknown>): JiraReportView["figures"] {
   return { ...status, ...audit, ...coverage, donePercent: percent, inferredParentFields: inferred };
 }
 
+function reportCompleteness(
+  report: Record<string, unknown> | undefined,
+): Pick<JiraReportView, "reason" | "failure"> {
+  const completeness = record(report?.completeness);
+  const reason = JIRA_REPORT_INCOMPLETE_REASONS.find((item) => item === completeness?.reason);
+  const failure = JIRA_REPORT_FAILURE_REASONS.find((item) => item === completeness?.failure);
+  return { reason, ...(failure === undefined ? {} : { failure }) };
+}
 /** Undefined for anything that is not a well-formed `jira.report` result. */
 export function jiraReportView(data: unknown): JiraReportView | undefined {
   const result = record(data);
@@ -98,17 +106,12 @@ export function jiraReportView(data: unknown): JiraReportView | undefined {
   )
     return undefined;
   const report = record(result.report);
-  const reason = JIRA_REPORT_INCOMPLETE_REASONS.find(
-    (item) => item === record(report?.completeness)?.reason,
-  );
-  const failure = JIRA_REPORT_FAILURE_REASONS.find((item) => item === record(report?.completeness)?.failure);
   return {
     reportId: result.reportId,
     status,
     issuesRead: read,
     issuesTotal: count(progress?.issuesTotal),
-    reason,
-    ...(failure === undefined ? {} : { failure }),
+    ...reportCompleteness(report),
     figures: report === undefined ? undefined : figuresOf(report),
   };
 }

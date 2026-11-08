@@ -1,3 +1,5 @@
+import { projectJiraDescriptionInput } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { say } from "./jira-result.test-fixture";
 import { render, screen, waitFor } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -26,6 +28,11 @@ function approvalFor(operation: Operation): ChatToolWriteApprovalView {
     state: "pending",
   };
 }
+const PREFERENCE_VALUE_LABELS = new Map<unknown, readonly [string, string]>([
+  [false, ["Boolean: false", "Wahrheitswert: falsch"]],
+  [0, ["Integer: 0", "Ganzzahl: 0"]],
+  ["", ["Value: empty text", "Wert: leerer Text"]],
+]);
 const JSON_SHAPE = /[{}[\]]|"[^"\s]+"\s*:/u;
 
 async function reviewed(
@@ -54,12 +61,12 @@ async function reviewed(
   await waitFor(() =>
     expect(
       screen.getByRole("button", {
-        name: locale === "en" ? "Approve this action" : "Diese Aktion genehmigen",
+        name: say(locale, "Approve this action", "Diese Aktion genehmigen"),
       }),
     ).toBeEnabled(),
   );
   const region = screen.getByRole("region", {
-    name: locale === "en" ? "Review Jira action" : "Jira-Aktion prüfen",
+    name: say(locale, "Review Jira action", "Jira-Aktion prüfen"),
   });
   return { text: region.textContent ?? "", region, container };
 }
@@ -74,158 +81,440 @@ afterEach(() => {
 });
 
 describe.each(["en", "de"] as const)("reviewed typed property changes in %s", (locale) => {
-  it.each(([
-    { set: "jira.set-board-property", remove: "jira.delete-board-property", entity: { boardId: "7" } },
-    { set: "jira.set-sprint-property", remove: "jira.delete-sprint-property", entity: { sprintId: "9" } },
-    { set: "jira.set-comment-property", remove: "jira.delete-comment-property", entity: { issueIdOrKey: "SYN-1", commentId: "10002" } },
-    { set: "jira.set-dashboard-item-property", remove: "jira.delete-dashboard-item-property", entity: { dashboardId: "71", itemId: "81" } },
-    { set: "jira.set-issue-property", remove: "jira.delete-issue-property", entity: { issueIdOrKey: "SYN-1" } },
-    { set: "jira.set-issue-type-property", remove: "jira.delete-issue-type-property", entity: { issueTypeId: "10001" } },
-    { set: "jira.set-project-property", remove: "jira.delete-project-property", entity: { projectIdOrKey: "SYN" } },
-    { set: "jira.set-user-property", remove: "jira.delete-user-property", entity: { username: "Synthetic-User" } },
-  ] as const).flatMap(({ set, remove, entity }) => [{ operation: set, entity }, { operation: remove, entity }]))(
-    "shows the complete reviewed typed value and selected entity for $operation", async ({ operation, entity }) => {
+  it.each(
+    (
+      [
+        {
+          set: "jira.set-board-property",
+          remove: "jira.delete-board-property",
+          entity: { boardId: "7" },
+        },
+        {
+          set: "jira.set-sprint-property",
+          remove: "jira.delete-sprint-property",
+          entity: { sprintId: "9" },
+        },
+        {
+          set: "jira.set-comment-property",
+          remove: "jira.delete-comment-property",
+          entity: { issueIdOrKey: "SYN-1", commentId: "10002" },
+        },
+        {
+          set: "jira.set-dashboard-item-property",
+          remove: "jira.delete-dashboard-item-property",
+          entity: { dashboardId: "71", itemId: "81" },
+        },
+        {
+          set: "jira.set-issue-property",
+          remove: "jira.delete-issue-property",
+          entity: { issueIdOrKey: "SYN-1" },
+        },
+        {
+          set: "jira.set-issue-type-property",
+          remove: "jira.delete-issue-type-property",
+          entity: { issueTypeId: "10001" },
+        },
+        {
+          set: "jira.set-project-property",
+          remove: "jira.delete-project-property",
+          entity: { projectIdOrKey: "SYN" },
+        },
+        {
+          set: "jira.set-user-property",
+          remove: "jira.delete-user-property",
+          entity: { username: "Synthetic-User" },
+        },
+      ] as const
+    ).flatMap(({ set, remove, entity }) => [
+      { operation: set, entity },
+      { operation: remove, entity },
+    ]),
+  )(
+    "shows the complete reviewed typed value and selected entity for $operation",
+    async ({ operation, entity }) => {
       const expectedValueNodes = [
-        { path: "", kind: "object", childCount: 8 }, { path: "/", kind: "null" },
-        { path: "/a~1b~0c", kind: "array", childCount: 0 }, { path: "/empty-object", kind: "object", childCount: 0 },
-        { path: "/text", kind: "string", textValue: " " }, { path: "/flag", kind: "boolean", booleanValue: false },
-        { path: "/zero", kind: "number", numberValue: 0 }, { path: "/empty-text", kind: "string", textValue: "" },
+        { path: "", kind: "object", childCount: 8 },
+        { path: "/", kind: "null" },
+        { path: "/a~1b~0c", kind: "array", childCount: 0 },
+        { path: "/empty-object", kind: "object", childCount: 0 },
+        { path: "/text", kind: "string", textValue: " " },
+        { path: "/flag", kind: "boolean", booleanValue: false },
+        { path: "/zero", kind: "number", numberValue: 0 },
+        { path: "/empty-text", kind: "string", textValue: "" },
         { path: "/control\u0000\\", kind: "string", textValue: "\u0000\u0085\\u0000" },
       ];
       const set = operation.startsWith("jira.set-");
-      const review = await reviewed(operation, { ...entity, propertyKey: "view ~settings", expectedValueNodes,
-        ...(set ? { valueNodes: [{ path: "", kind: "null" }] } : {}),
-      }, locale);
-      for (const value of [...Object.values(entity), "view ~settings", "/a~1b~0c", "/empty-object", "/zero"])
+      const review = await reviewed(
+        operation,
+        {
+          ...entity,
+          propertyKey: "view ~settings",
+          expectedValueNodes,
+          ...(set ? { valueNodes: [{ path: "", kind: "null" }] } : {}),
+        },
+        locale,
+      );
+      for (const value of [
+        ...Object.values(entity),
+        "view ~settings",
+        "/a~1b~0c",
+        "/empty-object",
+        "/zero",
+      ])
         expect(review.text).toContain(value);
-      const labels = locale === "en" ? ["Reviewed existing property value", "Root: the whole property value", "Value: JSON null", "Value: empty array", "Value: empty object", "Value: empty text", "Boolean: false"]
-        : ["Geprüfter bestehender Property-Wert", "Wurzel: der gesamte Property-Wert", "Wert: JSON-null", "Wert: leeres Array", "Wert: leeres Objekt", "Wert: leerer Text", "Wahrheitswert: falsch"];
+      const labels =
+        locale === "en"
+          ? [
+              "Reviewed existing property value",
+              "Root: the whole property value",
+              "Value: JSON null",
+              "Value: empty array",
+              "Value: empty object",
+              "Value: empty text",
+              "Boolean: false",
+            ]
+          : [
+              "Geprüfter bestehender Property-Wert",
+              "Wurzel: der gesamte Property-Wert",
+              "Wert: JSON-null",
+              "Wert: leeres Array",
+              "Wert: leeres Objekt",
+              "Wert: leerer Text",
+              "Wahrheitswert: falsch",
+            ];
       for (const label of labels) expect(review.text).toContain(label);
       expect(review.text).toContain(String.raw`/control\u0000\\`);
       expect(review.text).toContain(String.raw`\u0000\u0085\\u0000`);
-      expect(review.text).toContain(locale === "en" ? "Display escapes:" : "Sichtbare Escape-Darstellung:");
-      expect(review.text.includes(locale === "en" ? "Requested new property value" : "Angeforderter neuer Property-Wert")).toBe(set);
+      expect(review.text).toContain(
+        say(locale, "Display escapes:", "Sichtbare Escape-Darstellung:"),
+      );
+      expect(
+        review.text.includes(
+          say(locale, "Requested new property value", "Angeforderter neuer Property-Wert"),
+        ),
+      ).toBe(set);
       expect(review.text).not.toContain("expectedValueNodes");
       expect(review.text).not.toContain("childCount");
       expectNoJson(review);
-      if (operation === "jira.set-issue-property") expect(await axe(review.container)).toHaveNoViolations();
+      if (operation === "jira.set-issue-property")
+        expect(await axe(review.container)).toHaveNoViolations();
     },
   );
   it("distinguishes reviewed absence from a requested literal JSON null", async () => {
-    const review = await reviewed("jira.set-issue-property", { issueIdOrKey: "SYN-1", propertyKey: "view.settings", expectAbsent: true,
-      valueNodes: [{ path: "", kind: "null" }],
-    }, locale);
-    expect(review.text).toContain(locale === "en" ? "Reviewed absence" : "Geprüfte Abwesenheit");
-    expect(review.text).toContain(locale === "en" ? "Value: JSON null" : "Wert: JSON-null");
-    expect(review.text).not.toContain(locale === "en" ? "Reviewed existing property value" : "Geprüfter bestehender Property-Wert");
+    const review = await reviewed(
+      "jira.set-issue-property",
+      {
+        issueIdOrKey: "SYN-1",
+        propertyKey: "view.settings",
+        expectAbsent: true,
+        valueNodes: [{ path: "", kind: "null" }],
+      },
+      locale,
+    );
+    expect(review.text).toContain(say(locale, "Reviewed absence", "Geprüfte Abwesenheit"));
+    expect(review.text).toContain(say(locale, "Value: JSON null", "Wert: JSON-null"));
+    expect(review.text).not.toContain(
+      say(locale, "Reviewed existing property value", "Geprüfter bestehender Property-Wert"),
+    );
     expectNoJson(review);
   });
 });
 
-const REVIEWED_FILTER = { filterId: "9001", expectedOwnerKey: "owner-key", expectedName: "Reviewed filter", expectedJql: "project = SYN", expectedDescription: null };
-const REVIEWED_SHARES = [{ id: "9002", type: "group", groupName: "reviewed-group", view: true, edit: false }];
+const REVIEWED_FILTER = {
+  filterId: "9001",
+  expectedOwnerKey: "owner-key",
+  expectedName: "Reviewed filter",
+  expectedJql: "project = SYN",
+  expectedDescription: null,
+};
+const REVIEWED_SHARES = [
+  { id: "9002", type: "group", groupName: "reviewed-group", view: true, edit: false },
+];
 describe.each(["en", "de"] as const)("reviewed filter and preference changes in %s", (locale) => {
   it.each([
-    { operation: "jira.create-filter", args: { expectedActorKey: "owner-key", expectedDefaultShareScope: "PRIVATE", acceptDefaultSharing: true, name: "New filter", jql: "project = SYN", description: "" } },
+    {
+      operation: "jira.create-filter",
+      args: {
+        expectedActorKey: "owner-key",
+        expectedDefaultShareScope: "PRIVATE",
+        acceptDefaultSharing: true,
+        name: "New filter",
+        jql: "project = SYN",
+        description: "",
+      },
+    },
     { operation: "jira.update-filter", args: { ...REVIEWED_FILTER, description: "" } },
     { operation: "jira.delete-filter", args: REVIEWED_FILTER },
-    { operation: "jira.set-filter-share-scope", args: { expectedActorKey: "owner-key", expectedScope: "GLOBAL", scope: "PRIVATE" } },
-    { operation: "jira.set-filter-columns", args: { filterId: "9001", expectedOwnerKey: "owner-key", expectedColumns: ["summary", "status", "summary"], expectedColumnConfig: null, columns: ["status", "summary"] } },
-    { operation: "jira.reset-filter-columns", args: { filterId: "9001", expectedOwnerKey: "owner-key", expectedColumns: [], expectedColumnConfig: "FILTER" } },
-    { operation: "jira.add-filter-permission", args: { filterId: "9001", expectedOwnerKey: "owner-key", expectedPermissions: REVIEWED_SHARES, permission: { type: "global", view: true, edit: false }, acceptGlobalReplacement: true } },
-    { operation: "jira.delete-filter-permission", args: { filterId: "9001", expectedOwnerKey: "owner-key", expectedPermissions: REVIEWED_SHARES, permissionId: "9002" } },
-    { operation: "jira.set-my-preference", args: { expectedActorKey: "owner-key", key: "user.keyboard.shortcuts.disabled", expectedValue: true, value: false } },
-    { operation: "jira.set-my-preference", args: { expectedActorKey: "owner-key", key: "user.issues.per.page", expectedValue: 25, value: 0 } },
-    { operation: "jira.set-my-preference", args: { expectedActorKey: "owner-key", key: "jira.user.locale", expectedValue: "en", value: "" } },
-    { operation: "jira.delete-my-preference", args: { expectedActorKey: "owner-key", key: "jira.user.locale", expectedValue: "en" } },
-  ] as const)("shows the exact reviewed snapshot and native limitations for $operation", async ({ operation, args }) => {
-    const review = await reviewed(operation, args, locale);
-    expect(review.text).toContain("owner-key");
-    if ("filterId" in args) expect(review.text).toContain("9001");
-    if ("expectedPermissions" in args) {
-      expect(review.text).toContain("reviewed-group");
-      expect(review.text).toContain("9002");
-      expect(review.text).toContain(locale === "en" ? "Entry does not grant editing" : "Eintrag erlaubt kein Bearbeiten");
-    }
-    if (operation === "jira.create-filter") expect(review.text).toContain(locale === "en"
-      ? "The endpoint cannot atomically bind creation" : "Der Endpunkt kann die Erstellung nicht atomar");
-    if (operation === "jira.add-filter-permission") expect(review.text).toContain(locale === "en"
-      ? "Adding global sharing removes all existing filter shares" : "Eine globale Freigabe entfernt alle bestehenden Filterfreigaben");
-    if (operation === "jira.delete-filter" || operation === "jira.delete-my-preference") expect(review.text).toContain(locale === "en"
-      ? "An acknowledged deletion remains unconfirmed" : "Eine angenommene Löschung bleibt unbestätigt");
-    if ("value" in args && args.value === false) expect(review.text).toContain(locale === "en" ? "Boolean: false" : "Wahrheitswert: falsch");
-    if ("value" in args && args.value === 0) expect(review.text).toContain(locale === "en" ? "Integer: 0" : "Ganzzahl: 0");
-    if ("value" in args && args.value === "") expect(review.text).toContain(locale === "en" ? "Value: empty text" : "Wert: leerer Text");
-    expectNoJson(review);
-    expect(review.region.querySelector("a, img")).toBeNull();
-    if (operation === "jira.add-filter-permission") expect(await axe(review.container)).toHaveNoViolations();
-  });
+    {
+      operation: "jira.set-filter-share-scope",
+      args: { expectedActorKey: "owner-key", expectedScope: "GLOBAL", scope: "PRIVATE" },
+    },
+    {
+      operation: "jira.set-filter-columns",
+      args: {
+        filterId: "9001",
+        expectedOwnerKey: "owner-key",
+        expectedColumns: ["summary", "status", "summary"],
+        expectedColumnConfig: null,
+        columns: ["status", "summary"],
+      },
+    },
+    {
+      operation: "jira.reset-filter-columns",
+      args: {
+        filterId: "9001",
+        expectedOwnerKey: "owner-key",
+        expectedColumns: [],
+        expectedColumnConfig: "FILTER",
+      },
+    },
+    {
+      operation: "jira.add-filter-permission",
+      args: {
+        filterId: "9001",
+        expectedOwnerKey: "owner-key",
+        expectedPermissions: REVIEWED_SHARES,
+        permission: { type: "global", view: true, edit: false },
+        acceptGlobalReplacement: true,
+      },
+    },
+    {
+      operation: "jira.delete-filter-permission",
+      args: {
+        filterId: "9001",
+        expectedOwnerKey: "owner-key",
+        expectedPermissions: REVIEWED_SHARES,
+        permissionId: "9002",
+      },
+    },
+    {
+      operation: "jira.set-my-preference",
+      args: {
+        expectedActorKey: "owner-key",
+        key: "user.keyboard.shortcuts.disabled",
+        expectedValue: true,
+        value: false,
+      },
+    },
+    {
+      operation: "jira.set-my-preference",
+      args: {
+        expectedActorKey: "owner-key",
+        key: "user.issues.per.page",
+        expectedValue: 25,
+        value: 0,
+      },
+    },
+    {
+      operation: "jira.set-my-preference",
+      args: {
+        expectedActorKey: "owner-key",
+        key: "jira.user.locale",
+        expectedValue: "en",
+        value: "",
+      },
+    },
+    {
+      operation: "jira.delete-my-preference",
+      args: { expectedActorKey: "owner-key", key: "jira.user.locale", expectedValue: "en" },
+    },
+  ] as const)(
+    "shows the exact reviewed snapshot and native limitations for $operation",
+    async ({ operation, args }) => {
+      const review = await reviewed(operation, args, locale);
+      expect(review.text).toContain("owner-key");
+      if ("filterId" in args) expect(review.text).toContain("9001");
+      if ("expectedPermissions" in args) {
+        expect(review.text).toContain("reviewed-group");
+        expect(review.text).toContain("9002");
+        expect(review.text).toContain(
+          say(locale, "Entry does not grant editing", "Eintrag erlaubt kein Bearbeiten"),
+        );
+      }
+      if (operation === "jira.create-filter")
+        expect(review.text).toContain(
+          say(
+            locale,
+            "The endpoint cannot atomically bind creation",
+            "Der Endpunkt kann die Erstellung nicht atomar",
+          ),
+        );
+      if (operation === "jira.add-filter-permission")
+        expect(review.text).toContain(
+          say(
+            locale,
+            "Adding global sharing removes all existing filter shares",
+            "Eine globale Freigabe entfernt alle bestehenden Filterfreigaben",
+          ),
+        );
+      if (operation === "jira.delete-filter" || operation === "jira.delete-my-preference")
+        expect(review.text).toContain(
+          say(
+            locale,
+            "An acknowledged deletion remains unconfirmed",
+            "Eine angenommene Löschung bleibt unbestätigt",
+          ),
+        );
+      if ("value" in args) {
+        const labels = PREFERENCE_VALUE_LABELS.get(args.value);
+        if (labels !== undefined) expect(review.text).toContain(say(locale, ...labels));
+      }
+      expectNoJson(review);
+      expect(review.region.querySelector("a, img")).toBeNull();
+      if (operation === "jira.add-filter-permission")
+        expect(await axe(review.container)).toHaveNoViolations();
+    },
+  );
 });
 
 describe.each(["en", "de"] as const)("reviewed monitoring changes in %s", (locale) => {
   it.each([
-    ["jira.set-app-monitoring", false, true], ["jira.set-ipd-monitoring", true, false],
-    ["jira.start-jmx-metrics", false, true], ["jira.stop-jmx-metrics", true, false],
-  ] as const)("shows the exact prior state and requested target for %s", async (operation, expectedEnabled, enabled) => {
-    const args = operation === "jira.set-app-monitoring" || operation === "jira.set-ipd-monitoring"
-      ? { expectedEnabled, enabled } : { expectedEnabled };
-    const review = await reviewed(operation, args, locale);
-    for (const label of locale === "en" ? ["Reviewed current enabled state", "Requested enabled state", "Scope of this change", "Enabled", "Disabled"]
-      : ["Geprüfter aktueller Aktivierungszustand", "Angeforderter Aktivierungszustand", "Geltungsbereich dieser Änderung", "Aktiviert", "Deaktiviert"])
-      expect(review.text).toContain(label);
-    const reviewedLabel = locale === "en" ? "Reviewed current enabled state" : "Geprüfter aktueller Aktivierungszustand";
-    const targetLabel = locale === "en" ? "Requested enabled state" : "Angeforderter Aktivierungszustand";
-    const terms = [...review.region.querySelectorAll("dt")];
-    for (const [label, value] of [[reviewedLabel, expectedEnabled], [targetLabel, enabled]] as const) {
-      const expected = locale === "en" ? (value ? "Enabled" : "Disabled") : (value ? "Aktiviert" : "Deaktiviert");
-      expect(terms.find((term) => term.textContent === label)?.nextElementSibling?.textContent).toBe(expected);
-    }
-    expect(review.text).toContain(locale === "en" ? "Jira instance" : "Jira-Instanz");
-    expect(review.text).not.toContain("expectedEnabled");
-    expectNoJson(review);
-    expect(await axe(review.container)).toHaveNoViolations();
-  });
+    ["jira.set-app-monitoring", false, true],
+    ["jira.set-ipd-monitoring", true, false],
+    ["jira.start-jmx-metrics", false, true],
+    ["jira.stop-jmx-metrics", true, false],
+  ] as const)(
+    "shows the exact prior state and requested target for %s",
+    async (operation, expectedEnabled, enabled) => {
+      const args =
+        operation === "jira.set-app-monitoring" || operation === "jira.set-ipd-monitoring"
+          ? { expectedEnabled, enabled }
+          : { expectedEnabled };
+      const review = await reviewed(operation, args, locale);
+      for (const label of locale === "en"
+        ? [
+            "Reviewed current enabled state",
+            "Requested enabled state",
+            "Scope of this change",
+            "Enabled",
+            "Disabled",
+          ]
+        : [
+            "Geprüfter aktueller Aktivierungszustand",
+            "Angeforderter Aktivierungszustand",
+            "Geltungsbereich dieser Änderung",
+            "Aktiviert",
+            "Deaktiviert",
+          ])
+        expect(review.text).toContain(label);
+      const reviewedLabel = say(
+        locale,
+        "Reviewed current enabled state",
+        "Geprüfter aktueller Aktivierungszustand",
+      );
+      const targetLabel = say(
+        locale,
+        "Requested enabled state",
+        "Angeforderter Aktivierungszustand",
+      );
+      const terms = [...review.region.querySelectorAll("dt")];
+      for (const [label, value] of [
+        [reviewedLabel, expectedEnabled],
+        [targetLabel, enabled],
+      ] as const) {
+        const expected = say(
+          locale,
+          value ? "Enabled" : "Disabled",
+          value ? "Aktiviert" : "Deaktiviert",
+        );
+        expect(
+          terms.find((term) => term.textContent === label)?.nextElementSibling?.textContent,
+        ).toBe(expected);
+      }
+      expect(review.text).toContain(say(locale, "Jira instance", "Jira-Instanz"));
+      expect(review.text).not.toContain("expectedEnabled");
+      expectNoJson(review);
+      expect(await axe(review.container)).toHaveNoViolations();
+    },
+  );
 });
 
 describe.each(["en", "de"] as const)("reviewed screen tab changes in %s", (locale) => {
   it.each(["jira.create-screen-tab", "jira.rename-screen-tab"] as const)(
-    "shows the bound screen and exact reviewed/new names for %s", async (operation) => {
-      const review = await reviewed(operation, { screenId: "9223372036854775807", expectedScreenName: "Reviewed screen",
-        ...(operation === "jira.rename-screen-tab" ? { tabId: "9007199254740993", expectedName: "Current tab" } : {}),
-        name: "New tab name",
-      }, locale);
+    "shows the bound screen and exact reviewed/new names for %s",
+    async (operation) => {
+      const review = await reviewed(
+        operation,
+        {
+          screenId: "9223372036854775807",
+          expectedScreenName: "Reviewed screen",
+          ...(operation === "jira.rename-screen-tab"
+            ? { tabId: "9007199254740993", expectedName: "Current tab" }
+            : {}),
+          name: "New tab name",
+        },
+        locale,
+      );
       for (const value of ["9223372036854775807", "Reviewed screen", "New tab name"])
         expect(review.text).toContain(value);
-      for (const label of locale === "en" ? ["Reviewed screen name", "New tab name"] : ["Geprüfter Maskenname", "Neuer Tab-Name"])
+      for (const label of locale === "en"
+        ? ["Reviewed screen name", "New tab name"]
+        : ["Geprüfter Maskenname", "Neuer Tab-Name"])
         expect(review.text).toContain(label);
       if (operation === "jira.rename-screen-tab") {
         expect(review.text).toContain("9007199254740993");
         expect(review.text).toContain("Current tab");
-        expect(review.text).toContain(locale === "en" ? "Reviewed current tab name" : "Geprüfter aktueller Tab-Name");
+        expect(review.text).toContain(
+          say(locale, "Reviewed current tab name", "Geprüfter aktueller Tab-Name"),
+        );
       }
-      expect(review.text).not.toContain(locale === "en" ? "File name" : "Dateiname");
+      expect(review.text).not.toContain(say(locale, "File name", "Dateiname"));
       expectNoJson(review);
       expect(await axe(review.container)).toHaveNoViolations();
     },
   );
   it("displays the entire ordered reviewed field layout before deleting the selected tab", async () => {
-    const review = await reviewed("jira.delete-screen-tab", { screenId: "71", expectedScreenName: "Reviewed screen",
-      tabId: "81", expectedName: "Reviewed tab", expectedFieldIds: ["summary", "customfield_10001", "description"],
-    }, locale);
-    for (const value of ["71", "81", "Reviewed screen", "Reviewed tab", "summary", "customfield_10001", "description"])
+    const review = await reviewed(
+      "jira.delete-screen-tab",
+      {
+        screenId: "71",
+        expectedScreenName: "Reviewed screen",
+        tabId: "81",
+        expectedName: "Reviewed tab",
+        expectedFieldIds: ["summary", "customfield_10001", "description"],
+      },
+      locale,
+    );
+    for (const value of [
+      "71",
+      "81",
+      "Reviewed screen",
+      "Reviewed tab",
+      "summary",
+      "customfield_10001",
+      "description",
+    ])
       expect(review.text).toContain(value);
-    expect(review.text).toContain(locale === "en" ? "Delete Jira screen tab" : "Jira-Masken-Tab löschen");
-    expect(review.text).toContain(locale === "en" ? "Reviewed field IDs in their exact order" : "Geprüfte Feld-IDs in ihrer genauen Reihenfolge");
+    expect(review.text).toContain(say(locale, "Delete Jira screen tab", "Jira-Masken-Tab löschen"));
+    expect(review.text).toContain(
+      say(
+        locale,
+        "Reviewed field IDs in their exact order",
+        "Geprüfte Feld-IDs in ihrer genauen Reihenfolge",
+      ),
+    );
     expect(review.text.indexOf("summary")).toBeLessThan(review.text.indexOf("customfield_10001"));
-    expect(review.text.indexOf("customfield_10001")).toBeLessThan(review.text.indexOf("description"));
+    expect(review.text.indexOf("customfield_10001")).toBeLessThan(
+      review.text.indexOf("description"),
+    );
     expectNoJson(review);
     expect(await axe(review.container)).toHaveNoViolations();
   });
   it("distinguishes an explicitly reviewed empty field layout from omitted fields", async () => {
-    const review = await reviewed("jira.delete-screen-tab", { screenId: "71", expectedScreenName: "Reviewed screen",
-      tabId: "81", expectedName: "Reviewed tab", expectedFieldIds: [],
-    }, locale);
-    expect(review.text).toContain(locale === "en" ? "The reviewed tab contains no fields." : "Der geprüfte Tab enthält keine Felder.");
+    const review = await reviewed(
+      "jira.delete-screen-tab",
+      {
+        screenId: "71",
+        expectedScreenName: "Reviewed screen",
+        tabId: "81",
+        expectedName: "Reviewed tab",
+        expectedFieldIds: [],
+      },
+      locale,
+    );
+    expect(review.text).toContain(
+      say(locale, "The reviewed tab contains no fields.", "Der geprüfte Tab enthält keine Felder."),
+    );
     expectNoJson(review);
   });
 });
@@ -246,15 +535,14 @@ describe.each(["en", "de"] as const)("reviewed Jira deletion snapshots in %s", (
       );
       for (const value of ["SYN-7", "9007199254740993", "Reviewed comment to remove", "Developers"])
         expect(review.text).toContain(value);
+      expect(review.text).toContain(say(locale, "Delete Jira comment", "Jira-Kommentar löschen"));
       expect(review.text).toContain(
-        locale === "en" ? "Delete Jira comment" : "Jira-Kommentar löschen",
+        say(locale, "Reviewed comment text", "Geprüfter Kommentartext"),
       );
-      expect(review.text).toContain(
-        locale === "en" ? "Reviewed comment text" : "Geprüfter Kommentartext",
-      );
-      const visibilityLabels = locale === "en"
-        ? { group: "Visible to group", role: "Visible to role" }
-        : { group: "Sichtbar für Gruppe", role: "Sichtbar für Rolle" };
+      const visibilityLabels =
+        locale === "en"
+          ? { group: "Visible to group", role: "Visible to role" }
+          : { group: "Sichtbar für Gruppe", role: "Sichtbar für Rolle" };
       expect(review.text).toContain(visibilityLabels[type]);
       expectNoJson(review);
       expect(await axe(review.container)).toHaveNoViolations();
@@ -267,10 +555,10 @@ describe.each(["en", "de"] as const)("reviewed Jira deletion snapshots in %s", (
       locale,
     );
     expect(review.text).toContain(
-      locale === "en" ? "Reviewed text is empty" : "Der geprüfte Text ist leer",
+      say(locale, "Reviewed text is empty", "Der geprüfte Text ist leer"),
     );
     expect(review.text).toContain(
-      locale === "en" ? "No group or role restriction" : "Keine Gruppen- oder Rollenbeschränkung",
+      say(locale, "No group or role restriction", "Keine Gruppen- oder Rollenbeschränkung"),
     );
     expectNoJson(review);
   });
@@ -282,10 +570,8 @@ describe.each(["en", "de"] as const)("reviewed Jira deletion snapshots in %s", (
     );
     for (const value of ["SYN-8", "9007199254740993", "empty.txt", "0"])
       expect(review.text).toContain(value);
-    expect(review.text).toContain(
-      locale === "en" ? "Delete Jira attachment" : "Jira-Anhang löschen",
-    );
-    expect(review.text).toContain(locale === "en" ? "Size in bytes" : "Größe in Bytes");
+    expect(review.text).toContain(say(locale, "Delete Jira attachment", "Jira-Anhang löschen"));
+    expect(review.text).toContain(say(locale, "Size in bytes", "Größe in Bytes"));
     expectNoJson(review);
     expect(await axe(review.container)).toHaveNoViolations();
   });
@@ -307,19 +593,21 @@ describe.each(["en", "de"] as const)("reviewed Jira deletion snapshots in %s", (
       for (const value of ["SYN-9", "9007199254740993", "2026-11-07T12:30:00.000+0000", "0"])
         expect(review.text).toContain(value);
       expect(review.text).toContain(
-        locale === "en" ? "Delete Jira worklog" : "Jira-Arbeitsprotokoll löschen",
+        say(locale, "Delete Jira worklog", "Jira-Arbeitsprotokoll löschen"),
       );
       expect(review.text).toContain(
-        locale === "en" ? "Reviewed text is empty" : "Der geprüfte Text ist leer",
+        say(locale, "Reviewed text is empty", "Der geprüfte Text ist leer"),
       );
-      expect(review.text).toContain(locale === "en" ? "Remaining estimate" : "Restaufwand");
-      expect(review.text).toContain(locale === "en" ? "Keep unchanged" : "Unverändert lassen");
-      const unrestricted = locale === "en"
-        ? "No group or role restriction"
-        : "Keine Gruppen- oder Rollenbeschränkung";
+      expect(review.text).toContain(say(locale, "Remaining estimate", "Restaufwand"));
+      expect(review.text).toContain(say(locale, "Keep unchanged", "Unverändert lassen"));
+      const unrestricted = say(
+        locale,
+        "No group or role restriction",
+        "Keine Gruppen- oder Rollenbeschränkung",
+      );
       expect(review.text).toContain(visibility === null ? unrestricted : "Developers");
       expect(review.text).not.toContain(
-        locale === "en" ? "Clear the existing comment" : "Vorhandenen Kommentar leeren",
+        say(locale, "Clear the existing comment", "Vorhandenen Kommentar leeren"),
       );
       expect(review.text).not.toContain("adjustEstimate");
       expectNoJson(review);
@@ -338,7 +626,7 @@ describe.each(["en", "de"] as const)(
         locale,
       );
       expect(review.text).toContain(
-        locale === "en" ? "Clear the existing comment" : "Vorhandenen Kommentar leeren",
+        say(locale, "Clear the existing comment", "Vorhandenen Kommentar leeren"),
       );
       expectNoJson(review);
     });
@@ -370,7 +658,7 @@ describe.each(["en", "de"] as const)(
           : ["Zeitaufwand (Sekunden)", "Arbeitsbeginn", "Kommentar zur Arbeitszeit"])
           expect(review.text).toContain(value);
         if (operation === "jira.create-worklog") {
-          expect(review.text).toContain(locale === "en" ? "Visible to role" : "Sichtbar für Rolle");
+          expect(review.text).toContain(say(locale, "Visible to role", "Sichtbar für Rolle"));
           expect(review.text).toContain("Developers");
         } else expect(review.text).toContain("9007199254740993");
         expectNoJson(review);
@@ -414,7 +702,7 @@ describe.each(["en", "de"] as const)("readable comment updates in %s (#4298)", (
       { issueKey: "SYN-7", commentId: "9007199254740993", body: "Updated native comment" },
       locale,
     );
-    expect(review.text).toContain(locale === "en" ? "Comment ID" : "Kommentar-ID");
+    expect(review.text).toContain(say(locale, "Comment ID", "Kommentar-ID"));
     for (const value of ["SYN-7", "9007199254740993", "Updated native comment"])
       expect(review.text).toContain(value);
     expectNoJson(review);
@@ -469,7 +757,7 @@ describe.each(["en", "de"] as const)(
       async (operation, args, en, de) => {
         const review = await reviewed(operation, args, locale);
         expect(review.text).toContain(locale === "en" ? en : de);
-        expect(review.text).not.toContain(locale === "en" ? "File name" : "Dateiname");
+        expect(review.text).not.toContain(say(locale, "File name", "Dateiname"));
         for (const value of Object.values(args))
           if (typeof value === "string") expect(review.text).toContain(value);
         expectNoJson(review);
@@ -522,11 +810,9 @@ describe.each(["en", "de"] as const)("readable project approvals in %s (#4293)",
             ];
       for (const label of labels) expect(region.textContent).toContain(label);
       if (operation === "jira.create-project")
-        expect(region.textContent).toContain(
-          locale === "en" ? "Project template" : "Projektvorlage",
-        );
+        expect(region.textContent).toContain(say(locale, "Project template", "Projektvorlage"));
       for (const value of Object.values(args)) expect(region.textContent).toContain(value);
-      expect(region.textContent).not.toContain(locale === "en" ? "File name" : "Dateiname");
+      expect(region.textContent).not.toContain(say(locale, "File name", "Dateiname"));
       expect(region.querySelector("a")).toBeNull();
       expectNoJson({ region });
       expect(await axe(container)).toHaveNoViolations();
@@ -587,7 +873,7 @@ describe.each(["en", "de"] as const)("readable Agile approvals in %s (AC6)", (lo
       const review = await reviewed(operation, args, locale);
       expect(review.text).toContain(locale === "en" ? en : de);
       for (const value of Object.values(args).flat()) expect(review.text).toContain(String(value));
-      expect(review.text).not.toContain(locale === "en" ? "File name" : "Dateiname");
+      expect(review.text).not.toContain(say(locale, "File name", "Dateiname"));
       expect(JSON.stringify(args)).toBe(before);
       expectNoJson(review);
       expect(await axe(review.container)).toHaveNoViolations();
@@ -612,9 +898,9 @@ describe("Jira write approvals never show the request as JSON (#4178)", () => {
           : { projectId: "10000", issueTypeId: "10002", fields };
       const before = JSON.stringify(args);
       const review = await reviewed(operation, args);
-      expect(review.text).toContain(
-        "h2. Requirement\n\nExact\n\nh2. Criteria\n\n* one\n* two\n* three\n* four\n* five\n\nh2. Source\n\nExact source",
-      );
+      const canonical = projectJiraDescriptionInput(fields.description);
+      if (canonical === undefined) throw new TypeError("Missing canonical description projection");
+      expect(review.text).toContain(canonical.text);
       expect(JSON.stringify(args)).toBe(before);
       expect(fields.description).toEqual({ format: "markdown", text: description });
     },

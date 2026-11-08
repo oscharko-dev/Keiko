@@ -244,6 +244,7 @@ export const JIRA_PROJECT_TOOLS: ReadonlySet<string> = new Set([
 ]);
 const STANDALONE_TOOLS = new Set([
   ...JIRA_PROJECT_TOOLS,
+  ...JIRA_COLLABORATION_TOOLS,
   ...JIRA_AGILE_TOOLS,
   ...JIRA_PROJECT_METADATA_TOOLS,
   ...JIRA_SAVED_VIEW_TOOLS,
@@ -601,6 +602,39 @@ function issueContextItems(tool: string, data: UnknownRecord): JiraOutcomeItem[]
     }),
   ];
 }
+function collaborationItems(
+  tool: string,
+  data: UnknownRecord | undefined,
+  items: readonly unknown[],
+): JiraOutcomeItem[] | undefined {
+  if (
+    (!JIRA_COLLABORATION_TOOLS.has(tool) && !JIRA_SAVED_VIEW_TOOLS.has(tool)) ||
+    items.length === 0
+  )
+    return undefined;
+  return items.flatMap((entry) => {
+    const raw = record(entry);
+    const item = outcomeItem(
+      {
+        ...raw,
+        browseUrl: raw?.browseUrl ?? data?.browseUrl,
+        filterId: raw?.filterId ?? data?.filterId,
+      },
+      tool,
+    );
+    return item === undefined ? [] : [item];
+  });
+}
+function outcomeSources(
+  tool: string,
+  data: UnknownRecord | undefined,
+  items: readonly unknown[],
+  progress: readonly unknown[],
+): readonly unknown[] {
+  return data?.issueKey !== undefined || STANDALONE_TOOLS.has(tool)
+    ? [data, ...items, ...progress]
+    : [...items, ...progress];
+}
 function outcomeItems(
   exchange: ChatToolExchange,
   data: UnknownRecord | undefined,
@@ -616,25 +650,9 @@ function outcomeItems(
     return configurationItems(exchange.call.name, data ?? {}, configuration);
   const items = returnedEntries(data, exchange.call.name) ?? [];
   const progress = Array.isArray(exchange.draftProgress?.items) ? exchange.draftProgress.items : [];
-  const single = data?.issueKey !== undefined || STANDALONE_TOOLS.has(exchange.call.name);
-  const source = single ? [data, ...items, ...progress] : [...items, ...progress];
-  if (
-    (JIRA_COLLABORATION_TOOLS.has(exchange.call.name) ||
-      JIRA_SAVED_VIEW_TOOLS.has(exchange.call.name)) &&
-    items.length > 0
-  )
-    return items.flatMap((entry) => {
-      const raw = record(entry);
-      const item = outcomeItem(
-        {
-          ...raw,
-          browseUrl: raw?.browseUrl ?? data?.browseUrl,
-          filterId: raw?.filterId ?? data?.filterId,
-        },
-        exchange.call.name,
-      );
-      return item === undefined ? [] : [item];
-    });
+  const source = outcomeSources(exchange.call.name, data, items, progress);
+  const collaboration = collaborationItems(exchange.call.name, data, items);
+  if (collaboration !== undefined) return collaboration;
   const seen = new Set<string>();
   return source.flatMap((entry) => {
     const item = outcomeItem(entry, exchange.call.name);
@@ -1212,29 +1230,33 @@ function problemViews(
     hiddenProblemCount: Math.max(0, all.length - JIRA_OUTCOME_PROBLEMS_SHOWN),
   };
 }
-/** A display projection of the immutable receipt, shared by the live turn and restored history. */
-export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcomeView {
-  const knowledge = knowledgeToolOutcomeView(exchange);
-  if (knowledge !== undefined) return knowledge;
+function storedOutcomeData(exchange: ChatToolExchange): UnknownRecord {
   const stored = record(exchange.result?.data) ?? {};
-  const data =
-    [
-      JIRA_PARTICIPATION_TOOLS,
-      JIRA_MONITORING_WRITE_TOOLS,
-      JIRA_PROPERTY_MUTATION_TOOLS,
-      JIRA_SAVED_CONFIGURATION_WRITE_TOOLS,
-      JIRA_RELEASE_LIFECYCLE_TOOLS,
-      JIRA_LINK_MUTATION_TOOLS,
-      JIRA_CONFIGURATION_MUTATION_TOOLS,
-      JIRA_PLANNING_MUTATION_TOOLS,
-      JIRA_ACCESS_CONFIGURATION_TOOLS,
-      JIRA_SCHEME_ADMINISTRATION_TOOLS,
-      JIRA_INSTANCE_ADMINISTRATION_WRITE_TOOLS,
-      JIRA_SYSTEM_ACTION_TOOLS,
-      JIRA_ACCOUNT_RESOURCE_WRITE_TOOLS,
-    ].some((tools) => tools.has(exchange.call.name)) && exchange.mutationOutcome !== undefined
-      ? { ...stored, outcome: exchange.mutationOutcome }
-      : stored;
+  return [
+    JIRA_PARTICIPATION_TOOLS,
+    JIRA_MONITORING_WRITE_TOOLS,
+    JIRA_PROPERTY_MUTATION_TOOLS,
+    JIRA_SAVED_CONFIGURATION_WRITE_TOOLS,
+    JIRA_RELEASE_LIFECYCLE_TOOLS,
+    JIRA_LINK_MUTATION_TOOLS,
+    JIRA_CONFIGURATION_MUTATION_TOOLS,
+    JIRA_PLANNING_MUTATION_TOOLS,
+    JIRA_ACCESS_CONFIGURATION_TOOLS,
+    JIRA_SCHEME_ADMINISTRATION_TOOLS,
+    JIRA_INSTANCE_ADMINISTRATION_WRITE_TOOLS,
+    JIRA_SYSTEM_ACTION_TOOLS,
+    JIRA_ACCOUNT_RESOURCE_WRITE_TOOLS,
+  ].some((tools) => tools.has(exchange.call.name)) && exchange.mutationOutcome !== undefined
+    ? { ...stored, outcome: exchange.mutationOutcome }
+    : stored;
+}
+function resultItemsView(
+  exchange: ChatToolExchange,
+  data: UnknownRecord,
+): Pick<
+  JiraToolOutcomeView,
+  "items" | "resultsLabel" | "overflow" | "unlistedItemCount" | "issues" | "hiddenIssueCount"
+> {
   const projection = exchange.call.name.startsWith("jira_")
     ? issueProjection(exchange, data)
     : { issues: [], hiddenIssueCount: 0, listed: { shown: [], count: 0 } };
@@ -1250,6 +1272,15 @@ export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcome
       : 0,
     issues: projection.issues,
     hiddenIssueCount: projection.hiddenIssueCount,
+  };
+}
+/** A display projection of the immutable receipt, shared by the live turn and restored history. */
+export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcomeView {
+  const knowledge = knowledgeToolOutcomeView(exchange);
+  if (knowledge !== undefined) return knowledge;
+  const data = storedOutcomeData(exchange);
+  return {
+    ...resultItemsView(exchange, data),
     ...pageCounts(data, exchange.call.name),
     stagedCount: count(data.itemCount),
     unresolvedCount: count(data.unresolvedRefCount),
