@@ -445,6 +445,7 @@ function projectStagedCitationMarkers(
     resolvedCount: rewrite.resolvedCount,
     unresolvedCount: rewrite.unresolvedCount,
     markdownDescriptionCount: rewrite.markdownDescriptionCount,
+    unscannedTextCount: rewrite.unscannedTextCount,
   });
   return rewrite.resolvedCount === 0
     ? items

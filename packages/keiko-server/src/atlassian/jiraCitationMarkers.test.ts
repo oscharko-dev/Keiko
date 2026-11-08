@@ -120,6 +120,36 @@ describe("Jira text names the sources of the grounded answer it was written from
     }
   });
 
+  it("reads a description with many closed macros holding a literal backtick whole (F34)", () => {
+    const labels = new Map([[1, "Spec A"]]);
+    const block = Array.from(
+      { length: 20 },
+      (_, index) => "{code}\nexample " + String(index + 1) + ": `\n{code}\nGoal [1].",
+    ).join("\n");
+    const inline = Array.from(
+      { length: 20 },
+      (_, index) => "{noformat}example " + String(index + 1) + ": `{noformat} Goal [1].",
+    ).join("\n");
+    for (const description of [block, inline]) {
+      const rewrite = resolveJiraCitationMarkers({ description }, labels);
+      expect(rewrite).toMatchObject({
+        resolvedCount: 20,
+        unresolvedCount: 0,
+        unscannedTextCount: 0,
+      });
+      expect((rewrite.arguments as { description: string }).description).not.toContain("Goal [1]");
+    }
+  });
+
+  it("reports a text whose code context exceeds the bounded work as unscanned (F34)", () => {
+    const labels = new Map([[1, "Spec A"]]);
+    const description = "{code}`{code} Goal [1].\n".repeat(2_000);
+    const rewrite = resolveJiraCitationMarkers({ description, summary: "Titel [1]" }, labels);
+    expect(rewrite.unscannedTextCount).toBe(1);
+    expect(rewrite.resolvedCount).toBeGreaterThan(1);
+    expect(rewrite.resolvedCount).toBeLessThan(2_001);
+  });
+
   it("rewrites tagged Markdown and every draft item, keeping links and wiki links intact", () => {
     const args = {
       items: [
@@ -193,6 +223,7 @@ describe("Jira text names the sources of the grounded answer it was written from
       resolvedCount: 6,
       unresolvedCount: 1,
       markdownDescriptionCount: 1,
+      unscannedTextCount: 0,
     });
     const line = sink.events.find((event) => event.op === "jira.citation.markers");
     expect(line?.correlationId).toBe("corr-citations");
@@ -203,6 +234,21 @@ describe("Jira text names the sources of the grounded answer it was written from
       markdownDescriptionCount: 1,
     });
     expect(JSON.stringify(sink.events)).not.toContain("Lastenheft");
+    expectActivityLogProof("jira.citation.markers.line", formatActivityLogProofLine(line ?? {}));
+  });
+
+  it("records an unscanned text as partial evidence, never as complete (F34)", () => {
+    const sink = createBufferedServerLogSink();
+    recordJiraCitationMarkers(sink, "corr-unscanned", {
+      callCount: 1,
+      labelCount: 1,
+      resolvedCount: 3,
+      unresolvedCount: 0,
+      markdownDescriptionCount: 0,
+      unscannedTextCount: 1,
+    });
+    const line = sink.events.find((event) => event.op === "jira.citation.markers");
+    expect(line?.extra).toMatchObject({ unscannedTextCount: 1, completeness: "partial" });
     expectActivityLogProof("jira.citation.markers.line", formatActivityLogProofLine(line ?? {}));
   });
 
@@ -346,6 +392,7 @@ describe("Jira text names the sources of the grounded answer it was written from
       ["literal {code} inside inline code", repeating("`{code}` ")],
       ["Markdown code inside closed macros", repeating("{code}`a`{code}")],
       ["backticks inside an unclosed macro", repeating("{code}``")],
+      ["a literal backtick inside every closed macro", repeating("{code}`{code} [1]\n")],
     ])("scales linearly for %s", { timeout: 60_000 }, (_name, build) => {
       expect(ratio(build)).toBeLessThan(LINEAR_RATIO_MAX);
     });

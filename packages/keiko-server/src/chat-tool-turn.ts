@@ -1371,6 +1371,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       resolvedCount: 0,
       unresolvedCount: 0,
       markdownDescriptionCount: 0,
+      unscannedTextCount: 0,
     };
     const toolCalls = response.toolCalls.map((call) => {
       if (call.invocation === undefined || !writes.includes(call)) return call;
@@ -1378,6 +1379,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       counts.resolvedCount += rewrite.resolvedCount;
       counts.unresolvedCount += rewrite.unresolvedCount;
       counts.markdownDescriptionCount += rewrite.markdownDescriptionCount;
+      counts.unscannedTextCount += rewrite.unscannedTextCount;
       const bound = boundArguments(call.invocation.arguments);
       // The shown and the dispatched arguments change together or not at all.
       if (rewrite.arguments === call.arguments || bound === undefined) return call;

@@ -40,6 +40,8 @@ export interface JiraCitationRewrite {
   readonly unresolvedCount: number;
   /** Descriptions Data Center receives as wiki converted from Markdown (ADR-0128). */
   readonly markdownDescriptionCount: number;
+  /** Texts whose tail exceeded the bounded code-context work and kept its markers unresolved. */
+  readonly unscannedTextCount: number;
 }
 
 export function isJiraTextWrite(canonicalId: string | undefined): boolean {
@@ -126,6 +128,7 @@ interface Counter {
   resolved: number;
   unresolved: number;
   markdown: number;
+  unscanned: number;
 }
 
 /** Counted with the canonical projection the connector applies, never a second guess. */
@@ -188,7 +191,7 @@ class NextIndex {
  */
 class MarkdownContext {
   private position = 0;
-  private rereads = 0;
+  private rereadCharacters = 0;
   /** Where Markdown could no longer be told apart from macros; everything after is protected. */
   protectedFrom: number | undefined;
   constructor(
@@ -222,14 +225,16 @@ class MarkdownContext {
     if (count === 0) return;
     this.ranges.splice(this.position, count);
     if (!overflow) return;
-    // Parsing ran on through the macro under the wrong state: read the rest afresh. A bounded
-    // number of rereads keeps hostile input linear; past it the rest stays unresolved, as written.
-    if (this.rereads >= REREAD_MAX) {
+    // Parsing ran on through the macro under the wrong state: read the rest afresh. The rereads
+    // share a budget proportional to the text, so the work stays linear while ordinary
+    // descriptions are read whole; past it the rest keeps its markers and is reported unscanned.
+    const cost = this.text.length - end;
+    if (this.rereadCharacters + cost > this.text.length * REREAD_TEXT_MULTIPLE) {
       this.protectedFrom = Math.min(this.protectedFrom ?? end, end);
       this.ranges = this.ranges.slice(0, this.position);
       return;
     }
-    this.rereads++;
+    this.rereadCharacters += cost;
     const kept = this.ranges.slice(0, this.position);
     const rest = markdownCodeRanges(this.text.slice(end)).map((range) => ({
       start: range.start + end,
@@ -239,7 +244,7 @@ class MarkdownContext {
   }
 }
 
-const REREAD_MAX = 16;
+const REREAD_TEXT_MULTIPLE = 32;
 const BLOCK_MACRO_OPEN = /\{(code|noformat)(?=[:}])/gu;
 
 /** A `{code}` or `{noformat}` macro up to its closing tag, or to the end of an unclosed one. */
@@ -288,8 +293,14 @@ function inlineMacroSpans(text: string, markdown: MarkdownContext): Span[] {
   return spans;
 }
 
+interface CodeSpans {
+  readonly spans: readonly Span[];
+  /** Whether the code context could not be decided to the end within the work budget. */
+  readonly unscanned: boolean;
+}
+
 /** Every region whose brackets are code: Markdown fences and inline code, and Jira macros. */
-function codeSpans(text: string): readonly Span[] {
+function codeSpans(text: string): CodeSpans {
   const markdown = new MarkdownContext(
     text,
     markdownCodeRanges(text).map((range) => ({ start: range.start, end: range.end })),
@@ -307,7 +318,7 @@ function codeSpans(text: string): readonly Span[] {
       merged[merged.length - 1] = { start: last.start, end: Math.max(last.end, span.end) };
     else merged.push(span);
   }
-  return merged;
+  return { spans: merged, unscanned: markdown.protectedFrom !== undefined };
 }
 
 const CODE_MASK = "\u0001";
@@ -419,7 +430,9 @@ function rewriteText(
   placement: Placement,
   counter: Counter,
 ): string {
-  const groups = proseMarkerGroups(text, codeSpans(text));
+  const code = codeSpans(text);
+  if (code.unscanned) counter.unscanned++;
+  const groups = proseMarkerGroups(text, code.spans);
   let out = "";
   let cursor = 0;
   for (const run of markerRuns(text, groups)) {
@@ -476,13 +489,14 @@ export function resolveJiraCitationMarkers(
   args: Record<string, unknown>,
   labels: ReadonlyMap<number, string>,
 ): JiraCitationRewrite {
-  const counter: Counter = { resolved: 0, unresolved: 0, markdown: 0 };
+  const counter: Counter = { resolved: 0, unresolved: 0, markdown: 0, unscanned: 0 };
   const rewritten = rewriteValue("", args, labels, counter, 0) as Record<string, unknown>;
   return {
     arguments: counter.resolved === 0 ? args : rewritten,
     resolvedCount: counter.resolved,
     unresolvedCount: counter.unresolved,
     markdownDescriptionCount: counter.markdown,
+    unscannedTextCount: counter.unscanned,
   };
 }
 
@@ -500,6 +514,7 @@ const CITATION_MARKERS = defineActivityLogOperation({
     resolvedCount: MARKER_COUNT,
     unresolvedCount: MARKER_COUNT,
     markdownDescriptionCount: MARKER_COUNT,
+    unscannedTextCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -521,13 +536,22 @@ export function recordJiraCitationMarkers(
     readonly resolvedCount: number;
     readonly unresolvedCount: number;
     readonly markdownDescriptionCount: number;
+    readonly unscannedTextCount: number;
   },
 ): void {
+  const { unscannedTextCount, ...rest } = counts;
+  // An unscanned text kept markers that were never judged: the evidence says so, never "complete".
+  const completeness = unscannedTextCount > 0 ? "partial" : "complete";
   (sink ?? processServerLogSink()).write(
     activityLogEvent(
       CITATION_MARKERS,
       { correlationId: correlationId ?? UNKNOWN_CORRELATION_ID },
-      { ...counts, completeness: "complete", loss: "none" },
+      {
+        ...rest,
+        ...(unscannedTextCount > 0 ? { unscannedTextCount } : {}),
+        completeness,
+        loss: "none",
+      },
     ),
   );
 }
