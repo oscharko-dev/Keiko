@@ -244,3 +244,12 @@ paths = ['''^packages/keiko-local-knowledge/src/parsers/json-parser\.fidelity\.t
 targetRules = ["generic-api-key"]
 regexTarget = "line"
 regexes = ['''^\s*const secret = "AKIA-LIVE-SECRET-[0-9A-F]{8}";$''']
+
+[[allowlists]]
+description = "PR #4288: the synthetic Jira entity-property name keiko-ac7-synthetic-run in one immutable checkpoint of the AC7 property qualification test. It is test metadata (the name of a synthetic issue property), not a credential; the generic-api-key rule matches the key-named variable and the value's entropy. Later commits assemble the name at runtime. Only this exact historical fixture line in this one commit is exempt."
+condition = "AND"
+commits = ["c17e32f8152715a304a59da0e2b62b1d7c2df1c0"]
+paths = ['''^scripts/__tests__/jira-api-qualification-property\.test\.mjs$''']
+targetRules = ["generic-api-key"]
+regexTarget = "line"
+regexes = ['''^\s*const propertyKey = "keiko-ac7-synthetic-run";$''']

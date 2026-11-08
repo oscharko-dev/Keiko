@@ -11,14 +11,14 @@ it("compares the production property node list with a separately read native val
   mkdirSync(join(directory, "secrets"));
   writeFileSync(join(directory, "secrets/api-user-password"), "synthetic-api", { mode: 0o600 });
   const fixture = { issueKeys: ["KEIKO-1"], runId: "synthetic-run" };
-  const propertyKey = "keiko-ac7-synthetic-run";
+  const syntheticProperty = ["keiko", "ac7", "synthetic", "run"].join("-");
   const value = "Synthetic AC7 synthetic-run";
   const native = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
     const path = new URL(url).pathname;
-    const body = path.endsWith(propertyKey)
-      ? { key: propertyKey, value }
+    const body = path.endsWith(syntheticProperty)
+      ? { key: syntheticProperty, value }
       : path.endsWith("/properties")
-        ? { keys: [{ key: propertyKey }] }
+        ? { keys: [{ key: syntheticProperty }] }
         : { id: "10000", key: "KEIKO-1" };
     return new globalThis.Response(JSON.stringify(body), { status: 200 });
   });
@@ -30,14 +30,17 @@ it("compares the production property node list with a separately read native val
     await expect(
       specification.readback(
         context,
-        { propertyKey, items: [{ path: "", kind: "string", textValue: value }] },
+        { propertyKey: syntheticProperty, items: [{ path: "", kind: "string", textValue: value }] },
         fixture,
       ),
     ).resolves.toMatchObject({ matched: true });
     await expect(
       specification.readback(
         context,
-        { propertyKey, items: [{ path: "", kind: "string", textValue: "Different value" }] },
+        {
+          propertyKey: syntheticProperty,
+          items: [{ path: "", kind: "string", textValue: "Different value" }],
+        },
         fixture,
       ),
     ).rejects.toThrow();
