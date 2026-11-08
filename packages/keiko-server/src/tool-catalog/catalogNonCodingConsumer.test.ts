@@ -5,7 +5,10 @@ import {
 import type { JiraManagedReadToolName } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { AtlassianHttpBodyResult } from "@oscharko-dev/keiko-connectors";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
-import { createJiraProviderForCatalog } from "../atlassian/jiraManagedProvider.js";
+import {
+  createJiraProviderForCatalog,
+  jiraOperationBindingForTool,
+} from "../atlassian/jiraManagedProvider.js";
 import type {
   ManagedMcpTool,
   ManagedMcpToolResult,
@@ -440,18 +443,21 @@ it.each([
     const m = await jiraFixture(body, status, raw);
     const f = fixture(undefined, m.managed);
     try {
+      const operationBinding = jiraOperationBindingForTool("jira.projects");
+      if (operationBinding === undefined) throw new TypeError("Missing canonical project binding");
+      const expected = { ...data, operationBinding };
       const result = await f.binder.dispatch({ ...f.invocation, arguments: {} }, identity);
       expect(result).toMatchObject({
         kind: "settled",
         result: {
           status: "failed",
           reason: "provider-reported-error",
-          data,
+          data: expected,
           page: null,
-          metrics: { outputBytes: JSON.stringify(data).length, resultCount: 0 },
+          metrics: { outputBytes: Buffer.byteLength(JSON.stringify(expected)), resultCount: 0 },
         },
       });
-      expect(result.kind === "settled" ? result.result.data : undefined).toEqual(data);
+      expect(result.kind === "settled" ? result.result.data : undefined).toEqual(expected);
       expect(m.requests).toHaveLength(1);
       const settlement = f.logs.events.find(
         (event) =>

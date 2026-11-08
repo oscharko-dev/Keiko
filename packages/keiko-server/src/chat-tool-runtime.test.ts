@@ -161,7 +161,9 @@ function discoveryResponse(
       bridge.bind({
         id: "select-projects",
         name: "jira_describe",
-        arguments: { identities: ["GET /rest/api/2/project"] },
+        arguments: {
+          identities: ["GET /rest/api/2/project", "GET /rest/api/2/serverInfo"],
+        },
       }),
     ],
   };
@@ -1024,21 +1026,70 @@ it("keeps external MCP tools available while Jira typed schemas are selected bet
   expect((await send(f)).status).toBe(200);
   expect(f.effects).toEqual(["mcp-read", "jira-read"]);
   expect(f.calls).toHaveLength(3);
-  const first = f.calls[0]?.toolCatalog;
-  const second = f.calls[1]?.toolCatalog;
+  const [first, second] = f.calls.map((call) => call.toolCatalog);
   if (first?.kind !== "bound" || second?.kind !== "bound")
     throw new TypeError("Expected round catalogs");
-  expect(first.projection.tools.map((tool) => tool.alias)).not.toContain("jira_projects");
-  expect(second.projection.tools.map((tool) => tool.alias)).toContain("jira_projects");
+  // This Chat has no Knowledge scope: only the batch and its draft companion are absent.
   expect(
-    second.projection.tools
-      .filter((tool) => tool.alias.startsWith("mcp_"))
-      .map((tool) => tool.alias),
-  ).toEqual(
     first.projection.tools
-      .filter((tool) => tool.alias.startsWith("mcp_"))
-      .map((tool) => tool.alias),
+      .filter((tool) => tool.alias.startsWith("jira_"))
+      .map((tool) => tool.alias)
+      .sort(),
+  ).toEqual(
+    [
+      "jira_projects",
+      "jira_issue_types",
+      "jira_create_fields",
+      "jira_edit_fields",
+      "jira_search",
+      "jira_issue",
+      "jira_comments",
+      "jira_transitions",
+      "jira_assignable_users",
+      "jira_report",
+      "jira_draft_stage",
+      "jira_create",
+      "jira_edit",
+      "jira_assign",
+      "jira_comment",
+      "jira_transition",
+      "jira_attach",
+      "jira_discover",
+      "jira_describe",
+    ].sort(),
   );
+  const projects = first.projection.tools.find((tool) => tool.alias === "jira_projects");
+  expect(projects).toBeDefined();
+  expect(second.projection.tools.find((tool) => tool.alias === "jira_projects")).toEqual(projects);
+  expect(first.projection.tools.map((tool) => tool.alias)).not.toContain("jira_server_info");
+  const native = jiraOperationForTool("jira.server-info");
+  if (native === undefined) throw new TypeError("Missing native server-info contract");
+  expect(second.projection.tools.find((tool) => tool.alias === "jira_server_info")).toMatchObject({
+    toolRef: native.declaration.descriptor.toolRef,
+    inputSchema: native.declaration.descriptor.inputSchema,
+    resultSchema: native.declaration.descriptor.resultSchema,
+  });
+  const external = first.projection.tools.filter((tool) => tool.alias.startsWith("mcp_"));
+  expect(external).toHaveLength(2);
+  expect(second.projection.tools.filter((tool) => tool.alias.startsWith("mcp_"))).toEqual(external);
+  const read = external.find((tool) => tool.alias.includes("_get_status_"));
+  if (read === undefined) throw new TypeError("Missing external MCP read tool");
+  const transcript = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript;
+  expect(
+    transcript?.exchanges.map(({ call }) => ({ name: call.name, args: call.arguments })),
+  ).toEqual([
+    {
+      name: "jira_describe",
+      args: { identities: ["GET /rest/api/2/project", "GET /rest/api/2/serverInfo"] },
+    },
+    { name: read.alias, args: {} },
+    { name: "jira_projects", args: {} },
+  ]);
+  expect(transcript?.exchanges.map((exchange) => exchange.result?.status)).toEqual([
+    "completed",
+    "completed",
+    "completed",
+  ]);
 });
 it("resolves Full access for a Chat without a mode and runs both writes without an approval", async () => {
   const f = fixture({ write: true, defaultMode: true });

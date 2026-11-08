@@ -1129,26 +1129,35 @@ function schemaRequired(value: CatalogJsonValue | undefined): value is readonly 
   return Array.isArray(value) && value.every((item: unknown) => typeof item === "string");
 }
 
-function boundResultSchema(schema: CatalogJsonObject): CatalogJsonObject {
+/** A disjunction root carries only its keyword, annotations and an optional explicit object type. */
+function closedDisjunction(schema: CatalogJsonObject, keyword: "anyOf" | "oneOf"): boolean {
+  const allowed = new Set(["$schema", "description", "type", keyword]);
+  return (
+    (schema.type === undefined || schema.type === "object") &&
+    Object.keys(schema).every((key) => allowed.has(key))
+  );
+}
+
+function boundObjectSchema(schema: CatalogJsonObject, kind: "input" | "result"): CatalogJsonObject {
   const { properties, required } = schema;
-  if (schema.type === "object" && schemaObject(properties) && schemaRequired(required)) {
-    return {
-      ...schema,
-      properties: { ...properties, operationBinding: BINDING_SCHEMA },
-      required: [...required, "operationBinding"],
-    };
+  if (schema.type === "object") {
+    if (kind === "input") return schema;
+    if (schemaObject(properties) && schemaRequired(required))
+      return {
+        ...schema,
+        properties: { ...properties, operationBinding: BINDING_SCHEMA },
+        required: [...required, "operationBinding"],
+      };
   }
-  // A disjunction is still a closed object result: bind each alternative at the same level
-  // as its own additionalProperties:false. An outer allOf would leave every branch closed
-  // against the new field; lifting properties would erase the branch-specific requirements.
+  // Every alternative must already be an object. State that common root type for MCP without
+  // replacing an explicit type or lifting properties out of their closed branch. Only results
+  // receive the operation binding; input alternatives keep their complete original constraints.
   const keyword = schema.anyOf === undefined ? "oneOf" : "anyOf";
   const alternatives = schema[keyword];
-  const allowed = new Set(["$schema", "description", "type", keyword]);
   if (
-    (schema.type !== undefined && schema.type !== "object") ||
     !Array.isArray(alternatives) ||
     alternatives.length === 0 ||
-    !Object.keys(schema).every((key) => allowed.has(key))
+    !closedDisjunction(schema, keyword)
   )
     throw new ToolCatalogError("invalid-schema");
   return {
@@ -1156,7 +1165,7 @@ function boundResultSchema(schema: CatalogJsonObject): CatalogJsonObject {
     type: "object",
     [keyword]: alternatives.map((alternative: CatalogJsonValue) => {
       if (!schemaObject(alternative)) throw new ToolCatalogError("invalid-schema");
-      return boundResultSchema(alternative);
+      return boundObjectSchema(alternative, kind);
     }),
   };
 }
@@ -1166,7 +1175,8 @@ function resultDescriptor(descriptor: ToolDescriptor): ToolDescriptor {
   return createToolDescriptor({
     ...original,
     toolRef: createToolRef(descriptor.toolRef.canonicalId, descriptor.toolRef.contractVersion + 1),
-    resultSchema: boundResultSchema(descriptor.resultSchema),
+    inputSchema: boundObjectSchema(descriptor.inputSchema, "input"),
+    resultSchema: boundObjectSchema(descriptor.resultSchema, "result"),
     bounds: {
       ...descriptor.bounds,
       maxResultBytes: Math.min(

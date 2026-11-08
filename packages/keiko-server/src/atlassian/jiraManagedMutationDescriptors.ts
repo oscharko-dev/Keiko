@@ -1,20 +1,65 @@
-import { jiraAnonymizationUnlockDeclarationForTool, type JIRA_ANONYMIZATION_UNLOCK_DEFINITIONS } from "./jiraAnonymizationUnlockDescriptors.js";
-import { jiraAvatarMutationDeclarationForTool, type JIRA_AVATAR_WRITE_DEFINITIONS } from "./jiraAvatarMutationDescriptors.js";
-import { jiraIdentityMutationDeclarationForTool, type JIRA_IDENTITY_WRITE_DEFINITIONS } from "./jiraIdentityMutationDescriptors.js";
-import { jiraIssueLifecycleMutationDeclarationForTool, type JIRA_ISSUE_LIFECYCLE_WRITE_DEFINITIONS } from "./jiraIssueLifecycleMutationDescriptors.js";
-import { jiraProjectLifecycleMutationDeclarationForTool, type JIRA_PROJECT_LIFECYCLE_WRITE_DEFINITIONS } from "./jiraProjectLifecycleMutationDescriptors.js";
-import { jiraPrivateAccountDeclarationForTool, type JIRA_PRIVATE_ACCOUNT_WRITE_DEFINITIONS } from "./jiraPrivateAccountDescriptors.js";
+import {
+  jiraAnonymizationUnlockDeclarationForTool,
+  type JIRA_ANONYMIZATION_UNLOCK_DEFINITIONS,
+} from "./jiraAnonymizationUnlockDescriptors.js";
+import {
+  jiraAvatarMutationDeclarationForTool,
+  type JIRA_AVATAR_WRITE_DEFINITIONS,
+} from "./jiraAvatarMutationDescriptors.js";
+import {
+  jiraIdentityMutationDeclarationForTool,
+  type JIRA_IDENTITY_WRITE_DEFINITIONS,
+} from "./jiraIdentityMutationDescriptors.js";
+import {
+  jiraIssueLifecycleMutationDeclarationForTool,
+  type JIRA_ISSUE_LIFECYCLE_WRITE_DEFINITIONS,
+} from "./jiraIssueLifecycleMutationDescriptors.js";
+import {
+  jiraProjectLifecycleMutationDeclarationForTool,
+  type JIRA_PROJECT_LIFECYCLE_WRITE_DEFINITIONS,
+} from "./jiraProjectLifecycleMutationDescriptors.js";
+import {
+  jiraPrivateAccountDeclarationForTool,
+  type JIRA_PRIVATE_ACCOUNT_WRITE_DEFINITIONS,
+} from "./jiraPrivateAccountDescriptors.js";
 import { jiraReciprocalLinkDeclarationForTool } from "./jiraReciprocalLinkDescriptors.js";
 import { jiraBulkCreateDeclarationForTool } from "./jiraBulkCreateDescriptors.js";
-import { jiraDirectoryAccessMutationDeclarationForTool, type JIRA_DIRECTORY_ACCESS_WRITE_DEFINITIONS } from "./jiraDirectoryAccessMutationDescriptors.js";
-import { jiraMaintenanceMutationDeclarationForTool, type JIRA_MAINTENANCE_WRITE_DEFINITIONS } from "./jiraMaintenanceMutationDescriptors.js";
-import { jiraSchemaMutationDeclarationForTool, type JIRA_SCHEMA_WRITE_DEFINITIONS } from "./jiraSchemaMutationDescriptors.js";
-import { jiraGroupMutationDeclarationForTool, type JIRA_GROUP_WRITE_DEFINITIONS } from "./jiraGroupMutationDescriptors.js";
-import { jiraIssueActionMutationDeclarationForTool, type JIRA_ISSUE_ACTION_WRITE_DEFINITIONS } from "./jiraIssueActionMutationDescriptors.js";
-import { jiraOptionSchemeMutationDeclarationForTool, type JIRA_OPTION_SCHEME_WRITE_DEFINITIONS } from "./jiraOptionSchemeMutationDescriptors.js";
-import { jiraWorkflowSchemeMutationDeclarationForTool, type JIRA_WORKFLOW_SCHEME_WRITE_DEFINITIONS } from "./jiraWorkflowSchemeMutationDescriptors.js";
-import { jiraInstanceSettingMutationDeclarationForTool, type JIRA_INSTANCE_SETTING_WRITE_DEFINITIONS } from "./jiraInstanceSettingMutationDescriptors.js";
-import { jiraEmailTemplateDeclarationForTool, type JIRA_EMAIL_TEMPLATE_DEFINITIONS } from "./jiraEmailTemplateDescriptors.js";
+import {
+  jiraDirectoryAccessMutationDeclarationForTool,
+  type JIRA_DIRECTORY_ACCESS_WRITE_DEFINITIONS,
+} from "./jiraDirectoryAccessMutationDescriptors.js";
+import {
+  jiraMaintenanceMutationDeclarationForTool,
+  type JIRA_MAINTENANCE_WRITE_DEFINITIONS,
+} from "./jiraMaintenanceMutationDescriptors.js";
+import {
+  jiraSchemaMutationDeclarationForTool,
+  type JIRA_SCHEMA_WRITE_DEFINITIONS,
+} from "./jiraSchemaMutationDescriptors.js";
+import {
+  jiraGroupMutationDeclarationForTool,
+  type JIRA_GROUP_WRITE_DEFINITIONS,
+} from "./jiraGroupMutationDescriptors.js";
+import {
+  jiraIssueActionMutationDeclarationForTool,
+  type JIRA_ISSUE_ACTION_WRITE_DEFINITIONS,
+} from "./jiraIssueActionMutationDescriptors.js";
+import {
+  jiraOptionSchemeMutationDeclarationForTool,
+  type JIRA_OPTION_SCHEME_WRITE_DEFINITIONS,
+} from "./jiraOptionSchemeMutationDescriptors.js";
+import {
+  jiraWorkflowSchemeMutationDeclarationForTool,
+  type JIRA_WORKFLOW_SCHEME_WRITE_DEFINITIONS,
+} from "./jiraWorkflowSchemeMutationDescriptors.js";
+import {
+  jiraInstanceSettingMutationDeclarationForTool,
+  type JIRA_INSTANCE_SETTING_WRITE_DEFINITIONS,
+} from "./jiraInstanceSettingMutationDescriptors.js";
+import {
+  jiraEmailTemplateDeclarationForTool,
+  type JIRA_EMAIL_TEMPLATE_DEFINITIONS,
+} from "./jiraEmailTemplateDescriptors.js";
 import {
   jiraPermissionSchemeMutationDeclarationForTool,
   type JIRA_PERMISSION_SCHEME_WRITE_DEFINITIONS,
@@ -666,7 +711,7 @@ const DEFINITIONS: Readonly<
     },
   },
 };
-function isCoreMutationTool(name: JiraMutationOperation): name is CoreMutationToolName {
+export function isCoreMutationTool(name: JiraMutationOperation): name is CoreMutationToolName {
   return Object.hasOwn(DEFINITIONS, name);
 }
 export function jiraMutationDeclaration(name: JiraMutationOperation): ManagedMcpToolDeclaration {
@@ -722,7 +767,8 @@ function coreDeclaration(name: CoreMutationToolName): ManagedMcpToolDeclaration 
     descriptor: createToolDescriptor({
       toolRef: createToolRef(jiraMutationToolId(name), 3),
       description: definition.description,
-      inputSchema: name === "jira.draft" ? compileExternalCatalogSchema(definition.input) : definition.input,
+      inputSchema:
+        name === "jira.draft" ? compileExternalCatalogSchema(definition.input) : definition.input,
       resultSchema: definition.result ?? RESULT_SCHEMA,
       effects: ["connector-access"],
       actionMapping: [{ action: name, effects: ["connector-access"] }],

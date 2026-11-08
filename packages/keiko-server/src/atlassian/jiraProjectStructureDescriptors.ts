@@ -120,8 +120,11 @@ function boundedLocalPageFields(item: CatalogJsonObject): CatalogJsonObject {
     nextStartAt: PAGING.startAt,
   };
 }
-function writeResult(receipt: CatalogJsonObject): CatalogJsonObject {
-  return object(
+function writeResult(
+  receipt: CatalogJsonObject,
+  success?: CatalogJsonObject | false,
+): CatalogJsonObject {
+  const result = object(
     {
       ...receipt,
       ...FAILURE_FIELDS,
@@ -135,6 +138,23 @@ function writeResult(receipt: CatalogJsonObject): CatalogJsonObject {
     },
     ["outcome"],
   );
+  if (success === undefined) return result;
+  const alternatives: CatalogJsonObject[] = [
+    {
+      not: {
+        properties: { outcome: { type: "string", enum: ["succeeded"] } },
+        required: ["outcome"],
+      },
+    },
+  ];
+  if (success !== false)
+    alternatives.push(success, {
+      properties: { replayed: { type: "boolean", enum: [true] } },
+      required: ["replayed"],
+      // The journal retains no receipt. A replay cannot excuse partial or contrary native facts.
+      not: { anyOf: Object.keys(receipt).map((key) => ({ required: [key] })) },
+    });
+  return { ...result, allOf: [{ anyOf: alternatives }] };
 }
 interface Definition {
   readonly description: string;

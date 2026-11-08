@@ -1,15 +1,18 @@
 import { describe, expect, it, vi, type Mock } from "vitest";
 import { CatalogDispatchFault } from "../tool-catalog/catalogToolErrors.js";
 import { ToolCatalogError } from "@oscharko-dev/keiko-tool-catalog";
-import { createManagedMcpHost } from "@oscharko-dev/keiko-mcp";
+import { createManagedMcpHost, ManagedMcpError } from "@oscharko-dev/keiko-mcp";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import * as provider from "./jiraManagedProvider.js";
 import {
   createJiraCatalogDiscoveryProvider,
+  JIRA_CATALOG_DISCOVERY_TOOLS,
   jiraToolsForIdentities,
 } from "./jiraCatalogDiscovery.js";
 import type { CatalogHandlerContext } from "../tool-catalog/catalogToolPorts.js";
-import type { JiraChatCatalogConsumer } from "./jiraChatCatalogConsumer.js";
+import { jiraChatCatalogRoutes, type JiraChatCatalogConsumer } from "./jiraChatCatalogConsumer.js";
+import { createManagedProviderCatalog } from "../tool-catalog/managedProviderCatalog.js";
+import type { CatalogLifecycleLogPort } from "../tool-catalog/catalogToolLifecycle.js";
 
 type Context = CatalogHandlerContext<JiraChatCatalogConsumer>;
 type Tool = ReturnType<ReturnType<typeof createJiraCatalogDiscoveryProvider>["tools"]>[number];
@@ -134,7 +137,7 @@ describe("local Jira operation discovery", () => {
     async (args) => {
       const f = fixture();
       const result = await f.describe.execute(args, f.context);
-      expect(result.isError).not.toBe(true);
+      expect(result.isError).toBe(true);
       expect(result.data).toMatchObject({
         outcome: "failed",
         reason: "invalid-arguments",
@@ -146,17 +149,79 @@ describe("local Jira operation discovery", () => {
     },
   );
 
-  it("delivers an invalid describe identity through MCP without a tool-error exception", async () => {
+  it("marks an invalid describe identity as a managed tool error with private readable data", async () => {
     const f = fixture();
-    const host = createManagedMcpHost({ providers: [f.provider], log: { write: () => undefined } });
+    const write = vi.fn<CatalogLifecycleLogPort["primary"]["write"]>();
+    const host = createManagedMcpHost({ providers: [f.provider], log: { write } });
     try {
       await host.admit("discovery-invalid-identity");
-      await expect(
-        host.call("jira.describe", { identities: ["jira.create"] }, f.context),
-      ).resolves.toMatchObject({ outcome: "failed", reason: "invalid-arguments", items: [] });
+      expect(f.describe.descriptor.toolRef.contractVersion).toBe(2);
+      const failure: unknown = await host
+        .call("jira.describe", { identities: ["https://private.invalid/path"] }, f.context)
+        .catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(ManagedMcpError);
+      if (!(failure instanceof ManagedMcpError)) throw new TypeError("Expected managed tool error");
+      expect(failure.reason).toBe("tool-error");
+      expect(failure.structuredResult).toMatchObject({
+        outcome: "failed",
+        reason: "invalid-arguments",
+        items: [],
+      });
+      expect(failure.structuredResult?.guidance).toContain("jira.discover");
+      expect(Object.isFrozen(failure.structuredResult)).toBe(true);
+      expect(JSON.stringify(failure.structuredResult)).not.toContain("private.invalid");
+      expect(JSON.stringify(failure)).not.toMatch(
+        /invalid-arguments|jira\.discover|private\.invalid/u,
+      );
+      expect(JSON.stringify(write.mock.calls)).not.toMatch(
+        /invalid-arguments|jira\.discover|private\.invalid/u,
+      );
       expect(f.select).not.toHaveBeenCalled();
     } finally {
       await host.close();
+    }
+  });
+
+  it("preserves invalid describe guidance through the existing provider-reported-error adapter", async () => {
+    const f = fixture();
+    const write = vi.fn<CatalogLifecycleLogPort["primary"]["write"]>();
+    const managed = await createManagedProviderCatalog({
+      providers: [f.provider],
+      routes: jiraChatCatalogRoutes(JIRA_CATALOG_DISCOVERY_TOOLS),
+      profile: { id: "discovery-error-fixture", version: 1 },
+      log: { primary: { write }, diagnostics: { record: vi.fn() } },
+      correlationId: "discovery-invalid-adapter",
+      now: () => 0,
+    });
+    try {
+      const binding = managed.handlerBindings.find(
+        (handler) => handler.toolRef.canonicalId === "keiko.jira.describe",
+      );
+      if (binding === undefined) throw new TypeError("Missing describe binding");
+      const failure: unknown = await binding
+        .execute({ identities: ["https://private.invalid/path"] }, f.context)
+        .catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(CatalogDispatchFault);
+      if (!(failure instanceof CatalogDispatchFault))
+        throw new TypeError("Expected provider-reported dispatch failure");
+      expect(failure).toMatchObject({ status: "failed", reason: "provider-reported-error" });
+      expect(failure.providerResult).toMatchObject({
+        outcome: "failed",
+        reason: "invalid-arguments",
+        items: [],
+      });
+      expect(failure.providerResult?.guidance).toContain("jira.discover");
+      expect(Object.isFrozen(failure.providerResult)).toBe(true);
+      expect(JSON.stringify(failure.providerResult)).not.toContain("private.invalid");
+      expect(JSON.stringify(failure)).not.toMatch(
+        /invalid-arguments|jira\.discover|private\.invalid/u,
+      );
+      expect(JSON.stringify(write.mock.calls)).not.toMatch(
+        /invalid-arguments|jira\.discover|private\.invalid/u,
+      );
+      expect(f.select).not.toHaveBeenCalled();
+    } finally {
+      await managed.close();
     }
   });
 

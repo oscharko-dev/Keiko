@@ -38,7 +38,9 @@ import {
   createJiraProviderForCatalog,
   isCurrentJiraOperationBinding,
   jiraOperationBindingForTool,
+  jiraOperationForTool,
 } from "./jiraManagedProvider.js";
+import { isCoreMutationTool } from "./jiraManagedMutationDescriptors.js";
 import {
   createJiraCatalogDiscoveryProvider,
   JIRA_CATALOG_DISCOVERY_TOOLS,
@@ -47,6 +49,9 @@ import {
 import { KNOWLEDGE_CHAT_TOOLS } from "../requirementsToolName.js";
 import {
   JIRA_MANAGED_ACTION_TYPES,
+  JIRA_MANAGED_READ_TOOLS,
+  JIRA_MUTATION_OPERATIONS,
+  JIRA_READ_TOOL_FAMILIES,
   isJiraAvatarUploadOperation,
   type JiraAvatarUploadMutation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -107,27 +112,28 @@ const JIRA_DRAFT_BATCH_TOOL = "jira.draft-batch";
 /** The draft run Keiko offers after a clean batch; a catalog that offers the batch hosts it too. */
 const JIRA_DRAFT_TOOL = "jira.draft";
 const JIRA_BATCH_TOOLS = [JIRA_DRAFT_BATCH_TOOL, JIRA_DRAFT_TOOL] as const;
-/** Curated Chat tools stay directly available; discovery adds native operations per turn. */
+/** The existing issue-workflow families supply the curated reads; the batch has its own scope. */
+const JIRA_BASE_READS: ReadonlySet<string> = new Set([
+  ...JIRA_READ_TOOL_FAMILIES.projectList,
+  ...JIRA_READ_TOOL_FAMILIES.issueMetadata,
+  ...JIRA_READ_TOOL_FAMILIES.issues,
+  ...JIRA_READ_TOOL_FAMILIES.issueWorkflow,
+  ...JIRA_READ_TOOL_FAMILIES.localCompositions,
+]);
+/** Curated issue writes and local composition stay available alongside selected native tools. */
 const JIRA_BASE_TOOLS = [
-  "jira.projects",
-  "jira.issue-types",
-  "jira.create-fields",
-  "jira.edit-fields",
-  "jira.search",
-  "jira.issue",
-  "jira.comments",
-  "jira.transitions",
-  "jira.assignable-users",
-  "jira.report",
-  "jira.draft-stage",
-  "jira.create",
-  "jira.edit",
-  "jira.assign",
-  "jira.comment",
-  "jira.transition",
-  "jira.draft",
-  "jira.attach",
-] as const satisfies typeof JIRA_CHAT_TOOLS;
+  ...JIRA_MANAGED_READ_TOOLS.filter(
+    (tool) => JIRA_BASE_READS.has(tool) && tool !== JIRA_DRAFT_BATCH_TOOL,
+  ),
+  ...JIRA_MUTATION_OPERATIONS.filter((tool): boolean => {
+    if (!isCoreMutationTool(tool)) return false;
+    const definition = jiraOperationForTool(tool)?.definition;
+    return (
+      definition?.kind === "composite" ||
+      (definition?.kind === "native" && /\/issue(?:\/|$)/u.test(definition.pathTemplate))
+    );
+  }),
+] satisfies typeof JIRA_CHAT_TOOLS;
 const toolAlias = (tool: string): string => tool.replace(/[.-]/gu, "_");
 const JIRA_BATCH_ALIASES: ReadonlySet<string> = new Set(JIRA_BATCH_TOOLS.map(toolAlias));
 const withBatchTools = (tools: typeof JIRA_CHAT_TOOLS): typeof JIRA_CHAT_TOOLS => [
@@ -722,7 +728,7 @@ async function admitSelectedCatalog(
   requireDispatch(tools.length === names.size, "invalid", "invalid-arguments");
   const selected = createManagedChatCatalogRuntime<JiraChatCatalogConsumer>(
     () => [],
-    () => initialize(tools),
+    () => initialize([...new Set([...JIRA_BASE_TOOLS, ...tools])]),
   );
   selections.add(selected);
   try {

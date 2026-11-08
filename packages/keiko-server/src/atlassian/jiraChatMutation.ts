@@ -38,9 +38,21 @@ export interface JiraChatMutationExecution {
   readonly beforeEffect: () => boolean;
   /** Claim this exact mutation's approval inside the journal transaction, only before POST/PUT/DELETE. */
   readonly beforeMutation: (itemRef?: string) => boolean;
-  readonly execute: (http: AtlassianHttpBodyPort, lifecycle: AtlassianHttpLifecycleOptions) => Promise<JiraMutationAttempt>;
+  readonly execute: (
+    http: AtlassianHttpBodyPort,
+    lifecycle: AtlassianHttpLifecycleOptions,
+  ) => Promise<JiraMutationAttempt>;
 }
 const FAILED: JiraMutationAttempt = { ok: false, reason: "unavailable" };
+interface MutationObservation {
+  readonly attempt: JiraMutationAttempt;
+  readonly writeAttempted: boolean;
+}
+interface MutationTransport {
+  readonly http: AtlassianHttpBodyPort;
+  readonly lifecycle: AtlassianHttpLifecycleOptions;
+  readonly writeAttempted: boolean;
+}
 function confirmed(value: unknown): boolean {
   return value === true;
 }
@@ -73,16 +85,18 @@ function observedOutcome(record: ChatToolMutationRecord | undefined): JiraMutati
 function mutationTransport(
   input: JiraChatMutationExecution,
   journal: ChatToolMutationStore,
-): { readonly http: AtlassianHttpBodyPort; readonly lifecycle: AtlassianHttpLifecycleOptions } {
+): MutationTransport {
   const { intent } = input;
   let furtherLinks = 0;
   let continuing = false;
+  let writeAttempted = false;
   const admitsContinuation = (request: AtlassianHttpRequest | AtlassianHttpBodyRequest): boolean =>
     isJiraIssueLinkWrite(request) &&
     furtherLinks < JIRA_ISSUE_LINKS_MAX - JIRA_ISSUE_LINKS_PER_REQUEST_MAX &&
     journal.find(intent.invocationId)?.phase === "acknowledged";
   const lifecycle: AtlassianHttpLifecycleOptions = {
     beforeDispatch: (request): boolean => {
+      if (request.method !== "GET") writeAttempted = true;
       continuing = false;
       if (request.method === "GET") return confirmed(input.beforeEffect());
       if (admitsContinuation(request)) {
@@ -104,25 +118,40 @@ function mutationTransport(
       return true;
     },
   };
-  return { http: input.httpPortFactory(lifecycle), lifecycle };
+  const http = input.httpPortFactory(lifecycle);
+  return {
+    http: (request): ReturnType<AtlassianHttpBodyPort> => {
+      if (request.method !== "GET") writeAttempted = true;
+      return http(request);
+    },
+    lifecycle,
+    get writeAttempted(): boolean {
+      return writeAttempted;
+    },
+  };
 }
 async function attempt(
   input: JiraChatMutationExecution,
   journal: ChatToolMutationStore,
-): Promise<JiraMutationAttempt> {
+): Promise<MutationObservation> {
+  let transport: MutationTransport | undefined;
   try {
-    const transport = mutationTransport(input, journal);
+    transport = mutationTransport(input, journal);
     const result = validJiraMutationAttempt(
       await input.execute(transport.http, transport.lifecycle),
       input.intent.operation,
     );
     recordJiraTemplateAttempt(input.intent.correlationId, input.intent.operation, result);
-    return result;
+    return { attempt: result, writeAttempted: transport.writeAttempted };
   } catch (error) {
     emitServerDiagnostic(undefined, mutationDiagnostic(input.intent, error));
-    return error instanceof JiraAcknowledgedMutationError
-      ? validJiraMutationAttempt({ ...FAILED, receipt: error.receipt }, input.intent.operation)
-      : FAILED;
+    return {
+      attempt:
+        error instanceof JiraAcknowledgedMutationError
+          ? validJiraMutationAttempt({ ...FAILED, receipt: error.receipt }, input.intent.operation)
+          : FAILED,
+      writeAttempted: transport?.writeAttempted ?? false,
+    };
   }
 }
 /**
@@ -146,7 +175,10 @@ function jiraRejectedWithoutEffect(
  * A 401 additionally needs the existing server-owned positive identity observation;
  * error documents and the durable original HTTP status remain mandatory for settlement.
  */
-function atomicRejectionStatus(record: ChatToolMutationRecord, attempt: JiraMutationAttempt): boolean {
+function atomicRejectionStatus(
+  record: ChatToolMutationRecord,
+  attempt: JiraMutationAttempt,
+): boolean {
   const operation = record.operation;
   if (
     operation === "jira.create-screen-tab" ||
@@ -197,14 +229,20 @@ const ATOMIC_ERROR_OPERATIONS: ReadonlySet<string> = new Set([
 /** The outcome to settle, and whether it rests on Jira's own error document. */
 function settlement(
   current: ChatToolMutationRecord | undefined,
-  attempt: JiraMutationAttempt,
+  { attempt, writeAttempted }: MutationObservation,
 ): { readonly outcome: JiraMutationOutcome; readonly errorDocument: boolean } {
-  if (current?.phase === "prepared" && !attempt.ok)
-    return { outcome: "rejected", errorDocument: false };
-  if (current?.phase === "dispatched" && jiraRejectedWithoutEffect(current, attempt))
-    return { outcome: "rejected", errorDocument: true };
-  if (current?.phase === "acknowledged" && attempt.ok)
-    return { outcome: "succeeded", errorDocument: false };
+  if (current !== undefined) {
+    if (current.phase === "prepared" && !attempt.ok)
+      return {
+        outcome:
+          attempt.reason === "unavailable" && !writeAttempted ? "not-dispatched" : "rejected",
+        errorDocument: false,
+      };
+    if (current.phase === "dispatched" && jiraRejectedWithoutEffect(current, attempt))
+      return { outcome: "rejected", errorDocument: true };
+    if (current.phase === "acknowledged" && attempt.ok)
+      return { outcome: "succeeded", errorDocument: false };
+  }
   return { outcome: observedOutcome(current), errorDocument: false };
 }
 /** Keiko's closed reason for a write that failed; the store records it only for a local refusal. */
@@ -216,10 +254,11 @@ function localRefusal(attempt: JiraMutationAttempt): ChatToolMutationLocalRefusa
 function finish(
   input: JiraChatMutationExecution,
   journal: ChatToolMutationStore,
-  attempt: JiraMutationAttempt,
+  observation: MutationObservation,
 ): ManagedMcpToolResult {
+  const { attempt } = observation;
   const current = journal.find(input.intent.invocationId);
-  const { outcome, errorDocument } = settlement(current, attempt);
+  const { outcome, errorDocument } = settlement(current, observation);
   try {
     journal.settle(
       input.intent.invocationId,

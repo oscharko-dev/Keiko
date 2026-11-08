@@ -198,7 +198,7 @@ class JiraPrivateHttpOwner {
     return this.finishing;
   }
   private async finishOwned(): Promise<void> {
-    await Promise.allSettled([...this.active]);
+    await Promise.allSettled(this.active);
     const retained = this.owned;
     this.owned = undefined;
     const sessions = this.sessions;
@@ -485,10 +485,12 @@ class JiraPrivateHttpOwner {
       identity: {
         perform: (purpose, fields) => this.perform(purpose, fields),
         session: (action, expectedActorKey) => this.sessionAction(action, expectedActorKey),
-        unlock: (expectedActorKey) =>
-          this.options.selection?.binding.actorUserKey === expectedActorKey
+        unlock: (expectedActorKey): Promise<AtlassianWriteHttpOutcome> => {
+          if (this.options.selection === undefined) return Promise.resolve(UNAVAILABLE);
+          return this.options.selection.binding.actorUserKey === expectedActorKey
             ? this.perform("unlock-user-anonymization", {})
-            : Promise.resolve(CHANGED),
+            : Promise.resolve(CHANGED);
+        },
       },
       withAvatarSession: (expectedActorKey, execute) =>
         this.withAvatarSession(expectedActorKey, execute),
