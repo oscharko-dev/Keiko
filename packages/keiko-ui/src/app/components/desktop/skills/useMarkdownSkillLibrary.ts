@@ -47,25 +47,33 @@ function useLibraryRequest(): {
   readonly error: MarkdownSkillLibrary["error"];
   readonly setError: (value: MarkdownSkillLibrary["error"]) => void;
   readonly active: { current: boolean };
-  readonly run: (operation: () => Promise<void>) => Promise<void>;
+  readonly run: (operation: () => Promise<void>, queueRead?: boolean) => Promise<void>;
 } {
   const [error, setError] = useState<MarkdownSkillLibrary["error"]>();
   const [busy, setBusy] = useState(true);
   const active = useRef(true);
   const locked = useRef(false);
+  const trailingRead = useRef<(() => Promise<void>) | undefined>(undefined);
   useEffect(() => {
     active.current = true;
     return (): void => {
       active.current = false;
     };
   }, []);
-  const run = useCallback(async (operation: () => Promise<void>): Promise<void> => {
-    if (locked.current) return;
+  const run = useCallback(async function runRequest(
+    operation: () => Promise<void>,
+    queueRead = false,
+  ): Promise<void> {
+    if (locked.current) {
+      if (queueRead) trailingRead.current = operation;
+      return;
+    }
     locked.current = true;
     setBusy(true);
     setError(undefined);
     try {
       await operation();
+      if (active.current) setError(undefined);
     } catch (error_) {
       if (active.current) setError("request");
       reportClientDiagnostic("Private skill library request failed.", {
@@ -75,7 +83,10 @@ function useLibraryRequest(): {
       });
     } finally {
       locked.current = false;
-      if (active.current) setBusy(false);
+      const next = trailingRead.current;
+      trailingRead.current = undefined;
+      if (active.current && next !== undefined) await runRequest(next);
+      else if (active.current) setBusy(false);
     }
   }, []);
   return { busy, error, setError, active, run };
@@ -85,21 +96,30 @@ export function useMarkdownSkillLibrary(onChange: () => Promise<void>): Markdown
   const [skills, setSkills] = useState<readonly MarkdownSkillMetadata[]>([]);
   const [preview, setPreview] = useState<MarkdownSkillDocument>();
   const [available, setAvailable] = useState(false);
+  const invalidatedPreview = useRef(false);
   const request = useLibraryRequest();
   const { active, run } = request;
   const reload = useCallback(async (): Promise<void> => {
     if (active.current) setAvailable(false);
+    if (invalidatedPreview.current) {
+      invalidatedPreview.current = false;
+      if (active.current) setPreview(undefined);
+    }
     const next = await fetchMarkdownSkills();
     if (active.current) {
       setSkills(next);
       setAvailable(true);
     }
   }, [active]);
-  const refresh = useCallback(() => run(reload), [run, reload]);
+  const refresh = useCallback(() => run(reload, true), [run, reload]);
+  const refreshSession = useCallback(() => {
+    invalidatedPreview.current = true;
+    return refresh();
+  }, [refresh]);
   useEffect(() => {
     void refresh();
   }, [refresh]);
-  useLibrarySessionRefresh(request.busy, refresh, setPreview);
+  useLibrarySessionRefresh(request.busy, refreshSession);
   return {
     skills: available ? skills : [],
     preview: available ? preview : undefined,
@@ -112,19 +132,14 @@ export function useMarkdownSkillLibrary(onChange: () => Promise<void>): Markdown
 }
 
 /** Coalesce session refreshes behind an in-flight request; never replay a mutation. */
-function useLibrarySessionRefresh(
-  busy: boolean,
-  refresh: () => Promise<void>,
-  setPreview: (value: MarkdownSkillDocument | undefined) => void,
-): void {
+function useLibrarySessionRefresh(busy: boolean, refresh: () => Promise<void>): void {
   const redemptions = useCodingAppSessionRedemptions();
   const refreshed = useRef(redemptions);
   useEffect(() => {
     if (busy || refreshed.current === redemptions) return;
     refreshed.current = redemptions;
-    setPreview(undefined);
     void refresh();
-  }, [busy, redemptions, refresh, setPreview]);
+  }, [busy, redemptions, refresh]);
 }
 
 function libraryActions({

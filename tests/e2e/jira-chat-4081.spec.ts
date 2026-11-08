@@ -1,6 +1,6 @@
 import { expect, test, type Page, type Locator } from "@playwright/test";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
-import type { ChatMessage } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { ChatMessage, ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { parseJiraDraftReference } from "@oscharko-dev/keiko-connectors";
 import { join } from "node:path";
 import { jiraAccessibilityJourney } from "./support/jira-chat-4081-accessibility.js";
@@ -15,6 +15,73 @@ import {
   selectAskForApproval,
   send,
 } from "./support/jira-chat-4081.js";
+
+function completedBatchMessage(resumed: boolean): ChatMessage {
+  const progress = {
+    phase: "complete" as const,
+    draftedCount: 370,
+    plannedCount: 370,
+    coveredRequirementCount: 370,
+    requirementCount: 370,
+    failedCount: 0,
+  };
+  const exchange: ChatToolExchange = {
+    call: {
+      id: "batch-progress-fixture",
+      name: "jira_draft_batch",
+      arguments: resumed ? { create: true } : { requirements: "synthetic" },
+    },
+    batchProgress: progress,
+  };
+  return {
+    id: "batch-progress-message",
+    chatId: fixture().chats.approval.id,
+    role: "user",
+    content: resumed ? "Continue the draft." : "Draft the requirements.",
+    timestamp: Date.now(),
+    turnState: "completed",
+    toolTranscript: { schemaVersion: 1, exchanges: [exchange] },
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
+  };
+}
+
+for (const resumed of [false, true]) {
+  test(`a ${resumed ? "resumed" : "fresh"} completed batch fills 370/370 immediately in Chat and after reload`, async ({
+    page,
+  }) => {
+    const before = counts();
+    await page.route("**/api/chats/messages?*", async (route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      await route.fulfill({ json: { messages: [completedBatchMessage(resumed)] } });
+    });
+    await openJiraChat(page, "approval");
+    for (const reload of [false, true]) {
+      if (reload) await page.reload();
+      const bar = page.getByRole("progressbar", { name: /370 of 370 issues/u });
+      await expect(bar).toBeVisible();
+      const state = await bar.evaluate((element: HTMLProgressElement) => ({
+        value: element.value,
+        max: element.max,
+        position: element.position,
+        transition: getComputedStyle(element, "::-webkit-progress-value").transitionDuration,
+      }));
+      expect(state).toEqual({ value: 370, max: 370, position: 1, transition: "0s" });
+      await bar.evaluate((element) => {
+        element.removeAttribute("data-complete");
+      });
+      expect(
+        await bar.evaluate(
+          (element) => getComputedStyle(element, "::-webkit-progress-value").transitionDuration,
+        ),
+      ).toBe("0.2s");
+    }
+    expect(counts()).toEqual(before);
+  });
+}
 
 test("ordinary Chat restores a pending approval and completed receipt without duplicate writes", async ({
   page,

@@ -2384,6 +2384,24 @@ it.each([MAX_RECURSIVE_TEXT_FILE_BYTES, MAX_RECURSIVE_TEXT_FILE_BYTES + 1])(
   },
 );
 
+it.each(["workspace-sync-idle", "workspace-sync-active", "workspace-sync-pull-pending"])(
+  "accepts only the closed workspace polling activity %s (#4321)",
+  (composerActivity) => {
+    const report = {
+      message: "Workspace polling state changed.",
+      clientTs: "2026-11-08T00:00:00.000Z",
+      composerActivity,
+    };
+    expect(isClientDiagnosticIngestRequest(report)).toBe(true);
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...report,
+        composerActivity: `${composerActivity}-private`,
+      }),
+    ).toBe(false);
+  },
+);
+
 describe("coding task composer submission evidence (#3877)", () => {
   const submission = {
     kind: "start",
