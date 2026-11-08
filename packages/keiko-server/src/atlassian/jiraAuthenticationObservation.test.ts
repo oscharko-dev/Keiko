@@ -773,18 +773,6 @@ it.each(DOCUMENTED_NATIVE_WRITE_401)(
     expect(f.invalidated).toEqual([2]);
   },
 );
-it("refuses an encoded-separator native segment before any request or credential loss", async () => {
-  const path = "screens/addToDefault/unsafe%2Ffield";
-  const f = fixture(() => response({}, 401));
-  await expect(
-    f.deps.httpBodyPortFactory(f.metadata)({ ...request(path), method: "POST", bodyJson: "{}" }),
-  ).rejects.toMatchObject({ code: "invalid-input" });
-  expect(f.urls).toEqual([]);
-  expect(f.invalidated).toEqual([]);
-  expect(
-    ambiguousJiraAuthenticationResponse(f.metadata, { ...request(path), method: "POST" }),
-  ).toBe(false);
-});
 it.each([
   { method: "POST", path: "workflowscheme/1/draft" },
   { method: "PUT", path: "workflowscheme/1/createdraft" },
@@ -823,4 +811,10 @@ it("refuses an encoded slash before dispatch, authentication probing or credenti
   expect(f.urls).toEqual([]);
   expect(f.invalidated).toEqual([]);
   expect(f.current()).toEqual(f.metadata);
+  expect(
+    ambiguousJiraAuthenticationResponse(f.metadata, {
+      ...request("screens/addToDefault/unsafe%2Ffield"),
+      method: "POST",
+    }),
+  ).toBe(false);
 });

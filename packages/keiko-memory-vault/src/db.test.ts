@@ -9,6 +9,7 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,6 +18,7 @@ import { Worker } from "node:worker_threads";
 import { chmodIfPresent, openMemoryDatabase, quarantineCorruptDb } from "./db.js";
 import { MEMORY_VAULT_SCHEMA_VERSION, runMigrations } from "./schema.js";
 import { MemoryStorageError } from "./errors.js";
+import { SqliteStatePathError } from "@oscharko-dev/keiko-security/fs-hardening";
 import {
   memoryMigrationSnapshot,
   seedBrokenV12MemoryVault,
@@ -47,12 +49,27 @@ function freshDir(): string {
 }
 
 describe("openMemoryDatabase", () => {
-  it("classifies an open failure without replacing the existing path", () => {
+  it("keeps a refused symlinked state path fail-closed instead of withholding Memory", () => {
+    const dir = freshDir();
+    const target = join(dir, "real.sqlite");
+    writeFileSync(target, "");
+    const path = join(dir, "linked.sqlite");
+    symlinkSync(target, path);
+    const events: MemoryVaultLogEvent[] = [];
+    let failure: unknown;
+    try {
+      openMemoryDatabase(path, TEST_CIPHER, { write: (event) => events.push(event) });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(SqliteStatePathError);
+    expect(failure).not.toBeInstanceOf(MemoryStorageError);
+    expect(events.map((event) => event.op)).not.toContain("memory-vault.store.open-failed");
+  });
+  it("refuses a directory at the state path fail-closed without replacing it", () => {
     const path = join(freshDir(), "existing-directory");
     mkdirSync(path);
-    expect(() => openMemoryDatabase(path, TEST_CIPHER)).toThrow(
-      expect.objectContaining({ code: "vault-migration-failed" }),
-    );
+    expect(() => openMemoryDatabase(path, TEST_CIPHER)).toThrow(SqliteStatePathError);
     expect(statSync(path).isDirectory()).toBe(true);
     expect(readdirSync(path)).toEqual([]);
   });

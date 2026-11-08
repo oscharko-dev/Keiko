@@ -413,7 +413,8 @@ diagnostic records that Memory was withheld. `/api/health`, Status and the works
 `memory.readiness: "withheld"` with `vault-migration-failed` or `vault-unreadable` while the server
 remains live and Chat remains usable. The storage proof exercises a broken v12 database, unchanged
 version and rows, a closed handle and no quarantine. The server proof also exercises a successful
-Chat turn after the classified startup failure. Unclassified composition failures still propagate.
+Chat turn after the classified startup failure. Unclassified composition failures, including a
+refused state path, still propagate and emit no `memory-vault.store.open-failed` line.
 
 Request resolution accepts a client identity only when its bounded header-safe shape also survives
 the existing writer label redaction unchanged. Otherwise it mints one UUID before response-header,

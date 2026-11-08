@@ -33,7 +33,7 @@ describe("DiagnosticReadinessNotice", () => {
     {
       locale: "de",
       reason: "vault-migration-failed",
-      message: "Memory bleibt bis zur Reparatur des lokalen Tresors zurückgehalten.",
+      message: "Memory ist bis zur Reparatur des lokalen Tresors nicht verfügbar.",
     },
     {
       locale: "en",

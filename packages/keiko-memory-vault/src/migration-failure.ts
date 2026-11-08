@@ -2,6 +2,7 @@ import {
   isSqliteCorruptionError,
   sqliteErrorLike,
 } from "@oscharko-dev/keiko-security/sqlite-corruption";
+import { SqliteStatePathError } from "@oscharko-dev/keiko-security/fs-hardening";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -46,13 +47,16 @@ function openFailureMessage(error: unknown, phase: "open" | "migration" | "newer
   return "The memory vault could not be opened or migrated.";
 }
 
-/** Corruption keeps its existing quarantine owner; every other storage failure stays body-free. */
+/**
+ * Corruption keeps its existing quarantine owner and a refused state path keeps failing closed;
+ * every other storage failure stays body-free.
+ */
 export function memoryVaultOpenError(
   error: unknown,
   phase: "open" | "migration" | "newer-schema",
   sink?: MemoryVaultLogSink,
 ): MemoryStorageError {
-  if (isSqliteCorruptionError(error)) throw error;
+  if (isSqliteCorruptionError(error) || error instanceof SqliteStatePathError) throw error;
   if (
     error instanceof MemoryStorageError &&
     (error.code === "vault-unreadable" || error.code === "vault-migration-failed")
