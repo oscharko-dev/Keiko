@@ -1,4 +1,4 @@
-import { AtlassianCredentialCustodyError, jiraNativeId, type AtlassianHttpBodyRequest } from "@oscharko-dev/keiko-connectors";
+import { AtlassianCredentialCustodyError, jiraNativeId, parseJsonRecord, type AtlassianHttpBodyRequest } from "@oscharko-dev/keiko-connectors";
 
 function refuse(): never { throw new AtlassianCredentialCustodyError("invalid-input", ["Unsupported fixed Jira identity/project request"]); }
 function selected(request: AtlassianHttpBodyRequest): boolean {
@@ -11,8 +11,7 @@ function compatible(request: AtlassianHttpBodyRequest): boolean {
 }
 function jsonObject(text: string | undefined): Record<string, unknown> | undefined {
   if (text === undefined) return undefined;
-  let value: unknown; try { value = JSON.parse(text); } catch { return undefined; }
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? Object.fromEntries(Object.entries(value)) : undefined;
+  return parseJsonRecord(text);
 }
 function text(value: unknown, max = 255): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= max && !/[\p{Cc}\p{Surrogate}]/u.test(value);

@@ -31,6 +31,7 @@ export { copyHumanInputBinding, humanInputView, parseHumanInputValues, type Jira
 export { prepareJiraHumanInput, type JiraHumanInputSelection } from "./jira-human-input-preparation.js";
 export { prepareJiraHumanInputReview } from "./jira-human-input-review.js";
 export { jiraNativeId } from "./jira-native-values.js";
+export { parseJsonRecord, parseJsonObjectOrArray } from "./atlassian-sync-classify.js";
 export { jiraApplicationLinkId } from "./jira-reciprocal-link-values.js";
 export { JiraPrivateSessionError, type JiraPrivateSessionAccess, type JiraPrivateSessionExecutionResolver } from "./jira-private-session-custody.js";
 export { jiraPrivateCookie, jiraSessionBindingForInput, jiraPrivateSessionReference, copyJiraSessionBinding, type JiraPrivateSessionBinding, type JiraPrivateSessionScope, type JiraPrivateCookie } from "./jira-private-session-values.js";

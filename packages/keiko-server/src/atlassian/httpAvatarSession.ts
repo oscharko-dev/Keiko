@@ -1,4 +1,4 @@
-import { AtlassianCredentialCustodyError, jiraNativeId, jiraPropertyUserText, type AtlassianHttpBodyRequest } from "@oscharko-dev/keiko-connectors";
+import { AtlassianCredentialCustodyError, jiraNativeId, jiraPropertyUserText, parseJsonRecord, type AtlassianHttpBodyRequest } from "@oscharko-dev/keiko-connectors";
 import { JIRA_ATTACHMENT_MAX_BYTES, isJiraAttachmentName } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { JiraPrivateAuthentication } from "./httpRequestLifecycle.js";
 
@@ -21,8 +21,8 @@ function avatarRead(path: string, url: URL): boolean {
 }
 function cropBody(text: string | undefined): boolean {
   if (text === undefined) return false;
-  let raw: unknown; try { raw = JSON.parse(text); } catch { return false; }
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return false;
+  const raw = parseJsonRecord(text);
+  if (raw === undefined) return false;
   const fields = Object.entries(raw);
   return fields.length === 3 && fields.every(([key, value]) => (key === "cropperOffsetX" || key === "cropperOffsetY" || key === "cropperWidth") &&
     typeof value === "number" && Number.isSafeInteger(value) && value >= (key === "cropperWidth" ? 1 : 0) && value <= 2147483647);

@@ -157,6 +157,16 @@ describe("human input on existing Atlassian custody", () => {
     await expect(waiting).resolves.toMatchObject({ state: "cancelled" });
     expect(errorCode(() => f.inputs.submit(pending.requestId, f.binding, pending.revision, { password: PRIVATE_VALUE }))).toBe("not-pending");
   });
+  it("rejects the held call with the original vault failure during cancellation", async () => {
+    const f = fixture("jira.login"); const pending = f.inputs.prepare(f.binding);
+    const controller = new AbortController();
+    const waiting = f.inputs.wait(pending.requestId, f.binding, controller.signal);
+    const failure = new Error("Synthetic storage unavailable");
+    f.vault.get = () => { throw failure; };
+    const rejected = expect(waiting).rejects.toBe(failure);
+    controller.abort();
+    await rejected;
+  });
   it.each([{ password: "" }, { password: "x".repeat(4097) }, { password: "\ud800" }, { password: PRIVATE_VALUE, url: "https://foreign.invalid" }, { license: PRIVATE_VALUE }])("refuses incompatible human fields without echoing them %#", (values) => {
     const f = fixture("jira.login"); const pending = f.inputs.prepare(f.binding);
     expect(errorCode(() => f.inputs.submit(pending.requestId, f.binding, pending.revision, values))).toBe("invalid-input");

@@ -1,5 +1,6 @@
 import {
   AtlassianCredentialCustodyError, JiraHumanInputCustodyError, copyHumanInputBinding, jiraPrivateCookie, humanInputView, parseHumanInputValues,
+  parseJsonObjectOrArray,
   type AtlassianHttpBodyRequest, type JiraHumanInputHttpRequest, type JiraHumanInputValues, type JiraPrivateCookie,
   type AtlassianCredentialExecutionResolver,
 } from "@oscharko-dev/keiko-connectors";
@@ -76,15 +77,16 @@ export function claimHttpHumanInput(credentials: AtlassianCredentialExecutionRes
   consumed?.(humanInputView({ schemaVersion: 1, kind: "jira-operation-input", requestId, binding, revision, state: "consumed" }));
   return parseHumanInputValues(binding.operation, values) ?? refuse();
 }
-function responseJson(text: string): unknown { try { return JSON.parse(text); } catch { return undefined; } }
 /** Native diagnostics may reflect the submitted password/license. Never return that raw body. */
 export function privateHumanResponse(purpose: JiraHumanInputPurpose, status: number, text: string, truncated: boolean,
   onLoginCookie?: (cookie: JiraPrivateCookie) => void): string {
   if (status < 200 || status >= 300 || truncated) return "";
-  const value = responseJson(text);
+  const parsed = parseJsonObjectOrArray(text);
+  if (parsed === undefined) return "";
   if (purpose === "validate-create-user-password" || purpose === "validate-update-user-password")
-    return Array.isArray(value) && value.length <= TOOL_CATALOG_LIMITS.maxArrayItems && value.every((item) => typeof item === "string")
-      ? JSON.stringify({ accepted: value.length === 0, violationCount: value.length }) : "";
+    return parsed.items !== undefined && parsed.items.length <= TOOL_CATALOG_LIMITS.maxArrayItems && parsed.items.every((item) => typeof item === "string")
+      ? JSON.stringify({ accepted: parsed.items.length === 0, violationCount: parsed.items.length }) : "";
+  const value = parsed.body;
   if (purpose === "validate-license") {
     if (value === null || typeof value !== "object" || !("errors" in value) || value.errors === null || typeof value.errors !== "object" || Array.isArray(value.errors)) return "";
     const errors = Object.values(value.errors);

@@ -173,7 +173,7 @@ function wait(owner: Owner, requestId: string, binding: JiraHumanInputBinding, s
   if (signal.aborted) return Promise.resolve(cancel(owner, requestId, binding));
   const view = inspect(owner, requestId, binding);
   if (view?.state !== "awaiting-input") return Promise.resolve(view);
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     let settled = false;
     const listeners = owner.listeners.get(requestId) ?? new Set<() => void>();
     owner.listeners.set(requestId, listeners);
@@ -181,7 +181,10 @@ function wait(owner: Owner, requestId: string, binding: JiraHumanInputBinding, s
       if (settled) return;
       settled = true; clearTimeout(timer); signal.removeEventListener("abort", finish); listeners.delete(finish);
       if (listeners.size === 0) owner.listeners.delete(requestId);
-      try { resolve(signal.aborted ? cancel(owner, requestId, binding) : inspect(owner, requestId, binding)); } catch (error) { reject(error); }
+      // Adopt the observation promise, including its original rejection. The composing call
+      // owns diagnostics; notification callbacks must never turn custody failures into success.
+      resolve(Promise.resolve().then(() => signal.aborted
+        ? cancel(owner, requestId, binding) : inspect(owner, requestId, binding)));
     };
     // Expiry shares the existing call's signal/deadline. No background replay or runtime polling.
     const timer = setTimeout(finish, Math.max(1, view.expiresAt - now(owner)));

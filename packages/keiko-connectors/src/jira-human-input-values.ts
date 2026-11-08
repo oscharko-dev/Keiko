@@ -7,7 +7,7 @@ import {
   type JiraHumanInputField, type JiraHumanInputPurpose, type JiraHumanInputState, type JiraHumanInputView,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { savedExactKeys, savedName, savedText } from "./jira-saved-configuration-values.js";
-import { asRecord } from "./atlassian-sync-classify.js";
+import { asRecord, parseJsonRecord } from "./atlassian-sync-classify.js";
 
 export type JiraHumanInputContext =
   | { readonly kind: "chat"; readonly chatId: string; readonly messageId: string; readonly callId: string; readonly podId: string; readonly bindingGeneration: number }
@@ -114,8 +114,7 @@ export function parseHumanInputValues(operation: string, value: unknown): JiraHu
 }
 export function parseHumanInputRecord(serialized: string): JiraHumanInputRecord | undefined {
   if (new TextEncoder().encode(serialized).byteLength > JIRA_HUMAN_INPUT_MAX_BYTES + 8192) return undefined;
-  let value: unknown; try { value = JSON.parse(serialized); } catch { return undefined; }
-  const raw = asRecord(value); const binding = copyHumanInputBinding(raw?.binding);
+  const raw = parseJsonRecord(serialized); const binding = copyHumanInputBinding(raw?.binding);
   if (raw === undefined || !savedExactKeys(raw, RECORD_KEYS) || binding === undefined || raw.kind !== "jira-operation-input" || raw.schemaVersion !== 1 ||
       raw.requestId !== humanInputRequestId(binding) || typeof raw.revision !== "string" || !REVISION.test(raw.revision) ||
       !savedText(raw.state, 32)) return undefined;

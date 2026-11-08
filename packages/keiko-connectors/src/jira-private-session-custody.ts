@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AtlassianCredentialMetadata } from "@oscharko-dev/keiko-contracts";
 import type { AtlassianCredentialVaultPort } from "./atlassian-credential-custody.js";
-import { asRecord } from "./atlassian-sync-classify.js";
+import { parseJsonRecord } from "./atlassian-sync-classify.js";
 import { savedExactKeys } from "./jira-saved-configuration-values.js";
 import { copyJiraSessionBinding, jiraPrivateCookie, jiraPrivateSessionReference,
   type JiraPrivateSessionBinding, type JiraPrivateCookie } from "./jira-private-session-values.js";
@@ -55,8 +55,7 @@ function selected(deps: Dependencies, raw: JiraPrivateSessionBinding): JiraPriva
 }
 function parsed(serialized: string): RecordValue | undefined {
   if (Buffer.byteLength(serialized, "utf8") > 32768) return undefined;
-  let value: unknown; try { value = JSON.parse(serialized); } catch { return undefined; }
-  const raw = asRecord(value); const binding = copyJiraSessionBinding(raw?.binding);
+  const raw = parseJsonRecord(serialized); const binding = copyJiraSessionBinding(raw?.binding);
   if (raw === undefined || binding === undefined || !savedExactKeys(raw, KEYS) || raw.schemaVersion !== 1 || raw.kind !== "jira-private-session" ||
       typeof raw.revision !== "string" || !UUID.test(raw.revision) || (raw.leaseId !== undefined && (typeof raw.leaseId !== "string" || !UUID.test(raw.leaseId)))) return undefined;
   const cookie = raw.cookie === undefined ? undefined : jiraPrivateCookie(raw.cookie);
