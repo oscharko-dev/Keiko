@@ -16,6 +16,7 @@ import {
   type AtlassianWriteHttpOutcome,
   type AtlassianWriteHttpRequest,
   type JiraAvatarPorts,
+  type AtlassianHttpBodyPort,
 } from "@oscharko-dev/keiko-connectors";
 import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type {
@@ -40,6 +41,11 @@ export interface JiraPrivatePortOptions {
   /** Entire held turn/run, never an individual tool's HTTP deadline. */
   readonly lifetimeSignal?: AbortSignal;
   readonly onCleanupFailure?: (error: unknown) => void;
+  /** Server-owned observation of the existing bounded port, after private response projection. */
+  readonly decorateHttpBodyPort?: (
+    port: AtlassianHttpBodyPort,
+    observation: { readonly kind: "request" | "session-finalizer" },
+  ) => AtlassianHttpBodyPort;
 }
 export interface JiraPrivatePortFactoryResult {
   readonly finish: () => Promise<void>;
@@ -140,7 +146,7 @@ class JiraPrivateHttpOwner {
       {
         deployment: "data-center",
         baseUrl: this.base,
-        http: createGatewayAtlassianHttpBodyPort(patOptions),
+        http: this.http(patOptions),
       },
       context,
     );
@@ -148,6 +154,14 @@ class JiraPrivateHttpOwner {
     this.lifetime = options.lifetimeSignal ?? context.signal;
     this.lifetime.addEventListener("abort", this.aborted, { once: true });
     if (this.lifetime.aborted) this.aborted();
+  }
+
+  private http(
+    options: CreateAtlassianHttpPortOptions,
+    kind: "request" | "session-finalizer" = "request",
+  ): AtlassianHttpBodyPort {
+    const port = createGatewayAtlassianHttpBodyPort(options);
+    return this.options.decorateHttpBodyPort?.(port, { kind }) ?? port;
   }
 
   private async completeCleanup(execute: () => Promise<void>): Promise<void> {
@@ -173,18 +187,19 @@ class JiraPrivateHttpOwner {
   private async logout(cookie: () => string): Promise<void> {
     // Cleanup is one fixed cookie-only request, without action admission or mutation observers.
     // Keep the existing target/egress/byte/time bounds; this cannot dispatch another operation.
-    const {
-      beforeDispatch: _admission,
-      onResponse: _observer,
-      onHumanInputConsumed: _consumed,
-      onJiraLoginCookie: _candidate,
-      ...transport
-    } = this.privateOptions;
-    const http = createGatewayAtlassianHttpBodyPort({
-      ...transport,
-      singleAttempt: true,
-      privateAuthentication: { kind: "session", scope: "logout", cookie },
-    });
+    const transport = { ...this.privateOptions };
+    delete transport.beforeDispatch;
+    delete transport.onResponse;
+    delete transport.onHumanInputConsumed;
+    delete transport.onJiraLoginCookie;
+    const http = this.http(
+      {
+        ...transport,
+        singleAttempt: true,
+        privateAuthentication: { kind: "session", scope: "logout", cookie },
+      },
+      "session-finalizer",
+    );
     const result = await executeAtlassianWriteRequest(
       { http },
       { method: "DELETE", url: `${this.base}/rest/auth/1/session`, expect: "none" },
@@ -259,7 +274,7 @@ class JiraPrivateHttpOwner {
     request: AtlassianWriteHttpRequest,
     extra: Partial<CreateAtlassianHttpPortOptions> = {},
   ): Promise<AtlassianWriteHttpOutcome> {
-    const http = createGatewayAtlassianHttpBodyPort({ ...this.privateOptions, ...extra });
+    const http = this.http({ ...this.privateOptions, ...extra });
     return executeAdmittedJiraRequest({ http }, this.context, this.context.signal, request);
   }
   private async proof(cookie: () => string, selected: Actor): Promise<boolean> {
@@ -472,6 +487,7 @@ class JiraPrivateHttpOwner {
           this.context,
           session,
           this.options.legacyTemporaryRelease,
+          (port) => this.options.decorateHttpBodyPort?.(port, { kind: "request" }) ?? port,
         ),
       );
     });

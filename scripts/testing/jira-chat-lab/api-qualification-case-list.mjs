@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { API_QUALIFICATION_CASES } from "./api-qualification-cases.mjs";
 import { API_QUALIFICATION_OBSERVATION_CASES } from "./api-qualification-observation-cases.mjs";
 import { API_QUALIFICATION_CONFIGURATION_CASES } from "./api-qualification-configuration-cases.mjs";
@@ -18,6 +19,12 @@ import {
   API_QUALIFICATION_SCHEMA_CLEANUP_CASES,
 } from "./api-qualification-schema-cases.mjs";
 import { API_QUALIFICATION_ASSOCIATION_CASES } from "./api-qualification-association-cases.mjs";
+import { API_QUALIFICATION_PLANNING_CASES } from "./api-qualification-planning-cases.mjs";
+import { API_QUALIFICATION_APPLICATION_ROLE_CASES } from "./api-qualification-application-role-cases.mjs";
+import { API_QUALIFICATION_ASSETS_CASES } from "./api-qualification-assets-cases.mjs";
+import { API_QUALIFICATION_FILTER_CASES } from "./api-qualification-filter-cases.mjs";
+import { API_QUALIFICATION_LINK_CASES } from "./api-qualification-link-cases.mjs";
+import { API_QUALIFICATION_INDEX_CASES } from "./api-qualification-index-cases.mjs";
 
 export const API_QUALIFICATION_ALL_CASES = [
   ...API_QUALIFICATION_CASES,
@@ -38,4 +45,24 @@ export const API_QUALIFICATION_ALL_CASES = [
   ...API_QUALIFICATION_SCHEMA_CASES,
   ...API_QUALIFICATION_ASSOCIATION_CASES,
   ...API_QUALIFICATION_SCHEMA_CLEANUP_CASES,
+  ...API_QUALIFICATION_PLANNING_CASES,
+  ...API_QUALIFICATION_APPLICATION_ROLE_CASES,
+  ...API_QUALIFICATION_ASSETS_CASES,
+  ...API_QUALIFICATION_FILTER_CASES,
+  ...API_QUALIFICATION_LINK_CASES,
+  ...API_QUALIFICATION_INDEX_CASES,
 ];
+export function assertQualificationRecipeCoverage(ledger, decisions) {
+  const identities = new Set();
+  for (const entry of API_QUALIFICATION_ALL_CASES) {
+    const identity = ledger.currentCapabilities[entry.tool]?.identity;
+    assert.ok(identity && !identities.has(identity) && !decisions.has(identity));
+    identities.add(identity);
+  }
+  for (const row of ledger.operations)
+    assert.ok(
+      identities.has(row.identity) || decisions.has(row.identity),
+      "The complete inventory needs native recipes or explicit owner decisions before a full run",
+    );
+  assert.equal(identities.size + decisions.size, ledger.operations.length);
+}

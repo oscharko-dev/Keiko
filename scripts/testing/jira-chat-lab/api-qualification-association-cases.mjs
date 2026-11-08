@@ -46,8 +46,15 @@ async function priority(c, f) {
 }
 async function attributes(c, f) {
   await observeAdminActor(c, f);
-  assert.match(f.permissionAttributeSchemeId, /^(?:0|[1-9][0-9]*)$/u);
-  assert.match(f.permissionAttributeKey, /^[a-zA-Z0-9_.-]+$/u);
+  assert.ok(
+    typeof f.permissionAttributeSchemeId === "string" &&
+      /^(?:0|[1-9]\d*)$/u.test(f.permissionAttributeSchemeId),
+    "Permission-scheme attribute qualification requires an operator-supplied native permissionAttributeSchemeId in the owned lab fixture",
+  );
+  assert.ok(
+    typeof f.permissionAttributeKey === "string" && /^[\w.-]+$/u.test(f.permissionAttributeKey),
+    "Permission-scheme attribute qualification requires an operator-supplied permissionAttributeKey with an existing native Boolean value",
+  );
   f.attributeParent = await permissionSchemeReview(c, f.permissionAttributeSchemeId);
   const value = await read(c, attributePath(f));
   assert.equal(value.key, f.permissionAttributeKey);
@@ -141,7 +148,7 @@ export const API_QUALIFICATION_ASSOCIATION_CASES = [
           ),
         },
         async (context, data) => {
-          assert.match(data.schemeId, /^[1-9][0-9]*$/u);
+          assert.match(data.schemeId, /^[1-9]\d*$/u);
           f.associationPermissionTarget = await permissionSchemeReview(context, data.schemeId);
           assert.deepEqual(
             f.associationPermissionTarget.permissions.map(({ id: _id, ...grant }) => grant),

@@ -1,0 +1,206 @@
+[
+  {
+    "tool": "jira.board-epic-issues",
+    "identity": "GET /rest/agile/1.0/board/{boardId}/epic/{epicId}/issue"
+  },
+  {
+    "tool": "jira.epic-remove-issues",
+    "identity": "POST /rest/agile/1.0/epic/none/issue"
+  },
+  {
+    "tool": "jira.epic",
+    "identity": "GET /rest/agile/1.0/epic/{epicIdOrKey}"
+  },
+  {
+    "tool": "jira.epic-update",
+    "identity": "POST /rest/agile/1.0/epic/{epicIdOrKey}"
+  },
+  {
+    "tool": "jira.epic-issues",
+    "identity": "GET /rest/agile/1.0/epic/{epicIdOrKey}/issue"
+  },
+  {
+    "tool": "jira.epic-move-issues",
+    "identity": "POST /rest/agile/1.0/epic/{epicIdOrKey}/issue"
+  },
+  {
+    "tool": "jira.rank-epic",
+    "identity": "PUT /rest/agile/1.0/epic/{epicIdOrKey}/rank"
+  },
+  {
+    "tool": "jira.rank-issues",
+    "identity": "PUT /rest/agile/1.0/issue/rank"
+  },
+  {
+    "tool": "jira.issue-estimation",
+    "identity": "GET /rest/agile/1.0/issue/{issueIdOrKey}/estimation"
+  },
+  {
+    "tool": "jira.set-issue-estimation",
+    "identity": "PUT /rest/agile/1.0/issue/{issueIdOrKey}/estimation"
+  },
+  {
+    "tool": "jira.unmap-sprints",
+    "identity": "PUT /rest/agile/1.0/sprint/unmap"
+  },
+  {
+    "tool": "jira.unmap-all-sprints",
+    "identity": "PUT /rest/agile/1.0/sprint/unmap-all"
+  },
+  {
+    "tool": "jira.delete-sprint",
+    "identity": "DELETE /rest/agile/1.0/sprint/{sprintId}"
+  },
+  {
+    "tool": "jira.replace-sprint",
+    "identity": "PUT /rest/agile/1.0/sprint/{sprintId}"
+  },
+  {
+    "tool": "jira.swap-sprints",
+    "identity": "POST /rest/agile/1.0/sprint/{sprintId}/swap"
+  },
+  {
+    "tool": "jira.set-application-roles",
+    "identity": "PUT /rest/api/2/applicationrole"
+  },
+  {
+    "tool": "jira.set-application-role",
+    "identity": "PUT /rest/api/2/applicationrole/{key}"
+  },
+  {
+    "tool": "jira.delete-attachment",
+    "identity": "DELETE /rest/api/2/attachment/{id}"
+  },
+  {
+    "tool": "jira.attachment",
+    "identity": "GET /rest/api/2/attachment/{id}"
+  },
+  {
+    "tool": "jira.attachment-archive-summary",
+    "identity": "GET /rest/api/2/attachment/{id}/expand/human"
+  },
+  {
+    "tool": "jira.attachment-archive",
+    "identity": "GET /rest/api/2/attachment/{id}/expand/raw"
+  },
+  {
+    "tool": "jira.upload-temporary-avatar",
+    "identity": "POST /rest/api/2/avatar/{type}/temporary"
+  },
+  {
+    "tool": "jira.crop-temporary-avatar",
+    "identity": "POST /rest/api/2/avatar/{type}/temporaryCrop"
+  },
+  {
+    "tool": "jira.dashboard-item-property-keys",
+    "identity": "GET /rest/api/2/dashboard/{dashboardId}/items/{itemId}/properties"
+  },
+  {
+    "tool": "jira.delete-dashboard-item-property",
+    "identity": "DELETE /rest/api/2/dashboard/{dashboardId}/items/{itemId}/properties/{propertyKey}"
+  },
+  {
+    "tool": "jira.dashboard-item-property",
+    "identity": "GET /rest/api/2/dashboard/{dashboardId}/items/{itemId}/properties/{propertyKey}"
+  },
+  {
+    "tool": "jira.set-dashboard-item-property",
+    "identity": "PUT /rest/api/2/dashboard/{dashboardId}/items/{itemId}/properties/{propertyKey}"
+  },
+  {
+    "tool": "jira.dashboard",
+    "identity": "GET /rest/api/2/dashboard/{id}"
+  },
+  {
+    "tool": "jira.email-template-pack",
+    "identity": "GET /rest/api/2/email-templates"
+  },
+  {
+    "tool": "jira.upload-email-template-pack",
+    "identity": "POST /rest/api/2/email-templates"
+  },
+  {
+    "tool": "jira.apply-email-template-pack",
+    "identity": "POST /rest/api/2/email-templates/apply"
+  },
+  {
+    "tool": "jira.revert-email-template-pack",
+    "identity": "POST /rest/api/2/email-templates/revert"
+  },
+  {
+    "tool": "jira.reset-filter-columns",
+    "identity": "DELETE /rest/api/2/filter/{id}/columns"
+  },
+  {
+    "tool": "jira.filter-columns",
+    "identity": "GET /rest/api/2/filter/{id}/columns"
+  },
+  {
+    "tool": "jira.set-filter-columns",
+    "identity": "PUT /rest/api/2/filter/{id}/columns"
+  },
+  {
+    "tool": "jira.filter-permissions",
+    "identity": "GET /rest/api/2/filter/{id}/permission"
+  },
+  {
+    "tool": "jira.add-filter-permission",
+    "identity": "POST /rest/api/2/filter/{id}/permission"
+  },
+  {
+    "tool": "jira.delete-filter-permission",
+    "identity": "DELETE /rest/api/2/filter/{id}/permission/{permission-id}"
+  },
+  {
+    "tool": "jira.filter-permission",
+    "identity": "GET /rest/api/2/filter/{id}/permission/{permissionId}"
+  },
+  {
+    "tool": "jira.create-index-snapshot",
+    "identity": "POST /rest/api/2/index-snapshot"
+  },
+  {
+    "tool": "jira.index-summary",
+    "identity": "GET /rest/api/2/index/summary"
+  },
+  {
+    "tool": "jira.issue-picker",
+    "identity": "GET /rest/api/2/issue/picker"
+  },
+  {
+    "tool": "jira.create-reciprocal-remote-link",
+    "identity": "POST /rest/api/2/issue/remotelink/reciprocal"
+  },
+  {
+    "tool": "jira.attach",
+    "identity": "POST /rest/api/2/issue/{issueIdOrKey}/attachments"
+  },
+  {
+    "tool": "jira.delete-remote-link-by-global-id",
+    "identity": "DELETE /rest/api/2/issue/{issueIdOrKey}/remotelink"
+  },
+  {
+    "tool": "jira.upsert-remote-link",
+    "identity": "POST /rest/api/2/issue/{issueIdOrKey}/remotelink"
+  },
+  {
+    "tool": "jira.delete-remote-link",
+    "identity": "DELETE /rest/api/2/issue/{issueIdOrKey}/remotelink/{linkId}"
+  },
+  {
+    "tool": "jira.remote-link",
+    "identity": "GET /rest/api/2/issue/{issueIdOrKey}/remotelink/{linkId}"
+  },
+  {
+    "tool": "jira.update-remote-link",
+    "identity": "PUT /rest/api/2/issue/{issueIdOrKey}/remotelink/{linkId}"
+  },
+  {
+    "tool": "jira.create-issue-link",
+    "identity": "POST /rest/api/2/issueLink"
+  },
+  {
+    "tool": "jira.delete-issue-link",
+    "identity": "DELETE /rest/api/2/issueLink/{linkId}"
+  }
+]

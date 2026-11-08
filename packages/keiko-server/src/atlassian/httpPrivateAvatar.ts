@@ -6,6 +6,7 @@ import {
   type JiraAvatarMutation,
   type JiraAvatarTarget,
   type JiraPrivateSessionAccess,
+  type AtlassianHttpBodyPort,
 } from "@oscharko-dev/keiko-connectors";
 import { isJiraAttachmentPreview } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
@@ -14,6 +15,14 @@ import {
   type CreateAtlassianHttpPortOptions,
 } from "./httpPort.js";
 
+function ownedUploadPath(target: JiraAvatarTarget): string | undefined {
+  return target.kind === "project" || target.kind === "issuetype"
+    ? `universal_avatar/type/${target.kind}/owner/${target.id}/temp`
+    : undefined;
+}
+function validImageMime(value: unknown): value is "image/png" | "image/jpeg" {
+  return value === "image/png" || value === "image/jpeg";
+}
 function uploadPath(operation: JiraAvatarMutation, target: JiraAvatarTarget): string | undefined {
   switch (operation) {
     case "jira.upload-temporary-avatar":
@@ -23,9 +32,7 @@ function uploadPath(operation: JiraAvatarMutation, target: JiraAvatarTarget): st
     case "jira.upload-project-avatar":
       return target.kind === "project" ? `project/${target.id}/avatar/temporary` : undefined;
     case "jira.upload-owned-avatar":
-      return target.kind === "project" || target.kind === "issuetype"
-        ? `universal_avatar/type/${target.kind}/owner/${target.id}/temp`
-        : undefined;
+      return ownedUploadPath(target);
     case "jira.upload-user-avatar":
       return target.kind === "user" ? "user/avatar/temporary" : undefined;
     default:
@@ -37,22 +44,25 @@ export function privateAvatarSession(
   context: ManagedMcpInvocationContext,
   session: JiraPrivateSessionAccess,
   legacyTemporaryRelease?: "10.3" | "10.4",
+  decorateHttpBodyPort: (port: AtlassianHttpBodyPort) => AtlassianHttpBodyPort = (port) => port,
 ): JiraAvatarSession {
   const base = options.baseUrl.replace(/\/$/u, "");
-  const http = createGatewayAtlassianHttpBodyPort({
-    ...options,
-    privateAuthentication: {
-      kind: "session",
-      scope: "avatar",
-      cookie: session.cookieHeader,
-      ...(legacyTemporaryRelease === undefined ? {} : { legacyTemporaryRelease }),
-    },
-  });
+  const http = decorateHttpBodyPort(
+    createGatewayAtlassianHttpBodyPort({
+      ...options,
+      privateAuthentication: {
+        kind: "session",
+        scope: "avatar",
+        cookie: session.cookieHeader,
+        ...(legacyTemporaryRelease === undefined ? {} : { legacyTemporaryRelease }),
+      },
+    }),
+  );
   return {
     request: createJiraReadRequest({ deployment: "data-center", baseUrl: base, http }, context),
     temporary: session.temporary,
     rememberTemporary: session.rememberTemporary,
-    upload: (operation, target, file, mimeType, bytes) => {
+    upload: (operation, target, file, mimeType, bytes): ReturnType<JiraAvatarSession["upload"]> => {
       const path = uploadPath(operation, target);
       const owned = new Uint8Array(bytes);
       if (
@@ -60,7 +70,7 @@ export function privateAvatarSession(
         !isJiraAttachmentPreview(file) ||
         owned.byteLength !== file.sizeBytes ||
         createHash("sha256").update(owned).digest("hex") !== file.sha256 ||
-        (mimeType !== "image/png" && mimeType !== "image/jpeg")
+        !validImageMime(mimeType)
       )
         return Promise.resolve({ ok: false, reason: "field-validation" });
       const query = new URLSearchParams();

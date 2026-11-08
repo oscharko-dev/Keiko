@@ -8,13 +8,10 @@ import {
   mintAcceptedJiraChatAuthority,
   requestJiraChatReadGrant,
 } from "../../../packages/keiko-server/dist/atlassian/jiraChatAuthority.js";
-import {
-  createJiraChatCatalogAdmission,
-  createJiraChatCatalogConsumerPort,
-} from "../../../packages/keiko-server/dist/atlassian/jiraChatCatalogConsumer.js";
+import { createJiraChatCatalogAdmission } from "../../../packages/keiko-server/dist/atlassian/jiraChatCatalogConsumer.js";
 import {
   createJiraChatTurnReviewPorts,
-  jiraSourcePreparationForTurn,
+  prepareJiraTurn,
   observeJiraChatMutation,
 } from "../../../packages/keiko-server/dist/atlassian/jiraChatToolTurn.js";
 import { jiraOperationForTool } from "../../../packages/keiko-server/dist/atlassian/jiraManagedProvider.js";
@@ -22,7 +19,11 @@ import { createCatalogToolBinder } from "../../../packages/keiko-server/dist/too
 import { createCodingToolInvocationRegistry } from "../../../packages/keiko-server/dist/coding-runtime/codingToolInvocationRegistry.js";
 import { defaultServerDiagnosticSink } from "../../../packages/keiko-server/dist/diagnostics-log.js";
 import { acceptChatToolReadGrant } from "../../../packages/keiko-server/dist/chat-tool-approvals.js";
-import { matchesNativeIdentity, qualificationDigest } from "./api-qualification-evidence.mjs";
+import {
+  classifyQualification,
+  matchesNativeIdentity,
+  qualificationDigest,
+} from "./api-qualification-evidence.mjs";
 import { labSessionConnection } from "./lab-client.mjs";
 
 function readRequest(request, url) {
@@ -39,39 +40,63 @@ function readRequest(request, url) {
   );
 }
 
+function assertCanonicalCleanup(request, url) {
+  assert.equal(request.method, "DELETE");
+  assert.equal(url.pathname, "/rest/auth/1/session");
+  assert.equal(url.search, "");
+  assert.equal(request.bodyJson, undefined);
+  assert.equal(request.upload, undefined);
+  assert.equal(request.jiraHumanInput, undefined);
+}
+function admitWitnessEffect(owner, read, target) {
+  if (read) return;
+  if (!target || !owner.selected.mutation || owner.state.effects !== 0) {
+    owner.state.blocked += 1;
+    throw new TypeError("Qualification refused an unexpected or repeated native effect");
+  }
+  owner.state.effects += 1;
+}
+async function witnessRequest(owner, origin, port, request, canonicalCleanup) {
+  const url = new URL(request.url);
+  assert.equal(url.origin, origin);
+  const target =
+    owner.selected && matchesNativeIdentity(owner.selected.identity, request.method, url.pathname);
+  // Only the canonical private lifetime may send this fixed cookie-session finalizer.
+  if (canonicalCleanup) {
+    assertCanonicalCleanup(request, url);
+    return port(request);
+  }
+  admitWitnessEffect(owner, readRequest(request, url), target);
+  const result = await port(request);
+  if (target && result.kind === "response")
+    owner.state.responses.push({
+      status: result.status,
+      truncated: result.truncated,
+      bodyBytes: result.bodyBytes,
+      responseDigest: qualificationDigest(result.bodyText),
+    });
+  return result;
+}
 /** Forward actual transport responses unchanged; never synthesize Jira outcomes. */
 export function qualificationWitness(session) {
   const origin = labSessionConnection(session).httpsOrigin;
-  let selected;
-  let state = { blocked: 0, responses: [], effects: 0 };
+  const owner = { selected: undefined, state: { blocked: 0, responses: [], effects: 0 } };
   return {
     arm(identity, mutation) {
-      selected = { identity, mutation };
-      state = { blocked: 0, responses: [], effects: 0 };
+      owner.selected = { identity, mutation };
+      owner.state = { blocked: 0, responses: [], effects: 0 };
     },
-    snapshot: () => structuredClone(state),
+    snapshot: () => structuredClone(owner.state),
     decorate: (factory) => (metadata, correlation, lifecycle) => {
       const port = factory(metadata, correlation, lifecycle);
+      let cleanupUsed = false;
       return async (request) => {
-        const url = new URL(request.url);
-        assert.equal(url.origin, origin);
-        const target =
-          selected && matchesNativeIdentity(selected.identity, request.method, url.pathname);
-        const read = readRequest(request, url);
-        if (!read && (!target || !selected.mutation || state.effects !== 0)) {
-          state.blocked += 1;
-          throw new TypeError("Qualification refused an unexpected or repeated native effect");
+        const cleanup = lifecycle?.canonicalPrivateFinalizer === true;
+        if (cleanup) {
+          assert.equal(cleanupUsed, false, "A canonical private cleanup port is single use");
+          cleanupUsed = true;
         }
-        if (!read) state.effects += 1;
-        const result = await port(request);
-        if (target && result.kind === "response")
-          state.responses.push({
-            status: result.status,
-            truncated: result.truncated,
-            bodyBytes: result.bodyBytes,
-            responseDigest: qualificationDigest(result.bodyText),
-          });
-        return result;
+        return witnessRequest(owner, origin, port, request, cleanup);
       };
     },
   };
@@ -163,7 +188,24 @@ function completeQualificationTurn(context, turn) {
   assert.equal(completed.kind, "completed");
 }
 
-function qualificationReview(context, current, options, call, actionId) {
+function qualificationInputPorts(context, options, call, publishHumanInput) {
+  return {
+    requestReadConsent: async () => {
+      throw new TypeError("The accepted qualifier must already hold its real read grant");
+    },
+    publishHumanInput: async (view) => {
+      context.deps.store.updateChatToolTranscript(
+        options.message.id,
+        { kind: "human-input", callId: call.id, view },
+        options.correlationId,
+      );
+      assert.equal(typeof publishHumanInput, "function", "A protected input owner is required");
+      await publishHumanInput(context, view);
+    },
+  };
+}
+function qualificationReview(context, preparedTurn, options, call, actionId, publishHumanInput) {
+  const { context: current, sourcePreparation, consumerPort, humanInput } = preparedTurn;
   const writeExchange = (id) =>
     context.deps.store
       .findMessageById(options.message.id)
@@ -179,10 +221,10 @@ function qualificationReview(context, current, options, call, actionId) {
       sha256Hex(canonicalise(exchange.call.arguments)) === action.argumentsDigest
     );
   };
-  const sourcePreparation = jiraSourcePreparationForTurn(options, current);
   return {
     sourcePreparation,
-    consumerPort: createJiraChatCatalogConsumerPort(sourcePreparation.sourceDigestFor),
+    consumerPort,
+    humanInput,
     admission: {
       reviewableWrite,
       sourcePreparation,
@@ -204,12 +246,17 @@ function qualificationReview(context, current, options, call, actionId) {
           },
           current.correlationId,
         );
+      await humanInput.prepare(
+        call,
+        actionId,
+        qualificationInputPorts(context, options, call, publishHumanInput),
+      );
     },
   };
 }
 
-function bind(context, current, managed, review) {
-  const counters = {
+function bind(context, current, managed, review, maxToolCalls, shared) {
+  const counters = shared?.counters ?? {
     iterations: 0,
     modelCalls: 0,
     toolCalls: 0,
@@ -217,13 +264,15 @@ function bind(context, current, managed, review) {
     failureAttempts: 0,
     browserNavigations: 0,
   };
-  const budget = createHarnessCatalogBudget({
-    ...current,
-    counters,
-    now: Date.now,
-    deadlineAt: Date.parse(current.deadlineAt),
-    limits: { ...DEFAULT_LIMITS, maxToolCalls: 1 },
-  });
+  const budget =
+    shared?.budget ??
+    createHarnessCatalogBudget({
+      ...current,
+      counters,
+      now: Date.now,
+      deadlineAt: Date.parse(current.deadlineAt),
+      limits: { ...DEFAULT_LIMITS, maxToolCalls },
+    });
   const admission = createJiraChatCatalogAdmission({
     deps: context.deps,
     context: () => current,
@@ -250,7 +299,14 @@ function bind(context, current, managed, review) {
   return { binder, budget, counters };
 }
 
-async function prepareQualificationCall(context, accepted, managed, specification, args) {
+async function prepareQualificationCall(
+  context,
+  accepted,
+  managed,
+  preparedTurn,
+  specification,
+  args,
+) {
   const { current, turn, authority } = accepted;
   const operation = jiraOperationForTool(specification.tool);
   const call = {
@@ -276,12 +332,19 @@ async function prepareQualificationCall(context, accepted, managed, specificatio
     signal: current.signal,
     correlationId: current.correlationId,
   };
-  const review = qualificationReview(context, current, options, call, actionId);
+  const review = qualificationReview(
+    context,
+    preparedTurn,
+    options,
+    call,
+    actionId,
+    specification.publishHumanInput,
+  );
   await review.prepare();
   return { call, actionId, options, review, operation };
 }
 
-function retainQualificationResult(context, execution, dispatch, budget) {
+export function retainQualificationResult(context, execution, dispatch, budget) {
   if (dispatch.kind !== "settled") return;
   const { options, call, actionId, review, operation } = execution;
   budget.acceptReceipt(dispatch.receipt, operation.declaration.descriptor);
@@ -291,6 +354,7 @@ function retainQualificationResult(context, execution, dispatch, budget) {
     actionId,
     dispatch.result,
     review.sourcePreparation.sourceDigestFor(actionId, sha256Hex(canonicalise(call.arguments))),
+    review.humanInput.revisionFor(actionId, sha256Hex(canonicalise(call.arguments))),
   );
   context.deps.store.updateChatToolTranscript(
     options.message.id,
@@ -308,29 +372,35 @@ function retainQualificationResult(context, execution, dispatch, budget) {
   );
 }
 
-export async function dispatchQualification(context, chat, specification, args) {
+function qualificationOperation(specification) {
   const operation = jiraOperationForTool(specification.tool);
   assert.equal(operation?.definition.identity, specification.identity);
   assert.equal(
     operation.definition.effects.includes("remote-write"),
     specification.mutation === true,
   );
-  const accepted = await acceptedContext(context, chat);
-  const { current, turn } = accepted;
-  const managed = await context.deps.jiraChatCatalog.select([specification.identity]);
+  return operation;
+}
+
+async function dispatchHeldCall(held, specification, args) {
+  const { context, accepted, managed, preparedTurn, maxToolCalls, witness } = held;
+  const operation = qualificationOperation(specification);
+  witness?.arm(specification.identity, specification.mutation === true);
+  const execution = await prepareQualificationCall(
+    context,
+    accepted,
+    managed,
+    preparedTurn,
+    specification,
+    args,
+  );
+  const { review, actionId } = execution;
   try {
-    const execution = await prepareQualificationCall(
-      context,
-      accepted,
-      managed,
-      specification,
-      args,
-    );
-    const { review, actionId } = execution;
-    const { binder, budget, counters } = bind(context, current, managed, review);
+    const bound = bind(context, preparedTurn.context, managed, review, maxToolCalls, held.shared);
+    held.shared = { budget: bound.budget, counters: bound.counters };
     const toolRef = operation.declaration.descriptor.toolRef;
-    const offered = binder.offerTool(toolRef);
-    const dispatch = await binder.dispatch(
+    const offered = bound.binder.offerTool(toolRef);
+    const dispatch = await bound.binder.dispatch(
       {
         kind: "bound",
         toolRef,
@@ -340,16 +410,144 @@ export async function dispatchQualification(context, chat, specification, args) 
       },
       { actionId, idempotencyKey: actionId },
     );
-    retainQualificationResult(context, execution, dispatch, budget);
-    assert.equal(counters.modelCalls, 0);
-    completeQualificationTurn(context, turn);
+    retainQualificationResult(context, execution, dispatch, bound.budget);
+    assert.equal(bound.counters.modelCalls, 0);
     return {
       dispatch,
       binding: operation.binding,
       mutation: operation.definition.effects.includes("remote-write"),
       journal: context.deps.store.chatToolMutations.find(actionId),
+      ...(witness === undefined ? {} : { witness: witness.snapshot() }),
     };
   } finally {
-    await managed.close();
+    preparedTurn.humanInput.finalize(actionId);
   }
+}
+
+export async function withQualificationLifetime(preparedTurn, _witness, managed, run) {
+  try {
+    return await run();
+  } finally {
+    try {
+      preparedTurn.humanInput.finish();
+    } finally {
+      try {
+        await preparedTurn.privateLifetime.finish();
+      } finally {
+        await managed.close();
+      }
+    }
+  }
+}
+
+function declaredQualificationTools(specification) {
+  qualificationOperation(specification);
+  const auxiliary = specification.prerequisiteTools ?? [];
+  assert.ok(Array.isArray(auxiliary));
+  assert.equal(new Set(auxiliary).size, auxiliary.length);
+  assert.ok(!auxiliary.includes(specification.tool));
+  const maxToolCalls = 1 + auxiliary.length;
+  assert.ok(
+    maxToolCalls <= DEFAULT_LIMITS.maxToolCalls,
+    "The declared turn exceeds its tool budget",
+  );
+  const operations = auxiliary.map((tool) => {
+    const operation = jiraOperationForTool(tool);
+    assert.ok(operation, "Every auxiliary tool needs a real product contract");
+    return operation;
+  });
+  if (operations.some((operation) => operation.definition.effects.includes("remote-write"))) {
+    assert.equal(specification.administration, true);
+    assert.equal(specification.destructiveAdministration, true);
+  }
+  return { auxiliary, maxToolCalls, operations };
+}
+async function prepareHeldQualification(context, chat, specification) {
+  const { auxiliary, maxToolCalls, operations } = declaredQualificationTools(specification);
+  const accepted = await acceptedContext(context, chat);
+  assert.ok(
+    maxToolCalls <= accepted.authority.envelope.budget.maxToolCalls,
+    "The declared turn exceeds its accepted Authority Envelope",
+  );
+  const { current, turn } = accepted;
+  const managed = await context.deps.jiraChatCatalog.select([
+    specification.identity,
+    ...operations.map((operation) => operation.definition.identity),
+  ]);
+  const preparedTurn = prepareJiraTurn({
+    deps: context.deps,
+    message: turn.message,
+    authority: accepted.authority,
+    managed,
+    signal: current.signal,
+    correlationId: current.correlationId,
+  });
+  return {
+    context,
+    accepted,
+    managed,
+    preparedTurn,
+    maxToolCalls,
+    witness: context.qualificationWitness,
+    auxiliary,
+  };
+}
+function heldFixtureDispatcher(held, auxiliaries) {
+  const { context } = held;
+  const remaining = new Set(held.auxiliary);
+  return async (entry) => {
+    assert.ok(remaining.delete(entry.tool), "Only a declared once-only auxiliary call is allowed");
+    assert.equal(typeof entry.readback, "function");
+    assert.ok(held.witness, "Auxiliary calls require an independently armed native witness");
+    const operation = jiraOperationForTool(entry.tool);
+    const selected = {
+      ...entry,
+      identity: operation.definition.identity,
+      mutation: operation.definition.effects.includes("remote-write"),
+    };
+    const attempted = await dispatchHeldCall(held, selected, entry.arguments);
+    const readback = await entry.readback(context, attempted.dispatch.result?.data);
+    const runtimeAvailability = classifyQualification({
+      ...attempted,
+      identity: selected.identity,
+      witness: attempted.witness,
+      readback,
+    });
+    assert.equal(
+      runtimeAvailability,
+      "executable",
+      "A held-turn fixture needs verified native evidence",
+    );
+    auxiliaries.push({ tool: entry.tool, identity: selected.identity, attempted, readback });
+    return attempted.dispatch.result.data;
+  };
+}
+/** Finite declared auxiliary calls share exactly one canonical held turn and private lifetime. */
+export async function dispatchQualification(context, chat, specification, args) {
+  const held = await prepareHeldQualification(context, chat, specification);
+  const { preparedTurn, managed, accepted } = held;
+  const auxiliaries = [];
+  const fixture = heldFixtureDispatcher(held, auxiliaries);
+  const ports = { fixture, fixtureState: context.qualificationFixtureState };
+  return withQualificationLifetime(preparedTurn, held.witness, managed, async () => {
+    await specification.prepareInvocation?.(context, ports);
+    // A preparation may replace source-derived arguments, e.g. the current temporary crop.
+    const actualArgs = typeof args === "function" ? args() : args;
+    const attempted = await dispatchHeldCall(held, specification, actualArgs);
+    let readback;
+    if (specification.verifyInvocation !== undefined) {
+      assert.ok(
+        new Set(["succeeded", "succeeded-unconfirmed"]).has(
+          attempted.dispatch.result?.data?.outcome,
+        ),
+      );
+      readback = await specification.verifyInvocation(
+        context,
+        ports,
+        attempted.dispatch.result.data,
+      );
+    }
+    completeQualificationTurn(context, accepted.turn);
+    return { ...attempted, auxiliaries, ...(readback === undefined ? {} : { readback }) };
+  });
 }

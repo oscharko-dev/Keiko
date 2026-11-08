@@ -26,7 +26,7 @@ export async function createQualificationIssue(
       fields: { summary, ...fields },
     },
     async (c, data) => {
-      assert.match(data.issueKey, /^KEIKO-[1-9][0-9]*$/u);
+      assert.match(data.issueKey, /^KEIKO-[1-9]\d*$/u);
       actual = await read(c, `/rest/api/2/issue/${data.issueKey}`);
       assert.equal(actual.key, data.issueKey);
       assert.equal(actual.fields.project.id, f.projectId);
@@ -42,7 +42,7 @@ export function issueReview(value) {
   assert.ok(value && value.fields);
   assert.ok(value.fields.project && value.fields.issuetype);
   for (const id of [value.id, value.fields.project.id, value.fields.issuetype.id])
-    assert.match(String(id), /^[1-9][0-9]*$/u);
+    assert.match(String(id), /^[1-9]\d*$/u);
   assert.equal(typeof value.key, "string");
   assert.equal(typeof value.fields.summary, "string");
   assert.ok(value.fields.summary.length > 0);
@@ -71,7 +71,7 @@ export async function createQualificationVersion(context, f, label) {
       archived: false,
     },
     async (c, data) => {
-      assert.match(data.versionId, /^[1-9][0-9]*$/u);
+      assert.match(data.versionId, /^[1-9]\d*$/u);
       actual = await read(c, `/rest/api/2/version/${data.versionId}`);
       assert.equal(String(actual.id), data.versionId);
       assert.equal(String(actual.projectId), f.projectId);
@@ -98,7 +98,7 @@ export async function createQualificationField(context, f, label) {
       issueTypeIds: [f.issueTypeId],
     },
     async (c, data) => {
-      assert.match(data.fieldId, /^customfield_[1-9][0-9]*$/u);
+      assert.match(data.fieldId, /^customfield_[1-9]\d*$/u);
       const rows = await read(c, "/rest/api/2/field");
       const found = rows.filter((row) => row.id === data.fieldId);
       assert.equal(found.length, 1);
@@ -114,7 +114,7 @@ export async function createQualificationField(context, f, label) {
 export const qualificationProjectKey = (f, label) =>
   `Q${qualificationDigest([f.runId, label]).slice(0, 9).toUpperCase()}`;
 export function projectReview(value) {
-  assert.match(String(value.id), /^[1-9][0-9]*$/u);
+  assert.match(String(value.id), /^[1-9]\d*$/u);
   for (const field of ["key", "name"]) assert.equal(typeof value[field], "string");
   assert.equal(typeof value.archived, "boolean");
   return { id: String(value.id), key: value.key, name: value.name, archived: value.archived };
@@ -133,6 +133,34 @@ export async function createQualificationProject(context, f, label) {
       assert.equal(actual.key, key);
       assert.equal(actual.name, name);
       assert.equal(actual.projectTypeKey, "software");
+      return proof(4);
+    },
+  );
+  assert.ok(actual);
+  return actual;
+}
+export async function createQualificationFilter(context, f, label) {
+  const scope = await read(context, "/rest/api/2/filter/defaultShareScope");
+  const name = `AC7 ${label} ${f.runId}`;
+  let actual;
+  await fixtureWrite(
+    context,
+    "jira.create-filter",
+    {
+      expectedActorKey: f.adminActorKey,
+      expectedDefaultShareScope: scope.scope,
+      acceptDefaultSharing: true,
+      name,
+      description: "Synthetic AC7 auxiliary filter",
+      jql: "project = KEIKO ORDER BY Rank ASC",
+    },
+    async (c, data) => {
+      assert.match(data.filterId, /^[1-9]\d*$/u);
+      actual = await read(c, `/rest/api/2/filter/${data.filterId}`);
+      assert.equal(String(actual.id), data.filterId);
+      assert.equal(actual.name, name);
+      assert.equal(actual.owner.key, f.adminActorKey);
+      assert.equal(actual.jql, "project = KEIKO ORDER BY Rank ASC");
       return proof(4);
     },
   );
