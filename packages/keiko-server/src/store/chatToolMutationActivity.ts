@@ -14,6 +14,8 @@ import type {
 // Keiko's closed write-failure and field-validation vocabularies. `localRefusal` assigns the
 // contract types to them, so a reason the contracts add fails the type check until it is listed.
 const REFUSAL_REASONS = [
+  "effect-denied",
+  "cancelled",
   "auth-failed",
   "permission-denied",
   "not-found",

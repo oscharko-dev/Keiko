@@ -14,6 +14,7 @@ import {
 } from "./jira-field-metadata.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { jiraIssueLinksPresent, type JiraIssueLinkRequest } from "./jira-issue-links.js";
+import { dispatchFailure, type JiraObservationFailure } from "./jira-mutation-failure.js";
 import {
   jiraCommentVisibility,
   sameJiraCommentVisibility,
@@ -27,7 +28,7 @@ import {
 
 type Failure = Extract<JiraMutationAttempt, { ok: false }>;
 export type JiraIssueReadback =
-  | Failure
+  | JiraObservationFailure
   | {
       readonly ok: true;
       readonly id: string;
@@ -58,7 +59,7 @@ export async function readJiraMutationIssue(
     fields: [...new Set(fields)].sort(compareStrings).join(","),
   });
   const response = await request(`issue/${encodeURIComponent(issueKey)}?${query.toString()}`);
-  if (!response.ok) return response;
+  if (!response.ok) return dispatchFailure(response);
   const body = response.body;
   if (response.status !== 200 || body === undefined) return MALFORMED;
   const values = asRecord(body.fields);

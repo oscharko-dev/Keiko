@@ -1,4 +1,4 @@
-import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { TOOL_CATALOG_LIMITS, type CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { captureCatalogJson, describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
 import { jiraOperationForTool } from "./jiraManagedProvider.js";
 import { createJiraReadRequest, checkJiraManagedMutation, prepareJiraHumanInput, prepareJiraHumanInputReview, type JiraHumanInputBinding, type JiraHumanInputSelection } from "@oscharko-dev/keiko-connectors";
@@ -43,12 +43,12 @@ export function createJiraChatHumanInput(options: JiraChatTurnOptions, context: 
     if (grant.kind === "review-required") await ports.requestReadConsent(grant.grant);
     requireDispatch(admitted(), "denied", "authority-invalid");
   }
-  async function binding(call: ChatToolExchange["call"], purpose: JiraHumanInputPurpose): Promise<JiraHumanInputBinding> {
+  async function binding(call: ChatToolExchange["call"], purpose: JiraHumanInputPurpose, args: CatalogJsonObject): Promise<JiraHumanInputBinding> {
     const resolved = current();
     const credentials = options.deps.atlassianConnectorCredentials;
     const principalDigest = jiraChatActorDigest(options.deps);
     requireDispatch(resolved.ok && credentials !== undefined && principalDigest !== undefined && admitted(), "denied", "authority-invalid");
-    const expected = call.arguments.expectedActorKey;
+    const expected = args.expectedActorKey;
     requireDispatch(typeof expected === "string" && expected.length > 0 && expected.length <= 255, "invalid", "invalid-arguments");
     const request = createJiraReadRequest({ deployment: resolved.credential.deployment, baseUrl: resolved.credential.baseUrl,
       http: credentials.httpBodyPortFactory(resolved.credential, context.correlationId, { beforeDispatch: admitted }) },
@@ -57,7 +57,7 @@ export function createJiraChatHumanInput(options: JiraChatTurnOptions, context: 
     const body = actor.ok && actor.status === 200 ? actor.body : undefined;
     requireDispatch(admitted() && body?.key === expected && typeof body.name === "string" && body.name.length > 0 && body.name.length <= 255,
       "denied", "authority-invalid");
-    const review = await prepareJiraHumanInputReview(purpose, call.arguments, resolved.credential.baseUrl, request);
+    const review = await prepareJiraHumanInputReview(purpose, args, resolved.credential.baseUrl, request);
     requireDispatch(admitted() && review !== undefined && review.actorUserKey === expected && review.actorUsername === body.name,
       "denied", "authority-invalid");
     return { context: { kind: "chat", chatId: context.chatId, messageId: options.message.id, callId: call.id,
@@ -65,7 +65,7 @@ export function createJiraChatHumanInput(options: JiraChatTurnOptions, context: 
       authority: context.authorityReference,
       principalDigest, authRef: resolved.credential.authRef, authenticationGeneration: resolved.credential.generation,
       verificationRevision: resolved.credential.livePod.verificationRevision, operation: `jira.${purpose}`,
-      argumentsDigest: sha256Hex(canonicalise(call.arguments)), actorUserKey: expected, actorUsername: body.name, review,
+      argumentsDigest: sha256Hex(canonicalise(args)), actorUserKey: expected, actorUsername: body.name, review,
       expiresAt: Math.min(Date.parse(context.deadlineAt), Date.now() + JIRA_HUMAN_INPUT_MAX_LIFETIME_MS) };
   }
   return {
@@ -95,7 +95,7 @@ export function createJiraChatHumanInput(options: JiraChatTurnOptions, context: 
             http: credentials.httpBodyPortFactory(resolved.credential, context.correlationId, { beforeDispatch: admitted }) });
         if (!checked.ok) return;
       }
-      const bound = await binding(call, purpose);
+      const bound = await binding(call, purpose, args);
       const selection = await prepareJiraHumanInput(custody, bound, async (view) => {
         await ports.publishHumanInput(view);
         if (view.state === "awaiting-input") recordJiraHumanInput(options.deps.atlassianConnectorCredentials, context.correlationId, "requested");

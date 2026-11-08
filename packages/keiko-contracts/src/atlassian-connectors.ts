@@ -31,7 +31,7 @@ import {
   containsPseudoRoleMarker,
   stripUnsafeFormatChars,
 } from "./text-safety.js";
-import { ATLASSIAN_CONNECTOR_BASE_URL_MAX_CHARS } from "./atlassian-connector-url.js";
+import { ATLASSIAN_CONNECTOR_BASE_URL_MAX_CHARS, isSafeAtlassianConnectorBaseUrl } from "./atlassian-connector-url.js";
 export { ATLASSIAN_CONNECTOR_BASE_URL_MAX_CHARS, canonicalAtlassianConnectorBaseUrl, isSafeAtlassianConnectorBaseUrl } from "./atlassian-connector-url.js";
 
 import { JIRA_READ_TOOL_FAMILIES } from "./jira-read-tools.js";
@@ -2075,17 +2075,9 @@ export function isSafeJiraLiveIssueSummary(value: unknown): value is string {
 // re-encodable forms are rejected, never normalized through), and structurally safe
 // (https only; no userinfo, query, or fragment components).
 function canonicalHttpsBrowseTarget(value: string): URL | undefined {
-  if (/\s/u.test(value) || value.includes("@") || value.includes("?") || value.includes("#")) {
-    return undefined;
-  }
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    return undefined;
-  }
-  if (url.toString() !== value || !isSafeParsedBaseUrl(url)) return undefined;
-  return url;
+  if (!isSafeAtlassianConnectorBaseUrl(value)) return undefined;
+  const url = new URL(value);
+  return url.toString() === value ? url : undefined;
 }
 
 // Absolute https click-through URL for one live issue (`{base}/browse/{KEY}`), mirroring the

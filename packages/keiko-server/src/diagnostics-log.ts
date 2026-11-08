@@ -705,6 +705,8 @@ export const DEFAULT_SERVER_DIAGNOSTIC_SUMMARY = "server-operation-failed";
 // silently loses its summary on the log line instead of ever being echoed as-is.
 const SERVER_DIAGNOSTIC_SUMMARIES = [
   DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+  "jira-private-input-activity-log-failed",
+  "jira-private-input-cleanup-failed",
   "Provider verification failed without exposing upstream response details.",
   "Workspace index key resolution or initialization failed.",
   "Encrypted workspace index snapshot was rejected.",
