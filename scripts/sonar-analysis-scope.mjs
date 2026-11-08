@@ -16,6 +16,7 @@ const binaryExtensions = new Set([
   "class",
   "dll",
   "dmg",
+  "docx",
   "dylib",
   "eot",
   "exe",
@@ -35,6 +36,7 @@ const binaryExtensions = new Set([
   "otf",
   "pdf",
   "png",
+  "pptx",
   "so",
   "svg",
   "tar",
@@ -48,6 +50,7 @@ const binaryExtensions = new Set([
   "webp",
   "woff",
   "woff2",
+  "xlsx",
   "zip",
 ]);
 const codeExtensions = new Set([
@@ -113,7 +116,10 @@ const approvedScopeValueDigests = new Map([
   // and the test inclusions (KEIKO-1028, #3340 review follow-up): `vitest bench` files carry the
   // same Sonar disposition as `.test.`/`.spec.` — asserts nothing, never packaged. Re-computed
   // the SHA-256 of the raw value after `=` via `createHash("sha256").update(value).digest("hex")`.
-  ["sonar.exclusions", "dc113fa197390651bc9f0377b9a1395d19c5cadb60a9754b92c3f93e3c19b135"],
+  // Re-pinned for PR #4292: Office Open XML containers (`docx`, `pptx`, `xlsx`) are zip archives
+  // like the other binary formats; the golden requirements fixture made the scanner warn about
+  // invalid UTF-8, which the analysis-log gate rejects. Same change in sonar.test.exclusions.
+  ["sonar.exclusions", "3aaaa5af6e53b7c0d7462794cb16ee93624c281a047d74324359a685c8948e17"],
   ["sonar.test.inclusions", "8db9d0077b198b3b047e46ea3c5151f1b30aef42dabc06be1e589c8c475e1704"],
   // Re-pinned for PR #3876: `tests/fixtures/coding-workbench-lab/ledger-lab/**` is the live lab's
   // target repository, fixture data with deliberately planted defects, excluded from test analysis
@@ -121,8 +127,9 @@ const approvedScopeValueDigests = new Map([
   // fixture `inventory-py/**` is data of the same kind; analysing it made the scanner warn about an
   // unset Python version, which the analysis-log gate rejects. Re-pinned for #4271: the nested
   // monorepo lab fixture `polyglot-mono/**` is data of the same kind, already outside ESLint, and
-  // its `node:test` files are lab targets, not Keiko tests. SHA-256 of the raw value after `=`.
-  ["sonar.test.exclusions", "7c07b88350948795dad9a103e2a0ee2a2e65940d74508f2d0d6186c9a64d90ab"],
+  // its `node:test` files are lab targets, not Keiko tests. Re-pinned for PR #4292: the Office Open
+  // XML containers named above. SHA-256 of the raw value after `=`.
+  ["sonar.test.exclusions", "f2acd88bdf310da1e71b6b95f5869e9cb46d9d514039541db9337449da67a222"],
   [
     "sonar.typescript.tsconfigPaths",
     "016c8b1bfc0b97a73ee1b5680a7b1f46ccb5c24206229367ea88a266fe20c0d5",
