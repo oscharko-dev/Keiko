@@ -213,6 +213,7 @@ function harness(
       invocationId: "mcp-read-synthetic",
       retainProviderResult: (result) => result,
       retainLocalFailure: () => undefined,
+      retainRelayFailure: () => undefined,
       release: () => undefined,
     }),
     beginMutation: ({ toolName }) => {

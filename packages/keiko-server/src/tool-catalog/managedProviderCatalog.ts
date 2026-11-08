@@ -48,6 +48,10 @@ const MCP_FAILURES: Readonly<
   "result-too-large": ["failed", "handler-failed"],
   backoff: ["failed", "handler-unavailable"],
 };
+/** Reuses the closed adapter vocabulary when a private callback receives a runtime value. */
+export function isManagedMcpFailure(value: unknown): value is ManagedMcpFailure {
+  return typeof value === "string" && Object.hasOwn(MCP_FAILURES, value);
+}
 function catalogFailure(error: unknown): unknown {
   if (!(error instanceof ManagedMcpError)) return error;
   if (error.reason === "tool-error" && error.structuredResult !== undefined)

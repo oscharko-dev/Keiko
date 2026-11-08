@@ -3,6 +3,7 @@ import type {
   ExternalMcpConnection,
   ManagedMcpInvocationContext,
   ManagedMcpToolResult,
+  ManagedMcpFailure,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { ManagedMcpError, noEffectError } from "./definitions.js";
 import { connectExternalMcp } from "./external-client.js";
@@ -258,14 +259,88 @@ function retainingPermit(f: Fixture) {
 function retainingRead(f: Fixture) {
   const release = vi.fn();
   const retainProviderResult = vi.fn((result: ManagedMcpToolResult) => result);
+  const retainLocalFailure = vi.fn<(reason: "connector-scope-missing") => void>();
+  const retainRelayFailure = vi.fn<(reason: ManagedMcpFailure) => void>();
   const beginMutation = vi.fn(f.context.beginMutation);
   const beginReadCapture = vi.fn(() => ({
     invocationId: "mcp-read-synthetic", release, retainProviderResult,
-    retainLocalFailure: () => undefined,
+    retainLocalFailure, retainRelayFailure,
   }));
   const context: ManagedMcpInvocationContext = { ...f.context, beginMutation, beginReadCapture };
-  return { context, release, retainProviderResult, beginMutation, beginReadCapture };
+  return { context, release, retainProviderResult, retainLocalFailure, retainRelayFailure, beginMutation, beginReadCapture };
 }
+
+it.each(["connector-scope-missing", "protocol-error", "deadline-exceeded", "aborted"] as const)(
+  "retains the closed local Jira read failure %s without write admission or recovery",
+  async (reason) => {
+    const f = fixture("read", undefined, true, "jira");
+    const p = retainingRead(f);
+    f.call.mockRejectedValue(new ManagedMcpError(reason));
+    const response = await legacy(f, "tools/call", { name: "echo", arguments: { text: "value" } }, p.context);
+    expect(response.result?.isError).toBe(true);
+    expect(p.retainRelayFailure).toHaveBeenCalledExactlyOnceWith(reason);
+    expect(p.retainLocalFailure).not.toHaveBeenCalled();
+    expect(p.release).toHaveBeenCalledOnce();
+    expect(p.beginMutation).not.toHaveBeenCalled();
+    expect(f.recover).not.toHaveBeenCalled();
+    expect(f.call).toHaveBeenCalledOnce();
+  },
+);
+
+it("preserves a previously retained scope denial when the relay subsequently fails", async () => {
+  const f = fixture("read", undefined, true, "jira");
+  const p = retainingRead(f);
+  f.call.mockImplementation(async (_name, _args, context) => {
+    context.retainLocalFailure?.("connector-scope-missing");
+    throw new ManagedMcpError("connector-scope-missing");
+  });
+  const response = await legacy(f, "tools/call", { name: "echo", arguments: { text: "value" } }, p.context);
+  expect(response.result?.isError).toBe(true);
+  expect(p.retainLocalFailure).toHaveBeenCalledExactlyOnceWith("connector-scope-missing");
+  expect(p.retainRelayFailure).not.toHaveBeenCalled();
+  expect(p.release).toHaveBeenCalledOnce();
+  expect(f.recover).not.toHaveBeenCalled();
+});
+
+it.each([false, true])("never overwrites validated local Jira read data with a later relay error, failed=%s", async (isError) => {
+  const f = fixture("read", undefined, true, "jira");
+  const p = retainingRead(f);
+  const data = { outcome: isError ? "failed" : "succeeded", items: [] };
+  f.call.mockImplementation(async (_name, _args, context) => {
+    context.retainProviderResult?.({ data, isError });
+    throw new ManagedMcpError("protocol-error");
+  });
+  const response = await legacy(f, "tools/call", { name: "echo", arguments: { text: "value" } }, p.context);
+  expect(response.result?.isError).toBe(true);
+  expect(p.retainProviderResult).toHaveBeenCalledExactlyOnceWith({ data, isError });
+  expect(p.retainRelayFailure).not.toHaveBeenCalled();
+  expect(p.release).toHaveBeenCalledOnce();
+  expect(f.recover).not.toHaveBeenCalled();
+});
+
+it("preserves the original read timeout and releases its reservation when error persistence fails", async () => {
+  const f = fixture("read", undefined, true, "jira");
+  const p = retainingRead(f);
+  p.retainRelayFailure.mockImplementation(() => { throw new Error("Synthetic private store failure"); });
+  f.call.mockRejectedValue(new ManagedMcpError("deadline-exceeded"));
+  const response = await legacy(f, "tools/call", { name: "echo", arguments: { text: "value" } }, p.context);
+  expect(response.result).toMatchObject({ isError: true, content: [{ type: "text", text: "The tool did not answer in time." }] });
+  expect(JSON.stringify(response)).not.toContain("Synthetic private store failure");
+  expect(p.release).toHaveBeenCalledOnce();
+  expect(p.beginMutation).not.toHaveBeenCalled();
+  expect(f.recover).not.toHaveBeenCalled();
+});
+
+it("does not capture an external read failure from a Jira-like name or protocol metadata", async () => {
+  const f = fixture("read");
+  const p = retainingRead(f);
+  f.call.mockRejectedValue(new ManagedMcpError("deadline-exceeded"));
+  await legacy(f, "tools/call", { name: "echo", arguments: { text: "jira" },
+    _meta: { localProvider: "jira" } }, p.context);
+  expect(p.beginReadCapture).not.toHaveBeenCalled();
+  expect(p.retainRelayFailure).not.toHaveBeenCalled();
+  expect(f.recover).not.toHaveBeenCalled();
+});
 
 it.each([false, true])("captures local Jira reads before delivery without a mutation permit, failed=%s", async (isError) => {
   const f = fixture("read", undefined, true, "jira");

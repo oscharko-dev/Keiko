@@ -209,6 +209,102 @@ it("retains read scope denial without provider data, write state or a journal ro
   expect(f.db.prepare("SELECT COUNT(*) AS count FROM chat_tool_mutations").get()?.count).toBe(0);
 });
 
+it.each([
+  ["connector-scope-missing", "denied", "effect-denied"],
+  ["protocol-error", "failed", "handler-failed"],
+  ["tool-error", "failed", "handler-failed"],
+  ["deadline-exceeded", "timeout", "deadline-exceeded"],
+  ["aborted", "cancelled", "parent-cancelled"],
+] as const)("retains local read %s as %s rather than inventing a permission refusal", (failure, status, reason) => {
+  const f = fixture();
+  const { capture } = jiraRead(f);
+  capture.retainRelayFailure(failure);
+  capture.release();
+  f.reopen();
+  expect(jiraExchange(f)?.result).toMatchObject({ status, reason, effectStarted: false, data: null, page: null });
+  expect(jiraExchange(f)).not.toHaveProperty("mutationOutcome");
+  expect(f.db.prepare("SELECT COUNT(*) AS count FROM chat_tool_mutations").get()?.count).toBe(0);
+  expect(f.owner.observeCompletion(identity, true)).toBe("ignored");
+  expect(f.owner.unsettled(identity.runId)).toBe(false);
+});
+
+it("enforces the scope-only local failure API at runtime before retaining any outcome", () => {
+  const f = fixture();
+  const { capture } = jiraRead(f);
+  for (const reason of ["protocol-error", "deadline-exceeded", "aborted", "arbitrary-provider-text", null]) {
+    expect(() => Reflect.apply(capture.retainLocalFailure, undefined, [reason])).toThrow();
+    expect(jiraExchange(f)).toBeUndefined();
+  }
+  for (const reason of ["arbitrary-provider-text", "constructor", null]) {
+    expect(() => Reflect.apply(capture.retainRelayFailure, undefined, [reason])).toThrow();
+    expect(jiraExchange(f)).toBeUndefined();
+  }
+  capture.retainLocalFailure("connector-scope-missing");
+  capture.release();
+  expect(jiraExchange(f)?.result).toMatchObject({ status: "denied", reason: "effect-denied" });
+});
+
+it("retains a native POST search timeout as a read with no journal effect or recovery state", () => {
+  const f = fixture();
+  const capture = f.owner.beginReadCapture({
+    runId: identity.runId, toolName: "jira.search-post", argumentsValue: { jql: "project = SYN" },
+    signal: new AbortController().signal, localProvider: "jira",
+  });
+  if (capture === undefined) throw new Error("Expected POST read capture");
+  vi.spyOn(jiraProvider, "jiraOperationForTool").mockImplementation(() => {
+    throw new Error("Do not replace the admitted descriptor while retaining a read failure");
+  });
+  capture.retainRelayFailure("deadline-exceeded");
+  capture.release();
+  f.reopen();
+  expect(jiraExchange(f)).toMatchObject({
+    call: { name: "jira_search_post" },
+    result: { status: "timeout", reason: "deadline-exceeded", effectStarted: false, data: null },
+  });
+  expect(jiraExchange(f)).not.toHaveProperty("mutationOutcome");
+  expect(f.db.prepare("SELECT COUNT(*) AS count FROM chat_tool_mutations").get()?.count).toBe(0);
+  expect(f.owner.observeCompletion(identity, true)).toBe("ignored");
+  expect(f.owner.unsettled(identity.runId)).toBe(false);
+});
+
+it.each([false, true])("preserves validated provider read data when a later technical failure arrives, failed=%s", (failed) => {
+  const f = fixture();
+  const { capture, retain } = jiraRead(f);
+  const result = jiraReadResult(failed);
+  retain(result);
+  capture.retainRelayFailure("protocol-error");
+  capture.release();
+  expect(jiraExchange(f)?.result).toMatchObject({ status: failed ? "failed" : "completed", data: result.data });
+  expect(f.db.prepare("SELECT COUNT(*) AS count FROM chat_tool_mutations").get()?.count).toBe(0);
+});
+
+it("does not overwrite a retained explicit scope denial with a later transport failure", () => {
+  const f = fixture();
+  const { capture } = jiraRead(f);
+  capture.retainLocalFailure("connector-scope-missing");
+  capture.retainRelayFailure("protocol-error");
+  capture.release();
+  expect(jiraExchange(f)?.result).toMatchObject({ status: "denied", reason: "effect-denied", data: null });
+});
+
+it("refuses late technical error retention after release, cancellation or accepted-turn change", () => {
+  const f = fixture();
+  const released = jiraRead(f);
+  released.capture.release();
+  expect(() => released.capture.retainRelayFailure("protocol-error")).toThrow();
+  const controller = new AbortController();
+  const cancelled = jiraRead(f, controller.signal);
+  controller.abort();
+  expect(() => cancelled.capture.retainRelayFailure("aborted")).toThrow();
+  cancelled.capture.release();
+  const stale = jiraRead(f);
+  f.owner.bindTurn(identity.runId, "msg_next_human", "New human instruction");
+  expect(() => stale.capture.retainRelayFailure("deadline-exceeded")).toThrow("owner changed");
+  stale.capture.release();
+  expect(jiraExchange(f)).toBeUndefined();
+  expect(f.db.prepare("SELECT COUNT(*) AS count FROM chat_tool_mutations").get()?.count).toBe(0);
+});
+
 it("validates read delivery and history against the admitted snapshot after registry drift", () => {
   const f = fixture();
   const { capture, retain } = jiraRead(f);

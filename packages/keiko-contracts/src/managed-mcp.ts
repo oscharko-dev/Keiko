@@ -71,6 +71,8 @@ export interface ManagedMcpReadCapture {
   readonly invocationId: string;
   readonly retainProviderResult: (result: ManagedMcpToolResult) => ManagedMcpToolResult;
   readonly retainLocalFailure: (reason: "connector-scope-missing") => void;
+  /** Closed relay failures remain technical read outcomes, never mutation acknowledgement. */
+  readonly retainRelayFailure: (reason: ManagedMcpFailure) => void;
   readonly release: () => void;
 }
 

@@ -600,7 +600,7 @@ result is durable or the read finishes; cancellation, a changed accepted turn or
 capture cannot append a late result. Read history retains the admitted schema without consulting
 the current registry, including result paging and unknown totals. Chat and Coding share the existing
 Jira result-to-catalog page projection. The existing body-free transcript event records capture;
-provider bodies and report content are never added to the Activity Log.
+provider bodies and report content are never added to the Activity Log. Technical relay failures use a separate private read callback and the existing closed failure vocabulary: scope refusal remains denied, technical failure is failed, and deadline/cancellation retain their native catalog classes. A validated provider result or already persisted scope refusal takes precedence over a later relay error. Failed persistence preserves the primary closed failure and both internal causes, releases the reservation and creates no mutation recovery barrier.
 
 Only the server-owned local Jira connection can supply this callback; an external server's name,
 arguments or metadata cannot enable it. An error result never acknowledges a mutation. A validated

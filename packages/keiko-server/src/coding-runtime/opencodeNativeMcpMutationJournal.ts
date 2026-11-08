@@ -160,6 +160,7 @@ class NativeMutationJournal implements NativeMcpMutationJournal {
       invocationId,
       retainProviderResult: capture.retainProviderResult,
       retainLocalFailure: capture.retainLocalFailure,
+      retainRelayFailure: capture.retainRelayFailure,
       release: capture.releaseReservation,
     };
   }

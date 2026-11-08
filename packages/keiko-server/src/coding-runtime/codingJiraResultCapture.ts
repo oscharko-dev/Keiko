@@ -7,8 +7,10 @@ import type {
   CatalogJsonObject,
   ToolResultEnvelope,
   ToolDescriptor,
+  ToolResultStatus,
+  ToolResultReason,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
+import type { ManagedMcpToolResult, ManagedMcpFailure } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   validateToolResultEnvelope,
@@ -16,7 +18,7 @@ import {
 } from "@oscharko-dev/keiko-tool-catalog";
 import { jiraOperationForTool } from "../atlassian/jiraManagedProvider.js";
 import type { JiraOperationBinding, JiraOperationContract } from "../atlassian/jiraOperationRegistry.js";
-import { managedCatalogProjection } from "../tool-catalog/managedProviderCatalog.js";
+import { isManagedMcpFailure, managedCatalogProjection } from "../tool-catalog/managedProviderCatalog.js";
 import { journalConflict } from "../store/chatToolMutationState.js";
 import type { ChatToolMutationRecord } from "../store/chatToolMutationTypes.js";
 import type { CodingNativeToolTranscript } from "../store/codingHistory.js";
@@ -54,7 +56,32 @@ interface CaptureSnapshot {
 interface CodingJiraCapture {
   readonly retainProviderResult: (result: ManagedMcpToolResult) => ManagedMcpToolResult;
   readonly retainLocalFailure: (reason: "connector-scope-missing") => void;
+  readonly retainRelayFailure: (reason: ManagedMcpFailure) => void;
   readonly releaseReservation: () => void;
+}
+function requireScopeFailure(value: unknown): void {
+  if (value !== "connector-scope-missing") throw journalConflict();
+}
+
+function relayFailureResult(reason: ManagedMcpFailure): readonly [ToolResultStatus, ToolResultReason] {
+  if (!isManagedMcpFailure(reason)) throw journalConflict();
+  if (reason === "connector-scope-missing") return ["denied", "effect-denied"];
+  if (reason === "deadline-exceeded") return ["timeout", "deadline-exceeded"];
+  if (reason === "aborted") return ["cancelled", "parent-cancelled"];
+  return ["failed", "handler-failed"];
+}
+
+function persistLocalFailure(
+  snapshot: CaptureSnapshot,
+  status: ToolResultStatus,
+  reason: ToolResultReason,
+): void {
+  const dispatched = snapshot.effectStarted();
+  const result = validateToolResultEnvelope({
+    ...envelopeIdentity(snapshot, dispatched, 0),
+    status, reason, page: null, data: null,
+  }, snapshot.binding);
+  persistCaptured(snapshot, result, snapshot.mutation ? (dispatched ? "unknown" : "not-dispatched") : undefined);
 }
 
 function dispatchedFrom(record: ChatToolMutationRecord, current: () => ChatToolMutationRecord | undefined): boolean {
@@ -142,15 +169,20 @@ function captureCallbacks(snapshot: CaptureSnapshot): CodingJiraCapture {
       retained = Object.freeze({ data: result.data, ...(candidate.isError === true ? { isError: true } : {}) });
       return retained;
     },
-    retainLocalFailure: () => {
+    retainLocalFailure: (reason) => {
+      requireScopeFailure(reason);
       if (retained !== undefined) throw journalConflict();
       if (localFailure) return;
-      const dispatched = snapshot.effectStarted();
-      const result = validateToolResultEnvelope({
-        ...envelopeIdentity(snapshot, dispatched, 0),
-        status: "denied", reason: "effect-denied", page: null, data: null,
-      }, snapshot.binding);
-      persistCaptured(snapshot, result, snapshot.mutation ? (dispatched ? "unknown" : "not-dispatched") : undefined);
+      persistLocalFailure(snapshot, "denied", "effect-denied");
+      localFailure = true;
+    },
+    retainRelayFailure: (failure) => {
+      if (snapshot.mutation) throw journalConflict();
+      const [status, reason] = relayFailureResult(failure);
+      // Provider evidence and the earlier explicit scope refusal are already durable. A later
+      // delivery/transport failure must not replace either with an empty technical result.
+      if (retained !== undefined || localFailure) return;
+      persistLocalFailure(snapshot, status, reason);
       localFailure = true;
     },
   };

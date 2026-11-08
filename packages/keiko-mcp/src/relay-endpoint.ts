@@ -105,8 +105,9 @@ class RelayToolFailure extends Error {
     message: string,
     public readonly reason: ManagedMcpFailure,
     public readonly effect: ManagedMcpEffect,
+    cause: unknown,
   ) {
-    super(message);
+    super(message, { cause });
     this.name = "RelayToolFailure";
   }
 }
@@ -163,20 +164,44 @@ function dispatchAdmission(
 interface RelayObservation {
   dispatched: boolean;
   retained?: ManagedMcpToolResult;
+  localFailure?: true;
 }
 function resultCapture(
   permit: ManagedMcpMutationInvocation | ManagedMcpReadCapture | undefined,
   observation: RelayObservation,
 ): Pick<ManagedMcpInvocationContext, "retainProviderResult" | "retainLocalFailure"> {
   const retain = permit?.retainProviderResult;
+  const retainLocalFailure = permit?.retainLocalFailure;
   return {
-    retainLocalFailure: permit?.retainLocalFailure,
+    retainLocalFailure: retainLocalFailure === undefined ? undefined : (reason) => {
+      retainLocalFailure(reason);
+      observation.localFailure = true;
+    },
     retainProviderResult: retain === undefined ? undefined : (result) => {
       const retained = retain(result);
       observation.retained = retained;
       return retained;
     },
   };
+}
+
+/** A technical read failure is not a permission refusal and never enters mutation recovery. */
+function retainReadRelayFailure(
+  input: RelayCall,
+  capture: ManagedMcpReadCapture | undefined,
+  observation: RelayObservation,
+  reason: ManagedMcpFailure,
+  primaryError: unknown,
+): unknown {
+  if (input.mutation || input.connection.localProvider !== "jira" || capture === undefined ||
+      observation.retained !== undefined || observation.localFailure === true) return primaryError;
+  try {
+    capture.retainRelayFailure(reason);
+    return primaryError;
+  } catch (captureError) {
+    // Preserve both original causes, while the SDK receives only the primary closed failure.
+    return new AggregateError([primaryError, captureError], "Jira read result retention failed");
+  }
 }
 
 function beginReadCapture(input: RelayCall, context: ManagedMcpInvocationContext): ManagedMcpReadCapture | undefined {
@@ -240,9 +265,10 @@ async function invokeRelayTool(input: RelayCall): Promise<CallToolResult> {
     return result;
   } catch (error) {
     const { reason, effect } = failureOf(error);
+    const cause = retainReadRelayFailure(input, readCapture, observation, reason, error);
     await settleFailedCall(input, context, permit, effect);
     // The SDK delivers a thrown error's message to the model as an error result.
-    throw new RelayToolFailure(failureText(reason, effect, input.mutation), reason, effect);
+    throw new RelayToolFailure(failureText(reason, effect, input.mutation), reason, effect, cause);
   } finally {
     readCapture?.release();
   }
