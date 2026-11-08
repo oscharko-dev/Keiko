@@ -22,7 +22,7 @@ import {
   resolveLogDirectory,
   selectRunEvents,
 } from "./activity-log-events.mjs";
-import { BUMP_SET, driverCheck, historyCheck, judge } from "./bump-set-oracles.mjs";
+import { BUMP_SET, historyCheck, judge, runEndCheck } from "./bump-set-oracles.mjs";
 import {
   errorMessage,
   labBaseUrl,
@@ -77,7 +77,7 @@ function mustRun(cwd, command, args) {
 function template(workDir, fixture, cache) {
   if (cache.has(fixture)) return cache.get(fixture);
   const dir = join(workDir, "templates", fixture);
-  cpSync(join(FIXTURES, FIXTURE_DIRS[fixture]), dir, { recursive: true });
+  cpSync(join(FIXTURES, FIXTURE_DIRS[fixture]), dir, { recursive: true, verbatimSymlinks: true });
   mustRun(dir, "npm", ["install", "--no-audit", "--no-fund", "--silent"]);
   cache.set(fixture, dir);
   return dir;
@@ -87,7 +87,10 @@ function template(workDir, fixture, cache) {
 function prepareTask(workDir, entry, cache) {
   const root = join(workDir, entry.id);
   const repo = join(root, "repo");
-  cpSync(template(workDir, entry.fixture, cache), repo, { recursive: true });
+  cpSync(template(workDir, entry.fixture, cache), repo, {
+    recursive: true,
+    verbatimSymlinks: true,
+  });
   mustRun(repo, "git", ["init", "-q", "-b", "main"]);
   const patch = PATCHES[entry.baseline];
   if (patch !== undefined) mustRun(repo, "git", ["apply", join(FIXTURES, "patches", patch)]);
@@ -136,7 +139,7 @@ function driveTask(entry, task, options) {
     child.on("close", (code) => {
       writeFileSync(join(task.root, "driver.log"), `${stdout}\n${stderr}`, { mode: 0o600 });
       const runs = [...stdout.matchAll(/^----- run (run-\d+) -----$/gm)];
-      resolveRun({ started, exitCode: code, runId: runs[0]?.[1] });
+      resolveRun({ started, exitCode: code, runId: runs[0]?.[1], finalState: finalState(stdout) });
     });
   });
 }
@@ -155,6 +158,17 @@ function filesContaining(repo, value) {
   };
   walk(repo);
   return found;
+}
+
+/** The driver's `final {...}` line names the state the run settled in. */
+function finalState(stdout) {
+  const line = /^\S+ final (\{.*\})$/m.exec(stdout)?.[1];
+  if (line === undefined) return undefined;
+  try {
+    return JSON.parse(line).state;
+  } catch {
+    return undefined;
+  }
 }
 
 /** A fresh paired session per read: a session held across a long run may have expired. */
@@ -250,7 +264,7 @@ async function judgeEntry(entry, options, cache) {
     run.runId === undefined
       ? [{ name: "run", ok: false, reason: "no run started" }]
       : judge(entry, oracleContext(task, run, events));
-  checks.unshift({ name: "driver", ...driverCheck(run.exitCode) });
+  checks.unshift({ name: "run", ...runEndCheck(entry, run.finalState) });
   checks.push({ name: "history", ...historyCheck(history) });
   return {
     id: entry.id,
@@ -269,6 +283,16 @@ function selectEntries(only) {
   if (entries.length !== ids.size)
     throw new UsageError(`--only names a task outside the set: ${only}`);
   return entries;
+}
+
+/** Maven tasks need a JDK both in the dev server's runs and in the oracles; refuse before any run. */
+function requireJava(entries) {
+  if (!entries.some((entry) => entry.fixture === "polyglot")) return;
+  if (spawnSync("java", ["-version"], { stdio: "ignore" }).status !== 0) {
+    throw new UsageError(
+      "the polyglot tasks need a Java runtime: export JAVA_HOME and its bin on PATH for the dev server and this command",
+    );
+  }
 }
 
 async function preflight(session) {
@@ -312,6 +336,7 @@ async function main() {
     logDir: resolveLogDirectory(cli.values["log-dir"]),
   };
   const entries = selectEntries(cli.values.only);
+  requireJava(entries);
   const session = await openApiSession(labBaseUrl(options.baseUrl));
   await preflight(session);
   const cache = new Map();

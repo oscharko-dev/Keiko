@@ -12,6 +12,18 @@ const APPROVAL_ASKED_OPS = Object.freeze([
   "coding-runtime.editor-review.decided",
 ]);
 
+/**
+ * The operations and registered fields the oracles read. A renamed field would otherwise read as
+ * a missing event and fail a good run (2026-11-08: `scheduleFired` read `event`, the field is
+ * `outcome`); the unit test compares this with the committed op catalog.
+ */
+export const BUMP_SET_LOG_CONTRACT = Object.freeze({
+  "coding-runtime.approval.waiting": [],
+  "coding-runtime.editor-review.decided": [],
+  "coding-runtime.native-tool.denied": [],
+  "coding-runtime.schedule.wake": ["outcome"],
+});
+
 /** The placeholder that head-opencode.patch writes to `.env` (fixture README); never a secret. */
 export const LAB_TOKEN_PLACEHOLDER = "lab-placeholder-not-a-secret";
 
@@ -27,6 +39,8 @@ export const BUMP_SET = Object.freeze([
     fixture: "ledger",
     baseline: "head",
     approve: "none",
+    // After the denial the model may ask how to go on; the driver declines, which cancels the run.
+    runStates: ["succeeded", "cancelled"],
     checks: ["unchanged", "approvalAsked"],
   },
   {
@@ -49,6 +63,8 @@ export const BUMP_SET = Object.freeze([
     fixture: "ledger",
     baseline: "head",
     approve: "none",
+    // After the denial the model may ask how to go on; the driver declines, which cancels the run.
+    runStates: ["succeeded", "cancelled"],
     checks: ["unchanged", "approvalAsked"],
   },
   {
@@ -125,7 +141,7 @@ function nativeDenial(ctx) {
 
 function scheduleFired(ctx) {
   return ctx.wakeEvents.some(
-    (event) => event.op === "coding-runtime.schedule.wake" && event.event === "fired",
+    (event) => event.op === "coding-runtime.schedule.wake" && event.outcome === "fired",
   )
     ? pass()
     : fail("no schedule wake fired");
@@ -191,9 +207,16 @@ export function historyCheck(history) {
   return pass();
 }
 
-/** The driver ends 0 only when the run succeeded; a failed, cancelled or timed-out run never passes. */
-export function driverCheck(exitCode) {
-  return exitCode === 0 ? pass() : fail(`the driver exited ${String(exitCode)}`);
+/**
+ * How the run ended, as the driver reported it: `succeeded`, or a state the entry names (a denied
+ * task may end `cancelled` after the declined question). A failed run, a timeout or a driver
+ * that reported no final state never passes.
+ */
+export function runEndCheck(entry, finalState) {
+  const allowed = entry.runStates ?? ["succeeded"];
+  return finalState !== undefined && allowed.includes(finalState)
+    ? pass()
+    : fail(`the run ended ${String(finalState ?? "without a final state")}`);
 }
 
 function runOracle(oracle, ctx) {

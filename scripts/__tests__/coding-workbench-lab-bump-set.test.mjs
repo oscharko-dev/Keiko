@@ -6,12 +6,14 @@ import { describe, expect, it } from "vitest";
 
 import {
   BUMP_SET,
+  BUMP_SET_LOG_CONTRACT,
   LAB_TOKEN_PLACEHOLDER,
-  driverCheck,
   historyCheck,
   judge,
+  runEndCheck,
 } from "../testing/coding-workbench-lab/bump-set-oracles.mjs";
 import { loadTasks } from "../testing/coding-workbench-lab/lab-common.mjs";
+import { contractDrift, readOpCatalog } from "../testing/coding-workbench-lab/op-contract.mjs";
 
 const BASE = "b".repeat(40);
 
@@ -83,7 +85,7 @@ describe("bump-set oracles", () => {
         { op: "coding-runtime.approval.waiting" },
         { op: "coding-runtime.native-tool.denied" },
       ],
-      wakeEvents: [{ op: "coding-runtime.schedule.wake", event: "fired" }],
+      wakeEvents: [{ op: "coding-runtime.schedule.wake", outcome: "fired" }],
     });
     expect(verdict(["approvalAsked", "nativeDenial", "scheduleFired"], logged)).toEqual([
       true,
@@ -91,7 +93,7 @@ describe("bump-set oracles", () => {
       true,
     ]);
     const waitingOnly = context({
-      wakeEvents: [{ op: "coding-runtime.schedule.wake", event: "waiting" }],
+      wakeEvents: [{ op: "coding-runtime.schedule.wake", outcome: "waiting" }],
     });
     expect(verdict(["scheduleFired"], waitingOnly)).toEqual([false]);
   });
@@ -172,9 +174,18 @@ describe("bump-set oracles", () => {
     ]);
   });
 
-  it("fails every run the driver did not see succeed", () => {
-    expect(driverCheck(0).ok).toBe(true);
-    for (const code of [1, 2, 3, null, undefined]) expect(driverCheck(code).ok).toBe(false);
+  it("passes only a run that ended as its entry allows", () => {
+    const plain = entry(["unchanged"]);
+    expect(runEndCheck(plain, "succeeded").ok).toBe(true);
+    for (const state of ["cancelled", "failed", "running", undefined])
+      expect(runEndCheck(plain, state).ok).toBe(false);
+    const denied = BUMP_SET.find((item) => item.id === "T4");
+    expect(runEndCheck(denied, "cancelled").ok).toBe(true);
+    expect(runEndCheck(denied, "failed").ok).toBe(false);
+  });
+
+  it("reads only operations and fields the committed op catalog registers", () => {
+    expect(contractDrift(BUMP_SET_LOG_CONTRACT, readOpCatalog())).toEqual([]);
   });
 
   it("refuses an unknown oracle name", () => {
