@@ -6,6 +6,7 @@ import type { ChatToolExchange, ChatToolTranscript } from "@oscharko-dev/keiko-c
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import * as diagnostics from "@/lib/client-diagnostics";
 import { JiraChatTools } from "./JiraChatTools";
+import { partialJiraReadPage } from "./jira-result.test-fixture";
 import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
 
@@ -68,11 +69,19 @@ it.each([
           />
         </I18nProvider>,
       );
-      expect(screen.getByText(locale === "de" ? "Abgeschlossen" : "Completed")).toBeVisible();
-      if (partial) expect(screen.getByText(notice)).toBeVisible();
-      else expect(screen.queryByText(notice)).toBeNull();
-      expect(screen.getByText("Synthetic project")).toBeVisible();
-      expect(screen.getByText("SYN", { exact: true })).toBeVisible();
+      const completed = locale === "de" ? "Abgeschlossen" : "Completed";
+      if (partial) {
+        expect(screen.getByText(completed)).toBeVisible();
+        expect(screen.getByText(notice)).toBeVisible();
+        expect(screen.getByText("Synthetic project")).toBeVisible();
+        expect(screen.getByText("SYN", { exact: true })).toBeVisible();
+      } else {
+        // The model answer carries a complete read; progress already records its completion.
+        expect(screen.queryByText(completed)).toBeNull();
+        expect(screen.queryByText(notice)).toBeNull();
+        expect(screen.queryByText("Synthetic project")).toBeNull();
+        expect(screen.queryByText("SYN", { exact: true })).toBeNull();
+      }
       expect(screen.queryByText(/"outcome"/u)).toBeNull();
       expect(document.querySelector("pre")).toBeNull();
       expect(screen.queryByRole("button", { name: /retry|erneut|next page/i })).toBeNull();
@@ -101,7 +110,7 @@ it("links each historical result to its own saved Jira instance, even with the s
               {
                 call: {
                   id: `historical-${String(index)}`,
-                  name: "jira_issue",
+                  name: "jira_edit",
                   arguments: { issueKey: "SYN-1" },
                 },
                 result: {
@@ -328,14 +337,21 @@ function resultExchange(name: string, data: CatalogJsonObject): ChatToolExchange
   };
 }
 
+function partialResultExchange(name: string, data: CatalogJsonObject): ChatToolExchange {
+  const original = resultExchange(name, data);
+  if (original.result?.status !== "completed")
+    throw new TypeError("Missing partial result fixture");
+  return { ...original, result: { ...original.result, page: partialJiraReadPage(name) } };
+}
+
 describe.each(["en", "de"] as const)("readable saved Jira results in %s (#4290)", (locale) => {
-  it("keeps issue names, status, counts and links after a serialized transcript remount", async () => {
+  it("keeps changed issue names, status, counts and links after a serialized transcript remount", async () => {
     await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
     localStorage.setItem(I18N_STORAGE_KEY, locale);
     const transcript: ChatToolTranscript = {
       schemaVersion: 1,
       exchanges: [
-        resultExchange("jira_search", {
+        resultExchange("jira_edit", {
           outcome: "succeeded",
           startAt: 0,
           total: 1,
@@ -460,14 +476,14 @@ it.each([
   expect(document.querySelector("pre")).toBeNull();
 });
 
-it("keeps every returned project available behind a readable bounded disclosure", async () => {
+it("keeps every returned project of a partial read behind a readable bounded disclosure", async () => {
   const keys = ["PA", "PB", "PC", "PD", "PE", "PF", "PG"];
   render(
     <JiraChatTools
       transcript={{
         schemaVersion: 1,
         exchanges: [
-          resultExchange("jira_projects", {
+          partialResultExchange("jira_projects", {
             outcome: "succeeded",
             total: 7,
             startAt: 0,
@@ -499,58 +515,94 @@ it("shows no card for a complete Jira read that has nothing to say beyond the pr
   expect(document.querySelector("pre, details")).toBeNull();
 });
 
-it("records live Jira result counts joined to the parent without private content", () => {
-  const report = vi.spyOn(diagnostics, "reportClientDiagnostic");
-  try {
-    render(
-      <JiraChatTools
-        messageId="private-message-id"
-        transcript={{
-          schemaVersion: 1,
-          exchanges: [
-            resultExchange("jira_issue", {
-              outcome: "succeeded",
-              items: [
-                {
-                  key: "SYN-1",
-                  summary: "Private issue name",
-                  browseUrl: "https://jira.example.test/browse/SYN-1",
-                },
-              ],
-            }),
-          ],
-        }}
-        turnState="pending"
-      />,
-    );
-    const events = report.mock.calls.filter(
-      ([, meta]) => meta?.jiraResultPresentation !== undefined,
-    );
-    expect(events).toHaveLength(1);
-    expect(events[0]?.[1]?.jiraResultPresentation).toMatchObject({
-      exchangeCount: 1,
-      itemCount: 1,
-      shownCount: 1,
-      returnedCount: 1,
-      unreadableCount: 0,
-      problemCount: 0,
-      ruleCount: 0,
-      failure: "none",
-      restored: false,
-      messageDigest: "4a1187d989622c846f402ce31ebb6bb5e15355cedde1a803d16dfc8943dd87a0",
-    });
-    expect(JSON.stringify(events)).not.toMatch(
-      /SYN-1|Private issue name|jira\.example|call-jira|private-message-id|durationMs/u,
-    );
-  } finally {
-    report.mockRestore();
-  }
-});
+it.each([
+  [
+    "jira_issue",
+    { items: [{ key: "SYN-1", summary: "Observed issue", status: { name: "Open" } }] },
+  ],
+  ["jira_project", { projectId: "10001", projectKey: "SYN", projectName: "Observed project" }],
+  ["jira_create_fields", { items: [{ id: "customfield_123", name: "Epic Name", required: true }] }],
+  [
+    "jira_assignable_users",
+    { items: [{ name: "synthetic-user", displayName: "Observed user", active: true }] },
+  ],
+  ["jira_comments", { items: [{ id: "10000", body: "Observed comment" }] }],
+] satisfies readonly (readonly [string, CatalogJsonObject])[])(
+  "leaves a complete %s read to the model answer, including after reload",
+  (name, data) => {
+    const transcript: ChatToolTranscript = {
+      schemaVersion: 1,
+      exchanges: [resultExchange(name, { outcome: "succeeded", ...data })],
+    };
+    const first = render(<JiraChatTools transcript={transcript} turnState="pending" />);
+    expect(first.container.querySelector("[data-cards]")).toHaveAttribute("data-cards", "false");
+    first.unmount();
+    const saved = JSON.parse(JSON.stringify(transcript)) as ChatToolTranscript;
+    const restored = render(<JiraChatTools transcript={saved} turnState="completed" />);
+    expect(restored.container.querySelector("[data-cards]")).toHaveAttribute("data-cards", "false");
+    expect(screen.queryByText("Completed", { exact: true })).toBeNull();
+    expect(restored.container.querySelector("pre, details, a")).toBeNull();
+  },
+);
+
+it.each([
+  ["jira_create", 1],
+  ["jira_issue", 0],
+] as const)(
+  "records live %s result counts with shownCount=%s without private content",
+  (name, shownCount) => {
+    const report = vi.spyOn(diagnostics, "reportClientDiagnostic");
+    try {
+      render(
+        <JiraChatTools
+          messageId="private-message-id"
+          transcript={{
+            schemaVersion: 1,
+            exchanges: [
+              resultExchange(name, {
+                outcome: "succeeded",
+                items: [
+                  {
+                    key: "SYN-1",
+                    summary: "Private issue name",
+                    browseUrl: "https://jira.example.test/browse/SYN-1",
+                  },
+                ],
+              }),
+            ],
+          }}
+          turnState="pending"
+        />,
+      );
+      const events = report.mock.calls.filter(
+        ([, meta]) => meta?.jiraResultPresentation !== undefined,
+      );
+      expect(events).toHaveLength(1);
+      expect(events[0]?.[1]?.jiraResultPresentation).toMatchObject({
+        exchangeCount: 1,
+        itemCount: 1,
+        shownCount,
+        returnedCount: 1,
+        unreadableCount: 0,
+        problemCount: 0,
+        ruleCount: 0,
+        failure: "none",
+        restored: false,
+        messageDigest: "4a1187d989622c846f402ce31ebb6bb5e15355cedde1a803d16dfc8943dd87a0",
+      });
+      expect(JSON.stringify(events)).not.toMatch(
+        /SYN-1|Private issue name|jira\.example|call-jira|private-message-id|durationMs/u,
+      );
+    } finally {
+      report.mockRestore();
+    }
+  },
+);
 
 it("bounds restored history evidence and deduplicates equivalent live result states", () => {
   const report = vi.spyOn(diagnostics, "reportClientDiagnostic");
   const exchanges = Array.from({ length: 8 }, (_, index) => {
-    const result = resultExchange("jira_issue", {
+    const result = resultExchange("jira_edit", {
       items: [{ key: `SYN-${String(index + 1)}`, summary: "Private summary" }],
     });
     return { ...result, call: { ...result.call, id: `private-call-${String(index)}` } };
@@ -621,17 +673,17 @@ it("keeps field names, user availability and comment text readable without raw p
       transcript={{
         schemaVersion: 1,
         exchanges: [
-          resultExchange("jira_create_fields", {
+          partialResultExchange("jira_create_fields", {
             outcome: "succeeded",
             items: [{ id: "customfield_123", name: "Epic Name", required: true }],
           }),
-          resultExchange("jira_assignable_users", {
+          partialResultExchange("jira_assignable_users", {
             outcome: "succeeded",
             items: [
               { name: "private-account-id", displayName: "Assigned reviewer", active: false },
             ],
           }),
-          resultExchange("jira_comments", {
+          partialResultExchange("jira_comments", {
             outcome: "succeeded",
             items: [
               {
@@ -877,8 +929,12 @@ describe("Jira tool outcome for a business user (#4173)", () => {
     expect(screen.queryByText(/customfield_10103|required-field/u)).toBeNull();
   });
 
-  it("shows at most five read issues and counts the rest", () => {
-    const items = Array.from({ length: 7 }, (_, index) => ({ key: `KER-${String(index + 1)}` }));
+  it("shows at most five drafted issues and counts the rest", () => {
+    const items = Array.from({ length: 7 }, (_, index) => ({
+      ref: `item-${String(index)}`,
+      state: "created",
+      issueKey: `KER-${String(index + 1)}`,
+    }));
     render(
       <JiraChatTools
         transcript={{
@@ -886,7 +942,7 @@ describe("Jira tool outcome for a business user (#4173)", () => {
           exchanges: [
             {
               ...created({ outcome: "succeeded", items }),
-              call: { id: "s", name: "jira_search", arguments: {} },
+              call: { id: "s", name: "jira_draft", arguments: {} },
             },
           ],
         }}

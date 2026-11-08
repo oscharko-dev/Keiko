@@ -44,7 +44,8 @@ export function useCodingWorkbenchConnectors(list = listAtlassianConnectors): {
   const [administrationPodId, setAdministrationPodId] = useState<string>();
   const [mcpServers, setMcpServers] = useState<readonly string[] | undefined>(undefined);
   const jiraPodId = catalog.pods.some((pod) => pod.id === picked && pod.ready) ? picked : undefined;
-  const jiraAdministrationEnabled = !catalog.failed && jiraPodId !== undefined && administrationPodId === jiraPodId;
+  const jiraAdministrationEnabled =
+    !catalog.failed && jiraPodId !== undefined && administrationPodId === jiraPodId;
   // Clear the next-start selection permanently when readiness is lost; this does not revoke a run.
   useEffect(() => {
     if (administrationPodId !== undefined && (catalog.failed || administrationPodId !== jiraPodId))
@@ -57,11 +58,12 @@ export function useCodingWorkbenchConnectors(list = listAtlassianConnectors): {
       pods: catalog.pods,
       boundPodId: jiraPodId,
       jiraAdministrationEnabled,
-      onJiraAdministrationChange: (enabled) => setAdministrationPodId(enabled && !catalog.failed ? jiraPodId : undefined),
+      onJiraAdministrationChange: (enabled) =>
+        setAdministrationPodId(enabled && !catalog.failed ? jiraPodId : undefined),
       loading: servers.loading || catalog.loading,
       failed: servers.failed || catalog.failed,
       onServersChange: (selection) => setMcpServers(selection ?? undefined),
-      onPodChange: (podId) => {
+      onPodChange: (podId): void => {
         setAdministrationPodId(undefined);
         setPicked(podId ?? "");
       },

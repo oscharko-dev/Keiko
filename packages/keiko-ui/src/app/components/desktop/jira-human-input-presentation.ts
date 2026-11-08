@@ -1,5 +1,9 @@
-import { copyJiraHumanInputReview, type JiraHumanInputPurpose, type JiraHumanInputView } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
+import {
+  copyJiraHumanInputReview,
+  type JiraHumanInputPurpose,
+  type JiraHumanInputView,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type { OptionalWidgetTranslate, WidgetMessageKey } from "@/lib/optional-widget-i18n";
 
 const PURPOSE: Readonly<Record<JiraHumanInputPurpose, WidgetMessageKey>> = {
   "update-myself": "chat.jira.humanInput.review.profile",
@@ -11,10 +15,15 @@ const PURPOSE: Readonly<Record<JiraHumanInputPurpose, WidgetMessageKey>> = {
   login: "chat.jira.humanInput.review.login",
   "unlock-user-anonymization": "chat.jira.humanInput.review.unlock",
 };
-export interface JiraHumanInputFact { readonly label: string; readonly value: string }
+export interface JiraHumanInputFact {
+  readonly label: string;
+  readonly value: string;
+}
 /** Display-only facts from the server-owned review; never links, HTML or model call arguments. */
-export function jiraHumanInputReviewFacts(view: JiraHumanInputView,
-  t: (key: WidgetMessageKey) => string): readonly JiraHumanInputFact[] | undefined {
+export function jiraHumanInputReviewFacts(
+  view: JiraHumanInputView,
+  t: OptionalWidgetTranslate,
+): readonly JiraHumanInputFact[] | undefined {
   const review = copyJiraHumanInputReview(view.review, view.purpose);
   if (review === undefined) return undefined;
   const facts: JiraHumanInputFact[] = [
@@ -23,18 +32,31 @@ export function jiraHumanInputReviewFacts(view: JiraHumanInputView,
     { label: t("chat.jira.humanInput.review.actorUsername"), value: review.actorUsername },
     { label: t("chat.jira.humanInput.review.actorKey"), value: review.actorUserKey },
   ];
-  if (review.targetKind === "instance") facts.push({ label: t("chat.jira.humanInput.review.target"), value: t("chat.jira.humanInput.review.instance") });
-  else if (review.targetKind === "proposed-user") facts.push({ label: t("chat.jira.humanInput.review.proposedUsername"), value: review.targetUsername });
+  if (review.targetKind === "instance")
+    facts.push({
+      label: t("chat.jira.humanInput.review.target"),
+      value: t("chat.jira.humanInput.review.instance"),
+    });
+  else if (review.targetKind === "proposed-user")
+    facts.push({
+      label: t("chat.jira.humanInput.review.proposedUsername"),
+      value: review.targetUsername,
+    });
   else {
     facts.push({ label: t("chat.jira.humanInput.review.targetKey"), value: review.targetUserKey });
-    facts.push(review.targetKind === "user"
-      ? { label: t("chat.jira.humanInput.review.targetUsername"), value: review.targetUsername }
-      : { label: t("chat.jira.humanInput.review.executingNode"), value: review.executingNode });
+    facts.push(
+      review.targetKind === "user"
+        ? { label: t("chat.jira.humanInput.review.targetUsername"), value: review.targetUsername }
+        : { label: t("chat.jira.humanInput.review.executingNode"), value: review.executingNode },
+    );
   }
   return facts;
 }
 /** A live refresh may fill old absent metadata, but cannot retarget an already reviewed card. */
-export function sameJiraHumanInputReview(previous: JiraHumanInputView, next: JiraHumanInputView): boolean {
+export function sameJiraHumanInputReview(
+  previous: JiraHumanInputView,
+  next: JiraHumanInputView,
+): boolean {
   if (previous.purpose !== next.purpose) return false;
   const current = copyJiraHumanInputReview(next.review, next.purpose);
   if (current === undefined) return false;

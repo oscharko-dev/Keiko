@@ -47,6 +47,12 @@ function currentSummary(
   });
 }
 
+function settledPipelineState(
+  steps: readonly ChatProcessingStep[],
+  issueState: ChatProcessingState | undefined,
+): ChatProcessingState {
+  return issueState ?? steps.at(-1)?.state ?? "attention";
+}
 function pipelineSummary(steps: readonly ChatProcessingStep[], t: OptionalWidgetTranslate): string {
   const current = currentSummary(steps, t);
   if (current !== undefined) return current;
@@ -58,7 +64,7 @@ function pipelineSummary(steps: readonly ChatProcessingStep[], t: OptionalWidget
     return t("chat.processing.summary", { state: t("chat.processing.doneWithIssues") });
   if (responseState === "upcoming" && issueState !== undefined)
     return t("chat.processing.summary", { state: t(CHAT_PROCESSING_STATE_LABELS[issueState]) });
-  const state = responseState ?? issueState ?? steps.at(-1)?.state ?? "attention";
+  const state = responseState ?? settledPipelineState(steps, issueState);
   return t("chat.processing.summary", { state: t(CHAT_PROCESSING_STATE_LABELS[state]) });
 }
 

@@ -26,12 +26,12 @@ const FAILURE_KEYS: Readonly<Record<string, ClientJiraResultFailure>> = {
   "chat.jira.outcome.failure.unavailable": "unavailable",
 };
 type Counts = Omit<ClientJiraResultPresentation, "messageDigest" | "restored">;
-function presentationCounts(exchange: ChatToolExchange): Counts {
+function presentationCounts(exchange: ChatToolExchange, hasCard: boolean): Counts {
   const view = jiraToolOutcomeView(exchange);
   return {
     exchangeCount: 1,
     itemCount: view.items.length,
-    shownCount: Math.min(view.items.length, JIRA_OUTCOME_ITEMS_SHOWN),
+    shownCount: hasCard ? Math.min(view.items.length, JIRA_OUTCOME_ITEMS_SHOWN) : 0,
     returnedCount: view.returnedCount ?? view.items.length,
     unreadableCount: view.unreadableCount,
     problemCount: view.problems.length,
@@ -46,8 +46,11 @@ interface ObservedPresentation {
 }
 function hasPresentedResult(exchange: ChatToolExchange): boolean {
   // Knowledge has its own server read/coverage activity. An opaque foreign result is not Jira.
-  return exchange.call.name !== "jira_report" && isKnownJiraToolAlias(exchange.call.name) &&
-    (exchange.result !== undefined || exchange.draftProgress !== undefined);
+  return (
+    exchange.call.name !== "jira_report" &&
+    isKnownJiraToolAlias(exchange.call.name) &&
+    (exchange.result !== undefined || exchange.draftProgress !== undefined)
+  );
 }
 
 /** One counted line per distinct live state. Restored terminal history is never replayed. */
@@ -55,6 +58,7 @@ export function useJiraResultEvidence(
   transcript: ChatToolTranscript | undefined,
   turnState: ChatTurnState | undefined,
   messageId: string | undefined,
+  hasCard: (exchange: ChatToolExchange, turnState: ChatTurnState | undefined) => boolean,
 ): void {
   const observed = useRef<ObservedPresentation>({
     messageId,
@@ -69,7 +73,7 @@ export function useJiraResultEvidence(
     if (turnState === "pending") previous.live = true;
     const restored = !previous.live;
     const changed = transcript.exchanges.filter(hasPresentedResult).flatMap((exchange) => {
-      const counts = presentationCounts(exchange);
+      const counts = presentationCounts(exchange, hasCard(exchange, turnState));
       const state = JSON.stringify([
         exchange.call.id,
         exchange.result?.status,
@@ -86,5 +90,5 @@ export function useJiraResultEvidence(
         jiraResultPresentation: { ...counts, messageDigest: sha256Hex(messageId), restored },
       });
     }
-  }, [transcript, turnState, messageId]);
+  }, [transcript, turnState, messageId, hasCard]);
 }

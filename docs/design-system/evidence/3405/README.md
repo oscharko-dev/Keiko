@@ -332,3 +332,13 @@ source. The original nine-case producer ran again in the local gates container (
 including the real-BFF outage case, and `npm run check:update-ui-evidence` passes. The three JSON
 records bind the new API digest. Two screenshots changed bytes, without a visible change to the update window:
 `06-update-window-forced-colors.png` and `13-reconnecting-state-mocked.png`.
+
+## Jira UI verification refresh — 2026-11-08
+
+The inherited API and translation fingerprints were refreshed with the complete original producer
+on signed UI source head `575997e6caec9f86843cab1cae7f291569043164`, in the isolated Linux arm64
+container with Node 24.18.0, Liberation fonts and a Tini subreaper for the BFF lifecycle. All nine
+unchanged Chromium cases passed in 1.6 minutes, including the real-BFF stop/restart journey. The
+producer regenerated all 17 artifacts, and the source/harness freshness gate passes. Representative
+update-window and reconnect captures were visually inspected. No updater behavior, fixture,
+assertion or threshold changed; this remains updater fixture and BFF recovery evidence.

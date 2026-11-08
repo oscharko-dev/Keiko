@@ -9,8 +9,10 @@ import {
   type JiraPresentationSource as Source,
 } from "./jira-presentation-values";
 export const JIRA_RELEASE_TOOLS: ReadonlySet<string> = new Set([
-  "jira_component_related_issue_counts", "jira_version_related_issue_counts",
-  "jira_version_unresolved_issue_count", "jira_project_version_page",
+  "jira_component_related_issue_counts",
+  "jira_version_related_issue_counts",
+  "jira_version_unresolved_issue_count",
+  "jira_project_version_page",
 ]);
 const COUNT_FIELDS: Readonly<Record<string, Readonly<Record<string, WidgetMessageKey>>>> = {
   jira_component_related_issue_counts: { issueCount: "chat.jira.release.relatedIssues" },
@@ -19,28 +21,40 @@ const COUNT_FIELDS: Readonly<Record<string, Readonly<Record<string, WidgetMessag
     issuesFixedCount: "chat.jira.release.fixedIssues",
     issueCountWithCustomFieldsShowingVersion: "chat.jira.release.customFieldIssues",
   },
-  jira_version_unresolved_issue_count: { issuesUnresolvedCount: "chat.jira.release.unresolvedIssues" },
+  jira_version_unresolved_issue_count: {
+    issuesUnresolvedCount: "chat.jira.release.unresolvedIssues",
+  },
 };
 function countFact(label: WidgetMessageKey, value: unknown): JiraOutcomeFact[] {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
-    ? [{ label, value: String(value) }] : [];
+    ? [{ label, value: String(value) }]
+    : [];
 }
 function countScope(data: Source): WidgetMessageKey {
-  return data.countScope === "jira-response" ? "chat.jira.release.nativeCountScope" : "chat.jira.release.countScopeUnknown";
+  return data.countScope === "jira-response"
+    ? "chat.jira.release.nativeCountScope"
+    : "chat.jira.release.countScopeUnknown";
 }
 function fieldUsage(value: unknown, data: Source): JiraAgileDetails | undefined {
   const source = record(value);
   const id = text(source?.customFieldId);
   const name = text(source?.fieldName);
   if (id === undefined || name === undefined || source === undefined) return undefined;
-  const counts = countFact("chat.jira.release.fieldIssues", source.issueCountWithVersionInCustomField);
+  const counts = countFact(
+    "chat.jira.release.fieldIssues",
+    source.issueCountWithVersionInCustomField,
+  );
   return {
     name,
     facts: [
       ...fact("chat.jira.fact.versionId", data.versionId),
-      { label: "chat.jira.access.fieldId", value: id }, ...counts,
+      { label: "chat.jira.access.fieldId", value: id },
+      ...counts,
     ],
-    labels: [countScope(data), ...(counts.length === 0 ? ["chat.jira.release.countsUnknown"] as const : [])],
+    labels: [
+      countScope(data),
+      ...(counts.length === 0 ? (["chat.jira.release.countsUnknown"] as const) : []),
+    ],
   };
 }
 function customFields(data: Source): readonly JiraAgileDetails[] | undefined {
@@ -48,10 +62,17 @@ function customFields(data: Source): readonly JiraAgileDetails[] | undefined {
   const fields = data.customFieldNames.map((value: unknown) => fieldUsage(value, data));
   return fields.every((field) => field !== undefined) ? fields : undefined;
 }
+function customFieldCount(fields: readonly JiraAgileDetails[] | undefined): JiraOutcomeFact[] {
+  return fields === undefined
+    ? []
+    : [{ label: "chat.jira.release.customFieldCount", value: String(fields.length) }];
+}
 function counts(tool: string, data: Source): readonly JiraAgileDetails[] {
   const component = tool === "jira_component_related_issue_counts";
-  const identity = fact(component ? "chat.jira.fact.componentId" : "chat.jira.fact.versionId",
-    component ? data.componentId : data.versionId);
+  const identity = fact(
+    component ? "chat.jira.fact.componentId" : "chat.jira.fact.versionId",
+    component ? data.componentId : data.versionId,
+  );
   if (identity.length === 0) return [];
   const dimensions = Object.entries(COUNT_FIELDS[tool] ?? {});
   const facts = dimensions.flatMap(([field, label]) => countFact(label, data[field]));
@@ -60,13 +81,13 @@ function counts(tool: string, data: Source): readonly JiraAgileDetails[] {
   const relatedVersion = tool === "jira_version_related_issue_counts";
   const fields = relatedVersion ? customFields(data) : undefined;
   if (relatedVersion && fields === undefined) labels.push("chat.jira.release.customUsageUnknown");
-  return [{
-    facts: [
-      ...identity, ...facts,
-      ...(fields === undefined ? [] : [{ label: "chat.jira.release.customFieldCount", value: String(fields.length) } satisfies JiraOutcomeFact]),
-    ],
-    labels,
-  }, ...(fields ?? [])];
+  return [
+    {
+      facts: [...identity, ...facts, ...customFieldCount(fields)],
+      labels,
+    },
+    ...(fields ?? []),
+  ];
 }
 function versions(data: Source): readonly JiraAgileDetails[] {
   const context = [
