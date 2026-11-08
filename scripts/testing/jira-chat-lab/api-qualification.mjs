@@ -134,7 +134,7 @@ function caseEvidence(specification, attempted, observation, readback, failure, 
   };
 }
 async function runCase(context, chat, specification, fixture, witness, directory, report) {
-  await specification.prepare?.(context, fixture);
+  await specification.prepare?.(context, fixture, chat);
   const id = specification.fixtureId ?? qualificationDigest(specification.identity).slice(0, 24);
   const pending = join(directory, `${id}.pending.json`);
   privateJson(

@@ -18,6 +18,7 @@ import {
   API_QUALIFICATION_SCHEMA_CLEANUP_CASES,
 } from "./api-qualification-schema-cases.mjs";
 import { API_QUALIFICATION_ASSOCIATION_CASES } from "./api-qualification-association-cases.mjs";
+import { API_QUALIFICATION_INTEGRATOR_B_CASES } from "./api-qualification-integrator-b-cases.mjs";
 
 export const API_QUALIFICATION_ALL_CASES = [
   ...API_QUALIFICATION_CASES,
@@ -38,4 +39,5 @@ export const API_QUALIFICATION_ALL_CASES = [
   ...API_QUALIFICATION_SCHEMA_CASES,
   ...API_QUALIFICATION_ASSOCIATION_CASES,
   ...API_QUALIFICATION_SCHEMA_CLEANUP_CASES,
+  ...API_QUALIFICATION_INTEGRATOR_B_CASES,
 ];
