@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UI_HOST } from "./server.js";
 import { buildCspHeader } from "./csp.js";
 import { composeDiscussionDirectiveBlock } from "./discussion-prompt.js";
+import { CONVERSATION_REMEMBER_REFUSED_NOTICE } from "./conversation-prompt.js";
 import { conversationModelNotReadyResult } from "./conversation-readiness-admission.js";
 import {
   buildRedactor,
@@ -365,13 +366,14 @@ function insertAcceptedMemory(
   vault: MemoryVaultStore,
   body: string,
   scope: MemoryScope = { kind: "user", userId: makeMemoryUserId("local-operator") },
+  type: MemoryRecord["type"] = "preference",
 ): MemoryRecord {
   const now = Date.now();
   return vault.insertMemory({
     id: makeMemoryId(`mem-${String(now)}`),
     schemaVersion: "1",
     scope,
-    type: "preference",
+    type,
     body,
     provenance: {
       sourceKind: "explicit-user-instruction",
@@ -2469,7 +2471,14 @@ describe("desktop chat routes", () => {
     const memoryDir = join(tmp, "memory-vault-used-reinforcement");
     mkdirSync(memoryDir);
     const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
-    const recalled = insertAcceptedMemory(memoryVault, "Use pnpm instead of npm for installs.");
+    // A fact, not a preference: a person's own preference reaches every answer through the standing
+    // profile (#4228), so only a fact is recalled by the question.
+    const recalled = insertAcceptedMemory(
+      memoryVault,
+      "Use pnpm instead of npm for installs.",
+      { kind: "user", userId: makeMemoryUserId("local-operator") },
+      "semantic-fact",
+    );
     await restartWithDeps(
       deps(fakeModel("Use pnpm instead of npm for installs."), { memoryVault }),
     );
@@ -2542,6 +2551,49 @@ describe("desktop chat routes", () => {
       },
     ]);
     expect(listAllMemories(memoryVault, { includeExpired: true })).toEqual([]);
+    memoryVault.close();
+  });
+
+  // #4213 UI walk: Keiko refused "Merke dir: Meine Handynummer ist …" and the answer said it was
+  // stored, because the refusal was decided only after the answer was written.
+  it("tells the answer that a refused remember request was not stored", async () => {
+    const memoryDir = join(tmp, "memory-vault-refusal-notice");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    await restartWithDeps(deps(fakeModel("memory response"), { memoryVault }));
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+    const send = async (content: string): Promise<string> => {
+      const before = seenRequests.length;
+      const res = await fetch(`${base()}/api/desktop/chat`, {
+        method: "POST",
+        headers: POST_JSON_HEADERS,
+        body: JSON.stringify({
+          chatId: created.chat.id,
+          projectPath: projectDir,
+          modelId: CHAT_MODEL,
+          content,
+          memory: { enabled: true, context: {} },
+        }),
+      });
+      expect(res.status).toBe(200);
+      return seenRequests
+        .slice(before)
+        .flatMap((request) => request.messages.map((message) => message.content))
+        .join("\n");
+    };
+
+    const refused = await send("remember that my private support email is developer@example.com");
+    expect(refused).toContain(CONVERSATION_REMEMBER_REFUSED_NOTICE);
+    expect(listAllMemories(memoryVault, { includeExpired: true })).toEqual([]);
+    const kept = await send("remember that I prefer tables for numbers");
+    expect(kept).not.toContain(CONVERSATION_REMEMBER_REFUSED_NOTICE);
+    const ordinary = await send("What is the capital of France?");
+    expect(ordinary).not.toContain(CONVERSATION_REMEMBER_REFUSED_NOTICE);
     memoryVault.close();
   });
 

@@ -30,7 +30,11 @@ import {
   markdownSkillSelectionRefusal,
 } from "./markdown-skill-selection-admission.js";
 import { markdownSkillCompactionReserve } from "./markdown-skill-prompt.js";
-import { conversationSystemPrompt, renderStandingProfileBlock } from "./conversation-prompt.js";
+import {
+  CONVERSATION_REMEMBER_REFUSED_NOTICE,
+  conversationSystemPrompt,
+  renderStandingProfileBlock,
+} from "./conversation-prompt.js";
 import { withMarkdownSkillAdmission } from "./markdown-skill-admission.js";
 import { CancelledError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { hasGroundingScope, hasMixedJiraGroundingScope } from "./chat-grounding.js";
@@ -1791,6 +1795,72 @@ function captureActionsFromOutcomes(
   }, Promise.resolve([]));
 }
 
+// What capture makes of the person's words in this turn. The same pure extraction serves the answer,
+// which must know before it is written whether a remember request will be refused, and the capture
+// that runs once the turn is committed.
+function turnCaptureOutcomes(
+  request: SendDesktopChatRequest,
+  vault: MemoryVaultStore,
+  deps: UiHandlerDeps,
+  context: ConversationMemoryRuntimeContext,
+): readonly CaptureOutcome[] {
+  const previousMessage = (): ChatMessage | undefined =>
+    previousUserMessage(deps, request.content, context.conversationId);
+  return extractCandidatesFromUserText(
+    request.content,
+    buildCaptureContext(context, request.clientTurnId),
+    {
+      ...memoryCapturePolicyForDeps(deps, {
+        resolver: createMemoryTargetResolver(vault),
+        rememberScopeKind: "user",
+        forgetResolver: createMemoryForgetResolver(vault, {
+          scopes: conversationMemoryScopes(context),
+          conversationId: context.conversationId,
+          lastTurnStartedAt: () => previousMessage()?.timestamp,
+          previousMessageId: () => previousMessage()?.id,
+          previousStatement: () => previousMessage()?.content,
+        }),
+      }),
+    },
+  );
+}
+
+// Whether the outcome keeps what the person asked Keiko to remember, by the same checks capture
+// applies when it persists it.
+function keepsRememberedStatement(outcome: CaptureOutcome, vault: MemoryVaultStore): boolean {
+  if (outcome.kind !== "candidate") return false;
+  if (outcome.proposal.provenance.sourceKind !== "explicit-user-instruction") return false;
+  if (!isPersistableMemoryCandidate(outcome)) return false;
+  const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
+  return !isSuppressedByForgetTombstone(vault, buildMemoryRecordFromProposal(proposalId, outcome));
+}
+
+function asksToRemember(outcome: CaptureOutcome): boolean {
+  if (outcome.kind === "rejected") return outcome.statement === "remember";
+  return (
+    outcome.kind === "candidate" &&
+    outcome.proposal.provenance.sourceKind === "explicit-user-instruction"
+  );
+}
+
+// A person's own "Merke dir" that Keiko refuses must not be answered as stored (#4213).
+export function rememberRequestRefused(
+  deps: UiHandlerDeps,
+  request: SendDesktopChatRequest,
+): boolean {
+  const vault = deps.memoryVault;
+  if (request.memory?.enabled !== true || vault === undefined) return false;
+  const projectPath = normalizeDesktopProjectPath(request.projectPath, deps);
+  if (isRouteResult(projectPath)) return false;
+  const context = resolveConversationMemoryContext(deps, projectPath, request.chatId);
+  if (isRouteResult(context)) return false;
+  const outcomes = turnCaptureOutcomes(request, vault, deps, context);
+  return (
+    outcomes.some(asksToRemember) &&
+    !outcomes.some((outcome) => keepsRememberedStatement(outcome, vault))
+  );
+}
+
 function captureMemoryActions(
   request: SendDesktopChatRequest,
   deps: UiHandlerDeps,
@@ -1802,23 +1872,7 @@ function captureMemoryActions(
   }
   const previousMessage = (): ChatMessage | undefined =>
     previousUserMessage(deps, request.content, context.conversationId);
-  const outcomes = extractCandidatesFromUserText(
-    request.content,
-    buildCaptureContext(context, request.clientTurnId),
-    {
-      ...memoryCapturePolicyForDeps(deps, {
-        resolver: createMemoryTargetResolver(deps.memoryVault),
-        rememberScopeKind: "user",
-        forgetResolver: createMemoryForgetResolver(deps.memoryVault, {
-          scopes: conversationMemoryScopes(context),
-          conversationId: context.conversationId,
-          lastTurnStartedAt: () => previousMessage()?.timestamp,
-          previousMessageId: () => previousMessage()?.id,
-          previousStatement: () => previousMessage()?.content,
-        }),
-      }),
-    },
-  );
+  const outcomes = turnCaptureOutcomes(request, deps.memoryVault, deps, context);
   recordForgetNotStored(request.content, outcomes, correlationId);
   const mode = resolveMemoryCaptureAutonomyMode(deps, request.memory.mode);
   const surface = request.memory.surface ?? "desktop";
@@ -2041,11 +2095,17 @@ function joinSystemContext(...parts: readonly (string | undefined)[]): string | 
 }
 
 function systemContextForTurn(
+  deps: UiHandlerDeps,
+  request: SendDesktopChatRequest,
   memory: ConversationMemoryResultWire,
   snapshot: GatewayTurnSnapshot,
 ): string | undefined {
   const profileFacts = memory.context.profile?.entries.map((entry) => entry.text) ?? [];
-  return joinSystemContext(renderStandingProfileBlock(profileFacts), snapshot.rehydratedContext);
+  return joinSystemContext(
+    renderStandingProfileBlock(profileFacts),
+    rememberRequestRefused(deps, request) ? CONVERSATION_REMEMBER_REFUSED_NOTICE : undefined,
+    snapshot.rehydratedContext,
+  );
 }
 
 export function buildGatewayAssembly(
@@ -2082,7 +2142,7 @@ export function buildGatewayAssembly(
       snapshot.historyRevision,
       correlationId,
     ),
-    continuityContextText: systemContextForTurn(memory, snapshot),
+    continuityContextText: systemContextForTurn(deps, request, memory, snapshot),
     earlierCompaction: snapshot.earlierCompaction,
     documentContext: request.documentContext,
     redactionSecrets: currentRedactionSecrets(deps),
