@@ -196,7 +196,7 @@ class MarkdownContext {
   protectedFrom: number | undefined;
   constructor(
     private readonly text: string,
-    private ranges: Span[],
+    private readonly ranges: Span[],
   ) {}
   get spans(): readonly Span[] {
     return this.ranges;
@@ -222,25 +222,24 @@ class MarkdownContext {
       if (range.start >= start && range.end > end) overflow = true;
       count++;
     }
-    if (count === 0) return;
-    this.ranges.splice(this.position, count);
-    if (!overflow) return;
+    // Regions wholly inside the macro are covered by it; stepping past them copies nothing.
+    if (!overflow) {
+      this.position += count;
+      return;
+    }
     // Parsing ran on through the macro under the wrong state: read the rest afresh. The rereads
-    // share a budget proportional to the text, so the work stays linear while ordinary
-    // descriptions are read whole; past it the rest keeps its markers and is reported unscanned.
+    // share a budget proportional to the text, and only the rest is replaced, never the regions
+    // before it, so every step stays within that linear budget. Past it the rest keeps its
+    // markers and the text is reported unscanned.
     const cost = this.text.length - end;
+    this.ranges.length = this.position;
     if (this.rereadCharacters + cost > this.text.length * REREAD_TEXT_MULTIPLE) {
       this.protectedFrom = Math.min(this.protectedFrom ?? end, end);
-      this.ranges = this.ranges.slice(0, this.position);
       return;
     }
     this.rereadCharacters += cost;
-    const kept = this.ranges.slice(0, this.position);
-    const rest = markdownCodeRanges(this.text.slice(end)).map((range) => ({
-      start: range.start + end,
-      end: range.end + end,
-    }));
-    this.ranges = [...kept, ...rest];
+    for (const range of markdownCodeRanges(this.text.slice(end)))
+      this.ranges.push({ start: range.start + end, end: range.end + end });
   }
 }
 

@@ -393,6 +393,15 @@ describe("Jira text names the sources of the grounded answer it was written from
       ["Markdown code inside closed macros", repeating("{code}`a`{code}")],
       ["backticks inside an unclosed macro", repeating("{code}``")],
       ["a literal backtick inside every closed macro", repeating("{code}`{code} [1]\n")],
+      [
+        "many earlier code spans before rereads of a shorter tail",
+        (size: number): Record<string, unknown> => ({
+          description:
+            "`x` ".repeat(size) +
+            "\n" +
+            "{code}`{code} Goal [1].\n".repeat(Math.floor(3 * Math.sqrt(size))),
+        }),
+      ],
     ])("scales linearly for %s", { timeout: 60_000 }, (_name, build) => {
       expect(ratio(build)).toBeLessThan(LINEAR_RATIO_MAX);
     });

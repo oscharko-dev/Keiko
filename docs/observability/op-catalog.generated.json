@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "e66257343b40d80d120f2e9d73300933d16fa401fff1e9e52e8cdd8a7339d3f6",
+    "catalogDigest": "0fd723b47cf20c92e94e2967c04f62e77447878debba1b5cbe920e3a0a7c9875",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -32763,8 +32763,8 @@
         "failureClasses": ["atlassian-action-execution"],
         "proofIds": ["jira.citation.markers.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraCitationMarkers.ts:504",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraCitationMarkers.ts:546"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraCitationMarkers.ts:503",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraCitationMarkers.ts:545"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -114867,7 +114867,7 @@
     {
       "op": "jira.citation.markers",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraCitationMarkers.ts:507",
+      "site": "packages/keiko-server/src/atlassian/jiraCitationMarkers.ts:506",
       "package": "keiko-server"
     },
     {
