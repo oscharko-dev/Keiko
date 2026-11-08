@@ -2265,6 +2265,7 @@ const EXPECTED_RISK: Readonly<Record<AtlassianConnectorActionType, CodingWorkben
   "jira.assignable-users": "low",
   "jira.report": "low",
   "jira.draft-stage": "low",
+  "jira.draft-batch": "low",
   "sync-space": "low",
   "sync-project": "low",
   "search-issues-live": "low",
