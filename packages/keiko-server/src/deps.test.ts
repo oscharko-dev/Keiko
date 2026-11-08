@@ -2,6 +2,7 @@ import {
   chatAuthorityFixture,
   CHAT_AUTHORITY_TEST_NOW,
 } from "./editor/chatAuthority.test-support.js";
+import { JIRA_DEFAULT_CATALOG_TOOLS } from "./atlassian/jiraChatCatalogRuntime.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -35,7 +36,6 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import {
   ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
-  JIRA_MANAGED_ACTION_TYPES,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { standardPodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
@@ -3956,12 +3956,12 @@ it("shares one lazy Jira catalog per graph and closes it on disposal (#4089)", a
     if (runtime === undefined) throw new Error("Expected graph-owned managed catalog");
     const [first, second] = await Promise.all([runtime.get(), runtime.get()]);
     expect(second).toBe(first);
-    // The default catalog offers the curated Jira tools plus the local Knowledge tools declared by
-    // the same managed provider; the rest of the canonical set is selected per turn.
-    const toolCount = first.handlerBindings.length;
-    expect(toolCount).toBeGreaterThanOrEqual(KNOWLEDGE_CHAT_TOOLS.length);
-    expect(toolCount).toBeLessThan(
-      Object.keys(JIRA_MANAGED_ACTION_TYPES).length + KNOWLEDGE_CHAT_TOOLS.length,
+    // The default catalog offers exactly the curated production set (curated Jira tools, batch,
+    // discovery and the local Knowledge tools); the rest of the canonical set is selected per turn.
+    const toolCount = JIRA_DEFAULT_CATALOG_TOOLS.length;
+    expect(toolCount).toBe(24);
+    expect(first.handlerBindings.map((handler) => handler.catalogAction).sort()).toEqual(
+      [...JIRA_DEFAULT_CATALOG_TOOLS].sort(),
     );
     expect(
       activityLog.events.filter((event) => event.op === "mcp.managed.lifecycle"),

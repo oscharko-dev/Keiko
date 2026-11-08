@@ -139,6 +139,12 @@ const JIRA_BATCH_ALIASES: ReadonlySet<string> = new Set(JIRA_BATCH_TOOLS.map(too
 const withBatchTools = (tools: typeof JIRA_CHAT_TOOLS): typeof JIRA_CHAT_TOOLS => [
   ...new Set([...tools, ...JIRA_BATCH_TOOLS]),
 ];
+/** The exact tool names the default (unselected) Jira chat catalog offers. */
+export const JIRA_DEFAULT_CATALOG_TOOLS: readonly string[] = [
+  ...withBatchTools(JIRA_BASE_TOOLS),
+  ...JIRA_CATALOG_DISCOVERY_TOOLS,
+  ...KNOWLEDGE_CHAT_TOOLS,
+];
 /** Without the batch, its companion goes too unless the turn selected the draft run itself. */
 const batchOnlyTools = (tools: typeof JIRA_CHAT_TOOLS): readonly string[] =>
   tools.includes(JIRA_DRAFT_TOOL) ? [JIRA_DRAFT_BATCH_TOOL] : JIRA_BATCH_TOOLS;
@@ -703,11 +709,7 @@ function staticToolDefinitions(
   let definitions: readonly ToolDefinition[] | undefined;
   return () => {
     definitions ??= managedCatalogToolDefinitions(
-      jiraChatCatalogRoutes([
-        ...withBatchTools(JIRA_BASE_TOOLS),
-        ...JIRA_CATALOG_DISCOVERY_TOOLS,
-        ...KNOWLEDGE_CHAT_TOOLS,
-      ]),
+      jiraChatCatalogRoutes([...JIRA_DEFAULT_CATALOG_TOOLS]),
       chatCatalogProviders(deps, store, draftStore).flatMap((provider) => provider.tools()),
       JIRA_CHAT_PROFILE,
       Date.now(),
