@@ -2543,6 +2543,15 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.outcome.rule.template-unreadable":
     "Die Vorlage „{subject}“ konnte nicht gelesen werden.",
   "chat.jira.tool": "Jira-Aktion",
+  "chat.jira.catalog.discover": "Jira-Aktionen finden",
+  "chat.jira.catalog.describe": "Jira-Aktionen auswählen",
+  "chat.jira.catalog.actions": "Jira-Aktionen",
+  "chat.jira.catalog.read": "Liest Jira",
+  "chat.jira.catalog.write": "Ändert Jira",
+  "chat.jira.catalog.local": "Lokale Vorbereitung",
+  "chat.jira.catalog.selected": "Aktionsauswahl aktualisiert",
+  "chat.jira.catalog.invalidArguments":
+    "Die Jira-Aktionsauswahl war ungültig. Suche verfügbare Aktionen und wähle sie erneut aus.",
   "chat.jira.complete": "Abgeschlossen",
   "chat.jira.running": "Wird ausgeführt",
   "chat.jira.unavailable": "Konnte nicht abgeschlossen werden",

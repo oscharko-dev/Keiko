@@ -19,6 +19,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/knowledge-turn-coverage";
 import {
   jiraToolDetailsLabel,
+  JIRA_CATALOG_TOOLS,
   isKnownJiraToolAlias,
   jiraToolLabel,
   jiraToolRegionLabel,
@@ -124,13 +125,14 @@ function JiraContextLink({
 }
 function JiraResultTitle({ item }: { readonly item: JiraOutcomeItem }): ReactNode {
   const t = useTranslate();
+  const name = item.nameLabel === undefined ? item.name : t(item.nameLabel);
   const title = (
     <>
       {item.key === undefined ? null : <strong>{item.key}</strong>}
-      {item.name === undefined ? null : (
+      {name === undefined ? null : (
         <>
           {" "}
-          <span>{item.name}</span>
+          <span>{name}</span>
         </>
       )}
     </>
@@ -433,6 +435,7 @@ function outcomeIsEmpty(view: JiraToolOutcomeView): boolean {
 }
 function hasResultContent(exchange: ChatToolExchange): boolean {
   return (
+    (JIRA_CATALOG_TOOLS.has(exchange.call.name) && exchange.result !== undefined) ||
     VALIDATION_TOOLS.has(exchange.call.name) ||
     knowledgeReviewFailureNotice(exchange) !== undefined ||
     jiraReportOf(exchange) !== undefined ||

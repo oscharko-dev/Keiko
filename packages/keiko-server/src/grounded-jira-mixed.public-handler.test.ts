@@ -303,15 +303,24 @@ function restartConsentGraph(deps: UiHandlerDeps): UiHandlerDeps {
 function preselectKnownFixtureTools(
   catalog: UiHandlerDeps["jiraChatCatalog"],
   tool?: string,
+  additionalTools: readonly string[] = [],
 ): void {
   if (catalog === undefined) throw new TypeError("Missing Jira catalog");
-  vi.spyOn(catalog, "get").mockImplementation(() =>
-    catalog.select(
+  if (tool === undefined && additionalTools.length === 0) return;
+  vi.spyOn(catalog, "get").mockImplementation((scope) => {
+    const base = new Set(catalog.toolDefinitions(scope).map((entry) => entry.name));
+    return catalog.select(
       jiraOperationContracts()
-        .filter((entry) => tool === undefined || entry.declaration.name === tool)
+        .filter((entry) =>
+          tool === undefined
+            ? base.has(entry.declaration.name.replace(/[.-]/gu, "_")) ||
+              additionalTools.includes(entry.declaration.name)
+            : entry.declaration.name === tool,
+        )
         .map((entry) => entry.binding.identity),
-    ),
-  );
+      scope,
+    );
+  });
 }
 
 function context(body: Record<string, unknown>, approvalId?: string): RouteContext {
@@ -1953,6 +1962,20 @@ it.each(["answer", "uncited"] as const)(
 
 it("settles a committed mutation when the adopted window cannot fit the current tool catalog", async () => {
   const f = runtime(true);
+  // A bounded native selection still fits the catalog's compound byte ceiling while its full
+  // physical prompt exceeds the adopted window. The curated base alone now fits that window.
+  preselectKnownFixtureTools(f.deps.jiraChatCatalog, undefined, [
+    "jira.project",
+    "jira.project-permissions",
+    "jira.project-statuses",
+    "jira.project-types",
+    "jira.project-type",
+    "jira.project-categories",
+    "jira.project-category",
+    "jira.project-version-page",
+    "jira.priority",
+    "jira.priority-page",
+  ]);
   const requests = provider(["write", "overflow", "answer"]);
   const body = {
     chatId: f.chatId,
@@ -1965,6 +1988,8 @@ it("settles a committed mutation when the adopted window cannot fit the current 
   expect(response.status).toBe(200);
   expect(requests).toHaveLength(2);
   expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+  for (const cost of physicallyDispatchedPromptCosts(f.deps, requests))
+    expect(cost).toBeGreaterThan(8192);
   expect(JSON.stringify(response.body)).toContain("context window");
   const refused = gatewayPromptAdmissions(f.deps).at(-1);
   expect(refused).toMatchObject({ contextWindow: 8192, errorKind: "invalid-request" });

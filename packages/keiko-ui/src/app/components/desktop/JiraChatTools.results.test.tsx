@@ -1,6 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { axe } from "jest-axe";
 import type { ChatToolExchange, ChatToolTranscript } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -10,20 +10,23 @@ import { partialJiraReadPage } from "./jira-result.test-fixture";
 import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
 
-function exchange(outcome: string | undefined): ChatToolExchange {
+function exchange(
+  outcome: string | undefined,
+  catalog?: { readonly call: ChatToolExchange["call"]; readonly data: CatalogJsonObject },
+): ChatToolExchange {
   return {
-    call: { id: "call-1", name: "jira_edit", arguments: { issueKey: "LAB-1" } },
+    call: catalog?.call ?? { id: "call-1", name: "jira_edit", arguments: { issueKey: "LAB-1" } },
     result: {
       schemaVersion: 1,
       invocationId: "invocation-1",
       toolRef: null,
       projectionDigest: null,
-      effectStarted: true,
+      effectStarted: catalog === undefined,
       metrics: { inputBytes: 10, outputBytes: 10, resultCount: 1, durationMs: 20 },
       status: "completed",
       reason: "none",
       page: { truncated: false, reason: "none", cursor: null },
-      data: outcome === undefined ? {} : { outcome },
+      data: catalog?.data ?? (outcome === undefined ? {} : { outcome }),
     },
   };
 }
@@ -953,5 +956,166 @@ describe("Jira tool outcome for a business user (#4173)", () => {
     expect(list).toHaveTextContent("KER-5");
     expect(list).not.toHaveTextContent("KER-6");
     expect(list).toHaveTextContent("and 2 more");
+  });
+});
+
+describe.each(["en", "de"] as const)("local Jira catalog results in %s", (locale) => {
+  beforeEach(async () => {
+    await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+    localStorage.setItem(I18N_STORAGE_KEY, locale);
+  });
+  afterEach(() => localStorage.removeItem(I18N_STORAGE_KEY));
+
+  it.each(["jira_discover", "jira_describe"] as const)(
+    "keeps a readable %s result through history restoration without exposing schemas",
+    async (name) => {
+      const discover = name === "jira_discover";
+      const entry = { identity: "GET /rest/api/2/project", tool: "jira_projects" };
+      const data: CatalogJsonObject = {
+        outcome: "succeeded",
+        items: [
+          {
+            ...entry,
+            ...(discover
+              ? {
+                  description: "List projects available to this Jira connection.",
+                  kind: "native",
+                  effects: ["remote-read"],
+                }
+              : {}),
+            inputSchema: { properties: { hidden: { description: "schema-marker" } } },
+            url: "https://metadata.example.invalid/execute",
+          },
+          {
+            identity: "POST /unowned",
+            tool: "jira_unowned_execute",
+            description: "unowned-marker",
+          },
+        ],
+        ...(discover ? { startAt: 0, total: 2 } : { selectedFor: "next-round" }),
+        resultSchema: { description: "schema-marker" },
+      };
+      const transcript: ChatToolTranscript = {
+        schemaVersion: 1,
+        exchanges: [
+          exchange("succeeded", {
+            call: { id: name, name, arguments: {} },
+            data,
+          }),
+        ],
+      };
+      const title =
+        locale === "en"
+          ? discover
+            ? "Find Jira actions"
+            : "Select Jira actions"
+          : discover
+            ? "Jira-Aktionen finden"
+            : "Jira-Aktionen auswählen";
+      const show = (): ReturnType<typeof render> =>
+        render(
+          <I18nProvider>
+            <JiraChatTools
+              transcript={JSON.parse(JSON.stringify(transcript)) as ChatToolTranscript}
+              turnState="completed"
+            />
+          </I18nProvider>,
+        );
+      const first = show();
+      const previous = first.container.textContent;
+      first.unmount();
+      const { container } = show();
+      const card = screen.getByRole("group", { name: title });
+      expect(card).toHaveTextContent(title);
+      const rows = within(card).getByRole("list", {
+        name: locale === "en" ? "Jira actions" : "Jira-Aktionen",
+      });
+      expect(rows).toHaveTextContent(
+        locale === "en" ? "Read Jira projects" : "Jira-Projekte lesen",
+      );
+      if (discover)
+        expect(rows).toHaveTextContent("List projects available to this Jira connection.");
+      else
+        expect(card).toHaveTextContent(
+          locale === "en" ? "Action selection updated" : "Aktionsauswahl aktualisiert",
+        );
+      expect(container.textContent).toBe(previous);
+      expect(container.textContent).not.toMatch(
+        /schema-marker|unowned-marker|metadata\.example|A readable view|keine lesbare Ansicht/u,
+      );
+      expect(container.querySelector("pre, code, a, img, script")).toBeNull();
+      expect(await axe(container)).toHaveNoViolations();
+    },
+  );
+
+  it("shows an empty successful selection without inventing an action or a Jira effect", () => {
+    render(
+      <I18nProvider>
+        <JiraChatTools
+          transcript={{
+            schemaVersion: 1,
+            exchanges: [
+              exchange("succeeded", {
+                call: {
+                  id: "empty-selection",
+                  name: "jira_describe",
+                  arguments: { identities: [] },
+                },
+                data: { outcome: "succeeded", items: [], selectedFor: "next-round" },
+              }),
+            ],
+          }}
+          turnState="completed"
+        />
+      </I18nProvider>,
+    );
+    const card = screen.getByRole("group", {
+      name: locale === "en" ? "Select Jira actions" : "Jira-Aktionen auswählen",
+    });
+    expect(card).toHaveTextContent(
+      locale === "en" ? "Action selection updated" : "Aktionsauswahl aktualisiert",
+    );
+    expect(within(card).queryByRole("list")).toBeNull();
+    expect(card).not.toHaveTextContent(
+      locale === "en" ? "Jira action rejected" : "Jira-Aktion abgelehnt",
+    );
+  });
+
+  it("explains an invalid action selection without claiming that it was applied", () => {
+    render(
+      <I18nProvider>
+        <JiraChatTools
+          transcript={{
+            schemaVersion: 1,
+            exchanges: [
+              exchange("failed", {
+                call: { id: "invalid-selection", name: "jira_describe", arguments: {} },
+                data: {
+                  outcome: "failed",
+                  reason: "invalid-arguments",
+                  items: [],
+                  guidance: "<a href='https://metadata.example.invalid'>guidance-marker</a>",
+                },
+              }),
+            ],
+          }}
+          turnState="completed"
+        />
+      </I18nProvider>,
+    );
+    const card = screen.getByRole("group", {
+      name: locale === "en" ? "Select Jira actions" : "Jira-Aktionen auswählen",
+    });
+    expect(card).toHaveTextContent(
+      locale === "en"
+        ? "The Jira action selection was invalid. Find available actions and select them again."
+        : "Die Jira-Aktionsauswahl war ungültig. Suche verfügbare Aktionen und wähle sie erneut aus.",
+    );
+    expect(card).not.toHaveTextContent(
+      /guidance-marker|metadata\.example|invalid-arguments|Action selection updated|Aktionsauswahl aktualisiert/u,
+    );
+    expect(card).not.toHaveTextContent(locale === "en" ? "Completed" : "Abgeschlossen");
+    expect(within(card).queryByRole("list")).toBeNull();
+    expect(card.querySelector("a, pre, code")).toBeNull();
   });
 });
