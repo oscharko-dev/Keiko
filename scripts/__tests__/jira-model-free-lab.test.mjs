@@ -217,6 +217,8 @@ it.each([
       rmSync(directory, { recursive: true, force: true });
     }
   },
+  // Each turn admits its own governed host (about 0.17 s); 65 turns take about 11 s, linear.
+  120000,
 );
 
 it("settles one model-free native effect in the production mutation journal and receipt", async () => {
