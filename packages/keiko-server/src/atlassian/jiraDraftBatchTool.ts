@@ -12,6 +12,11 @@ import {
 } from "@oscharko-dev/keiko-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
+import {
+  countJiraTemplateViolations,
+  JIRA_TEMPLATE_RULE_IDS,
+  type JiraTemplateRuleId,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { requirementReference } from "@oscharko-dev/keiko-quality-intelligence";
 import type { UiHandlerDeps } from "../deps.js";
 import { openKnowledgeStoreForDeps } from "../local-knowledge-store-open.js";
@@ -165,7 +170,7 @@ function selectedRequirements(
     byRef.set(ref, {
       ref,
       title: clip(redact(entry.title), TITLE_CHARS_MAX),
-      section: clip(entry.sectionPath.map(redact).join(" > "), SECTION_CHARS_MAX),
+      section: clip(entry.sectionPath.map((part) => redact(part)).join(" > "), SECTION_CHARS_MAX),
       text: clip(redact(entry.statement), REQUIREMENT_TEXT_CHARS_MAX),
       criteria: entry.acceptanceCriteria.map((item) => redact(item.text)),
     });
@@ -324,9 +329,33 @@ function stageOutcome(result: ManagedMcpToolResult): DraftBatchStageOutcome {
   )
     return { kind: "staged", draftId, draftDigest, itemCount, pageCount };
   if (data.outcome === "rejected" || data.reason === "invalid-input")
-    return { kind: "rejected", guidance: rejectionGuidance(data), owner: rejectionOwner(data) };
+    return {
+      kind: "rejected",
+      guidance: rejectionGuidance(data),
+      owner: rejectionOwner(data),
+      violationRuleCounts: rejectionRuleCounts(data),
+    };
   const reason = typeof data.reason === "string" ? data.reason : "stage-failed";
   return { kind: "fatal", reason, transient: !PERMANENT_STAGE_REASONS.has(reason) };
+}
+
+function rejectionRuleCounts(
+  data: CatalogJsonObject,
+): Partial<Readonly<Record<JiraTemplateRuleId, number>>> {
+  const violations: { readonly ruleId: JiraTemplateRuleId }[] = [];
+  const candidates: readonly unknown[] = Array.isArray(data.violations) ? data.violations : [];
+  for (const violation of candidates) {
+    if (
+      violation === null ||
+      typeof violation !== "object" ||
+      Array.isArray(violation) ||
+      !("ruleId" in violation)
+    )
+      continue;
+    const ruleId = JIRA_TEMPLATE_RULE_IDS.find((candidate) => candidate === violation.ruleId);
+    if (ruleId !== undefined) violations.push({ ruleId });
+  }
+  return countJiraTemplateViolations(violations);
 }
 
 const REJECTION_KEYS = [
@@ -384,6 +413,16 @@ function observation(run: BatchRun, observed: DraftBatchObservation): void {
       ...(observed.completionTokens === undefined
         ? {}
         : { completionTokens: observed.completionTokens }),
+      ...(observed.parseAttemptCount === undefined
+        ? {}
+        : { parseAttemptCount: observed.parseAttemptCount }),
+      ...(observed.stageAttemptCount === undefined
+        ? {}
+        : { stageAttemptCount: observed.stageAttemptCount }),
+      ...(observed.guidanceDigest === undefined ? {} : { guidanceDigest: observed.guidanceDigest }),
+      ...(observed.violationRuleCounts === undefined
+        ? {}
+        : { violationRuleCounts: observed.violationRuleCounts }),
     });
 }
 
@@ -431,6 +470,8 @@ function deadlineGuidance(result: DraftBatchResult, drafted: number): string {
 }
 
 function partialGuidance(run: BatchRun, result: DraftBatchResult, drafted: number): string {
+  if (result.stopReason === "stage-rejection-unchanged")
+    return `${String(drafted)} of ${String(result.progress.plannedCount)} issues are drafted and saved. The corrected page received the same stage refusal again, so Keiko stopped without splitting it further. Report failedRequirementRefs and review the refused content and applicable rules before another attempt.`;
   const notes = [
     result.stopReason === "deadline"
       ? deadlineGuidance(result, drafted)
@@ -484,6 +525,15 @@ function originalRequirements(args: JiraDraftBatchArguments): CatalogJsonObject 
   };
 }
 
+function resultReason(
+  succeeded: boolean,
+  result: DraftBatchResult,
+  fatal: string | undefined,
+): CatalogJsonObject {
+  if (succeeded && result.stopReason !== "stage-rejection-unchanged") return {};
+  return { reason: fatal ?? result.stopReason ?? "nothing-drafted" };
+}
+
 function resultData(run: BatchRun, result: DraftBatchResult): CatalogJsonObject {
   const { progress } = result;
   const failedCount =
@@ -492,7 +542,7 @@ function resultData(run: BatchRun, result: DraftBatchResult): CatalogJsonObject 
   const fatal = run.fatalReason;
   return {
     outcome: succeeded ? "succeeded" : "failed",
-    ...(succeeded ? {} : { reason: fatal ?? result.stopReason ?? "nothing-drafted" }),
+    ...resultReason(succeeded, result, fatal),
     ...(result.draftId === undefined ? {} : { draftId: result.draftId }),
     ...(result.draftDigest === undefined ? {} : { draftDigest: result.draftDigest }),
     newDraft: run.args.draftId === undefined,
@@ -521,6 +571,8 @@ function resultData(run: BatchRun, result: DraftBatchResult): CatalogJsonObject 
 }
 
 function failureGuidance(result: DraftBatchResult, fatal: string | undefined): string {
+  if (result.stopReason === "stage-rejection-unchanged")
+    return "The corrected page received the same stage refusal again. Nothing was drafted; Keiko stopped without splitting it further. Report the refusal and review the content and applicable rules before another attempt.";
   if (fatal === "too-large")
     return "The backlog is larger than one draft can hold. Tell the user the items already written are saved and offer to draft the rest as a second batch with fewer requirements.";
   if (result.stopReason === "deadline")

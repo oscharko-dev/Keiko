@@ -197,6 +197,7 @@ async function superviseTurn(ctx, chat, prior, isSettled, { observe, during }) {
     decisions.induced ??= startDuring(during, user?.toolTranscript?.exchanges ?? [], isSettled);
     await delay(500);
   }
+  decisions.labLimitReached = !isSettled() && Date.now() - started >= TURN_LIMIT_MS;
   return decisions;
 }
 
@@ -226,6 +227,7 @@ async function chatTurn(ctx, chat, content, options = {}) {
   let settled = false;
   let failure;
   let decisions;
+  let termination;
   const send = new globalThis.AbortController();
   const pending = api(
     ctx,
@@ -252,13 +254,20 @@ async function chatTurn(ctx, chat, content, options = {}) {
     });
   } finally {
     // A turn that outlives supervision is cancelled, so it cannot write into the next journey.
-    if (!settled) send.abort();
+    if (!settled) {
+      if (decisions?.labLimitReached) termination = "lab-limit";
+      send.abort();
+    }
     await pending;
   }
   const { writes, records } = decisions;
   return {
     durationMs: Date.now() - started,
     failure,
+    termination,
+    // The live lab context exposes no resolved product turn budget. A provider request timeout
+    // is a different bound; neither it nor this supervision limit proves that product budget.
+    limits: { labTurnMs: TURN_LIMIT_MS, productTurnMs: null },
     approvals: { writes, records },
     induced: await decisions.induced,
     ...(await settledTurn(ctx, chat, prior)),

@@ -4,6 +4,7 @@ import type {
 } from "@oscharko-dev/keiko-connectors";
 import {
   JIRA_LINK_MUTATIONS,
+  JIRA_TEMPLATE_RULE_IDS,
   type JiraFieldValidationFailure,
   type JiraMutationAttempt,
   type JiraMutationOperation,
@@ -18,6 +19,52 @@ import { processServerLogSink } from "../process-log-sink.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { jiraToolLogFields } from "./jiraOperationLogFields.js";
 import { recordJiraOperationActivity } from "./jiraOperationActivity.js";
+
+const RULE_COUNT = { type: "integer", dataClass: "count", required: false } as const;
+/** Exact closed rule IDs projected into the existing camel-case Activity Log field grammar. */
+const RULE_COUNT_NAMES = {
+  "summary-too-short": "summaryTooShortCount",
+  "summary-too-long": "summaryTooLongCount",
+  "summary-pattern": "summaryPatternCount",
+  "section-missing": "sectionMissingCount",
+  "section-empty": "sectionEmptyCount",
+  "field-missing": "fieldMissingCount",
+  "field-unavailable": "fieldUnavailableCount",
+  "label-missing": "labelMissingCount",
+  "label-pattern": "labelPatternCount",
+  "label-count": "labelCountCount",
+  "parent-missing": "parentMissingCount",
+  "parent-type-mismatch": "parentTypeMismatchCount",
+  "template-unreadable": "templateUnreadableCount",
+} as const satisfies Readonly<Record<JiraTemplateRuleId, string>>;
+type RuleCountField = (typeof RULE_COUNT_NAMES)[JiraTemplateRuleId];
+
+export const JIRA_TEMPLATE_RULE_COUNT_FIELDS = {
+  summaryTooShortCount: RULE_COUNT,
+  summaryTooLongCount: RULE_COUNT,
+  summaryPatternCount: RULE_COUNT,
+  sectionMissingCount: RULE_COUNT,
+  sectionEmptyCount: RULE_COUNT,
+  fieldMissingCount: RULE_COUNT,
+  fieldUnavailableCount: RULE_COUNT,
+  labelMissingCount: RULE_COUNT,
+  labelPatternCount: RULE_COUNT,
+  labelCountCount: RULE_COUNT,
+  parentMissingCount: RULE_COUNT,
+  parentTypeMismatchCount: RULE_COUNT,
+  templateUnreadableCount: RULE_COUNT,
+} satisfies Readonly<Record<RuleCountField, typeof RULE_COUNT>>;
+
+export function jiraTemplateRuleCountFields(
+  counts: Partial<Readonly<Record<JiraTemplateRuleId, number>>> | undefined,
+): Partial<Record<RuleCountField, number>> {
+  const fields: Partial<Record<RuleCountField, number>> = {};
+  for (const ruleId of JIRA_TEMPLATE_RULE_IDS) {
+    const count = counts?.[ruleId];
+    if (count !== undefined) fields[RULE_COUNT_NAMES[ruleId]] = count;
+  }
+  return fields;
+}
 
 /**
  * Customer-defined issue templates (#4177): where the active templates come from and how a

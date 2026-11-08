@@ -6,6 +6,7 @@ import {
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { processServerLogSink } from "../process-log-sink.js";
+import { JIRA_TEMPLATE_RULE_COUNT_FIELDS, jiraTemplateRuleCountFields } from "./jiraTemplateLog.js";
 
 /**
  * Refusals of the final `jira.draft` call beside the staging ones. `requirements-untraced` is the
@@ -55,6 +56,7 @@ const JIRA_DRAFT_OPERATION = defineActivityLogOperation({
     byteCount: COUNT_FIELD,
     unresolvedRefCount: COUNT_FIELD,
     violationCount: COUNT_FIELD,
+    ...JIRA_TEMPLATE_RULE_COUNT_FIELDS,
     settledCount: { type: "integer", dataClass: "count", required: false },
     pendingCount: { type: "integer", dataClass: "count", required: false },
     // A staging call or a create run: Jira reads sent, and reads answered from the invocation's own
@@ -128,6 +130,7 @@ export function recordJiraDraftActivity(
         byteCount: input.byteCount,
         unresolvedRefCount: input.unresolvedRefCount,
         violationCount: input.violationCount,
+        ...jiraTemplateRuleCountFields(input.violationRuleCounts),
         ...(input.settledCount === undefined ? {} : { settledCount: input.settledCount }),
         ...(input.pendingCount === undefined ? {} : { pendingCount: input.pendingCount }),
         ...readFields(input),

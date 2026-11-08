@@ -2,6 +2,8 @@ import {
   JIRA_DRAFT_DIGEST_PATTERN,
   JIRA_DRAFT_ID_PATTERN,
   JIRA_DRAFT_PAGE_ITEMS_MAX,
+  countJiraTemplateViolations,
+  type JiraTemplateRuleId,
   type JiraTemplateViolation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { withJiraDraftReadMemo, type JiraDraftReadCounts } from "./jira-draft-read-memo.js";
@@ -58,6 +60,7 @@ export interface JiraDraftActivity {
   readonly byteCount: number;
   readonly unresolvedRefCount: number;
   readonly violationCount: number;
+  readonly violationRuleCounts?: Partial<Readonly<Record<JiraTemplateRuleId, number>>>;
   readonly durationMs: number;
   /** A run only: items created, reconciled or deselected so far, and items not yet started. */
   readonly settledCount?: number;
@@ -277,7 +280,15 @@ function readActivity(
 ): Pick<JiraDraftActivity, "readCount" | "readReusedCount"> {
   return { readCount: reads.made, readReusedCount: reads.reused };
 }
-function templateRefusalResult(refusal: JiraDraftTemplateRefusal): ManagedMcpToolResult {
+function templateRefusalResult<Context extends ManagedMcpInvocationContext>(
+  refusal: JiraDraftTemplateRefusal,
+  run: StageRun<Context>,
+  pageItemCount: number,
+): ManagedMcpToolResult {
+  refuseStage(run, "template-violation", pageItemCount, {
+    violationCount: refusal.violations.length,
+    violationRuleCounts: countJiraTemplateViolations(refusal.violations),
+  });
   const guidance = jiraTemplateViolationGuidance(refusal.violations);
   return {
     isError: true,
@@ -412,12 +423,7 @@ export async function executeJiraDraftStageTool<Context extends ManagedMcpInvoca
   // page after page in one invocation: identical reads are answered from the invocation's memo.
   const reads = withJiraDraftReadMemo(connection, context, run.reads, now);
   const template = await firstJiraDraftTemplateRefusal(items, context, reads);
-  if (template !== undefined) {
-    refuseStage(run, "template-violation", args.items.length, {
-      violationCount: template.violations.length,
-    });
-    return templateRefusalResult(template);
-  }
+  if (template !== undefined) return templateRefusalResult(template, run, args.items.length);
   const fields = await pageFieldRefusals(items, context, reads);
   const firstField = fields.refusals[0];
   if (firstField !== undefined) {

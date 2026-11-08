@@ -127,7 +127,7 @@ function ItemRelations({ item }: { readonly item: JiraDraftTreeItem }): ReactNod
   const parent = item.parentRef ?? item.parentIssueKey;
   const notes = [
     ...(item.requirementIds.length === 0
-      ? []
+      ? [t("chat.jira.draft.requirementsMissing")]
       : [t("chat.jira.draft.requirements", { ids: item.requirementIds.join(", ") })]),
     ...(item.parentFieldId === undefined || parent === undefined
       ? []

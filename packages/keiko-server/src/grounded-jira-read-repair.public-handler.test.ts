@@ -26,6 +26,12 @@ import {
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { jiraChatActorDigest } from "./atlassian/jiraPodAccess.js";
 import { mockRequest, mockResponse } from "./_support.js";
 import { handleSendDesktopChat } from "./chat-handlers.js";
@@ -44,7 +50,9 @@ const cleanup: (() => Promise<void>)[] = [];
 
 afterEach(async () => {
   await new Promise<void>((resolve) => setImmediate(resolve));
-  for (const close of cleanup.splice(0)) await close();
+  await cleanup
+    .splice(0)
+    .reduce((pending, close) => pending.then(() => close()), Promise.resolve());
   resetServerLogger();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -555,6 +563,56 @@ it("retains this turn's validated Jira read evidence when repairing a Knowledge 
   expect(answerContent(result.body)).toContain(CURRENT);
   expect(result.body).toMatchObject({ citations: [expect.anything()] });
 });
+
+it.each([
+  { variant: "markers", disposition: "applied", after: 3 },
+  { variant: "shortened", disposition: "rejected-content-changed", after: 1 },
+  { variant: "truncated", disposition: "rejected-truncated", after: 3 },
+  { variant: "malformed", disposition: "failed", after: 1 },
+])(
+  "records before and after repair line counts without answer text: $disposition",
+  async ({ variant, disposition, after }) => {
+    const f = await fixture();
+    const original = `Feature returns true.\n\n- Jira project GOLD is named ${CURRENT}.\n- The project name comes from this turn's Jira result.`;
+    f.script = scriptedModel("jira.projects", {}, (_request, round) => {
+      if (round === 1) return response(original);
+      if (variant === "malformed") return response("{");
+      const candidate =
+        variant === "shortened"
+          ? "Feature returns true [1]."
+          : original.replace("true.", "true [1].");
+      const result = response(candidate);
+      return variant === "truncated" ? { ...result, finishReason: "length" } : result;
+    });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const result = await handleGroundedAsk(context(f, "repair-line-counts"), f.deps);
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const event = sink.events.find(
+      (entry) =>
+        entry.op === "search.citations.reconciled" &&
+        entry.extra?.citationRepairDisposition === disposition,
+    );
+    if (event === undefined) throw new Error("Missing citation repair activity");
+    const line = formatActivityLogProofLine(event);
+    expect(expectActivityLogProof("search.citations.reconciled.line", line)).toMatchObject({
+      citationRepairDisposition: disposition,
+      repairLineCountBefore: 3,
+      repairLineCountAfter: after,
+    });
+    expect(line).not.toContain(CURRENT);
+    expect(line).not.toContain("Feature");
+    if (variant === "truncated")
+      expect(
+        sink.events.some(
+          (entry) =>
+            entry.op === "search.citations.reconciled" &&
+            entry.extra?.citationRepairDisposition === "applied",
+        ),
+      ).toBe(false);
+    expect(answerContent(result.body)).toContain(CURRENT);
+  },
+);
 
 it("does not promote prior, rejected or raw Jira payloads to current repair evidence", async () => {
   const f = await fixture();

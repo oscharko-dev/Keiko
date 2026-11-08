@@ -2088,6 +2088,7 @@ export {
   JIRA_TEMPLATE_PARSE_ERROR_CODES,
   JIRA_TEMPLATE_RULE_IDS,
   JIRA_TEMPLATE_VIOLATIONS_MAX,
+  countJiraTemplateViolations,
   compileJiraTemplatePattern,
   describeJiraTemplateParseErrors,
   isJiraIssueTemplateDocument,

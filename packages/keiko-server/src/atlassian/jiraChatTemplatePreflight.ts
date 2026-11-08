@@ -39,10 +39,13 @@ import {
   JIRA_PRIVATE_ACCOUNT_MUTATIONS,
   JIRA_ISSUE_LIFECYCLE_MUTATIONS,
   JIRA_PROJECT_LIFECYCLE_MUTATIONS,
+  JIRA_MANAGED_ACTION_TYPES,
+  countJiraTemplateViolations,
   sanitizeJiraMutationFailureDetail,
   type JiraFieldValidationFailure,
   type JiraMutationOperation,
   type JiraTemplateViolation,
+  type JiraTemplateRuleId,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
@@ -57,6 +60,7 @@ import { jiraFailureDetailData, jiraMutationToolResult } from "./jiraMutationRes
 import { recordJiraDraftActivity } from "./jiraDraftActivity.js";
 import { draftRefusalData, readableChatDraft } from "./jiraChatDraftArguments.js";
 import { resolveCurrentJiraChatAuthority } from "./jiraChatAuthority.js";
+import { decideAtlassianEnvelopeAction } from "./actionPolicy.js";
 import { requireDispatch } from "../tool-catalog/catalogToolErrors.js";
 import { jiraChatEmailTemplateComposition } from "./jiraEmailTemplateComposition.js";
 import { jiraChatAvatarComposition } from "./jiraAvatarComposition.js";
@@ -267,6 +271,7 @@ function itemsOf(args: CatalogJsonObject): readonly Readonly<Record<string, unkn
 interface DraftItemsRefusal {
   readonly reason: "template-violation" | "invalid-fields";
   readonly violationCount: number;
+  readonly violationRuleCounts?: Partial<Readonly<Record<JiraTemplateRuleId, number>>>;
   readonly data: CatalogJsonObject;
 }
 /** The structured refusal the model corrects: the item and the exact rules it violates. */
@@ -359,6 +364,7 @@ function templateDraftRefusal(
   return {
     reason: "template-violation",
     violationCount: refusal.violations.length,
+    violationRuleCounts: countJiraTemplateViolations(refusal.violations),
     data: draftTemplateRefusalData(refusal),
   };
 }
@@ -404,16 +410,46 @@ async function draftPreflight(
   const refusal = await draftValidationRefusal(ports, action, context, draft);
   // The advice records its own refusal, so this draft is not also logged as submitted.
   const advice = untracedAdviceOf(ports, draft, refusal !== undefined, context);
-  if (advice !== undefined) return advice;
+  if (advice !== undefined) return untracedReviewRefusal(ports, action, context, advice);
   recordDraftPreflight(ports, context, {
     reason: draft.ok ? refusal?.reason : draft.reason,
     sizes: draftSizes(jiraDraftStore, context.chatId, args, draft),
     violationCount: refusal?.violationCount ?? 0,
+    violationRuleCounts: refusal?.violationRuleCounts,
     startedAt,
   });
   if (refusal !== undefined) return refusal.data;
   return draft.ok ? undefined : draftRefusalData(draft);
 }
+
+/** Only an existing required review can confirm the missing trace; this never grants the write. */
+function untracedReviewRefusal(
+  ports: JiraChatTemplatePreflightPorts,
+  action: JiraChatCatalogAction,
+  context: JiraChatCatalogContext,
+  advice: CatalogJsonObject,
+): CatalogJsonObject | undefined {
+  if (
+    advice.requirementRefusal !== "untraced" ||
+    context.signal.aborted ||
+    !ports.readAllowed(action)
+  )
+    return advice;
+  const current = resolveCurrentJiraChatAuthority(
+    ports.deps,
+    context.chatId,
+    context.authorityReference,
+    new Date().toISOString(),
+    context.correlationId,
+  );
+  if (!current.ok) return advice;
+  const policy = decideAtlassianEnvelopeAction(
+    JIRA_MANAGED_ACTION_TYPES["jira.draft"],
+    current.envelope,
+  );
+  return policy.kind === "review-required" ? undefined : advice;
+}
+
 function untracedAdviceOf(
   ports: JiraChatTemplatePreflightPorts,
   draft: ReturnType<typeof readableChatDraft>,
@@ -435,6 +471,8 @@ function recordDraftPreflight(
     readonly reason: Parameters<typeof recordJiraDraftActivity>[2]["refusal"];
     readonly sizes: ReturnType<typeof draftSizes>;
     readonly violationCount: number;
+    readonly violationRuleCounts?:
+      Partial<Readonly<Record<JiraTemplateRuleId, number>>> | undefined;
     readonly startedAt: number;
   },
 ): void {
@@ -447,6 +485,9 @@ function recordDraftPreflight(
     ...sizes,
     unresolvedRefCount: 0,
     violationCount,
+    ...(outcome.violationRuleCounts === undefined
+      ? {}
+      : { violationRuleCounts: outcome.violationRuleCounts }),
     durationMs: Date.now() - startedAt,
   });
 }

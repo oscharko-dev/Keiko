@@ -54,6 +54,10 @@ const CREATE_FIELDS = [
   field("project", "project", true),
   field("issuetype", "issuetype", true),
   { ...field("summary", "string", true), name: "Summary" },
+  {
+    ...field("labels", "array"),
+    schema: { type: "array", items: "string", system: "labels" },
+  },
   field("parent", "issuelink"),
   {
     ...field("description", "string", false),
@@ -197,6 +201,7 @@ interface Harness {
     },
   ) => ReturnType<ReturnType<typeof createJiraDraftBatchExecutor>>;
   readonly requests: GatewayCallRequest[];
+  readonly answers: string[];
   readonly progress: ChatToolBatchProgress[];
   readonly confirmed: NormalizedResponse[];
   readonly store: JiraDraftStore;
@@ -213,6 +218,7 @@ async function harness(
   fixtures.push(f);
   const logs = createBufferedServerLogSink();
   const requests: GatewayCallRequest[] = [];
+  const answers: string[] = [];
   const progress: ChatToolBatchProgress[] = [];
   const confirmed: NormalizedResponse[] = [];
   const store = createJiraDraftStore({
@@ -223,6 +229,7 @@ async function harness(
     call: (request) => {
       requests.push(request);
       const answer = script(request, requests.length);
+      if (typeof answer === "string") answers.push(answer);
       return answer instanceof Error ? Promise.reject(answer) : Promise.resolve(reply(answer));
     },
   };
@@ -235,6 +242,7 @@ async function harness(
   const executor = createJiraDraftBatchExecutor(deps, draftTool(deps, store));
   return {
     requests,
+    answers,
     progress,
     confirmed,
     store,
@@ -1296,5 +1304,104 @@ describe("rulesText", () => {
     expect(rulesText(rules([]))).toBe("{}");
     expect(rulesText(rules([{ a: 1 }]))).toBe('[{"a":1}]');
     expect(rulesText(rules([{ name: "x".repeat(20_000) }]))).toBe("{}");
+  });
+});
+
+function s17Diagnostics(h: Harness, data: CatalogJsonObject): string {
+  return JSON.stringify({
+    data,
+    requests: h.requests.map((request, index) => {
+      const last = request.messages.at(-1);
+      const text = last === undefined ? "" : contentText(last.content);
+      return {
+        keys: keysOf(request),
+        correction: text.includes("Your previous answer") ? text.slice(0, 1500) : undefined,
+        answer: h.answers[index]?.slice(0, 1500),
+      };
+    }),
+    batch: proofLines(h),
+  });
+}
+
+function s17TemplateAnswer(request: GatewayCallRequest): string {
+  const correction = request.messages.some((message) => {
+    const text = contentText(message.content);
+    return text.includes("Your previous answer") && text.includes("summary-too-short");
+  });
+  if (!correction) return page(keysOf(request));
+  return JSON.stringify({
+    items: keysOf(request).map((key) => ({
+      key,
+      summary: `S17 corrected summary for ${key} with sufficient detail`,
+      sections: { "Acceptance criteria": "The supplied requirement is implemented." },
+    })),
+  });
+}
+
+describe("S17 real batch stage corrections", () => {
+  it("keeps parse and real template-stage attempts distinct and logs only closed rule counts", async () => {
+    const h = await harness(
+      (request, call) => (call === 1 ? "not json" : s17TemplateAnswer(request)),
+      [{ capsuleId: "cap-a", text: specification(1).text }],
+    );
+    const strict: JiraIssueTemplateSet = {
+      templates: [template("summaryMinLength: 30")],
+      unreadable: 0,
+    };
+    const result = await h.run(ARGS, { templates: strict });
+    expect(result.data, s17Diagnostics(h, result.data)).toMatchObject({
+      outcome: "succeeded",
+      draftedCount: 1,
+      failedCount: 0,
+    });
+    expect(h.requests).toHaveLength(3);
+    const correction = h.requests[2];
+    if (correction === undefined) throw new Error("Expected the real template correction call");
+    expect(promptOf(correction)).toContain("summary-too-short");
+    expect(stagedItems(h)).toHaveLength(1);
+    const lines = proofLines(h);
+    const refused = lines.find((line) => line.phase === "page" && line.outcome === "refused");
+    expect(refused).toMatchObject({
+      parseAttemptCount: 2,
+      stageAttemptCount: 1,
+      summaryTooShortCount: 1,
+    });
+    expect(refused?.guidanceDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(lines.find((line) => line.phase === "page" && line.outcome === "staged")).toMatchObject({
+      parseAttemptCount: 3,
+      stageAttemptCount: 2,
+    });
+    const logged = h.logs.events.map((event) => formatActivityLogProofLine(event)).join("\n");
+    expect(logged).not.toContain("S17 corrected summary");
+    expect(logged).not.toContain("Your previous answer");
+    expect(logged).not.toContain("The supplied requirement is implemented.");
+  });
+
+  it("returns the unchanged-stage-rejection reason without a smaller-page retry", async () => {
+    const h = await harness(
+      (request) => page(keysOf(request)),
+      [{ capsuleId: "cap-a", text: specification(3).text }],
+    );
+    const strict: JiraIssueTemplateSet = {
+      templates: [template("summaryMinLength: 30")],
+      unreadable: 0,
+    };
+    const result = await h.run(ARGS, { templates: strict });
+    expect(result.isError).toBe(true);
+    expect(result.data, s17Diagnostics(h, result.data)).toMatchObject({
+      outcome: "failed",
+      reason: "stage-rejection-unchanged",
+      draftedCount: 0,
+      failedCount: 3,
+    });
+    expect(h.requests).toHaveLength(2);
+    expect(stagedItems(h)).toEqual([]);
+    expect(proofLines(h).some((line) => line.outcome === "split")).toBe(false);
+    expect(proofLines(h).at(-1)).toMatchObject({
+      phase: "completed",
+      stopReason: "stage-rejection-unchanged",
+      outcome: "failed",
+      errorKind: "validation-failed",
+    });
   });
 });

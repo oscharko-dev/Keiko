@@ -145,6 +145,7 @@ import { createEntailmentStage } from "./grounded-entailment-stage.js";
 import {
   logAnswerAssessment,
   logCitationReconciliation,
+  citationRepairLineCounts,
   logCitationSupport,
   type CitationSupportCaveat,
 } from "./grounded-citation-log.js";
@@ -891,6 +892,10 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
   }
 
   private validatedRepair(original: string, candidate: string): string {
+    if (!this.lastComplete) {
+      this.recordRepair(original, candidate, "rejected-truncated");
+      return original;
+    }
     const markers = new Set(this.sentReferences.map((_reference, index) => index + 1));
     try {
       const repaired = citationRepairContent(
@@ -899,30 +904,37 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
         buildPackCitationIndex([]),
         markers,
       );
-      return repaired ?? this.retainRepairOriginal(original, "rejected-content-changed");
+      this.recordRepair(
+        original,
+        repaired ?? candidate,
+        repaired === undefined ? "rejected-content-changed" : "applied",
+      );
+      return repaired ?? original;
     } catch (error) {
       if (!(error instanceof SyntaxError)) throw error;
       // Malformed annotation JSON is an unavailable optional repair, never a replacement answer.
-      return this.retainRepairOriginal(original, "failed");
+      this.recordRepair(original, candidate, "failed");
+      return original;
     }
   }
 
-  private retainRepairOriginal(
+  private recordRepair(
     original: string,
-    disposition: "rejected-content-changed" | "failed",
-  ): string {
+    proposed: string,
+    disposition: "applied" | "rejected-content-changed" | "rejected-truncated" | "failed",
+  ): void {
     const markers = new Set(this.sentReferences.map((_reference, index) => index + 1));
+    const answer = disposition === "applied" ? proposed : original;
     logCitationReconciliation(
       {
-        answer: original,
+        answer,
         referenceCount: this.sentReferences.length,
-        attachedIndices: [...reconcileNumericCitations(original, markers).citedMarkers],
+        attachedIndices: [...reconcileNumericCitations(answer, markers).citedMarkers],
         refusal: false,
       },
       this.context.correlationId,
-      { citationRepairDisposition: disposition },
+      { citationRepairDisposition: disposition, ...citationRepairLineCounts(original, proposed) },
     );
-    return original;
   }
 
   private async answerResponse(input: AnswerGeneratorInput): Promise<NormalizedResponse> {
