@@ -100,6 +100,9 @@ interface TaskLoader {
   readonly load: (id: string, activate: boolean) => Promise<void>;
 }
 
+/** After a pick, settled runs of other tasks are held off; `reported` logged that once. */
+type PickHold = "none" | "held" | "reported";
+
 export function useCodingTaskSession(options: SessionInput): CodingTaskSession {
   const [forkTarget, setForkTarget] = useState<string | undefined>(undefined);
   const input = {
@@ -108,12 +111,13 @@ export function useCodingTaskSession(options: SessionInput): CodingTaskSession {
     forkTarget,
   };
   const ignoredRun = useRef<string | undefined>(undefined);
+  const pickHold = useRef<PickHold>("none");
   const latest = useRef(input);
   latest.current = input;
   const controller = useTaskLoader(latest);
   const { detail, pending, setPending, error, setError, load } = controller;
-  const newTask = useNewTask(latest, ignoredRun, controller);
-  useSessionSelection(input, load, newTask, ignoredRun);
+  const newTask = useNewTask(latest, ignoredRun, pickHold, controller);
+  useSessionSelection(input, load, newTask, ignoredRun, pickHold);
   const finish = async (): Promise<void> => {
     if (input.active || detail === null) return;
     setPending(true);
@@ -490,6 +494,7 @@ function useHistoryScope(
 function useNewTask(
   latest: { current: SessionInput },
   ignoredRun: { current: string | undefined },
+  pickHold: { current: PickHold },
   controller: TaskLoader,
 ): () => Promise<void> {
   const { sequence, setDetail, setError, setPending } = controller;
@@ -504,6 +509,7 @@ function useNewTask(
       });
     }
     ignoredRun.current = current.snapshot?.runId;
+    pickHold.current = "held";
     sequence.current += 1;
     setDetail(null);
     setError(false);
@@ -518,7 +524,7 @@ function useNewTask(
     } finally {
       setPending(false);
     }
-  }, [latest, ignoredRun, sequence, setDetail, setError, setPending]);
+  }, [latest, ignoredRun, pickHold, sequence, setDetail, setError, setPending]);
   return newTask;
 }
 
@@ -541,6 +547,7 @@ function useSessionSelection(
   load: (id: string, activate: boolean) => Promise<void>,
   newTask: () => Promise<void>,
   ignoredRun: { current: string | undefined },
+  pickHold: { current: PickHold },
 ): void {
   const { selection, snapshot, active } = input;
   const activeWorkspaceId = input.workspace?.activeInstance?.workspaceId;
@@ -556,16 +563,18 @@ function useSessionSelection(
     }
     if (lastSelection.current === selection || active) return;
     lastSelection.current = selection;
+    pickHold.current = "held";
     selectionHandled.current?.();
     if (selection.startsWith("new:")) void newTask();
     else {
       ignoredRun.current = snapshot?.runId;
       void load(selection, true);
     }
-  }, [selection, active, snapshot?.runId, load, newTask, ignoredRun]);
+  }, [selection, active, snapshot?.runId, load, newTask, ignoredRun, pickHold]);
   useEffect(() => {
     const id = snapshot?.conversationId;
     if (id === undefined || snapshot?.runId === ignoredRun.current) return;
+    if (!followsAfterPick(pickHold, active)) return;
     void load(id, false);
     window.dispatchEvent(new Event(CODING_HISTORY_CHANGED));
   }, [
@@ -573,7 +582,28 @@ function useSessionSelection(
     snapshot?.runId,
     snapshot?.state,
     activeWorkspaceId,
+    active,
     load,
     ignoredRun,
+    pickHold,
   ]);
+}
+
+/**
+ * Whether the window may follow the runtime's run after the operator picked a task (#4271). The
+ * runtime status names the process's latest run, not this window's task, and a window opened
+ * from Coding History reads it only after the pick: a settled run of another task must not
+ * replace the picked one. A run that becomes active afterwards owns the window again.
+ */
+function followsAfterPick(pickHold: { current: PickHold }, active: boolean): boolean {
+  if (pickHold.current === "none") return true;
+  if (active) {
+    pickHold.current = "none";
+    return true;
+  }
+  if (pickHold.current === "held") {
+    pickHold.current = "reported";
+    reportCodingWorkbenchInteraction({ interaction: "history-run-held" }, newClientCorrelationId());
+  }
+  return false;
 }

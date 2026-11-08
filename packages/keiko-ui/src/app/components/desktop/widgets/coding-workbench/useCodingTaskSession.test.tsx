@@ -382,6 +382,79 @@ describe("coding task selection", () => {
     await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(reads));
   });
 
+  // #4271: the runtime status is the process's latest run, whatever task the window shows. A new
+  // window opened from Coding History reads it only after the pick, and that settled run of
+  // another task replaced the opened one ("opening loads the wrong session").
+  it("keeps a task opened from Coding History when a settled run of another task arrives", async () => {
+    const two = { ...detail, task: { ...detail.task, id: "chat-two", latestRunId: "run-two" } };
+    read.mockImplementation((id: string) =>
+      Promise.resolve(id === "chat-two" ? two : { ...detail, task: { ...detail.task, id } }),
+    );
+    const workspace = activeWorkspace();
+    const { result, rerender } = renderHook(
+      ({ run }: { readonly run: CodingWorkbenchRuntimeSnapshot | null }) =>
+        useCodingTaskSession({
+          snapshot: run,
+          active: run?.state === "running",
+          root: "/repo",
+          workspace,
+          selection: "chat-two",
+        }),
+      { initialProps: { run: null as CodingWorkbenchRuntimeSnapshot | null } },
+    );
+    await waitFor(() => expect(result.current.conversationId).toBe("chat-two"));
+    rerender({ run: { ...snapshot("chat-latest"), runId: "run-latest" } });
+    await act(async () => Promise.resolve());
+    expect(read).not.toHaveBeenCalledWith("chat-latest", expect.any(String));
+    expect(result.current.conversationId).toBe("chat-two");
+    // The hold is recorded once per pick, body-free: another settled run adds no second line.
+    rerender({ run: { ...snapshot("chat-later"), runId: "run-later" } });
+    await act(async () => Promise.resolve());
+    expect(read).not.toHaveBeenCalledWith("chat-later", expect.any(String));
+    expect(reportClientDiagnostic).toHaveBeenCalledExactlyOnceWith(
+      "[keiko] coding workbench interaction: history-run-held",
+      {
+        correlationId: expect.any(String),
+        codingWorkbenchInteraction: { interaction: "history-run-held" },
+      },
+    );
+    expect(JSON.stringify(vi.mocked(reportClientDiagnostic).mock.calls)).not.toContain("chat-");
+    // A run that becomes active afterwards owns the window again.
+    rerender({ run: { ...snapshot("chat-next"), runId: "run-next", state: "running" } });
+    await waitFor(() => expect(read).toHaveBeenCalledWith("chat-next", expect.any(String)));
+  });
+
+  it("keeps New task empty when a settled run of another task arrives afterwards", async () => {
+    const { result, rerender } = renderHook(
+      ({ run }: { readonly run: CodingWorkbenchRuntimeSnapshot | null }) =>
+        useCodingTaskSession({
+          snapshot: run,
+          active: false,
+          root: "/repo",
+          workspace: null,
+          selection: "new:1",
+        }),
+      { initialProps: { run: null as CodingWorkbenchRuntimeSnapshot | null } },
+    );
+    await waitFor(() => expect(result.current.pending).toBe(false));
+    rerender({ run: { ...snapshot("chat-latest"), runId: "run-latest" } });
+    await act(async () => Promise.resolve());
+    expect(read).not.toHaveBeenCalledWith("chat-latest", expect.any(String));
+    expect(result.current.conversationId).toBeUndefined();
+    const held = vi
+      .mocked(reportClientDiagnostic)
+      .mock.calls.filter(([message]) => message.endsWith("history-run-held"));
+    expect(held).toEqual([
+      [
+        "[keiko] coding workbench interaction: history-run-held",
+        {
+          correlationId: expect.any(String),
+          codingWorkbenchInteraction: { interaction: "history-run-held" },
+        },
+      ],
+    ]);
+  });
+
   it("drops the previous conversation when reading another selected task fails", async () => {
     const workspace = activeWorkspace();
     read.mockImplementation((id: string) =>

@@ -2197,6 +2197,10 @@ export const CLIENT_CODING_WORKBENCH_INTERACTIONS = [
   // A history task of another workspace than the active one was returned and not activated: the
   // operator works in another workspace, an ordinary transition and not a failure (#4118).
   "history-workspace-switched",
+  // A window showing a task picked from Coding History, or a new task, did not follow a settled
+  // run of another task: the runtime status names the process's latest run, not the window's task
+  // (#4271). Once per pick; a run that becomes active afterwards owns the window again.
+  "history-run-held",
   // The server refused to register the run's editor bridge: the root boundary refused the run's
   // root, or another tab holds the run's lease. Closed reason only (#4117).
   "bridge-registration-refused",
@@ -2393,6 +2397,7 @@ export type ClientDiagnosticCodingWorkbenchInteraction =
   | { readonly interaction: "history-repository-switched" }
   | { readonly interaction: "event-stream-reconnecting" }
   | { readonly interaction: "history-workspace-switched" }
+  | { readonly interaction: "history-run-held" }
   | {
       readonly interaction: "bridge-registration-refused";
       readonly refusal: ClientCodingWorkbenchBridgeRefusal;
@@ -2459,6 +2464,7 @@ const CODING_WORKBENCH_INTERACTION_FIELDS: Readonly<
   "history-repository-switched": {},
   "event-stream-reconnecting": {},
   "history-workspace-switched": {},
+  "history-run-held": {},
   "bridge-registration-refused": {
     refusal: (value) => isSetMember(value, CODING_WORKBENCH_BRIDGE_REFUSAL_SET),
   },

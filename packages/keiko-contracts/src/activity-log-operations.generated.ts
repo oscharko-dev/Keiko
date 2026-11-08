@@ -5008,6 +5008,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "history-repository-switched",
           "event-stream-reconnecting",
           "history-workspace-switched",
+          "history-run-held",
           "bridge-registration-refused",
           "diff-windowed",
           "notice-held",
