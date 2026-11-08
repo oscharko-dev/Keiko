@@ -103,7 +103,7 @@ describe("exact Jira operation facts through existing log owners", () => {
     },
   );
 
-  it.each([...JIRA_MANAGED_READ_TOOLS, ...JIRA_MUTATION_OPERATIONS.filter((tool) => tool !== "jira.draft" && tool !== "jira.attach")])(
+  it.each([...JIRA_MANAGED_READ_TOOLS.filter((tool) => tool !== "jira.draft-batch"), ...JIRA_MUTATION_OPERATIONS.filter((tool) => tool !== "jira.draft" && tool !== "jira.attach")])(
     "binds Coding %s to the same family without treating its envelope completion as a Jira acknowledgement", (tool) => {
       const sink = createBufferedServerLogSink();
       recordCodingJiraPod(sink, "coding-proof", { action: "call", outcome: "failed", tool, reason: "scope-missing" });

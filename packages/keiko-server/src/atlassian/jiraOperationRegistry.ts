@@ -19,7 +19,7 @@ import {
 } from "@oscharko-dev/keiko-tool-catalog";
 
 export type JiraOperationTool = JiraManagedReadToolName | JiraMutationOperation;
-type CompositeTool = "jira.report" | "jira.draft-stage" | "jira.draft";
+type CompositeTool = "jira.report" | "jira.draft-stage" | "jira.draft-batch" | "jira.draft";
 type NativeTool = Exclude<JiraOperationTool, CompositeTool>;
 type JiraOperationEffect = "remote-read" | "remote-write" | "local-report" | "local-draft";
 type JiraPermissionPolicy = (typeof NATIVE)[NativeTool][3] | "composed-current-metadata";
@@ -1056,6 +1056,8 @@ const COMPOSITES: Readonly<
     local: "local-report",
   },
   "jira.draft-stage": { members: ["jira.create-fields"], local: "local-draft" },
+  // Pages the Chat's Knowledge requirements through the same local staging as jira.draft-stage.
+  "jira.draft-batch": { members: ["jira.create-fields"], local: "local-draft" },
   "jira.draft": { members: ["jira.create", "jira.edit"], local: "local-draft" },
 };
 

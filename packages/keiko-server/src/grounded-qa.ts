@@ -23,6 +23,7 @@ import { chatAuthenticationInterruption } from "./chat-authentication-interrupti
 import {
   assertCitationRepairTurnActive,
   callGroundedSynthesisModel,
+  sentEvidenceSources,
   type GroundedSynthesisPurpose,
   requiresObservedToolResult,
 } from "./grounded-plural-synthesis.js";
@@ -1942,7 +1943,7 @@ async function dispatchGroundedSynthesis(
       tracker,
       ctx.deps.chatToolTurn,
       requiresObservedToolResult(ctx.deps, sent.sentReferenceCount),
-      { purpose: ctx.purpose },
+      { purpose: ctx.purpose, evidenceSources: sentEvidenceSources(sent.sentReferenceCount) },
     );
     ctx.synthesis.recordCompleted();
     tracker.settleFallback(promptTokens, response.usage);
@@ -2073,6 +2074,7 @@ function runDefaultGroundedExploration(
     ...groundedExplorationPolicies(deps),
     reliableCitationBehaviour: citationBehaviourFor(deps, modelId),
     observeCitationBehaviour: citationBehaviourObserverFor(deps, modelId, runnerCtx.correlationId),
+    toolTurn: deps.chatToolTurn,
     answerer: createGatewayAnswerer(
       deps,
       model,

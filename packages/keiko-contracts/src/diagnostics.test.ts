@@ -26,6 +26,7 @@ import {
   CLIENT_CODING_RUNTIME_CALLS,
   CLIENT_CODING_RUN_RESTORE_SIZE_MAX,
   CLIENT_CODING_RUN_RESTORE_COUNT_MAX,
+  CLIENT_CITATION_HIGHLIGHT_BOX_MAX,
   CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX,
   CLIENT_SELECT_DISMISSAL_REASONS,
   CLIENT_DIAGNOSTIC_KINDS,
@@ -2177,6 +2178,45 @@ describe("Files scope ownership decision evidence", () => {
           filesScopeDecision: decision,
         }),
       ).toBe(false);
+  });
+});
+
+describe("citation highlight diagnostic contract", () => {
+  const request = (citationHighlight: unknown, correlationId = "highlight-123"): boolean =>
+    isClientDiagnosticIngestRequest({ ...validRequest(), correlationId, citationHighlight });
+
+  it("accepts a framed passage with boxes and the other outcomes with none", () => {
+    expect(request({ outcome: "framed", boxCount: 1 })).toBe(true);
+    expect(request({ outcome: "framed", boxCount: CLIENT_CITATION_HIGHLIGHT_BOX_MAX })).toBe(true);
+    for (const outcome of ["not-found", "no-passage", "no-text"]) {
+      expect(request({ outcome, boxCount: 0 })).toBe(true);
+    }
+  });
+
+  it.each([
+    { outcome: "framed", boxCount: 0 },
+    { outcome: "not-found", boxCount: 1 },
+    { outcome: "framed", boxCount: CLIENT_CITATION_HIGHLIGHT_BOX_MAX + 1 },
+    { outcome: "framed", boxCount: 1.5 },
+    { outcome: "located", boxCount: 1 },
+    { outcome: "framed", boxCount: 1, passage: "Altlasten" },
+    { outcome: "framed" },
+    "framed",
+  ])("rejects the incoherent or extended report %j", (citationHighlight) => {
+    expect(request(citationHighlight)).toBe(false);
+  });
+
+  it("requires the report's correlation id", () => {
+    const { correlationId: _omitted, ...withoutCorrelation } = {
+      ...validRequest(),
+      correlationId: "highlight-123",
+    };
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...withoutCorrelation,
+        citationHighlight: { outcome: "framed", boxCount: 1 },
+      }),
+    ).toBe(false);
   });
 });
 

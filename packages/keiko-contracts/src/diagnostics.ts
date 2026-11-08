@@ -449,6 +449,8 @@ export const CLIENT_COMPOSER_ACTIVITIES = [
   "text-copied",
   "coding-task-submission",
   "coding-task-reset",
+  "markdown-view-changed",
+  "markdown-rich-unavailable",
 ] as const;
 export type ClientComposerActivity = (typeof CLIENT_COMPOSER_ACTIVITIES)[number];
 export const CLIENT_COMPOSER_CODE_STAGES = [
@@ -676,6 +678,9 @@ export interface ClientDiagnosticIngestRequest {
   // under the correlation its synthesis request carries, never the spoken text.
   readonly answerSpeech?: ClientDiagnosticAnswerSpeech | undefined;
   readonly citationActivation?: ClientDiagnosticCitationActivation | undefined;
+  // Whether the PDF viewer framed a cited passage on its page: a closed outcome and a box count,
+  // never the passage.
+  readonly citationHighlight?: ClientDiagnosticCitationHighlight | undefined;
   readonly scopeNotice?: ClientDiagnosticScopeNotice | undefined;
   readonly evidenceInspection?: ClientDiagnosticEvidenceInspection | undefined;
   readonly supportReportDelivery?: ClientSupportReportDelivery | undefined;
@@ -897,6 +902,7 @@ const CLOSED_CLIENT_REPORT_KEYS = [
   "answerCopy",
   "answerSpeech",
   "citationActivation",
+  "citationHighlight",
   "scopeNotice",
   "evidenceInspection",
   "supportReportDelivery",
@@ -3063,6 +3069,44 @@ function isClientDiagnosticCitationActivation(
   );
 }
 
+/** Whether the PDF viewer framed the cited passage on its page; never the passage itself. */
+export interface ClientDiagnosticCitationHighlight {
+  readonly outcome: "framed" | "not-found" | "no-passage" | "no-text";
+  readonly boxCount: number;
+}
+const CITATION_HIGHLIGHT_OUTCOMES: ReadonlySet<unknown> = new Set([
+  "framed",
+  "not-found",
+  "no-passage",
+  "no-text",
+]);
+const CITATION_HIGHLIGHT_KEYS = new Set(["outcome", "boxCount"]);
+export const CLIENT_CITATION_HIGHLIGHT_BOX_MAX = 64;
+
+function isClientDiagnosticCitationHighlight(
+  value: unknown,
+): value is ClientDiagnosticCitationHighlight {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value);
+  if (
+    keys.length !== CITATION_HIGHLIGHT_KEYS.size ||
+    keys.some((key) => !CITATION_HIGHLIGHT_KEYS.has(key))
+  )
+    return false;
+  if (!CITATION_HIGHLIGHT_OUTCOMES.has(value.outcome)) return false;
+  if (!isBoundedNonNegativeInteger(value.boxCount, CLIENT_CITATION_HIGHLIGHT_BOX_MAX)) return false;
+  // Only a framed passage has boxes, and it has at least one.
+  return value.outcome === "framed" ? value.boxCount > 0 : value.boxCount === 0;
+}
+
+function hasValidCitationHighlightContext(value: Record<string, unknown>): boolean {
+  if (value.citationHighlight === undefined) return true;
+  return (
+    isActivityLogCorrelationId(value.correlationId) &&
+    isClientDiagnosticCitationHighlight(value.citationHighlight)
+  );
+}
+
 function hasValidCitationActivationContext(value: Record<string, unknown>): boolean {
   if (value.citationActivation === undefined) return true;
   return (
@@ -3174,6 +3218,7 @@ function hasValidEvidenceInspectionContext(value: Record<string, unknown>): bool
 function hasValidRetrievalEvidenceContext(value: Record<string, unknown>): boolean {
   return (
     hasValidCitationActivationContext(value) &&
+    hasValidCitationHighlightContext(value) &&
     hasValidScopeNoticeContext(value) &&
     hasValidEvidenceInspectionContext(value)
   );

@@ -16,6 +16,7 @@ import {
   chatToolTurnEndReason,
   chatToolTurnPartialAnswer,
   recordChatToolTurnContextFitted,
+  recordChatToolTurnResultCondensed,
   recordChatToolTurnCorrected,
   recordChatToolTurnEnded,
 } from "./chat-tool-turn-ending.js";
@@ -374,5 +375,22 @@ describe("withToolResultsAsSource", () => {
       withToolResultsAsSource(answer, { hasUsableObservation: () => true }).uncertainty,
     ).toEqual([answer.uncertainty[1]]);
     expect(answer.uncertainty).toHaveLength(2);
+  });
+});
+
+describe("recordChatToolTurnResultCondensed", () => {
+  it("records the stored and the sent row counts under the turn correlation", () => {
+    const logs = createBufferedServerLogSink();
+    recordChatToolTurnResultCondensed(logs, {
+      correlationId: "result-condensed-proof",
+      messageId: "message-private-id",
+      rowCount: 370,
+      keptRowCount: 1,
+    });
+    const event = logs.events.find((entry) => entry.op === "chat.tool-turn.result-condensed");
+    expect(event?.extra).toMatchObject({ rowCount: 370, keptRowCount: 1 });
+    const line = formatActivityLogProofLine(event ?? {});
+    expectActivityLogProof("chat.tool-turn.result-condensed.line", line);
+    expect(line).not.toContain("message-private-id");
   });
 });

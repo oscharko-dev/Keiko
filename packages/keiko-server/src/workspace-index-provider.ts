@@ -9,7 +9,7 @@ import {
   type WorkspaceIndexSnapshot,
 } from "@oscharko-dev/keiko-workspace";
 import {
-  resolveLocalVaultKey,
+  resolveLocalVaultKeyOnce,
   type LocalVaultKeychainAccess,
 } from "@oscharko-dev/keiko-security/secret-vault";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
@@ -319,7 +319,7 @@ export function createServerWorkspaceIndexProvider(
     // is the id that failure — and only that failure — is reported under.
     const correlationId = randomUUID();
     try {
-      const { key } = resolveLocalVaultKey({
+      const { key } = resolveLocalVaultKeyOnce({
         env: options.env ?? process.env,
         vaultDir: runtimeDir,
         envVarName: WORKSPACE_INDEX_KEY_ENV,

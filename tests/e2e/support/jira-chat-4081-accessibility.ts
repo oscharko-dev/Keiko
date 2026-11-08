@@ -218,7 +218,7 @@ async function captureZoomControls(
   path: string,
 ): Promise<Record<string, unknown>> {
   const controls = surface.locator(
-    ":is(input, textarea, select, button, summary):not(:disabled):visible",
+    ":is(input, textarea, select, button, summary, a[href]):not(:disabled):visible",
   );
   const count = await controls.count();
   expect(count).toBeGreaterThan(0);

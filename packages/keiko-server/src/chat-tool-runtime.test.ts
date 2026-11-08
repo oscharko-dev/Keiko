@@ -25,6 +25,7 @@ import type {
   AtlassianCredentialMetadata,
   AtlassianHttpBodyPort,
 } from "@oscharko-dev/keiko-connectors";
+import type { ChatMessage } from "./store/index.js";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import { handleSendDesktopChat } from "./chat-handlers.js";
 import { handleUpdateChat } from "./store-handlers.js";
@@ -41,7 +42,11 @@ import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { NO_LOCAL_VAULT_KEYCHAIN } from "@oscharko-dev/keiko-security/secret-vault";
 import { buildAtlassianConnectorCredentialDeps } from "./atlassian/wiring.js";
 import { createAtlassianCredentialMetadataStore } from "./atlassian/credentialMetadataStore.js";
-import { handleSubmitJiraHumanInput, handleGetJiraHumanInput, handleCancelJiraHumanInput } from "./atlassian/jiraHumanInputRoutes.js";
+import {
+  handleSubmitJiraHumanInput,
+  handleGetJiraHumanInput,
+  handleCancelJiraHumanInput,
+} from "./atlassian/jiraHumanInputRoutes.js";
 import { jiraOperationActionDigest } from "./atlassian/jiraOperationRegistry.js";
 import * as requirementBinding from "./atlassian/jiraChatRequirementBinding.js";
 import { openKnowledgeStoreForDeps } from "./local-knowledge-store-open.js";
@@ -67,6 +72,10 @@ interface Options {
     readonly arguments: () => Record<string, unknown>;
   };
   readonly reasoningHistory?: "required-with-tools" | undefined;
+  /** A scripted single-tool conversation: the tool to call in model round `round`, if any. */
+  readonly steps?: (
+    round: number,
+  ) => { canonicalId: string; args: Record<string, unknown> } | undefined;
   readonly write?: boolean;
   readonly repeat?: boolean;
   readonly batchSize?: number;
@@ -156,29 +165,41 @@ function discoveryResponse(
 function modelFinished(options: Options, round: number): boolean {
   return options.repeat !== true && round > (options.demandDiscovery === true ? 2 : 1);
 }
+function settledResponse(
+  request: GatewayCallRequest,
+  round: number,
+  promptTokens: number,
+): NormalizedResponse {
+  const admission = request.attemptAdmission?.({ promptTokens, maxOutputTokens: 100 });
+  const response: NormalizedResponse = {
+    modelId: MODEL,
+    content: "Both source observations are available.",
+    finishReason: "stop",
+    toolCalls: [],
+    structuredOutput: null,
+    reasoning: "Inspect both configured sources.",
+    usage: {
+      requestId: `request-${String(round)}`,
+      promptTokens,
+      completionTokens: 10,
+      latencyMs: 1,
+      costClass: "low",
+    },
+  };
+  admission?.settle(response.usage, true, "observed");
+  return response;
+}
 function model(calls: GatewayCallRequest[], options: Options): ModelPort {
   const promptTokens = options.promptTokens ?? 100;
   const batchSize = options.batchSize ?? 2;
   return {
     call: (request): Promise<NormalizedResponse> => {
       calls.push(request);
-      const admission = request.attemptAdmission?.({ promptTokens, maxOutputTokens: 100 });
-      const response: NormalizedResponse = {
-        modelId: MODEL,
-        content: "Both source observations are available.",
-        finishReason: "stop",
-        toolCalls: [],
-        structuredOutput: null,
-        reasoning: "Inspect both configured sources.",
-        usage: {
-          requestId: `request-${String(calls.length)}`,
-          promptTokens,
-          completionTokens: 10,
-          latencyMs: 1,
-          costClass: "low",
-        },
-      };
-      admission?.settle(response.usage, true, "observed");
+      const response = settledResponse(request, calls.length, promptTokens);
+      if (options.steps !== undefined)
+        return Promise.resolve(
+          scriptedStep(request, response, options.steps(calls.length), calls.length),
+        );
       if (modelFinished(options, calls.length)) return Promise.resolve(response);
       if (request.toolCatalog?.kind !== "bound") throw new Error("Expected shared bound catalog");
       const discovery = discoveryResponse(request, options, calls.length, response);
@@ -215,6 +236,28 @@ function model(calls: GatewayCallRequest[], options: Options): ModelPort {
         }),
       });
     },
+  };
+}
+function scriptedStep(
+  request: GatewayCallRequest,
+  response: NormalizedResponse,
+  step: { canonicalId: string; args: Record<string, unknown> } | undefined,
+  round: number,
+): NormalizedResponse {
+  if (step === undefined) return response;
+  if (request.toolCatalog?.kind !== "bound") throw new Error("Expected shared bound catalog");
+  const tool = request.toolCatalog.projection.tools.find(
+    (entry) => entry.toolRef.canonicalId === step.canonicalId,
+  );
+  if (tool === undefined) throw new Error(`Missing offered ${step.canonicalId}`);
+  const bridge = createGatewayToolCatalogBridge({ ...request, stream: false }, Date.now);
+  return {
+    ...response,
+    content: "",
+    finishReason: "tool_calls",
+    toolCalls: [
+      bridge.bind({ id: `step-${String(round)}`, name: tool.alias, arguments: step.args }),
+    ],
   };
 }
 function credential(deps: UiHandlerDeps): AtlassianCredentialMetadata {
@@ -370,10 +413,15 @@ function preselectKnownFixtureTools(deps: UiHandlerDeps, options: Options): void
   const catalog = deps.jiraChatCatalog;
   if (catalog === undefined) throw new TypeError("Missing Jira catalog");
   vi.spyOn(catalog, "get").mockImplementation(() =>
-    catalog.select(jiraOperationContracts()
-      .filter((entry) => options.jiraAction === undefined ||
-        entry.declaration.descriptor.toolRef.canonicalId === options.jiraAction.canonicalId)
-      .map((entry) => entry.binding.identity)),
+    catalog.select(
+      jiraOperationContracts()
+        .filter(
+          (entry) =>
+            options.jiraAction === undefined ||
+            entry.declaration.descriptor.toolRef.canonicalId === options.jiraAction.canonicalId,
+        )
+        .map((entry) => entry.binding.identity),
+    ),
   );
 }
 function send(f: Fixture): ReturnType<typeof handleSendDesktopChat> {
@@ -443,9 +491,13 @@ function privateProfileFixture(defaultMode: boolean, unchanged = false) {
     expectedUser: PRIVATE_PROFILE,
     displayName,
   };
-  const f = fixture({ defaultMode, jiraAction: {
-    canonicalId: "keiko.jira.update.myself", arguments: () => argumentsValue,
-  } });
+  const f = fixture({
+    defaultMode,
+    jiraAction: {
+      canonicalId: "keiko.jira.update.myself",
+      arguments: () => argumentsValue,
+    },
+  });
   const configPath = join(f.root, "private-credentials.json");
   const requests: { method: string; path: string }[] = [];
   let observedName: string = PRIVATE_PROFILE.displayName;
@@ -461,34 +513,63 @@ function privateProfileFixture(defaultMode: boolean, unchanged = false) {
     return new Response(null, { status: 204 });
   });
   const credentials = buildAtlassianConnectorCredentialDeps({
-    configPath, env: { KEIKO_STATE_DIR: f.root }, egress: () => undefined,
-    keychainAccess: NO_LOCAL_VAULT_KEYCHAIN, fetchImpl,
+    configPath,
+    env: { KEIKO_STATE_DIR: f.root },
+    egress: () => undefined,
+    keychainAccess: NO_LOCAL_VAULT_KEYCHAIN,
+    fetchImpl,
   });
   const existing = f.deps.atlassianConnectorCredentials;
   const principal = jiraChatActorDigest(f.deps);
-  if (existing === undefined || principal === undefined) throw new TypeError("Missing Jira composition");
+  if (existing === undefined || principal === undefined)
+    throw new TypeError("Missing Jira composition");
   Object.assign(existing, credentials);
-  const created = credentials.custody.create({
-    provider: "jira", deployment: "data-center", authScheme: "bearer-pat",
-    displayName: "Synthetic private Jira", baseUrl: "https://jira.example.invalid",
-    apiToken: "synthetic-private-profile-pat",
-    livePodCreationRequestId: "61188dd4-2703-4279-9c02-7828eccf6325",
-  }, principal);
+  const created = credentials.custody.create(
+    {
+      provider: "jira",
+      deployment: "data-center",
+      authScheme: "bearer-pat",
+      displayName: "Synthetic private Jira",
+      baseUrl: "https://jira.example.invalid",
+      apiToken: "synthetic-private-profile-pat",
+      livePodCreationRequestId: "61188dd4-2703-4279-9c02-7828eccf6325",
+    },
+    principal,
+  );
   const verification = credentials.custody.beginVerification(created.authRef);
-  if (created.deployment !== "data-center" || created.livePod === undefined || verification === undefined)
+  if (
+    created.deployment !== "data-center" ||
+    created.livePod === undefined ||
+    verification === undefined
+  )
     throw new TypeError("Missing private Pod");
-  createAtlassianCredentialMetadataStore({ configPath }).bindTargetAdmission(created,
-    { baseUrl: created.baseUrl, addressClass: "public" });
-  credentials.custody.finishVerification(created.authRef, created.generation, verification.revision, "ok");
-  f.deps.store.updateChat(f.chatId, { jiraPodId: created.livePod.podId }, {
-    verifiedJiraPod: { podId: created.livePod.podId, authenticationGeneration: created.generation },
+  createAtlassianCredentialMetadataStore({ configPath }).bindTargetAdmission(created, {
+    baseUrl: created.baseUrl,
+    addressClass: "public",
   });
+  credentials.custody.finishVerification(
+    created.authRef,
+    created.generation,
+    verification.revision,
+    "ok",
+  );
+  f.deps.store.updateChat(
+    f.chatId,
+    { jiraPodId: created.livePod.podId },
+    {
+      verifiedJiraPod: {
+        podId: created.livePod.podId,
+        authenticationGeneration: created.generation,
+      },
+    },
+  );
   return { ...f, argumentsValue, requests };
 }
 
 function privateProfileExchange(f: Fixture): ChatToolExchange | undefined {
-  return f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges
-    .find((exchange) => exchange.call.name === "jira_update_myself");
+  return f.deps.store
+    .listMessages(f.chatId)[0]
+    ?.toolTranscript?.exchanges.find((exchange) => exchange.call.name === "jira_update_myself");
 }
 
 async function pendingPrivateInput(f: Fixture): Promise<JiraHumanInputView> {
@@ -501,51 +582,76 @@ async function pendingPrivateInput(f: Fixture): Promise<JiraHumanInputView> {
 }
 
 function submitPrivateProfileInput(f: Fixture, view: JiraHumanInputView) {
-  return handleSubmitJiraHumanInput(context({
-    expectedRevision: view.revision, values: { password: PRIVATE_PASSWORD },
-  }, { requestId: view.requestId }), f.deps);
+  return handleSubmitJiraHumanInput(
+    context(
+      {
+        expectedRevision: view.revision,
+        values: { password: PRIVATE_PASSWORD },
+      },
+      { requestId: view.requestId },
+    ),
+    f.deps,
+  );
 }
 
-it.each([false, true])("binds private input and journal revision through a mixed Chat (allowed=%s)", async (defaultMode) => {
-  const f = privateProfileFixture(defaultMode);
-  const pending = send(f);
-  void pending.catch(() => undefined);
-  const input = await pendingPrivateInput(f);
-  expect(f.effects).toEqual(["mcp-read"]);
-  expect(f.requests.every((request) => request.method === "GET")).toBe(true);
-  expect(privateProfileExchange(f)?.approval).toBeUndefined();
-  expect(privateProfileExchange(f)?.result).toBeUndefined();
-  expect(privateProfileExchange(f)?.mutationOutcome).toBeUndefined();
-  expect((await submitPrivateProfileInput(f, input)).status).toBe(200);
-  if (!defaultMode) await approveWrite(f, "jira-chat-write");
-  expect((await pending).status).toBe(200);
-  const exchange = privateProfileExchange(f);
-  const message = f.deps.store.listMessages(f.chatId)[0];
-  const contract = jiraOperationForTool("jira.update-myself");
-  if (exchange?.humanInput === undefined || message === undefined || contract === undefined)
-    throw new TypeError("Missing retained private exchange");
-  expect(exchange.humanInput.state).toBe("consumed");
-  expect(exchange.humanInput.revision).not.toBe(input.revision);
-  expect(exchange).toMatchObject({ mutationOutcome: "succeeded", result: { status: "completed" } });
-  const invocationId = sha256Hex(canonicalise({ messageId: message.id, callId: exchange.call.id }));
-  const argumentsDigest = sha256Hex(canonicalise(f.argumentsValue));
-  const digest = jiraOperationActionDigest("jira.update-myself", argumentsDigest,
-    contract.binding, undefined, exchange.humanInput.revision);
-  expect(f.deps.store.chatToolMutations?.find(invocationId)).toMatchObject({
-    actionDigest: digest, phase: "settled", outcome: "succeeded",
-  });
-  expect(digest).not.toBe(jiraOperationActionDigest("jira.update-myself", argumentsDigest, contract.binding));
-  if (defaultMode) expect(exchange.approval).toBeUndefined();
-  else expect(exchange.approval?.actionDigest).toBe(digest);
-  expect(f.requests.filter((request) => request.method === "PUT")).toEqual([
-    { method: "PUT", path: "/rest/api/2/myself" },
-  ]);
-  expect(JSON.stringify({ messages: f.deps.store.listMessages(f.chatId), modelCalls: f.calls }))
-    .not.toContain(PRIVATE_PASSWORD);
-  expect((await send(f)).status).toBe(200);
-  expect(f.requests.filter((request) => request.method === "PUT")).toHaveLength(1);
-  expect((await submitPrivateProfileInput(f, exchange.humanInput)).status).not.toBe(200);
-});
+it.each([false, true])(
+  "binds private input and journal revision through a mixed Chat (allowed=%s)",
+  async (defaultMode) => {
+    const f = privateProfileFixture(defaultMode);
+    const pending = send(f);
+    void pending.catch(() => undefined);
+    const input = await pendingPrivateInput(f);
+    expect(f.effects).toEqual(["mcp-read"]);
+    expect(f.requests.every((request) => request.method === "GET")).toBe(true);
+    expect(privateProfileExchange(f)?.approval).toBeUndefined();
+    expect(privateProfileExchange(f)?.result).toBeUndefined();
+    expect(privateProfileExchange(f)?.mutationOutcome).toBeUndefined();
+    expect((await submitPrivateProfileInput(f, input)).status).toBe(200);
+    if (!defaultMode) await approveWrite(f, "jira-chat-write");
+    expect((await pending).status).toBe(200);
+    const exchange = privateProfileExchange(f);
+    const message = f.deps.store.listMessages(f.chatId)[0];
+    const contract = jiraOperationForTool("jira.update-myself");
+    if (exchange?.humanInput === undefined || message === undefined || contract === undefined)
+      throw new TypeError("Missing retained private exchange");
+    expect(exchange.humanInput.state).toBe("consumed");
+    expect(exchange.humanInput.revision).not.toBe(input.revision);
+    expect(exchange).toMatchObject({
+      mutationOutcome: "succeeded",
+      result: { status: "completed" },
+    });
+    const invocationId = sha256Hex(
+      canonicalise({ messageId: message.id, callId: exchange.call.id }),
+    );
+    const argumentsDigest = sha256Hex(canonicalise(f.argumentsValue));
+    const digest = jiraOperationActionDigest(
+      "jira.update-myself",
+      argumentsDigest,
+      contract.binding,
+      undefined,
+      exchange.humanInput.revision,
+    );
+    expect(f.deps.store.chatToolMutations?.find(invocationId)).toMatchObject({
+      actionDigest: digest,
+      phase: "settled",
+      outcome: "succeeded",
+    });
+    expect(digest).not.toBe(
+      jiraOperationActionDigest("jira.update-myself", argumentsDigest, contract.binding),
+    );
+    if (defaultMode) expect(exchange.approval).toBeUndefined();
+    else expect(exchange.approval?.actionDigest).toBe(digest);
+    expect(f.requests.filter((request) => request.method === "PUT")).toEqual([
+      { method: "PUT", path: "/rest/api/2/myself" },
+    ]);
+    expect(
+      JSON.stringify({ messages: f.deps.store.listMessages(f.chatId), modelCalls: f.calls }),
+    ).not.toContain(PRIVATE_PASSWORD);
+    expect((await send(f)).status).toBe(200);
+    expect(f.requests.filter((request) => request.method === "PUT")).toHaveLength(1);
+    expect((await submitPrivateProfileInput(f, exchange.humanInput)).status).not.toBe(200);
+  },
+);
 
 it("keeps an exact profile no-op free of private input in the mixed Chat", async () => {
   const f = privateProfileFixture(true, true);
@@ -563,8 +669,10 @@ it("rejects mixed-Chat private input after the bound Jira scope is revoked", asy
   const input = await pendingPrivateInput(f);
   const chat = f.deps.store.findChatById(f.chatId);
   if (chat === undefined) throw new TypeError("Missing mixed Chat");
-  const update = context({ jiraPodId: null,
-    expectedGroundingScopeIdentity: deriveChatGroundingScopeIdentity(chat) });
+  const update = context({
+    jiraPodId: null,
+    expectedGroundingScopeIdentity: deriveChatGroundingScopeIdentity(chat),
+  });
   update.url.searchParams.set("id", f.chatId);
   expect((await handleUpdateChat(update, f.deps)).status).toBe(200);
   await pending;
@@ -574,54 +682,88 @@ it("rejects mixed-Chat private input after the bound Jira scope is revoked", asy
 });
 
 it("clears ready private input after a pre-dispatch mixed-Chat revocation and permits owner cleanup after the turn", async () => {
-  const f = privateProfileFixture(false); const pending = send(f);
+  const f = privateProfileFixture(false);
+  const pending = send(f);
   void pending.catch(() => undefined);
   const input = await pendingPrivateInput(f);
   expect((await submitPrivateProfileInput(f, input)).status).toBe(200);
-  await vi.waitFor(() => { expect(privateProfileExchange(f)?.approval).toBeDefined(); });
+  await vi.waitFor(() => {
+    expect(privateProfileExchange(f)?.approval).toBeDefined();
+  });
   const inputs = f.deps.atlassianConnectorCredentials?.custody.humanInputs;
   if (inputs === undefined) throw new TypeError("Missing input custody");
   const cancel = vi.spyOn(inputs, "cancel");
   const chat = f.deps.store.findChatById(f.chatId);
   if (chat === undefined) throw new TypeError("Missing mixed Chat");
-  const update = context({ jiraPodId: null, expectedGroundingScopeIdentity: deriveChatGroundingScopeIdentity(chat) });
+  const update = context({
+    jiraPodId: null,
+    expectedGroundingScopeIdentity: deriveChatGroundingScopeIdentity(chat),
+  });
   update.url.searchParams.set("id", f.chatId);
   expect((await handleUpdateChat(update, f.deps)).status).toBe(200);
   await pending;
-  expect(cancel).toHaveBeenCalledWith(input.requestId, expect.objectContaining({ operation: "jira.update-myself" }));
-  const cleanup = await handleCancelJiraHumanInput(context({}, { requestId: input.requestId }), f.deps);
+  expect(cancel).toHaveBeenCalledWith(
+    input.requestId,
+    expect.objectContaining({ operation: "jira.update-myself" }),
+  );
+  const cleanup = await handleCancelJiraHumanInput(
+    context({}, { requestId: input.requestId }),
+    f.deps,
+  );
   expect(cleanup).toMatchObject({ status: 200, body: { state: "cancelled" } });
   expect((await submitPrivateProfileInput(f, input)).status).not.toBe(200);
   const principal = f.deps.serverPrincipal;
   Object.assign(f.deps, { serverPrincipal: () => "different-ended-input-owner" });
-  try { expect((await handleCancelJiraHumanInput(context({}, { requestId: input.requestId }), f.deps)).status).toBe(404); }
-  finally { Object.assign(f.deps, { serverPrincipal: principal }); }
+  try {
+    expect(
+      (await handleCancelJiraHumanInput(context({}, { requestId: input.requestId }), f.deps))
+        .status,
+    ).toBe(404);
+  } finally {
+    Object.assign(f.deps, { serverPrincipal: principal });
+  }
   expect(f.requests.every((request) => request.method === "GET")).toBe(true);
-  expect(JSON.stringify({ cleanup, messages: f.deps.store.listMessages(f.chatId) })).not.toContain(PRIVATE_PASSWORD);
+  expect(JSON.stringify({ cleanup, messages: f.deps.store.listMessages(f.chatId) })).not.toContain(
+    PRIVATE_PASSWORD,
+  );
 });
 
 it("keeps protected input metadata private from a different local principal", async () => {
-  const f = privateProfileFixture(true); const pending = send(f);
+  const f = privateProfileFixture(true);
+  const pending = send(f);
   void pending.catch(() => undefined);
   const input = await pendingPrivateInput(f);
   const originalPrincipal = f.deps.serverPrincipal;
   Object.assign(f.deps, { serverPrincipal: () => "different-private-input-owner" });
   try {
-    const inspect = await handleGetJiraHumanInput(context({}, { requestId: input.requestId }), f.deps);
+    const inspect = await handleGetJiraHumanInput(
+      context({}, { requestId: input.requestId }),
+      f.deps,
+    );
     expect(inspect.status).toBe(404);
     const submit = await submitPrivateProfileInput(f, input);
     expect(submit.status).toBe(404);
     expect(JSON.stringify({ inspect, submit })).not.toContain(PRIVATE_PASSWORD);
-  } finally { Object.assign(f.deps, { serverPrincipal: originalPrincipal }); }
+  } finally {
+    Object.assign(f.deps, { serverPrincipal: originalPrincipal });
+  }
   await handleCancelJiraHumanInput(context({}, { requestId: input.requestId }), f.deps);
   await pending;
   expect(f.requests.every((request) => request.method === "GET")).toBe(true);
 });
 it("refuses a stale protected revision without replacing the held input", async () => {
-  const f = privateProfileFixture(true); const pending = send(f);
+  const f = privateProfileFixture(true);
+  const pending = send(f);
   void pending.catch(() => undefined);
   const input = await pendingPrivateInput(f);
-  expect((await submitPrivateProfileInput(f, { ...input, revision: "87654321-1234-4123-8123-123456789abc" })).status).toBe(409);
+  expect(
+    (
+      await submitPrivateProfileInput(f, {
+        ...input,
+        revision: "87654321-1234-4123-8123-123456789abc",
+      })
+    ).status,
+  ).toBe(409);
   expect(privateProfileExchange(f)?.humanInput).toEqual(input);
   expect((await submitPrivateProfileInput(f, input)).status).toBe(200);
   await pending;
@@ -629,20 +771,30 @@ it("refuses a stale protected revision without replacing the held input", async 
   expect(JSON.stringify(f.deps.store.listMessages(f.chatId))).not.toContain(PRIVATE_PASSWORD);
 });
 it("rechecks the bound Pod after awaiting a delayed protected-input body", async () => {
-  const f = privateProfileFixture(true); const pending = send(f);
+  const f = privateProfileFixture(true);
+  const pending = send(f);
   void pending.catch(() => undefined);
   const input = await pendingPrivateInput(f);
   const stream = new PassThrough();
-  const request = handleSubmitJiraHumanInput({
-    ...context({}, { requestId: input.requestId }), req: stream as unknown as IncomingMessage,
-  }, f.deps);
+  const request = handleSubmitJiraHumanInput(
+    {
+      ...context({}, { requestId: input.requestId }),
+      req: stream as unknown as IncomingMessage,
+    },
+    f.deps,
+  );
   expect(stream.listenerCount("data")).toBe(1);
   const chat = f.deps.store.findChatById(f.chatId);
   if (chat === undefined) throw new TypeError("Missing delayed private-input Chat");
-  const update = context({ jiraPodId: null, expectedGroundingScopeIdentity: deriveChatGroundingScopeIdentity(chat) });
+  const update = context({
+    jiraPodId: null,
+    expectedGroundingScopeIdentity: deriveChatGroundingScopeIdentity(chat),
+  });
   update.url.searchParams.set("id", f.chatId);
   expect((await handleUpdateChat(update, f.deps)).status).toBe(200);
-  stream.end(JSON.stringify({ expectedRevision: input.revision, values: { password: PRIVATE_PASSWORD } }));
+  stream.end(
+    JSON.stringify({ expectedRevision: input.revision, values: { password: PRIVATE_PASSWORD } }),
+  );
   expect((await request).status).toBe(409);
   await pending;
   expect(f.requests.every((item) => item.method === "GET")).toBe(true);
@@ -892,6 +1044,12 @@ it("preserves complete parallel assistant exchanges through real Gateway and rel
 // The public combined source path must retain Jira's existing review owners (#4173/4176/4178).
 // No test imports another test module, and the external MCP fixture remains the same real binder.
 describe("combined Jira review admission parity", () => {
+  function turnExchanges(f: Fixture): readonly ChatToolExchange[] {
+    return (
+      f.deps.store.listMessages(f.chatId).find((message) => message.toolTranscript !== undefined)
+        ?.toolTranscript?.exchanges ?? []
+    );
+  }
   function jiraExchange(f: Fixture): ChatToolExchange | undefined {
     return f.deps.store
       .listMessages(f.chatId)[0]
@@ -977,13 +1135,16 @@ describe("combined Jira review admission parity", () => {
       updateCapsuleState(session.store, pod.capsuleId, "ready");
       const chat = f.deps.store.findChatById(f.chatId);
       if (chat === undefined) throw new TypeError("Missing combined-source Chat");
-      const selected = await handleUpdateChat({
-        ...context({
-          localKnowledgeScopes: [{ kind: "capsule", capsuleId: pod.capsuleId, connectedAtMs: 1 }],
-          expectedGroundingScopeIdentity: deriveChatGroundingScopeIdentity(chat),
-        }),
-        url: new URL(`http://127.0.0.1/api/chats?id=${encodeURIComponent(f.chatId)}`),
-      }, f.deps);
+      const selected = await handleUpdateChat(
+        {
+          ...context({
+            localKnowledgeScopes: [{ kind: "capsule", capsuleId: pod.capsuleId, connectedAtMs: 1 }],
+            expectedGroundingScopeIdentity: deriveChatGroundingScopeIdentity(chat),
+          }),
+          url: new URL(`http://127.0.0.1/api/chats?id=${encodeURIComponent(f.chatId)}`),
+        },
+        f.deps,
+      );
       expect(selected.status).toBe(200);
     } finally {
       session.close();
@@ -1007,22 +1168,40 @@ describe("combined Jira review admission parity", () => {
     async (drift) => {
       const checkedRefs: (string | undefined)[] = [];
       const createPreparation = requirementBinding.createJiraChatSourcePreparation;
-      vi.spyOn(requirementBinding, "createJiraChatSourcePreparation").mockImplementation((options) => {
-        const source = createPreparation(options);
-        return { ...source, current: (prepared, itemRef) => {
-          checkedRefs.push(itemRef);
-          return source.current(prepared, itemRef);
-        } };
+      vi.spyOn(requirementBinding, "createJiraChatSourcePreparation").mockImplementation(
+        (options) => {
+          const source = createPreparation(options);
+          return {
+            ...source,
+            current: (prepared, itemRef) => {
+              checkedRefs.push(itemRef);
+              return source.current(prepared, itemRef);
+            },
+          };
+        },
+      );
+      const f = fixture({
+        jiraAction: {
+          canonicalId: "keiko.jira.draft",
+          arguments: () => ({
+            items: [
+              {
+                ref: "traced-story",
+                projectId: "10000",
+                issueTypeId: "10001",
+                fields: {
+                  summary: "Traced Story",
+                  description: {
+                    format: "markdown",
+                    text: "## Criteria\n- Thema 1 ist verfügbar.\n- Fehler zu Thema 1 werden gemeldet.",
+                  },
+                },
+                requirementIds: ["LH-001"],
+              },
+            ],
+          }),
+        },
       });
-      const f = fixture({ jiraAction: {
-        canonicalId: "keiko.jira.draft",
-        arguments: () => ({ items: [{
-          ref: "traced-story", projectId: "10000", issueTypeId: "10001",
-          fields: { summary: "Traced Story", description: { format: "markdown", text:
-            "## Criteria\n- Thema 1 ist verfügbar.\n- Fehler zu Thema 1 werden gemeldet." } },
-          requirementIds: ["LH-001"],
-        }] }),
-      } });
       const jira = useDraftRemote(f);
       await connectRequirementSource(f);
       const pending = send(f);
@@ -1032,9 +1211,16 @@ describe("combined Jira review admission parity", () => {
         if (approval === undefined) throw new TypeError("Missing source-bound draft approval");
         expect(jira.posts()).toEqual([]);
         if (drift) changeRequirementSource(f);
-        const decision = await handleDecideChatWriteApproval(context({
-          decision: "approve", actionDigest: approval.actionDigest,
-        }, { approvalId: approval.approvalId }), f.deps);
+        const decision = await handleDecideChatWriteApproval(
+          context(
+            {
+              decision: "approve",
+              actionDigest: approval.actionDigest,
+            },
+            { approvalId: approval.approvalId },
+          ),
+          f.deps,
+        );
         expect(decision.status).toBe(200);
         expect((await pending).status).toBe(200);
         expect(f.effects).toEqual(["mcp-read"]);
@@ -1331,6 +1517,83 @@ describe("combined Jira review admission parity", () => {
         result: { status: "completed", data: { excludedCount: 2, createdCount: 1 } },
       });
       expect(f.effects).toEqual(["mcp-read"]);
+    } finally {
+      await settlePendingJira(f, pending);
+    }
+  });
+
+  it("names the active citation sources of a staged draft on the combined Jira, MCP and Knowledge route (F7)", async () => {
+    const stagedItem = (description: string): Record<string, unknown> => ({
+      ref: "epic",
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Epic", description },
+    });
+    const reference = (f: Fixture): Record<string, unknown> => {
+      const staged = turnExchanges(f).find((exchange) => exchange.call.name === "jira_draft_stage");
+      const data = staged?.result?.status === "completed" ? staged.result.data : undefined;
+      const { draftId, draftDigest } = (data ?? {}) as Record<string, string | undefined>;
+      return { draftId, draftDigest };
+    };
+    const holder: { fixture?: Fixture } = {};
+    const f = fixture({
+      steps: (round) => {
+        if (round === 1)
+          return {
+            canonicalId: "keiko.jira.draft.stage",
+            args: { items: [stagedItem("Goal [1].")] },
+          };
+        return round === 2 && holder.fixture !== undefined
+          ? { canonicalId: "keiko.jira.draft", args: reference(holder.fixture) }
+          : undefined;
+      },
+    });
+    holder.fixture = f;
+    const jira = useDraftRemote(f);
+    f.deps.store.createMessage({
+      chatId: f.chatId,
+      role: "assistant",
+      content: "Goal [1].",
+      timestamp: 1,
+      groundedAnswer: {
+        groundingKind: "local-knowledge",
+        citations: [{ marker: "[1]", label: "Spec A.pdf · page 2" }],
+      } as unknown as NonNullable<ChatMessage["groundedAnswer"]>,
+    } as Parameters<typeof f.deps.store.createMessage>[0]);
+    const pending = send(f);
+    void pending.catch(() => undefined);
+    try {
+      const approval = await vi.waitFor(
+        () => {
+          const pendingApproval = turnExchanges(f).find(
+            (exchange) => exchange.call.name === "jira_draft",
+          )?.approval;
+          expect(pendingApproval?.state).toBe("pending");
+          return pendingApproval;
+        },
+        { timeout: 8_000, interval: 10 },
+      );
+      if (approval === undefined) throw new TypeError("Missing draft approval");
+      const stored = f.deps.jiraDraftStore?.peek(String(reference(f).draftId), f.chatId);
+      expect(JSON.stringify(stored)).toContain("Goal (Spec A.pdf · page 2).");
+      expect(JSON.stringify(stored)).not.toContain("Goal [1]");
+      expect(stored?.digest).toBe(reference(f).draftDigest);
+      expect(jira.posts()).toEqual([]);
+      expect(
+        (
+          await handleDecideChatWriteApproval(
+            context(
+              { decision: "approve", actionDigest: approval.actionDigest },
+              { approvalId: approval.approvalId },
+            ),
+            f.deps,
+          )
+        ).status,
+      ).toBe(200);
+      expect((await pending).status).toBe(200);
+      expect(jira.posts().map((post) => post.fields)).toMatchObject([
+        { description: "Goal (Spec A.pdf · page 2)." },
+      ]);
     } finally {
       await settlePendingJira(f, pending);
     }

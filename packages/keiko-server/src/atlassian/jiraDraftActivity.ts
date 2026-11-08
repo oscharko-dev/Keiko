@@ -28,7 +28,7 @@ const JIRA_DRAFT_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["staged", "submitted", "refused", "progress", "executed"],
+      values: ["staged", "submitted", "refused", "progress", "executed", "named"],
     },
     refusal: {
       type: "string",
@@ -57,6 +57,10 @@ const JIRA_DRAFT_OPERATION = defineActivityLogOperation({
     violationCount: COUNT_FIELD,
     settledCount: { type: "integer", dataClass: "count", required: false },
     pendingCount: { type: "integer", dataClass: "count", required: false },
+    // A staging call or a create run: Jira reads sent, and reads answered from the invocation's own
+    // memo (a create run shares only batch-identical create metadata; search and read-back stay live).
+    readCount: { type: "integer", dataClass: "count", required: false },
+    readReusedCount: { type: "integer", dataClass: "count", required: false },
     durationMs: { type: "integer", dataClass: "duration", required: true },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -70,7 +74,11 @@ const JIRA_DRAFT_OPERATION = defineActivityLogOperation({
 });
 
 export interface JiraDraftLogInput extends Omit<JiraDraftActivity, "phase" | "refusal"> {
-  readonly phase: JiraDraftActivity["phase"] | "submitted";
+  /**
+   * `named`: a tool turn told the model which staged draft the Chat holds (#4292). Naming stages,
+   * checks and waits for nothing, so its page, reference, violation and duration counts are zero.
+   */
+  readonly phase: JiraDraftActivity["phase"] | "submitted" | "named";
   readonly refusal?: JiraDraftRefusalKind;
 }
 
@@ -87,6 +95,13 @@ const REFUSAL_KIND: Readonly<Record<JiraDraftRefusalKind, ActivityLogErrorKind>>
   "draft-invalid": "invalid-request",
   "requirements-untraced": "invalid-request",
 };
+
+function readFields(input: JiraDraftLogInput): Record<string, number> {
+  return {
+    ...(input.readCount === undefined ? {} : { readCount: input.readCount }),
+    ...(input.readReusedCount === undefined ? {} : { readReusedCount: input.readReusedCount }),
+  };
+}
 
 /** Counts and closed words only: no summary, field value, issue key, ref or draft id. */
 export function recordJiraDraftActivity(
@@ -115,6 +130,7 @@ export function recordJiraDraftActivity(
         violationCount: input.violationCount,
         ...(input.settledCount === undefined ? {} : { settledCount: input.settledCount }),
         ...(input.pendingCount === undefined ? {} : { pendingCount: input.pendingCount }),
+        ...readFields(input),
         durationMs: input.durationMs,
         completeness: errorKind === undefined ? "complete" : "partial",
         loss: "none",

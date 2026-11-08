@@ -83,6 +83,7 @@ const SEARCH_CITATIONS_RECONCILED_OPERATION = defineActivityLogOperation({
         "failed",
         "skipped-budget",
         "skipped-capability",
+        "skipped-tool-action",
       ],
     },
     repairProseAvailable: { type: "boolean", dataClass: "closed-enum", required: false },

@@ -117,6 +117,12 @@ export interface PdfCitationPreviewDisplay {
   readonly pageNumber?: number;
   readonly pageLabel?: string;
   readonly anchorQuality: PdfCitationPreviewAnchorQuality;
+  /**
+   * The cited passage as the person reads it (content policy applied), carried only by an
+   * authorized open: the viewer looks for it on the cited page and frames it. Never persisted with
+   * the window and never logged.
+   */
+  readonly passage?: string;
 }
 
 export type PdfCitationPreviewOrigin = "inline-marker" | "citation-chip";

@@ -197,6 +197,136 @@ describe("criterion text is active content, not a substring or quotation", () =>
   });
 });
 
+const FORMATTED_CRITERIA = [
+  "Der **Status** wird angezeigt.",
+  "Der *Status* wird angezeigt.",
+  "Der Wert `max` wird angezeigt.",
+  "Siehe [Hilfe](https://example.test/hilfe) dazu.",
+] as const;
+
+function formattedSpecification(criterion: string): string {
+  return [
+    "# Lastenheft",
+    "",
+    "### LH-001 Thema",
+    "",
+    "Das Portal unterstützt das Thema; die Bearbeitung ist innerhalb von 10 Minuten abgeschlossen.",
+    "",
+    "Abnahmekriterien:",
+    `- ${criterion}`,
+    "",
+    "Priorität: Muss.",
+    "",
+  ].join("\n");
+}
+
+describe("criteria with Markdown formatting survive the Markdown-to-wiki conversion", () => {
+  it.each(FORMATTED_CRITERIA)("accepts %s written as a Markdown bullet", async (criterion) => {
+    const { open } = await session([
+      { capsuleId: "cap-fmt", text: formattedSpecification(criterion) },
+    ]);
+    const trace = open();
+    try {
+      const collapsed = criterion.replace(/\s+/gu, " ");
+      expect(
+        trace.resolve(["LH-001"], { description: { format: "markdown", text: `- ${collapsed}` } })
+          .ok,
+      ).toBe(true);
+      expect(
+        trace.resolve(["LH-001"], {
+          description: { format: "markdown", text: "- Etwas ganz anderes." },
+        }).ok,
+      ).toBe(false);
+    } finally {
+      trace.close();
+    }
+  });
+
+  it("accepts a multi-line criterion collapsed to one bullet and refuses a paraphrase", async () => {
+    const { open } = await session([
+      { capsuleId: "cap-fmt", text: formattedSpecification("Der Status\nwird angezeigt.") },
+    ]);
+    const trace = open();
+    try {
+      const accepted = { format: "markdown", text: "- Der Status wird angezeigt." };
+      expect(trace.resolve(["LH-001"], { description: accepted }).ok).toBe(true);
+      const paraphrase = { format: "markdown", text: "- Der Status wird dargestellt." };
+      expect(trace.resolve(["LH-001"], { description: paraphrase }).ok).toBe(false);
+    } finally {
+      trace.close();
+    }
+  });
+});
+
+function macroSpecification(macro: string, second: boolean): string {
+  return [
+    "# Lastenheft",
+    "",
+    "### LH-001 Thema",
+    "",
+    "Das Portal unterstützt das Thema; die Bearbeitung ist innerhalb von 10 Minuten abgeschlossen.",
+    "",
+    "Abnahmekriterien:",
+    `- ${macro}`,
+    ...(second ? ["- Fehler zu Thema 1 werden gemeldet."] : []),
+    "",
+    "Priorität: Muss.",
+    "",
+  ].join("\n");
+}
+
+describe("a criterion without a checkable representation is refused (F16)", () => {
+  const MACROS = [
+    "{code} Return an error if authentication fails.",
+    "{noformat} Reject an invalid signature.",
+  ] as const;
+
+  it.each(MACROS)("refuses a description that omits the macro criterion: %s", async (macro) => {
+    const { open } = await session([
+      { capsuleId: "cap-macro", text: macroSpecification(macro, false) },
+    ]);
+    const trace = open();
+    try {
+      const omitted = trace.resolve(["LH-001"], {
+        description: {
+          format: "markdown",
+          text: "## Acceptance criteria\n\n- Unrelated description.",
+        },
+      });
+      expect(omitted).toMatchObject({
+        ok: false,
+        reason: "references",
+        problems: [{ reason: "acceptance-criteria-missing" }],
+      });
+    } finally {
+      trace.close();
+    }
+  });
+
+  it.each(MACROS)(
+    "does not let the ordinary second criterion establish the macro one: %s",
+    async (macro) => {
+      const { open } = await session([
+        { capsuleId: "cap-macro", text: macroSpecification(macro, true) },
+      ]);
+      const trace = open();
+      try {
+        const omitted = trace.resolve(["LH-001"], {
+          description: { format: "markdown", text: "- Fehler zu Thema 1 werden gemeldet." },
+        });
+        expect(omitted).toMatchObject({
+          ok: false,
+          problems: [{ reason: "acceptance-criteria-missing" }],
+        });
+        if (omitted.ok) throw new TypeError("Expected the macro criterion refusal");
+        expect(omitted.problems[0]?.reference).toMatch(/:LH-001\/AC1$/u);
+      } finally {
+        trace.close();
+      }
+    },
+  );
+});
+
 describe("trace session", () => {
   it("resolves a scoped reference to doc-scoped labels and a footer with the document and revision", async () => {
     const { f, open } = await session([

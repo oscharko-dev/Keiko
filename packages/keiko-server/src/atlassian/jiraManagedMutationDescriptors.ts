@@ -163,8 +163,8 @@ export const REQUIREMENT_REFUSAL = {
   enum: ["no-knowledge-pod", "unavailable", "references", "untraced", "source-changed"],
 };
 const NUMERIC_ID = { ...text(32), pattern: "^[0-9]{1,32}$" };
-const PROJECT_ID = { ...NUMERIC_ID, description: "Numeric id from the project read." };
-const ISSUE_TYPE_ID = { ...NUMERIC_ID, description: "Numeric id from the issue-type read." };
+export const PROJECT_ID = { ...NUMERIC_ID, description: "Numeric id from the project read." };
+export const ISSUE_TYPE_ID = { ...NUMERIC_ID, description: "Numeric id from the issue-type read." };
 const FIELDS = {
   ...object({}),
   additionalProperties: true,
@@ -233,6 +233,19 @@ const DRAFT_LINKS = {
     ["type", "direction"],
   ),
 };
+/** Nests a drafted item under another item of the draft (`ref`) or an existing issue (`issueKey`). */
+export const JIRA_DRAFT_PARENT_SCHEMA = {
+  ...object(
+    {
+      fieldId: DRAFT_RELATION_FIELD,
+      ref: DRAFT_REF,
+      issueKey: ISSUE_KEY,
+    },
+    ["fieldId"],
+  ),
+  description:
+    "Nests this item. fieldId is the relation field the child's create metadata names (parent for a sub-task, the Epic Link field for an epic's issue); the target is exactly one of ref (an item of this draft, created first) or issueKey (an existing issue).",
+};
 export const JIRA_DRAFT_ITEM_SCHEMA = object(
   {
     ref: DRAFT_REF,
@@ -245,18 +258,7 @@ export const JIRA_DRAFT_ITEM_SCHEMA = object(
       description:
         "Create fields as for jira.create; summary is required. Omit the field the parent relation writes.",
     },
-    parent: {
-      ...object(
-        {
-          fieldId: DRAFT_RELATION_FIELD,
-          ref: DRAFT_REF,
-          issueKey: ISSUE_KEY,
-        },
-        ["fieldId"],
-      ),
-      description:
-        "Nests this item. fieldId is the relation field the child's create metadata names (parent for a sub-task, the Epic Link field for an epic's issue); the target is exactly one of ref (an item of this draft, created first) or issueKey (an existing issue).",
-    },
+    parent: JIRA_DRAFT_PARENT_SCHEMA,
     links: DRAFT_LINKS,
     requirementIds: REQUIREMENT_IDS,
   },
@@ -417,6 +419,8 @@ const DRAFT_RESULT_SCHEMA = object(
     // reported as exact key ranges, and what did not fit as a count.
     compact: { type: "boolean" },
     omittedRowCount: DRAFT_COUNT,
+    // The Jira browse prefix the listed keys open under (prefix plus key).
+    browseUrlPrefix: text(4096),
     createdRanges: KEY_RANGES,
     existingRanges: KEY_RANGES,
     rangesTruncated: { type: "boolean" },

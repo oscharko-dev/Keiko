@@ -39,9 +39,71 @@ export interface RequirementVocabulary {
   readonly reservedPrefixes: readonly string[];
   /** Table header names per column role. */
   readonly tableColumns: Readonly<Record<TableColumnRole, readonly string[]>>;
+  /**
+   * Header names of columns that belong to other things than a requirement's content (a test case,
+   * a status, a result, a code meaning). A table that names an identifier column next to such a
+   * column and no title, statement, priority or criteria column is a cross-reference or a code list,
+   * not a list of requirements.
+   */
+  readonly foreignColumns: readonly string[];
+  /** Words that join the members of an enumeration (`Muss, Soll oder Kann`). */
+  readonly listConjunctions: readonly string[];
+  /** Words that, directly before an obligation phrase, say it is named and not used (`ist Muss`). */
+  readonly priorityCues: readonly string[];
 }
 
 export const DEFAULT_REQUIREMENT_VOCABULARY: RequirementVocabulary = Object.freeze({
+  foreignColumns: [
+    "code",
+    "fehlercode",
+    "error code",
+    "bedeutung",
+    "meaning",
+    "begriff",
+    "term",
+    "definition",
+    "abkürzung",
+    "abbreviation",
+    "testfall",
+    "testfälle",
+    "test case",
+    "test cases",
+    "status",
+    "ergebnis",
+    "result",
+    "version",
+    "datum",
+    "date",
+    "autor",
+    "author",
+    "änderung",
+    "change",
+    "bemerkung",
+    "kommentar",
+    "comment",
+    "bearbeiter",
+    "assignee",
+    "wert",
+    "value",
+    "einheit",
+    "unit",
+  ],
+  listConjunctions: ["oder", "und", "or", "and", "ou", "et", "o", "y", "e", "ed"],
+  priorityCues: [
+    "ist",
+    "sind",
+    "lautet",
+    "lauten",
+    "als",
+    "is",
+    "are",
+    "est",
+    "sont",
+    "es",
+    "son",
+    "è",
+    "sono",
+  ],
   priorityKeys: [
     "Priorität",
     "Prioritaet",
@@ -322,6 +384,16 @@ export interface CompiledVocabulary {
   readonly priorityLead: RegExp;
   /** A sentence with an obligation phrase. */
   readonly modal: RegExp;
+  /** Every obligation phrase of a text, for telling a verb from a priority term. */
+  readonly modalEach: RegExp;
+  /** Three or more priority values joined as an enumeration (`Muss, Soll oder Kann`). */
+  readonly priorityListing: RegExp;
+  /** What may stand between two members of an enumeration: a separator or a conjunction. */
+  readonly priorityJoint: RegExp;
+  /** The end of a text that names a priority: a cue word or key, `:` or `=` (`Priorität ist `). */
+  readonly priorityCue: RegExp;
+  /** Folded header names of columns that hold other things than requirement content. */
+  readonly foreignHeaders: ReadonlySet<string>;
   /** A sentence that opens with a personal obligation phrase, so it names no subject. */
   readonly subjectlessModal: RegExp;
   /**
@@ -427,6 +499,59 @@ export function tableRoleOf(
   return words.length > 1 && vocabulary.idHeadWords.has(words.at(-1) ?? "") ? "id" : undefined;
 }
 
+/** Whether a table header names a column of other things than requirement content. */
+export function isForeignColumn(vocabulary: CompiledVocabulary, header: string): boolean {
+  return vocabulary.foreignHeaders.has(foldHeader(header));
+}
+
+/** The span of a text an enumeration of priority values covers. */
+function listingSpans(
+  vocabulary: CompiledVocabulary,
+  text: string,
+): readonly (readonly number[])[] {
+  return [...text.matchAll(vocabulary.priorityListing)].map((match) => [
+    match.index,
+    match.index + match[0].length,
+  ]);
+}
+
+const NOTHING_FOLLOWS = /^[\s.!?;:,)\]]*$/u;
+
+/**
+ * Whether an obligation phrase at `at` is named and not used: a member of an enumeration of three
+ * priority values (`must, should or could`), the word behind a cue (`Priorität ist Muss`, `Prio: Soll`)
+ * or the next member of an enumeration that began that way (`Muss, Soll`). A modal that follows a
+ * subject (`The Contractor Shall log`, `Das System Muss`, `muss/soll`) is a verb in any case.
+ */
+function usedAsPriorityTerm(
+  vocabulary: CompiledVocabulary,
+  text: string,
+  at: number,
+  named: { readonly spans: readonly (readonly number[])[]; readonly lastEnd: number },
+): boolean {
+  if (named.spans.some(([start = 0, end = 0]) => at >= start && at < end)) return true;
+  if (vocabulary.priorityCue.test(text.slice(0, at))) return true;
+  return named.lastEnd >= 0 && vocabulary.priorityJoint.test(text.slice(named.lastEnd, at));
+}
+
+/**
+ * Whether a text states an obligation: it holds an obligation phrase used as a verb. A legend that
+ * names the priorities (`Die Priorität einer Anforderung ist Muss, Soll oder Kann.`) obliges nobody.
+ */
+export function statesObligation(vocabulary: CompiledVocabulary, text: string): boolean {
+  const spans = listingSpans(vocabulary, text);
+  let lastEnd = -1;
+  for (const match of text.matchAll(vocabulary.modalEach)) {
+    const end = match.index + match[0].length;
+    // Nothing follows the last word of a listing row (`Sitzungsübersicht Muss`): it obliges nothing.
+    const named = NOTHING_FOLLOWS.test(text.slice(end));
+    if (!named && !usedAsPriorityTerm(vocabulary, text, match.index, { spans, lastEnd }))
+      return true;
+    lastEnd = end;
+  }
+  return false;
+}
+
 function merge(base: readonly string[], extra: readonly string[] | undefined): readonly string[] {
   return extra === undefined ? base : [...new Set([...base, ...extra])];
 }
@@ -449,6 +574,9 @@ export function mergeRequirementVocabulary(
     impersonalModalVerbs: merge(base.impersonalModalVerbs, extra.impersonalModalVerbs),
     conditionalModalVerbs: merge(base.conditionalModalVerbs, extra.conditionalModalVerbs),
     reservedPrefixes: merge(base.reservedPrefixes, extra.reservedPrefixes),
+    foreignColumns: merge(base.foreignColumns, extra.foreignColumns),
+    listConjunctions: merge(base.listConjunctions, extra.listConjunctions),
+    priorityCues: merge(base.priorityCues, extra.priorityCues),
     tableColumns: {
       id: columns("id"),
       title: columns("title"),
@@ -476,6 +604,28 @@ function tableRoleMap(
 function personalModals(vocabulary: RequirementVocabulary): string {
   const impersonal = new Set(vocabulary.impersonalModalVerbs.map((term) => foldTerm(term)));
   return alternation(vocabulary.modalVerbs.filter((term) => !impersonal.has(foldTerm(term))));
+}
+
+/** The patterns that tell an obligation phrase used as a verb from a priority term. */
+function obligationPatterns(
+  vocabulary: RequirementVocabulary,
+  values: string,
+): Pick<CompiledVocabulary, "modalEach" | "priorityListing" | "priorityJoint" | "priorityCue"> {
+  const modals = alternation(vocabulary.modalVerbs);
+  const joint = String.raw`(?:\s*[,/;]\s*|\s+(?:${alternation(vocabulary.listConjunctions)})\s+)`;
+  const cues = alternation([...vocabulary.priorityCues, ...vocabulary.priorityKeys]);
+  return {
+    modalEach: new RegExp(
+      String.raw`${LETTER_BEFORE}(?:${modals})${LETTER_AFTER}(?!-\p{L})`,
+      "giu",
+    ),
+    priorityListing: new RegExp(
+      `${LETTER_BEFORE}(?:${values})${LETTER_AFTER}(?:${joint}(?:${values})${LETTER_AFTER}){2,}`,
+      "giu",
+    ),
+    priorityJoint: new RegExp(`^${joint}$`, "iu"),
+    priorityCue: new RegExp(String.raw`(?:${LETTER_BEFORE}(?:${cues})\s*[:=]?\s*|[:=]\s*)$`, "iu"),
+  };
 }
 
 export function compileRequirementVocabulary(
@@ -508,6 +658,8 @@ export function compileRequirementVocabulary(
       String.raw`${LETTER_BEFORE}(?:${alternation(vocabulary.modalVerbs)})${LETTER_AFTER}(?!-\p{L})`,
       "iu",
     ),
+    ...obligationPatterns(vocabulary, values),
+    foreignHeaders: new Set(vocabulary.foreignColumns.map((name) => foldHeader(name))),
     subjectlessModal: new RegExp(String.raw`^(?:${personalModals(vocabulary)})(?=\s)`, "iu"),
     conditionalLead: new RegExp(
       String.raw`^(?:${alternation(vocabulary.conditionalModalVerbs)})\s+([^,]+),\s*(.+)$`,

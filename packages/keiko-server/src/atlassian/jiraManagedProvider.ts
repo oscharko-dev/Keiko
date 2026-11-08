@@ -1,7 +1,16 @@
-import { jiraPrivateAccountDeclarationForTool, type JIRA_PRIVATE_ACCOUNT_READ_DEFINITIONS } from "./jiraPrivateAccountDescriptors.js";
+import {
+  jiraPrivateAccountDeclarationForTool,
+  type JIRA_PRIVATE_ACCOUNT_READ_DEFINITIONS,
+} from "./jiraPrivateAccountDescriptors.js";
 import { JIRA_PROJECT_REVIEW_SCHEMA } from "./jiraProjectLifecycleSchemas.js";
-import { jiraEmailTemplateDeclarationForTool, type JIRA_EMAIL_TEMPLATE_DEFINITIONS } from "./jiraEmailTemplateDescriptors.js";
-import { jiraIdentityObservationDeclarationForTool, type JIRA_IDENTITY_OBSERVATION_READ_DEFINITIONS } from "./jiraIdentityObservationDescriptors.js";
+import {
+  jiraEmailTemplateDeclarationForTool,
+  type JIRA_EMAIL_TEMPLATE_DEFINITIONS,
+} from "./jiraEmailTemplateDescriptors.js";
+import {
+  jiraIdentityObservationDeclarationForTool,
+  type JIRA_IDENTITY_OBSERVATION_READ_DEFINITIONS,
+} from "./jiraIdentityObservationDescriptors.js";
 import {
   jiraRemoteVersionLinkDeclarationForTool,
   type JIRA_REMOTE_VERSION_LINK_READ_DEFINITIONS,
@@ -54,10 +63,7 @@ import {
   jiraAgileContextDeclarationForTool,
   type JIRA_AGILE_CONTEXT_READ_DEFINITIONS,
 } from "./jiraAgileContextDescriptors.js";
-import {
-  jiraJqlDeclarationForTool,
-  type JIRA_JQL_READ_DEFINITIONS,
-} from "./jiraJqlDescriptors.js";
+import { jiraJqlDeclarationForTool, type JIRA_JQL_READ_DEFINITIONS } from "./jiraJqlDescriptors.js";
 import {
   jiraScopedDirectoryDeclarationForTool,
   type JIRA_SCOPED_DIRECTORY_READ_DEFINITIONS,
@@ -99,6 +105,7 @@ import {
   type JiraManagedConnection,
   type JiraManagedMutationExecutor,
   type JiraDraftToolDeps,
+  type JiraDraftBatchExecutor,
   type JiraReportToolDeps,
 } from "@oscharko-dev/keiko-connectors";
 import {
@@ -122,7 +129,11 @@ import type {
   ManagedMcpToolResult,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { recordJiraProviderCall } from "./jiraOperationActivity.js";
-import { compileExternalCatalogSchema, createToolDescriptor, createToolRef } from "@oscharko-dev/keiko-tool-catalog";
+import {
+  compileExternalCatalogSchema,
+  createToolDescriptor,
+  createToolRef,
+} from "@oscharko-dev/keiko-tool-catalog";
 
 import { text, object } from "./jiraManagedSchemas.js";
 import {
@@ -130,6 +141,7 @@ import {
   JIRA_FAILURE_MESSAGES_SCHEMA,
   jiraMutationDeclaration,
 } from "./jiraManagedMutationDescriptors.js";
+import { JIRA_DRAFT_BATCH_DECLARATION } from "./jiraDraftBatchDescriptor.js";
 import { jiraDraftStageDeclaration } from "./jiraDraftDescriptor.js";
 import { jiraReportDeclaration } from "./jiraReportDescriptor.js";
 import { JIRA_APPLICABLE_TEMPLATES_SCHEMA } from "./jiraTemplateMetadataSchema.js";
@@ -248,6 +260,7 @@ type CoreReadToolName = Exclude<
   JiraManagedReadToolName,
   | "jira.report"
   | "jira.draft-stage"
+  | "jira.draft-batch"
   | Extract<
       JiraManagedReadToolName,
       | keyof typeof JIRA_PRIVATE_ACCOUNT_READ_DEFINITIONS
@@ -390,8 +403,10 @@ const DEFINITIONS: Readonly<Record<CoreReadToolName, ReadDefinition>> = {
     item: FIELD,
   },
   "jira.search": SEARCH_DEFINITION,
-  "jira.search-post": { ...SEARCH_DEFINITION,
-    description: "Perform the same bounded opaque-JQL search through native POST with a typed JSON search request. This is a read, creates no issue or mutation receipt and grants no write authority. Follow nextStartAt for all pages; use jira.report for project totals and compliance. Native query validation stays enabled.",
+  "jira.search-post": {
+    ...SEARCH_DEFINITION,
+    description:
+      "Perform the same bounded opaque-JQL search through native POST with a typed JSON search request. This is a read, creates no issue or mutation receipt and grants no write authority. Follow nextStartAt for all pages; use jira.report for project totals and compliance. Native query validation stays enabled.",
   },
   "jira.issue": {
     description:
@@ -494,6 +509,7 @@ function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
   }
   if (name === "jira.report") return jiraReportDeclaration();
   if (name === "jira.draft-stage") return jiraDraftStageDeclaration();
+  if (name === "jira.draft-batch") return JIRA_DRAFT_BATCH_DECLARATION;
   if (!isCoreReadTool(name)) throw new TypeError("Unsupported Jira read tool");
   return coreDeclaration(name);
 }
@@ -511,25 +527,28 @@ function coreDeclaration(name: CoreReadToolName): ManagedMcpToolDeclaration {
       },
       definition.required,
     ),
-    resultSchema: coreResultSchema(name, object(
-      {
-        ...definition.rootResult,
-        outcome: { type: "string", enum: ["succeeded", "failed"] },
-        reason: text(64),
-        fieldErrors: JIRA_FAILURE_FIELD_ERRORS_SCHEMA,
-        messages: JIRA_FAILURE_MESSAGES_SCHEMA,
-        browseUrl: text(4096),
-        draft: object({ tool: text(16), use: text(256) }, ["tool", "use"]),
-        ...(name === "jira.create-fields"
-          ? { applicableTemplates: JIRA_APPLICABLE_TEMPLATES_SCHEMA }
-          : {}),
-        items: { type: "array", maxItems: 100, items: definition.item },
-        startAt: PAGE_NUMBER,
-        total: PAGE_NUMBER,
-        nextStartAt: PAGE_NUMBER,
-      },
-      ["outcome"],
-    )),
+    resultSchema: coreResultSchema(
+      name,
+      object(
+        {
+          ...definition.rootResult,
+          outcome: { type: "string", enum: ["succeeded", "failed"] },
+          reason: text(64),
+          fieldErrors: JIRA_FAILURE_FIELD_ERRORS_SCHEMA,
+          messages: JIRA_FAILURE_MESSAGES_SCHEMA,
+          browseUrl: text(4096),
+          draft: object({ tool: text(16), use: text(256) }, ["tool", "use"]),
+          ...(name === "jira.create-fields"
+            ? { applicableTemplates: JIRA_APPLICABLE_TEMPLATES_SCHEMA }
+            : {}),
+          items: { type: "array", maxItems: 100, items: definition.item },
+          startAt: PAGE_NUMBER,
+          total: PAGE_NUMBER,
+          nextStartAt: PAGE_NUMBER,
+        },
+        ["outcome"],
+      ),
+    ),
     effects: ["connector-access"],
     actionMapping: [{ action: name, effects: ["connector-access"] }],
     policyReferences: ["adr-0128.d4"],
@@ -563,7 +582,8 @@ function rawDeclarationForTool(tool: string): ManagedMcpToolDeclaration | undefi
 export function jiraOperationContracts(): readonly JiraOperationContract[] {
   if (completeOperationContracts !== undefined) return completeOperationContracts;
   const names = [...JIRA_MANAGED_READ_TOOLS, ...JIRA_MUTATION_OPERATIONS];
-  if (new Set(names).size !== names.length) throw new TypeError("Duplicate Jira operation declaration");
+  if (new Set(names).size !== names.length)
+    throw new TypeError("Duplicate Jira operation declaration");
   const contracts = names.map((name) => {
     const contract = jiraOperationForTool(name);
     if (contract === undefined) throw new TypeError("Missing Jira operation contract");
@@ -610,6 +630,7 @@ export function createJiraProviderForCatalog<Context extends ManagedMcpInvocatio
   executeMutation?: JiraManagedMutationExecutor<Context>,
   report?: JiraReportToolDeps<Context>,
   draft?: JiraDraftToolDeps<Context>,
+  batch?: JiraDraftBatchExecutor<Context>,
 ): ManagedMcpProvider<Context> {
   const selected = tools.map((name) => {
     const declaration = jiraDeclarationForTool(name);
@@ -622,6 +643,7 @@ export function createJiraProviderForCatalog<Context extends ManagedMcpInvocatio
     ...(executeMutation === undefined ? {} : { executeMutation }),
     ...(report === undefined ? {} : { report }),
     ...(draft === undefined ? {} : { draft }),
+    ...(batch === undefined ? {} : { batch }),
   });
   const boundTools = Object.freeze(
     provider.tools().map((tool) => {
@@ -639,7 +661,11 @@ export function createJiraProviderForCatalog<Context extends ManagedMcpInvocatio
             recordJiraProviderCall(args[1].correlationId, operation, "failed");
             throw error;
           }
-          recordJiraProviderCall(args[1].correlationId, operation, result.isError === true ? "failed" : "completed");
+          recordJiraProviderCall(
+            args[1].correlationId,
+            operation,
+            result.isError === true ? "failed" : "completed",
+          );
           // Provider response content never chooses the operation or its contract authority.
           return { ...result, data: { ...result.data, operationBinding: binding } };
         },

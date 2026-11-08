@@ -51,10 +51,43 @@
   color: var(--feedback-success);
 }
 
+/* The running step breathes, so a person sees Keiko is still at work; reduced motion keeps
+   the same colour and label without movement. */
 .cmpStep[data-state="active"] .cmpIcon {
   color: var(--accent-text);
   border-color: var(--accent-line);
   background: var(--accent-dim);
+}
+
+@keyframes cmp-step-active {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 var(--accent-dim);
+  }
+  50% {
+    box-shadow: 0 0 0 5px var(--accent-dim);
+  }
+}
+
+@keyframes cmp-step-done {
+  from {
+    transform: scale(0.7);
+    opacity: 0.4;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .cmpStep[data-state="done"] .cmpIcon {
+    animation: cmp-step-done 240ms ease-out;
+  }
+
+  .cmpStep[data-state="active"] .cmpIcon {
+    animation: cmp-step-active 1.6s ease-in-out infinite;
+  }
 }
 
 .cmpStep[data-state="approval"] .cmpIcon,
@@ -97,7 +130,7 @@
 }
 
 /* Wrapping stays readable at narrow chat widths and under the workspace's content zoom.
-   No animation is required: state changes remain visible with reduced motion enabled. */
+   State changes remain visible with reduced motion enabled. */
 @container (max-width: 40rem) {
   .cmpSteps {
     display: flex;

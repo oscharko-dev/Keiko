@@ -10,6 +10,7 @@ export default defineConfig({
     setupFiles: [
       fileURLToPath(new URL("../../tests/support/activity-log-test-writer.ts", import.meta.url)),
       fileURLToPath(new URL("../../tests/support/test-state-dirs.ts", import.meta.url)),
+      fileURLToPath(new URL("../../tests/support/reset-vault-key-cache.ts", import.meta.url)),
     ],
   },
 });

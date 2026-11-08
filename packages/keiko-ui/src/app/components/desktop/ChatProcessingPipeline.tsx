@@ -31,13 +31,19 @@ function isCurrentStep(step: ChatProcessingStep): boolean {
   return step.state === "active" || step.state === "approval" || step.state === "input";
 }
 
-function currentSummary(steps: readonly ChatProcessingStep[], t: OptionalWidgetTranslate): string | undefined {
+function currentSummary(
+  steps: readonly ChatProcessingStep[],
+  t: OptionalWidgetTranslate,
+): string | undefined {
   const current = steps.filter(isCurrentStep);
   if (current.length === 0) return undefined;
   if (current.every((step) => step.state === "input"))
     return t("chat.processing.summary", { state: t("chat.processing.input") });
   return t("chat.processing.current", {
-    steps: current.slice(-3).map((step) => t(step.label)).join(", "),
+    steps: current
+      .slice(-3)
+      .map((step) => t(step.label))
+      .join(", "),
   });
 }
 
@@ -81,9 +87,7 @@ function groupCompletedSteps(steps: readonly ChatProcessingStep[]): readonly Pre
 }
 
 function compactStepIndices(groups: readonly PresentedStep[]): ReadonlySet<number> {
-  const current = groups.findLastIndex(
-    ({ step }) => isCurrentStep(step),
-  );
+  const current = groups.findLastIndex(({ step }) => isCurrentStep(step));
   const visible = new Set([0, groups.length - 1, current]);
   for (let index = Math.max(0, groups.length - 4); index < groups.length; index += 1)
     visible.add(index);
@@ -93,8 +97,10 @@ function compactStepIndices(groups: readonly PresentedStep[]): ReadonlySet<numbe
 function ProcessingStep({ step, index, count }: PresentedStep): ReactNode {
   const t = useTranslate();
   const current = isCurrentStep(step);
+  const stepLabel =
+    step.progress === undefined ? t(step.label) : `${t(step.label)} · ${step.progress}`;
   const label =
-    count === 1 ? t(step.label) : t("chat.processing.repeated", { label: t(step.label), count });
+    count === 1 ? stepLabel : t("chat.processing.repeated", { label: stepLabel, count });
   const state = t(CHAT_PROCESSING_STATE_LABELS[step.state]);
   return (
     <li

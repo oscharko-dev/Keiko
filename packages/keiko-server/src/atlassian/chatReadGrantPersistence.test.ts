@@ -101,6 +101,22 @@ it("retains accepted private consent after closing and reopening its actual SQLi
   });
 });
 
+it("persists a renewal that re-binds the grant to the renewing authority, and nothing else", () => {
+  const f = fixture();
+  const subject = f.entry.grant.subject;
+  const registry = accepted(f);
+  const rebound = { ...f.entry.authority, envelopeDigest: "e".repeat(64) };
+  expect(registry.renewChatReadGrant(subject, NOW, NOW + 90_000, undefined, rebound)).toBeDefined();
+  const restored = new AtlassianActionApprovalRegistry(() => NOW, persistence(f.store));
+  expect(restored.findGrantedChatReadGrant(subject)?.expiresAt).toBe(NOW + 90_000);
+  const store = persistence(f.store);
+  const current = store.list()[0];
+  if (current === undefined) throw new Error("Missing retained grant");
+  expect(current.authority).toEqual(rebound);
+  // Without a time renewal the issuing authority cannot be swapped.
+  expect(store.save({ ...current, authority: f.entry.authority }, current)).toBe(false);
+});
+
 it("persists a granted read's restarted time, forward only and with its proof", () => {
   const f = fixture();
   const subject = f.entry.grant.subject;

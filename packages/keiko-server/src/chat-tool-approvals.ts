@@ -220,6 +220,33 @@ function withFullDecisionTime<Envelope extends ChatToolAuthorityEnvelope>(
   );
   return renewed === undefined ? facts : { ...facts, readExpiresAt: renewed.expiresAt };
 }
+const READ_GRANT_RENEWAL_MIN_ELAPSED_MS = 30_000;
+
+/**
+ * A running admitted invocation outlives the consent TTL of the automatic read grant (owner decision
+ * 2026-11-02: the connection is the consent). Its effect guard calls this after authority, binding,
+ * subject and mode were all proven current: a granted grant restarts its time on every passing check once 30 s have elapsed since its last start (sliding window, so one long model call between two checks is covered),
+ * forward only, within the envelope and re-bound to the invocation's authority. A pending, rejected, revoked or expired grant is never
+ * touched, so a hard denial still ends the invocation.
+ */
+export function renewRunningReadGrant(
+  registry: ApprovalRegistry,
+  envelope: Pick<ChatToolAuthorityEnvelope, "subject" | "expiresAt">,
+  authority: EditorAgentGovernedAuthorityReference,
+  now: number,
+  correlationId: string,
+): void {
+  if (registry === undefined) return;
+  const granted = registry.findGrantedChatReadGrant(envelope.subject, correlationId);
+  if (granted === undefined || now - granted.requestedAt < READ_GRANT_RENEWAL_MIN_ELAPSED_MS)
+    return;
+  // Current authority, binding and subject were proven by the caller: the grant is re-bound to this
+  // invocation's authority and never outlives that authority's envelope.
+  const envelopeEnd = Date.parse(envelope.expiresAt);
+  if (!Number.isFinite(envelopeEnd)) return;
+  const expiresAt = Math.min(envelopeEnd, now + ATLASSIAN_ACTION_APPROVAL_TTL_MS);
+  registry.renewChatReadGrant(envelope.subject, now, expiresAt, correlationId, authority);
+}
 function chatWriteApprovalWithinBounds(
   entry: ChatWriteApprovalEntry,
   facts: ChatWriteFacts,

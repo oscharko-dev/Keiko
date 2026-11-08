@@ -1189,6 +1189,7 @@ describe("weakly supported citations", () => {
       const turn: NonNullable<UiHandlerDeps["chatToolTurn"]> = {
         onTranscript: (): void => undefined,
         hasUsableObservation: (): boolean => true,
+        reportsToolAction: false,
         meter: (model): ModelPort => model,
         stream: (): never => {
           throw new TypeError("Streaming was not requested");
@@ -1209,6 +1210,7 @@ describe("weakly supported citations", () => {
           return ended;
         },
         settleRetryFailure: (): undefined => undefined,
+        bindEvidenceSources: (): void => undefined,
       };
       const complete =
         "The release checklist covers signing, notarization and upload, each step in order.";
