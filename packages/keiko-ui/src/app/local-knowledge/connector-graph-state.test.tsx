@@ -142,6 +142,7 @@ it("does not overlap a held refresh with another tick or visibility catch-up", a
   });
   f.capsules.mockReturnValue(held);
   await advance();
+  expect(f.hook.result.current.loadStatus).toBe("ready");
   await advance(10_000);
   act(() => visibility("visible"));
   expect(f.capsules).toHaveBeenCalledTimes(2);

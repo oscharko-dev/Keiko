@@ -7796,12 +7796,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-ui/src/app/local-knowledge/connector-graph-state.ts",
-      "owner": "useCapsuleLoader",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-ui/src/lib/api.ts",
       "owner": "bffFailure",
       "kind": "unregistered-catch",

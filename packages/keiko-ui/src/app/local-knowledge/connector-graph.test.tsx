@@ -1300,10 +1300,16 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
   it("removes Cancel when indexing finishes without remounting the Knowledge Pod row", async () => {
     vi.useFakeTimers();
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-    let lifecycleState: CapsuleLifecycleState = "indexing";
-    const fetchCapsulesImpl = vi.fn(() =>
-      Promise.resolve({ capsules: [makeCapsule({ displayName: "Running Pod", lifecycleState })] }),
-    );
+    let finishReload: ((response: CapsulesResponse) => void) | undefined;
+    const response = new Promise<CapsulesResponse>((resolve) => {
+      finishReload = resolve;
+    });
+    const fetchCapsulesImpl = vi
+      .fn()
+      .mockResolvedValueOnce({
+        capsules: [makeCapsule({ displayName: "Running Pod", lifecycleState: "indexing" })],
+      })
+      .mockReturnValue(response);
     const view = render(<ConnectorGraph fetchCapsulesImpl={fetchCapsulesImpl} />);
     try {
       await act(async () => {
@@ -1315,9 +1321,19 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
           name: "Cancel indexing for Knowledge Pod Running Pod",
         }),
       ).toBeInTheDocument();
-      lifecycleState = "ready";
       await act(async () => {
         await vi.advanceTimersByTimeAsync(2_000);
+      });
+      // A real HTTP response yields between loading and settlement; the existing row must
+      // stay mounted through that pending interval as well as after the new data arrives.
+      expect(screen.getByRole("article", { name: "Knowledge Pod: Running Pod" })).toBe(row);
+      if (finishReload === undefined) throw new TypeError("Missing held Pod reload resolver");
+      const finish = finishReload;
+      await act(async () => {
+        finish({
+          capsules: [makeCapsule({ displayName: "Running Pod", lifecycleState: "ready" })],
+        });
+        await response;
       });
       expect(
         within(row).queryByRole("button", {

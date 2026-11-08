@@ -34,7 +34,7 @@ function emptyCapsuleSets(): ReturnType<typeof fetchCapsuleSets> {
   return Promise.resolve({ capsuleSets: [] });
 }
 
-function useIndexingRefresh(active: boolean, reload: () => Promise<void>): void {
+function useIndexingRefresh(active: boolean, reload: (background: boolean) => Promise<void>): void {
   useEffect(() => {
     if (!active) return;
     let pending = false;
@@ -42,7 +42,7 @@ function useIndexingRefresh(active: boolean, reload: () => Promise<void>): void 
       if (pending) return;
       pending = true;
       try {
-        await reload();
+        await reload(true);
       } finally {
         pending = false;
       }
@@ -74,27 +74,31 @@ function useCapsuleLoader(
   const [loadStatus, setLoadStatus] = useState<LoadStatus>("loading");
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const reload = useCallback(async (): Promise<void> => {
-    setLoadStatus("loading");
-    setLoadError(null);
-    try {
-      const [capsuleResponse, capsuleSetResponse] = await Promise.all([
-        fetchCapsulesImpl({ includeKnowledgePods: true }),
-        fetchCapsuleSetsImpl({ includeKnowledgePods: true }),
-      ]);
-      setCapsules(capsulesForKnowledgePodUi(capsuleResponse));
-      setCapsuleSets(capsuleSetsForKnowledgePodUi(capsuleSetResponse));
-      setLoadStatus("ready");
-    } catch (error) {
-      reportClientDiagnostic("Knowledge Pod catalog load failed.", {
-        correlationId: correlationIdOf(error),
-        errorKind: bffRequestErrorKind(error),
-        errorEvidence: clientErrorEvidence(error),
-      });
-      setLoadError(formatError(error));
-      setLoadStatus("error");
-    }
-  }, [fetchCapsulesImpl, fetchCapsuleSetsImpl]);
+  const reload = useCallback(
+    async (background = false): Promise<void> => {
+      // Polls keep the mounted catalog available while the next native snapshot is in flight.
+      if (!background) setLoadStatus("loading");
+      setLoadError(null);
+      try {
+        const [capsuleResponse, capsuleSetResponse] = await Promise.all([
+          fetchCapsulesImpl({ includeKnowledgePods: true }),
+          fetchCapsuleSetsImpl({ includeKnowledgePods: true }),
+        ]);
+        setCapsules(capsulesForKnowledgePodUi(capsuleResponse));
+        setCapsuleSets(capsuleSetsForKnowledgePodUi(capsuleSetResponse));
+        setLoadStatus("ready");
+      } catch (error) {
+        reportClientDiagnostic("Knowledge Pod catalog load failed.", {
+          correlationId: correlationIdOf(error),
+          errorKind: bffRequestErrorKind(error),
+          errorEvidence: clientErrorEvidence(error),
+        });
+        setLoadError(formatError(error));
+        setLoadStatus("error");
+      }
+    },
+    [fetchCapsulesImpl, fetchCapsuleSetsImpl],
+  );
 
   useEffect(() => {
     void reload();
