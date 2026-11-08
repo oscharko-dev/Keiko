@@ -130,6 +130,12 @@ describe("exact Jira operation facts through existing log owners", () => {
     const registry: readonly ActivityLogOperationRegistration[] = ACTIVITY_LOG_OPERATION_REGISTRY;
     const families = registry.filter(({ op }) => op.startsWith("jira.operation."));
     expect(families).toHaveLength(13);
+    const local = families.find(({ op }) => op === "jira.operation.local")?.fields.operation
+      ?.values;
+    expect(local).toEqual(["jira.report", "jira.draft-stage", "jira.draft-batch"]);
+    const legacyLocal = local?.filter((tool) => tool !== "jira.draft-batch");
+    expect(legacyLocal).toHaveLength(2);
+    expect(legacyLocal).toEqual(["jira.report", "jira.draft-stage"]);
     const members = families.flatMap((entry) => {
       const values = entry.fields.operation?.values;
       expect(values?.length).toBe(PROOFS.find(({ op }) => op === entry.op)?.count);
@@ -138,12 +144,20 @@ describe("exact Jira operation facts through existing log owners", () => {
     });
     const definitions = jiraOperationDefinitions();
     expect(definitions.filter(({ kind }) => kind === "native")).toHaveLength(439);
-    expect(
-      definitions
-        .filter(({ kind }) => kind === "composite")
-        .map(({ tool }) => tool)
-        .sort(),
-    ).toEqual(["jira.draft", "jira.draft-batch", "jira.draft-stage", "jira.report"]);
+    const composites = definitions
+      .filter(({ kind }) => kind === "composite")
+      .map(({ tool }) => tool)
+      .sort();
+    expect(composites).toHaveLength(4);
+    expect(composites).toEqual([
+      "jira.draft",
+      "jira.draft-batch",
+      "jira.draft-stage",
+      "jira.report",
+    ]);
+    const legacyComposites = composites.filter((tool) => tool !== "jira.draft-batch");
+    expect(legacyComposites).toHaveLength(3);
+    expect(legacyComposites).toEqual(["jira.draft", "jira.draft-stage", "jira.report"]);
     expect(new Set(members).size).toBe(members.length);
     expect(new Set(members)).toEqual(new Set(definitions.map(({ tool }) => tool)));
     expect(new Set(members)).toEqual(

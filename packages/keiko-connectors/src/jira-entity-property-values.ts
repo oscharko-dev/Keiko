@@ -3,14 +3,15 @@ import {
   type CatalogJsonObject,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { jiraNativeText } from "./jira-native-values.js";
+import { rolePrincipalText } from "./jira-role-values.js";
 
 // Native EntityPropertyResource limits; the catalog's independent limits still apply.
 // https://docs.atlassian.com/software/jira/docs/api/11.3.0/com/atlassian/jira/rest/v2/issue/IssuePropertyResource.html
 export const JIRA_PROPERTY_KEY_MAX_BYTES = 255;
 export const JIRA_PROPERTY_VALUE_MAX_BYTES = 32768;
-/** Native username/key query text must round-trip without URLSearchParams replacing code units. */
+/** Native username/key identities remain single-line and preserve every admitted code unit. */
 export function jiraPropertyUserText(value: unknown): value is string {
-  return jiraNativeText(value, 255) && !/[\p{Cc}\p{Surrogate}]/u.test(value);
+  return rolePrincipalText(value);
 }
 type Refusal = "malformed-payload" | "bounds-exceeded";
 interface Projection {

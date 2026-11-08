@@ -12,6 +12,7 @@ import {
 } from "./jira-property-test/_support.js";
 import {
   jiraPropertyKey,
+  jiraPropertyUserText,
   jiraPropertyValue,
   JIRA_PROPERTY_VALUE_MAX_BYTES,
 } from "./jira-entity-property-values.js";
@@ -20,6 +21,7 @@ import {
   isJiraEntityPropertyRead,
   JIRA_ENTITY_PROPERTY_READS,
 } from "./jira-managed-entity-properties.js";
+import { jiraNativeText } from "./jira-native-values.js";
 
 type ReadName = Parameters<typeof read>[0];
 function request(
@@ -370,6 +372,41 @@ describe("bound native entity property reads", () => {
     expect(new Set(JIRA_ENTITY_PROPERTY_READS).size).toBe(16);
     expect(isJiraEntityPropertyRead("jira.set-property")).toBe(false);
     expect(isJiraEntityPropertyRead("https://untrusted.invalid/properties")).toBe(false);
+  });
+});
+
+describe("single-line native user identities", () => {
+  it.each(["Synthetic User", " Synthetic User ", "Synthetic \u{1f680}", "x".repeat(255)])(
+    "preserves bounded native identity spelling: %#",
+    (identity) => {
+      expect(jiraPropertyUserText(identity)).toBe(true);
+    },
+  );
+  it.each([
+    "Synthetic\nUser",
+    "Synthetic\rUser",
+    "Synthetic\tUser",
+    "Synthetic User\n",
+    "Synthetic\u0000User",
+    "Synthetic\u0085User",
+    "Synthetic\ud800",
+    "Synthetic\udc00",
+    "x".repeat(256),
+    "",
+    " ",
+    undefined,
+    null,
+    false,
+  ])("refuses malformed actor identity without rewriting it: %#", (identity) => {
+    expect(jiraPropertyUserText(identity)).toBe(false);
+  });
+  it("preserves ordinary multiline project text and literal JSON property text", () => {
+    const text = "Synthetic\nUser\r\tText";
+    expect(jiraNativeText(text, 255)).toBe(true);
+    expect(jiraPropertyValue(text)).toEqual({
+      ok: true,
+      items: [{ path: "", kind: "string", textValue: text }],
+    });
   });
 });
 
