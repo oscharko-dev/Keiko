@@ -126,7 +126,7 @@ function writeResult(
       unchanged: { type: "boolean" },
       guidance: text(512),
       browseUrl: text(4096),
-      fieldId: text(64),
+      fieldId: receipt.fieldId === undefined ? text(64) : receipt.fieldId,
       validation: { type: "string", enum: JIRA_FIELD_VALIDATION_FAILURES },
     },
     ["outcome"],

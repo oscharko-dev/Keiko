@@ -1,5 +1,8 @@
 import { expect, it, vi } from "vitest";
-import { ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK, JIRA_MANAGED_ACTION_TYPES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK,
+  JIRA_MANAGED_ACTION_TYPES,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
 import { isBoundedExternalJsonSchema } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import {
@@ -17,10 +20,26 @@ it("admits the four fixed monitoring-write contracts through the unchanged schem
   }
 });
 it.each([
-  ["jira.set-app-monitoring", { expectedEnabled: false, enabled: true }, { monitoringEnabled: true }],
-  ["jira.set-app-monitoring", { expectedEnabled: true, enabled: false }, { monitoringEnabled: false }],
-  ["jira.set-ipd-monitoring", { expectedEnabled: false, enabled: true }, { monitoringEnabled: true }],
-  ["jira.set-ipd-monitoring", { expectedEnabled: true, enabled: false }, { monitoringEnabled: false }],
+  [
+    "jira.set-app-monitoring",
+    { expectedEnabled: false, enabled: true },
+    { monitoringEnabled: true },
+  ],
+  [
+    "jira.set-app-monitoring",
+    { expectedEnabled: true, enabled: false },
+    { monitoringEnabled: false },
+  ],
+  [
+    "jira.set-ipd-monitoring",
+    { expectedEnabled: false, enabled: true },
+    { monitoringEnabled: true },
+  ],
+  [
+    "jira.set-ipd-monitoring",
+    { expectedEnabled: true, enabled: false },
+    { monitoringEnabled: false },
+  ],
   ["jira.start-jmx-metrics", { expectedEnabled: false }, { jmxMetricsExposed: true }],
   ["jira.stop-jmx-metrics", { expectedEnabled: true }, { jmxMetricsExposed: false }],
 ] as const)("preserves explicit reviewed boolean state for %s", (name, args, receipt) => {
@@ -28,10 +47,17 @@ it.each([
   if (declaration === undefined) throw new TypeError("Missing monitoring declaration");
   expect(describeCatalogSchemaMismatch(declaration.descriptor.inputSchema, args)).toBeUndefined();
   for (const outcome of ["succeeded", "succeeded-unconfirmed", "unknown"])
-    expect(describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, { outcome, ...receipt })).toBeUndefined();
-  expect(describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, {
-    outcome: "rejected", reason: "conflict", unchanged: true, ...receipt,
-  })).toBeUndefined();
+    expect(
+      describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, { outcome, ...receipt }),
+    ).toBeUndefined();
+  expect(
+    describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, {
+      outcome: "rejected",
+      reason: "conflict",
+      unchanged: true,
+      ...receipt,
+    }),
+  ).toBeUndefined();
 });
 it.each([
   ["jira.set-app-monitoring", { enabled: true }],
@@ -54,7 +80,12 @@ it.each([
 ] as const)("refuses mismatched %s receipt fields", (name, receipt) => {
   const declaration = jiraMonitoringDeclarationForTool(name);
   if (declaration === undefined) throw new TypeError("Missing monitoring declaration");
-  expect(describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, { outcome: "succeeded", ...receipt })).toBeDefined();
+  expect(
+    describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, {
+      outcome: "succeeded",
+      ...receipt,
+    }),
+  ).toBeDefined();
 });
 it.each([
   ["jira.set-app-monitoring", "/monitoring/app"],
@@ -64,8 +95,11 @@ it.each([
 ] as const)("binds %s to its reviewed high-risk native POST", (name, pathTemplate) => {
   expect(ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK[JIRA_MANAGED_ACTION_TYPES[name]]).toBe("high");
   expect(jiraOperationForTool(name)?.definition).toMatchObject({
-    method: "POST", apiRoot: "/rest/api/2", pathTemplate,
-    effects: ["remote-read", "remote-write"], permissionPolicy: "monitoring-state-and-readback",
+    method: "POST",
+    apiRoot: "/rest/api/2",
+    pathTemplate,
+    effects: ["remote-read", "remote-write"],
+    permissionPolicy: "instance-admin-monitoring-state-and-readback",
   });
   const connection = vi.fn();
   const executeMutation = vi.fn();

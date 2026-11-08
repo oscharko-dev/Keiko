@@ -2,7 +2,10 @@ import { expect, it } from "vitest";
 import { isBoundedExternalJsonSchema } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
 import { VERSION_LINK_MUTATION_CASES as CASES } from "../../../../tests/support/jira-version-link-mutation-fixture.js";
-import { JIRA_VERSION_LINK_WRITE_DEFINITIONS, jiraVersionLinkMutationDeclarationForTool as declaration } from "./jiraVersionLinkMutationDescriptors.js";
+import {
+  JIRA_VERSION_LINK_WRITE_DEFINITIONS,
+  jiraVersionLinkMutationDeclarationForTool as declaration,
+} from "./jiraVersionLinkMutationDescriptors.js";
 
 it("declares exactly four bounded native version-link mutation identities", () => {
   expect(Object.keys(JIRA_VERSION_LINK_WRITE_DEFINITIONS)).toEqual(CASES.map(({ tool }) => tool));
@@ -16,8 +19,15 @@ it("declares exactly four bounded native version-link mutation identities", () =
 it.each(CASES)("admits $tool's exact reviewed source and independent receipt", (selected) => {
   const operation = declaration(selected.tool);
   if (operation === undefined) throw new TypeError("Missing fixed version-link declaration");
-  expect(describeCatalogSchemaMismatch(operation.descriptor.inputSchema, selected.args)).toBeUndefined();
-  expect(describeCatalogSchemaMismatch(operation.descriptor.resultSchema, { outcome: "succeeded", ...selected.expectedReceipt })).toBeUndefined();
+  expect(
+    describeCatalogSchemaMismatch(operation.descriptor.inputSchema, selected.args),
+  ).toBeUndefined();
+  expect(
+    describeCatalogSchemaMismatch(operation.descriptor.resultSchema, {
+      outcome: "succeeded",
+      ...selected.expectedReceipt,
+    }),
+  ).toBeUndefined();
 });
 it.each([
   { tool: CASES[0].tool, args: { ...CASES[0].args, url: "https://other.invalid" } },
@@ -33,8 +43,12 @@ it.each([
   expect(describeCatalogSchemaMismatch(operation.descriptor.inputSchema, args)).toBeDefined();
 });
 it("states upsert, generated-ID exclusion and native proof boundaries explicitly", () => {
-  expect(JIRA_VERSION_LINK_WRITE_DEFINITIONS[CASES[0].tool].description).toContain("generated");
+  expect(JIRA_VERSION_LINK_WRITE_DEFINITIONS[CASES[0].tool].description).toContain(
+    "Jira would generate an ID if omitted",
+  );
   expect(JIRA_VERSION_LINK_WRITE_DEFINITIONS[CASES[1].tool].description).toContain("raw JSON");
   expect(JIRA_VERSION_LINK_WRITE_DEFINITIONS[CASES[2].tool].description).toContain("404");
-  expect(JIRA_VERSION_LINK_WRITE_DEFINITIONS[CASES[3].tool].description).toContain("confirmAll:true");
+  expect(JIRA_VERSION_LINK_WRITE_DEFINITIONS[CASES[3].tool].description).toContain(
+    "confirmAll:true",
+  );
 });

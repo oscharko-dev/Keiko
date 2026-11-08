@@ -1,4 +1,8 @@
-import { jiraOperationContracts, jiraDeclarationForTool } from "./jiraManagedProvider.js";
+import {
+  jiraOperationContracts,
+  jiraDeclarationForTool,
+  jiraOperationForTool,
+} from "./jiraManagedProvider.js";
 import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
 import { invalidateJiraPodChats } from "./jiraPodLifecycle.js";
 import {
@@ -142,6 +146,7 @@ afterEach(async () => {
   citationSources.labels = new Map();
   for (const cleanup of cleanups.splice(0)) await cleanup();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 function context(body: Record<string, unknown>, params: Record<string, string> = {}): RouteContext {
   return {
@@ -195,7 +200,7 @@ function configure(deps: UiHandlerDeps, proof: ToolProof = true, contextWindow?:
   runtime.recordVerifiedCapability(
     MODEL,
     { conversationReady: true },
-    new Date().toISOString(),
+    new Date(Date.now()).toISOString(),
     runtime.generation(),
   );
 }
@@ -639,7 +644,7 @@ function controlledTurnDeadline(runtimeMs: number): { readonly expire: () => voi
   let clock = Date.now();
   const timeouts: AbortController[] = [];
   const timeout = AbortSignal.timeout.bind(AbortSignal);
-  vi.spyOn(Date, "now").mockImplementation(() => clock);
+  vi.setSystemTime(clock);
   vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) => {
     if (milliseconds > runtimeMs) return timeout(milliseconds);
     const controller = new AbortController();
@@ -649,6 +654,7 @@ function controlledTurnDeadline(runtimeMs: number): { readonly expire: () => voi
   return {
     expire: (): void => {
       clock += runtimeMs;
+      vi.setSystemTime(clock);
       for (const controller of timeouts)
         controller.abort(
           new DOMException("The operation was aborted due to timeout", "TimeoutError"),
@@ -663,8 +669,8 @@ function controlledTurnDeadline(runtimeMs: number): { readonly expire: () => voi
 it.each([false, true])(
   "names exactly the keys Jira created when the turn reaches its deadline after a draft (stream=%s)",
   async (stream) => {
-    const f = fixture(true, undefined, true, false, true);
     const deadline = controlledTurnDeadline(3_000);
+    const f = fixture(true, undefined, true, false, true);
     Object.assign(f.deps, {
       chatToolTurnBudget: { ...TEN_CALL_BUDGET, maxRuntimeMs: 3_000 },
     });
@@ -3605,12 +3611,14 @@ function demandSelectedModel(
   f: ReturnType<typeof fixture>,
   mutation: boolean,
   afterWrite?: () => void,
+  additionalIdentities: readonly string[] = [],
 ): void {
   if (f.deps.jiraChatCatalog === undefined) throw new TypeError("Missing Jira catalog");
   vi.mocked(f.deps.jiraChatCatalog.get).mockRestore();
   const operation = mutation ? "jira_comment" : "jira_projects";
   const identities = [
     mutation ? "POST /rest/api/2/issue/{issueIdOrKey}/comment" : "GET /rest/api/2/project",
+    ...additionalIdentities,
   ];
   const argumentsValue = mutation
     ? { issueKey: "KEIKO-1", body: "Synthetic approved comment" }
@@ -3665,10 +3673,10 @@ function demandSelectedModel(
   });
 }
 
-it("narrows the curated Jira schemas after a settled describe round and preserves its original binding", async () => {
+it("extends the curated Jira base after a settled describe round and preserves every original binding", async () => {
   const f = fixture(false, undefined, true, false, false, undefined, true);
   configure(f.deps, true, 32768);
-  demandSelectedModel(f, false);
+  demandSelectedModel(f, false, undefined, ["GET /rest/api/2/serverInfo"]);
   expect((await handleSendDesktopChat(sendContext(f, "demand-selected-read"), f.deps)).status).toBe(
     200,
   );
@@ -3678,11 +3686,54 @@ it("narrows the curated Jira schemas after a settled describe round and preserve
   const second = f.calls[1]?.toolCatalog;
   if (first?.kind !== "bound" || second?.kind !== "bound")
     throw new TypeError("Expected round catalogs");
-  expect(first.projection.tools.map((tool) => tool.alias)).toContain("jira_projects");
-  expect(second.projection.tools.map((tool) => tool.alias)).toContain("jira_projects");
+  const firstAliases = first.projection.tools.map((tool) => tool.alias);
+  expect(firstAliases.filter((alias) => alias.startsWith("jira_")).sort()).toEqual(
+    [
+      ...[...FIXTURE_OPERATION_TOOLS]
+        .filter((tool) => tool !== "jira.draft")
+        .map((tool) => tool.replace(/[.-]/gu, "_")),
+      "jira_discover",
+      "jira_describe",
+    ].sort(),
+  );
+  expect(firstAliases).not.toContain("jira_server_info");
+  const secondAliases = second.projection.tools.map((tool) => tool.alias);
+  expect([...secondAliases].sort()).toEqual([...firstAliases, "jira_server_info"].sort());
+  expect(new Set(secondAliases).size).toBe(secondAliases.length);
+  for (const tool of first.projection.tools)
+    expect(second.projection.tools.find((selected) => selected.alias === tool.alias)).toEqual(tool);
+  const projects = jiraOperationForTool("jira.projects");
+  const native = jiraOperationForTool("jira.server-info");
+  if (projects === undefined || native === undefined)
+    throw new TypeError("Missing canonical fixture operations");
+  expect(first.projection.tools.find((tool) => tool.alias === "jira_projects")).toMatchObject({
+    toolRef: projects.declaration.descriptor.toolRef,
+    inputSchema: projects.declaration.descriptor.inputSchema,
+    resultSchema: projects.declaration.descriptor.resultSchema,
+  });
+  expect(native.binding.identity).toBe("GET /rest/api/2/serverInfo");
+  expect(second.projection.tools.find((tool) => tool.alias === "jira_server_info")).toMatchObject({
+    toolRef: native.declaration.descriptor.toolRef,
+    inputSchema: native.declaration.descriptor.inputSchema,
+    resultSchema: native.declaration.descriptor.resultSchema,
+  });
   expect(first.projection.projectionDigest).not.toBe(second.projection.projectionDigest);
   const exchanges = demandExchanges(f);
-  expect(exchanges.map((entry) => entry.call.name)).toEqual(["jira_describe", "jira_projects"]);
+  expect(exchanges.map(({ call }) => ({ name: call.name, arguments: call.arguments }))).toEqual([
+    {
+      name: "jira_describe",
+      arguments: { identities: ["GET /rest/api/2/project", "GET /rest/api/2/serverInfo"] },
+    },
+    { name: "jira_projects", arguments: {} },
+  ]);
+  expect(
+    exchanges.filter(({ call }) => call.name === "jira_projects").map(({ result }) => result),
+  ).toMatchObject([
+    {
+      toolRef: projects.declaration.descriptor.toolRef,
+      data: { operationBinding: projects.binding },
+    },
+  ]);
   expect(exchanges.every((entry) => entry.result?.status === "completed")).toBe(true);
 });
 
