@@ -126,20 +126,35 @@ export function clearSessionCookies(secure: boolean): readonly string[] {
   ];
 }
 
-/** Read the app-session cookie value from a request, or `undefined` when it is absent. */
-export function readSessionCookie(req: IncomingMessage): string | undefined {
+function presentedSessionProofs(req: IncomingMessage): readonly string[] {
   const header = req.headers.cookie;
-  if (typeof header !== "string") return undefined;
+  if (typeof header !== "string") return [];
+  const values: string[] = [];
   for (const part of header.split(";")) {
     const trimmed = part.trim();
     const separator = trimmed.indexOf("=");
-    if (separator <= 0) continue;
-    if (trimmed.slice(0, separator) === APP_SESSION_COOKIE_NAME) {
-      const value = trimmed.slice(separator + 1);
-      return value.length > 0 ? value : undefined;
-    }
+    if (separator > 0 && trimmed.slice(0, separator) === APP_SESSION_COOKIE_NAME)
+      values.push(trimmed.slice(separator + 1));
   }
-  return undefined;
+  return values;
+}
+/** The secret is returned separately from the count-only request observation. */
+export function readSessionCookieObservation(req: IncomingMessage): {
+  readonly cookieToken: string | undefined;
+  readonly presentedProofCount: number;
+  readonly distinctProofCount: number;
+} {
+  const values = presentedSessionProofs(req);
+  const value = values[0];
+  return {
+    cookieToken: value === undefined || value.length === 0 ? undefined : value,
+    presentedProofCount: values.length,
+    distinctProofCount: new Set(values.filter((candidate) => candidate.length > 0)).size,
+  };
+}
+/** Read the app-session cookie value without exposing it to diagnostics. */
+export function readSessionCookie(req: IncomingMessage): string | undefined {
+  return readSessionCookieObservation(req).cookieToken;
 }
 
 /** Whether the request arrived over TLS, gating the `Secure` cookie attribute. */

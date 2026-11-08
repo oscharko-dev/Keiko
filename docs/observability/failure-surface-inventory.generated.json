@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "c336ad84eedb511dfb2aea017ab67b1a64b2c21652820f7b6ce24299da6f06c8"
+    "catalogDigest": "6d38691fc4d15c8444381e63756ba1e4b0e0f7a1494b46cd76c85955dc97f4f7"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -71,9 +71,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 675,
-    "proofCount": 698,
-    "resolvedProofCount": 698,
+    "operationCount": 677,
+    "proofCount": 700,
+    "resolvedProofCount": 700,
     "failureClassCount": 394,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -364,8 +364,10 @@
         "coding-app-session.expired",
         "coding-app-session.local-session.confirmed",
         "coding-app-session.local-session.denied",
+        "coding-app-session.local-session.refused",
         "coding-app-session.operation.state",
         "coding-app-session.paired",
+        "coding-app-session.proof.refused",
         "coding-app-session.rotated",
         "coding-app-session.rotation.state",
         "coding-app-session.signed-out",
@@ -1629,12 +1631,18 @@
     "coding-app-session.local-session.denied.request": [
       "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.test.ts"
     ],
+    "coding-app-session.local-session.refused.reason": [
+      "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.test.ts"
+    ],
     "coding-app-session.operation.state.line": [
       "packages/keiko-server/src/coding-app-session/appSessionReadAuthority.test.ts",
       "packages/keiko-server/src/coding-app-session/codingRunSessionLease.test.ts"
     ],
     "coding-app-session.paired.request": [
       "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.test.ts"
+    ],
+    "coding-app-session.proof.refused.reason": [
+      "packages/keiko-server/src/coding-app-session/sessionRegistry.proof.test.ts"
     ],
     "coding-app-session.rotated.request": [
       "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.test.ts"

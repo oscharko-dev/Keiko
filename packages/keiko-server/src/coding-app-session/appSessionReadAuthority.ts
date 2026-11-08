@@ -13,9 +13,9 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { processServerLogSink } from "../process-log-sink.js";
-import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { UNKNOWN_CORRELATION_ID, resolveCorrelationId } from "../correlation.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { readSessionCookie } from "./sessionCookie.js";
+import { readSessionCookieObservation } from "./sessionCookie.js";
 import type { AppSession } from "./sessionRegistry.js";
 
 /**
@@ -27,7 +27,11 @@ export function resolveAppSessionReadAuthority(
   deps: Pick<UiHandlerDeps, "codingAppSessionChannel">,
   req: IncomingMessage,
 ): AppSession | undefined {
-  return deps.codingAppSessionChannel?.verifySession(readSessionCookie(req));
+  const { cookieToken, ...observation } = readSessionCookieObservation(req);
+  return deps.codingAppSessionChannel?.verifySession(cookieToken, {
+    ...observation,
+    correlationId: resolveCorrelationId(req),
+  });
 }
 
 const SESSION_OPERATION = defineActivityLogOperation({
@@ -103,7 +107,10 @@ function logOperationState(
   releaseReason?: "settled" | "aborted",
 ): void {
   const inspect = deps.codingAppSessionChannel?.inspectOperationCount;
-  const concurrentOperations = inspect?.(token);
+  const concurrentOperations = inspect?.(token, {
+    correlationId: context.correlationId ?? UNKNOWN_CORRELATION_ID,
+    purpose: "operation",
+  });
   const authorityState = operationAuthorityState(inspect !== undefined, concurrentOperations);
   const event = activityLogEvent(
     SESSION_OPERATION,
@@ -135,8 +142,12 @@ export function beginAppSessionOperation(
   context: OperationContext = {},
 ): () => void {
   if (req === undefined || deps.codingAppSessionChannel === undefined) return (): void => undefined;
-  const token = readSessionCookie(req);
-  const release = deps.codingAppSessionChannel.beginOperation(token);
+  const { cookieToken: token, ...observation } = readSessionCookieObservation(req);
+  const release = deps.codingAppSessionChannel.beginOperation(token, {
+    ...observation,
+    correlationId: context.correlationId ?? resolveCorrelationId(req),
+    purpose: "operation",
+  });
   if (release === undefined) return (): void => undefined;
   const startedAt = performance.now();
   let released = false;

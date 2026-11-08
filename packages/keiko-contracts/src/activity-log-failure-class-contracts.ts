@@ -1715,7 +1715,11 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
         "coding-app-session.local-session.confirmed",
         "coding-app-session.paired",
       ],
-      failure: ["coding-app-session.local-session.denied"],
+      failure: [
+        "coding-app-session.local-session.denied",
+        "coding-app-session.local-session.refused",
+        "coding-app-session.proof.refused",
+      ],
       loss: [],
     },
     requiredCausalOperations: [
@@ -1724,8 +1728,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "coding-app-session.expired",
       "coding-app-session.local-session.confirmed",
       "coding-app-session.local-session.denied",
+      "coding-app-session.local-session.refused",
       "coding-app-session.operation.state",
       "coding-app-session.paired",
+      "coding-app-session.proof.refused",
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
@@ -1734,8 +1740,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "coding-app-session.expired",
       "coding-app-session.local-session.confirmed",
       "coding-app-session.local-session.denied",
+      "coding-app-session.local-session.refused",
       "coding-app-session.operation.state",
       "coding-app-session.paired",
+      "coding-app-session.proof.refused",
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [

@@ -394,8 +394,18 @@ describe("app-session lifecycle lines (F65)", () => {
       expect(result.status).toBe(401);
       expect(result.body).toEqual({ status: "unavailable" });
       expect(result.headers).toBeUndefined();
-      expect(events).toEqual([]);
-      expect(channel.ensureLocalSession(mint.cookieToken)).toEqual({ status: "unavailable" });
+      const reason = remaining === 0 ? "lifetime" : "lifetime-insufficient";
+      expect(events).toMatchObject([
+        {
+          op: "coding-app-session.local-session.refused",
+          correlationId: "repair-boundary",
+          extra: { reason, count: 1 },
+        },
+      ]);
+      expect(channel.ensureLocalSession(mint.cookieToken)).toEqual({
+        status: "unavailable",
+        reason: remaining === 0 ? "session-unregistered" : reason,
+      });
     },
   );
 
@@ -468,7 +478,13 @@ describe("app-session lifecycle lines (F65)", () => {
     const { deps: logDeps, events } = logged(channel);
     for (let index = 0; index < DENIAL_ALERT_THRESHOLD; index += 1)
       handleCodingAppSessionLocalSession(ctx(), logDeps);
-    expect(events).toMatchObject([
+    const aggregates = events.filter(
+      (event) => event.op === "coding-app-session.local-session.denied",
+    );
+    expect(
+      events.filter((event) => event.op === "coding-app-session.local-session.refused"),
+    ).toHaveLength(DENIAL_ALERT_THRESHOLD);
+    expect(aggregates).toMatchObject([
       {
         op: "coding-app-session.local-session.denied",
         level: "warn",
@@ -477,11 +493,15 @@ describe("app-session lifecycle lines (F65)", () => {
     ]);
     expectActivityLogProof(
       "coding-app-session.local-session.denied.request",
-      formatActivityLogProofLine(events[0] ?? {}),
+      formatActivityLogProofLine(aggregates[0] ?? {}),
     );
     expect(JSON.stringify(events)).not.toContain("sess_");
     handleCodingAppSessionLocalSession(ctx("attacker-private-cookie"), logDeps);
-    expect(events).toHaveLength(1);
+    expect(events).toHaveLength(DENIAL_ALERT_THRESHOLD + 2);
+    expect(events.at(-1)).toMatchObject({
+      op: "coding-app-session.local-session.refused",
+      extra: { reason: "proof-missing", count: 1 },
+    });
   });
 
   it("writes no line of its own for a denied pairing; denials stay aggregated (KEIKO-0838)", async () => {
@@ -624,4 +644,44 @@ it("defers rotation during an active turn even when its response is discarded", 
   release?.();
   expect(registry.inspectOperationCount(mint.cookieToken)).toBe(0);
   expect(registry.inspect(mint.cookieToken)).toBeDefined();
+});
+
+it("records every unsuccessful local-session repair before its denial aggregate threshold", () => {
+  const activityLog = createBufferedServerLogSink();
+  const registry = createSessionRegistry({ activityLog });
+  registry.mint("synthetic");
+  const channel = createCodingAppSessionChannel({ registry });
+  const handlerDeps = {
+    ...deps(channel),
+    activityLog,
+    codingAppSessionDenialWindows: new CodingAppSessionDenialWindows(),
+  };
+  for (const correlationId of ["repair-observation-one", "repair-observation-two"]) {
+    expect(
+      handleCodingAppSessionLocalSession({ ...ctx(), correlationId }, handlerDeps).status,
+    ).toBe(401);
+    const event = activityLog.events.find(
+      (event) =>
+        event.op === "coding-app-session.local-session.refused" &&
+        event.correlationId === correlationId,
+    );
+    expect(event).toMatchObject({ extra: { reason: "proof-missing", count: 1 } });
+  }
+});
+
+it("records an unsuccessful repair even when the channel is absent", () => {
+  const activityLog = createBufferedServerLogSink();
+  expect(
+    handleCodingAppSessionLocalSession(ctx(), { ...deps(undefined), activityLog }).status,
+  ).toBe(401);
+  expect(activityLog.events).toMatchObject([
+    {
+      op: "coding-app-session.local-session.refused",
+      extra: { reason: "channel-unavailable", count: 1 },
+    },
+  ]);
+  expectActivityLogProof(
+    "coding-app-session.local-session.refused.reason",
+    formatActivityLogProofLine(activityLog.events[0] ?? {}),
+  );
 });
