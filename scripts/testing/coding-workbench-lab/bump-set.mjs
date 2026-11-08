@@ -51,7 +51,6 @@ const FIXTURES = join(REPO_ROOT, "tests", "fixtures", "coding-workbench-lab");
 const FIXTURE_DIRS = { ledger: "ledger-lab", polyglot: "polyglot-mono" };
 const PATCHES = {
   initial: "initial-state.patch",
-  "head+t7": "head-t7.patch",
   "head+opencode": "head-opencode.patch",
 };
 const GIT_ID = [
@@ -239,6 +238,37 @@ function oracleContext(task, run, events) {
   };
 }
 
+const WAKE_SETTLE_MS = 60_000;
+const WAKE_TERMINAL_OUTCOMES = new Set(["fired", "missed", "failed", "refused", "removed"]);
+
+function wakeSettled(events, started) {
+  return events
+    .map((event) => flatten(event))
+    .some(
+      (event) =>
+        event.op === "coding-runtime.schedule.wake" &&
+        (event.ts ?? "") >= started &&
+        WAKE_TERMINAL_OUTCOMES.has(event.outcome),
+    );
+}
+
+async function pollWake(logDir, started, deadline) {
+  const events = await readActivityEvents(logDir);
+  if (wakeSettled(events, started) || Date.now() >= deadline) return events;
+  await sleep(2000);
+  return pollWake(logDir, started, deadline);
+}
+
+/**
+ * The Activity Log after the run. Keiko records a wake's outcome only after the wake run ended,
+ * a moment after the driver saw it end (2026-11-08: `fired` two seconds later), so a task that
+ * awaits a wake reads until that outcome is written, for at most a minute.
+ */
+function readEventsAfterWake(entry, logDir, started) {
+  if (entry.awaitWakeMinutes === undefined) return readActivityEvents(logDir);
+  return pollWake(logDir, started, Date.now() + WAKE_SETTLE_MS);
+}
+
 async function runEntry(entry, options, cache) {
   try {
     return await judgeEntry(entry, options, cache);
@@ -259,7 +289,7 @@ async function judgeEntry(entry, options, cache) {
   const run = await driveTask(entry, task, options);
   // History first: the oracles below block on npm and Maven.
   const history = await readHistory(options.baseUrl, task.repo);
-  const events = await readActivityEvents(options.logDir);
+  const events = await readEventsAfterWake(entry, options.logDir, run.started);
   const checks =
     run.runId === undefined
       ? [{ name: "run", ok: false, reason: "no run started" }]

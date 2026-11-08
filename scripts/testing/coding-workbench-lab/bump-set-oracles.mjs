@@ -46,7 +46,8 @@ export const BUMP_SET = Object.freeze([
   {
     id: "T17",
     fixture: "ledger",
-    baseline: "head+t7",
+    // `head` already parses RFC 4180 quotes; only `initial` gives the task something to change.
+    baseline: "initial",
     approve: "all",
     origin: true,
     checks: ["pushedBranch", "npmTestPasses"],
