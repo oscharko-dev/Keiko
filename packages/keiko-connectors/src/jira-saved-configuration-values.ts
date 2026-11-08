@@ -41,7 +41,7 @@ export function savedUnchanged(message: string, receipt: JiraSavedConfigurationR
 export function savedUnconfirmed(message: string, receipt: JiraSavedConfigurationReceipt): SavedFailure {
   return { ok: false, reason: "unavailable", detail: { messages: [message] }, receipt };
 }
-export function savedExactKeys(value: CatalogJsonObject, allowed: ReadonlySet<string>): boolean {
+export function savedExactKeys(value: Readonly<Record<string, unknown>>, allowed: ReadonlySet<string>): boolean {
   return Object.keys(value).every((key) => allowed.has(key));
 }
 export function savedText(value: unknown, max: number, empty = false): value is string {
