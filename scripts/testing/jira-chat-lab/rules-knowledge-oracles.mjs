@@ -3,11 +3,6 @@ import { epicConforms, gradeBacklog, sectionsPresent } from "./requirements/orac
 import { STRUCTURE_RULES } from "./requirements/corpus.mjs";
 import { gradeFormatInventory, FORMATS } from "./requirements/formats.mjs";
 import { completedToolExchange, toolExchangeOf } from "./requirements/tool-exchanges.mjs";
-import {
-  goldenProjectKey,
-  loadGoldenManifest,
-  readGoldenIssues,
-} from "./requirements/golden-jira-oracle.mjs";
 
 const CONTENT_RULES = new Set([
   "summary-pattern",
@@ -49,24 +44,16 @@ export function gradeRuleRefusal({ exchanges, before, after, template, ruleId })
   );
 }
 
-function bugHasPriority(issue, issueType) {
-  return issueType !== "Bug" || typeof issue.fields.priority?.id === "string";
-}
-
-function childRelation(issue, issueType, parentKey) {
-  if (issueType === "Sub-task")
-    return issue.fields.issuetype.subtask === true && issue.fields.parent?.key === parentKey;
-  return true;
-}
-
 function correctedFields(issue, { requirementId, issueType, parentKey, epicLinkFieldId }) {
   if (issue.fields.issuetype?.name !== issueType) return false;
   if (issueType === "Epic") return epicConforms(issue, requirementId);
   if (!issue.fields.summary.startsWith(`[${requirementId}]`)) return false;
   const rule = issueType === "Sub-task" ? STRUCTURE_RULES.Task : STRUCTURE_RULES[issueType];
   if (!sectionsPresent(issue.fields.description, rule.sections)) return false;
-  if (issueType === "Sub-task") return childRelation(issue, issueType, parentKey);
-  return issue.fields[epicLinkFieldId] === parentKey && bugHasPriority(issue, issueType);
+  if (issueType === "Sub-task")
+    return issue.fields.issuetype.subtask === true && issue.fields.parent?.key === parentKey;
+  if (issue.fields[epicLinkFieldId] !== parentKey) return false;
+  return issueType !== "Bug" || typeof issue.fields.priority?.id === "string";
 }
 
 export function gradeCorrectedCreate({
@@ -240,104 +227,5 @@ export function gradeEpicVisibility({ created, boardEpics, backlog, exchanges, b
   return (
     observedReads &&
     created.every((issue) => visible.has(String(issue.id)) && !queued.has(String(issue.id)))
-  );
-}
-
-const BULK_REFUSAL_STEP = "ac1-bulk-refusals";
-const REQUIREMENT_PREFIX = /^\[([^\]]+)\] /u;
-
-function bulkResult(status, detail, counts = {}) {
-  return {
-    step: BULK_REFUSAL_STEP,
-    status,
-    detail,
-    counts: {
-      seededCount: 0,
-      refusedCount: 0,
-      wronglyCreatedCount: 0,
-      wronglyRefusedCount: 0,
-      ...counts,
-    },
-  };
-}
-
-function seededMap(seeded, known) {
-  if (!Array.isArray(seeded) || seeded.length === 0) return undefined;
-  const planned = new Map();
-  for (const entry of seeded) {
-    const id = entry?.requirementId;
-    if (
-      typeof id !== "string" ||
-      !known.has(id) ||
-      typeof entry.ruleId !== "string" ||
-      entry.ruleId.length === 0 ||
-      planned.has(id)
-    )
-      return undefined;
-    planned.set(id, entry.ruleId);
-  }
-  return planned;
-}
-
-async function nativeIssues(ctx) {
-  const key = goldenProjectKey(ctx.projectKey);
-  if (typeof ctx.search === "function") return ctx.search(`project = ${key} ORDER BY id ASC`);
-  return readGoldenIssues(ctx.read, key, { signal: ctx.signal });
-}
-
-function requirementUniverse(ctx) {
-  try {
-    return new Set((ctx.truth?.requirements ?? loadGoldenManifest().requirements).map((r) => r.id));
-  } catch {
-    return undefined;
-  }
-}
-
-async function readCreatedIds(ctx, universe) {
-  try {
-    const issues = await nativeIssues(ctx);
-    if (!Array.isArray(issues)) return undefined;
-    const created = new Set();
-    for (const issue of issues) {
-      const id = REQUIREMENT_PREFIX.exec(issue?.fields?.summary ?? "")?.[1];
-      if (id !== undefined && universe.has(id)) created.add(id);
-    }
-    return created;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Grades a bulk Jira run from native state only: a seeded requirement must own no issue, every
- * other requirement must own one. Model prose and Keiko UI text are never evidence; unreadable or
- * malformed evidence is "unverified", never "green".
- */
-export async function gradeBulkRefusals(ctx, { seeded } = {}) {
-  const universe = requirementUniverse(ctx);
-  if (universe === undefined)
-    return bulkResult("unverified", "Requirement truth is unavailable; nothing was graded");
-  const planned = seededMap(seeded, universe);
-  if (planned === undefined)
-    return bulkResult("unverified", "Seeded violations are empty or malformed; nothing was graded");
-  const created = await readCreatedIds(ctx, universe);
-  if (created === undefined)
-    return bulkResult("unverified", "Native Jira state could not be read", {
-      seededCount: planned.size,
-    });
-  const seededIds = [...planned.keys()];
-  const counts = {
-    seededCount: planned.size,
-    refusedCount: seededIds.filter((id) => !created.has(id)).length,
-    wronglyCreatedCount: seededIds.filter((id) => created.has(id)).length,
-    wronglyRefusedCount: [...universe].filter((id) => !planned.has(id) && !created.has(id)).length,
-  };
-  const ok = counts.wronglyCreatedCount === 0 && counts.wronglyRefusedCount === 0;
-  return bulkResult(
-    ok ? "green" : "red",
-    ok
-      ? "Every seeded requirement has no native issue; every other requirement has one"
-      : "Native Jira state contradicts the seeded refusals",
-    counts,
   );
 }
