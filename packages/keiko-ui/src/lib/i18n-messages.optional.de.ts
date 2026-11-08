@@ -1033,6 +1033,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.draft.empty": "(leer)",
   "chat.jira.draft.cleared": "Geleert",
   "chat.jira.draft.requirements": "Anforderungen: {ids}",
+  "chat.jira.draft.requirementsMissing":
+    "Keine Anforderungsreferenzen: Die Freigabe erstellt dieses Issue ohne Quellnachverfolgung.",
   "chat.jira.draft.unreadable":
     "Dieser Entwurf lässt sich nicht als Vorgangsliste darstellen; seine Details werden Feld für Feld angezeigt.",
   "chat.jira.draft.loading":

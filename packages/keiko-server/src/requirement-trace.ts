@@ -129,7 +129,7 @@ function criterionForms(text: string): readonly string[] {
   // No readable block (for example a literal `{code}` macro marker): it has no checkable
   // representation, so the caller refuses it instead of treating it as present.
   if (blocks.length === 0) return [];
-  const converted = blocks.map(criterionText).join(" ");
+  const converted = blocks.map((block) => criterionText(block)).join(" ");
   return converted === text ? [text] : [text, converted];
 }
 
@@ -258,13 +258,29 @@ export function openTraceSession(deps: UiHandlerDeps, turn: TraceTurn): TraceSes
 
 // ─── Results and evidence ────────────────────────────────────────────────────
 
+/** Fixed repair instructions; never substitute references or labels for the source criteria. */
+export function traceRefusalGuidance(
+  resolution: Extract<TraceResolution, { ok: false }>,
+): string | undefined {
+  if (!resolution.problems.some((problem) => problem.reason === "acceptance-criteria-missing"))
+    return undefined;
+  return (
+    "Nothing was changed. Read the referenced requirements with knowledge.requirements. " +
+    "Copy each missing acceptance criterion verbatim into fields.description. " +
+    "Keep requirementIds beside fields; IDs, labels and paraphrases do not replace the literal criteria. " +
+    "For a draft, stage the corrected traced items before submitting them. Do not remove requirementIds to bypass this refusal."
+  );
+}
+
 export function traceRefusalData(
   resolution: Extract<TraceResolution, { ok: false }>,
   ref?: string,
 ): CatalogJsonObject {
+  const guidance = traceRefusalGuidance(resolution);
   return {
     reason: "field-validation",
     requirementRefusal: resolution.reason,
+    ...(guidance === undefined ? {} : { guidance }),
     requirementProblems: resolution.problems.map((problem): CatalogJsonObject => ({
       ...(ref === undefined ? {} : { ref }),
       reference: problem.reference.slice(0, JIRA_REQUIREMENT_REFERENCE_CHARS_MAX),

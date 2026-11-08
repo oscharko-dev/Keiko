@@ -23,7 +23,7 @@ import type {
   ManagedMcpProvider,
   ManagedMcpToolResult,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import type { ToolDefinition } from "@oscharko-dev/keiko-contracts";
+import type { ChatToolWriteApprovalView, ToolDefinition } from "@oscharko-dev/keiko-contracts";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "../deps.js";
 import type { CatalogHandlerContext } from "../tool-catalog/catalogToolPorts.js";
@@ -129,7 +129,9 @@ const JIRA_BASE_TOOLS = [
   "jira.attach",
 ] as const satisfies typeof JIRA_CHAT_TOOLS;
 const toolAlias = (tool: string): string => tool.replace(/[.-]/gu, "_");
-const JIRA_BATCH_ALIASES: ReadonlySet<string> = new Set(JIRA_BATCH_TOOLS.map(toolAlias));
+const JIRA_BATCH_ALIASES: ReadonlySet<string> = new Set(
+  JIRA_BATCH_TOOLS.map((tool) => toolAlias(tool)),
+);
 const withBatchTools = (tools: typeof JIRA_CHAT_TOOLS): typeof JIRA_CHAT_TOOLS => [
   ...new Set([...tools, ...JIRA_BATCH_TOOLS]),
 ];
@@ -227,8 +229,8 @@ function prepareMutation(
 }
 
 /**
- * The drafts already advised about in a turn, oldest first; bounded like a cache. A draft is its
- * items: correcting them and sending them again is that same choice, a draft of other items is not.
+ * Refusal-log deduplication for a turn, oldest first and bounded. Repeating the same item refs
+ * never confirms an untraced write; only actual trace resolution or human approval can do that.
  */
 const ADVISED_DRAFTS_MAX = 256;
 export function untracedAdvisory(
@@ -243,7 +245,7 @@ export function untracedAdvisory(
   return (refs): boolean => {
     const turn = `${context.chatId}\u0000${context.userMessageId ?? context.correlationId}`;
     const key = `${turn}\u0000${JSON.stringify([...refs].sort((a, b) => a.localeCompare(b)))}`;
-    if (advised.has(key)) return false;
+    if (advised.has(key)) return true;
     advised.add(key);
     if (advised.size > ADVISED_DRAFTS_MAX) advised.delete(advised.values().next().value ?? key);
     recordJiraDraftActivity(deps.activityLog, context.correlationId, {
@@ -442,7 +444,19 @@ export function jiraChatDraftConnection(
   };
 }
 
-/** The items the human left out when approving this draft; none without an approval. */
+/** A pending or refused approval is never a human confirmation of an untraced draft. */
+export function isApprovedJiraDraft(
+  approval: ChatToolWriteApprovalView | undefined,
+  actionDigest: string,
+): approval is Extract<ChatToolWriteApprovalView, { readonly kind: "jira-chat-write" }> {
+  return (
+    approval?.kind === "jira-chat-write" &&
+    approval.operation === "jira.draft" &&
+    approval.actionDigest === actionDigest &&
+    (approval.state === "approved" || approval.state === "claimed")
+  );
+}
+
 /** The human's approval of exactly this draft action, or undefined when none reviewed it. */
 function draftApproval(
   deps: UiHandlerDeps,
@@ -456,9 +470,7 @@ function draftApproval(
     intent.invocationId,
     context.correlationId,
   )?.approval;
-  return approval?.kind === "jira-chat-write" && approval.actionDigest === intent.actionDigest
-    ? approval
-    : undefined;
+  return isApprovedJiraDraft(approval, intent.actionDigest) ? approval : undefined;
 }
 
 /**

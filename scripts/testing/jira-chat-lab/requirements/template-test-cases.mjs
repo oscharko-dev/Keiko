@@ -27,34 +27,74 @@ export const testCaseTemplateMarkdown = (project) =>
 const HEADING = (name) =>
   new RegExp(String.raw`(?:^|\n)[ \t]*(?:h\d\.|#+)?[ \t]*[*_]*${name}\b[^\n]*`, "iu");
 
-/** Whether every named section opens a heading and holds text before the next one (or the footer). */
-export function sectionsFilled(description, names) {
+function descriptionBody(description) {
   const text = String(description ?? "").replaceAll("\r\n", "\n");
   const footer = text.indexOf(FOOTER_START);
-  const body = footer < 0 ? text : text.slice(0, footer);
+  return footer < 0 ? text : text.slice(0, footer);
+}
+
+function sectionFacts(description, names) {
+  const body = descriptionBody(description);
   const heads = names.map((name) => HEADING(name).exec(body));
-  if (heads.some((head) => head === null)) return false;
-  const starts = heads.map((head) => head.index + head[0].length);
-  return heads.every((head, index) => {
+  const missing = names.filter((_name, index) => heads[index] === null);
+  const empty = heads.flatMap((head, index) => {
+    if (head === null) return [];
     const next = heads
+      .filter((other) => other !== null)
       .map((other) => other.index)
       .filter((position) => position > head.index)
       .sort((a, b) => a - b)[0];
-    return body.slice(starts[index], next ?? body.length).trim() !== "";
+    return body.slice(head.index + head[0].length, next ?? body.length).trim() === ""
+      ? [names[index]]
+      : [];
   });
+  return { missing, empty };
 }
 
-/** The criterion number a conforming test case names, or undefined. */
-function criterionOf(issue, item) {
+/** Whether every named section opens a heading and holds text before the next one (or the footer). */
+export function sectionsFilled(description, names) {
+  const facts = sectionFacts(description, names);
+  return facts.missing.length === 0 && facts.empty.length === 0;
+}
+
+function headingSnapshot(description) {
+  return descriptionBody(description)
+    .split("\n")
+    .flatMap((line) => {
+      const marked = /^[ \t]*(?:h\d\.|#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$/u.exec(line);
+      if (marked !== null) return [marked[1]];
+      const plain = line.trim().replace(/^[*_]+|[*_]+$/gu, "");
+      return TEST_CASE_SECTIONS.some((name) => name.toLowerCase() === plain.toLowerCase())
+        ? [plain]
+        : [];
+    });
+}
+
+function criterionFacts(issue, item) {
   const pattern = new RegExp(String.raw`^${item.id}/AC(\d+) \S`, "u");
   const number = Number(pattern.exec(issue.fields.summary ?? "")?.[1]);
   const labels = issue.fields.labels ?? [];
   const traced =
     labels.includes(`keiko-req-${item.id}`) || labels.includes(`keiko-ac-${item.id}-AC${number}`);
   const known = Number.isInteger(number) && number >= 1 && number <= item.acceptanceCount;
-  return known && traced && sectionsFilled(issue.fields.description, TEST_CASE_SECTIONS)
-    ? number
-    : undefined;
+  return { number, known, traced };
+}
+
+/** The same native facts explain a refusal and determine whether this criterion is credited. */
+function testCaseFacts(issue, item) {
+  const { number, known, traced } = criterionFacts(issue, item);
+  const sections = sectionFacts(issue.fields.description, TEST_CASE_SECTIONS);
+  const causes = [];
+  if (!known) causes.push("summary");
+  if (!traced) causes.push("label");
+  if (sections.missing.length > 0 || sections.empty.length > 0) causes.push("section");
+  return { issue, number: causes.length === 0 ? number : undefined, causes, sections };
+}
+
+function templateFailureEvidence({ issue, causes, sections }) {
+  // Synthetic REQ-project evidence stays in the existing private lab scorecard. Never copy the
+  // description body or this issue snapshot into the product's body-free Activity Log.
+  return `${issue.key}: causes=${causes.join(",")}; summary=${JSON.stringify(issue.fields.summary ?? null)}; labels=${JSON.stringify(issue.fields.labels ?? null)}; headings=${JSON.stringify(headingSnapshot(issue.fields.description))}; missingSections=${JSON.stringify(sections.missing)}; emptySections=${JSON.stringify(sections.empty)}`;
 }
 
 /**
@@ -65,7 +105,8 @@ function gradeTemplateTestCases({ tests, item }) {
   if (tests.credited.length === 0) {
     return { status: "unverified", detail: "no test case issue in Jira" };
   }
-  const numbers = tests.credited.map((issue) => criterionOf(issue, item));
+  const facts = tests.credited.map((issue) => testCaseFacts(issue, item));
+  const numbers = facts.map((fact) => fact.number);
   const expected = Array.from({ length: item.acceptanceCount }, (_, index) => index + 1);
   const count = (number) => numbers.filter((entry) => entry === number).length;
   const missing = expected.filter((number) => count(number) === 0);
@@ -77,9 +118,13 @@ function gradeTemplateTestCases({ tests, item }) {
     nonconforming === 0 &&
     tests.duplicates.length === 0 &&
     tests.credited.length === item.acceptanceCount;
+  const evidence = facts
+    .filter((fact) => fact.causes.length > 0)
+    .map((fact) => templateFailureEvidence(fact));
+  const detail = `${tests.credited.length} issues for ${item.acceptanceCount} criteria: ${missing.length} criteria without one, ${duplicated.length} duplicated, ${nonconforming} not conforming to the template`;
   return {
     status: ok ? "green" : "red",
-    detail: `${tests.credited.length} issues for ${item.acceptanceCount} criteria: ${missing.length} criteria without one, ${duplicated.length} duplicated, ${nonconforming} not conforming to the template`,
+    detail: [detail, ...evidence].join("; "),
   };
 }
 

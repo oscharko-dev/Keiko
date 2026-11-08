@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "28d2a28c0188702fa6ec26bf4f6b4e3bb220dd76264dc59cda2e9f2e46c1a775"
+    "catalogDigest": "7acd8b8958cc9994860e34c6e5b26dc74d11180bac2796860a0b4b177f5d761a"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -2871,6 +2871,7 @@
     "search.answer.assessed.line": ["packages/keiko-server/src/grounded-citation-log.test.ts"],
     "search.citations.reconciled.line": [
       "packages/keiko-server/src/grounded-citation-log.test.ts",
+      "packages/keiko-server/src/grounded-jira-read-repair.public-handler.test.ts",
       "packages/keiko-server/src/grounded-qa-hybrid.test.ts"
     ],
     "search.citations.support-settled.line": [

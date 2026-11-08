@@ -1059,6 +1059,35 @@ describe("Jira write approvals never show the request as JSON (#4178)", () => {
     expectNoJson(review);
   });
 
+  it.each(["en", "de"] as const)(
+    "states the missing source trace before explicit approval of an untraced draft in %s (S16)",
+    async (locale) => {
+      const review = await reviewed(
+        "jira.draft",
+        {
+          items: [
+            {
+              ref: "manual",
+              projectId: "10000",
+              issueTypeId: "10001",
+              fields: { summary: "Intentionally unrelated work" },
+            },
+          ],
+        },
+        locale,
+      );
+      expect(review.text).toContain(
+        say(
+          locale,
+          "No requirement references: approval creates this issue without a source trace.",
+          "Keine Anforderungsreferenzen: Die Freigabe erstellt dieses Issue ohne Quellnachverfolgung.",
+        ),
+      );
+      expectNoJson(review);
+      expect(await axe(review.container)).toHaveNoViolations();
+    },
+  );
+
   it("shows an MCP write's arguments under the names the tool gave them", async () => {
     const view: ChatToolWriteApprovalView = {
       kind: "mcp-chat-write",

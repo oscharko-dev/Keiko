@@ -452,6 +452,24 @@ describe("trace session", () => {
 });
 
 describe("trace results and evidence", () => {
+  it("tells the model to preserve literal missing acceptance criteria in the description (S16)", () => {
+    const refusal = traceRefusalData(
+      {
+        ok: false,
+        reason: "references",
+        problems: [{ reference: "document:LH-001/AC2", reason: "acceptance-criteria-missing" }],
+      },
+      "traced",
+    );
+    expect(refusal.guidance).toContain(
+      "Copy each missing acceptance criterion verbatim into fields.description.",
+    );
+    expect(refusal.guidance).toContain("Keep requirementIds");
+    expect(refusal.requirementProblems).toEqual([
+      { ref: "traced", reference: "document:LH-001/AC2", reason: "acceptance-criteria-missing" },
+    ]);
+  });
+
   it("shapes refusals and outcomes for the tool result without echoing long input", () => {
     const refusal = traceRefusalData(
       {

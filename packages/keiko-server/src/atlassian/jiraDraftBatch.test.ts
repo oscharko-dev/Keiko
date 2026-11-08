@@ -73,7 +73,11 @@ interface Behavior {
     call: number,
   ) => DraftBatchGeneration | undefined;
   readonly outline?: (refs: string[], call: number) => DraftBatchGeneration | undefined;
-  readonly stage?: (refs: string[], call: number) => DraftBatchStageOutcome | undefined;
+  readonly stage?: (
+    refs: string[],
+    call: number,
+    items: readonly CatalogJsonObject[],
+  ) => DraftBatchStageOutcome | undefined;
   readonly completionPerKey?: number | undefined;
   readonly signal?: AbortSignal;
   readonly onGenerate?: () => void;
@@ -136,9 +140,9 @@ function harness(behavior: Behavior = {}): Harness {
       stageAttempts += 1;
       const failure = behavior.failStage?.(stageAttempts);
       if (failure !== undefined) return Promise.reject(failure);
-      const refs = items.map(refOf);
+      const refs = items.map((item) => refOf(item));
       h.stageCalls.push({ refs, draftId });
-      const custom = behavior.stage?.(refs, h.stageCalls.length);
+      const custom = behavior.stage?.(refs, h.stageCalls.length, items);
       if (custom !== undefined) return Promise.resolve(custom);
       h.staged.push(...items);
       pageCount += 1;
@@ -175,7 +179,7 @@ function input(count: number, overrides: Partial<DraftBatchInput> = {}): DraftBa
 }
 
 function stagedRefs(h: Harness): string[] {
-  return h.staged.map(refOf);
+  return h.staged.map((item) => refOf(item));
 }
 
 function coveredRefs(h: Harness): string[] {
@@ -397,19 +401,23 @@ describe("runJiraDraftBatch recovery", () => {
     expect(h.observations.some((o) => o.kind === "page" && o.outcome === "refused")).toBe(true);
   });
 
-  it("fails only the ref the stage always rejects", async () => {
+  it("stops instead of splitting an unchanged model-owned stage rejection", async () => {
     const h = harness({
       stage: (refs) => (refs.includes("D3") ? { kind: "rejected", guidance: "Nope." } : undefined),
     });
     const result = await runJiraDraftBatch(input(10), h.ports);
-    expect(result.failedRequirementRefs).toEqual(["doc:R3"]);
+    expect(result.stopReason).toBe("stage-rejection-unchanged");
+    expect(result.failedRequirementRefs).toEqual(requirements(10).map((item) => item.ref));
     expect(result.progress).toMatchObject({
-      draftedCount: 9,
-      failedCount: 1,
-      coveredRequirementCount: 9,
+      draftedCount: 0,
+      coveredRequirementCount: 0,
     });
-    expect(stagedRefs(h)).not.toContain("D3");
-    expect(stagedRefs(h)).toHaveLength(9);
+    expect(stagedRefs(h)).toEqual([]);
+    expect(h.fillCalls).toHaveLength(2);
+    expect(h.stageCalls).toHaveLength(2);
+    expect(h.observations.some((item) => item.kind === "page" && item.outcome === "split")).toBe(
+      false,
+    );
   });
 
   it("stops on a fatal stage outcome and reports the undrafted requirements", async () => {
@@ -838,15 +846,18 @@ describe("runJiraDraftBatch Keiko-owned rejections", () => {
         : undefined;
   };
 
-  it("finds the one refused issue from the cached answers without asking the model again", async () => {
+  it("stops cached isolation when the same Keiko rejection returns", async () => {
     const h = harness({ stage: keikoRejects("D3") });
     const result = await runJiraDraftBatch(input(10), h.ports);
     expect(h.fillCalls).toHaveLength(1);
-    expect(result.failedRequirementRefs).toEqual(["doc:R3"]);
-    expect(result.progress).toMatchObject({ draftedCount: 9, failedCount: 1 });
-    expect(stagedRefs(h)).not.toContain("D3");
-    expect(stagedRefs(h)).toHaveLength(9);
-    expect(h.stageCalls.length).toBeLessThanOrEqual(1 + 2 * Math.ceil(Math.log2(10)) + 1);
+    expect(result.stopReason).toBe("stage-rejection-unchanged");
+    expect(result.failedRequirementRefs).toEqual(requirements(10).map((item) => item.ref));
+    expect(result.progress.draftedCount).toBe(0);
+    expect(stagedRefs(h)).toEqual([]);
+    expect(h.stageCalls.map((call) => call.refs)).toEqual([
+      ["D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8", "D9", "D10"],
+      ["D1", "D2", "D3", "D4", "D5"],
+    ]);
   });
 
   it("fails a lone issue at once, with no correction call", async () => {
@@ -979,6 +990,169 @@ describe("runJiraDraftBatch oversized groups", () => {
       ["doc:R2"],
       ["doc:R3"],
     ]);
-    expect(new Set(h.staged.map(refOf)).size).toBe(3);
+    expect(new Set(h.staged.map((item) => refOf(item))).size).toBe(3);
+  });
+});
+
+const S17_GUIDANCE = "Start every summary with Corrected: and preserve its requirement key.";
+
+function s17CorrectedAnswer(keys: readonly string[]): string {
+  return JSON.stringify({
+    items: keys.map((key) => ({
+      key,
+      summary: `Corrected: ${key}`,
+      sections: { Context: `c ${key}`, Acceptance: `a ${key}` },
+    })),
+  });
+}
+
+function s17GuidedFill(
+  keys: readonly string[],
+  messages: readonly DraftBatchMessage[],
+): DraftBatchGeneration {
+  const corrected = messages.some((message) => message.content.includes(S17_GUIDANCE));
+  return { kind: "text", text: corrected ? s17CorrectedAnswer(keys) : fillAnswer(keys) };
+}
+
+function s17CorrectedItem(item: CatalogJsonObject): boolean {
+  const fields: unknown = item.fields;
+  return (
+    fields !== null &&
+    typeof fields === "object" &&
+    !Array.isArray(fields) &&
+    "summary" in fields &&
+    typeof fields.summary === "string" &&
+    fields.summary.startsWith("Corrected: ")
+  );
+}
+
+function s17Stage(items: readonly CatalogJsonObject[]): DraftBatchStageOutcome | undefined {
+  if (items.every((item) => s17CorrectedItem(item))) return undefined;
+  return { kind: "rejected", guidance: S17_GUIDANCE, owner: "model" };
+}
+
+function expectS17Correction(messages: readonly DraftBatchMessage[] | undefined): void {
+  expect(messages?.some((message) => message.content.includes(S17_GUIDANCE))).toBe(true);
+}
+
+describe("S17 batch correction continuity", () => {
+  it("carries the last stage correction into both halves after output exhaustion", async () => {
+    const h = harness({
+      fill: (keys, messages, call) =>
+        call === 2 ? { kind: "exhausted" } : s17GuidedFill(keys, messages),
+      stage: (_refs, _call, items) => s17Stage(items),
+    });
+    const result = await runJiraDraftBatch(input(4), h.ports);
+    expectComplete(result, 4, h);
+    expect(h.fillCalls.map((messages) => keysOf(messages).length)).toEqual([4, 4, 2, 2]);
+    expectS17Correction(h.fillCalls[2]);
+    expectS17Correction(h.fillCalls[3]);
+    expect(h.stageCalls.map((call) => call.refs.length)).toEqual([4, 2, 2]);
+    expect(h.staged.every((item) => s17CorrectedItem(item))).toBe(true);
+  });
+
+  it("does not spend the stage correction allowance on an earlier parse failure", async () => {
+    const h = harness({
+      fill: (keys, messages, call) =>
+        call === 1 ? { kind: "text", text: "not json" } : s17GuidedFill(keys, messages),
+      stage: (_refs, _call, items) => s17Stage(items),
+    });
+    const result = await runJiraDraftBatch(input(1), h.ports);
+    expectComplete(result, 1, h);
+    expect(h.fillCalls).toHaveLength(3);
+    expect(h.stageCalls).toHaveLength(2);
+    expectS17Correction(h.fillCalls[2]);
+    expect(h.observations.find((observation) => observation.outcome === "staged")).toMatchObject({
+      parseAttemptCount: 3,
+      stageAttemptCount: 2,
+    });
+    expect(h.observations.some((observation) => observation.outcome === "split")).toBe(false);
+  });
+
+  it("stops with a closed reason when the corrected attempt receives the identical stage refusal", async () => {
+    const h = harness({
+      stage: (_refs, _call, items) => s17Stage(items),
+    });
+    const result = await runJiraDraftBatch(input(4), h.ports);
+    expect(result.stopReason).toBe("stage-rejection-unchanged");
+    expect(result.itemCount).toBe(0);
+    expect(result.failedRequirementRefs).toEqual(["doc:R1", "doc:R2", "doc:R3", "doc:R4"]);
+    expect(h.fillCalls).toHaveLength(2);
+    expectS17Correction(h.fillCalls[1]);
+    expect(h.stageCalls).toHaveLength(2);
+    expect(h.staged).toEqual([]);
+    expect(h.observations.some((observation) => observation.outcome === "split")).toBe(false);
+    const last = h.observations.at(-1);
+    expect(last).toMatchObject({
+      outcome: "refused",
+      parseAttemptCount: 2,
+      stageAttemptCount: 2,
+    });
+    expect(last?.kind === "page" ? last.guidanceDigest : undefined).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it("stops the first Keiko isolation after an identical rejection without visiting siblings", async () => {
+    const h = harness({
+      stage: () => ({ kind: "rejected", guidance: "Trace refused.", owner: "keiko" }),
+    });
+    const result = await runJiraDraftBatch(input(4), h.ports);
+    expect(result.stopReason).toBe("stage-rejection-unchanged");
+    expect(result.failedRequirementRefs).toEqual(["doc:R1", "doc:R2", "doc:R3", "doc:R4"]);
+    expect(h.fillCalls).toHaveLength(1);
+    expect(h.stageCalls.map((call) => call.refs)).toEqual([
+      ["D1", "D2", "D3", "D4"],
+      ["D1", "D2"],
+    ]);
+    expect(h.staged).toEqual([]);
+    expect(h.observations.filter((item) => item.outcome === "split")).toHaveLength(1);
+  });
+
+  it("stops an identical rejection when its owner changes from model to Keiko", async () => {
+    const h = harness({
+      stage: (_refs, call) => ({
+        kind: "rejected",
+        guidance: S17_GUIDANCE,
+        owner: call === 1 ? "model" : "keiko",
+      }),
+    });
+    const result = await runJiraDraftBatch(input(4), h.ports);
+    expect(result.stopReason).toBe("stage-rejection-unchanged");
+    expect(result.failedRequirementRefs).toEqual(["doc:R1", "doc:R2", "doc:R3", "doc:R4"]);
+    expect(h.fillCalls).toHaveLength(2);
+    expectS17Correction(h.fillCalls[1]);
+    expect(h.stageCalls).toHaveLength(2);
+    expect(h.staged).toEqual([]);
+    expect(h.observations.some((item) => item.outcome === "split")).toBe(false);
+  });
+
+  it("carries a model-owned singleton correction out of Keiko-owned bisection", async () => {
+    const h = harness({
+      fill: (keys, messages) => s17GuidedFill(keys, messages),
+      stage: (refs, _call, items) => {
+        if (refs.length === 3)
+          return { kind: "rejected", guidance: "Trace refused.", owner: "keiko" };
+        return refs.includes("D3") ? s17Stage(items) : undefined;
+      },
+    });
+    const result = await runJiraDraftBatch(input(3), h.ports);
+    expectComplete(result, 3, h);
+    expect(h.fillCalls).toHaveLength(2);
+    expect(keysOf(h.fillCalls[1] ?? [])).toEqual(["D3"]);
+    expectS17Correction(h.fillCalls[1]);
+    expect(h.stageCalls.map((call) => call.refs)).toEqual([
+      ["D1", "D2", "D3"],
+      ["D1", "D2"],
+      ["D3"],
+      ["D3"],
+    ]);
+    expect(
+      h.observations.filter((item) => item.kind === "page" && item.outcome === "refused"),
+    ).toEqual([
+      expect.objectContaining({ itemCount: 3, parseAttemptCount: 1, stageAttemptCount: 1 }),
+      expect.objectContaining({ itemCount: 1, parseAttemptCount: 0, stageAttemptCount: 1 }),
+    ]);
+    expect(
+      h.staged.filter((item) => refOf(item) === "D3").every((item) => s17CorrectedItem(item)),
+    ).toBe(true);
   });
 });

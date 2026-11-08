@@ -107,6 +107,8 @@ const SEARCH_CITATIONS_RECONCILED_OPERATION = defineActivityLogOperation({
     weakOverlapCount: { type: "integer", dataClass: "count", required: false },
     groupedMarkerCount: { type: "integer", dataClass: "count", required: false },
     danglingMarkerCount: { type: "integer", dataClass: "count", required: true },
+    repairLineCountBefore: { type: "integer", dataClass: "count", required: false },
+    repairLineCountAfter: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -124,6 +126,9 @@ const SEARCH_CITATIONS_RECONCILED_OPERATION = defineActivityLogOperation({
 });
 
 export interface CitationReconciliationMetadata {
+  /** Nonempty source-answer lines in the repair input and proposed output, including refusals. */
+  readonly repairLineCountBefore?: number | undefined;
+  readonly repairLineCountAfter?: number | undefined;
   readonly citationRepairDisposition?: CitationRepairDisposition | undefined;
   readonly answerKind?: GroundedAnswerKind | undefined;
   readonly citationBehaviour?: GroundedCitationBehaviour | undefined;
@@ -134,6 +139,18 @@ export interface CitationReconciliationMetadata {
   readonly declaredInScopeCount?: number | undefined;
   readonly declaredUnreadInScopeCount?: number | undefined;
   readonly declaredNotInScopeCount?: number | undefined;
+}
+
+/** Structural evidence only; the original and proposed repair never leave the answer owner. */
+export function citationRepairLineCounts(
+  original: string,
+  proposed: string,
+): Pick<CitationReconciliationMetadata, "repairLineCountBefore" | "repairLineCountAfter"> {
+  const count = (text: string): number =>
+    groundedAnswerSourceText(text)
+      .split(/\r\n|\r|\n/u)
+      .filter((line) => line.trim().length > 0).length;
+  return { repairLineCountBefore: count(original), repairLineCountAfter: count(proposed) };
 }
 
 function definedCitationMetadata(
@@ -161,6 +178,12 @@ function citationCountMetadata(
   metadata: CitationReconciliationMetadata,
 ): Partial<ActivityLogFields<typeof SEARCH_CITATIONS_RECONCILED_OPERATION>> {
   return {
+    ...(metadata.repairLineCountBefore === undefined
+      ? {}
+      : { repairLineCountBefore: metadata.repairLineCountBefore }),
+    ...(metadata.repairLineCountAfter === undefined
+      ? {}
+      : { repairLineCountAfter: metadata.repairLineCountAfter }),
     ...(metadata.followUpPass === undefined ? {} : { followUpPass: metadata.followUpPass }),
     ...(metadata.insufficiencyDeclaredCount === undefined
       ? {}
