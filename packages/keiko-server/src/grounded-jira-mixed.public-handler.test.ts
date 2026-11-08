@@ -619,7 +619,8 @@ it("rotates real custody during pending normal Chat writes and preserves the oth
     for (const id of f.chats) interruptChatGenerations(f.deps, id);
     await Promise.allSettled(pending);
   }
-});
+  // Four turn-progress waits in sequence: the test's own bound must cover all of them.
+}, 30_000);
 
 function holdOwnedResponse(
   f: ReturnType<typeof runtime>,
