@@ -8,6 +8,7 @@ import { MemoryAutonomyControl } from "./MemoryAutonomyControl";
 function renderControl(props: {
   readonly mode?: CodingWorkbenchMode;
   readonly effectiveMode?: CodingWorkbenchMode | null;
+  readonly routineFactsHeldForReview?: boolean;
   readonly disabled?: boolean;
   readonly error?: "hydrate" | "persist" | null;
   readonly onChange?: (mode: CodingWorkbenchMode) => void;
@@ -16,6 +17,7 @@ function renderControl(props: {
     <MemoryAutonomyControl
       mode={props.mode ?? "governed-assist"}
       effectiveMode={props.effectiveMode ?? null}
+      routineFactsHeldForReview={props.routineFactsHeldForReview ?? false}
       disabled={props.disabled ?? false}
       error={props.error ?? null}
       onChange={props.onChange ?? vi.fn()}
@@ -33,6 +35,29 @@ describe("MemoryAutonomyControl", () => {
     const selected = within(group).getByRole("radio", { name: /Supervised workspace/ });
     expect(selected).toBeChecked();
     expect(within(group).getByRole("radio", { name: /Full access/ })).not.toBeChecked();
+  });
+
+  it("says routine memories wait for review only when the operator holds them (#4206)", () => {
+    const { rerender } = renderControl({});
+    expect(
+      screen.getByText(/Keiko uses new routine memories right away, in every mode/),
+    ).toBeInTheDocument();
+    rerender(
+      <MemoryAutonomyControl
+        mode="autonomous-delivery"
+        effectiveMode="governed-assist"
+        routineFactsHeldForReview
+        disabled={false}
+        error={null}
+        onChange={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/right away, in every mode/)).not.toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Your administrator holds new routine memories for review. Keiko uses them once they are approved.",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("calls onChange with the selected mode", async () => {

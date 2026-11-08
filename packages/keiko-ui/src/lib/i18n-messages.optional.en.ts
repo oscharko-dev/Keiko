@@ -2500,6 +2500,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "memoria.settings.mode.label": "Memory autonomy",
   "memoria.settings.mode.help":
     "Keiko uses new routine memories right away, in every mode. The mode only applies to memories that still wait for review.",
+  "memoria.settings.mode.helpHeld":
+    "Your administrator holds new routine memories for review. Keiko uses them once they are approved.",
   "memoria.settings.mode.group": "Memory autonomy mode",
   "memoria.settings.mode.governedAssist.label": "Ask for approval",
   "memoria.settings.mode.governedAssist.description":

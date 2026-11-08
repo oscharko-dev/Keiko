@@ -65,6 +65,7 @@ function MemoriaVivaRequestSettings({
         <MemoryAutonomyControl
           mode={policy.requestedMode}
           effectiveMode={policy.effectiveMode}
+          routineFactsHeldForReview={policy.routineFactsHeldForReview}
           disabled={policy.pending}
           error={policy.error}
           onChange={policy.change}

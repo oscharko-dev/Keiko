@@ -75,6 +75,8 @@ interface MemoryAutonomyControlProps {
   // lower than `mode` when the deployment ceiling clamps the requested selection. null before the
   // first hydrate/persist response lands.
   readonly effectiveMode: CodingWorkbenchMode | null;
+  // An operator ceiling that holds new routine facts for review makes the default help untrue.
+  readonly routineFactsHeldForReview?: boolean;
   readonly disabled: boolean;
   readonly error: "hydrate" | "persist" | null;
   readonly onChange: (mode: CodingWorkbenchMode) => void;
@@ -83,6 +85,7 @@ interface MemoryAutonomyControlProps {
 export function MemoryAutonomyControl({
   mode,
   effectiveMode,
+  routineFactsHeldForReview = false,
   disabled,
   error,
   onChange,
@@ -94,7 +97,13 @@ export function MemoryAutonomyControl({
     <div className={styles.root}>
       <div className={styles.heading}>
         <strong>{t("memoria.settings.mode.label")}</strong>
-        <span>{t("memoria.settings.mode.help")}</span>
+        <span>
+          {t(
+            routineFactsHeldForReview
+              ? "memoria.settings.mode.helpHeld"
+              : "memoria.settings.mode.help",
+          )}
+        </span>
       </div>
       <div className={styles.group} role="radiogroup" aria-label={t("memoria.settings.mode.group")}>
         {CODING_WORKBENCH_MODES.map((option) => (

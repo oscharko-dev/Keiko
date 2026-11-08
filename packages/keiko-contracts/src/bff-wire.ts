@@ -976,6 +976,9 @@ export interface MemoryAutonomyPolicyWire {
   readonly effectiveMode: CodingWorkbenchMode;
   readonly deploymentCeiling: CodingWorkbenchMode;
   readonly revision: number;
+  // True when an operator-configured ceiling holds new routine facts for review instead of using
+  // them right away (#4206). Absent from older servers, which never held them.
+  readonly routineFactsHeldForReview?: boolean | undefined;
 }
 
 export interface UpdateMemoryAutonomyPolicyWire {

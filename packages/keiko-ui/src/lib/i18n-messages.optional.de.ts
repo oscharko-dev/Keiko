@@ -2597,6 +2597,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "memoria.settings.mode.label": "Erinnerungsautonomie",
   "memoria.settings.mode.help":
     "Neue Routine-Erinnerungen nutzt Keiko sofort, in jedem Modus. Der Modus gilt nur für Erinnerungen, die noch auf Prüfung warten.",
+  "memoria.settings.mode.helpHeld":
+    "Ihre Administration hält neue Routine-Erinnerungen zur Prüfung zurück. Keiko nutzt sie, sobald sie freigegeben sind.",
   "memoria.settings.mode.group": "Erinnerungsautonomiemodus",
   "memoria.settings.mode.governedAssist.label": "Um Freigabe bitten",
   "memoria.settings.mode.governedAssist.description":

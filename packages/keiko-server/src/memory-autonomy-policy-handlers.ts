@@ -5,6 +5,7 @@ import type { UiHandlerDeps } from "./deps.js";
 import {
   DEFAULT_MEMORY_AUTONOMY_MODE,
   memoryDeploymentCeiling,
+  memoryOperatorRestrictsAcceptance,
   resolveMemoryCaptureAutonomyMode,
 } from "./memory-capture-policy.js";
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
@@ -26,6 +27,7 @@ function policyProjection(
     effectiveMode: resolveMemoryCaptureAutonomyMode(deps, requestedMode),
     deploymentCeiling,
     revision,
+    routineFactsHeldForReview: memoryOperatorRestrictsAcceptance(deps),
   };
 }
 
