@@ -54,7 +54,7 @@ describe("native issue pin and explicit email request", () => {
       reason: "unavailable",
       receipt: {
         recipientUserKeys: [USER.key],
-        notificationDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        notificationDigest: expect.stringMatching(/^[a-f0-9]{64}$/u) as string,
       },
     });
     expect(JSON.stringify(result.receipt)).not.toContain(notify.args.textBody);
@@ -91,7 +91,7 @@ describe("native issue pin and explicit email request", () => {
       receipt: pin.receipt,
     });
     expect(f.calls.filter((call) => call.path.endsWith("/pinned-comments"))).toHaveLength(2);
-    expect(f.calls.filter((call) => call.method === "PUT")[0]?.body).toBe(true);
+    expect(f.calls.find((call) => call.method === "PUT")?.body).toBe(true);
   });
   it("refuses a pre-effect no-op for an already observed exact pin", async () => {
     const f = issueActionFixture();

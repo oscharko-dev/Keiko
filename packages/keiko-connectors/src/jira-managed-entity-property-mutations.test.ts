@@ -15,6 +15,7 @@ import {
   PROPERTY_CASES as CASES,
   type PropertyScenario,
 } from "./jira-property-test/_support.js";
+import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { scriptedJiraMutationRequest as port } from "./jira-test-request/_support.js";
 
 const KEY = "review ~key";
@@ -58,7 +59,15 @@ function propertyPath(scenario: PropertyScenario): string {
 function fixture(
   scenario: PropertyScenario,
   script: readonly (AtlassianWriteHttpOutcome | Error)[],
-) {
+): {
+  readonly selected: ReturnType<typeof port>;
+  readonly unused: ReturnType<typeof port>;
+  readonly ports: {
+    readonly platform: ReturnType<typeof port>;
+    readonly agile: ReturnType<typeof port>;
+    readonly baseUrl: string;
+  };
+} {
   const selected = port(script);
   const unused = port([]);
   return {
@@ -82,7 +91,7 @@ function script(scenario: PropertyScenario, remove: boolean): readonly Atlassian
     remove ? ABSENT : value(false),
   ];
 }
-function effects(selected: ReturnType<typeof port>) {
+function effects(selected: ReturnType<typeof port>): Parameters<JiraMutationRequest>[] {
   return selected.mock.calls.filter(([, method]) => method !== undefined && method !== "GET");
 }
 

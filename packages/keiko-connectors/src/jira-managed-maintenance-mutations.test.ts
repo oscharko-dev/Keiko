@@ -133,7 +133,7 @@ describe("one-effect reviewed maintenance operations", () => {
       const native = maintenanceMutationFixture(selected);
       const args: Record<string, CatalogJsonValue> = { ...selected.args };
       for (const [key, value] of Object.entries(patch)) {
-        if (value === undefined) delete args[key];
+        if (value === undefined) Reflect.deleteProperty(args, key);
         else args[key] = value;
       }
       expect(await execute(selected.name, args, native.request)).toMatchObject({

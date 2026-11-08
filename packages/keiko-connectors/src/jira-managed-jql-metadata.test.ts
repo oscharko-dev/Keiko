@@ -178,7 +178,7 @@ it.each([
 );
 it("refuses an oversized native collection rather than returning a deceptively complete prefix", async () => {
   const results = Array.from({ length: TOOL_CATALOG_LIMITS.maxArrayItems + 1 }, (_, index) => ({
-    value: `Value ${index}`,
+    value: `Value ${String(index)}`,
   }));
   expect(
     (await read("jira.jql-suggestions", { fieldName: "project" }, request({ results }))).data

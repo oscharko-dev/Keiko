@@ -43,7 +43,9 @@ export interface IssueLifecycleSubtask {
   readonly id: string;
   readonly key: string;
 }
-type Common = { readonly actor: string };
+interface Common {
+  readonly actor: string;
+}
 export type IssueLifecycleInput = Common &
   (
     | { readonly kind: "archive-many"; readonly issues: readonly IssueLifecycleReview[] }
@@ -146,19 +148,11 @@ function nativePosition(value: unknown): value is number {
     value <= Number.MAX_SAFE_INTEGER
   );
 }
-function singleInput(
-  operation: Exclude<JiraIssueLifecycleMutation, "jira.archive-issues">,
+function reorderInput(
   args: CatalogJsonObject,
   actor: string,
+  issue: IssueLifecycleReview,
 ): IssueLifecycleInput | undefined {
-  const issue = issueLifecycleReview(args.expectedIssue);
-  if (issue === undefined) return undefined;
-  if (operation === "jira.delete-issue")
-    return Array.isArray(args.expectedSubtasks) && args.expectedSubtasks.length === 0
-      ? { kind: "delete", actor, issue }
-      : undefined;
-  if (operation !== "jira.move-subtask")
-    return { kind: operation === "jira.archive-issue" ? "archive" : "restore", actor, issue };
   const subtasks = selectedList(
     args.expectedSubtasks,
     issueLifecycleSubtask,
@@ -178,6 +172,21 @@ function singleInput(
         original: args.originalPosition,
         current: args.currentPosition,
       };
+}
+function singleInput(
+  operation: Exclude<JiraIssueLifecycleMutation, "jira.archive-issues">,
+  args: CatalogJsonObject,
+  actor: string,
+): IssueLifecycleInput | undefined {
+  const issue = issueLifecycleReview(args.expectedIssue);
+  if (issue === undefined) return undefined;
+  if (operation === "jira.delete-issue")
+    return Array.isArray(args.expectedSubtasks) && args.expectedSubtasks.length === 0
+      ? { kind: "delete", actor, issue }
+      : undefined;
+  if (operation !== "jira.move-subtask")
+    return { kind: operation === "jira.archive-issue" ? "archive" : "restore", actor, issue };
+  return reorderInput(args, actor, issue);
 }
 export function isJiraIssueLifecycleMutation(name: string): name is JiraIssueLifecycleMutation {
   return Object.hasOwn(INPUT_KEYS, name);

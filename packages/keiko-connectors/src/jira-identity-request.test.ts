@@ -1,9 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import { jiraIdentityRequests } from "./jira-identity-request.js";
 import { jiraProjectLifecycleRequests } from "./jira-project-lifecycle-request.js";
 
-function fixture() {
+interface IdentityFixture {
+  readonly http: Mock<AtlassianHttpBodyPort>;
+  readonly beforeEffect: Mock<() => boolean>;
+  readonly controller: AbortController;
+  readonly identity: ReturnType<typeof jiraIdentityRequests>;
+  readonly project: ReturnType<typeof jiraProjectLifecycleRequests>;
+}
+function fixture(): IdentityFixture {
   const http = vi.fn<AtlassianHttpBodyPort>(() =>
     Promise.resolve({
       kind: "response",

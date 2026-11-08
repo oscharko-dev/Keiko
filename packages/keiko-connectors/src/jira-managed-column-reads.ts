@@ -114,29 +114,44 @@ export function projectJiraColumnItems(
   }
   return items;
 }
+const MALFORMED_STATE = { ok: false, reason: "malformed-payload" } as const;
+function stateConfiguration(
+  response: JiraReadResponse,
+): { readonly columnConfig?: string } | undefined {
+  const body = response.body;
+  const configuration =
+    response.items === undefined && body !== undefined ? layoutConfiguration(body) : {};
+  if (configuration === undefined) return undefined;
+  return typeof configuration.columnConfig === "string"
+    ? { columnConfig: configuration.columnConfig }
+    : {};
+}
+function listedColumns(
+  raw: readonly unknown[],
+  layout: boolean,
+):
+  | { readonly ok: true; readonly columns: readonly string[] }
+  | { readonly ok: false; readonly reason: "malformed-payload" | "bounds-exceeded" } {
+  if (raw.length > TOOL_CATALOG_LIMITS.maxArrayItems)
+    return { ok: false, reason: "bounds-exceeded" };
+  const items = projectJiraColumnItems(raw, layout);
+  if (items === undefined) return MALFORMED_STATE;
+  const fields = columnFieldIds(items, layout);
+  return fields === undefined ? MALFORMED_STATE : { ok: true, columns: fields };
+}
 /** Internal complete-layout evidence for writes; selectors and read projections stay unchanged. */
 export function projectJiraFilterColumnState(
   response: JiraReadResponse,
 ):
   | { readonly ok: true; readonly columns?: readonly string[]; readonly columnConfig?: string }
   | { readonly ok: false; readonly reason: "malformed-payload" | "bounds-exceeded" } {
-  const body = response.body;
-  const configuration =
-    response.items === undefined && body !== undefined ? layoutConfiguration(body) : {};
-  if (configuration === undefined) return { ok: false, reason: "malformed-payload" };
-  const raw = response.items ?? body?.columnLayoutItems;
-  const columnConfig =
-    typeof configuration.columnConfig === "string" ? configuration.columnConfig : undefined;
-  if (raw === undefined || raw === null)
-    return { ok: true, ...(columnConfig === undefined ? {} : { columnConfig }) };
-  if (!Array.isArray(raw)) return { ok: false, reason: "malformed-payload" };
-  if (raw.length > TOOL_CATALOG_LIMITS.maxArrayItems)
-    return { ok: false, reason: "bounds-exceeded" };
-  const items = projectJiraColumnItems(raw, response.items === undefined);
-  if (items === undefined) return { ok: false, reason: "malformed-payload" };
-  const fields = columnFieldIds(items, response.items === undefined);
-  if (fields === undefined) return { ok: false, reason: "malformed-payload" };
-  return { ok: true, columns: fields, ...(columnConfig === undefined ? {} : { columnConfig }) };
+  const configuration = stateConfiguration(response);
+  if (configuration === undefined) return MALFORMED_STATE;
+  const raw = response.items ?? response.body?.columnLayoutItems;
+  if (raw === undefined || raw === null) return { ok: true, ...configuration };
+  if (!Array.isArray(raw)) return MALFORMED_STATE;
+  const listed = listedColumns(raw, response.items === undefined);
+  return listed.ok ? { ok: true, columns: listed.columns, ...configuration } : listed;
 }
 function columnFieldIds(
   items: readonly CatalogJsonObject[],

@@ -265,7 +265,7 @@ describe("one-demand native maintenance observations", () => {
   it("refuses excessive native node and queue collections before projecting a partial status", async () => {
     const entries = Array.from(
       { length: TOOL_CATALOG_LIMITS.maxArrayItems + 1 },
-      (_, i) => [`node-${i}`, {}] as const,
+      (_, i) => [`node-${String(i)}`, {}] as const,
     );
     expect(
       (await read("jira.cluster-nodes", {}, array(entries.map(([nodeId]) => ({ nodeId }))))).data

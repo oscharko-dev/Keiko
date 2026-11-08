@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import {
@@ -7,15 +7,15 @@ import {
   JIRA_APPLICATION_SETTINGS_READS,
 } from "./jira-managed-application-settings.js";
 
-function objectRequest(body: Record<string, unknown>) {
+function objectRequest(body: Record<string, unknown>): Mock<JiraMutationRequest> {
   return vi.fn<JiraMutationRequest>().mockResolvedValue({ ok: true, status: 200, body });
 }
-function arrayRequest(items: readonly unknown[]) {
+function arrayRequest(items: readonly unknown[]): Mock<JiraMutationRequest> {
   return vi
     .fn<JiraMutationRequest>()
     .mockResolvedValue({ ok: true, status: 200, body: undefined, items });
 }
-function scalarRequest(scalar: string | boolean | number | null) {
+function scalarRequest(scalar: string | boolean | number | null): Mock<JiraMutationRequest> {
   return vi
     .fn<JiraMutationRequest>()
     .mockResolvedValue({ ok: true, status: 200, body: undefined, scalar });
@@ -61,16 +61,16 @@ it("withholds unknown configuration data without reading value/default/example a
   const observed = vi.fn(() => "private diagnostic setting");
   const body = {
     key: "plugin.connection.password",
-    get value() {
+    get value(): string {
       return observed();
     },
-    get example() {
+    get example(): string {
       return observed();
     },
-    get defaultValue() {
+    get defaultValue(): string {
       return observed();
     },
-    get allowedValues() {
+    get allowedValues(): string {
       return observed();
     },
   };
@@ -268,7 +268,7 @@ it("rejects malformed and oversized collections before local slicing", async () 
         {},
         arrayRequest(
           Array.from({ length: TOOL_CATALOG_LIMITS.maxArrayItems + 1 }, (_, index) => ({
-            key: `plugin.setting.${index}`,
+            key: `plugin.setting.${String(index)}`,
           })),
         ),
       )

@@ -8,10 +8,9 @@ import {
 import {
   TOOL_CATALOG_LIMITS,
   type CatalogJsonObject,
-  type CatalogJsonValue,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { canonicalise } from "@oscharko-dev/keiko-security";
-import { asRecord } from "./atlassian-sync-classify.js";
+import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import { parseRequirementIds } from "./jira-draft.js";
 import { jiraNativeId } from "./jira-native-values.js";
 import { jiraResourceSelfMatches } from "./jira-resource-self.js";
@@ -40,20 +39,12 @@ const INPUT_KEYS = new Set([
   "confirmUnverifiedEffect",
 ]);
 const ITEM_KEYS = new Set(["projectId", "issueTypeId", "fields", "links"]);
-function record(value: CatalogJsonValue): value is CatalogJsonObject {
+function record(value: unknown): value is CatalogJsonObject {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
-export function parseJiraBulkCreateInput(args: CatalogJsonObject): JiraBulkCreateInput | undefined {
-  if (
-    !savedExactKeys(args, INPUT_KEYS) ||
-    !savedText(args.expectedActorKey, 255) ||
-    args.confirmUnverifiedEffect !== true
-  )
-    return undefined;
-  const issues = args.issues;
-  const references = parseRequirementIds(args.requirementIds);
-  if (!Array.isArray(issues) || issues.length < 1 || issues.length > 50 || references === undefined)
-    return undefined;
+function boundedIssues(args: CatalogJsonObject): readonly CatalogJsonObject[] | undefined {
+  const issues = asArray(args.issues);
+  if (issues === undefined || issues.length < 1 || issues.length > 50) return undefined;
   if (
     new TextEncoder().encode(JSON.stringify(args)).byteLength > TOOL_CATALOG_LIMITS.maxArgumentBytes
   )
@@ -67,6 +58,18 @@ export function parseJiraBulkCreateInput(args: CatalogJsonObject): JiraBulkCreat
     seen.add(identity);
     values.push(structuredClone(item));
   }
+  return values;
+}
+export function parseJiraBulkCreateInput(args: CatalogJsonObject): JiraBulkCreateInput | undefined {
+  if (
+    !savedExactKeys(args, INPUT_KEYS) ||
+    !savedText(args.expectedActorKey, 255) ||
+    args.confirmUnverifiedEffect !== true
+  )
+    return undefined;
+  const references = parseRequirementIds(args.requirementIds);
+  const values = boundedIssues(args);
+  if (references === undefined || values === undefined) return undefined;
   return {
     actor: args.expectedActorKey,
     issues: Object.freeze(values),
@@ -157,20 +160,18 @@ function errorDetail(value: unknown): JiraMutationFailureDetail | undefined {
         : Object.entries(errors).map(([fieldId, message]) => ({ fieldId, message })),
   });
 }
+function validElementNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 2147483647;
+}
+function validFailureStatus(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 400 && value <= 599;
+}
 function bulkFailure(value: unknown): BulkFailure | undefined {
   const raw = asRecord(value);
   if (raw === undefined) return undefined;
   const element = raw.failedElementNumber;
   const status = raw.status;
-  if (
-    typeof element !== "number" ||
-    !Number.isInteger(element) ||
-    element < 0 ||
-    element > 2147483647
-  )
-    return undefined;
-  if (typeof status !== "number" || !Number.isInteger(status) || status < 400 || status > 599)
-    return undefined;
+  if (!validElementNumber(element) || !validFailureStatus(status)) return undefined;
   const detail = errorDetail(raw.elementErrors);
   return { element, status, ...(detail === undefined ? {} : { detail }) };
 }

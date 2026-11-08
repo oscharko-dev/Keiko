@@ -238,7 +238,7 @@ describe("closed group and application-role reads", () => {
         .reason,
     ).toBe("malformed-payload");
     const values = Array.from({ length: TOOL_CATALOG_LIMITS.maxArrayItems + 1 }, (_, index) => ({
-      key: `role-${index}`,
+      key: `role-${String(index)}`,
     }));
     expect(
       (await executeJiraDirectoryRead("jira.application-roles", {}, array(values))).data.reason,

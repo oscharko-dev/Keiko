@@ -89,6 +89,11 @@ interface Selection extends JiraReadPageSelection {
   readonly context: CatalogJsonObject;
 }
 const PAGED: ReadonlySet<Mode> = new Set(["issues", "projects", "versions"]);
+/** Context values are closed identifier strings; anything else renders as empty. */
+function contextText(context: CatalogJsonObject, key: string): string {
+  const value = context[key];
+  return typeof value === "string" ? value : "";
+}
 function allowed(definition: Definition): ReadonlySet<string> {
   const result = new Set<string>(definition.parameters);
   if (PAGED.has(definition.mode)) {
@@ -151,7 +156,8 @@ function select(name: ContextRead, args: CatalogJsonObject): Selection | undefin
     if (typeof args.released !== "boolean") return undefined;
     query.set("released", String(args.released));
   }
-  if (definition.mode === "estimation") query.set("boardId", String(target.context.boardId));
+  if (definition.mode === "estimation")
+    query.set("boardId", contextText(target.context, "boardId"));
   return {
     ...page,
     ...target,
@@ -203,29 +209,33 @@ function contextResult(
     ? result
     : boundJiraReadResult({ ...result, data: { ...result.data, ...context } });
 }
+function collectionItems(
+  values: readonly unknown[] | undefined,
+  selected: Selection,
+): readonly CatalogJsonObject[] | undefined {
+  if (values === undefined) return undefined;
+  return projectJiraCollection(
+    values,
+    selected.maxResults,
+    selected.mode === "projects" ? project : version,
+    "id",
+  );
+}
+function withoutVersionIds(
+  items: readonly CatalogJsonObject[] | undefined,
+): readonly CatalogJsonObject[] | undefined {
+  return items?.map((item) => {
+    const result = { ...item };
+    delete result.id;
+    return result;
+  });
+}
 function collection(response: JiraReadResponse, selected: Selection): ManagedMcpToolResult {
   const values = asArray(response.body?.values);
   if (values !== undefined && values.length > selected.maxResults)
     return jiraReadFailure("bounds-exceeded");
-  let items: readonly CatalogJsonObject[] | undefined;
-  if (values === undefined) {
-    items = undefined;
-  } else {
-    items = projectJiraCollection(
-      values,
-      selected.maxResults,
-      selected.mode === "projects" ? project : version,
-      "id",
-    );
-  }
-  const visible =
-    selected.mode === "versions"
-      ? items?.map((item) => {
-          const result = { ...item };
-          delete result.id;
-          return result;
-        })
-      : items;
+  const items = collectionItems(values, selected);
+  const visible = selected.mode === "versions" ? withoutVersionIds(items) : items;
   const body = response.body ?? {};
   const envelope = body.total === null ? { ...body, total: undefined } : body;
   return contextResult(remoteJiraPage(envelope, visible, selected.startAt, selected.maxResults), {
@@ -314,7 +324,7 @@ async function boundBoard(
 ): Promise<ManagedMcpToolResult | undefined> {
   if (selected.mode !== "projects" && selected.mode !== "versions") return undefined;
   const result = await executeJiraSelectedRead(
-    { path: `board/${String(selected.context.boardId)}` },
+    { path: `board/${contextText(selected.context, "boardId")}` },
     request,
     "json",
     (response) => {
@@ -331,10 +341,10 @@ async function bindEstimation(
   request: JiraMutationRequest,
 ): Promise<Selection | ManagedMcpToolResult> {
   if (selected.mode !== "estimation") return selected;
-  const target = selected.context.issueIdOrKey;
+  const target = contextText(selected.context, "issueIdOrKey");
   const query = new URLSearchParams({ fields: "summary", updateHistory: "false" });
   const result = await executeJiraSelectedRead(
-    { path: `issue/${encodeURIComponent(String(target))}?${query.toString()}` },
+    { path: `issue/${encodeURIComponent(target)}?${query.toString()}` },
     request,
     "json",
     (response) => {

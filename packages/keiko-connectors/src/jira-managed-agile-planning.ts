@@ -166,6 +166,11 @@ async function confirmEstimate(
         "conflict",
       );
 }
+function rankFieldReadable(fields: Readonly<Record<string, unknown>>, fieldId: string): boolean {
+  return (
+    Object.hasOwn(fields, fieldId) && (fields[fieldId] === null || savedText(fields[fieldId], 2048))
+  );
+}
 async function observeRanks(
   requests: JiraAgileRequestPhase,
   admission: PlanningAdmission,
@@ -178,11 +183,7 @@ async function observeRanks(
     const read = await freshIssue(requests, selected, input.fieldId);
     if (!read.ok) return read;
     const fields = read.value.fields;
-    if (
-      !Object.hasOwn(fields, input.fieldId) ||
-      (fields[input.fieldId] !== null && !savedText(fields[input.fieldId], 2048))
-    )
-      return PLANNING_MALFORMED;
+    if (!rankFieldReadable(fields, input.fieldId)) return PLANNING_MALFORMED;
     if (input.operation === "jira.rank-epic") {
       const epic = await readPlanningEpic(requests, read.value);
       if (epic !== undefined) return epic;

@@ -201,6 +201,17 @@ function upload(args: CatalogJsonObject, base: AvatarBase): AvatarUploadInput | 
     },
   };
 }
+function sha256Hex(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{64}$/u.test(value);
+}
+function uploadByteCount(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value > 0 &&
+    value <= JIRA_ATTACHMENT_MAX_BYTES
+  );
+}
 function temporary(value: unknown): AvatarCropInput["expectedTemporary"] | undefined {
   const raw = asRecord(value);
   if (raw === undefined || !exact(raw, ["uploadSha256", "uploadBytes", "crop", "needsCropping"]))
@@ -208,15 +219,8 @@ function temporary(value: unknown): AvatarCropInput["expectedTemporary"] | undef
   const crop = avatarCrop(raw.crop);
   if (
     crop === undefined ||
-    typeof raw.uploadSha256 !== "string" ||
-    !/^[0-9a-f]{64}$/u.test(raw.uploadSha256)
-  )
-    return undefined;
-  if (
-    typeof raw.uploadBytes !== "number" ||
-    !Number.isSafeInteger(raw.uploadBytes) ||
-    raw.uploadBytes <= 0 ||
-    raw.uploadBytes > JIRA_ATTACHMENT_MAX_BYTES ||
+    !sha256Hex(raw.uploadSha256) ||
+    !uploadByteCount(raw.uploadBytes) ||
     typeof raw.needsCropping !== "boolean"
   )
     return undefined;
@@ -276,17 +280,11 @@ function cropping(
     ? undefined
     : { ...base, kind, expectedTemporary, crop, expectedAvatars };
 }
-export function parseJiraAvatarMutation(
+function selection(
   operation: JiraAvatarMutation,
   args: CatalogJsonObject,
+  base: AvatarBase,
 ): AvatarInput | undefined {
-  if (!savedName(args.expectedActorKey)) return undefined;
-  const target = expectedTarget(operation, args.target);
-  if (target === undefined) return undefined;
-  const base: AvatarBase = { actor: args.expectedActorKey, target };
-  if (operation.startsWith("jira.upload-")) return upload(args, base);
-  if (operation.startsWith("jira.create-") || operation === "jira.crop-temporary-avatar")
-    return cropping(operation, args, base);
   if (
     !exact(args, ["expectedActorKey", "target", "avatarId", "expectedAvatars"]) ||
     !jiraNativeId(args.avatarId)
@@ -300,4 +298,17 @@ export function parseJiraAvatarMutation(
   return kind === "delete" && selected.category !== "custom"
     ? undefined
     : { ...base, kind, avatarId: args.avatarId, expectedAvatars };
+}
+export function parseJiraAvatarMutation(
+  operation: JiraAvatarMutation,
+  args: CatalogJsonObject,
+): AvatarInput | undefined {
+  if (!savedName(args.expectedActorKey)) return undefined;
+  const target = expectedTarget(operation, args.target);
+  if (target === undefined) return undefined;
+  const base: AvatarBase = { actor: args.expectedActorKey, target };
+  if (operation.startsWith("jira.upload-")) return upload(args, base);
+  if (operation.startsWith("jira.create-") || operation === "jira.crop-temporary-avatar")
+    return cropping(operation, args, base);
+  return selection(operation, args, base);
 }

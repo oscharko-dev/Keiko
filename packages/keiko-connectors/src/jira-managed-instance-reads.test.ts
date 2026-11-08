@@ -232,8 +232,8 @@ it.each([
 it("refuses an over-budget definition collection without returning a silently incomplete page", async () => {
   const permissions = Object.fromEntries(
     Array.from({ length: TOOL_CATALOG_LIMITS.maxArrayItems + 1 }, (_, index) => [
-      `PERMISSION_${index}`,
-      { name: `Permission ${index}` },
+      `PERMISSION_${String(index)}`,
+      { name: `Permission ${String(index)}` },
     ]),
   );
   const port = request({ permissions });

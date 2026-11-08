@@ -73,6 +73,18 @@ function pageMetadata(
     raw.maxResults >= 1
   );
 }
+function pageOutOfBounds(
+  comments: readonly unknown[],
+  raw: { readonly total: number; readonly maxResults: number },
+  start: number,
+): boolean {
+  if (
+    comments.length > Math.min(raw.maxResults, TOOL_CATALOG_LIMITS.maxArrayItems) ||
+    start + comments.length > raw.total
+  )
+    return true;
+  return start + comments.length !== raw.total && comments.length === 0;
+}
 function commentPage(
   response: Extract<AtlassianWriteHttpOutcome, { readonly ok: true }>,
   start: number,
@@ -83,14 +95,8 @@ function commentPage(
   if (response.status !== 200 || !pageMetadata(raw, start) || comments === undefined)
     return MALFORMED;
   if (total !== undefined && raw.total !== total) return CONFLICT;
-  if (
-    comments.length > Math.min(raw.maxResults, TOOL_CATALOG_LIMITS.maxArrayItems) ||
-    start + comments.length > raw.total
-  )
-    return MALFORMED;
-  const last = start + comments.length === raw.total;
-  if (!last && comments.length === 0) return MALFORMED;
-  return { ok: true, comments, total: raw.total, last };
+  if (pageOutOfBounds(comments, raw, start)) return MALFORMED;
+  return { ok: true, comments, total: raw.total, last: start + comments.length === raw.total };
 }
 function collectCommentIds(
   comments: readonly unknown[],

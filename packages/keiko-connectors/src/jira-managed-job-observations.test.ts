@@ -271,7 +271,7 @@ it("retains the documented native metric description without executing or repars
 
 it("refuses oversized snapshot collections without returning a deceptively complete prefix", async () => {
   const items = Array.from({ length: TOOL_CATALOG_LIMITS.maxArrayItems + 1 }, (_, index) => ({
-    absolutePath: `/server/${index}`,
+    absolutePath: `/server/${String(index)}`,
   }));
   expect((await read("jira.index-snapshots", {}, response({ items }))).data.reason).toBe(
     "bounds-exceeded",

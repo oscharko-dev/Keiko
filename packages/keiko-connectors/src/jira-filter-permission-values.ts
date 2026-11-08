@@ -167,37 +167,35 @@ function targetSelectors(raw: Record<string, unknown>): Record<string, string> |
   }
   return fields;
 }
+function targetRights(
+  raw: Record<string, unknown>,
+): { readonly view: boolean; readonly edit: boolean } | undefined {
+  if (Object.keys(raw).some((key) => !TARGET_FIELDS.has(key)) || !SHARE_TYPES.has(raw.type))
+    return undefined;
+  const { view, edit } = raw;
+  if (typeof view !== "boolean" || typeof edit !== "boolean" || (!view && !edit)) return undefined;
+  return { view, edit };
+}
 export function filterPermissionTarget(value: unknown): FilterPermissionTarget | undefined {
   const raw = asRecord(value);
-  if (
-    raw === undefined ||
-    Object.keys(raw).some((key) => !TARGET_FIELDS.has(key)) ||
-    !SHARE_TYPES.has(raw.type)
-  )
-    return undefined;
-  if (typeof raw.view !== "boolean" || typeof raw.edit !== "boolean" || (!raw.view && !raw.edit))
-    return undefined;
+  if (raw === undefined) return undefined;
+  const rights = targetRights(raw);
+  if (rights === undefined) return undefined;
   // The input is a CatalogJsonValue at the dispatch boundary. Build a closed object, never cast a
   // native arbitrary object into catalog arguments or preserve extra recipient selectors.
   const selected: CatalogJsonObject = {
     type: typeof raw.type === "string" ? raw.type : "",
-    view: raw.view,
-    edit: raw.edit,
+    view: rights.view,
+    edit: rights.edit,
   };
   const fields = targetSelectors(raw);
   if (fields === undefined) return undefined;
   const input = { ...selected, ...fields };
   return input.type === "global" || input.type === "authenticated"
     ? broadTarget(input)
-    : specificTarget(input, raw.view, raw.edit);
+    : specificTarget(input, rights.view, rights.edit);
 }
-export function filterPermissionMatches(
-  row: CatalogJsonObject,
-  target: FilterPermissionTarget,
-  rights = true,
-): boolean {
-  if (row.type !== target.type) return false;
-  if (rights && (row.view !== target.view || row.edit !== target.edit)) return false;
+function recipientMatches(row: CatalogJsonObject, target: FilterPermissionTarget): boolean {
   if (target.type === "group")
     return (
       row.groupName === target.groupName &&
@@ -225,6 +223,15 @@ export function filterPermissionMatches(
     "userName",
     "userDisplayName",
   ]);
+}
+export function filterPermissionMatches(
+  row: CatalogJsonObject,
+  target: FilterPermissionTarget,
+  rights = true,
+): boolean {
+  if (row.type !== target.type) return false;
+  if (rights && (row.view !== target.view || row.edit !== target.edit)) return false;
+  return recipientMatches(row, target);
 }
 function recipientFieldsAbsent(row: CatalogJsonObject, fields: readonly string[]): boolean {
   return fields.every((field) => row[field] === undefined);

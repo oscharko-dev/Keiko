@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
 import {
   TOOL_CATALOG_LIMITS,
   type CatalogJsonObject,
@@ -13,7 +13,7 @@ import {
   JIRA_ACCOUNT_DIAGNOSTIC_READS,
 } from "./jira-managed-account-diagnostics.js";
 
-const port = (response: AtlassianWriteHttpOutcome) =>
+const port = (response: AtlassianWriteHttpOutcome): Mock<JiraMutationRequest> =>
   vi.fn<JiraMutationRequest>().mockResolvedValue(response);
 it.each([0, 12, Number.MAX_SAFE_INTEGER])(
   "retains observed cached duplicate-account count %s without flushing",

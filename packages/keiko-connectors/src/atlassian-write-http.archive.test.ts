@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import { JIRA_ATTACHMENT_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   ATLASSIAN_HTTP_UPLOAD_MAX_BYTES,
@@ -24,7 +24,7 @@ const ARCHIVE = {
   bodyBytes: BYTES.byteLength,
   truncated: false,
 } as const;
-function port(result: AtlassianHttpBodyResult = ARCHIVE) {
+function port(result: AtlassianHttpBodyResult = ARCHIVE): Mock<AtlassianHttpBodyPort> {
   return vi.fn<AtlassianHttpBodyPort>().mockResolvedValue(result);
 }
 describe("closed ZIP response codec on the existing write transport", () => {

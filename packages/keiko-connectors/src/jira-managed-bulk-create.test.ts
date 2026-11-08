@@ -17,10 +17,10 @@ import { JiraAcknowledgedMutationError } from "./jira-mutation-failure.js";
 function preparedPorts(): JiraBulkCreatePorts & {
   readonly prepare: ReturnType<typeof vi.fn<JiraPrepareCreate>>;
 } {
-  const prepare = vi.fn<JiraPrepareCreate>(async (args) => {
+  const prepare = vi.fn<JiraPrepareCreate>((args) => {
     const fields = asRecord(args.fields);
     if (fields === undefined) throw new TypeError("Synthetic prepared fields absent");
-    return {
+    return Promise.resolve({
       ok: true,
       projectId: "10000",
       issueTypeId: "3",
@@ -28,7 +28,7 @@ function preparedPorts(): JiraBulkCreatePorts & {
       metadata: [],
       values: { ok: true, fields, update: {} },
       plan: { inline: [], present: [], further: [] },
-    };
+    });
   });
   return { prepare };
 }

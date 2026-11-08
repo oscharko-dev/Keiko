@@ -169,7 +169,7 @@ describe("reviewed instance configuration writes", () => {
   });
   it("reserves the full 16 KiB receipt before reads or writes", async () => {
     const f = instanceSettingMutationFixture();
-    const columns = Array.from({ length: 100 }, (_, index) => `${index}${"x".repeat(250)}`);
+    const columns = Array.from({ length: 100 }, (_, index) => `${String(index)}${"x".repeat(250)}`);
     expect(await execute(CASES[1].name, { ...CASES[1].args, columns }, f.request)).toMatchObject({
       ok: false,
       reason: "field-validation",
@@ -243,7 +243,7 @@ describe("reviewed instance configuration writes", () => {
     const f = instanceSettingMutationFixture();
     f.fields.push(
       ...Array.from({ length: 999 }, (_, index) => ({
-        id: `customfield_${index + 1}`,
+        id: `customfield_${String(index + 1)}`,
         name: "Field",
         navigable: true,
       })),

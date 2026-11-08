@@ -11,7 +11,9 @@ import { JiraAcknowledgedMutationError } from "./jira-mutation-failure.js";
 import { identityPrerequisiteFailure } from "./jira-identity-mutation-values.js";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 
-const writes = (fixture: ReturnType<typeof identityMutationFixture>) =>
+const writes = (
+  fixture: ReturnType<typeof identityMutationFixture>,
+): ReturnType<typeof identityMutationFixture>["calls"] =>
   fixture.calls.filter((call) => call.method !== "GET");
 describe("bound native identity operations without model secrets", () => {
   it("never imports an unrelated prerequisite receipt into the identity result", () => {

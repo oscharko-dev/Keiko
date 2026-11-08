@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
 import {
   TOOL_CATALOG_LIMITS,
   type CatalogJsonObject,
@@ -11,9 +11,10 @@ import {
   JIRA_ANONYMIZATION_READS,
 } from "./jira-managed-anonymization-reads.js";
 
-const port = (outcome: AtlassianWriteHttpOutcome) =>
+const port = (outcome: AtlassianWriteHttpOutcome): Mock<JiraMutationRequest> =>
   vi.fn<JiraMutationRequest>().mockResolvedValue(outcome);
-const success = (body: Record<string, unknown>) => port({ ok: true, status: 200, body });
+const success = (body: Record<string, unknown>): Mock<JiraMutationRequest> =>
+  port({ ok: true, status: 200, body });
 it("binds validation to the exact native user key and preserves false/empty diagnostics", async () => {
   const request = success({
     userKey: "USER + QA",
@@ -320,8 +321,9 @@ it("adds a task review only when all owner/task facts are actually supplied", as
     "currentProgress",
     "operations",
   ]) {
-    const incomplete: Record<string, unknown> = { ...complete };
-    delete incomplete[omitted];
+    const incomplete: Record<string, unknown> = Object.fromEntries(
+      Object.entries(complete).filter(([key]) => key !== omitted),
+    );
     const result = await read("jira.anonymization-progress", {}, success(incomplete));
     expect(result.data.outcome).toBe("succeeded");
     expect(result.data).not.toHaveProperty("reviewSnapshot");

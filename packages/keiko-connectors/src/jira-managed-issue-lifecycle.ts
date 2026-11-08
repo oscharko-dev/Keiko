@@ -43,7 +43,9 @@ export function jiraIssueDeletionAdmission(
   source: JiraIssueTemplateSource | undefined,
 ): JiraIssueLifecyclePorts {
   return {
-    deletionAdmission: async () => {
+    deletionAdmission: async (): ReturnType<
+      NonNullable<JiraIssueLifecyclePorts["deletionAdmission"]>
+    > => {
       const gate = await gateJiraSchemaRuleImpact({
         request,
         source,

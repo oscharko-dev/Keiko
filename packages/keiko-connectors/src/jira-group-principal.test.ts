@@ -1,9 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import type { AtlassianWriteHttpOutcome } from "./atlassian-write-http.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { bindJiraGroupPrincipal as bind } from "./jira-group-principal.js";
 
-function request(body: Record<string, unknown>) {
+function request(body: Record<string, unknown>): Mock<JiraMutationRequest> {
   return vi.fn<JiraMutationRequest>().mockResolvedValue({ ok: true, status: 200, body });
 }
 describe("supported exact native group principal binding", () => {

@@ -376,6 +376,14 @@ function projectedStageArgs<Context extends ManagedMcpInvocationContext>(
   return { ...parsed, items: deps.projectItems(parsed.items, context) };
 }
 
+function invalidArgsRefusal<Context extends ManagedMcpInvocationContext>(
+  run: StageRun<Context>,
+  rawArgs: CatalogJsonObject,
+): ManagedMcpToolResult {
+  const refused = refuseStage(run, "invalid-input", 0);
+  return { ...refused, data: { ...refused.data, guidance: invalidPageGuidance(rawArgs) } };
+}
+
 /** `jira.draft-stage`: append a page of validated items to a draft; it changes nothing in Jira. */
 export async function executeJiraDraftStageTool<Context extends ManagedMcpInvocationContext>(
   rawArgs: CatalogJsonObject,
@@ -388,10 +396,7 @@ export async function executeJiraDraftStageTool<Context extends ManagedMcpInvoca
   const parsed = parseStageArgs(rawArgs);
   const args = projectedStageArgs(parsed, deps, context);
   const run: StageRun<Context> = { deps, context, args, startedAt, reads: { made: 0, reused: 0 } };
-  if (args === undefined) {
-    const refused = refuseStage(run, "invalid-input", 0);
-    return { ...refused, data: { ...refused.data, guidance: invalidPageGuidance(rawArgs) } };
-  }
+  if (args === undefined) return invalidArgsRefusal(run, rawArgs);
   if (connection.deployment !== "data-center") return refuseStage(run, "unsupported-deployment", 0);
   const prepared = preparePageRequirements(run, args.items);
   if (!prepared.ok) {

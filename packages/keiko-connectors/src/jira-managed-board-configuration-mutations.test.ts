@@ -1,7 +1,8 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
-import type { JiraAgileRequests } from "./jira-agile-request.js";
+import type { JiraAgileRequestPhase, JiraAgileRequests } from "./jira-agile-request.js";
+import type { AtlassianWriteHttpOutcome } from "./atlassian-write-http.js";
 import { executeJiraBoardConfigurationMutation as execute } from "./jira-managed-board-configuration-mutations.js";
 
 const CONTEXT = {
@@ -18,39 +19,83 @@ const CONFIGURATION = {
   filter: { id: "37" },
   columnConfig: { columns: [{ name: "To do", statuses: [{ id: "1" }] }] },
 };
-function fixture() {
-  let enabled = false;
-  let removed = false;
+interface BoardMemory {
+  enabled: boolean;
+  removed: boolean;
+}
+interface BoardFixture {
+  readonly requests: JiraAgileRequests;
+  readonly readback: Mock<() => JiraAgileRequestPhase>;
+  readonly agile: Mock<JiraMutationRequest>;
+  readonly issue: Mock<JiraMutationRequest>;
+  readonly state: () => BoardMemory;
+}
+function boardOutcome(
+  memory: BoardMemory,
+  method: NonNullable<Parameters<JiraMutationRequest>[1]>,
+): AtlassianWriteHttpOutcome | undefined {
+  if (method === "DELETE") {
+    memory.removed = true;
+    return { ok: true, status: 204, body: undefined };
+  }
+  return method === "GET" ? { ok: false, reason: "not-found" } : undefined;
+}
+function velocityOutcome(
+  memory: BoardMemory,
+  method: NonNullable<Parameters<JiraMutationRequest>[1]>,
+  body: Parameters<JiraMutationRequest>[2],
+): AtlassianWriteHttpOutcome | undefined {
+  if (method === "GET") return { ok: true, status: 200, body: { value: memory.enabled } };
+  if (
+    method === "PUT" &&
+    body !== null &&
+    typeof body === "object" &&
+    "value" in body &&
+    typeof body.value === "boolean"
+  ) {
+    memory.enabled = body.value;
+    return { ok: true, status: 201, body: undefined };
+  }
+  return undefined;
+}
+function boardRoute(
+  memory: BoardMemory,
+  path: string,
+  method: NonNullable<Parameters<JiraMutationRequest>[1]>,
+  body: Parameters<JiraMutationRequest>[2],
+): AtlassianWriteHttpOutcome {
+  const outcome =
+    path === "board/7/configuration" && method === "GET"
+      ? ({ ok: true, status: 200, body: CONFIGURATION } as const)
+      : path === "board/7"
+        ? boardOutcome(memory, method)
+        : path === "board/7/settings/refined-velocity"
+          ? velocityOutcome(memory, method, body)
+          : undefined;
+  if (outcome === undefined) throw new TypeError("Unexpected board configuration request");
+  return outcome;
+}
+function fixture(): BoardFixture {
+  const memory: BoardMemory = { enabled: false, removed: false };
   const issue = vi
     .fn<JiraMutationRequest>()
     .mockResolvedValue({ ok: true, status: 200, body: { key: "actor-key", name: "native-actor" } });
-  const agile = vi.fn<JiraMutationRequest>(async (path, method = "GET", body) => {
-    if (path === "board/7/configuration" && method === "GET")
-      return { ok: true, status: 200, body: CONFIGURATION };
-    if (path === "board/7" && method === "DELETE") {
-      removed = true;
-      return { ok: true, status: 204, body: undefined };
-    }
-    if (path === "board/7" && method === "GET") return { ok: false, reason: "not-found" };
-    if (path === "board/7/settings/refined-velocity") {
-      if (method === "GET") return { ok: true, status: 200, body: { value: enabled } };
-      if (
-        method === "PUT" &&
-        body !== null &&
-        typeof body === "object" &&
-        "value" in body &&
-        typeof body.value === "boolean"
-      ) {
-        enabled = body.value;
-        return { ok: true, status: 201, body: undefined };
-      }
-    }
-    throw new TypeError("Unexpected board configuration request");
-  });
+  const agile = vi.fn<JiraMutationRequest>(
+    (path, method = "GET", body) =>
+      new Promise((resolve) => {
+        resolve(boardRoute(memory, path, method, body));
+      }),
+  );
   const phase = { agile, issue, signal: new AbortController().signal };
   const readback = vi.fn(() => phase);
   const requests: JiraAgileRequests = { ...phase, readback };
-  return { requests, readback, agile, issue, state: () => ({ enabled, removed }) };
+  return {
+    requests,
+    readback,
+    agile,
+    issue,
+    state: () => ({ enabled: memory.enabled, removed: memory.removed }),
+  };
 }
 it("changes only the native boolean after reviewed configuration and independently confirms the same actor and board", async () => {
   const f = fixture();

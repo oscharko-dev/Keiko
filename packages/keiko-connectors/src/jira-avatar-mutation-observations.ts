@@ -117,18 +117,22 @@ export function sameAvatarRows(
     )
   );
 }
+function targetFacts(target: JiraAvatarTarget): readonly string[] {
+  switch (target.kind) {
+    case "session":
+      return [target.avatarType];
+    case "user":
+      return [target.key, target.name];
+    case "project":
+      return [target.id, target.key];
+    case "issuetype":
+      return [target.id];
+  }
+}
 export function sameAvatarTarget(left: JiraAvatarTarget, right: JiraAvatarTarget): boolean {
   if (left.kind !== right.kind) return false;
-  switch (left.kind) {
-    case "session":
-      return right.kind === "session" && left.avatarType === right.avatarType;
-    case "user":
-      return right.kind === "user" && left.key === right.key && left.name === right.name;
-    case "project":
-      return right.kind === "project" && left.id === right.id && left.key === right.key;
-    case "issuetype":
-      return right.kind === "issuetype" && left.id === right.id;
-  }
+  const rightFacts = targetFacts(right);
+  return targetFacts(left).every((fact, index) => fact === rightFacts[index]);
 }
 export async function admitAvatarInput(
   request: JiraMutationRequest,

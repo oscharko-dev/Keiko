@@ -31,6 +31,25 @@ function shareScope(permissions: readonly unknown[] | undefined): string {
   if (permissions === undefined) return "unknown";
   return permissions.length === 0 ? "private" : "shared";
 }
+function filterDescription(value: unknown): string | null | undefined {
+  const description = value ?? null;
+  if (description === null) return null;
+  return typeof description === "string" &&
+    description.length <= 32768 &&
+    !/\p{Surrogate}/u.test(description)
+    ? description
+    : undefined;
+}
+function addOptionalFilterFields(
+  result: Record<string, CatalogJsonValue>,
+  raw: Record<string, unknown>,
+  permissions: readonly unknown[] | undefined,
+): void {
+  const owner = ownerProjection(raw.owner);
+  if (owner !== undefined) result.owner = owner;
+  if (typeof raw.favourite === "boolean") result.favourite = raw.favourite;
+  if (permissions !== undefined) result.sharePermissionCount = permissions.length;
+}
 function filterProjection(value: unknown): CatalogJsonObject | undefined {
   const raw = asRecord(value);
   const id = agileInputId(raw?.id);
@@ -41,14 +60,8 @@ function filterProjection(value: unknown): CatalogJsonObject | undefined {
     !agileText(raw.jql, TOOL_CATALOG_LIMITS.maxStringBytes)
   )
     return undefined;
-  const description = raw.description ?? null;
-  if (
-    description !== null &&
-    (typeof description !== "string" ||
-      description.length > 32768 ||
-      /\p{Surrogate}/u.test(description))
-  )
-    return undefined;
+  const description = filterDescription(raw.description);
+  if (description === undefined) return undefined;
   const permissions = asArray(raw.sharePermissions);
   const result: Record<string, CatalogJsonValue> = {
     id,
@@ -57,10 +70,7 @@ function filterProjection(value: unknown): CatalogJsonObject | undefined {
     description,
     shareScope: shareScope(permissions),
   };
-  const owner = ownerProjection(raw.owner);
-  if (owner !== undefined) result.owner = owner;
-  if (typeof raw.favourite === "boolean") result.favourite = raw.favourite;
-  if (permissions !== undefined) result.sharePermissionCount = permissions.length;
+  addOptionalFilterFields(result, raw, permissions);
   return result;
 }
 function pageNumber(value: unknown, fallback: number, max: number, min = 0): number | undefined {

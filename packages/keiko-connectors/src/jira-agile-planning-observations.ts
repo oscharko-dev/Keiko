@@ -179,6 +179,16 @@ function completeSubset(
     rows.length === expectedCount
   );
 }
+function subsetRowsMatch(rows: readonly unknown[], issues: readonly PlanningIssue[]): boolean {
+  const expected = new Map(issues.map((issue) => [issue.id, issue.key]));
+  for (const row of rows) {
+    const raw = asRecord(row);
+    const id = jiraNativeNumericId(raw?.id);
+    if (id === undefined || expected.get(id) !== raw?.key) return false;
+    expected.delete(id);
+  }
+  return expected.size === 0;
+}
 /** Only the explicitly selected IDs are queried; this is not a complete board population. */
 export async function readPlanningBoardSubset(
   requests: JiraAgileRequestPhase,
@@ -200,14 +210,7 @@ export async function readPlanningBoardSubset(
       "Every selected issue and anchor must be visible in the bound board subset; missing or partial results are unavailable.",
       "unavailable",
     );
-  const expected = new Map(issues.map((issue) => [issue.id, issue.key]));
-  for (const row of rows) {
-    const raw = asRecord(row);
-    const id = jiraNativeNumericId(raw?.id);
-    if (id === undefined || expected.get(id) !== raw?.key) return PLANNING_MALFORMED;
-    expected.delete(id);
-  }
-  return expected.size === 0 ? undefined : PLANNING_MALFORMED;
+  return subsetRowsMatch(rows, issues) ? undefined : PLANNING_MALFORMED;
 }
 export async function readPlanningEstimation(
   requests: JiraAgileRequestPhase,

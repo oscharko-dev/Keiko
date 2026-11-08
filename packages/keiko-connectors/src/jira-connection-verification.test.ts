@@ -58,7 +58,7 @@ describe("identity-only observation within an existing request", () => {
         url: "https://jira.example/context/rest/api/2/myself",
         timeoutMs: 173,
         maxBodyBytes: 65536,
-        signal: expect.any(AbortSignal),
+        signal: expect.any(AbortSignal) as AbortSignal,
       },
     ]);
     controller.abort();
@@ -103,10 +103,9 @@ describe("identity-only observation within an existing request", () => {
     vi.useFakeTimers();
     vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) => {
       const controller = new AbortController();
-      setTimeout(
-        () => controller.abort(new DOMException("deadline", "TimeoutError")),
-        milliseconds,
-      );
+      setTimeout(() => {
+        controller.abort(new DOMException("deadline", "TimeoutError"));
+      }, milliseconds);
       return controller.signal;
     });
     try {
@@ -114,7 +113,9 @@ describe("identity-only observation within an existing request", () => {
       const port: AtlassianHttpBodyPort = (request) =>
         new Promise((resolve) => {
           const floorTimer = setTimeout(
-            () => resolve(response(user)),
+            () => {
+              resolve(response(user));
+            },
             Math.max(1000, request.timeoutMs),
           );
           request.signal?.addEventListener(

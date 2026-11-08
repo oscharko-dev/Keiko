@@ -217,7 +217,7 @@ describe("native administration group lifecycle and direct membership", () => {
           name: `other-user-${String(index)}`,
         })),
       );
-      f.controls.memberPageChange = (body, start) => {
+      f.controls.memberPageChange = (body, start): void => {
         if (problem === "missing-page" && start > 0) delete body.values;
         if (problem === "changed-total" && start > 0) body.total = 61;
         if (problem === "duplicate-key" && start > 0)

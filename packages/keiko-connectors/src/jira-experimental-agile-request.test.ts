@@ -1,8 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import { jiraAgileRequests, jiraExperimentalAgileRequest } from "./jira-agile-request.js";
 
-function fixture(admitted = true) {
+interface ExperimentalFixture {
+  readonly http: Mock<AtlassianHttpBodyPort>;
+  readonly beforeEffect: Mock<() => boolean>;
+  readonly controller: AbortController;
+  readonly context: Parameters<typeof jiraExperimentalAgileRequest>[1];
+  readonly connection: Parameters<typeof jiraExperimentalAgileRequest>[0];
+  readonly request: ReturnType<typeof jiraExperimentalAgileRequest>;
+}
+function fixture(admitted = true): ExperimentalFixture {
   const http = vi.fn<AtlassianHttpBodyPort>(() =>
     Promise.resolve({
       kind: "response",

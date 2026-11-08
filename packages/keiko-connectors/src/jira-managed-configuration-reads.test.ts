@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
@@ -9,7 +9,16 @@ import {
 } from "./jira-managed-configuration-reads.js";
 
 type Operation = Parameters<typeof executeJiraConfigurationRead>[0];
-function fixture(body: Record<string, unknown> | readonly unknown[], status = 200) {
+function fixture(
+  body: Record<string, unknown> | readonly unknown[],
+  status = 200,
+): {
+  readonly request: Mock<JiraMutationRequest>;
+  readonly read: (
+    name: Operation,
+    args?: CatalogJsonObject,
+  ) => ReturnType<typeof executeJiraConfigurationRead>;
+} {
   const request = vi.fn<JiraMutationRequest>(() =>
     Promise.resolve({
       ok: true,

@@ -197,6 +197,21 @@ function createInput(args: CatalogJsonObject, actor: string): IdentityInput | un
       }
     : undefined;
 }
+function updateFields(
+  args: CatalogJsonObject,
+): { readonly displayName?: string; readonly active?: boolean } | undefined {
+  if (args.displayName === undefined && args.active === undefined) return undefined;
+  if (args.displayName !== undefined && !savedName(args.displayName)) return undefined;
+  if (
+    args.active !== undefined &&
+    (typeof args.active !== "boolean" || args.acceptUnverifiedAccess !== true)
+  )
+    return undefined;
+  return {
+    ...(typeof args.displayName === "string" ? { displayName: args.displayName } : {}),
+    ...(typeof args.active === "boolean" ? { active: args.active } : {}),
+  };
+}
 function reviewedInput(
   operation: JiraIdentityMutation,
   args: CatalogJsonObject,
@@ -208,39 +223,40 @@ function reviewedInput(
     return args.confirmIrreversibleDeletion === true
       ? { kind: "delete", actor, expected }
       : undefined;
-  if (args.displayName === undefined && args.active === undefined) return undefined;
-  if (args.displayName !== undefined && !savedName(args.displayName)) return undefined;
+  const fields = updateFields(args);
+  return fields === undefined ? undefined : { kind: "update", actor, expected, ...fields };
+}
+function expectedOperations(value: unknown): readonly string[] | undefined {
   if (
-    args.active !== undefined &&
-    (typeof args.active !== "boolean" || args.acceptUnverifiedAccess !== true)
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > TOOL_CATALOG_LIMITS.maxArrayItems ||
+    !value.every((item): item is string => savedText(item, 128)) ||
+    new Set(value).size !== value.length
   )
     return undefined;
-  return {
-    kind: "update",
-    actor,
-    expected,
-    ...(typeof args.displayName === "string" ? { displayName: args.displayName } : {}),
-    ...(typeof args.active === "boolean" ? { active: args.active } : {}),
-  };
+  return value;
+}
+function anonymizationParties(
+  args: CatalogJsonObject,
+): { readonly user: IdentityUser; readonly owner: IdentityUser } | undefined {
+  const user = identityUser(args.user);
+  const owner = identityUser(args.newOwner);
+  return user === undefined || owner === undefined || user.key === owner.key
+    ? undefined
+    : { user, owner };
 }
 function anonymizationInput(
   operation: JiraIdentityMutation,
   args: CatalogJsonObject,
   actor: string,
 ): IdentityInput | undefined {
-  const user = identityUser(args.user);
-  const owner = identityUser(args.newOwner);
-  const operations = args.expectedOperations;
+  const parties = anonymizationParties(args);
+  const operations = expectedOperations(args.expectedOperations);
   if (
-    user === undefined ||
-    owner === undefined ||
-    user.key === owner.key ||
-    args.confirmIrreversibleAnonymization !== true ||
-    !Array.isArray(operations) ||
-    operations.length === 0 ||
-    operations.length > TOOL_CATALOG_LIMITS.maxArrayItems ||
-    !operations.every((item): item is string => savedText(item, 128)) ||
-    new Set(operations).size !== operations.length
+    parties === undefined ||
+    operations === undefined ||
+    args.confirmIrreversibleAnonymization !== true
   )
     return undefined;
   if (args.oldUserKey !== undefined && !savedName(args.oldUserKey)) return undefined;
@@ -248,13 +264,20 @@ function anonymizationInput(
   return {
     kind: "anonymize",
     actor,
-    user,
-    owner,
+    ...parties,
     operations: Object.freeze([...operations]),
     rerun: operation === "jira.rerun-user-anonymization",
     ...(typeof args.oldUserKey === "string" ? { oldUserKey: args.oldUserKey } : {}),
     ...(typeof args.oldUserName === "string" ? { oldUserName: args.oldUserName } : {}),
   };
+}
+function sessionInput(args: CatalogJsonObject, actor: string): IdentityInput | undefined {
+  const user = identityUser(args.user);
+  return user !== undefined &&
+    jiraPropertyPathKey(user.name) &&
+    args.confirmSessionInvalidation === true
+    ? { kind: "session", actor, user }
+    : undefined;
 }
 export function parseIdentityInput(
   operation: JiraIdentityMutation,
@@ -272,12 +295,7 @@ export function parseIdentityInput(
     return reviewedInput(operation, args, actor);
   if (operation !== "jira.invalidate-user-session")
     return anonymizationInput(operation, args, actor);
-  const user = identityUser(args.user);
-  return user !== undefined &&
-    jiraPropertyPathKey(user.name) &&
-    args.confirmSessionInvalidation === true
-    ? { kind: "session", actor, user }
-    : undefined;
+  return sessionInput(args, actor);
 }
 export function identityReceipt(input: IdentityInput, created?: IdentityUser): JiraIdentityReceipt {
   if (input.kind === "create")

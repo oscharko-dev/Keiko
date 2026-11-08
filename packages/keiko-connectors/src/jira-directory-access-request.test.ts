@@ -1,11 +1,17 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import { executeAtlassianWriteRequest } from "./atlassian-write-http.js";
 import { jiraDirectoryAccessRequests } from "./jira-directory-access-request.js";
 
 const ROLE = { key: "jira-software", groups: ["R&D team"], defaultGroups: ["R&D team"] } as const;
 const VERSION = '"native-role-version"';
-function fixture() {
+interface DirectoryFixture {
+  readonly http: Mock<AtlassianHttpBodyPort>;
+  readonly controller: AbortController;
+  readonly beforeEffect: Mock<() => boolean>;
+  readonly ports: ReturnType<typeof jiraDirectoryAccessRequests>;
+}
+function fixture(): DirectoryFixture {
   const http = vi.fn<AtlassianHttpBodyPort>(() =>
     Promise.resolve({
       kind: "response",

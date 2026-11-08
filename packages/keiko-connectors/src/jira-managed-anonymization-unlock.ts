@@ -1,5 +1,6 @@
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { canonicalise } from "@oscharko-dev/keiko-security";
+import type { AtlassianWriteHttpOutcome } from "./atlassian-write-http.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import type { JiraPrivateIdentityPorts } from "./jira-private-identity-ports.js";
 import { projectJiraAnonymizationTaskSnapshot } from "./jira-managed-anonymization-reads.js";
@@ -58,7 +59,7 @@ async function unlock(
   ports: JiraPrivateIdentityPorts,
   input: UnlockInput,
   receipt: JiraAnonymizationUnlockReceipt,
-) {
+): Promise<AtlassianWriteHttpOutcome> {
   try {
     return await ports.unlock(input.actor);
   } catch (error) {
@@ -67,6 +68,23 @@ async function unlock(
       throw new JiraAcknowledgedMutationError(error, receipt);
     throw error;
   }
+}
+function unlockOutcome(
+  response: AtlassianWriteHttpOutcome,
+  receipt: JiraAnonymizationUnlockReceipt,
+): UnlockAttempt {
+  const status = response.ok ? response.status : response.httpStatus;
+  if (status !== undefined && status >= 200 && status < 300)
+    return {
+      ...refused(
+        "Jira acknowledged the global stale-task unlock request. The shutdown statement was human-supplied, not an independently verified process state. Native unlock has no atomic task binding, so task removal, another task's state and global consequences remain unconfirmed. Do not replay this request.",
+        "unavailable",
+      ),
+      receipt,
+    };
+  return response.ok
+    ? { ok: false, reason: "malformed-payload", receipt }
+    : { ok: false, reason: response.reason, receipt };
 }
 /** DELETE has no task selector or compare-and-swap. Human attestation supplies external shutdown
  * information, not independent process evidence; every acknowledged effect remains unconfirmed. */
@@ -97,16 +115,5 @@ export async function executeJiraAnonymizationUnlock(
   const current = await admit(input, request);
   if (current !== undefined) return current;
   const response = await unlock(ports, input, receipt);
-  const status = response.ok ? response.status : response.httpStatus;
-  if (status !== undefined && status >= 200 && status < 300)
-    return {
-      ...refused(
-        "Jira acknowledged the global stale-task unlock request. The shutdown statement was human-supplied, not an independently verified process state. Native unlock has no atomic task binding, so task removal, another task's state and global consequences remain unconfirmed. Do not replay this request.",
-        "unavailable",
-      ),
-      receipt,
-    };
-  return response.ok
-    ? { ok: false, reason: "malformed-payload", receipt }
-    : { ok: false, reason: response.reason, receipt };
+  return unlockOutcome(response, receipt);
 }

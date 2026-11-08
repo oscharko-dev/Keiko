@@ -129,6 +129,15 @@ function unconfirmed(input: IdentityInput, receipt: JiraIdentityReceipt): Identi
   };
   return identityRefusal(messages[input.kind], "unavailable", receipt);
 }
+function acknowledgedFieldsObserved(
+  input: Extract<IdentityInput, { kind: "create" | "update" }>,
+  observed: ReturnType<typeof observedIdentityUser>,
+): boolean {
+  const name =
+    input.kind === "create" ? input.displayName : (input.displayName ?? input.expected.displayName);
+  const active = input.kind === "update" ? (input.active ?? input.expected.active) : undefined;
+  return observed?.displayName === name && (active === undefined || observed.active === active);
+}
 async function confirmUser(
   request: JiraMutationRequest,
   input: Extract<IdentityInput, { kind: "create" | "update" }>,
@@ -148,11 +157,7 @@ async function confirmUser(
   if (!actor.ok) return acknowledgedFailure(identityPrerequisiteFailure(actor), known);
   const current = await bindIdentityUser(request, user);
   if (!current.ok) return acknowledgedFailure(current, known);
-  const observed = observedIdentityUser(current.value);
-  const name =
-    input.kind === "create" ? input.displayName : (input.displayName ?? input.expected.displayName);
-  const active = input.kind === "update" ? (input.active ?? input.expected.active) : undefined;
-  if (observed?.displayName !== name || (active !== undefined && observed.active !== active))
+  if (!acknowledgedFieldsObserved(input, observedIdentityUser(current.value)))
     return identityRefusal(
       "Jira acknowledged the request, but the same native user's independently read fields do not match. Keep the known identity and review it; do not replay.",
       "unavailable",
@@ -173,6 +178,32 @@ async function afterAcknowledgement(
   // None of these endpoints supplies an independently attributable completion/absence proof.
   // In particular do not follow Location/cookie headers or turn a later 404 into confirmation.
   return unconfirmed(input, receipt);
+}
+function acknowledgedReceipt(
+  input: IdentityInput,
+  response: Extract<AtlassianWriteHttpOutcome, { ok: true }>,
+  known: JiraIdentityReceipt,
+): JiraIdentityReceipt {
+  if (input.kind !== "create") return known;
+  const created = createdIdentity(response.body, input.name);
+  return created === undefined ? known : identityReceipt(input, created);
+}
+async function dispatchIdentity(
+  request: JiraMutationRequest,
+  ports: JiraIdentityPorts | undefined,
+  input: IdentityInput,
+  known: JiraIdentityReceipt,
+): Promise<IdentityAttempt> {
+  const response = await effect(request, ports, input);
+  if (!response.ok) return { ...dispatchFailure(response), receipt: known };
+  if (response.status < 200 || response.status >= 300)
+    return { ...IDENTITY_MALFORMED, receipt: known };
+  const acknowledged = acknowledgedReceipt(input, response, known);
+  try {
+    return await afterAcknowledgement(request, input, response, acknowledged);
+  } catch (error) {
+    throw new JiraAcknowledgedMutationError(error, acknowledged);
+  }
 }
 /** Fixed native identity operations over the existing custody/admission/ACK/journal owners. */
 export async function executeJiraIdentityMutation(
@@ -200,16 +231,5 @@ export async function executeJiraIdentityMutation(
   if (check) return { ok: true, receipt: { actorUserKey: input.actor } };
   const actor = await readSavedActor(request, input.actor);
   if (!actor.ok) return identityPrerequisiteFailure(actor);
-  const response = await effect(request, ports, input);
-  if (!response.ok) return { ...dispatchFailure(response), receipt: known };
-  if (response.status < 200 || response.status >= 300)
-    return { ...IDENTITY_MALFORMED, receipt: known };
-  const created = input.kind === "create" ? createdIdentity(response.body, input.name) : undefined;
-  const acknowledged =
-    input.kind === "create" && created !== undefined ? identityReceipt(input, created) : known;
-  try {
-    return await afterAcknowledgement(request, input, response, acknowledged);
-  } catch (error) {
-    throw new JiraAcknowledgedMutationError(error, acknowledged);
-  }
+  return dispatchIdentity(request, ports, input, known);
 }

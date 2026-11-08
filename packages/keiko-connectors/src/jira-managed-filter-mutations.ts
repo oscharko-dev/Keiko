@@ -152,6 +152,18 @@ async function confirmExisting(
     throw new JiraAcknowledgedMutationError(error, receipt);
   }
 }
+async function sendExisting(
+  request: JiraMutationRequest,
+  target: SavedFilter,
+  changes: ExistingInput["changes"] | undefined,
+  receipt: JiraSavedConfigurationReceipt,
+): Promise<JiraSavedConfigurationAttempt> {
+  const remove = changes === undefined;
+  const response = await request(`filter/${target.id}`, remove ? "DELETE" : "PUT", changes, "none");
+  if (!response.ok) return { ...dispatchFailure(response), receipt };
+  if (response.status < 200 || response.status >= 300) return { ...SAVED_MALFORMED, receipt };
+  return confirmExisting(request, target, remove, receipt);
+}
 async function changeExisting(
   operation: FilterMutation,
   args: CatalogJsonObject,
@@ -174,15 +186,7 @@ async function changeExisting(
       receipt,
     );
   if (check) return { ok: true, receipt: {} };
-  const response = await request(
-    `filter/${target.id}`,
-    remove ? "DELETE" : "PUT",
-    remove ? undefined : selected.changes,
-    "none",
-  );
-  if (!response.ok) return { ...dispatchFailure(response), receipt };
-  if (response.status < 200 || response.status >= 300) return { ...SAVED_MALFORMED, receipt };
-  return confirmExisting(request, target, remove, receipt);
+  return sendExisting(request, target, remove ? undefined : selected.changes, receipt);
 }
 async function createAdmission(
   request: JiraMutationRequest,
@@ -249,23 +253,10 @@ async function confirmCreated(
     throw new JiraAcknowledgedMutationError(error, receipt);
   }
 }
-async function create(
-  args: CatalogJsonObject,
+async function sendCreate(
   request: JiraMutationRequest,
-  check: boolean,
+  selected: CreateInput,
 ): Promise<JiraSavedConfigurationAttempt> {
-  const selected = createInput(args);
-  if (selected === undefined)
-    return savedInvalid(
-      "Creating a filter requires reviewed current-user identity, acceptDefaultSharing:true and the observed default sharing scope, plus name and JQL. Jira does not support an atomic private-sharing override on this endpoint.",
-    );
-  const prior = await createAdmission(request, selected);
-  if (!prior.ok) return prior;
-  if (check) return { ok: true, receipt: {} };
-  // Repeat the exact actor/default checks immediately before the single POST. This reduces a race,
-  // but is deliberately not represented as an atomic guarantee or a private-start override.
-  const rebound = await createAdmission(request, selected);
-  if (!rebound.ok) return rebound;
   const response = await request(
     "filter",
     "POST",
@@ -285,6 +276,25 @@ async function create(
   if (response.status < 200 || response.status >= 300 || receipt.filterId === undefined)
     return { ...SAVED_MALFORMED, receipt };
   return confirmCreated(request, selected, receipt);
+}
+async function create(
+  args: CatalogJsonObject,
+  request: JiraMutationRequest,
+  check: boolean,
+): Promise<JiraSavedConfigurationAttempt> {
+  const selected = createInput(args);
+  if (selected === undefined)
+    return savedInvalid(
+      "Creating a filter requires reviewed current-user identity, acceptDefaultSharing:true and the observed default sharing scope, plus name and JQL. Jira does not support an atomic private-sharing override on this endpoint.",
+    );
+  const prior = await createAdmission(request, selected);
+  if (!prior.ok) return prior;
+  if (check) return { ok: true, receipt: {} };
+  // Repeat the exact actor/default checks immediately before the single POST. This reduces a race,
+  // but is deliberately not represented as an atomic guarantee or a private-start override.
+  const rebound = await createAdmission(request, selected);
+  if (!rebound.ok) return rebound;
+  return sendCreate(request, selected);
 }
 async function confirmScope(
   request: JiraMutationRequest,
@@ -307,40 +317,57 @@ async function confirmScope(
     throw new JiraAcknowledgedMutationError(error, receipt);
   }
 }
-async function setScope(
+function scopeReviewed(
   args: CatalogJsonObject,
-  request: JiraMutationRequest,
-  check: boolean,
-): Promise<JiraSavedConfigurationAttempt> {
+): { readonly actorKey: string; readonly expectedScope: DefaultShareScope } | undefined {
   if (
     !savedExactKeys(args, SCOPE_FIELDS) ||
     !savedText(args.expectedActorKey, 255) ||
     !savedShareScope(args.expectedScope)
   )
+    return undefined;
+  return { actorKey: args.expectedActorKey, expectedScope: args.expectedScope };
+}
+async function sendScope(
+  request: JiraMutationRequest,
+  actorKey: string,
+  scope: "PRIVATE" | "AUTHENTICATED",
+  receipt: JiraSavedConfigurationReceipt,
+): Promise<JiraSavedConfigurationAttempt> {
+  const response = await request("filter/defaultShareScope", "PUT", { scope }, "none");
+  if (!response.ok) return { ...dispatchFailure(response), receipt };
+  if (response.status < 200 || response.status >= 300) return { ...SAVED_MALFORMED, receipt };
+  return confirmScope(request, actorKey, scope, receipt);
+}
+async function setScope(
+  args: CatalogJsonObject,
+  request: JiraMutationRequest,
+  check: boolean,
+): Promise<JiraSavedConfigurationAttempt> {
+  const reviewed = scopeReviewed(args);
+  if (reviewed === undefined)
     return savedInvalid(
       "Review the connected user and native current default sharing scope before changing it.",
     );
-  if (args.scope !== "PRIVATE" && args.scope !== "AUTHENTICATED")
+  const scope = args.scope;
+  if (scope !== "PRIVATE" && scope !== "AUTHENTICATED")
     return savedInvalid(
       "The published write endpoint supports only PRIVATE or AUTHENTICATED default sharing. Nothing was written.",
     );
-  const actor = await readSavedActor(request, args.expectedActorKey);
+  const actor = await readSavedActor(request, reviewed.actorKey);
   if (!actor.ok) return actor;
   const prior = await readSavedShareScope(request);
   if (!prior.ok) return prior;
-  if (prior.value !== args.expectedScope)
+  if (prior.value !== reviewed.expectedScope)
     return savedConflict("The default sharing scope changed after review. Nothing was written.");
   const receipt = { userKey: actor.value.key, username: actor.value.name };
-  if (prior.value === args.scope)
+  if (prior.value === scope)
     return savedUnchanged("Default sharing already has the requested scope. Nothing was written.", {
       ...receipt,
       observedShareScope: prior.value,
     });
   if (check) return { ok: true, receipt: {} };
-  const response = await request("filter/defaultShareScope", "PUT", { scope: args.scope }, "none");
-  if (!response.ok) return { ...dispatchFailure(response), receipt };
-  if (response.status < 200 || response.status >= 300) return { ...SAVED_MALFORMED, receipt };
-  return confirmScope(request, args.expectedActorKey, args.scope, receipt);
+  return sendScope(request, reviewed.actorKey, scope, receipt);
 }
 export function isJiraFilterMutation(name: string): name is FilterMutation {
   return (OPERATIONS as readonly string[]).includes(name);

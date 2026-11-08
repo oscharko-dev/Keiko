@@ -98,6 +98,9 @@ function fieldMessages(value: unknown): JiraMaintenanceProjection {
   }
   return { ok: true, value: { fields } };
 }
+function optionalFieldMessages(errors: unknown): JiraMaintenanceProjection {
+  return errors === undefined || errors === null ? { ok: true, value: {} } : fieldMessages(errors);
+}
 function diagnosticGroup(operation: string, value: unknown): JiraMaintenanceProjection {
   const raw = asRecord(value);
   if (operation.length > 255 || listBounds(raw?.errorMessages, 4096)) return BOUNDS;
@@ -106,10 +109,7 @@ function diagnosticGroup(operation: string, value: unknown): JiraMaintenanceProj
     stringList(entry, 4096),
   );
   if (messages === undefined) return MALFORMED;
-  const fields =
-    raw.errors === undefined || raw.errors === null
-      ? ({ ok: true, value: {} } as const)
-      : fieldMessages(raw.errors);
+  const fields = optionalFieldMessages(raw.errors);
   if (!fields.ok) return fields;
   return {
     ok: true,

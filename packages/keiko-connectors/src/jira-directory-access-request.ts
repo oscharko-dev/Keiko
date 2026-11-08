@@ -6,6 +6,7 @@ import { atlassianApiEndpointsFor, atlassianApiUrl } from "./atlassian-sync-clas
 import {
   ATLASSIAN_WRITE_ACTION_TOTAL_TIMEOUT_MS,
   type AtlassianWriteHttpOutcome,
+  type AtlassianWriteHttpRequest,
 } from "./atlassian-write-http.js";
 import type { JiraManagedConnection } from "./jira-managed-connection.js";
 import { executeAdmittedJiraRequest } from "./jira-request-admission.js";
@@ -53,81 +54,119 @@ function role(value: JiraApplicationRoleConfiguration): boolean {
   );
 }
 const INVALID: AtlassianWriteHttpOutcome = { ok: false, reason: "field-validation" };
+interface DirectoryRequestEnv {
+  readonly connection: JiraManagedConnection;
+  readonly context: ManagedMcpInvocationContext;
+  readonly signal: AbortSignal;
+  readonly endpoints: ReturnType<typeof atlassianApiEndpointsFor>;
+}
+function dispatch(
+  env: DirectoryRequestEnv,
+  request: AtlassianWriteHttpRequest,
+): Promise<AtlassianWriteHttpOutcome> {
+  return executeAdmittedJiraRequest(env.connection, env.context, env.signal, request);
+}
+function roleWriteAdmitted(
+  version: string,
+  values: readonly JiraApplicationRoleConfiguration[],
+  bulk: boolean,
+): boolean {
+  const keys = values.map((value) => value.key);
+  return (
+    isAtlassianApplicationRoleVersion(version) &&
+    strings(keys, false) &&
+    values.every(role) &&
+    new Set(keys).size === values.length &&
+    (bulk || values.length === 1)
+  );
+}
+async function writeRoles(
+  env: DirectoryRequestEnv,
+  version: string,
+  values: readonly JiraApplicationRoleConfiguration[],
+  bulk: boolean,
+): Promise<AtlassianWriteHttpOutcome> {
+  const first = values[0];
+  if (first === undefined || !roleWriteAdmitted(version, values, bulk)) return INVALID;
+  const body = values.map((value) => ({
+    key: value.key,
+    groups: [...value.groups],
+    defaultGroups: [...value.defaultGroups],
+  }));
+  const path = bulk ? "applicationrole" : `applicationrole/${encodeURIComponent(first.key)}`;
+  const result = await dispatch(env, {
+    method: "PUT",
+    url: atlassianApiUrl(env.endpoints, path),
+    bodyJson: JSON.stringify(bulk ? body : body[0]),
+    jiraApplicationRole: { ifMatch: version },
+    expect: "none",
+  });
+  return !result.ok && result.httpStatus === 412 ? { ...result, reason: "conflict" } : result;
+}
+function setApplication(
+  env: DirectoryRequestEnv,
+  username: string,
+  applicationKey: string,
+  present: boolean,
+): Promise<AtlassianWriteHttpOutcome> {
+  if (
+    !savedText(username, 255) ||
+    !isSafeAtlassianIdentifier(applicationKey) ||
+    typeof present !== "boolean"
+  )
+    return Promise.resolve(INVALID);
+  const query = new URLSearchParams({ username, applicationKey });
+  return dispatch(env, {
+    method: present ? "POST" : "DELETE",
+    url: atlassianApiUrl(env.endpoints, `user/application?${query.toString()}`),
+    jiraUserApplication: true,
+    expect: "none",
+  });
+}
+function setColumns(
+  env: DirectoryRequestEnv,
+  username: string,
+  columns: readonly string[],
+): Promise<AtlassianWriteHttpOutcome> {
+  if (!savedText(username, 255) || !strings(columns, false)) return Promise.resolve(INVALID);
+  const form = new URLSearchParams({ username });
+  for (const column of columns) form.append("columns", column);
+  return dispatch(env, {
+    method: "PUT",
+    url: atlassianApiUrl(env.endpoints, "user/columns"),
+    bodyJson: form.toString(),
+    jiraUserColumns: true,
+    expect: "none",
+  });
+}
 /** Three fixed native ports; all selectors originate in bound/reviewed leaf inputs. */
 export function jiraDirectoryAccessRequests(
   connection: JiraManagedConnection,
   context: ManagedMcpInvocationContext,
 ): JiraDirectoryAccessPorts {
-  const endpoints = atlassianApiEndpointsFor(connection.baseUrl, "/rest/api/2/");
-  const signal = AbortSignal.any([
-    context.signal,
-    AbortSignal.timeout(ATLASSIAN_WRITE_ACTION_TOTAL_TIMEOUT_MS),
-  ]);
-  return {
+  const env: DirectoryRequestEnv = {
+    connection,
+    context,
+    endpoints: atlassianApiEndpointsFor(connection.baseUrl, "/rest/api/2/"),
+    signal: AbortSignal.any([
+      context.signal,
+      AbortSignal.timeout(ATLASSIAN_WRITE_ACTION_TOTAL_TIMEOUT_MS),
+    ]),
+  };
+  const ports: JiraDirectoryAccessPorts = {
     roles: {
       read: () =>
-        executeAdmittedJiraRequest(connection, context, signal, {
+        dispatch(env, {
           method: "GET",
-          url: atlassianApiUrl(endpoints, "applicationrole"),
+          url: atlassianApiUrl(env.endpoints, "applicationrole"),
           jiraApplicationRole: "version",
           expect: "json-array",
         }),
-      write: async (version, values, bulk) => {
-        const first = values[0];
-        if (
-          !isAtlassianApplicationRoleVersion(version) ||
-          !strings(
-            values.map((value) => value.key),
-            false,
-          ) ||
-          first === undefined ||
-          !values.every(role) ||
-          new Set(values.map((value) => value.key)).size !== values.length ||
-          (!bulk && values.length !== 1)
-        )
-          return INVALID;
-        const body = values.map((value) => ({
-          key: value.key,
-          groups: [...value.groups],
-          defaultGroups: [...value.defaultGroups],
-        }));
-        const path = bulk ? "applicationrole" : `applicationrole/${encodeURIComponent(first.key)}`;
-        const result = await executeAdmittedJiraRequest(connection, context, signal, {
-          method: "PUT",
-          url: atlassianApiUrl(endpoints, path),
-          bodyJson: JSON.stringify(bulk ? body : body[0]),
-          jiraApplicationRole: { ifMatch: version },
-          expect: "none",
-        });
-        return !result.ok && result.httpStatus === 412 ? { ...result, reason: "conflict" } : result;
-      },
+      write: (version, values, bulk) => writeRoles(env, version, values, bulk),
     },
-    application: (username, applicationKey, present) => {
-      if (
-        !savedText(username, 255) ||
-        !isSafeAtlassianIdentifier(applicationKey) ||
-        typeof present !== "boolean"
-      )
-        return Promise.resolve(INVALID);
-      const query = new URLSearchParams({ username, applicationKey });
-      return executeAdmittedJiraRequest(connection, context, signal, {
-        method: present ? "POST" : "DELETE",
-        url: atlassianApiUrl(endpoints, `user/application?${query.toString()}`),
-        jiraUserApplication: true,
-        expect: "none",
-      });
-    },
-    columns: (username, columns) => {
-      if (!savedText(username, 255) || !strings(columns, false)) return Promise.resolve(INVALID);
-      const form = new URLSearchParams({ username });
-      for (const column of columns) form.append("columns", column);
-      return executeAdmittedJiraRequest(connection, context, signal, {
-        method: "PUT",
-        url: atlassianApiUrl(endpoints, "user/columns"),
-        bodyJson: form.toString(),
-        jiraUserColumns: true,
-        expect: "none",
-      });
-    },
+    application: (username, applicationKey, present) =>
+      setApplication(env, username, applicationKey, present),
+    columns: (username, columns) => setColumns(env, username, columns),
   };
+  return ports;
 }

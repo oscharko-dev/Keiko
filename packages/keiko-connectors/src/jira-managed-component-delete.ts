@@ -107,6 +107,37 @@ async function reviewed(
   );
   return target.ok ? undefined : target;
 }
+type ComponentSelection = NonNullable<ReturnType<typeof input>>;
+function deletionReceipt(
+  selected: ComponentSelection,
+  context: Parameters<typeof releaseReceipt>[2],
+): ReturnType<typeof releaseReceipt> & { readonly replacementComponentId?: string } {
+  return {
+    ...releaseReceipt("component", selected.selected, context),
+    ...(selected.replacement === undefined
+      ? {}
+      : { replacementComponentId: selected.replacement.id }),
+  };
+}
+async function sendDelete(
+  request: JiraMutationRequest,
+  selected: ComponentSelection,
+  receipt: ReturnType<typeof deletionReceipt>,
+): Promise<JiraReleaseMutationAttempt> {
+  const query =
+    selected.replacement === undefined
+      ? ""
+      : `?${new URLSearchParams({ moveIssuesTo: selected.replacement.id }).toString()}`;
+  const response = await request(
+    `component/${selected.selected.id}${query}`,
+    "DELETE",
+    undefined,
+    "none",
+  );
+  if (!response.ok) return { ...dispatchFailure(response), receipt };
+  if (response.status < 200 || response.status >= 300) return { ...RELEASE_MALFORMED, receipt };
+  return confirm(request, selected, receipt);
+}
 export function isJiraComponentDelete(name: string): name is "jira.delete-component" {
   return name === "jira.delete-component";
 }
@@ -144,23 +175,6 @@ export async function executeJiraComponentDelete(
       },
     };
   if (check) return { ok: true, receipt: {} };
-  const receipt = {
-    ...releaseReceipt("component", selected.selected, context.value),
-    ...(selected.replacement === undefined
-      ? {}
-      : { replacementComponentId: selected.replacement.id }),
-  };
-  const query =
-    selected.replacement === undefined
-      ? ""
-      : `?${new URLSearchParams({ moveIssuesTo: selected.replacement.id }).toString()}`;
-  const response = await request(
-    `component/${selected.selected.id}${query}`,
-    "DELETE",
-    undefined,
-    "none",
-  );
-  if (!response.ok) return { ...dispatchFailure(response), receipt };
-  if (response.status < 200 || response.status >= 300) return { ...RELEASE_MALFORMED, receipt };
-  return confirm(request, selected, receipt);
+  const receipt = deletionReceipt(selected, context.value);
+  return sendDelete(request, selected, receipt);
 }

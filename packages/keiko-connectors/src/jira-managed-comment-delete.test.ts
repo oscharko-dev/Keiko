@@ -266,25 +266,27 @@ it("proves same-parent membership and deletion absence across more than one thou
     return { id, self: `${BASE_URL}/rest/api/2/issue/${ISSUE.id}/comment/${id}` };
   });
   const offsets: number[] = [];
-  const request = vi.fn<JiraMutationRequest>(async (path, method = "GET") => {
+  const request = vi.fn<JiraMutationRequest>((path, method = "GET") => {
     if (path === `issue/${ISSUE.key}?fields=summary` || path === `issue/${ISSUE.id}?fields=summary`)
-      return response(ISSUE);
+      return Promise.resolve(response(ISSUE));
     if (method === "DELETE") {
       expect(path).toBe(COMMENT_PATH);
       written = true;
-      return { ok: true, status: 204, body: undefined };
+      return Promise.resolve({ ok: true, status: 204, body: undefined });
     }
-    if (path === COMMENT_PATH) return response(COMMENT);
+    if (path === COMMENT_PATH) return Promise.resolve(response(COMMENT));
     const query = new URLSearchParams(path.split("?")[1]);
     const startAt = Number(query.get("startAt"));
     offsets.push(startAt);
     const comments = written ? others : [...others, COMMENT];
-    return response({
-      startAt,
-      maxResults: 1000,
-      total: comments.length,
-      comments: comments.slice(startAt, startAt + 1000),
-    });
+    return Promise.resolve(
+      response({
+        startAt,
+        maxResults: 1000,
+        total: comments.length,
+        comments: comments.slice(startAt, startAt + 1000),
+      }),
+    );
   });
   expect(await remove(request)).toEqual({ ok: true, receipt: RECEIPT });
   expect(offsets).toEqual([0, 1000, 0, 1000]);
@@ -293,11 +295,12 @@ it("proves same-parent membership and deletion absence across more than one thou
 it.each(["timeout", "cancelled", "effect-denied"] as const)(
   "stops paged admission on the existing %s request budget without an effect",
   async (reason) => {
-    const request = vi.fn<JiraMutationRequest>(async (path) => {
-      if (path === `issue/${ISSUE.key}?fields=summary`) return response(ISSUE);
-      if (path === COLLECTION_PATH) return response({ ...collection([COMMENT]), total: 2 });
+    const request = vi.fn<JiraMutationRequest>((path) => {
+      if (path === `issue/${ISSUE.key}?fields=summary`) return Promise.resolve(response(ISSUE));
+      if (path === COLLECTION_PATH)
+        return Promise.resolve(response({ ...collection([COMMENT]), total: 2 }));
       expect(path).toBe(`issue/${ISSUE.id}/comment?startAt=1&maxResults=1000`);
-      return { ok: false, reason };
+      return Promise.resolve({ ok: false, reason });
     });
     expect(await remove(request)).toMatchObject({ ok: false, reason });
     expect(request.mock.calls.every(([, method]) => method !== "DELETE")).toBe(true);

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { AtlassianWriteHttpOutcome } from "./atlassian-write-http.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
@@ -61,75 +61,121 @@ function createArgs(target: JiraAvatarTarget = TARGET): CatalogJsonObject {
     expectedAvatars: ROWS.map((row) => ({ ...row })),
   };
 }
-function harness(target: JiraAvatarTarget = TARGET) {
-  const state = {
+interface HarnessState {
+  rows: CatalogJsonObject[];
+  effect: AtlassianWriteHttpOutcome | undefined;
+  writes: number;
+  temporary: JiraAvatarTemporarySnapshot | undefined;
+  readbackFailure: boolean;
+  throwAfterAck: boolean;
+  server: { version: string; versionNumbers: number[]; deploymentType: string };
+}
+interface Harness {
+  readonly state: HarnessState;
+  readonly request: Mock<JiraMutationRequest>;
+  readonly upload: Mock<JiraAvatarSession["upload"]>;
+  readonly source: Mock<NonNullable<JiraAvatarPorts["source"]>>;
+  readonly inspectImage: Mock<NonNullable<JiraAvatarPorts["inspectImage"]>>;
+  readonly withSession: Mock<NonNullable<JiraAvatarPorts["withSession"]>>;
+  readonly ports: JiraAvatarPorts;
+  readonly session: JiraAvatarSession;
+}
+function okBody(
+  body: Record<string, unknown> | undefined,
+  status = 200,
+): AtlassianWriteHttpOutcome {
+  return { ok: true, status, body };
+}
+function writeOutcome(
+  state: HarnessState,
+  method: NonNullable<Parameters<JiraMutationRequest>[1]>,
+): AtlassianWriteHttpOutcome {
+  state.writes++;
+  if (method === "PUT")
+    state.rows = state.rows.map((row) => ({ ...row, selected: row.id === "42" }));
+  if (method === "DELETE") state.rows = state.rows.filter((row) => row.id !== "42");
+  return (
+    state.effect ??
+    okBody(
+      method === "POST" ? { id: "43", owner: "100", selected: false } : undefined,
+      method === "POST" ? 201 : 204,
+    )
+  );
+}
+function identityOutcome(state: HarnessState, path: string): AtlassianWriteHttpOutcome | undefined {
+  if (path === "serverInfo") return okBody(state.server);
+  if (path === "myself") return okBody({ key: ACTOR, name: "synthetic-user" });
+  if (path === "project/100") return okBody({ id: "100", key: "SYN", name: "Synthetic" });
+  if (path === "issuetype/7")
+    return okBody({ id: "7", name: "Story", description: null, subtask: false, avatarId: "41" });
+  return undefined;
+}
+function userOutcome(
+  target: JiraAvatarTarget,
+  path: string,
+): AtlassianWriteHttpOutcome | undefined {
+  return target.kind === "user" &&
+    (path === `user?username=${target.name}` || path === `user?key=${target.key}`)
+    ? okBody({ key: target.key, name: target.name })
+    : undefined;
+}
+function avatarsOutcome(state: HarnessState, path: string): AtlassianWriteHttpOutcome | undefined {
+  return path === "project/100/avatars" ||
+    path === "universal_avatar/type/issuetype/owner/7" ||
+    path === "user/avatars?username=target-user"
+    ? okBody({
+        system: state.rows.filter((row) => row.category === "system"),
+        custom: state.rows.filter((row) => row.category === "custom"),
+      })
+    : undefined;
+}
+function readOutcome(
+  state: HarnessState,
+  target: JiraAvatarTarget,
+  path: string,
+  route: string,
+): AtlassianWriteHttpOutcome {
+  if (state.writes > 0 && state.throwAfterAck) throw new TypeError("synthetic readback defect");
+  if (state.writes > 0 && state.readbackFailure) return { ok: false, reason: "permission-denied" };
+  const outcome =
+    identityOutcome(state, path) ?? userOutcome(target, path) ?? avatarsOutcome(state, path);
+  if (outcome === undefined) throw new TypeError(`Unexpected synthetic route: ${route}`);
+  return outcome;
+}
+function harness(target: JiraAvatarTarget = TARGET): Harness {
+  const state: HarnessState = {
     rows: avatarFixtureRows(target).map((row) => ({ ...row })),
-    effect: undefined as AtlassianWriteHttpOutcome | undefined,
+    effect: undefined,
     writes: 0,
-    temporary: undefined as JiraAvatarTemporarySnapshot | undefined,
+    temporary: undefined,
     readbackFailure: false,
     throwAfterAck: false,
     server: { version: "10.4.0", versionNumbers: [10, 4, 0], deploymentType: "Data Center" },
   };
-  const request = vi.fn<JiraMutationRequest>(async (path, method = "GET", body) => {
-    if (method !== "GET") {
-      state.writes++;
-      if (method === "PUT")
-        state.rows = state.rows.map((row) => ({ ...row, selected: row.id === "42" }));
-      if (method === "DELETE") state.rows = state.rows.filter((row) => row.id !== "42");
-      return (
-        state.effect ?? {
-          ok: true,
-          status: method === "POST" ? 201 : 204,
-          body: method === "POST" ? { id: "43", owner: "100", selected: false } : undefined,
-        }
-      );
-    }
-    if (state.writes > 0 && state.throwAfterAck) throw new TypeError("synthetic readback defect");
-    if (state.writes > 0 && state.readbackFailure)
-      return { ok: false, reason: "permission-denied" };
-    if (path === "serverInfo") return { ok: true, status: 200, body: state.server };
-    if (path === "myself")
-      return { ok: true, status: 200, body: { key: ACTOR, name: "synthetic-user" } };
-    if (path === "project/100")
-      return { ok: true, status: 200, body: { id: "100", key: "SYN", name: "Synthetic" } };
-    if (path === "issuetype/7")
-      return {
-        ok: true,
-        status: 200,
-        body: { id: "7", name: "Story", description: null, subtask: false, avatarId: "41" },
-      };
-    if (
-      target.kind === "user" &&
-      (path === `user?username=${target.name}` || path === `user?key=${target.key}`)
-    )
-      return { ok: true, status: 200, body: { key: target.key, name: target.name } };
-    if (
-      path === "project/100/avatars" ||
-      path === "universal_avatar/type/issuetype/owner/7" ||
-      path === "user/avatars?username=target-user"
-    )
-      return {
-        ok: true,
-        status: 200,
-        body: {
-          system: state.rows.filter((row) => row.category === "system"),
-          custom: state.rows.filter((row) => row.category === "custom"),
-        },
-      };
-    throw new TypeError(`Unexpected synthetic route: ${method} ${path} ${String(body)}`);
-  });
-  const upload = vi.fn<JiraAvatarSession["upload"]>(async () => {
-    expect(state.temporary).toBeUndefined();
-    state.writes++;
-    return (
-      state.effect ?? {
-        ok: true,
-        status: 201,
-        body: { ...CROP, needsCropping: false, url: "https://invalid.example/never-follow" },
-      }
-    );
-  });
+  const request = vi.fn<JiraMutationRequest>(
+    (path, method = "GET", body) =>
+      new Promise((resolve) => {
+        resolve(
+          method === "GET"
+            ? readOutcome(state, target, path, `${method} ${path} ${JSON.stringify(body)}`)
+            : writeOutcome(state, method),
+        );
+      }),
+  );
+  const upload = vi.fn<JiraAvatarSession["upload"]>(
+    () =>
+      new Promise((resolve) => {
+        expect(state.temporary).toBeUndefined();
+        state.writes++;
+        resolve(
+          state.effect ??
+            okBody(
+              { ...CROP, needsCropping: false, url: "https://invalid.example/never-follow" },
+              201,
+            ),
+        );
+      }),
+  );
   const session: JiraAvatarSession = {
     request,
     upload,

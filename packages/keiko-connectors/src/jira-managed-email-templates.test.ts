@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
 import { JIRA_ATTACHMENT_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
@@ -16,7 +16,14 @@ import { scriptedJiraMutationRequest } from "./jira-test-request/_support.js";
 
 const ACTOR = { ok: true, status: 200, body: EMAIL_TEMPLATE_ACTOR } as const;
 const ACK = { ok: true, status: 204, body: undefined } as const;
-function scenario() {
+type EmailScenario = ReturnType<typeof emailTemplateFixture> & {
+  request: ReturnType<typeof scriptedJiraMutationRequest>;
+  download: Mock<JiraEmailTemplatePorts["download"]>;
+  inspect: Mock<JiraEmailTemplatePorts["inspect"]>;
+  source: Mock<NonNullable<JiraEmailTemplatePorts["source"]>>;
+  upload: Mock<NonNullable<JiraEmailTemplatePorts["upload"]>>;
+};
+function scenario(): EmailScenario {
   const fixture = emailTemplateFixture();
   const request = scriptedJiraMutationRequest([ACTOR, ACTOR, ACK]);
   const download = vi
@@ -118,9 +125,9 @@ it("does not use model expectedFile as a source grant", async () => {
 it("copies source bytes before async inspection and uploads that exact owned snapshot", async () => {
   const s = scenario();
   const original = Uint8Array.from(s.bytes);
-  s.inspect.mockImplementation(async () => {
+  s.inspect.mockImplementation(() => {
     s.bytes.fill(0);
-    return { ok: true, value: s.pack };
+    return Promise.resolve({ ok: true, value: s.pack });
   });
   expect(await mutate("jira.upload-email-template-pack", s.uploadArgs, s)).toMatchObject({
     ok: false,

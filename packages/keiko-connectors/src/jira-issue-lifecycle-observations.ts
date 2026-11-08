@@ -19,6 +19,31 @@ import {
   type IssueLifecycleSubtask,
 } from "./jira-issue-lifecycle-values.js";
 
+type ObservedIssue = Extract<
+  Awaited<ReturnType<typeof readJiraMutationIssue>>,
+  { readonly ok: true }
+>;
+function observedIdentity(
+  issue: ObservedIssue,
+): Pick<IssueLifecycleReview, "id" | "key" | "summary" | "projectId" | "issueTypeId"> | undefined {
+  const project = asRecord(issue.fields.project);
+  const type = asRecord(issue.fields.issuetype);
+  if (
+    !jiraNativeId(issue.id) ||
+    !isSafeAtlassianIdentifier(issue.key) ||
+    !jiraNativeId(project?.id) ||
+    !jiraNativeId(type?.id) ||
+    typeof issue.fields.summary !== "string"
+  )
+    return undefined;
+  return {
+    id: issue.id,
+    key: issue.key,
+    summary: issue.fields.summary,
+    projectId: project.id,
+    issueTypeId: type.id,
+  };
+}
 export async function bindIssueLifecycleIssue(
   request: JiraMutationRequest,
   expected: IssueLifecycleReview,
@@ -29,21 +54,13 @@ export async function bindIssueLifecycleIssue(
     "issuetype",
   ]);
   if (!issue.ok) return issueLifecycleFailure(issue);
-  const project = asRecord(issue.fields.project);
-  const type = asRecord(issue.fields.issuetype);
-  if (
-    !jiraNativeId(issue.id) ||
-    !isSafeAtlassianIdentifier(issue.key) ||
-    !jiraNativeId(project?.id) ||
-    !jiraNativeId(type?.id) ||
-    typeof issue.fields.summary !== "string"
-  )
-    return ISSUE_LIFECYCLE_MALFORMED;
-  return issue.id === expected.id &&
-    issue.key === expected.key &&
-    issue.fields.summary === expected.summary &&
-    project.id === expected.projectId &&
-    type.id === expected.issueTypeId
+  const observed = observedIdentity(issue);
+  if (observed === undefined) return ISSUE_LIFECYCLE_MALFORMED;
+  return observed.id === expected.id &&
+    observed.key === expected.key &&
+    observed.summary === expected.summary &&
+    observed.projectId === expected.projectId &&
+    observed.issueTypeId === expected.issueTypeId
     ? undefined
     : issueLifecycleRefusal(
         "The exact issue identity, project, type or reviewed summary changed. Review the current issue before sending a new request.",
@@ -93,8 +110,30 @@ function sameSubtasks(
 ): boolean {
   return (
     left.length === right.length &&
-    left.every((item, index) => item.id === right[index]?.id && item.key === right[index]?.key)
+    left.every(
+      (item, index) => item.id === right.at(index)?.id && item.key === right.at(index)?.key,
+    )
   );
+}
+async function reorderAvailability(
+  request: JiraMutationRequest,
+  issue: IssueLifecycleReview,
+): Promise<IssueLifecycleFailure | undefined> {
+  const available = await request(
+    `issue/${issue.id}/subtask/move`,
+    "GET",
+    undefined,
+    "json-scalar",
+  );
+  if (!available.ok) return issueLifecycleFailure(dispatchFailure(available));
+  if (available.status !== 200 || typeof available.scalar !== "boolean")
+    return ISSUE_LIFECYCLE_MALFORMED;
+  return available.scalar
+    ? undefined
+    : issueLifecycleRefusal(
+        "Jira reports that this parent cannot currently reorder subtasks. Nothing was sent.",
+        "unavailable",
+      );
 }
 async function admitSubtasks(
   request: JiraMutationRequest,
@@ -112,21 +151,7 @@ async function admitSubtasks(
       "conflict",
     );
   if (input.kind === "delete") return undefined;
-  const available = await request(
-    `issue/${input.issue.id}/subtask/move`,
-    "GET",
-    undefined,
-    "json-scalar",
-  );
-  if (!available.ok) return issueLifecycleFailure(dispatchFailure(available));
-  if (available.status !== 200 || typeof available.scalar !== "boolean")
-    return ISSUE_LIFECYCLE_MALFORMED;
-  return available.scalar
-    ? undefined
-    : issueLifecycleRefusal(
-        "Jira reports that this parent cannot currently reorder subtasks. Nothing was sent.",
-        "unavailable",
-      );
+  return reorderAvailability(request, input.issue);
 }
 export async function admitIssueLifecycle(
   request: JiraMutationRequest,

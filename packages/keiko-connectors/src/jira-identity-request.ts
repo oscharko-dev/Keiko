@@ -1,6 +1,9 @@
 import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { atlassianApiEndpointsFor, atlassianApiUrl } from "./atlassian-sync-classify.js";
-import { ATLASSIAN_WRITE_ACTION_TOTAL_TIMEOUT_MS } from "./atlassian-write-http.js";
+import {
+  ATLASSIAN_WRITE_ACTION_TOTAL_TIMEOUT_MS,
+  type AtlassianWriteHttpOutcome,
+} from "./atlassian-write-http.js";
 import type { JiraIdentityPorts } from "./jira-identity-mutation-values.js";
 import type { JiraManagedConnection } from "./jira-managed-connection.js";
 import { executeAdmittedJiraRequest } from "./jira-request-admission.js";
@@ -17,7 +20,7 @@ export function jiraIdentityRequests(
     AbortSignal.timeout(ATLASSIAN_WRITE_ACTION_TOTAL_TIMEOUT_MS),
   ]);
   return {
-    user: (method, key, body) => {
+    user: (method, key, body): Promise<AtlassianWriteHttpOutcome> => {
       if (
         (method === "POST" && (key !== undefined || body === undefined)) ||
         (method !== "POST" && !savedName(key)) ||

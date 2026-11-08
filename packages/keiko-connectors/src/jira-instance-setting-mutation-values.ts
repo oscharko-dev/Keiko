@@ -97,7 +97,8 @@ export function isJiraInstanceSettingMutation(name: string): name is JiraInstanc
 function applicationWire(key: string, value: CatalogJsonValue | undefined): string | undefined {
   const kinds: Readonly<Record<string, string>> = JIRA_NONSECRET_APPLICATION_KINDS;
   if (!Object.hasOwn(kinds, key) || typeof value !== kinds[key]) return undefined;
-  const native = typeof value === "string" ? value : String(value);
+  if (value === undefined || value === null || typeof value === "object") return undefined;
+  const native = String(value);
   const projected = projectJiraApplicationValue(key, native);
   return "item" in projected && projected.item.valueState === "observed" ? native : undefined;
 }

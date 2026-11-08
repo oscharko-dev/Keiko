@@ -86,24 +86,25 @@ export function identityValidationPath(
 function emptyObserved(value: unknown): boolean {
   return Array.isArray(value) && value.length === 0;
 }
-async function anonymizationAdmission(
+type AnonymizeInput = Extract<IdentityInput, { kind: "anonymize" }>;
+async function bindAnonymizationParties(
   request: JiraMutationRequest,
-  input: Extract<IdentityInput, { kind: "anonymize" }>,
+  input: AnonymizeInput,
 ): Promise<IdentityFailure | undefined> {
   const user = await bindIdentityUser(request, input.user);
   if (!user.ok) return user;
   const owner = await bindIdentityUser(request, input.owner);
   if (!owner.ok) return owner;
-  if (owner.value.active !== true)
-    return identityRefusal(
-      "The selected ownership recipient must be independently observed as active. Unknown state is not an active account.",
-    );
-  const response = await request(identityValidationPath(input), "GET", undefined, "json");
-  if (!response.ok) return identityPrerequisiteFailure(dispatchFailure(response));
-  if (response.status !== 200 || response.body === undefined) return IDENTITY_MALFORMED;
-  const projected = projectJiraAnonymizationValidation(response.body, input.user.key);
-  if (!projected.ok) return projected;
-  const value = projected.value;
+  return owner.value.active === true
+    ? undefined
+    : identityRefusal(
+        "The selected ownership recipient must be independently observed as active. Unknown state is not an active account.",
+      );
+}
+function anonymizationValidationRefusal(
+  value: CatalogJsonObject,
+  input: AnonymizeInput,
+): IdentityFailure | undefined {
   if (
     value.userName !== input.user.name ||
     value.deleted !== false ||
@@ -116,7 +117,12 @@ async function anonymizationAdmission(
       "Native anonymization validation must explicitly bind the reviewed user and report success, no business validation failure, and complete empty errors/warnings. Review or resolve native diagnostics in Jira first; missing facts are unavailable, never an empty validation.",
       "unavailable",
     );
-  const operations = value.operations;
+  return anonymizationOperationsRefusal(value.operations, input);
+}
+function anonymizationOperationsRefusal(
+  operations: unknown,
+  input: AnonymizeInput,
+): IdentityFailure | undefined {
   if (
     !Array.isArray(operations) ||
     operations.length !== input.operations.length ||
@@ -128,6 +134,19 @@ async function anonymizationAdmission(
       "conflict",
     );
   return undefined;
+}
+async function anonymizationAdmission(
+  request: JiraMutationRequest,
+  input: AnonymizeInput,
+): Promise<IdentityFailure | undefined> {
+  const parties = await bindAnonymizationParties(request, input);
+  if (parties !== undefined) return parties;
+  const response = await request(identityValidationPath(input), "GET", undefined, "json");
+  if (!response.ok) return identityPrerequisiteFailure(dispatchFailure(response));
+  if (response.status !== 200 || response.body === undefined) return IDENTITY_MALFORMED;
+  const projected = projectJiraAnonymizationValidation(response.body, input.user.key);
+  if (!projected.ok) return projected;
+  return anonymizationValidationRefusal(projected.value, input);
 }
 export async function admitIdentityMutation(
   request: JiraMutationRequest,

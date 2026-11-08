@@ -188,6 +188,16 @@ function retainedDraftBytes(
   return (current?.bytes ?? 0) + pageBytes(page) + bindingBytes;
 }
 
+function retainDraft(
+  drafts: Drafts,
+  draft: StagedJiraDraft,
+  bounds: { readonly perOwner: number; readonly maxTotalBytes: number },
+): void {
+  drafts.set(draft.id, draft);
+  trimOwner(drafts, draft.owner, bounds.perOwner);
+  trimBytes(drafts, bounds.maxTotalBytes);
+}
+
 export function createJiraDraftStore(options: JiraDraftStoreOptions = {}): JiraDraftStore {
   const now = options.now ?? Date.now;
   const newId = options.newId ?? randomUUID;
@@ -223,9 +233,7 @@ export function createJiraDraftStore(options: JiraDraftStoreOptions = {}): JiraD
         bytes,
         lastUsedAt: now(),
       });
-      drafts.set(draft.id, draft);
-      trimOwner(drafts, owner, perOwner);
-      trimBytes(drafts, maxTotalBytes);
+      retainDraft(drafts, draft, { perOwner, maxTotalBytes });
       return { ok: true, draft };
     },
     get: (id, owner): StagedJiraDraft | undefined => {

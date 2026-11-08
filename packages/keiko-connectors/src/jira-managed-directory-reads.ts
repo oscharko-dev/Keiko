@@ -42,6 +42,30 @@ interface Selection {
   readonly groupName?: string;
   readonly applicationRoleKey?: string;
 }
+function applicationRoleSelection(
+  args: CatalogJsonObject,
+  startAt: number,
+  maxResults: number,
+): Selection | undefined {
+  return isSafeAtlassianIdentifier(args.applicationRoleKey)
+    ? {
+        path: `applicationrole/${encodeURIComponent(args.applicationRoleKey)}`,
+        applicationRoleKey: args.applicationRoleKey,
+        startAt,
+        maxResults,
+      }
+    : undefined;
+}
+function groupsSelection(
+  args: CatalogJsonObject,
+  query: URLSearchParams,
+  startAt: number,
+  maxResults: number,
+): Selection | undefined {
+  if (args.query !== undefined && !jiraNativeText(args.query, 255, true)) return undefined;
+  if (typeof args.query === "string") query.set("query", args.query);
+  return { path: `groups/picker?${query.toString()}`, startAt, maxResults };
+}
 function selection(name: DirectoryRead, args: CatalogJsonObject): Selection | undefined {
   if (Object.keys(args).some((key) => !ARGUMENTS[name].has(key))) return undefined;
   const startAt = jiraDirectoryNumber(args.startAt, 0, 1_000_000);
@@ -53,21 +77,9 @@ function selection(name: DirectoryRead, args: CatalogJsonObject): Selection | un
   );
   if (startAt === undefined || maxResults === undefined) return undefined;
   if (name === "jira.application-roles") return { path: "applicationrole", startAt, maxResults };
-  if (name === "jira.application-role")
-    return isSafeAtlassianIdentifier(args.applicationRoleKey)
-      ? {
-          path: `applicationrole/${encodeURIComponent(args.applicationRoleKey)}`,
-          applicationRoleKey: args.applicationRoleKey,
-          startAt,
-          maxResults,
-        }
-      : undefined;
+  if (name === "jira.application-role") return applicationRoleSelection(args, startAt, maxResults);
   const query = new URLSearchParams({ maxResults: String(maxResults) });
-  if (name === "jira.groups") {
-    if (args.query !== undefined && !jiraNativeText(args.query, 255, true)) return undefined;
-    if (typeof args.query === "string") query.set("query", args.query);
-    return { path: `groups/picker?${query.toString()}`, startAt, maxResults };
-  }
+  if (name === "jira.groups") return groupsSelection(args, query, startAt, maxResults);
   return groupMemberSelection(args, query, startAt, maxResults);
 }
 function groupMemberSelection(
@@ -94,16 +106,22 @@ export function projectJiraApplicationRole(value: unknown): CatalogJsonObject | 
   const raw = asRecord(value);
   if (raw === undefined || !isSafeAtlassianIdentifier(raw.key)) return undefined;
   const result: Record<string, CatalogJsonValue> = { key: raw.key };
+  const texts = applicationRoleTexts(raw);
+  const groups = applicationRoleGroups(raw);
+  const flags = applicationRoleFlags(raw);
+  const seats = applicationRoleSeats(raw);
+  if (texts === undefined || groups === undefined || flags === undefined || seats === undefined)
+    return undefined;
+  Object.assign(result, texts, groups, flags, seats);
+  return result;
+}
+function applicationRoleTexts(raw: Record<string, unknown>): CatalogJsonObject | undefined {
+  const result: Record<string, CatalogJsonValue> = {};
   for (const key of ["name", "userCountDescription"] as const) {
     if (raw[key] === undefined || raw[key] === null) continue;
     if (!jiraNativeText(raw[key], key === "name" ? 255 : 1024)) return undefined;
     result[key] = raw[key];
   }
-  const groups = applicationRoleGroups(raw);
-  const flags = applicationRoleFlags(raw);
-  const seats = applicationRoleSeats(raw);
-  if (groups === undefined || flags === undefined || seats === undefined) return undefined;
-  Object.assign(result, groups, flags, seats);
   return result;
 }
 function applicationRoleGroups(raw: Record<string, unknown>): CatalogJsonObject | undefined {
@@ -175,21 +193,21 @@ function groups(body: Record<string, unknown>, selected: Selection): ManagedMcpT
     },
   });
 }
+function rolesResponse(response: JiraReadResponse, selected: Selection): ManagedMcpToolResult {
+  const values = response.items;
+  if (values === undefined) return jiraReadFailure("malformed-payload");
+  if (values.length > TOOL_CATALOG_LIMITS.maxArrayItems) return jiraReadFailure("bounds-exceeded");
+  const items = roles(values);
+  return items === undefined
+    ? jiraReadFailure("malformed-payload")
+    : boundJiraReadResult(localJiraPage(items, selected.startAt, selected.maxResults));
+}
 function projectResponse(
   name: DirectoryRead,
   response: JiraReadResponse,
   selected: Selection,
 ): ManagedMcpToolResult {
-  if (name === "jira.application-roles") {
-    const values = response.items;
-    if (values === undefined) return jiraReadFailure("malformed-payload");
-    if (values.length > TOOL_CATALOG_LIMITS.maxArrayItems)
-      return jiraReadFailure("bounds-exceeded");
-    const items = roles(values);
-    return items === undefined
-      ? jiraReadFailure("malformed-payload")
-      : boundJiraReadResult(localJiraPage(items, selected.startAt, selected.maxResults));
-  }
+  if (name === "jira.application-roles") return rolesResponse(response, selected);
   const body = response.body;
   if (body === undefined) return jiraReadFailure("malformed-payload");
   if (name === "jira.application-role") {

@@ -156,9 +156,7 @@ describe("human-attested stale anonymization unlock", () => {
     await expect(
       execute(f.args, f.request, {
         ...f.ports,
-        unlock: async () => {
-          throw defect;
-        },
+        unlock: () => Promise.reject(defect),
       }),
     ).rejects.toBe(defect);
     expect(f.effects).toEqual([]);

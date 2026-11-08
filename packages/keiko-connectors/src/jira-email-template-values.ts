@@ -77,6 +77,30 @@ export function emailTemplateDigest(value: unknown): value is string {
 function exactKeys(value: object, keys: readonly string[]): boolean {
   return Object.keys(value).every((key) => keys.includes(key));
 }
+function connectedSourcePath(value: unknown): string | undefined {
+  const source = asRecord(value);
+  if (
+    source === undefined ||
+    !exactKeys(source, ["kind", "path"]) ||
+    source.kind !== "connected-file" ||
+    !isPortableWorkspaceRelativePath(source.path)
+  )
+    return undefined;
+  return source.path;
+}
+function expectedUploadFile(value: unknown): EmailTemplateUploadInput["expectedFile"] | undefined {
+  const expected = asRecord(value);
+  if (
+    expected === undefined ||
+    !isJiraAttachmentPreview(expected) ||
+    !exactKeys(expected, ["name", "sizeBytes", "sha256"]) ||
+    typeof expected.name !== "string" ||
+    typeof expected.sizeBytes !== "number" ||
+    typeof expected.sha256 !== "string"
+  )
+    return undefined;
+  return { name: expected.name, sizeBytes: expected.sizeBytes, sha256: expected.sha256 };
+}
 function uploadInput(
   args: CatalogJsonObject,
   actorKey: string,
@@ -91,30 +115,10 @@ function uploadInput(
     args.acceptStagedTemplateReplacement !== true
   )
     return undefined;
-  const source = asRecord(args.source);
-  if (
-    source === undefined ||
-    !exactKeys(source, ["kind", "path"]) ||
-    source.kind !== "connected-file" ||
-    !isPortableWorkspaceRelativePath(source.path)
-  )
-    return undefined;
-  const expected = asRecord(args.expectedFile);
-  if (
-    expected === undefined ||
-    !isJiraAttachmentPreview(expected) ||
-    !exactKeys(expected, ["name", "sizeBytes", "sha256"]) ||
-    typeof expected.name !== "string" ||
-    typeof expected.sizeBytes !== "number" ||
-    typeof expected.sha256 !== "string"
-  )
-    return undefined;
-  return {
-    kind: "upload",
-    actorKey,
-    path: source.path,
-    expectedFile: { name: expected.name, sizeBytes: expected.sizeBytes, sha256: expected.sha256 },
-  };
+  const path = connectedSourcePath(args.source);
+  const expectedFile = expectedUploadFile(args.expectedFile);
+  if (path === undefined || expectedFile === undefined) return undefined;
+  return { kind: "upload", actorKey, path, expectedFile };
 }
 function globalInput(
   operation: JiraEmailTemplateMutation,

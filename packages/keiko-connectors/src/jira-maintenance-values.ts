@@ -6,7 +6,10 @@ import {
 import { asRecord } from "./atlassian-sync-classify.js";
 import { jiraNativeNumericId, jiraNativeText } from "./jira-native-values.js";
 
-type Refusal = { readonly ok: false; readonly reason: "malformed-payload" | "bounds-exceeded" };
+interface Refusal {
+  readonly ok: false;
+  readonly reason: "malformed-payload" | "bounds-exceeded";
+}
 type Value = { readonly ok: true; readonly value: CatalogJsonValue } | Refusal;
 export type JiraMaintenanceProjection =
   { readonly ok: true; readonly value: CatalogJsonObject } | Refusal;

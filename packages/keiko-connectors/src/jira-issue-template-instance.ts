@@ -148,6 +148,24 @@ async function readParentIssueTypes(request: JiraMutationRequest): Promise<
   return { ok: true, types } as const;
 }
 
+function readParentTypesIfRequired(
+  request: JiraMutationRequest,
+  template: JiraIssueTemplate,
+): Promise<Awaited<ReturnType<typeof readParentIssueTypes>> | undefined> {
+  return template.parent.issueTypes === undefined
+    ? Promise.resolve(undefined)
+    : readParentIssueTypes(request);
+}
+function readStatusesIfProject(
+  request: JiraMutationRequest,
+  template: JiraIssueTemplate,
+  project: ProjectFacts | undefined,
+): Promise<readonly string[] | undefined> {
+  return project === undefined
+    ? Promise.resolve(undefined)
+    : readStatuses(request, template, project);
+}
+
 /** The live facts one template is validated against; unreadable parts are left out, not guessed. */
 export async function readJiraTemplateInstanceMetadata(
   request: JiraMutationRequest,
@@ -156,13 +174,11 @@ export async function readJiraTemplateInstanceMetadata(
   const read = await readProject(request, template.project);
   if (!read.ok) return read;
   const { project } = read;
-  const parentTypes =
-    template.parent.issueTypes === undefined ? undefined : await readParentIssueTypes(request);
+  const parentTypes = await readParentTypesIfRequired(request, template);
   if (parentTypes !== undefined && !parentTypes.ok) return parentTypes;
   const fields = await readJiraFieldCatalog(request);
   const linkTypes = await readLinkTypes(request);
-  const statuses =
-    project === undefined ? undefined : await readStatuses(request, template, project);
+  const statuses = await readStatusesIfProject(request, template, project);
   return {
     ok: true,
     instance: {

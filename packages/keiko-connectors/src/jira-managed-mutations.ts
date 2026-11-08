@@ -487,6 +487,34 @@ function createArgumentsRefusal(
     ],
   );
 }
+async function prepareWithAdmittedArguments(
+  request: JiraMutationRequest,
+  create: {
+    readonly projectId: string;
+    readonly issueTypeId: string;
+    readonly fields: NonNullable<ReturnType<typeof fieldsInput>>;
+    readonly links: NonNullable<ReturnType<typeof parseJiraIssueLinks>>;
+  },
+  templates: JiraIssueTemplateSource | undefined,
+  trace: JiraTraceRequest | undefined,
+): Promise<JiraCreatePreparation> {
+  const { projectId, issueTypeId, fields, links } = create;
+  const metadata = await jiraCreateMutationMetadata(request, projectId, issueTypeId);
+  if (!metadata.ok) return metadata;
+  const twin = await draftTwin(request, { projectId, issueTypeId, fields, links }, metadata.fields);
+  if (twin.kind === "repeat") return twin.attempt;
+  const prepared = createdFields(fields, metadata.fields, trace, twin);
+  if (!prepared.ok) return validationFailure(prepared);
+  const admitted = await prepareCreateWithMetadata(
+    request,
+    { projectId, issueTypeId, fields: prepared.fields, links, ...descriptionMetric(prepared) },
+    metadata.fields,
+    templates,
+  );
+  return admitted.ok && twin.identity !== undefined
+    ? { ...admitted, draftIdentity: twin.identity }
+    : admitted;
+}
 /** The existing single-create admission owner, also used before the one native bulk effect.
  * This performs no writes, including no follow-up issue links. */
 export async function prepareJiraCreate(
@@ -506,21 +534,12 @@ export async function prepareJiraCreate(
   // Narrowing only: the refusal above already named every argument these reject.
   if (!numericId(projectId) || !numericId(issueTypeId) || fields === undefined) return INVALID;
   if (links === undefined) return INVALID;
-  const metadata = await jiraCreateMutationMetadata(request, projectId, issueTypeId);
-  if (!metadata.ok) return metadata;
-  const twin = await draftTwin(request, { projectId, issueTypeId, fields, links }, metadata.fields);
-  if (twin.kind === "repeat") return twin.attempt;
-  const prepared = createdFields(fields, metadata.fields, trace, twin);
-  if (!prepared.ok) return validationFailure(prepared);
-  const admitted = await prepareCreateWithMetadata(
+  return prepareWithAdmittedArguments(
     request,
-    { projectId, issueTypeId, fields: prepared.fields, links, ...descriptionMetric(prepared) },
-    metadata.fields,
+    { projectId, issueTypeId, fields, links },
     templates,
+    trace,
   );
-  return admitted.ok && twin.identity !== undefined
-    ? { ...admitted, draftIdentity: twin.identity }
-    : admitted;
 }
 async function createIssue(
   request: JiraMutationRequest,
@@ -1540,6 +1559,40 @@ function savedFilterLink(attempt: JiraMutationAttempt, baseUrl: string): JiraMut
   // Replace any supplied destination; native self/view URLs never control a result link.
   return { ...attempt, receipt: { ...receipt, browseUrl } };
 }
+function agileConfigurationMutation(
+  operation: JiraMutationOperation,
+  args: CatalogJsonObject,
+  context: ManagedMcpInvocationContext,
+  connection: JiraManagedConnection,
+  check: boolean,
+): Promise<JiraMutationAttempt> | undefined {
+  if (isJiraSprintLifecycleMutation(operation))
+    return executeJiraSprintLifecycleMutation(
+      operation,
+      args,
+      {
+        requests: jiraAgileRequests(connection, context),
+        ...(connection.issueTemplates === undefined
+          ? {}
+          : { templates: connection.issueTemplates }),
+        experimentalAgile: jiraExperimentalAgileRequest(connection, context),
+      },
+      check,
+    );
+  if (isJiraAgilePlanningMutation(operation))
+    return executeJiraAgilePlanningMutation(
+      operation,
+      args,
+      {
+        requests: jiraAgileRequests(connection, context),
+        ...(connection.issueTemplates === undefined
+          ? {}
+          : { templates: connection.issueTemplates }),
+      },
+      check,
+    );
+  return undefined;
+}
 function configurationMutation(
   operation: JiraMutationOperation,
   args: CatalogJsonObject,
@@ -1572,32 +1625,10 @@ function configurationMutation(
       jiraAgileRequests(connection, context),
       check,
     );
-  if (isJiraSprintLifecycleMutation(operation))
-    return executeJiraSprintLifecycleMutation(
-      operation,
-      args,
-      {
-        requests: jiraAgileRequests(connection, context),
-        ...(connection.issueTemplates === undefined
-          ? {}
-          : { templates: connection.issueTemplates }),
-        experimentalAgile: jiraExperimentalAgileRequest(connection, context),
-      },
-      check,
-    );
-  if (isJiraAgilePlanningMutation(operation))
-    return executeJiraAgilePlanningMutation(
-      operation,
-      args,
-      {
-        requests: jiraAgileRequests(connection, context),
-        ...(connection.issueTemplates === undefined
-          ? {}
-          : { templates: connection.issueTemplates }),
-      },
-      check,
-    );
-  return savedConfigurationMutation(operation, args, request, check, connection.baseUrl);
+  return (
+    agileConfigurationMutation(operation, args, context, connection, check) ??
+    savedConfigurationMutation(operation, args, request, check, connection.baseUrl)
+  );
 }
 function nativeLifecycleMutation(
   operation: JiraMutationOperation,
@@ -1696,7 +1727,7 @@ function avatarPortsForMutation(
     ...(source === undefined ? {} : { source }),
   };
 }
-function resourceAndIdentityMutation(
+function lifecycleAndBulkMutation(
   operation: JiraMutationOperation,
   args: CatalogJsonObject,
   request: JiraMutationRequest,
@@ -1705,31 +1736,6 @@ function resourceAndIdentityMutation(
   check: boolean,
   trace?: JiraTraceRequest,
 ): Promise<JiraMutationAttempt> | undefined {
-  if (isJiraAnonymizationUnlock(operation))
-    return executeJiraAnonymizationUnlock(args, request, connection.privateIdentity, check);
-  if (isJiraAvatarMutation(operation))
-    return executeJiraAvatarMutation(
-      operation,
-      args,
-      avatarPortsForMutation(connection, request, check),
-      check,
-    );
-  if (isJiraIdentityMutation(operation))
-    return executeJiraIdentityMutation(
-      operation,
-      args,
-      request,
-      jiraIdentityRequests(connection, context),
-      check,
-    );
-  if (isJiraPrivateAccountMutation(operation))
-    return executeJiraPrivateAccountMutation(
-      operation,
-      args,
-      request,
-      connection.privateIdentity,
-      check,
-    );
   if (isJiraIssueLifecycleMutation(operation))
     return executeJiraIssueLifecycleMutation(
       operation,
@@ -1769,25 +1775,49 @@ function resourceAndIdentityMutation(
     );
   return undefined;
 }
-function dedicatedMutation(
+function resourceAndIdentityMutation(
   operation: JiraMutationOperation,
-  source: CatalogJsonObject,
-  context: ManagedMcpInvocationContext,
+  args: CatalogJsonObject,
+  request: JiraMutationRequest,
   connection: JiraManagedConnection,
+  context: ManagedMcpInvocationContext,
   check: boolean,
   trace?: JiraTraceRequest,
 ): Promise<JiraMutationAttempt> | undefined {
-  const args = structuredClone(source);
-  const request = requestFor(connection, context);
-  const specialized =
-    resourceAndIdentityMutation(operation, args, request, connection, context, check, trace) ??
-    systemAdministrationMutation(operation, args, request, connection, context, check) ??
-    instanceConfigurationMutation(operation, args, request, connection, context, check) ??
-    permissionRoleMutation(operation, args, request, connection, context, check) ??
-    configurationMutation(operation, args, request, context, connection, check) ??
-    deletionMutation(operation, args, request, connection, check) ??
-    nativeLifecycleMutation(operation, args, request, connection, check);
-  if (specialized !== undefined) return specialized;
+  if (isJiraAnonymizationUnlock(operation))
+    return executeJiraAnonymizationUnlock(args, request, connection.privateIdentity, check);
+  if (isJiraAvatarMutation(operation))
+    return executeJiraAvatarMutation(
+      operation,
+      args,
+      avatarPortsForMutation(connection, request, check),
+      check,
+    );
+  if (isJiraIdentityMutation(operation))
+    return executeJiraIdentityMutation(
+      operation,
+      args,
+      request,
+      jiraIdentityRequests(connection, context),
+      check,
+    );
+  if (isJiraPrivateAccountMutation(operation))
+    return executeJiraPrivateAccountMutation(
+      operation,
+      args,
+      request,
+      connection.privateIdentity,
+      check,
+    );
+  return lifecycleAndBulkMutation(operation, args, request, connection, context, check, trace);
+}
+function entityMutation(
+  operation: JiraMutationOperation,
+  args: CatalogJsonObject,
+  request: JiraMutationRequest,
+  connection: JiraManagedConnection,
+  check: boolean,
+): Promise<JiraMutationAttempt> | undefined {
   if (isJiraParticipationMutation(operation))
     return executeJiraParticipationMutation(operation, args, request, check, connection.baseUrl);
   if (isJiraWorklogMutation(operation))
@@ -1801,6 +1831,27 @@ function dedicatedMutation(
   if (isJiraProjectMutation(operation))
     return executeJiraProjectMutation(operation, args, request, check);
   return undefined;
+}
+function dedicatedMutation(
+  operation: JiraMutationOperation,
+  source: CatalogJsonObject,
+  context: ManagedMcpInvocationContext,
+  connection: JiraManagedConnection,
+  check: boolean,
+  trace?: JiraTraceRequest,
+): Promise<JiraMutationAttempt> | undefined {
+  const args = structuredClone(source);
+  const request = requestFor(connection, context);
+  return (
+    resourceAndIdentityMutation(operation, args, request, connection, context, check, trace) ??
+    systemAdministrationMutation(operation, args, request, connection, context, check) ??
+    instanceConfigurationMutation(operation, args, request, connection, context, check) ??
+    permissionRoleMutation(operation, args, request, connection, context, check) ??
+    configurationMutation(operation, args, request, context, connection, check) ??
+    deletionMutation(operation, args, request, connection, check) ??
+    nativeLifecycleMutation(operation, args, request, connection, check) ??
+    entityMutation(operation, args, request, connection, check)
+  );
 }
 
 function instanceConfigurationMutation(

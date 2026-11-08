@@ -1,9 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import { JIRA_ATTACHMENT_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import { jiraEmailTemplateRequest } from "./jira-email-template-request.js";
 
-function fixture(allowed = true) {
+interface EmailFixture {
+  readonly bytes: Uint8Array;
+  readonly http: Mock<AtlassianHttpBodyPort>;
+  readonly beforeEffect: Mock<() => boolean>;
+  readonly controller: AbortController;
+  readonly request: ReturnType<typeof jiraEmailTemplateRequest>;
+}
+function fixture(allowed = true): EmailFixture {
   const bytes = new Uint8Array([0x50, 0x4b, 0, 0xff, 0xc0, 0x80]);
   const http = vi.fn<AtlassianHttpBodyPort>(() =>
     Promise.resolve({

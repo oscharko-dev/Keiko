@@ -42,57 +42,81 @@ interface Scenario {
   readonly extraRelation?: boolean;
   readonly recheckChanged?: boolean;
 }
-function fixture(options: Scenario = {}): ReturnType<typeof vi.fn<JiraMutationRequest>> {
-  let written = false;
-  let issueReads = 0;
-  return vi.fn<JiraMutationRequest>(async (path, method = "GET") => {
-    if (method !== "GET") {
-      written = true;
-      return options.write ?? response(undefined, options.deleting ? 204 : 201);
-    }
-    if (path === "myself")
-      return response({
-        key: written
-          ? (options.afterActor ?? "synthetic-actor")
-          : (options.actor ?? "synthetic-actor"),
-        name: "synthetic.user",
-      });
-    if (written && options.afterRead !== undefined) {
-      if (options.afterRead instanceof Error) throw options.afterRead;
-      return options.afterRead;
-    }
-    if (path === "issueLinkType/9") return response(options.type ?? TYPE);
-    if (path === `issueLink/${ID}`) {
-      if (options.direct instanceof Error) throw options.direct;
-      return response(
-        options.direct ?? { id: ID, type: TYPE, inwardIssue: FIRST, outwardIssue: SECOND },
-      );
-    }
-    const selected = path.split("?")[0];
-    const inward =
-      selected === `issue/${FIRST.id}` || selected?.toUpperCase() === `ISSUE/${FIRST.key}`;
-    const outward =
-      selected === `issue/${SECOND.id}` || selected?.toUpperCase() === `ISSUE/${SECOND.key}`;
-    if (!inward && !outward) throw new TypeError(`Unexpected native request: ${path}`);
-    issueReads++;
-    const present = written ? !options.deleting : options.deleting === true;
-    const edges =
-      (written ? options.after : options.before) ?? (present ? [adjacency(inward)] : []);
-    const added = options.extraRelation ? [adjacency(inward, "777")] : [];
-    const changed =
-      options.recheckChanged && issueReads > 2 && !written ? [adjacency(inward, "888")] : [];
-    return response({
-      ...(inward ? FIRST : SECOND),
-      fields: {
-        summary: "Synthetic",
-        description: "",
-        labels: [],
-        project: { key: "SYN" },
-        issuetype: { id: "10", name: "Story" },
-        ...(options.missingField ? {} : { issuelinks: [...edges, ...added, ...changed] }),
-      },
-    });
+interface LinkMemory {
+  written: boolean;
+  issueReads: number;
+}
+function afterWriteRead(read: AtlassianWriteHttpOutcome | Error): AtlassianWriteHttpOutcome {
+  if (read instanceof Error) throw read;
+  return read;
+}
+function directLink(options: Scenario): AtlassianWriteHttpOutcome {
+  if (options.direct instanceof Error) throw options.direct;
+  return response(
+    options.direct ?? { id: ID, type: TYPE, inwardIssue: FIRST, outwardIssue: SECOND },
+  );
+}
+function targetSide(path: string): "inward" | "outward" {
+  const selected = path.split("?")[0];
+  const upper = selected?.toUpperCase();
+  if (selected === `issue/${FIRST.id}` || upper === `ISSUE/${FIRST.key}`) return "inward";
+  if (selected === `issue/${SECOND.id}` || upper === `ISSUE/${SECOND.key}`) return "outward";
+  throw new TypeError(`Unexpected native request: ${path}`);
+}
+function issueLinks(options: Scenario, memory: LinkMemory, inward: boolean): unknown[] {
+  const present = memory.written ? !options.deleting : options.deleting === true;
+  const edges =
+    (memory.written ? options.after : options.before) ?? (present ? [adjacency(inward)] : []);
+  const added = options.extraRelation ? [adjacency(inward, "777")] : [];
+  const changed =
+    options.recheckChanged && memory.issueReads > 2 && !memory.written
+      ? [adjacency(inward, "888")]
+      : [];
+  return [...edges, ...added, ...changed];
+}
+function readIssue(options: Scenario, memory: LinkMemory, path: string): AtlassianWriteHttpOutcome {
+  const inward = targetSide(path) === "inward";
+  memory.issueReads++;
+  return response({
+    ...(inward ? FIRST : SECOND),
+    fields: {
+      summary: "Synthetic",
+      description: "",
+      labels: [],
+      project: { key: "SYN" },
+      issuetype: { id: "10", name: "Story" },
+      ...(options.missingField ? {} : { issuelinks: issueLinks(options, memory, inward) }),
+    },
   });
+}
+function actorResponse(options: Scenario, written: boolean): AtlassianWriteHttpOutcome {
+  const actor = written ? options.afterActor : options.actor;
+  return response({ key: actor ?? "synthetic-actor", name: "synthetic.user" });
+}
+function linkRoute(
+  options: Scenario,
+  memory: LinkMemory,
+  path: string,
+  method: NonNullable<Parameters<JiraMutationRequest>[1]>,
+): AtlassianWriteHttpOutcome {
+  if (method !== "GET") {
+    memory.written = true;
+    return options.write ?? response(undefined, options.deleting ? 204 : 201);
+  }
+  if (path === "myself") return actorResponse(options, memory.written);
+  if (memory.written && options.afterRead !== undefined) return afterWriteRead(options.afterRead);
+  if (path === "issueLinkType/9") return response(options.type ?? TYPE);
+  if (path === `issueLink/${ID}`) return directLink(options);
+  return readIssue(options, memory, path);
+}
+function fixture(options: Scenario = {}): ReturnType<typeof vi.fn<JiraMutationRequest>> {
+  const memory: LinkMemory = { written: false, issueReads: 0 };
+  return vi.fn<JiraMutationRequest>(
+    (path, method = "GET") =>
+      new Promise((resolve) => {
+        resolve(linkRoute(options, memory, path, method));
+      }),
+  );
 }
 function effects(request: ReturnType<typeof fixture>): readonly Parameters<JiraMutationRequest>[] {
   return request.mock.calls.filter(([, method = "GET"]) => method !== "GET");
@@ -103,7 +127,7 @@ function run(
   args: CatalogJsonObject = INPUT,
   check = false,
   templates?: JiraIssueTemplateSource,
-) {
+): ReturnType<typeof executeJiraIssueLinkMutation> {
   return executeJiraIssueLinkMutation(
     deleting ? "jira.delete-issue-link" : "jira.create-issue-link",
     deleting ? { ...args, linkId: ID } : args,

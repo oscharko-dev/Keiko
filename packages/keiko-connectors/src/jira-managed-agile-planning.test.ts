@@ -1,13 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { parseJiraIssueTemplate } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { executeJiraAgilePlanningMutation } from "./jira-managed-agile-planning.js";
+import type { JiraIssueTemplateSource } from "./jira-managed-template-gate.js";
 import { JiraAcknowledgedMutationError } from "./jira-mutation-failure.js";
 import {
   AGILE_PLANNING_FIXTURE_CASES as CASES,
   agilePlanningFixture,
 } from "../../../tests/support/jira-agile-planning-fixture.js";
 
-function formal(requiredFields: string) {
+type Fixture = ReturnType<typeof agilePlanningFixture>;
+function formal(requiredFields: string): JiraIssueTemplateSource {
   const parsed = parseJiraIssueTemplate(
     [
       "---",
@@ -24,13 +26,12 @@ function formal(requiredFields: string) {
   if (!parsed.ok) throw new TypeError("Synthetic template must parse");
   return () => ({ templates: [parsed.template], unreadable: 0 });
 }
-function first(f: ReturnType<typeof agilePlanningFixture>) {
+function first(f: Fixture): Fixture["issues"] extends Map<string, infer Issue> ? Issue : never {
   const issue = f.issues.get("10001");
   if (issue === undefined) throw new TypeError("Missing synthetic issue");
   return issue;
 }
-const writes = (f: ReturnType<typeof agilePlanningFixture>) =>
-  f.calls.filter(({ method }) => method !== "GET");
+const writes = (f: Fixture): Fixture["calls"] => f.calls.filter(({ method }) => method !== "GET");
 
 describe("fixed Agile planning effects", () => {
   it.each(CASES)(
@@ -155,7 +156,7 @@ describe("reviewed membership and global rank evidence", () => {
     const readback = f.ports.requests.readback;
     const requests = {
       ...f.ports.requests,
-      readback: () => {
+      readback: (): ReturnType<typeof readback> => {
         f.controls.omitEpic = true;
         return readback();
       },

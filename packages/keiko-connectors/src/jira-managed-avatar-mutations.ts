@@ -130,6 +130,39 @@ async function confirmSelection(
     throw new JiraAcknowledgedMutationError(error, known);
   }
 }
+function alreadySelected(
+  input: AvatarSelectionInput,
+  known: JiraAvatarReceipt,
+): JiraAvatarAttempt | undefined {
+  if (
+    input.kind !== "set" ||
+    !input.expectedAvatars.some((row) => row.id === input.avatarId && row.selected)
+  )
+    return undefined;
+  return {
+    ok: false,
+    reason: "conflict",
+    receipt: known,
+    detail: {
+      unchanged: true,
+      messages: [
+        "The exact reviewed avatar is already selected for the bound native owner; no effect was dispatched.",
+      ],
+    },
+  };
+}
+function dispatchSelection(
+  request: JiraMutationRequest,
+  input: AvatarSelectionInput,
+  path: string,
+): Promise<AtlassianWriteHttpOutcome> {
+  return request(
+    path,
+    input.kind === "delete" ? "DELETE" : "PUT",
+    input.kind === "set" ? { id: input.avatarId } : undefined,
+    "none",
+  );
+}
 async function selectAvatar(
   operation: JiraAvatarMutation,
   input: AvatarSelectionInput,
@@ -139,21 +172,8 @@ async function selectAvatar(
   const refused = await admitAvatarInput(request, input);
   if (refused !== undefined) return refused;
   const known = Object.freeze(receipt(input, input.avatarId));
-  if (
-    input.kind === "set" &&
-    input.expectedAvatars.some((row) => row.id === input.avatarId && row.selected)
-  )
-    return {
-      ok: false,
-      reason: "conflict",
-      receipt: known,
-      detail: {
-        unchanged: true,
-        messages: [
-          "The exact reviewed avatar is already selected for the bound native owner; no effect was dispatched.",
-        ],
-      },
-    };
+  const unchanged = alreadySelected(input, known);
+  if (unchanged !== undefined) return unchanged;
   if (check) return { ok: true, receipt: known };
   const path = effectPath(
     operation,
@@ -163,12 +183,7 @@ async function selectAvatar(
   if (path === undefined) return AVATAR_MALFORMED;
   const current = await admitAvatarInput(request, input);
   if (current !== undefined) return current;
-  const response = await request(
-    path,
-    input.kind === "delete" ? "DELETE" : "PUT",
-    input.kind === "set" ? { id: input.avatarId } : undefined,
-    "none",
-  );
+  const response = await dispatchSelection(request, input, path);
   if (!acknowledged(response))
     return response.ok
       ? { ...AVATAR_MALFORMED, receipt: known }
@@ -177,6 +192,33 @@ async function selectAvatar(
 }
 function digest(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
+}
+async function readSourceBytes(
+  source: NonNullable<JiraAvatarPorts["source"]>,
+  input: AvatarUploadInput,
+): Promise<AvatarObservation<Uint8Array>> {
+  const read = await source({
+    kind: "connected-file",
+    path: input.path,
+    maxBytes: JIRA_ATTACHMENT_MAX_BYTES,
+    purpose: "jira-avatar-image",
+  });
+  if (!read.ok) return read;
+  if (
+    read.content.bytes.byteLength === 0 ||
+    read.content.bytes.byteLength > JIRA_ATTACHMENT_MAX_BYTES
+  )
+    return { ok: false, reason: "bounds-exceeded" };
+  const bytes = Uint8Array.from(read.content.bytes);
+  if (
+    read.content.name !== input.expectedFile.name ||
+    bytes.byteLength !== input.expectedFile.sizeBytes ||
+    digest(bytes) !== input.expectedFile.sha256
+  )
+    return avatarConflict(
+      "The actual connected image bytes no longer match the reviewed file name, size and SHA-256. Review the current source before uploading; nothing was sent.",
+    );
+  return { ok: true, value: bytes };
 }
 async function imageBytes(
   ports: JiraAvatarPorts,
@@ -188,30 +230,11 @@ async function imageBytes(
     return avatarUnavailable(
       "The existing governed connected-file image source and image admission are unavailable. A model-supplied file digest does not grant source access.",
     );
-  const source = await ports.source({
-    kind: "connected-file",
-    path: input.path,
-    maxBytes: JIRA_ATTACHMENT_MAX_BYTES,
-    purpose: "jira-avatar-image",
-  });
+  const source = await readSourceBytes(ports.source, input);
   if (!source.ok) return source;
-  if (
-    source.content.bytes.byteLength === 0 ||
-    source.content.bytes.byteLength > JIRA_ATTACHMENT_MAX_BYTES
-  )
-    return { ok: false, reason: "bounds-exceeded" };
-  const bytes = Uint8Array.from(source.content.bytes);
-  if (
-    source.content.name !== input.expectedFile.name ||
-    bytes.byteLength !== input.expectedFile.sizeBytes ||
-    digest(bytes) !== input.expectedFile.sha256
-  )
-    return avatarConflict(
-      "The actual connected image bytes no longer match the reviewed file name, size and SHA-256. Review the current source before uploading; nothing was sent.",
-    );
-  const inspected = await ports.inspectImage(bytes);
+  const inspected = await ports.inspectImage(source.value);
   if (!inspected.ok) return inspected;
-  const owned = Uint8Array.from(bytes);
+  const owned = Uint8Array.from(source.value);
   return digest(owned) === input.expectedFile.sha256
     ? { ok: true, value: { bytes: owned, mimeType: inspected.value.mimeType } }
     : avatarConflict("Image admission changed the reviewed source bytes; no upload was sent.");
@@ -309,6 +332,34 @@ async function createdAvatar(
     throw new JiraAcknowledgedMutationError(error, identified);
   }
 }
+function rememberCropped(
+  session: JiraAvatarSession,
+  input: AvatarCropInput,
+  response: AtlassianWriteHttpOutcome,
+  known: JiraAvatarReceipt,
+): JiraAvatarAttempt {
+  const observed = response.ok ? avatarCropAcknowledgement(response.body) : undefined;
+  if (observed === undefined) return unconfirmed(known);
+  try {
+    session.rememberTemporary(
+      Object.freeze({
+        actorKey: input.actor,
+        target: Object.freeze({ ...input.target }),
+        uploadSha256: input.expectedTemporary.uploadSha256,
+        uploadBytes: input.expectedTemporary.uploadBytes,
+        crop: Object.freeze({ ...observed.crop }),
+        needsCropping: observed.needsCropping,
+      }),
+    );
+    return unconfirmed({
+      ...known,
+      temporaryCrop: observed.crop,
+      temporaryNeedsCropping: observed.needsCropping,
+    });
+  } catch (error) {
+    throw new JiraAcknowledgedMutationError(error, known);
+  }
+}
 async function cropAvatar(
   operation: JiraAvatarMutation,
   input: AvatarCropInput,
@@ -334,27 +385,7 @@ async function cropAvatar(
       ? { ...AVATAR_MALFORMED, receipt: known }
       : { ...dispatchFailure(response), receipt: known };
   if (input.kind === "create") return createdAvatar(session, input, response, known);
-  const observed = response.ok ? avatarCropAcknowledgement(response.body) : undefined;
-  if (observed === undefined) return unconfirmed(known);
-  try {
-    session.rememberTemporary(
-      Object.freeze({
-        actorKey: input.actor,
-        target: Object.freeze({ ...input.target }),
-        uploadSha256: input.expectedTemporary.uploadSha256,
-        uploadBytes: input.expectedTemporary.uploadBytes,
-        crop: Object.freeze({ ...observed.crop }),
-        needsCropping: observed.needsCropping,
-      }),
-    );
-    return unconfirmed({
-      ...known,
-      temporaryCrop: observed.crop,
-      temporaryNeedsCropping: observed.needsCropping,
-    });
-  } catch (error) {
-    throw new JiraAcknowledgedMutationError(error, known);
-  }
+  return rememberCropped(session, input, response, known);
 }
 async function legacyReleaseAdmission(ports: JiraAvatarPorts): Promise<AvatarFailure | undefined> {
   const expected = ports.legacyTemporaryRelease;

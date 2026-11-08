@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import { executeJiraAgileContextRead, isJiraAgileContextRead } from "./jira-agile-context-reads.js";
@@ -12,7 +12,16 @@ interface Response {
   readonly body: unknown;
   readonly status?: number;
 }
-function fixture(responses: readonly Response[]) {
+interface AgileFixture {
+  readonly http: Mock<AtlassianHttpBodyPort>;
+  readonly context: Parameters<typeof executeJiraAgileContextRead>[2];
+  readonly connection: Parameters<typeof executeJiraAgileContextRead>[3];
+  readonly read: (
+    name: Operation,
+    args: CatalogJsonObject,
+  ) => ReturnType<typeof executeJiraAgileContextRead>;
+}
+function fixture(responses: readonly Response[]): AgileFixture {
   let index = 0;
   const http = vi.fn<AtlassianHttpBodyPort>(() => {
     const selected = responses[index++];
@@ -51,10 +60,10 @@ const ISSUE = {
   key: "SYN-1",
   fields: { summary: "Scoped issue", description: "Native description" },
 };
-function page(values: readonly unknown[]) {
+function page(values: readonly unknown[]): Record<string, unknown> {
   return { startAt: 0, maxResults: 25, total: values.length, isLast: true, values };
 }
-function issuePage() {
+function issuePage(): Record<string, unknown> {
   return { startAt: 0, maxResults: 25, total: 1, issues: [ISSUE] };
 }
 

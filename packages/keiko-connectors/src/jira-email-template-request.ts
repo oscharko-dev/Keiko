@@ -20,7 +20,7 @@ export function jiraEmailTemplateRequest(
     AbortSignal.timeout(ATLASSIAN_WRITE_ACTION_TOTAL_TIMEOUT_MS),
   ]);
   return {
-    download: async () => {
+    download: async (): ReturnType<JiraEmailTemplatePorts["download"]> => {
       const result = await executeAdmittedJiraRequest(connection, context, signal, {
         method: "GET",
         url,
@@ -32,7 +32,7 @@ export function jiraEmailTemplateRequest(
         ? { ok: false, reason: "malformed-payload" }
         : { ok: true, status: result.status, bytes: result.bytes };
     },
-    upload: (bytes) => {
+    upload: (bytes): ReturnType<NonNullable<JiraEmailTemplatePorts["upload"]>> => {
       if (!(bytes instanceof Uint8Array))
         return Promise.resolve({ ok: false, reason: "field-validation" });
       if (bytes.byteLength > JIRA_ATTACHMENT_MAX_BYTES)

@@ -141,8 +141,8 @@ describe("native field and custom option observations", () => {
   });
   it("classifies oversized field/child collections as budget refusals", async () => {
     const values = Array.from({ length: TOOL_CATALOG_LIMITS.maxArrayItems + 1 }, (_, index) => ({
-      id: `customfield_${index + 1}`,
-      name: `Field ${index}`,
+      id: `customfield_${String(index + 1)}`,
+      name: `Field ${String(index)}`,
     }));
     expect(
       (await executeJiraFieldDirectoryRead("jira.fields", {}, fields(values))).data.reason,

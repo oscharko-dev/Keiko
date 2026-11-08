@@ -25,6 +25,17 @@ export function jiraDirectoryNumber(
     : undefined;
 }
 
+function copyOptionalFlags(
+  raw: Record<string, unknown>,
+  result: Record<string, CatalogJsonValue>,
+): boolean {
+  for (const key of ["active", "deleted"] as const) {
+    if (raw[key] === undefined || raw[key] === null) continue;
+    if (typeof raw[key] !== "boolean") return false;
+    result[key] = raw[key];
+  }
+  return true;
+}
 /** User keys stay exact; a username's native spelling is presentation, not a rewritten identity. */
 export function jiraDirectoryUser(value: unknown): CatalogJsonObject | undefined {
   const raw = asRecord(value);
@@ -35,12 +46,7 @@ export function jiraDirectoryUser(value: unknown): CatalogJsonObject | undefined
     if (!jiraNativeText(raw.displayName, 255)) return undefined;
     result.displayName = raw.displayName;
   }
-  for (const key of ["active", "deleted"] as const) {
-    if (raw[key] === undefined || raw[key] === null) continue;
-    if (typeof raw[key] !== "boolean") return undefined;
-    result[key] = raw[key];
-  }
-  return result;
+  return copyOptionalFlags(raw, result) ? result : undefined;
 }
 
 export function jiraDirectoryUsers(

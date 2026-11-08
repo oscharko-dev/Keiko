@@ -52,33 +52,42 @@ function schema(value: unknown): CatalogJsonObject | undefined {
   }
   return result;
 }
-export function jiraFieldDirectoryProjection(value: unknown): CatalogJsonObject | undefined {
-  const raw = asRecord(value);
-  if (raw === undefined || !isJiraFieldId(raw.id) || !jiraNativeText(raw.name, 255))
-    return undefined;
-  const result: Record<string, CatalogJsonValue> = { id: raw.id, name: raw.name };
+function fieldFlags(raw: Record<string, unknown>): CatalogJsonObject | undefined {
+  const result: Record<string, CatalogJsonValue> = {};
   for (const key of ["custom", "orderable", "navigable", "searchable"] as const) {
     if (raw[key] === undefined || raw[key] === null) continue;
     if (typeof raw[key] !== "boolean") return undefined;
     result[key] = raw[key];
   }
-  if (raw.clauseNames !== undefined && raw.clauseNames !== null) {
-    const names = asArray(raw.clauseNames);
-    if (
-      names === undefined ||
-      names.length > TOOL_CATALOG_LIMITS.maxArrayItems ||
-      !names.every((name): name is string => jiraNativeText(name, 255)) ||
-      new Set(names).size !== names.length
-    )
-      return undefined;
-    result.clauseNames = names;
-  }
-  if (raw.schema !== undefined && raw.schema !== null) {
-    const projected = schema(raw.schema);
-    if (projected === undefined) return undefined;
-    result.schema = projected;
-  }
   return result;
+}
+function fieldClauseNames(raw: Record<string, unknown>): CatalogJsonObject | undefined {
+  if (raw.clauseNames === undefined || raw.clauseNames === null) return {};
+  const names = asArray(raw.clauseNames);
+  if (
+    names === undefined ||
+    names.length > TOOL_CATALOG_LIMITS.maxArrayItems ||
+    !names.every((name): name is string => jiraNativeText(name, 255)) ||
+    new Set(names).size !== names.length
+  )
+    return undefined;
+  return { clauseNames: names };
+}
+function fieldSchema(raw: Record<string, unknown>): CatalogJsonObject | undefined {
+  if (raw.schema === undefined || raw.schema === null) return {};
+  const projected = schema(raw.schema);
+  return projected === undefined ? undefined : { schema: projected };
+}
+export function jiraFieldDirectoryProjection(value: unknown): CatalogJsonObject | undefined {
+  const raw = asRecord(value);
+  if (raw === undefined || !isJiraFieldId(raw.id) || !jiraNativeText(raw.name, 255))
+    return undefined;
+  const flags = fieldFlags(raw);
+  const clauseNames = fieldClauseNames(raw);
+  const schemaPart = fieldSchema(raw);
+  if (flags === undefined || clauseNames === undefined || schemaPart === undefined)
+    return undefined;
+  return { id: raw.id, name: raw.name, ...flags, ...clauseNames, ...schemaPart };
 }
 export type JiraCustomFieldOptionProjection =
   | { readonly ok: true; readonly item: CatalogJsonObject }
