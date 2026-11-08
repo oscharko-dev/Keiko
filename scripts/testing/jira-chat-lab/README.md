@@ -580,6 +580,38 @@ Stage diagnostics contain no request bodies or credentials. Screenshots stay in
 the private synthetic session directory. A failed or license-budget-rejected run
 is not a completed journey; repeat the entire group in a valid session.
 
+## AC7 ledger publication
+
+`api-qualification-ledger.mjs` publishes one complete model-free run on its exact
+clean source revision. Run it in the existing verification container after all
+439 identities have qualified, with the private report path mounted there:
+
+```sh
+docker exec -e KEIKO_OS_KEYCHAIN=off -w /absolute/checkout CONTAINER \
+  node scripts/testing/jira-chat-lab/api-qualification-ledger.mjs \
+  /absolute/private/session/api-qualification-RUN/qualification-VERSION-RUN.json
+```
+
+The driver records a per-case source/run/release/image binding, the closed
+product result, receipt, journal and independent readback. Only an unchanged
+source and a zero-unknown final report receive `phase: complete`. Publication
+regrades every row with the same evidence classifier and checks its tool effect
+against the inventory. Missing or duplicate identities, mixed runs, model calls,
+open reconciliation markers, native validation errors and unapproved policy
+proposals withhold the ledger. Old partial reports cannot be upgraded by adding
+references. No cross-head or cross-run pooling is supported.
+
+The writer archives only counts, closed native statuses and readback digests,
+then atomically replaces the ledger using the existing synchronized private-file
+writer. References point into that committed body-free archive. A failed archive
+publication leaves the previous ledger intact; an already identical archive can
+be reused on recovery. Case bodies remain in the private run directory. The
+export is `writeQualificationLedger({ ledgerPath, reportPath, sourceRevision })`;
+the CLI additionally verifies the clean repository before publication. An
+independent readback never turns `malformed-payload` or `not-found` into native
+success. Failed/unconfirmed writes qualify only with native 2xx, the matching
+settled journal and receipt, reason `unavailable`, and a nonvacuous readback.
+
 ## Ordinary Chat response-loss and restart qualification
 
 Run this finite group only after the licensed HTTPS/read/write preflight and while no other
