@@ -154,6 +154,30 @@ node scripts/testing/coding-workbench-lab/run-summary.mjs run-<digits> --ledger-
   --driver wb-ui --approve all --task T2 --mode "Supervised workspace" --head "$(git rev-parse --short HEAD)"
 ```
 
+## Version-bump set
+
+An OpenCode version bump is a regression check, not a requalification. `bump-set.mjs` runs nine
+tasks of the catalog that cover the integration's surfaces: a read-only answer (T1), a denied edit
+(T4, T30), an edit, test and push to a bare origin (T17), the credential floor (T29), a scheduled
+wake (T33), the nested monorepo with Maven and npm (T37, T38) and a native-tool denial (T40).
+
+A task passes only on what the host can check, never on the run's own `succeeded`: each task gets
+a fresh copy of its fixture at its baseline, and after the run the harness checks the Git state
+(and the origin for the push), runs the fixture's own `npm test` or Maven verify, reads the
+Activity Log for the approval, denial and wake events, searches the copy for the lab token
+placeholder, checks that the planted tests are untouched, and requires the task in Coding History
+with at least two messages. The oracles are in `bump-set-oracles.mjs`.
+
+```bash
+node scripts/testing/coding-workbench-lab/bump-set.mjs --work-dir ~/keiko-bump-lab/runs \
+  --model <coding model> [--only T1,T4] [--timeout-min 30]
+```
+
+The work directory must lie outside the checkout. The set writes `verdicts.json` there and prints
+one `PASS`/`FAIL` line per task; it exits 0 only when every task passed. Do not rebuild the
+packages (`npm run build:packages`, or a gate that builds them) while the set runs: the dev
+server restarts on a changed `dist` and ends the running task.
+
 ## Scripts
 
 The Chat continuity commands use their own private BFF and synthetic project. Their configuration,
@@ -174,7 +198,7 @@ source admission and baseline/candidate procedure are documented in
 
 | Script                      | What it does                                                                                                                         |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `tasks.json`                | The task catalog: ids T1 to T36 and C1, their exact texts, modes and baselines                                                       |
+| `tasks.json`                | The task catalog: ids T1 to T41 and C1, their exact texts, modes and baselines                                                       |
 | `wb-ui.mjs`                 | Runs one task through the real Workbench UI in headless Chromium (`--headed` to watch); the driver for every editing task            |
 | `wb-run.mjs`                | Runs one task over the HTTP API; read-only tasks only, because edits need the live editor bridge (finding F4)                        |
 | `wb-stop.mjs`               | Stops a run                                                                                                                          |
@@ -183,6 +207,8 @@ source admission and baseline/candidate procedure are documented in
 | `run-summary.mjs`           | Body-free run summary and, with `--ledger-row`, a draft ledger row that names the driver and the approval policy                     |
 | `turn-profile.mjs`          | Body-free per-turn timing profile of a run (model, operator pauses, tools, gaps), bounded at the run's settlement                    |
 | `rawtl.mjs`                 | Body-free raw timeline of a run and its child requests, optionally filtered by operation                                             |
+| `bump-set.mjs`              | Runs the version-bump set (nine tasks, each on a fresh fixture copy) and judges every run on the host; see Version-bump set          |
+| `bump-set-oracles.mjs`      | The bump-set task list and its host-side oracles (a library, not a command)                                                          |
 | `chaos-proxy.mjs`           | Fault-injecting proxy between LiteLLM and the model server (503 bursts, outage, latency, drop, stall, hang)                          |
 | `chaos-suite.mjs`           | Runs the scenarios S1 to S7 against task C1, one summary line each; exits 1 if one started no run                                    |
 | `verify-latency.mjs`        | Times the server's enforced verification path on the lab repository (finding F14)                                                    |
