@@ -3,7 +3,7 @@ import { systemAdministrationTransportController } from "./jira-system-administr
 import { permissionRoleTransportController } from "./jira-permission-role-transport-fixture.js";
 import { schemeSettingTransportController } from "./jira-scheme-setting-transport-fixture.js";
 import { emailTemplateTransportController } from "./jira-email-template-transport-fixture.js";
-import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { jiraManagedScenarios, type JiraManagedScenario } from "./jira-managed-scenario.js";
 import type { AtlassianHttpBodyRequest, AtlassianHttpBodyResult } from "@oscharko-dev/keiko-connectors";
 import { LINK_MUTATION_FIXTURE_CASES, linkMutationTransportFixture } from "./jira-link-mutation-fixture.js";
 import { RELEASE_LIFECYCLE_FIXTURE_CASES, releaseLifecycleTransportFixture } from "./jira-release-lifecycle-fixture.js";
@@ -18,59 +18,76 @@ const PROJECT = { projectId: "10000", projectKey: "SYN", userKey: ACTOR };
 const release = RELEASE_LIFECYCLE_FIXTURE_CASES;
 const links = LINK_MUTATION_FIXTURE_CASES;
 /** Literal key coverage remains independent of the production registration and adapter results. */
-export const LIFECYCLE_ARGUMENTS: Readonly<Record<LifecycleMutation, CatalogJsonObject>> = {
-  "jira.delete-component": { ...release[0].args, expectedActorKey: ACTOR },
-  "jira.merge-version": { ...release[1].args, expectedActorKey: ACTOR },
-  "jira.move-version": { ...release[2].args, expectedActorKey: ACTOR },
-  "jira.remove-and-swap-version": { ...release[3].args, expectedActorKey: ACTOR },
-  "jira.create-issue-link": { ...links[0].args, expectedActorKey: ACTOR },
-  "jira.delete-issue-link": { ...links[1].args, expectedActorKey: ACTOR },
-  "jira.upsert-remote-link": { ...links[2].args, expectedActorKey: ACTOR },
-  "jira.update-remote-link": { ...links[3].args, expectedActorKey: ACTOR },
-  "jira.delete-remote-link": { ...links[4].args, expectedActorKey: ACTOR },
-  "jira.delete-remote-link-by-global-id": { ...links[5].args, expectedActorKey: ACTOR },
-};
-export const LIFECYCLE_RECEIPTS: Readonly<Record<LifecycleMutation, CatalogJsonObject>> = {
-  "jira.delete-component": { ...PROJECT, componentId: "71", replacementComponentId: "72" },
-  "jira.merge-version": { ...PROJECT, versionId: "81", targetVersionId: "82" },
-  "jira.move-version": { ...PROJECT, versionId: "81" },
-  "jira.remove-and-swap-version": { ...PROJECT, versionId: "81", replacementVersionIds: ["82"] },
-  "jira.create-issue-link": { ...RELATION, linkPresent: true },
-  "jira.delete-issue-link": { ...RELATION, linkPresent: false },
-  "jira.upsert-remote-link": { ...ISSUE, linkId: "72", linkPresent: true },
-  "jira.update-remote-link": { ...ISSUE, linkId: "72", linkPresent: true },
-  "jira.delete-remote-link": { ...ISSUE, linkId: "72", linkPresent: false },
-  "jira.delete-remote-link-by-global-id": { ...ISSUE, linkId: "72", linkPresent: false },
-};
-export const LIFECYCLE_REMOTE_STATE: Readonly<Record<LifecycleMutation, object>> = {
-  "jira.delete-component": { lifecycle: { componentIds: ["72"], versionIds: ["81", "82"] } },
-  "jira.merge-version": { lifecycle: { componentIds: ["71", "72"], versionIds: ["82"] } },
-  "jira.move-version": { lifecycle: { componentIds: ["71", "72"], versionIds: ["82", "81"] } },
-  "jira.remove-and-swap-version": { lifecycle: { componentIds: ["71", "72"], versionIds: ["82"] } },
-  "jira.create-issue-link": { lifecycle: { issueLinkPresent: true } },
-  "jira.delete-issue-link": { lifecycle: { issueLinkPresent: false } },
-  "jira.upsert-remote-link": { lifecycle: { remotePresent: true, remoteTitle: "Reviewed link" } },
-  "jira.update-remote-link": { lifecycle: { remotePresent: true, remoteTitle: "Updated link" } },
-  "jira.delete-remote-link": { lifecycle: { remotePresent: false } },
-  "jira.delete-remote-link-by-global-id": { lifecycle: { remotePresent: false } },
-};
-/** Three native operations change issue references that the entity collections cannot prove. */
-export const LIFECYCLE_EXPECTED_OUTCOMES = {
-  "jira.delete-component": "succeeded-unconfirmed",
-  "jira.merge-version": "succeeded-unconfirmed",
-  "jira.move-version": "succeeded",
-  "jira.remove-and-swap-version": "succeeded-unconfirmed",
-  "jira.create-issue-link": "succeeded",
-  "jira.delete-issue-link": "succeeded",
-  "jira.upsert-remote-link": "succeeded",
-  "jira.update-remote-link": "succeeded",
-  "jira.delete-remote-link": "succeeded",
-  "jira.delete-remote-link-by-global-id": "succeeded",
-} as const satisfies Readonly<Record<LifecycleMutation, "succeeded" | "succeeded-unconfirmed">>;
-export function expectedLifecycleOutcome(operation: string): "succeeded" | "succeeded-unconfirmed" | undefined {
-  const outcomes: Readonly<Record<string, "succeeded" | "succeeded-unconfirmed">> = LIFECYCLE_EXPECTED_OUTCOMES;
-  return Object.hasOwn(outcomes, operation) ? outcomes[operation] : undefined;
-}
+const SCENARIOS = {
+  // These three native bulk effects change issue references beyond the entity collection proof.
+  "jira.delete-component": {
+    args: release[0].args,
+    receipt: { ...PROJECT, componentId: "71", replacementComponentId: "72" },
+    remoteState: { lifecycle: { componentIds: ["72"], versionIds: ["81", "82"] } },
+    outcome: "succeeded-unconfirmed",
+  },
+  "jira.merge-version": {
+    args: release[1].args,
+    receipt: { ...PROJECT, versionId: "81", targetVersionId: "82" },
+    remoteState: { lifecycle: { componentIds: ["71", "72"], versionIds: ["82"] } },
+    outcome: "succeeded-unconfirmed",
+  },
+  "jira.move-version": {
+    args: release[2].args,
+    receipt: { ...PROJECT, versionId: "81" },
+    remoteState: { lifecycle: { componentIds: ["71", "72"], versionIds: ["82", "81"] } },
+    outcome: "succeeded",
+  },
+  "jira.remove-and-swap-version": {
+    args: release[3].args,
+    receipt: { ...PROJECT, versionId: "81", replacementVersionIds: ["82"] },
+    remoteState: { lifecycle: { componentIds: ["71", "72"], versionIds: ["82"] } },
+    outcome: "succeeded-unconfirmed",
+  },
+  "jira.create-issue-link": {
+    args: links[0].args,
+    receipt: { ...RELATION, linkPresent: true },
+    remoteState: { lifecycle: { issueLinkPresent: true } },
+    outcome: "succeeded",
+  },
+  "jira.delete-issue-link": {
+    args: links[1].args,
+    receipt: { ...RELATION, linkPresent: false },
+    remoteState: { lifecycle: { issueLinkPresent: false } },
+    outcome: "succeeded",
+  },
+  "jira.upsert-remote-link": {
+    args: links[2].args,
+    receipt: { ...ISSUE, linkId: "72", linkPresent: true },
+    remoteState: { lifecycle: { remotePresent: true, remoteTitle: "Reviewed link" } },
+    outcome: "succeeded",
+  },
+  "jira.update-remote-link": {
+    args: links[3].args,
+    receipt: { ...ISSUE, linkId: "72", linkPresent: true },
+    remoteState: { lifecycle: { remotePresent: true, remoteTitle: "Updated link" } },
+    outcome: "succeeded",
+  },
+  "jira.delete-remote-link": {
+    args: links[4].args,
+    receipt: { ...ISSUE, linkId: "72", linkPresent: false },
+    remoteState: { lifecycle: { remotePresent: false } },
+    outcome: "succeeded",
+  },
+  "jira.delete-remote-link-by-global-id": {
+    args: links[5].args,
+    receipt: { ...ISSUE, linkId: "72", linkPresent: false },
+    remoteState: { lifecycle: { remotePresent: false } },
+    outcome: "succeeded",
+  },
+} satisfies Readonly<Record<LifecycleMutation, JiraManagedScenario>>;
+export const {
+  arguments: LIFECYCLE_ARGUMENTS,
+  receipts: LIFECYCLE_RECEIPTS,
+  remoteState: LIFECYCLE_REMOTE_STATE,
+  outcomes: LIFECYCLE_EXPECTED_OUTCOMES,
+  expectedOutcome: expectedLifecycleOutcome,
+} = jiraManagedScenarios(SCENARIOS, ACTOR);
 interface Controller {
   readonly read: (request: AtlassianHttpBodyRequest) => AtlassianHttpBodyResult | undefined | Promise<AtlassianHttpBodyResult | undefined>;
   readonly write: (request: AtlassianHttpBodyRequest) => AtlassianHttpBodyResult | undefined | Promise<AtlassianHttpBodyResult | undefined>;
