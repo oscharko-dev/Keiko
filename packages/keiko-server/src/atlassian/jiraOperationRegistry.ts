@@ -278,47 +278,59 @@ function writes<const K extends NativeTool>(
 }
 const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
   ...writes("instance-admin-human-attested-anonymization-unlock", { "jira.unlock-user-anonymization": ["DELETE", "/user/anonymization/unlock"] }),
-  ...writes("instance-admin-avatar-session-and-uncertainty", { "jira.upload-temporary-avatar": ["POST", "/avatar/{type}/temporary"] }),
-  ...writes("instance-admin-avatar-session-and-uncertainty", { "jira.crop-temporary-avatar": ["POST", "/avatar/{type}/temporaryCrop"] }),
-  ...writes("instance-admin-avatar-session-and-uncertainty", { "jira.upload-issue-type-avatar": ["POST", "/issuetype/{id}/avatar/temporary"] }),
-  ...writes("instance-admin-avatar-session-and-uncertainty", { "jira.create-issue-type-avatar": ["POST", "/issuetype/{id}/avatar"] }),
-  ...writes("instance-admin-avatar-session-and-uncertainty", { "jira.upload-project-avatar": ["POST", "/project/{projectIdOrKey}/avatar/temporary"] }),
-  ...writes("instance-admin-avatar-session-and-uncertainty", { "jira.create-project-avatar": ["POST", "/project/{projectIdOrKey}/avatar"] }),
-  ...writes("instance-admin-avatar-session-and-uncertainty", { "jira.set-project-avatar": ["PUT", "/project/{projectIdOrKey}/avatar"] }),
-  ...writes("instance-admin-avatar-session-and-uncertainty", { "jira.delete-project-avatar": ["DELETE", "/project/{projectIdOrKey}/avatar/{id}"] }),
-  ...writes("instance-admin-avatar-session-and-uncertainty", { "jira.upload-owned-avatar": ["POST", "/universal_avatar/type/{type}/owner/{owningObjectId}/temp"] }),
-  ...writes("instance-admin-avatar-session-and-uncertainty", { "jira.create-owned-avatar": ["POST", "/universal_avatar/type/{type}/owner/{owningObjectId}/avatar"] }),
-  ...writes("instance-admin-avatar-session-and-uncertainty", { "jira.delete-owned-avatar": ["DELETE", "/universal_avatar/type/{type}/owner/{owningObjectId}/avatar/{id}"] }),
-  ...writes("instance-admin-avatar-session-and-uncertainty", { "jira.upload-user-avatar": ["POST", "/user/avatar/temporary"] }),
-  ...writes("instance-admin-avatar-session-and-uncertainty", { "jira.create-user-avatar": ["POST", "/user/avatar"] }),
-  ...writes("instance-admin-avatar-session-and-uncertainty", { "jira.set-user-avatar": ["PUT", "/user/avatar"] }),
-  ...writes("instance-admin-avatar-session-and-uncertainty", { "jira.delete-user-avatar": ["DELETE", "/user/avatar/{id}"] }),
-  ...writes("instance-admin-user-lifecycle-and-uncertainty", { "jira.create-user": ["POST", "/user"] }),
-  ...writes("instance-admin-user-lifecycle-and-uncertainty", { "jira.update-user": ["PUT", "/user"] }),
-  ...writes("instance-admin-user-lifecycle-and-uncertainty", { "jira.delete-user": ["DELETE", "/user"] }),
-  ...writes("instance-admin-user-lifecycle-and-uncertainty", { "jira.invalidate-user-session": ["DELETE", "/user/session/{username}"] }),
-  ...writes("instance-admin-user-lifecycle-and-uncertainty", { "jira.schedule-user-anonymization": ["POST", "/user/anonymization"] }),
-  ...writes("instance-admin-user-lifecycle-and-uncertainty", { "jira.rerun-user-anonymization": ["POST", "/user/anonymization/rerun"] }),
-  ...writes("issue-lifecycle-and-uncertainty", { "jira.archive-issues": ["POST", "/issue/archive"] }),
-  ...writes("issue-lifecycle-and-uncertainty", { "jira.delete-issue": ["DELETE", "/issue/{issueIdOrKey}"] }),
-  ...writes("issue-lifecycle-and-uncertainty", { "jira.archive-issue": ["PUT", "/issue/{issueIdOrKey}/archive"] }),
-  ...writes("issue-lifecycle-and-uncertainty", { "jira.restore-issue": ["PUT", "/issue/{issueIdOrKey}/restore"] }),
-  ...writes("issue-lifecycle-and-uncertainty", { "jira.move-subtask": ["POST", "/issue/{issueIdOrKey}/subtask/move"] }),
+  ...writes("instance-admin-avatar-session-and-uncertainty", {
+    "jira.upload-temporary-avatar": ["POST", "/avatar/{type}/temporary"],
+    "jira.crop-temporary-avatar": ["POST", "/avatar/{type}/temporaryCrop"],
+    "jira.upload-issue-type-avatar": ["POST", "/issuetype/{id}/avatar/temporary"],
+    "jira.create-issue-type-avatar": ["POST", "/issuetype/{id}/avatar"],
+    "jira.upload-project-avatar": ["POST", "/project/{projectIdOrKey}/avatar/temporary"],
+    "jira.create-project-avatar": ["POST", "/project/{projectIdOrKey}/avatar"],
+    "jira.set-project-avatar": ["PUT", "/project/{projectIdOrKey}/avatar"],
+    "jira.delete-project-avatar": ["DELETE", "/project/{projectIdOrKey}/avatar/{id}"],
+    "jira.upload-owned-avatar": ["POST", "/universal_avatar/type/{type}/owner/{owningObjectId}/temp"],
+    "jira.create-owned-avatar": ["POST", "/universal_avatar/type/{type}/owner/{owningObjectId}/avatar"],
+    "jira.delete-owned-avatar": ["DELETE", "/universal_avatar/type/{type}/owner/{owningObjectId}/avatar/{id}"],
+    "jira.upload-user-avatar": ["POST", "/user/avatar/temporary"],
+    "jira.create-user-avatar": ["POST", "/user/avatar"],
+    "jira.set-user-avatar": ["PUT", "/user/avatar"],
+    "jira.delete-user-avatar": ["DELETE", "/user/avatar/{id}"],
+  }),
+  ...writes("instance-admin-user-lifecycle-and-uncertainty", {
+    "jira.create-user": ["POST", "/user"],
+    "jira.update-user": ["PUT", "/user"],
+    "jira.delete-user": ["DELETE", "/user"],
+    "jira.invalidate-user-session": ["DELETE", "/user/session/{username}"],
+    "jira.schedule-user-anonymization": ["POST", "/user/anonymization"],
+    "jira.rerun-user-anonymization": ["POST", "/user/anonymization/rerun"],
+  }),
+  ...writes("issue-lifecycle-and-uncertainty", {
+    "jira.archive-issues": ["POST", "/issue/archive"],
+    "jira.delete-issue": ["DELETE", "/issue/{issueIdOrKey}"],
+    "jira.archive-issue": ["PUT", "/issue/{issueIdOrKey}/archive"],
+    "jira.restore-issue": ["PUT", "/issue/{issueIdOrKey}/restore"],
+    "jira.move-subtask": ["POST", "/issue/{issueIdOrKey}/subtask/move"],
+  }),
   ...writes("bulk-current-metadata-and-uncertainty", { "jira.create-issues": ["POST", "/issue/bulk"] }),
   ...writes("instance-admin-configured-reciprocal-link-and-uncertainty", { "jira.create-reciprocal-remote-link": ["POST", "/issue/remotelink/reciprocal"] }),
-  ...writes("instance-admin-project-lifecycle-and-uncertainty", { "jira.delete-project": ["DELETE", "/project/{projectIdOrKey}"] }),
-  ...writes("instance-admin-project-lifecycle-and-uncertainty", { "jira.archive-project": ["PUT", "/project/{projectIdOrKey}/archive"] }),
-  ...writes("instance-admin-project-lifecycle-and-uncertainty", { "jira.restore-project": ["PUT", "/project/{projectIdOrKey}/restore"] }),
-  ...writes("instance-admin-project-lifecycle-and-uncertainty", { "jira.update-project-type": ["PUT", "/project/{projectIdOrKey}/type/{newProjectTypeKey}"] }),
-  ...writes("instance-admin-project-lifecycle-and-uncertainty", { "jira.set-project-permission-scheme": ["PUT", "/project/{projectKeyOrId}/permissionscheme"] }),
-  ...writes("instance-admin-project-lifecycle-and-uncertainty", { "jira.set-project-priority-scheme": ["PUT", "/project/{projectKeyOrId}/priorityscheme"] }),
-  ...writes("instance-admin-project-lifecycle-and-uncertainty", { "jira.remove-project-priority-scheme": ["DELETE", "/project/{projectKeyOrId}/priorityscheme/{schemeId}"] }),
-  ...writes("bound-protected-account-and-readback", { "jira.update-myself": ["PUT", "/myself"] }),
-  ...writes("bound-protected-account-and-readback", { "jira.update-my-password": ["PUT", "/myself/password"] }),
+  ...writes("instance-admin-project-lifecycle-and-uncertainty", {
+    "jira.delete-project": ["DELETE", "/project/{projectIdOrKey}"],
+    "jira.archive-project": ["PUT", "/project/{projectIdOrKey}/archive"],
+    "jira.restore-project": ["PUT", "/project/{projectIdOrKey}/restore"],
+    "jira.update-project-type": ["PUT", "/project/{projectIdOrKey}/type/{newProjectTypeKey}"],
+    "jira.set-project-permission-scheme": ["PUT", "/project/{projectKeyOrId}/permissionscheme"],
+    "jira.set-project-priority-scheme": ["PUT", "/project/{projectKeyOrId}/priorityscheme"],
+    "jira.remove-project-priority-scheme": ["DELETE", "/project/{projectKeyOrId}/priorityscheme/{schemeId}"],
+  }),
+  ...writes("bound-protected-account-and-readback", {
+    "jira.update-myself": ["PUT", "/myself"],
+    "jira.update-my-password": ["PUT", "/myself/password"],
+  }),
   ...writes("instance-admin-user-lifecycle-and-uncertainty", { "jira.update-user-password": ["PUT", "/user/password"] }),
-  ...writes("bound-private-session-and-uncertainty", { "jira.login": ["POST", "/session"] }, "/rest/auth/1"),
-  ...writes("bound-private-session-and-uncertainty", { "jira.logout": ["DELETE", "/session"] }, "/rest/auth/1"),
-  ...writes("bound-private-session-and-uncertainty", { "jira.release-websudo": ["DELETE", "/websudo"] }, "/rest/auth/1"),
+  ...writes("bound-private-session-and-uncertainty", {
+    "jira.login": ["POST", "/session"],
+    "jira.logout": ["DELETE", "/session"],
+    "jira.release-websudo": ["DELETE", "/websudo"],
+  }, "/rest/auth/1"),
   "jira.validate-create-user-password": ["POST", "read", "/password/policy/createUser", "bound-protected-password-policy", "/rest/api/2"],
   "jira.validate-update-user-password": ["POST", "read", "/password/policy/updateUser", "bound-protected-password-policy", "/rest/api/2"],
   "jira.validate-license": ["POST", "read", "/licenseValidator", "instance-admin-protected-license-validation", "/rest/api/2"],
@@ -330,8 +342,6 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
   }),
   ...writes("instance-admin-group-membership-unconfirmed", {
     "jira.add-group-user": ["POST", "/group/user"],
-  }),
-  ...writes("instance-admin-group-membership-unconfirmed", {
     "jira.remove-group-user": ["DELETE", "/group/user"],
   }),
   ...writes("comment-pin-and-readback", {
@@ -342,38 +352,16 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
   }),
   ...writes("instance-admin-maintenance-request-unconfirmed", {
     "jira.request-cluster-index-snapshot": ["PUT", "/cluster/index-snapshot/{nodeId}"],
-  }),
-  ...writes("instance-admin-maintenance-request-unconfirmed", {
     "jira.delete-cluster-node": ["DELETE", "/cluster/node/{nodeId}"],
-  }),
-  ...writes("instance-admin-maintenance-request-unconfirmed", {
     "jira.mark-cluster-node-offline": ["PUT", "/cluster/node/{nodeId}/offline"],
-  }),
-  ...writes("instance-admin-maintenance-request-unconfirmed", {
     "jira.approve-cluster-upgrade": ["POST", "/cluster/zdu/approve"],
-  }),
-  ...writes("instance-admin-maintenance-request-unconfirmed", {
     "jira.cancel-cluster-upgrade": ["POST", "/cluster/zdu/cancel"],
-  }),
-  ...writes("instance-admin-maintenance-request-unconfirmed", {
     "jira.retry-cluster-upgrade": ["POST", "/cluster/zdu/retryUpgrade"],
-  }),
-  ...writes("instance-admin-maintenance-request-unconfirmed", {
     "jira.start-cluster-upgrade": ["POST", "/cluster/zdu/start"],
-  }),
-  ...writes("instance-admin-maintenance-request-unconfirmed", {
     "jira.create-index-snapshot": ["POST", "/index-snapshot"],
-  }),
-  ...writes("instance-admin-maintenance-request-unconfirmed", {
     "jira.start-reindex": ["POST", "/reindex"],
-  }),
-  ...writes("instance-admin-maintenance-request-unconfirmed", {
     "jira.reindex-issues": ["POST", "/reindex/issue"],
-  }),
-  ...writes("instance-admin-maintenance-request-unconfirmed", {
     "jira.process-reindex-requests": ["POST", "/reindex/request"],
-  }),
-  ...writes("instance-admin-maintenance-request-unconfirmed", {
     "jira.run-upgrade": ["POST", "/upgrade"],
   }),
   ...writes("instance-admin-custom-field-create-unconfirmed", {
@@ -402,8 +390,6 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
   }),
   ...writes("instance-admin-link-type-order-unconfirmed", {
     "jira.reset-link-type-order": ["PUT", "/issueLinkType/order"],
-  }),
-  ...writes("instance-admin-link-type-order-unconfirmed", {
     "jira.move-link-type": ["PUT", "/issueLinkType/{issueLinkTypeId}/order"],
   }),
   ...writes("instance-admin-terminology-and-readback", {
@@ -411,14 +397,10 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
   }),
   ...writes("instance-admin-application-role-cas-unconfirmed", {
     "jira.set-application-role": ["PUT", "/applicationrole/{key}"],
-  }),
-  ...writes("instance-admin-application-role-cas-unconfirmed", {
     "jira.set-application-roles": ["PUT", "/applicationrole"],
   }),
   ...writes("instance-admin-user-application-unconfirmed", {
     "jira.add-user-application": ["POST", "/user/application"],
-  }),
-  ...writes("instance-admin-user-application-unconfirmed", {
     "jira.remove-user-application": ["DELETE", "/user/application"],
   }),
   ...writes("instance-admin-user-columns-and-readback", {
@@ -429,8 +411,6 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
   }),
   ...writes("instance-admin-issue-type-scheme-config-and-readback", {
     "jira.create-issue-type-scheme": ["POST", "/issuetypescheme"],
-  }),
-  ...writes("instance-admin-issue-type-scheme-config-and-readback", {
     "jira.update-issue-type-scheme": ["PUT", "/issuetypescheme/{schemeId}"],
   }),
   ...writes("instance-admin-issue-type-scheme-delete-unconfirmed", {
@@ -438,20 +418,12 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
   }),
   ...writes("instance-admin-issue-type-scheme-projects-unconfirmed", {
     "jira.add-issue-type-scheme-projects": ["POST", "/issuetypescheme/{schemeId}/associations"],
-  }),
-  ...writes("instance-admin-issue-type-scheme-projects-unconfirmed", {
     "jira.set-issue-type-scheme-projects": ["PUT", "/issuetypescheme/{schemeId}/associations"],
-  }),
-  ...writes("instance-admin-issue-type-scheme-projects-unconfirmed", {
     "jira.clear-issue-type-scheme-projects": ["DELETE", "/issuetypescheme/{schemeId}/associations"],
-  }),
-  ...writes("instance-admin-issue-type-scheme-projects-unconfirmed", {
     "jira.remove-issue-type-scheme-project": ["DELETE", "/issuetypescheme/{schemeId}/associations/{projIdOrKey}"],
   }),
   ...writes("instance-admin-priority-scheme-config-and-readback", {
     "jira.create-priority-scheme": ["POST", "/priorityschemes"],
-  }),
-  ...writes("instance-admin-priority-scheme-config-and-readback", {
     "jira.update-priority-scheme": ["PUT", "/priorityschemes/{schemeId}"],
   }),
   ...writes("instance-admin-priority-scheme-delete-unconfirmed", {
@@ -468,8 +440,6 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
   }),
   ...writes("instance-admin-workflow-draft-config-and-readback", {
     "jira.create-workflow-scheme-draft": ["POST", "/workflowscheme/{id}/createdraft"],
-  }),
-  ...writes("instance-admin-workflow-draft-config-and-readback", {
     "jira.update-workflow-scheme-draft": ["PUT", "/workflowscheme/{id}/draft"],
   }),
   ...writes("instance-admin-workflow-draft-delete-and-parent-readback", {
@@ -477,38 +447,26 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
   }),
   ...writes("instance-admin-workflow-scheme-mapping-unconfirmed", {
     "jira.set-workflow-scheme-default": ["PUT", "/workflowscheme/{id}/default"],
-  }),
-  ...writes("instance-admin-workflow-scheme-mapping-unconfirmed", {
     "jira.delete-workflow-scheme-default": ["DELETE", "/workflowscheme/{id}/default"],
   }),
   ...writes("instance-admin-workflow-draft-config-and-readback", {
     "jira.set-workflow-scheme-draft-default": ["PUT", "/workflowscheme/{id}/draft/default"],
-  }),
-  ...writes("instance-admin-workflow-draft-config-and-readback", {
     "jira.delete-workflow-scheme-draft-default": ["DELETE", "/workflowscheme/{id}/draft/default"],
   }),
   ...writes("instance-admin-workflow-scheme-mapping-unconfirmed", {
     "jira.set-workflow-scheme-issue-type": ["PUT", "/workflowscheme/{id}/issuetype/{issueType}"],
-  }),
-  ...writes("instance-admin-workflow-scheme-mapping-unconfirmed", {
     "jira.delete-workflow-scheme-issue-type": ["DELETE", "/workflowscheme/{id}/issuetype/{issueType}"],
   }),
   ...writes("instance-admin-workflow-draft-config-and-readback", {
     "jira.set-workflow-scheme-draft-issue-type": ["PUT", "/workflowscheme/{id}/draft/issuetype/{issueType}"],
-  }),
-  ...writes("instance-admin-workflow-draft-config-and-readback", {
     "jira.delete-workflow-scheme-draft-issue-type": ["DELETE", "/workflowscheme/{id}/draft/issuetype/{issueType}"],
   }),
   ...writes("instance-admin-workflow-scheme-mapping-unconfirmed", {
     "jira.set-workflow-scheme-workflow": ["PUT", "/workflowscheme/{id}/workflow"],
-  }),
-  ...writes("instance-admin-workflow-scheme-mapping-unconfirmed", {
     "jira.delete-workflow-scheme-workflow": ["DELETE", "/workflowscheme/{id}/workflow"],
   }),
   ...writes("instance-admin-workflow-draft-config-and-readback", {
     "jira.set-workflow-scheme-draft-workflow": ["PUT", "/workflowscheme/{id}/draft/workflow"],
-  }),
-  ...writes("instance-admin-workflow-draft-config-and-readback", {
     "jira.delete-workflow-scheme-draft-workflow": ["DELETE", "/workflowscheme/{id}/draft/workflow"],
   }),
   ...writes("instance-admin-application-property-and-readback", {
@@ -567,17 +525,11 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
   }),
   ...writes("instance-admin-role-default-actors-unconfirmed", {
     "jira.add-role-default-actors": ["POST", "/role/{id}/actors"],
-  }),
-  ...writes("instance-admin-role-default-actors-unconfirmed", {
     "jira.delete-role-default-actor": ["DELETE", "/role/{id}/actors"],
   }),
   ...writes("instance-admin-project-role-actors-unconfirmed", {
     "jira.add-project-role-actors": ["POST", "/project/{projectIdOrKey}/role/{id}"],
-  }),
-  ...writes("instance-admin-project-role-actors-unconfirmed", {
     "jira.set-project-role-actors": ["PUT", "/project/{projectIdOrKey}/role/{id}"],
-  }),
-  ...writes("instance-admin-project-role-actors-unconfirmed", {
     "jira.delete-project-role-actor": ["DELETE", "/project/{projectIdOrKey}/role/{id}"],
   }),
   ...writes("instance-admin-project-category-create-and-readback", {
@@ -591,8 +543,6 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
   }),
   ...writes("version-remote-link-upsert-and-readback", {
     "jira.upsert-version-remote-link": ["POST", "/version/{versionId}/remotelink"],
-  }),
-  ...writes("version-remote-link-upsert-and-readback", {
     "jira.upsert-version-remote-link-by-global-id": ["POST", "/version/{versionId}/remotelink/{globalId}"],
   }),
   ...writes("version-remote-link-delete-and-absence", {
@@ -606,8 +556,6 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
   }, "/rest/agile/1.0"),
   ...writes("rank-and-position-uncertainty", {
     "jira.rank-epic": ["PUT", "/epic/{epicIdOrKey}/rank"],
-  }, "/rest/agile/1.0"),
-  ...writes("rank-and-position-uncertainty", {
     "jira.rank-issues": ["PUT", "/issue/rank"],
   }, "/rest/agile/1.0"),
   ...writes("issue-estimation-and-readback", {
