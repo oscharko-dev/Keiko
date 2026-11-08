@@ -1170,41 +1170,6 @@ function boundObjectSchema(schema: CatalogJsonObject, kind: "input" | "result"):
   };
 }
 
-function unboundResultSchema(schema: CatalogJsonObject): CatalogJsonObject {
-  const { properties, required } = schema;
-  if (schemaObject(properties) && schemaRequired(required) && "operationBinding" in properties) {
-    const { operationBinding: _binding, ...rest } = properties;
-    return {
-      ...schema,
-      properties: rest,
-      required: required.filter((name) => name !== "operationBinding"),
-    };
-  }
-  for (const keyword of ["anyOf", "oneOf"] as const) {
-    const alternatives = schema[keyword];
-    if (Array.isArray(alternatives))
-      return {
-        ...schema,
-        [keyword]: alternatives.map((alternative: CatalogJsonValue) =>
-          schemaObject(alternative) ? unboundResultSchema(alternative) : alternative,
-        ),
-      };
-  }
-  return schema;
-}
-
-/**
- * Results stored before the operation binding existed never carried the field. Their qualification
- * uses the same descriptor without that one required property; fresh results keep the bound
- * descriptor. A descriptor that never required the binding is returned unchanged.
- */
-export function historicalResultDescriptor(descriptor: ToolDescriptor): ToolDescriptor {
-  const resultSchema = unboundResultSchema(descriptor.resultSchema);
-  if (canonicalise(resultSchema) === canonicalise(descriptor.resultSchema)) return descriptor;
-  const { descriptorDigest: _digest, ...original } = descriptor;
-  return createToolDescriptor({ ...original, resultSchema });
-}
-
 function resultDescriptor(descriptor: ToolDescriptor): ToolDescriptor {
   const { descriptorDigest: _digest, ...original } = descriptor;
   return createToolDescriptor({
