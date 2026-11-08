@@ -130,14 +130,15 @@ export function isOpenCodeToolExecutionFailure(tool: unknown, state: unknown): b
   return tool === "shell" && isFailedShellResult(state.metadata);
 }
 
-/** The closed upstream token OpenCode reports when its own permission rules rejected a call. */
+/** The closed upstream token OpenCode reports when a permission request was rejected. */
 const OPENCODE_PERMISSION_REJECTED_ERROR_TYPE = "permission.rejected";
 
 /**
- * True when an errored tool part was refused by OpenCode's own static permission rules (the
- * mode-independent `external_directory` deny floor) before Keiko's policy hook was consulted. Only
- * the closed upstream token `error.type` is compared, against its exact literal; the upstream
- * `message` is untrusted and is never read. Every native tool signal of a run, live or reloaded,
+ * True when OpenCode settled an errored tool part as a permission rejection. The token is shared by
+ * a configured rule (such as the mode-independent `external_directory` deny floor), Keiko's policy
+ * hook replying `reject`, and a person pressing Deny; it does not name which one. Only the closed
+ * upstream token `error.type` is compared, against its exact literal; the upstream `message` is
+ * untrusted and is never read. Every native tool signal of a run, live or reloaded,
  * comes from the history projection (`opencodeV2History.ts` displayToolState), so the live card
  * and the reloaded one show the same refusal.
  */

@@ -102,9 +102,10 @@ export const BUMP_SET = Object.freeze([
 const pass = () => ({ ok: true });
 const fail = (reason) => ({ ok: false, reason });
 
+/** Rename detection off: a moved file lists its old and its new path, never `old -> new`. */
 function changedPaths(ctx) {
-  const committed = ctx.git(["diff", "--name-only", `${ctx.baseline}`, "HEAD"]);
-  const working = ctx.git(["status", "--porcelain", "--untracked-files=all"]);
+  const committed = ctx.git(["diff", "--name-only", `${ctx.baseline}`, "HEAD", "--no-renames"]);
+  const working = ctx.git(["status", "--porcelain", "--untracked-files=all", "--no-renames"]);
   const fromStatus = working
     .split("\n")
     .filter(Boolean)
@@ -122,7 +123,10 @@ function unchanged(ctx) {
 function unchangedTracked(ctx) {
   const head = ctx.git(["rev-parse", "HEAD"]).trim();
   if (head !== ctx.baseline) return fail("a commit was added");
-  const tracked = ctx.git(["diff", "--name-only", "HEAD"]).split("\n").filter(Boolean);
+  const tracked = ctx
+    .git(["diff", "--name-only", "HEAD", "--no-renames"])
+    .split("\n")
+    .filter(Boolean);
   return tracked.length === 0 ? pass() : fail(`tracked change: ${tracked.slice(0, 5).join(", ")}`);
 }
 

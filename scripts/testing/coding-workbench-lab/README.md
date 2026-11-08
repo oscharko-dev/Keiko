@@ -170,8 +170,14 @@ with at least two messages. The oracles are in `bump-set-oracles.mjs`.
 
 ```bash
 node scripts/testing/coding-workbench-lab/bump-set.mjs --work-dir ~/keiko-bump-lab/runs \
-  --model <coding model> [--only T1,T4] [--timeout-min 30]
+  --model <coding model> [--only T1,T4] [--timeout-min 30] [--base-url <origin>] [--log-dir <dir>]
 ```
+
+`--base-url` (or `KEIKO_LAB_BASE_URL`) names the dev server's loopback origin. The oracles read
+that server's Activity Log: when it runs with another state directory, `--log-dir` (or
+`KEIKO_LAB_LOG_DIR`) must name its `logs` directory, or the approval, denial and wake checks see no
+events and fail a good run. The polyglot tasks (Maven) need a Java runtime on `PATH` for both the
+dev server and this command; the set refuses to start them without one.
 
 The work directory must lie outside the checkout and be empty (or absent): every task starts from a
 fresh fixture copy, so a rerun uses a new directory. The set writes `verdicts.json` there and prints

@@ -152,6 +152,25 @@ describe("bump-set oracles", () => {
     expect(verdict(["pushedBranch"], context({ origin: mainMoved }))).toEqual([false]);
   });
 
+  it("fails when a planted test was moved to a non-test path", () => {
+    // Git as it answers with and without rename detection: only `--no-renames` lists both sides.
+    const moved = (renamed, split) => ({
+      ...context(),
+      git: (args) => {
+        const command = args.join(" ");
+        if (!command.startsWith("status --porcelain") && !command.startsWith("diff --name-only"))
+          return command.startsWith("rev-parse") ? `${BASE}\n` : "";
+        if (command.startsWith("diff")) return "";
+        return args.includes("--no-renames") ? split : renamed;
+      },
+    });
+    const ctx = moved(
+      "R  src/csv.test.ts -> src/csv-cases.ts\n",
+      "D  src/csv.test.ts\nA  src/csv-cases.ts\n",
+    );
+    expect(verdict(["testsUntouched"], ctx)).toEqual([false]);
+  });
+
   it("fails when the run edited the planted failing tests, and on a red build", () => {
     const editedTest = context({
       git: { "diff --name-only": "core/src/test/java/lab/core/PercentTest.java\n" },
