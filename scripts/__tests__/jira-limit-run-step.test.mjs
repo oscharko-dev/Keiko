@@ -1,266 +1,223 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  chmodSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { openLimitStep } from "../testing/jira-chat-lab/limit-run-step.mjs";
-import { privateJson } from "../testing/jira-chat-lab/private-json.mjs";
+import { memoryLimitIntent } from "./helpers/limit-run-intent.mjs";
 
-let directory;
-let controller;
 let ctx;
-beforeEach(() => {
-  directory = mkdtempSync(join(tmpdir(), "keiko-limit-step-"));
-  controller = new globalThis.AbortController();
-  ctx = {
-    sessionDir: directory,
-    projectKey: "LIM7",
-    intent: { owner: "retained", phase: "exclusive" },
-    signal: controller.signal,
-  };
-});
-afterEach(() => rmSync(directory, { recursive: true, force: true }));
-const read = (path) => JSON.parse(readFileSync(path, "utf8"));
+let controller;
+const STEP = "w12-templates";
 const skill = {
   id: "msk_01234567-89ab-4cde-8fab-0123456789ab",
   revision: 1,
   digest: "a".repeat(64),
   issueType: "Epic",
 };
+beforeEach(() => {
+  controller = new globalThis.AbortController();
+  ctx = {
+    sessionDir: "/private/hermetic-limit-session",
+    projectKey: "LIM7",
+    intent: memoryLimitIntent({ otherOwner: { retained: true } }),
+    signal: controller.signal,
+  };
+});
 
-describe("private limit-run step journal", () => {
-  it("syncs the initial private journal before optional parent persistence and preserves the exclusive intent", async () => {
-    const existingIntent = join(directory, "parent-intent.json");
-    privateJson(existingIntent, { phase: "exclusive", owner: "retained" }, true);
-    const parent = readFileSync(existingIntent, "utf8");
-    ctx.intent.persist = vi.fn(() => {
-      const path = join(directory, "limit-run-LIM7-w12-templates.json");
-      expect(read(path).phase).toBe("prepared");
-      expect(statSync(path).mode & 0o777).toBe(0o600);
-    });
-    const journal = await openLimitStep(ctx, "w12-templates");
-    expect(ctx.intent.steps["w12-templates"]).toBe(journal.state);
-    expect(ctx.intent.persist).toHaveBeenCalledTimes(1);
-    expect(ctx.intent.owner).toBe("retained");
-    expect(ctx.intent.phase).toBe("exclusive");
-    expect(readFileSync(existingIntent, "utf8")).toBe(parent);
-  });
-  it("restores pending evidence after process restart without changing its uncertain phase", async () => {
-    const journal = await openLimitStep(ctx, "w12-templates");
-    await journal.checkpoint({
-      phase: "pending",
-      resources: { projectId: "10037", epicLinkFieldId: "customfield_10013", templates: [skill] },
-      counts: { templates: 4, installed: 1 },
-    });
-    const restarted = await openLimitStep({ ...ctx, intent: {} }, "w12-templates");
-    expect(restarted.state).toEqual(journal.state);
-    expect(restarted.state.phase).toBe("pending");
-    await expect(restarted.checkpoint({ phase: "prepared" })).rejects.toThrow("Invalid limit step");
+describe("step records in the sole orchestrator-owned intent", () => {
+  it("records without a directory or second file and never exposes writable owner state", async () => {
+    const journal = await openLimitStep(ctx, STEP);
+    expect(ctx.intent.state[STEP]).toEqual(journal.state);
+    expect(ctx.intent).not.toHaveProperty("steps");
+    const snapshot = ctx.intent.state;
+    snapshot[STEP].phase = "completed";
+    expect(ctx.intent.state[STEP].phase).toBe("prepared");
+    expect(ctx.intent.state.otherOwner).toEqual({ retained: true });
     expect(
-      await restarted.result("unverified", "templates-pending-unverified", {
-        templates: 4,
-        installed: 1,
-        verified: 0,
-      }),
-    ).toEqual({
-      step: "w12-templates",
-      status: "unverified",
-      detail: "templates-pending-unverified",
-      counts: { templates: 4, installed: 1, verified: 0 },
-      evidenceFile: journal.evidenceFile,
-    });
-    expect(read(journal.evidenceFile).phase).toBe("pending");
+      await journal.result("green", "templates-installed", { installed: 0 }),
+    ).not.toHaveProperty("evidenceFile");
   });
-  it("retains completed native identities for read-only reverification without rearming the step", async () => {
-    const journal = await openLimitStep(ctx, "w12-rule-probes");
-    await journal.checkpoint({
-      phase: "pending",
-      resources: { chatId: "01234567-89ab-4cde-8fab-0123456789ab", baselineDigest: "b".repeat(64) },
-    });
-    await journal.checkpoint({
-      phase: "completed",
-      resources: {
-        completedModes: ["governed-assist", "supervised-coding", "autonomous-delivery"],
-      },
-    });
-    await journal.result("green", "rule-probes-confirmed", {
-      requestedModes: 3,
-      probedModes: 3,
-      refusals: 3,
-      nativeWrites: 0,
-      approvals: 3,
-    });
-    const resumed = await openLimitStep({ ...ctx, intent: {} }, "w12-rule-probes");
-    expect(resumed.state.phase).toBe("completed");
-    expect(resumed.state.resources.baselineDigest).toBe("b".repeat(64));
-    expect(resumed.state.resources.completedModes).toHaveLength(3);
-    await expect(resumed.checkpoint({ phase: "pending" })).rejects.toThrow("Invalid limit step");
+  it("uses only the canonical path if the owner supplies one", async () => {
+    ctx.intent = memoryLimitIntent({}, `${ctx.sessionDir}/intent.json`);
+    const journal = await openLimitStep(ctx, STEP);
+    expect(
+      (await journal.result("unverified", "templates-pending-unverified", {})).evidenceFile,
+    ).toBe(ctx.intent.path);
+    expect(ctx.intent.state[STEP].result).not.toHaveProperty("evidenceFile");
   });
-  it("recovers a journal persisted before parent persistence failed", async () => {
-    const journal = await openLimitStep(ctx, "w12-templates");
-    const staleParent = structuredClone(ctx.intent);
-    ctx.intent.persist = vi.fn(() => {
-      throw new Error("Synthetic parent persistence failure");
-    });
-    await expect(
-      journal.checkpoint({ phase: "pending", counts: { templates: 4 } }),
-    ).rejects.toThrow("parent persistence");
-    const resumed = await openLimitStep({ ...ctx, intent: staleParent }, "w12-templates");
-    expect(resumed.state.phase).toBe("pending");
-    expect(resumed.state.revision).toBe(1);
+  it("records pending before yielding and resumes without rearming a native write", async () => {
+    const journal = await openLimitStep(ctx, STEP);
+    const pending = journal.checkpoint({ phase: "pending", resources: { templates: [skill] } });
+    expect(ctx.intent.state[STEP].phase).toBe("pending");
+    await pending;
+    ctx.intent = memoryLimitIntent(ctx.intent.state);
+    const resumed = await openLimitStep(ctx, STEP);
+    expect(resumed.state).toEqual(journal.state);
+    await expect(resumed.checkpoint({ phase: "prepared" })).rejects.toThrow("Invalid limit step");
   });
-  it("snapshots caller metadata so later mutation cannot introduce body content into retained state", async () => {
-    const journal = await openLimitStep(ctx, "w12-templates");
-    const templates = [{ ...skill }];
-    await journal.checkpoint({ phase: "pending", resources: { templates } });
+  it("snapshots caller resources and isolates local state from the canonical record", async () => {
+    const journal = await openLimitStep(ctx, STEP);
+    const templates = [structuredClone(skill)];
+    await journal.checkpoint({ resources: { templates } });
     templates[0].digest = "private body";
-    expect(journal.state.resources.templates[0].digest).toBe(skill.digest);
-    const observed = { installed: 1 };
-    await journal.result("unverified", "templates-pending-unverified", observed);
-    observed.installed = 999;
-    expect(journal.state.result.counts.installed).toBe(1);
-    expect(readFileSync(journal.evidenceFile, "utf8")).not.toContain("private body");
+    journal.state.resources.templates[0].digest = "private body";
+    expect(ctx.intent.state[STEP].resources.templates[0].digest).toBe(skill.digest);
+    await expect(journal.checkpoint({ counts: { installed: 1 } })).rejects.toThrow(
+      "Invalid limit step",
+    );
   });
-  it("retains each step independently in the existing intent", async () => {
-    const templates = await openLimitStep(ctx, "w12-templates");
-    await templates.checkpoint({ phase: "pending" });
-    const probes = await openLimitStep(ctx, "w12-rule-probes");
-    expect(probes.state.phase).toBe("prepared");
-    expect(ctx.intent.steps["w12-templates"]).toBe(templates.state);
-    expect(probes.evidenceFile).not.toBe(templates.evidenceFile);
+  it("refuses a stale caller rather than overwriting newer completed work", async () => {
+    const earlier = await openLimitStep(ctx, STEP);
+    const newer = await openLimitStep(ctx, STEP);
+    await newer.checkpoint({ phase: "pending", counts: { installed: 1 } });
+    await expect(earlier.checkpoint({ counts: { installed: 0 } })).rejects.toThrow(
+      "Invalid limit step",
+    );
+    expect(ctx.intent.state[STEP].counts.installed).toBe(1);
   });
-  it.each(["../escape", "LIM7/secret", "LIM7\\secret", "LIM7\n", "https://secret.invalid", "lim7"])(
-    "refuses unsafe project identity %j",
-    async (projectKey) => {
-      await expect(openLimitStep({ ...ctx, projectKey }, "w12-templates")).rejects.toThrow(
-        "Invalid limit step",
-      );
-      expect(ctx.intent.steps).toBeUndefined();
-    },
-  );
-  it("refuses a step outside the closed W12 inventory", async () => {
-    await expect(openLimitStep(ctx, "../../parent")).rejects.toThrow("Invalid limit step");
+  it("surfaces owner persistence failure before dispatch", async () => {
+    const journal = await openLimitStep(ctx, STEP);
+    vi.spyOn(ctx.intent, "record").mockImplementation(() => {
+      throw new Error("owner unavailable");
+    });
+    await expect(journal.checkpoint({ phase: "pending" })).rejects.toThrow("owner unavailable");
+    expect(ctx.intent.state[STEP].phase).toBe("prepared");
   });
   it.each([
-    { phase: "retry" },
-    { prompt: "private body" },
-    { resources: null },
-    { resources: { projectId: "Bearer private-credential" } },
-    { resources: { projectId: 10037 } },
-    { resources: { templates: [{ ...skill, body: "private body" }] } },
-    { resources: { templates: [{ ...skill, id: "private text" }] } },
-    { resources: { templates: [{ ...skill, digest: "Authorization: private" }] } },
-    { resources: { templates: [{ ...skill, issueType: "foreign" }] } },
-    { counts: { privateBody: 1 } },
+    { projectKey: "../escape" },
+    { sessionDir: "relative" },
+    { intent: {} },
+    { intent: { state: [], record: () => undefined } },
+    { intent: memoryLimitIntent({}, "/outside/intent.json") },
+  ])("refuses invalid context %#", async (patch) => {
+    await expect(openLimitStep({ ...ctx, ...patch }, STEP)).rejects.toThrow("Invalid limit step");
+  });
+  it.each([
+    { prompt: "private" },
+    { resources: { templates: [{ ...skill, body: "private" }] } },
+    { resources: { templates: [{ ...skill, digest: "private" }] } },
     { counts: { installed: -1 } },
     { counts: { installed: Infinity } },
-  ])(
-    "refuses invalid or body-carrying checkpoint %j without mutating persisted state",
-    async (patch) => {
-      const journal = await openLimitStep(ctx, "w12-templates");
-      const before = readFileSync(journal.evidenceFile, "utf8");
-      await expect(journal.checkpoint(patch)).rejects.toThrow("Invalid limit step");
-      expect(readFileSync(journal.evidenceFile, "utf8")).toBe(before);
-      expect(journal.state.phase).toBe("prepared");
+    { counts: { installed: "private" } },
+    { counts: { rawText: 1 } },
+    { phase: "foreign" },
+    { resources: { projectId: "https://private.invalid" } },
+    { resources: { templates: Array.from({ length: 5 }, () => skill) } },
+  ])("refuses invalid checkpoint %# before record", async (patch) => {
+    const journal = await openLimitStep(ctx, STEP);
+    const before = ctx.intent.state;
+    await expect(journal.checkpoint(patch)).rejects.toThrow("Invalid limit step");
+    expect(ctx.intent.state).toEqual(before);
+  });
+  it.each(["schemaVersion", "projectKey", "step", "phase"])(
+    "refuses corrupt persisted %s",
+    async (key) => {
+      const journal = await openLimitStep(ctx, STEP);
+      ctx.intent.record(STEP, { ...journal.state, [key]: "foreign" });
+      const before = ctx.intent.state;
+      await expect(openLimitStep(ctx, STEP)).rejects.toThrow("Invalid limit step");
+      expect(ctx.intent.state).toEqual(before);
     },
   );
-  it.each([
-    { resources: { chatId: "private text" } },
-    { resources: { baselineDigest: "private body" } },
-    { resources: { completedModes: ["ungoverned"] } },
-    { resources: { completedModes: ["governed-assist", "governed-assist"] } },
-    { resources: { answer: "private body" } },
-  ])("refuses unsafe probe state %j", async (patch) => {
-    const journal = await openLimitStep(ctx, "w12-rule-probes");
-    await expect(journal.checkpoint(patch)).rejects.toThrow("Invalid limit step");
-  });
-  it("persists only closed result codes and numeric counts", async () => {
-    const journal = await openLimitStep(ctx, "w12-templates");
+  it("retains only closed result fields and records cancellation without its private reason", async () => {
+    const journal = await openLimitStep(ctx, STEP);
+    await expect(journal.result("green", "private diagnostic", {})).rejects.toThrow(
+      "Invalid limit step",
+    );
+    await expect(journal.result("foreign", "templates-installed", {})).rejects.toThrow(
+      "Invalid limit step",
+    );
     await expect(
-      journal.result("green", "raw answer with private text", { installed: 4 }),
+      journal.result("green", "templates-installed", { installed: "private" }),
     ).rejects.toThrow("Invalid limit step");
-    await expect(
-      journal.result("green", "templates-installed", { installed: "private body" }),
-    ).rejects.toThrow("Invalid limit step");
-    await expect(
-      journal.result("approved", "templates-installed", { installed: 4 }),
-    ).rejects.toThrow("Invalid limit step");
-    const result = await journal.result("green", "templates-installed", {
-      templates: 4,
-      installed: 4,
-      verified: 4,
-    });
-    expect(Object.keys(result).sort()).toEqual([
-      "counts",
-      "detail",
-      "evidenceFile",
-      "status",
-      "step",
-    ]);
-    expect(read(journal.evidenceFile).result).not.toHaveProperty("evidenceFile");
-    expect(read(journal.evidenceFile).phase).toBe("prepared");
-  });
-  it("guards aborted opens and checkpoints, but records an unverified abort without leaking the reason", async () => {
-    const journal = await openLimitStep(ctx, "w12-templates");
     controller.abort("private abort reason");
-    await expect(openLimitStep(ctx, "w12-rule-probes")).rejects.toMatchObject({
-      name: "AbortError",
-      message: "limit-step-aborted",
-    });
     await expect(journal.checkpoint({ phase: "pending" })).rejects.toMatchObject({
       name: "AbortError",
     });
-    await expect(
-      journal.result("green", "templates-installed", { installed: 4 }),
-    ).rejects.toMatchObject({ name: "AbortError" });
-    await journal.result("unverified", "templates-aborted", { installed: 0 });
-    expect(readFileSync(journal.evidenceFile, "utf8")).not.toContain("private abort reason");
+    await expect(openLimitStep(ctx, STEP)).rejects.toMatchObject({ name: "AbortError" });
+    await expect(journal.result("green", "templates-installed", {})).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    await journal.result("unverified", "templates-aborted", {});
+    expect(JSON.stringify(ctx.intent.state)).not.toContain("private abort reason");
   });
-  it.each(["schemaVersion", "projectKey", "step", "phase"])(
-    "refuses mismatched persisted %s without replacing it",
-    async (field) => {
-      const journal = await openLimitStep(ctx, "w12-templates");
-      const corrupt = { ...read(journal.evidenceFile), [field]: "foreign" };
-      privateJson(journal.evidenceFile, corrupt);
-      await expect(openLimitStep({ ...ctx, intent: {} }, "w12-templates")).rejects.toThrow(
-        "Invalid limit step",
-      );
-      expect(read(journal.evidenceFile)).toEqual(corrupt);
+});
+
+describe("extended record scopes", () => {
+  const chatId = "01234567-89ab-4cde-8fab-0123456789ab";
+  it.each([
+    [
+      "ac5-project",
+      { deniedChatId: chatId, deniedActorClass: "restricted" },
+      { deniedIssues: 0 },
+      "denied-chat-unavailable",
+    ],
+    [
+      "ac6-sprint-bulk",
+      { boardId: "1", taskRefs: [{ id: "3", key: "LIM7-1" }] },
+      { size: 300, unconfirmedReceipts: 1, wireWrites: 20 },
+      "sprint-bulk-receipt-unconfirmed",
+    ],
+    ["ac9-ui-language-en", { locale: "en" }, { changes: 1 }, "ui-language-confirmed"],
+    ["ac9-ui-language-de", { locale: "de" }, { changes: 0 }, "ui-language-confirmed"],
+    [
+      "ac9-cards-readable",
+      { chatId, cardDigest: "a".repeat(64) },
+      { cards: 3 },
+      "cards-readable-confirmed",
+    ],
+  ])("retains closed %s facts in the same handle", async (step, resources, counts, detail) => {
+    const journal = await openLimitStep(ctx, step);
+    await journal.checkpoint({ phase: "completed", resources, counts });
+    await journal.result("unverified", detail, counts);
+    expect((await openLimitStep(ctx, step)).state.resources).toEqual(resources);
+    await expect(journal.checkpoint({ resources: { body: "private" } })).rejects.toThrow(
+      "Invalid limit step",
+    );
+  });
+  it("retains 300 bounded task references at maximum project-key length", async () => {
+    ctx.projectKey = "L".repeat(32);
+    const journal = await openLimitStep(ctx, "ac6-sprint-bulk");
+    const taskRefs = Array.from({ length: 300 }, (_, index) => ({
+      id: String(index + 1),
+      key: `${ctx.projectKey}-${index + 1}`,
+    }));
+    await journal.checkpoint({ phase: "pending", resources: { taskRefs } });
+    expect((await openLimitStep(ctx, "ac6-sprint-bulk")).state.resources.taskRefs).toEqual(
+      taskRefs,
+    );
+  });
+  it.each([
+    { taskRefs: [{ id: "1", key: "OTHER-1" }] },
+    {
+      taskRefs: [
+        { id: "1", key: "LIM7-1" },
+        { id: "1", key: "LIM7-2" },
+      ],
     },
-  );
-  it("refuses public, symlinked and malformed existing journals with closed errors", async () => {
-    const journal = await openLimitStep(ctx, "w12-templates");
-    chmodSync(journal.evidenceFile, 0o644);
-    await expect(openLimitStep({ ...ctx, intent: {} }, "w12-templates")).rejects.toThrow(
-      "Invalid limit step",
-    );
-    rmSync(journal.evidenceFile);
-    const target = join(directory, "other-private.json");
-    privateJson(target, journal.state, true);
-    symlinkSync(target, journal.evidenceFile);
-    await expect(openLimitStep({ ...ctx, intent: {} }, "w12-templates")).rejects.toThrow(
-      "Invalid limit step",
-    );
-    rmSync(journal.evidenceFile);
-    writeFileSync(journal.evidenceFile, '{"secret":"private malformed body', { mode: 0o600 });
-    await expect(openLimitStep({ ...ctx, intent: {} }, "w12-templates")).rejects.toThrow(
-      /^Invalid limit step journal$/u,
-    );
+    {
+      taskRefs: [
+        { id: "1", key: "LIM7-1" },
+        { id: "2", key: "LIM7-1" },
+      ],
+    },
+    {
+      taskRefs: Array.from({ length: 301 }, (_, index) => ({
+        id: String(index + 1),
+        key: `LIM7-${index + 1}`,
+      })),
+    },
+    { doneKeys: Array.from({ length: 11 }, (_, index) => `LIM7-${index + 1}`) },
+  ])("refuses unbound or oversized Sprint resources %#", async (resources) => {
+    const journal = await openLimitStep(ctx, "ac6-sprint-bulk");
+    await expect(journal.checkpoint({ resources })).rejects.toThrow("Invalid limit step");
   });
-  it("refuses an on-disk rollback or same-revision disagreement with retained intent", async () => {
-    const journal = await openLimitStep(ctx, "w12-templates");
-    const initial = read(journal.evidenceFile);
-    await journal.checkpoint({ phase: "pending" });
-    privateJson(journal.evidenceFile, initial);
-    await expect(openLimitStep(ctx, "w12-templates")).rejects.toThrow("Invalid limit step");
-    privateJson(journal.evidenceFile, { ...journal.state, phase: "completed" });
-    await expect(openLimitStep(ctx, "w12-templates")).rejects.toThrow("Invalid limit step");
+  it("rechecks a completed read-only observation without rearming a write", async () => {
+    const journal = await openLimitStep(ctx, "ac9-ui-language-en");
+    await journal.checkpoint({
+      phase: "completed",
+      resources: { locale: "en" },
+      counts: { changes: 1 },
+    });
+    await journal.checkpoint({ counts: { changes: 0 } });
+    await expect(journal.checkpoint({ phase: "pending" })).rejects.toThrow("Invalid limit step");
+    expect(ctx.intent.state["ac9-ui-language-en"].counts.changes).toBe(0);
   });
 });

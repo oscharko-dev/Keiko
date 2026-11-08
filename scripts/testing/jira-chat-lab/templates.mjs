@@ -180,7 +180,7 @@ async function installNewTemplates(ctx, journal, plan, region, progress) {
 
 async function installOrVerify(ctx, journal, plan, progress) {
   const { metadata, expected, projectKey } = plan;
-  const { region } = await resolveLimitBrowser(ctx);
+  const { region } = await resolveLimitBrowser(ctx, ctx.chat);
   if (journal.state.phase !== "completed")
     return installNewTemplates(ctx, journal, plan, region, progress);
   assert.equal(journal.state.resources.projectId, metadata.projectId);
@@ -205,6 +205,7 @@ export async function installTemplates(ctx) {
   let metadataAvailable = false;
   try {
     ctx.signal.throwIfAborted();
+    assert.ok(ctx.chat?.id && typeof ctx.chat.projectPath === "string");
     const metadata = await nativeMetadata(ctx, projectKey);
     metadataAvailable = true;
     const plan = {

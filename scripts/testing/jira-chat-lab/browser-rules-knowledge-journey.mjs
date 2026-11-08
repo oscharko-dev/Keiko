@@ -51,27 +51,20 @@ function probePrompt(projectKey) {
   return (
     `Erstelle genau ein Epic im Projekt ${projectKey} mit Zusammenfassung 'Regelprobe ohne Kennung', ` +
     "Beschreibung 'Absichtlich ohne Abschnitte' und keinen Labels. Keine Elternzuordnung und keine explizite Priorität. " +
-    "Nutze den Jira-Create-Aufruf genau mit diesem Inhalt, ohne Vorabkorrektur. " +
+    "Lege es genau mit diesem Inhalt an, ohne Vorabkorrektur. " +
     "Wenn die formale Vorlage verweigert, melde ihre konkrete Regel und beende den Turn ohne erneuten Schreibversuch."
   );
 }
 
-function submitProbe(ctx, opened, counts) {
-  return sendBrowserTurn(
-    opened.page,
-    opened.region,
-    opened.context,
-    opened.chat.id,
-    probePrompt(ctx.projectKey),
-    {
-      operations: WRITE_TOOLS,
-      timeoutMs: 1800000,
-      beforeDecision: () => {
-        counts.approvals += 1;
-        throw new TypeError("Formal rule probe reached write approval");
-      },
+function submitProbe(ctx, counts) {
+  return ctx.turn(ctx.chat, probePrompt(ctx.projectKey), {
+    operations: WRITE_TOOLS,
+    timeoutMs: 1800000,
+    beforeDecision: () => {
+      counts.approvals += 1;
+      throw new TypeError("Formal rule probe reached write approval");
     },
-  );
+  });
 }
 
 function probeFailure(before, after, result, projectKey, counts) {
@@ -112,7 +105,7 @@ async function probeMode(ctx, opened, journal, mode, counts) {
     return "rule-probe-native-change";
   }
   await selectAccessMode(opened.page, opened.region, mode);
-  const result = await submitProbe(ctx, opened, counts);
+  const result = await submitProbe(ctx, counts);
   const after = await issues(ctx, "*all");
   counts.probedModes += 1;
   const failure = probeFailure(before, after, result, ctx.projectKey, counts);
@@ -145,7 +138,7 @@ async function reverifyProbes(ctx, journal, modes) {
     return journal.result("unverified", "rule-probe-readback-unavailable", counts);
   let opened;
   try {
-    opened = await resolveLimitBrowser(ctx);
+    opened = await resolveLimitBrowser(ctx, ctx.chat);
   } catch {
     return journal.result("unverified", "rule-probe-readback-unavailable", counts);
   }
@@ -160,7 +153,7 @@ async function reverifyProbes(ctx, journal, modes) {
 }
 
 async function executeRuleProbes(ctx, journal, modes, counts) {
-  const opened = await resolveLimitBrowser(ctx);
+  const opened = await resolveLimitBrowser(ctx, ctx.chat);
   return withEnglishLimitUi(ctx, () => executeOpenedProbes(ctx, opened, journal, modes, counts));
 }
 
@@ -178,6 +171,11 @@ async function executeOpenedProbes(ctx, opened, journal, modes, counts) {
   }
   await journal.checkpoint({ phase: "completed", counts });
   return journal.result("green", "rule-probes-confirmed", counts);
+}
+
+function requireRuleProbeContext(ctx) {
+  assert.equal(typeof ctx.turn, "function");
+  assert.ok(ctx.chat?.id && typeof ctx.chat.projectPath === "string");
 }
 
 /** The already-open Chat must refuse formal input in every mode, without an approval or native effect. */
@@ -200,6 +198,7 @@ export async function runRuleProbes(ctx, { modes }) {
   if (journal.state.phase === "pending")
     return journal.result("unverified", "rule-probes-pending", journal.state.counts);
   try {
+    requireRuleProbeContext(ctx);
     if (journal.state.phase === "completed") return await reverifyProbes(ctx, journal, modes);
     return await executeRuleProbes(ctx, journal, modes, counts);
   } catch {

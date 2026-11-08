@@ -59,12 +59,20 @@ async function observedChat(page, chatId, modelId) {
 }
 
 /** No Chat creation, pairing, storage rewrite or credential persistence; cookies stay in memory. */
-export async function resolveLimitBrowser(ctx) {
+export async function resolveLimitBrowser(ctx, expectedChat) {
   const page = ctx.page;
   const { origin, hostname } = new URL(page.url());
   assert.ok(new Set(["127.0.0.1", "localhost", "[::1]"]).has(hostname));
   const { region, chatId } = await activeChatWindow(page);
   const chat = await observedChat(page, chatId, ctx.modelId);
+  const supplied =
+    expectedChat === undefined
+      ? [ctx.chat, ctx.reportChat, ctx.deniedChat].filter((value) => value !== undefined)
+      : [expectedChat];
+  assert.ok(
+    supplied.some((value) => value?.id === chat.id && value.projectPath === chat.projectPath),
+    "The visible Chat must be supplied by the orchestrator",
+  );
   const cookies = await page.context().cookies(origin);
   assert.ok(cookies.length > 0, "The existing browser session must already be paired");
   const cookie = cookies.map((entry) => `${entry.name}=${entry.value}`).join("; ");

@@ -1,9 +1,10 @@
 // Hermetic W12 workflow tests: the browser and independent native HTTP read are injected doubles.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { URL } from "node:url";
+import { memoryLimitIntent } from "./helpers/limit-run-intent.mjs";
 
 const ports = vi.hoisted(() => ({
   turn: vi.fn(),
@@ -132,7 +133,9 @@ function context() {
     projectKey: "LIM7",
     locale: "en",
     modelId: "fixture-model",
-    intent: {},
+    chat: { id: CHAT_ID, projectPath: "/synthetic/workspace" },
+    turn: ports.turn,
+    intent: memoryLimitIntent(),
     signal: new globalThis.AbortController().signal,
     requests,
   };
@@ -158,6 +161,18 @@ afterEach(() => {
 });
 
 describe("W12 runtime project and formal refusal probes", () => {
+  it.each(["turn", "chat"])(
+    "requires the orchestrator's %s instead of adopting another owner",
+    async (field) => {
+      const ctx = context();
+      ctx[field] = undefined;
+      expect(await journey.runRuleProbes(ctx, { modes: MODES })).toMatchObject({
+        status: "unverified",
+      });
+      expect(ports.turn).not.toHaveBeenCalled();
+      expect(ports.mode).not.toHaveBeenCalled();
+    },
+  );
   it("keeps the REQ default exclusively in the legacy CLI's optional fifth argument", () => {
     const args = ["/synthetic/session", "model-a", "embed-b", "7"];
     expect(rulesKnowledgeArguments(args).projectKey).toBe("REQ");
@@ -188,14 +203,13 @@ describe("W12 runtime project and formal refusal probes", () => {
     expect(ports.turn).toHaveBeenCalledTimes(3);
     expect(ports.native.mock.calls.length).toBeGreaterThanOrEqual(6);
     for (const call of ports.turn.mock.calls) {
-      expect(call[0]).toBe(ctx.page);
-      expect(call[3]).toBe(CHAT_ID);
-      expect(call[4]).toContain("Projekt LIM7");
-      expect(call[4]).not.toContain("REQ");
-      expect(call[5].operations).toEqual(["jira.create"]);
-      expect(call[5].beforeDecision).toBeTypeOf("function");
+      expect(call[0]).toBe(ctx.chat);
+      expect(call[1]).toContain("Projekt LIM7");
+      expect(call[1]).not.toContain("REQ");
+      expect(call[2].operations).toEqual(["jira.create"]);
+      expect(call[2].beforeDecision).toBeTypeOf("function");
     }
-    const evidence = readFileSync(result.evidenceFile, "utf8");
+    const evidence = JSON.stringify(ctx.intent.state["w12-rule-probes"]);
     expect(evidence).not.toContain("synthetic-cookie");
     expect(evidence).not.toContain("Synthetic baseline");
   });
@@ -204,7 +218,7 @@ describe("W12 runtime project and formal refusal probes", () => {
     "refuses green for %s and stops without replay",
     async (fault) => {
       const ctx = context();
-      ports.turn.mockImplementation(async (_page, _region, _live, _chat, _prompt, options) => {
+      ports.turn.mockImplementation(async (_chat, _prompt, options) => {
         if (fault === "approval") await options.beforeDecision();
         const result = refusal(fault === "wrong-project" ? "REQ/Epic" : "LIM7/Epic");
         if (fault === "assistant-prose") result.exchanges = [];

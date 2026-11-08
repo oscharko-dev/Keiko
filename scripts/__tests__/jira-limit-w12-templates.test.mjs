@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
+import { memoryLimitIntent } from "./helpers/limit-run-intent.mjs";
 
 const ports = vi.hoisted(() => ({
   upload: vi.fn(),
@@ -50,7 +51,6 @@ function fixture() {
   const controller = new globalThis.AbortController();
   const skills = new Map();
   const uploads = [];
-  const stateWrites = [];
   const region = { count: vi.fn().mockResolvedValue(1), getByRole: vi.fn() };
   const windows = { filter: vi.fn(() => region) };
   const page = {
@@ -64,12 +64,9 @@ function fixture() {
     projectKey: "LIM7",
     locale: "en",
     modelId: "fixture-model",
+    chat: { id: "11111111-1111-4111-8111-111111111111", projectPath: "/synthetic/workspace" },
     signal: controller.signal,
-    intent: {
-      persist: vi.fn(() => {
-        stateWrites.push(structuredClone(ctx.intent.steps));
-      }),
-    },
+    intent: memoryLimitIntent(),
   };
   ports.browser.mockResolvedValue({ page, region });
   ports.english.mockImplementation(async (_ctx, run) => run());
@@ -81,7 +78,7 @@ function fixture() {
   ports.upload.mockImplementation(async (actualPage, actualRegion, markdown, fileName, formal) => {
     expect(actualPage).toBe(page);
     expect(actualRegion).toBe(region);
-    expect(ctx.intent.steps["w12-templates"].phase).toBe("pending");
+    expect(ctx.intent.state["w12-templates"].phase).toBe("pending");
     const skill = {
       id: `msk_00000000-0000-4000-8000-${String(uploads.length + 1).padStart(12, "0")}`,
       revision: 1,
@@ -97,7 +94,7 @@ function fixture() {
     status: () => 200,
     json: async () => ({ skill: skills.get(path.split("/").at(-1)) }),
   }));
-  return { ctx, controller, skills, uploads, region, page, stateWrites };
+  return { ctx, controller, skills, uploads, region, page };
 }
 
 function resumeUi(f, { valid = true } = {}) {
@@ -198,12 +195,9 @@ describe("W12 runtime-bound template installation", () => {
       "/rest/api/2/field",
     ]);
     expect(f.page.request.get).toHaveBeenCalledTimes(4);
-    expect(f.ctx.intent.steps["w12-templates"].phase).toBe("completed");
-    expect(f.stateWrites.some((state) => state["w12-templates"].phase === "pending")).toBe(true);
-    const evidence = readFileSync(
-      join(f.ctx.sessionDir, "limit-run-LIM7-w12-templates.json"),
-      "utf8",
-    );
+    expect(f.ctx.intent.state["w12-templates"].phase).toBe("completed");
+    expect(f.ctx.intent.records.some((record) => record.value.phase === "pending")).toBe(true);
+    const evidence = JSON.stringify(f.ctx.intent.state["w12-templates"]);
     expect(evidence).not.toContain("## ");
     expect(evidence).not.toContain("fixture-model");
   });
@@ -231,7 +225,15 @@ describe("W12 runtime-bound template installation", () => {
     f.ctx.locale = "de";
     expect(await installTemplates(f.ctx)).toMatchObject({ status: "green" });
     expect(ports.english).toHaveBeenCalledWith(f.ctx, expect.any(Function));
-    expect(ports.browser).toHaveBeenCalledWith(f.ctx);
+    expect(ports.browser).toHaveBeenCalledWith(f.ctx, f.ctx.chat);
+  });
+
+  it("does not adopt an unprovided Chat or write a second intent file", async () => {
+    const f = fixture();
+    delete f.ctx.chat;
+    expect(await installTemplates(f.ctx)).toMatchObject({ status: "unverified" });
+    expect(ports.upload).not.toHaveBeenCalled();
+    expect(f.ctx.intent).not.toHaveProperty("steps");
   });
 
   it("keeps existing lowercase builder inputs compatible", () => {
@@ -272,7 +274,7 @@ describe("W12 runtime-bound template installation", () => {
     const result = await installTemplates(f.ctx);
     expect(result).toMatchObject({ status: "red", detail: "templates-verification-failed" });
     expect(JSON.stringify(result)).not.toContain("credential");
-    f.ctx.intent = {};
+    f.ctx.intent = memoryLimitIntent(f.ctx.intent.state);
     expect(await installTemplates(f.ctx)).toMatchObject({
       status: "unverified",
       detail: "templates-pending-unverified",
@@ -292,7 +294,7 @@ describe("W12 runtime-bound template installation", () => {
       status: "red",
       detail: "templates-verification-failed",
     });
-    expect(f.ctx.intent.steps["w12-templates"].phase).toBe("pending");
+    expect(f.ctx.intent.state["w12-templates"].phase).toBe("pending");
     expect(ports.upload).toHaveBeenCalledTimes(4);
   });
 
@@ -317,7 +319,7 @@ describe("W12 runtime-bound template installation", () => {
     await installTemplates(f.ctx);
     ports.upload.mockClear();
     ports.read.mockClear();
-    f.ctx.intent = {};
+    f.ctx.intent = memoryLimitIntent(f.ctx.intent.state);
     resumeUi(f);
     expect(await installTemplates(f.ctx)).toMatchObject({
       status: "green",
