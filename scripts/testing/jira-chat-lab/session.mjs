@@ -53,31 +53,39 @@ if (action === "init") {
 } else {
   const session = loadSession(directory);
   const command = action === "start" ? ["up", "-d"] : [action === "status" ? "ps" : "stop"];
+  let tlsRenewed = false;
   if (action === "start") {
     await requireExclusiveLab(session);
-    initializeLabTls(join(directory, "secrets", "tls"));
-  }
-  execFileSync(
-    "docker",
-    [
-      "compose",
-      "-p",
-      session.project,
-      "-f",
-      join(dirname(fileURLToPath(import.meta.url)), "compose.yaml"),
-      ...command,
-    ],
-    {
-      env: {
-        ...process.env,
-        KEIKO_OS_KEYCHAIN: "off",
-        KEIKO_JIRA_LAB_STATE_DIR: directory,
-        KEIKO_JIRA_LAB_HTTP_PORT: String(session.httpPort),
-        KEIKO_JIRA_LAB_HTTPS_PORT: String(session.httpsPort),
-        KEIKO_JIRA_LAB_JIRA_VERSION: session.jiraVersion,
-        KEIKO_JIRA_LAB_JIRA_SHA256: session.jiraImageDigest,
+    initializeLabTls(join(directory, "secrets", "tls"), {
+      onRenew: () => {
+        tlsRenewed = true;
       },
-      stdio: "inherit",
-    },
-  );
+    });
+  }
+  const commands = [command];
+  if (tlsRenewed) commands.push(["up", "-d", "--no-deps", "--force-recreate", "tls"]);
+  for (const selected of commands)
+    execFileSync(
+      "docker",
+      [
+        "compose",
+        "-p",
+        session.project,
+        "-f",
+        join(dirname(fileURLToPath(import.meta.url)), "compose.yaml"),
+        ...selected,
+      ],
+      {
+        env: {
+          ...process.env,
+          KEIKO_OS_KEYCHAIN: "off",
+          KEIKO_JIRA_LAB_STATE_DIR: directory,
+          KEIKO_JIRA_LAB_HTTP_PORT: String(session.httpPort),
+          KEIKO_JIRA_LAB_HTTPS_PORT: String(session.httpsPort),
+          KEIKO_JIRA_LAB_JIRA_VERSION: session.jiraVersion,
+          KEIKO_JIRA_LAB_JIRA_SHA256: session.jiraImageDigest,
+        },
+        stdio: "inherit",
+      },
+    );
 }

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 import { expect, it } from "vitest";
+import { initializeLabTls } from "../testing/jira-chat-lab/tls-front.mjs";
 import { DEFAULT_LAB_CONNECTION } from "../testing/jira-chat-lab/lab-client.mjs";
 
 const sessionScript = fileURLToPath(
@@ -27,10 +28,7 @@ function invokeSession(action, projects, inspectFailure = false) {
     }),
     { mode: 0o600 },
   );
-  for (const name of ["ca.key", "ca.pem", "server.key", "server.pem"])
-    writeFileSync(join(directory, "secrets", "tls", name), "synthetic TLS fixture", {
-      mode: 0o600,
-    });
+  initializeLabTls(join(directory, "secrets", "tls"));
   writeFileSync(
     join(tools, "docker"),
     `#!${process.execPath}

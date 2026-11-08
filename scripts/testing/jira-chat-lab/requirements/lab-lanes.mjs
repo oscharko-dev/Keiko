@@ -5,13 +5,14 @@
 // can never start using Jira while another one restarts it. Waiting lanes never block each other:
 // the first to take the lock renews, the others find the license renewed under the lock.
 import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 const LANES = "lanes";
 const RESTART_LOCK = "license-restart.lock";
 const WAITING = "waiting";
 const ACTIVE = "active";
+const registrations = new Map();
 // A lock whose owner is not yet written is being taken; only an old one is abandoned.
 const UNOWNED_LOCK_GRACE_MS = 60_000;
 
@@ -43,8 +44,23 @@ function writeState(directory, pid, state) {
 
 /** Registers this process as a lane that does not use Jira yet, until it exits. */
 export function registerLane(directory, pid = process.pid) {
-  writeState(directory, pid, WAITING);
-  const release = () => rmSync(join(lanesDirectory(directory), String(pid)), { force: true });
+  const key = join(resolve(directory), LANES, String(pid));
+  const count = registrations.get(key) ?? 0;
+  if (count === 0) writeState(directory, pid, WAITING);
+  registrations.set(key, count + 1);
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    process.off("exit", release);
+    const remaining = (registrations.get(key) ?? 1) - 1;
+    if (remaining > 0) {
+      registrations.set(key, remaining);
+      return;
+    }
+    registrations.delete(key);
+    rmSync(key, { force: true });
+  };
   process.once("exit", release);
   return release;
 }

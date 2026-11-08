@@ -21,6 +21,10 @@ import { DEFAULT_LAB_CONNECTION } from "../testing/jira-chat-lab/lab-client.mjs"
 import { runQualificationBatches } from "../testing/jira-chat-lab/api-qualification.mjs";
 import { jiraOperationForTool } from "../../packages/keiko-server/dist/atlassian/jiraManagedProvider.js";
 
+vi.mock("../testing/jira-chat-lab/run-preflight.mjs", () => ({
+  prepareLabRun: async () => () => undefined,
+}));
+
 vi.mock("../testing/jira-chat-lab/lab-client.mjs", async (original) => ({
   ...(await original()),
   requireLicense: vi.fn(async () => 9000),
@@ -47,6 +51,7 @@ it("uses the paired product server with an empty provider catalog and no model p
       stateReady: (root) => paths.push(root),
       run: async (context) => {
         expect(context.cookie.length).toBeGreaterThan(0);
+        expect(existsSync(join(context.root, "memory", "keiko-memory.db"))).toBe(true);
         expect(
           context.deps.store.listProjects().some((project) => project.path === context.projectPath),
         ).toBe(true);
