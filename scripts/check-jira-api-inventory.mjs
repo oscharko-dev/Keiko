@@ -158,7 +158,7 @@ function validateState(row) {
   requireValid(STATES.has(row.implementationState), "implementation-state");
   requireValid(AVAILABILITY.has(row.runtimeAvailability), "runtime-availability");
   requireValid(textList(row.verificationReferences), "verification-references");
-  if (row.implementationState === "implemented" || row.runtimeAvailability === "executable")
+  if (row.implementationState === "implemented" || row.runtimeAvailability !== "unknown")
     requireValid(row.verificationReferences.length > 0, "missing-verification");
   if (row.implementationState === "deferred" || row.implementationState === "excluded-by-policy")
     requireValid(nonemptyText(row.ownerDecision), "missing-owner-decision");

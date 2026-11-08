@@ -31,7 +31,13 @@ import {
   SESSION_PAIRING_LAUNCHER_SECRET_ENV,
 } from "../../../packages/keiko-server/dist/coding-app-session/launcherSessionPairingPort.js";
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session-pairing";
-import { actorDetails, labSessionConnection, loadSession, readPrivateFile, requireLicense } from "./lab-client.mjs";
+import {
+  actorDetails,
+  labSessionConnection,
+  loadSession,
+  readPrivateFile,
+  requireLicense,
+} from "./lab-client.mjs";
 import { sessionVerificationPort } from "./product-port.mjs";
 import { establishedReadGrant } from "./read-grant.mjs";
 import { drainLiveChatTurns } from "./chat-lifecycle.mjs";
@@ -288,9 +294,10 @@ export async function configureModel(deps, modelId, session, configPath, options
   );
   console.log(JSON.stringify({ operation: "jira-chat-live-model", verified: true }));
 }
-async function createVerifiedPod(origin, cookie, session, actor) {
+async function createVerifiedPod(origin, cookie, session, actor, administration = false) {
   actorDetails(actor);
-  if (actor === "admin") throw new TypeError("The laboratory administrator has no synthetic PAT");
+  if (actor === "admin" && !administration)
+    throw new TypeError("The laboratory administrator requires explicit qualification scope");
   const credential = await jsonRequest(
     origin,
     cookie,
@@ -329,22 +336,63 @@ export async function prepareChat(
   modelId,
   actor = "api",
   toolMode = undefined,
+  administration = false,
 ) {
-  const credential = await createVerifiedPod(origin, cookie, session, actor);
+  const credential = await createVerifiedPod(origin, cookie, session, actor, administration);
   const created = await jsonRequest(origin, cookie, "chat-create", "/api/chats", {
     projectPath,
     title: "Synthetic Jira live Chat",
     selectedModel: modelId,
   });
+  return bindVerifiedChat(origin, cookie, created.chat, credential, toolMode, administration);
+}
+
+/** Private qualification state uses the real store without inventing a gateway/model provider. */
+export async function prepareModelFreeChat(context, actor = "api", administration = false) {
+  assert.equal(context.deps.gatewayConfig.current(), undefined);
+  const credential = await createVerifiedPod(
+    context.origin,
+    context.cookie,
+    context.session,
+    actor,
+    administration,
+  );
+  const created = context.deps.store.createChat(
+    context.projectPath,
+    "Synthetic model-free API qualification",
+    "model-free-qualification",
+  );
+  const observed = await jsonRequest(
+    context.origin,
+    context.cookie,
+    "qualification-chat-observe",
+    `/api/chats?id=${encodeURIComponent(created.id)}&projectPath=${encodeURIComponent(context.projectPath)}`,
+    undefined,
+    "GET",
+  );
+  const chat = observed.chats.find((entry) => entry.id === created.id);
+  assert.ok(chat);
+  return bindVerifiedChat(
+    context.origin,
+    context.cookie,
+    chat,
+    credential,
+    "autonomous-delivery",
+    administration,
+  );
+}
+
+async function bindVerifiedChat(origin, cookie, chat, credential, toolMode, administration) {
   const bound = await jsonRequest(
     origin,
     cookie,
     "chat-bind",
-    `/api/chats?id=${encodeURIComponent(created.chat.id)}`,
+    `/api/chats?id=${encodeURIComponent(chat.id)}`,
     {
       jiraPodId: credential.livePod.podId,
       ...(toolMode === undefined ? {} : { toolMode }),
-      expectedGroundingScopeIdentity: created.chat.groundingScopeIdentity,
+      ...(administration ? { jiraAdministrationEnabled: true } : {}),
+      expectedGroundingScopeIdentity: chat.groundingScopeIdentity,
     },
     "PATCH",
   );
@@ -564,13 +612,57 @@ export async function withLiveChat({
   embeddingModelId,
 }) {
   if (!modelId) throw new TypeError("A locally installed model is required");
+  return withLabProduct({
+    session,
+    modelId,
+    run,
+    retainState,
+    stateReady,
+    browser,
+    restoreState,
+    decorateAtlassianHttp,
+    configureServer,
+    prepareModel: (root) =>
+      prepareLiveModel(root, session, modelId, { modelRetries, embeddingModelId }),
+  });
+}
+
+/** Same paired server/vault/transport as the Chat lab, with no provider or model probe. */
+export async function withModelFreeJira({ session, run, stateReady, decorateAtlassianHttp }) {
+  return withLabProduct({
+    session,
+    run,
+    stateReady,
+    decorateAtlassianHttp,
+    modelId: undefined,
+    retainState: true,
+    browser: false,
+    prepareModel: () => ({
+      env: { KEIKO_CA_BUNDLE_PATH: join(session.directory, "secrets", "tls", "ca.pem") },
+      configure: () => undefined,
+    }),
+  });
+}
+
+async function withLabProduct({
+  session,
+  modelId,
+  run,
+  retainState,
+  stateReady,
+  browser,
+  restoreState,
+  decorateAtlassianHttp,
+  configureServer,
+  prepareModel,
+}) {
   await requireLicense(session);
   const root = liveStateDirectory(session, retainState, restoreState);
   const projectPath = join(root, "workspace");
   mkdirSync(projectPath, { recursive: true });
   const secret = randomBytes(48).toString("hex");
   stateReady?.(root);
-  const model = prepareLiveModel(root, session, modelId, { modelRetries, embeddingModelId });
+  const model = prepareModel(root);
   const restoring = restoreState !== undefined;
   const deps = createLiveDeps(root, session, secret, retainState, restoring, model.env);
   decorateCredentialTransport(deps, decorateAtlassianHttp, session);
@@ -584,7 +676,7 @@ export async function withLiveChat({
     server = createLiveUiServer({ port, deps, root, browser, configureServer });
     await new Promise((resolve) => server.listen(port, "127.0.0.1", resolve));
     const cookie = await pairedCookie(origin, secret);
-    await run({ origin, cookie, session, projectPath, modelId, secret, root });
+    await run({ origin, cookie, session, projectPath, modelId, secret, root, deps });
     await requireLicense(session);
     assert.notEqual(process.exitCode, 1);
   } finally {

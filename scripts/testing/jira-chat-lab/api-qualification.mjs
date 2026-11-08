@@ -1,0 +1,264 @@
+// AC7 model-free qualification through the existing lab and application-owned catalog.
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { withModelFreeJira, prepareModelFreeChat } from "./chat-read.mjs";
+import {
+  assertSessionServerInfo,
+  basicAuth,
+  labRequest,
+  loadSession,
+  requireLicense,
+} from "./lab-client.mjs";
+import { privateJson } from "./private-json.mjs";
+import {
+  API_QUALIFICATION_CASES,
+  observeQualificationFixtures,
+} from "./api-qualification-cases.mjs";
+import { dispatchQualification, qualificationWitness } from "./api-qualification-runtime.mjs";
+import { API_QUALIFICATION_ISSUE_CASES } from "./api-qualification-issue-cases.mjs";
+import { requireQualificationSnapshot } from "./api-qualification-snapshot.mjs";
+import {
+  classifyQualification,
+  qualificationDigest,
+  qualificationSummary,
+} from "./api-qualification-evidence.mjs";
+
+const repository = resolve(import.meta.dirname, "..", "..", "..");
+const ledgerPath = join(repository, "docs/local-knowledge/jira-api-coverage/operations.json");
+const stage = (value) =>
+  console.log(JSON.stringify({ operation: "jira-api-qualification", ...value }));
+
+function sourceRevision() {
+  const options = { cwd: repository, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] };
+  const dirty = execFileSync("git", ["status", "--porcelain", "--untracked-files=normal"], options);
+  assert.equal(
+    dirty,
+    "",
+    "Commit the complete qualification sources before recording native evidence",
+  );
+  return execFileSync("git", ["rev-parse", "HEAD"], options).trim();
+}
+
+function caseRows(ledger, cases) {
+  const tools = new Map();
+  for (const row of ledger.operations)
+    for (const tool of row.currentCapabilityIds) {
+      assert.ok(!tools.has(tool), "A native qualification tool has one exact identity");
+      tools.set(tool, row.identity);
+    }
+  return cases.map((entry) => {
+    const identity = tools.get(entry.tool);
+    assert.ok(identity, "Every qualification case must belong to the operation ledger");
+    return { ...entry, identity };
+  });
+}
+
+async function observeReadback(context, specification, attempted, fixture) {
+  try {
+    return {
+      readback: await specification.readback(context, attempted.dispatch.result?.data, fixture),
+    };
+  } catch (error) {
+    return {
+      failure: error instanceof assert.AssertionError ? "readback-mismatch" : "readback-failed",
+    };
+  }
+}
+function caseEvidence(specification, attempted, observation, readback, failure) {
+  const runtimeAvailability = classifyQualification({
+    ...attempted,
+    identity: specification.identity,
+    witness: observation,
+    readback,
+  });
+  return {
+    id: qualificationDigest(specification.identity).slice(0, 24),
+    identity: specification.identity,
+    tool: specification.tool,
+    runtimeAvailability,
+    binding: attempted.binding,
+    witness: observation,
+    receipt: attempted.dispatch.receipt,
+    journal:
+      attempted.journal === undefined
+        ? null
+        : {
+            phase: attempted.journal.phase,
+            outcome: attempted.journal.outcome,
+            httpStatus: attempted.journal.httpStatus,
+          },
+    resultDigest: qualificationDigest(attempted.dispatch.result),
+    readback,
+    ...(failure === undefined ? {} : { failure }),
+  };
+}
+async function runCase(context, chat, specification, fixture, witness, directory) {
+  const id = qualificationDigest(specification.identity).slice(0, 24);
+  const pending = join(directory, `${id}.pending.json`);
+  privateJson(
+    pending,
+    { identity: specification.identity, phase: "dispatch-may-have-started" },
+    true,
+  );
+  witness.arm(specification.identity, specification.mutation === true);
+  const attempted = await dispatchQualification(
+    context,
+    chat,
+    specification,
+    specification.arguments(fixture),
+  );
+  const { readback, failure } = await observeReadback(context, specification, attempted, fixture);
+  const evidence = caseEvidence(specification, attempted, witness.snapshot(), readback, failure);
+  privateJson(join(directory, `${id}.json`), evidence, true);
+  if (attempted.journal?.outcome === "unknown" || attempted.journal?.phase === "dispatched")
+    throw new TypeError(
+      "Uncertain native effect requires reconciliation before any further dispatch",
+    );
+  rmSync(pending);
+  stage({
+    identity: specification.identity,
+    runtimeAvailability: evidence.runtimeAvailability,
+    ...(failure ? { failure } : {}),
+  });
+  return evidence;
+}
+
+async function executeCases(context, specifications, report, directory, witness) {
+  context.actor = "api";
+  const fixture = await observeQualificationFixtures(
+    context,
+    JSON.parse(readFileSync(join(context.session.directory, "fixture.json"), "utf8")),
+  );
+  fixture.runId = report.runId;
+  const chats = new Map();
+  for (const specification of specifications) {
+    await requireLicense(context.session);
+    context.actor = specification.actor ?? "api";
+    const binding = `${context.actor}:${specification.administration === true}`;
+    if (!chats.has(binding))
+      chats.set(
+        binding,
+        await prepareModelFreeChat(context, context.actor, specification.administration === true),
+      );
+    const chat = chats.get(binding);
+    const evidence = await runCase(context, chat, specification, fixture, witness, directory);
+    const row = report.operations.find(
+      (operation) => operation.identity === specification.identity,
+    );
+    Object.assign(row, evidence, {
+      verificationReferences:
+        evidence.runtimeAvailability === "unknown" ? [] : [`${report.file}#${evidence.id}`],
+    });
+    privateJson(join(directory, report.file), report);
+    if (specification.mutation && evidence.runtimeAvailability === "unknown")
+      throw new TypeError("Reconcile the failed mutation before dispatching dependent cases");
+  }
+}
+
+function createReport(session, ledger, revision, runId) {
+  return {
+    schemaVersion: 1,
+    runId,
+    sourceRevision: revision,
+    release: session.jiraVersion,
+    imageDigest: session.jiraImageDigest,
+    inventoryDigest: qualificationDigest(ledger.operations.map((row) => row.identity)),
+    file: `qualification-${session.jiraVersion}-${runId}.json`,
+    modelCalls: 0,
+    proposals: [],
+    operations: ledger.operations.map((row) => ({
+      identity: row.identity,
+      runtimeAvailability: "unknown",
+      verificationReferences: [],
+    })),
+  };
+}
+async function observeRelease(session) {
+  const native = await labRequest(
+    session,
+    "GET",
+    "/rest/api/2/serverInfo",
+    basicAuth(session, "admin"),
+  );
+  assert.equal(native.status, 200);
+  assertSessionServerInfo(session, native.value);
+}
+function prepareRun(session, ledger, revision) {
+  const runId = randomUUID();
+  const output = join(session.directory, `api-qualification-${runId}`);
+  const pending = join(session.directory, "api-qualification.pending.json");
+  privateJson(
+    pending,
+    {
+      runId,
+      sourceRevision: revision,
+      release: session.jiraVersion,
+      output,
+      reconcileBeforeRetry: true,
+    },
+    true,
+  );
+  mkdirSync(output, { mode: 0o700 });
+  const report = createReport(session, ledger, revision, runId);
+  return { report, output, pending };
+}
+async function admitSnapshot(session, selected, report, snapshotId) {
+  if (!selected.some((entry) => entry.destructiveAdministration)) return;
+  assert.ok(snapshotId, "Destructive administration requires a verified owned snapshot");
+  const snapshot = await requireQualificationSnapshot(session, snapshotId);
+  report.snapshotId = snapshot.id;
+}
+export async function qualifyApi(directory, only, snapshotId) {
+  const session = loadSession(directory);
+  const ledger = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  assert.equal(ledger.operations.length, 439);
+  const revision = sourceRevision();
+  const selected = caseRows(ledger, [
+    ...API_QUALIFICATION_CASES,
+    ...API_QUALIFICATION_ISSUE_CASES,
+  ]).filter((entry) => only === undefined || only.includes(entry.tool));
+  assert.ok(selected.length > 0);
+  await observeRelease(session);
+  const { report, output, pending } = prepareRun(session, ledger, revision);
+  await admitSnapshot(session, selected, report, snapshotId);
+  const witness = qualificationWitness(session);
+  privateJson(join(output, report.file), report, true);
+  await withModelFreeJira({
+    session,
+    decorateAtlassianHttp: witness.decorate,
+    stateReady: (root) => privateJson(join(output, "product-state.json"), { root }, true),
+    run: (context) => executeCases(context, selected, report, output, witness),
+  });
+  const counts = qualificationSummary(report.operations);
+  rmSync(pending);
+  stage({
+    release: session.jiraVersion,
+    sourceRevision: revision,
+    counts,
+    proposals: report.proposals.length,
+  });
+  return { report, counts };
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try {
+    const [directory, only, snapshotId, ...extra] = process.argv.slice(2);
+    if (!directory || extra.length > 0)
+      throw new TypeError(
+        "Usage: api-qualification.mjs <private-session> [comma-separated-tools] [owned-snapshot-id]",
+      );
+    const { counts } = await qualifyApi(directory, only?.split(","), snapshotId);
+    if (counts.unknown > 0) process.exitCode = 1;
+  } catch (error) {
+    stage({
+      passed: false,
+      reconcileRequired: true,
+      errorType: error instanceof Error ? error.name : "unknown",
+    });
+    process.exitCode = 1;
+  }
+}

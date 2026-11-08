@@ -103,6 +103,12 @@ function licenseWizardFixture({ foreign = false, refusal = false } = {}) {
 }
 
 describe("synthetic Jira normal license wizard", () => {
+  it("allows first-license plugin initialization to finish within the existing setup readiness budget without replay", async () => {
+    const { page } = licenseWizardFixture();
+    await licenseSetup(page, { origin }, "synthetic-license");
+    expect(page.request.post).toHaveBeenCalledOnce();
+    expect(page.request.post.mock.calls[0][1]).toMatchObject({ timeout: 180_000, maxRedirects: 0 });
+  });
   it("submits the real wizard's next control exactly once", async () => {
     const { page, response } = licenseWizardFixture();
     await licenseSetup(page, { origin }, "synthetic-license");

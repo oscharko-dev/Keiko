@@ -62,3 +62,26 @@ async function ensureToken(session, actor) {
   writeFileSync(path, token.rawToken, { mode: 0o600, flag: "wx" });
   return `Bearer ${token.rawToken}`;
 }
+
+/** Own disposable qualification sessions only: reuse normal PAT creation and verify native admin. */
+export async function ensureFixtureAdminToken(session) {
+  const auth = await ensureToken(session, "admin");
+  const identity = await checked(
+    session,
+    "qualification-admin-identity",
+    "GET",
+    "/rest/api/2/myself",
+    auth,
+  );
+  if (identity.name !== "keiko-admin" || identity.active !== true)
+    throw new TypeError("Unexpected qualification administrator identity");
+  const permissions = await checked(
+    session,
+    "qualification-admin-permission",
+    "GET",
+    "/rest/api/2/mypermissions?permissions=ADMINISTER",
+    auth,
+  );
+  if (permissions.permissions?.ADMINISTER?.havePermission !== true)
+    throw new TypeError("Qualification requires actual native administration permission");
+}
