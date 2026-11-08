@@ -370,3 +370,15 @@ capture, while **Check again** remains visible. It therefore does not establish 
 acceptance of the manual path. These records describe this fixture run and its captured source
 digests; they do not identify or qualify the final UI build, change any bundle budget, or establish
 native update or Jira/model behavior.
+
+## Chat model-verification notice refresh — 2026-11-08
+
+The updated core EN/DE readiness notices changed two declared catalog digests. The unchanged
+canonical producer ran again in the same isolated Linux arm64 container, with Keychain access
+disabled, 4 CPUs, 4 GiB and one Chromium worker. All nine cases passed, including the real BFF
+stop/restart case; the command exited 0 after 123.15 seconds. The three provenance records were
+regenerated and the unchanged freshness check passed. Captures 11 and 13 changed and were visually
+inspected: progress, cancellation, reconnect status and retained update details remain readable.
+The earlier capture-10 limitation remains. Separate Chat formatter and ErrorNotice tests cover the
+new verification remedy; these updater fixtures do not prove a live Jira/model journey or that the
+initial JavaScript bundle fits its unchanged budget.

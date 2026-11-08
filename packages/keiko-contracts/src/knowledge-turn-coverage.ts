@@ -334,14 +334,28 @@ function completedDraft(
     )
   );
 }
+/** A named replay can finish every item without dispatching another Jira write. */
+function completedDraftReplay(
+  exchange: ChatToolExchange,
+  data: Readonly<Record<string, unknown>>,
+): boolean {
+  return (
+    exchange.result?.toolRef?.canonicalId === "keiko.jira.draft" &&
+    exchange.mutationOutcome === "not-dispatched" &&
+    data.outcome === "not-dispatched" &&
+    data.createdCount === 0 &&
+    completedDraft(exchange, data)
+  );
+}
 function successfulCreationData(
   exchange: ChatToolExchange,
 ): Readonly<Record<string, unknown>> | undefined {
   const result = exchange.result;
   if (result?.status !== "completed") return undefined;
+  const data = record(result.data);
+  if (data !== undefined && completedDraftReplay(exchange, data)) return data;
   if (exchange.mutationOutcome !== undefined && exchange.mutationOutcome !== "succeeded")
     return undefined;
-  const data = record(result.data);
   return data?.outcome === "succeeded" ? data : undefined;
 }
 function completedIssue(data: Readonly<Record<string, unknown>>): boolean {
