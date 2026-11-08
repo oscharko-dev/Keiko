@@ -4,6 +4,7 @@ import type {
   JiraReportExportFormat,
   JiraReportIncompleteReason,
   JiraReportFailureReason,
+  JiraReportEstimateUnavailableReason,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   useOptionalWidgetTranslate as useTranslate,
@@ -27,6 +28,31 @@ const LOCAL_FAILURE_KEYS: Partial<Readonly<Record<JiraReportFailureReason, Widge
   "effect-denied": "chat.jira.outcome.failure.localAuthority",
   cancelled: "chat.jira.outcome.failure.cancelled",
 };
+const ESTIMATE_REASON_KEYS: Readonly<
+  Record<JiraReportEstimateUnavailableReason, WidgetMessageKey>
+> = {
+  "project-not-specified": "chat.jira.report.estimateReason.project-not-specified",
+  "field-not-found": "chat.jira.report.estimateReason.field-not-found",
+  "ambiguous-field": "chat.jira.report.estimateReason.ambiguous-field",
+  "metadata-unavailable": "chat.jira.report.estimateReason.metadata-unavailable",
+};
+
+function EstimateField({
+  estimate,
+}: {
+  readonly estimate: NonNullable<JiraReportView["estimate"]>;
+}): ReactNode {
+  const t = useTranslate();
+  return (
+    <p>
+      {estimate.available
+        ? t("chat.jira.report.estimateField", { name: estimate.fieldName, id: estimate.fieldId })
+        : t("chat.jira.report.estimateUnavailable", {
+            reason: t(ESTIMATE_REASON_KEYS[estimate.reason]),
+          })}
+    </p>
+  );
+}
 const EXPORTS: readonly {
   readonly format: JiraReportExportFormat;
   readonly label: WidgetMessageKey;
@@ -50,15 +76,18 @@ function ReportStatus({ view }: { readonly view: JiraReportView }): ReactNode {
     return <output>{t("chat.jira.report.complete", { read: view.issuesRead })}</output>;
   return (
     <output>
-      {t(total === undefined ? "chat.jira.report.incompleteUnknown" : "chat.jira.report.incomplete", {
-        reason: t(
-          view.reason === undefined
-            ? "chat.jira.report.reason.read-failed"
-            : REASON_KEYS[view.reason],
-        ),
-        read: view.issuesRead,
-        ...(total === undefined ? {} : { total }),
-      })}
+      {t(
+        total === undefined ? "chat.jira.report.incompleteUnknown" : "chat.jira.report.incomplete",
+        {
+          reason: t(
+            view.reason === undefined
+              ? "chat.jira.report.reason.read-failed"
+              : REASON_KEYS[view.reason],
+          ),
+          read: view.issuesRead,
+          ...(total === undefined ? {} : { total }),
+        },
+      )}
     </output>
   );
 }
@@ -168,6 +197,7 @@ export function JiraReportCard({
       <ReportStatus view={view} />
       {localFailure === undefined || view.status !== "incomplete" ? null : <p>{t(localFailure)}</p>}
       {view.figures === undefined ? null : <Figures figures={view.figures} />}
+      {view.estimate === undefined ? null : <EstimateField estimate={view.estimate} />}
       {view.figures === undefined ? null : <p>{t("chat.jira.report.figures")}</p>}
       {view.status === "reading" || chatId === undefined ? null : (
         <ExportActions reportId={view.reportId} chatId={chatId} />

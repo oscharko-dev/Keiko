@@ -1482,6 +1482,23 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: true,
       },
+      estimateSource: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["explicit-field", "board-configuration", "project-screen", "unavailable"],
+      },
+      estimateUnavailableReason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "project-not-specified",
+          "field-not-found",
+          "ambiguous-field",
+          "metadata-unavailable",
+        ],
+      },
       format: {
         type: "string",
         dataClass: "closed-enum",
@@ -32352,7 +32369,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["jira.report", "jira.draft-stage"],
+        values: ["jira.report", "jira.draft-stage", "jira.draft-batch"],
       },
     },
     causal: "correlation",

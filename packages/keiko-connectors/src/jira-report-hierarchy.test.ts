@@ -7,7 +7,8 @@ import { JIRA_REPORT_FIELD_CHUNK_CHARS } from "./jira-report-page.js";
 
 function listing(items: readonly unknown[]): JiraReportHttp {
   return {
-    request: async () => ({ ok: false, reason: "not-found" }),
+    request: () => Promise.resolve({ ok: false, reason: "not-found" }),
+    getAgileRecord: () => Promise.resolve({ ok: false, reason: "not-found" }),
     getArray: () => Promise.resolve({ ok: true, items }),
     getRecord: () => Promise.resolve({ ok: false, reason: "not-found" }),
   };
@@ -116,6 +117,7 @@ describe("hierarchy discovery depends on the schema shape, never on an app's fie
   it("states an unreadable field list as unavailable with its closed reason", async () => {
     const outcome = await discoverHierarchyFields({
       ...listing([]),
+      getAgileRecord: () => Promise.resolve({ ok: false, reason: "not-found" }),
       getArray: () => Promise.resolve({ ok: false, reason: "permission-denied" }),
     });
     expect(outcome).toMatchObject({

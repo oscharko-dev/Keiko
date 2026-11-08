@@ -30,20 +30,21 @@ function chunkedRead(offset: number | undefined): {
   return {
     requests,
     http: {
-      request: async () => ({ ok: false, reason: "not-found" }),
-      getArray: async () => ({ ok: true, items: [] }),
-      getRecord: async (path) => {
+      request: () => Promise.resolve({ ok: false, reason: "not-found" }),
+      getAgileRecord: () => Promise.resolve({ ok: false, reason: "not-found" }),
+      getArray: () => Promise.resolve({ ok: true, items: [] }),
+      getRecord: (path): ReturnType<JiraReportHttp["getRecord"]> => {
         const url = new URL(path, "https://jira.example.invalid/rest/api/2/");
         requests.push(url);
         const first = requests.length === 1;
-        return {
+        return Promise.resolve({
           ok: true,
           body: {
             startAt: first ? 8 : offset,
             total: 9,
             issues: [{ key: "REP-9", fields: first ? { summary: "Observed" } : { labels: [] } }],
           },
-        };
+        });
       },
     },
   };

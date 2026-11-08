@@ -32,7 +32,7 @@ export interface JiraReportFieldPlan {
   readonly parentProposals: Map<string, readonly ParentProposal[]>;
   /** Requested fields omitted or unreadable in a hit; neither proves an empty value. */
   readonly omittedFields: Set<string>;
-  readonly estimateFieldId: string;
+  readonly estimateFieldId: string | undefined;
   readonly requirementIds: ReadonlySet<string>;
   readonly requiredByType: ReadonlyMap<string, readonly string[]>;
   readonly checker: JiraReportComplianceChecker | undefined;
@@ -141,16 +141,22 @@ function estimateOf(
   plan: JiraReportFieldPlan,
 ): number | undefined {
   // An explicit null is unestimated; a requested field Jira withholds is unreadable evidence.
+  if (plan.estimateFieldId === undefined) return undefined;
   if (!Object.hasOwn(fields, plan.estimateFieldId)) plan.omittedFields.add(plan.estimateFieldId);
   const value = fields[plan.estimateFieldId];
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 function unusableEstimate(
   fields: Record<string, unknown>,
-  fieldId: string,
+  fieldId: string | undefined,
   estimate: number | undefined,
 ): boolean {
-  return Object.hasOwn(fields, fieldId) && fields[fieldId] !== null && estimate === undefined;
+  return (
+    fieldId !== undefined &&
+    Object.hasOwn(fields, fieldId) &&
+    fields[fieldId] !== null &&
+    estimate === undefined
+  );
 }
 /** Jira returns null (or an empty collection or string) for a field without a value. */
 export function isEmptyJiraValue(value: unknown): boolean {
@@ -193,7 +199,8 @@ async function checkerDeviations(
 }
 function safeCheckerDeviation(item: JiraReportDeviation): JiraReportDeviation | undefined {
   if (!RULE_ID_PATTERN.test(item.ruleId)) return undefined;
-  const fieldId = item.fieldId !== undefined && /^\w{1,64}$/u.test(item.fieldId) ? item.fieldId : undefined;
+  const fieldId =
+    item.fieldId !== undefined && /^\w{1,64}$/u.test(item.fieldId) ? item.fieldId : undefined;
   const subject = subjectOf(item.subject);
   return {
     ruleId: item.ruleId,
@@ -234,15 +241,9 @@ function trimTrailingSeparators(token: string): string {
  * Every label the response carries: the trace a write left on the issue and the requirement ids
  * are read from them, so no count cut may hide one. The memory budget charges each label.
  */
-function labelsOf(
-  fields: Record<string, unknown>,
-  plan: JiraReportFieldPlan,
-): readonly string[] {
+function labelsOf(fields: Record<string, unknown>, plan: JiraReportFieldPlan): readonly string[] {
   const labels = asArray(fields.labels);
-  if (
-    labels === undefined ||
-    !labels.every((item): item is string => typeof item === "string")
-  ) {
+  if (!labels?.every((item): item is string => typeof item === "string")) {
     plan.omittedFields.add("labels");
     return [];
   }

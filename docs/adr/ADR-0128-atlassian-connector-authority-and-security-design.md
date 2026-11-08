@@ -1556,8 +1556,7 @@ the approval.
 `issue-tracker.read`) and the one place where Keiko, not the model, produces project numbers. For a
 project (`projectKey`), a JQL scope (`jql`) or both, the connector pages Jira's search to
 completion itself and computes, as plain arithmetic over what it read: issues per status category
-and per issue type and status name, own estimates (`timeoriginalestimate` seconds, or a numeric
-field the caller names) done/total/remaining, unassigned and overdue open issues, progress per
+and per issue type and status name, own estimates done/total/remaining, unassigned and overdue open issues, progress per
 container (an epic, or any root issue holding non-sub-task work; hierarchy comes from `parent`,
 from app-defined fields the instance lists with an opaque value shape — schema type `any`, a custom
 type, no Jira system role — whose values are issue keys on the issues read, or from caller-named
@@ -1599,6 +1598,20 @@ field list was not read, makes the report incomplete with reason `template-unrea
 compliance `checker: unavailable` instead of zero deviations), and coverage of declared `requirementIds`
 (a requirement is covered by an issue naming its identifier in summary, labels or description;
 items traced through the covering issue's descendants and, for a container, its linked issues).
+**Estimate field selection (#4321 C4, 2026-11-08).** An explicit `estimateFieldId` wins. Otherwise,
+the report reads every board of the named project and its Agile estimation configuration. One
+consistent configured field supplies the estimates; conflicting board fields are unavailable,
+never selected arbitrarily. When no board field can be established, the existing project create
+metadata supplies a numeric Story Points field actually present on the project's screens. A
+global field name alone does not establish project applicability. Conflicting screen fields,
+missing configuration, unreadable metadata or a JQL-only scope without a project produce a
+closed unavailability reason and `estimate: null`, never invented zero totals or an invented
+unestimated-issue count. Original time estimates are seconds only when explicitly selected or
+configured by the board. The summary and card name the selected field; model figures, exports
+and the report comment disclose unavailable estimates. The existing `atlassian.jira-report` line
+records `estimateSource` (`explicit-field`, `board-configuration`, `project-screen`, `unavailable`)
+and an optional closed `estimateUnavailableReason`, with no field id or display name.
+
 `requirementsFromPods: true` makes Keiko list the requirement identifiers of the Chat's
 Knowledge Pods itself (the read `knowledge.requirements` serves; stable derived `DRV-` handles are
 listed with the explicit ones, because an issue can name them in a trace footer or `keiko-req-` label

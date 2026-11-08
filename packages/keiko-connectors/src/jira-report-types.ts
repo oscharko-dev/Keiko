@@ -1,5 +1,7 @@
 import type {
   JiraReportEstimateUnit,
+  JiraReportEstimateSource,
+  JiraReportEstimateUnavailableReason,
   JiraReportFailureReason,
   JiraReportIncompleteReason,
   JiraReportStatusCategory,
@@ -72,7 +74,10 @@ export interface JiraReportComplianceChecker {
   readonly check: (
     facts: JiraReportIssueFacts,
     request?: JiraMutationRequest,
-  ) => readonly JiraReportDeviation[] | "unavailable" | Promise<readonly JiraReportDeviation[] | "unavailable">;
+  ) =>
+    | readonly JiraReportDeviation[]
+    | "unavailable"
+    | Promise<readonly JiraReportDeviation[] | "unavailable">;
   /**
    * Whether at least one template applies to the issue, so that `check` actually judged it (#4181).
    * A checker without it is taken to judge every issue.
@@ -119,7 +124,8 @@ export interface JiraReportEstimate {
 export interface JiraReportProgress extends JiraReportStatusCounts {
   /** Done issues over all issues, in percent with one decimal; 0 for an empty set. */
   readonly donePercent: number;
-  readonly estimate: JiraReportEstimate;
+  /** Null when no project estimate field could be established; never an invented zero. */
+  readonly estimate: JiraReportEstimate | null;
 }
 
 export interface JiraReportTypeProgress {
@@ -184,6 +190,9 @@ export interface JiraReportScope {
   readonly projectKey?: string;
   readonly jql: string;
   readonly estimateFieldId?: string;
+  readonly estimateFieldName?: string;
+  readonly estimateSource?: JiraReportEstimateSource;
+  readonly estimateUnavailableReason?: JiraReportEstimateUnavailableReason;
   /** Seconds of original time estimate, or the named field's own unit. */
   readonly estimateUnit: JiraReportEstimateUnit;
   /** The date overdue is judged against, in `timeZone`. */

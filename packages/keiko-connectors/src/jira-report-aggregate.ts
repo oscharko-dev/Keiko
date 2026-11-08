@@ -195,14 +195,17 @@ function estimateOf(issues: readonly JiraReportIssue[]): JiraReportEstimate {
   }
   return { total: round6(total), done: round6(done), remaining: round6(total - done), unestimated };
 }
-function progressOf(issues: readonly JiraReportIssue[]): JiraReportProgress {
+function progressOf(
+  issues: readonly JiraReportIssue[],
+  estimatesAvailable: boolean,
+): JiraReportProgress {
   const counts = emptyCounts();
   for (const issue of issues) countInto(counts, issue);
   const donePercent = counts.total === 0 ? 0 : Math.round((counts.done * 1000) / counts.total) / 10;
   return {
     ...(counts satisfies JiraReportStatusCounts),
     donePercent,
-    estimate: estimateOf(issues),
+    estimate: estimatesAvailable ? estimateOf(issues) : null,
   };
 }
 function byTypeOf(issues: readonly JiraReportIssue[]): readonly JiraReportTypeProgress[] {
@@ -248,7 +251,7 @@ function membersOf(graph: Graph, root: string): readonly JiraReportIssue[] {
 function linkedOf(graph: Graph, root: string): readonly JiraReportIssue[] {
   return graph.linkedByRoot.get(root) ?? [];
 }
-function containerOf(graph: Graph, key: string): JiraReportContainer {
+function containerOf(graph: Graph, key: string, estimatesAvailable: boolean): JiraReportContainer {
   const issue = graph.index.get(key);
   const members = membersOf(graph, key);
   const linked = linkedOf(graph, key);
@@ -259,8 +262,8 @@ function containerOf(graph: Graph, key: string): JiraReportContainer {
     statusName: issue?.statusName ?? "",
     category: issue?.category ?? "undefined",
     external: issue === undefined,
-    members: progressOf(members),
-    linked: progressOf(linked),
+    members: progressOf(members, estimatesAvailable),
+    linked: progressOf(linked, estimatesAvailable),
     byType: byTypeOf([...members, ...linked]),
   };
 }
@@ -444,14 +447,17 @@ export function buildJiraReport(input: JiraReportInput): JiraReport {
   const today = input.scope.asOf;
   const rows = issues.map((issue) => rowOf(graph, issue, today));
   const open = issues.filter((issue) => issue.category !== "done");
-  const epics = [...graph.containers].sort(compareIssueKeys).map((key) => containerOf(graph, key));
+  const estimatesAvailable = input.scope.estimateUnit !== "unavailable";
+  const epics = [...graph.containers]
+    .sort(compareIssueKeys)
+    .map((key) => containerOf(graph, key, estimatesAvailable));
   return withDigest({
     generatedAt: input.now.toISOString(),
     scope: input.scope,
     completeness: input.completeness,
     hierarchy: input.hierarchy,
     progress: {
-      project: progressOf(issues),
+      project: progressOf(issues, estimatesAvailable),
       byType: byTypeOf(issues),
       byStatus: byStatusOf(issues),
       unassigned: open.filter((issue) => !issue.assigned).length,

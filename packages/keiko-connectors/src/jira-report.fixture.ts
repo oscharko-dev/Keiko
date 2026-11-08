@@ -174,7 +174,10 @@ function rawIssue(issue: FixtureIssue, requested: ReadonlySet<string>, extra: nu
   return { id: issue.key.slice(4), key: issue.key, fields };
 }
 
-export function response(body: unknown, truncated = false): AtlassianHttpBodyResult {
+export function response(
+  body: unknown,
+  truncated = false,
+): Extract<AtlassianHttpBodyResult, { readonly kind: "response" }> {
   const bodyText = JSON.stringify(body);
   return {
     kind: "response",
@@ -305,6 +308,22 @@ function createMeta(path: string, options: FixtureOptions): AtlassianHttpBodyRes
   return response({ values: ISSUE_TYPES, isLast: true, total: ISSUE_TYPES.length });
 }
 
+function boardResponse(path: string): AtlassianHttpBodyResult | undefined {
+  if (path.endsWith("/agile/1.0/board"))
+    return response({ startAt: 0, isLast: true, values: [{ id: 7 }] });
+  if (path.endsWith("/agile/1.0/board/7/configuration"))
+    return response({
+      estimation: {
+        type: "field",
+        field: {
+          fieldId: "timeoriginalestimate",
+          displayName: "Original estimate",
+        },
+      },
+    });
+  return undefined;
+}
+
 export function fixtureJira(options: FixtureOptions): FixtureJira {
   const searches: FixtureJira["searches"] = [];
   const requests: string[] = [];
@@ -334,6 +353,8 @@ export function fixtureJira(options: FixtureOptions): FixtureJira {
     const url = new URL(request.url);
     const path = url.pathname.replace(/^.*\/rest\/api\/2\//u, "");
     requests.push(`${request.method} ${path}${url.search}`);
+    const board = boardResponse(url.pathname);
+    if (board !== undefined) return Promise.resolve(board);
     if (path === "field") {
       const status = fieldStatuses.shift();
       if (status !== undefined && status !== 200) return Promise.resolve(failure(status));

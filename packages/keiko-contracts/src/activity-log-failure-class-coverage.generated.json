@@ -2008,6 +2008,18 @@
               "required": false
             },
             {
+              "name": "estimateSource",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "estimateUnavailableReason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "failure",
               "type": "string",
               "dataClass": "closed-enum",

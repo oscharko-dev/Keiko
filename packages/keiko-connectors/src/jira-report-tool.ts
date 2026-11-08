@@ -4,6 +4,8 @@ import {
   type JiraReportFailureReason,
   type JiraReportIncompleteReason,
   type JiraReportStatus,
+  type JiraReportEstimateSource,
+  type JiraReportEstimateUnavailableReason,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
@@ -67,6 +69,8 @@ export interface JiraReportActivity {
   readonly requirementCount: number;
   /** How the parent relation was found; absent until the instance's metadata has been read. */
   readonly hierarchy?: JiraReport["hierarchy"];
+  readonly estimateSource?: JiraReportEstimateSource;
+  readonly estimateUnavailableReason?: JiraReportEstimateUnavailableReason;
   /** How many arguments a refused call named wrongly; never their values. */
   readonly invalidArgumentCount?: number;
   /** The section page a call returned: its entries, the section's size, and a byte-fit cut. */
@@ -125,6 +129,10 @@ function optionalActivity(session: JiraReportSession): Partial<JiraReportActivit
       ? {}
       : { failure: session.failure }),
     ...(total === undefined ? {} : { issuesTotal: total }),
+    estimateSource: session.scope.estimateSource ?? "unavailable",
+    ...(session.scope.estimateUnavailableReason === undefined
+      ? {}
+      : { estimateUnavailableReason: session.scope.estimateUnavailableReason }),
   };
 }
 function hierarchyActivity(session: JiraReportSession): Pick<JiraReportActivity, "hierarchy"> {
