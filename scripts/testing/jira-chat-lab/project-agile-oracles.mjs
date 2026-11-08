@@ -1,3 +1,4 @@
+import { compareStrings } from "../../lib/compare-strings.mjs";
 import assert from "node:assert/strict";
 import { URL } from "node:url";
 import { basicAuth, labRequest, labSessionConnection } from "./lab-client.mjs";
@@ -127,7 +128,10 @@ export function exactSprint(sprint, expected) {
 }
 
 export function exactMembership(issues, expectedKeys) {
-  assert.deepEqual(issues.map((issue) => issue.key).sort(), [...expectedKeys].sort());
+  assert.deepEqual(
+    issues.map((issue) => issue.key).sort(compareStrings),
+    [...expectedKeys].sort(compareStrings),
+  );
 }
 
 export function completedOperation(turn, operation, outcome = "succeeded") {

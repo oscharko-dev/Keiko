@@ -1,3 +1,4 @@
+import { compareStrings } from "../../lib/compare-strings.mjs";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { basicAuth, labRequest } from "./lab-client.mjs";
@@ -91,7 +92,8 @@ export function exactKeys(actual, expected) {
   const keys = actual.map((value) => (typeof value === "string" ? value : value.key));
   requireRoleFact(keys.every((key) => typeof key === "string"));
   requireRoleFact(
-    new Set(keys).size === keys.length && same([...keys].sort(), [...expected].sort()),
+    new Set(keys).size === keys.length &&
+      same([...keys].sort(compareStrings), [...expected].sort(compareStrings)),
   );
   return keys;
 }
@@ -120,13 +122,13 @@ export function sprintProjection(value) {
 export function exactSprint(value, expected) {
   for (const [key, wanted] of Object.entries(expected)) {
     const actual = value[key];
-    const equal = key.endsWith("Date")
-      ? Date.parse(actual) === Date.parse(wanted)
-      : key === "id" || key === "originBoardId"
-        ? nativeId(actual) === nativeId(wanted)
-        : same(actual, wanted);
-    requireRoleFact(equal);
+    requireRoleFact(sprintFieldMatches(key, actual, wanted));
   }
+}
+function sprintFieldMatches(key, actual, wanted) {
+  if (key.endsWith("Date")) return Date.parse(actual) === Date.parse(wanted);
+  if (key === "id" || key === "originBoardId") return nativeId(actual) === nativeId(wanted);
+  return same(actual, wanted);
 }
 export function exactBody(body, expected) {
   return same(body, expected);
@@ -139,11 +141,13 @@ export function effectProof(turn, operations, facts = {}, denied = false) {
 }
 const keyDigest = (keys) =>
   createHash("sha256")
-    .update([...keys].sort().join("\n"))
+    .update([...keys].sort(compareStrings).join("\n"))
     .digest("hex");
 function answerKeys(answer) {
   const visible = answer.replaceAll(/\[([^\]]+)\]\([^)]*\)/gu, "$1");
-  return [...new Set(visible.match(/\b[A-Z][A-Z0-9_]*-[1-9][0-9]*\b/gu) ?? [])].sort();
+  return [...new Set(visible.match(/\b[A-Z][A-Z0-9_]*-[1-9][0-9]*\b/gu) ?? [])].sort(
+    compareStrings,
+  );
 }
 function exactAnswer(turn, keys, numbers) {
   requireRoleFact(
@@ -152,7 +156,7 @@ function exactAnswer(turn, keys, numbers) {
     "answer",
   );
   requireRoleFact(
-    same(answerKeys(turn.answer), [...keys].sort()),
+    same(answerKeys(turn.answer), [...keys].sort(compareStrings)),
     "answer-keys-mismatch",
     "answer",
   );

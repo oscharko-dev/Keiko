@@ -1,3 +1,4 @@
+import { compareStrings } from "../../lib/compare-strings.mjs";
 import { actorDetails, basicAuth, checked, labNativeId } from "./lab-client.mjs";
 import assert from "node:assert/strict";
 import { URLSearchParams } from "node:url";
@@ -27,7 +28,7 @@ const grantKey = (value) => `${value.permission}:${value.holder.type}:${value.ho
 const normalizeGrants = (values) =>
   values
     .map((value) => grantKey(value))
-    .sort()
+    .sort(compareStrings)
     .join("|");
 
 /** A lab seeded by an earlier fixture gains new grants; anything else in its scheme is drift. */
