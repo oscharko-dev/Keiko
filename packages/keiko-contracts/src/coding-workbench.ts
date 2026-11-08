@@ -89,7 +89,7 @@ export function isWriteCapableCodingConnectorScope(
 ): value is CodingWorkbenchConnectorScope {
   return (
     typeof value === "string" &&
-    CODING_WORKBENCH_CONNECTOR_SCOPES.some((scope) => scope === value) &&
+    (CODING_WORKBENCH_CONNECTOR_SCOPES as readonly string[]).includes(value) &&
     (value.endsWith(".write") || value === "issue-tracker.admin")
   );
 }

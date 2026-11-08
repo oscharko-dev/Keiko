@@ -705,12 +705,15 @@ function purposeIntegrityReview(
   if (purpose === undefined) return review;
   return {
     required: true,
-    reviewed: review.required
-      ? review.reviewed
-      : purpose === "jira-email-template-pack"
-        ? template
-        : avatar,
+    reviewed: review.required ? review.reviewed : selectPurposePreview(purpose, template, avatar),
   };
+}
+function selectPurposePreview(
+  purpose: JiraAttachmentSourceRequest["purpose"],
+  template: JiraAttachmentPreview | undefined,
+  avatar: JiraAttachmentPreview | undefined,
+): JiraAttachmentPreview | undefined {
+  return purpose === "jira-email-template-pack" ? template : avatar;
 }
 function reviewRefusal(
   review: JiraChatAttachmentReview,

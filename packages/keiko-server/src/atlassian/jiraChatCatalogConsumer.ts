@@ -163,8 +163,10 @@ function validActionFields(action: CatalogJsonObject): boolean {
 }
 function validActionBinding(tool: string, action: CatalogJsonObject): boolean {
   const bound = jiraOperationForTool(tool) !== undefined;
+  const revisionKey = action.humanInputRevision === undefined ? "" : "humanInputRevision,";
+  const sourceKey = action.sourceDigest === undefined ? "" : "sourceDigest,";
   const keys = bound
-    ? `actionId,argumentsDigest,${action.humanInputRevision === undefined ? "" : "humanInputRevision,"}idempotencyKey,operationBinding,${action.sourceDigest === undefined ? "" : "sourceDigest,"}tool`
+    ? `actionId,argumentsDigest,${revisionKey}idempotencyKey,operationBinding,${sourceKey}tool`
     : "actionId,argumentsDigest,idempotencyKey,tool";
   return (
     Object.keys(action).sort(compareStrings).join() === keys &&

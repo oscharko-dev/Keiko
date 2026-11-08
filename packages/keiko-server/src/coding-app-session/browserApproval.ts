@@ -1,4 +1,3 @@
-import type { SessionProofObservation } from "./sessionRegistry.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { createHash, createPublicKey, randomBytes, randomInt, verify } from "node:crypto";
 import {
@@ -25,7 +24,7 @@ import {
   type BrowserApprovalRequestResult,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import type { BrowserApprovalStore, StoredBrowserApproval } from "../store/browserApprovals.js";
-import type { SessionMint, SessionRegistry } from "./sessionRegistry.js";
+import type { SessionMint, SessionProofObservation, SessionRegistry } from "./sessionRegistry.js";
 import { APP_SESSION_COOKIE_MAX_AGE_SECONDS } from "./sessionCookie.js";
 
 interface ApprovedDecision {

@@ -1,6 +1,7 @@
 // Offline implementation accounting; these facts cannot register a tool or authorize a request.
 import { existsSync, readFileSync } from "node:fs";
 import { URL } from "node:url";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import ts from "typescript";
 import { sha256 } from "./digest.mjs";
 import { requireJiraInventory as requireValid } from "./jira-api-sources.mjs";
@@ -457,8 +458,8 @@ function capabilitiesFor(ledger, registry) {
     "current-capabilities",
   );
   requireValid(
-    JSON.stringify(Object.keys(notes).sort()) ===
-      JSON.stringify(registry.entries.map((entry) => entry.tool).sort()),
+    JSON.stringify(Object.keys(notes).sort(compareStrings)) ===
+      JSON.stringify(registry.entries.map((entry) => entry.tool).sort(compareStrings)),
     "current-capability-completeness",
   );
   return Object.fromEntries(
@@ -472,7 +473,7 @@ function capabilityIds(identity, capabilities) {
   return Object.entries(capabilities)
     .filter(([, capability]) => capability.identity === identity)
     .map(([tool]) => tool)
-    .sort();
+    .sort(compareStrings);
 }
 /** Update only implementation mappings; source provenance, historical facts and qualification stay intact. */
 export function reconcileJiraImplementation(ledger, registry) {

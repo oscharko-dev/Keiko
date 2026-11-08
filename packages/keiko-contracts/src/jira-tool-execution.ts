@@ -30,7 +30,7 @@ export const JIRA_AVATAR_UPLOAD_MUTATIONS = Object.freeze([
 ] as const satisfies readonly JiraAvatarMutation[]);
 export type JiraAvatarUploadMutation = (typeof JIRA_AVATAR_UPLOAD_MUTATIONS)[number];
 export function isJiraAvatarUploadOperation(name: string): name is JiraAvatarUploadMutation {
-  return JIRA_AVATAR_UPLOAD_MUTATIONS.some((operation) => operation === name);
+  return (JIRA_AVATAR_UPLOAD_MUTATIONS as readonly string[]).includes(name);
 }
 export const JIRA_IDENTITY_MUTATIONS = Object.freeze([
   "jira.create-user",
@@ -199,7 +199,7 @@ export type JiraBoardConfigurationMutation = (typeof JIRA_BOARD_CONFIGURATION_MU
 export function isJiraBoardConfigurationMutation(
   name: string,
 ): name is JiraBoardConfigurationMutation {
-  return JIRA_BOARD_CONFIGURATION_MUTATIONS.some((operation) => operation === name);
+  return (JIRA_BOARD_CONFIGURATION_MUTATIONS as readonly string[]).includes(name);
 }
 export const JIRA_SPRINT_LIFECYCLE_MUTATIONS = Object.freeze([
   "jira.replace-sprint",
@@ -301,7 +301,7 @@ export const JIRA_PROJECT_CATEGORY_MUTATIONS = Object.freeze([
 ] as const);
 export type JiraProjectCategoryMutation = (typeof JIRA_PROJECT_CATEGORY_MUTATIONS)[number];
 export function isJiraProjectCategoryMutation(name: string): name is JiraProjectCategoryMutation {
-  return JIRA_PROJECT_CATEGORY_MUTATIONS.some((operation) => operation === name);
+  return (JIRA_PROJECT_CATEGORY_MUTATIONS as readonly string[]).includes(name);
 }
 
 export const JIRA_ANONYMIZATION_UNLOCK_MUTATIONS = Object.freeze([

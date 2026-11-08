@@ -403,7 +403,7 @@ function belongs<const Names extends readonly string[]>(
   names: Names,
   tool: string,
 ): tool is Names[number] {
-  return names.some((name) => name === tool);
+  return (names as readonly string[]).includes(tool);
 }
 // A family claims only its exact code-owned names; unmatched tools fall through to the next one.
 function family<const Names extends readonly string[]>(

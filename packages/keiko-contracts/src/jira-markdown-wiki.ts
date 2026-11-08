@@ -20,7 +20,16 @@ const TABLE_ROW = /^\s*\|.*\|\s*$/u;
 const TABLE_RULE_CELL = /^:?-{3,}:?$/u;
 const WIKI_HEADING = /^h[1-6]\.\s/u;
 const QUOTED = /^ {0,3}>/u;
-const BLOCK_START = /^(?: {0,3}(?:>|[-*+_]{1,}[ \t]|`{3}|~{3})|[ \t]*\d{1,9}[.)][ \t]|\s*\|)/u;
+const BLOCK_START_PREFIXED = /^ {0,3}(?:>|[-*+_]+[ \t]|`{3}|~{3})/u;
+const BLOCK_START_ORDERED = /^[ \t]*\d{1,9}[.)][ \t]/u;
+const BLOCK_START_TABLE = /^\s*\|/u;
+function startsBlock(line: string): boolean {
+  return (
+    BLOCK_START_PREFIXED.test(line) ||
+    BLOCK_START_ORDERED.test(line) ||
+    BLOCK_START_TABLE.test(line)
+  );
+}
 const STRONG_OPEN = "";
 const STRONG_CLOSE = "";
 
@@ -96,7 +105,7 @@ function proseInline(text: string): string {
  */
 function monospace(code: string, tableCell: boolean): string {
   // In a table cell Markdown writes a pipe inside code as `\|`; the span escapes it once itself.
-  const literal = tableCell ? code.replaceAll("\\|", "|") : code;
+  const literal = tableCell ? code.replaceAll(String.raw`\|`, "|") : code;
   const escaped = literal.replaceAll(/[{}[\]~!|]/gu, (character) => "\\" + character);
   return `{{${escaped}}}`;
 }
@@ -195,7 +204,7 @@ function hardBreakBody(line: string): string | undefined {
 /** A hard break joins two lines of one paragraph; a wiki `\\\\` keeps the break. */
 function proseLine(line: string, next: string | undefined): string {
   const body = hardBreakBody(line);
-  const continues = next !== undefined && next.trim() !== "" && !BLOCK_START.test(next);
+  const continues = next !== undefined && next.trim() !== "" && !startsBlock(next);
   if (body === undefined || !continues || body.trim() === "") return markdownInlineToJiraWiki(line);
   return `${markdownInlineToJiraWiki(body)}\\\\`;
 }

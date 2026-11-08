@@ -4,6 +4,7 @@ import {
   type JiraHumanInputCustody,
   type AtlassianCredentialMetadata,
 } from "@oscharko-dev/keiko-connectors";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import type { Chat, ChatMessage, ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   JIRA_HUMAN_INPUT_MAX_BYTES,
@@ -26,19 +27,16 @@ interface OwnedInput {
   readonly requestId: string;
   readonly codingPublish?: (view: JiraHumanInputView) => void;
 }
+function failureMessage(status: number): string {
+  if (status === 404) return "The private Jira input request is not available.";
+  if (status === 400) return "Provide exactly the requested fields for the current input revision.";
+  return "The Jira input request changed or expired. Refresh its state before continuing.";
+}
 function failure(ctx: RouteContext, status: number): RouteResult {
   return {
     status,
     headers: NO_STORE,
-    body: errorBody(
-      "JIRA_HUMAN_INPUT_UNAVAILABLE",
-      status === 404
-        ? "The private Jira input request is not available."
-        : status === 400
-          ? "Provide exactly the requested fields for the current input revision."
-          : "The Jira input request changed or expired. Refresh its state before continuing.",
-      ctx.correlationId,
-    ),
+    body: errorBody("JIRA_HUMAN_INPUT_UNAVAILABLE", failureMessage(status), ctx.correlationId),
   };
 }
 function requestId(ctx: RouteContext): string | undefined {
@@ -192,7 +190,7 @@ async function submitInput(
   );
   if (body.kind === "rejected") return { ...body.response, headers: NO_STORE };
   if (
-    Object.keys(body.value).sort().join() !== "expectedRevision,values" ||
+    Object.keys(body.value).sort(compareStrings).join() !== "expectedRevision,values" ||
     typeof body.value.expectedRevision !== "string"
   )
     return failure(ctx, 400);

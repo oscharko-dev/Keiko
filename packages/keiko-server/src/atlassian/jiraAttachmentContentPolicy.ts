@@ -546,6 +546,13 @@ export async function admitAttachmentContent(input: {
 
 /** The fixed avatar port accepts only PNG/JPEG after the existing full content admission.
  * Signature recognition alone never grants egress or implies valid decoded pixel content. */
+function rasterMimeType(
+  bytes: Parameters<typeof startsWith>[0],
+): "image/png" | "image/jpeg" | undefined {
+  if (startsWith(bytes, PNG)) return "image/png";
+  return startsWith(bytes, JPEG) ? "image/jpeg" : undefined;
+}
+
 export async function admitJiraAvatarImage(
   input: Parameters<typeof admitAttachmentContent>[0],
 ): Promise<
@@ -555,11 +562,7 @@ export async function admitJiraAvatarImage(
       readonly mimeType: "image/png" | "image/jpeg";
     }
 > {
-  const mimeType = startsWith(input.bytes, PNG)
-    ? "image/png"
-    : startsWith(input.bytes, JPEG)
-      ? "image/jpeg"
-      : undefined;
+  const mimeType = rasterMimeType(input.bytes);
   if (mimeType === undefined) return UNSCANNABLE;
   const admitted = await admitAttachmentContent(input);
   if (!admitted.ok) return admitted;

@@ -31,8 +31,7 @@ function shareScope(permissions: readonly unknown[] | undefined): string {
   if (permissions === undefined) return "unknown";
   return permissions.length === 0 ? "private" : "shared";
 }
-function filterDescription(value: unknown): string | null | undefined {
-  const description = value ?? null;
+function filterDescription(description: unknown = null): string | null | undefined {
   if (description === null) return null;
   return typeof description === "string" &&
     description.length <= 32768 &&

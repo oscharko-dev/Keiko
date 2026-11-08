@@ -228,7 +228,7 @@ function pendingState(
 ): PendingCodingJiraInput {
   const contract = jiraOperationForTool(input.operation);
   if (contract === undefined) return refuse();
-  const mutation = JIRA_MUTATION_OPERATIONS.some((name) => name === input.operation);
+  const mutation = (JIRA_MUTATION_OPERATIONS as readonly string[]).includes(input.operation);
   const started = {
     kind: "started" as const,
     call: {

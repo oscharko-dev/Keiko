@@ -1,4 +1,5 @@
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import type { CodingJiraPodBinding } from "./codingJiraPodBinding.js";
 import type {
   CodingWorkbenchMode,
@@ -87,7 +88,7 @@ export function codingRuntimeStartConfirmationClaim(
         ...(facts.jiraPod === undefined ? {} : { jiraPod: facts.jiraPod }),
         ...(facts.connectorScopes === undefined
           ? {}
-          : { connectorScopes: [...new Set(facts.connectorScopes)].sort() }),
+          : { connectorScopes: [...new Set(facts.connectorScopes)].sort(compareStrings) }),
         project: { id: facts.projectId, digest: facts.projectDigest },
         ...(facts.repositoryIdentity === undefined
           ? {}

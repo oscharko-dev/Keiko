@@ -82,7 +82,7 @@ function own(value: object, key: PropertyKey): unknown {
 function id(value: unknown): value is string {
   return (
     typeof value === "string" &&
-    /^[1-9][0-9]{0,18}$/u.test(value) &&
+    /^[1-9]\d{0,18}$/u.test(value) &&
     BigInt(value) <= 9223372036854775807n
   );
 }
@@ -97,7 +97,8 @@ function arrayShape(value: unknown, max: number): value is readonly unknown[] {
     Reflect.ownKeys(value).length === value.length + 1
   );
 }
-function strings(value: unknown, kind: "projectIds" | "projectKeys" | "columnIds"): boolean {
+type StringsKind = "projectIds" | "projectKeys" | "columnIds";
+function strings(value: unknown, kind: StringsKind): boolean {
   if (!arrayShape(value, kind === "columnIds" ? TOOL_CATALOG_LIMITS.maxArrayItems : 50))
     return false;
   if (kind === "columnIds" && value.length === 0) return false;

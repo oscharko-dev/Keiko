@@ -91,15 +91,15 @@ function deletion(priority: boolean): JiraNativeDefinition {
     true,
   );
 }
+function associationProjects(
+  change: "add" | "replace" | "clear" | "remove",
+): typeof PROJECTS & { readonly minItems?: number; readonly maxItems?: number } {
+  if (change === "remove") return { ...PROJECTS, minItems: 1, maxItems: 1 };
+  if (change === "clear") return { ...PROJECTS, maxItems: 0 };
+  return change === "add" ? { ...PROJECTS, minItems: 1 } : PROJECTS;
+}
 function association(change: "add" | "replace" | "clear" | "remove"): JiraNativeDefinition {
-  const projects =
-    change === "remove"
-      ? { ...PROJECTS, minItems: 1, maxItems: 1 }
-      : change === "clear"
-        ? { ...PROJECTS, maxItems: 0 }
-        : change === "add"
-          ? { ...PROJECTS, minItems: 1 }
-          : PROJECTS;
+  const projects = associationProjects(change);
   return write(
     `Change issue-type scheme associations: ${change}. POST add appends, PUT replace overwrites every association (explicit [] clears), DELETE clear removes all, DELETE remove selects exactly one numeric bound project ID. Every current and selected project ID/key/name must still match independent project reads. Compare complete native scheme association configuration before and after; absent collection is unavailable, never []. Removed projects revert to the global/default scheme. These observations do not prove complete issue population or default-scheme effects, so all four association operations remain acknowledged-unconfirmed. No inferred migration, arbitrary project path or actor-visible issue search is used as population proof.`,
     object(

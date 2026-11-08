@@ -288,7 +288,7 @@ function collaborationOperation(
 function int64Identity(value: unknown): value is string {
   return (
     typeof value === "string" &&
-    /^[1-9][0-9]{0,18}$/u.test(value) &&
+    /^[1-9]\d{0,18}$/u.test(value) &&
     BigInt(value) <= 9223372036854775807n
   );
 }
@@ -312,7 +312,7 @@ function validStructureReceipt(
   );
 }
 function issueKey(value: unknown): value is string {
-  return typeof value === "string" && /^[A-Z][A-Z0-9_]{0,31}-[1-9][0-9]{0,15}$/u.test(value);
+  return typeof value === "string" && /^[A-Z][A-Z0-9_]{0,31}-[1-9]\d{0,15}$/u.test(value);
 }
 function validCollaborationReceipt(
   receipt: JiraMutationReceipt,
@@ -342,7 +342,7 @@ function agileReceiptValue(key: string, value: unknown): boolean {
   if (key === "epicKey") return issueKey(value);
   return (
     typeof value === "string" &&
-    /^[1-9][0-9]{0,15}$/u.test(value) &&
+    /^[1-9]\d{0,15}$/u.test(value) &&
     Number.isSafeInteger(Number(value))
   );
 }
@@ -405,7 +405,7 @@ function validProjectReceipt(receipt: JiraMutationReceipt): boolean {
   if (
     !isSafeAtlassianIdentifier(receipt.projectKey) ||
     typeof receipt.projectId !== "string" ||
-    !/^[0-9]{1,32}$/u.test(receipt.projectId)
+    !/^\d{1,32}$/u.test(receipt.projectId)
   )
     return false;
   return Object.entries(receipt).every(([key, value]) => {

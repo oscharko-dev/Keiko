@@ -1073,24 +1073,22 @@ export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
   "add-page-comment": "confluence",
 } as const satisfies Readonly<Record<AtlassianConnectorActionType, AtlassianConnectorProvider>>);
 
+function issueTrackerAccess(
+  actionClass: (typeof ATLASSIAN_CONNECTOR_ACTION_CLASS)[AtlassianConnectorActionType],
+): "admin" | "write" | "read" {
+  if (actionClass === "connector-admin") return "admin";
+  return actionClass === "connector-write" ? "write" : "read";
+}
+
 export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchConnectorScope>
 > = Object.freeze({
   ...jiraActionValues(ATLASSIAN_CONNECTOR_ACTION_TYPES, (action): CodingWorkbenchConnectorScope => {
-    const provider =
-      ATLASSIAN_CONNECTOR_ACTION_PROVIDER[action] === "jira" ? "issue-tracker" : "knowledge-base";
     const actionClass = ATLASSIAN_CONNECTOR_ACTION_CLASS[action];
-    const access =
-      actionClass === "connector-admin"
-        ? "admin"
-        : actionClass === "connector-write"
-          ? "write"
-          : "read";
-    return provider === "knowledge-base"
-      ? actionClass === "connector-access"
-        ? "knowledge-base.read"
-        : "knowledge-base.write"
-      : `issue-tracker.${access}`;
+    if (ATLASSIAN_CONNECTOR_ACTION_PROVIDER[action] !== "jira") {
+      return actionClass === "connector-access" ? "knowledge-base.read" : "knowledge-base.write";
+    }
+    return `issue-tracker.${issueTrackerAccess(actionClass)}`;
   }),
 } as const satisfies Readonly<Record<AtlassianConnectorActionType, CodingWorkbenchConnectorScope>>);
 

@@ -135,7 +135,7 @@ function alignedIssues(
 function rankField(value: unknown): boolean {
   return (
     typeof value === "string" &&
-    /^customfield_[1-9][0-9]{0,15}$/u.test(value) &&
+    /^customfield_[1-9]\d{0,15}$/u.test(value) &&
     Number.isSafeInteger(Number(value.slice("customfield_".length)))
   );
 }

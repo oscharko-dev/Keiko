@@ -1,4 +1,5 @@
 import type { CodingWorkbenchConnectorScope } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import {
   prepareCodingJiraHumanInput,
   currentCodingJiraInput,
@@ -259,6 +260,14 @@ function providerResult(error: unknown): CatalogJsonObject | undefined {
   return error instanceof ManagedMcpError ? error.structuredResult : undefined;
 }
 
+function failureReason(
+  scopeMissing: boolean,
+  provider: CatalogJsonObject | undefined,
+): "scope-missing" | "internal" | "tool-failed" {
+  if (scopeMissing) return "scope-missing";
+  return provider === undefined ? "internal" : "tool-failed";
+}
+
 /** The existing failed-call observation and capture boundary, shared by the call's catch. */
 function recordJiraCallFailure(
   log: ServerLogSink | undefined,
@@ -272,7 +281,7 @@ function recordJiraCallFailure(
   recordCodingJiraPod(log, context.correlationId, {
     ...line,
     outcome: "failed",
-    reason: scopeMissing ? "scope-missing" : provider === undefined ? "internal" : "tool-failed",
+    reason: failureReason(scopeMissing, provider),
     ...linkLineCounts(provider),
     durationMs: Date.now() - started,
     ...(provider === undefined ? { error } : {}),
@@ -419,7 +428,7 @@ class CodingJiraPodService implements CodingJiraPods {
     scopes: readonly CodingWorkbenchConnectorScope[],
   ): PodEntry {
     if (this.#closed || authority.signal?.aborted === true) throw NOT_ADMITTED();
-    const key = `${this.key(binding)}:${authority.runId}:${[...scopes].sort().join(",")}`;
+    const key = `${this.key(binding)}:${authority.runId}:${[...scopes].sort(compareStrings).join(",")}`;
     const existing = this.#entries.get(key);
     if (existing !== undefined && !existing.lifetime.signal.aborted) return existing;
     if (existing !== undefined) {

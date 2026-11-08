@@ -1,4 +1,3 @@
-import type { SessionProofObservation, SessionProofRefusalReason } from "./sessionRegistry.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 // The authenticated local app-session channel primitive (ADR-0141 D2, D3, D6).
 //
@@ -20,7 +19,13 @@ import {
   isWellFormedSessionPairingAttestation,
   type SessionPairingPort,
 } from "./sessionPairingPort.js";
-import type { AppSession, SessionMint, SessionRegistry } from "./sessionRegistry.js";
+import type {
+  AppSession,
+  SessionMint,
+  SessionProofObservation,
+  SessionProofRefusalReason,
+  SessionRegistry,
+} from "./sessionRegistry.js";
 import type { BrowserApprovalService } from "./browserApproval.js";
 import {
   contentFreeErrorClass,
@@ -188,9 +193,10 @@ function subscribeToContent(
   listener: (snapshot: CodingAppSessionChannelSnapshot) => boolean,
   admission: LiveSubscriptionAdmission,
   diagnostics: ServerDiagnosticSink | undefined,
-  deferAdmissionReleaseOnBackpressure: boolean,
-  observation: SessionProofObservation,
+  options: Parameters<CodingAppSessionChannel["subscribe"]>[2],
 ): ReturnType<CodingAppSessionChannel["subscribe"]> {
+  const observation = options?.observation ?? {};
+  const deferAdmissionReleaseOnBackpressure = options?.deferAdmissionReleaseOnBackpressure ?? false;
   const session = registry.verify(cookieToken, observation);
   const snapshot =
     session === undefined
@@ -531,8 +537,7 @@ export function createCodingAppSessionChannel(
         listener,
         admission,
         diagnostics,
-        options?.deferAdmissionReleaseOnBackpressure ?? false,
-        options?.observation ?? {},
+        options,
       ),
   };
 }

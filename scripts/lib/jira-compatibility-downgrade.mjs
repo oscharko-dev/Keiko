@@ -33,7 +33,9 @@ function downgradeRecords(records) {
     if (pod?.verificationInProgress || pod?.credentialOperation !== undefined)
       throw new Error("operation-pending");
     if (pod?.compatibility === undefined) continue;
-    const { compatibility: _observation, ...legacyPod } = pod;
+    const legacyPod = Object.fromEntries(
+      Object.entries(pod).filter(([key]) => key !== "compatibility"),
+    );
     changes.push({
       ...record,
       generation: nextCounter(record.generation),

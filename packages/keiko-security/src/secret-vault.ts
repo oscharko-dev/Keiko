@@ -1246,6 +1246,33 @@ function replaceAllShards(
  * `list` reads only filenames and never decrypts, which is what lets a caller reconcile stored
  * bodies against its own index.
  */
+
+type VaultGuard = <T>(operation: () => T) => T;
+
+function guardedSetMany(
+  guarded: VaultGuard,
+  sink: SecurityLogSink | undefined,
+  next: ReadonlyMap<string, string>,
+  merge: (entries: ReadonlyMap<string, string>) => void,
+): void {
+  setManyWithLog(sink, next, (entries) => {
+    guarded(() => {
+      merge(entries);
+    });
+  });
+}
+
+function guardedDeleteMany(
+  guarded: VaultGuard,
+  sink: SecurityLogSink | undefined,
+  references: readonly string[],
+  remove: () => void,
+): void {
+  deleteManyWithLog(sink, references, () => {
+    guarded(remove);
+  });
+}
+
 export function createShardedLocalSecretVault(deps: ShardedLocalSecretVaultDeps): LocalSecretVault {
   const { key, sink } = deps;
   const storeDir = resolve(deps.storeDir);
@@ -1267,16 +1294,14 @@ export function createShardedLocalSecretVault(deps: ShardedLocalSecretVaultDeps)
       writeShard(storeDir, requiredShardPath(storeDir, reference), sealString(key, secret), sink);
     },
     setMany: (next): void => {
-      setManyWithLog(sink, next, (entries) => {
-        guarded(() => {
-          mergeShardEntries(
-            storeDir,
-            (reference) => requiredShardPath(storeDir, reference),
-            key,
-            entries,
-            sink,
-          );
-        });
+      guardedSetMany(guarded, sink, next, (entries) => {
+        mergeShardEntries(
+          storeDir,
+          (reference) => requiredShardPath(storeDir, reference),
+          key,
+          entries,
+          sink,
+        );
       });
     },
     replaceAll: (next): void => {
@@ -1286,10 +1311,8 @@ export function createShardedLocalSecretVault(deps: ShardedLocalSecretVaultDeps)
       removeShard(storeDir, reference);
     },
     deleteMany: (references): void => {
-      deleteManyWithLog(sink, references, () => {
-        guarded(() => {
-          deleteShardEntries(storeDir, references);
-        });
+      guardedDeleteMany(guarded, sink, references, () => {
+        deleteShardEntries(storeDir, references);
       });
     },
     has: (reference): boolean => envelopeFor(reference) !== undefined,
@@ -1311,10 +1334,8 @@ export function createLocalSecretVault(deps: LocalSecretVaultDeps): LocalSecretV
       mergeStoreEntries(resolvedStorePath, key, new Map([[reference, secret]]), sink);
     },
     setMany: (next): void => {
-      setManyWithLog(sink, next, (entries) => {
-        guarded(() => {
-          mergeStoreEntries(resolvedStorePath, key, entries, sink);
-        });
+      guardedSetMany(guarded, sink, next, (entries) => {
+        mergeStoreEntries(resolvedStorePath, key, entries, sink);
       });
     },
     replaceAll: (next): void => {
@@ -1324,10 +1345,8 @@ export function createLocalSecretVault(deps: LocalSecretVaultDeps): LocalSecretV
       deleteStoreEntry(resolvedStorePath, reference, sink);
     },
     deleteMany: (references): void => {
-      deleteManyWithLog(sink, references, () => {
-        guarded(() => {
-          deleteStoreEntries(resolvedStorePath, references, sink);
-        });
+      guardedDeleteMany(guarded, sink, references, () => {
+        deleteStoreEntries(resolvedStorePath, references, sink);
       });
     },
     has: (reference): boolean => reference in readStore(resolvedStorePath),
