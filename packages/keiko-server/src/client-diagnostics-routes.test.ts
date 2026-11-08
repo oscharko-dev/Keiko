@@ -1659,6 +1659,10 @@ describe("POST /api/diagnostics/client", () => {
       deliveryState: "unobserved",
     },
     { interaction: "delivery-step-shown", deliveryStep: "journey", deliveryState: "stale" },
+    // #4068: where a mounted Workbench window took its repository from, never the path.
+    { interaction: "repository-resolved", repositorySource: "window" },
+    { interaction: "repository-resolved", repositorySource: "shell" },
+    { interaction: "repository-resolved", repositorySource: "none" },
   ])("persists the Coding Workbench interaction $interaction at info", async (interaction) => {
     const sink = captureServerLog();
     const body = JSON.stringify({
@@ -1703,6 +1707,9 @@ describe("POST /api/diagnostics/client", () => {
     { interaction: "notice-held" },
     { interaction: "notice-held", notice: "Activity not connected." },
     { interaction: "notice-held", notice: "skills", fileCount: 1 },
+    { interaction: "repository-resolved" },
+    { interaction: "repository-resolved", repositorySource: "/repos/synthetic-repository" },
+    { interaction: "repository-resolved", repositorySource: "window", repositoryPath: "/repos/a" },
     { interaction: "delivery-step-shown" },
     { interaction: "delivery-step-shown", deliveryStep: "journey" },
     { interaction: "delivery-step-shown", deliveryStep: "journey", deliveryState: "ready" },

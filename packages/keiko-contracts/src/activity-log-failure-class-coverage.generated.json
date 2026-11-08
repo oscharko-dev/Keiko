@@ -6109,6 +6109,12 @@
               "required": false
             },
             {
+              "name": "repositorySource",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "section",
               "type": "string",
               "dataClass": "closed-enum",

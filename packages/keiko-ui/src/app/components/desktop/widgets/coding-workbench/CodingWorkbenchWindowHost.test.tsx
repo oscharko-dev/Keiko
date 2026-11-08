@@ -42,6 +42,13 @@ vi.mock("@/lib/client-diagnostics", () => ({
   },
 }));
 
+// The routine mount report (#4068) is observed on its own; the #A pins below keep proving that a
+// repository or branch pick reports nothing.
+const repositoryResolved = vi.hoisted(() => vi.fn<(source: string) => void>());
+vi.mock("@/lib/coding-workbench-interaction", () => ({
+  reportCodingWorkbenchRepositoryResolved: repositoryResolved,
+}));
+
 function contextFixture(overrides: Partial<WindowRenderContext> = {}): WindowRenderContext {
   return {
     windowId: "window-1",
@@ -318,6 +325,54 @@ describe("CodingWorkbenchWindowHost", () => {
       descriptionPrNumber: 42,
       descriptionProposalId: "proposal-1",
       descriptionSnapshotDigest: "d".repeat(64),
+    });
+  });
+
+  describe("repository source report (#4068)", () => {
+    const binding: WorkspaceBinding = {
+      schemaVersion: "1",
+      workspaceId: "ws-bound",
+      taskId: "task-bound",
+      activeRoot: "/repos/bound",
+      boundSurfaces: [],
+      gitDeliveryRoot: "/repos/bound",
+      editorProjectRoot: "/repos/bound",
+    };
+
+    it.each([
+      ["window", { repositoryPath: "/repos/cfg" }, { selectedRoot: "/repos/shared" }],
+      ["shell", {}, { selectedRoot: "/repos/shared" }],
+      ["none", {}, { selectedRoot: "/repos/shared", activeBinding: binding }],
+    ] as const)("reports %s once when the window mounts", (source, cfg, overrides) => {
+      repositoryResolved.mockClear();
+      renderHost(cfg, overrides);
+      expect(repositoryResolved.mock.calls).toEqual([[source]]);
+    });
+
+    it("waits for the shell's folder and then reports once, not for later changes", () => {
+      repositoryResolved.mockClear();
+      const context = contextFixture({ selectedRoot: null });
+      const view = render(<CodingWorkbenchWindowHost cfg={{}} context={context} />);
+      expect(repositoryResolved).not.toHaveBeenCalled();
+
+      view.rerender(
+        <CodingWorkbenchWindowHost cfg={{}} context={{ ...context, selectedRoot: "/repos/a" }} />,
+      );
+      view.rerender(
+        <CodingWorkbenchWindowHost
+          cfg={{ repositoryPath: "/repos/picked" }}
+          context={{ ...context, selectedRoot: "/repos/b" }}
+        />,
+      );
+
+      expect(repositoryResolved.mock.calls).toEqual([["shell"]]);
+    });
+
+    it("reports nothing for a repository the person picks", () => {
+      repositoryResolved.mockClear();
+      renderHost({ repositoryPath: "/repos/cfg" });
+      windowRendered.mock.calls.at(-1)?.[0]?.onSelectRepository?.("/repos/newly-bound");
+      expect(repositoryResolved.mock.calls).toEqual([["window"]]);
     });
   });
 });

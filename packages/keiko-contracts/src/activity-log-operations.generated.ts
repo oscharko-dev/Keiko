@@ -5349,6 +5349,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "diff-windowed",
           "notice-held",
           "delivery-step-shown",
+          "repository-resolved",
         ],
       },
       section: {
@@ -5477,6 +5478,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "completed",
           "cancelled",
         ],
+      },
+      repositorySource: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["window", "shell", "none"],
       },
     },
     causal: "correlation",

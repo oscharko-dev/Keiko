@@ -1,6 +1,8 @@
 "use client";
 
-import { useRef, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
+import type { ClientCodingWorkbenchRepositorySource } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import { reportCodingWorkbenchRepositoryResolved } from "@/lib/coding-workbench-interaction";
 import type { WindowCfgRecord, WindowRenderContext } from "../../windows/WindowsRegistry";
 import { CodingWorkbenchWindow, type CodingWorkbenchGitTarget } from "./CodingWorkbenchWindow";
 import type { WorkbenchExecutionLocation } from "./CodingWorkbenchRepositorySelector";
@@ -87,6 +89,29 @@ function useShellSeedRoot(context: WindowRenderContext): string | null | undefin
   return seed.current?.root;
 }
 
+function repositorySourceOf(
+  cfgRoot: string | undefined,
+  seedRoot: string | null | undefined,
+): ClientCodingWorkbenchRepositorySource | undefined {
+  if (cfgRoot !== undefined) return "window";
+  if (seedRoot === undefined) return undefined;
+  return seedRoot === null ? "none" : "shell";
+}
+
+// #4068: record once per mounted window where its repository came from, as soon as that is
+// settled. A restored window that silently fell back to the shell's folder was the gap that kept a
+// wrong-repository start unexplained; later picks are the person's own and are not reported.
+function useRepositorySourceReport(
+  source: ClientCodingWorkbenchRepositorySource | undefined,
+): void {
+  const reported = useRef(false);
+  useEffect(() => {
+    if (reported.current || source === undefined) return;
+    reported.current = true;
+    reportCodingWorkbenchRepositoryResolved(source);
+  }, [source]);
+}
+
 /** Keep feature navigation inside the Workbench's existing observed lazy-load boundary. */
 export function CodingWorkbenchWindowHost({
   cfg,
@@ -98,6 +123,7 @@ export function CodingWorkbenchWindowHost({
   const cfgRoot = typeof cfg.repositoryPath === "string" ? cfg.repositoryPath : undefined;
   const seedRoot = useShellSeedRoot(context);
   const root = cfgRoot ?? seedRoot;
+  useRepositorySourceReport(repositorySourceOf(cfgRoot, seedRoot));
   const historySelection =
     typeof cfg.historySelection === "string" ? cfg.historySelection : undefined;
   const restoringHistory = isHistoryRestore(historySelection);

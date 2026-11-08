@@ -1136,7 +1136,10 @@ run status sentence, and holds its secondary notices until it is paired; each ho
 `deliveryStep` (`delivery-review`, `stage-review`, `unstage-review`, `commit-review`,
 `commit-result`, `draft-delivery`, `ci-readiness`, `journey`) and only that step's closed
 `deliveryState` (a review's load state, a commit status, a delivery phase, a CI or journey state;
-never a head or tree digest; #4271). These were warn/unknown
+never a head or tree digest; #4271). Once per mounted window, `repository-resolved` records where
+its repository came from with the closed `repositorySource`: `window` (its own saved selection,
+which the layout retains with its branch and location), `shell` (the folder the shell held) or
+`none` (an active task binding met it first); never the path (#4068). These were warn/unknown
 `client.diagnostic` notes before and buried the rare real browser failures. The server side of
 that bridge records each registration on `editor.agent.bridge-registration` (`registered`,
 `refreshed`, `rotated`, or `refused` at warn with the closed root-boundary reason or

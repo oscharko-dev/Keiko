@@ -305,6 +305,49 @@ describe("workspace-persistence", () => {
     expect(rejected[0]?.cfg).toEqual({ projectPath: "/other" });
   });
 
+  // #3563 made the Coding Workbench remember the repository a person chose, so the window reopens
+  // on it. The sanitizer had no `coding` keys and dropped that choice on every save and reload: a
+  // restored Workbench fell back to whatever folder the shell held, which in the customer-shape
+  // qualification was sometimes the Yarn project instead of the provisioned repository.
+  it("retains the Coding Workbench's own repository, branch and location across a reload", () => {
+    const cfg = {
+      repositoryPath: "/repos/synthetic-repository",
+      targetBranch: "feature/review",
+      targetBranchRoot: "/repos/synthetic-repository",
+      executionLocation: "worktree",
+    };
+    const retained = parsePersistedWindows(
+      JSON.stringify([win({ id: "workbench", type: "coding", cfg })]),
+    );
+    expect(retained?.[0]?.cfg).toEqual(cfg);
+  });
+
+  it("drops a Coding Workbench selection that is not a bounded, secret-free value", () => {
+    const secretRoot = `/repos/ghp_${"a".repeat(36)}`;
+    expect(isSecretShapedString(secretRoot)).toBe(true);
+    const rejected: readonly Record<string, unknown>[] = [
+      { repositoryPath: "" },
+      { repositoryPath: "   " },
+      { repositoryPath: 42 },
+      { repositoryPath: `/${"r".repeat(4_096)}` },
+      { repositoryPath: secretRoot },
+      { targetBranch: "" },
+      { targetBranch: `refs/${"b".repeat(1_024)}` },
+      { targetBranchRoot: secretRoot },
+      { executionLocation: "remote" },
+      { executionLocation: true },
+      // A pending Coding History hand-off is consumed once by the mounted window; replaying it
+      // after a reload would reopen a task nobody asked for.
+      { historySelection: "task:1" },
+    ];
+    for (const cfg of rejected) {
+      const sanitized = sanitizePersistedWindows([
+        { ...win({ id: "workbench", type: "coding" }), cfg },
+      ]);
+      expect(sanitized[0]?.cfg).toEqual({});
+    }
+  });
+
   // Epic #3384 live-flow defect (#3401 "Review description"): the governed pull request window is
   // opened with the exact server-held retained description proposal in its cfg, but the persistence
   // whitelist only knew `projectPath`/`headBranchName`, so one desktop reload silently dropped the

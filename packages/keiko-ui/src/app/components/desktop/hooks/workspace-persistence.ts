@@ -123,6 +123,10 @@ const INTERNAL_CFG_KEYS: Readonly<Partial<Record<WindowType, readonly string[]>>
   // The Coding Workbench can explicitly open the user-selected repository rather than an active
   // task worktree. Retain only this closed marker, never an arbitrary binding instruction.
   governedGit: ["rootBinding"],
+  // #3563: the Coding Workbench reopens on the repository, branch and location a person chose for
+  // it. Without these keys a restored window fell back to whatever folder the shell held. A pending
+  // Coding History hand-off (`historySelection`) is consumed once and deliberately not retained.
+  coding: ["repositoryPath", "targetBranch", "targetBranchRoot", "executionLocation"],
   // Epic #3384 (#3401 "Review description"): the governed pull request window carries the exact
   // server-held retained description proposal it must review. Each key has a closed value shape
   // (owner/repo, positive integer, opaque reference, sha256 digest) so a reload restores the same
@@ -193,6 +197,30 @@ function sanitizeChatCreationRequestId(value: unknown): AppWindow["cfg"][string]
   return isDesktopChatCreationRequestId(value) && !isSecretShapedString(value) ? value : undefined;
 }
 
+const MAX_CODING_ROOT_LENGTH = 1_024;
+const MAX_CODING_BRANCH_LENGTH = 256;
+
+// A Workbench selection is restored only as the exact value it was chosen as: a padded, oversized
+// or secret-shaped value is dropped rather than redacted, because a placeholder root or branch
+// would be offered to the person as if it were real.
+function boundedSecretFreeText(value: unknown, maxLength: number): AppWindow["cfg"][string] {
+  if (typeof value !== "string" || value.length === 0 || value.length > maxLength) return undefined;
+  if (value.trim() !== value || isSecretShapedString(value)) return undefined;
+  return value;
+}
+
+function sanitizeCodingRoot(value: unknown): AppWindow["cfg"][string] {
+  return boundedSecretFreeText(value, MAX_CODING_ROOT_LENGTH);
+}
+
+function sanitizeCodingBranch(value: unknown): AppWindow["cfg"][string] {
+  return boundedSecretFreeText(value, MAX_CODING_BRANCH_LENGTH);
+}
+
+function sanitizeCodingExecutionLocation(value: unknown): AppWindow["cfg"][string] {
+  return value === "local" || value === "worktree" ? value : undefined;
+}
+
 const CLOSED_CONFIG_VALUE_SANITIZERS: Readonly<Record<string, ClosedConfigValueSanitizer>> = {
   "governedGit:rootBinding": sanitizeCodingRepositoryBinding,
   "files:rootBinding": sanitizeCodingRepositoryBinding,
@@ -204,6 +232,10 @@ const CLOSED_CONFIG_VALUE_SANITIZERS: Readonly<Record<string, ClosedConfigValueS
   [`chat:${CHAT_ID_FINGERPRINT_CFG_KEY}`]: sanitizeSha256Digest,
   [`chat:${CHAT_ID_CHOSEN_CFG_KEY}`]: sanitizeSetMarker,
   "chat:newChatRequestId": sanitizeChatCreationRequestId,
+  "coding:repositoryPath": sanitizeCodingRoot,
+  "coding:targetBranch": sanitizeCodingBranch,
+  "coding:targetBranchRoot": sanitizeCodingRoot,
+  "coding:executionLocation": sanitizeCodingExecutionLocation,
 };
 
 function isFiniteNumber(value: unknown): value is number {

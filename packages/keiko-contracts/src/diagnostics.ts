@@ -2217,6 +2217,9 @@ export const CLIENT_CODING_WORKBENCH_INTERACTIONS = [
   // draft delivery's phase, the CI readiness or the journey outcome. These were warn/unknown
   // `client.diagnostic` sentences before (#4271). The step and its closed state only.
   "delivery-step-shown",
+  // The mounted window settled where its repository came from: its own saved selection, the
+  // folder the shell held, or none. The closed source only, never the path (#4068).
+  "repository-resolved",
 ] as const;
 export type ClientCodingWorkbenchInteractionName =
   (typeof CLIENT_CODING_WORKBENCH_INTERACTIONS)[number];
@@ -2371,6 +2374,15 @@ const DELIVERY_STEP_STATES = {
   Record<ClientCodingWorkbenchDeliveryStep, readonly ClientCodingWorkbenchDeliveryState[]>
 >;
 
+/**
+ * Where a mounted Workbench window took its repository from: the window's own saved selection, the
+ * folder the shell held when the window first knew it, or none (an active task binding met the
+ * window first).
+ */
+export const CLIENT_CODING_WORKBENCH_REPOSITORY_SOURCES = ["window", "shell", "none"] as const;
+export type ClientCodingWorkbenchRepositorySource =
+  (typeof CLIENT_CODING_WORKBENCH_REPOSITORY_SOURCES)[number];
+
 /** Bounds a changeset's file count, like the restored-run counts above. */
 export const CLIENT_CODING_WORKBENCH_FILE_COUNT_MAX = 100_000;
 /** Bounds a windowed diff's total line and byte counts (16 Mi lines, 1 GiB). */
@@ -2415,6 +2427,10 @@ export type ClientDiagnosticCodingWorkbenchInteraction =
       readonly interaction: "delivery-step-shown";
       readonly deliveryStep: ClientCodingWorkbenchDeliveryStep;
       readonly deliveryState: ClientCodingWorkbenchDeliveryState;
+    }
+  | {
+      readonly interaction: "repository-resolved";
+      readonly repositorySource: ClientCodingWorkbenchRepositorySource;
     };
 
 const CODING_WORKBENCH_INTERACTION_SET: ReadonlySet<string> = new Set(
@@ -2437,6 +2453,9 @@ const CODING_WORKBENCH_DIFF_SURFACE_SET: ReadonlySet<string> = new Set(
 );
 const CODING_WORKBENCH_HELD_NOTICE_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_HELD_NOTICES,
+);
+const CODING_WORKBENCH_REPOSITORY_SOURCE_SET: ReadonlySet<string> = new Set(
+  CLIENT_CODING_WORKBENCH_REPOSITORY_SOURCES,
 );
 
 function isCodingWorkbenchInteractionName(
@@ -2490,6 +2509,9 @@ const CODING_WORKBENCH_INTERACTION_FIELDS: Readonly<
     deliveryStep: (value) =>
       typeof value === "string" && Object.hasOwn(DELIVERY_STEP_STATES, value),
     deliveryState: (value) => isSetMember(value, CODING_WORKBENCH_DELIVERY_STATE_SET),
+  },
+  "repository-resolved": {
+    repositorySource: (value) => isSetMember(value, CODING_WORKBENCH_REPOSITORY_SOURCE_SET),
   },
 };
 
