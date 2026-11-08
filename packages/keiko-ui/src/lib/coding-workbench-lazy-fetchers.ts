@@ -1,7 +1,7 @@
 /**
  * Lazy contract validators + BFF fetchers for Coding Workbench route groups: GitHub issue
  * preview (#3385), governed draft-delivery journey refresh (#3389), and governed PR-description
- * application (#3399, ADR-0086), and governed Git fetch/pull (#1573).
+ * application (#3399, ADR-0086), governed Git fetch/pull (#1573), and Git delivery.
  *
  * Ordinary Git reads and Chat comparison connections share this boundary and validation port.
  *
@@ -83,6 +83,30 @@ import {
 } from "./api-shared-primitives";
 import type {
   ConnectGitChangeInput,
+  GitDeliveryLocalBranchCreateInput,
+  GitDeliveryLocalBranchSwitchInput,
+  GitDeliveryStageInput,
+  GitDeliveryUnstageInput,
+  GitDeliveryMutationResponse,
+  GitDeliveryCommitPreviewResponse,
+  GitDeliveryCommitDraftResponse,
+  GitDeliveryCommitExecuteInput,
+  GitDeliveryCommitApproveResponse,
+  GitDeliveryPushInput,
+  GitDeliveryPushPreviewResponse,
+  GitDeliveryPushExecuteResponse,
+  GitDeliveryPushApproveResponse,
+  GitDeliveryPrInput,
+  GitDeliveryPrPreviewResponse,
+  GitDeliveryPrExecuteResponse,
+  GitDeliveryPrApproveResponse,
+  GitDeliveryMergeInput,
+  GitDeliveryMergePreviewResponse,
+  GitDeliveryMergeApproveResponse,
+  GitDeliveryMergeExecuteResponse,
+  GitDeliveryPrMarkReadyInput,
+  GitDeliveryPrMarkReadyApproveResponse,
+  GitDeliveryPrMarkReadyExecuteResponse,
   GitDeliverySyncInput,
   GitDeliverySyncApproveResponse,
   CodingWorkbenchIssuePreviewRequest,
@@ -480,6 +504,357 @@ export async function fetchGitDeliveryPrDescriptionStatus(
     },
     validatePrDescriptionApplicationResultWire,
   );
+}
+
+// Governed Git delivery uses the same injected HTTP boundary as Git fetch/pull.
+// The public wrapper snapshots the command before loading this module and refuses an aborted load
+// before any request. Request bodies, approval claims and route ordering remain owned here.
+
+function gitDeliveryPushBody(input: GitDeliveryPushInput): string {
+  return JSON.stringify({
+    schemaVersion: "1",
+    projectId: input.projectId,
+    remoteAlias: input.remoteAlias,
+    remoteBranchName: input.remoteBranchName,
+    sourceBranchName: input.sourceBranchName,
+    ...(input.forcePush === undefined ? {} : { forcePush: input.forcePush }),
+    ...(input.setUpstreamTracking === undefined
+      ? {}
+      : { setUpstreamTracking: input.setUpstreamTracking }),
+    ...(input.verifiedCommitSha === undefined
+      ? {}
+      : { verifiedCommitSha: input.verifiedCommitSha }),
+    ...(input.approval === undefined ? {} : { approval: input.approval }),
+  });
+}
+
+function gitDeliveryPrBody(input: GitDeliveryPrInput): string {
+  return JSON.stringify({
+    schemaVersion: "1",
+    projectId: input.projectId,
+    kind: input.kind,
+    ownerAndRepo: input.ownerAndRepo,
+    headBranchName: input.headBranchName,
+    baseBranchName: input.baseBranchName,
+    title: input.title,
+    body: input.body,
+    ...(input.isDraft === undefined ? {} : { isDraft: input.isDraft }),
+    ...(input.prExternalId === undefined ? {} : { prExternalId: input.prExternalId }),
+    ...(input.convertToDraft === undefined ? {} : { convertToDraft: input.convertToDraft }),
+    ...(input.convertFromDraft === undefined ? {} : { convertFromDraft: input.convertFromDraft }),
+    ...(input.verifiedCommitSha === undefined
+      ? {}
+      : { verifiedCommitSha: input.verifiedCommitSha }),
+    ...(input.approval === undefined ? {} : { approval: input.approval }),
+  });
+}
+
+function gitDeliveryMergeBody(input: GitDeliveryMergeInput): string {
+  return JSON.stringify({
+    schemaVersion: "1",
+    projectId: input.projectId,
+    kind: "merge",
+    ownerAndRepo: input.ownerAndRepo,
+    prExternalId: input.prExternalId,
+    baseBranchName: input.baseBranchName,
+    headBranchName: input.headBranchName,
+    mergeStrategy: input.mergeStrategy,
+    deleteBranchAfterMerge: input.deleteBranchAfterMerge,
+    ...(input.expectedHeadRefHash === undefined
+      ? {}
+      : { expectedHeadRefHash: input.expectedHeadRefHash }),
+    ...(input.approval === undefined ? {} : { approval: input.approval }),
+  });
+}
+
+function gitDeliveryPrMarkReadyBody(input: GitDeliveryPrMarkReadyInput): string {
+  return JSON.stringify({
+    schemaVersion: "1",
+    projectId: input.projectId,
+    ownerAndRepo: input.ownerAndRepo,
+    prExternalId: input.prExternalId,
+    headSha: input.headSha,
+    baseSha: input.baseSha,
+    baseRef: input.baseRef,
+    readinessDigest: input.readinessDigest,
+    ...(input.approval === undefined ? {} : { approval: input.approval }),
+  });
+}
+
+export async function fetchGitDeliveryLocalBranchCreate(
+  fetchJson: ApiFetchJson,
+  input: GitDeliveryLocalBranchCreateInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryMutationResponse> {
+  return fetchJson("/api/git-delivery/local-branch/create", {
+    method: "POST",
+    body: JSON.stringify({
+      schemaVersion: "1",
+      projectId: input.projectId,
+      branchName: input.branchName,
+      baseBranchName: input.baseBranchName,
+      startPointRefHash: input.startPointRefHash,
+      userInitiated: true,
+      ...(input.approval === undefined ? {} : { approval: input.approval }),
+    }),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitDeliveryLocalBranchSwitch(
+  fetchJson: ApiFetchJson,
+  input: GitDeliveryLocalBranchSwitchInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryMutationResponse> {
+  return fetchJson("/api/git-delivery/local-branch/switch", {
+    method: "POST",
+    body: JSON.stringify({
+      schemaVersion: "1",
+      projectId: input.projectId,
+      branchName: input.branchName,
+      userInitiated: true,
+      ...(input.approval === undefined ? {} : { approval: input.approval }),
+    }),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitDeliveryStage(
+  fetchJson: ApiFetchJson,
+  input: GitDeliveryStageInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryMutationResponse> {
+  return fetchJson("/api/git-delivery/staging/stage", {
+    method: "POST",
+    body: JSON.stringify({
+      schemaVersion: "1",
+      projectId: input.projectId,
+      pathspecs: input.pathspecs,
+      includeUntracked: input.includeUntracked,
+      userInitiated: true,
+      ...(input.approval === undefined ? {} : { approval: input.approval }),
+    }),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitDeliveryUnstage(
+  fetchJson: ApiFetchJson,
+  input: GitDeliveryUnstageInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryMutationResponse> {
+  return fetchJson("/api/git-delivery/staging/unstage", {
+    method: "POST",
+    body: JSON.stringify({
+      schemaVersion: "1",
+      projectId: input.projectId,
+      pathspecs: input.pathspecs,
+      userInitiated: true,
+      ...(input.approval === undefined ? {} : { approval: input.approval }),
+    }),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitDeliveryCommitPreview(
+  fetchJson: ApiFetchJson,
+  input: { readonly projectId: string; readonly messageDraft?: string },
+  signal?: AbortSignal,
+): Promise<GitDeliveryCommitPreviewResponse> {
+  return fetchJson("/api/git-delivery/commit/preview", {
+    method: "POST",
+    body: JSON.stringify({
+      schemaVersion: "1",
+      projectId: input.projectId,
+      ...(input.messageDraft === undefined ? {} : { messageDraft: input.messageDraft }),
+    }),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitDeliveryCommitDraft(
+  fetchJson: ApiFetchJson,
+  input: { readonly projectId: string; readonly instruction?: string },
+  signal?: AbortSignal,
+): Promise<GitDeliveryCommitDraftResponse> {
+  return fetchJson("/api/git-delivery/commit/draft", {
+    method: "POST",
+    body: JSON.stringify({
+      schemaVersion: "1",
+      projectId: input.projectId,
+      ...(input.instruction === undefined ? {} : { instruction: input.instruction }),
+    }),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitDeliveryCommitExecute(
+  fetchJson: ApiFetchJson,
+  input: GitDeliveryCommitExecuteInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryMutationResponse> {
+  return fetchJson("/api/git-delivery/commit/execute", {
+    method: "POST",
+    body: JSON.stringify({
+      schemaVersion: "1",
+      projectId: input.projectId,
+      message: input.message,
+      ...(input.allowEmpty === undefined ? {} : { allowEmpty: input.allowEmpty }),
+      ...(input.approval === undefined ? {} : { approval: input.approval }),
+      ...(input.userInitiated === true ? { userInitiated: true } : {}),
+    }),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitDeliveryCommitApprove(
+  fetchJson: ApiFetchJson,
+  input: GitDeliveryCommitExecuteInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryCommitApproveResponse> {
+  return fetchJson("/api/git-delivery/commit/approve", {
+    method: "POST",
+    body: JSON.stringify({
+      schemaVersion: "1",
+      projectId: input.projectId,
+      message: input.message,
+      ...(input.allowEmpty === undefined ? {} : { allowEmpty: input.allowEmpty }),
+      ...(input.userInitiated === true ? { userInitiated: true } : {}),
+    }),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitDeliveryPushPreview(
+  fetchJson: ApiFetchJson,
+  input: GitDeliveryPushInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryPushPreviewResponse> {
+  return fetchJson("/api/git-delivery/push/preview", {
+    method: "POST",
+    body: gitDeliveryPushBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitDeliveryPushExecute(
+  fetchJson: ApiFetchJson,
+  input: GitDeliveryPushInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryPushExecuteResponse> {
+  return fetchJson("/api/git-delivery/push/execute", {
+    method: "POST",
+    body: gitDeliveryPushBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitDeliveryPushApprove(
+  fetchJson: ApiFetchJson,
+  input: GitDeliveryPushInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryPushApproveResponse> {
+  return fetchJson("/api/git-delivery/push/approve", {
+    method: "POST",
+    body: gitDeliveryPushBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitDeliveryPrPreview(
+  fetchJson: ApiFetchJson,
+  input: GitDeliveryPrInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryPrPreviewResponse> {
+  return fetchJson("/api/git-delivery/pr/preview", {
+    method: "POST",
+    body: gitDeliveryPrBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitDeliveryPrExecute(
+  fetchJson: ApiFetchJson,
+  input: GitDeliveryPrInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryPrExecuteResponse> {
+  return fetchJson("/api/git-delivery/pr/execute", {
+    method: "POST",
+    body: gitDeliveryPrBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitDeliveryPrApprove(
+  fetchJson: ApiFetchJson,
+  input: GitDeliveryPrInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryPrApproveResponse> {
+  return fetchJson("/api/git-delivery/pr/approve", {
+    method: "POST",
+    body: gitDeliveryPrBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitDeliveryMergePreview(
+  fetchJson: ApiFetchJson,
+  input: GitDeliveryMergeInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryMergePreviewResponse> {
+  return fetchJson("/api/git-delivery/merge/preview", {
+    method: "POST",
+    body: gitDeliveryMergeBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitDeliveryMergeApprove(
+  fetchJson: ApiFetchJson,
+  input: GitDeliveryMergeInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryMergeApproveResponse> {
+  return fetchJson("/api/git-delivery/merge/approve", {
+    method: "POST",
+    body: gitDeliveryMergeBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitDeliveryMergeExecute(
+  fetchJson: ApiFetchJson,
+  input: GitDeliveryMergeInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryMergeExecuteResponse> {
+  return fetchJson("/api/git-delivery/merge/execute", {
+    method: "POST",
+    body: gitDeliveryMergeBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitDeliveryPrMarkReadyApprove(
+  fetchJson: ApiFetchJson,
+  input: GitDeliveryPrMarkReadyInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryPrMarkReadyApproveResponse> {
+  return fetchJson("/api/git-delivery/pr/mark-ready/approve", {
+    method: "POST",
+    body: gitDeliveryPrMarkReadyBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitDeliveryPrMarkReadyExecute(
+  fetchJson: ApiFetchJson,
+  input: GitDeliveryPrMarkReadyInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryPrMarkReadyExecuteResponse> {
+  return fetchJson("/api/git-delivery/pr/mark-ready/execute", {
+    method: "POST",
+    body: gitDeliveryPrMarkReadyBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
 }
 
 // Governed Git fetch/pull keeps request construction and validation behind the same lazy boundary.

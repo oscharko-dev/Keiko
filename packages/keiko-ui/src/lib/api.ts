@@ -3131,23 +3131,16 @@ export interface GitDeliveryLocalBranchCreateInput {
   readonly approval?: GitDeliveryApprovalClaim;
 }
 
+// Delivery bodies share the existing lazy Git owner. Snapshot before its asynchronous load so
+// caller changes cannot alter the reviewed command; refuse an abort before invoking the HTTP port.
 export async function fetchGitDeliveryLocalBranchCreate(
   input: GitDeliveryLocalBranchCreateInput,
   signal?: AbortSignal,
 ): Promise<GitDeliveryMutationResponse> {
-  return fetchJson("/api/git-delivery/local-branch/create", {
-    method: "POST",
-    body: JSON.stringify({
-      schemaVersion: "1",
-      projectId: input.projectId,
-      branchName: input.branchName,
-      baseBranchName: input.baseBranchName,
-      startPointRefHash: input.startPointRefHash,
-      userInitiated: true,
-      ...(input.approval === undefined ? {} : { approval: input.approval }),
-    }),
-    ...(signal === undefined ? {} : { signal }),
-  });
+  const command = structuredClone(input);
+  const api = await loadGitWorkbenchApi();
+  signal?.throwIfAborted();
+  return api.fetchGitDeliveryLocalBranchCreate(fetchJson, command, signal);
 }
 
 export interface GitDeliveryLocalBranchSwitchInput {
@@ -3160,17 +3153,10 @@ export async function fetchGitDeliveryLocalBranchSwitch(
   input: GitDeliveryLocalBranchSwitchInput,
   signal?: AbortSignal,
 ): Promise<GitDeliveryMutationResponse> {
-  return fetchJson("/api/git-delivery/local-branch/switch", {
-    method: "POST",
-    body: JSON.stringify({
-      schemaVersion: "1",
-      projectId: input.projectId,
-      branchName: input.branchName,
-      userInitiated: true,
-      ...(input.approval === undefined ? {} : { approval: input.approval }),
-    }),
-    ...(signal === undefined ? {} : { signal }),
-  });
+  const command = structuredClone(input);
+  const api = await loadGitWorkbenchApi();
+  signal?.throwIfAborted();
+  return api.fetchGitDeliveryLocalBranchSwitch(fetchJson, command, signal);
 }
 
 export interface GitRepositoryInitializeInput {
@@ -3206,18 +3192,10 @@ export async function fetchGitDeliveryStage(
   input: GitDeliveryStageInput,
   signal?: AbortSignal,
 ): Promise<GitDeliveryMutationResponse> {
-  return fetchJson("/api/git-delivery/staging/stage", {
-    method: "POST",
-    body: JSON.stringify({
-      schemaVersion: "1",
-      projectId: input.projectId,
-      pathspecs: input.pathspecs,
-      includeUntracked: input.includeUntracked,
-      userInitiated: true,
-      ...(input.approval === undefined ? {} : { approval: input.approval }),
-    }),
-    ...(signal === undefined ? {} : { signal }),
-  });
+  const command = structuredClone(input);
+  const api = await loadGitWorkbenchApi();
+  signal?.throwIfAborted();
+  return api.fetchGitDeliveryStage(fetchJson, command, signal);
 }
 
 export interface GitDeliveryUnstageInput {
@@ -3230,17 +3208,10 @@ export async function fetchGitDeliveryUnstage(
   input: GitDeliveryUnstageInput,
   signal?: AbortSignal,
 ): Promise<GitDeliveryMutationResponse> {
-  return fetchJson("/api/git-delivery/staging/unstage", {
-    method: "POST",
-    body: JSON.stringify({
-      schemaVersion: "1",
-      projectId: input.projectId,
-      pathspecs: input.pathspecs,
-      userInitiated: true,
-      ...(input.approval === undefined ? {} : { approval: input.approval }),
-    }),
-    ...(signal === undefined ? {} : { signal }),
-  });
+  const command = structuredClone(input);
+  const api = await loadGitWorkbenchApi();
+  signal?.throwIfAborted();
+  return api.fetchGitDeliveryUnstage(fetchJson, command, signal);
 }
 
 export interface GitDeliveryCommitPreviewResponse {
@@ -3267,30 +3238,20 @@ export async function fetchGitDeliveryCommitPreview(
   input: { readonly projectId: string; readonly messageDraft?: string },
   signal?: AbortSignal,
 ): Promise<GitDeliveryCommitPreviewResponse> {
-  return fetchJson("/api/git-delivery/commit/preview", {
-    method: "POST",
-    body: JSON.stringify({
-      schemaVersion: "1",
-      projectId: input.projectId,
-      ...(input.messageDraft === undefined ? {} : { messageDraft: input.messageDraft }),
-    }),
-    ...(signal === undefined ? {} : { signal }),
-  });
+  const command = structuredClone(input);
+  const api = await loadGitWorkbenchApi();
+  signal?.throwIfAborted();
+  return api.fetchGitDeliveryCommitPreview(fetchJson, command, signal);
 }
 
 export async function fetchGitDeliveryCommitDraft(
   input: { readonly projectId: string; readonly instruction?: string },
   signal?: AbortSignal,
 ): Promise<GitDeliveryCommitDraftResponse> {
-  return fetchJson("/api/git-delivery/commit/draft", {
-    method: "POST",
-    body: JSON.stringify({
-      schemaVersion: "1",
-      projectId: input.projectId,
-      ...(input.instruction === undefined ? {} : { instruction: input.instruction }),
-    }),
-    ...(signal === undefined ? {} : { signal }),
-  });
+  const command = structuredClone(input);
+  const api = await loadGitWorkbenchApi();
+  signal?.throwIfAborted();
+  return api.fetchGitDeliveryCommitDraft(fetchJson, command, signal);
 }
 
 export interface GitDeliveryCommitExecuteInput {
@@ -3305,18 +3266,10 @@ export async function fetchGitDeliveryCommitExecute(
   input: GitDeliveryCommitExecuteInput,
   signal?: AbortSignal,
 ): Promise<GitDeliveryMutationResponse> {
-  return fetchJson("/api/git-delivery/commit/execute", {
-    method: "POST",
-    body: JSON.stringify({
-      schemaVersion: "1",
-      projectId: input.projectId,
-      message: input.message,
-      ...(input.allowEmpty === undefined ? {} : { allowEmpty: input.allowEmpty }),
-      ...(input.approval === undefined ? {} : { approval: input.approval }),
-      ...(input.userInitiated === true ? { userInitiated: true } : {}),
-    }),
-    ...(signal === undefined ? {} : { signal }),
-  });
+  const command = structuredClone(input);
+  const api = await loadGitWorkbenchApi();
+  signal?.throwIfAborted();
+  return api.fetchGitDeliveryCommitExecute(fetchJson, command, signal);
 }
 
 // ─── Governed remote publish (Issue #476, Epic #470) ────────────────────────────────────────────
@@ -3365,44 +3318,24 @@ export interface GitDeliveryPushExecuteResponse extends GitDeliveryMutationRespo
   readonly recoveryActionHint?: string;
 }
 
-function gitDeliveryPushBody(input: GitDeliveryPushInput): string {
-  return JSON.stringify({
-    schemaVersion: "1",
-    projectId: input.projectId,
-    remoteAlias: input.remoteAlias,
-    remoteBranchName: input.remoteBranchName,
-    sourceBranchName: input.sourceBranchName,
-    ...(input.forcePush === undefined ? {} : { forcePush: input.forcePush }),
-    ...(input.setUpstreamTracking === undefined
-      ? {}
-      : { setUpstreamTracking: input.setUpstreamTracking }),
-    ...(input.verifiedCommitSha === undefined
-      ? {}
-      : { verifiedCommitSha: input.verifiedCommitSha }),
-    ...(input.approval === undefined ? {} : { approval: input.approval }),
-  });
-}
-
 export async function fetchGitDeliveryPushPreview(
   input: GitDeliveryPushInput,
   signal?: AbortSignal,
 ): Promise<GitDeliveryPushPreviewResponse> {
-  return fetchJson("/api/git-delivery/push/preview", {
-    method: "POST",
-    body: gitDeliveryPushBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
+  const command = structuredClone(input);
+  const api = await loadGitWorkbenchApi();
+  signal?.throwIfAborted();
+  return api.fetchGitDeliveryPushPreview(fetchJson, command, signal);
 }
 
 export async function fetchGitDeliveryPushExecute(
   input: GitDeliveryPushInput,
   signal?: AbortSignal,
 ): Promise<GitDeliveryPushExecuteResponse> {
-  return fetchJson("/api/git-delivery/push/execute", {
-    method: "POST",
-    body: gitDeliveryPushBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
+  const command = structuredClone(input);
+  const api = await loadGitWorkbenchApi();
+  signal?.throwIfAborted();
+  return api.fetchGitDeliveryPushExecute(fetchJson, command, signal);
 }
 
 // ─── Fetch / pull sync (Issue #1573 API, consumed by Issue #1576 UI) ─────────────────────────
@@ -3546,47 +3479,24 @@ export interface GitDeliveryPrExecuteResponse extends GitDeliveryMutationRespons
   readonly createdPrExternalId?: string;
 }
 
-function gitDeliveryPrBody(input: GitDeliveryPrInput): string {
-  return JSON.stringify({
-    schemaVersion: "1",
-    projectId: input.projectId,
-    kind: input.kind,
-    ownerAndRepo: input.ownerAndRepo,
-    headBranchName: input.headBranchName,
-    baseBranchName: input.baseBranchName,
-    title: input.title,
-    body: input.body,
-    ...(input.isDraft === undefined ? {} : { isDraft: input.isDraft }),
-    ...(input.prExternalId === undefined ? {} : { prExternalId: input.prExternalId }),
-    ...(input.convertToDraft === undefined ? {} : { convertToDraft: input.convertToDraft }),
-    ...(input.convertFromDraft === undefined ? {} : { convertFromDraft: input.convertFromDraft }),
-    ...(input.verifiedCommitSha === undefined
-      ? {}
-      : { verifiedCommitSha: input.verifiedCommitSha }),
-    ...(input.approval === undefined ? {} : { approval: input.approval }),
-  });
-}
-
 export async function fetchGitDeliveryPrPreview(
   input: GitDeliveryPrInput,
   signal?: AbortSignal,
 ): Promise<GitDeliveryPrPreviewResponse> {
-  return fetchJson("/api/git-delivery/pr/preview", {
-    method: "POST",
-    body: gitDeliveryPrBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
+  const command = structuredClone(input);
+  const api = await loadGitWorkbenchApi();
+  signal?.throwIfAborted();
+  return api.fetchGitDeliveryPrPreview(fetchJson, command, signal);
 }
 
 export async function fetchGitDeliveryPrExecute(
   input: GitDeliveryPrInput,
   signal?: AbortSignal,
 ): Promise<GitDeliveryPrExecuteResponse> {
-  return fetchJson("/api/git-delivery/pr/execute", {
-    method: "POST",
-    body: gitDeliveryPrBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
+  const command = structuredClone(input);
+  const api = await loadGitWorkbenchApi();
+  signal?.throwIfAborted();
+  return api.fetchGitDeliveryPrExecute(fetchJson, command, signal);
 }
 
 // ─── Governed merge command center (#478, ADR-0087) ──────────────────────────────────────────────────
@@ -3664,33 +3574,14 @@ export interface GitDeliveryMergeExecuteResponse extends GitDeliveryMutationResp
   readonly branchDeleted?: boolean;
 }
 
-function gitDeliveryMergeBody(input: GitDeliveryMergeInput): string {
-  return JSON.stringify({
-    schemaVersion: "1",
-    projectId: input.projectId,
-    kind: "merge",
-    ownerAndRepo: input.ownerAndRepo,
-    prExternalId: input.prExternalId,
-    baseBranchName: input.baseBranchName,
-    headBranchName: input.headBranchName,
-    mergeStrategy: input.mergeStrategy,
-    deleteBranchAfterMerge: input.deleteBranchAfterMerge,
-    ...(input.expectedHeadRefHash === undefined
-      ? {}
-      : { expectedHeadRefHash: input.expectedHeadRefHash }),
-    ...(input.approval === undefined ? {} : { approval: input.approval }),
-  });
-}
-
 export async function fetchGitDeliveryMergePreview(
   input: GitDeliveryMergeInput,
   signal?: AbortSignal,
 ): Promise<GitDeliveryMergePreviewResponse> {
-  return fetchJson("/api/git-delivery/merge/preview", {
-    method: "POST",
-    body: gitDeliveryMergeBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
+  const command = structuredClone(input);
+  const api = await loadGitWorkbenchApi();
+  signal?.throwIfAborted();
+  return api.fetchGitDeliveryMergePreview(fetchJson, command, signal);
 }
 
 // Mints the server-issued approval claim the default approval-gated merge policy pack requires. The
@@ -3701,22 +3592,20 @@ export async function fetchGitDeliveryMergeApprove(
   input: GitDeliveryMergeInput,
   signal?: AbortSignal,
 ): Promise<GitDeliveryMergeApproveResponse> {
-  return fetchJson("/api/git-delivery/merge/approve", {
-    method: "POST",
-    body: gitDeliveryMergeBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
+  const command = structuredClone(input);
+  const api = await loadGitWorkbenchApi();
+  signal?.throwIfAborted();
+  return api.fetchGitDeliveryMergeApprove(fetchJson, command, signal);
 }
 
 export async function fetchGitDeliveryMergeExecute(
   input: GitDeliveryMergeInput,
   signal?: AbortSignal,
 ): Promise<GitDeliveryMergeExecuteResponse> {
-  return fetchJson("/api/git-delivery/merge/execute", {
-    method: "POST",
-    body: gitDeliveryMergeBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
+  const command = structuredClone(input);
+  const api = await loadGitWorkbenchApi();
+  signal?.throwIfAborted();
+  return api.fetchGitDeliveryMergeExecute(fetchJson, command, signal);
 }
 
 // ---------------------------------------------------------------------------
@@ -3925,40 +3814,24 @@ export interface GitDeliveryPrMarkReadyExecuteResponse {
   readonly rejectionReason?: string;
 }
 
-function gitDeliveryPrMarkReadyBody(input: GitDeliveryPrMarkReadyInput): string {
-  return JSON.stringify({
-    schemaVersion: "1",
-    projectId: input.projectId,
-    ownerAndRepo: input.ownerAndRepo,
-    prExternalId: input.prExternalId,
-    headSha: input.headSha,
-    baseSha: input.baseSha,
-    baseRef: input.baseRef,
-    readinessDigest: input.readinessDigest,
-    ...(input.approval === undefined ? {} : { approval: input.approval }),
-  });
-}
-
 export async function fetchGitDeliveryPrMarkReadyApprove(
   input: GitDeliveryPrMarkReadyInput,
   signal?: AbortSignal,
 ): Promise<GitDeliveryPrMarkReadyApproveResponse> {
-  return fetchJson("/api/git-delivery/pr/mark-ready/approve", {
-    method: "POST",
-    body: gitDeliveryPrMarkReadyBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
+  const command = structuredClone(input);
+  const api = await loadGitWorkbenchApi();
+  signal?.throwIfAborted();
+  return api.fetchGitDeliveryPrMarkReadyApprove(fetchJson, command, signal);
 }
 
 export async function fetchGitDeliveryPrMarkReadyExecute(
   input: GitDeliveryPrMarkReadyInput,
   signal?: AbortSignal,
 ): Promise<GitDeliveryPrMarkReadyExecuteResponse> {
-  return fetchJson("/api/git-delivery/pr/mark-ready/execute", {
-    method: "POST",
-    body: gitDeliveryPrMarkReadyBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
+  const command = structuredClone(input);
+  const api = await loadGitWorkbenchApi();
+  signal?.throwIfAborted();
+  return api.fetchGitDeliveryPrMarkReadyExecute(fetchJson, command, signal);
 }
 
 /**
@@ -3994,17 +3867,10 @@ export async function fetchGitDeliveryCommitApprove(
   input: GitDeliveryCommitExecuteInput,
   signal?: AbortSignal,
 ): Promise<GitDeliveryCommitApproveResponse> {
-  return fetchJson("/api/git-delivery/commit/approve", {
-    method: "POST",
-    body: JSON.stringify({
-      schemaVersion: "1",
-      projectId: input.projectId,
-      message: input.message,
-      ...(input.allowEmpty === undefined ? {} : { allowEmpty: input.allowEmpty }),
-      ...(input.userInitiated === true ? { userInitiated: true } : {}),
-    }),
-    ...(signal === undefined ? {} : { signal }),
-  });
+  const command = structuredClone(input);
+  const api = await loadGitWorkbenchApi();
+  signal?.throwIfAborted();
+  return api.fetchGitDeliveryCommitApprove(fetchJson, command, signal);
 }
 
 export interface GitDeliveryPushApproveResponse {
@@ -4017,11 +3883,10 @@ export async function fetchGitDeliveryPushApprove(
   input: GitDeliveryPushInput,
   signal?: AbortSignal,
 ): Promise<GitDeliveryPushApproveResponse> {
-  return fetchJson("/api/git-delivery/push/approve", {
-    method: "POST",
-    body: gitDeliveryPushBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
+  const command = structuredClone(input);
+  const api = await loadGitWorkbenchApi();
+  signal?.throwIfAborted();
+  return api.fetchGitDeliveryPushApprove(fetchJson, command, signal);
 }
 
 export interface GitDeliveryPrApproveResponse {
@@ -4034,11 +3899,10 @@ export async function fetchGitDeliveryPrApprove(
   input: GitDeliveryPrInput,
   signal?: AbortSignal,
 ): Promise<GitDeliveryPrApproveResponse> {
-  return fetchJson("/api/git-delivery/pr/approve", {
-    method: "POST",
-    body: gitDeliveryPrBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
+  const command = structuredClone(input);
+  const api = await loadGitWorkbenchApi();
+  signal?.throwIfAborted();
+  return api.fetchGitDeliveryPrApprove(fetchJson, command, signal);
 }
 
 /**
