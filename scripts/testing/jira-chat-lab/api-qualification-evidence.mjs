@@ -51,11 +51,12 @@ function nativeRefusal(statuses, data, readback) {
     return "unavailable";
   return undefined;
 }
-function successfulJournal(journal) {
+function successfulJournal(journal, outcome) {
   return (
     journal === undefined ||
     (journal.phase === "settled" &&
-      new Set(["succeeded", "succeeded-unconfirmed"]).has(journal.outcome))
+      new Set(["succeeded", "succeeded-unconfirmed"]).has(journal.outcome) &&
+      journal.outcome === outcome)
   );
 }
 function matchedReadback(readback) {
@@ -73,13 +74,26 @@ function observedReceipt(dispatch) {
     receipt.budgetDisposition === "committed"
   );
 }
-function executableObservation(dispatch, statuses, readback, journal) {
+function settledNativeAcknowledgement(dispatch, statuses, journal, mutation) {
+  const data = dispatch.result.data;
+  if (data.outcome === "succeeded") return dispatch.result.status === "completed";
   return (
-    dispatch.result.status === "completed" &&
+    mutation === true &&
+    dispatch.result.status === "failed" &&
+    data.outcome === "succeeded-unconfirmed" &&
+    data.reason === "unavailable" &&
+    journal?.phase === "settled" &&
+    journal.outcome === "succeeded-unconfirmed" &&
+    statuses.every((status) => status === journal.httpStatus)
+  );
+}
+function executableObservation(dispatch, statuses, readback, journal, mutation) {
+  return (
+    settledNativeAcknowledgement(dispatch, statuses, journal, mutation) &&
     statuses.every((status) => status >= 200 && status < 300) &&
     new Set(["succeeded", "succeeded-unconfirmed"]).has(dispatch.result.data.outcome) &&
     matchedReadback(readback) &&
-    successfulJournal(journal)
+    successfulJournal(journal, dispatch.result.data.outcome)
   );
 }
 
@@ -101,7 +115,9 @@ export function classifyQualification({
   const data = dispatch.result.data;
   const refusal = nativeRefusal(statuses, data, readback);
   if (refusal !== undefined) return refusal;
-  return executableObservation(dispatch, statuses, readback, journal) ? "executable" : "unknown";
+  return executableObservation(dispatch, statuses, readback, journal, mutation)
+    ? "executable"
+    : "unknown";
 }
 
 export function qualificationSummary(operations) {

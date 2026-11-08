@@ -85,7 +85,7 @@ describe("native Jira qualification evidence", () => {
         mutation: true,
         journal: { phase: "settled", outcome: "succeeded-unconfirmed" },
       }),
-    ).toBe("executable");
+    ).toBe("unknown");
   });
 
   it.each([400, 401, 403, 404, 405, 429, 500])(
@@ -169,4 +169,36 @@ describe("native Jira qualification evidence", () => {
     ).toEqual({ executable: 0, denied: 1, unavailable: 0, unknown: 1 });
     expect(() => qualificationSummary([{ runtimeAvailability: "excluded-by-policy" }])).toThrow();
   });
+});
+
+it("never qualifies malformed or missing proof through a matching external readback", () => {
+  const o = observation();
+  o.mutation = true;
+  o.dispatch.result.status = "failed";
+  o.dispatch.receipt.status = "failed";
+  o.dispatch.result.data.outcome = "succeeded-unconfirmed";
+  o.journal = { phase: "settled", outcome: "succeeded-unconfirmed", httpStatus: 200 };
+  for (const reason of [undefined, "malformed-payload", "not-found", "permission-denied"]) {
+    o.dispatch.result.data.reason = reason;
+    expect(classifyQualification(o)).toBe("unknown");
+  }
+  o.dispatch.result.data.reason = "unavailable";
+  expect(classifyQualification(o)).toBe("executable");
+  expect(classifyQualification({ ...o, mutation: false })).toBe("unknown");
+  const completed = {
+    ...o,
+    dispatch: {
+      ...o.dispatch,
+      result: {
+        ...o.dispatch.result,
+        status: "completed",
+        data: { ...o.dispatch.result.data, reason: "malformed-payload" },
+      },
+      receipt: { ...o.dispatch.receipt, status: "completed" },
+    },
+  };
+  expect(classifyQualification(completed)).toBe("unknown");
+  expect(classifyQualification({ ...o, journal: { ...o.journal, httpStatus: 204 } })).toBe(
+    "unknown",
+  );
 });

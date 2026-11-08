@@ -94,7 +94,7 @@ async function observeReadback(context, specification, attempted, fixture) {
     };
   }
 }
-function caseEvidence(specification, attempted, observation, readback, failure) {
+function caseEvidence(specification, attempted, observation, readback, failure, report) {
   const runtimeAvailability = classifyQualification({
     ...attempted,
     identity: specification.identity,
@@ -102,11 +102,28 @@ function caseEvidence(specification, attempted, observation, readback, failure) 
     readback,
   });
   return {
+    runId: report.runId,
+    sourceRevision: report.sourceRevision,
+    release: report.release,
+    imageDigest: report.imageDigest,
     id: qualificationDigest(specification.identity).slice(0, 24),
     identity: specification.identity,
     tool: specification.tool,
     runtimeAvailability,
     binding: attempted.binding,
+    mutation: specification.mutation === true,
+    dispatch: {
+      kind: attempted.dispatch.kind,
+      result: {
+        status: attempted.dispatch.result.status,
+        data: {
+          operationBinding: attempted.dispatch.result.data?.operationBinding,
+          outcome: attempted.dispatch.result.data?.outcome,
+          reason: attempted.dispatch.result.data?.reason,
+        },
+      },
+      receipt: attempted.dispatch.receipt,
+    },
     witness: observation,
     receipt: attempted.dispatch.receipt,
     journal:
@@ -122,7 +139,7 @@ function caseEvidence(specification, attempted, observation, readback, failure) 
     ...(failure === undefined ? {} : { failure }),
   };
 }
-async function runCase(context, chat, specification, fixture, witness, directory) {
+async function runCase(context, chat, specification, fixture, witness, directory, report) {
   await specification.prepare?.(context, fixture);
   const id = qualificationDigest(specification.identity).slice(0, 24);
   const pending = join(directory, `${id}.pending.json`);
@@ -139,7 +156,14 @@ async function runCase(context, chat, specification, fixture, witness, directory
     specification.arguments(fixture),
   );
   const { readback, failure } = await observeReadback(context, specification, attempted, fixture);
-  const evidence = caseEvidence(specification, attempted, witness.snapshot(), readback, failure);
+  const evidence = caseEvidence(
+    specification,
+    attempted,
+    witness.snapshot(),
+    readback,
+    failure,
+    report,
+  );
   privateJson(join(directory, `${id}.json`), evidence, true);
   if (attempted.journal?.outcome === "unknown" || attempted.journal?.phase === "dispatched")
     throw new TypeError(
@@ -174,7 +198,15 @@ async function executeCases(context, specifications, report, directory, witness,
         await prepareModelFreeChat(context, context.actor, specification.administration === true),
       );
     const chat = chats.get(binding);
-    const evidence = await runCase(context, chat, specification, fixture, witness, directory);
+    const evidence = await runCase(
+      context,
+      chat,
+      specification,
+      fixture,
+      witness,
+      directory,
+      report,
+    );
     const row = report.operations.find(
       (operation) => operation.identity === specification.identity,
     );
@@ -204,6 +236,7 @@ function createReport(session, ledger, revision, runId) {
     inventoryDigest: qualificationDigest(ledger.operations.map((row) => row.identity)),
     file: `qualification-${session.jiraVersion}-${runId}.json`,
     modelCalls: 0,
+    phase: "running",
     proposals: proposals.proposals.map((proposal) => ({
       id: proposal.id,
       status: proposals.status,
@@ -288,6 +321,10 @@ export async function qualifyApi(directory, only, snapshotId) {
     },
   });
   const counts = qualificationSummary(report.operations);
+  assert.equal(sourceRevision(), revision, "Qualification sources changed during the run");
+  report.phase = counts.unknown === 0 ? "complete" : "incomplete";
+  report.counts = counts;
+  privateJson(join(output, report.file), report);
   rmSync(pending);
   stage({
     release: session.jiraVersion,
