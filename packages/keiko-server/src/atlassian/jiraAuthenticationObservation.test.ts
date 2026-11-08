@@ -190,7 +190,7 @@ it.each(["project", "issuetypescheme/1", "workflowscheme/1/unknown", "workflow/u
     expect(f.invalidated).toEqual([2]);
   },
 );
-it.each(["workflowscheme/1", "workflow", "screens", "cluster/nodes", "cluster/zdu/state", "index-snapshot/isRunning", "user/columns", "index-snapshot"])("does not classify a %s write as an ambiguous administrator read", async (path) => {
+it.each(["workflowscheme/1/unknown", "workflow", "screens", "cluster/nodes", "cluster/zdu/state", "index-snapshot/isRunning", "user/columns", "index-snapshot"])("does not classify a %s write as an ambiguous administrator read", async (path) => {
   const f = fixture(() => response({}, 401));
   await f.deps.httpBodyPortFactory(f.metadata)({ ...request(path), method: "PUT", bodyJson: "{}" });
   expect(f.urls).toHaveLength(1);
@@ -502,7 +502,7 @@ it.each([
   ["POST", "screens/0/tabs"],
   ["PUT", "screens/1/tabs/0"],
   ["DELETE", "screens/1/tabs/2/fields"],
-  ["POST", "screens/1/tabs/2/move/1"],
+  ["POST", "screens/1/tabs/2/move/-1"],
   ["PUT", "project/1"],
   ["POST", "monitoring/app"],
   ["POST", "monitoring/ipd"],
@@ -577,4 +577,75 @@ it("spends only the tab-write's subsecond remaining deadline on identity IO", as
   expect(probeSignal?.aborted).toBe(true);
   expect(f.urls).toHaveLength(2);
   expect(f.current()).toEqual(f.metadata);
+});
+
+
+const DOCUMENTED_NATIVE_WRITE_401 = [
+  { method: "POST", path: "/workflowscheme" },
+  { method: "PUT", path: "/workflowscheme/1" },
+  { method: "DELETE", path: "/workflowscheme/1" },
+  { method: "POST", path: "/workflowscheme/1/createdraft" },
+  { method: "PUT", path: "/workflowscheme/1/draft" },
+  { method: "DELETE", path: "/workflowscheme/1/draft" },
+  { method: "PUT", path: "/workflowscheme/1/default" },
+  { method: "DELETE", path: "/workflowscheme/1/default" },
+  { method: "PUT", path: "/workflowscheme/1/draft/default" },
+  { method: "DELETE", path: "/workflowscheme/1/draft/default" },
+  { method: "PUT", path: "/workflowscheme/1/issuetype/2" },
+  { method: "DELETE", path: "/workflowscheme/1/issuetype/2" },
+  { method: "PUT", path: "/workflowscheme/1/draft/issuetype/2" },
+  { method: "DELETE", path: "/workflowscheme/1/draft/issuetype/2" },
+  { method: "PUT", path: "/workflowscheme/1/workflow" },
+  { method: "DELETE", path: "/workflowscheme/1/workflow" },
+  { method: "PUT", path: "/workflowscheme/1/draft/workflow" },
+  { method: "DELETE", path: "/workflowscheme/1/draft/workflow" },
+  { method: "PUT", path: "/issue/SYN-1/assignee" },
+  { method: "POST", path: "/issue/SYN-1/watchers" },
+  { method: "DELETE", path: "/issue/SYN-1/watchers" },
+  { method: "POST", path: "/screens/addToDefault/customfield_10000" },
+  { method: "POST", path: "/screens/1/tabs/2/fields" },
+  { method: "DELETE", path: "/screens/1/tabs/2/fields/1" },
+  { method: "POST", path: "/screens/1/tabs/2/fields/1/move" },
+  { method: "PUT", path: "/screens/1/tabs/2/fields/1/updateShowWhenEmptyIndicator/false" },
+  { method: "POST", path: "/screens/1/tabs/2/move/0" },
+] as const;
+it.each(DOCUMENTED_NATIVE_WRITE_401)("keeps the actual $method $path permission refusal without credential loss or write replay", async ({ method, path }) => {
+  const methods: string[] = [];
+  const f = fixture((index, init) => {
+    methods.push(init?.method ?? "GET");
+    return index === 0 ? response({ errorMessages: ["Native permission or WebSudo required"] }, 401) : response(IDENTITY);
+  });
+  const result = await executeAtlassianWriteRequest({ http: f.deps.httpBodyPortFactory(f.metadata) }, {
+    method, url: request(path).url, expect: "none", ...(method === "DELETE" ? {} : { bodyJson: "{}" }),
+  });
+  expect(result).toMatchObject({ ok: false, reason: "permission-denied", httpStatus: 401 });
+  expect(methods).toEqual([method, "GET"]);
+  expect(f.urls).toEqual([request(path).url, `${BASE}/rest/api/2/myself`]);
+  expect(f.current()).toEqual(f.metadata); expect(f.invalidated).toEqual([]);
+  expect(JSON.stringify(f.events)).not.toMatch(/Native permission|WebSudo|synthetic-user|https:/u);
+});
+it.each(DOCUMENTED_NATIVE_WRITE_401)("keeps expired credentials definitive after $method $path", async ({ method, path }) => {
+  const f = fixture(() => response({}, 401));
+  const result = await f.deps.httpBodyPortFactory(f.metadata)({ ...request(path), method, ...(method === "DELETE" ? {} : { bodyJson: "{}" }) });
+  expect(result).toMatchObject({ status: 401 }); expect(result).not.toHaveProperty("authentication");
+  expect(f.urls).toEqual([request(path).url, `${BASE}/rest/api/2/myself`]);
+  expect(f.invalidated).toEqual([2]);
+});
+it.each([
+  { method: "POST", path: "workflowscheme/1/draft" },
+  { method: "PUT", path: "workflowscheme/1/createdraft" },
+  { method: "PUT", path: "workflowscheme/0" },
+  { method: "PUT", path: "workflowscheme/9223372036854775808" },
+  { method: "DELETE", path: "workflowscheme/1/unknown" },
+  { method: "POST", path: "screens/1/tabs/2/fields/3/move/unknown" },
+  { method: "PUT", path: "screens/1/tabs/2/fields/3/updateShowWhenEmptyIndicator/0" },
+  { method: "POST", path: "screens/1/tabs/2/move/2147483648" },
+  { method: "POST", path: "screens/addToDefault/unsafe%2Ffield" },
+  { method: "POST", path: "issue/SYN-1/assignee" },
+  { method: "PUT", path: "issue/SYN-1/watchers" },
+  { method: "POST", path: "issue/SYN-1/notify" },
+] as const)("never widens documented native auth facts to $method $path", async ({ method, path }) => {
+  const f = fixture(() => response({}, 401));
+  await f.deps.httpBodyPortFactory(f.metadata)({ ...request(path), method, ...(method === "DELETE" ? {} : { bodyJson: "{}" }) });
+  expect(f.urls).toEqual([request(path).url]); expect(f.invalidated).toEqual([2]);
 });
