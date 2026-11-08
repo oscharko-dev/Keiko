@@ -4,7 +4,10 @@ import {
   JIRA_MUTATION_DETAIL_LIMITS,
   JIRA_MUTATION_RESULT_STATES,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import { TOOL_CATALOG_LIMITS, type CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  TOOL_CATALOG_LIMITS,
+  type CatalogJsonObject,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import {
   compileExternalCatalogSchema,
@@ -41,11 +44,11 @@ const COMPONENT_FIELDS = {
   },
 };
 const COMPONENT_FIELDS_WITH_IDENTITY = {
-    ...COMPONENT_FIELDS,
-    id: ID,
-    project: PROJECT,
-    archived: { type: "boolean" },
-    deleted: { type: "boolean" },
+  ...COMPONENT_FIELDS,
+  id: ID,
+  project: PROJECT,
+  archived: { type: "boolean" },
+  deleted: { type: "boolean" },
 };
 const COMPONENT = object(COMPONENT_FIELDS_WITH_IDENTITY, ["id", "name", "project"]);
 const VERSION_FIELDS = {
@@ -110,8 +113,11 @@ function boundedLocalPageFields(item: CatalogJsonObject): CatalogJsonObject {
     nextStartAt: PAGING.startAt,
   };
 }
-function writeResult(receipt: CatalogJsonObject): CatalogJsonObject {
-  return object(
+function writeResult(
+  receipt: CatalogJsonObject,
+  success?: CatalogJsonObject | false,
+): CatalogJsonObject {
+  const result = object(
     {
       ...receipt,
       ...FAILURE_FIELDS,
@@ -125,6 +131,23 @@ function writeResult(receipt: CatalogJsonObject): CatalogJsonObject {
     },
     ["outcome"],
   );
+  if (success === undefined) return result;
+  const alternatives: CatalogJsonObject[] = [
+    {
+      not: {
+        properties: { outcome: { type: "string", enum: ["succeeded"] } },
+        required: ["outcome"],
+      },
+    },
+  ];
+  if (success !== false)
+    alternatives.push(success, {
+      properties: { replayed: { type: "boolean", enum: [true] } },
+      required: ["replayed"],
+      // The journal retains no receipt. A replay cannot excuse partial or contrary native facts.
+      not: { anyOf: Object.keys(receipt).map((key) => ({ required: [key] })) },
+    });
+  return { ...result, allOf: [{ anyOf: alternatives }] };
 }
 interface Definition {
   readonly description: string;
@@ -133,7 +156,12 @@ interface Definition {
   readonly risk: "read" | "write";
   readonly maxResultCount: number;
 }
-function readDefinition(description: string, input: CatalogJsonObject, fields: CatalogJsonObject, maxResultCount = 1): Definition {
+function readDefinition(
+  description: string,
+  input: CatalogJsonObject,
+  fields: CatalogJsonObject,
+  maxResultCount = 1,
+): Definition {
   return { description, input, result: readResult(fields), risk: "read", maxResultCount };
 }
 export const JIRA_PROJECT_STRUCTURE_READ_DEFINITIONS = {

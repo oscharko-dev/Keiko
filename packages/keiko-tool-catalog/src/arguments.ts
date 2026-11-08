@@ -23,7 +23,7 @@ export function validateToolArguments(
   // The mismatch account rides on the error so the rejecting layer can name the declared property
   // that was missing or invalid -- in its log and in the model's one correction -- without quoting
   // the arguments.
-  const mismatch = describeCatalogSchemaMismatch(verified.inputSchema, captured);
+  const mismatch = describeCatalogSchemaMismatch(verified.inputSchema, structuredClone(captured));
   if (mismatch !== undefined) throw new ToolCatalogError("invalid-shape", mismatch);
   return deepFreeze(captured);
 }

@@ -102,6 +102,7 @@ function fixture(
   purpose: FixturePurpose = "login",
   legacyTemporaryRelease?: "10.3" | "10.4",
   turnLifetimeMs = 60_000,
+  inputAvailable = true,
 ): Fixture {
   const custody = privateJiraCustodyFixture(`jira.${purpose}`);
   const pending = custody.inputs.prepare(custody.binding);
@@ -169,7 +170,7 @@ function fixture(
     expiresAt: custody.binding.expiresAt + turnLifetimeMs - 60_000,
   };
   const privatePortOptions = {
-    selection,
+    ...(inputAvailable ? { selection } : {}),
     sessionScope,
     onConsumed,
     onCleanupFailure: (error: unknown): void => {
@@ -535,6 +536,52 @@ describe("real private Jira session composition", () => {
       expect(session.current()).toBeUndefined();
       return Promise.resolve();
     });
+  });
+  it("refuses anonymization unlock without a protected selection before native effects", async () => {
+    const f = fixture("unlock-user-anonymization", undefined, 60_000, false);
+    await expect(f.ports.identity.unlock("actor-key")).resolves.toEqual({
+      ok: false,
+      reason: "unavailable",
+    });
+    expect(f.fetchImpl).not.toHaveBeenCalled();
+    expect(f.beforeEffect).not.toHaveBeenCalled();
+    expect(f.onConsumed).not.toHaveBeenCalled();
+  });
+  it("keeps anonymization unlock actor mismatch a conflict before native effects", async () => {
+    const f = fixture("unlock-user-anonymization");
+    await expect(f.ports.identity.unlock("different-actor")).resolves.toEqual({
+      ok: false,
+      reason: "conflict",
+    });
+    expect(f.fetchImpl).not.toHaveBeenCalled();
+    expect(f.beforeEffect).not.toHaveBeenCalled();
+    expect(f.onConsumed).not.toHaveBeenCalled();
+  });
+  it("rechecks the native actor for an otherwise matching unlock selection", async () => {
+    const f = fixture("unlock-user-anonymization");
+    f.fetchImpl.mockResolvedValueOnce(
+      Response.json({ key: "changed-actor", name: "Native Actor" }),
+    );
+    await expect(f.ports.identity.unlock("actor-key")).resolves.toEqual({
+      ok: false,
+      reason: "conflict",
+    });
+    expect(f.fetchImpl).toHaveBeenCalledOnce();
+    expect(f.fetchImpl.mock.calls.filter(([, init]) => init?.method === "DELETE")).toEqual([]);
+    expect(f.onConsumed).not.toHaveBeenCalled();
+  });
+  it("consumes the matching unlock selection once and refuses another native effect", async () => {
+    const f = fixture("unlock-user-anonymization");
+    await expect(f.ports.identity.unlock("actor-key")).resolves.toMatchObject({
+      ok: true,
+      status: 204,
+    });
+    await expect(f.ports.identity.unlock("actor-key")).resolves.toEqual({
+      ok: false,
+      reason: "unavailable",
+    });
+    expect(f.fetchImpl.mock.calls.filter(([, init]) => init?.method === "DELETE")).toHaveLength(1);
+    expect(f.onConsumed).toHaveBeenCalledOnce();
   });
   it.each([200, 202, 204])(
     "preserves a real unlock ACK %s when its journal observer throws afterwards",

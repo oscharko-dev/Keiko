@@ -114345,28 +114345,28 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:122",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:147",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:240",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:279",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:266",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:305",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:272",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:311",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -117755,7 +117755,7 @@
     {
       "op": "jira.mutation-execution-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:53",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:65",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

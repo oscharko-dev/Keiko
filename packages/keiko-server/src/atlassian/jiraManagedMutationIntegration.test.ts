@@ -1,13 +1,29 @@
-import { expectedFinalOutcome, FINAL_EXPECTED_OUTCOMES } from "../../../../tests/support/jira-managed-final-scenarios.js";
+import {
+  expectedFinalOutcome,
+  FINAL_EXPECTED_OUTCOMES,
+} from "../../../../tests/support/jira-managed-final-scenarios.js";
 import { privateNativeTransportController } from "../../../../tests/support/jira-private-native-transport-fixture.js";
 import { privateNativeComposition } from "../../../../tests/support/jira-private-native-composition.js";
-import { PRIVATE_NATIVE_COOKIE, PRIVATE_NATIVE_PASSWORD, PRIVATE_NATIVE_LICENSE } from "../../../../tests/support/jira-private-native-cases.js";
+import {
+  PRIVATE_NATIVE_COOKIE,
+  PRIVATE_NATIVE_PASSWORD,
+  PRIVATE_NATIVE_LICENSE,
+} from "../../../../tests/support/jira-private-native-cases.js";
 import { PRIVATE_ACCOUNT_READ_CASES } from "../../../../tests/support/jira-private-account-fixture.js";
 import { privateNativeCase } from "../../../../tests/support/jira-private-native-cases.js";
-import { expectedSystemAdministrationOutcome, SYSTEM_ADMINISTRATION_EXPECTED_OUTCOMES } from "../../../../tests/support/jira-managed-system-administration-scenarios.js";
-import { expectedSchemeSettingOutcome, SCHEME_SETTING_EXPECTED_OUTCOMES } from "../../../../tests/support/jira-managed-scheme-setting-scenarios.js";
+import {
+  expectedSystemAdministrationOutcome,
+  SYSTEM_ADMINISTRATION_EXPECTED_OUTCOMES,
+} from "../../../../tests/support/jira-managed-system-administration-scenarios.js";
+import {
+  expectedSchemeSettingOutcome,
+  SCHEME_SETTING_EXPECTED_OUTCOMES,
+} from "../../../../tests/support/jira-managed-scheme-setting-scenarios.js";
 import { emailTemplateFixtureAdmission } from "../../../../tests/support/jira-email-template-transport-fixture.js";
-import { expectedPermissionRoleOutcome, PERMISSION_ROLE_EXPECTED_OUTCOMES } from "../../../../tests/support/jira-managed-permission-role-scenarios.js";
+import {
+  expectedPermissionRoleOutcome,
+  PERMISSION_ROLE_EXPECTED_OUTCOMES,
+} from "../../../../tests/support/jira-managed-permission-role-scenarios.js";
 import { DatabaseSync } from "node:sqlite";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
@@ -50,10 +66,24 @@ import {
 } from "../../../../tests/support/jira-managed-mutation-scenarios.js";
 import { jiraMutationToolId } from "./jiraMutationToolId.js";
 import { nativeAdministrationWrite } from "../../../../tests/support/jira-managed-administration-scenarios.js";
-import { expectedSavedConfigurationOutcome, nativeSavedConfigurationWrite, prepareSavedConfiguration } from "../../../../tests/support/jira-managed-saved-configuration-scenarios.js";
-import { expectedLifecycleOutcome, lifecycleRemoteFixture, LIFECYCLE_EXPECTED_OUTCOMES } from "../../../../tests/support/jira-managed-lifecycle-scenarios.js";
-import { expectedConfigurationOutcome, CONFIGURATION_EXPECTED_OUTCOMES } from "../../../../tests/support/jira-managed-configuration-scenarios.js";
-import { expectedPlanningOutcome, PLANNING_EXPECTED_OUTCOMES } from "../../../../tests/support/jira-managed-planning-scenarios.js";
+import {
+  expectedSavedConfigurationOutcome,
+  nativeSavedConfigurationWrite,
+  prepareSavedConfiguration,
+} from "../../../../tests/support/jira-managed-saved-configuration-scenarios.js";
+import {
+  expectedLifecycleOutcome,
+  lifecycleRemoteFixture,
+  LIFECYCLE_EXPECTED_OUTCOMES,
+} from "../../../../tests/support/jira-managed-lifecycle-scenarios.js";
+import {
+  expectedConfigurationOutcome,
+  CONFIGURATION_EXPECTED_OUTCOMES,
+} from "../../../../tests/support/jira-managed-configuration-scenarios.js";
+import {
+  expectedPlanningOutcome,
+  PLANNING_EXPECTED_OUTCOMES,
+} from "../../../../tests/support/jira-managed-planning-scenarios.js";
 import { jiraChatCatalogRoutes } from "./jiraChatCatalogConsumer.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import {
@@ -95,9 +125,13 @@ const SINGLE_MUTATIONS = JIRA_MUTATION_OPERATIONS.filter(
 const ADMIN_MUTATIONS = SINGLE_MUTATIONS.filter(
   (operation) => jiraRequiredConnectorScope(operation) === "issue-tracker.admin",
 );
-interface FixtureAuthoritySelection { readonly adminScope?: true }
+interface FixtureAuthoritySelection {
+  readonly adminScope?: true;
+}
 function reviewedAuthority(operation: JiraMutationOperation): FixtureAuthoritySelection {
-  return jiraRequiredConnectorScope(operation) === "issue-tracker.admin" ? { adminScope: true } : {};
+  return jiraRequiredConnectorScope(operation) === "issue-tracker.admin"
+    ? { adminScope: true }
+    : {};
 }
 function database(): {
   store: ReturnType<typeof buildUiStoreOverDatabase>;
@@ -220,16 +254,27 @@ async function fixtureReadResult(
   const path = new URL(url).pathname;
   if (operation === "jira.set-instance-base-url" && path.endsWith("/serverInfo")) {
     const observed = await lifecycle.read(url);
-    if (observed === undefined) throw new TypeError("Missing independent configured URL observation");
+    if (observed === undefined)
+      throw new TypeError("Missing independent configured URL observation");
     return observed;
   }
-  return await lifecycle.read(url) ?? verificationProbe(path) ?? nativeRead(path, state) ?? fixtureRead(path, state);
+  return (
+    verificationProbe(path) ??
+    (await lifecycle.read(url)) ??
+    nativeRead(path, state) ??
+    fixtureRead(path, state)
+  );
 }
 async function assertNativeRequestHeaders(request: Request, path: string): Promise<void> {
   expect(request.headers.get("authorization")).toBe(["Bearer", "synthetic-test-pat"].join(" "));
-  const experimental = (request.method === "PUT" &&
-    (path === "/context/rest/agile/1.0/sprint/unmap" || path === "/context/rest/agile/1.0/sprint/unmap-all")) ||
-    ((request.method === "POST" || request.method === "DELETE") && path === "/context/rest/api/2/user/application") ||
+  const experimental =
+    (request.method === "PUT" &&
+      new Set([
+        "/context/rest/agile/1.0/sprint/unmap",
+        "/context/rest/agile/1.0/sprint/unmap-all",
+      ]).has(path)) ||
+    (new Set(["POST", "DELETE"]).has(request.method) &&
+      path === "/context/rest/api/2/user/application") ||
     /^\/context\/rest\/api\/2\/project\/[1-9][0-9]*\/priorityscheme(?:\/[1-9][0-9]*)?$/u.test(path);
   expect(request.headers.get("x-experimentalapi")).toBe(experimental ? "true" : null);
   if (path === "/context/rest/api/2/email-templates") {
@@ -238,8 +283,10 @@ async function assertNativeRequestHeaders(request: Request, path: string): Promi
     else expect(request.headers.get("content-type")).toBe("application/zip");
   }
   await assertDirectoryRequestHeaders(request, path);
-  const attribute = request.method === "PUT" &&
-    path === "/context/rest/api/2/permissionscheme/7/attribute/ADMINISTER_PROJECTS.extended.enabled";
+  const attribute =
+    request.method === "PUT" &&
+    path ===
+      "/context/rest/api/2/permissionscheme/7/attribute/ADMINISTER_PROJECTS.extended.enabled";
   if (!attribute) {
     expect(request.headers.get("content-type")).not.toBe("text/plain");
     return;
@@ -248,7 +295,10 @@ async function assertNativeRequestHeaders(request: Request, path: string): Promi
   expect(await request.clone().text()).toBe("false");
 }
 async function assertDirectoryRequestHeaders(request: Request, path: string): Promise<void> {
-  const role = request.method === "PUT" && (path === "/context/rest/api/2/applicationrole" || path === "/context/rest/api/2/applicationrole/jira-software");
+  const role =
+    request.method === "PUT" &&
+    (path === "/context/rest/api/2/applicationrole" ||
+      path === "/context/rest/api/2/applicationrole/jira-software");
   expect(request.headers.get("if-match")).toBe(role ? '"native-role-version"' : null);
   if (role) expect(request.headers.get("content-type")).toBe("application/json");
   if (path === "/context/rest/api/2/user/application" && request.method !== "GET") {
@@ -257,7 +307,9 @@ async function assertDirectoryRequestHeaders(request: Request, path: string): Pr
   }
   if (request.method === "PUT" && path === "/context/rest/api/2/user/columns") {
     expect(request.headers.get("content-type")).toBe("application/x-www-form-urlencoded");
-    expect(await request.clone().text()).toBe("username=Target+User&columns=status&columns=summary&columns=status");
+    expect(await request.clone().text()).toBe(
+      "username=Target+User&columns=status&columns=summary&columns=status",
+    );
   }
 }
 function remote(
@@ -273,7 +325,51 @@ function remote(
   const lifecycle = lifecycleRemoteFixture(initialOperation);
   const privateNative = privateNativeTransportController(initialOperation);
   state.lifecycle = lifecycle.snapshot();
+  state.isWatching = initialOperation === "jira.unwatch";
+  state.hasVoted = initialOperation === "jira.unvote";
+  state.administration.jmxExposed = initialOperation === "jira.stop-jmx-metrics";
+  prepareSavedConfiguration(state.savedConfiguration, initialOperation);
+  if (
+    initialOperation === "jira.set-comment-property" ||
+    initialOperation === "jira.delete-comment-property"
+  )
+    state.comment = "Original";
+  if (initialOperation === "jira.delete-comment") state.comment = "Original";
+  if (initialOperation === "jira.delete-attachment")
+    state.fields.attachment = [{ id: "10300", filename: "report.txt", size: ATTACHED.length }];
+  if (initialOperation === "jira.delete-worklog") {
+    state.fields.timespent = 3600;
+    state.fields.timetracking = {
+      originalEstimateSeconds: 7200,
+      remainingEstimateSeconds: 3600,
+      timeSpentSeconds: 3600,
+    };
+  }
   let writes = 0;
+  async function privateResponse(
+    native: NonNullable<ReturnType<typeof privateNativeTransportController>>,
+    request: Request,
+  ): Promise<Response> {
+    if (request.method === "GET" && mode === "readback-denied" && writes > 0)
+      return Response.json({}, { status: 403 });
+    const result = await native.handle(request);
+    state.lifecycle = native.snapshot();
+    if (request.method !== "GET" && mode === "lost-response")
+      throw new TypeError("Synthetic connection loss after commit");
+    return result;
+  }
+  function fixtureResponse(result: Awaited<ReturnType<typeof fixtureReadResult>>): Response {
+    if (result.kind !== "response") throw new Error("Expected synthetic HTTP response");
+    return new Response(result.status === 204 ? null : (result.archiveBytes ?? result.bodyText), {
+      status: result.status,
+      headers: {
+        "content-type": result.archiveBytes === undefined ? "application/json" : "application/zip",
+        ...(result.applicationRoleVersion === undefined
+          ? {}
+          : { etag: result.applicationRoleVersion }),
+      },
+    });
+  }
   return {
     state,
     writes: () => writes,
@@ -287,26 +383,14 @@ function remote(
       }
       const refusal = await scriptedRefusal(mode, request);
       if (refusal !== undefined) return refusal;
-      if (privateNative !== undefined) {
-        if (request.method === "GET" && mode === "readback-denied" && writes > 0) return Response.json({}, { status: 403 });
-        const result = await privateNative.handle(request);
-        state.lifecycle = privateNative.snapshot();
-        if (request.method !== "GET" && mode === "lost-response") throw new TypeError("Synthetic connection loss after commit");
-        return result;
-      }
+      if (privateNative !== undefined) return privateResponse(privateNative, request);
       const result =
         request.method === "GET"
           ? await fixtureReadResult(mode, request.url, state, writes, lifecycle, initialOperation)
           : await fixtureWriteResult(request, path, state, lifecycle);
       if (request.method !== "GET" && mode === "lost-response")
         throw new TypeError("Synthetic connection loss after commit");
-      if (result.kind !== "response") throw new Error("Expected synthetic HTTP response");
-      return new Response(result.status === 204 ? null : result.archiveBytes ?? result.bodyText, {
-        status: result.status,
-        headers: { "content-type": result.archiveBytes === undefined ? "application/json" : "application/zip",
-          ...(result.applicationRoleVersion === undefined ? {} : { etag: result.applicationRoleVersion }),
-        },
-      });
+      return fixtureResponse(result);
     },
   };
 }
@@ -322,14 +406,18 @@ async function fixtureWriteResult(
     state.lifecycle = lifecycle.snapshot();
     return nativeLifecycle;
   }
-  const savedConfiguration = await nativeSavedConfigurationWrite(request, state.savedConfiguration);
-  if (savedConfiguration !== undefined) return savedConfiguration;
-  const administration = await nativeAdministrationWrite(request, state.administration);
-  if (administration !== undefined) return administration;
-  const deletion = nativeDeletionWrite(request, state);
-  if (deletion !== undefined) return deletion;
-  const participation = nativeParticipationWrite(request, state);
-  if (participation !== undefined) return participation;
+  const writers = [
+    (): ReturnType<typeof nativeSavedConfigurationWrite> =>
+      nativeSavedConfigurationWrite(request, state.savedConfiguration),
+    (): ReturnType<typeof nativeAdministrationWrite> =>
+      nativeAdministrationWrite(request, state.administration),
+    (): ReturnType<typeof nativeDeletionWrite> => nativeDeletionWrite(request, state),
+    (): ReturnType<typeof nativeParticipationWrite> => nativeParticipationWrite(request, state),
+  ];
+  for (const write of writers) {
+    const result = await write();
+    if (result !== undefined) return result;
+  }
   if (
     path.includes("/worklog") &&
     new URL(request.url).searchParams.get("adjustEstimate") !== "leave"
@@ -406,7 +494,8 @@ async function fixture(
   state: MutationRemoteState;
   logs: ReturnType<typeof createBufferedServerLogSink>;
   offered: unknown;
-  privatePrerequisites: { sessionAvailable: boolean; sourceAvailable: boolean; inputAvailable: boolean } | undefined;
+  privatePrerequisites:
+    { sessionAvailable: boolean; sourceAvailable: boolean; inputAvailable: boolean } | undefined;
 }> {
   const db = database();
   // Explicit fixture authority mirrors the independent human opt-in; mode and custody add no admin.
@@ -417,38 +506,51 @@ async function fixture(
   ]);
   let activeInvocation = "";
   let activeIntent: ChatToolMutationIntent | undefined;
+  // Binder cancellation can settle first; the fixture also joins the durable mutation owner.
+  const executions = new Map<string, ReturnType<typeof executeJiraChatMutation>>();
   let invalidate = (): void => undefined;
-  const jira = remote(mode, () => {
-    expect(db.journal.find(activeInvocation)?.phase).toBe("dispatched");
-  }, initialOperation);
-  jira.state.isWatching = initialOperation === "jira.unwatch";
-  jira.state.hasVoted = initialOperation === "jira.unvote";
-  jira.state.administration.jmxExposed = initialOperation === "jira.stop-jmx-metrics";
-  prepareSavedConfiguration(jira.state.savedConfiguration, initialOperation);
-  if (initialOperation === "jira.set-comment-property" || initialOperation === "jira.delete-comment-property")
-    jira.state.comment = "Original";
-  if (initialOperation === "jira.delete-comment") jira.state.comment = "Original";
-  if (initialOperation === "jira.delete-attachment") jira.state.fields.attachment = [{ id: "10300", filename: "report.txt", size: ATTACHED.length }];
-  if (initialOperation === "jira.delete-worklog") {
-    jira.state.fields.timespent = 3600;
-    jira.state.fields.timetracking = { originalEstimateSeconds: 7200, remainingEstimateSeconds: 3600, timeSpentSeconds: 3600 };
-  }
-  const privateComposition = privateNativeComposition(initialOperation, BASE_URL, jira.fetch, db.logs, { store: db.store, chatId: db.chatId });
+  const jira = remote(
+    mode,
+    () => {
+      expect(db.journal.find(activeInvocation)?.phase).toBe("dispatched");
+    },
+    initialOperation,
+  );
+  const privateComposition = privateNativeComposition(
+    initialOperation,
+    BASE_URL,
+    jira.fetch,
+    db.logs,
+    { store: db.store, chatId: db.chatId },
+  );
   if (privateComposition !== undefined) cleanup.push(privateComposition.close);
-  const ordinaryCredentials = privateComposition === undefined ? await mutationCredentials(jira.fetch, db.logs) : undefined;
-  const metadata = privateComposition?.metadata ?? ordinaryCredentials?.metadata;
+  const credentialOwner = privateComposition ?? (await mutationCredentials(jira.fetch, db.logs));
+  const metadata: unknown = credentialOwner.metadata;
   if (metadata === undefined) throw new TypeError("Missing native fixture credentials");
-  function httpPort(lifecycle: AtlassianHttpLifecycleOptions, correlationId: string): AtlassianHttpBodyPort {
+  function httpPort(
+    lifecycle: AtlassianHttpLifecycleOptions,
+    correlationId: string,
+  ): AtlassianHttpBodyPort {
     if (privateComposition !== undefined) return privateComposition.http(lifecycle);
-    if (ordinaryCredentials === undefined) throw new TypeError("Missing ordinary native fixture credentials");
-    return ordinaryCredentials.credentials.httpBodyPortFactory(ordinaryCredentials.metadata, correlationId, lifecycle);
+    if (!("credentials" in credentialOwner))
+      throw new TypeError("Missing ordinary native fixture credentials");
+    return credentialOwner.credentials.httpBodyPortFactory(
+      credentialOwner.metadata,
+      correlationId,
+      lifecycle,
+    );
   }
-  function observedLifecycle(lifecycle: AtlassianHttpLifecycleOptions): AtlassianHttpLifecycleOptions {
-    return { ...lifecycle, onResponse: (request, status) => {
-      const observed = lifecycle.onResponse?.(request, status) === true;
-      if (request.method !== "GET" && observed) invalidate();
-      return observed;
-    } };
+  function observedLifecycle(
+    lifecycle: AtlassianHttpLifecycleOptions,
+  ): AtlassianHttpLifecycleOptions {
+    return {
+      ...lifecycle,
+      onResponse: (request, status): boolean => {
+        const observed = lifecycle.onResponse?.(request, status) === true;
+        if (request.method !== "GET" && observed) invalidate();
+        return observed;
+      },
+    };
   }
   const executeMutation: JiraManagedMutationExecutor<
     CatalogHandlerContext<ConversationConsumer>
@@ -460,10 +562,15 @@ async function fixture(
       userMessageId: db.userMessageId,
       turnRef: db.turnRef,
       actorId: context.actorId,
-      podId: privateComposition === undefined ? "synthetic-pod" : privateFixturePod(privateComposition.metadata).podId,
+      podId:
+        privateComposition === undefined
+          ? "synthetic-pod"
+          : privateFixturePod(privateComposition.metadata).podId,
       bindingGeneration: context.binding.generation,
       credentialGeneration: 1,
-      authorityDigest: sha256Hex(canonicalise({ authority: context.authority, connectorScopes: [...connectorScopes] })),
+      authorityDigest: sha256Hex(
+        canonicalise({ authority: context.authority, connectorScopes: [...connectorScopes] }),
+      ),
       actionDigest: sha256Hex(canonicalise({ operation, args })),
       operation,
       correlationId: context.correlationId,
@@ -473,19 +580,39 @@ async function fixture(
       intent: activeIntent,
       httpPortFactory: (lifecycle: AtlassianHttpLifecycleOptions): AtlassianHttpBodyPort =>
         httpPort(observedLifecycle(lifecycle), context.correlationId),
-      beforeEffect: () => context.beforeEffect() && connectorScopes.has(jiraRequiredConnectorScope(operation)),
-      beforeMutation: () => context.beforeEffect() && connectorScopes.has(jiraRequiredConnectorScope(operation)),
+      beforeEffect: (): boolean =>
+        context.beforeEffect() && connectorScopes.has(jiraRequiredConnectorScope(operation)),
+      beforeMutation: (): boolean =>
+        context.beforeEffect() && connectorScopes.has(jiraRequiredConnectorScope(operation)),
     };
-    if (operation !== "jira.draft") return executeJiraChatMutation({ ...shared, execute: async (http, lifecycle) => {
-      if (privateComposition === undefined) return execute(http);
-      const livePod = privateFixturePod(privateComposition.metadata);
-      const ports = await privateComposition.ports(context, args, observedLifecycle(lifecycle), {
-        context: { kind: "chat", chatId: context.chatId, messageId: db.userMessageId, callId: context.invocationId,
-          podId: livePod.podId, bindingGeneration: context.binding.generation },
-        authority: { runId: db.turnRef, envelopeDigest: shared.intent.authorityDigest },
+    if (operation !== "jira.draft") {
+      const execution = executeJiraChatMutation({
+        ...shared,
+        execute: async (http, lifecycle) => {
+          if (privateComposition === undefined) return execute(http);
+          const livePod = privateFixturePod(privateComposition.metadata);
+          const ports = await privateComposition.ports(
+            context,
+            args,
+            observedLifecycle(lifecycle),
+            {
+              context: {
+                kind: "chat",
+                chatId: context.chatId,
+                messageId: db.userMessageId,
+                callId: context.invocationId,
+                podId: livePod.podId,
+                bindingGeneration: context.binding.generation,
+              },
+              authority: { runId: db.turnRef, envelopeDigest: shared.intent.authorityDigest },
+            },
+          );
+          return execute(http, undefined, ports);
+        },
       });
-      return execute(http, undefined, ports);
-    } });
+      executions.set(context.invocationId, execution);
+      return execution;
+    }
     // The draft itself is never journaled; its one synthetic item is what reaches Jira.
     activeInvocation = jiraDraftChildIntent(activeIntent, "one").invocationId;
     return executeJiraChatDraft({
@@ -496,6 +623,11 @@ async function fixture(
       connection: { deployment: "data-center", baseUrl: BASE_URL },
     });
   };
+  // A case offers its actual operation and the explicit next write used to prove that an
+  // uncertain effect blocks the turn. The complete inventory remains covered by it.each below.
+  const tools = [
+    ...new Set<JiraMutationOperation>([initialOperation ?? "jira.create", "jira.comment"]),
+  ];
   const provider = createJiraProviderForCatalog<CatalogHandlerContext<ConversationConsumer>>(
     () => ({
       deployment: "data-center",
@@ -512,7 +644,7 @@ async function fixture(
         });
       },
     }),
-    JIRA_MUTATION_OPERATIONS,
+    tools,
     executeMutation,
   );
   const managed = await createManagedProviderCatalog<ConversationConsumer>({
@@ -521,7 +653,7 @@ async function fixture(
     log: { primary: db.logs, diagnostics: { record: () => undefined } },
     correlationId: "mutation-admission",
     now: () => 1000,
-    routes: jiraChatCatalogRoutes(JIRA_MUTATION_OPERATIONS).map(({ name, alias }) => ({
+    routes: jiraChatCatalogRoutes(tools).map(({ name, alias }) => ({
       name,
       alias,
       catalogAction: name,
@@ -583,7 +715,13 @@ async function fixture(
       );
       if (projected === undefined) throw new TypeError("Expected offered mutation identity");
       const call = gateway.bind({ id, name: projected.alias, arguments: args });
-      return consumer.binder.dispatch(call.invocation, { actionId: id, idempotencyKey: id });
+      const outcome = await consumer.binder.dispatch(call.invocation, {
+        actionId: id,
+        idempotencyKey: id,
+      });
+      await executions.get(outcome.receipt.invocationId);
+      executions.delete(outcome.receipt.invocationId);
+      return outcome;
     },
   };
 }
@@ -612,84 +750,193 @@ it.each(["binding-revoked", "cancelled"] as const)(
   },
 );
 
-it.each(["jira.login", "jira.upload-project-avatar"] as const)("retains %s native acknowledgement before cancelled private proof/cleanup", async (operation) => {
-  const f = await fixture("confirmed", "cancelled", operation, reviewedAuthority(operation));
-  const outcome = await f.invoke(operation);
-  expect(outcome).toMatchObject({ kind: "settled", result: { status: "cancelled", data: null } });
-  expect(f.journal.find(f.intent().invocationId)).toMatchObject({ phase: "settled", outcome: "succeeded-unconfirmed" });
-  expect(f.writes()).toBe(1);
-  await f.invoke(operation);
-  expect(f.writes()).toBe(1);
-});
+it.each(["jira.login", "jira.upload-project-avatar"] as const)(
+  "retains %s native acknowledgement before cancelled private proof/cleanup",
+  async (operation) => {
+    const f = await fixture("confirmed", "cancelled", operation, reviewedAuthority(operation));
+    const outcome = await f.invoke(operation);
+    expect(outcome).toMatchObject({ kind: "settled", result: { status: "cancelled", data: null } });
+    expect(f.journal.find(f.intent().invocationId)).toMatchObject({
+      phase: "settled",
+      outcome: "succeeded-unconfirmed",
+    });
+    expect(f.writes()).toBe(1);
+    await f.invoke(operation);
+    expect(f.writes()).toBe(1);
+  },
+);
 
 it.each([
   { operation: "jira.upload-project-avatar", missing: "sessionAvailable" },
   { operation: "jira.upload-project-avatar", missing: "sourceAvailable" },
   { operation: "jira.login", missing: "inputAvailable" },
   { operation: "jira.unlock-user-anonymization", missing: "inputAvailable" },
-] as const)("refuses $operation before native effects when real $missing is unavailable", async ({ operation, missing }) => {
-  const f = await fixture("confirmed", undefined, operation, reviewedAuthority(operation));
-  if (f.privatePrerequisites === undefined) throw new TypeError("Missing actual private corpus composition");
-  f.privatePrerequisites[missing] = false;
-  const outcome = await f.invoke(operation);
-  expect(outcome).toMatchObject({ kind: "settled", result: { status: "failed", data: { outcome: "not-dispatched" } } });
-  expect(f.writes()).toBe(0);
-  expect(f.journal.find(f.intent().invocationId)?.phase).not.toBe("acknowledged");
-});
-
-it.each(PRIVATE_ACCOUNT_READ_CASES)("keeps $name a native POST read through the actual catalog and private custody", async (item) => {
-  const selected = privateNativeCase(item.name); const native = privateNativeTransportController(item.name);
-  if (selected === undefined || native === undefined) throw new TypeError("Missing independent validator fixture");
-  const db = database(); let invocation = "";
-  const composition = privateNativeComposition(item.name, BASE_URL, async (input, init) => native.handle(new Request(input, init)),
-    db.logs, { store: db.store, chatId: db.chatId });
-  if (composition === undefined) throw new TypeError("Missing actual private validator composition");
-  cleanup.push(composition.close);
-  const mutation = vi.fn<JiraManagedMutationExecutor<CatalogHandlerContext<ConversationConsumer>>>(async () => {
-    throw new TypeError("Read validation must never enter the mutation executor");
-  });
-  const provider = createJiraProviderForCatalog<CatalogHandlerContext<ConversationConsumer>>(async (context) => {
-    invocation = context.invocationId;
-    const pod = privateFixturePod(composition.metadata);
-    const ports = await composition.ports(context, selected.args, {}, {
-      context: { kind: "chat", chatId: context.chatId, messageId: db.userMessageId, callId: context.invocationId,
-        podId: pod.podId, bindingGeneration: context.binding.generation },
-      authority: { runId: context.runId, envelopeDigest: sha256Hex(context.authority) },
+] as const)(
+  "refuses $operation before native effects when real $missing is unavailable",
+  async ({ operation, missing }) => {
+    const f = await fixture("confirmed", undefined, operation, reviewedAuthority(operation));
+    if (f.privatePrerequisites === undefined)
+      throw new TypeError("Missing actual private corpus composition");
+    f.privatePrerequisites[missing] = false;
+    const outcome = await f.invoke(operation);
+    expect(outcome).toMatchObject({
+      kind: "settled",
+      result: { status: "failed", data: { outcome: "not-dispatched" } },
     });
-    return { deployment: "data-center", baseUrl: BASE_URL, http: composition.http(), ...ports };
-  }, [item.name], mutation);
-  const managed = await createManagedProviderCatalog<ConversationConsumer>({ providers: [provider],
-    profile: { id: "jira-private-validator-fixture", version: 1 },
-    log: { primary: db.logs, diagnostics: { record: () => undefined } }, correlationId: "private-validator", now: () => 1000,
-    routes: jiraChatCatalogRoutes([item.name]).map(({ name, alias }) => ({ name, alias, catalogAction: name,
-      previewAction: (identity): ConversationAction => ({ ...identity, action: "lookup", query: name }),
-      actionFor: (args, identity): ConversationAction => ({ ...identity, action: "lookup", query: canonicalise({ name, args }) }),
-      resultFor: (data): CatalogHandlerResult => ({ data, page: { truncated: false, reason: "none", cursor: null }, resultCount: 1 }),
-    })),
-  });
-  cleanup.push(() => managed.close());
-  const consumer = createConversationConsumerFixture(undefined, managed); consumer.context.chatId = db.chatId; cleanup.push(consumer.dispose);
-  const gateway = createGatewayToolCatalogBridge({ modelId: "synthetic-model", messages: [], toolCatalog: {
-    kind: "bound", catalog: managed.catalog, projection: managed.projection, offered: consumer.binder.offer(),
-  } }, () => 1000, db.logs);
-  const projected = managed.projection.tools[0]; if (projected === undefined) throw new TypeError("Missing actual validator descriptor");
-  const call = gateway.bind({ id: "private-validation-call", name: projected.alias, arguments: selected.args });
-  const result = await consumer.binder.dispatch(call.invocation, { actionId: "private-validation-call", idempotencyKey: "private-validation-call" });
-  expect(result).toMatchObject({ kind: "settled", result: { status: "completed", data: {
-    outcome: "succeeded", accepted: true, violationCount: 0, validationScope: item.scope,
-  } } });
-  expect(native.snapshot()).toEqual({ validations: 1 }); expect(mutation).not.toHaveBeenCalled();
-  expect(db.journal.find(invocation)).toBeUndefined();
-  for (const secret of [PRIVATE_NATIVE_PASSWORD, PRIVATE_NATIVE_LICENSE, PRIVATE_NATIVE_COOKIE.value]) {
-    expect(JSON.stringify(result)).not.toContain(secret); expect(db.logs.lines().join()).not.toContain(secret);
-  }
-});
+    expect(f.writes()).toBe(0);
+    expect(f.journal.find(f.intent().invocationId)?.phase).not.toBe("acknowledged");
+  },
+);
+
+it.each(PRIVATE_ACCOUNT_READ_CASES)(
+  "keeps $name a native POST read through the actual catalog and private custody",
+  async (item) => {
+    const selected = privateNativeCase(item.name);
+    const native = privateNativeTransportController(item.name);
+    if (selected === undefined || native === undefined)
+      throw new TypeError("Missing independent validator fixture");
+    const db = database();
+    let invocation = "";
+    const composition = privateNativeComposition(
+      item.name,
+      BASE_URL,
+      async (input, init) => native.handle(new Request(input, init)),
+      db.logs,
+      { store: db.store, chatId: db.chatId },
+    );
+    if (composition === undefined)
+      throw new TypeError("Missing actual private validator composition");
+    cleanup.push(composition.close);
+    const mutation = vi.fn<
+      JiraManagedMutationExecutor<CatalogHandlerContext<ConversationConsumer>>
+    >(() =>
+      Promise.reject(new TypeError("Read validation must never enter the mutation executor")),
+    );
+    const provider = createJiraProviderForCatalog<CatalogHandlerContext<ConversationConsumer>>(
+      async (context) => {
+        invocation = context.invocationId;
+        const pod = privateFixturePod(composition.metadata);
+        const ports = await composition.ports(
+          context,
+          selected.args,
+          {},
+          {
+            context: {
+              kind: "chat",
+              chatId: context.chatId,
+              messageId: db.userMessageId,
+              callId: context.invocationId,
+              podId: pod.podId,
+              bindingGeneration: context.binding.generation,
+            },
+            authority: { runId: context.runId, envelopeDigest: sha256Hex(context.authority) },
+          },
+        );
+        return { deployment: "data-center", baseUrl: BASE_URL, http: composition.http(), ...ports };
+      },
+      [item.name],
+      mutation,
+    );
+    const managed = await createManagedProviderCatalog<ConversationConsumer>({
+      providers: [provider],
+      profile: { id: "jira-private-validator-fixture", version: 1 },
+      log: { primary: db.logs, diagnostics: { record: () => undefined } },
+      correlationId: "private-validator",
+      now: () => 1000,
+      routes: jiraChatCatalogRoutes([item.name]).map(({ name, alias }) => ({
+        name,
+        alias,
+        catalogAction: name,
+        previewAction: (identity): ConversationAction => ({
+          ...identity,
+          action: "lookup",
+          query: name,
+        }),
+        actionFor: (args, identity): ConversationAction => ({
+          ...identity,
+          action: "lookup",
+          query: canonicalise({ name, args }),
+        }),
+        resultFor: (data): CatalogHandlerResult => ({
+          data,
+          page: { truncated: false, reason: "none", cursor: null },
+          resultCount: 1,
+        }),
+      })),
+    });
+    cleanup.push(() => managed.close());
+    const consumer = createConversationConsumerFixture(undefined, managed);
+    consumer.context.chatId = db.chatId;
+    cleanup.push(consumer.dispose);
+    const gateway = createGatewayToolCatalogBridge(
+      {
+        modelId: "synthetic-model",
+        messages: [],
+        toolCatalog: {
+          kind: "bound",
+          catalog: managed.catalog,
+          projection: managed.projection,
+          offered: consumer.binder.offer(),
+        },
+      },
+      () => 1000,
+      db.logs,
+    );
+    const projected = managed.projection.tools[0];
+    if (projected === undefined) throw new TypeError("Missing actual validator descriptor");
+    const call = gateway.bind({
+      id: "private-validation-call",
+      name: projected.alias,
+      arguments: selected.args,
+    });
+    const result = await consumer.binder.dispatch(call.invocation, {
+      actionId: "private-validation-call",
+      idempotencyKey: "private-validation-call",
+    });
+    expect(result).toMatchObject({
+      kind: "settled",
+      result: {
+        status: "completed",
+        data: {
+          outcome: "succeeded",
+          accepted: true,
+          violationCount: 0,
+          validationScope: item.scope,
+        },
+      },
+    });
+    expect(native.snapshot()).toEqual({ validations: 1 });
+    expect(mutation).not.toHaveBeenCalled();
+    expect(db.journal.find(invocation)).toBeUndefined();
+    for (const secret of [
+      PRIVATE_NATIVE_PASSWORD,
+      PRIVATE_NATIVE_LICENSE,
+      PRIVATE_NATIVE_COOKIE.value,
+    ]) {
+      expect(JSON.stringify(result)).not.toContain(secret);
+      expect(db.logs.lines().join()).not.toContain(secret);
+    }
+  },
+);
 
 it.each(SINGLE_MUTATIONS)(
   "executes %s through the real gateway/binder/SDK and durable journal",
   async (operation) => {
     const f = await fixture("confirmed", undefined, operation, reviewedAuthority(operation));
-    const expectedOutcome = expectedFinalOutcome(operation) ?? expectedSystemAdministrationOutcome(operation) ?? expectedSchemeSettingOutcome(operation) ?? expectedPermissionRoleOutcome(operation) ?? expectedPlanningOutcome(operation) ?? expectedConfigurationOutcome(operation) ?? expectedLifecycleOutcome(operation) ?? expectedSavedConfigurationOutcome(operation) ?? "succeeded";
+    const expectedOutcome =
+      [
+        expectedFinalOutcome,
+        expectedSystemAdministrationOutcome,
+        expectedSchemeSettingOutcome,
+        expectedPermissionRoleOutcome,
+        expectedPlanningOutcome,
+        expectedConfigurationOutcome,
+        expectedLifecycleOutcome,
+        expectedSavedConfigurationOutcome,
+      ].reduce<string | undefined>(
+        (outcome, resolve): string | undefined => outcome ?? resolve(operation),
+        undefined,
+      ) ?? "succeeded";
     expect(await f.invoke(operation)).toMatchObject({
       kind: "settled",
       result: {
@@ -713,7 +960,11 @@ it.each(SINGLE_MUTATIONS)(
     expect(f.logs.lines().join()).not.toMatch(
       /synthetic-test-pat|203\.0\.113\.10|Synthetic comment|SYN-1/u,
     );
-    for (const secret of [PRIVATE_NATIVE_PASSWORD, PRIVATE_NATIVE_LICENSE, PRIVATE_NATIVE_COOKIE.value]) {
+    for (const secret of [
+      PRIVATE_NATIVE_PASSWORD,
+      PRIVATE_NATIVE_LICENSE,
+      PRIVATE_NATIVE_COOKIE.value,
+    ]) {
       expect(JSON.stringify(f.offered)).not.toContain(secret);
       expect(f.logs.lines().join()).not.toContain(secret);
     }
@@ -844,7 +1095,7 @@ it.each(["html-error-page", "server-error"] as const)(
 );
 
 it("requires explicit clearing and rejects ambiguous assignment through the SDK path", async () => {
-  const f = await fixture();
+  const f = await fixture("confirmed", undefined, "jira.assign");
   expect(
     await f.invoke("jira.assign", {
       issueKey: "SYN-1",
@@ -880,7 +1131,7 @@ function settledMutationLine(
 // #4173: a write Keiko refuses before dispatch settles `rejected` with no HTTP status. Its settled
 // line must name Keiko's closed reason, or the log cannot say why the model's write failed.
 it("names Keiko's closed reason on the settled line of a write refused before dispatch", async () => {
-  const f = await fixture();
+  const f = await fixture("confirmed", undefined, "jira.assign");
 
   await f.invoke("jira.assign", {
     issueKey: "SYN-1",
@@ -930,7 +1181,7 @@ it("records no local refusal reason once Jira itself answered the write", async 
   expect(line).not.toHaveProperty("fieldValidation");
 });
 it("runs a backlog draft through the real gateway/binder/SDK as journaled item creates (#4178)", async () => {
-  const f = await fixture();
+  const f = await fixture("confirmed", undefined, "jira.draft");
   expect(await f.invoke("jira.draft")).toMatchObject({
     kind: "settled",
     result: {
@@ -995,7 +1246,7 @@ it("requires saved target admission before the SDK fixture can dispatch any HTTP
 });
 
 it("treats a draft whose items all exist already as a completed no-op, not a tool error (#4178)", async () => {
-  const f = await fixture();
+  const f = await fixture("confirmed", undefined, "jira.draft");
   expect(await f.invoke("jira.draft")).toMatchObject({
     kind: "settled",
     result: { status: "completed", data: { outcome: "succeeded", createdCount: 1 } },
@@ -1024,7 +1275,7 @@ it("treats a draft whose items all exist already as a completed no-op, not a too
 it.each([51, 100])(
   "rejects %s updates at the catalog boundary before journal preparation",
   async (count) => {
-    const f = await fixture();
+    const f = await fixture("confirmed", undefined, "jira.edit");
     const prepare = vi.spyOn(f.journal, "prepare");
     await expect(
       f.invoke("jira.edit", {
@@ -1059,39 +1310,105 @@ it("keeps an independent complete argument/state/receipt case for every register
   expect(Object.keys(SUCCESS_RECEIPTS).sort()).toEqual([...SINGLE_MUTATIONS].sort());
   expect(ADMIN_MUTATIONS).toHaveLength(139);
   expect(Object.keys(FINAL_EXPECTED_OUTCOMES)).toHaveLength(42);
-  expect(Object.entries(FINAL_EXPECTED_OUTCOMES).filter(([, outcome]) => outcome === "succeeded").map(([name]) => name).sort()).toEqual([
-    "jira.login", "jira.set-project-avatar", "jira.set-user-avatar", "jira.update-myself", "jira.update-user",
+  expect(
+    Object.entries(FINAL_EXPECTED_OUTCOMES)
+      .filter(([, outcome]) => outcome === "succeeded")
+      .map(([name]) => name)
+      .sort(),
+  ).toEqual([
+    "jira.login",
+    "jira.set-project-avatar",
+    "jira.set-user-avatar",
+    "jira.update-myself",
+    "jira.update-user",
   ]);
   expect(Object.keys(SCHEME_SETTING_EXPECTED_OUTCOMES)).toHaveLength(35);
-  expect(Object.entries(SCHEME_SETTING_EXPECTED_OUTCOMES).filter(([, outcome]) => outcome === "succeeded-unconfirmed").map(([name]) => name).sort()).toEqual([
-    "jira.add-issue-type-scheme-projects", "jira.apply-email-template-pack", "jira.clear-issue-type-scheme-projects",
-    "jira.delete-issue-type-scheme", "jira.delete-priority-scheme", "jira.delete-workflow-scheme",
-    "jira.delete-workflow-scheme-default", "jira.delete-workflow-scheme-issue-type", "jira.delete-workflow-scheme-workflow",
-    "jira.remove-issue-type-scheme-project", "jira.revert-email-template-pack", "jira.set-instance-base-url",
-    "jira.set-issue-type-scheme-projects", "jira.set-workflow-scheme-default", "jira.set-workflow-scheme-issue-type",
-    "jira.set-workflow-scheme-workflow", "jira.upload-email-template-pack",
+  expect(
+    Object.entries(SCHEME_SETTING_EXPECTED_OUTCOMES)
+      .filter(([, outcome]) => outcome === "succeeded-unconfirmed")
+      .map(([name]) => name)
+      .sort(),
+  ).toEqual([
+    "jira.add-issue-type-scheme-projects",
+    "jira.apply-email-template-pack",
+    "jira.clear-issue-type-scheme-projects",
+    "jira.delete-issue-type-scheme",
+    "jira.delete-priority-scheme",
+    "jira.delete-workflow-scheme",
+    "jira.delete-workflow-scheme-default",
+    "jira.delete-workflow-scheme-issue-type",
+    "jira.delete-workflow-scheme-workflow",
+    "jira.remove-issue-type-scheme-project",
+    "jira.revert-email-template-pack",
+    "jira.set-instance-base-url",
+    "jira.set-issue-type-scheme-projects",
+    "jira.set-workflow-scheme-default",
+    "jira.set-workflow-scheme-issue-type",
+    "jira.set-workflow-scheme-workflow",
+    "jira.upload-email-template-pack",
   ]);
-  expect(Object.entries(PERMISSION_ROLE_EXPECTED_OUTCOMES).filter(([, outcome]) => outcome === "succeeded-unconfirmed").map(([name]) => name).sort())
-    .toEqual(["jira.add-project-role-actors", "jira.add-role-default-actors", "jira.delete-permission-scheme", "jira.delete-project-role-actor", "jira.delete-role", "jira.delete-role-default-actor", "jira.set-project-role-actors"]);
-  expect(Object.entries(PLANNING_EXPECTED_OUTCOMES).filter(([, outcome]) => outcome === "succeeded-unconfirmed").map(([name]) => name).sort())
-    .toEqual(["jira.delete-project-category", "jira.rank-epic", "jira.rank-issues"]);
-  expect(Object.entries(LIFECYCLE_EXPECTED_OUTCOMES).filter(([, outcome]) => outcome === "succeeded-unconfirmed").map(([name]) => name).sort())
-    .toEqual(["jira.delete-component", "jira.merge-version", "jira.remove-and-swap-version"]);
-  expect(Object.entries(CONFIGURATION_EXPECTED_OUTCOMES).filter(([, outcome]) => outcome === "succeeded-unconfirmed").map(([name]) => name).sort())
-    .toEqual(["jira.add-default-screen-field", "jira.delete-board", "jira.delete-sprint", "jira.swap-sprints", "jira.unmap-all-sprints"]);
+  expect(
+    Object.entries(PERMISSION_ROLE_EXPECTED_OUTCOMES)
+      .filter(([, outcome]) => outcome === "succeeded-unconfirmed")
+      .map(([name]) => name)
+      .sort(),
+  ).toEqual([
+    "jira.add-project-role-actors",
+    "jira.add-role-default-actors",
+    "jira.delete-permission-scheme",
+    "jira.delete-project-role-actor",
+    "jira.delete-role",
+    "jira.delete-role-default-actor",
+    "jira.set-project-role-actors",
+  ]);
+  expect(
+    Object.entries(PLANNING_EXPECTED_OUTCOMES)
+      .filter(([, outcome]) => outcome === "succeeded-unconfirmed")
+      .map(([name]) => name)
+      .sort(),
+  ).toEqual(["jira.delete-project-category", "jira.rank-epic", "jira.rank-issues"]);
+  expect(
+    Object.entries(LIFECYCLE_EXPECTED_OUTCOMES)
+      .filter(([, outcome]) => outcome === "succeeded-unconfirmed")
+      .map(([name]) => name)
+      .sort(),
+  ).toEqual(["jira.delete-component", "jira.merge-version", "jira.remove-and-swap-version"]);
+  expect(
+    Object.entries(CONFIGURATION_EXPECTED_OUTCOMES)
+      .filter(([, outcome]) => outcome === "succeeded-unconfirmed")
+      .map(([name]) => name)
+      .sort(),
+  ).toEqual([
+    "jira.add-default-screen-field",
+    "jira.delete-board",
+    "jira.delete-sprint",
+    "jira.swap-sprints",
+    "jira.unmap-all-sprints",
+  ]);
 });
-it.each(ADMIN_MUTATIONS)("does not grant %s administration from ordinary issue scopes or verified credentials", async (operation) => {
-  const f = await fixture("confirmed", undefined, operation);
-  const before = structuredClone(f.state);
-  expect(await f.invoke(operation)).toMatchObject({ kind: "settled", result: { data: { outcome: "pending", reason: "permission-denied" } } });
-  expect(f.writes()).toBe(0);
-  expect(f.journal.find(f.intent().invocationId)).toBeUndefined();
-  expect(f.state).toEqual(before);
-});
+it.each(ADMIN_MUTATIONS)(
+  "does not grant %s administration from ordinary issue scopes or verified credentials",
+  async (operation) => {
+    const f = await fixture("confirmed", undefined, operation);
+    const before = structuredClone(f.state);
+    expect(await f.invoke(operation)).toMatchObject({
+      kind: "settled",
+      result: { data: { outcome: "pending", reason: "permission-denied" } },
+    });
+    expect(f.writes()).toBe(0);
+    expect(f.journal.find(f.intent().invocationId)).toBeUndefined();
+    expect(f.state).toEqual(before);
+  },
+);
 
 it("keeps each of the 35 new administrative/issue outcomes explicit through gateway replay", () => {
   expect(Object.keys(SYSTEM_ADMINISTRATION_EXPECTED_OUTCOMES)).toHaveLength(35);
-  expect(Object.entries(SYSTEM_ADMINISTRATION_EXPECTED_OUTCOMES).filter(([, outcome]) => outcome === "succeeded-unconfirmed").map(([name]) => name).sort()).toEqual([
+  expect(
+    Object.entries(SYSTEM_ADMINISTRATION_EXPECTED_OUTCOMES)
+      .filter(([, outcome]) => outcome === "succeeded-unconfirmed")
+      .map(([name]) => name)
+      .sort(),
+  ).toEqual([
     "jira.add-group-user",
     "jira.add-user-application",
     "jira.approve-cluster-upgrade",
