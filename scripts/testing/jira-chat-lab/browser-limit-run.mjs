@@ -10,6 +10,7 @@ import { nativePages, projectAgileRead } from "./project-agile-oracles.mjs";
 import { withExclusiveProcessLock } from "./requirements/work-project-lock.mjs";
 
 const MODES = ["governed-assist", "supervised-coding", "autonomous-delivery"];
+const CHAT_SLOTS = ["document", "report", "denied"];
 const OWNERS = {
   runProjectSetup: "./browser-project-agile-journey.mjs",
   installTemplates: "./requirements/templates.mjs",
@@ -167,6 +168,21 @@ async function step(ctx, results, name, run) {
 }
 
 async function cards(ctx, blocks, results, checkpoint) {
+  const documentRegion = ctx.region;
+  if (ctx.focusChat) {
+    const focused = await ctx.focusChat(checkpoint === "report" ? ctx.reportChat : ctx.chat);
+    ctx.cardChat = focused.chat;
+    ctx.region = focused.region;
+  }
+  try {
+    await bilingualCards(ctx, blocks, results, checkpoint);
+  } finally {
+    ctx.region = documentRegion;
+    delete ctx.cardChat;
+  }
+}
+
+async function bilingualCards(ctx, blocks, results, checkpoint) {
   for (const locale of ["en", "de"]) {
     await step(ctx, results, `ac9-${checkpoint}-${locale}-language`, () =>
       blocks.setUiLanguage(ctx, locale),
@@ -182,8 +198,12 @@ async function cards(ctx, blocks, results, checkpoint) {
   ctx.locale = "en";
 }
 
-function faultPlan(blocks) {
-  const plan = blocks.createFaultPlan({ at: [0.4, 0.8], kinds: ["response-drop", "server-kill"] });
+function faultPlan(blocks, scope) {
+  const plan = blocks.createFaultPlan({
+    scope,
+    at: [0.4, 0.8],
+    kinds: ["response-drop", "server-kill"],
+  });
   assert.equal(typeof plan?.maybeInject, "function");
   return plan;
 }
@@ -209,20 +229,23 @@ async function stages(ctx, options, blocks, results) {
   await step(ctx, results, "ac1-probes", () => blocks.runRuleProbes(ctx, { modes: [...MODES] }));
   await step(ctx, results, "ac2-lastenheft", () => blocks.stageLastenheft(ctx));
   await step(ctx, results, "ac2-epics", () =>
-    blocks.runBulkEpics(ctx, { violationRate: options.violationRate, faults: faultPlan(blocks) }),
+    blocks.runBulkEpics(ctx, {
+      violationRate: options.violationRate,
+      faults: faultPlan(blocks, "bulk-epics"),
+    }),
   );
   await step(ctx, results, "ac1-bulk-refusals", () =>
     blocks.gradeBulkRefusals(ctx, { seeded: bulkSeeds(ctx) }),
   );
   await cards(ctx, blocks, results, "epics");
   await step(ctx, results, "ac4-hierarchy", () =>
-    blocks.runHierarchyBulk(ctx, { faults: faultPlan(blocks) }),
+    blocks.runHierarchyBulk(ctx, { faults: faultPlan(blocks, "hierarchy") }),
   );
-  ctx.faults = faultPlan(blocks);
   await step(ctx, results, "ac6-sprint", () =>
     blocks.runSprintBulk(ctx, { size: options.sprintSize, batch: 50 }),
   );
   await cards(ctx, blocks, results, "sprint");
+  ctx.faults = faultPlan(blocks, "progress");
   const progress = await step(ctx, results, "progress-simulation", () =>
     blocks.simulateProgress(ctx, { seedDeviations: true }),
   );
@@ -266,6 +289,9 @@ function validateLimitOptions(ctx, options, blocks) {
   );
   for (const name of Object.keys(OWNERS)) assert.equal(typeof blocks?.[name], "function");
   assert.ok(ctx.intent && ctx.signal && ctx.page && /^LIM[1-9][0-9]{0,6}$/u.test(ctx.projectKey));
+  const chats = [ctx.chat, ctx.reportChat, ctx.deniedChat];
+  assert.ok(chats.every((chat) => typeof chat?.id === "string" && chat.id.length > 0));
+  assert.equal(new Set(chats.map((chat) => chat.id)).size, 3);
   return selected;
 }
 
@@ -315,32 +341,213 @@ export async function readLimitFieldTruth(read, projectKey) {
   return { fieldIds: { epicLink: epic[0].id }, requiredFieldsByType };
 }
 
-async function limitContext(live, opened, options, intent, signal) {
+function recordLimitChat(intent, slot, facts) {
+  const fields = ["phase", "chatId", "windowId", "podId", "actorClass"];
+  const saved = Object.fromEntries(
+    fields.filter((key) => facts[key] !== undefined).map((key) => [key, facts[key]]),
+  );
+  intent.record("chats", {
+    ...intent.state.chats,
+    [slot]: { ...intent.state.chats?.[slot], ...saved },
+  });
+}
+
+function resumableLimitChat(intent, slot) {
+  const saved = intent.state.chats?.[slot] ?? {};
+  assert.ok(
+    saved.phase !== "chat-creation-may-have-started" || saved.chatId,
+    "An uncertain Chat creation requires reconciliation",
+  );
+  assert.ok(
+    saved.phase !== "pod-creation-may-have-started" || saved.podId,
+    "An uncertain Pod creation requires reconciliation",
+  );
+  return saved;
+}
+
+function limitChatOptions(slot, saved, handles, options, intent) {
+  const restricted = slot === "denied";
+  const actorClass = restricted ? "restricted" : "permitted";
+  assert.ok(saved.actorClass === undefined || saved.actorClass === actorClass);
+  if (slot === "report" && saved.podId !== undefined)
+    assert.equal(saved.podId, handles.document.podId);
+  const titles = { document: "Documents", report: "Reporting", denied: "Restricted" };
+  return {
+    shared: handles.document,
+    chatId: saved.chatId,
+    podId: saved.podId ?? (slot === "report" ? handles.document.podId : undefined),
+    title: `Limit Run ${titles[slot]}`,
+    label: restricted ? "Limit Run Restricted" : "Limit Run Jira",
+    tokenFile: restricted ? options.deniedToken : options.permittedToken,
+    actorClass,
+    mode: "autonomous-delivery",
+    administration: true,
+    jiraOnly: slot !== "document",
+    onPhase: (facts) => recordLimitChat(intent, slot, facts),
+    onChat: (facts) => recordLimitChat(intent, slot, facts),
+    onPod: (facts) => recordLimitChat(intent, slot, facts),
+  };
+}
+
+/** Three ordinary UI Chats share one signed-in page and exactly two verified Jira Pods. */
+export async function openLimitRunChats(live, options, intent, ports) {
+  const ui = ports ?? (await import("./browser-workflow-turn.mjs"));
+  const handles = {};
+  try {
+    for (const slot of CHAT_SLOTS) {
+      const saved = resumableLimitChat(intent, slot);
+      const selected = limitChatOptions(slot, saved, handles, options, intent);
+      const handle = await ui.openWorkflowBrowser(live, selected);
+      handles[slot] = handle;
+      if (saved.chatId !== undefined) assert.equal(handle.chat.id, saved.chatId);
+      if (saved.podId !== undefined) assert.equal(handle.podId, saved.podId);
+      if (slot !== "document") {
+        assert.equal(handle.page, handles.document.page);
+        assert.equal(handle.browser, handles.document.browser);
+      }
+      recordLimitChat(intent, slot, {
+        phase: "ready",
+        chatId: handle.chat.id,
+        windowId: handle.windowId,
+        podId: handle.podId,
+        actorClass: selected.actorClass,
+      });
+    }
+    assert.equal(new Set(CHAT_SLOTS.map((slot) => handles[slot].chat.id)).size, 3);
+    assert.equal(handles.report.podId, handles.document.podId);
+    assert.notEqual(handles.denied.podId, handles.document.podId);
+    await handles.document.focus(handles.document.page);
+    return handles;
+  } catch (error) {
+    await handles.document?.close();
+    throw error;
+  }
+}
+
+function limitChatHandle(ctx, handles, chat) {
+  const slot = CHAT_SLOTS.find((name) => handles[name].chat.id === chat?.id);
+  assert.ok(slot, "A turn must target one of this run's three registered Chats");
+  const handle = handles[slot];
+  const saved = ctx.intent.state.chats?.[slot];
+  assert.ok(
+    saved?.chatId === handle.chat.id && saved.podId === handle.podId,
+    "The saved Chat binding changed",
+  );
+  return { slot, handle };
+}
+
+async function focusLimitChat(ctx, handles, chat, ui) {
+  ctx.signal.throwIfAborted();
+  const { slot, handle } = limitChatHandle(ctx, handles, chat);
+  const focused = await handle.focus(ctx.page);
+  ctx.signal.throwIfAborted();
+  assert.equal(focused.chat.id, handle.chat.id);
+  ui.assertWorkflowChatConfiguration(focused.chat, ctx, handle.podId, {
+    mode: "autonomous-delivery",
+    administration: true,
+    jiraOnly: slot !== "document",
+  });
+  ctx[slot === "document" ? "chat" : `${slot}Chat`] = focused.chat;
+  ctx.activeChatId = focused.chat.id;
+  return focused;
+}
+
+function limitRecovery(ctx, live, handles, ui) {
+  if (typeof live.restartServer !== "function") return undefined;
+  let pending = false;
+  return {
+    async restartServer(options = {}) {
+      assert.ok(Object.keys(options).every((key) => key === "signal"));
+      assert.equal(pending, false, "The owned laboratory restart is already in progress");
+      const signal = globalThis.AbortSignal.any([
+        ctx.signal,
+        ...(options.signal ? [options.signal] : []),
+      ]);
+      signal.throwIfAborted();
+      for (const slot of CHAT_SLOTS) limitChatHandle(ctx, handles, handles[slot].chat);
+      pending = true;
+      try {
+        return await recoverLimitBrowser(ctx, live, handles, ui, signal);
+      } finally {
+        pending = false;
+      }
+    },
+  };
+}
+
+async function recoverLimitBrowser(ctx, live, handles, ui, signal) {
+  const began = globalThis.performance.now();
+  const root = live.root;
+  const origin = live.origin;
+  const active = ctx.activeChatId ?? ctx.chat.id;
+  const count = (ctx.intent.state.recovery?.count ?? 0) + 1;
+  ctx.intent.record("recovery", { phase: "restarting", count });
+  try {
+    const restarted = await live.restartServer({ signal });
+    assert.equal(restarted.restarted, true);
+    assert.ok(
+      live.root === root && live.origin === origin,
+      "The owned laboratory state must be retained",
+    );
+    signal.throwIfAborted();
+    await ctx.page.reload({ waitUntil: "domcontentloaded" });
+    await ui.redeemWorkflowBrowserSession(ctx.page, ctx);
+    for (const slot of CHAT_SLOTS) {
+      signal.throwIfAborted();
+      const focused = await ctx.focusChat(handles[slot].chat);
+      if (slot === "document") ctx.region = focused.region;
+    }
+    await ctx.focusChat({ id: active });
+    signal.throwIfAborted();
+    const downtimeMs = Math.ceil(globalThis.performance.now() - began);
+    ctx.intent.record("recovery", { phase: "recovered", count, downtimeMs });
+    return { restarted: true, downtimeMs };
+  } catch (error) {
+    ctx.intent.record("recovery", { phase: "failed", count });
+    throw error;
+  }
+}
+
+function bindLimitTurnOwner(ctx, handles, ui) {
+  ctx.focusChat = (chat) => focusLimitChat(ctx, handles, chat, ui);
+  ctx.turn = async (chat, prompt, extra = {}) => {
+    const focused = await focusLimitChat(ctx, handles, chat, ui);
+    return ui.sendBrowserTurn(ctx.page, focused.region, ctx, focused.chat.id, prompt, {
+      operations: ["jira.draft", "jira.create"],
+      timeoutMs: 1800000,
+      ...extra,
+      persist: (value) => ctx.intent.record("browserTurn", { chatId: focused.chat.id, ...value }),
+    });
+  };
+}
+
+/** Explicit Chat routing keeps document and live-report sources separate across recovery. */
+export async function createLimitRunContext(live, handles, options, intent, signal, ports) {
   const { loadGoldenManifest, readGoldenIssues } =
     await import("./requirements/golden-jira-oracle.mjs");
-  const { sendBrowserTurn } = await import("./browser-workflow-turn.mjs");
+  const ui = ports ?? (await import("./browser-workflow-turn.mjs"));
+  assert.equal(typeof ui.assertWorkflowChatConfiguration, "function");
   const ctx = {
     ...live,
-    ...opened,
+    ...handles.document,
     ...options,
+    reportChat: handles.report.chat,
+    deniedChat: handles.denied.chat,
     locale: "en",
     intent,
     signal,
     truth: loadGoldenManifest(),
   };
+  for (const name of ["cookie", "secret", "origin", "root", "projectPath"])
+    Object.defineProperty(ctx, name, { enumerable: true, get: () => live[name] });
   ctx.read = (path) => projectAgileRead(ctx.session, path);
   ctx.checkLicense = async () =>
     assert.ok(
       (await requireLicense(ctx.session)) >= 1800,
       "Thirty minutes of the existing license window are required; no automatic Jira restart",
     );
-  ctx.turn = (chat, prompt, extra = {}) =>
-    sendBrowserTurn(ctx.page, ctx.region, ctx, chat.id, prompt, {
-      operations: ["jira.draft", "jira.create"],
-      timeoutMs: 1800000,
-      ...extra,
-      persist: (value) => intent.record("browserTurn", { chatId: chat.id, ...value }),
-    });
+  bindLimitTurnOwner(ctx, handles, ui);
+  ctx.recovery = limitRecovery(ctx, live, handles, ui);
   ctx.search = (jql, fields = "*all") => {
     const normalized = jql.replaceAll('"', "").replaceAll(/\s+/gu, " ").trim();
     assert.ok(
@@ -355,7 +562,6 @@ async function limitContext(live, opened, options, intent, signal) {
     ctx.truth = { ...ctx.truth, ...fields };
     intent.record("fieldTruth", fields);
   };
-  intent.record("chat", opened.chat);
   return ctx;
 }
 
@@ -369,7 +575,6 @@ async function main(argv) {
     async (assertOwned) => {
       const intent = createLimitRunIntent(session.directory, options, assertOwned);
       const { withLiveChat } = await import("./chat-read.mjs");
-      const { openWorkflowBrowser } = await import("./browser-workflow-turn.mjs");
       const signal = globalThis.AbortSignal.timeout(14 * 60 * 60 * 1000);
       try {
         await withLiveChat({
@@ -377,22 +582,20 @@ async function main(argv) {
           modelId: options.modelId,
           embeddingModelId: options.embeddingModelId,
           browser: true,
+          ownedChild: true,
           retainState: true,
           modelRetries: 0,
           stateReady: (directory) => intent.record("stateDirectory", directory),
           run: async (live) => {
-            const opened = await openWorkflowBrowser(live, {
-              tokenFile: options.permittedToken,
-              administration: true,
-            });
+            const opened = await openLimitRunChats(live, options, intent);
             try {
               await runBrowserLimitRun(
-                await limitContext(live, opened, options, intent, signal),
+                await createLimitRunContext(live, opened, options, intent, signal),
                 {},
                 blocks,
               );
             } finally {
-              await opened.browser.close();
+              await opened.document.close();
             }
           },
         });

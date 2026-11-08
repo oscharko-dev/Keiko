@@ -42,13 +42,17 @@ import { sessionVerificationPort } from "./product-port.mjs";
 import { establishedReadGrant } from "./read-grant.mjs";
 import { prepareLabRun } from "./run-preflight.mjs";
 import { drainLiveChatTurns } from "./chat-lifecycle.mjs";
+import { createOwnedLiveChatProcess, runOwnedLiveChatLifecycle } from "./owned-live-chat.mjs";
+
+let ownedEvidenceFailure;
 
 process.on("warning", (warning) => {
   if (warning.code !== "KEIKO_LOG_SINK_FAILED") return;
+  process.exitCode = 1;
+  ownedEvidenceFailure?.();
   console.log(
     JSON.stringify({ operation: "jira-chat-live-read", passed: false, stage: "activity-log" }),
   );
-  process.exitCode = 1;
 });
 
 /** Where the lab's live Keiko writes its Activity Log; a lane's state directory holds none. */
@@ -76,34 +80,17 @@ export async function request(origin, cookie, name, path, body, method = "POST",
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   if (!response.ok) {
-    const failure = await response.json().catch(() => ({}));
-    console.log(
-      JSON.stringify({
-        operation: "jira-chat-live-http",
-        stage: name,
-        status: response.status,
-        code: failure.error?.code,
-        message:
-          typeof failure.error?.message === "string"
-            ? failure.error.message.slice(0, 240)
-            : undefined,
-      }),
-    );
-    throw new TypeError("Live Chat HTTP stage failed");
+    throw failedStage(name, response.status);
   }
   return response;
 }
-function failedStage(name, status, failure) {
+function failedStage(_name, status, _failure) {
   console.log(
     JSON.stringify({
       operation: "jira-chat-live-http",
-      stage: name,
-      status,
-      code: failure.error?.code,
-      message:
-        typeof failure.error?.message === "string"
-          ? failure.error.message.slice(0, 240)
-          : undefined,
+      stage: "request-failed",
+      status: Number.isSafeInteger(status) && status >= 100 && status <= 599 ? status : 0,
+      failureClass: "http-status",
     }),
   );
   return new TypeError("Live Chat HTTP stage failed");
@@ -559,7 +546,7 @@ async function runSelectedJourney(origin, cookie, session, projectPath, modelId,
       ),
   });
 }
-async function pairedCookie(origin, secret) {
+async function pairedCookie(origin, secret, signal) {
   const attestation = mintLauncherPairingAttestation({
     secret,
     requestId: randomUUID(),
@@ -571,6 +558,8 @@ async function pairedCookie(origin, secret) {
     "pair",
     "/api/coding-workbench/app-session/pair",
     attestation,
+    "POST",
+    signal,
   );
   const cookie = paired.headers
     .getSetCookie()
@@ -612,6 +601,182 @@ function createLiveUiServer({ port, deps, root, browser, configureServer }) {
   return server;
 }
 
+async function closeLiveProduct(server, deps, projectPath) {
+  try {
+    server?.closeAllConnections();
+    if (server) await new Promise((resolve) => server.close(resolve));
+  } finally {
+    try {
+      await drainLiveChatTurns(deps, projectPath);
+    } finally {
+      await deps.dispose?.();
+    }
+  }
+}
+
+/** The one server/dependency/model lifecycle, shared by in-process and owned-child qualification. */
+async function startLiveProduct({
+  root,
+  session,
+  secret,
+  retainState,
+  restoring,
+  model,
+  browser,
+  decorateAtlassianHttp,
+  configureServer,
+  port,
+}) {
+  const projectPath = join(root, "workspace");
+  mkdirSync(projectPath, { recursive: true });
+  const deps = createLiveDeps(root, session, secret, retainState, restoring, model.env);
+  let server;
+  try {
+    decorateCredentialTransport(deps, decorateAtlassianHttp, session);
+    await model.configure(deps);
+    if (!deps.store.listProjects().some((project) => project.path === projectPath))
+      deps.store.createProject(projectPath);
+    const selectedPort = port ?? (await unusedPort());
+    server = createLiveUiServer({ port: selectedPort, deps, root, browser, configureServer });
+    await new Promise((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(selectedPort, "127.0.0.1", resolve);
+    });
+    return {
+      port: selectedPort,
+      projectPath,
+      deps,
+      close: () => closeLiveProduct(server, deps, projectPath),
+    };
+  } catch (error) {
+    await closeLiveProduct(server, deps, projectPath);
+    throw error;
+  }
+}
+
+function validateOwnedLiveOptions(options) {
+  const allowed = new Set([
+    "sessionDir",
+    "root",
+    "secret",
+    "modelId",
+    "modelRetries",
+    "embeddingModelId",
+    "browser",
+    "restoring",
+    "port",
+  ]);
+  if (
+    Object.keys(options).some((key) => !allowed.has(key)) ||
+    process.env.KEIKO_OS_KEYCHAIN !== "off"
+  )
+    throw new TypeError("owned-lab-invalid-initialization");
+}
+
+function bindOwnedEvidenceFailure(observer) {
+  ownedEvidenceFailure = observer;
+  if (process.exitCode === 1) {
+    ownedEvidenceFailure?.();
+    throw new TypeError("owned-lab-evidence-unavailable");
+  }
+}
+
+/** Internal IPC entry: ordinary composition, same persisted state and credential-key owner. */
+export async function startOwnedLiveChatServer(options, { onEvidenceFailure } = {}) {
+  validateOwnedLiveOptions(options);
+  if (
+    typeof options.root !== "string" ||
+    typeof options.sessionDir !== "string" ||
+    !Number.isSafeInteger(options.port) ||
+    options.port < 1 ||
+    options.port > 65535
+  )
+    throw new TypeError("owned-lab-invalid-initialization");
+  const session = loadSession(options.sessionDir);
+  const root = liveStateDirectory(session, true, options.root);
+  bindOwnedEvidenceFailure(onEvidenceFailure);
+  if (
+    typeof options.secret !== "string" ||
+    !/^[0-9a-f]{96}$/u.test(options.secret) ||
+    !options.modelId
+  )
+    throw new TypeError("owned-lab-invalid-initialization");
+  const model = prepareLiveModel(root, session, options.modelId, {
+    modelRetries: options.modelRetries,
+    embeddingModelId: options.embeddingModelId,
+  });
+  return startLiveProduct({ ...options, root, session, model, retainState: true });
+}
+
+function ownedLiveContext(options, root, secret, controller) {
+  let cookie;
+  const pair = async (signal) => {
+    cookie = await pairedCookie(
+      controller.origin,
+      secret,
+      globalThis.AbortSignal.any([
+        globalThis.AbortSignal.timeout(30000),
+        ...(signal ? [signal] : []),
+      ]),
+    );
+  };
+  const live = {
+    session: options.session,
+    modelId: options.modelId,
+    root,
+    secret,
+    projectPath: join(root, "workspace"),
+    get origin() {
+      return controller.origin;
+    },
+    get cookie() {
+      return cookie;
+    },
+    restartServer: async (restartOptions = {}) => {
+      const began = globalThis.performance.now();
+      await controller.restart(restartOptions);
+      await pair(restartOptions.signal);
+      return { restarted: true, downtimeMs: Math.ceil(globalThis.performance.now() - began) };
+    },
+  };
+  return { live, pair };
+}
+
+async function withOwnedLiveChat(options) {
+  if (!options.retainState || options.decorateAtlassianHttp || options.configureServer)
+    throw new TypeError(
+      "Owned laboratory children require retained state and serializable lifecycle options",
+    );
+  await requireLicense(options.session);
+  const root = liveStateDirectory(options.session, true, options.restoreState);
+  options.stateReady?.(root);
+  const secret = randomBytes(48).toString("hex");
+  const controller = createOwnedLiveChatProcess({
+    port: await unusedPort(),
+    initialization: {
+      sessionDir: options.session.directory,
+      root,
+      secret,
+      modelId: options.modelId,
+      modelRetries: options.modelRetries,
+      embeddingModelId: options.embeddingModelId,
+      browser: options.browser,
+      restoring: options.restoreState !== undefined,
+    },
+  });
+  const context = ownedLiveContext(options, root, secret, controller);
+  return runOwnedLiveChatLifecycle({
+    run: async () => {
+      await controller.start();
+      await context.pair();
+      await options.run(context.live);
+      assert.notEqual(process.exitCode, 1);
+    },
+    close: () => controller.close(),
+    audit: () => requireLicense(options.session),
+  });
+}
+
 /** Reuse the paired production server, vault, real model probe and ordinary Chat routes. */
 export async function withLiveChat({
   session,
@@ -626,8 +791,23 @@ export async function withLiveChat({
   configureServer,
   modelRetries,
   embeddingModelId,
+  ownedChild = false,
 }) {
   if (!modelId) throw new TypeError("A locally installed model is required");
+  if (ownedChild)
+    return withOwnedLiveChat({
+      session,
+      modelId,
+      run,
+      retainState,
+      stateReady,
+      browser,
+      restoreState,
+      decorateAtlassianHttp,
+      configureServer,
+      modelRetries,
+      embeddingModelId,
+    });
   return withLabProduct({
     session,
     modelId,
@@ -688,27 +868,26 @@ async function runLabProduct({
   const secret = randomBytes(48).toString("hex");
   stateReady?.(root);
   const model = prepareModel(root);
-  const restoring = restoreState !== undefined;
-  const deps = createLiveDeps(root, session, secret, retainState, restoring, model.env);
-  decorateCredentialTransport(deps, decorateAtlassianHttp, session);
-  let server;
+  let product;
   try {
-    await model.configure(deps);
-    if (!deps.store.listProjects().some((project) => project.path === projectPath))
-      deps.store.createProject(projectPath);
-    const port = await unusedPort();
-    const origin = `http://127.0.0.1:${port}`;
-    server = createLiveUiServer({ port, deps, root, browser, configureServer });
-    await new Promise((resolve) => server.listen(port, "127.0.0.1", resolve));
+    product = await startLiveProduct({
+      root,
+      session,
+      secret,
+      retainState,
+      restoring: restoreState !== undefined,
+      model,
+      browser,
+      decorateAtlassianHttp,
+      configureServer,
+    });
+    const origin = `http://127.0.0.1:${product.port}`;
     const cookie = await pairedCookie(origin, secret);
-    await run({ origin, cookie, session, projectPath, modelId, secret, root, deps });
+    await run({ origin, cookie, session, projectPath, modelId, secret, root, deps: product.deps });
     await requireLicense(session);
     assert.notEqual(process.exitCode, 1);
   } finally {
-    server?.closeAllConnections();
-    if (server) await new Promise((resolve) => server.close(resolve));
-    await drainLiveChatTurns(deps, projectPath);
-    await deps.dispose?.();
+    await product?.close();
     if (!retainState) rmSync(root, { recursive: true, force: true });
   }
 }

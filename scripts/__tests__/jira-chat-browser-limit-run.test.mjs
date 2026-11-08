@@ -60,13 +60,16 @@ function fixture() {
     signal: controller.signal,
     checkLicense: vi.fn(() => Promise.resolve(2700)),
     prepareTruth: vi.fn(() => Promise.resolve()),
+    chat: { id: "document-chat" },
+    reportChat: { id: "report-chat" },
+    deniedChat: { id: "denied-chat" },
   };
   const calls = [];
   const blocks = Object.fromEntries(
     NAMES.map((name) => [
       name,
       vi.fn(async (context, options) => {
-        calls.push({ name, context, options, locale: context.locale });
+        calls.push({ name, context, options, locale: context.locale, faults: context.faults });
         return result(name.replaceAll(/[A-Z]/gu, (value) => `-${value.toLowerCase()}`));
       }),
     ]),
@@ -137,8 +140,13 @@ it("composes the exact owners once in plan order, with bilingual reload checks a
   expect(f.blocks.runSprintBulk).toHaveBeenCalledWith(f.ctx, { size: 250, batch: 50 });
   expect(f.ctx.faults).toBe(f.plans[2]);
   expect(new Set(f.plans).size).toBe(3);
-  for (const plan of f.plans)
-    expect(plan.options).toEqual({ at: [0.4, 0.8], kinds: ["response-drop", "server-kill"] });
+  for (const [index, scope] of ["bulk-epics", "hierarchy", "progress"].entries())
+    expect(f.plans[index].options).toEqual({
+      scope,
+      at: [0.4, 0.8],
+      kinds: ["response-drop", "server-kill"],
+    });
+  expect(f.calls.find(({ name }) => name === "runSprintBulk").faults).toBeUndefined();
   expect(f.blocks.simulateProgress).toHaveBeenCalledWith(f.ctx, { seedDeviations: true });
   expect(f.blocks.runProgressReport).toHaveBeenCalledWith(f.ctx, {
     truthFile: join(f.ctx.sessionDir, "progress-truth.json"),
