@@ -1469,7 +1469,7 @@ function derivedConfidence(body: string, evidence: string, subjectless: boolean)
   return 0.4 + subjectBonus + coverageBonus;
 }
 
-// The learner reads the model's answer through the strict projection, which masks an identifier
+// The model's answer reaches the learner through the strict projection, which masks an identifier
 // such as an IBAN (under KEIKO_CONTENT_REDACTION=on the model's input is masked too). The quote then
 // holds the placeholder where the person wrote the identifier and is not verbatim, though what the
 // person said was an identifier Keiko never keeps (#4206). The quote's other parts are found in
