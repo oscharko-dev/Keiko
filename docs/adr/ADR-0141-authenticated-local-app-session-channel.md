@@ -327,7 +327,10 @@ knowing an old session id cannot revive it. A valid replacement starts a new ina
 and inherits the exact active operation count. Each idempotent release resolves the live entry by
 session id, so it decrements that inherited count and refreshes inactivity after completion.
 Revoked, evicted or expired sessions cannot be revived. The registry records the count and a closed
-rotation reason, including a deferred browser-completion retry, without bearer material.
+deferred-rotation reason under the originating request correlation, without bearer material.
+Both browser completion retries and the ordinary rotate route defer while an operation is active;
+the rotate route returns the closed `deferred` status without replacing any cookie. Only the
+existing successful rotation event records its operation count, avoiding duplicate success lines.
 Snapshots, repaired cookies and replacement live streams all remain bounded by the original
 absolute lifetime. Rotated HTTP cookie projections use only that lifetime's remaining full seconds,
 clamped by the existing cookie ceiling; the registered rotation event records the actual
@@ -339,7 +342,7 @@ that boundary, it revokes the unusable replacement and cannot report a successfu
 A refused `local-session` cookie repair returns HTTP 401 with the closed `unavailable` status and
 no cookie. The browser records it as a failed repair and never treats it as confirmation. The
 existing Activity Log records `coding-app-session.local-session.denied` with the single closed
-reason `authority-unavailable`, at most once per minute per composed server. It contains no
+reason `authority-unavailable` and the aggregate `count`, at warning level when the pairing-denial threshold is reached, at most once per minute per composed server. It contains no
 identity, cookie or caller-provided content. Pairing acknowledgement semantics remain unchanged.
 
 Explicit normal Chat sends verify an optionally presented existing session so active conversation

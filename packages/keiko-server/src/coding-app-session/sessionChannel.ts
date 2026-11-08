@@ -1,3 +1,4 @@
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 // The authenticated local app-session channel primitive (ADR-0141 D2, D3, D6).
 //
 // This is the runtime-neutral core the later waves build on: pairing issues a session through the
@@ -48,8 +49,13 @@ export type CodingAppSessionPairResult =
   | { readonly paired: false };
 
 export type CodingAppSessionRotateResult =
-  | { readonly rotated: true; readonly cookieToken: string; readonly maxAgeSeconds: number }
-  | { readonly rotated: false };
+  | {
+      readonly rotated: true;
+      readonly cookieToken: string;
+      readonly maxAgeSeconds: number;
+      readonly activeOperationCount: number;
+    }
+  | { readonly rotated: false; readonly status?: "deferred" };
 
 export type CodingAppSessionEnsureResult =
   | { readonly status: "active"; readonly maxAgeSeconds: number }
@@ -60,7 +66,10 @@ export interface CodingAppSessionChannel {
   readonly pair: (attestation: unknown) => CodingAppSessionPairResult;
   readonly ensureLocalSession: (cookieToken: string | undefined) => CodingAppSessionEnsureResult;
   readonly snapshot: (cookieToken: string | undefined) => CodingAppSessionChannelSnapshot;
-  readonly rotate: (cookieToken: string | undefined) => CodingAppSessionRotateResult;
+  readonly rotate: (
+    cookieToken: string | undefined,
+    correlationId?: string,
+  ) => CodingAppSessionRotateResult;
   /**
    * Revoke the session behind a presented cookie: true when one was revoked, false for an absent,
    * invalid, revoked or expired presentation, which leaves nothing to revoke.
@@ -413,12 +422,16 @@ function ensureLocalSession(
 function rotateSession(
   registry: SessionRegistry,
   cookieToken: string | undefined,
+  correlationId: string,
 ): CodingAppSessionRotateResult {
   if (ensureLocalSession(registry, cookieToken).status === "unavailable") return { rotated: false };
   const session = registry.verify(cookieToken);
   if (session === undefined) return { rotated: false };
-  const mint = registry.rotate(session.sessionId);
-  if (mint === undefined) return { rotated: false };
+  const mint = registry.rotate(session.sessionId, { onlyIfIdle: true, correlationId });
+  if (mint === undefined)
+    return (registry.inspectOperationCount(cookieToken) ?? 0) > 0
+      ? { rotated: false, status: "deferred" }
+      : { rotated: false };
   const remainingMs = registry.verifyForCookieRepair(mint.cookieToken);
   if (remainingMs === undefined || remainingMs < 1_000) {
     registry.revoke(mint.session.sessionId);
@@ -428,6 +441,7 @@ function rotateSession(
     rotated: true,
     cookieToken: mint.cookieToken,
     maxAgeSeconds: Math.floor(remainingMs / 1000),
+    activeOperationCount: 0,
   };
 }
 
@@ -448,8 +462,8 @@ export function createCodingAppSessionChannel(
       if (session === undefined) return contentFreeCodingAppSessionChannelSnapshot();
       return projectContent(session, contentSource);
     },
-    rotate: (cookieToken: string | undefined): CodingAppSessionRotateResult =>
-      rotateSession(registry, cookieToken),
+    rotate: (cookieToken, correlationId = UNKNOWN_CORRELATION_ID): CodingAppSessionRotateResult =>
+      rotateSession(registry, cookieToken, correlationId),
     signOut: (cookieToken: string | undefined): boolean => {
       const session = registry.verify(cookieToken);
       if (session === undefined) return false;

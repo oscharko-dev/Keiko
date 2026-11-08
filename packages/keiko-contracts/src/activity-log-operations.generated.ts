@@ -7654,6 +7654,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "loss-state",
         required: true,
       },
+      count: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
       reason: {
         type: "string",
         dataClass: "closed-enum",
@@ -7795,6 +7800,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "duration",
         required: true,
       },
+      activeOperationCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
     },
     causal: "correlation",
     lifecycle: "end",
@@ -7830,7 +7840,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["active-operation", "cookie-response"],
+        values: ["active-operation"],
       },
     },
     causal: "correlation",
