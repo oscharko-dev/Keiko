@@ -1,3 +1,4 @@
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { createHash, createPublicKey, randomBytes, randomInt, verify } from "node:crypto";
 import {
   BROWSER_APPROVAL_CHALLENGE_TTL_MS,
@@ -67,7 +68,11 @@ export interface BrowserApprovalService {
   readonly snapshot: (cookie: string | undefined) => BrowserApprovalManagementSnapshot | undefined;
   readonly approve: (cookie: string | undefined, input: unknown) => boolean;
   readonly challenge: (input: unknown, origin: string) => BrowserApprovalChallengeResult;
-  readonly prove: (input: unknown, origin: string) => BrowserApprovalCompletion;
+  readonly prove: (
+    input: unknown,
+    origin: string,
+    correlationId?: string,
+  ) => BrowserApprovalCompletion;
   readonly revoke: (cookie: string | undefined, approvalId: string) => boolean;
 }
 
@@ -305,6 +310,7 @@ function finishRequest(
   request: PendingRequest,
   decision: ApprovedDecision,
   now: number,
+  correlationId: string,
 ): BrowserApprovalCompletion {
   const approval = decision.remember ? currentApproval(state, decision.approvalId, now) : undefined;
   if (decision.remember && approval === undefined) return { state: "unavailable" };
@@ -313,7 +319,7 @@ function finishRequest(
   const mint =
     request.sessionId === undefined
       ? state.registry.mintForApproval("Approved browser", decision)
-      : state.registry.rotate(request.sessionId, { onlyIfIdle: true });
+      : state.registry.rotate(request.sessionId, { onlyIfIdle: true, correlationId });
   if (mint === undefined) return { state: "unavailable" };
   request.sessionId = mint.session.sessionId;
   const touched = approval === undefined ? undefined : { ...approval, lastUsedAtMs: now };
@@ -325,6 +331,7 @@ function completeRequest(
   challenge: BrowserApprovalChallenge,
   signature: string,
   now: number,
+  correlationId: string,
 ): BrowserApprovalCompletion {
   const request = state.requests.get(challenge.subjectId);
   const decision = request?.decision;
@@ -336,7 +343,7 @@ function completeRequest(
   )
     return { state: "unavailable" };
   if (!verifyProof(request.publicKey, challenge, signature)) return { state: "unavailable" };
-  return finishRequest(state, request, decision, now);
+  return finishRequest(state, request, decision, now, correlationId);
 }
 
 function completion(
@@ -380,6 +387,7 @@ function proveApproval(
   state: ApprovalState,
   input: unknown,
   origin: string,
+  correlationId: string,
 ): BrowserApprovalCompletion {
   const parsed = validateBrowserApprovalProofInput(input);
   const now = observedTime(state);
@@ -388,7 +396,7 @@ function proveApproval(
   state.challenges.delete(parsed.value.challengeId);
   if (challenge?.origin !== origin || now < challenge.issuedAtMs) return { state: "unavailable" };
   return challenge.purpose === "complete"
-    ? completeRequest(state, challenge, parsed.value.signature, now)
+    ? completeRequest(state, challenge, parsed.value.signature, now, correlationId)
     : renewApproval(state, challenge, parsed.value.signature, now);
 }
 
@@ -466,7 +474,8 @@ export function createBrowserApprovalService(deps: {
     approve: (cookie, input): boolean => approveRequest(state, cookie, input),
     challenge: (input, origin): BrowserApprovalChallengeResult =>
       issueChallenge(state, input, origin),
-    prove: (input, origin): BrowserApprovalCompletion => proveApproval(state, input, origin),
+    prove: (input, origin, correlationId = UNKNOWN_CORRELATION_ID): BrowserApprovalCompletion =>
+      proveApproval(state, input, origin, correlationId),
     revoke: (cookie, id): boolean => revokeApproval(state, cookie, id),
   };
 }

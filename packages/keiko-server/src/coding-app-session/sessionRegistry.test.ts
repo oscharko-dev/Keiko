@@ -312,13 +312,18 @@ it.each(["idle", "absolute"] as const)(
   },
 );
 
-it("records rotation, deferred rotation and observed expiry without session identities or secrets", () => {
+it("records deferred rotation and observed expiry without session identities or secrets", () => {
   const clock = fixedClock(0);
   const activityLog = createBufferedServerLogSink();
   const registry = createSessionRegistry({ now: clock.now, idleTtlMs: 100, activityLog });
   const mint = registry.mint("private-principal");
   const release = registry.beginOperation(mint.cookieToken);
-  expect(registry.rotate(mint.session.sessionId, { onlyIfIdle: true })).toBeUndefined();
+  expect(
+    registry.rotate(mint.session.sessionId, {
+      onlyIfIdle: true,
+      correlationId: "deferred-registry-audit",
+    }),
+  ).toBeUndefined();
   expect(registry.inspectOperationCount(mint.cookieToken)).toBe(1);
   const rotated = registry.rotate(mint.session.sessionId);
   expect(rotated).toBeDefined();
@@ -327,7 +332,6 @@ it("records rotation, deferred rotation and observed expiry without session iden
   expect(registry.inspect(rotated?.cookieToken)).toBeUndefined();
   expect(activityLog.events.map((event) => event.extra)).toEqual([
     { activeOperationCount: 1, reason: "active-operation", completeness: "complete", loss: "none" },
-    { activeOperationCount: 1, reason: "cookie-response", completeness: "complete", loss: "none" },
     {
       expiredSessionCount: 1,
       sessionCount: 0,
@@ -355,7 +359,12 @@ it("keeps the browser credential and its lease when rotation evidence cannot be 
   });
   const mint = registry.mint("synthetic");
   const release = registry.beginOperation(mint.cookieToken);
-  expect(() => registry.rotate(mint.session.sessionId)).toThrow("synthetic-log-failure");
+  expect(() =>
+    registry.rotate(mint.session.sessionId, {
+      onlyIfIdle: true,
+      correlationId: "deferred-log-failure",
+    }),
+  ).toThrow("synthetic-log-failure");
   expect(registry.inspectOperationCount(mint.cookieToken)).toBe(1);
   release?.();
   expect(registry.inspectOperationCount(mint.cookieToken)).toBe(0);

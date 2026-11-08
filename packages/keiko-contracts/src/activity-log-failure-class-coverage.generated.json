@@ -8839,13 +8839,19 @@
           "analyzerProjection": "failure-cluster",
           "safeContextFields": [
             {
+              "name": "count",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
               "name": "reason",
               "type": "string",
               "dataClass": "closed-enum",
               "required": true
             }
           ],
-          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
           "frameCauseEvidence": {
             "frames": false,
             "causeChain": false
@@ -8983,13 +8989,19 @@
           "analyzerProjection": "timeline",
           "safeContextFields": [
             {
+              "name": "activeOperationCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
               "name": "cookieMaxAgeSeconds",
               "type": "integer",
               "dataClass": "duration",
               "required": true
             }
           ],
-          "evidenceClasses": ["completeness-state", "duration", "loss-state"],
+          "evidenceClasses": ["completeness-state", "count", "duration", "loss-state"],
           "frameCauseEvidence": {
             "frames": false,
             "causeChain": false

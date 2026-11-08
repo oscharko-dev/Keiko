@@ -150,7 +150,11 @@ async function handleProof(ctx: RouteContext, deps: UiHandlerDeps): Promise<Rout
   const result =
     origin === undefined
       ? UNAVAILABLE
-      : (deps.codingAppSessionChannel?.browserApproval?.prove(body, origin) ?? UNAVAILABLE);
+      : (deps.codingAppSessionChannel?.browserApproval?.prove(
+          body,
+          origin,
+          ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+        ) ?? UNAVAILABLE);
   recordApproval(ctx, deps, "prove", result.state);
   if (result.state !== "active")
     return { status: 200, body: UNAVAILABLE, headers: PRIVATE_HEADERS };

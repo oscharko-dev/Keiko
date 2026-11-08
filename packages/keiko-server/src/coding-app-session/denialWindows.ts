@@ -62,8 +62,8 @@ export class CodingAppSessionDenialWindows {
     recordDenial(this.rotate, now, onThresholdReached);
   }
 
-  recordLocalSessionDenial(now: number, onFirstDenial: (count: number) => void): void {
-    recordDenial(this.localSession, now, onFirstDenial, 1);
+  recordLocalSessionDenial(now: number, onThresholdReached: (count: number) => void): void {
+    recordDenial(this.localSession, now, onThresholdReached);
   }
 
   /** Disposal hook (deps.ts `createUiHandlerDispose`): drop counters so nothing outlives the graph. */

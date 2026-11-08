@@ -136,6 +136,7 @@ const LOCAL_SESSION_DENIED_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "coding-app-session.codingAppSessionRoutes.localSessionDenied",
   fields: {
+    count: { type: "integer", dataClass: "count", required: true },
     reason: {
       type: "string",
       dataClass: "closed-enum",
@@ -152,12 +153,12 @@ const LOCAL_SESSION_DENIED_OPERATION = defineActivityLogOperation({
 });
 
 function localSessionDenied(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
-  resolveCodingAppSessionDenialWindows(deps).recordLocalSessionDenial(Date.now(), () => {
+  resolveCodingAppSessionDenialWindows(deps).recordLocalSessionDenial(Date.now(), (count) => {
     appSessionActivity(deps).write(
       activityLogEvent(
         LOCAL_SESSION_DENIED_OPERATION,
-        { level: "info", correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID },
-        { reason: "authority-unavailable" },
+        { level: "warn", correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID },
+        { reason: "authority-unavailable", count },
       ),
     );
   });
@@ -171,7 +172,10 @@ const CODING_APP_SESSION_ROTATED_OPERATION = defineActivityLogOperation({
   category: "http",
   owner: "keiko-server",
   emitter: "coding-app-session.codingAppSessionRoutes.handleCodingAppSessionRotate",
-  fields: { cookieMaxAgeSeconds: { type: "integer", dataClass: "duration", required: true } },
+  fields: {
+    cookieMaxAgeSeconds: { type: "integer", dataClass: "duration", required: true },
+    activeOperationCount: { type: "integer", dataClass: "count", required: true },
+  },
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
@@ -528,8 +532,12 @@ export function openCodingAppSessionStream(
 export function handleCodingAppSessionRotate(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const channel = deps.codingAppSessionChannel;
   if (channel === undefined) return ackResult();
-  const result = channel.rotate(readSessionCookie(ctx.req));
+  const result = channel.rotate(
+    readSessionCookie(ctx.req),
+    ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+  );
   if (!result.rotated) {
+    if (result.status === "deferred") return { status: 200, body: { status: "deferred" } };
     // KEIKO-0838: same aggregate-diagnostic pattern as pair(), independent window/counter.
     resolveCodingAppSessionDenialWindows(deps).recordRotateDenial(Date.now(), (count) => {
       emitPairingDenialAggregate(deps, "coding-app-session.rotate", count);
@@ -541,7 +549,7 @@ export function handleCodingAppSessionRotate(ctx: RouteContext, deps: UiHandlerD
     activityLogEvent(
       CODING_APP_SESSION_ROTATED_OPERATION,
       { level: "info", correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID },
-      { cookieMaxAgeSeconds: maxAgeSeconds },
+      { cookieMaxAgeSeconds: maxAgeSeconds, activeOperationCount: result.activeOperationCount },
     ),
   );
   return ackResult(issuedCookie(ctx.req, result.cookieToken, maxAgeSeconds));

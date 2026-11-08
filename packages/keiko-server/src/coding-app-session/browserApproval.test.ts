@@ -446,10 +446,16 @@ describe("explicit browser approval", () => {
     );
     if (first.state !== "active") throw new Error("Missing first session");
     const release = f.registry.beginOperation(first.mint.cookieToken);
+    const rotation = vi.spyOn(f.registry, "rotate");
     const repeated = f.service.prove(
       proof(challenge(f.service, descriptor.requestId), key.privateKey),
       ORIGIN,
+      "browser-proof-audit",
     );
+    expect(rotation).toHaveBeenCalledWith(first.mint.session.sessionId, {
+      onlyIfIdle: true,
+      correlationId: "browser-proof-audit",
+    });
     expect(repeated.state).toBe("unavailable");
     expect(f.registry.inspectOperationCount(first.mint.cookieToken)).toBe(1);
     release?.();

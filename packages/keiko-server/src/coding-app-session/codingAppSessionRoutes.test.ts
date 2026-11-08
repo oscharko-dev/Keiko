@@ -28,7 +28,7 @@ import {
   APP_SESSION_ACTIVE_COOKIE_COUNT,
   serializeSessionCookies,
 } from "./sessionCookie.js";
-import { CodingAppSessionDenialWindows } from "./denialWindows.js";
+import { CodingAppSessionDenialWindows, DENIAL_ALERT_THRESHOLD } from "./denialWindows.js";
 import { createSessionRegistry } from "./sessionRegistry.js";
 import { type ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
@@ -394,12 +394,7 @@ describe("app-session lifecycle lines (F65)", () => {
       expect(result.status).toBe(401);
       expect(result.body).toEqual({ status: "unavailable" });
       expect(result.headers).toBeUndefined();
-      expect(events).toMatchObject([
-        {
-          op: "coding-app-session.local-session.denied",
-          extra: { reason: "authority-unavailable" },
-        },
-      ]);
+      expect(events).toEqual([]);
       expect(channel.ensureLocalSession(mint.cookieToken)).toEqual({ status: "unavailable" });
     },
   );
@@ -471,9 +466,14 @@ describe("app-session lifecycle lines (F65)", () => {
   it("logs local-session denials with a closed reason and no bearer material", () => {
     const { channel } = pairedChannel();
     const { deps: logDeps, events } = logged(channel);
-    handleCodingAppSessionLocalSession(ctx(), logDeps);
+    for (let index = 0; index < DENIAL_ALERT_THRESHOLD; index += 1)
+      handleCodingAppSessionLocalSession(ctx(), logDeps);
     expect(events).toMatchObject([
-      { op: "coding-app-session.local-session.denied", extra: { reason: "authority-unavailable" } },
+      {
+        op: "coding-app-session.local-session.denied",
+        level: "warn",
+        extra: { reason: "authority-unavailable", count: DENIAL_ALERT_THRESHOLD },
+      },
     ]);
     expectActivityLogProof(
       "coding-app-session.local-session.denied.request",
@@ -594,5 +594,34 @@ it("rotation cookies retain the original remaining absolute lifetime", () => {
   const active = projections.filter((projection) => !projection.includes("Max-Age=0"));
   expect(active).toHaveLength(APP_SESSION_ACTIVE_COOKIE_COUNT);
   for (const cookie of active) expect(/(?:^|; )Max-Age=(\d+)/u.exec(cookie)?.[1]).toBe("50");
-  expect(events[0]?.extra).toMatchObject({ cookieMaxAgeSeconds: 50 });
+  expect(events[0]?.extra).toMatchObject({ cookieMaxAgeSeconds: 50, activeOperationCount: 0 });
+});
+
+it("defers rotation during an active turn even when its response is discarded", () => {
+  let now = 0;
+  const activityLog = createBufferedServerLogSink();
+  const registry = createSessionRegistry({ now: () => now, activityLog });
+  const mint = registry.mint("synthetic");
+  const release = registry.beginOperation(mint.cookieToken);
+  const channel = createCodingAppSessionChannel({ registry });
+  const result = handleCodingAppSessionRotate(
+    {
+      ...ctx(`${APP_SESSION_COOKIE_NAME}=${mint.cookieToken}`),
+      correlationId: "rotation-held-audit",
+    },
+    { ...deps(channel), activityLog },
+  );
+  expect(result).toEqual({ status: 200, body: { status: "deferred" } });
+  expect(activityLog.events).toMatchObject([
+    {
+      op: "coding-app-session.rotation.state",
+      correlationId: "rotation-held-audit",
+      extra: { activeOperationCount: 1, reason: "active-operation" },
+    },
+  ]);
+  now = 40 * 60_000;
+  expect(registry.inspect(mint.cookieToken)).toBeDefined();
+  release?.();
+  expect(registry.inspectOperationCount(mint.cookieToken)).toBe(0);
+  expect(registry.inspect(mint.cookieToken)).toBeDefined();
 });

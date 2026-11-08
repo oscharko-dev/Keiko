@@ -59,7 +59,7 @@ export interface SessionRegistry {
   /** Approval retries defer atomically while a browser operation still owns its current bearer. */
   readonly rotate: (
     sessionId: string,
-    options?: { readonly onlyIfIdle: boolean },
+    options?: { readonly onlyIfIdle: boolean; readonly correlationId?: string },
   ) => SessionMint | undefined;
   readonly revoke: (sessionId: string) => void;
   readonly revokeApproval: (approvalId: string) => number;
@@ -160,7 +160,7 @@ const ROTATION_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["active-operation", "cookie-response"],
+      values: ["active-operation"],
     },
   },
   causal: "correlation",
@@ -174,13 +174,13 @@ const ROTATION_OPERATION = defineActivityLogOperation({
 function recordRotation(
   state: RegistryState,
   activeOperationCount: number,
-  reason: "active-operation" | "cookie-response",
+  correlationId: string,
 ): void {
   state.activityLog?.write(
     activityLogEvent(
       ROTATION_OPERATION,
-      { level: "info", correlationId: UNKNOWN_CORRELATION_ID },
-      { activeOperationCount, reason },
+      { level: "info", correlationId },
+      { activeOperationCount, reason: "active-operation" },
     ),
   );
 }
@@ -400,6 +400,7 @@ function rotateSession(
   state: RegistryState,
   sessionId: string,
   onlyIfIdle: boolean,
+  correlationId: string,
 ): SessionMint | undefined {
   const stored = state.sessions.get(sessionId);
   if (stored === undefined) return undefined;
@@ -409,7 +410,7 @@ function rotateSession(
     return undefined;
   }
   if (onlyIfIdle && stored.activeOperationCount > 0) {
-    recordRotation(state, stored.activeOperationCount, "active-operation");
+    recordRotation(state, stored.activeOperationCount, correlationId);
     return undefined;
   }
   const mint = storeSession(state, {
@@ -421,12 +422,6 @@ function rotateSession(
     lastSeenAtMs: nowMs,
     ...(stored.approval === undefined ? {} : { approval: stored.approval }),
   });
-  try {
-    recordRotation(state, stored.activeOperationCount, "cookie-response");
-  } catch (error) {
-    state.sessions.set(sessionId, stored);
-    throw error;
-  }
   return mint;
 }
 
@@ -489,7 +484,12 @@ export function createSessionRegistry(deps: SessionRegistryDeps = {}): SessionRe
     beginOperation: (cookieToken: string | undefined): (() => void) | undefined =>
       beginSessionOperation(state, cookieToken),
     rotate: (sessionId, options): SessionMint | undefined =>
-      rotateSession(state, sessionId, options?.onlyIfIdle === true),
+      rotateSession(
+        state,
+        sessionId,
+        options?.onlyIfIdle === true,
+        options?.correlationId ?? UNKNOWN_CORRELATION_ID,
+      ),
     revoke: (sessionId: string): void => {
       state.sessions.delete(sessionId);
     },
