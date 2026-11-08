@@ -1,3 +1,4 @@
+import { jiraProjectReview, jiraProjectReviewFields, type JiraProjectReview } from "./jira-project-review.js";
 import {
   JIRA_READ_TOOL_FAMILIES,
   isSafeAtlassianIdentifier,
@@ -27,6 +28,7 @@ type Failure = Extract<JiraMutationAttempt, { readonly ok: false }>;
 interface ProjectView {
   /** Private readback evidence; never spread into a tool result or receipt. */
   readonly invalidMetadataFields: ReadonlySet<string>;
+  readonly reviewSnapshot?: JiraProjectReview;
   readonly projectId: string;
   readonly projectKey: string;
   readonly projectName: string;
@@ -110,12 +112,14 @@ function projectView(body: Record<string, unknown> | undefined): ProjectView | u
   )
     return undefined;
   const { optional, invalidMetadataFields } = projectMetadata(body);
+  const reviewSnapshot = jiraProjectReview(body);
   return {
     projectId: body.id,
     projectKey: body.key,
     projectName: body.name,
     ...optional,
     invalidMetadataFields,
+    ...(reviewSnapshot === undefined ? {} : { reviewSnapshot }),
   };
 }
 function receipt(project: ProjectView): ProjectReceipt {
@@ -167,7 +171,7 @@ async function validateKey(request: JiraMutationRequest, key: string): Promise<K
     detail,
   };
 }
-async function accessibleType(
+export async function readJiraAccessibleProjectType(
   request: JiraMutationRequest,
   key: string,
 ): Promise<Failure | { readonly ok: true; readonly name?: string }> {
@@ -218,11 +222,12 @@ async function projectResult(
 ): Promise<ManagedMcpToolResult> {
   const result = await readJiraBoundProject(request, target);
   if (!result.ok) return jiraReadFailure(result.reason, result.detail);
-  const { invalidMetadataFields, ...project } = result.project;
+  const { invalidMetadataFields, reviewSnapshot, ...project } = result.project;
   return {
     data: {
       outcome: "succeeded",
       ...project,
+      ...jiraProjectReviewFields(reviewSnapshot),
       ...(invalidMetadataFields.size === 0
         ? {}
         : { omittedMetadataCount: invalidMetadataFields.size }),
@@ -249,7 +254,7 @@ async function typeResult(
   request: JiraMutationRequest,
   key: string,
 ): Promise<ManagedMcpToolResult> {
-  const result = await accessibleType(request, key);
+  const result = await readJiraAccessibleProjectType(request, key);
   return result.ok
     ? {
         data: {
@@ -412,7 +417,7 @@ async function createProject(
       reason: "field-validation",
       detail: { ...validation.detail, fieldId: "key", validation: "invalid-field" },
     };
-  const available = await accessibleType(request, args.projectTypeKey);
+  const available = await readJiraAccessibleProjectType(request, args.projectTypeKey);
   if (!available.ok) return available;
   if (check) return { ok: true, receipt: {} };
   const result = await request("project", "POST", args);

@@ -70,6 +70,9 @@ import { JIRA_SCHEME_ADMINISTRATION_TOOLS, jiraSchemeAdministrationDetails } fro
 import { JIRA_INSTANCE_ADMINISTRATION_TOOLS, JIRA_INSTANCE_ADMINISTRATION_WRITE_TOOLS, jiraInstanceAdministrationDetails } from "./jira-instance-administration-presentation";
 import { JIRA_SYSTEM_ACTION_TOOLS } from "./jira-system-action-receipt";
 import { jiraSystemActionDetails } from "./jira-system-action-presentation";
+import { JIRA_ACCOUNT_RESOURCE_TOOLS, JIRA_ACCOUNT_RESOURCE_WRITE_TOOLS, jiraAccountResourceDetails } from "./jira-account-resource-presentation";
+import { JIRA_PRIVATE_ACCOUNT_TOOLS } from "./jira-private-account-presentation";
+import { JIRA_RESOURCE_LIFECYCLE_TOOLS, jiraResourceLifecycleIdentityComplete } from "./jira-resource-lifecycle-presentation";
 import { JIRA_SPRINT_REVIEW_TOOLS, jiraSprintReviewDetails } from "./jira-sprint-review-presentation";
 import { JIRA_PROPERTY_TOOLS, jiraPropertyDetails } from "./jira-property-presentation";
 import { JIRA_MONITORING_WRITE_TOOLS, jiraMonitoringDetails } from "./jira-monitoring-presentation";
@@ -290,6 +293,7 @@ function boardContextLink(tool: string, source: UnknownRecord): string | undefin
 }
 type ConfigurationPresenter = (tool: string, source: UnknownRecord, args?: unknown) => readonly JiraAgileDetails[];
 const CONFIGURATION_PRESENTERS: readonly (readonly [ReadonlySet<string>, ConfigurationPresenter])[] = [
+  [JIRA_ACCOUNT_RESOURCE_TOOLS, jiraAccountResourceDetails],
   [JIRA_SYSTEM_ACTION_TOOLS, jiraSystemActionDetails],
   [JIRA_SCHEME_ADMINISTRATION_TOOLS, jiraSchemeAdministrationDetails],
   [JIRA_INSTANCE_ADMINISTRATION_TOOLS, jiraInstanceAdministrationDetails],
@@ -403,8 +407,21 @@ function presentedDetails(details: readonly JiraAgileDetails[]): JiraOutcomeItem
 }
 function configurationItems(tool: string, data: UnknownRecord, details: readonly JiraAgileDetails[]): JiraOutcomeItem[] {
   const items = presentedDetails(details);
+  const resourceLink = resourceLifecycleLink(tool, data);
+  if (resourceLink !== undefined) return items.map((item, index) => index === 0 ? { ...item, ...resourceLink } : item);
   const filterHref = filterLink(tool, data);
   return filterHref === undefined ? items : items.map((item, index) => index === 0 ? { ...item, filterHref } : item);
+}
+/** A retained, canonical receipt supplies the key; its saved URL uses the existing Jira destination
+ * validators. Do not turn arguments, remote-link content or a current connector into a URL. */
+function resourceLifecycleLink(tool: string, data: UnknownRecord): Pick<JiraOutcomeItem, "key" | "href"> | undefined {
+  if (!JIRA_RESOURCE_LIFECYCLE_TOOLS.has(tool) || !jiraResourceLifecycleIdentityComplete(tool, data)) return undefined;
+  const saved = data.browseUrl;
+  if (typeof saved !== "string" || /[\p{Cc}\\]/u.test(saved) || /%(?:2f|5c|25)/iu.test(saved)) return undefined;
+  const projectKey = text(data.projectKey);
+  const key = projectKey ?? text(data.issueKey);
+  const href = projectKey === undefined ? issueLink(saved, key) : projectLink(saved, projectKey);
+  return href === undefined || key === undefined ? undefined : { key, href };
 }
 function issueContextItems(tool: string, data: UnknownRecord): JiraOutcomeItem[] | undefined {
   if (tool === "jira_issue_picker")
@@ -565,7 +582,7 @@ export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcome
     [JIRA_PARTICIPATION_TOOLS, JIRA_MONITORING_WRITE_TOOLS, JIRA_PROPERTY_MUTATION_TOOLS, JIRA_SAVED_CONFIGURATION_WRITE_TOOLS,
       JIRA_RELEASE_LIFECYCLE_TOOLS, JIRA_LINK_MUTATION_TOOLS, JIRA_CONFIGURATION_MUTATION_TOOLS, JIRA_PLANNING_MUTATION_TOOLS,
       JIRA_ACCESS_CONFIGURATION_TOOLS, JIRA_SCHEME_ADMINISTRATION_TOOLS, JIRA_INSTANCE_ADMINISTRATION_WRITE_TOOLS,
-      JIRA_SYSTEM_ACTION_TOOLS].some((tools) => tools.has(exchange.call.name)) && exchange.mutationOutcome !== undefined
+      JIRA_SYSTEM_ACTION_TOOLS, JIRA_ACCOUNT_RESOURCE_WRITE_TOOLS].some((tools) => tools.has(exchange.call.name)) && exchange.mutationOutcome !== undefined
       ? { ...stored, outcome: exchange.mutationOutcome }
       : stored;
   return {
@@ -573,8 +590,9 @@ export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcome
     ...pageCounts(data, exchange.call.name),
     stagedCount: count(data.itemCount),
     unresolvedCount: count(data.unresolvedRefCount),
-    problems: problemsOf(data),
-    rules: rulesOf(data),
+    // Private credential/session validators expose only closed reasons and violation counts.
+    problems: JIRA_PRIVATE_ACCOUNT_TOOLS.has(exchange.call.name) ? [] : problemsOf(data),
+    rules: JIRA_PRIVATE_ACCOUNT_TOOLS.has(exchange.call.name) ? [] : rulesOf(data),
     validation: JIRA_FIELD_VALIDATION_FAILURES.find((value) => value === data.validation),
     failure: failureMessage(exchange, data),
   };

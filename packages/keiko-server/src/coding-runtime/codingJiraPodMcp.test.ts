@@ -944,6 +944,64 @@ describe("a Pod that is no longer the one the human chose", () => {
 });
 
 describe("a write that does not complete", () => {
+  it("retains the leaf's acknowledged target receipt when independent Coding readback throws", async () => {
+    const h = retainingHarness(harness());
+    let written = false;
+    h.http.mockImplementation(async (request) => {
+      if (request.method === "POST") {
+        written = true;
+        return response(undefined, 204);
+      }
+      if (written) throw new TypeError("Synthetic readback failure");
+      return response({ enabled: false });
+    });
+    const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
+    const result = await client.call("jira.set-app-monitoring", {
+      enabled: true, expectedEnabled: false,
+    });
+    // The real leaf wraps only this post-ACK exception; the Coding owner validates its receipt.
+    expect(result).toMatchObject({ isError: true, structuredContent: {
+      outcome: "succeeded-unconfirmed", reason: "unavailable", monitoringEnabled: true,
+    } });
+    expect(h.retained).toMatchObject([{ isError: true, data: {
+      outcome: "succeeded-unconfirmed", reason: "unavailable", monitoringEnabled: true,
+    } }]);
+    expect(h.http.mock.calls.map(([request]) => request.method)).toEqual(["GET", "POST", "GET"]);
+    expect(h.dispatched).toHaveBeenCalledOnce();
+    expect(h.recover).toHaveBeenCalledOnce();
+    expect(h.released).not.toHaveBeenCalled();
+    expect(JSON.stringify(result)).not.toContain("Synthetic readback failure");
+  });
+
+  it.each(["preflight", "write"] as const)(
+    "does not invent ACK or retain an arbitrary receipt on a %s exception",
+    async (phase) => {
+      const h = retainingHarness(harness());
+      h.http.mockImplementation(async (request) => {
+        if (phase === "preflight" || request.method === "POST")
+          throw Object.assign(new TypeError("Synthetic unacknowledged failure"), {
+            receipt: { monitoringEnabled: true },
+          });
+        return response({ enabled: false });
+      });
+      const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
+      const result = await client.call("jira.set-app-monitoring", {
+        enabled: true, expectedEnabled: false,
+      });
+      const outcome = phase === "preflight" ? "rejected" : "unknown";
+      expect(result).toMatchObject({ isError: true, structuredContent: {
+        outcome, reason: "unavailable",
+      } });
+      expect(result.structuredContent).not.toHaveProperty("monitoringEnabled");
+      expect(h.retained).toMatchObject([{ isError: true, data: { outcome } }]);
+      expect(h.retained[0]?.data).not.toHaveProperty("monitoringEnabled");
+      expect(h.http.mock.calls.map(([request]) => request.method))
+        .toEqual(phase === "preflight" ? ["GET"] : ["GET", "POST"]);
+      expect(h.recover).toHaveBeenCalledTimes(phase === "preflight" ? 0 : 1);
+      expect(h.released).toHaveBeenCalledTimes(phase === "preflight" ? 1 : 0);
+    },
+  );
+
   it.each([400, 401, 403, 409, 429, 500])("never treats native HTTP %s as an acknowledged successful write", async (status) => {
     const h = retainingHarness(harness());
     h.http.mockImplementation(async (request) => request.method === "GET"

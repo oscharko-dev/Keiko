@@ -6,6 +6,19 @@ import { jiraWorkflowSchemeReviewSnapshot } from "./jira-workflow-scheme-values.
 import { JiraAcknowledgedMutationError } from "./jira-mutation-failure.js";
 
 describe("reviewed workflow scheme configuration and explicit drafts", () => {
+  it.each([{ defaultWorkflow: null }, { mappings: [] }, { defaultWorkflow: SCHEME.defaultWorkflow }, { mappings: SCHEME.mappings }])(
+    "marks every explicit base mapping/default target unconfirmable, including unchanged values", async (target) => {
+      const f = workflowSchemeMutationFixture();
+      const result = await execute("jira.update-workflow-scheme", { ...CASES[1].args, ...target }, f.request);
+      expect(result).toMatchObject({ ok: false, receipt: { ...CASES[1].receipt, workflowMappingChanged: true } });
+      expect(f.calls.filter(({ method }) => method !== "GET")).toHaveLength(1);
+    },
+  );
+  it("marks a metadata-only base update false without adding a deployment claim", async () => {
+    const f = workflowSchemeMutationFixture();
+    expect(await execute("jira.update-workflow-scheme", { ...CASES[1].args, description: "" }, f.request))
+      .toEqual({ ok: true, receipt: CASES[1].receipt });
+  });
   it.each(CASES)("sends one fixed $name request and independently observes the same parent", async (test) => {
     const f = workflowSchemeMutationFixture(test.draft);
     const result = await execute(test.name, structuredClone(test.args), f.request);

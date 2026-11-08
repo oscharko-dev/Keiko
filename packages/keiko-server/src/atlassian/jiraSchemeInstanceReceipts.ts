@@ -102,6 +102,7 @@ function emailOperation(operation: JiraSchemeInstanceOperation): operation is ke
 }
 const PROPERTY_KEYS = new Set(["jira.clone.prefix", "jira.option.voting", "jira.option.watching", "jira.option.timetracking"]);
 function workflowValue(key: PropertyKey, value: unknown, operation: JiraSchemeInstanceOperation): boolean | undefined {
+  if (key === "workflowMappingChanged") return operation === "jira.update-workflow-scheme" && typeof value === "boolean";
   if (key === "workflowSchemeScope") return value === (operation.includes("-draft") ? "draft" : "scheme");
   if (key === "mappingPresent") {
     if (operation === "jira.set-workflow-scheme-workflow" || operation === "jira.set-workflow-scheme-draft-workflow") return typeof value === "boolean";
@@ -139,6 +140,7 @@ function optionalAcknowledgement(key: PropertyKey, operation: JiraSchemeInstance
   return key === "schemeId" && creates.has(operation);
 }
 function optionalObservation(key: PropertyKey, operation: JiraSchemeInstanceOperation): boolean {
+  if (key === "workflowMappingChanged") return operation === "jira.update-workflow-scheme";
   return key === "observedManifestSha256" && (operation === "jira.apply-email-template-pack" || operation === "jira.revert-email-template-pack");
 }
 function allowedKeys(receipt: JiraMutationReceipt, operation: JiraSchemeInstanceOperation): boolean {
@@ -171,8 +173,9 @@ const ALWAYS_UNCONFIRMED: ReadonlySet<JiraSchemeInstanceOperation> = new Set([
   "jira.set-instance-base-url", "jira.upload-email-template-pack", "jira.apply-email-template-pack", "jira.revert-email-template-pack",
 ]);
 function associationName(value: string): value is keyof typeof ASSOCIATIONS { return Object.hasOwn(ASSOCIATIONS, value); }
-/** Base workflow updates that change defaults/mappings additionally remain unconfirmed in the
- * executor, which owns the reviewed arguments; this receipt never invents deployment evidence. */
-export function canConfirmJiraSchemeInstance(operation: JiraMutationOperation): boolean {
+/** Historical receipts may omit the additive marker. Current success admission requires
+ * explicit metadata-only evidence; neither absence nor a mapping target proves deployment. */
+export function canConfirmJiraSchemeInstance(operation: JiraMutationOperation, receipt: JiraMutationReceipt): boolean {
+  if (operation === "jira.update-workflow-scheme") return own(receipt, "workflowMappingChanged") === false;
   return !isJiraSchemeInstanceOperation(operation) || !ALWAYS_UNCONFIRMED.has(operation);
 }

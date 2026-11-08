@@ -93,6 +93,45 @@ describe("schema impacts on saved formal rules", () => {
   });
 });
 
+describe("issue deletion impacts on surviving formal references", () => {
+  function admission(rule: JiraIssueTemplate, items: readonly unknown[] = []) {
+    const request = vi.fn<JiraMutationRequest>().mockResolvedValue({ ok: true, status: 200, body: undefined, items });
+    return { request, source: () => ({ templates: [rule], unreadable: 0 }), impact: { kind: "issue-deletion" as const } };
+  }
+  it.each(["parentLink: Blocks", "parentField: parent", "requiredFields: [issuelinks]", "requiredFields: [subtasks]"])("refuses an unproved surviving reference: %s", async (line) => {
+    expect(await gateJiraSchemaRuleImpact(admission(template(["activateOn: [create]", line]))))
+      .toMatchObject({ ok: false, violations: [{ ruleId: "template-unreadable" }] });
+  });
+  it("does not apply the deleted object's content requirements as a surviving field state", async () => {
+    const input = admission(template(["activateOn: [create, transition:Ready]", "summaryMinLength: 8", "requiredLabels: [reviewed]", "requiredFields: [Summary]"]));
+    expect(await gateJiraSchemaRuleImpact(input)).toEqual({ ok: true });
+    expect(input.request).not.toHaveBeenCalled();
+  });
+  it("uses observed scalar metadata to establish disjoint impact", async () => {
+    const input = admission(template(["activateOn: [edit]", "requiredFields: [Story Points]"]), [
+      { id: "customfield_10016", name: "Story Points", schema: { type: "number", custom: "com.atlassian.jira.plugin.system.customfieldtypes:float" } },
+    ]);
+    expect(await gateJiraSchemaRuleImpact(input)).toEqual({ ok: true });
+    expect(input.request).toHaveBeenCalledWith("field", "GET", undefined, "json-array");
+  });
+  it.each([undefined, { type: "string", custom: "plugin:issue-picker" }, { type: "issue" }])("does not invent disjointness from opaque/missing issue-reference metadata", async (schema) => {
+    const input = admission(template(["activateOn: [create]", "parentField: Related Issue"]), [
+      { id: "customfield_10100", name: "Related Issue", ...(schema === undefined ? {} : { schema }) },
+    ]);
+    expect(await gateJiraSchemaRuleImpact(input)).toMatchObject({ ok: false });
+  });
+  it("keeps an unreadable catalog fail-closed while unrelated content rules remain usable", async () => {
+    const input = admission(template(["activateOn: [edit]", "requiredFields: [Related Issue]"]));
+    input.request.mockResolvedValue({ ok: false, reason: "permission-denied" });
+    expect(await gateJiraSchemaRuleImpact(input)).toMatchObject({ ok: false, violations: [{ ruleId: "template-unreadable" }] });
+  });
+  it("does not convert prose-only/no-formal-rule sources into a deletion gate", async () => {
+    const request = vi.fn<JiraMutationRequest>();
+    expect(await gateJiraSchemaRuleImpact({ request, source: () => ({ templates: [], unreadable: 0 }), impact: { kind: "issue-deletion" } })).toEqual({ ok: true });
+    expect(request).not.toHaveBeenCalled();
+  });
+});
+
 interface ReadRoute {
   readonly suffix?: string;
   readonly includes?: string;

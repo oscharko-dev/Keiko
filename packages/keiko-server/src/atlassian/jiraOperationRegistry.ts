@@ -19,6 +19,17 @@ type CompositeTool = "jira.report" | "jira.draft-stage" | "jira.draft";
 type NativeTool = Exclude<JiraOperationTool, CompositeTool>;
 type JiraOperationEffect = "remote-read" | "remote-write" | "local-report" | "local-draft";
 type JiraPermissionPolicy =
+  | "instance-admin-human-attested-anonymization-unlock"
+  | "instance-admin-avatar-session-and-uncertainty"
+  | "instance-admin-user-lifecycle-and-uncertainty"
+  | "issue-lifecycle-and-uncertainty"
+  | "bulk-current-metadata-and-uncertainty"
+  | "instance-admin-configured-reciprocal-link-and-uncertainty"
+  | "instance-admin-project-lifecycle-and-uncertainty"
+  | "bound-protected-account-and-readback"
+  | "bound-private-session-and-uncertainty"
+  | "bound-protected-password-policy"
+  | "instance-admin-protected-license-validation"
   | "instance-admin-group-create-and-readback"
   | "instance-admin-group-delete-unconfirmed"
   | "instance-admin-group-membership-unconfirmed"
@@ -266,6 +277,51 @@ function writes<const K extends NativeTool>(
   return result as NativeGroup<K>;
 }
 const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
+  ...writes("instance-admin-human-attested-anonymization-unlock", { "jira.unlock-user-anonymization": ["DELETE", "/user/anonymization/unlock"] }),
+  ...writes("instance-admin-avatar-session-and-uncertainty", { "jira.upload-temporary-avatar": ["POST", "/avatar/{type}/temporary"] }),
+  ...writes("instance-admin-avatar-session-and-uncertainty", { "jira.crop-temporary-avatar": ["POST", "/avatar/{type}/temporaryCrop"] }),
+  ...writes("instance-admin-avatar-session-and-uncertainty", { "jira.upload-issue-type-avatar": ["POST", "/issuetype/{id}/avatar/temporary"] }),
+  ...writes("instance-admin-avatar-session-and-uncertainty", { "jira.create-issue-type-avatar": ["POST", "/issuetype/{id}/avatar"] }),
+  ...writes("instance-admin-avatar-session-and-uncertainty", { "jira.upload-project-avatar": ["POST", "/project/{projectIdOrKey}/avatar/temporary"] }),
+  ...writes("instance-admin-avatar-session-and-uncertainty", { "jira.create-project-avatar": ["POST", "/project/{projectIdOrKey}/avatar"] }),
+  ...writes("instance-admin-avatar-session-and-uncertainty", { "jira.set-project-avatar": ["PUT", "/project/{projectIdOrKey}/avatar"] }),
+  ...writes("instance-admin-avatar-session-and-uncertainty", { "jira.delete-project-avatar": ["DELETE", "/project/{projectIdOrKey}/avatar/{id}"] }),
+  ...writes("instance-admin-avatar-session-and-uncertainty", { "jira.upload-owned-avatar": ["POST", "/universal_avatar/type/{type}/owner/{owningObjectId}/temp"] }),
+  ...writes("instance-admin-avatar-session-and-uncertainty", { "jira.create-owned-avatar": ["POST", "/universal_avatar/type/{type}/owner/{owningObjectId}/avatar"] }),
+  ...writes("instance-admin-avatar-session-and-uncertainty", { "jira.delete-owned-avatar": ["DELETE", "/universal_avatar/type/{type}/owner/{owningObjectId}/avatar/{id}"] }),
+  ...writes("instance-admin-avatar-session-and-uncertainty", { "jira.upload-user-avatar": ["POST", "/user/avatar/temporary"] }),
+  ...writes("instance-admin-avatar-session-and-uncertainty", { "jira.create-user-avatar": ["POST", "/user/avatar"] }),
+  ...writes("instance-admin-avatar-session-and-uncertainty", { "jira.set-user-avatar": ["PUT", "/user/avatar"] }),
+  ...writes("instance-admin-avatar-session-and-uncertainty", { "jira.delete-user-avatar": ["DELETE", "/user/avatar/{id}"] }),
+  ...writes("instance-admin-user-lifecycle-and-uncertainty", { "jira.create-user": ["POST", "/user"] }),
+  ...writes("instance-admin-user-lifecycle-and-uncertainty", { "jira.update-user": ["PUT", "/user"] }),
+  ...writes("instance-admin-user-lifecycle-and-uncertainty", { "jira.delete-user": ["DELETE", "/user"] }),
+  ...writes("instance-admin-user-lifecycle-and-uncertainty", { "jira.invalidate-user-session": ["DELETE", "/user/session/{username}"] }),
+  ...writes("instance-admin-user-lifecycle-and-uncertainty", { "jira.schedule-user-anonymization": ["POST", "/user/anonymization"] }),
+  ...writes("instance-admin-user-lifecycle-and-uncertainty", { "jira.rerun-user-anonymization": ["POST", "/user/anonymization/rerun"] }),
+  ...writes("issue-lifecycle-and-uncertainty", { "jira.archive-issues": ["POST", "/issue/archive"] }),
+  ...writes("issue-lifecycle-and-uncertainty", { "jira.delete-issue": ["DELETE", "/issue/{issueIdOrKey}"] }),
+  ...writes("issue-lifecycle-and-uncertainty", { "jira.archive-issue": ["PUT", "/issue/{issueIdOrKey}/archive"] }),
+  ...writes("issue-lifecycle-and-uncertainty", { "jira.restore-issue": ["PUT", "/issue/{issueIdOrKey}/restore"] }),
+  ...writes("issue-lifecycle-and-uncertainty", { "jira.move-subtask": ["POST", "/issue/{issueIdOrKey}/subtask/move"] }),
+  ...writes("bulk-current-metadata-and-uncertainty", { "jira.create-issues": ["POST", "/issue/bulk"] }),
+  ...writes("instance-admin-configured-reciprocal-link-and-uncertainty", { "jira.create-reciprocal-remote-link": ["POST", "/issue/remotelink/reciprocal"] }),
+  ...writes("instance-admin-project-lifecycle-and-uncertainty", { "jira.delete-project": ["DELETE", "/project/{projectIdOrKey}"] }),
+  ...writes("instance-admin-project-lifecycle-and-uncertainty", { "jira.archive-project": ["PUT", "/project/{projectIdOrKey}/archive"] }),
+  ...writes("instance-admin-project-lifecycle-and-uncertainty", { "jira.restore-project": ["PUT", "/project/{projectIdOrKey}/restore"] }),
+  ...writes("instance-admin-project-lifecycle-and-uncertainty", { "jira.update-project-type": ["PUT", "/project/{projectIdOrKey}/type/{newProjectTypeKey}"] }),
+  ...writes("instance-admin-project-lifecycle-and-uncertainty", { "jira.set-project-permission-scheme": ["PUT", "/project/{projectKeyOrId}/permissionscheme"] }),
+  ...writes("instance-admin-project-lifecycle-and-uncertainty", { "jira.set-project-priority-scheme": ["PUT", "/project/{projectKeyOrId}/priorityscheme"] }),
+  ...writes("instance-admin-project-lifecycle-and-uncertainty", { "jira.remove-project-priority-scheme": ["DELETE", "/project/{projectKeyOrId}/priorityscheme/{schemeId}"] }),
+  ...writes("bound-protected-account-and-readback", { "jira.update-myself": ["PUT", "/myself"] }),
+  ...writes("bound-protected-account-and-readback", { "jira.update-my-password": ["PUT", "/myself/password"] }),
+  ...writes("instance-admin-user-lifecycle-and-uncertainty", { "jira.update-user-password": ["PUT", "/user/password"] }),
+  ...writes("bound-private-session-and-uncertainty", { "jira.login": ["POST", "/session"] }, "/rest/auth/1"),
+  ...writes("bound-private-session-and-uncertainty", { "jira.logout": ["DELETE", "/session"] }, "/rest/auth/1"),
+  ...writes("bound-private-session-and-uncertainty", { "jira.release-websudo": ["DELETE", "/websudo"] }, "/rest/auth/1"),
+  "jira.validate-create-user-password": ["POST", "read", "/password/policy/createUser", "bound-protected-password-policy", "/rest/api/2"],
+  "jira.validate-update-user-password": ["POST", "read", "/password/policy/updateUser", "bound-protected-password-policy", "/rest/api/2"],
+  "jira.validate-license": ["POST", "read", "/licenseValidator", "instance-admin-protected-license-validation", "/rest/api/2"],
   ...writes("instance-admin-group-create-and-readback", {
     "jira.create-group": ["POST", "/group"],
   }),
@@ -1215,6 +1271,7 @@ export function jiraOperationActionDigest(
   argumentsDigest: string,
   operationBinding?: JiraOperationBinding,
   sourceDigest?: string,
+  humanInputRevision?: string,
 ): string {
   return sha256Hex(
     canonicalise({
@@ -1222,6 +1279,7 @@ export function jiraOperationActionDigest(
       argumentsDigest,
       ...(operationBinding === undefined ? {} : { operationBinding }),
       ...(sourceDigest === undefined ? {} : { sourceDigest }),
+      ...(humanInputRevision === undefined ? {} : { humanInputRevision }),
     }),
   );
 }

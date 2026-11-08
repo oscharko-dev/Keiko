@@ -1,5 +1,6 @@
 "use client";
 import type { ReactNode } from "react";
+import { JiraHumanInput } from "./JiraHumanInput";
 import { JiraWriteApproval } from "./JiraWriteApproval";
 import type {
   ChatToolExchange,
@@ -73,6 +74,7 @@ import { JIRA_ACCESS_CONFIGURATION_TOOLS } from "./jira-access-configuration-pre
 import { JIRA_SCHEME_ADMINISTRATION_TOOLS } from "./jira-scheme-administration-presentation";
 import { JIRA_INSTANCE_ADMINISTRATION_TOOLS } from "./jira-instance-administration-presentation";
 import { JIRA_SYSTEM_ACTION_TOOLS } from "./jira-system-action-receipt";
+import { JIRA_ACCOUNT_RESOURCE_TOOLS } from "./jira-account-resource-presentation";
 import {
   jiraToolOutcomeView,
   JIRA_OUTCOME_ITEMS_SHOWN,
@@ -308,6 +310,7 @@ function resultCardSemantics(exchange: ChatToolExchange): {
   readonly label: ReturnType<typeof jiraToolLabel>;
 } {
   return [
+    JIRA_ACCOUNT_RESOURCE_TOOLS,
     JIRA_IDENTITY_OBSERVATION_TOOLS,
     JIRA_SELECTED_WORKLOG_TOOLS,
     JIRA_SAVED_CONFIGURATION_WRITE_TOOLS,
@@ -427,6 +430,9 @@ export function JiraChatTools({
           <KnowledgeCoverageNotice transcript={transcript} turnState={turnState} />
           {transcript?.exchanges.map((exchange) => (
             <div key={exchange.call.id} className={styles.cmpExchange}>
+              {exchange.humanInput === undefined ? null : <JiraHumanInput
+                key={exchange.humanInput.requestId} initial={exchange.humanInput} turnState={turnState} call={exchange.call}
+              />}
               {exchange.approval === undefined ? null : (
                 <JiraWriteApproval
                   key={exchange.approval.approvalId}

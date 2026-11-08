@@ -103,6 +103,10 @@ const TEMPLATE_ADMISSION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: true,
       values: [
+        "jira.delete-issue",
+        "jira.delete-project",
+        "jira.create-issues",
+        "jira.create-reciprocal-remote-link",
         "jira.delete-custom-fields",
         "jira.delete-issue-type",
         "jira.update-issue-type",
@@ -222,6 +226,10 @@ const FIELD_ADMISSION = defineActivityLogOperation({
 });
 
 const TEMPLATE_OPERATIONS = [
+  "jira.delete-issue",
+  "jira.delete-project",
+  "jira.create-issues",
+  "jira.create-reciprocal-remote-link",
   "jira.delete-custom-fields",
   "jira.delete-issue-type",
   "jira.update-issue-type",

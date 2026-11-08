@@ -1492,3 +1492,78 @@ describe("persisted Jira operation approval contracts", () => {
     );
   });
 });
+
+describe("private Jira input transcript ownership", () => {
+  const inputCall = { id: "private-input-call", name: "jira_login", arguments: { expectedActorKey: "actor-key" } };
+  const awaiting = {
+    requestId: `jhi_${"a".repeat(64)}`, revision: "12345678-1234-4123-8123-123456789abc",
+    purpose: "login" as const, state: "awaiting-input" as const, expiresAt: 100000,
+    fields: ["password" as const], optionalFields: [],
+  };
+  it("retains only closed metadata and prevents replacing a ready input or reviving cancellation", () => {
+    const { store, id } = fixture();
+    store.updateChatToolTranscript(id, { kind: "started", call: inputCall }, "private-input-proof");
+    const update = (view: import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors").JiraHumanInputView) =>
+      store.updateChatToolTranscript(id, { kind: "human-input", callId: inputCall.id, view }, "private-input-proof");
+    update(awaiting);
+    const ready = { ...awaiting, state: "ready" as const, revision: "87654321-1234-4123-8123-123456789abc" };
+    update(ready);
+    expect(() => update({ ...ready, revision: awaiting.revision })).toThrow();
+    expect(() => update({ ...ready, requestId: `jhi_${"b".repeat(64)}` })).toThrow();
+    expect(() => update({ ...ready, expiresAt: ready.expiresAt + 1 })).toThrow();
+    const cancelled = { ...ready, state: "cancelled" as const };
+    update(cancelled);
+    expect(() => update(ready)).toThrow();
+    expect(store.findMessageById(id)?.toolTranscript?.exchanges[0]?.humanInput).toEqual(cancelled);
+  });
+  it("rejects secret-bearing extras and metadata attached to another operation", () => {
+    const { store, id } = fixture();
+    store.updateChatToolTranscript(id, { kind: "started", call: inputCall }, "private-input-proof");
+    for (const view of [{ ...awaiting, values: { password: "synthetic-never-store" } }, { ...awaiting, purpose: "validate-license", fields: ["license"] }]) {
+      expect(() => store.updateChatToolTranscript(id,
+        { kind: "human-input", callId: inputCall.id, view: view as typeof awaiting }, "private-input-proof")).toThrow();
+    }
+    expect(JSON.stringify(store.findMessageById(id)?.toolTranscript)).not.toContain("synthetic-never-store");
+  });
+  it("retains a pending native identity without fabricating a result and settles only that exact call", () => {
+    const f = fixture();
+    const contract = jiraOperationForTool("jira.login");
+    if (contract === undefined) throw new TypeError("Missing private login contract");
+    const nativeCall = { ...inputCall, id: "mcp-private-input-call" };
+    const digest = sha256Hex(canonicalise(nativeCall.arguments));
+    const started = { kind: "started", call: nativeCall, operationBinding: contract.binding, nativeArgumentsDigest: digest } as const;
+    f.store.updateChatToolTranscript(f.id, started, "coding-private-input");
+    f.store.updateChatToolTranscript(f.id, { kind: "human-input", callId: nativeCall.id, view: awaiting }, "coding-private-input");
+    const pending = f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0];
+    expect(pending).toMatchObject({ call: nativeCall, humanInput: awaiting });
+    expect(pending).not.toHaveProperty("result");
+    expect(pending).not.toHaveProperty("mutationOutcome");
+    const projection = managedCatalogProjection(
+      [{ name: "jira.login", alias: "jira_login" }], [contract.declaration],
+      { id: "pending-input-fixture", version: 1 }, 0,
+    );
+    const binding = { descriptor: contract.declaration.descriptor, projectionDigest: projection.projectionDigest };
+    const completed = validateToolResultEnvelope({ ...result(), invocationId: nativeCall.id,
+      toolRef: binding.descriptor.toolRef, projectionDigest: binding.projectionDigest }, binding);
+    const captured = { kind: "captured", call: nativeCall, operationBinding: contract.binding,
+      nativeArgumentsDigest: digest, result: completed, binding, mutationOutcome: "not-dispatched" } as const;
+    expect(() => f.store.updateChatToolTranscript(f.id, { ...captured, call: {
+      ...nativeCall, arguments: { expectedActorKey: "other" },
+    } }, "coding-private-input")).toThrow();
+    f.store.updateChatToolTranscript(f.id, captured, "coding-private-input");
+    expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0]).toMatchObject({
+      humanInput: awaiting, result: { status: "denied", effectStarted: false }, mutationOutcome: "not-dispatched",
+    });
+  });
+  it("refuses forged pending native digests and does not accept them on ordinary Chat IDs", () => {
+    const f = fixture();
+    const operationBinding = jiraOperationBindingForTool("jira.login");
+    if (operationBinding === undefined) throw new TypeError("Missing private login contract");
+    const digest = sha256Hex(canonicalise(inputCall.arguments));
+    for (const update of [
+      { kind: "started", call: inputCall, operationBinding, nativeArgumentsDigest: digest },
+      { kind: "started", call: { ...inputCall, id: "mcp-private-input" }, operationBinding, nativeArgumentsDigest: "f".repeat(64) },
+    ] as const) expect(() => f.store.updateChatToolTranscript(f.id, update, "coding-private-input")).toThrow();
+    expect(f.store.findMessageById(f.id)?.toolTranscript).toBeUndefined();
+  });
+});

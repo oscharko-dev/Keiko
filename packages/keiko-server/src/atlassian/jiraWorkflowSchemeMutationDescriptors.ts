@@ -28,9 +28,16 @@ function write(description: string, input: CatalogJsonObject, fields: CatalogJso
     }, risk: "write", maxResultCount: 1 };
 }
 function update(draft: boolean): JiraNativeDefinition {
-  return write("Update explicitly supplied metadata/default/mappings; omitted fields remain unchanged, explicit empty description clears it, explicit empty mappings removes configured issue-type mappings, and null explicitly removes the configured default. Workflow names and issue-type IDs in supplied targets are independently bound. Complete expected metadata, mapping sets and original draft mappings must still match. Native draft PUT can create if another actor deletes the draft after admission: an independently observed different draft ID stays unconfirmed, never retargeted. Base mapping edits remain unconfirmed for aggregate project consequences; metadata-only or exact draft configuration can confirm without claiming deployment.",
+  const definition = write("Update explicitly supplied metadata/default/mappings; omitted fields remain unchanged, explicit empty description clears it, explicit empty mappings removes configured issue-type mappings, and null explicitly removes the configured default. Workflow names and issue-type IDs in supplied targets are independently bound. Complete expected metadata, mapping sets and original draft mappings must still match. Native draft PUT can create if another actor deletes the draft after admission: an independently observed different draft ID stays unconfirmed, never retargeted. Base mapping edits remain unconfirmed for aggregate project consequences; metadata-only or exact draft configuration can confirm without claiming deployment. A base-update workflowMappingChanged flag records whether defaults or mappings were explicitly supplied, even when unchanged.",
     { ...object({ ...reviewed(draft), ...TARGET }, requiredReview(draft)),
-      anyOf: Object.keys(TARGET).map((field) => ({ required: [field] })) }, receipt(draft));
+      anyOf: Object.keys(TARGET).map((field) => ({ required: [field] })) },
+    { ...receipt(draft), ...(!draft ? { workflowMappingChanged: { type: "boolean" } } : {}) });
+  return draft ? definition : { ...definition, result: { ...definition.result,
+    allOf: [{ anyOf: [
+      { not: { properties: { outcome: { type: "string", enum: ["succeeded"] } }, required: ["outcome"] } },
+      { properties: { workflowMappingChanged: { type: "boolean", enum: [false] } }, required: ["workflowMappingChanged"] },
+    ] }],
+  } };
 }
 function remove(draft: boolean): JiraNativeDefinition {
   return write(draft

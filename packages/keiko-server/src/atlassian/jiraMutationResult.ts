@@ -50,6 +50,18 @@ import {
   JIRA_SYSTEM_ACTION_RECEIPTS, isJiraSystemActionOperation,
   validJiraSystemActionReceipt, canConfirmJiraSystemAction,
 } from "./jiraSystemActionReceipts.js";
+import {
+  JIRA_RESOURCE_LIFECYCLE_RECEIPTS, isJiraResourceLifecycleOperation,
+  validJiraResourceLifecycleReceipt, canConfirmJiraResourceLifecycle,
+} from "./jiraResourceLifecycleReceipts.js";
+import {
+  JIRA_IDENTITY_AVATAR_RECEIPTS, isJiraIdentityAvatarOperation,
+  validJiraIdentityAvatarReceipt, canConfirmJiraIdentityAvatar,
+} from "./jiraIdentityAvatarReceipts.js";
+import {
+  JIRA_PRIVATE_ACCOUNT_RECEIPTS, isJiraPrivateAccountOperation,
+  validJiraPrivateAccountReceipt, canConfirmJiraPrivateAccount,
+} from "./jiraPrivateAccountReceipts.js";
 
 /**
  * The shared projection of a Jira mutation attempt onto the managed tool result. Ordinary Chat and
@@ -127,6 +139,9 @@ type CollaborationOperation = keyof typeof COLLABORATION_RECEIPTS;
 const REQUIRED_RECEIPTS: Readonly<
   Record<JiraMutationOperation, readonly (keyof JiraMutationReceipt)[]>
 > = {
+  ...JIRA_RESOURCE_LIFECYCLE_RECEIPTS,
+  ...JIRA_IDENTITY_AVATAR_RECEIPTS,
+  ...JIRA_PRIVATE_ACCOUNT_RECEIPTS,
   ...JIRA_SYSTEM_ACTION_RECEIPTS,
   ...JIRA_SCHEME_INSTANCE_RECEIPTS,
   ...JIRA_ACCESS_CONFIGURATION_RECEIPTS,
@@ -349,7 +364,14 @@ function validProjectReceipt(receipt: JiraMutationReceipt): boolean {
     return isSafeAtlassianIdentifier(value);
   });
 }
+function resourceAccountIdentities(receipt: JiraMutationReceipt, operation: JiraMutationOperation): boolean | undefined {
+  if (isJiraResourceLifecycleOperation(operation)) return validJiraResourceLifecycleReceipt(receipt, operation);
+  if (isJiraIdentityAvatarOperation(operation)) return validJiraIdentityAvatarReceipt(receipt, operation);
+  return isJiraPrivateAccountOperation(operation) ? validJiraPrivateAccountReceipt(receipt, operation) : undefined;
+}
 function specificIdentities(receipt: JiraMutationReceipt, operation: JiraMutationOperation): boolean | undefined {
+  const resource = resourceAccountIdentities(receipt, operation);
+  if (resource !== undefined) return resource;
   if (isJiraSystemActionOperation(operation)) return validJiraSystemActionReceipt(receipt, operation);
   if (isJiraSchemeInstanceOperation(operation)) return validJiraSchemeInstanceReceipt(receipt, operation);
   if (isJiraAccessConfigurationOperation(operation)) return validJiraAccessConfigurationReceipt(receipt, operation);
@@ -397,11 +419,14 @@ function partialIdentity(receipt: JiraMutationReceipt, operation: JiraMutationOp
   );
 }
 function exactReceiptFamily(operation: JiraMutationOperation): boolean {
-  return isJiraSystemActionOperation(operation) || isJiraSchemeInstanceOperation(operation) || isJiraAccessConfigurationOperation(operation) || isJiraPlanningLifecycleOperation(operation) || isJiraConfigurationReceiptOperation(operation) ||
+  return resourceAccountOperation(operation) || isJiraSystemActionOperation(operation) || isJiraSchemeInstanceOperation(operation) || isJiraAccessConfigurationOperation(operation) || isJiraPlanningLifecycleOperation(operation) || isJiraConfigurationReceiptOperation(operation) ||
     isJiraRelationLifecycleOperation(operation) || isJiraSavedConfigurationOperation(operation);
 }
+function resourceAccountOperation(operation: JiraMutationOperation): boolean {
+  return isJiraResourceLifecycleOperation(operation) || isJiraIdentityAvatarOperation(operation) || isJiraPrivateAccountOperation(operation);
+}
 const RECEIPT_ARRAY_KEYS = ["issueKeys", "replacementVersionIds", "sprintIds", "issueIds", "globalIds", "actorUserKeys", "actorGroupNames", "projectIds", "projectKeys", "columnIds",
-  "reindexRequestIds", "recipientUserKeys", "applicationRoleKeys", "fieldIds", "linkTypeIds"] as const;
+  "reindexRequestIds", "recipientUserKeys", "applicationRoleKeys", "fieldIds", "linkTypeIds", "subtaskIds"] as const;
 function ownReceiptArray(receipt: JiraMutationReceipt, key: (typeof RECEIPT_ARRAY_KEYS)[number]): readonly string[] | undefined {
   const own = Object.getOwnPropertyDescriptor(receipt, key);
   return own !== undefined && "value" in own ? receipt[key] : undefined;
@@ -415,7 +440,18 @@ function snapshotReceipt(receipt: JiraMutationReceipt): JiraMutationReceipt {
   const names = Object.getOwnPropertyDescriptor(receipt, "terminologyNames");
   if (names !== undefined && "value" in names && receipt.terminologyNames !== undefined)
     snapshot.terminologyNames = Object.freeze([...receipt.terminologyNames]);
+  snapshotReceiptMetadata(receipt, snapshot);
   return Object.freeze(snapshot);
+}
+function snapshotReceiptMetadata(receipt: JiraMutationReceipt, snapshot: { -readonly [K in keyof JiraMutationReceipt]: JiraMutationReceipt[K] }): void {
+  for (const key of ["bulkFailedElementNumbers", "bulkFailureStatuses"] as const) {
+    const own = Object.getOwnPropertyDescriptor(receipt, key);
+    const values = own !== undefined && "value" in own ? receipt[key] : undefined;
+    if (values !== undefined) snapshot[key] = Object.freeze([...values]);
+  }
+  const crop = Object.getOwnPropertyDescriptor(receipt, "temporaryCrop");
+  if (crop !== undefined && "value" in crop && receipt.temporaryCrop !== undefined)
+    snapshot.temporaryCrop = Object.freeze({ ...receipt.temporaryCrop });
 }
 
 /**
@@ -486,12 +522,15 @@ function boundedViolations(
 function validOriginalReceipt(receipt: JiraMutationReceipt, operation: JiraMutationOperation): boolean {
   return specificIdentities(receipt, operation) ?? true;
 }
-function canConfirmOperation(operation: JiraMutationOperation): boolean {
-  return canConfirmJiraSystemAction(operation) && canConfirmJiraSavedConfiguration(operation) && canConfirmJiraRelationLifecycle(operation) &&
-    canConfirmJiraConfiguration(operation) && canConfirmJiraPlanningLifecycle(operation) && canConfirmJiraAccessConfiguration(operation) && canConfirmJiraSchemeInstance(operation);
+function canConfirmResourceAccount(operation: JiraMutationOperation, receipt: JiraMutationReceipt): boolean {
+  return canConfirmJiraResourceLifecycle(operation) && canConfirmJiraIdentityAvatar(operation, receipt) && canConfirmJiraPrivateAccount(operation, receipt);
+}
+function canConfirmOperation(operation: JiraMutationOperation, receipt: JiraMutationReceipt): boolean {
+  return canConfirmResourceAccount(operation, receipt) && canConfirmJiraSystemAction(operation) && canConfirmJiraSavedConfiguration(operation) && canConfirmJiraRelationLifecycle(operation) &&
+    canConfirmJiraConfiguration(operation) && canConfirmJiraPlanningLifecycle(operation) && canConfirmJiraAccessConfiguration(operation) && canConfirmJiraSchemeInstance(operation, receipt);
 }
 function retainMissingAcknowledgement(operation: JiraMutationOperation): boolean {
-  return isJiraSystemActionOperation(operation) || isJiraRelationLifecycleOperation(operation) || isJiraAccessConfigurationOperation(operation) || isJiraSchemeInstanceOperation(operation);
+  return resourceAccountOperation(operation) || isJiraSystemActionOperation(operation) || isJiraRelationLifecycleOperation(operation) || isJiraAccessConfigurationOperation(operation) || isJiraSchemeInstanceOperation(operation);
 }
 
 /** An attempt is a success only with the validated identities its operation must return. */
@@ -502,7 +541,7 @@ export function validJiraMutationAttempt(
   if (!value.ok) return failedAttempt(value, operation);
   if (!validOriginalReceipt(value.receipt, operation))
     return { ok: false, reason: "malformed-payload" };
-  if (!canConfirmOperation(operation))
+  if (!canConfirmOperation(operation, value.receipt))
     return failedAttempt({ ok: false, reason: "malformed-payload", receipt: value.receipt }, operation);
   const receipt = Object.freeze({ ...value.receipt });
   const valid =

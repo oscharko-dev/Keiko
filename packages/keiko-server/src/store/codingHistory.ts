@@ -21,6 +21,12 @@ export interface CodingNativeToolTranscript {
     update: Extract<ChatToolTranscriptUpdate, { kind: "captured" }>,
     correlationId: string,
   ) => void;
+  /** Public pending input metadata on the actual native call; no secret value or result. */
+  readonly humanInput: (
+    started: Extract<ChatToolTranscriptUpdate, { kind: "started" }>,
+    view: import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors").JiraHumanInputView,
+    correlationId: string,
+  ) => void;
 }
 
 export interface CodingHistoryCreateInput {
@@ -770,6 +776,12 @@ function nativeToolTranscript(
     capture: (update, correlationId) => withImmediateTransaction(db, () => {
       requireBound();
       store.updateChatToolTranscript(bound.userMessageId, update, correlationId);
+    }),
+    humanInput: (started, view, correlationId) => withImmediateTransaction(db, () => {
+      requireBound();
+      if (!started.call.id.startsWith("mcp-")) throw invalidRequest("Invalid pending native call.");
+      store.updateChatToolTranscript(bound.userMessageId, started, correlationId);
+      store.updateChatToolTranscript(bound.userMessageId, { kind: "human-input", callId: started.call.id, view }, correlationId);
     }),
   };
 }

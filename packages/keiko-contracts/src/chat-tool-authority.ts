@@ -1,6 +1,7 @@
 import {
   JIRA_MUTATION_OPERATIONS,
   isJiraAttachmentPreview,
+  isJiraAvatarUploadOperation,
   isJiraDraftRef,
   type JiraAttachmentPreview,
   type JiraMutationOperation,
@@ -467,6 +468,9 @@ function validateWriteApprovalKeys(
   }
   const excluded = Object.hasOwn(value, "excludedItemRefs");
   const attached = Object.hasOwn(value, "attachment");
+  if (!attached && (value.operation === "jira.upload-email-template-pack" ||
+      (typeof value.operation === "string" && isJiraAvatarUploadOperation(value.operation))))
+    errors.push("chatWriteApproval.attachment is required");
   validateKeys(
     value,
     [
@@ -484,7 +488,8 @@ function validateWriteApprovalKeys(
   if (attached) {
     if (!isJiraAttachmentPreview(value.attachment))
       errors.push("chatWriteApproval.attachment is invalid");
-    if (value.operation !== "jira.attach" && value.operation !== "jira.upload-email-template-pack")
+    if (value.operation !== "jira.attach" && value.operation !== "jira.upload-email-template-pack" &&
+      !(typeof value.operation === "string" && isJiraAvatarUploadOperation(value.operation)))
       errors.push("chatWriteApproval.operation is invalid");
   }
 }

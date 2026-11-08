@@ -701,9 +701,9 @@ Memory retains its separate explicit-or-`governed-assist` default. This availabi
 itself grant a Chat read grant, mutation approval, connector scope or authority envelope.
 
 
-**Explicit instance administration (#4287, review 4503902861).** The one hundred six implemented administration writes—application/IPD monitoring, JMX exposure
+**Explicit instance administration (#4287, review 4503902861).** The one hundred thirty-seven source-defined administration writes—application/IPD monitoring, JMX exposure
 start/stop, screen-tab and screen-field layout changes, issue-type property set/delete, filter creation,
-future-filter default sharing, filter permission addition/removal, project-category lifecycle, role/default/project-membership, permission-scheme/grant/attribute changes, issue-type/priority/workflow-scheme configuration, four closed instance settings, email-template upload/apply/revert, group lifecycle/membership, schema configuration, directory access/layout, maintenance requests and instance-wide sprint synchronization cleanup—use the separate connector class
+future-filter default sharing, filter permission addition/removal, project-category lifecycle, role/default/project-membership, permission-scheme/grant/attribute changes, issue-type/priority/workflow-scheme configuration, four closed instance settings, email-template upload/apply/revert, group lifecycle/membership, schema configuration, directory access/layout, maintenance requests, avatar effects, user lifecycle, configured reciprocal linking, project lifecycle changes, another-user password update, human-attested anonymization unlock and instance-wide sprint synchronization cleanup—use the separate connector class
 `connector-admin` and require `issue-tracker.admin`. Ordinary `issue-tracker.write` never admits
 these operations, including in Full access. They retain high risk and the same Workbench
 `connector-access` class, `internet` resource scope, supervised `connector-write` kind and existing
@@ -817,6 +817,70 @@ identity; completion status alone does not prove an error-free job. POST search 
 worklog lookup are explicit remote reads, despite their HTTP method, and acquire no mutation
 approval or journal entry. The fixed auth/1 session GET reads only the bound connection after
 current-user equality; passwords, cookies and login/logout remain separate capabilities.
+
+Three additional native POST observations consume protected human input through the existing
+custody owner. Password-policy validation has ordinary read scope and low risk. License validation
+is an explicit administration read with high risk; it does not activate a license. Thus five native
+reads require administration: license validation, three anonymization GETs and the email
+pack GET. The three POST validators never acquire mutation-journal entries merely because they
+use POST. Only acceptance and a bounded violation count leave the private transport; echoed
+password/license values and reflected native messages do not.
+
+The [private account owner](../../packages/keiko-connectors/src/jira-managed-private-account.ts)
+binds actor and selected user key/username before dispatch. Current-user edits expose only reviewed
+display-name changes, with independent identity/active-state readback. Self-password, login, logout
+and websudo release retain ordinary write authority; another-user password requires administration.
+All retain high risk and existing approval semantics. Password updates, logout and websudo release
+remain acknowledged/unconfirmed for global credential/session consequences. A login success is
+restricted to a same-actor session independently established by cookie-only current-user and session
+reads. A PAT identity observation is never substituted for cookie proof.
+
+Protected values are supplied by authenticated human input, bound to the existing call's canonical
+arguments, current authority, actor and connector generation. They stay in the existing vault and
+one-use custody path, outside the catalog, model, transcript and Activity Log. The public pending
+view contains no secret and grants no authority. Supplying a missing secret or shutdown fact is
+distinct from granting action approval: required-review mode still uses the existing exact approval,
+while allowed mode does not acquire an extra mandatory approval. No new approval registry, generic
+header selector or credential forwarding route is introduced. The actual owners are
+[HumanInput custody](../../packages/keiko-connectors/src/jira-human-input-custody.ts) and the
+[fixed private HTTP boundary](../../packages/keiko-server/src/atlassian/httpPrivateIdentity.ts).
+
+Avatar effects require administration and use the existing authorized file/content snapshot path
+with strict PNG/JPEG admission and bounded immutable bytes. Their private cookie-only session is
+actor/generation/authority-bound; one exclusive lease covers target reads and its temporary slot.
+A new upload clears prior temporary state before dispatch, including a lost response. Crop/create
+consume only the exact reviewed slot and never infer an owner from generic temporary metadata.
+Only complete independent project/user selection metadata can confirm a selection. Other avatar
+ACKs remain unconfirmed for image content or assignment. Legacy generic upload/crop routes require
+a matching retained-release binding and are not exposed as working 11.3 APIs. Missing connected-file
+authority, including an uncomposed Coding source, refuses before upload; a task path is not a grant.
+The [avatar leaf](../../packages/keiko-connectors/src/jira-managed-avatar-mutations.ts),
+[file composition](../../packages/keiko-server/src/atlassian/jiraAvatarComposition.ts) and
+[private session custody](../../packages/keiko-connectors/src/jira-private-session-custody.ts)
+retain these distinct responsibilities.
+
+Native user/project/issue lifecycle effects preserve exact reviewed identities and known ACK IDs
+without asserting global access, hidden population or complete migration. Bulk create prepares all
+items through the existing create metadata, formal, trace and duplicate owners before one native
+request; partial ACK entries do not imply positional attribution or a retry. Reciprocal linking
+uses only an existing configured application link, never an arbitrary model URL or foreign probe.
+Issue/project deletion evaluates surviving required parent/link/issue-picker references through
+the existing formal-impact owner, refusing an unresolved global population. Deleted objects' own
+summary/labels are not fabricated surviving post-states; archive does not invent a field migration.
+Project restore acknowledgement does not start a second reindex effect. Configuration observations
+alone still cannot establish effective access or full global consequences.
+
+Anonymization unlock requires administration and an actual human-only shutdown attestation for the
+observed executing node and complete task snapshot. The
+[unlock owner](../../packages/keiko-connectors/src/jira-managed-anonymization-unlock.ts) rereads actor
+and native task immediately before one fixed bodyless DELETE. It identifies the shutdown statement
+as human-supplied information, not independent process evidence; node OFFLINE is insufficient.
+No model Boolean, invented task ID or progress unit is admitted. Native unlock has no task CAS and
+remains acknowledged/unconfirmed despite matching prereads. No automatic shutdown or replay follows.
+
+These are constrained source contracts. The existing 439-row coverage ledger keeps every runtime
+qualification unknown and AC1–AC9 open until actual current-head verification and original journey
+acceptance; neither a descriptor count nor this ADR supplies that evidence.
 
 Native issue-link changes bind both canonical parents and the complete reviewed relations;
 saved templates judge the planned native post-relation before a single effect. Remote-link

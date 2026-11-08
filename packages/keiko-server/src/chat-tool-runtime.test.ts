@@ -12,7 +12,10 @@ import {
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import { updateCapsuleState } from "@oscharko-dev/keiko-local-knowledge";
+import { seedCapsuleWithVectors } from "@oscharko-dev/keiko-local-knowledge/testing";
 import type { ChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts";
+import type { JiraHumanInputView } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ExternalMcpConnection } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type { McpServerDefinition } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
@@ -31,8 +34,16 @@ import { handleDecideChatWriteApproval } from "./atlassian/chatWriteApprovalRout
 import { installMcpChatCatalogRuntime } from "./mcp/mcpChatCatalogRuntime.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { conversationForGateway } from "./conversation-gateway.js";
-import { jiraOperationContracts } from "./atlassian/jiraManagedProvider.js";
-import { sha256Hex } from "@oscharko-dev/keiko-security";
+import { jiraOperationContracts, jiraOperationForTool } from "./atlassian/jiraManagedProvider.js";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
+import { NO_LOCAL_VAULT_KEYCHAIN } from "@oscharko-dev/keiko-security/secret-vault";
+import { buildAtlassianConnectorCredentialDeps } from "./atlassian/wiring.js";
+import { createAtlassianCredentialMetadataStore } from "./atlassian/credentialMetadataStore.js";
+import { handleSubmitJiraHumanInput } from "./atlassian/jiraHumanInputRoutes.js";
+import { jiraOperationActionDigest } from "./atlassian/jiraOperationRegistry.js";
+import * as requirementBinding from "./atlassian/jiraChatRequirementBinding.js";
+import { openKnowledgeStoreForDeps } from "./local-knowledge-store-open.js";
+import { specification } from "./_requirementSupport.js";
 import { createGatewayAtlassianHttpBodyPort } from "./atlassian/httpPort.js";
 import {
   syntheticJira,
@@ -50,7 +61,7 @@ afterEach(async () => {
 interface Options {
   readonly demandDiscovery?: boolean;
   readonly jiraAction?: {
-    readonly canonicalId: "keiko.jira.draft" | "keiko.jira.attach";
+    readonly canonicalId: "keiko.jira.draft" | "keiko.jira.attach" | "keiko.jira.update.myself";
     readonly arguments: () => Record<string, unknown>;
   };
   readonly reasoningHistory?: "required-with-tools" | undefined;
@@ -357,7 +368,10 @@ function preselectKnownFixtureTools(deps: UiHandlerDeps, options: Options): void
   const catalog = deps.jiraChatCatalog;
   if (catalog === undefined) throw new TypeError("Missing Jira catalog");
   vi.spyOn(catalog, "get").mockImplementation(() =>
-    catalog.select(jiraOperationContracts().map((entry) => entry.binding.identity)),
+    catalog.select(jiraOperationContracts()
+      .filter((entry) => options.jiraAction === undefined ||
+        entry.declaration.descriptor.toolRef.canonicalId === options.jiraAction.canonicalId)
+      .map((entry) => entry.binding.identity)),
   );
 }
 function send(f: Fixture): ReturnType<typeof handleSendDesktopChat> {
@@ -411,6 +425,151 @@ async function approveWrite(f: Fixture, kind: ChatToolWriteApprovalView["kind"])
     ).status,
   ).toBe(200);
 }
+
+const PRIVATE_PROFILE = {
+  key: "private-actor-key",
+  name: "Native Private Actor",
+  displayName: "Original private actor",
+  active: false,
+} as const;
+const PRIVATE_PASSWORD = "synthetic-human-only-profile-password";
+
+function privateProfileFixture(defaultMode: boolean, unchanged = false) {
+  const displayName = unchanged ? PRIVATE_PROFILE.displayName : "Reviewed private actor";
+  const argumentsValue = {
+    expectedActorKey: PRIVATE_PROFILE.key,
+    expectedUser: PRIVATE_PROFILE,
+    displayName,
+  };
+  const f = fixture({ defaultMode, jiraAction: {
+    canonicalId: "keiko.jira.update.myself", arguments: () => argumentsValue,
+  } });
+  const configPath = join(f.root, "private-credentials.json");
+  const requests: { method: string; path: string }[] = [];
+  let observedName: string = PRIVATE_PROFILE.displayName;
+  const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
+    const method = init?.method ?? "GET";
+    const path = new URL(String(url)).pathname;
+    requests.push({ method, path });
+    if (path !== "/rest/api/2/myself") throw new TypeError("Unexpected private profile route");
+    if (method === "GET") return Response.json({ ...PRIVATE_PROFILE, displayName: observedName });
+    if (method !== "PUT") throw new TypeError("Unexpected private profile method");
+    expect(JSON.parse(String(init?.body))).toEqual({ displayName, password: PRIVATE_PASSWORD });
+    observedName = displayName;
+    return new Response(null, { status: 204 });
+  });
+  const credentials = buildAtlassianConnectorCredentialDeps({
+    configPath, env: { KEIKO_STATE_DIR: f.root }, egress: () => undefined,
+    keychainAccess: NO_LOCAL_VAULT_KEYCHAIN, fetchImpl,
+  });
+  const existing = f.deps.atlassianConnectorCredentials;
+  const principal = jiraChatActorDigest(f.deps);
+  if (existing === undefined || principal === undefined) throw new TypeError("Missing Jira composition");
+  Object.assign(existing, credentials);
+  const created = credentials.custody.create({
+    provider: "jira", deployment: "data-center", authScheme: "bearer-pat",
+    displayName: "Synthetic private Jira", baseUrl: "https://jira.example.invalid",
+    apiToken: "synthetic-private-profile-pat",
+    livePodCreationRequestId: "61188dd4-2703-4279-9c02-7828eccf6325",
+  }, principal);
+  const verification = credentials.custody.beginVerification(created.authRef);
+  if (created.livePod === undefined || verification === undefined) throw new TypeError("Missing private Pod");
+  createAtlassianCredentialMetadataStore({ configPath }).bindTargetAdmission(created,
+    { baseUrl: created.baseUrl, addressClass: "public" });
+  credentials.custody.finishVerification(created.authRef, created.generation, verification.revision, "ok");
+  f.deps.store.updateChat(f.chatId, { jiraPodId: created.livePod.podId }, {
+    verifiedJiraPod: { podId: created.livePod.podId, authenticationGeneration: created.generation },
+  });
+  return { ...f, argumentsValue, requests };
+}
+
+function privateProfileExchange(f: Fixture): ChatToolExchange | undefined {
+  return f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges
+    .find((exchange) => exchange.call.name === "jira_update_myself");
+}
+
+async function pendingPrivateInput(f: Fixture): Promise<JiraHumanInputView> {
+  await vi.waitFor(() => {
+    expect(privateProfileExchange(f)?.humanInput?.state).toBe("awaiting-input");
+  });
+  const view = privateProfileExchange(f)?.humanInput;
+  if (view === undefined) throw new TypeError("Missing private input request");
+  return view;
+}
+
+function submitPrivateProfileInput(f: Fixture, view: JiraHumanInputView) {
+  return handleSubmitJiraHumanInput(context({
+    expectedRevision: view.revision, values: { password: PRIVATE_PASSWORD },
+  }, { requestId: view.requestId }), f.deps);
+}
+
+it.each([false, true])("binds private input and journal revision through a mixed Chat (allowed=%s)", async (defaultMode) => {
+  const f = privateProfileFixture(defaultMode);
+  const pending = send(f);
+  void pending.catch(() => undefined);
+  const input = await pendingPrivateInput(f);
+  expect(f.effects).toEqual(["mcp-read"]);
+  expect(f.requests.every((request) => request.method === "GET")).toBe(true);
+  expect(privateProfileExchange(f)?.approval).toBeUndefined();
+  expect(privateProfileExchange(f)?.result).toBeUndefined();
+  expect(privateProfileExchange(f)?.mutationOutcome).toBeUndefined();
+  expect((await submitPrivateProfileInput(f, input)).status).toBe(200);
+  if (!defaultMode) await approveWrite(f, "jira-chat-write");
+  expect((await pending).status).toBe(200);
+  const exchange = privateProfileExchange(f);
+  const message = f.deps.store.listMessages(f.chatId)[0];
+  const contract = jiraOperationForTool("jira.update-myself");
+  if (exchange?.humanInput === undefined || message === undefined || contract === undefined)
+    throw new TypeError("Missing retained private exchange");
+  expect(exchange.humanInput.state).toBe("consumed");
+  expect(exchange.humanInput.revision).not.toBe(input.revision);
+  expect(exchange).toMatchObject({ mutationOutcome: "succeeded", result: { status: "completed" } });
+  const invocationId = sha256Hex(canonicalise({ messageId: message.id, callId: exchange.call.id }));
+  const argumentsDigest = sha256Hex(canonicalise(f.argumentsValue));
+  const digest = jiraOperationActionDigest("jira.update-myself", argumentsDigest,
+    contract.binding, undefined, exchange.humanInput.revision);
+  expect(f.deps.store.chatToolMutations?.find(invocationId)).toMatchObject({
+    actionDigest: digest, phase: "settled", outcome: "succeeded",
+  });
+  expect(digest).not.toBe(jiraOperationActionDigest("jira.update-myself", argumentsDigest, contract.binding));
+  if (defaultMode) expect(exchange.approval).toBeUndefined();
+  else expect(exchange.approval?.actionDigest).toBe(digest);
+  expect(f.requests.filter((request) => request.method === "PUT")).toEqual([
+    { method: "PUT", path: "/rest/api/2/myself" },
+  ]);
+  expect(JSON.stringify({ messages: f.deps.store.listMessages(f.chatId), modelCalls: f.calls }))
+    .not.toContain(PRIVATE_PASSWORD);
+  expect((await send(f)).status).toBe(200);
+  expect(f.requests.filter((request) => request.method === "PUT")).toHaveLength(1);
+  expect((await submitPrivateProfileInput(f, exchange.humanInput)).status).not.toBe(200);
+});
+
+it("keeps an exact profile no-op free of private input in the mixed Chat", async () => {
+  const f = privateProfileFixture(true, true);
+  expect((await send(f)).status).toBe(200);
+  expect(f.effects).toEqual(["mcp-read"]);
+  expect(f.requests.every((request) => request.method === "GET")).toBe(true);
+  expect(privateProfileExchange(f)?.humanInput).toBeUndefined();
+  expect(privateProfileExchange(f)?.mutationOutcome).toBe("not-dispatched");
+});
+
+it("rejects mixed-Chat private input after the bound Jira scope is revoked", async () => {
+  const f = privateProfileFixture(true);
+  const pending = send(f);
+  void pending.catch(() => undefined);
+  const input = await pendingPrivateInput(f);
+  const chat = f.deps.store.findChatById(f.chatId);
+  if (chat === undefined) throw new TypeError("Missing mixed Chat");
+  const update = context({ jiraPodId: null,
+    expectedGroundingScopeIdentity: deriveChatGroundingScopeIdentity(chat) });
+  update.url.searchParams.set("id", f.chatId);
+  expect((await handleUpdateChat(update, f.deps)).status).toBe(200);
+  await pending;
+  expect((await submitPrivateProfileInput(f, input)).status).not.toBe(200);
+  expect(f.requests.every((request) => request.method === "GET")).toBe(true);
+  expect(JSON.stringify(f.deps.store.listMessages(f.chatId))).not.toContain(PRIVATE_PASSWORD);
+});
+
 async function expectFirstMutationAwaitingResult(f: Fixture): Promise<void> {
   await vi.waitFor(() => {
     expect(f.effects).toEqual(["mcp-write"]);
@@ -729,6 +888,96 @@ describe("combined Jira review admission parity", () => {
     );
     return jira;
   }
+  async function connectRequirementSource(f: Fixture): Promise<void> {
+    const session = openKnowledgeStoreForDeps(f.deps);
+    try {
+      const pod = await seedCapsuleWithVectors(session.store, {
+        displayName: "Reviewed requirements.md",
+        text: specification(1).text,
+      });
+      updateCapsuleState(session.store, pod.capsuleId, "ready");
+      const chat = f.deps.store.findChatById(f.chatId);
+      if (chat === undefined) throw new TypeError("Missing combined-source Chat");
+      const selected = await handleUpdateChat({
+        ...context({
+          localKnowledgeScopes: [{ kind: "capsule", capsuleId: pod.capsuleId, connectedAtMs: 1 }],
+          expectedGroundingScopeIdentity: deriveChatGroundingScopeIdentity(chat),
+        }),
+        url: new URL(`http://127.0.0.1/api/chats?id=${encodeURIComponent(f.chatId)}`),
+      }, f.deps);
+      expect(selected.status).toBe(200);
+    } finally {
+      session.close();
+    }
+  }
+  function changeRequirementSource(f: Fixture): void {
+    const session = openKnowledgeStoreForDeps(f.deps);
+    try {
+      session.store._internal.db
+        .prepare("UPDATE documents SET safe_display_name = ?")
+        .run("Changed requirements.md");
+      session.store._internal.db
+        .prepare("UPDATE capsules SET updated_at = updated_at + 1000")
+        .run();
+    } finally {
+      session.close();
+    }
+  }
+  it.each([false, true])(
+    "preserves the selected requirement source and item guard in the mixed draft path (drift=%s)",
+    async (drift) => {
+      const checkedRefs: (string | undefined)[] = [];
+      const createPreparation = requirementBinding.createJiraChatSourcePreparation;
+      vi.spyOn(requirementBinding, "createJiraChatSourcePreparation").mockImplementation((options) => {
+        const source = createPreparation(options);
+        return { ...source, current: (prepared, itemRef) => {
+          checkedRefs.push(itemRef);
+          return source.current(prepared, itemRef);
+        } };
+      });
+      const f = fixture({ jiraAction: {
+        canonicalId: "keiko.jira.draft",
+        arguments: () => ({ items: [{
+          ref: "traced-story", projectId: "10000", issueTypeId: "10001",
+          fields: { summary: "Traced Story", description: { format: "markdown", text:
+            "## Criteria\n- Thema 1 ist verfügbar.\n- Fehler zu Thema 1 werden gemeldet." } },
+          requirementIds: ["LH-001"],
+        }] }),
+      } });
+      const jira = useDraftRemote(f);
+      await connectRequirementSource(f);
+      const pending = send(f);
+      void pending.catch(() => undefined);
+      try {
+        const approval = (await observedJiraExchange(f)).approval;
+        if (approval === undefined) throw new TypeError("Missing source-bound draft approval");
+        expect(jira.posts()).toEqual([]);
+        if (drift) changeRequirementSource(f);
+        const decision = await handleDecideChatWriteApproval(context({
+          decision: "approve", actionDigest: approval.actionDigest,
+        }, { approvalId: approval.approvalId }), f.deps);
+        expect(decision.status).toBe(200);
+        expect((await pending).status).toBe(200);
+        expect(f.effects).toEqual(["mcp-read"]);
+        if (drift) {
+          expect(jira.posts()).toEqual([]);
+          expect(jiraExchange(f)?.mutationOutcome).not.toBe("succeeded");
+          expect(jiraExchange(f)?.result?.status).not.toBe("completed");
+        } else {
+          expect(checkedRefs).toContain("traced-story");
+          expect(jira.posts()).toHaveLength(1);
+          expect(jira.issues[0]?.fields.description).toContain("Keiko traceability");
+          expect(jira.issues[0]?.fields.description).toContain("LH-001");
+          expect(jiraExchange(f)).toMatchObject({
+            mutationOutcome: "succeeded",
+            result: { status: "completed", data: { createdCount: 1, failedCount: 0 } },
+          });
+        }
+      } finally {
+        await settlePendingJira(f, pending);
+      }
+    },
+  );
   it("refuses an invalid saved template before any combined-path Jira write approval", async () => {
     const f = fixture({
       jiraAction: {

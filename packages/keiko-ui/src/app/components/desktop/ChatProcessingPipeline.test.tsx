@@ -10,6 +10,7 @@ import type {
 import type { ChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts";
 import { ChatProcessingPipeline } from "./ChatProcessingPipeline";
 import { chatProcessingSteps, type ChatProcessingStep } from "./chat-processing-pipeline";
+import { jiraToolState } from "./jira-tool-presentation";
 import { JiraChatTools } from "./JiraChatTools";
 import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
@@ -54,6 +55,54 @@ const approval: ChatToolWriteApprovalView = {
 function transcript(...exchanges: readonly ChatToolExchange[]): ChatToolTranscript {
   return { schemaVersion: 1, exchanges };
 }
+
+function humanInputCall(state: NonNullable<ChatToolExchange["humanInput"]>["state"]): ChatToolExchange {
+  return { ...call("jira_login"), humanInput: {
+    requestId: `jhi_${"a".repeat(64)}`, revision: "11111111-1111-4111-8111-111111111111",
+    purpose: "login", state, expiresAt: 1, fields: ["password"], optionalFields: [],
+  } };
+}
+
+describe("canonical human-input processing states", () => {
+  it("waits for human input without reporting an active Jira query or deriving expiry from the local clock", () => {
+    const steps = chatProcessingSteps(transcript(humanInputCall("awaiting-input")), "pending", false);
+    expect(steps[1]?.state).toBe("input");
+    expect(jiraToolState(humanInputCall("awaiting-input"), "pending")).toBe("chat.jira.humanInput.waiting");
+    expect(steps.some((step) => step.state === "active" || step.id === "continuing")).toBe(false);
+    expect(JSON.stringify(steps)).not.toMatch(/password|requestId|revision|expiresAt|cookie/iu);
+  });
+  it.each([
+    ["awaiting-input", "cancelled", "cancelled"], ["awaiting-input", "failed", "failed"],
+    ["awaiting-input", "completed", "blocked"], ["expired", "pending", "blocked"],
+    ["cancelled", "pending", "cancelled"], ["expired", "cancelled", "cancelled"],
+  ] as const)("keeps %s / %s interrupted instead of continuing", (state, turnState, expected) => {
+    const steps = chatProcessingSteps(transcript(humanInputCall(state)), turnState, false);
+    expect(steps[1]?.state).toBe(expected);
+    expect(steps.some((step) => step.state === "active" || step.state === "input")).toBe(false);
+  });
+  it("retains settled remote-effect uncertainty over a stale input view", () => {
+    const exchange = { ...completed(humanInputCall("awaiting-input")), mutationOutcome: "unknown" as const };
+    expect(chatProcessingSteps(transcript(exchange), "cancelled", false)[1]?.state).toBe("attention");
+    expect(chatProcessingSteps(transcript(humanInputCall("consumed")), "pending", false)[1]?.state).toBe("active");
+  });
+  it.each(["en", "de"] as const)("restores a readable waiting state in %s", async (locale) => {
+    await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+    localStorage.setItem(I18N_STORAGE_KEY, locale);
+    try {
+      const steps = chatProcessingSteps(transcript(humanInputCall("awaiting-input")), "pending", false);
+      const view = <I18nProvider><ChatProcessingPipeline steps={steps} /></I18nProvider>;
+      const first = render(view); first.unmount(); const restored = render(view);
+      const label = locale === "de" ? "Wartet auf deine Eingabe" : "Waiting for your input";
+      expect(screen.getByRole("listitem", { current: "step" })).toHaveTextContent(label);
+      expect(screen.getByRole("status")).toHaveTextContent(label);
+      expect(restored.container.querySelector("input, textarea")).toBeNull();
+      expect((await axe(restored.container)).violations).toHaveLength(0);
+      restored.rerender(<I18nProvider><ChatProcessingPipeline steps={chatProcessingSteps(transcript(humanInputCall("expired")), "pending", false)} /></I18nProvider>);
+      expect(screen.queryByRole("listitem", { current: "step" })).toBeNull();
+      expect(screen.getByRole("status")).toHaveTextContent(locale === "de" ? "Nicht ausgeführt" : "Not performed");
+    } finally { localStorage.removeItem(I18N_STORAGE_KEY); }
+  });
+});
 
 describe("observed Chat processing steps", () => {
   it.each(["constructor", "toString", "__proto__"])(

@@ -396,10 +396,11 @@ export async function gateJiraBulkReferenceChange(input: {
 }
 
 export type JiraSchemaRuleImpact =
+  | { readonly kind: "issue-deletion" }
   | { readonly kind: "issue-type"; readonly types: readonly { readonly id: string; readonly name: string }[] }
   | { readonly kind: "custom-fields"; readonly fields: readonly JiraFieldCatalogEntry[] }
   | { readonly kind: "link-type"; readonly names: readonly string[] };
-function schemaRuleAffected(template: JiraIssueTemplate, impact: JiraSchemaRuleImpact, catalog: readonly JiraFieldCatalogEntry[]): boolean {
+function schemaRuleAffected(template: JiraIssueTemplate, impact: Exclude<JiraSchemaRuleImpact, { readonly kind: "issue-deletion" }>, catalog: readonly JiraFieldCatalogEntry[]): boolean {
   if (impact.kind === "issue-type") return impact.types.some((type) =>
     sameType(template.issueType, type.id) || sameType(template.issueType, type.name));
   if (impact.kind === "link-type") return linkSchemaRuleAffected(template, impact.names);
@@ -411,6 +412,44 @@ function schemaRuleAffected(template: JiraIssueTemplate, impact: JiraSchemaRuleI
 function linkSchemaRuleAffected(template: JiraIssueTemplate, names: readonly string[]): boolean {
   if (template.parent.link !== undefined && names.some((name) => sameType(template.parent.link ?? "", name))) return true;
   return references([template]).some((reference) => sameType(reference, "issuelinks") || sameType(reference, "Issue Links"));
+}
+function mayReferenceDeletedIssue(id: string, values: readonly unknown[]): boolean {
+  if (id === "parent" || id === "issuelinks" || id === "subtasks") return true;
+  if (JIRA_TEMPLATE_SYSTEM_FIELDS.some((field) => field.id === id)) return false;
+  const matches = values.map(asRecord).filter((value) => value?.id === id);
+  if (matches.length !== 1) return true;
+  const raw = matches[0];
+  const parsed = parseJiraFieldMetadata([{ fieldId: id, name: raw?.name, schema: raw?.schema, required: false, operations: [] }]);
+  if (!parsed.ok) return true;
+  const kind = parsed.fields[0]?.kind;
+  return kind === undefined || kind === "issue" || kind === "links" || kind === "opaque" || kind === "unsupported";
+}
+function deletionRuleAffected(template: JiraIssueTemplate, values: readonly unknown[]): boolean {
+  if (template.parent.link !== undefined) return true;
+  const catalog = [...JIRA_TEMPLATE_SYSTEM_FIELDS, ...fieldCatalogValues(values)];
+  return references([template]).some((reference) => {
+    const ids = resolveJiraTemplateFieldIds(reference, catalog);
+    return ids.length === 0 || ids.some((id) => mayReferenceDeletedIssue(id, values));
+  });
+}
+function schemaImpactResult(affected: readonly JiraIssueTemplate[], subject = "Schema changes require complete governed issue migration"): JiraTemplateGateResult {
+  return affected.length === 0 ? OK : {
+    ok: false, reason: "field-validation",
+    violations: affected.slice(0, JIRA_TEMPLATE_VIOLATIONS_MAX).map((template) => ({
+      ruleId: "template-unreadable", template: jiraIssueTemplateLabel(template),
+      subject,
+    })),
+  };
+}
+/** Deletion can remove inbound references from other, permission-hidden issues. The deleted
+ * object's own content is not a surviving post-state. Native scalar metadata can prove that a
+ * required field is unrelated; unknown/plugin issue references cannot prove population coverage. */
+async function issueDeletionImpact(request: JiraMutationRequest, templates: readonly JiraIssueTemplate[]): Promise<JiraTemplateGateResult> {
+  const unresolved = references(templates).some((reference) =>
+    resolveJiraTemplateFieldIds(reference, JIRA_TEMPLATE_SYSTEM_FIELDS).length === 0);
+  const values = unresolved ? await readFieldCatalogValues(request) : [];
+  return schemaImpactResult(templates.filter((template) => deletionRuleAffected(template, values ?? [])),
+    "Issue deletion requires complete evidence for surviving issue references");
 }
 /** Schema deletion and type renaming can change values or the selection of saved formal rules
  * for a population Jira does not expose completely. Consider every declared activation and all
@@ -426,17 +465,12 @@ export async function gateJiraSchemaRuleImpact(input: {
   if (set === undefined) return OK;
   if (set.unreadable > 0) return unreadableRefusal(set.unreadableNames);
   if (set.templates.length === 0) return OK;
+  if (input.impact.kind === "issue-deletion") return issueDeletionImpact(input.request, set.templates);
   const catalog = input.impact.kind === "custom-fields"
     ? await readJiraFieldCatalog(input.request) : JIRA_TEMPLATE_SYSTEM_FIELDS;
   if (catalog === undefined) return unreadableRefusal(["native field catalog for schema impact"]);
   const affected = set.templates.filter((template) => schemaRuleAffected(template, input.impact, catalog));
-  return affected.length === 0 ? OK : {
-    ok: false, reason: "field-validation",
-    violations: affected.slice(0, JIRA_TEMPLATE_VIOLATIONS_MAX).map((template) => ({
-      ruleId: "template-unreadable", template: jiraIssueTemplateLabel(template),
-      subject: "Schema changes require complete governed issue migration",
-    })),
-  };
+  return schemaImpactResult(affected);
 }
 
 /** Operation metadata first; the instance field list only when a reference stays unresolved. */

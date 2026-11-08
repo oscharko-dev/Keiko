@@ -123,10 +123,10 @@ to Chat or Coding, grant authority, or bypass those owners.
 
 ## Current constrained implementation snapshot
 
-The current registry supplies **394 native identities: 213 reads and 181 writes**. Each is mapped to
+The current registry supplies **439 native identities: 216 reads and 223 writes**. Each is mapped to
 its exact published method/path identity and remains `partial`: the closed typed operation exposes
 only the documented supported fields and behavior, rather than the entire upstream API contract.
-The other **45 operations remain `not-implemented`**. No row is marked fully implemented,
+No identity remains without a constrained source mapping. No row is marked fully implemented,
 executable, owner-deferred or excluded by this snapshot. All 439 source/version IDs, cluster
 assignments, dependencies and qualification fields are retained.
 
@@ -137,8 +137,9 @@ worklog create/update with connected-user watching/voting; fourteen C9 workflow-
 and screen reads; three reviewed comment/attachment/worklog deletions; and eight C10 user, group and
 application-role reads; ten permission/security/notification configuration reads; and five additional
 project scheme/accessible-security associations; twenty core issue/project metadata reads; four instance/current-actor observations; seven role/priority-scheme reads; four release-count/project-version-page reads; seven scoped directory/field reads; two JQL metadata/suggestion reads; nine additional Agile context reads; seven configuration metadata reads; three scalar runtime-setting observations; four maintenance-status observations; seven resource-page/link-type/accessibility/column-layout reads; nine additional job/monitoring observations; sixteen entity-property reads; three reviewed screen-tab writes; six additional issue-context reads; four governed monitoring changes; and sixteen reviewed entity-property set/delete operations. The three existing
-report/draft composites remain compositions, not extra native API identities. Other destructive operations, account/session effects, avatar uploads and remaining administration
-stay open. A registered declaration is not evidence that
+report/draft composites remain compositions, not extra native API identities. The final avatar,
+identity/session, issue and project sources are described below; their runtime qualification and
+the original acceptance journeys remain open. A registered declaration is not evidence that
 Jira grants the current person permission or that a particular installation supports the operation.
 
 Four account diagnostics add password requirement messages, cached duplicate-account count/list and current-HTTP-context stored search errors. Native204 is an explicit absent search error only at that documented route; missing200 content is unavailable. Duplicate observations never flush caches, infer a complete directory audit or grant password acceptance. Three application/preference reads expose strict values only for closed documented nonsecret keys; unknown keys retain metadata with withheld values. Defaults, examples and allowed values never leave that projection, and permissionLevel is a native filter rather than a grant. All new regression, wire, EN/DE, reload and accessibility sources are unexecuted.
@@ -154,11 +155,14 @@ Two further native observations bind a permission-scheme attribute and read the 
 
 Three remote-version-link readers bind native versions where selected, decode only the documented JSON-encoded native link once and reuse the complete typed-value owner. Two worklog change feeds preserve exact native time windows and cursors without totals, synthetic offsets, skipped prefixes or implied all-history coverage. Native permission/retention limits and the excluded latest minute remain explicit. All five new wire/policy/schema and readable EN/DE result regression sources remain unexecuted.
 
-One hundred six administration writes (four monitoring changes, nine screen/tab layout changes, two
-global issue-type property mutations, four filter creation/sharing changes, three project-category changes, six permission-scheme/grant/attribute changes, nine role/default/project-membership changes, ten issue-type/priority-scheme changes, eighteen workflow-scheme/base/draft configuration changes, four instance-setting changes, three email-template effects, four group lifecycle/membership changes, twelve maintenance requests, eleven schema changes, six directory-access/layout changes and one instance-wide sprint cleanup) require the explicit `issue-tracker.admin` grant. Ordinary
+One hundred thirty-seven administration writes (four monitoring changes, nine screen/tab layout changes, two
+global issue-type property mutations, four filter creation/sharing changes, three project-category changes, six permission-scheme/grant/attribute changes, nine role/default/project-membership changes, ten issue-type/priority-scheme changes, eighteen workflow-scheme/base/draft configuration changes, four instance-setting changes, three email-template effects, four group lifecycle/membership changes, twelve maintenance requests, eleven schema changes, six directory-access/layout changes, fifteen avatar effects, six user-lifecycle effects, one reciprocal-link request, seven project-lifecycle changes, another-user password update, human-attested anonymization unlock and one instance-wide sprint cleanup) require the explicit `issue-tracker.admin` grant. Ordinary
 Jira write access, a selected credential and Full access mode do not supply that grant. Coding binds
 the human's selected scope into its start confirmation and real Authority Envelope, and rechecks the
-current exact action scope before native dispatch. Most metadata reads retain `issue-tracker.read`; three anonymization observations and the email-template archive observation require explicit administration while retaining read effects and low risk.
+current exact action scope before native dispatch. Most metadata reads retain `issue-tracker.read`.
+Five reads require explicit administration: three anonymization observations and the email-template
+archive observation retain low risk; the native license-validation POST retains high risk and read
+effect. The two protected password-policy POSTs remain ordinary low-risk reads.
 This authority repair changes no native identity or qualification status; its source regressions,
 ledger reconciliation and generated log contracts remain pending the deferred final validation.
 Coding mutation results now use the existing run/turn-bound History and transcript owner to retain validated success/error payloads and known receipts before recovery. Private immutable descriptor, operation and original-argument bindings survive display redaction and registry changes. Existing transcript byte/call reservations are admitted before native dispatch; unavailable capacity or unreadable stored state refuses the write. Generic Chat APIs remain isolated from Coding rows. Local scope denial is stored without fabricating a native Jira permission response, and a valid provider receipt takes precedence after post-dispatch scope loss. Error results never acknowledge a write; the existing journal remains authoritative for unknown/unconfirmed/succeeded history and no replay. The existing result cards render those exchanges in EN/DE after reload even when user text is already in the timeline. Validated native reads now share the same immutable result projection, capacity owner and run/turn-bound atomic transcript capture, without creating mutation rows, acknowledgements or recovery barriers. Success, failure and local scope denial remain readable after reload. Cancellation, changed turns or released reservations refuse late capture. AC9 acceptance and every confirming run remain open.
@@ -370,11 +374,11 @@ not claims that those tests ran on the current head. `verificationReferences` re
 actual operation-level qualification is recorded. The registry digest is source accounting, not a
 replacement for the runtime's immutable operation contract digest or one-use approval binding.
 
-The current deletion, directory, configuration and core metadata deltas were edited directly during the explicit code-only
-period.
+The current source deltas, including the final 45 identities, were edited directly during the explicit
+code-only period.
 Its registry digest is source-file bookkeeping, not a validation result. Inventory reconciliation,
 checks and final current-head verification remain pending until the permitted final verification
-phase tomorrow morning; no runtime qualification was added.
+phase; no runtime qualification was added.
 
 Run `node scripts/reconcile-jira-api-inventory.mjs` after a reviewed registry change in that phase. A new native
 tool first needs explicit constraints and code/test references in `currentCapabilities`; missing or
@@ -438,13 +442,13 @@ updating provenance and all affected rows together; a changed digest is never si
 
 
 
-Thirteen screen/board/sprint operations extend the existing native mutation owner. Six screen-field/tab changes require explicit administration and complete reviewed ordered layouts, preserving false/null and native zero-based tab positions. Default-screen field addition remains unconfirmed because Jira chooses the target. Board deletion remains unconfirmed because actor-visible omission or404 does not establish native absence; refined-velocity changes confirm only the observed boolean, never velocity metrics. Five Sprint operations add full replacement, deletion, swapping and selected/instance-wide synchronization cleanup. Native PUT replacement is distinct from POST partial update, and saved formal edit rules guard implicit Sprint-field membership effects before dispatch, including existing POST completion. The existing sprint reader exposes a bounded shared review snapshot with native missing/null facts preserved. Only the two fixed unmap PUT identities receive the server-owned experimental header; the instance-wide action requires explicit admin authority and a sample is never the effect boundary. Deletion, swap and whole-instance cleanup remain unconfirmed after acknowledgement. V72 preserves prior journal rows and historical SQL. New native-wire, receipt, policy, migration, preflight, EN/DE/reload/accessibility regression sources remain unexecuted. Current source scope is254Platform +42Agile +1authentication identity; all439 runtime qualifications remain unknown.
+Thirteen screen/board/sprint operations extend the existing native mutation owner. Six screen-field/tab changes require explicit administration and complete reviewed ordered layouts, preserving false/null and native zero-based tab positions. Default-screen field addition remains unconfirmed because Jira chooses the target. Board deletion remains unconfirmed because actor-visible omission or404 does not establish native absence; refined-velocity changes confirm only the observed boolean, never velocity metrics. Five Sprint operations add full replacement, deletion, swapping and selected/instance-wide synchronization cleanup. Native PUT replacement is distinct from POST partial update, and saved formal edit rules guard implicit Sprint-field membership effects before dispatch, including existing POST completion. The existing sprint reader exposes a bounded shared review snapshot with native missing/null facts preserved. Only the two fixed unmap PUT identities receive the server-owned experimental header; the instance-wide action requires explicit admin authority and a sample is never the effect boundary. Deletion, swap and whole-instance cleanup remain unconfirmed after acknowledgement. V72 preserves prior journal rows and historical SQL. New native-wire, receipt, policy, migration, preflight, EN/DE/reload/accessibility regression sources remain unexecuted. Current source scope is254Platform +42Agile +1authentication identity; all 439 runtime qualifications remain unknown.
 
 
-Eleven planning/version-link/project-category operations extend the same native owners. Epic removal binds exact prior relationships and independently confirms explicit native absence. Rank operations include the anchor in formal edit admission, preserve partial207 effects and always keep absolute rank unconfirmed. Estimation binds board/field/issue and explicit units: original-time wire strings are minutes, observed values are seconds, zero is real and missing is unknown. Version-link writes reuse complete typed values and complete same-parent collections; exact available native global IDs are now exposed for review without inferring them from names or following URI content. Selected deletion requires proven same-version absence with unchanged siblings; all-link deletion requires explicit acceptance and a complete bounded receipt admitted before effects. Three project-category mutations require explicit administration, exact string descriptions and native actor binding. Actual empty descriptions remain distinct from missing/null; created IDs stay lossless beyond JS safe integers and never derive from names after lost ACK. Category deletion remains unconfirmed. Forward-only V73 keeps historical migrations unchanged. New wire/policy/schema/receipt/migration/EN-DE/reload/accessibility regression sources are authored and unexecuted. Current source scope is261Platform +46Agile +1authentication identity; all439 runtime qualifications remain unknown.
+Eleven planning/version-link/project-category operations extend the same native owners. Epic removal binds exact prior relationships and independently confirms explicit native absence. Rank operations include the anchor in formal edit admission, preserve partial207 effects and always keep absolute rank unconfirmed. Estimation binds board/field/issue and explicit units: original-time wire strings are minutes, observed values are seconds, zero is real and missing is unknown. Version-link writes reuse complete typed values and complete same-parent collections; exact available native global IDs are now exposed for review without inferring them from names or following URI content. Selected deletion requires proven same-version absence with unchanged siblings; all-link deletion requires explicit acceptance and a complete bounded receipt admitted before effects. Three project-category mutations require explicit administration, exact string descriptions and native actor binding. Actual empty descriptions remain distinct from missing/null; created IDs stay lossless beyond JS safe integers and never derive from names after lost ACK. Category deletion remains unconfirmed. Forward-only V73 keeps historical migrations unchanged. New wire/policy/schema/receipt/migration/EN-DE/reload/accessibility regression sources are authored and unexecuted. Current source scope is261Platform +46Agile +1authentication identity; all 439 runtime qualifications remain unknown.
 
 
-Fifteen access-configuration mutations extend existing role and permission readers/binders. All require explicit administration and independent native permissions. Permission-scheme replacements distinguish omitted grants from explicit[], use exact holder namespaces and native acknowledged IDs, and confirm full same-parent configuration rather than effective user access. The attribute port preserves its native text/plain Boolean contract without opening generic headers or text bodies. Role POST partial updates and PUT full replacements remain distinct. Users bind by stable key and native username, groups by native group name; observed assignment IDs/namespaces are mandatory. Default actors remain separate from project membership. Native actors-only default envelopes never invent role metadata, and missing descriptions or actor types remain unavailable. Role deletion, five actor changes and permission-scheme deletion always remain acknowledged/unconfirmed because full aggregate security consequences are not proven. V74 preserves V73 and prior SQL. New native-wire/policy/receipt/migration/preflight/EN-DE/reload/accessibility regression sources are authored and unexecuted. Current source scope is276Platform +46Agile +1authentication identity;116 implementations and all439 runtime qualifications remain open.
+Fifteen access-configuration mutations extend existing role and permission readers/binders. All require explicit administration and independent native permissions. Permission-scheme replacements distinguish omitted grants from explicit[], use exact holder namespaces and native acknowledged IDs, and confirm full same-parent configuration rather than effective user access. The attribute port preserves its native text/plain Boolean contract without opening generic headers or text bodies. Role POST partial updates and PUT full replacements remain distinct. Users bind by stable key and native username, groups by native group name; observed assignment IDs/namespaces are mandatory. Default actors remain separate from project membership. Native actors-only default envelopes never invent role metadata, and missing descriptions or actor types remain unavailable. Role deletion, five actor changes and permission-scheme deletion always remain acknowledged/unconfirmed because full aggregate security consequences are not proven. V74 preserves V73 and prior SQL. New native-wire/policy/receipt/migration/preflight/EN-DE/reload/accessibility regression sources are authored and unexecuted. Current source scope is276Platform +46Agile +1authentication identity;116 implementations and all 439 runtime qualifications remain open.
 
 Thirty-six further constrained identities add ten issue-type/priority-scheme mutations, eighteen
 workflow-scheme/base/draft mutations, four instance settings and four email-template operations.
@@ -502,8 +506,81 @@ saved-rule-compliance proof. Exact documented permission/WebSudo401 responses us
 current-generation identity observation rather than revoking a healthy credential; the denied
 operation remains denied, with no retry or generic status exception.
 
-This source snapshot has 347 Platform, 46 Agile and one authentication identity. Forty-five
-identity/avatar/project/issue operations still require implementation, and every one of the439
-runtime qualifications remains unknown with no fabricated verification or owner exclusions.
+That preceding checkpoint recorded 347 Platform, 46 Agile and one authentication identity, with 45
+source mappings still open. The final 45 source delta below supersedes those counts; earlier tranche
+counts in this document describe their historical checkpoints, not current qualification.
+
+The current source snapshot maps **389 Platform, 46 Agile and 4 authentication identities**. All 439
+rows remain `partial`, all 439 `runtimeAvailability` values remain `unknown`, and no verification
+reference or owner exclusion has been added. AC1–AC9 remain open. Complete method/path accounting
+does not establish complete supported fields, consumer composition, native permissions, version
+availability, current-head quality gates or acceptance of the original user journeys.
+
+Fifteen avatar effects reuse the existing file/content/approval and private session owners. Chat
+preview reads the authorized connected file; required review binds its exact byte snapshot, while
+allowed mode mints the same immutable snapshot without a new mandatory approval. PNG/JPEG content
+admission and the 20MiB limit precede upload. The actual cookie-only session independently proves
+the same actor and holds one exclusive temporary slot for its connector generation and invocation
+authority. New upload clears that slot before dispatch, including lost ACK; crop/create consume
+the exact reviewed actor/target/hash/crop snapshot before effect. Only project/user selection can
+confirm complete observed selection metadata. Thirteen other effects remain unconfirmed and never
+prove image pixels or global assignment. The legacy generic temporary/crop routes require a real
+server-owned 10.3/10.4 binding; they are absent from the retained 11.3 API. Coding task/workspace paths
+do not grant connected-file authority, so a missing Coding upload source remains unavailable.
+These boundaries are owned by the [avatar leaf](../../../packages/keiko-connectors/src/jira-managed-avatar-mutations.ts),
+[Chat composition](../../../packages/keiko-server/src/atlassian/jiraAvatarComposition.ts) and
+[private session custody](../../../packages/keiko-connectors/src/jira-private-session-custody.ts).
+
+Six user-lifecycle writes bind exact actor and target key/username. Profile metadata can confirm
+only its independently read exact state; supplied active-state changes, creation, deletion,
+invalidation and anonymization schedule/rerun remain unconfirmed for aggregate identity/access
+effects. No generated password or reflected native credential error enters a model result.
+Five issue-lifecycle calls, bulk creation, reciprocal linking and seven project-lifecycle calls
+also retain acknowledged uncertainty. Bulk creation prepares every item through the existing
+metadata/formal/source/duplicate owner before one POST; partial ACK IDs never imply positional
+attribution or a safe replay. Reciprocal linking requires an existing configured application link,
+with no generic foreign fetch. Project restore does not silently launch reindexing. Issue/project
+deletion evaluates surviving parent/link/issue-picker references through the
+[existing formal-impact owner](../../../packages/keiko-connectors/src/jira-managed-template-gate.ts);
+neither visible JQL prefixes nor bare404 establish a complete population or absence. Archives do
+not invent a global field-migration gate. The published project-priority templates retain
+`{projectKeyOrId}`, while execution uses the independently bound native numeric project ID.
+
+Six protected account/session writes and three protected POST observations use the existing
+[private account leaf](../../../packages/keiko-connectors/src/jira-managed-private-account.ts) and
+[HumanInput custody](../../../packages/keiko-connectors/src/jira-human-input-custody.ts). Secrets are
+submitted only through authenticated human input, bound to the current call/arguments, authority,
+actor and Pod generation; they never pass through model arguments, OpenCode questions, receipts
+or logs. Login confirms only an independently cookie-proven same-actor session; PAT authentication
+is not a cookie-session proof. Display-name update confirms only exact unchanged identity/active
+and desired metadata. Password updates, logout and websudo release stay unconfirmed. Password and
+license validators return only bounded acceptance/count facts; a policy rejection is an observed
+read result, not a credential change, and license validation never activates a license.
+
+The [anonymization unlock leaf](../../../packages/keiko-connectors/src/jira-managed-anonymization-unlock.ts)
+requires a human-only shutdown attestation tied to the complete observed task/owner snapshot. It
+rereads actor and the current native task immediately before the fixed global DELETE. The human
+statement is explicitly not independent process-shutdown evidence; an OFFLINE node is insufficient.
+Missing task identity is never inferred, progress has no invented unit, and the absence of native
+CAS leaves every acknowledgement unconfirmed. No model Boolean grants this action.
+
+Coding protected-input history uses the existing
+[run/turn-bound pending owner](../../../packages/keiko-server/src/coding-runtime/codingJiraHumanInput.ts)
+and [tool transcript](../../../packages/keiko-server/src/store/chatToolTranscript.ts). Only the public
+pending view is persisted; it is not a completed result or mutation acknowledgement. Submission
+and consumption revalidate the actual active run/call, original arguments and current envelope.
+Stopped/replaced invocations cannot consume the input. Existing journal uncertainty and one-effect
+recovery remain authoritative. V77 appends the closed writes to the existing journal without
+turning the three POST observations into mutation rows.
+
+The source closeout status remains:
+
+| Boundary | Recorded state |
+| --- | --- |
+| Published identities and constrained source mappings | 439 of 439 mapped; all `partial` |
+| Runtime availability | 439 `unknown`; no successful native qualification inferred |
+| Verification references | Unchanged; no new execution evidence |
+| AC1–AC9 and original authoring/report/Coding journeys | Open; source counts do not discharge acceptance |
+
 All added schema/transport/receipt/migration/preflight/policy/EN-DE/reload/accessibility regression
 sources and final generated artifacts remain pending execution in the permitted final window.

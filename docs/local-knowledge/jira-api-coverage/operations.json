@@ -525,7 +525,8 @@
         "packages/keiko-connectors/src/jira-managed-anonymization-reads.ts",
         "packages/keiko-contracts/src/jira-read-tools.ts",
         "packages/keiko-server/src/atlassian/jiraManagedProvider.ts",
-        "packages/keiko-server/src/atlassian/jiraIdentityObservationDescriptors.ts"
+        "packages/keiko-server/src/atlassian/jiraIdentityObservationDescriptors.ts",
+        "packages/keiko-connectors/src/jira-anonymization-unlock-values.ts"
       ],
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-anonymization-reads.test.ts",
@@ -691,6 +692,88 @@
         "packages/keiko-server/src/atlassian/jiraMaintenanceMutationDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
         "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.archive-issue": {
+      "identity": "PUT /rest/api/2/issue/{issueIdOrKey}/archive",
+      "effect": "write",
+      "permissionPolicy": "issue-lifecycle-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Five ordinary-write issue lifecycle effects bind actor, immutable native issue ID, canonical key, reviewed metadata and same-parent context before one fixed request. Every native ACK remains unconfirmed for complete hidden links, archival, deletion or ordering consequences. Deletion fixes deleteSubtasks=false and requires the complete reviewed native subtask collection to be empty. The existing issue-deletion formal-impact owner checks potentially surviving parent/link/issue-picker references and refuses unresolved global population; it does not treat the deleted issue own summary/labels as a surviving post-state or invent an archive migration gate. Bare404 and permission-filtered collections never prove absence. No retry or follow-up effect is synthesized. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-issue-lifecycle-values.ts",
+        "packages/keiko-connectors/src/jira-issue-lifecycle-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-lifecycle.ts",
+        "packages/keiko-connectors/src/jira-issue-context-values.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.ts",
+        "packages/keiko-server/src/atlassian/jiraIssueLifecycleMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceLifecycleReceipts.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-issue-lifecycle.test.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIssueLifecycleMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceLifecycleReceipts.test.ts",
+        "tests/support/jira-issue-lifecycle-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.archive-issues": {
+      "identity": "POST /rest/api/2/issue/archive",
+      "effect": "write",
+      "permissionPolicy": "issue-lifecycle-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Five ordinary-write issue lifecycle effects bind actor, immutable native issue ID, canonical key, reviewed metadata and same-parent context before one fixed request. Every native ACK remains unconfirmed for complete hidden links, archival, deletion or ordering consequences. Deletion fixes deleteSubtasks=false and requires the complete reviewed native subtask collection to be empty. The existing issue-deletion formal-impact owner checks potentially surviving parent/link/issue-picker references and refuses unresolved global population; it does not treat the deleted issue own summary/labels as a surviving post-state or invent an archive migration gate. Bare404 and permission-filtered collections never prove absence. No retry or follow-up effect is synthesized. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-issue-lifecycle-values.ts",
+        "packages/keiko-connectors/src/jira-issue-lifecycle-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-lifecycle.ts",
+        "packages/keiko-connectors/src/jira-issue-context-values.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.ts",
+        "packages/keiko-server/src/atlassian/jiraIssueLifecycleMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceLifecycleReceipts.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-issue-lifecycle.test.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIssueLifecycleMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceLifecycleReceipts.test.ts",
+        "tests/support/jira-issue-lifecycle-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.archive-project": {
+      "identity": "PUT /rest/api/2/project/{projectIdOrKey}/archive",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-project-lifecycle-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Seven admin/high project lifecycle/configuration effects bind actor and complete independently observed canonical project identity, archived Boolean and reviewed metadata. Exact target type/schemes are independently read; priority changes use their fixed native experimental port. Every ACK remains unconfirmed for global archival, deletion, migration, scheme and reindex consequences. Native restore202 does not schedule an automatic second reindex. Deletion invokes the existing issue-deletion formal-impact owner for surviving references; no visible JQL prefix establishes a complete global population and no blanket archive rule is invented. Explicit pre-effect no-op requires exact observed current state. Bare404, native collection omission or permission loss is never absence proof. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-project-review.ts",
+        "packages/keiko-connectors/src/jira-project-lifecycle-ports.ts",
+        "packages/keiko-connectors/src/jira-project-lifecycle-values.ts",
+        "packages/keiko-connectors/src/jira-project-lifecycle-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-project-lifecycle.ts",
+        "packages/keiko-connectors/src/jira-project-lifecycle-request.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.ts",
+        "packages/keiko-server/src/atlassian/jiraProjectLifecycleSchemas.ts",
+        "packages/keiko-server/src/atlassian/jiraProjectLifecycleMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceLifecycleReceipts.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-project-review.test.ts",
+        "packages/keiko-connectors/src/jira-managed-project-lifecycle.test.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.test.ts",
+        "packages/keiko-server/src/atlassian/jiraProjectLifecycleMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceLifecycleReceipts.test.ts",
+        "tests/support/jira-project-lifecycle-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
@@ -1351,11 +1434,13 @@
       "kind": "constrained-tool",
       "constraints": "One issue through metadata, formal-template/source and authority enforcement; draft composition reuses this operation.",
       "sourceFiles": [
-        "packages/keiko-connectors/src/jira-managed-mutations.ts"
+        "packages/keiko-connectors/src/jira-managed-mutations.ts",
+        "packages/keiko-connectors/src/jira-create-preparation.ts"
       ],
       "testFiles": [
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
-        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts"
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-connectors/src/jira-bulk-create-preparation.test.ts"
       ]
     },
     "jira.create-component": {
@@ -1528,6 +1613,43 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.create-issue-type-avatar": {
+      "identity": "POST /rest/api/2/issuetype/{id}/avatar",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-avatar-session-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Fifteen explicit admin/high avatar effects use fixed native targets and a private cookie-only session bound to the same independently observed actor, connector generation and accepted Chat/Coding authority. One exclusive session lease contains target reads, upload/crop and temporary-slot use; a new upload clears prior temporary state before dispatch, including lost ACK, and crop/create consume the exact reviewed slot before effect. Authorized connected-file bytes are immutable-copy/hash-bound and pass the existing PNG/JPEG content floor and 20MiB limit; model paths or expected hashes grant no file authority. Chat preview, required review and allowed server-minted snapshots reuse existing attachment owners. Coding task paths supply no connected-file authority, so that source remains unavailable until actually composed. Only selected-project/user avatar metadata can independently confirm from complete same-owner collections; the other thirteen effects remain acknowledged/unconfirmed, never image-content or assignment proof. Legacy generic temporary/crop identities exist only in retained10.3/10.4 and require a server-owned matching release binding; they are not claimed for11.3. No cookie, URL, image bytes or native temporary filesystem metadata enters model results or logs. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-avatar-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-avatar-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-avatar-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-avatar-mutations.ts",
+        "packages/keiko-connectors/src/jira-managed-avatar-reads.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.ts",
+        "packages/keiko-connectors/src/jira-private-session-values.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarComposition.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.ts",
+        "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateAvatar.ts",
+        "packages/keiko-server/src/atlassian/httpAvatarSession.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-avatar-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarComposition.test.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.private-session.test.ts",
+        "tests/support/jira-avatar-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.create-issue-type-scheme": {
       "identity": "POST /rest/api/2/issuetypescheme",
       "effect": "write",
@@ -1546,6 +1668,33 @@
         "packages/keiko-connectors/src/jira-managed-option-scheme-mutations.test.ts",
         "packages/keiko-connectors/src/jira-option-scheme-review.test.ts",
         "packages/keiko-server/src/atlassian/jiraOptionSchemeMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.create-issues": {
+      "identity": "POST /rest/api/2/issue/bulk",
+      "effect": "write",
+      "permissionPolicy": "bulk-current-metadata-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "One native bulk-create POST admits1..50 items through the existing prepareJiraCreate owner, including current native metadata, formal saved rules, source trace and duplicate checks. Every item must prepare before any effect; a plan needing follow-up issue-link writes is refused before dispatch. Native partial failures and readable created identities remain unconfirmed without imputing ACK array positions to requested items. Missing IDs are never reconstructed from names or retried. This composition supplies no atomic-bulk, complete-population or automatic replay claim. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-create-preparation.ts",
+        "packages/keiko-connectors/src/jira-bulk-create-values.ts",
+        "packages/keiko-connectors/src/jira-managed-bulk-create.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.ts",
+        "packages/keiko-server/src/atlassian/jiraBulkCreateDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceLifecycleReceipts.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-bulk-create-values.test.ts",
+        "packages/keiko-connectors/src/jira-managed-bulk-create.test.ts",
+        "packages/keiko-connectors/src/jira-bulk-create-preparation.test.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.test.ts",
+        "packages/keiko-server/src/atlassian/jiraBulkCreateDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceLifecycleReceipts.test.ts",
+        "tests/support/jira-bulk-create-fixture.ts",
         "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
@@ -1572,6 +1721,43 @@
         "packages/keiko-server/src/atlassian/jiraSchemaMutationDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
         "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.create-owned-avatar": {
+      "identity": "POST /rest/api/2/universal_avatar/type/{type}/owner/{owningObjectId}/avatar",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-avatar-session-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Fifteen explicit admin/high avatar effects use fixed native targets and a private cookie-only session bound to the same independently observed actor, connector generation and accepted Chat/Coding authority. One exclusive session lease contains target reads, upload/crop and temporary-slot use; a new upload clears prior temporary state before dispatch, including lost ACK, and crop/create consume the exact reviewed slot before effect. Authorized connected-file bytes are immutable-copy/hash-bound and pass the existing PNG/JPEG content floor and 20MiB limit; model paths or expected hashes grant no file authority. Chat preview, required review and allowed server-minted snapshots reuse existing attachment owners. Coding task paths supply no connected-file authority, so that source remains unavailable until actually composed. Only selected-project/user avatar metadata can independently confirm from complete same-owner collections; the other thirteen effects remain acknowledged/unconfirmed, never image-content or assignment proof. Legacy generic temporary/crop identities exist only in retained10.3/10.4 and require a server-owned matching release binding; they are not claimed for11.3. No cookie, URL, image bytes or native temporary filesystem metadata enters model results or logs. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-avatar-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-avatar-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-avatar-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-avatar-mutations.ts",
+        "packages/keiko-connectors/src/jira-managed-avatar-reads.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.ts",
+        "packages/keiko-connectors/src/jira-private-session-values.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarComposition.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.ts",
+        "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateAvatar.ts",
+        "packages/keiko-server/src/atlassian/httpAvatarSession.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-avatar-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarComposition.test.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.private-session.test.ts",
+        "tests/support/jira-avatar-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
@@ -1636,6 +1822,43 @@
         "packages/keiko-connectors/src/jira-managed-projects.test.ts"
       ]
     },
+    "jira.create-project-avatar": {
+      "identity": "POST /rest/api/2/project/{projectIdOrKey}/avatar",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-avatar-session-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Fifteen explicit admin/high avatar effects use fixed native targets and a private cookie-only session bound to the same independently observed actor, connector generation and accepted Chat/Coding authority. One exclusive session lease contains target reads, upload/crop and temporary-slot use; a new upload clears prior temporary state before dispatch, including lost ACK, and crop/create consume the exact reviewed slot before effect. Authorized connected-file bytes are immutable-copy/hash-bound and pass the existing PNG/JPEG content floor and 20MiB limit; model paths or expected hashes grant no file authority. Chat preview, required review and allowed server-minted snapshots reuse existing attachment owners. Coding task paths supply no connected-file authority, so that source remains unavailable until actually composed. Only selected-project/user avatar metadata can independently confirm from complete same-owner collections; the other thirteen effects remain acknowledged/unconfirmed, never image-content or assignment proof. Legacy generic temporary/crop identities exist only in retained10.3/10.4 and require a server-owned matching release binding; they are not claimed for11.3. No cookie, URL, image bytes or native temporary filesystem metadata enters model results or logs. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-avatar-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-avatar-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-avatar-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-avatar-mutations.ts",
+        "packages/keiko-connectors/src/jira-managed-avatar-reads.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.ts",
+        "packages/keiko-connectors/src/jira-private-session-values.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarComposition.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.ts",
+        "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateAvatar.ts",
+        "packages/keiko-server/src/atlassian/httpAvatarSession.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-avatar-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarComposition.test.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.private-session.test.ts",
+        "tests/support/jira-avatar-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.create-project-category": {
       "identity": "POST /rest/api/2/projectCategory",
       "effect": "write",
@@ -1652,6 +1875,31 @@
         "tests/support/jira-project-category-fixture.ts",
         "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.create-reciprocal-remote-link": {
+      "identity": "POST /rest/api/2/issue/remotelink/reciprocal",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-configured-reciprocal-link-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Explicit admin/high reciprocal remote-link creation is limited to independently bound issue context and an already configured application link. The private fixed application-link metadata port admits only the configured same-host manifest and exact source/target directions. Remote-user authority, remote saved rules and both effects cannot be independently established from this native ACK; the outcome always remains unconfirmed and may be partial. No arbitrary URL/header, foreign fetch, credential forwarding or generic proxy is exposed. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-reciprocal-configuration-request.ts",
+        "packages/keiko-connectors/src/jira-reciprocal-link-values.ts",
+        "packages/keiko-connectors/src/jira-reciprocal-link-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-reciprocal-link.ts",
+        "packages/keiko-server/src/atlassian/jiraReciprocalLinkDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceLifecycleReceipts.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-reciprocal-configuration-request.test.ts",
+        "packages/keiko-connectors/src/jira-managed-reciprocal-link.test.ts",
+        "packages/keiko-server/src/atlassian/jiraReciprocalLinkDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceLifecycleReceipts.test.ts",
+        "tests/support/jira-reciprocal-link-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
@@ -1707,6 +1955,71 @@
         "packages/keiko-server/src/store/jiraScreenTabMigration.test.ts",
         "packages/keiko-server/src/store/jiraOperationMigration.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.create-user": {
+      "identity": "POST /rest/api/2/user",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-user-lifecycle-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Six closed admin/high user lifecycle effects bind current actor and exact user key/username independently. Creation omits password so native generation remains private, retains only actually acknowledged identity and never claims aggregate access. Profile-only metadata may confirm exact independent readback; supplied active changes always remain unconfirmed. Delete, session invalidation and anonymization schedule/rerun remain acknowledged/unconfirmed for directory, session and global identity consequences. Anonymization requires the observed native validation and active-owner facts, with no status-only completion claim. A rerun target that cannot independently bind its current key and username is unavailable. Fixed experimental transport is server-owned; no generic header or password model argument is exposed. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-identity-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-identity-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-identity-mutations.ts",
+        "packages/keiko-connectors/src/jira-managed-anonymization-reads.ts",
+        "packages/keiko-connectors/src/jira-identity-request.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.ts",
+        "packages/keiko-server/src/atlassian/httpIdentityExperimental.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-identity-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-identity-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.identity-experimental.test.ts",
+        "tests/support/jira-identity-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.create-user-avatar": {
+      "identity": "POST /rest/api/2/user/avatar",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-avatar-session-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Fifteen explicit admin/high avatar effects use fixed native targets and a private cookie-only session bound to the same independently observed actor, connector generation and accepted Chat/Coding authority. One exclusive session lease contains target reads, upload/crop and temporary-slot use; a new upload clears prior temporary state before dispatch, including lost ACK, and crop/create consume the exact reviewed slot before effect. Authorized connected-file bytes are immutable-copy/hash-bound and pass the existing PNG/JPEG content floor and 20MiB limit; model paths or expected hashes grant no file authority. Chat preview, required review and allowed server-minted snapshots reuse existing attachment owners. Coding task paths supply no connected-file authority, so that source remains unavailable until actually composed. Only selected-project/user avatar metadata can independently confirm from complete same-owner collections; the other thirteen effects remain acknowledged/unconfirmed, never image-content or assignment proof. Legacy generic temporary/crop identities exist only in retained10.3/10.4 and require a server-owned matching release binding; they are not claimed for11.3. No cookie, URL, image bytes or native temporary filesystem metadata enters model results or logs. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-avatar-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-avatar-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-avatar-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-avatar-mutations.ts",
+        "packages/keiko-connectors/src/jira-managed-avatar-reads.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.ts",
+        "packages/keiko-connectors/src/jira-private-session-values.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarComposition.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.ts",
+        "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateAvatar.ts",
+        "packages/keiko-server/src/atlassian/httpAvatarSession.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-avatar-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarComposition.test.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.private-session.test.ts",
+        "tests/support/jira-avatar-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
@@ -1780,6 +2093,43 @@
         "packages/keiko-connectors/src/jira-managed-worklog-mutations.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.crop-temporary-avatar": {
+      "identity": "POST /rest/api/2/avatar/{type}/temporaryCrop",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-avatar-session-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Fifteen explicit admin/high avatar effects use fixed native targets and a private cookie-only session bound to the same independently observed actor, connector generation and accepted Chat/Coding authority. One exclusive session lease contains target reads, upload/crop and temporary-slot use; a new upload clears prior temporary state before dispatch, including lost ACK, and crop/create consume the exact reviewed slot before effect. Authorized connected-file bytes are immutable-copy/hash-bound and pass the existing PNG/JPEG content floor and 20MiB limit; model paths or expected hashes grant no file authority. Chat preview, required review and allowed server-minted snapshots reuse existing attachment owners. Coding task paths supply no connected-file authority, so that source remains unavailable until actually composed. Only selected-project/user avatar metadata can independently confirm from complete same-owner collections; the other thirteen effects remain acknowledged/unconfirmed, never image-content or assignment proof. Legacy generic temporary/crop identities exist only in retained10.3/10.4 and require a server-owned matching release binding; they are not claimed for11.3. No cookie, URL, image bytes or native temporary filesystem metadata enters model results or logs. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-avatar-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-avatar-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-avatar-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-avatar-mutations.ts",
+        "packages/keiko-connectors/src/jira-managed-avatar-reads.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.ts",
+        "packages/keiko-connectors/src/jira-private-session-values.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarComposition.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.ts",
+        "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateAvatar.ts",
+        "packages/keiko-server/src/atlassian/httpAvatarSession.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-avatar-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarComposition.test.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.private-session.test.ts",
+        "tests/support/jira-avatar-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
@@ -2225,6 +2575,32 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.delete-issue": {
+      "identity": "DELETE /rest/api/2/issue/{issueIdOrKey}",
+      "effect": "write",
+      "permissionPolicy": "issue-lifecycle-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Five ordinary-write issue lifecycle effects bind actor, immutable native issue ID, canonical key, reviewed metadata and same-parent context before one fixed request. Every native ACK remains unconfirmed for complete hidden links, archival, deletion or ordering consequences. Deletion fixes deleteSubtasks=false and requires the complete reviewed native subtask collection to be empty. The existing issue-deletion formal-impact owner checks potentially surviving parent/link/issue-picker references and refuses unresolved global population; it does not treat the deleted issue own summary/labels as a surviving post-state or invent an archive migration gate. Bare404 and permission-filtered collections never prove absence. No retry or follow-up effect is synthesized. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-issue-lifecycle-values.ts",
+        "packages/keiko-connectors/src/jira-issue-lifecycle-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-lifecycle.ts",
+        "packages/keiko-connectors/src/jira-issue-context-values.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.ts",
+        "packages/keiko-server/src/atlassian/jiraIssueLifecycleMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceLifecycleReceipts.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-issue-lifecycle.test.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIssueLifecycleMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceLifecycleReceipts.test.ts",
+        "tests/support/jira-issue-lifecycle-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.delete-issue-link": {
       "identity": "DELETE /rest/api/2/issueLink/{linkId}",
       "effect": "write",
@@ -2404,6 +2780,43 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.delete-owned-avatar": {
+      "identity": "DELETE /rest/api/2/universal_avatar/type/{type}/owner/{owningObjectId}/avatar/{id}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-avatar-session-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Fifteen explicit admin/high avatar effects use fixed native targets and a private cookie-only session bound to the same independently observed actor, connector generation and accepted Chat/Coding authority. One exclusive session lease contains target reads, upload/crop and temporary-slot use; a new upload clears prior temporary state before dispatch, including lost ACK, and crop/create consume the exact reviewed slot before effect. Authorized connected-file bytes are immutable-copy/hash-bound and pass the existing PNG/JPEG content floor and 20MiB limit; model paths or expected hashes grant no file authority. Chat preview, required review and allowed server-minted snapshots reuse existing attachment owners. Coding task paths supply no connected-file authority, so that source remains unavailable until actually composed. Only selected-project/user avatar metadata can independently confirm from complete same-owner collections; the other thirteen effects remain acknowledged/unconfirmed, never image-content or assignment proof. Legacy generic temporary/crop identities exist only in retained10.3/10.4 and require a server-owned matching release binding; they are not claimed for11.3. No cookie, URL, image bytes or native temporary filesystem metadata enters model results or logs. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-avatar-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-avatar-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-avatar-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-avatar-mutations.ts",
+        "packages/keiko-connectors/src/jira-managed-avatar-reads.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.ts",
+        "packages/keiko-connectors/src/jira-private-session-values.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarComposition.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.ts",
+        "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateAvatar.ts",
+        "packages/keiko-server/src/atlassian/httpAvatarSession.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-avatar-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarComposition.test.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.private-session.test.ts",
+        "tests/support/jira-avatar-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.delete-permission-grant": {
       "identity": "DELETE /rest/api/2/permissionscheme/{schemeId}/permission/{permissionId}",
       "effect": "write",
@@ -2474,6 +2887,73 @@
         "packages/keiko-connectors/src/jira-managed-option-scheme-mutations.test.ts",
         "packages/keiko-connectors/src/jira-option-scheme-review.test.ts",
         "packages/keiko-server/src/atlassian/jiraOptionSchemeMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.delete-project": {
+      "identity": "DELETE /rest/api/2/project/{projectIdOrKey}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-project-lifecycle-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Seven admin/high project lifecycle/configuration effects bind actor and complete independently observed canonical project identity, archived Boolean and reviewed metadata. Exact target type/schemes are independently read; priority changes use their fixed native experimental port. Every ACK remains unconfirmed for global archival, deletion, migration, scheme and reindex consequences. Native restore202 does not schedule an automatic second reindex. Deletion invokes the existing issue-deletion formal-impact owner for surviving references; no visible JQL prefix establishes a complete global population and no blanket archive rule is invented. Explicit pre-effect no-op requires exact observed current state. Bare404, native collection omission or permission loss is never absence proof. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-project-review.ts",
+        "packages/keiko-connectors/src/jira-project-lifecycle-ports.ts",
+        "packages/keiko-connectors/src/jira-project-lifecycle-values.ts",
+        "packages/keiko-connectors/src/jira-project-lifecycle-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-project-lifecycle.ts",
+        "packages/keiko-connectors/src/jira-project-lifecycle-request.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.ts",
+        "packages/keiko-server/src/atlassian/jiraProjectLifecycleSchemas.ts",
+        "packages/keiko-server/src/atlassian/jiraProjectLifecycleMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceLifecycleReceipts.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-project-review.test.ts",
+        "packages/keiko-connectors/src/jira-managed-project-lifecycle.test.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.test.ts",
+        "packages/keiko-server/src/atlassian/jiraProjectLifecycleMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceLifecycleReceipts.test.ts",
+        "tests/support/jira-project-lifecycle-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.delete-project-avatar": {
+      "identity": "DELETE /rest/api/2/project/{projectIdOrKey}/avatar/{id}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-avatar-session-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Fifteen explicit admin/high avatar effects use fixed native targets and a private cookie-only session bound to the same independently observed actor, connector generation and accepted Chat/Coding authority. One exclusive session lease contains target reads, upload/crop and temporary-slot use; a new upload clears prior temporary state before dispatch, including lost ACK, and crop/create consume the exact reviewed slot before effect. Authorized connected-file bytes are immutable-copy/hash-bound and pass the existing PNG/JPEG content floor and 20MiB limit; model paths or expected hashes grant no file authority. Chat preview, required review and allowed server-minted snapshots reuse existing attachment owners. Coding task paths supply no connected-file authority, so that source remains unavailable until actually composed. Only selected-project/user avatar metadata can independently confirm from complete same-owner collections; the other thirteen effects remain acknowledged/unconfirmed, never image-content or assignment proof. Legacy generic temporary/crop identities exist only in retained10.3/10.4 and require a server-owned matching release binding; they are not claimed for11.3. No cookie, URL, image bytes or native temporary filesystem metadata enters model results or logs. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-avatar-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-avatar-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-avatar-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-avatar-mutations.ts",
+        "packages/keiko-connectors/src/jira-managed-avatar-reads.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.ts",
+        "packages/keiko-connectors/src/jira-private-session-values.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarComposition.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.ts",
+        "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateAvatar.ts",
+        "packages/keiko-server/src/atlassian/httpAvatarSession.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-avatar-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarComposition.test.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.private-session.test.ts",
+        "tests/support/jira-avatar-mutation-fixture.ts",
         "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
@@ -2733,6 +3213,71 @@
         "packages/keiko-server/src/store/jiraEntityPropertyMigration.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts",
         "packages/keiko-server/src/atlassian/jiraAgileOperationTransport.test.ts"
+      ]
+    },
+    "jira.delete-user": {
+      "identity": "DELETE /rest/api/2/user",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-user-lifecycle-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Six closed admin/high user lifecycle effects bind current actor and exact user key/username independently. Creation omits password so native generation remains private, retains only actually acknowledged identity and never claims aggregate access. Profile-only metadata may confirm exact independent readback; supplied active changes always remain unconfirmed. Delete, session invalidation and anonymization schedule/rerun remain acknowledged/unconfirmed for directory, session and global identity consequences. Anonymization requires the observed native validation and active-owner facts, with no status-only completion claim. A rerun target that cannot independently bind its current key and username is unavailable. Fixed experimental transport is server-owned; no generic header or password model argument is exposed. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-identity-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-identity-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-identity-mutations.ts",
+        "packages/keiko-connectors/src/jira-managed-anonymization-reads.ts",
+        "packages/keiko-connectors/src/jira-identity-request.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.ts",
+        "packages/keiko-server/src/atlassian/httpIdentityExperimental.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-identity-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-identity-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.identity-experimental.test.ts",
+        "tests/support/jira-identity-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.delete-user-avatar": {
+      "identity": "DELETE /rest/api/2/user/avatar/{id}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-avatar-session-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Fifteen explicit admin/high avatar effects use fixed native targets and a private cookie-only session bound to the same independently observed actor, connector generation and accepted Chat/Coding authority. One exclusive session lease contains target reads, upload/crop and temporary-slot use; a new upload clears prior temporary state before dispatch, including lost ACK, and crop/create consume the exact reviewed slot before effect. Authorized connected-file bytes are immutable-copy/hash-bound and pass the existing PNG/JPEG content floor and 20MiB limit; model paths or expected hashes grant no file authority. Chat preview, required review and allowed server-minted snapshots reuse existing attachment owners. Coding task paths supply no connected-file authority, so that source remains unavailable until actually composed. Only selected-project/user avatar metadata can independently confirm from complete same-owner collections; the other thirteen effects remain acknowledged/unconfirmed, never image-content or assignment proof. Legacy generic temporary/crop identities exist only in retained10.3/10.4 and require a server-owned matching release binding; they are not claimed for11.3. No cookie, URL, image bytes or native temporary filesystem metadata enters model results or logs. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-avatar-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-avatar-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-avatar-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-avatar-mutations.ts",
+        "packages/keiko-connectors/src/jira-managed-avatar-reads.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.ts",
+        "packages/keiko-connectors/src/jira-private-session-values.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarComposition.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.ts",
+        "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateAvatar.ts",
+        "packages/keiko-server/src/atlassian/httpAvatarSession.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-avatar-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarComposition.test.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.private-session.test.ts",
+        "tests/support/jira-avatar-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
     "jira.delete-user-property": {
@@ -3528,6 +4073,34 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.invalidate-user-session": {
+      "identity": "DELETE /rest/api/2/user/session/{username}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-user-lifecycle-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Six closed admin/high user lifecycle effects bind current actor and exact user key/username independently. Creation omits password so native generation remains private, retains only actually acknowledged identity and never claims aggregate access. Profile-only metadata may confirm exact independent readback; supplied active changes always remain unconfirmed. Delete, session invalidation and anonymization schedule/rerun remain acknowledged/unconfirmed for directory, session and global identity consequences. Anonymization requires the observed native validation and active-owner facts, with no status-only completion claim. A rerun target that cannot independently bind its current key and username is unavailable. Fixed experimental transport is server-owned; no generic header or password model argument is exposed. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-identity-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-identity-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-identity-mutations.ts",
+        "packages/keiko-connectors/src/jira-managed-anonymization-reads.ts",
+        "packages/keiko-connectors/src/jira-identity-request.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.ts",
+        "packages/keiko-server/src/atlassian/httpIdentityExperimental.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-identity-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-identity-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.identity-experimental.test.ts",
+        "tests/support/jira-identity-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.ipd-monitoring": {
       "identity": "GET /rest/api/2/monitoring/ipd",
       "effect": "read",
@@ -3986,6 +4559,86 @@
         "packages/keiko-connectors/src/jira-managed-issue-details.test.ts"
       ]
     },
+    "jira.login": {
+      "identity": "POST /rest/auth/1/session",
+      "effect": "write",
+      "permissionPolicy": "bound-private-session-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Fixed auth/1 session effects use the existing private custody and current HumanInput binding, never model credentials/cookies or arbitrary targets. Login confirms only sessionEstablished:true after independent cookie-only myself and auth/session identify the same prior actor; PAT authorization never substitutes for that proof. Logout and websudo release bind the reviewed actor again and always remain acknowledged/unconfirmed for complete session or privilege consequences. Current authority and one-use private input are rechecked at actual dispatch. Known actor identity survives uncertainty without invented session state, replay or secret-bearing history. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-private-account-values.ts",
+        "packages/keiko-connectors/src/jira-managed-private-account.ts",
+        "packages/keiko-connectors/src/jira-private-identity-ports.ts",
+        "packages/keiko-connectors/src/jira-human-input-custody.ts",
+        "packages/keiko-connectors/src/jira-human-input-preparation.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountReceipts.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateIdentity.ts",
+        "packages/keiko-server/src/atlassian/httpHumanInput.ts",
+        "packages/keiko-server/src/atlassian/jiraHumanInputRoutes.ts",
+        "packages/keiko-server/src/coding-runtime/codingJiraHumanInput.ts",
+        "packages/keiko-server/src/store/chatToolTranscript.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.ts",
+        "packages/keiko-server/src/atlassian/httpAvatarSession.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-private-account.test.ts",
+        "packages/keiko-connectors/src/jira-human-input-custody.test.ts",
+        "packages/keiko-connectors/src/jira-human-input-preparation.test.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountReceipts.test.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateIdentity.test.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateIdentity.journal.test.ts",
+        "packages/keiko-server/src/coding-runtime/codingJiraHumanInput.test.ts",
+        "packages/keiko-server/src/store/chatToolTranscript.test.ts",
+        "tests/support/jira-private-account-fixture.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.private-session.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.logout": {
+      "identity": "DELETE /rest/auth/1/session",
+      "effect": "write",
+      "permissionPolicy": "bound-private-session-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Fixed auth/1 session effects use the existing private custody and current HumanInput binding, never model credentials/cookies or arbitrary targets. Login confirms only sessionEstablished:true after independent cookie-only myself and auth/session identify the same prior actor; PAT authorization never substitutes for that proof. Logout and websudo release bind the reviewed actor again and always remain acknowledged/unconfirmed for complete session or privilege consequences. Current authority and one-use private input are rechecked at actual dispatch. Known actor identity survives uncertainty without invented session state, replay or secret-bearing history. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-private-account-values.ts",
+        "packages/keiko-connectors/src/jira-managed-private-account.ts",
+        "packages/keiko-connectors/src/jira-private-identity-ports.ts",
+        "packages/keiko-connectors/src/jira-human-input-custody.ts",
+        "packages/keiko-connectors/src/jira-human-input-preparation.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountReceipts.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateIdentity.ts",
+        "packages/keiko-server/src/atlassian/httpHumanInput.ts",
+        "packages/keiko-server/src/atlassian/jiraHumanInputRoutes.ts",
+        "packages/keiko-server/src/coding-runtime/codingJiraHumanInput.ts",
+        "packages/keiko-server/src/store/chatToolTranscript.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.ts",
+        "packages/keiko-server/src/atlassian/httpAvatarSession.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-private-account.test.ts",
+        "packages/keiko-connectors/src/jira-human-input-custody.test.ts",
+        "packages/keiko-connectors/src/jira-human-input-preparation.test.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountReceipts.test.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateIdentity.test.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateIdentity.journal.test.ts",
+        "packages/keiko-server/src/coding-runtime/codingJiraHumanInput.test.ts",
+        "packages/keiko-server/src/store/chatToolTranscript.test.ts",
+        "tests/support/jira-private-account-fixture.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.private-session.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.mark-cluster-node-offline": {
       "identity": "PUT /rest/api/2/cluster/node/{nodeId}/offline",
       "effect": "write",
@@ -4103,6 +4756,32 @@
         "packages/keiko-server/src/store/jiraConfigurationMutationMigration.test.ts",
         "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.move-subtask": {
+      "identity": "POST /rest/api/2/issue/{issueIdOrKey}/subtask/move",
+      "effect": "write",
+      "permissionPolicy": "issue-lifecycle-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Five ordinary-write issue lifecycle effects bind actor, immutable native issue ID, canonical key, reviewed metadata and same-parent context before one fixed request. Every native ACK remains unconfirmed for complete hidden links, archival, deletion or ordering consequences. Deletion fixes deleteSubtasks=false and requires the complete reviewed native subtask collection to be empty. The existing issue-deletion formal-impact owner checks potentially surviving parent/link/issue-picker references and refuses unresolved global population; it does not treat the deleted issue own summary/labels as a surviving post-state or invent an archive migration gate. Bare404 and permission-filtered collections never prove absence. No retry or follow-up effect is synthesized. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-issue-lifecycle-values.ts",
+        "packages/keiko-connectors/src/jira-issue-lifecycle-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-lifecycle.ts",
+        "packages/keiko-connectors/src/jira-issue-context-values.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.ts",
+        "packages/keiko-server/src/atlassian/jiraIssueLifecycleMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceLifecycleReceipts.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-issue-lifecycle.test.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIssueLifecycleMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceLifecycleReceipts.test.ts",
+        "tests/support/jira-issue-lifecycle-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
@@ -5153,6 +5832,46 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.release-websudo": {
+      "identity": "DELETE /rest/auth/1/websudo",
+      "effect": "write",
+      "permissionPolicy": "bound-private-session-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Fixed auth/1 session effects use the existing private custody and current HumanInput binding, never model credentials/cookies or arbitrary targets. Login confirms only sessionEstablished:true after independent cookie-only myself and auth/session identify the same prior actor; PAT authorization never substitutes for that proof. Logout and websudo release bind the reviewed actor again and always remain acknowledged/unconfirmed for complete session or privilege consequences. Current authority and one-use private input are rechecked at actual dispatch. Known actor identity survives uncertainty without invented session state, replay or secret-bearing history. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-private-account-values.ts",
+        "packages/keiko-connectors/src/jira-managed-private-account.ts",
+        "packages/keiko-connectors/src/jira-private-identity-ports.ts",
+        "packages/keiko-connectors/src/jira-human-input-custody.ts",
+        "packages/keiko-connectors/src/jira-human-input-preparation.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountReceipts.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateIdentity.ts",
+        "packages/keiko-server/src/atlassian/httpHumanInput.ts",
+        "packages/keiko-server/src/atlassian/jiraHumanInputRoutes.ts",
+        "packages/keiko-server/src/coding-runtime/codingJiraHumanInput.ts",
+        "packages/keiko-server/src/store/chatToolTranscript.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.ts",
+        "packages/keiko-server/src/atlassian/httpAvatarSession.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-private-account.test.ts",
+        "packages/keiko-connectors/src/jira-human-input-custody.test.ts",
+        "packages/keiko-connectors/src/jira-human-input-preparation.test.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountReceipts.test.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateIdentity.test.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateIdentity.journal.test.ts",
+        "packages/keiko-server/src/coding-runtime/codingJiraHumanInput.test.ts",
+        "packages/keiko-server/src/store/chatToolTranscript.test.ts",
+        "tests/support/jira-private-account-fixture.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.private-session.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.remote-link": {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/remotelink/{linkId}",
       "effect": "read",
@@ -5284,6 +6003,36 @@
         "packages/keiko-connectors/src/jira-managed-option-scheme-mutations.test.ts",
         "packages/keiko-connectors/src/jira-option-scheme-review.test.ts",
         "packages/keiko-server/src/atlassian/jiraOptionSchemeMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.remove-project-priority-scheme": {
+      "identity": "DELETE /rest/api/2/project/{projectKeyOrId}/priorityscheme/{schemeId}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-project-lifecycle-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Seven admin/high project lifecycle/configuration effects bind actor and complete independently observed canonical project identity, archived Boolean and reviewed metadata. Exact target type/schemes are independently read; priority changes use their fixed native experimental port. Every ACK remains unconfirmed for global archival, deletion, migration, scheme and reindex consequences. Native restore202 does not schedule an automatic second reindex. Deletion invokes the existing issue-deletion formal-impact owner for surviving references; no visible JQL prefix establishes a complete global population and no blanket archive rule is invented. Explicit pre-effect no-op requires exact observed current state. Bare404, native collection omission or permission loss is never absence proof. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-project-review.ts",
+        "packages/keiko-connectors/src/jira-project-lifecycle-ports.ts",
+        "packages/keiko-connectors/src/jira-project-lifecycle-values.ts",
+        "packages/keiko-connectors/src/jira-project-lifecycle-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-project-lifecycle.ts",
+        "packages/keiko-connectors/src/jira-project-lifecycle-request.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.ts",
+        "packages/keiko-server/src/atlassian/jiraProjectLifecycleSchemas.ts",
+        "packages/keiko-server/src/atlassian/jiraProjectLifecycleMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceLifecycleReceipts.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-project-review.test.ts",
+        "packages/keiko-connectors/src/jira-managed-project-lifecycle.test.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.test.ts",
+        "packages/keiko-server/src/atlassian/jiraProjectLifecycleMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceLifecycleReceipts.test.ts",
+        "tests/support/jira-project-lifecycle-fixture.ts",
         "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
@@ -5443,6 +6192,34 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.rerun-user-anonymization": {
+      "identity": "POST /rest/api/2/user/anonymization/rerun",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-user-lifecycle-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Six closed admin/high user lifecycle effects bind current actor and exact user key/username independently. Creation omits password so native generation remains private, retains only actually acknowledged identity and never claims aggregate access. Profile-only metadata may confirm exact independent readback; supplied active changes always remain unconfirmed. Delete, session invalidation and anonymization schedule/rerun remain acknowledged/unconfirmed for directory, session and global identity consequences. Anonymization requires the observed native validation and active-owner facts, with no status-only completion claim. A rerun target that cannot independently bind its current key and username is unavailable. Fixed experimental transport is server-owned; no generic header or password model argument is exposed. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-identity-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-identity-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-identity-mutations.ts",
+        "packages/keiko-connectors/src/jira-managed-anonymization-reads.ts",
+        "packages/keiko-connectors/src/jira-identity-request.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.ts",
+        "packages/keiko-server/src/atlassian/httpIdentityExperimental.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-identity-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-identity-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.identity-experimental.test.ts",
+        "tests/support/jira-identity-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.reset-filter-columns": {
       "identity": "DELETE /rest/api/2/filter/{id}/columns",
       "effect": "write",
@@ -5581,6 +6358,62 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.restore-issue": {
+      "identity": "PUT /rest/api/2/issue/{issueIdOrKey}/restore",
+      "effect": "write",
+      "permissionPolicy": "issue-lifecycle-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Five ordinary-write issue lifecycle effects bind actor, immutable native issue ID, canonical key, reviewed metadata and same-parent context before one fixed request. Every native ACK remains unconfirmed for complete hidden links, archival, deletion or ordering consequences. Deletion fixes deleteSubtasks=false and requires the complete reviewed native subtask collection to be empty. The existing issue-deletion formal-impact owner checks potentially surviving parent/link/issue-picker references and refuses unresolved global population; it does not treat the deleted issue own summary/labels as a surviving post-state or invent an archive migration gate. Bare404 and permission-filtered collections never prove absence. No retry or follow-up effect is synthesized. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-issue-lifecycle-values.ts",
+        "packages/keiko-connectors/src/jira-issue-lifecycle-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-lifecycle.ts",
+        "packages/keiko-connectors/src/jira-issue-context-values.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.ts",
+        "packages/keiko-server/src/atlassian/jiraIssueLifecycleMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceLifecycleReceipts.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-issue-lifecycle.test.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIssueLifecycleMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceLifecycleReceipts.test.ts",
+        "tests/support/jira-issue-lifecycle-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.restore-project": {
+      "identity": "PUT /rest/api/2/project/{projectIdOrKey}/restore",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-project-lifecycle-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Seven admin/high project lifecycle/configuration effects bind actor and complete independently observed canonical project identity, archived Boolean and reviewed metadata. Exact target type/schemes are independently read; priority changes use their fixed native experimental port. Every ACK remains unconfirmed for global archival, deletion, migration, scheme and reindex consequences. Native restore202 does not schedule an automatic second reindex. Deletion invokes the existing issue-deletion formal-impact owner for surviving references; no visible JQL prefix establishes a complete global population and no blanket archive rule is invented. Explicit pre-effect no-op requires exact observed current state. Bare404, native collection omission or permission loss is never absence proof. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-project-review.ts",
+        "packages/keiko-connectors/src/jira-project-lifecycle-ports.ts",
+        "packages/keiko-connectors/src/jira-project-lifecycle-values.ts",
+        "packages/keiko-connectors/src/jira-project-lifecycle-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-project-lifecycle.ts",
+        "packages/keiko-connectors/src/jira-project-lifecycle-request.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.ts",
+        "packages/keiko-server/src/atlassian/jiraProjectLifecycleSchemas.ts",
+        "packages/keiko-server/src/atlassian/jiraProjectLifecycleMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceLifecycleReceipts.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-project-review.test.ts",
+        "packages/keiko-connectors/src/jira-managed-project-lifecycle.test.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.test.ts",
+        "packages/keiko-server/src/atlassian/jiraProjectLifecycleMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceLifecycleReceipts.test.ts",
+        "tests/support/jira-project-lifecycle-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.retry-cluster-upgrade": {
       "identity": "POST /rest/api/2/cluster/zdu/retryUpgrade",
       "effect": "write",
@@ -5710,6 +6543,34 @@
         "packages/keiko-server/src/atlassian/jiraMaintenanceMutationDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
         "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.schedule-user-anonymization": {
+      "identity": "POST /rest/api/2/user/anonymization",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-user-lifecycle-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Six closed admin/high user lifecycle effects bind current actor and exact user key/username independently. Creation omits password so native generation remains private, retains only actually acknowledged identity and never claims aggregate access. Profile-only metadata may confirm exact independent readback; supplied active changes always remain unconfirmed. Delete, session invalidation and anonymization schedule/rerun remain acknowledged/unconfirmed for directory, session and global identity consequences. Anonymization requires the observed native validation and active-owner facts, with no status-only completion claim. A rerun target that cannot independently bind its current key and username is unavailable. Fixed experimental transport is server-owned; no generic header or password model argument is exposed. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-identity-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-identity-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-identity-mutations.ts",
+        "packages/keiko-connectors/src/jira-managed-anonymization-reads.ts",
+        "packages/keiko-connectors/src/jira-identity-request.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.ts",
+        "packages/keiko-server/src/atlassian/httpIdentityExperimental.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-identity-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-identity-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.identity-experimental.test.ts",
+        "tests/support/jira-identity-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
@@ -6370,6 +7231,103 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.set-project-avatar": {
+      "identity": "PUT /rest/api/2/project/{projectIdOrKey}/avatar",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-avatar-session-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Fifteen explicit admin/high avatar effects use fixed native targets and a private cookie-only session bound to the same independently observed actor, connector generation and accepted Chat/Coding authority. One exclusive session lease contains target reads, upload/crop and temporary-slot use; a new upload clears prior temporary state before dispatch, including lost ACK, and crop/create consume the exact reviewed slot before effect. Authorized connected-file bytes are immutable-copy/hash-bound and pass the existing PNG/JPEG content floor and 20MiB limit; model paths or expected hashes grant no file authority. Chat preview, required review and allowed server-minted snapshots reuse existing attachment owners. Coding task paths supply no connected-file authority, so that source remains unavailable until actually composed. Only selected-project/user avatar metadata can independently confirm from complete same-owner collections; the other thirteen effects remain acknowledged/unconfirmed, never image-content or assignment proof. Legacy generic temporary/crop identities exist only in retained10.3/10.4 and require a server-owned matching release binding; they are not claimed for11.3. No cookie, URL, image bytes or native temporary filesystem metadata enters model results or logs. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-avatar-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-avatar-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-avatar-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-avatar-mutations.ts",
+        "packages/keiko-connectors/src/jira-managed-avatar-reads.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.ts",
+        "packages/keiko-connectors/src/jira-private-session-values.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarComposition.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.ts",
+        "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateAvatar.ts",
+        "packages/keiko-server/src/atlassian/httpAvatarSession.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-avatar-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarComposition.test.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.private-session.test.ts",
+        "tests/support/jira-avatar-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.set-project-permission-scheme": {
+      "identity": "PUT /rest/api/2/project/{projectKeyOrId}/permissionscheme",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-project-lifecycle-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Seven admin/high project lifecycle/configuration effects bind actor and complete independently observed canonical project identity, archived Boolean and reviewed metadata. Exact target type/schemes are independently read; priority changes use their fixed native experimental port. Every ACK remains unconfirmed for global archival, deletion, migration, scheme and reindex consequences. Native restore202 does not schedule an automatic second reindex. Deletion invokes the existing issue-deletion formal-impact owner for surviving references; no visible JQL prefix establishes a complete global population and no blanket archive rule is invented. Explicit pre-effect no-op requires exact observed current state. Bare404, native collection omission or permission loss is never absence proof. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-project-review.ts",
+        "packages/keiko-connectors/src/jira-project-lifecycle-ports.ts",
+        "packages/keiko-connectors/src/jira-project-lifecycle-values.ts",
+        "packages/keiko-connectors/src/jira-project-lifecycle-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-project-lifecycle.ts",
+        "packages/keiko-connectors/src/jira-project-lifecycle-request.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.ts",
+        "packages/keiko-server/src/atlassian/jiraProjectLifecycleSchemas.ts",
+        "packages/keiko-server/src/atlassian/jiraProjectLifecycleMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceLifecycleReceipts.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-project-review.test.ts",
+        "packages/keiko-connectors/src/jira-managed-project-lifecycle.test.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.test.ts",
+        "packages/keiko-server/src/atlassian/jiraProjectLifecycleMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceLifecycleReceipts.test.ts",
+        "tests/support/jira-project-lifecycle-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.set-project-priority-scheme": {
+      "identity": "PUT /rest/api/2/project/{projectKeyOrId}/priorityscheme",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-project-lifecycle-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Seven admin/high project lifecycle/configuration effects bind actor and complete independently observed canonical project identity, archived Boolean and reviewed metadata. Exact target type/schemes are independently read; priority changes use their fixed native experimental port. Every ACK remains unconfirmed for global archival, deletion, migration, scheme and reindex consequences. Native restore202 does not schedule an automatic second reindex. Deletion invokes the existing issue-deletion formal-impact owner for surviving references; no visible JQL prefix establishes a complete global population and no blanket archive rule is invented. Explicit pre-effect no-op requires exact observed current state. Bare404, native collection omission or permission loss is never absence proof. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-project-review.ts",
+        "packages/keiko-connectors/src/jira-project-lifecycle-ports.ts",
+        "packages/keiko-connectors/src/jira-project-lifecycle-values.ts",
+        "packages/keiko-connectors/src/jira-project-lifecycle-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-project-lifecycle.ts",
+        "packages/keiko-connectors/src/jira-project-lifecycle-request.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.ts",
+        "packages/keiko-server/src/atlassian/jiraProjectLifecycleSchemas.ts",
+        "packages/keiko-server/src/atlassian/jiraProjectLifecycleMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceLifecycleReceipts.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-project-review.test.ts",
+        "packages/keiko-connectors/src/jira-managed-project-lifecycle.test.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.test.ts",
+        "packages/keiko-server/src/atlassian/jiraProjectLifecycleMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceLifecycleReceipts.test.ts",
+        "tests/support/jira-project-lifecycle-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.set-project-property": {
       "identity": "PUT /rest/api/2/project/{projectIdOrKey}/properties/{propertyKey}",
       "effect": "write",
@@ -6538,6 +7496,43 @@
         "packages/keiko-server/src/atlassian/jiraSchemaMutationDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
         "packages/keiko-server/src/atlassian/jiraSystemActionReceipts.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.set-user-avatar": {
+      "identity": "PUT /rest/api/2/user/avatar",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-avatar-session-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Fifteen explicit admin/high avatar effects use fixed native targets and a private cookie-only session bound to the same independently observed actor, connector generation and accepted Chat/Coding authority. One exclusive session lease contains target reads, upload/crop and temporary-slot use; a new upload clears prior temporary state before dispatch, including lost ACK, and crop/create consume the exact reviewed slot before effect. Authorized connected-file bytes are immutable-copy/hash-bound and pass the existing PNG/JPEG content floor and 20MiB limit; model paths or expected hashes grant no file authority. Chat preview, required review and allowed server-minted snapshots reuse existing attachment owners. Coding task paths supply no connected-file authority, so that source remains unavailable until actually composed. Only selected-project/user avatar metadata can independently confirm from complete same-owner collections; the other thirteen effects remain acknowledged/unconfirmed, never image-content or assignment proof. Legacy generic temporary/crop identities exist only in retained10.3/10.4 and require a server-owned matching release binding; they are not claimed for11.3. No cookie, URL, image bytes or native temporary filesystem metadata enters model results or logs. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-avatar-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-avatar-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-avatar-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-avatar-mutations.ts",
+        "packages/keiko-connectors/src/jira-managed-avatar-reads.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.ts",
+        "packages/keiko-connectors/src/jira-private-session-values.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarComposition.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.ts",
+        "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateAvatar.ts",
+        "packages/keiko-server/src/atlassian/httpAvatarSession.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-avatar-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarComposition.test.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.private-session.test.ts",
+        "tests/support/jira-avatar-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
@@ -7231,6 +8226,42 @@
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"
       ]
     },
+    "jira.unlock-user-anonymization": {
+      "identity": "DELETE /rest/api/2/user/anonymization/unlock",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-human-attested-anonymization-unlock",
+      "kind": "constrained-tool",
+      "constraints": "Explicit admin/high fixed bodyless DELETE requires an actual human-only ownerShutdownConfirmation through the existing authenticated one-use HumanInput owner, bound to the exact reviewed task snapshot, executingNode, target user, submitted time, operations, current authority and invocation. The leaf rereads actor and the complete current global native progress snapshot immediately before the callback and refuses any drift. Optional/null native facts remain distinct and native progress has no inferred task ID or unit. Human shutdown attestation is identified as a human statement, never independent process-shutdown proof; OFFLINE is insufficient. The native global DELETE has no CAS and every ACK remains unconfirmed. Bare404 supplies no absence or no-op proof; no automatic replay or additional shutdown action is introduced. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-anonymization-unlock-values.ts",
+        "packages/keiko-connectors/src/jira-managed-anonymization-unlock.ts",
+        "packages/keiko-connectors/src/jira-managed-anonymization-reads.ts",
+        "packages/keiko-connectors/src/jira-private-identity-ports.ts",
+        "packages/keiko-connectors/src/jira-human-input-custody.ts",
+        "packages/keiko-server/src/atlassian/jiraAnonymizationUnlockDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityObservationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountReceipts.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateIdentity.ts",
+        "packages/keiko-server/src/atlassian/jiraHumanInputRoutes.ts",
+        "packages/keiko-contracts/src/jira-human-input.ts",
+        "packages/keiko-server/src/coding-runtime/codingJiraHumanInput.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-anonymization-unlock.test.ts",
+        "packages/keiko-connectors/src/jira-managed-anonymization-reads.test.ts",
+        "packages/keiko-connectors/src/jira-human-input-custody.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAnonymizationUnlockDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityObservationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountReceipts.test.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateIdentity.test.ts",
+        "packages/keiko-contracts/src/jira-human-input.test.ts",
+        "packages/keiko-server/src/coding-runtime/codingJiraHumanInput.test.ts",
+        "tests/support/jira-anonymization-unlock-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.unmap-all-sprints": {
       "identity": "PUT /rest/agile/1.0/sprint/unmap-all",
       "effect": "write",
@@ -7441,6 +8472,78 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.update-my-password": {
+      "identity": "PUT /rest/api/2/myself/password",
+      "effect": "write",
+      "permissionPolicy": "bound-protected-account-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Closed private account effects bind expected actor and exact independently observed user key/username. update-myself supports displayName only and confirms solely after unchanged identity/active plus independently observed desired displayName; an explicit unchanged result consumes no protected input. Self-password targets the actor, while another-user password requires explicit admin/high and independently bound target namespaces. Password effects remain acknowledged/unconfirmed and never prove credential validity. Secret fields come only through the existing authenticated one-use HumanInput/custody owner, bound to exact current invocation, argument digest, authority and Pod generation; they are absent from model arguments, results, receipts, logs and OpenCode questions. Missing or stale private context refuses before dispatch without granting new authority. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-private-account-values.ts",
+        "packages/keiko-connectors/src/jira-managed-private-account.ts",
+        "packages/keiko-connectors/src/jira-private-identity-ports.ts",
+        "packages/keiko-connectors/src/jira-human-input-custody.ts",
+        "packages/keiko-connectors/src/jira-human-input-preparation.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountReceipts.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateIdentity.ts",
+        "packages/keiko-server/src/atlassian/httpHumanInput.ts",
+        "packages/keiko-server/src/atlassian/jiraHumanInputRoutes.ts",
+        "packages/keiko-server/src/coding-runtime/codingJiraHumanInput.ts",
+        "packages/keiko-server/src/store/chatToolTranscript.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-private-account.test.ts",
+        "packages/keiko-connectors/src/jira-human-input-custody.test.ts",
+        "packages/keiko-connectors/src/jira-human-input-preparation.test.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountReceipts.test.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateIdentity.test.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateIdentity.journal.test.ts",
+        "packages/keiko-server/src/coding-runtime/codingJiraHumanInput.test.ts",
+        "packages/keiko-server/src/store/chatToolTranscript.test.ts",
+        "tests/support/jira-private-account-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.update-myself": {
+      "identity": "PUT /rest/api/2/myself",
+      "effect": "write",
+      "permissionPolicy": "bound-protected-account-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Closed private account effects bind expected actor and exact independently observed user key/username. update-myself supports displayName only and confirms solely after unchanged identity/active plus independently observed desired displayName; an explicit unchanged result consumes no protected input. Self-password targets the actor, while another-user password requires explicit admin/high and independently bound target namespaces. Password effects remain acknowledged/unconfirmed and never prove credential validity. Secret fields come only through the existing authenticated one-use HumanInput/custody owner, bound to exact current invocation, argument digest, authority and Pod generation; they are absent from model arguments, results, receipts, logs and OpenCode questions. Missing or stale private context refuses before dispatch without granting new authority. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-private-account-values.ts",
+        "packages/keiko-connectors/src/jira-managed-private-account.ts",
+        "packages/keiko-connectors/src/jira-private-identity-ports.ts",
+        "packages/keiko-connectors/src/jira-human-input-custody.ts",
+        "packages/keiko-connectors/src/jira-human-input-preparation.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountReceipts.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateIdentity.ts",
+        "packages/keiko-server/src/atlassian/httpHumanInput.ts",
+        "packages/keiko-server/src/atlassian/jiraHumanInputRoutes.ts",
+        "packages/keiko-server/src/coding-runtime/codingJiraHumanInput.ts",
+        "packages/keiko-server/src/store/chatToolTranscript.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-private-account.test.ts",
+        "packages/keiko-connectors/src/jira-human-input-custody.test.ts",
+        "packages/keiko-connectors/src/jira-human-input-preparation.test.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountReceipts.test.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateIdentity.test.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateIdentity.journal.test.ts",
+        "packages/keiko-server/src/coding-runtime/codingJiraHumanInput.test.ts",
+        "packages/keiko-server/src/store/chatToolTranscript.test.ts",
+        "tests/support/jira-private-account-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.update-permission-scheme": {
       "identity": "PUT /rest/api/2/permissionscheme/{schemeId}",
       "effect": "write",
@@ -7521,6 +8624,36 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.update-project-type": {
+      "identity": "PUT /rest/api/2/project/{projectIdOrKey}/type/{newProjectTypeKey}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-project-lifecycle-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Seven admin/high project lifecycle/configuration effects bind actor and complete independently observed canonical project identity, archived Boolean and reviewed metadata. Exact target type/schemes are independently read; priority changes use their fixed native experimental port. Every ACK remains unconfirmed for global archival, deletion, migration, scheme and reindex consequences. Native restore202 does not schedule an automatic second reindex. Deletion invokes the existing issue-deletion formal-impact owner for surviving references; no visible JQL prefix establishes a complete global population and no blanket archive rule is invented. Explicit pre-effect no-op requires exact observed current state. Bare404, native collection omission or permission loss is never absence proof. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-project-review.ts",
+        "packages/keiko-connectors/src/jira-project-lifecycle-ports.ts",
+        "packages/keiko-connectors/src/jira-project-lifecycle-values.ts",
+        "packages/keiko-connectors/src/jira-project-lifecycle-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-project-lifecycle.ts",
+        "packages/keiko-connectors/src/jira-project-lifecycle-request.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.ts",
+        "packages/keiko-server/src/atlassian/jiraProjectLifecycleSchemas.ts",
+        "packages/keiko-server/src/atlassian/jiraProjectLifecycleMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceLifecycleReceipts.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-project-review.test.ts",
+        "packages/keiko-connectors/src/jira-managed-project-lifecycle.test.ts",
+        "packages/keiko-connectors/src/jira-managed-template-gate.test.ts",
+        "packages/keiko-server/src/atlassian/jiraProjectLifecycleMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraResourceLifecycleReceipts.test.ts",
+        "tests/support/jira-project-lifecycle-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.update-remote-link": {
       "identity": "PUT /rest/api/2/issue/{issueIdOrKey}/remotelink/{linkId}",
       "effect": "write",
@@ -7569,6 +8702,70 @@
         "packages/keiko-server/src/store/jiraAccessConfigurationMigration.test.ts",
         "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.update-user": {
+      "identity": "PUT /rest/api/2/user",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-user-lifecycle-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Six closed admin/high user lifecycle effects bind current actor and exact user key/username independently. Creation omits password so native generation remains private, retains only actually acknowledged identity and never claims aggregate access. Profile-only metadata may confirm exact independent readback; supplied active changes always remain unconfirmed. Delete, session invalidation and anonymization schedule/rerun remain acknowledged/unconfirmed for directory, session and global identity consequences. Anonymization requires the observed native validation and active-owner facts, with no status-only completion claim. A rerun target that cannot independently bind its current key and username is unavailable. Fixed experimental transport is server-owned; no generic header or password model argument is exposed. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-identity-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-identity-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-identity-mutations.ts",
+        "packages/keiko-connectors/src/jira-managed-anonymization-reads.ts",
+        "packages/keiko-connectors/src/jira-identity-request.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.ts",
+        "packages/keiko-server/src/atlassian/httpIdentityExperimental.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-identity-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-identity-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.identity-experimental.test.ts",
+        "tests/support/jira-identity-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.update-user-password": {
+      "identity": "PUT /rest/api/2/user/password",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-user-lifecycle-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Closed private account effects bind expected actor and exact independently observed user key/username. update-myself supports displayName only and confirms solely after unchanged identity/active plus independently observed desired displayName; an explicit unchanged result consumes no protected input. Self-password targets the actor, while another-user password requires explicit admin/high and independently bound target namespaces. Password effects remain acknowledged/unconfirmed and never prove credential validity. Secret fields come only through the existing authenticated one-use HumanInput/custody owner, bound to exact current invocation, argument digest, authority and Pod generation; they are absent from model arguments, results, receipts, logs and OpenCode questions. Missing or stale private context refuses before dispatch without granting new authority. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-private-account-values.ts",
+        "packages/keiko-connectors/src/jira-managed-private-account.ts",
+        "packages/keiko-connectors/src/jira-private-identity-ports.ts",
+        "packages/keiko-connectors/src/jira-human-input-custody.ts",
+        "packages/keiko-connectors/src/jira-human-input-preparation.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountReceipts.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateIdentity.ts",
+        "packages/keiko-server/src/atlassian/httpHumanInput.ts",
+        "packages/keiko-server/src/atlassian/jiraHumanInputRoutes.ts",
+        "packages/keiko-server/src/coding-runtime/codingJiraHumanInput.ts",
+        "packages/keiko-server/src/store/chatToolTranscript.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-private-account.test.ts",
+        "packages/keiko-connectors/src/jira-human-input-custody.test.ts",
+        "packages/keiko-connectors/src/jira-human-input-preparation.test.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountReceipts.test.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateIdentity.test.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateIdentity.journal.test.ts",
+        "packages/keiko-server/src/coding-runtime/codingJiraHumanInput.test.ts",
+        "packages/keiko-server/src/store/chatToolTranscript.test.ts",
+        "tests/support/jira-private-account-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
@@ -7701,6 +8898,191 @@
         "packages/keiko-server/src/atlassian/jiraEmailTemplateArchive.test.ts",
         "packages/keiko-server/src/atlassian/jiraEmailTemplateDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/httpPort.email-template.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.upload-issue-type-avatar": {
+      "identity": "POST /rest/api/2/issuetype/{id}/avatar/temporary",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-avatar-session-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Fifteen explicit admin/high avatar effects use fixed native targets and a private cookie-only session bound to the same independently observed actor, connector generation and accepted Chat/Coding authority. One exclusive session lease contains target reads, upload/crop and temporary-slot use; a new upload clears prior temporary state before dispatch, including lost ACK, and crop/create consume the exact reviewed slot before effect. Authorized connected-file bytes are immutable-copy/hash-bound and pass the existing PNG/JPEG content floor and 20MiB limit; model paths or expected hashes grant no file authority. Chat preview, required review and allowed server-minted snapshots reuse existing attachment owners. Coding task paths supply no connected-file authority, so that source remains unavailable until actually composed. Only selected-project/user avatar metadata can independently confirm from complete same-owner collections; the other thirteen effects remain acknowledged/unconfirmed, never image-content or assignment proof. Legacy generic temporary/crop identities exist only in retained10.3/10.4 and require a server-owned matching release binding; they are not claimed for11.3. No cookie, URL, image bytes or native temporary filesystem metadata enters model results or logs. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-avatar-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-avatar-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-avatar-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-avatar-mutations.ts",
+        "packages/keiko-connectors/src/jira-managed-avatar-reads.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.ts",
+        "packages/keiko-connectors/src/jira-private-session-values.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarComposition.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.ts",
+        "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateAvatar.ts",
+        "packages/keiko-server/src/atlassian/httpAvatarSession.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-avatar-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarComposition.test.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.private-session.test.ts",
+        "tests/support/jira-avatar-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.upload-owned-avatar": {
+      "identity": "POST /rest/api/2/universal_avatar/type/{type}/owner/{owningObjectId}/temp",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-avatar-session-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Fifteen explicit admin/high avatar effects use fixed native targets and a private cookie-only session bound to the same independently observed actor, connector generation and accepted Chat/Coding authority. One exclusive session lease contains target reads, upload/crop and temporary-slot use; a new upload clears prior temporary state before dispatch, including lost ACK, and crop/create consume the exact reviewed slot before effect. Authorized connected-file bytes are immutable-copy/hash-bound and pass the existing PNG/JPEG content floor and 20MiB limit; model paths or expected hashes grant no file authority. Chat preview, required review and allowed server-minted snapshots reuse existing attachment owners. Coding task paths supply no connected-file authority, so that source remains unavailable until actually composed. Only selected-project/user avatar metadata can independently confirm from complete same-owner collections; the other thirteen effects remain acknowledged/unconfirmed, never image-content or assignment proof. Legacy generic temporary/crop identities exist only in retained10.3/10.4 and require a server-owned matching release binding; they are not claimed for11.3. No cookie, URL, image bytes or native temporary filesystem metadata enters model results or logs. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-avatar-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-avatar-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-avatar-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-avatar-mutations.ts",
+        "packages/keiko-connectors/src/jira-managed-avatar-reads.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.ts",
+        "packages/keiko-connectors/src/jira-private-session-values.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarComposition.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.ts",
+        "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateAvatar.ts",
+        "packages/keiko-server/src/atlassian/httpAvatarSession.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-avatar-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarComposition.test.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.private-session.test.ts",
+        "tests/support/jira-avatar-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.upload-project-avatar": {
+      "identity": "POST /rest/api/2/project/{projectIdOrKey}/avatar/temporary",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-avatar-session-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Fifteen explicit admin/high avatar effects use fixed native targets and a private cookie-only session bound to the same independently observed actor, connector generation and accepted Chat/Coding authority. One exclusive session lease contains target reads, upload/crop and temporary-slot use; a new upload clears prior temporary state before dispatch, including lost ACK, and crop/create consume the exact reviewed slot before effect. Authorized connected-file bytes are immutable-copy/hash-bound and pass the existing PNG/JPEG content floor and 20MiB limit; model paths or expected hashes grant no file authority. Chat preview, required review and allowed server-minted snapshots reuse existing attachment owners. Coding task paths supply no connected-file authority, so that source remains unavailable until actually composed. Only selected-project/user avatar metadata can independently confirm from complete same-owner collections; the other thirteen effects remain acknowledged/unconfirmed, never image-content or assignment proof. Legacy generic temporary/crop identities exist only in retained10.3/10.4 and require a server-owned matching release binding; they are not claimed for11.3. No cookie, URL, image bytes or native temporary filesystem metadata enters model results or logs. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-avatar-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-avatar-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-avatar-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-avatar-mutations.ts",
+        "packages/keiko-connectors/src/jira-managed-avatar-reads.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.ts",
+        "packages/keiko-connectors/src/jira-private-session-values.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarComposition.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.ts",
+        "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateAvatar.ts",
+        "packages/keiko-server/src/atlassian/httpAvatarSession.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-avatar-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarComposition.test.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.private-session.test.ts",
+        "tests/support/jira-avatar-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.upload-temporary-avatar": {
+      "identity": "POST /rest/api/2/avatar/{type}/temporary",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-avatar-session-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Fifteen explicit admin/high avatar effects use fixed native targets and a private cookie-only session bound to the same independently observed actor, connector generation and accepted Chat/Coding authority. One exclusive session lease contains target reads, upload/crop and temporary-slot use; a new upload clears prior temporary state before dispatch, including lost ACK, and crop/create consume the exact reviewed slot before effect. Authorized connected-file bytes are immutable-copy/hash-bound and pass the existing PNG/JPEG content floor and 20MiB limit; model paths or expected hashes grant no file authority. Chat preview, required review and allowed server-minted snapshots reuse existing attachment owners. Coding task paths supply no connected-file authority, so that source remains unavailable until actually composed. Only selected-project/user avatar metadata can independently confirm from complete same-owner collections; the other thirteen effects remain acknowledged/unconfirmed, never image-content or assignment proof. Legacy generic temporary/crop identities exist only in retained10.3/10.4 and require a server-owned matching release binding; they are not claimed for11.3. No cookie, URL, image bytes or native temporary filesystem metadata enters model results or logs. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-avatar-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-avatar-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-avatar-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-avatar-mutations.ts",
+        "packages/keiko-connectors/src/jira-managed-avatar-reads.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.ts",
+        "packages/keiko-connectors/src/jira-private-session-values.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarComposition.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.ts",
+        "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateAvatar.ts",
+        "packages/keiko-server/src/atlassian/httpAvatarSession.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-avatar-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarComposition.test.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.private-session.test.ts",
+        "tests/support/jira-avatar-mutation-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.upload-user-avatar": {
+      "identity": "POST /rest/api/2/user/avatar/temporary",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-avatar-session-and-uncertainty",
+      "kind": "constrained-tool",
+      "constraints": "Fifteen explicit admin/high avatar effects use fixed native targets and a private cookie-only session bound to the same independently observed actor, connector generation and accepted Chat/Coding authority. One exclusive session lease contains target reads, upload/crop and temporary-slot use; a new upload clears prior temporary state before dispatch, including lost ACK, and crop/create consume the exact reviewed slot before effect. Authorized connected-file bytes are immutable-copy/hash-bound and pass the existing PNG/JPEG content floor and 20MiB limit; model paths or expected hashes grant no file authority. Chat preview, required review and allowed server-minted snapshots reuse existing attachment owners. Coding task paths supply no connected-file authority, so that source remains unavailable until actually composed. Only selected-project/user avatar metadata can independently confirm from complete same-owner collections; the other thirteen effects remain acknowledged/unconfirmed, never image-content or assignment proof. Legacy generic temporary/crop identities exist only in retained10.3/10.4 and require a server-owned matching release binding; they are not claimed for11.3. No cookie, URL, image bytes or native temporary filesystem metadata enters model results or logs. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-avatar-mutation-values.ts",
+        "packages/keiko-connectors/src/jira-avatar-mutation-input.ts",
+        "packages/keiko-connectors/src/jira-avatar-mutation-observations.ts",
+        "packages/keiko-connectors/src/jira-managed-avatar-mutations.ts",
+        "packages/keiko-connectors/src/jira-managed-avatar-reads.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.ts",
+        "packages/keiko-connectors/src/jira-private-session-values.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarComposition.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.ts",
+        "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateAvatar.ts",
+        "packages/keiko-server/src/atlassian/httpAvatarSession.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-avatar-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-private-session-custody.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityAvatarReceipts.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAvatarComposition.test.ts",
+        "packages/keiko-server/src/atlassian/jiraChatAttachment.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.test.ts",
+        "packages/keiko-server/src/atlassian/httpPort.private-session.test.ts",
+        "tests/support/jira-avatar-mutation-fixture.ts",
         "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
@@ -7929,6 +9311,78 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.validate-create-user-password": {
+      "identity": "POST /rest/api/2/password/policy/createUser",
+      "effect": "read",
+      "permissionPolicy": "bound-protected-password-policy",
+      "kind": "constrained-tool",
+      "constraints": "Three protected native POST observations have explicit read effect and no mutation journal or credential change. Password policy validators retain read/low authority and return only native-password-policy-only acceptance plus bounded violation count; they do not create a user, authenticate an old password or establish username availability. License validation requires explicit admin/high despite read effect, returns native-license-validation-only and never activates a license. accepted is true exactly when violationCount is zero; missing or contradictory facts are unavailable. Password/license input and native reflected error strings remain private in existing one-use HumanInput/custody, with exact current actor/invocation/authority binding and no model-secret field. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-private-account-values.ts",
+        "packages/keiko-connectors/src/jira-managed-private-account.ts",
+        "packages/keiko-connectors/src/jira-private-identity-ports.ts",
+        "packages/keiko-connectors/src/jira-human-input-custody.ts",
+        "packages/keiko-connectors/src/jira-human-input-preparation.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountReceipts.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateIdentity.ts",
+        "packages/keiko-server/src/atlassian/httpHumanInput.ts",
+        "packages/keiko-server/src/atlassian/jiraHumanInputRoutes.ts",
+        "packages/keiko-server/src/coding-runtime/codingJiraHumanInput.ts",
+        "packages/keiko-server/src/store/chatToolTranscript.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-private-account.test.ts",
+        "packages/keiko-connectors/src/jira-human-input-custody.test.ts",
+        "packages/keiko-connectors/src/jira-human-input-preparation.test.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountReceipts.test.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateIdentity.test.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateIdentity.journal.test.ts",
+        "packages/keiko-server/src/coding-runtime/codingJiraHumanInput.test.ts",
+        "packages/keiko-server/src/store/chatToolTranscript.test.ts",
+        "tests/support/jira-private-account-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.validate-license": {
+      "identity": "POST /rest/api/2/licenseValidator",
+      "effect": "read",
+      "permissionPolicy": "instance-admin-protected-license-validation",
+      "kind": "constrained-tool",
+      "constraints": "Three protected native POST observations have explicit read effect and no mutation journal or credential change. Password policy validators retain read/low authority and return only native-password-policy-only acceptance plus bounded violation count; they do not create a user, authenticate an old password or establish username availability. License validation requires explicit admin/high despite read effect, returns native-license-validation-only and never activates a license. accepted is true exactly when violationCount is zero; missing or contradictory facts are unavailable. Password/license input and native reflected error strings remain private in existing one-use HumanInput/custody, with exact current actor/invocation/authority binding and no model-secret field. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-private-account-values.ts",
+        "packages/keiko-connectors/src/jira-managed-private-account.ts",
+        "packages/keiko-connectors/src/jira-private-identity-ports.ts",
+        "packages/keiko-connectors/src/jira-human-input-custody.ts",
+        "packages/keiko-connectors/src/jira-human-input-preparation.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountReceipts.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateIdentity.ts",
+        "packages/keiko-server/src/atlassian/httpHumanInput.ts",
+        "packages/keiko-server/src/atlassian/jiraHumanInputRoutes.ts",
+        "packages/keiko-server/src/coding-runtime/codingJiraHumanInput.ts",
+        "packages/keiko-server/src/store/chatToolTranscript.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-private-account.test.ts",
+        "packages/keiko-connectors/src/jira-human-input-custody.test.ts",
+        "packages/keiko-connectors/src/jira-human-input-preparation.test.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountReceipts.test.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateIdentity.test.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateIdentity.journal.test.ts",
+        "packages/keiko-server/src/coding-runtime/codingJiraHumanInput.test.ts",
+        "packages/keiko-server/src/store/chatToolTranscript.test.ts",
+        "tests/support/jira-private-account-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.validate-project-key": {
       "identity": "GET /rest/api/2/projectvalidate/key",
       "effect": "read",
@@ -7940,6 +9394,42 @@
       ],
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-projects.test.ts"
+      ]
+    },
+    "jira.validate-update-user-password": {
+      "identity": "POST /rest/api/2/password/policy/updateUser",
+      "effect": "read",
+      "permissionPolicy": "bound-protected-password-policy",
+      "kind": "constrained-tool",
+      "constraints": "Three protected native POST observations have explicit read effect and no mutation journal or credential change. Password policy validators retain read/low authority and return only native-password-policy-only acceptance plus bounded violation count; they do not create a user, authenticate an old password or establish username availability. License validation requires explicit admin/high despite read effect, returns native-license-validation-only and never activates a license. accepted is true exactly when violationCount is zero; missing or contradictory facts are unavailable. Password/license input and native reflected error strings remain private in existing one-use HumanInput/custody, with exact current actor/invocation/authority binding and no model-secret field. This is unexecuted source accounting, not native availability, complete API behavior or AC1-AC9 acceptance. Existing authority, content floor, bounded receipt and one-effect recovery owners remain mandatory.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-private-account-values.ts",
+        "packages/keiko-connectors/src/jira-managed-private-account.ts",
+        "packages/keiko-connectors/src/jira-private-identity-ports.ts",
+        "packages/keiko-connectors/src/jira-human-input-custody.ts",
+        "packages/keiko-connectors/src/jira-human-input-preparation.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountReceipts.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateIdentity.ts",
+        "packages/keiko-server/src/atlassian/httpHumanInput.ts",
+        "packages/keiko-server/src/atlassian/jiraHumanInputRoutes.ts",
+        "packages/keiko-server/src/coding-runtime/codingJiraHumanInput.ts",
+        "packages/keiko-server/src/store/chatToolTranscript.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-private-account.test.ts",
+        "packages/keiko-connectors/src/jira-human-input-custody.test.ts",
+        "packages/keiko-connectors/src/jira-human-input-preparation.test.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraPrivateAccountReceipts.test.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateIdentity.test.ts",
+        "packages/keiko-server/src/atlassian/httpPrivateIdentity.journal.test.ts",
+        "packages/keiko-server/src/coding-runtime/codingJiraHumanInput.test.ts",
+        "packages/keiko-server/src/store/chatToolTranscript.test.ts",
+        "tests/support/jira-private-account-fixture.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationRegistry.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
     "jira.version": {
@@ -8312,8 +9802,8 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "e761026fbc976887e963e5ce84d8e74b12a102fbdda8f539922f001c032ffb65",
-    "nativeOperationCount": 394
+    "sha256": "287ae4eb71cedf0c1312186c73a01c9513e8fc4455aa0071537b2abffa4ec2bc",
+    "nativeOperationCount": 439
   },
   "operations": [
     {
@@ -10477,10 +11967,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.upload-temporary-avatar"
+      ]
     },
     {
       "identity": "POST /rest/api/2/avatar/{type}/temporaryCrop",
@@ -10503,10 +11995,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.crop-temporary-avatar"
+      ]
     },
     {
       "identity": "PUT /rest/api/2/cluster/index-snapshot/{nodeId}",
@@ -12811,10 +14305,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.archive-issues"
+      ]
     },
     {
       "identity": "POST /rest/api/2/issue/bulk",
@@ -12845,10 +14341,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.create-issues"
+      ]
     },
     {
       "identity": "GET /rest/api/2/issue/createmeta/{projectIdOrKey}/issuetypes",
@@ -12983,10 +14481,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.create-reciprocal-remote-link"
+      ]
     },
     {
       "identity": "DELETE /rest/api/2/issue/{issueIdOrKey}",
@@ -13017,10 +14517,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.delete-issue"
+      ]
     },
     {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}",
@@ -13127,10 +14629,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.archive-issue"
+      ]
     },
     {
       "identity": "PUT /rest/api/2/issue/{issueIdOrKey}/assignee",
@@ -13927,10 +15431,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.restore-issue"
+      ]
     },
     {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/subtask",
@@ -14033,10 +15539,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.move-subtask"
+      ]
     },
     {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/transitions",
@@ -15205,10 +16713,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.create-issue-type-avatar"
+      ]
     },
     {
       "identity": "POST /rest/api/2/issuetype/{id}/avatar/temporary",
@@ -15237,10 +16747,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.upload-issue-type-avatar"
+      ]
     },
     {
       "identity": "GET /rest/api/2/issuetype/{issueTypeId}/properties",
@@ -15845,10 +17357,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.validate-license"
+      ]
     },
     {
       "identity": "GET /rest/api/2/monitoring/app",
@@ -16347,10 +17861,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.update-myself"
+      ]
     },
     {
       "identity": "PUT /rest/api/2/myself/password",
@@ -16381,10 +17897,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.update-my-password"
+      ]
     },
     {
       "identity": "GET /rest/api/2/notificationscheme",
@@ -16525,10 +18043,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.validate-create-user-password"
+      ]
     },
     {
       "identity": "POST /rest/api/2/password/policy/updateUser",
@@ -16559,10 +18079,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.validate-update-user-password"
+      ]
     },
     {
       "identity": "GET /rest/api/2/permissions",
@@ -17503,10 +19025,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.delete-project"
+      ]
     },
     {
       "identity": "GET /rest/api/2/project/{projectIdOrKey}",
@@ -17609,10 +19133,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.archive-project"
+      ]
     },
     {
       "identity": "POST /rest/api/2/project/{projectIdOrKey}/avatar",
@@ -17643,10 +19169,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.create-project-avatar"
+      ]
     },
     {
       "identity": "PUT /rest/api/2/project/{projectIdOrKey}/avatar",
@@ -17677,10 +19205,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.set-project-avatar"
+      ]
     },
     {
       "identity": "POST /rest/api/2/project/{projectIdOrKey}/avatar/temporary",
@@ -17711,10 +19241,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.upload-project-avatar"
+      ]
     },
     {
       "identity": "DELETE /rest/api/2/project/{projectIdOrKey}/avatar/{id}",
@@ -17745,10 +19277,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.delete-project-avatar"
+      ]
     },
     {
       "identity": "GET /rest/api/2/project/{projectIdOrKey}/avatars",
@@ -17995,10 +19529,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.restore-project"
+      ]
     },
     {
       "identity": "GET /rest/api/2/project/{projectIdOrKey}/role",
@@ -18245,10 +19781,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.update-project-type"
+      ]
     },
     {
       "identity": "GET /rest/api/2/project/{projectIdOrKey}/version",
@@ -18459,10 +19997,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.set-project-permission-scheme"
+      ]
     },
     {
       "identity": "GET /rest/api/2/project/{projectKeyOrId}/priorityscheme",
@@ -18529,10 +20069,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.set-project-priority-scheme"
+      ]
     },
     {
       "identity": "DELETE /rest/api/2/project/{projectKeyOrId}/priorityscheme/{schemeId}",
@@ -18563,10 +20105,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.remove-project-priority-scheme"
+      ]
     },
     {
       "identity": "GET /rest/api/2/project/{projectKeyOrId}/securitylevel",
@@ -20788,10 +22332,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.create-owned-avatar"
+      ]
     },
     {
       "identity": "DELETE /rest/api/2/universal_avatar/type/{type}/owner/{owningObjectId}/avatar/{id}",
@@ -20822,10 +22368,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.delete-owned-avatar"
+      ]
     },
     {
       "identity": "POST /rest/api/2/universal_avatar/type/{type}/owner/{owningObjectId}/temp",
@@ -20856,10 +22404,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.upload-owned-avatar"
+      ]
     },
     {
       "identity": "GET /rest/api/2/upgrade",
@@ -20962,10 +22512,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.delete-user"
+      ]
     },
     {
       "identity": "GET /rest/api/2/user",
@@ -21032,10 +22584,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.create-user"
+      ]
     },
     {
       "identity": "PUT /rest/api/2/user",
@@ -21066,10 +22620,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.update-user"
+      ]
     },
     {
       "identity": "GET /rest/api/2/user/a11y/personal-settings",
@@ -21172,10 +22728,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.schedule-user-anonymization"
+      ]
     },
     {
       "identity": "GET /rest/api/2/user/anonymization/progress",
@@ -21278,10 +22836,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.rerun-user-anonymization"
+      ]
     },
     {
       "identity": "DELETE /rest/api/2/user/anonymization/unlock",
@@ -21312,10 +22872,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.unlock-user-anonymization"
+      ]
     },
     {
       "identity": "DELETE /rest/api/2/user/application",
@@ -21492,10 +23054,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.create-user-avatar"
+      ]
     },
     {
       "identity": "PUT /rest/api/2/user/avatar",
@@ -21526,10 +23090,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.set-user-avatar"
+      ]
     },
     {
       "identity": "POST /rest/api/2/user/avatar/temporary",
@@ -21560,10 +23126,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.upload-user-avatar"
+      ]
     },
     {
       "identity": "DELETE /rest/api/2/user/avatar/{id}",
@@ -21594,10 +23162,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.delete-user-avatar"
+      ]
     },
     {
       "identity": "GET /rest/api/2/user/avatars",
@@ -21876,10 +23446,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.update-user-password"
+      ]
     },
     {
       "identity": "GET /rest/api/2/user/permission/search",
@@ -22162,10 +23734,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.invalidate-user-session"
+      ]
     },
     {
       "identity": "GET /rest/api/2/user/viewissue/search",
@@ -23931,10 +25505,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.logout"
+      ]
     },
     {
       "identity": "GET /rest/auth/1/session",
@@ -24001,10 +25577,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.login"
+      ]
     },
     {
       "identity": "DELETE /rest/auth/1/websudo",
@@ -24035,10 +25613,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.release-websudo"
+      ]
     }
   ]
 }

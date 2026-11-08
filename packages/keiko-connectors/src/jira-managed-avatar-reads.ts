@@ -80,14 +80,14 @@ function avatarAttributes(raw: Record<string, unknown>): CatalogJsonObject | und
   }
   return result;
 }
-function avatar(value: unknown, category: Category): CatalogJsonObject | undefined {
+export function projectJiraAvatar(value: unknown, category: Category): CatalogJsonObject | undefined {
   const raw = asRecord(value);
   const id = typeof raw?.id === "number" && Number.isSafeInteger(raw.id) ? String(raw.id) : raw?.id;
   if (raw === undefined || !jiraNativeId(id)) return undefined;
   const attributes = avatarAttributes(raw);
   return attributes === undefined ? undefined : { id, category, ...attributes };
 }
-function avatarGroups(
+export function jiraAvatarGroups(
   body: Record<string, unknown> | undefined,
   systemOnly: boolean,
 ): readonly { readonly value: unknown; readonly category: Category }[] | undefined {
@@ -115,7 +115,7 @@ export async function executeJiraAvatarRead(
     0,
   );
   if (count > TOOL_CATALOG_LIMITS.maxArrayItems) return jiraReadFailure("bounds-exceeded");
-  const grouped = avatarGroups(response.body, name === "jira.system-avatars");
+  const grouped = jiraAvatarGroups(response.body, name === "jira.system-avatars");
   if (grouped === undefined) return jiraReadFailure("malformed-payload");
   const items = projectJiraCollection(
     grouped,
@@ -123,7 +123,7 @@ export async function executeJiraAvatarRead(
     (entry) => {
       const raw = asRecord(entry);
       return raw?.category === "system" || raw?.category === "custom"
-        ? avatar(raw.value, raw.category)
+        ? projectJiraAvatar(raw.value, raw.category)
         : undefined;
     },
     "id",

@@ -820,6 +820,9 @@ interface AgentAuthorityRegistryDependency {
 }
 
 export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
+  /** Revalidates the held native Jira call; secrets remain in credential custody. */
+  readonly codingJiraInputContext?: import("./coding-runtime/codingJiraHumanInput.js").CodingJiraCurrentInputResolver;
+
   readonly mcpSettings?: McpSettingsStore;
   readonly mcpAuthorization?: McpAuthorization;
   readonly mcpConnections?: ConfiguredMcpConnections;
@@ -5096,6 +5099,7 @@ function installCodingJiraPods(
   pods.attach({ ...deps, emailTemplateInspection: (signal) => jiraEmailTemplateInspection(deps, signal) });
   const previousDispose = deps.dispose;
   return Object.assign(deps, {
+    codingJiraInputContext: pods.currentInputContext,
     dispose: async (): Promise<void> => {
       try {
         await pods.close();

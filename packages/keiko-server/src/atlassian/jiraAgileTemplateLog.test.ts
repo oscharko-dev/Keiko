@@ -13,6 +13,10 @@ import {
 afterEach(resetServerLogger);
 
 it.each([
+  "jira.delete-issue",
+  "jira.delete-project",
+  "jira.create-issues",
+  "jira.create-reciprocal-remote-link",
   "jira.epic-remove-issues",
   "jira.rank-epic",
   "jira.rank-issues",

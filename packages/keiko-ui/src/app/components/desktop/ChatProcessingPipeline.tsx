@@ -23,25 +23,35 @@ function StepIcon({ state }: { readonly state: ChatProcessingState }): ReactNode
   if (state === "failed" || state === "cancelled" || state === "blocked")
     return <CloseIcon size={14} />;
   if (state === "attention") return <InfoIcon size={14} />;
-  if (state === "approval") return <LockIcon size={14} />;
+  if (state === "approval" || state === "input") return <LockIcon size={14} />;
   return <DotsIcon size={14} />;
 }
 
+function isCurrentStep(step: ChatProcessingStep): boolean {
+  return step.state === "active" || step.state === "approval" || step.state === "input";
+}
+
+function currentSummary(steps: readonly ChatProcessingStep[], t: OptionalWidgetTranslate): string | undefined {
+  const current = steps.filter(isCurrentStep);
+  if (current.length === 0) return undefined;
+  if (current.every((step) => step.state === "input"))
+    return t("chat.processing.summary", { state: t("chat.processing.input") });
+  return t("chat.processing.current", {
+    steps: current.slice(-3).map((step) => t(step.label)).join(", "),
+  });
+}
+
 function pipelineSummary(steps: readonly ChatProcessingStep[], t: OptionalWidgetTranslate): string {
-  const current = steps.filter((step) => step.state === "active" || step.state === "approval");
-  if (current.length > 0)
-    return t("chat.processing.current", {
-      steps: current
-        .slice(-3)
-        .map((step) => t(step.label))
-        .join(", "),
-    });
+  const current = currentSummary(steps, t);
+  if (current !== undefined) return current;
   if (steps.some((step) => step.state === "attention")) return t("chat.processing.checkOutcome");
   const terminal = ["failed", "blocked", "cancelled"] as const;
   const issueState = terminal.find((candidate) => steps.some((step) => step.state === candidate));
   const responseState = steps.find((step) => step.id === "response")?.state;
   if (responseState === "done" && issueState !== undefined)
     return t("chat.processing.summary", { state: t("chat.processing.doneWithIssues") });
+  if (responseState === "upcoming" && issueState !== undefined)
+    return t("chat.processing.summary", { state: t(CHAT_PROCESSING_STATE_LABELS[issueState]) });
   const state = responseState ?? issueState ?? steps.at(-1)?.state ?? "attention";
   return t("chat.processing.summary", { state: t(CHAT_PROCESSING_STATE_LABELS[state]) });
 }
@@ -72,7 +82,7 @@ function groupCompletedSteps(steps: readonly ChatProcessingStep[]): readonly Pre
 
 function compactStepIndices(groups: readonly PresentedStep[]): ReadonlySet<number> {
   const current = groups.findLastIndex(
-    ({ step }) => step.state === "active" || step.state === "approval",
+    ({ step }) => isCurrentStep(step),
   );
   const visible = new Set([0, groups.length - 1, current]);
   for (let index = Math.max(0, groups.length - 4); index < groups.length; index += 1)
@@ -82,7 +92,7 @@ function compactStepIndices(groups: readonly PresentedStep[]): ReadonlySet<numbe
 
 function ProcessingStep({ step, index, count }: PresentedStep): ReactNode {
   const t = useTranslate();
-  const current = step.state === "active" || step.state === "approval";
+  const current = isCurrentStep(step);
   const label =
     count === 1 ? t(step.label) : t("chat.processing.repeated", { label: t(step.label), count });
   const state = t(CHAT_PROCESSING_STATE_LABELS[step.state]);

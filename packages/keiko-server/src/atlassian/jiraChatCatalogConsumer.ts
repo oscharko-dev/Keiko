@@ -65,6 +65,8 @@ import { jiraCatalogResult } from "./jiraCatalogResult.js";
 
 /** Private ordinary-Chat scope. Neither a workspace nor a Coding session is required. */
 export interface JiraChatCatalogContext extends ToolConsumerContext {
+  readonly activeHumanInput?: () => import("@oscharko-dev/keiko-connectors").JiraHumanInputSelection | undefined;
+  readonly humanInputFor?: (operation: string, argumentsDigest: string) => import("@oscharko-dev/keiko-connectors").JiraHumanInputSelection | undefined;
   readonly jiraDiscoveryResultFits?: ((result: CatalogJsonObject) => boolean) | undefined;
   readonly chatId: string;
   readonly authorityReference: EditorAgentGovernedAuthorityReference;
@@ -88,6 +90,8 @@ export interface JiraChatCatalogAction extends ToolConsumerActionIdentity {
   readonly operationBinding?: JiraOperationBinding;
   /** Server-prepared source payload, captured before the approval identity is minted. */
   readonly sourceDigest?: string;
+  /** Random revision of the immutable ready input, never a secret-derived hash. */
+  readonly humanInputRevision?: string;
 }
 export interface JiraChatCatalogConsumer extends CatalogConsumer {
   readonly context: JiraChatCatalogContext;
@@ -133,11 +137,13 @@ function validActionFields(action: CatalogJsonObject): boolean {
 function validActionBinding(tool: string, action: CatalogJsonObject): boolean {
   const bound = jiraOperationForTool(tool) !== undefined;
   const keys = bound
-    ? `actionId,argumentsDigest,idempotencyKey,operationBinding,${action.sourceDigest === undefined ? "" : "sourceDigest,"}tool`
+    ? `actionId,argumentsDigest,${action.humanInputRevision === undefined ? "" : "humanInputRevision,"}idempotencyKey,operationBinding,${action.sourceDigest === undefined ? "" : "sourceDigest,"}tool`
     : "actionId,argumentsDigest,idempotencyKey,tool";
   return (
     Object.keys(action).sort(compareStrings).join() === keys &&
     (!bound || isCurrentJiraOperationBinding(tool, action.operationBinding)) &&
+    (action.humanInputRevision === undefined || (typeof action.humanInputRevision === "string" &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(action.humanInputRevision))) &&
     (action.sourceDigest === undefined ||
       (typeof action.sourceDigest === "string" && /^[0-9a-f]{64}$/u.test(action.sourceDigest)))
   );
@@ -160,18 +166,23 @@ function captureAction(value: CatalogJsonValue): JiraChatCatalogAction | undefin
     argumentsDigest: action.argumentsDigest as string,
     ...actionBinding(tool),
     ...(typeof action.sourceDigest === "string" ? { sourceDigest: action.sourceDigest } : {}),
+    ...(typeof action.humanInputRevision === "string" ? { humanInputRevision: action.humanInputRevision } : {}),
   };
 }
 
 export function createJiraChatCatalogConsumerPort(
   sourceDigestFor?: (actionId: string, argumentsDigest: string) => string | undefined,
+  humanInputRevisionFor?: (actionId: string, argumentsDigest: string) => string | undefined,
 ): CatalogConsumerPort<JiraChatCatalogConsumer> {
   const capture = (value: CatalogJsonValue): JiraChatCatalogAction | undefined => {
     const action = captureAction(value);
     if (action === undefined) return undefined;
     const sourceDigest = sourceDigestFor?.(action.actionId, action.argumentsDigest);
     if (action.sourceDigest !== undefined && action.sourceDigest !== sourceDigest) return undefined;
-    return sourceDigest === undefined ? action : { ...action, sourceDigest };
+    const humanInputRevision = humanInputRevisionFor?.(action.actionId, action.argumentsDigest);
+    if (action.humanInputRevision !== undefined && action.humanInputRevision !== humanInputRevision) return undefined;
+    return { ...action, ...(sourceDigest === undefined ? {} : { sourceDigest }),
+      ...(humanInputRevision === undefined ? {} : { humanInputRevision }) };
   };
   return {
     scope: (context) => ({

@@ -14,6 +14,8 @@
 // through this port can leak content into evidence, diagnostics, or wire responses. (#2243's sync
 // adapters extend this seam with capped body reading; the custody/verify lane never reads bodies.)
 
+import type { JiraHumanInputHttpRequest } from "./jira-private-identity-ports.js";
+
 export interface AtlassianHttpRequest {
   readonly method: "GET";
   // Absolute https URL on the connector's configured base URL. The adapter re-validates that the
@@ -92,6 +94,14 @@ export interface AtlassianHttpBodyRequest {
   readonly jiraUserApplication?: true | undefined;
   /** Fixed user/columns PUT form, with a bound username and ordered repeated columns. */
   readonly jiraUserColumns?: true | undefined;
+  /** Fixed experimental UserResource POST/PUT/DELETE only. */
+  readonly jiraIdentityExperimental?: true | undefined;
+  /** Fixed experimental project priority GET/PUT/DELETE only. */
+  readonly jiraProjectPriority?: true | undefined;
+  /** Private server selection only; never serialized secret body bytes. */
+  readonly jiraHumanInput?: JiraHumanInputHttpRequest | undefined;
+  /** Fixed raw PNG/JPEG temporary upload; requires the private cookie-session transport. */
+  readonly jiraAvatarImage?: true | undefined;
   // Run-level cancellation (ADR-0128 D5): the adapter composes this with its own timeout so an
   // aborted sync run tears down the in-flight request instead of waiting it out.
   readonly signal?: AbortSignal | undefined;

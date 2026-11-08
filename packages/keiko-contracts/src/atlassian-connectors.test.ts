@@ -355,9 +355,41 @@ const ADMIN_READ_ACTIONS = [
   "jira.email-template-pack",
   "jira.anonymization-validation", "jira.anonymization-rerun-validation", "jira.anonymization-progress",
 ] as const;
-const ADMIN_READ_SET: ReadonlySet<string> = new Set(ADMIN_READ_ACTIONS);
+const ADMIN_HIGH_READ_ACTIONS = ["jira.validate-license"] as const;
+const ADMIN_READ_SET: ReadonlySet<string> = new Set([...ADMIN_READ_ACTIONS, ...ADMIN_HIGH_READ_ACTIONS]);
 // Explicit expectations for the added native writes; no production policy table supplies values.
 const ADMIN_ACTIONS = [
+  "upload-temporary-avatar",
+  "crop-temporary-avatar",
+  "upload-issue-type-avatar",
+  "create-issue-type-avatar",
+  "upload-project-avatar",
+  "create-project-avatar",
+  "set-project-avatar",
+  "delete-project-avatar",
+  "upload-owned-avatar",
+  "create-owned-avatar",
+  "delete-owned-avatar",
+  "upload-user-avatar",
+  "create-user-avatar",
+  "set-user-avatar",
+  "delete-user-avatar",
+  "create-user",
+  "update-user",
+  "delete-user",
+  "invalidate-user-session",
+  "schedule-user-anonymization",
+  "rerun-user-anonymization",
+  "create-reciprocal-remote-link",
+  "delete-project",
+  "archive-project",
+  "restore-project",
+  "update-project-type",
+  "set-project-permission-scheme",
+  "set-project-priority-scheme",
+  "remove-project-priority-scheme",
+  "update-user-password",
+  "unlock-user-anonymization",
   "create-group",
   "delete-group",
   "add-group-user",
@@ -435,6 +467,17 @@ const ADMIN_ACTIONS = [
   "create-filter", "set-filter-share-scope", "add-filter-permission", "delete-filter-permission",
 ] as const satisfies readonly AtlassianConnectorActionType[];
 const HIGH_WRITES = [
+  "archive-issues",
+  "delete-issue",
+  "archive-issue",
+  "restore-issue",
+  "move-subtask",
+  "create-issues",
+  "update-myself",
+  "update-my-password",
+  "login",
+  "logout",
+  "release-websudo",
   "notify-issue",
   "epic-remove-issues", "rank-epic", "rank-issues", "set-issue-estimation", "delete-version-remote-link", "delete-version-remote-links",
   "delete-board", "set-board-refined-velocity", "replace-sprint", "delete-sprint", "swap-sprints", "unmap-sprints",
@@ -476,6 +519,7 @@ const D4_TABLE: readonly D4Row[] = [
   ...expectedJiraRows(HIGH_WRITES, "connector-write", "issue-tracker.write", "high"),
   ...expectedJiraRows(MEDIUM_WRITES, "connector-write", "issue-tracker.write", "medium"),
   ...expectedJiraRows(ADMIN_READ_ACTIONS, "connector-admin", "issue-tracker.admin", "low"),
+  ...expectedJiraRows(ADMIN_HIGH_READ_ACTIONS, "connector-admin", "issue-tracker.admin", "high"),
   ...expectedJiraRows(ADMIN_ACTIONS, "connector-admin", "issue-tracker.admin", "high"),
 ];
 

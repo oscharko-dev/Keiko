@@ -165,13 +165,14 @@ factory, never a raw token resolver. Every metadata and confirmation read rechec
 authority and the Chat read grant. The exact action approval is claimed atomically inside
 the durable journal's dispatch boundary, immediately before the first mutating HTTP request;
 metadata reads and duplicate deliveries cannot consume or reapply that claim. Full access
-uses the same boundary with its currently validated allowed disposition. The one hundred six global
+uses the same boundary with its currently validated allowed disposition. The one hundred thirty-seven source-defined
 administration writes additionally require the explicitly selected `issue-tracker.admin` scope
 defined in ADR-0128 D4. A Chat scope change advances the existing binding generation and revokes
 earlier approvals; neither schema selection nor Full access supplies administration authority.
 
-Four administration observations retain read effects and low risk: three anonymization diagnostics
-and metadata-only email-template export. The fixed ZIP byte port uses the existing request lifecycle
+Five administration observations retain read effects: three anonymization diagnostics and
+metadata-only email-template export have low risk; protected license validation has high risk.
+The fixed ZIP byte port uses the existing request lifecycle
 and never exposes template bytes to the model or log. File snapshots follow the existing mode-derived
 authority: private immutable snapshots in allowed mode and reviewed snapshots where approval is
 required. Global template replacement, base-URL consequences and scheme-wide effects cannot be
@@ -626,6 +627,41 @@ capture cannot append a late result. Read history retains the admitted schema wi
 the current registry, including result paging and unknown totals. Chat and Coding share the existing
 Jira result-to-catalog page projection. The existing body-free transcript event records capture;
 provider bodies and report content are never added to the Activity Log. Technical relay failures use a separate private read callback and the existing closed failure vocabulary: scope refusal remains denied, technical failure is failed, and deadline/cancellation retain their native catalog classes. A validated provider result or already persisted scope refusal takes precedence over a later relay error. Failed persistence preserves the primary closed failure and both internal causes, releases the reservation and creates no mutation recovery barrier.
+
+Protected Jira input reuses that same invocation and History ownership. The
+[Coding input owner](../../packages/keiko-server/src/coding-runtime/codingJiraHumanInput.ts) retains
+only bounded pending metadata for the actual run/call lifetime. After schema admission and the
+existing mutation check-only path where applicable, it persists a public HumanInput view through the existing
+[transcript owner](../../packages/keiko-server/src/store/chatToolTranscript.ts), bound to the real
+stored user message and turn. This is pending history, not a completed tool result, mutation ACK
+or recovery settlement. No-op or refused calls do not request protected input. No synthetic Chat,
+separate question store or OpenCode question carries secret values.
+
+At submission and consumption, the existing current-input callback checks the active task/run,
+call identity, canonical original arguments, Pod generation and current Authority Envelope. A
+replaced/stopped invocation or changed authority cannot consume a prior selection. The existing
+vault/custody owner holds protected values privately and consumes the current one-use claim at
+actual dispatch. Public input revision and pending status may survive reload; passwords, licenses,
+cookies and human input values do not enter History, catalog results, receipts or Activity Log.
+The input supplies a missing secret or factual attestation; it never supplies connector authority
+or replaces the existing action approval. Allowed mode remains allowed within its validated
+envelope, without a new mandatory approval.
+
+Native password-policy and license-validation POSTs remain reads; license validation additionally
+requires explicit administration and high-risk admission. They produce bounded acceptance/count
+facts without mutation journal rows. Private account/session writes retain the existing journal:
+login can confirm only same-actor cookie proof, profile updates only exact independent metadata,
+and password/logout/websudo ACKs remain unconfirmed. Human-attested anonymization unlock retains
+the exact task/owner review but no native CAS, and therefore never claims independently confirmed
+shutdown or global unlock completion. Forward-only V77 adds the closed writes without changing
+historical journal phases or turning these POST observations into writes.
+
+The private session path is a credential capability, not a connected-file grant. Avatar upload
+still needs an actual authorized immutable image source and content admission. A Coding task or
+workspace path alone does not supply that source, and an uncomposed source refuses before effect.
+The 439 mapped native identities remain constrained source coverage; all runtime availability and
+AC1–AC9 qualification remain open. Pending-input/history source regressions have not been executed
+and this ADR does not claim end-to-end consumer or current-head acceptance.
 
 Only the server-owned local Jira connection can supply this callback; an external server's name,
 arguments or metadata cannot enable it. An error result never acknowledges a mutation. A validated

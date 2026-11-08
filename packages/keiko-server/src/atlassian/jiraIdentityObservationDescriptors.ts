@@ -1,6 +1,7 @@
 import { TOOL_CATALOG_LIMITS, type CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { object, text } from "./jiraManagedSchemas.js";
+import { JIRA_ANONYMIZATION_TASK_SNAPSHOT_SCHEMA } from "./jiraAnonymizationUnlockDescriptors.js";
 import {
   jiraNativeIdentitySchema as ID,
   jiraNativeDeclaration,
@@ -58,6 +59,7 @@ export const JIRA_IDENTITY_OBSERVATION_READ_DEFINITIONS = {
       taskSelection: { type: "string", enum: ["active-or-latest", "selected-task"] },
       selectedTaskId: ID,
       progress: PROGRESS,
+      reviewSnapshot: JIRA_ANONYMIZATION_TASK_SNAPSHOT_SCHEMA,
     },
   ),
   "jira.current-session": read(

@@ -1,6 +1,7 @@
 import {
   JIRA_MANAGED_ACTION_TYPES,
   JIRA_MUTATION_OPERATIONS,
+  isJiraAvatarUploadOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ToolAuthorityAvailability } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import type {
@@ -42,6 +43,7 @@ export function jiraChatWriteAction(
           action.argumentsDigest,
           action.operationBinding,
           action.sourceDigest,
+          action.humanInputRevision,
         ),
       };
 }
@@ -134,7 +136,7 @@ async function reviewedIdentity(
   action: JiraChatCatalogAction,
   identity: JiraChatWriteActionIdentity,
 ): Promise<JiraChatWriteActionIdentity | undefined> {
-  if (identity.operation !== "jira.attach" && identity.operation !== "jira.upload-email-template-pack") return identity;
+  if (identity.operation !== "jira.attach" && identity.operation !== "jira.upload-email-template-pack" && !isJiraAvatarUploadOperation(identity.operation)) return identity;
   const attachment = await options.attachmentPreview?.(action);
   return attachment === undefined ? undefined : { ...identity, attachment };
 }

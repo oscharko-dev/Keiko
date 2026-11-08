@@ -8,6 +8,10 @@ import {
 } from "@oscharko-dev/keiko-connectors";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { directoryAccessHeaders } from "./httpDirectoryAccess.js";
+import { identityExperimentalHeaders } from "./httpIdentityExperimental.js";
+import { decodeCanonicalUriSegment } from "./canonicalUriSegment.js";
+import { claimHttpHumanInput } from "./httpHumanInput.js";
+import type { JiraHumanInputView } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 
 type RequestSnapshot = Readonly<AtlassianHttpRequest | AtlassianHttpBodyRequest>;
 
@@ -23,6 +27,9 @@ interface RequestLifecycle {
   readonly observe: (response: Response) => Promise<void>;
   readonly rethrowFailure: () => void;
 }
+/** HTTP composition only. Neither variant is accepted from tool arguments or ordinary requests. */
+export type JiraPrivateAuthentication = { readonly kind: "anonymous" } |
+  { readonly kind: "session"; readonly scope: "actor" | "avatar" | "logout" | "websudo"; readonly cookie: () => string; readonly legacyTemporaryRelease?: "10.3" | "10.4" };
 
 function requireConfirmation(result: unknown): void {
   if (result !== true) {
@@ -47,6 +54,8 @@ function reportObservationFailure(correlationId: string, error: unknown): void {
 
 /** A JSON body is declared as such; a governed upload also carries Jira's XSRF opt-out (#4176). */
 function requestBodyHeaders(request: RequestSnapshot): Record<string, string> {
+  const identity = "maxBodyBytes" in request ? identityExperimentalHeaders(request) : undefined;
+  if (identity !== undefined) return identity;
   const directory = "maxBodyBytes" in request ? directoryAccessHeaders(request) : undefined;
   if (directory !== undefined) return directory;
   const archive = emailTemplateHeaders(
@@ -89,11 +98,7 @@ function closedJiraUrl(url: URL): boolean {
     url.username === "" && url.password === "";
 }
 function canonicalAttributeKey(encoded: string | undefined): boolean {
-  if (encoded === undefined) return false;
-  try {
-    const key = decodeURIComponent(encoded);
-    return jiraPropertyPathKey(key) && encodeURIComponent(key) === encoded;
-  } catch { return false; }
+  return jiraPropertyPathKey(decodeCanonicalUriSegment(encoded));
 }
 function permissionAttributeUrl(url: URL): boolean {
   if (!closedJiraUrl(url)) return false;
@@ -133,6 +138,8 @@ export function atlassianHttpRequestLifecycle(
     readonly credentials: AtlassianCredentialExecutionResolver;
     readonly authRef: string;
     readonly correlationId: string;
+    readonly privateAuthentication?: JiraPrivateAuthentication;
+    readonly onHumanInputConsumed?: (view: JiraHumanInputView) => void;
   },
   request: RequestSnapshot,
 ): RequestLifecycle {
@@ -155,10 +162,21 @@ export function atlassianHttpRequestLifecycle(
     prepareHeaders: (): Headers =>
       run(() => {
         if (beforeDispatch !== undefined) requireConfirmation(beforeDispatch(request));
+        const input = "jiraHumanInput" in request ? request.jiraHumanInput : undefined;
+        if (input?.selection.binding.operation === "jira.unlock-user-anonymization" &&
+            claimHttpHumanInput(credentials, input, options.onHumanInputConsumed).ownerShutdownConfirmation !== "confirmed")
+          throw new AtlassianCredentialCustodyError("invalid-input", ["Missing human owner-shutdown attestation"]);
+        const privateAuth = options.privateAuthentication;
+        if (privateAuth?.kind === "anonymous") return new Headers({ accept: "application/json", ...headers, "content-type": "application/json" });
+        if (privateAuth?.kind === "session") return new Headers({ cookie: privateAuth.cookie(), accept: "application/json", ...headers });
         const credential = credentials.resolveForExecution(authRef);
         return new Headers({
           authorization: atlassianAuthorizationHeaderValue(credential),
           accept: "application/json",
+          ...(input !== undefined && input.selection.binding.operation !== "jira.unlock-user-anonymization" ? {
+            "content-type": "application/json",
+            ...(input.selection.binding.operation === "jira.update-user-password" ? { "X-ExperimentalApi": "true" } : {}),
+          } : {}),
           ...headers,
         });
       }),

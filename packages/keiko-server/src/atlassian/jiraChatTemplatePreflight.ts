@@ -1,3 +1,4 @@
+import { jiraChatPrivatePorts } from "./jiraChatPrivatePorts.js";
 import {
   checkJiraManagedMutation,
   firstJiraDraftTemplateRefusal,
@@ -32,6 +33,11 @@ import {
   JIRA_MAINTENANCE_MUTATIONS,
   JIRA_SCHEMA_MUTATIONS,
   JIRA_DIRECTORY_ACCESS_MUTATIONS,
+  JIRA_AVATAR_MUTATIONS,
+  JIRA_IDENTITY_MUTATIONS,
+  JIRA_PRIVATE_ACCOUNT_MUTATIONS,
+  JIRA_ISSUE_LIFECYCLE_MUTATIONS,
+  JIRA_PROJECT_LIFECYCLE_MUTATIONS,
   sanitizeJiraMutationFailureDetail,
   type JiraFieldValidationFailure,
   type JiraMutationOperation,
@@ -52,6 +58,7 @@ import { draftRefusalData, readableChatDraft } from "./jiraChatDraftArguments.js
 import { resolveCurrentJiraChatAuthority } from "./jiraChatAuthority.js";
 import { requireDispatch } from "../tool-catalog/catalogToolErrors.js";
 import { jiraChatEmailTemplateComposition } from "./jiraEmailTemplateComposition.js";
+import { jiraChatAvatarComposition } from "./jiraAvatarComposition.js";
 import type { JiraChatAttachmentDeps } from "./jiraChatAttachment.js";
 import {
   jiraIssueTemplateSource,
@@ -61,6 +68,14 @@ import {
 
 /** Field and metadata writes share read-only validation; templates apply only to issue fields. */
 const FIELD_OPERATIONS = [
+  "jira.unlock-user-anonymization",
+  ...JIRA_AVATAR_MUTATIONS,
+  ...JIRA_IDENTITY_MUTATIONS,
+  ...JIRA_PRIVATE_ACCOUNT_MUTATIONS,
+  ...JIRA_ISSUE_LIFECYCLE_MUTATIONS,
+  ...JIRA_PROJECT_LIFECYCLE_MUTATIONS,
+  "jira.create-issues",
+  "jira.create-reciprocal-remote-link",
   ...JIRA_GROUP_MUTATIONS,
   ...JIRA_ISSUE_ACTION_MUTATIONS,
   ...JIRA_MAINTENANCE_MUTATIONS,
@@ -160,13 +175,11 @@ function dryRunTarget(
   current: Credential,
 ): DryRunTarget {
   const allowed = (): boolean => !context.signal.aborted && ports.readAllowed(action);
+  const invocation = { invocationId: action.actionId, correlationId: context.correlationId,
+    signal: context.signal, beforeEffect: allowed };
+  const privatePorts = jiraChatPrivatePorts(ports.deps, context, current.credential, invocation);
   return {
-    invocation: {
-      invocationId: action.actionId,
-      correlationId: context.correlationId,
-      signal: context.signal,
-      beforeEffect: allowed,
-    },
+    invocation,
     connection: {
       baseUrl: current.credential.baseUrl,
       deployment: current.credential.deployment,
@@ -178,6 +191,13 @@ function dryRunTarget(
         signal: context.signal,
         review: () => ({ required: true, reviewed: undefined }),
       }),
+      privateIdentity: privatePorts?.identity,
+      avatars: { ...jiraChatAvatarComposition(ports.deps, {
+        chatId: context.chatId,
+        correlationId: context.correlationId,
+        signal: context.signal,
+        review: () => ({ required: true, reviewed: undefined }),
+      }), ...(privatePorts === undefined ? {} : { withSession: privatePorts.withAvatarSession }) },
     },
   };
 }

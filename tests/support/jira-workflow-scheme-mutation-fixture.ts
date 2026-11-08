@@ -18,7 +18,7 @@ export const WORKFLOW_SCHEME_MUTATION_FIXTURE_CASES = [
     path: "workflowscheme", method: "POST", body: { name: "New", description: "", defaultWorkflow: "Default", issueTypeMappings: {} },
     receipt: { ...BASE_RECEIPT, schemeId: "9223372036854775807" }, confirmed: true, draft: false },
   { name: "jira.update-workflow-scheme", args: { ...REVIEW, name: "Renamed" }, path: "workflowscheme/37", method: "PUT", body: { name: "Renamed", updateDraftIfNeeded: false },
-    receipt: BASE_RECEIPT, confirmed: true, draft: false },
+    receipt: { ...BASE_RECEIPT, workflowMappingChanged: false }, confirmed: true, draft: false },
   { name: "jira.delete-workflow-scheme", args: { ...REVIEW, confirmUnverifiedDeletion: true }, path: "workflowscheme/37", method: "DELETE", body: undefined,
     receipt: { ...BASE_RECEIPT, schemePresent: false }, confirmed: false, draft: false },
   { name: "jira.create-workflow-scheme-draft", args: REVIEW, path: "workflowscheme/37/createdraft", method: "POST", body: undefined,

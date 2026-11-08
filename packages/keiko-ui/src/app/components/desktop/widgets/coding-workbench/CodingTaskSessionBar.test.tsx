@@ -1,7 +1,11 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { axe } from "jest-axe";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { CodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts";
+import type { JiraHumanInputView } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
@@ -12,7 +16,20 @@ import {
 } from "./CodingTaskSessionBar";
 import { CodingWorkbenchProgress } from "./CodingWorkbenchProgress";
 import type { ShownRun } from "./codingWorkbenchRestoredRun";
-import type { CodingTaskSession } from "./useCodingTaskSession";
+import { useCodingTaskSession, type CodingTaskSession } from "./useCodingTaskSession";
+import * as historyApi from "@/lib/coding-history-api";
+import * as inputApi from "@/lib/jira-human-input-api";
+
+vi.mock("@/lib/coding-history-api", () => ({
+  CODING_HISTORY_CHANGED: "keiko:coding-history-changed",
+  fetchCodingTask: vi.fn(),
+  updateCodingTask: vi.fn(),
+}));
+vi.mock("@/lib/jira-human-input-api", () => ({
+  getJiraHumanInput: vi.fn(),
+  submitJiraHumanInput: vi.fn(),
+  cancelJiraHumanInput: vi.fn(),
+}));
 
 function session(): CodingTaskSession {
   return {
@@ -69,6 +86,141 @@ function sessionWith(messages: readonly HistoryMessage[], truncated = false): Co
     },
   };
 }
+
+function liveTaskSnapshot(revision: number): CodingWorkbenchRuntimeSnapshot {
+  return {
+    schemaVersion: "1",
+    state: "running",
+    revision,
+    updatedAt: "2026-11-08T10:00:00.000Z",
+    runId: "run-7",
+    conversationId: "task-7",
+  };
+}
+
+function LiveTaskTranscript({
+  snapshot,
+}: {
+  readonly snapshot: CodingWorkbenchRuntimeSnapshot;
+}): ReactNode {
+  const current = useCodingTaskSession({
+    snapshot,
+    active: true,
+    workspace: null,
+    root: "/repo",
+    selection: undefined,
+  });
+  return (
+    <CodingTaskTranscript
+      session={current}
+      shownRun={{ runId: "run-7", overflowMessageIds: new Set() }}
+    />
+  );
+}
+
+function inputMessage(
+  view: JiraHumanInputView,
+  turnState: HistoryMessage["turnState"],
+): HistoryMessage {
+  return {
+    ...historyMessage("native-input", "run-7", "Request already shown in the live feed"),
+    turnState,
+    toolTranscript: {
+      schemaVersion: 1,
+      exchanges: [{
+        call: {
+          id: "mcp-private-input",
+          name: "jira_login",
+          arguments: { expectedActorKey: "synthetic-actor" },
+        },
+        humanInput: view,
+      }],
+    },
+  };
+}
+
+describe.each(["en", "de"] as const)("pending native Coding input in %s", (locale) => {
+  const password = locale === "de" ? "Passwort" : "Password";
+  const submit = locale === "de" ? "Geschützt übermitteln" : "Provide securely";
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+    localStorage.setItem(I18N_STORAGE_KEY, locale);
+  });
+  afterEach(() => localStorage.removeItem(I18N_STORAGE_KEY));
+
+  it("loads a same-run revision and renders the real protected form, including after remount", async () => {
+    const view: JiraHumanInputView = {
+      requestId: `jhi_${"b".repeat(64)}`,
+      revision: "12345678-1234-4123-8123-123456789abc",
+      purpose: "login",
+      state: "awaiting-input",
+      expiresAt: Date.now() + 60_000,
+      fields: ["password"],
+      optionalFields: [],
+    };
+    const empty = sessionWith([]).detail;
+    const pending = sessionWith([inputMessage(view, "pending")]).detail;
+    if (empty === null || pending === null) throw new TypeError("Missing task fixture");
+    vi.mocked(historyApi.fetchCodingTask).mockResolvedValueOnce(empty).mockResolvedValue(pending);
+    vi.mocked(inputApi.getJiraHumanInput).mockResolvedValue(view);
+    vi.mocked(inputApi.submitJiraHumanInput).mockResolvedValue({ ...view, state: "ready" });
+    const first = render(
+      <I18nProvider><LiveTaskTranscript snapshot={liveTaskSnapshot(1)} /></I18nProvider>,
+    );
+    await waitFor(() => expect(historyApi.fetchCodingTask).toHaveBeenCalledTimes(1));
+    expect(screen.queryByLabelText(password)).toBeNull();
+    first.rerender(<I18nProvider><LiveTaskTranscript snapshot={liveTaskSnapshot(2)} /></I18nProvider>);
+    await waitFor(() => expect(screen.getByLabelText(password)).toBeEnabled());
+    expect(historyApi.fetchCodingTask).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText("Request already shown in the live feed")).toBeNull();
+    first.rerender(<I18nProvider><LiveTaskTranscript snapshot={liveTaskSnapshot(2)} /></I18nProvider>);
+    expect(historyApi.fetchCodingTask).toHaveBeenCalledTimes(2);
+    expect(await axe(first.container)).toHaveNoViolations();
+    first.unmount();
+    const restored = render(
+      <I18nProvider><LiveTaskTranscript snapshot={liveTaskSnapshot(2)} /></I18nProvider>,
+    );
+    await waitFor(() => expect(screen.getByLabelText(password)).toBeEnabled());
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(password), "synthetic-human-entry");
+    await user.click(screen.getByRole("button", { name: submit }));
+    await waitFor(() => expect(screen.queryByLabelText(password)).toBeNull());
+    expect(inputApi.submitJiraHumanInput).toHaveBeenCalledExactlyOnceWith(view.requestId, {
+      expectedRevision: view.revision,
+      values: { password: "synthetic-human-entry" },
+    });
+    expect(restored.container.textContent).not.toContain("synthetic-human-entry");
+    expect(JSON.stringify(localStorage)).not.toContain("synthetic-human-entry");
+  });
+
+  it.each([undefined, "completed", "failed", "cancelled"] as const)(
+    "does not infer pending input from a saved view with turnState %s", async (turnState) => {
+      const view: JiraHumanInputView = {
+        requestId: `jhi_${"c".repeat(64)}`,
+        revision: "12345678-1234-4123-8123-123456789abc",
+        purpose: "login",
+        state: "awaiting-input",
+        expiresAt: Date.now() + 60_000,
+        fields: ["password"],
+        optionalFields: [],
+      };
+      vi.mocked(inputApi.getJiraHumanInput).mockResolvedValue(view);
+      render(
+        <I18nProvider>
+          <CodingTaskTranscript
+            session={sessionWith([inputMessage(view, turnState)])}
+            shownRun={undefined}
+          />
+        </I18nProvider>,
+      );
+      await waitFor(() => expect(inputApi.getJiraHumanInput).toHaveBeenCalled());
+      expect(screen.queryByLabelText(password)).toBeNull();
+      expect(screen.queryByRole("button", { name: submit })).toBeNull();
+      expect(inputApi.submitJiraHumanInput).not.toHaveBeenCalled();
+    },
+  );
+});
 
 // #3876 review: the transcript hid every message of the shown run, so a message the timeline's feed
 // could not carry was shown in neither place. It now hides only what the timeline carries.

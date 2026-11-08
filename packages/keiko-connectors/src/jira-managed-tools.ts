@@ -1,3 +1,5 @@
+import { isJiraProjectLifecycleMutation } from "./jira-project-lifecycle-values.js";
+import { isJiraPrivateAccountRead, executeJiraPrivateAccountRead } from "./jira-managed-private-account.js";
 import { executeJiraSearchPostRead, isJiraSearchPostRead } from "./jira-managed-search-post.js";
 import { executeJiraWorklogsByIdRead, isJiraWorklogsByIdRead } from "./jira-managed-worklogs-by-id.js";
 import { executeJiraAnonymizationRead, isJiraAnonymizationRead } from "./jira-managed-anonymization-reads.js";
@@ -136,7 +138,8 @@ export type JiraManagedMutationExecutor<Context extends ManagedMcpInvocationCont
   operation: JiraMutationOperation,
   args: CatalogJsonObject,
   context: Context,
-  execute: (http: AtlassianHttpBodyPort, trace?: JiraTraceRequest) => Promise<JiraMutationAttempt>,
+  execute: (http: AtlassianHttpBodyPort, trace?: JiraTraceRequest,
+    privatePorts?: Pick<JiraManagedConnection, "privateIdentity" | "avatars">) => Promise<JiraMutationAttempt>,
 ) => Promise<ManagedMcpToolResult>;
 
 interface Project extends CatalogJsonObject {
@@ -365,6 +368,7 @@ async function read<Context extends ManagedMcpInvocationContext>(
 }
 
 type NativeDetailRead =
+  | Parameters<typeof executeJiraPrivateAccountRead>[0]
   | "jira.email-template-pack"
   | "jira.search-post"
   | "jira.worklogs-by-id"
@@ -408,7 +412,7 @@ type NativeDetailRead =
 function isNativeDetailRead(name: string): name is NativeDetailRead {
   if (name === "jira.email-template-pack") return true;
   return [
-    isJiraSearchPostRead, isJiraWorklogsByIdRead, isJiraAnonymizationRead, isJiraSessionRead,
+    isJiraPrivateAccountRead, isJiraSearchPostRead, isJiraWorklogsByIdRead, isJiraAnonymizationRead, isJiraSessionRead,
     isJiraRemoteVersionLinkRead,
     isJiraWorklogFeedRead,
     isJiraAdministrativeObservationRead,
@@ -530,6 +534,7 @@ function selectedObservationRead(
     const ports = jiraManagedEmailTemplatePorts(connection, context, request, true);
     return ports === undefined ? Promise.resolve(failure("unavailable")) : executeJiraEmailTemplateRead(args, ports);
   }
+  if (isJiraPrivateAccountRead(name)) return executeJiraPrivateAccountRead(name, args, request, connection.privateIdentity);
   if (isJiraSearchPostRead(name)) return executeJiraSearchPostRead(args, request, connection.baseUrl);
   if (isJiraWorklogsByIdRead(name)) return executeJiraWorklogsByIdRead(args, request);
   if (isJiraAnonymizationRead(name)) return executeJiraAnonymizationRead(name, args, request);
@@ -684,10 +689,13 @@ function managedTool<Context extends ManagedMcpInvocationContext>(
         operation,
         structuredClone(snapshot),
         context,
-        (http, trace) =>
-          executeJiraManagedMutation(operation, snapshot, context, { ...selected, http }, trace),
+        (http, trace, privatePorts) => executeJiraManagedMutation(operation, snapshot, context, {
+          ...selected, http, ...privatePorts,
+          avatars: { ...selected.avatars, ...privatePorts?.avatars },
+        }, trace),
       );
-      if (isJiraProjectMutation(operation)) return withProjectLink(result, selected.baseUrl);
+      if (isJiraProjectMutation(operation) || isJiraProjectLifecycleMutation(operation))
+        return withProjectLink(result, selected.baseUrl);
       return withIssueLink(
         result,
         selected.baseUrl,

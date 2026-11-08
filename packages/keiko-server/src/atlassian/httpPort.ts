@@ -22,6 +22,10 @@ import {
   ATLASSIAN_HTTP_UPLOAD_MAX_BYTES,
   ATLASSIAN_WRITE_RESPONSE_MAX_BYTES,
   AtlassianCredentialCustodyError,
+  JiraHumanInputCustodyError,
+  JiraPrivateSessionError,
+  jiraPrivateCookie,
+  type JiraPrivateCookie,
   type AtlassianCredentialExecutionResolver,
   type AtlassianHttpBodyPort,
   type AtlassianHttpBodyRequest,
@@ -30,12 +34,17 @@ import {
   type AtlassianHttpRequest,
   type AtlassianHttpResult,
 } from "@oscharko-dev/keiko-connectors";
+import { createSecretSpellingStreamRedactor, SecretSpellingOverflowError } from "@oscharko-dev/keiko-security";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { applicationRoleResponseVersion, assertDirectoryAccessTarget } from "./httpDirectoryAccess.js";
+import { assertIdentityExperimentalTarget } from "./httpIdentityExperimental.js";
+import { assertHumanInputTarget, claimHttpHumanInput, humanInputPurpose, ownedHumanInput, privateHumanBody, privateHumanResponse } from "./httpHumanInput.js";
+import { assertPrivateSessionRequest } from "./httpAvatarSession.js";
 import {
   isSafeAtlassianConnectorBaseUrl,
   canonicalAtlassianConnectorBaseUrl,
   JIRA_ATTACHMENT_MAX_BYTES,
+  type JiraHumanInputView,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   outboundTargetBlockedReason,
@@ -48,6 +57,7 @@ import { processServerLogSink } from "../process-log-sink.js";
 import {
   atlassianHttpRequestLifecycle,
   type AtlassianHttpLifecycleOptions,
+  type JiraPrivateAuthentication,
 } from "./httpRequestLifecycle.js";
 import { isAtlassianTargetAdmission, type AtlassianTargetAdmission } from "./targetAdmission.js";
 import { recordTargetAdmission } from "./targetAdmissionActivity.js";
@@ -84,6 +94,10 @@ export function exceedsBodyByteCeiling(bytes: number, ceilingBytes: number): boo
 }
 
 export interface CreateAtlassianHttpPortOptions extends AtlassianHttpLifecycleOptions {
+  readonly privateAuthentication?: JiraPrivateAuthentication;
+  readonly onHumanInputConsumed?: (view: JiraHumanInputView) => void;
+  /** Only the fixed login composition receives a bounded private candidate; never a result field. */
+  readonly onJiraLoginCookie?: (cookie: JiraPrivateCookie) => void;
   /** Server-owned one-shot identity observation; never a model or HTTP request option. */
   readonly singleAttempt?: true;
   /** Derived from current saved Data Center metadata; never a request-body authority flag. */
@@ -430,7 +444,8 @@ function assertValidUpload(request: AtlassianHttpBodyRequest): void {
     request.bodyJson !== undefined ||
     !(upload.bytes instanceof Uint8Array) || !(upload.bytes.buffer instanceof ArrayBuffer) ||
     !(request.jiraEmailTemplateArchive === true
-      ? upload.contentType === "application/zip" : MULTIPART_CONTENT_TYPE.test(upload.contentType)) ||
+      ? upload.contentType === "application/zip" : request.jiraAvatarImage === true
+        ? upload.contentType === "image/png" || upload.contentType === "image/jpeg" : MULTIPART_CONTENT_TYPE.test(upload.contentType)) ||
     exceedsBodyByteCeiling(upload.bytes.byteLength, ATLASSIAN_HTTP_UPLOAD_MAX_BYTES)
   ) {
     throw new AtlassianCredentialCustodyError("invalid-input", [
@@ -449,9 +464,10 @@ function assertEmailTemplateTarget(base: URL, target: URL, request: AtlassianHtt
 }
 
 function ownedBodyRequest(request: Readonly<AtlassianHttpBodyRequest>): Readonly<AtlassianHttpBodyRequest> {
+  if (request.jiraHumanInput !== undefined) return Object.freeze({ ...request, jiraHumanInput: ownedHumanInput(request.jiraHumanInput) });
   if (typeof request.jiraApplicationRole === "object" && request.jiraApplicationRole !== null)
     return Object.freeze({ ...request, jiraApplicationRole: Object.freeze({ ...request.jiraApplicationRole }) });
-  if (request.jiraEmailTemplateArchive !== true || request.upload === undefined) return request;
+  if ((request.jiraEmailTemplateArchive !== true && request.jiraAvatarImage !== true) || request.upload === undefined) return request;
   // Admission/egress can await: retain our own bytes before either callback can run.
   return Object.freeze({ ...request, upload: Object.freeze({
     contentType: request.upload.contentType, bytes: new Uint8Array(request.upload.bytes),
@@ -473,11 +489,48 @@ function assertValidRequestBody(request: AtlassianHttpBodyRequest): void {
   }
 }
 
-function requestBody(request: AtlassianHttpBodyRequest): {
+function requestBody(request: AtlassianHttpBodyRequest, options: CreateAtlassianHttpPortOptions): {
   readonly body?: string | Uint8Array<ArrayBuffer>;
+  readonly prepareBody?: () => string;
 } {
+  const input = request.jiraHumanInput;
+  if (input?.selection.binding.operation === "jira.unlock-user-anonymization") return {};
+  if (input !== undefined) return { prepareBody: () => {
+    const values = claimHttpHumanInput(options.credentials, input, options.onHumanInputConsumed);
+    const body = privateHumanBody(input, values);
+    if (Buffer.byteLength(body, "utf8") > ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES) throw new AtlassianCredentialCustodyError("invalid-input");
+    return body;
+  } };
   if (request.upload !== undefined) return { body: request.upload.bytes };
   return request.bodyJson === undefined ? {} : { body: request.bodyJson };
+}
+
+function observePrivateCookie(authentication: JiraPrivateAuthentication | undefined): {
+  readonly authentication: JiraPrivateAuthentication | undefined;
+  readonly value: () => string | undefined;
+} {
+  let value: string | undefined;
+  if (authentication?.kind !== "session") return { authentication, value: () => undefined };
+  return { value: () => value, authentication: { ...authentication, cookie: () => {
+    const header = authentication.cookie(); const separator = header.indexOf("=");
+    const cookie = jiraPrivateCookie({ name: header.slice(0, separator), value: header.slice(separator + 1) });
+    if (separator < 1 || cookie === undefined) throw new AtlassianCredentialCustodyError("invalid-input", ["Invalid private Jira session material"]);
+    value = cookie.value; return `${cookie.name}=${cookie.value}`;
+  } } };
+}
+function privateCookieBody(body: BoundedBodyRead, status: number, value: string | undefined): BoundedBodyRead {
+  if (status < 200 || status >= 300) return { ...body, bodyText: "" };
+  if (value === undefined) return { ...body, bodyText: "", truncated: true };
+  // Reuse the existing exact-secret spelling owner, including escaped JSON spellings. No second
+  // JSON evaluation and no remote diagnostics can disclose this ephemeral cookie to a projector.
+  const floor = createSecretSpellingStreamRedactor([value]);
+  try {
+    floor.push(body.bodyText); floor.finish();
+    return floor.redactedCount() === 0 ? body : { ...body, bodyText: "", truncated: true };
+  } catch (error) {
+    if (error instanceof SecretSpellingOverflowError) return { ...body, bodyText: "", truncated: true };
+    throw error;
+  }
 }
 
 export function createGatewayAtlassianHttpBodyPort(
@@ -489,11 +542,20 @@ export function createGatewayAtlassianHttpBodyPort(
     const target = assertAllowlistedTarget(base, snapshot.url);
     assertEmailTemplateTarget(base, target, snapshot);
     assertDirectoryAccessTarget(base, target, snapshot);
+    assertIdentityExperimentalTarget(base, target, snapshot);
+    assertHumanInputTarget(base, snapshot, options.authRef);
+    assertPrivateSessionRequest(base, snapshot, options.privateAuthentication);
+    if (options.privateAuthentication?.kind === "anonymous" && humanInputPurpose(snapshot) !== "login")
+      throw new AtlassianCredentialCustodyError("invalid-input", ["Anonymous Jira transport is reserved for private login"]);
+    if (humanInputPurpose(snapshot) === "login" && options.privateAuthentication?.kind !== "anonymous")
+      throw new AtlassianCredentialCustodyError("invalid-input", ["Jira login requires private anonymous transport"]);
     assertValidRequestBody(snapshot);
     const request = ownedBodyRequest(snapshot);
     const signal = composeBodyRequestSignal(request);
+    const privateCookie = observePrivateCookie(options.privateAuthentication);
     const lifecycle = atlassianHttpRequestLifecycle(
-      { ...options, correlationId: options.correlationId ?? UNKNOWN_CORRELATION_ID },
+      { ...options, ...(privateCookie.authentication === undefined ? {} : { privateAuthentication: privateCookie.authentication }),
+        correlationId: options.correlationId ?? UNKNOWN_CORRELATION_ID },
       request,
     );
     try {
@@ -503,7 +565,7 @@ export function createGatewayAtlassianHttpBodyPort(
         method: request.method,
         prepareHeaders: lifecycle.prepareHeaders,
         singleAttempt: options.singleAttempt === true || request.method !== "GET",
-        ...requestBody(request),
+        ...requestBody(request, options),
         signal,
         egress,
         log: processServerLogSink(),
@@ -513,12 +575,16 @@ export function createGatewayAtlassianHttpBodyPort(
       const response = await authenticatedReadResponse(request.method, upstream);
       await lifecycle.observe(response);
       const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"), Date.now());
-      const body = await readResponseBody(response, request);
+      const observedBody = await readResponseBody(response, request);
+      const body = options.privateAuthentication?.kind === "session"
+        ? privateCookieBody(observedBody, response.status, privateCookie.value()) : observedBody;
+      const purpose = humanInputPurpose(request);
+      const bodyText = purpose === undefined ? body.bodyText : privateHumanResponse(purpose, response.status, body.bodyText, body.truncated, options.onJiraLoginCookie);
       const applicationRoleVersion = applicationRoleResponseVersion(request, response);
       return {
         kind: "response",
         status: response.status,
-        bodyText: body.bodyText,
+        bodyText,
         ...(body.archiveBytes === undefined ? {} : { archiveBytes: body.archiveBytes }),
         ...(applicationRoleVersion === undefined ? {} : { applicationRoleVersion }),
         bodyBytes: body.bodyBytes,
@@ -527,7 +593,7 @@ export function createGatewayAtlassianHttpBodyPort(
       };
     } catch (error) {
       lifecycle.rethrowFailure();
-      if (error instanceof AtlassianCredentialCustodyError) throw error;
+      if (error instanceof AtlassianCredentialCustodyError || error instanceof JiraHumanInputCustodyError || error instanceof JiraPrivateSessionError) throw error;
       return classifyTransportError(error);
     }
   };

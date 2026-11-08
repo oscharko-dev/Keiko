@@ -1,3 +1,4 @@
+import { createJiraChatHumanInput } from "./jiraChatHumanInput.js";
 import { reserveChatToolPrompt } from "../chat-tool-approvals.js";
 import { JIRA_TOOL_GUIDANCE } from "./jiraToolGuidance.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
@@ -6,6 +7,7 @@ import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ChatMessage } from "../store/index.js";
 import {
   JIRA_MUTATION_OPERATIONS,
+  isJiraAvatarUploadOperation,
   type JiraAttachmentPreview,
   type JiraMutationOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -15,6 +17,7 @@ import {
   jiraChatAttachmentLimit,
   previewJiraChatAttachment,
   previewJiraEmailTemplatePack,
+  previewJiraAvatarImage,
   type JiraChatAttachmentDeps,
 } from "./jiraChatAttachment.js";
 import type { UiHandlerDeps } from "../deps.js";
@@ -176,6 +179,12 @@ async function reviewedAttachment(
   const { deps, message, correlationId, authority, signal } = options;
   const args = proposedWriteArguments(access, action);
   if (action.tool === "jira.upload-email-template-pack") return reviewedEmailTemplate(options, access, action, args);
+  if (isJiraAvatarUploadOperation(action.tool)) {
+    if (args === undefined || !access.reviewableWrite(action) || !access.readAllowed(action)) return undefined;
+    const path = emailTemplatePath(args); if (path === undefined) return undefined;
+    const preview = await previewJiraAvatarImage(deps, message.chatId, path, correlationId, signal);
+    return access.readAllowed(action) ? preview : undefined;
+  }
   const parsed =
     args !== undefined && access.reviewableWrite(action)
       ? parseJiraAttachmentArguments(args)
@@ -262,11 +271,14 @@ export function jiraSourcePreparationForTurn(
 
 export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
   private readonly sourcePreparation: JiraChatSourcePreparation;
+  private readonly humanInput: ReturnType<typeof createJiraChatHumanInput>;
   public constructor(private readonly jiraOptions: JiraChatTurnOptions) {
     const { authority, deps, managed, correlationId, message } = jiraOptions;
-    const context = jiraTurnContext(jiraOptions);
+    const baseContext = jiraTurnContext(jiraOptions);
+    const humanInput = createJiraChatHumanInput(jiraOptions, baseContext);
+    const context = { ...baseContext, humanInputFor: humanInput.selectionFor, activeHumanInput: humanInput.currentSelection };
     const sourcePreparation = jiraSourcePreparationForTurn(jiraOptions, context);
-    const consumerPort = createJiraChatCatalogConsumerPort(sourcePreparation.sourceDigestFor);
+    const consumerPort = createJiraChatCatalogConsumerPort(sourcePreparation.sourceDigestFor, humanInput.revisionFor);
     const bind =
       (
         selected: ManagedProviderCatalog<JiraChatCatalogConsumer>,
@@ -301,7 +313,11 @@ export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
       budget: authority.envelope.budget,
       guidance: JIRA_TOOL_GUIDANCE,
       bind: bind(managed),
-      prepareInvocation: sourcePreparation.prepareInvocation,
+      prepareInvocation: async (call, actionId, ports) => {
+        const source = await sourcePreparation.prepareInvocation(call, actionId);
+        await humanInput.prepare(call, actionId, ports);
+        return source;
+      },
       selectTools: async (identities) => {
         requireDispatch(deps.jiraChatCatalog !== undefined, "failed", "handler-unavailable");
         const selected = await deps.jiraChatCatalog.select(identities);
@@ -309,6 +325,7 @@ export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
       },
     });
     this.sourcePreparation = sourcePreparation;
+    this.humanInput = humanInput;
   }
   protected override reserveAuthorityPrompt(promptTokens: number): boolean {
     return reserveChatToolPrompt(this.jiraOptions, reserveCurrentJiraChatAuthority, promptTokens);
@@ -325,6 +342,7 @@ export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
       identity,
       result,
       this.sourcePreparation.sourceDigestFor(identity, sha256Hex(canonicalise(call.arguments))),
+      this.humanInput.revisionFor(identity, sha256Hex(canonicalise(call.arguments))),
     );
   }
 }
@@ -354,6 +372,7 @@ export function observeJiraChatMutation(
   identity: string,
   result: ToolResultEnvelope,
   sourceDigest?: string,
+  humanInputRevision?: string,
 ): JiraMutationOutcome | undefined {
   const operation = JIRA_MUTATION_OPERATIONS.find(
     (value) => result.toolRef?.canonicalId === jiraMutationToolId(value),
@@ -372,6 +391,7 @@ export function observeJiraChatMutation(
       idempotencyKey: identity,
       argumentsDigest: sha256Hex(canonicalise(call.arguments)),
       ...(sourceDigest === undefined ? {} : { sourceDigest }),
+      ...(humanInputRevision === undefined ? {} : { humanInputRevision }),
       operationBinding: contract.binding,
     },
     correlationId,

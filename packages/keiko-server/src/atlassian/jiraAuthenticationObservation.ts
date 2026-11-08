@@ -1,3 +1,4 @@
+import { decodeCanonicalUriSegment } from "./canonicalUriSegment.js";
 import { maintenancePathNode } from "@oscharko-dev/keiko-connectors";
 import type {
   AtlassianCredentialMetadata,
@@ -98,15 +99,15 @@ const AMBIGUOUS_NATIVE_WRITES: readonly (readonly [Request["method"], readonly s
   ["POST", ["screens", "$id", "tabs", "$id", "move", "$position"]],
 ];
 function nativeTextSegment(value: string): boolean {
-  try {
-    const decoded = decodeURIComponent(value);
-    return decoded.trim().length > 0 && decoded.length <= 255 && decoded === decoded.trim() && decoded !== "." && decoded !== ".." &&
-      !/[\\/%?#\p{Cc}\p{Surrogate}]/u.test(decoded);
-  } catch { return false; }
+  const decoded = decodeCanonicalUriSegment(value);
+  return decoded !== undefined && decoded.trim().length > 0 && decoded.length <= 255 && decoded === decoded.trim() && decoded !== "." && decoded !== ".." &&
+    !/[\\/%?#\p{Cc}\p{Surrogate}]/u.test(decoded);
 }
 function nativeNodeSegment(value: string): boolean {
-  try { return maintenancePathNode(decodeURIComponent(value)); } catch { return false; }
+  const decoded = decodeCanonicalUriSegment(value);
+  return decoded !== undefined && maintenancePathNode(decoded);
 }
+
 function nativeWriteSegment(expected: string, actual: string): boolean {
   switch (expected) {
     case "$node": return nativeNodeSegment(actual);

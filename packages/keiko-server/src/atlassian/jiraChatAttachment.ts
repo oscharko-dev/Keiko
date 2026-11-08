@@ -13,6 +13,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import {
   JIRA_ATTACHMENT_MAX_BYTES,
+  isJiraAvatarUploadOperation,
   isJiraAttachmentName,
   type AtlassianConnectorWriteFailureReason,
   type JiraAttachmentPreview,
@@ -28,7 +29,7 @@ import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-
 import { FilesError, readConnectedFileBytes } from "../files.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { currentRedactionSecrets } from "../redaction-secrets.js";
-import { admitAttachmentContent } from "./jiraAttachmentContentPolicy.js";
+import { admitAttachmentContent, admitJiraAvatarImage } from "./jiraAttachmentContentPolicy.js";
 import { inspectJiraEmailTemplateArchive } from "./jiraEmailTemplateArchive.js";
 import {
   resolveCurrentJiraChatAuthority,
@@ -228,9 +229,19 @@ const EMAIL_TEMPLATE_GUIDANCE: Partial<Readonly<Record<Refusal, string>>> = {
   "too-large": "The email-template ZIP exceeds the existing 20 MiB file limit. Supply a smaller complete pack; entries are never silently omitted.",
   unscannable: "The email-template ZIP must contain a complete bounded set of regular, unambiguous portable entries whose contents pass the existing credential scan. Encrypted, aliased, linked, malformed or unscannable entries are refused.",
 };
+const AVATAR_GUIDANCE: Partial<Readonly<Record<Refusal, string>>> = {
+  unreviewed: "No server-owned integrity snapshot covers this avatar image. Read the connected PNG/JPEG through the current task authority; keep the existing review only when the selected mode requires it.",
+  "changed-after-review": "The avatar image changed after its exact-byte snapshot. Refresh the connected-file snapshot and any required review before uploading.",
+  "too-large": "The avatar image exceeds the existing 20 MiB connected-file limit. Supply a smaller PNG or JPEG.",
+  unscannable: "The avatar image must be a complete PNG or JPEG whose structure and text carriers pass the existing credential floor. Other formats, malformed images and trailing content are refused.",
+};
+function purposeGuidance(refusal: Refusal, purpose: JiraAttachmentSourceRequest["purpose"], fallback: string): string {
+  if (purpose === "jira-email-template-pack") return EMAIL_TEMPLATE_GUIDANCE[refusal] ?? fallback;
+  return purpose === "jira-avatar-image" ? AVATAR_GUIDANCE[refusal] ?? fallback : fallback;
+}
 function refused(refusal: Refusal, purpose?: JiraAttachmentSourceRequest["purpose"]): Extract<JiraAttachmentSourceResult, { ok: false }> {
   const { reason, validation, message } = PROJECTION[refusal];
-  const guidance = purpose === "jira-email-template-pack" ? EMAIL_TEMPLATE_GUIDANCE[refusal] ?? message : message;
+  const guidance = purposeGuidance(refusal, purpose, message);
   return { ok: false, reason, detail: { fieldId: "source", validation, messages: [guidance] } };
 }
 
@@ -364,7 +375,8 @@ async function contentRefusal(deps: JiraChatAttachmentDeps, bytes: Uint8Array, n
     if (inspected.ok) return undefined;
     return inspected.contentRefusal ?? (inspected.reason === "bounds-exceeded" ? "too-large" : "unscannable");
   }
-  const verdict = await admitAttachmentContent({ bytes, name, secrets, ...(signal === undefined ? {} : { signal }) });
+  const input = { bytes, name, secrets, ...(signal === undefined ? {} : { signal }) };
+  const verdict = purpose === "jira-avatar-image" ? await admitJiraAvatarImage(input) : await admitAttachmentContent(input);
   return verdict.ok ? undefined : verdict.refusal;
 }
 function previewOf(content: ContentWithPreview): JiraAttachmentPreview {
@@ -465,7 +477,13 @@ export async function previewJiraChatAttachment(
 /** Server-minted file integrity snapshot through the same connected scope and content floor.
  * This is not an authority grant: the caller retains the existing mode/approval decision. */
 export async function previewJiraEmailTemplatePack(deps: JiraChatAttachmentDeps, chatId: string, path: string, correlationId: string, signal?: AbortSignal): Promise<JiraAttachmentPreview | undefined> {
-  const read = await readContent(deps, chatId, { path, maxBytes: JIRA_ATTACHMENT_MAX_BYTES, purpose: "jira-email-template-pack" }, correlationId, signal);
+  return previewPurposeFile(deps, chatId, path, correlationId, "jira-email-template-pack", signal);
+}
+export async function previewJiraAvatarImage(deps: JiraChatAttachmentDeps, chatId: string, path: string, correlationId: string, signal?: AbortSignal): Promise<JiraAttachmentPreview | undefined> {
+  return previewPurposeFile(deps, chatId, path, correlationId, "jira-avatar-image", signal);
+}
+async function previewPurposeFile(deps: JiraChatAttachmentDeps, chatId: string, path: string, correlationId: string, purpose: NonNullable<JiraAttachmentSourceRequest["purpose"]>, signal?: AbortSignal): Promise<JiraAttachmentPreview | undefined> {
+  const read = await readContent(deps, chatId, { path, maxBytes: JIRA_ATTACHMENT_MAX_BYTES, purpose }, correlationId, signal);
   recordJiraAttachmentSource(correlationId, "review", read.ok ? undefined : read.refusal, read.ok ? read.content.bytes.length : 0);
   return read.ok ? Object.freeze(previewOf(read.content)) : undefined;
 }
@@ -476,8 +494,21 @@ export function jiraChatEmailTemplatePreviewSource(
   deps: JiraChatAttachmentDeps,
   options: { readonly chatId: string; readonly correlationId: string; readonly signal?: AbortSignal },
 ): JiraAttachmentSource {
+  return purposePreviewSource(deps, options, "jira-email-template-pack");
+}
+export function jiraChatAvatarPreviewSource(
+  deps: JiraChatAttachmentDeps,
+  options: { readonly chatId: string; readonly correlationId: string; readonly signal?: AbortSignal },
+): JiraAttachmentSource {
+  return purposePreviewSource(deps, options, "jira-avatar-image");
+}
+function purposePreviewSource(
+  deps: JiraChatAttachmentDeps,
+  options: { readonly chatId: string; readonly correlationId: string; readonly signal?: AbortSignal },
+  purpose: NonNullable<JiraAttachmentSourceRequest["purpose"]>,
+): JiraAttachmentSource {
   return async (request) => {
-    if (request.purpose !== "jira-email-template-pack") return refused("unscannable");
+    if (request.purpose !== purpose) return refused("unscannable");
     const read = await readContent(deps, options.chatId,
       { ...request, maxBytes: Math.min(request.maxBytes, JIRA_ATTACHMENT_MAX_BYTES) }, options.correlationId, options.signal);
     recordJiraAttachmentSource(options.correlationId, "review", read.ok ? undefined : read.refusal, read.ok ? read.content.bytes.length : 0);
@@ -502,15 +533,20 @@ export type JiraChatAttachmentReview =
 export function attachmentReviewFor(
   policy: string,
   approval: ChatToolWriteApprovalView | undefined,
+  expectedOperation?: string,
 ): JiraChatAttachmentReview {
   if (policy === "allowed") return { required: false };
   return {
     required: true,
     reviewed:
-      approval?.kind === "jira-chat-write" && (approval.operation === "jira.attach" || approval.operation === "jira.upload-email-template-pack")
+      approval?.kind === "jira-chat-write" && fileApprovalOperation(approval.operation) &&
+      (expectedOperation === undefined || approval.operation === expectedOperation)
         ? approval.attachment
         : undefined,
   };
+}
+function fileApprovalOperation(operation: string): boolean {
+  return operation === "jira.attach" || operation === "jira.upload-email-template-pack" || isJiraAvatarUploadOperation(operation);
 }
 
 function samePreview(left: JiraAttachmentPreview, right: JiraAttachmentPreview): boolean {
@@ -532,16 +568,18 @@ export function jiraChatAttachmentSource(
     readonly review: () => JiraChatAttachmentReview;
     /** Private server-minted byte snapshot for an already allowed email-template operation. */
     readonly emailTemplateSnapshot?: JiraAttachmentPreview;
+    /** Private actual-byte snapshot for already allowed avatar uploads, never a grant by itself. */
+    readonly avatarSnapshot?: JiraAttachmentPreview;
     readonly signal?: AbortSignal;
   },
 ): JiraAttachmentSource {
   const templateSnapshot = options.emailTemplateSnapshot === undefined ? undefined : Object.freeze({ ...options.emailTemplateSnapshot });
+  const avatarSnapshot = options.avatarSnapshot === undefined ? undefined : Object.freeze({ ...options.avatarSnapshot });
   return async (request): Promise<JiraAttachmentSourceResult> => {
     const read = await readContent(deps, options.chatId, request, options.correlationId, options.signal);
     const review = options.review();
     // A required integrity snapshot never upgrades policy or creates a fresh approval prompt.
-    const integrityReview: JiraChatAttachmentReview = request.purpose === "jira-email-template-pack"
-      ? { required: true, reviewed: review.required ? review.reviewed : templateSnapshot } : review;
+    const integrityReview = purposeIntegrityReview(request.purpose, review, templateSnapshot, avatarSnapshot);
     const refusal = read.ok ? reviewRefusal(integrityReview, read.content) : read.refusal;
     recordJiraAttachmentSource(
       options.correlationId,
@@ -553,6 +591,11 @@ export function jiraChatAttachmentSource(
       ? refused(refusal ?? "failed", request.purpose)
       : { ok: true, content: read.content };
   };
+}
+function purposeIntegrityReview(purpose: JiraAttachmentSourceRequest["purpose"], review: JiraChatAttachmentReview,
+  template: JiraAttachmentPreview | undefined, avatar: JiraAttachmentPreview | undefined): JiraChatAttachmentReview {
+  if (purpose === undefined) return review;
+  return { required: true, reviewed: review.required ? review.reviewed : purpose === "jira-email-template-pack" ? template : avatar };
 }
 function reviewRefusal(
   review: JiraChatAttachmentReview,

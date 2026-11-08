@@ -1,3 +1,11 @@
+import { jiraAnonymizationUnlockDeclarationForTool, type JIRA_ANONYMIZATION_UNLOCK_DEFINITIONS } from "./jiraAnonymizationUnlockDescriptors.js";
+import { jiraAvatarMutationDeclarationForTool, type JIRA_AVATAR_WRITE_DEFINITIONS } from "./jiraAvatarMutationDescriptors.js";
+import { jiraIdentityMutationDeclarationForTool, type JIRA_IDENTITY_WRITE_DEFINITIONS } from "./jiraIdentityMutationDescriptors.js";
+import { jiraIssueLifecycleMutationDeclarationForTool, type JIRA_ISSUE_LIFECYCLE_WRITE_DEFINITIONS } from "./jiraIssueLifecycleMutationDescriptors.js";
+import { jiraProjectLifecycleMutationDeclarationForTool, type JIRA_PROJECT_LIFECYCLE_WRITE_DEFINITIONS } from "./jiraProjectLifecycleMutationDescriptors.js";
+import { jiraPrivateAccountDeclarationForTool, type JIRA_PRIVATE_ACCOUNT_WRITE_DEFINITIONS } from "./jiraPrivateAccountDescriptors.js";
+import { jiraReciprocalLinkDeclarationForTool } from "./jiraReciprocalLinkDescriptors.js";
+import { jiraBulkCreateDeclarationForTool } from "./jiraBulkCreateDescriptors.js";
 import { jiraDirectoryAccessMutationDeclarationForTool, type JIRA_DIRECTORY_ACCESS_WRITE_DEFINITIONS } from "./jiraDirectoryAccessMutationDescriptors.js";
 import { jiraMaintenanceMutationDeclarationForTool, type JIRA_MAINTENANCE_WRITE_DEFINITIONS } from "./jiraMaintenanceMutationDescriptors.js";
 import { jiraSchemaMutationDeclarationForTool, type JIRA_SCHEMA_WRITE_DEFINITIONS } from "./jiraSchemaMutationDescriptors.js";
@@ -454,6 +462,14 @@ type CoreMutationToolName = Exclude<
   JiraMutationOperation,
   Extract<
     JiraMutationOperation,
+    | keyof typeof JIRA_ANONYMIZATION_UNLOCK_DEFINITIONS
+    | keyof typeof JIRA_AVATAR_WRITE_DEFINITIONS
+    | keyof typeof JIRA_IDENTITY_WRITE_DEFINITIONS
+    | keyof typeof JIRA_ISSUE_LIFECYCLE_WRITE_DEFINITIONS
+    | keyof typeof JIRA_PROJECT_LIFECYCLE_WRITE_DEFINITIONS
+    | keyof typeof JIRA_PRIVATE_ACCOUNT_WRITE_DEFINITIONS
+    | "jira.create-issues"
+    | "jira.create-reciprocal-remote-link"
     | keyof typeof JIRA_DIRECTORY_ACCESS_WRITE_DEFINITIONS
     | keyof typeof JIRA_MAINTENANCE_WRITE_DEFINITIONS
     | keyof typeof JIRA_SCHEMA_WRITE_DEFINITIONS
@@ -651,6 +667,14 @@ function isCoreMutationTool(name: JiraMutationOperation): name is CoreMutationTo
 }
 export function jiraMutationDeclaration(name: JiraMutationOperation): ManagedMcpToolDeclaration {
   for (const producer of [
+    jiraAnonymizationUnlockDeclarationForTool,
+    jiraAvatarMutationDeclarationForTool,
+    jiraIdentityMutationDeclarationForTool,
+    jiraIssueLifecycleMutationDeclarationForTool,
+    jiraProjectLifecycleMutationDeclarationForTool,
+    jiraPrivateAccountDeclarationForTool,
+    jiraReciprocalLinkDeclarationForTool,
+    jiraBulkCreateDeclarationForTool,
     jiraDirectoryAccessMutationDeclarationForTool,
     jiraMaintenanceMutationDeclarationForTool,
     jiraSchemaMutationDeclarationForTool,

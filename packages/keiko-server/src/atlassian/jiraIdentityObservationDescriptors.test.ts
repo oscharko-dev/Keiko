@@ -56,3 +56,17 @@ it.each([
   if (declaration === undefined) throw new TypeError("Missing identity-observation declaration");
   expect(describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, { outcome: "succeeded", ...result })).toBeDefined();
 });
+
+it("keeps the task review's observed owner and null/absent states without a process proof", () => {
+  const declaration = jiraIdentityObservationDeclarationForTool("jira.anonymization-progress");
+  if (declaration === undefined) throw new TypeError("Missing progress declaration");
+  const reviewSnapshot = { userKey: "target", executingNode: "owner-node", submittedTime: "native-time", status: "RUNNING",
+    isRerun: false, currentProgress: 0, operations: [], startTime: null };
+  const result = { outcome: "succeeded", observationScope: "anonymization-progress", taskSelection: "active-or-latest",
+    progress: { userKey: "target" }, reviewSnapshot };
+  expect(describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, result)).toBeUndefined();
+  for (const field of ["shutdownConfirmed", "taskId", "progressUrl"])
+    expect(describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, { ...result, reviewSnapshot: { ...reviewSnapshot, [field]: true } })).toBeDefined();
+  expect(describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, { ...result,
+    reviewSnapshot: { ...reviewSnapshot, executingNode: null } })).toBeDefined();
+});

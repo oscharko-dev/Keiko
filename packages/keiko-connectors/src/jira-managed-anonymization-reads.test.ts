@@ -59,6 +59,10 @@ it("keeps selected task context separate from observed progress and native failu
     progress: { userKey: "observed-user", userName: "Observed", currentProgress: 0, currentSubTask: "",
       submittedTime: "2026-11-08T10:00:00.000+0000", status: "COMPLETED", isRerun: false,
       errors: [{ operation: "GENERAL", messages: ["One handler failed."] }], operations: ["NATIVE_FUTURE_HANDLER"] },
+    reviewSnapshot: { executingNode: "private-node", userKey: "observed-user", userName: "Observed", fullName: null,
+      currentProgress: 0, currentSubTask: "", submittedTime: "2026-11-08T10:00:00.000+0000",
+      startTime: null, finishTime: null, status: "COMPLETED", isRerun: false,
+      errors: [{ operation: "GENERAL", messages: ["One handler failed."] }], operations: ["NATIVE_FUTURE_HANDLER"] },
   });
   expect(request).toHaveBeenCalledExactlyOnceWith("user/anonymization/progress?taskId=9223372036854775807", "GET", undefined, "json");
 });
@@ -128,4 +132,17 @@ it("exposes only the three documented observations", () => {
   expect(JIRA_ANONYMIZATION_READS).toHaveLength(3);
   expect(isJiraAnonymizationRead("jira.anonymize-user")).toBe(false);
   expect(isJiraAnonymizationRead("jira.unlock-anonymization")).toBe(false);
+});
+
+it("adds a task review only when all owner/task facts are actually supplied", async () => {
+  const complete = { userKey: "target", executingNode: "owner-node", submittedTime: "native-time", status: "RUNNING",
+    isRerun: false, currentProgress: 0, operations: [], userName: null, startTime: null };
+  expect((await read("jira.anonymization-progress", {}, success(complete))).data.reviewSnapshot).toEqual(complete);
+  for (const omitted of ["executingNode", "submittedTime", "status", "isRerun", "currentProgress", "operations"]) {
+    const incomplete: Record<string, unknown> = { ...complete }; delete incomplete[omitted];
+    const result = await read("jira.anonymization-progress", {}, success(incomplete));
+    expect(result.data.outcome).toBe("succeeded");
+    expect(result.data).not.toHaveProperty("reviewSnapshot");
+    expect(result.data).not.toHaveProperty("shutdownVerified");
+  }
 });

@@ -40,11 +40,14 @@ export function nameJiraFieldErrors(
   return sanitizeJiraMutationFailureDetail({ ...detail, fieldErrors }) ?? detail;
 }
 
-/** The dispatch's own refusal, with Jira's explanation when it gave one. */
+/** The dispatch's own refusal, with Jira's explanation when it gave one.
+ * This pre-acknowledgement result cannot carry a receipt. The composing owner binds any
+ * independently known target after dispatch; a generic receipt must never widen that target.
+ */
 export function dispatchFailure(
   response: JiraHttpFailure,
   metadata: readonly JiraFieldMetadata[] = [],
-): JiraMutationFailure {
+): Omit<JiraMutationFailure, "receipt"> & { readonly receipt?: never } {
   const detail = nameJiraFieldErrors(response.remote, metadata);
   return {
     ok: false,

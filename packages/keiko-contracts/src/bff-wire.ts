@@ -1,3 +1,4 @@
+import type { JiraHumanInputView } from "./jira-human-input.js";
 import type { ModelCapability, NormalizedToolCall } from "./gateway.js";
 import type { ToolResultEnvelope } from "./governed-tool-catalog.js";
 import { exactKeys } from "./contract-validation-primitives.js";
@@ -534,6 +535,8 @@ export interface ChatToolExchange {
   readonly result?: ToolResultEnvelope | undefined;
   /** Bound server-owned draft receipts retained beside a cancelled result, never inside it. */
   readonly draftProgress?: Readonly<Record<string, unknown>> | undefined;
+  /** Public request metadata only; values stay in the private credential vault. */
+  readonly humanInput?: JiraHumanInputView | undefined;
   readonly approval?: ChatToolWriteApprovalView | undefined;
   /** Durable remote-effect knowledge is independent from transport cancellation or denial. */
   readonly mutationOutcome?: JiraMutationOutcome | undefined;

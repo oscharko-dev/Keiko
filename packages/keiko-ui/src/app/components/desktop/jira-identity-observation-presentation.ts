@@ -1,5 +1,6 @@
 import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
 import type { JiraAgileDetails, JiraOutcomeFact } from "./jira-agile-presentation";
+import { jiraAnonymizationTaskReviewDetails } from "./jira-anonymization-unlock-presentation";
 import {
   jiraPresentationFact as fact,
   jiraPresentationRecord as record,
@@ -89,7 +90,7 @@ function progress(data: Source): readonly JiraAgileDetails[] {
     ...fact("chat.jira.identity.displayName", source.fullName), ...fact("chat.jira.jobs.selectedTaskId", data.selectedTaskId),
     ...fact("chat.jira.jobs.status", source.status), ...value, ...fact("chat.jira.jobs.subtask", source.currentSubTask),
     ...fact("chat.jira.jobs.submittedTime", source.submittedTime), ...fact("chat.jira.jobs.startTime", source.startTime),
-    ...fact("chat.jira.jobs.finishTime", source.finishTime)], labels }, operations(source),
+    ...fact("chat.jira.jobs.finishTime", source.finishTime)], labels }, jiraAnonymizationTaskReviewDetails(data), operations(source),
   ...diagnostics(source, "errors"), ...diagnostics(source, "warnings")];
 }
 function session(data: Source): JiraAgileDetails {

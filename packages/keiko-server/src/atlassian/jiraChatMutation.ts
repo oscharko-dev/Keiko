@@ -38,7 +38,7 @@ export interface JiraChatMutationExecution {
   readonly beforeEffect: () => boolean;
   /** Claim this exact mutation's approval inside the journal transaction, only before POST/PUT/DELETE. */
   readonly beforeMutation: (itemRef?: string) => boolean;
-  readonly execute: (http: AtlassianHttpBodyPort) => Promise<JiraMutationAttempt>;
+  readonly execute: (http: AtlassianHttpBodyPort, lifecycle: AtlassianHttpLifecycleOptions) => Promise<JiraMutationAttempt>;
 }
 const FAILED: JiraMutationAttempt = { ok: false, reason: "unavailable" };
 function confirmed(value: unknown): boolean {
@@ -73,7 +73,7 @@ function observedOutcome(record: ChatToolMutationRecord | undefined): JiraMutati
 function mutationTransport(
   input: JiraChatMutationExecution,
   journal: ChatToolMutationStore,
-): AtlassianHttpBodyPort {
+): { readonly http: AtlassianHttpBodyPort; readonly lifecycle: AtlassianHttpLifecycleOptions } {
   const { intent } = input;
   let furtherLinks = 0;
   let continuing = false;
@@ -81,7 +81,7 @@ function mutationTransport(
     isJiraIssueLinkWrite(request) &&
     furtherLinks < JIRA_ISSUE_LINKS_MAX - JIRA_ISSUE_LINKS_PER_REQUEST_MAX &&
     journal.find(intent.invocationId)?.phase === "acknowledged";
-  return input.httpPortFactory({
+  const lifecycle: AtlassianHttpLifecycleOptions = {
     beforeDispatch: (request): boolean => {
       continuing = false;
       if (request.method === "GET") return confirmed(input.beforeEffect());
@@ -103,15 +103,17 @@ function mutationTransport(
       if (request.method !== "GET" && !continuing) journal.acknowledge(intent.invocationId, status);
       return true;
     },
-  });
+  };
+  return { http: input.httpPortFactory(lifecycle), lifecycle };
 }
 async function attempt(
   input: JiraChatMutationExecution,
   journal: ChatToolMutationStore,
 ): Promise<JiraMutationAttempt> {
   try {
+    const transport = mutationTransport(input, journal);
     const result = validJiraMutationAttempt(
-      await input.execute(mutationTransport(input, journal)),
+      await input.execute(transport.http, transport.lifecycle),
       input.intent.operation,
     );
     recordJiraTemplateAttempt(input.intent.correlationId, input.intent.operation, result);

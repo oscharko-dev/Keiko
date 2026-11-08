@@ -30,6 +30,11 @@ import {
   JIRA_MAINTENANCE_MUTATIONS,
   JIRA_SCHEMA_MUTATIONS,
   JIRA_DIRECTORY_ACCESS_MUTATIONS,
+  JIRA_AVATAR_MUTATIONS,
+  JIRA_IDENTITY_MUTATIONS,
+  JIRA_PRIVATE_ACCOUNT_MUTATIONS,
+  JIRA_ISSUE_LIFECYCLE_MUTATIONS,
+  JIRA_PROJECT_LIFECYCLE_MUTATIONS,
   JIRA_TEMPLATE_RULE_IDS,
   parseJiraIssueTemplate,
   type JiraMutationAttempt,
@@ -257,6 +262,18 @@ describe("the model-facing refusal", () => {
     expect(sink.events.map((event) => event.extra?.operation)).toEqual(operations);
     expect(sink.events.map((event) => event.extra?.ruleIds)).toEqual(operations.map(() => [VIOLATION.ruleId]));
     expect(sink.lines().join()).not.toMatch(/fieldIds|issueTypeId|replacementIssueTypeId|linkTypeId|Acceptance criteria|SYN\/Story/u);
+  });
+  it("logs all resource/account/avatar refusals as closed class and operation digest only", () => {
+    const sink = logs();
+    const operations = [...JIRA_AVATAR_MUTATIONS, ...JIRA_IDENTITY_MUTATIONS, ...JIRA_PRIVATE_ACCOUNT_MUTATIONS,
+      ...JIRA_ISSUE_LIFECYCLE_MUTATIONS, ...JIRA_PROJECT_LIFECYCLE_MUTATIONS,
+      "jira.create-issues", "jira.create-reciprocal-remote-link"] as const;
+    for (const operation of operations) recordJiraFieldRefusal("resource-account-refusal", { operation, refusedCount: 1, validations: ["invalid-field"] });
+    expect(sink.events.map((event) => event.extra)).toEqual(operations.map((operation) => ({
+      operation: "jira-write", operationDigest: createHash("sha256").update(operation).digest("hex"),
+      refusedCount: 1, validations: ["invalid-field"], completeness: "complete", loss: "none",
+    })));
+    expect(sink.lines().join()).not.toMatch(/username|actorUserKey|password|cookie|sessionEstablished|applicationLinkId|temporaryCrop|projectId|issueKey/u);
   });
 });
 
@@ -593,6 +610,13 @@ describe("the dry run before approval", () => {
   });
 
   it.each([
+    ...JIRA_AVATAR_MUTATIONS,
+    ...JIRA_IDENTITY_MUTATIONS,
+    ...JIRA_PRIVATE_ACCOUNT_MUTATIONS,
+    ...JIRA_ISSUE_LIFECYCLE_MUTATIONS,
+    ...JIRA_PROJECT_LIFECYCLE_MUTATIONS,
+    "jira.create-issues",
+    "jira.create-reciprocal-remote-link",
     ...JIRA_ENTITY_PROPERTY_MUTATIONS,
     "jira.create-screen-tab",
     "jira.set-app-monitoring",

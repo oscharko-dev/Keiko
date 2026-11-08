@@ -26,6 +26,16 @@ export {
   type AtlassianResolvedCredential,
   type CreatedAtlassianCredentialCustody,
 } from "./atlassian-credential-custody.js";
+export { JiraHumanInputCustodyError, type JiraHumanInputCustody, type JiraHumanInputExecutionResolver } from "./jira-human-input-custody.js";
+export { copyHumanInputBinding, humanInputView, parseHumanInputValues, type JiraHumanInputBinding, type JiraHumanInputContext, type JiraHumanInputValues } from "./jira-human-input-values.js";
+export { prepareJiraHumanInput, type JiraHumanInputSelection } from "./jira-human-input-preparation.js";
+export { jiraNativeId } from "./jira-native-values.js";
+export { jiraApplicationLinkId } from "./jira-reciprocal-link-values.js";
+export { JiraPrivateSessionError, type JiraPrivateSessionAccess, type JiraPrivateSessionExecutionResolver } from "./jira-private-session-custody.js";
+export { jiraPrivateCookie, jiraSessionBindingForInput, jiraPrivateSessionReference, copyJiraSessionBinding, type JiraPrivateSessionBinding, type JiraPrivateSessionScope, type JiraPrivateCookie } from "./jira-private-session-values.js";
+export type { JiraPrivateIdentityPorts, JiraHumanInputHttpRequest } from "./jira-private-identity-ports.js";
+export { executeAdmittedJiraRequest } from "./jira-request-admission.js";
+export type { JiraAvatarPorts, JiraAvatarSession, JiraAvatarTarget, JiraAvatarMutation, JiraAvatarAttempt } from "./jira-avatar-mutation-values.js";
 export {
   ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES,
   ATLASSIAN_HTTP_UPLOAD_MAX_BYTES,

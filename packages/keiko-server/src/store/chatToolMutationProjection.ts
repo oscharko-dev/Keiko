@@ -62,6 +62,7 @@ function matchesCall(
           argumentsDigest,
           operationBinding,
           sourceDigest,
+          call.humanInput?.revision,
         );
   return (
     (record.sourceKind !== "configured-mcp" ||

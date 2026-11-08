@@ -24,13 +24,14 @@ export function jiraRemoteLinkMembership(value: unknown, binding: JiraIssueConte
   const id = jiraNativeNumericId(raw.id);
   return id !== undefined && jiraResourceSelfMatches(raw.self, `issue/${binding.issueId}/remotelink/${id}`);
 }
-function parentIdMatches(value: unknown, binding: JiraIssueContextBinding): boolean {
+type SubtaskParentBinding = Pick<JiraIssueContextBinding, "issueId" | "issueKey">;
+function parentIdMatches(value: unknown, binding: SubtaskParentBinding): boolean {
   return value === undefined || (jiraNativeId(value) && value === binding.issueId);
 }
-function parentKeyMatches(value: unknown, binding: JiraIssueContextBinding): boolean {
+function parentKeyMatches(value: unknown, binding: SubtaskParentBinding): boolean {
   return value === undefined || (isSafeAtlassianIdentifier(value) && value.toUpperCase() === binding.issueKey.toUpperCase());
 }
-export function jiraSubtaskMembership(value: unknown, binding: JiraIssueContextBinding): boolean {
+export function jiraSubtaskMembership(value: unknown, binding: SubtaskParentBinding): boolean {
   const parentValue = asRecord(asRecord(value)?.fields)?.parent;
   if (parentValue === undefined || parentValue === null) return true;
   const parent = asRecord(parentValue);

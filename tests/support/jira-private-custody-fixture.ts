@@ -1,0 +1,37 @@
+import { createAtlassianCredentialCustody, type AtlassianCredentialMetadata } from "../../packages/keiko-connectors/src/atlassian-credential-custody.js";
+import type { JiraHumanInputBinding } from "../../packages/keiko-connectors/src/jira-human-input-values.js";
+
+/** Private synthetic custody over one shared port; production kernel guards have separate sources. */
+export function privateJiraCustodyFixture(operation: JiraHumanInputBinding["operation"] = "jira.update-my-password", principal = "a".repeat(64)) {
+  let now = 1_800_000_000_000;
+  const entries = new Map<string, string>(); const leases = new Set<string>();
+  const metadata = new Map<string, AtlassianCredentialMetadata>();
+  const vault = {
+    list: () => [...entries.keys()],
+    get: (id: string) => entries.get(id), set: (id: string, value: string) => { entries.set(id, value); }, delete: (id: string) => { entries.delete(id); },
+    compareAndSet: (id: string, expected: string | undefined, next: string | undefined) => {
+      if (entries.get(id) !== expected) return false;
+      if (next === undefined) entries.delete(id); else entries.set(id, next); return true;
+    },
+    acquireLease: (id: string, scope = "record") => {
+      const key = `${scope}:${id}`;
+      if (leases.has(key)) return undefined; leases.add(key); let held = true;
+      return () => { if (held) { held = false; leases.delete(key); } };
+    },
+  };
+  const metadataStore = { get: (id: string) => metadata.get(id), list: () => [...metadata.values()], insert: (value: AtlassianCredentialMetadata) => { metadata.set(value.authRef, value); }, delete: (id: string) => metadata.delete(id) };
+  const fork = () => createAtlassianCredentialCustody({ now: () => now, vault, metadataStore });
+  const { custody, executionResolver } = fork();
+  const created = custody.create({ provider: "jira", deployment: "data-center", displayName: "Synthetic Jira", baseUrl: "https://jira.example.invalid/context",
+    authScheme: "bearer-pat", apiToken: ["synthetic", "private", "pat"].join("-"), livePodCreationRequestId: "7765d9e4-fc9a-46d5-aea4-24880fec5e1e" }, principal);
+  const verification = custody.beginVerification(created.authRef, 1);
+  if (verification === undefined || created.livePod === undefined) throw new TypeError("Missing synthetic Pod verification");
+  custody.finishVerification(created.authRef, 1, verification.revision, "ok");
+  const inputs = custody.humanInputs; const privateInputs = executionResolver.humanInputs; const sessions = executionResolver.sessions;
+  if (inputs === undefined || privateInputs === undefined || sessions === undefined) throw new TypeError("Missing real private custody facets");
+  const binding: JiraHumanInputBinding = { context: { kind: "chat", chatId: "chat-1", messageId: "message-1", callId: "call-1", podId: created.livePod.podId, bindingGeneration: 1 },
+    authority: { runId: "authority-run-1", envelopeDigest: "d".repeat(64) }, principalDigest: principal,
+    authRef: created.authRef, authenticationGeneration: 1, verificationRevision: verification.revision, operation,
+    argumentsDigest: "b".repeat(64), actorUserKey: "actor-key", actorUsername: "Native Actor", expiresAt: now + 60_000 };
+  return { custody, executionResolver, inputs, privateInputs, sessions, binding, sealedPortEntries: entries, vault, fork, advance: (milliseconds: number) => { now += milliseconds; } };
+}

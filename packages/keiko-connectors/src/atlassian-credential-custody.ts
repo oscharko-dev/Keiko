@@ -47,6 +47,8 @@ import {
   isSafeAtlassianDisplayName,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { LocalSecretVault } from "@oscharko-dev/keiko-security/secret-vault";
+import { createJiraHumanInputCustody, type JiraHumanInputCustody, type JiraHumanInputExecutionResolver } from "./jira-human-input-custody.js";
+import { createJiraPrivateSessionCustody, type JiraPrivateSessionExecutionResolver } from "./jira-private-session-custody.js";
 
 // ─── Bounds for the credential material itself (hostile-input guards) ─────────
 // The account email and API token feed `Authorization: Basic base64(email:token)` downstream, so
@@ -248,8 +250,8 @@ export function isAtlassianCredentialMetadata(
 }
 
 // ─── Injected ports (implemented by keiko-server, the composition root) ───────
-// Structural subset of keiko-security's LocalSecretVault: custody needs no `replaceAll`/`list`.
-export type AtlassianCredentialVaultPort = Pick<LocalSecretVault, "get" | "set" | "delete">;
+// Enumeration is private and used only for bounded expiration of Jira input/session records.
+export type AtlassianCredentialVaultPort = Pick<LocalSecretVault, "get" | "set" | "delete" | "compareAndSet" | "acquireLease"> & Partial<Pick<LocalSecretVault, "list">>;
 
 // Non-secret metadata persistence. keiko-server implements this over a private, 0600-hardened
 // JSON store in the same `<config-dir>/credentials/` custody domain as the vault (ADR-0128 D2) —
@@ -271,6 +273,9 @@ export type AtlassianResolvedCredential =
 // injects it exclusively into the outbound HTTP adapter (ADR-0128 D2 write-only rule), so no
 // route, event, or serialized surface can ever reach the secret.
 export interface AtlassianCredentialExecutionResolver {
+  /** Separate execution-only facet; never exposed through credential routes or tool results. */
+  readonly humanInputs?: JiraHumanInputExecutionResolver;
+  readonly sessions?: JiraPrivateSessionExecutionResolver;
   readonly resolveForExecution: (
     authRef: string,
     expectedGeneration?: number,
@@ -279,6 +284,8 @@ export interface AtlassianCredentialExecutionResolver {
 
 // ─── Custody surface ───────────────────────────────────────────────────────────
 export interface AtlassianCredentialCustody {
+  /** Human-only submissions/readiness; this facet cannot resolve stored values. */
+  readonly humanInputs?: JiraHumanInputCustody;
   // Accepts the raw secret exactly once (unknown-shaped: hostile input is validated here, at the
   // enforcement point). Returns metadata only. Throws AtlassianCredentialCustodyError.
   readonly create: (input: unknown, livePodOwnerDigest?: string) => AtlassianCredentialMetadata;
@@ -898,7 +905,23 @@ export function createAtlassianCredentialCustody(
   deps: AtlassianCredentialCustodyDeps,
 ): CreatedAtlassianCredentialCustody {
   const now = deps.now ?? ((): number => Date.now());
+  const privateVault: AtlassianCredentialVaultPort = {
+    get: (reference) => vaultOp(() => deps.vault.get(reference)),
+    set: (reference, value) => vaultOp(() => deps.vault.set(reference, value)),
+    delete: (reference) => vaultOp(() => deps.vault.delete(reference)),
+    ...(deps.vault.compareAndSet === undefined ? {} : { compareAndSet: (reference: string, expected: string | undefined, next: string | undefined) =>
+      vaultOp(() => deps.vault.compareAndSet?.(reference, expected, next) ?? false) }),
+    ...(deps.vault.acquireLease === undefined ? {} : { acquireLease: (reference: string, scope?: "record" | "collection") => vaultOp(() => deps.vault.acquireLease?.(reference, scope)) }),
+    ...(deps.vault.list === undefined ? {} : { list: () => vaultOp(() => deps.vault.list?.() ?? []) }),
+  };
+  const metadata = (authRef: string): AtlassianCredentialMetadata | undefined => {
+    const raw = deps.metadataStore.get(authRef);
+    return raw !== undefined && isAtlassianCredentialMetadata(raw) ? raw : undefined;
+  };
+  const humanInputs = createJiraHumanInputCustody({ vault: privateVault, now, metadata });
+  const sessions = createJiraPrivateSessionCustody({ vault: privateVault, now, metadata });
   const custody: AtlassianCredentialCustody = {
+    humanInputs: humanInputs.custody,
     create: (input: unknown, ownerDigest?: string): AtlassianCredentialMetadata =>
       createCredential(deps, now, input, ownerDigest),
     updateLivePod: (authRef, input, correlationId) =>
@@ -931,6 +954,8 @@ export function createAtlassianCredentialCustody(
   return {
     custody,
     executionResolver: {
+      humanInputs: humanInputs.executionResolver,
+      sessions,
       resolveForExecution: (
         authRef: string,
         expectedGeneration?: number,

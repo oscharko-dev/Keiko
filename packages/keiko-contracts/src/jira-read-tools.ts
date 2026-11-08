@@ -2,6 +2,7 @@ import { deepFreeze } from "./deep-freeze.js";
 
 /** Closed immutable read identities shared by native owners and the governed provider catalog. */
 export const JIRA_READ_TOOL_FAMILIES = deepFreeze({
+  privateAccount: ["jira.validate-create-user-password", "jira.validate-update-user-password", "jira.validate-license"],
   emailTemplatePacks: ["jira.email-template-pack"],
   searchPost: ["jira.search-post"],
   worklogBatch: ["jira.worklogs-by-id"],

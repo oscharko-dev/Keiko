@@ -36,7 +36,7 @@ describe("scheme and instance configuration receipt evidence", () => {
   });
   it.each(CASES)("retains $operation context without upgrading global consequences", ({ operation, receipt, confirm }) => {
     expect(valid(receipt, operation)).toBe(true);
-    expect(canConfirmJiraSchemeInstance(operation)).toBe(confirm);
+    expect(canConfirmJiraSchemeInstance(operation, receipt)).toBe(confirm);
     expect(validJiraMutationAttempt({ ok: true, receipt }, operation)).toEqual(confirm
       ? { ok: true, receipt } : { ok: false, reason: "malformed-payload", receipt });
     for (const outcome of ["unknown", "succeeded-unconfirmed"] as const) {
@@ -74,6 +74,25 @@ describe("scheme and instance configuration receipt evidence", () => {
       const missing = { ...draft }; Reflect.deleteProperty(missing, key); refused(missing, "jira.update-workflow-scheme-draft");
       for (const value of ["0", "01", "9223372036854775808", 9007199254740992, null]) refused(changed(draft, key, value), "jira.update-workflow-scheme-draft");
     }
+  });
+  it("requires explicit metadata-only evidence for current base-update success, retaining legacy and uncertain context", () => {
+    const metadata = WORKFLOW_SCHEME_MUTATION_FIXTURE_CASES[1].receipt;
+    const legacy = { ...metadata }; Reflect.deleteProperty(legacy, "workflowMappingChanged");
+    for (const receipt of [legacy, { ...metadata, workflowMappingChanged: true }]) {
+      expect(valid(receipt, "jira.update-workflow-scheme")).toBe(true);
+      expect(canConfirmJiraSchemeInstance("jira.update-workflow-scheme", receipt)).toBe(false);
+      expect(validJiraMutationAttempt({ ok: true, receipt }, "jira.update-workflow-scheme"))
+        .toEqual({ ok: false, reason: "malformed-payload", receipt });
+      expect(validJiraMutationAttempt({ ok: false, reason: "unavailable", receipt }, "jira.update-workflow-scheme"))
+        .toEqual({ ok: false, reason: "unavailable", receipt });
+    }
+    expect(validJiraMutationAttempt({ ok: true, receipt: metadata }, "jira.update-workflow-scheme"))
+      .toEqual({ ok: true, receipt: metadata });
+    refused(changed(metadata, "workflowMappingChanged", "false"), "jira.update-workflow-scheme");
+    refused({ ...WORKFLOW_SCHEME_MUTATION_FIXTURE_CASES[4].receipt, workflowMappingChanged: false }, "jira.update-workflow-scheme-draft");
+    const getter = vi.fn(() => false);
+    const accessor = { ...metadata }; Object.defineProperty(accessor, "workflowMappingChanged", { get: getter, enumerable: true });
+    refused(accessor, "jira.update-workflow-scheme"); expect(getter).not.toHaveBeenCalled();
   });
   it("keeps base, draft, requested mapping presence and whole deletion distinct", () => {
     const draft = WORKFLOW_SCHEME_MUTATION_FIXTURE_CASES[16].receipt;

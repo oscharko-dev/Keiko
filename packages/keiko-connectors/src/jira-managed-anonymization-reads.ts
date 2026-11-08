@@ -12,6 +12,7 @@ import { jiraReadFailure, projectJiraOptionalFields } from "./jira-managed-metad
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { executeJiraSelectedRead, type JiraReadResponse } from "./jira-managed-read-request.js";
 import { jiraNativeId, jiraNativeText } from "./jira-native-values.js";
+import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 
 // These three GETs validate or observe; the native POST scheduling and DELETE unlock are distinct.
 // https://docs.atlassian.com/software/jira/docs/api/11.3.3/com/atlassian/jira/rest/v2/user/anonymization/UserAnonymizationResource.html
@@ -126,8 +127,8 @@ function commonFields(raw: Record<string, unknown>): JiraMaintenanceProjection {
   }
   return { ok: true, value: result };
 }
-function validation(raw: Record<string, unknown>, selected: Selection): JiraMaintenanceProjection {
-  if (raw.userKey !== selected.userKey) return MALFORMED;
+export function projectJiraAnonymizationValidation(raw: Record<string, unknown>, userKey: string): JiraMaintenanceProjection {
+  if (raw.userKey !== userKey) return MALFORMED;
   if ([raw.userName, raw.displayName].some((value) => oversizedText(value, 255))) return BOUNDS;
   const names = projectJiraOptionalFields(raw, ["userName", "displayName"], (value) =>
     nativeText(value, 255, true) ? value : undefined);
@@ -156,10 +157,30 @@ function progress(raw: Record<string, unknown>): JiraMaintenanceProjection {
     userKey: raw.userKey, ...names, ...status, ...rerun, ...observed.value, ...common.value,
   } } : common;
 }
+/** Exact documented task facts for human review. The node is an observed owner name, not a
+ * process-liveness proof; progressUrl is neither followed nor treated as an independent task ID. */
+function completeTaskFacts(raw: Record<string, unknown>): boolean {
+  return nativeText(raw.executingNode, 255) && nativeText(raw.submittedTime, 128) &&
+    nativeText(raw.status, 128) && typeof raw.isRerun === "boolean" &&
+    typeof raw.currentProgress === "number" && Number.isSafeInteger(raw.currentProgress) && Array.isArray(raw.operations);
+}
+export function projectJiraAnonymizationTaskSnapshot(value: unknown): CatalogJsonObject | undefined {
+  const raw = asRecord(value);
+  if (raw === undefined || !completeTaskFacts(raw) || !nativeText(raw.executingNode, 255)) return undefined;
+  const projected = progress(raw);
+  if (!projected.ok) return undefined;
+  const snapshot: Record<string, CatalogJsonValue> = { ...projected.value, executingNode: raw.executingNode };
+  // A review must not silently turn a supplied null into an absent field. Ordinary read summaries
+  // retain their original omission behaviour; this additional snapshot alone is lossless here.
+  for (const key of ["userName", "fullName", "currentSubTask", "startTime", "finishTime", "errors", "warnings"] as const)
+    if (Object.hasOwn(raw, key) && raw[key] === null) snapshot[key] = null;
+  return deepFreeze(snapshot);
+}
 function projectResponse(response: JiraReadResponse, selected: Selection): ManagedMcpToolResult {
   const raw = response.body;
   if (raw === undefined) return jiraReadFailure("malformed-payload");
-  const projected = selected.mode === "progress" ? progress(raw) : validation(raw, selected);
+  const projected = selected.mode === "progress" ? progress(raw)
+    : selected.userKey === undefined ? MALFORMED : projectJiraAnonymizationValidation(raw, selected.userKey);
   if (!projected.ok) return jiraReadFailure(projected.reason);
   if (selected.mode !== "progress") {
     if (selected.userKey === undefined) return jiraReadFailure("malformed-payload");
@@ -168,11 +189,13 @@ function projectResponse(response: JiraReadResponse, selected: Selection): Manag
       validation: projected.value,
     } });
   }
+  const reviewSnapshot = projectJiraAnonymizationTaskSnapshot(raw);
   return boundJiraReadResult({ data: {
     outcome: "succeeded", observationScope: "anonymization-progress",
     taskSelection: selected.taskId === undefined ? "active-or-latest" : "selected-task",
     ...(selected.taskId === undefined ? {} : { selectedTaskId: selected.taskId }),
     progress: projected.value,
+    ...(reviewSnapshot === undefined ? {} : { reviewSnapshot }),
   } });
 }
 export function isJiraAnonymizationRead(name: string): name is AnonymizationRead {

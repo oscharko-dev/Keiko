@@ -2,6 +2,44 @@ import type { AtlassianConnectorWriteFailureReason } from "./atlassian-connector
 import type { JiraTemplateViolation } from "./jira-issue-template.js";
 import { compareStrings } from "./comparators.js";
 
+export const JIRA_AVATAR_MUTATIONS = Object.freeze([
+  "jira.upload-temporary-avatar", "jira.crop-temporary-avatar",
+  "jira.upload-issue-type-avatar", "jira.create-issue-type-avatar",
+  "jira.upload-project-avatar", "jira.create-project-avatar", "jira.set-project-avatar", "jira.delete-project-avatar",
+  "jira.upload-owned-avatar", "jira.create-owned-avatar", "jira.delete-owned-avatar",
+  "jira.upload-user-avatar", "jira.create-user-avatar", "jira.set-user-avatar", "jira.delete-user-avatar",
+] as const);
+export type JiraAvatarMutation = (typeof JIRA_AVATAR_MUTATIONS)[number];
+/** The existing immutable file review is needed for exactly these five raw image uploads. */
+export const JIRA_AVATAR_UPLOAD_MUTATIONS = Object.freeze([
+  "jira.upload-temporary-avatar", "jira.upload-issue-type-avatar", "jira.upload-project-avatar",
+  "jira.upload-owned-avatar", "jira.upload-user-avatar",
+] as const satisfies readonly JiraAvatarMutation[]);
+export type JiraAvatarUploadMutation = (typeof JIRA_AVATAR_UPLOAD_MUTATIONS)[number];
+export function isJiraAvatarUploadOperation(name: string): name is JiraAvatarUploadMutation {
+  return JIRA_AVATAR_UPLOAD_MUTATIONS.some((operation) => operation === name);
+}
+export const JIRA_IDENTITY_MUTATIONS = Object.freeze([
+  "jira.create-user", "jira.update-user", "jira.delete-user", "jira.invalidate-user-session",
+  "jira.schedule-user-anonymization", "jira.rerun-user-anonymization",
+] as const);
+export type JiraIdentityMutation = (typeof JIRA_IDENTITY_MUTATIONS)[number];
+/** Private human-input or owned-session actions. Validation POSTs remain separate read tools. */
+export const JIRA_PRIVATE_ACCOUNT_MUTATIONS = Object.freeze([
+  "jira.update-myself", "jira.update-my-password", "jira.update-user-password",
+  "jira.login", "jira.logout", "jira.release-websudo",
+] as const);
+export type JiraPrivateAccountMutation = (typeof JIRA_PRIVATE_ACCOUNT_MUTATIONS)[number];
+export const JIRA_ISSUE_LIFECYCLE_MUTATIONS = Object.freeze([
+  "jira.archive-issues", "jira.delete-issue", "jira.archive-issue", "jira.restore-issue", "jira.move-subtask",
+] as const);
+export type JiraIssueLifecycleMutation = (typeof JIRA_ISSUE_LIFECYCLE_MUTATIONS)[number];
+export const JIRA_PROJECT_LIFECYCLE_MUTATIONS = Object.freeze([
+  "jira.delete-project", "jira.archive-project", "jira.restore-project", "jira.update-project-type",
+  "jira.set-project-permission-scheme", "jira.set-project-priority-scheme", "jira.remove-project-priority-scheme",
+] as const);
+export type JiraProjectLifecycleMutation = (typeof JIRA_PROJECT_LIFECYCLE_MUTATIONS)[number];
+
 export const JIRA_GROUP_MUTATIONS = Object.freeze([
   "jira.create-group",
   "jira.delete-group",
@@ -184,6 +222,14 @@ export type JiraProjectCategoryMutation = (typeof JIRA_PROJECT_CATEGORY_MUTATION
 
 /** Remote effects remain separate from the enclosing MCP/catalog terminal status. */
 export const JIRA_MUTATION_OPERATIONS = [
+  "jira.unlock-user-anonymization",
+  ...JIRA_AVATAR_MUTATIONS,
+  ...JIRA_IDENTITY_MUTATIONS,
+  ...JIRA_PRIVATE_ACCOUNT_MUTATIONS,
+  ...JIRA_ISSUE_LIFECYCLE_MUTATIONS,
+  ...JIRA_PROJECT_LIFECYCLE_MUTATIONS,
+  "jira.create-issues",
+  "jira.create-reciprocal-remote-link",
   ...JIRA_GROUP_MUTATIONS,
   ...JIRA_ISSUE_ACTION_MUTATIONS,
   ...JIRA_MAINTENANCE_MUTATIONS,
@@ -361,6 +407,41 @@ export type JiraMutationResultState = (typeof JIRA_MUTATION_RESULT_STATES)[numbe
 /** Validated Jira identities and closed state facts; never remote bodies or headers.
  * Monitoring booleans on unknown/unconfirmed writes are requested targets, not success evidence. */
 export interface JiraMutationReceipt {
+  readonly avatarType?: "user" | "project" | "issuetype";
+  readonly avatarId?: string;
+  readonly avatarPresent?: boolean;
+  readonly avatarSelected?: boolean;
+  readonly temporaryAvatar?: true;
+  /** Native acknowledgement metadata, not image persistence or independent content evidence. */
+  readonly temporaryCrop?: { readonly cropperOffsetX: number; readonly cropperOffsetY: number; readonly cropperWidth: number };
+  readonly temporaryNeedsCropping?: boolean;
+  readonly userPresent?: boolean;
+  readonly userActive?: boolean;
+  readonly userSessionInvalidationRequested?: true;
+  /** Present only after the private custody owner proves the same cookie-session actor. */
+  readonly sessionEstablished?: true;
+  readonly executingNode?: string;
+  readonly anonymizationSubmittedTime?: string;
+  readonly anonymizationRequested?: true;
+  readonly anonymizationRerunRequested?: true;
+  readonly newOwnerUserKey?: string;
+  readonly issueArchivedRequested?: boolean;
+  readonly issuePresent?: false;
+  readonly subtaskIds?: readonly string[];
+  readonly originalPosition?: number;
+  readonly currentPosition?: number;
+  readonly requestedIssueCount?: number;
+  readonly bulkFailedElementNumbers?: readonly number[];
+  readonly bulkFailureStatuses?: readonly number[];
+  readonly applicationLinkId?: string;
+  readonly applicationLinkDestinationDigest?: string;
+  readonly selectedRemoteIssueId?: string;
+  readonly delegatedEffectRequested?: true;
+  readonly projectPresent?: false;
+  readonly projectArchivedRequested?: boolean;
+  readonly projectTypeKey?: string;
+  readonly previousSchemeId?: string;
+  readonly projectSchemeAssigned?: boolean;
   readonly actorUserKey?: string;
   readonly applicationRoleKeys?: readonly string[];
   readonly applicationAccessRequested?: boolean;
@@ -386,6 +467,8 @@ export interface JiraMutationReceipt {
   readonly associationChange?: "add" | "replace" | "clear" | "remove";
   readonly draftSchemeId?: string;
   readonly workflowSchemeScope?: "scheme" | "draft";
+  /** Base-update input included default/mapping configuration; never deployment evidence. */
+  readonly workflowMappingChanged?: boolean;
   readonly workflowName?: string;
   readonly mappingPresent?: boolean;
   readonly valueDigest?: string;

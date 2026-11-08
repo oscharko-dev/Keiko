@@ -272,3 +272,25 @@ export function recordCredentialUpdated(
     });
   }
 }
+
+const JIRA_HUMAN_INPUT_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation", schemaVersion: 1, op: "atlassian.jira.human-input",
+  category: "security", owner: "keiko-server", emitter: "atlassian.credentialActivity.recordJiraHumanInput",
+  fields: { phase: { type: "string", dataClass: "closed-enum", required: true,
+    values: ["requested", "provided", "cancelled", "consumed", "expired"] } },
+  causal: "correlation", lifecycle: "state", analyzerProjection: "timeline",
+  failureClasses: ["atlassian-credential-custody"], proofIds: ["atlassian.jira.human-input.line"], releaseImpact: "patch",
+});
+/** No submitted values, public request IDs, user labels or secret-derived digests. */
+export function recordJiraHumanInput(
+  deps: Pick<AtlassianConnectorCredentialDeps, "activityLog" | "diagnostics"> | undefined,
+  correlationId: string,
+  phase: "requested" | "provided" | "cancelled" | "consumed" | "expired",
+): void {
+  try { deps?.activityLog?.write(activityLogEvent(JIRA_HUMAN_INPUT_OPERATION, { correlationId }, { phase })); }
+  catch (error) {
+    emitServerDiagnostic(deps?.diagnostics, { correlationId, timestamp: new Date().toISOString(),
+      operation: "atlassian.jira.human-input", source: "atlassian.credential-activity.human-input",
+      errorClass: contentFreeErrorClass(error), message: "jira-private-input-activity-log-failed" });
+  }
+}

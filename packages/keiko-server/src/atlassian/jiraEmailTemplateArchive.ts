@@ -62,12 +62,23 @@ export async function inspectJiraEmailTemplateArchive(
   if (!read.ok) return { ok: false, reason: archiveFailure(read.reason) };
   const admitted = await admitJiraEmailTemplateParts(bytes, read.parts, options.secrets,
     { now, deadlineAt, ...(options.signal === undefined ? {} : { signal: options.signal }) });
-  if (!admitted.ok && (admitted.refusal === "cancelled" || admitted.refusal === "bounds-exceeded"))
-    return { ok: false, reason: admitted.refusal };
-  if (!admitted.ok) return { ok: false, reason: "field-validation", contentRefusal: admitted.refusal, detail: { fieldId: "source", validation: "invalid-field", messages: [
-    admitted.refusal === "contains-credential" ? "The email-template archive contains credential material and cannot be exposed or uploaded. Remove the credential and review a new archive."
-      : "Every email-template archive entry must be fully scannable by the existing content policy. Unsupported or unreadable content was refused.",
-  ] } };
+  if (!admitted.ok) {
+    switch (admitted.refusal) {
+      case "cancelled":
+      case "bounds-exceeded":
+        return { ok: false, reason: admitted.refusal };
+      case "contains-credential":
+        return { ok: false, reason: "field-validation", contentRefusal: admitted.refusal,
+          detail: { fieldId: "source", validation: "invalid-field", messages: [
+            "The email-template archive contains credential material and cannot be exposed or uploaded. Remove the credential and review a new archive.",
+          ] } };
+      case "unscannable":
+        return { ok: false, reason: "field-validation", contentRefusal: admitted.refusal,
+          detail: { fieldId: "source", validation: "invalid-field", messages: [
+            "Every email-template archive entry must be fully scannable by the existing content policy. Unsupported or unreadable content was refused.",
+          ] } };
+    }
+  }
   const projected = entries(read.parts);
   if (projected === undefined) return malformed();
   if (options.signal?.aborted) return { ok: false, reason: "cancelled" };

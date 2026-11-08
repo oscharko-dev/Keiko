@@ -66,7 +66,7 @@ export interface ChatSourcesConsumer extends CatalogConsumer {
   readonly guard: ToolEffectGuard & {
     readonly write?: {
       readonly action: SourceAction;
-      readonly beforeMutation: () => boolean;
+      readonly beforeMutation: (itemRef?: string) => boolean;
       readonly source?: import("./atlassian/jiraChatRequirementBinding.js").PreparedJiraSource;
     };
   };
@@ -273,7 +273,8 @@ function jointGuard(
         check,
         write: {
           action: write.action,
-          beforeMutation: () => check() && write.beforeMutation() && check(),
+          ...(write.source === undefined ? {} : { source: write.source }),
+          beforeMutation: (itemRef) => check() && write.beforeMutation(itemRef) && check(),
         },
       };
 }

@@ -52,7 +52,7 @@ function snapshotMetadata(raw: Record<string, unknown>): Pick<SchemeSnapshot, "i
   return raw.description === null || savedText(raw.description, 32768, true)
     ? { id: raw.id, name: raw.name, description: raw.description } : undefined;
 }
-function snapshot(value: unknown, kind: SchemeKind): SchemeSnapshot | undefined {
+export function jiraOptionSchemeInputSnapshot(value: unknown, kind: SchemeKind): SchemeSnapshot | undefined {
   const raw = asRecord(value); const fields = keys(kind);
   const allowed = new Set(["id", "name", "description", fields.ids, fields.defaultId, ...(kind === "priority" ? ["defaultScheme"] : [])]);
   if (raw === undefined || !savedExactKeys(raw, allowed)) return undefined;
@@ -112,7 +112,7 @@ function withTarget(args: CatalogJsonObject, base: SchemeSelection): SchemeSelec
   return desired === undefined ? undefined : { ...base, target: desired };
 }
 function existingSelection(args: CatalogJsonObject, common: SchemeSelection): SchemeSelection | undefined {
-  const expected = snapshot(args.expectedScheme, common.kind);
+  const expected = jiraOptionSchemeInputSnapshot(args.expectedScheme, common.kind);
   if (expected === undefined) return undefined;
   const base = { ...common, expected };
   if (common.operation.startsWith("jira.update-")) return withTarget(args, base);

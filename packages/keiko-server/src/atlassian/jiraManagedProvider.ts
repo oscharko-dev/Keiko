@@ -1,3 +1,5 @@
+import { jiraPrivateAccountDeclarationForTool, type JIRA_PRIVATE_ACCOUNT_READ_DEFINITIONS } from "./jiraPrivateAccountDescriptors.js";
+import { JIRA_PROJECT_REVIEW_SCHEMA } from "./jiraProjectLifecycleSchemas.js";
 import { jiraEmailTemplateDeclarationForTool, type JIRA_EMAIL_TEMPLATE_DEFINITIONS } from "./jiraEmailTemplateDescriptors.js";
 import { jiraIdentityObservationDeclarationForTool, type JIRA_IDENTITY_OBSERVATION_READ_DEFINITIONS } from "./jiraIdentityObservationDescriptors.js";
 import {
@@ -246,6 +248,7 @@ type CoreReadToolName = Exclude<
   | "jira.draft-stage"
   | Extract<
       JiraManagedReadToolName,
+      | keyof typeof JIRA_PRIVATE_ACCOUNT_READ_DEFINITIONS
       | keyof typeof JIRA_EMAIL_TEMPLATE_DEFINITIONS
       | keyof typeof JIRA_IDENTITY_OBSERVATION_READ_DEFINITIONS
       | keyof typeof JIRA_REMOTE_VERSION_LINK_READ_DEFINITIONS
@@ -306,6 +309,7 @@ const DEFINITIONS: Readonly<Record<CoreReadToolName, ReadDefinition>> = {
       projectId: text(64),
       projectKey: text(64),
       projectName: text(255),
+      reviewSnapshot: JIRA_PROJECT_REVIEW_SCHEMA,
       description: READ_TEXT,
       url: text(4096),
       lead: text(255),
@@ -451,6 +455,7 @@ function isCoreReadTool(name: JiraManagedReadToolName): name is CoreReadToolName
 }
 function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
   for (const producer of [
+    jiraPrivateAccountDeclarationForTool,
     jiraEmailTemplateDeclarationForTool,
     jiraIdentityObservationDeclarationForTool,
     jiraRemoteVersionLinkDeclarationForTool,

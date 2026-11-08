@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
+import { Buffer } from "node:buffer";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
-import { JIRA_ATTACHMENT_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { JIRA_ATTACHMENT_MAX_BYTES, JIRA_AVATAR_UPLOAD_MUTATIONS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ChatConnectedScope } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   expectActivityLogProof,
@@ -21,6 +22,8 @@ import {
   previewJiraChatAttachment,
   previewJiraEmailTemplatePack,
   jiraChatEmailTemplatePreviewSource,
+  jiraChatAvatarPreviewSource,
+  previewJiraAvatarImage,
   type JiraChatAttachmentDeps,
   type JiraChatAttachmentReview,
 } from "./jiraChatAttachment.js";
@@ -86,6 +89,64 @@ afterEach(() => {
 
 const ARGS = (path: string): { issueKey: string; path: string } => ({ issueKey: "SYN-1", path });
 const MAX = JIRA_ATTACHMENT_MAX_BYTES;
+
+describe("closed avatar image source purpose", () => {
+  const IMAGE = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jE0sAAAAASUVORK5CYII=", "base64");
+  const REQUEST = { kind: "connected-file", path: "docs/avatar.png", maxBytes: MAX, purpose: "jira-avatar-image" } as const;
+  function writeImage(bytes: Uint8Array = IMAGE): void { writeFileSync(join(root, REQUEST.path), bytes); }
+  it("previews an admitted image before approval without granting its later send", async () => {
+    connect({}); writeImage();
+    const preview = jiraChatAvatarPreviewSource(deps(), { chatId, correlationId: "avatar-source" });
+    expect(await preview(REQUEST)).toMatchObject({ ok: true, content: { name: "avatar.png" } });
+    const source = jiraChatAttachmentSource(deps(), { chatId, correlationId: "avatar-source", review: () => ({ required: true, reviewed: undefined }) });
+    expect(await source(REQUEST)).toMatchObject({ ok: false, reason: "conflict" });
+    expect(await preview({ ...REQUEST, purpose: "jira-email-template-pack" })).toMatchObject({ ok: false });
+  });
+  it("requires a server integrity snapshot even when existing policy allows the effect", async () => {
+    connect({}); writeImage();
+    const options = { chatId, correlationId: "avatar-source", review: (): JiraChatAttachmentReview => ({ required: false }) };
+    expect(await jiraChatAttachmentSource(deps(), options)(REQUEST)).toMatchObject({ ok: false, reason: "conflict" });
+    const snapshot = await previewJiraAvatarImage(deps(), chatId, REQUEST.path, "avatar-source");
+    if (snapshot === undefined) throw new TypeError("Missing native image fixture snapshot");
+    expect(Object.isFrozen(snapshot)).toBe(true);
+    expect(await jiraChatAttachmentSource(deps(), { ...options, avatarSnapshot: snapshot })(REQUEST)).toMatchObject({ ok: true, content: { sha256: snapshot.sha256 } });
+    expect(options.review()).toEqual({ required: false });
+  });
+  it("does not substitute an allowed-mode byte snapshot for a required review", async () => {
+    connect({}); writeImage();
+    const avatarSnapshot = await previewJiraAvatarImage(deps(), chatId, REQUEST.path, "avatar-source");
+    if (avatarSnapshot === undefined) throw new TypeError("Missing image snapshot");
+    expect(await jiraChatAttachmentSource(deps(), { chatId, correlationId: "avatar-source", avatarSnapshot,
+      review: () => ({ required: true, reviewed: undefined }) })(REQUEST)).toMatchObject({ ok: false, reason: "conflict" });
+  });
+  it("uses the exact approved image and refuses changed bytes without replacing the approval", async () => {
+    connect({}); writeImage();
+    const reviewed = await previewJiraAvatarImage(deps(), chatId, REQUEST.path, "avatar-source");
+    const source = jiraChatAttachmentSource(deps(), { chatId, correlationId: "avatar-source", review: () => ({ required: true, reviewed }) });
+    expect(await source(REQUEST)).toMatchObject({ ok: true });
+    writeImage(new Uint8Array([255, 216, 255, 224, 0, 2, 255, 217]));
+    expect(await source(REQUEST)).toMatchObject({ ok: false, reason: "conflict" });
+    expect(logs.events.at(-1)?.extra).toMatchObject({ refusal: "changed-after-review" });
+  });
+  it("rechecks the actual connected selection and refuses unconnected Coding/task-like paths", async () => {
+    writeImage();
+    expect(await previewJiraAvatarImage(deps(), chatId, REQUEST.path, "avatar-source")).toBeUndefined();
+    connect({});
+    const avatarSnapshot = await previewJiraAvatarImage(deps(), chatId, REQUEST.path, "avatar-source");
+    if (avatarSnapshot === undefined) throw new TypeError("Missing image snapshot");
+    const source = jiraChatAttachmentSource(deps(), { chatId, correlationId: "avatar-source", avatarSnapshot, review: () => ({ required: false }) });
+    connect({ kind: "directory", relativePaths: ["other"] });
+    expect(await source(REQUEST)).toMatchObject({ ok: false, reason: "field-validation" });
+  });
+  it("does not open ordinary text/archive/image-like filenames as avatars or log raw file metadata", async () => {
+    connect({}); writeImage(Buffer.from("ordinary text, not image"));
+    expect(await previewJiraAvatarImage(deps(), chatId, REQUEST.path, "avatar-source")).toBeUndefined();
+    writeImage(Buffer.concat([IMAGE, Buffer.from(CONFIGURED_SECRET)]));
+    expect(await previewJiraAvatarImage(deps(), chatId, REQUEST.path, "avatar-source")).toBeUndefined();
+    expect(JSON.stringify(logs.events)).not.toContain(CONFIGURED_SECRET);
+    expect(JSON.stringify(logs.events)).not.toContain("avatar.png");
+  });
+});
 
 describe("closed email-template ZIP source purpose", () => {
   function writePack(content = "Synthetic notification $issue.summary"): void {
@@ -531,6 +592,13 @@ describe("what policy and the approval registry say about an attachment", () => 
       .toEqual({ required: true, reviewed: undefined });
     expect(attachmentReviewFor("allowed", approval({ operation: "jira.upload-email-template-pack", attachment: preview })))
       .toEqual({ required: false });
+  });
+  it.each(JIRA_AVATAR_UPLOAD_MUTATIONS)("binds the existing file approval to the exact avatar upload %s", (operation) => {
+    const reviewed = approval({ operation, attachment: preview });
+    expect(attachmentReviewFor("review-required", reviewed, operation)).toEqual({ required: true, reviewed: preview });
+    expect(attachmentReviewFor("review-required", reviewed, "jira.attach")).toEqual({ required: true, reviewed: undefined });
+    expect(attachmentReviewFor("review-required", approval({ operation: "jira.attach", attachment: preview }), operation)).toEqual({ required: true, reviewed: undefined });
+    expect(attachmentReviewFor("allowed", undefined, operation)).toEqual({ required: false });
   });
 });
 

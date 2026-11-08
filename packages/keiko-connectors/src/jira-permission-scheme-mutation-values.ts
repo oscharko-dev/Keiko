@@ -107,7 +107,7 @@ export function permissionGrantSnapshots(value: unknown): readonly PermissionGra
   const rows = grantValues(value, permissionGrantSnapshot);
   return rows !== undefined && new Set(rows.map(({ id }) => id)).size === rows.length ? rows : undefined;
 }
-function expectedScheme(value: unknown): PermissionSchemeSnapshot | undefined {
+export function jiraPermissionSchemeInputSnapshot(value: unknown): PermissionSchemeSnapshot | undefined {
   const raw = asRecord(value);
   if (raw === undefined || !savedExactKeys(raw, SNAPSHOT_FIELDS) || !jiraNativeId(raw.id) || !savedName(raw.name) || !savedText(raw.description, 32768, true)) return undefined;
   const permissions = grantValues(raw.permissions, expectedGrant);
@@ -170,7 +170,7 @@ const SELECT_INPUT: Readonly<Record<JiraPermissionSchemeMutation, (base: Permiss
 };
 export function parsePermissionSchemeInput(operation: JiraPermissionSchemeMutation, args: CatalogJsonObject): PermissionSchemeInput | undefined {
   if (!savedExactKeys(args, INPUT_FIELDS[operation]) || !savedText(args.expectedActorKey, 255)) return undefined;
-  const expected = operation === "jira.create-permission-scheme" ? undefined : expectedScheme(args.expectedScheme);
+  const expected = operation === "jira.create-permission-scheme" ? undefined : jiraPermissionSchemeInputSnapshot(args.expectedScheme);
   if (operation !== "jira.create-permission-scheme" && expected === undefined) return undefined;
   if (new TextEncoder().encode(JSON.stringify(args)).byteLength > TOOL_CATALOG_LIMITS.maxArgumentBytes) return undefined;
   return SELECT_INPUT[operation]({ operation, actor: args.expectedActorKey, ...(expected === undefined ? {} : { expected }) }, args);

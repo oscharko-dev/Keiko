@@ -3,6 +3,9 @@ import { isBoundedExternalJsonSchema } from "@oscharko-dev/keiko-contracts/runti
 import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
 import { WORKFLOW_SCHEME_MUTATION_FIXTURE_CASES as CASES } from "../../../../tests/support/jira-workflow-scheme-mutation-fixture.js";
 import { JIRA_WORKFLOW_SCHEME_WRITE_DEFINITIONS as DEFINITIONS, jiraWorkflowSchemeMutationDeclarationForTool as declaration } from "./jiraWorkflowSchemeMutationDescriptors.js";
+import { compileExternalCatalogSchema } from "@oscharko-dev/keiko-tool-catalog";
+import { jiraNativeWriteResult, jiraNativeIdentitySchema } from "./jiraProjectStructureDescriptors.js";
+import { text } from "./jiraManagedSchemas.js";
 
 describe("closed workflow scheme configuration declarations", () => {
   it.each(CASES)("compiles the exact $name declaration and native context", ({ name, args, receipt, confirmed }) => {
@@ -32,6 +35,24 @@ describe("closed workflow scheme configuration declarations", () => {
     if (actual === undefined) throw new TypeError("Missing workflow scheme declaration");
     expect(describeCatalogSchemaMismatch(actual.descriptor.inputSchema, { ...CASES[1].args, description: "", defaultWorkflow: null, mappings: [] })).toBeUndefined();
     expect(describeCatalogSchemaMismatch(actual.descriptor.inputSchema, { expectedActorKey: CASES[1].args.expectedActorKey, expectedScheme: CASES[1].args.expectedScheme })).toBeDefined();
+  });
+  it("requires a false mapping marker for new success while preserving the immutable legacy result schema", () => {
+    const actual = declaration("jira.update-workflow-scheme");
+    if (actual === undefined) throw new TypeError("Missing workflow scheme declaration");
+    const legacySchema = compileExternalCatalogSchema(jiraNativeWriteResult({
+      userKey: { ...text(255), minLength: 1 }, schemeId: jiraNativeIdentitySchema,
+      workflowSchemeScope: { type: "string", enum: ["scheme"] }, schemePresent: { type: "boolean" },
+    }));
+    const original = JSON.stringify(legacySchema);
+    const legacyReceipt = { userKey: "actor", schemeId: "37", workflowSchemeScope: "scheme", schemePresent: true };
+    const historicSuccess = { outcome: "succeeded", ...legacyReceipt };
+    expect(describeCatalogSchemaMismatch(legacySchema, historicSuccess)).toBeUndefined();
+    expect(describeCatalogSchemaMismatch(actual.descriptor.resultSchema, historicSuccess)).toBeDefined();
+    expect(describeCatalogSchemaMismatch(actual.descriptor.resultSchema, { ...historicSuccess, workflowMappingChanged: true })).toBeDefined();
+    expect(describeCatalogSchemaMismatch(actual.descriptor.resultSchema, { ...historicSuccess, workflowMappingChanged: false })).toBeUndefined();
+    expect(describeCatalogSchemaMismatch(actual.descriptor.resultSchema, { ...historicSuccess, outcome: "unknown" })).toBeUndefined();
+    expect(JSON.stringify(legacySchema)).toBe(original);
+    expect(describeCatalogSchemaMismatch(legacySchema, historicSuccess)).toBeUndefined();
   });
   it("has no workflow-definition, publication or arbitrary proxy declaration", () => {
     for (const name of ["jira.publish-workflow-scheme", "jira.update-workflow", "PUT /workflowscheme/1", "jira.workflow-scheme-proxy"]) expect(declaration(name)).toBeUndefined();

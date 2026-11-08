@@ -78,6 +78,54 @@ import {
   type JiraMutationOperation,
 } from "./jira-tool-execution.js";
 
+const JIRA_RESOURCE_ACCOUNT_ADMIN_ACTIONS = Object.freeze([
+  "unlock-user-anonymization",
+  "upload-temporary-avatar",
+  "crop-temporary-avatar",
+  "upload-issue-type-avatar",
+  "create-issue-type-avatar",
+  "upload-project-avatar",
+  "create-project-avatar",
+  "set-project-avatar",
+  "delete-project-avatar",
+  "upload-owned-avatar",
+  "create-owned-avatar",
+  "delete-owned-avatar",
+  "upload-user-avatar",
+  "create-user-avatar",
+  "set-user-avatar",
+  "delete-user-avatar",
+  "create-user",
+  "update-user",
+  "delete-user",
+  "invalidate-user-session",
+  "schedule-user-anonymization",
+  "rerun-user-anonymization",
+  "create-reciprocal-remote-link",
+  "delete-project",
+  "archive-project",
+  "restore-project",
+  "update-project-type",
+  "set-project-permission-scheme",
+  "set-project-priority-scheme",
+  "remove-project-priority-scheme",
+  "update-user-password",
+] as const);
+const JIRA_RESOURCE_ACCOUNT_WRITE_ACTIONS = Object.freeze([
+  "archive-issues",
+  "delete-issue",
+  "archive-issue",
+  "restore-issue",
+  "move-subtask",
+  "create-issues",
+  "update-myself",
+  "update-my-password",
+  "login",
+  "logout",
+  "release-websudo",
+] as const);
+type JiraResourceAccountAction = (typeof JIRA_RESOURCE_ACCOUNT_ADMIN_ACTIONS)[number] | (typeof JIRA_RESOURCE_ACCOUNT_WRITE_ACTIONS)[number];
+
 type JiraEntityPropertyAction = JiraEntityPropertyMutation extends `jira.${infer Action}` ? Action : never;
 function jiraPropertyAction(name: JiraEntityPropertyMutation): JiraEntityPropertyAction {
   return name.slice(5) as JiraEntityPropertyAction;
@@ -711,6 +759,7 @@ export type AtlassianSyncJobState =
 // ─── Governed action vocabulary and effect-class table (ADR-0128 D4) ──────────
 export type AtlassianConnectorActionType =
   | JiraManagedReadToolName
+  | JiraResourceAccountAction
   | JiraEntityPropertyAction
   | JiraSavedConfigurationAction
   | JiraRelationshipOrReleaseAction
@@ -764,6 +813,8 @@ export type AtlassianConnectorActionType =
 
 export const ATLASSIAN_CONNECTOR_ACTION_TYPES: readonly AtlassianConnectorActionType[] =
   Object.freeze([
+    ...JIRA_RESOURCE_ACCOUNT_ADMIN_ACTIONS,
+    ...JIRA_RESOURCE_ACCOUNT_WRITE_ACTIONS,
     ...JIRA_DIRECTORY_SCHEMA_MAINTENANCE_ACTIONS,
     ...JIRA_ISSUE_ACTIONS,
     ...JIRA_SCHEME_RUNTIME_EMAIL_ACTIONS,
@@ -824,6 +875,48 @@ export const JIRA_REQUIREMENT_REFERENCE_CHARS_MAX = 120;
 export const JIRA_MANAGED_ACTION_TYPES: Readonly<
   Record<JiraManagedReadToolName | JiraMutationOperation, AtlassianConnectorActionType>
 > = Object.freeze({
+  "jira.unlock-user-anonymization": "unlock-user-anonymization",
+  "jira.upload-temporary-avatar": "upload-temporary-avatar",
+  "jira.crop-temporary-avatar": "crop-temporary-avatar",
+  "jira.upload-issue-type-avatar": "upload-issue-type-avatar",
+  "jira.create-issue-type-avatar": "create-issue-type-avatar",
+  "jira.upload-project-avatar": "upload-project-avatar",
+  "jira.create-project-avatar": "create-project-avatar",
+  "jira.set-project-avatar": "set-project-avatar",
+  "jira.delete-project-avatar": "delete-project-avatar",
+  "jira.upload-owned-avatar": "upload-owned-avatar",
+  "jira.create-owned-avatar": "create-owned-avatar",
+  "jira.delete-owned-avatar": "delete-owned-avatar",
+  "jira.upload-user-avatar": "upload-user-avatar",
+  "jira.create-user-avatar": "create-user-avatar",
+  "jira.set-user-avatar": "set-user-avatar",
+  "jira.delete-user-avatar": "delete-user-avatar",
+  "jira.create-user": "create-user",
+  "jira.update-user": "update-user",
+  "jira.delete-user": "delete-user",
+  "jira.invalidate-user-session": "invalidate-user-session",
+  "jira.schedule-user-anonymization": "schedule-user-anonymization",
+  "jira.rerun-user-anonymization": "rerun-user-anonymization",
+  "jira.archive-issues": "archive-issues",
+  "jira.delete-issue": "delete-issue",
+  "jira.archive-issue": "archive-issue",
+  "jira.restore-issue": "restore-issue",
+  "jira.move-subtask": "move-subtask",
+  "jira.create-issues": "create-issues",
+  "jira.create-reciprocal-remote-link": "create-reciprocal-remote-link",
+  "jira.delete-project": "delete-project",
+  "jira.archive-project": "archive-project",
+  "jira.restore-project": "restore-project",
+  "jira.update-project-type": "update-project-type",
+  "jira.set-project-permission-scheme": "set-project-permission-scheme",
+  "jira.set-project-priority-scheme": "set-project-priority-scheme",
+  "jira.remove-project-priority-scheme": "remove-project-priority-scheme",
+  "jira.update-myself": "update-myself",
+  "jira.update-my-password": "update-my-password",
+  "jira.update-user-password": "update-user-password",
+  "jira.login": "login",
+  "jira.logout": "logout",
+  "jira.release-websudo": "release-websudo",
   "jira.create-group": "create-group",
   "jira.delete-group": "delete-group",
   "jira.add-group-user": "add-group-user",
@@ -1029,6 +1122,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASSES: readonly AtlassianConnectorActi
 export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
   Record<AtlassianConnectorActionType, AtlassianConnectorActionClass>
 > = Object.freeze({
+  ...jiraActionValues(JIRA_RESOURCE_ACCOUNT_ADMIN_ACTIONS, "connector-admin"),
+  ...jiraActionValues(JIRA_RESOURCE_ACCOUNT_WRITE_ACTIONS, "connector-write"),
   ...jiraActionValues(JIRA_DIRECTORY_SCHEMA_MAINTENANCE_ACTIONS, "connector-admin"),
   ...jiraActionValues(JIRA_ISSUE_ACTIONS, "connector-write"),
   ...jiraActionValues(JIRA_SCHEME_RUNTIME_EMAIL_ACTIONS, "connector-admin"),
@@ -1041,6 +1136,7 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
   ...jiraActionValues(JIRA_SAVED_ADMIN_ACTIONS, "connector-admin"),
   ...jiraActionValues(JIRA_SAVED_WRITE_ACTIONS, "connector-write"),
   ...jiraActionValues(JIRA_MANAGED_READ_TOOLS, "connector-access"),
+  "jira.validate-license": "connector-admin",
   ...jiraActionValues(JIRA_READ_TOOL_FAMILIES.anonymization, "connector-admin"),
   ...jiraActionValues(JIRA_READ_TOOL_FAMILIES.emailTemplatePacks, "connector-admin"),
   ...jiraActionValues(JIRA_PROPERTY_ACTIONS, "connector-write"),
@@ -1092,6 +1188,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
 export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
   Record<AtlassianConnectorActionType, AtlassianConnectorProvider>
 > = Object.freeze({
+  ...jiraActionValues(JIRA_RESOURCE_ACCOUNT_ADMIN_ACTIONS, "jira"),
+  ...jiraActionValues(JIRA_RESOURCE_ACCOUNT_WRITE_ACTIONS, "jira"),
   ...jiraActionValues(JIRA_DIRECTORY_SCHEMA_MAINTENANCE_ACTIONS, "jira"),
   ...jiraActionValues(JIRA_ISSUE_ACTIONS, "jira"),
   ...jiraActionValues(JIRA_SCHEME_RUNTIME_EMAIL_ACTIONS, "jira"),
@@ -1148,6 +1246,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
 export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchConnectorScope>
 > = Object.freeze({
+  ...jiraActionValues(JIRA_RESOURCE_ACCOUNT_ADMIN_ACTIONS, "issue-tracker.admin"),
+  ...jiraActionValues(JIRA_RESOURCE_ACCOUNT_WRITE_ACTIONS, "issue-tracker.write"),
   ...jiraActionValues(JIRA_DIRECTORY_SCHEMA_MAINTENANCE_ACTIONS, "issue-tracker.admin"),
   ...jiraActionValues(JIRA_ISSUE_ACTIONS, "issue-tracker.write"),
   ...jiraActionValues(JIRA_SCHEME_RUNTIME_EMAIL_ACTIONS, "issue-tracker.admin"),
@@ -1160,6 +1260,7 @@ export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
   ...jiraActionValues(JIRA_SAVED_ADMIN_ACTIONS, "issue-tracker.admin"),
   ...jiraActionValues(JIRA_SAVED_WRITE_ACTIONS, "issue-tracker.write"),
   ...jiraActionValues(JIRA_MANAGED_READ_TOOLS, "issue-tracker.read"),
+  "jira.validate-license": "issue-tracker.admin",
   ...jiraActionValues(JIRA_READ_TOOL_FAMILIES.anonymization, "issue-tracker.admin"),
   ...jiraActionValues(JIRA_READ_TOOL_FAMILIES.emailTemplatePacks, "issue-tracker.admin"),
   ...jiraActionValues(JIRA_PROPERTY_ACTIONS, "issue-tracker.write"),
@@ -1221,6 +1322,8 @@ export function jiraRequiredConnectorScope(
 export const ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchApprovalRisk>
 > = Object.freeze({
+  ...jiraActionValues(JIRA_RESOURCE_ACCOUNT_ADMIN_ACTIONS, "high"),
+  ...jiraActionValues(JIRA_RESOURCE_ACCOUNT_WRITE_ACTIONS, "high"),
   ...jiraActionValues(JIRA_DIRECTORY_SCHEMA_MAINTENANCE_ACTIONS, "high"),
   ...jiraActionValues(JIRA_ISSUE_ACTIONS, "high"),
   "pin-comment": "medium",
@@ -1242,6 +1345,7 @@ export const ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK: Readonly<
   "remove-and-swap-version": "high",
   "delete-filter": "high",
   ...jiraActionValues(JIRA_MANAGED_READ_TOOLS, "low"),
+  "jira.validate-license": "high",
   ...jiraActionValues(JIRA_PROPERTY_ACTIONS, "high"),
   "set-app-monitoring": "high",
   "set-ipd-monitoring": "high",
@@ -2290,3 +2394,25 @@ export {
   type JiraReportSection,
   type JiraReportStatusCategory,
 } from "./jira-report.js";
+
+export {
+  JIRA_HUMAN_INPUT_PURPOSES,
+  JIRA_HUMAN_INPUT_FIELDS,
+  JIRA_HUMAN_INPUT_FIELD_SETS,
+  JIRA_HUMAN_INPUT_MAX_BYTES,
+  JIRA_HUMAN_INPUT_MAX_LIFETIME_MS,
+  isJiraHumanInputView,
+  type JiraHumanInputPurpose,
+  type JiraHumanInputField,
+  type JiraHumanInputState,
+  type JiraHumanInputView,
+  type JiraHumanInputSubmission,
+} from "./jira-human-input.js";
+export {
+  JIRA_AVATAR_MUTATIONS, type JiraAvatarMutation,
+  JIRA_AVATAR_UPLOAD_MUTATIONS, type JiraAvatarUploadMutation, isJiraAvatarUploadOperation,
+  JIRA_IDENTITY_MUTATIONS, type JiraIdentityMutation,
+  JIRA_PRIVATE_ACCOUNT_MUTATIONS, type JiraPrivateAccountMutation,
+  JIRA_ISSUE_LIFECYCLE_MUTATIONS, type JiraIssueLifecycleMutation,
+  JIRA_PROJECT_LIFECYCLE_MUTATIONS, type JiraProjectLifecycleMutation,
+} from "./jira-tool-execution.js";

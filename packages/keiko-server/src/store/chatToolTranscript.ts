@@ -15,6 +15,8 @@ import type {
   ChatToolWriteApprovalView,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  isJiraHumanInputView,
+  type JiraHumanInputView,
   JIRA_MUTATION_OUTCOMES,
   JIRA_MUTATION_OPERATIONS,
   JIRA_MANAGED_READ_TOOLS,
@@ -42,6 +44,7 @@ import { invalidRequest, notFound } from "./errors.js";
 import { withImmediateTransaction } from "./transaction.js";
 
 export type ChatToolTranscriptUpdate =
+  | { readonly kind: "human-input"; readonly callId: string; readonly view: JiraHumanInputView }
   | {
       /** An observed native Coding result: start and settlement are one existing-store transaction. */
       readonly kind: "captured";
@@ -56,6 +59,8 @@ export type ChatToolTranscriptUpdate =
       readonly kind: "started";
       readonly call: ChatToolExchange["call"];
       readonly operationBinding?: JiraOperationBinding;
+      /** Existing Coding invocation digest, before protected-input waiting; never a result. */
+      readonly nativeArgumentsDigest?: string;
     }
   | { readonly kind: "write-prepared"; readonly callId: string; readonly sourceDigest: string }
   | {
@@ -138,7 +143,7 @@ const UPDATE = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["started", "captured", "write-prepared", "settled", "read-consent", "write-approval"],
+      values: ["started", "captured", "write-prepared", "settled", "read-consent", "write-approval", "human-input"],
     },
     exchangeCount: { type: "integer", dataClass: "count", required: true },
     draftReceiptCount: { type: "integer", dataClass: "count", required: false },
@@ -200,9 +205,10 @@ function approvalActionDigest(
   argumentsDigest: string,
   operationBinding?: JiraOperationBinding,
   sourceDigest?: string,
+  humanInputRevision?: string,
 ): string {
   return approval.kind === "jira-chat-write"
-    ? jiraOperationActionDigest(approval.operation, argumentsDigest, operationBinding, sourceDigest)
+    ? jiraOperationActionDigest(approval.operation, argumentsDigest, operationBinding, sourceDigest, humanInputRevision)
     : sha256Hex(canonicalise({ operation: approval.operation, argumentsDigest }));
 }
 function matchesApprovalCall(
@@ -211,6 +217,7 @@ function matchesApprovalCall(
   identity: TranscriptIdentity,
   operationBinding?: JiraOperationBinding,
   sourceDigest?: string,
+  humanInputRevision?: string,
 ): boolean {
   return (
     (approval.kind === "jira-chat-write" ||
@@ -225,6 +232,7 @@ function matchesApprovalCall(
         sha256Hex(canonicalise(call.arguments)),
         operationBinding,
         sourceDigest,
+        humanInputRevision,
       )
   );
 }
@@ -266,7 +274,8 @@ function validApproval(
   return (
     isChatToolWriteApprovalView(value.approval) &&
     identity !== undefined &&
-    matchesApprovalCall(value.approval, call, identity, value.operationBinding, value.sourceDigest)
+    matchesApprovalCall(value.approval, call, identity, value.operationBinding, value.sourceDigest,
+      isJiraHumanInputView(value.humanInput) ? value.humanInput.revision : undefined)
   );
 }
 
@@ -331,11 +340,13 @@ function validExchange(
       "nativeArgumentsDigest",
       "mutationOutcome",
       "draftProgress",
+      "humanInput",
     ]) ||
     !validCall(value.call)
   )
     return false;
   if (!validEffectProjections(value, value.call, identity)) return false;
+  if (value.humanInput !== undefined && !validHumanInput(value.humanInput, value.call)) return false;
   if (!validResultBinding(value)) return false;
   if (value.result !== undefined)
     validateToolResultEnvelope(
@@ -437,11 +448,12 @@ function projectStoredTranscript(
     : {
         ...stored,
         exchanges: stored.exchanges.map(
-          ({ call, result, approval, mutationOutcome, draftProgress }) => ({
+          ({ call, result, approval, mutationOutcome, draftProgress, humanInput }) => ({
             call: canonicalCall(call),
             ...(result === undefined ? {} : { result }),
             ...(draftProgress === undefined ? {} : { draftProgress }),
             ...(approval === undefined ? {} : { approval }),
+            ...(humanInput === undefined ? {} : { humanInput }),
             ...(mutationOutcome === undefined ? {} : { mutationOutcome }),
           }),
         ),
@@ -521,6 +533,7 @@ function applyExchange(
           ...(update.operationBinding === undefined
             ? {}
             : { operationBinding: update.operationBinding }),
+          ...(update.nativeArgumentsDigest === undefined ? {} : { nativeArgumentsDigest: update.nativeArgumentsDigest }),
         },
       ],
     };
@@ -557,6 +570,7 @@ function applyUpdate(
     const started = applyExchange(current, {
       kind: "started", call: update.call,
       ...(update.operationBinding === undefined ? {} : { operationBinding: update.operationBinding }),
+      ...(update.nativeArgumentsDigest === undefined ? {} : { nativeArgumentsDigest: update.nativeArgumentsDigest }),
     });
     const captured = { ...started, exchanges: started.exchanges.map((exchange) =>
       exchange.call.id === update.call.id && update.nativeArgumentsDigest !== undefined
@@ -567,6 +581,7 @@ function applyUpdate(
       ...(update.mutationOutcome === undefined ? {} : { mutationOutcome: update.mutationOutcome }),
     });
   }
+  if (update.kind === "human-input") return applyHumanInput(current, update);
   if (update.kind === "write-prepared") return applyPrepared(current, update);
   if (update.kind === "write-approval") return applyApproval(current, update, chatId, messageId);
   if (update.kind !== "read-consent") return applyExchange(current, update);
@@ -576,6 +591,31 @@ function applyUpdate(
     ? grants.map((grant) => (grant.kind === update.grant.kind ? update.grant : grant))
     : [...grants, update.grant];
   return { ...current, readGrant: update.grant, readGrants };
+}
+
+function validHumanInput(value: unknown, call: ChatToolExchange["call"]): value is JiraHumanInputView {
+  return isJiraHumanInputView(value) && call.name === `jira_${value.purpose.replaceAll("-", "_")}`;
+}
+
+/** An immutable request can advance once to ready, then only to a terminal state. */
+function humanInputTransition(previous: JiraHumanInputView, next: JiraHumanInputView): boolean {
+  if (previous.requestId !== next.requestId || previous.purpose !== next.purpose || previous.expiresAt !== next.expiresAt) return false;
+  if (canonicalise(previous) === canonicalise(next)) return true;
+  if (previous.state === "awaiting-input") return next.state === "ready" || next.state === "cancelled" || next.state === "expired";
+  return previous.state === "ready" && previous.revision === next.revision &&
+    (next.state === "consumed" || next.state === "cancelled" || next.state === "expired");
+}
+
+function applyHumanInput(
+  current: StoredTranscript,
+  update: Extract<ChatToolTranscriptUpdate, { kind: "human-input" }>,
+): StoredTranscript {
+  const exchange = current.exchanges.find((entry) => entry.call.id === update.callId);
+  if (exchange === undefined || exchange.result !== undefined || !validHumanInput(update.view, exchange.call))
+    throw invalidRequest("Private tool input identity conflict.");
+  if (exchange.humanInput === undefined ? update.view.state !== "awaiting-input" : !humanInputTransition(exchange.humanInput, update.view))
+    throw invalidRequest("Private tool input state conflict.");
+  return { ...current, exchanges: current.exchanges.map((entry) => entry === exchange ? { ...entry, humanInput: update.view } : entry) };
 }
 
 function validSourceDigest(value: unknown): value is string {
@@ -624,6 +664,7 @@ function applyApproval(
       { messageId, chatId },
       operationBinding,
       exchange.sourceDigest,
+      exchange.humanInput?.revision,
     )
   )
     throw invalidRequest("Tool approval identity conflict.");
@@ -746,7 +787,8 @@ function sameStartedExchange(
   return (
     canonicalise(canonicalCall(existing.call)) === canonicalise(canonicalCall(update.call)) &&
     canonicalise(existing.operationBinding ?? null) ===
-      canonicalise(update.operationBinding ?? null)
+      canonicalise(update.operationBinding ?? null) &&
+    existing.nativeArgumentsDigest === update.nativeArgumentsDigest
   );
 }
 
@@ -768,9 +810,21 @@ function redactUpdate(
   update: ChatToolTranscriptUpdate,
   redact: (value: string) => string,
 ): ChatToolTranscriptUpdate {
-  if (update.kind === "started") return { ...update, call: redactCall(update, redact) };
+  if (update.kind === "started") {
+    if (update.nativeArgumentsDigest !== undefined &&
+        (!update.call.id.startsWith("mcp-") || update.operationBinding === undefined ||
+          update.nativeArgumentsDigest !== sha256Hex(canonicalise(update.call.arguments))))
+      throw invalidRequest("Invalid pending native tool identity.");
+    return { ...update, call: redactCall(update, redact) };
+  }
   if (update.kind === "captured") return redactCaptured(update, redact);
   if (update.kind === "settled") return redactSettlement(update, redact);
+  if (update.kind === "human-input") {
+    if (!isJiraHumanInputView(update.view)) throw invalidRequest("Invalid private input projection.");
+    // Copy only the closed public DTO; no submission value may survive via an extra property.
+    return { kind: "human-input", callId: update.callId, view: { ...update.view,
+      fields: [...update.view.fields], optionalFields: [...update.view.optionalFields] } };
+  }
   if (update.kind === "write-prepared") {
     if (!validSourceDigest(update.sourceDigest))
       throw invalidRequest("Invalid tool source snapshot.");

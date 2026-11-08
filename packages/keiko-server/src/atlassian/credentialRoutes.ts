@@ -98,6 +98,13 @@ export interface AtlassianCredentialHttpOptions extends AtlassianHttpLifecycleOp
 }
 
 export interface AtlassianConnectorCredentialDeps {
+  /** Fixed private Identity/Avatar ports; cookie and human secret resolvers stay inside wiring. */
+  readonly jiraPrivatePortFactory?: (
+    metadata: AtlassianCredentialMetadata,
+    context: import("@oscharko-dev/keiko-contracts/runtime/managed-mcp").ManagedMcpInvocationContext,
+    options: import("./httpPrivateIdentity.js").JiraPrivatePortOptions,
+    lifecycle?: AtlassianCredentialHttpOptions,
+  ) => import("./httpPrivateIdentity.js").JiraPrivatePortFactoryResult;
   /** Listener lifecycle owned by the BFF, never exposed through an HTTP request. */
   readonly registerListener?: (port: number) => () => void;
   readonly custody: AtlassianCredentialCustody;

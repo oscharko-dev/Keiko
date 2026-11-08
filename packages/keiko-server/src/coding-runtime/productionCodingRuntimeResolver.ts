@@ -5,6 +5,7 @@ import {
   CodingRuntimeLaunchRejectedError,
 } from "./launchFailure.js";
 import type { CodingJiraPods, CodingJiraRunAuthority } from "./codingJiraPodMcp.js";
+import { sha256Hex } from "@oscharko-dev/keiko-security";
 import { isAgentAdmitted, openCodeSelectableAgents } from "./opencodeAgents.js";
 import { openCodePromptInputs } from "./opencodePromptInputs.js";
 import { openCodeVisibleToolNames, type OpenCodeToolProfile } from "./opencodeToolSchemas.js";
@@ -142,6 +143,7 @@ import {
   CodingRuntimeAuthorityService,
   type CodingRuntimeMintResult,
   type CodingRuntimeTrustedContext,
+  type CodingRuntimeResolution,
 } from "./runtimeAuthorityService.js";
 import {
   createCodingToolApprovalBridge,
@@ -1459,6 +1461,7 @@ function createBackendRun({
     jiraAuthority: {
       runId: request.runId,
       currentScopes: (phase) => runtimeJiraScopes(input, context, minted, authority, phase),
+      currentInputAuthority: () => runtimeJiraInputAuthority(input, context, minted, authority),
     },
     resolveWorkspaceRootAccess,
     contextUsage,
@@ -1933,6 +1936,15 @@ function runtimeJiraScopes(
   authority: CodingRuntimeAuthorityService,
   phase: "discovery" | "effect",
 ): ReturnType<CodingJiraRunAuthority["currentScopes"]> {
+  return runtimeJiraEnvelope(input, context, minted, authority, phase)?.authority.connectorScopes;
+}
+function runtimeJiraEnvelope(
+  input: ProductionCodingRuntimeResolverInput,
+  context: CodingRuntimeTrustedContext,
+  minted: MintedRuntime,
+  authority: CodingRuntimeAuthorityService,
+  phase: "discovery" | "effect",
+): Extract<CodingRuntimeResolution, { ok: true }>["envelope"] | undefined {
   const request = {
     capability: minted.toolFacadeCapability,
     adapterKind: adapterKind(context),
@@ -1944,7 +1956,16 @@ function runtimeJiraScopes(
   const resolved = phase === "discovery" && authority.state().state === "starting"
     ? authority.revalidateCapabilityForPendingSpawn(request)
     : authority.revalidateCapabilityForMutation(request);
-  return resolved.ok ? resolved.envelope.authority.connectorScopes : undefined;
+  return resolved.ok ? resolved.envelope : undefined;
+}
+
+function runtimeJiraInputAuthority(input: ProductionCodingRuntimeResolverInput, context: CodingRuntimeTrustedContext,
+  minted: MintedRuntime, authority: CodingRuntimeAuthorityService): ReturnType<NonNullable<CodingJiraRunAuthority["currentInputAuthority"]>> {
+  const envelope = runtimeJiraEnvelope(input, context, minted, authority, "effect");
+  if (envelope === undefined || envelope.authority.runId !== minted.authorityRef.runId ||
+      editorAgentAuthorityEnvelopeDigest(envelope.authority) !== minted.authorityRef.envelopeDigest) return undefined;
+  return Object.freeze({ taskId: context.taskId, principalDigest: sha256Hex(context.operatorId),
+    authority: Object.freeze({ ...minted.authorityRef }), expiresAt: Date.parse(envelope.authority.expiresAt) });
 }
 
 function runtimeMutationLive(

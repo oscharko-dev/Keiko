@@ -1,5 +1,6 @@
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { recordConnectionCheck } from "./credentialActivity.js";
+import { createJiraPrivatePorts } from "./httpPrivateIdentity.js";
 import type {
   AtlassianCredentialHttpOptions,
   AtlassianConnectorCredentialDeps,
@@ -91,12 +92,23 @@ function lazyVaultPort(
       securityLogSink: options.securityLogSink,
     }));
   return {
+    list: () => open().list(),
     get: (reference: string): string | undefined => open().get(reference),
     set: (reference: string, secret: string): void => {
       open().set(reference, secret);
     },
     delete: (reference: string): void => {
       open().delete(reference);
+    },
+    compareAndSet: (reference, expected, next) => {
+      const compare = open().compareAndSet;
+      if (compare === undefined) throw new AtlassianCredentialCustodyError("vault-unavailable");
+      return compare(reference, expected, next);
+    },
+    acquireLease: (reference, scope) => {
+      const acquire = open().acquireLease;
+      if (acquire === undefined) throw new AtlassianCredentialCustodyError("vault-unavailable");
+      return acquire(reference, scope);
     },
   };
 }
@@ -114,6 +126,11 @@ export function buildAtlassianConnectorCredentialDeps(
   const owner = { options, listenerPorts, executionResolver, custody, metadataStore };
   return {
     custody,
+    jiraPrivatePortFactory: (metadata, context, privateOptions, lifecycle = {}) => createJiraPrivatePorts(
+      credentialTransportOptions(owner, metadata, context.correlationId, lifecycle),
+      credentialTransportOptions(owner, metadata, context.correlationId, lifecycle, false),
+      context, privateOptions,
+    ),
     registerListener: (port): (() => void) => {
       listenerPorts.add(port);
       return (): void => {
@@ -132,7 +149,21 @@ function generationBoundResolver(
   resolver: AtlassianCredentialExecutionResolver,
   generation: number,
 ): AtlassianCredentialExecutionResolver {
-  return { resolveForExecution: (authRef) => resolver.resolveForExecution(authRef, generation) };
+  const inputs = resolver.humanInputs;
+  const sessions = resolver.sessions;
+  const boundInputs: AtlassianCredentialExecutionResolver["humanInputs"] = inputs === undefined ? undefined : { claim: (id, binding, revision) => {
+    if (binding.authenticationGeneration !== generation) throw new AtlassianCredentialCustodyError("credential-changed");
+    return inputs.claim(id, binding, revision);
+  } };
+  const boundSessions: AtlassianCredentialExecutionResolver["sessions"] = sessions === undefined ? undefined : { withLease: (binding, execute) => {
+    if (binding.authenticationGeneration !== generation) throw new AtlassianCredentialCustodyError("credential-changed");
+    return sessions.withLease(binding, execute);
+  } };
+  return {
+    resolveForExecution: (authRef) => resolver.resolveForExecution(authRef, generation),
+    ...(boundInputs === undefined ? {} : { humanInputs: boundInputs }),
+    ...(boundSessions === undefined ? {} : { sessions: boundSessions }),
+  };
 }
 
 interface CredentialTransportOwner {
@@ -241,10 +272,11 @@ function credentialTransportOptions(
   metadata: AtlassianCredentialMetadata,
   correlationId: string | undefined,
   lifecycle: AtlassianCredentialHttpOptions = {},
+  observeCredentialAuthentication = true,
 ): CreateAtlassianHttpPortOptions {
   const { options, listenerPorts, executionResolver } = owner;
   const observe =
-    lifecycle.purpose === "verification"
+    lifecycle.purpose === "verification" || !observeCredentialAuthentication
       ? (): void => undefined
       : observedAuthentication(owner, metadata, correlationId ?? UNKNOWN_CORRELATION_ID);
   const beforeDispatch = lifecycle.beforeDispatch;

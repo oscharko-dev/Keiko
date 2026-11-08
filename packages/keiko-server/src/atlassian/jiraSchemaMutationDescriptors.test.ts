@@ -25,6 +25,26 @@ describe("closed schema mutation declarations", () => {
     expect(describeCatalogSchemaMismatch(actual.descriptor.inputSchema, { ...args, projectIds: [] })).toBeDefined();
     expect(describeCatalogSchemaMismatch(actual.descriptor.inputSchema, { ...args, issueTypeIds: [] })).toBeDefined();
   });
+  it.each([
+    "jira.create-custom-field", "jira.delete-custom-fields", "jira.create-issue-type",
+    "jira.delete-issue-type", "jira.delete-link-type", "jira.reset-link-type-order", "jira.move-link-type",
+  ] as const)("forbids a bare succeeded outcome for unconfirmed native action %s", (name) => {
+    const actual = declaration(name);
+    const fixture = SCHEMA_MUTATION_FIXTURE_CASES.find((candidate) => candidate.name === name);
+    if (actual === undefined || fixture === undefined) throw new TypeError("Missing schema fixture");
+    expect(describeCatalogSchemaMismatch(actual.descriptor.resultSchema, { outcome: "succeeded", ...fixture.receipt })).toBeDefined();
+    expect(describeCatalogSchemaMismatch(actual.descriptor.resultSchema, { outcome: "succeeded" })).toBeDefined();
+    for (const outcome of ["succeeded-unconfirmed", "unknown"])
+      expect(describeCatalogSchemaMismatch(actual.descriptor.resultSchema, { outcome, ...fixture.receipt })).toBeUndefined();
+  });
+  it.each(["jira.update-issue-type", "jira.create-link-type", "jira.update-link-type", "jira.set-terminology"] as const)(
+    "preserves independently confirmable metadata outcome for %s", (name) => {
+      const actual = declaration(name);
+      const fixture = SCHEMA_MUTATION_FIXTURE_CASES.find((candidate) => candidate.name === name);
+      if (actual === undefined || fixture === undefined) throw new TypeError("Missing schema fixture");
+      expect(describeCatalogSchemaMismatch(actual.descriptor.resultSchema, { outcome: "succeeded", ...fixture.receipt })).toBeUndefined();
+    },
+  );
   it("retains reviewed null, rejects missing/null desired descriptions and does not accept avatars", () => {
     const actual = declaration("jira.update-issue-type"); if (actual === undefined) throw new TypeError("Missing declaration");
     const args = SCHEMA_MUTATION_FIXTURE_CASES[3].args;

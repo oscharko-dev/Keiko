@@ -40,7 +40,7 @@ export type JiraAttachmentSourceResult =
     };
 export interface JiraAttachmentSourceRequest {
   /** Private composing-owner purpose; never a model-selectable generic archive capability. */
-  readonly purpose?: "jira-email-template-pack";
+  readonly purpose?: "jira-email-template-pack" | "jira-avatar-image";
   readonly kind: (typeof JIRA_ATTACHMENT_SOURCE_KINDS)[number];
   /** Relative to a root the owner already governs; the owner re-validates containment. */
   readonly path: string;

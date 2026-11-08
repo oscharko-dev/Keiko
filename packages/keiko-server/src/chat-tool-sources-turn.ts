@@ -46,6 +46,7 @@ import {
   type JiraChatCatalogContext,
 } from "./atlassian/jiraChatCatalogConsumer.js";
 import type { JiraChatSourcePreparation } from "./atlassian/jiraChatRequirementBinding.js";
+import { createJiraChatHumanInput } from "./atlassian/jiraChatHumanInput.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import {
   combineChatCatalogs,
@@ -125,9 +126,25 @@ function selectedSourceCatalog(
 function sourcePreparationFor(options: Options): {
   readonly initialContext: ChatSourcesContext;
   readonly sourcePreparation: JiraChatSourcePreparation | undefined;
+  readonly humanInput: ReturnType<typeof createJiraChatHumanInput> | undefined;
   readonly consumerPort: ReturnType<typeof createChatSourcesConsumerPort>;
 } {
-  const initialContext = sourceContext(options);
+  const baseContext = sourceContext(options);
+  const humanInput =
+    options.primary.kind === "jira"
+      ? createJiraChatHumanInput(options.primary.options, baseContext.jira)
+      : undefined;
+  const initialContext: ChatSourcesContext =
+    humanInput === undefined
+      ? baseContext
+      : {
+          ...baseContext,
+          jira: {
+            ...baseContext.jira,
+            humanInputFor: humanInput.selectionFor,
+            activeHumanInput: humanInput.currentSelection,
+          },
+        };
   const sourcePreparation =
     options.primary.kind === "jira"
       ? jiraSourcePreparationForTurn(options.primary.options, initialContext.jira)
@@ -135,8 +152,9 @@ function sourcePreparationFor(options: Options): {
   return {
     initialContext,
     sourcePreparation,
+    humanInput,
     consumerPort: createChatSourcesConsumerPort(
-      createJiraChatCatalogConsumerPort(sourcePreparation?.sourceDigestFor),
+      createJiraChatCatalogConsumerPort(sourcePreparation?.sourceDigestFor, humanInput?.revisionFor),
     ),
   };
 }
@@ -159,10 +177,12 @@ function sourceReviewPorts(
 /** One binder, harness and model loop; source adapters keep their existing consent and effect owners. */
 class ChatSourcesToolTurn extends ChatToolTurn<ChatSourcesContext> {
   private readonly sourcePreparation: JiraChatSourcePreparation | undefined;
+  private readonly humanInput: ReturnType<typeof createJiraChatHumanInput> | undefined;
   constructor(private readonly sourceOptions: Options) {
     const { deps, message, correlationId, primary, mcp } = sourceOptions;
     const managed = combineChatCatalogs(primary.options.managed, mcp.managed);
-    const { initialContext, sourcePreparation, consumerPort } = sourcePreparationFor(sourceOptions);
+    const { initialContext, sourcePreparation, humanInput, consumerPort } =
+      sourcePreparationFor(sourceOptions);
     const bind =
       (selected: typeof managed): ChatToolTurnOptions<ChatSourcesContext>["bind"] =>
       (context, budgetPort, invocationRegistry) =>
@@ -194,7 +214,13 @@ class ChatSourcesToolTurn extends ChatToolTurn<ChatSourcesContext> {
       budget: primary.options.authority.envelope.budget,
       ...(sourcePreparation === undefined
         ? {}
-        : { prepareInvocation: sourcePreparation.prepareInvocation }),
+        : {
+            prepareInvocation: async (call, actionId, ports) => {
+              const source = await sourcePreparation.prepareInvocation(call, actionId);
+              await humanInput?.prepare(call, actionId, ports);
+              return source;
+            },
+          }),
       ...(primary.kind === "jira"
         ? {
             guidance: JIRA_TOOL_GUIDANCE,
@@ -204,6 +230,7 @@ class ChatSourcesToolTurn extends ChatToolTurn<ChatSourcesContext> {
       bind: bind(managed),
     });
     this.sourcePreparation = sourcePreparation;
+    this.humanInput = humanInput;
   }
   protected override reserveAuthorityPrompt(promptTokens: number): boolean {
     return (
@@ -222,6 +249,7 @@ class ChatSourcesToolTurn extends ChatToolTurn<ChatSourcesContext> {
     identity: string,
     result: ToolResultEnvelope,
   ): ChatToolExchange["mutationOutcome"] {
+    const argumentsDigest = sha256Hex(canonicalise(call.arguments));
     return (
       (this.sourceOptions.primary.kind === "jira"
         ? observeJiraChatMutation(
@@ -229,10 +257,8 @@ class ChatSourcesToolTurn extends ChatToolTurn<ChatSourcesContext> {
             call,
             identity,
             result,
-            this.sourcePreparation?.sourceDigestFor(
-              identity,
-              sha256Hex(canonicalise(call.arguments)),
-            ),
+            this.sourcePreparation?.sourceDigestFor(identity, argumentsDigest),
+            this.humanInput?.revisionFor(identity, argumentsDigest),
           )
         : undefined) ?? observeMcpChatMutation(this.sourceOptions.mcp, call, identity, result)
     );

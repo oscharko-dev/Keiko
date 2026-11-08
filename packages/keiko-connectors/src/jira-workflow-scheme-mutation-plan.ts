@@ -6,6 +6,9 @@ export function workflowSchemeReceipt(input: WorkflowSchemeInput, schemeId = inp
   return Object.freeze({ userKey: input.actor, workflowSchemeScope: input.draft ? "draft" : "scheme",
     schemePresent: input.kind !== "delete", ...(schemeId === undefined ? {} : { schemeId }),
     ...(draftId === undefined ? {} : { draftSchemeId: draftId }), ...mappingReceipt(input),
+    ...(input.kind === "update" && !input.draft ? {
+      workflowMappingChanged: input.target?.defaultWorkflow !== undefined || input.target?.mappings !== undefined,
+    } : {}),
   });
 }
 function mappingPresent(input: WorkflowSchemeInput): boolean {

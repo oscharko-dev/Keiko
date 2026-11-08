@@ -36,6 +36,7 @@ import {
 } from "./atlassian-http-port.js";
 import { ATLASSIAN_SYNC_RETRY_MAX_ATTEMPTS, retryDelayMs } from "./atlassian-sync-lane.js";
 import { asRecord, parseJsonArray, parseJsonObjectOrArray, parseJsonRecord, parseJsonScalar } from "./atlassian-sync-classify.js";
+import type { JiraHumanInputHttpRequest } from "./jira-private-identity-ports.js";
 
 // ADR-0128 D3: interactive write/read actions (issue and page CRUD, transitions, comments).
 export const ATLASSIAN_WRITE_ACTION_TIMEOUT_MS = 30_000;
@@ -70,6 +71,10 @@ export interface AtlassianWriteHttpRequest {
   readonly jiraApplicationRole?: AtlassianApplicationRoleRequest | undefined;
   readonly jiraUserApplication?: true | undefined;
   readonly jiraUserColumns?: true | undefined;
+  readonly jiraIdentityExperimental?: true | undefined;
+  readonly jiraProjectPriority?: true | undefined;
+  readonly jiraHumanInput?: JiraHumanInputHttpRequest | undefined;
+  readonly jiraAvatarImage?: true | undefined;
   // Closed JSON response shapes, or status only; every JSON mode shares the same byte cap.
   readonly expect: "json" | "json-array" | "json-object-or-array" | "json-scalar" | "none" | "jira-email-template-zip";
 }
@@ -232,6 +237,10 @@ async function issueOnce(
     ...(request.jiraApplicationRole === undefined ? {} : { jiraApplicationRole: request.jiraApplicationRole }),
     ...(request.jiraUserApplication === undefined ? {} : { jiraUserApplication: request.jiraUserApplication }),
     ...(request.jiraUserColumns === undefined ? {} : { jiraUserColumns: request.jiraUserColumns }),
+    ...(request.jiraIdentityExperimental === undefined ? {} : { jiraIdentityExperimental: request.jiraIdentityExperimental }),
+    ...(request.jiraProjectPriority === undefined ? {} : { jiraProjectPriority: request.jiraProjectPriority }),
+    ...(request.jiraHumanInput === undefined ? {} : { jiraHumanInput: request.jiraHumanInput }),
+    ...(request.jiraAvatarImage === undefined ? {} : { jiraAvatarImage: request.jiraAvatarImage }),
     // KEIKO-0318: thread the caller's cancellation into the transport call itself so an abort
     // tears down the in-flight request (AtlassianHttpBodyRequest.signal) instead of only being
     // observed between attempts — the between-attempt checks alone only stopped a LATER retry.

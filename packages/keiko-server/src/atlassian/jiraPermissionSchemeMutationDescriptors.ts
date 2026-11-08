@@ -13,11 +13,11 @@ const NEW_HOLDER = { oneOf: [
 const GRANT = object({ permission: NAME, holder: NEW_HOLDER }, ["permission", "holder"]);
 const EXPECTED_GRANT = object({ id: ID, permission: NAME, holder: HOLDER }, ["id", "permission", "holder"]);
 const GRANTS = { type: "array", maxItems: TOOL_CATALOG_LIMITS.maxArrayItems, items: GRANT };
-const SNAPSHOT = object({ id: ID, name: NAME, description: DESCRIPTION,
+export const JIRA_PERMISSION_SCHEME_REVIEW_SCHEMA = object({ id: ID, name: NAME, description: DESCRIPTION,
   permissions: { type: "array", maxItems: TOOL_CATALOG_LIMITS.maxArrayItems, items: EXPECTED_GRANT } },
   ["id", "name", "description", "permissions"]);
 const ACTOR = { expectedActorKey: NAME };
-const REVIEW = { ...ACTOR, expectedScheme: SNAPSHOT };
+const REVIEW = { ...ACTOR, expectedScheme: JIRA_PERMISSION_SCHEME_REVIEW_SCHEMA };
 const BASE_RECEIPT = { userKey: NAME, schemeId: ID };
 const ATTRIBUTE_KEY = { ...NAME, description: "Exact observed native attribute key; fixed-path owner refuses slash, backslash, percent, controls, lone surrogates and dot segments before lookup. At most255 UTF-8 bytes." };
 const COMMON = "Explicit high-risk issue-tracker.admin action. Jira independently enforces native administrator rights and validates holder/permission references; configuration observations do not establish anyone's effective permissions. Bind the reviewed connected actor, exact scheme identity/name/description and complete native grant set before one effect. Missing descriptions/grants are unavailable, never empty. Holder parameters preserve exact native user/group/role/custom-field identifiers; no expanded user/group objects, model URLs or headers. Pre-reads are not atomic compare-and-swap. Retain known IDs after acknowledgement and independently rebind the parent and full result state; never retry an uncertain write. Receipt flags under unknown/unconfirmed mean requested target only. These configuration changes do not invent formal issue-template rules.";

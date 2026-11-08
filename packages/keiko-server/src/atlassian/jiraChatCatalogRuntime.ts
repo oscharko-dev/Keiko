@@ -1,6 +1,8 @@
+import { jiraChatPrivatePorts } from "./jiraChatPrivatePorts.js";
 import { createManagedChatCatalogRuntime } from "../tool-catalog/managedChatCatalogRuntime.js";
 import { randomUUID } from "node:crypto";
 import { jiraChatEmailTemplateComposition } from "./jiraEmailTemplateComposition.js";
+import { jiraChatAvatarComposition } from "./jiraAvatarComposition.js";
 import {
   createJiraDraftStore,
   createJiraReportStore,
@@ -42,7 +44,7 @@ import {
   jiraToolsForIdentities,
 } from "./jiraCatalogDiscovery.js";
 import { KNOWLEDGE_CHAT_TOOLS } from "../requirementsToolName.js";
-import { JIRA_MANAGED_ACTION_TYPES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { JIRA_MANAGED_ACTION_TYPES, isJiraAvatarUploadOperation, type JiraAvatarUploadMutation } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { decideAtlassianEnvelopeAction } from "./actionPolicy.js";
 import { resolveCurrentJiraChatAuthority } from "./jiraChatAuthority.js";
 import {
@@ -278,7 +280,12 @@ function mutationExecutor(deps: UiHandlerDeps): MutationExecutor {
       (trace) =>
         executeJiraChatMutation({
           ...shared,
-          execute: (http) => execute(http, trace),
+          execute: (http, lifecycle) => {
+            // Private cookie/body ports must share this exact journal's dispatch and ACK hooks.
+            const ports = jiraChatPrivatePorts(deps, context, prepared.current.credential, context, lifecycle);
+            return execute(http, trace, { privateIdentity: ports?.identity,
+              avatars: { withSession: ports?.withAvatarSession } });
+          },
         }),
       source?.items[0]?.trace,
     );
@@ -399,7 +406,7 @@ function attachmentReview(
   deps: UiHandlerDeps,
   envelope: Extract<ReturnType<typeof resolveCurrentJiraChatAuthority>, { ok: true }>["envelope"],
   context: CatalogHandlerContext<JiraChatCatalogConsumer>,
-  operation: "jira.attach" | "jira.upload-email-template-pack" = "jira.attach",
+  operation: "jira.attach" | "jira.upload-email-template-pack" | JiraAvatarUploadMutation = "jira.attach",
 ): JiraChatAttachmentReview {
   const policy = decideAtlassianEnvelopeAction(JIRA_MANAGED_ACTION_TYPES[operation], envelope);
   const actionId = context.mutationGuard.write?.action.actionId;
@@ -412,7 +419,14 @@ function attachmentReview(
           actionId,
           context.correlationId,
         )?.approval;
-  return attachmentReviewFor(policy.kind, approval);
+  return attachmentReviewFor(policy.kind, approval, operation);
+}
+function avatarAttachmentReview(deps: UiHandlerDeps,
+  envelope: Extract<ReturnType<typeof resolveCurrentJiraChatAuthority>, { ok: true }>["envelope"],
+  context: CatalogHandlerContext<JiraChatCatalogConsumer>): JiraChatAttachmentReview {
+  const operation = context.mutationGuard.write?.action.tool;
+  return operation !== undefined && isJiraAvatarUploadOperation(operation)
+    ? attachmentReview(deps, envelope, context, operation) : { required: true, reviewed: undefined };
 }
 
 function connection(
@@ -428,6 +442,9 @@ function connection(
   );
   const credentials = deps.atlassianConnectorCredentials;
   requireDispatch(current.ok && credentials !== undefined, "denied", "authority-invalid");
+  // Writes receive private ports only inside the journal's tracked transport callback below.
+  const privatePorts = context.mutationGuard.write === undefined
+    ? jiraChatPrivatePorts(deps, context, current.credential, context) : undefined;
   return {
     baseUrl: current.credential.baseUrl,
     deployment: current.credential.deployment,
@@ -442,6 +459,13 @@ function connection(
       signal: context.signal,
       review: () => attachmentReview(deps, current.envelope, context, "jira.upload-email-template-pack"),
     }),
+    privateIdentity: privatePorts?.identity,
+    avatars: { ...jiraChatAvatarComposition(deps, {
+      chatId: context.chatId,
+      correlationId: context.correlationId,
+      signal: context.signal,
+      review: () => avatarAttachmentReview(deps, current.envelope, context),
+    }), ...(privatePorts === undefined ? {} : { withSession: privatePorts.withAvatarSession }) },
     attachmentSource: jiraChatAttachmentSource(deps, {
       chatId: context.chatId,
       correlationId: context.correlationId,

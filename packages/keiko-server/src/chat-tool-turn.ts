@@ -179,6 +179,10 @@ export interface ChatToolCatalogSelection<Context extends ToolConsumerContext> {
   readonly bind: ChatCatalogBind<Context>;
   readonly close: () => Promise<void>;
 }
+export interface ChatToolInvocationPreparationPorts {
+  readonly publishHumanInput: (view: import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors").JiraHumanInputView) => Promise<void>;
+  readonly requestReadConsent: (grant: ChatToolReadGrantView) => Promise<void>;
+}
 export interface ChatToolTurnOptions<Context extends ToolConsumerContext> {
   readonly deps: Pick<UiHandlerDeps, "store" | "gatewayConfig" | "atlassianActionApprovalRegistry">;
   readonly message: ChatMessage;
@@ -194,6 +198,7 @@ export interface ChatToolTurnOptions<Context extends ToolConsumerContext> {
   readonly prepareInvocation?: (
     call: ChatToolExchange["call"],
     actionId: string,
+    ports: ChatToolInvocationPreparationPorts,
   ) => Promise<{ readonly sourceDigest?: string } | undefined>;
   readonly selectTools?: (
     identities: readonly string[],
@@ -750,7 +755,14 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     call: NormalizedResponse["toolCalls"][number],
     identity: string,
   ): Promise<void> {
-    const prepared = await this.options.prepareInvocation?.(publicToolCall(call), identity);
+    const prepared = await this.options.prepareInvocation?.(publicToolCall(call), identity, {
+      requestReadConsent: (grant) => this.waitForReadConsent(grant),
+      publishHumanInput: async (view) => {
+        this.options.deps.store.updateChatToolTranscript(this.options.message.id,
+          { kind: "human-input", callId: call.id, view }, this.options.correlationId);
+        await this.publish();
+      },
+    });
     if (prepared?.sourceDigest === undefined) return;
     const { deps, message, correlationId } = this.options;
     deps.store.updateChatToolTranscript(

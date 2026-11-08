@@ -2,7 +2,10 @@ import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import { currentAuditRedactString, type UiHandlerDeps } from "../deps.js";
 import { errorBody, type RouteContext, type RouteDefinition, type RouteResult } from "../routes.js";
 import { resolveAppSessionReadAuthority } from "../coding-app-session/appSessionReadAuthority.js";
-import { CODING_TASK_IMPORT_MAX_BYTES } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { CODING_TASK_IMPORT_MAX_BYTES, type ChatMessage, type ChatToolExchange, type CodingHistoryDetail } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { jiraChatActorDigest } from "../atlassian/jiraPodAccess.js";
+import type { JiraHumanInputBinding } from "@oscharko-dev/keiko-connectors";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   readBoundedRequestBody,
   readJsonRequestBodyOutcome,
@@ -41,7 +44,46 @@ export function readCodingHistory(ctx: RouteContext, deps: UiHandlerDeps): Route
   const detail = deps.codingRuntimeOrchestrator
     ?.getHistory()
     ?.detail(ctx.params.id ?? "", ctx.correlationId ?? UNKNOWN_CORRELATION_ID);
-  return detail === undefined ? unavailable(ctx) : { status: 200, body: detail };
+  return detail === undefined ? unavailable(ctx) : {
+    status: 200,
+    body: { ...detail, messages: detail.messages.map((message) => currentInputMessage(deps, detail, message)) },
+  };
+}
+
+function currentInputMessage(deps: UiHandlerDeps, detail: CodingHistoryDetail, message: ChatMessage): ChatMessage {
+  if (message.role !== "user" || message.runId === undefined) return message;
+  if (!message.toolTranscript?.exchanges.some((exchange) => waitingInput(exchange) !== undefined)) return message;
+  const turn = deps.store.codingHistory?.nativeTurn(message.runId);
+  if (turn?.chatId !== detail.task.id || turn.userMessageId !== message.id) return message;
+  const held = message.toolTranscript?.exchanges.some((exchange) =>
+    currentInputExchange(deps, detail.task.taskId, message.runId, exchange));
+  // Historical transcript rows alone never activate a form after a restart or a later turn.
+  return held === true ? { ...message, turnState: "pending" } : message;
+}
+
+function currentInputExchange(deps: UiHandlerDeps, taskId: string, runId: string | undefined, exchange: ChatToolExchange): boolean {
+  const view = waitingInput(exchange);
+  if (view === undefined) return false;
+  const principal = jiraChatActorDigest(deps);
+  const custody = deps.atlassianConnectorCredentials?.custody.humanInputs;
+  const binding = principal === undefined ? undefined : custody?.bindingFor(view.requestId, principal);
+  if (binding === undefined || !sameInputCall(binding, taskId, runId, exchange)) return false;
+  const current = custody?.inspect(view.requestId, binding);
+  return current?.revision === view.revision && current.state === view.state &&
+    deps.codingJiraInputContext?.(binding, view.requestId) !== undefined;
+}
+
+function sameInputCall(binding: JiraHumanInputBinding, taskId: string, runId: string | undefined, exchange: ChatToolExchange): boolean {
+  return binding.context.kind === "coding" && binding.context.runId === runId &&
+    binding.context.taskId === taskId && binding.context.callId === exchange.call.id &&
+    binding.operation.replace(/[.-]/gu, "_") === exchange.call.name &&
+    binding.argumentsDigest === sha256Hex(canonicalise(exchange.call.arguments));
+}
+
+function waitingInput(exchange: ChatToolExchange): ChatToolExchange["humanInput"] {
+  if (exchange.result !== undefined) return undefined;
+  const view = exchange.humanInput;
+  return view?.state === "awaiting-input" || view?.state === "ready" ? view : undefined;
 }
 
 interface ExportRefusalResponse {
