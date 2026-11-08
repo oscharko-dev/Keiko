@@ -10,9 +10,9 @@ import {
 const root = new URL("../../docs/local-knowledge/jira-api-coverage/", import.meta.url);
 const ledger = JSON.parse(readFileSync(new URL("operations.json", root), "utf8"));
 const policy = JSON.parse(readFileSync(new URL("qualification-proposals.json", root), "utf8"));
-it("binds exactly the nine owner-decided deferrals and leaves cluster reads and filter deletion native", () => {
+it("binds exactly the twelve owner-decided deferrals and leaves cluster reads and filter deletion native", () => {
   const decisions = decidedQualificationDeferrals(policy, ledger);
-  expect(decisions.size).toBe(9);
+  expect(decisions.size).toBe(12);
   expect(decisions.has("GET /rest/api/2/cluster/nodes")).toBe(false);
   expect(decisions.has("DELETE /rest/api/2/filter/{id}")).toBe(false);
 });

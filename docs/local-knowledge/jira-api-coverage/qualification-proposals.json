@@ -63,6 +63,33 @@
         "packages/keiko-connectors/src/jira-managed-saved-configuration-mutations.test.ts",
         "scripts/testing/jira-chat-lab/api-qualification-agile-cases.mjs"
       ]
+    },
+    {
+      "id": "temporary-avatar-needs-independent-session-observation",
+      "proposedDisposition": "deferred",
+      "disposition": "deferred",
+      "identities": [
+        "POST /rest/api/2/avatar/{type}/temporary",
+        "POST /rest/api/2/avatar/{type}/temporaryCrop"
+      ],
+      "rationale": "Jira 10.3 documents no GET or resource identity for the session-held temporary avatar. The upload and crop responses are the product's own claim, a separate browser or login session cannot observe the product session's temporary state, and the actor or public avatar lists do not observe the temporary state.",
+      "requiredForQualification": "An independent native observation of the same session's temporary avatar state: actor, type, upload digest and bytes, crop, needsCropping and crop geometry.",
+      "sourceReferences": [
+        "scripts/testing/jira-chat-lab/api-qualification-assets-cases.mjs",
+        "packages/keiko-server/src/atlassian/jiraAvatarMutationDescriptors.ts"
+      ]
+    },
+    {
+      "id": "reciprocal-link-requires-owned-peer-instance",
+      "proposedDisposition": "deferred",
+      "disposition": "deferred",
+      "identities": ["POST /rest/api/2/issue/remotelink/reciprocal"],
+      "rationale": "A reciprocal remote link needs a second owned Jira instance with its own database and licence and mutually authenticated native application links. The single disposable laboratory has no peer, and an invented peer proves nothing.",
+      "requiredForQualification": "An owner-approved second laboratory instance with mutual application links and independent credentials, with both sides observed natively.",
+      "sourceReferences": [
+        "scripts/testing/jira-chat-lab/compose.yaml",
+        "scripts/testing/jira-chat-lab/api-qualification-link-cases.mjs"
+      ]
     }
   ]
 }

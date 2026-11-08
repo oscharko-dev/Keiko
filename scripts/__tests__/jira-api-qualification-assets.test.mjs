@@ -13,15 +13,11 @@ import {
 } from "../../packages/keiko-server/dist/atlassian/httpPrivateIdentity.js";
 import { createJiraChatMutationIntent } from "../../packages/keiko-server/dist/atlassian/jiraChatMutationIntent.js";
 import { observeJiraChatMutation } from "../../packages/keiko-server/dist/atlassian/jiraChatToolTurn.js";
-import {
-  API_QUALIFICATION_ASSETS_CASES,
-  qualificationChangedCrop,
-} from "../testing/jira-chat-lab/api-qualification-assets-cases.mjs";
+import { API_QUALIFICATION_ASSETS_CASES } from "../testing/jira-chat-lab/api-qualification-assets-cases.mjs";
 import {
   assetPack,
   observeEmailPack,
   prepareAttachmentSource,
-  publishAssetLoginInput,
   qualificationEmailZip,
   requireEmailDefault,
 } from "../testing/jira-chat-lab/api-qualification-assets-fixtures.mjs";
@@ -56,17 +52,6 @@ function state() {
       expectedFile: { name: "email-templates.zip", sizeBytes: 3, sha256: sha },
     },
     assetEmailPack: { manifestSha256: sha },
-    assetAvatarFile: {
-      source: { kind: "connected-file", path: "ac7-assets/avatar.png" },
-      expectedFile: { name: "avatar.png", sizeBytes: 3, sha256: sha },
-    },
-    assetTemporaryAvatar: {
-      uploadSha256: sha,
-      uploadBytes: 3,
-      crop: { cropperOffsetX: 0, cropperOffsetY: 0, cropperWidth: 1 },
-      needsCropping: false,
-    },
-    assetAvatarCrop: { cropperOffsetX: 0, cropperOffsetY: 0, cropperWidth: 1 },
   };
 }
 let directory;
@@ -93,15 +78,13 @@ function native(reader) {
   });
 }
 
-it("registers exactly the sixteen assigned unique native identities with valid real contracts", () => {
+it("registers exactly the fourteen assigned unique native identities with valid real contracts", () => {
   const identities = new Set();
   const expectedTools = new Set([
     "jira.delete-attachment",
     "jira.attachment",
     "jira.attachment-archive-summary",
     "jira.attachment-archive",
-    "jira.upload-temporary-avatar",
-    "jira.crop-temporary-avatar",
     "jira.dashboard-item-property-keys",
     "jira.delete-dashboard-item-property",
     "jira.dashboard-item-property",
@@ -130,7 +113,7 @@ it("registers exactly the sixteen assigned unique native identities with valid r
     if (entry.mutation) expect(entry.destructiveAdministration).toBe(true);
   }
   expect(expectedTools.size).toBe(0);
-  expect(identities.size).toBe(16);
+  expect(identities.size).toBe(14);
 });
 
 it("requires the returned attachment ID to belong to its same readable issue and exact source", async () => {
@@ -265,36 +248,6 @@ it("refuses malformed or empty native email exports instead of proving a bare 20
   await expect(assetPack(createZip([]))).rejects.toThrow();
 });
 
-it("keeps the two generic temporary avatar recipes closed without an independent native oracle", async () => {
-  const fetch = native(() => ({ key: "admin-key", name: "keiko-admin" }));
-  for (const tool of ["jira.upload-temporary-avatar", "jira.crop-temporary-avatar"])
-    await expect(selected(tool).prepare(context, state())).rejects.toThrow(
-      "independent native temporary-avatar reader",
-    );
-  expect(fetch).toHaveBeenCalledTimes(2);
-});
-
-it("rejects a temporary-avatar receipt that disagrees with the independent native slot", async () => {
-  const f = state();
-  context.qualificationTemporaryAvatarOracle = vi.fn().mockResolvedValue({
-    actorUserKey: "admin-key",
-    avatarType: "user",
-    ...f.assetTemporaryAvatar,
-  });
-  const data = {
-    actorUserKey: "admin-key",
-    avatarType: "user",
-    temporaryAvatar: true,
-    uploadSha256: sha,
-    uploadBytes: 3,
-    temporaryCrop: f.assetAvatarCrop,
-    temporaryNeedsCropping: false,
-  };
-  const recipe = selected("jira.upload-temporary-avatar");
-  await expect(recipe.readback(context, data, f)).resolves.toMatchObject({ matched: true });
-  await expect(recipe.readback(context, { ...data, uploadBytes: 4 }, f)).rejects.toThrow();
-});
-
 it("binds exact generated document paths through the real Files API for each current Chat", async () => {
   const f = state();
   context.projectPath = join(directory, "workspace");
@@ -322,33 +275,6 @@ it("binds exact generated document paths through the real Files API for each cur
   context.qualificationChat = { id: "second-chat" };
   await prepareAttachmentSource(context, f);
   expect(chats).toEqual(["first-chat", "second-chat"]);
-});
-
-it("submits only the held login's protected input through authenticated BFF and rejects another purpose", async () => {
-  context.origin = "http://127.0.0.1:1983";
-  context.cookie = "synthetic-paired-cookie";
-  const view = {
-    requestId: `jhi_${sha}`,
-    revision: "input-revision",
-    purpose: "login",
-    state: "awaiting-input",
-  };
-  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, options) => {
-    expect(String(url)).toBe(
-      `${context.origin}/api/atlassian-connectors/human-inputs/${view.requestId}`,
-    );
-    expect(options.headers.Cookie).toBe(context.cookie);
-    expect(JSON.parse(options.body)).toEqual({
-      expectedRevision: "input-revision",
-      values: { password: "synthetic-admin-password" },
-    });
-    return new globalThis.Response(JSON.stringify({ state: "ready" }), { status: 200 });
-  });
-  await publishAssetLoginInput(context, view);
-  await expect(
-    publishAssetLoginInput(context, { ...view, purpose: "update-my-password" }),
-  ).rejects.toThrow();
-  expect(fetch).toHaveBeenCalledOnce();
 });
 
 it("rejects duplicate, self-referential and over-budget auxiliaries before minting turn authority", async () => {
@@ -478,26 +404,6 @@ it("requires revert to change a distinct synthetic pack back to the complete ver
   await expect(
     recipe.readback(context, { ...data, priorManifestSha256: defaults.manifestSha256 }, f),
   ).rejects.toThrow();
-});
-
-it("requires a different native crop inside independently observed image bounds", () => {
-  const current = { cropperOffsetX: 0, cropperOffsetY: 0, cropperWidth: 4 };
-  expect(() => qualificationChangedCrop(undefined, current)).toThrow("native crop target");
-  expect(() =>
-    qualificationChangedCrop({ width: 4, height: 4, nextCrop: current }, current),
-  ).toThrow("unchanged crop");
-  expect(() =>
-    qualificationChangedCrop(
-      { width: 4, height: 4, nextCrop: { ...current, cropperOffsetX: 1 } },
-      current,
-    ),
-  ).toThrow();
-  expect(
-    qualificationChangedCrop(
-      { width: 4, height: 4, nextCrop: { ...current, cropperWidth: 3 } },
-      current,
-    ),
-  ).toEqual({ ...current, cropperWidth: 3 });
 });
 
 it("preserves protected-input journal outcomes using the same revision as the product consumer", () => {

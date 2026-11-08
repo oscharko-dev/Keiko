@@ -84,14 +84,6 @@
     "identity": "GET /rest/api/2/attachment/{id}/expand/raw"
   },
   {
-    "tool": "jira.upload-temporary-avatar",
-    "identity": "POST /rest/api/2/avatar/{type}/temporary"
-  },
-  {
-    "tool": "jira.crop-temporary-avatar",
-    "identity": "POST /rest/api/2/avatar/{type}/temporaryCrop"
-  },
-  {
     "tool": "jira.dashboard-item-property-keys",
     "identity": "GET /rest/api/2/dashboard/{dashboardId}/items/{itemId}/properties"
   },
@@ -166,10 +158,6 @@
   {
     "tool": "jira.issue-picker",
     "identity": "GET /rest/api/2/issue/picker"
-  },
-  {
-    "tool": "jira.create-reciprocal-remote-link",
-    "identity": "POST /rest/api/2/issue/remotelink/reciprocal"
   },
   {
     "tool": "jira.attach",

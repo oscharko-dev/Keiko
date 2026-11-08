@@ -6,12 +6,7 @@ import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { readBoundedOoxmlPackage } from "@oscharko-dev/keiko-local-knowledge";
 import { basicAuth, labSessionConnection } from "./lab-client.mjs";
-import {
-  adminLoginInput,
-  connectQualificationFile,
-  protectedInputPublisher,
-  qualificationPng,
-} from "./api-qualification-fixtures.mjs";
+import { connectQualificationFile } from "./api-qualification-fixtures.mjs";
 import { createZip } from "./requirements/ooxml-zip.mjs";
 import { writeCorpusDocuments } from "./requirements/corpus-documents.mjs";
 
@@ -134,19 +129,3 @@ export async function prepareEmailSource(context, f) {
   assert.notEqual(f.assetEmailPack.manifestSha256, prior.manifestSha256);
   f.assetEmailPrior = prior;
 }
-
-/** A deterministic synthetic PNG, connected as the avatar source of this Chat. */
-export async function prepareAvatarSource(context, f) {
-  const { directory } = assetDirectory(context, f);
-  const output = join(directory, "avatar.png");
-  writeFileSync(output, qualificationPng(96, Number.parseInt(f.runId.slice(0, 2), 16) || 0x5a), {
-    mode: 0o600,
-  });
-  f.assetAvatarFile = await connectAsset(context, f, output);
-}
-
-/** The sole secret submission goes through the paired BFF's protected human-input channel. */
-export const publishAssetLoginInput = protectedInputPublisher((context) => {
-  assert.equal(context.actor, "admin");
-  return adminLoginInput(context);
-}, "login");

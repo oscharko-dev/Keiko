@@ -480,12 +480,7 @@ function qualificationPlan(directory, only) {
   assert.ok(selected.length > 0);
   return { session, ledger, revision, selected };
 }
-export async function qualifyApi(
-  directory,
-  only,
-  snapshotId,
-  { reciprocalPeer, temporaryAvatarOracle, emailDefaultOracle } = {},
-) {
+export async function qualifyApi(directory, only, snapshotId, { emailDefaultOracle } = {}) {
   const { session, ledger, revision, selected } = qualificationPlan(directory, only);
   await observeRelease(session);
   const { report, output, pending } = prepareRun(session, ledger, revision);
@@ -505,8 +500,6 @@ export async function qualifyApi(
       privateJson(join(output, report.file), report);
     },
     run: async (context, selected) => {
-      context.qualificationReciprocalPeer = reciprocalPeer;
-      context.qualificationTemporaryAvatarOracle = temporaryAvatarOracle;
       context.qualificationEmailDefaultOracle = emailDefaultOracle;
       fixture = await executeCases(context, selected, report, output, witness, fixture);
     },

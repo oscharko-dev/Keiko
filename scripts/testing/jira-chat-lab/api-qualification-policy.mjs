@@ -1,4 +1,4 @@
-// These nine dispositions were explicitly decided by the integrator on 2026-11-08.
+// These twelve dispositions were explicitly decided by the integrator on 2026-11-08.
 // A proposed exemption, target HTTP error or self-reported run outcome grants no exemption.
 import assert from "node:assert/strict";
 import { qualificationDigest } from "./api-qualification-evidence.mjs";
@@ -14,6 +14,9 @@ const APPROVED = new Set([
   "POST /rest/api/2/cluster/zdu/start",
   "POST /rest/api/2/upgrade",
   "POST /rest/api/2/issue/{issueIdOrKey}/notify",
+  "POST /rest/api/2/avatar/{type}/temporary",
+  "POST /rest/api/2/avatar/{type}/temporaryCrop",
+  "POST /rest/api/2/issue/remotelink/reciprocal",
 ]);
 export function decidedQualificationDeferrals(policy, ledger) {
   if (policy === undefined) return new Map();

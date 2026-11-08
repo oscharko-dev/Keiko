@@ -4,7 +4,7 @@ import { expect, it } from "vitest";
 import { API_QUALIFICATION_ALL_CASES } from "../testing/jira-chat-lab/api-qualification-case-list.mjs";
 import { decidedQualificationDeferrals } from "../testing/jira-chat-lab/api-qualification-policy.mjs";
 
-it("has an explicit governed recipe for every native inventory identity outside the nine decided deferrals", () => {
+it("has an explicit governed recipe for every native inventory identity outside the twelve decided deferrals", () => {
   const root = new URL("../../docs/local-knowledge/jira-api-coverage/", import.meta.url);
   const ledger = JSON.parse(readFileSync(new URL("operations.json", root), "utf8"));
   const policy = JSON.parse(readFileSync(new URL("qualification-proposals.json", root), "utf8"));
@@ -16,5 +16,18 @@ it("has an explicit governed recipe for every native inventory identity outside 
       !deferred.has(row.identity) && !row.currentCapabilityIds.some((tool) => tools.has(tool)),
   );
   expect(missing.map((row) => row.identity)).toEqual([]);
+  expect(deferred.size).toBe(12);
+  const deferredTools = [
+    "jira.upload-temporary-avatar",
+    "jira.crop-temporary-avatar",
+    "jira.create-reciprocal-remote-link",
+  ];
+  const deferredRows = ledger.operations.filter((row) =>
+    row.currentCapabilityIds.some((tool) => deferredTools.includes(tool)),
+  );
+  expect(deferredRows).toHaveLength(3);
+  for (const row of deferredRows)
+    expect(deferred.get(row.identity)?.reference).toMatch(/^qualification-proposals\.json#/u);
+  for (const tool of deferredTools) expect(tools.has(tool), tool).toBe(false);
   expect(API_QUALIFICATION_ALL_CASES.length + deferred.size).toBe(ledger.operations.length);
 });
