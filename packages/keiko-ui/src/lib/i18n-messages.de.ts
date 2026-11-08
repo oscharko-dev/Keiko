@@ -528,9 +528,9 @@ export const DE_MESSAGES = {
     "Das ausgewählte Modell ist vorübergehend nicht verfügbar. Wähle ein anderes verfügbares Modell oder warte auf seine Wiederherstellung.",
   "chat.error.modelNotReady.title": "Modellprüfung erforderlich",
   "chat.error.modelNotReady.message":
-    "Das ausgewählte Modell hat die Bereitschaftsprüfung noch nicht bestanden.",
+    "Die Bereitschaftsprüfung für das ausgewählte Modell fehlt, ist nicht mehr gültig oder ist fehlgeschlagen.",
   "chat.error.modelNotReady.remediation":
-    "Öffne die Modelleinstellungen, starte die Bereitschaftsprüfung und sende deine Nachricht danach erneut.",
+    "Öffne Einstellungen > Modelle, führe die Bereitschaftsprüfung für das ausgewählte Modell aus und sende deine Nachricht anschließend erneut.",
   "chat.error.modelNotReady.action": "Modellprüfung öffnen",
   "chat.error.capabilityUnavailable.title": "Modellfunktion nicht verfügbar",
   "chat.error.capabilityUnavailable.message":

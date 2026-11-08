@@ -22651,6 +22651,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      reason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["unsupported", "unverified", "stale", "configuration-changed"],
+      },
     },
     causal: "correlation",
     lifecycle: "state",

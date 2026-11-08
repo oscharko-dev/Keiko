@@ -1,5 +1,6 @@
 import type { ChatToolExchange } from "./bff-wire.js";
 import { canonicalise } from "./canonical-json.js";
+import { JIRA_DRAFT_DIGEST_PATTERN, JIRA_DRAFT_ID_PATTERN } from "./jira-tool-execution.js";
 
 export const KNOWLEDGE_REVIEW_FAILURE_STAGES = [
   "model-output-invalid",
@@ -89,6 +90,7 @@ function count(value: unknown): number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
 }
 interface Stream {
+  readonly callId: string;
   readonly cursor: string | undefined;
   readonly continuous: boolean;
   /** Position of the exchange that last advanced this chain. */
@@ -155,6 +157,7 @@ function observeStream(
   const key = `${exchange.result?.toolRef?.canonicalId ?? ""}|${canonicalise(selection)}`;
   const previous = tally.streams.get(key);
   tally.streams.set(key, {
+    callId: exchange.call.id,
     cursor: typeof data.nextCursor === "string" ? data.nextCursor : undefined,
     continuous:
       cursor === undefined || (previous?.continuous === true && previous.cursor === cursor),
@@ -332,11 +335,116 @@ function settledByBatch(tally: Tally, key: string, stream: Stream): boolean {
     key.startsWith(`${REQUIREMENTS_TOOL}|`)
   );
 }
-function pendingPageCount(tally: Tally): number {
+function pendingPageCount(tally: Tally, incidentalCalls: ReadonlySet<string>): number {
   return [...tally.streams].filter(
     ([key, stream]) =>
-      (stream.cursor !== undefined || !stream.continuous) && !settledByBatch(tally, key, stream),
+      (stream.cursor !== undefined || !stream.continuous) &&
+      !settledByBatch(tally, key, stream) &&
+      !incidentalCalls.has(stream.callId),
   ).length;
+}
+
+const DRAFT_ID = new RegExp(JIRA_DRAFT_ID_PATTERN, "u");
+const DRAFT_DIGEST = new RegExp(JIRA_DRAFT_DIGEST_PATTERN, "u");
+function namedDraft(value: Readonly<Record<string, unknown>>): boolean {
+  return (
+    typeof value.draftId === "string" &&
+    DRAFT_ID.test(value.draftId) &&
+    typeof value.draftDigest === "string" &&
+    DRAFT_DIGEST.test(value.draftDigest)
+  );
+}
+function positiveCount(value: unknown): boolean {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+function completedStage(data: Readonly<Record<string, unknown>>): boolean {
+  return (
+    namedDraft(data) &&
+    positiveCount(data.itemCount) &&
+    positiveCount(data.pageCount) &&
+    data.unresolvedRefCount === 0 &&
+    Array.isArray(data.unresolvedRefs) &&
+    data.unresolvedRefs.length === 0
+  );
+}
+function completedDraft(
+  exchange: ChatToolExchange,
+  data: Readonly<Record<string, unknown>>,
+): boolean {
+  const settled = [data.createdCount, data.existingCount, data.excludedCount];
+  return (
+    namedDraft(exchange.call.arguments) &&
+    settled.every(
+      (value) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0,
+    ) &&
+    settled.some((value) => positiveCount(value)) &&
+    [data.failedCount, data.uncertainCount, data.skippedCount, data.pendingCount].every(
+      (value) => value === 0,
+    )
+  );
+}
+function successfulCreationData(
+  exchange: ChatToolExchange,
+): Readonly<Record<string, unknown>> | undefined {
+  const result = exchange.result;
+  if (result?.status !== "completed") return undefined;
+  if (exchange.mutationOutcome !== undefined && exchange.mutationOutcome !== "succeeded")
+    return undefined;
+  const data = record(result.data);
+  return data?.outcome === "succeeded" ? data : undefined;
+}
+function completedIssue(data: Readonly<Record<string, unknown>>): boolean {
+  return (
+    typeof data.issueId === "string" &&
+    data.issueId.length > 0 &&
+    typeof data.issueKey === "string" &&
+    data.issueKey.length > 0
+  );
+}
+function completedCreation(exchange: ChatToolExchange): boolean | undefined {
+  const data = successfulCreationData(exchange);
+  switch (exchange.result?.toolRef?.canonicalId) {
+    case "keiko.jira.create":
+      return data !== undefined && completedIssue(data);
+    case "keiko.jira.draft.stage":
+      return data !== undefined && completedStage(data);
+    case "keiko.jira.draft":
+      return data !== undefined && completedDraft(exchange, data);
+    default:
+      return undefined;
+  }
+}
+function outsideCreationTask(exchange: ChatToolExchange): boolean {
+  const complete = completedCreation(exchange);
+  return (
+    exchange.result?.toolRef?.canonicalId === DRAFT_BATCH_TOOL ||
+    complete === false ||
+    (exchange.mutationOutcome !== undefined && complete !== true)
+  );
+}
+function attestedInventory(exchange: ChatToolExchange, calls: ReadonlySet<string>): boolean {
+  return (
+    calls.has(exchange.call.id) &&
+    exchange.result?.toolRef?.canonicalId === "keiko.knowledge.documents" &&
+    exchange.call.arguments.view === "inventory" &&
+    record(exchange.result.data)?.view === "inventory"
+  );
+}
+
+/** Runtime inventory is supporting metadata, not a model-requested collection task. */
+function incidentalInventoryCalls(
+  exchanges: readonly ChatToolExchange[],
+  callIds: readonly string[] | undefined,
+): ReadonlySet<string> {
+  const calls = new Set(callIds);
+  if (calls.size === 0 || !exchanges.some((exchange) => completedCreation(exchange) === true))
+    return new Set<string>();
+  if (exchanges.some((exchange) => outsideCreationTask(exchange))) return new Set<string>();
+  const requestedCoverage = exchanges.some(
+    (exchange) =>
+      TOOLS.has(exchange.result?.toolRef?.canonicalId ?? "") && !attestedInventory(exchange, calls),
+  );
+  return requestedCoverage ? new Set<string>() : calls;
 }
 
 function observe(tally: Tally, exchange: ChatToolExchange): void {
@@ -391,6 +499,7 @@ function observeCounts(tally: Tally, totals: Readonly<Record<string, unknown>> |
 /** Trusted tool identity and structured receipts only; neither answer wording nor document text. */
 export function knowledgeTurnCoverage(
   exchanges: readonly ChatToolExchange[],
+  context?: { readonly incidentalReadCallIds: readonly string[] },
 ): KnowledgeTurnCoverage | undefined {
   const tally: Tally = {
     observed: false,
@@ -414,6 +523,7 @@ export function knowledgeTurnCoverage(
   for (const exchange of exchanges) observeExchange(tally, exchange);
   if (!tally.observed) return undefined;
   const covered = tally.batchCovered;
+  const incidentalCalls = incidentalInventoryCalls(exchanges, context?.incidentalReadCallIds);
   return {
     documentCount: tally.documents,
     requirementCount: tally.requirements,
@@ -426,7 +536,7 @@ export function knowledgeTurnCoverage(
     failedOperationCount: tally.failedOperations,
     omittedRequirementCount: tally.omittedRequirements,
     truncatedRequirementCount: tally.truncatedRequirements.size,
-    pendingPageCount: pendingPageCount(tally),
+    pendingPageCount: pendingPageCount(tally, incidentalCalls),
     ...(covered === undefined ? {} : { draftBatchCoveredRequirementCount: covered }),
   };
 }

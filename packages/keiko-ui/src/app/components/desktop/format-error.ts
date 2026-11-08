@@ -52,29 +52,40 @@ interface TrailingCode {
   readonly code: string;
 }
 
+function whitespaceStartBefore(message: string, end: number): number {
+  let start = end;
+  while (start > 0 && isSpaceChar(message[start - 1] ?? "")) start--;
+  return start;
+}
+
+function codeBeforeClosingParen(
+  message: string,
+  closeParen: number,
+): { readonly start: number; readonly code: string } | undefined {
+  let start = closeParen;
+  while (start > 0 && isCodeBodyChar(message[start - 1] ?? "")) start--;
+  const code = message.slice(start, closeParen);
+  if (code.length < 3 || !/^[A-Z]$/u.test(code[0] ?? "")) return undefined;
+  return { start, code };
+}
+
 // Manual scan replacing the former `/\s+\(([A-Z][A-Z0-9_/-]{2,})\)\s*$/` (SonarCloud S8786): that
 // pattern's leading `\s+` is unanchored, so a message with no trailing " (CODE)" at all (e.g. one
 // long whitespace-only string) forces the engine to retry the full backtrack at every start
 // position, giving O(n²) work. Scanning back from the end char-by-char can't backtrack and is O(n).
 function extractTrailingCode(message: string): TrailingCode | undefined {
-  let end = message.length;
-  while (end > 0 && isSpaceChar(message[end - 1] ?? "")) end--;
+  const end = whitespaceStartBefore(message, message.length);
   if (end === 0 || message[end - 1] !== ")") return undefined;
-  const closeParen = end - 1;
+  const code = codeBeforeClosingParen(message, end - 1);
+  if (code === undefined) return undefined;
 
-  let runStart = closeParen;
-  while (runStart > 0 && isCodeBodyChar(message[runStart - 1] ?? "")) runStart--;
-  const code = message.slice(runStart, closeParen);
-  if (code.length < 3 || !/^[A-Z]$/u.test(code[0] ?? "")) return undefined;
-
-  const openParen = runStart - 1;
+  const openParen = code.start - 1;
   if (openParen < 0 || message[openParen] !== "(") return undefined;
 
-  let wsStart = openParen;
-  while (wsStart > 0 && isSpaceChar(message[wsStart - 1] ?? "")) wsStart--;
+  const wsStart = whitespaceStartBefore(message, openParen);
   if (wsStart === openParen) return undefined;
 
-  return { prefixEnd: wsStart, code };
+  return { prefixEnd: wsStart, code: code.code };
 }
 
 function parseFormattedMessage(message: string): {
@@ -146,6 +157,9 @@ const GATEWAY_ERROR_KEYS: Readonly<Record<string, GatewayErrorKeys>> = {
     message: "chat.error.jiraAuthentication.message",
     remediation: "chat.error.jiraAuthentication.remediation",
   },
+  // The server maps missing, stale or configuration-invalidated readiness proof to this existing
+  // code. Keep that recovery distinct from observed unsupported capabilities, including when the
+  // notice is restored from formatUserError's saved string; provider prose is not a classifier.
   CONVERSATION_MODEL_NOT_READY: {
     title: "chat.error.modelNotReady.title",
     message: "chat.error.modelNotReady.message",
