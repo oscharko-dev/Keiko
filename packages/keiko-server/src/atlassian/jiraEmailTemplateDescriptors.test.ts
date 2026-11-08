@@ -37,10 +37,11 @@ it.each(["upload", "apply", "revert"] as const)("never admits a confirmed %s eff
 it("keeps complete export metadata separate from any file content or staged identity", () => {
   const { pack } = emailTemplateFixture();
   const schema = JIRA_EMAIL_TEMPLATE_DEFINITIONS["jira.email-template-pack"].result;
-  const result = { outcome: "succeeded", selectionScope: "complete-exported-email-template-pack",
+  const metadata = { outcome: "succeeded", selectionScope: "complete-exported-email-template-pack",
     archiveBytes: pack.archiveBytes, archiveSha256: pack.archiveSha256, manifestSha256: pack.manifestSha256,
-    entryCount: pack.entries.length, items: pack.entries };
+    entryCount: pack.entries.length };
+  const result = { ...metadata, items: pack.entries };
   expect(describeCatalogSchemaMismatch(schema, result)).toBeUndefined();
   expect(describeCatalogSchemaMismatch(schema, { ...result, content: "template body" })).toBeDefined();
-  expect(describeCatalogSchemaMismatch(schema, { ...result, items: undefined })).toBeDefined();
+  expect(describeCatalogSchemaMismatch(schema, metadata)).toBeDefined();
 });

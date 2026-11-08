@@ -11,6 +11,7 @@ import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import { resolveCurrentJiraChatAuthority } from "./jiraChatAuthority.js";
 import { jiraChatActorDigest } from "./jiraPodAccess.js";
 import { recordJiraHumanInput } from "./credentialActivity.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 
 const NO_STORE = { "Cache-Control": "no-store" } as const;
 type Action = "inspect" | "submit" | "cancel";
@@ -63,7 +64,7 @@ function ownedInput(ctx: RouteContext, deps: UiHandlerDeps, action: Action): Own
     const current = deps.codingJiraInputContext?.(binding, id);
     return current === undefined ? undefined : { ...owned, codingPublish: current.publish };
   }
-  return chatContextCurrent(deps, owned, action, ctx.correlationId) ? owned : undefined;
+  return chatContextCurrent(deps, owned, action, ctx.correlationId ?? UNKNOWN_CORRELATION_ID) ? owned : undefined;
 }
 function publish(deps: UiHandlerDeps, ctx: RouteContext, owned: OwnedInput, view: JiraHumanInputView): void {
   if (owned.binding.context.kind === "coding") { owned.codingPublish?.(view); return; }
@@ -71,7 +72,7 @@ function publish(deps: UiHandlerDeps, ctx: RouteContext, owned: OwnedInput, view
   const message = deps.store.findMessageById(messageId);
   const exchange = message?.toolTranscript?.exchanges.find((entry) => entry.call.id === callId);
   if (message?.turnState === "pending" && exchange?.result === undefined)
-    deps.store.updateChatToolTranscript(messageId, { kind: "human-input", callId, view }, ctx.correlationId);
+    deps.store.updateChatToolTranscript(messageId, { kind: "human-input", callId, view }, ctx.correlationId ?? UNKNOWN_CORRELATION_ID);
 }
 function response(ctx: RouteContext, deps: UiHandlerDeps, owned: OwnedInput, view: JiraHumanInputView | undefined): RouteResult {
   if (view === undefined) return failure(ctx, 404);
@@ -99,7 +100,7 @@ async function run(ctx: RouteContext, deps: UiHandlerDeps, action: Action): Prom
     // Body arrival may outlive the call or a Pod switch. Revalidate before the durable CAS.
     if (ownedInput(ctx, deps, action)?.requestId !== owned.requestId) return failure(ctx, 409);
     const view = owned.custody.submit(owned.requestId, owned.binding, body.value.expectedRevision, body.value.values);
-    recordJiraHumanInput(deps.atlassianConnectorCredentials, ctx.correlationId, "provided");
+    recordJiraHumanInput(deps.atlassianConnectorCredentials, ctx.correlationId ?? UNKNOWN_CORRELATION_ID, "provided");
     return response(ctx, deps, owned, view);
   } catch (error) {
     if (!(error instanceof JiraHumanInputCustodyError)) throw error;

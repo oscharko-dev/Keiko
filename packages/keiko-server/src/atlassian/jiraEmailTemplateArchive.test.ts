@@ -74,12 +74,18 @@ it("lets cancellation interrupt a valid multi-part pack during the existing cont
   let visited = 0;
   const parts = new Map<string, Uint8Array>([["first.vm", first], ["second.vm", second]]);
   const values = parts.values.bind(parts);
-  parts.values = function* () {
-    for (const part of values()) {
-      visited++;
-      if (visited === 2) abort.abort();
-      yield part;
-    }
+  parts.values = () => {
+    const iterator = values();
+    const next = iterator.next.bind(iterator);
+    iterator.next = () => {
+      const part = next();
+      if (!part.done) {
+        visited++;
+        if (visited === 2) abort.abort();
+      }
+      return part;
+    };
+    return iterator;
   };
   expect(await admitJiraEmailTemplateParts(new Uint8Array(), parts, [],
     { signal: abort.signal, deadlineAt: 15000, now: () => 0 })).toEqual({ ok: false, refusal: "cancelled" });
@@ -89,7 +95,12 @@ it("shares the original deadline with content scanning instead of starting a new
   let current = 0;
   const parts = new Map([["safe.vm", new TextEncoder().encode("safe text")]]);
   const values = parts.values.bind(parts);
-  parts.values = function* () { current = 15000; yield* values(); };
+  parts.values = () => {
+    const iterator = values();
+    const next = iterator.next.bind(iterator);
+    iterator.next = () => { current = 15000; return next(); };
+    return iterator;
+  };
   expect(await admitJiraEmailTemplateParts(new Uint8Array(), parts, [],
     { deadlineAt: 15000, now: () => current })).toEqual({ ok: false, refusal: "bounds-exceeded" });
 });

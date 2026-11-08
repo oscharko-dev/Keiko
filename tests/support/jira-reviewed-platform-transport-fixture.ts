@@ -5,7 +5,7 @@ import { VERSION_LINK_MUTATION_CASES, versionLinkMutationFixture } from "./jira-
 import { PROJECT_CATEGORY_FIXTURE_CASES, projectCategoryFixture } from "./jira-project-category-fixture.js";
 import { response } from "./jira-managed-remote.js";
 
-interface ReviewedTransportFixture {
+export interface ReviewedTransportFixture {
   readonly read: (request: AtlassianHttpBodyRequest) => Promise<AtlassianHttpBodyResult | undefined>;
   readonly write: (request: AtlassianHttpBodyRequest) => Promise<AtlassianHttpBodyResult | undefined>;
   readonly snapshot: () => object;

@@ -121,7 +121,9 @@ describe("independent fifteen-operation avatar source matrix", () => {
 describe("session-owned temporary avatars", () => {
   it("requires the real private session port before any native request", async () => {
     const h = harness();
-    expect(await executeJiraAvatarMutation("jira.upload-project-avatar", uploadArgs(), { ...h.ports, withSession: undefined })).toMatchObject({ ok: false, reason: "unavailable" });
+    const ports = { ...h.ports };
+    delete ports.withSession;
+    expect(await executeJiraAvatarMutation("jira.upload-project-avatar", uploadArgs(), ports)).toMatchObject({ ok: false, reason: "unavailable" });
     expect(h.request).not.toHaveBeenCalled(); expect(h.upload).not.toHaveBeenCalled();
   });
   it("requires admitted actual bytes, and does not treat expectedFile as source authority", async () => {
@@ -144,8 +146,9 @@ describe("session-owned temporary avatars", () => {
   });
   it("invalidates a previous temporary slot before a lost upload acknowledgement", async () => {
     const h = harness(); h.state.temporary = { actorKey: ACTOR, target: TARGET, ...TEMP };
-    h.state.effect = { ok: false, reason: "network-error" };
-    expect(await executeJiraAvatarMutation("jira.upload-project-avatar", uploadArgs(), h.ports)).toMatchObject({ ok: false, reason: "network-error" });
+    // The shared write transport maps a network-error without a response to unavailable.
+    h.state.effect = { ok: false, reason: "unavailable" };
+    expect(await executeJiraAvatarMutation("jira.upload-project-avatar", uploadArgs(), h.ports)).toMatchObject({ ok: false, reason: "unavailable" });
     expect(h.state.temporary).toBeUndefined(); expect(h.upload).toHaveBeenCalledTimes(1);
   });
   it.each(["actor", "target", "digest", "bytes", "crop"])("refuses a stale private temporary %s binding", async (kind) => {
@@ -165,7 +168,9 @@ describe("session-owned temporary avatars", () => {
   });
   it("does not silently claim legacy generic avatar endpoints on11.3", async () => {
     const h = harness();
-    expect(await executeJiraAvatarMutation("jira.upload-temporary-avatar", uploadArgs({ kind: "session", avatarType: "user" }), { ...h.ports, legacyTemporaryRelease: undefined })).toMatchObject({ ok: false, reason: "unavailable" });
+    const ports = { ...h.ports };
+    delete ports.legacyTemporaryRelease;
+    expect(await executeJiraAvatarMutation("jira.upload-temporary-avatar", uploadArgs({ kind: "session", avatarType: "user" }), ports)).toMatchObject({ ok: false, reason: "unavailable" });
     expect(h.withSession).not.toHaveBeenCalled();
   });
   it.each(["10.3", "10.4"] as const)("uses the current native %s release for both legacy operations without confirming the image", async (release) => {

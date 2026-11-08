@@ -1,4 +1,4 @@
-import { TOOL_CATALOG_LIMITS, type CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { TOOL_CATALOG_LIMITS, type CatalogJsonObject, type CatalogJsonValue } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { captureCatalogJson, describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
 import { jiraOperationForTool } from "./jiraManagedProvider.js";
 import { createJiraReadRequest, checkJiraManagedMutation, prepareJiraHumanInput, prepareJiraHumanInputReview, type JiraHumanInputBinding, type JiraHumanInputSelection } from "@oscharko-dev/keiko-connectors";
@@ -19,6 +19,9 @@ interface Prepared {
   readonly operation: string;
   readonly argumentsDigest: string;
   readonly selection: JiraHumanInputSelection;
+}
+function capturedObject(value: CatalogJsonValue): value is CatalogJsonObject {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 /** Private companion to source preparation, scoped to this already-held turn; no secret values. */
 export function createJiraChatHumanInput(options: JiraChatTurnOptions, context: JiraChatCatalogContext) {
@@ -75,7 +78,7 @@ export function createJiraChatHumanInput(options: JiraChatTurnOptions, context: 
       const contract = jiraOperationForTool(`jira.${purpose}`);
       // The catalog owns the final typed refusal. Do not ask for private values for invalid args.
       const args = captureCatalogJson(call.arguments, TOOL_CATALOG_LIMITS.maxArgumentBytes);
-      if (contract === undefined || args === null || typeof args !== "object" || Array.isArray(args) ||
+      if (contract === undefined || !capturedObject(args) ||
           describeCatalogSchemaMismatch(contract.declaration.descriptor.inputSchema, args) !== undefined) return;
       const custody = options.deps.atlassianConnectorCredentials?.custody.humanInputs;
       requireDispatch(custody !== undefined, "failed", "handler-unavailable");

@@ -31,7 +31,7 @@ function selected(name: string) {
 function schemaObject(value: CatalogJsonValue | undefined): CatalogJsonObject {
   if (value === null || value === undefined || typeof value !== "object" || Array.isArray(value))
     throw new TypeError("Missing authored object schema");
-  return value;
+  return Object.fromEntries<CatalogJsonValue>(Object.entries<CatalogJsonValue>(value));
 }
 function inputField(name: string, field: string): CatalogJsonObject {
   return compileExternalCatalogSchema(schemaObject(schemaObject(selected(name).declaration.descriptor.inputSchema.properties)[field]));

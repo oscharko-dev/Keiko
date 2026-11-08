@@ -9,6 +9,7 @@ import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { createInMemoryUiStore } from "../../packages/keiko-server/src/store/index.js";
+import { buildRedactor } from "../../packages/keiko-server/src/deps.js";
 import { jiraChatAvatarComposition } from "../../packages/keiko-server/src/atlassian/jiraAvatarComposition.js";
 import type { JiraChatAttachmentDeps } from "../../packages/keiko-server/src/atlassian/jiraChatAttachment.js";
 import { createGatewayAtlassianHttpBodyPort, type CreateAtlassianHttpPortOptions } from "../../packages/keiko-server/src/atlassian/httpPort.js";
@@ -45,7 +46,7 @@ function connectedFiles(connected: ConnectedChat | undefined): Files {
   const store = connected?.store ?? createInMemoryUiStore(); store.createProject(root);
   const chatId = connected?.chatId ?? store.createChat(root, "Synthetic native image", "model").id;
   store.updateChat(chatId, { connectedScopes: [{ kind: "workspace-root", root, relativePaths: [], connectedAtMs: 1 }] });
-  const deps: JiraChatAttachmentDeps = { store, redactor: (value: string) => value, managedTaskWorkspaceRoot: undefined,
+  const deps: JiraChatAttachmentDeps = { store, redactor: buildRedactor({}), managedTaskWorkspaceRoot: undefined,
     env: {}, config: undefined, gatewayConfig: undefined, egress: undefined };
   return { deps, chatId, close: () => { if (connected === undefined) store.close(); rmSync(root, { recursive: true, force: true }); } };
 }
@@ -120,8 +121,10 @@ export function privateNativeComposition(tool: string | undefined, baseUrl: stri
   connected?: ConnectedChat): Composition | undefined {
   const selected = privateNativeCase(tool); if (selected === undefined) return undefined;
   const purpose = JIRA_HUMAN_INPUT_PURPOSES.find((value) => selected.tool === `jira.${value}`);
+  const compatibility = legacyCompatibility(selected.tool);
   const state = privateJiraCustodyFixture(purpose === undefined ? "jira.login" : `jira.${purpose}`, "a".repeat(64),
-    { baseUrl, actorKey: ACTOR.key, actorUsername: ACTOR.name, compatibility: legacyCompatibility(selected.tool) });
+    { baseUrl, actorKey: ACTOR.key, actorUsername: ACTOR.name,
+      ...(compatibility === undefined ? {} : { compatibility }) });
   const metadata = state.custody.getMetadata(state.binding.authRef);
   if (metadata === undefined) throw new TypeError("Missing actual fixture credential metadata");
   const options = { baseUrl, authRef: metadata.authRef, credentials: state.executionResolver, fetchImpl, activityLog };

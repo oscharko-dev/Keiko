@@ -65,7 +65,7 @@ describe("exact Jira operation facts through existing log owners", () => {
     });
     const definitions = jiraOperationDefinitions();
     expect(definitions.filter(({ kind }) => kind === "native")).toHaveLength(439);
-    expect(definitions.filter(({ kind }) => kind === "composite").map(({ tool }) => tool).toSorted())
+    expect(definitions.filter(({ kind }) => kind === "composite").map(({ tool }) => tool).sort())
       .toEqual(["jira.draft", "jira.draft-stage", "jira.report"]);
     expect(new Set(members).size).toBe(members.length);
     expect(new Set(members)).toEqual(new Set(definitions.map(({ tool }) => tool)));
