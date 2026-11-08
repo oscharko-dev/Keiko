@@ -9,9 +9,9 @@ import {
   filterPermissionSnapshots, filterPermissionTarget, reviewableFilterPermission, sameFilterPermissions, type FilterPermissionTarget,
 } from "./jira-filter-permission-values.js";
 import {
-  readOwnedFilter, readSavedActor, readSavedPermissions, savedConflict, savedExactKeys, savedInvalid,
+  bindSavedFilterOwner, readSavedPermissions, savedConflict, savedExactKeys, savedInvalid,
   savedText, savedUnchanged, savedUnconfirmed, SAVED_MALFORMED, type JiraSavedConfigurationAttempt,
-  type JiraSavedConfigurationReceipt, type SavedObservation,
+  type JiraSavedConfigurationReceipt,
 } from "./jira-saved-configuration-values.js";
 
 type PermissionMutation = "jira.add-filter-permission" | "jira.delete-filter-permission";
@@ -29,12 +29,6 @@ function input(operation: PermissionMutation, args: CatalogJsonObject): Input | 
   if (target === undefined) return undefined;
   if (target.type === "global" ? args.acceptGlobalReplacement !== true : args.acceptGlobalReplacement !== undefined) return undefined;
   return { ...base, target };
-}
-async function parent(request: JiraMutationRequest, selected: Input): Promise<SavedObservation<true>> {
-  const actor = await readSavedActor(request, selected.actorKey);
-  if (!actor.ok) return actor;
-  const filter = await readOwnedFilter(request, selected.filterId, selected.actorKey);
-  return filter.ok ? { ok: true, value: true } : filter;
 }
 function removedPermissionRefusal(selected: Input, permissions: readonly CatalogJsonObject[], receipt: JiraSavedConfigurationReceipt): JiraSavedConfigurationAttempt | undefined {
   const permissionId = selected.permissionId;
@@ -85,7 +79,7 @@ function acknowledgedPermission(response: Extract<AtlassianWriteHttpOutcome, { r
 }
 async function confirm(request: JiraMutationRequest, selected: Input, receipt: JiraSavedConfigurationReceipt): Promise<JiraSavedConfigurationAttempt> {
   try {
-    const rebound = await parent(request, selected);
+    const rebound = await bindSavedFilterOwner(request, selected.filterId, selected.actorKey);
     if (!rebound.ok) return { ...rebound, receipt };
     if (selected.target !== undefined) {
       const recipient = await bindFilterPermissionRecipient(request, selected.target);
@@ -101,7 +95,7 @@ export function isJiraFilterPermissionMutation(name: string): name is Permission
 export async function executeJiraFilterPermissionMutation(operation: PermissionMutation, args: CatalogJsonObject, request: JiraMutationRequest, check = false): Promise<JiraSavedConfigurationAttempt> {
   const selected = input(operation, args);
   if (selected === undefined) return savedInvalid("Review the owned filter and its complete permission rows. Add uses one closed recipient with explicit view/edit booleans; global requires acceptGlobalReplacement:true because Jira removes all prior shares. Delete names one exact permission ID. Nothing was written.");
-  const bound = await parent(request, selected);
+  const bound = await bindSavedFilterOwner(request, selected.filterId, selected.actorKey);
   if (!bound.ok) return bound;
   const current = await readSavedPermissions(request, selected.filterId);
   if (!current.ok) return current;

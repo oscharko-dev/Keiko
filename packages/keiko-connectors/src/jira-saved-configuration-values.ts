@@ -68,6 +68,12 @@ export async function readOwnedFilter(request: JiraMutationRequest, id: string, 
   if (filter.ownerKey !== actorKey) return savedConflict("The filter no longer has the reviewed connected-user owner. Ownership changed or is different; an acknowledged operation remains unconfirmed and must not be replayed.");
   return { ok: true, value: filter };
 }
+export async function bindSavedFilterOwner(request: JiraMutationRequest, filterId: string, actorKey: string): Promise<SavedObservation<true>> {
+  const actor = await readSavedActor(request, actorKey);
+  if (!actor.ok) return actor;
+  const filter = await readOwnedFilter(request, filterId, actorKey);
+  return filter.ok ? { ok: true, value: true } : filter;
+}
 export function sameSavedFilter(actual: SavedFilter, expected: SavedFilter): boolean {
   return actual.id === expected.id && actual.ownerKey === expected.ownerKey && actual.name === expected.name &&
     actual.jql === expected.jql && actual.description === expected.description;

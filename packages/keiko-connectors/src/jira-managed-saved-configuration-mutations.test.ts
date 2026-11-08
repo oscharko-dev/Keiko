@@ -55,6 +55,8 @@ const CASES: readonly Scenario[] = [
   { name: "delete-my-preference", execute: (args, request, check) => executeJiraPreferenceMutation("jira.delete-my-preference", args, request, check),
     args: { key: "user.notify.own.changes", expectedActorKey: "synthetic-key", expectedValue: true }, before: [ACTOR, scalar("true"), ACTOR], ack: ACK, after: [ACTOR, MISSING], path: "mypreferences?key=user.notify.own.changes", method: "DELETE", confirmed: false, receipt: { userKey: "synthetic-key", username: "synthetic-user", preferenceKey: "user.notify.own.changes", preferencePresent: false } },
 ];
+const FILTER_OWNER_CASES = CASES.filter(({ name }) => name === "set-filter-columns" || name === "reset-filter-columns" ||
+  name === "add-filter-permission" || name === "delete-filter-permission");
 it.each(CASES)("performs one fixed $name effect and independently classifies the actual readback", async (scenario) => {
   const request = port([...scenario.before, scenario.ack, ...scenario.after]);
   const result = await scenario.execute(scenario.args, request);
@@ -86,6 +88,37 @@ it.each(CASES)("refuses changed actor identity before $name", async (scenario) =
   const request = port([object({ key: "another-key", name: "synthetic-user" })]);
   expect(await scenario.execute(scenario.args, request)).toMatchObject({ ok: false, reason: "conflict" });
   expect(request).toHaveBeenCalledTimes(1);
+});
+it.each(FILTER_OWNER_CASES)("refuses changed filter ownership before $name without a mutation receipt", async (scenario) => {
+  const changed = object({ ...FILTER_BODY, owner: { key: "another-key", name: "another-user" } });
+  const request = port([ACTOR, changed]);
+  const result = await scenario.execute(scenario.args, request);
+  expect(result).toMatchObject({ ok: false, reason: "conflict" });
+  expect(result).not.toHaveProperty("receipt");
+  expect(request.mock.calls).toEqual([["myself", "GET", undefined, "json"], ["filter/37", "GET", undefined, "json"]]);
+});
+it.each(FILTER_OWNER_CASES)("stops the $name readback at changed actor identity and retains its known target", async (scenario) => {
+  const changed = object({ key: "another-key", name: "another-user" });
+  const request = port([...scenario.before, scenario.ack, changed]);
+  expect(await scenario.execute(scenario.args, request)).toMatchObject({ ok: false, reason: "conflict",
+    receipt: { filterId: "37", userKey: "synthetic-key" } });
+  expect(request.mock.calls.slice(scenario.before.length + 1)).toEqual([["myself", "GET", undefined, "json"]]);
+  expect(request.mock.calls.filter(([, method]) => method !== "GET")).toHaveLength(1);
+});
+it.each(FILTER_OWNER_CASES)("keeps changed filter ownership after $name acknowledged and unconfirmed", async (scenario) => {
+  const changed = object({ ...FILTER_BODY, owner: { key: "another-key", name: "another-user" } });
+  const request = port([...scenario.before, scenario.ack, ACTOR, changed]);
+  expect(await scenario.execute(scenario.args, request)).toMatchObject({ ok: false, reason: "conflict",
+    receipt: { filterId: "37", userKey: "synthetic-key" } });
+  expect(request.mock.calls.slice(scenario.before.length + 1)).toEqual([["myself", "GET", undefined, "json"], ["filter/37", "GET", undefined, "json"]]);
+  expect(request.mock.calls.filter(([, method]) => method !== "GET")).toHaveLength(1);
+});
+it.each(FILTER_OWNER_CASES)("retains the $name receipt when the owned-filter read throws after ACK", async (scenario) => {
+  const cause = new TypeError("Synthetic owned-filter read failure");
+  const request = port([...scenario.before, scenario.ack, ACTOR, cause]);
+  await expect(scenario.execute(scenario.args, request)).rejects.toMatchObject({ name: "JiraAcknowledgedMutationError", cause,
+    receipt: { filterId: "37", userKey: "synthetic-key" } });
+  expect(request.mock.calls.filter(([, method]) => method !== "GET")).toHaveLength(1);
 });
 it("refuses the last-moment default-sharing change before creation", async () => {
   const scenario = CASES[0];

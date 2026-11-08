@@ -4,7 +4,7 @@ import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { dispatchFailure, JiraAcknowledgedMutationError } from "./jira-mutation-failure.js";
 import { jiraNativeId } from "./jira-native-values.js";
 import {
-  readOwnedFilter, readSavedActor, savedConflict, savedExactKeys, savedInvalid, savedText,
+  bindSavedFilterOwner, savedConflict, savedExactKeys, savedInvalid, savedText,
   savedUnchanged, savedUnconfirmed, SAVED_MALFORMED, type JiraSavedConfigurationAttempt,
   type JiraSavedConfigurationReceipt, type SavedObservation,
 } from "./jira-saved-configuration-values.js";
@@ -46,15 +46,9 @@ function noOwnColumns(state: ColumnState): boolean {
 function exactOwnColumns(state: ColumnState, columns: readonly string[]): boolean {
   return (state.columnConfig === "FILTER" || state.columnConfig === "EXPLICIT") && equalColumns(state.columns, columns);
 }
-async function parent(request: JiraMutationRequest, selected: Input): Promise<SavedObservation<true>> {
-  const actor = await readSavedActor(request, selected.actorKey);
-  if (!actor.ok) return actor;
-  const filter = await readOwnedFilter(request, selected.filterId, selected.actorKey);
-  return filter.ok ? { ok: true, value: true } : filter;
-}
 async function confirm(request: JiraMutationRequest, selected: Input, receipt: JiraSavedConfigurationReceipt): Promise<JiraSavedConfigurationAttempt> {
   try {
-    const bound = await parent(request, selected);
+    const bound = await bindSavedFilterOwner(request, selected.filterId, selected.actorKey);
     if (!bound.ok) return { ...bound, receipt };
     const current = await readColumns(request, selected.filterId);
     if (!current.ok) return { ...current, receipt };
@@ -69,7 +63,7 @@ export function isJiraFilterColumnMutation(name: string): name is ColumnMutation
 export async function executeJiraFilterColumnMutation(operation: ColumnMutation, args: CatalogJsonObject, request: JiraMutationRequest, check = false): Promise<JiraSavedConfigurationAttempt> {
   const selected = input(operation, args);
   if (selected === undefined) return savedInvalid("Review the filter owner, full ordered expectedColumns and expectedColumnConfig (null means native provenance was omitted). Set needs a nonempty ordered columns list. Reset accepts no replacement list. Nothing was written.");
-  const bound = await parent(request, selected);
+  const bound = await bindSavedFilterOwner(request, selected.filterId, selected.actorKey);
   if (!bound.ok) return bound;
   const current = await readColumns(request, selected.filterId);
   if (!current.ok) return current;
