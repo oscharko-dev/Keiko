@@ -612,6 +612,61 @@ independent readback never turns `malformed-payload` or `not-found` into native
 success. Failed/unconfirmed writes qualify only with native 2xx, the matching
 settled journal and receipt, reason `unavailable`, and a nonvacuous readback.
 
+## Limit-run fault plan (Amendment 3)
+
+`browser-bulk-fault.mjs` exports exactly
+`createFaultPlan({ scope, at, kinds })`, returning `{ maybeInject(ctx, progress01) }`.
+The closed scopes are `bulk-epics`, `hierarchy` and `progress`. Threshold/kind
+pairs stay together; the normal plan pairs `0.4` with `response-drop` and `0.8`
+with `server-kill`. Call before the next ordinary unit to arm a drop and again
+after independently observing and recording the completed unit. Call once more
+at progress `1` and include that StepResult in the block's final grade. A pending,
+skipped or unverified fault check must never be ignored when grading the run.
+
+F records only through `ctx.intent.record("faults", value)`. Each
+`<scope>:<kind>` key is reserved as `injecting` before an effect. Any existing key,
+including an interrupted or skipped record, prevents another injection. The
+existing private intent stores native issue identities and summary/state digests;
+summary bodies and exception contents are absent. F writes no other journal and
+does not modify another block's checkpoint.
+
+A response drop targets only the signed-in loopback page's ordinary Chat POST
+routes. It forwards the original request once with redirects and retries disabled,
+then aborts the browser response with `connectionreset`, disposes the fetched
+response and removes only its own handler. GETs and other origins cannot consume
+it. F never sends a prompt or retries a turn. The block and product retain their
+normal canonical resume path. Cancellation removes the handler; a response
+already forwarded is delivered from the fetched response rather than forwarded
+again. If forwarding fails, the paused request is closed without a retry and the
+fault remains unverified.
+
+Server crashes go exclusively through
+`ctx.recovery.restartServer({ signal })`. The orchestrator owns its process,
+SIGKILL, same-state restart, health wait, page reload and launcher pairing. F
+requires `{ restarted: true, downtimeMs }`; it neither discovers nor kills a PID.
+A missing handle records `skipped` / `recovery-unavailable` and stays `unverified`,
+also if a handle appears later. F does not arm a missed fault after the final unit.
+
+Fresh `ctx.search` reads the complete target project through the existing native
+JQL owner; `ctx.read` verifies its native project identity. Known issue keys/IDs
+in intent and the pre-fault native population must remain present with the same
+summary. Recorded `sprintId` or `sprint.id` values additionally trigger complete
+Agile membership readback through the existing paginator. This preserves observed
+membership prefixes across more than three pages. Completed-unit cursors in
+`bulkEpics`, `hierarchyBulk`, `progressSimulation` and `sprintBulk` must not regress.
+A progress argument alone cannot prove recovery: new native units (creation
+scopes), or changed native issue/sprint state (progress scope), must corroborate
+continuation. Recovery is recorded only after those facts agree. A second pending
+fault cannot overtake an unresolved first one.
+
+StepResult contains the closed step/status/detail and numeric `injected`,
+`recovered`, `duplicates`, `lost` counts. Missing handles or evidence stay
+`unverified`; observed duplicates or lost records are `red`. Only a complete,
+freshly reverified fault plan can be `green`. The hermetic factory tests use an
+in-memory intent, fake page routing and the bound recovery stub; they include a
+370-unit sequence and multi-page sprint membership. They are not live crash or
+model qualification.
+
 ## Ordinary Chat response-loss and restart qualification
 
 Run this finite group only after the licensed HTTPS/read/write preflight and while no other
