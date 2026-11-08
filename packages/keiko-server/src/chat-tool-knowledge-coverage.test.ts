@@ -11,6 +11,7 @@ import {
   knowledgeCoverageIssues,
   knowledgeCoverageReceipt,
 } from "./chat-tool-knowledge-coverage.js";
+import { draftResult } from "./atlassian/jiraChatDraft.js";
 
 function isResultDataObject(value: CatalogJsonValue): value is CatalogJsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -462,6 +463,74 @@ describe("incidental Knowledge inventory while creating a named complete draft (
     items: [{ ref: "task", state: "created", issueKey: "SYN-1" }],
   };
   const draft = exchange(draftData, reference, "keiko.jira.draft");
+
+  it("settles incidental inventory for the real named existing-only draft replay", () => {
+    const produced = draftResult("https://jira.example.invalid", [
+      { ref: "first", state: "existing", issueKey: "SYN-1" },
+      { ref: "second", state: "existing", issueKey: "SYN-2" },
+    ]);
+    expect(produced.isError).toBeUndefined();
+    expect(produced.data).toMatchObject({
+      outcome: "not-dispatched",
+      createdCount: 0,
+      existingCount: 2,
+      pendingCount: 0,
+      uncertainCount: 0,
+    });
+    const replay: ChatToolExchange = {
+      ...exchange(produced.data, reference, "keiko.jira.draft"),
+      mutationOutcome: "not-dispatched",
+    };
+
+    const coverage = knowledgeTurnCoverage([partialRead, replay], context);
+
+    expect(coverage?.pendingPageCount).toBe(0);
+    expect(coverage?.draftBatchCoveredRequirementCount).toBeUndefined();
+    expect(knowledgeCoverageReceipt(partialRead)).toMatchObject({ nextCursor: "inventory-next" });
+  });
+
+  it("keeps an existing-only replay strict when unnamed or durably uncertain", () => {
+    const produced = draftResult("https://jira.example.invalid", [
+      { ref: "task", state: "existing", issueKey: "SYN-1" },
+    ]);
+    const unnamed: ChatToolExchange = {
+      ...exchange(produced.data, {}, "keiko.jira.draft"),
+      mutationOutcome: "not-dispatched",
+    };
+    const uncertain: ChatToolExchange = {
+      ...exchange(produced.data, reference, "keiko.jira.draft"),
+      mutationOutcome: "unknown",
+    };
+
+    expect(knowledgeTurnCoverage([partialRead, unnamed], context)?.pendingPageCount).toBe(1);
+    expect(knowledgeTurnCoverage([partialRead, uncertain], context)?.pendingPageCount).toBe(1);
+  });
+
+  it.each(["pending", "uncertain"] as const)(
+    "keeps a real existing-item replay strict with another %s item",
+    (state) => {
+      const produced = draftResult("https://jira.example.invalid", [
+        { ref: "first", state: "existing", issueKey: "SYN-1" },
+        { ref: "second", state },
+      ]);
+      expect(produced.isError).toBe(true);
+      const observed = exchange(produced.data, reference, "keiko.jira.draft");
+      if (observed.result === undefined) throw new Error("Missing draft result fixture");
+      const replay: ChatToolExchange = {
+        ...observed,
+        result: {
+          ...observed.result,
+          status: "failed",
+          reason: "provider-reported-error",
+          page: null,
+          data: produced.data,
+        },
+        mutationOutcome: state === "pending" ? "not-dispatched" : "unknown",
+      };
+
+      expect(knowledgeTurnCoverage([partialRead, replay], context)?.pendingPageCount).toBe(1);
+    },
+  );
 
   it.each([
     { name: "create", settled: create },
