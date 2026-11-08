@@ -137,7 +137,9 @@ describe("native credential path rule", () => {
     expect(rule.endsWith(`(deny file-write* ${literals})`)).toBe(true);
     // Every other credential name, and every other `*.pem` file, keeps its rule.
     const { plain: otherPlain } = ruleRegexes(rule);
-    expect(otherPlain.map(String)).toEqual(plain.map(String));
+    expect(otherPlain.map((pattern) => String(pattern))).toEqual(
+      plain.map((pattern) => String(pattern)),
+    );
     expect(rule.replace(` ${literals}`, "").replace(`(deny file-write* ${literals})`, "")).toBe(
       CREDENTIAL_PATH_SEATBELT_RULE,
     );
