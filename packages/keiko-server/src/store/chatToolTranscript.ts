@@ -1,6 +1,12 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { ChatToolExchange, ChatToolTranscript } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type {
+  ChatToolBatchProgress,
+  ChatToolExchange,
+  ChatToolTranscript,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
+  CHAT_TOOL_BATCH_TOOL_NAME,
+  isChatToolBatchProgress,
   isChatToolReadGrantView,
   isChatToolWriteApprovalView,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -43,6 +49,12 @@ export type ChatToolTranscriptUpdate =
       readonly binding?: ToolResultValidationBinding;
       readonly mutationOutcome?: JiraMutationOutcome;
       readonly draftProgress?: Readonly<Record<string, unknown>>;
+    }
+  | {
+      /** Counted progress of the running draft batch call; retained when the call settles. */
+      readonly kind: "progress";
+      readonly callId: string;
+      readonly batchProgress: ChatToolBatchProgress;
     }
   | { readonly kind: "read-consent"; readonly grant: ChatToolReadGrantView }
   | {
@@ -93,8 +105,17 @@ const UPDATE = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["started", "settled", "read-consent", "write-approval"],
+      values: ["started", "settled", "progress", "read-consent", "write-approval"],
     },
+    batchPhase: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["outlining", "drafting", "complete"],
+    },
+    batchDraftedCount: { type: "integer", dataClass: "count", required: false },
+    batchPlannedCount: { type: "integer", dataClass: "count", required: false },
+    batchFailedCount: { type: "integer", dataClass: "count", required: false },
     exchangeCount: { type: "integer", dataClass: "count", required: true },
     draftReceiptCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
@@ -239,6 +260,7 @@ function validExchange(
       "approval",
       "mutationOutcome",
       "draftProgress",
+      "batchProgress",
     ]) ||
     !validCall(value.call)
   )
@@ -252,7 +274,17 @@ function validExchange(
     );
   else if (value.resultBinding !== undefined) return false;
   if (value.draftProgress !== undefined) validateDraftProgress(value as unknown as StoredExchange);
-  return true;
+  return validBatchProgress(value, value.call);
+}
+/** Batch progress belongs to the draft batch call alone and stays a closed, bounded record. */
+function validBatchProgress(
+  value: Record<string, unknown>,
+  call: ChatToolExchange["call"],
+): boolean {
+  return (
+    value.batchProgress === undefined ||
+    (call.name === CHAT_TOOL_BATCH_TOOL_NAME && isChatToolBatchProgress(value.batchProgress))
+  );
 }
 function validReadGrants(
   value: Record<string, unknown>,
@@ -306,10 +338,11 @@ export function decodeChatToolTranscript(
     : {
         ...stored,
         exchanges: stored.exchanges.map(
-          ({ call, result, approval, mutationOutcome, draftProgress }) => ({
+          ({ call, result, approval, mutationOutcome, draftProgress, batchProgress }) => ({
             call: canonicalCall(call),
             ...(result === undefined ? {} : { result }),
             ...(draftProgress === undefined ? {} : { draftProgress }),
+            ...(batchProgress === undefined ? {} : { batchProgress }),
             ...(approval === undefined ? {} : { approval }),
             ...(mutationOutcome === undefined ? {} : { mutationOutcome }),
           }),
@@ -402,12 +435,32 @@ function applyExchange(
     ),
   };
 }
+function applyProgress(
+  current: StoredTranscript,
+  update: Extract<ChatToolTranscriptUpdate, { kind: "progress" }>,
+): StoredTranscript {
+  const existing = current.exchanges.find((exchange) => exchange.call.id === update.callId);
+  // Progress describes a running call; a settled or foreign exchange is a conflict, not a no-op.
+  if (
+    existing?.call.name !== CHAT_TOOL_BATCH_TOOL_NAME ||
+    existing.result !== undefined ||
+    !isChatToolBatchProgress(update.batchProgress)
+  )
+    throw invalidRequest("Tool progress identity conflict.");
+  return {
+    ...current,
+    exchanges: current.exchanges.map((exchange) =>
+      exchange === existing ? { ...exchange, batchProgress: update.batchProgress } : exchange,
+    ),
+  };
+}
 function applyUpdate(
   current: StoredTranscript,
   update: ChatToolTranscriptUpdate,
   chatId: string,
   messageId: string,
 ): StoredTranscript {
+  if (update.kind === "progress") return applyProgress(current, update);
   if (update.kind === "write-approval") return applyApproval(current, update, chatId, messageId);
   if (update.kind !== "read-consent") return applyExchange(current, update);
   if (update.grant.chatId !== chatId) throw invalidRequest("Tool consent Chat mismatch.");
@@ -547,6 +600,11 @@ function redactUpdate(
     return { kind: "started", call: canonicalCall(call) };
   }
   if (update.kind === "settled") return redactSettlement(update, redact);
+  if (update.kind === "progress") {
+    if (!isChatToolBatchProgress(update.batchProgress))
+      throw invalidRequest("Invalid tool progress projection.");
+    return { ...update, batchProgress: { ...update.batchProgress } };
+  }
   if (update.kind === "write-approval") {
     if (!isChatToolWriteApprovalView(update.approval))
       throw invalidRequest("Invalid tool approval projection.");
@@ -557,6 +615,21 @@ function redactUpdate(
   return update;
 }
 
+function progressLogFields(update: ChatToolTranscriptUpdate): {
+  batchPhase?: ChatToolBatchProgress["phase"];
+  batchDraftedCount?: number;
+  batchPlannedCount?: number;
+  batchFailedCount?: number;
+} {
+  if (update.kind !== "progress") return {};
+  const { phase, draftedCount, plannedCount, failedCount } = update.batchProgress;
+  return {
+    batchPhase: phase,
+    batchDraftedCount: draftedCount,
+    batchPlannedCount: plannedCount,
+    batchFailedCount: failedCount,
+  };
+}
 function draftReceiptLogFields(update: ChatToolTranscriptUpdate): { draftReceiptCount?: number } {
   if (update.kind !== "settled" || update.draftProgress === undefined) return {};
   return {
@@ -604,6 +677,7 @@ export function updateChatToolTranscript(
         phase: update.kind,
         exchangeCount: count,
         ...draftReceiptLogFields(update),
+        ...progressLogFields(update),
         completeness: "complete",
         loss: "none",
       },

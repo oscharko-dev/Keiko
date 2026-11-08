@@ -29,28 +29,24 @@ import { createInMemoryUiStore } from "./store/index.js";
 // Two durable public facts in a deterministic order: one project-scoped, one user-scoped.
 const TWO_PUBLIC_FACTS = JSON.stringify([
   {
-    source: "user",
-    body: "The platform team ships releases on a fortnightly cadence.",
+    about: "self",
+    body: "I ship releases on a fortnightly cadence.",
+    evidence: "I ship releases on a fortnightly cadence.",
     type: "fact",
-    confidence: 0.7,
-    scope: "project",
-    tags: ["release"],
   },
   {
-    source: "user",
-    body: "The build pipeline runs on self-hosted runners.",
+    about: "self",
+    body: "I run the build pipeline on self-hosted runners.",
+    evidence: "I run the build pipeline on self-hosted runners.",
     type: "fact",
-    confidence: 0.6,
-    scope: "user",
-    tags: ["ci"],
   },
 ]);
 
 // Each accepted model body is an exact complete line from this user turn, as required by the
 // user-provenance boundary in the real salience extractor.
 const USER_TEXT = [
-  "The platform team ships releases on a fortnightly cadence.",
-  "The build pipeline runs on self-hosted runners.",
+  "I ship releases on a fortnightly cadence.",
+  "I run the build pipeline on self-hosted runners.",
 ].join("\n");
 
 function fakeModel(content: string): ModelPort {
@@ -163,15 +159,15 @@ describe("legacy fail-closed parity for mode-aware capture", () => {
       {
         kind: "candidate",
         proposalId: "<uuid>",
-        body: "The platform team ships releases on a fortnightly cadence.",
-        scopeLabel: "Project memory",
+        body: "I ship releases on a fortnightly cadence.",
+        scopeLabel: "User memory",
         requiresApproval: false,
         status: "proposed",
       },
       {
         kind: "candidate",
         proposalId: "<uuid>",
-        body: "The build pipeline runs on self-hosted runners.",
+        body: "I run the build pipeline on self-hosted runners.",
         scopeLabel: "User memory",
         requiresApproval: false,
         status: "proposed",
@@ -181,7 +177,7 @@ describe("legacy fail-closed parity for mode-aware capture", () => {
     expect(records).toHaveLength(2);
     expect(records.every((r) => r.status === "proposed")).toBe(true);
     expect(records.every((r) => r.provenance.sensitivity === "public")).toBe(true);
-    expect([...records].map((r) => r.scope.kind).sort()).toEqual(["project", "user"]);
+    expect(records.map((r) => r.scope.kind)).toEqual(["user", "user"]);
   });
 
   it("writes nothing when memory is disabled", async () => {

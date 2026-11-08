@@ -24,6 +24,7 @@ import {
   GROUNDED_SYSTEM_PROMPT_PRESERVING,
 } from "../../../packages/keiko-server/dist/grounded-prompt.js";
 import { groundingAccountingWitness } from "./grounding-accounting-witness.mjs";
+import { isSalienceRequest, readBody, salienceReply } from "./salience-model-mock.mjs";
 
 const PORT = Number(process.env.KEIKO_E2E_MODEL_PORT ?? "32186");
 const HOST = "127.0.0.1";
@@ -33,7 +34,6 @@ const HOST = "127.0.0.1";
 // changes what the browser shows and reddens the smoke.
 const REPLY_MARKER = "KEIKO_E2E_STREAM_OK";
 const JOURNAL_CAPTURE_MARKER = "KEIKO_E2E_JOURNAL_CAPTURE";
-const SALIENCE_PROMPT_MARKER = "You extract durable memories from a chat turn";
 // Which of the two the server sends follows KEIKO_CONTENT_REDACTION; either is a grounded request.
 const GROUNDED_PROMPT_MARKERS = [GROUNDED_SYSTEM_PROMPT, GROUNDED_SYSTEM_PROMPT_PRESERVING].map(
   (prompt) => JSON.stringify(prompt).slice(1, -1),
@@ -74,15 +74,6 @@ function observeGroundingAccounting(raw) {
     groundingAccountingWitness(raw, completionUsage(completionContent(raw))),
   );
   if (groundingAccounting.length > 16) groundingAccounting.shift();
-}
-
-function readBody(req) {
-  return new Promise((resolve) => {
-    const chunks = [];
-    req.on("data", (chunk) => chunks.push(chunk));
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    req.on("error", () => resolve(""));
-  });
 }
 
 function chunkFrame(delta, finishReason) {
@@ -157,22 +148,9 @@ function completionContent(rawRequest) {
   if (rawRequest.includes("KEIKO_E2E_READ_METADATA")) {
     return "The supplied files include src/read.ts and src/cited.ts [src/cited.ts:1]. src/excluded.ts was not supplied.";
   }
-  if (
-    !rawRequest.includes(JOURNAL_CAPTURE_MARKER) ||
-    !rawRequest.includes(SALIENCE_PROMPT_MARKER)
-  ) {
-    return REPLY_TEXT;
-  }
-  return JSON.stringify([
-    {
-      source: "user",
-      body: "KEIKO_E2E_JOURNAL_CAPTURE: remember the deterministic release window.",
-      type: "fact",
-      confidence: 0.91,
-      scope: "project",
-      tags: ["journal-e2e"],
-    },
-  ]);
+  const { messages = [] } = JSON.parse(rawRequest);
+  if (!isSalienceRequest(messages)) return REPLY_TEXT;
+  return salienceReply(messages, [JOURNAL_CAPTURE_MARKER]);
 }
 
 function markdownSkillWitness(rawRequest) {

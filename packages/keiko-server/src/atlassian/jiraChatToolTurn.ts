@@ -1,5 +1,6 @@
+import { chatKnowledgeScopes } from "../requirement-inventory.js";
 import { reserveChatToolPrompt } from "../chat-tool-approvals.js";
-import { JIRA_TOOL_GUIDANCE } from "./jiraToolGuidance.js";
+import { jiraTurnGuidance } from "./jiraOpenDraft.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -206,7 +207,12 @@ export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
       context,
       correlationId,
       budget: authority.envelope.budget,
-      guidance: JIRA_TOOL_GUIDANCE,
+      guidance: jiraTurnGuidance(
+        deps.jiraDraftStore,
+        message.chatId,
+        deps.activityLog,
+        correlationId,
+      ),
       bind: (current, budgetPort) =>
         bindChatToolCatalog<JiraChatCatalogConsumer>({
           deps,
@@ -290,7 +296,9 @@ export async function createJiraChatToolTurn(
   if (deps.store.findChatById(message.chatId)?.jiraPodBinding === undefined) return undefined;
   const catalog = deps.jiraChatCatalog;
   requireDispatch(catalog !== undefined, "denied", "authority-invalid");
-  const managed = await catalog.get();
+  const managed = await catalog.get({
+    knowledgeScoped: chatKnowledgeScopes(deps.store.findChatById(message.chatId)).length > 0,
+  });
   const correlation = correlationIdOrUnknown(correlationId);
   const bound = mintAndBoundChatTurn<JiraChatTurnOptions["authority"]>(
     deps,

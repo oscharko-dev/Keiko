@@ -23,6 +23,8 @@ import {
   expectedMarkdownSkillSelection,
 } from "../hooks/useChatMarkdownSkill";
 import { ApiError } from "@/lib/api";
+import * as atlassian from "@/lib/atlassian-connectors-api";
+import * as jiraTemplates from "@/lib/jira-templates-api";
 import { notifyCodingAppSessionChanged } from "@/lib/coding-app-session-client";
 import { MarkdownSkillControl } from "./MarkdownSkillControl";
 import { MarkdownSkillDialog } from "./MarkdownSkillDialog";
@@ -39,6 +41,15 @@ vi.mock("@/lib/markdown-skills-api", () => ({
   changeMarkdownSkillSelection: vi.fn(),
 }));
 vi.mock("@/lib/client-diagnostics", () => ({ reportClientDiagnostic: vi.fn() }));
+vi.mock("@/lib/jira-templates-api", () => ({
+  fetchJiraTemplates: vi.fn(),
+  proposeJiraTemplates: vi.fn(),
+  validateJiraTemplate: vi.fn(),
+}));
+vi.mock(import("@/lib/atlassian-connectors-api"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  listAtlassianConnectors: vi.fn(),
+}));
 
 const DOCUMENT: MarkdownSkillDocument = {
   id: "synthetic-skill",
@@ -69,6 +80,8 @@ function Harness({ chatId = "chat-a" }: { readonly chatId?: string }): ReactNode
 
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.mocked(jiraTemplates.fetchJiraTemplates).mockResolvedValue([]);
+  vi.mocked(atlassian.listAtlassianConnectors).mockResolvedValue([]);
   vi.mocked(api.fetchMarkdownSkills).mockResolvedValue([]);
   vi.mocked(api.fetchMarkdownSkillSelection).mockResolvedValue(EMPTY);
   vi.mocked(api.readMarkdownSkill).mockResolvedValue(DOCUMENT);
@@ -86,7 +99,57 @@ async function open(): Promise<HTMLElement> {
   return dialog;
 }
 
+/** Opens a stored skill in the editor and waits until its text is shown. */
+async function openSkill(dialog: HTMLElement, name = DOCUMENT.name): Promise<void> {
+  fireEvent.click(await within(dialog).findByRole("button", { name: new RegExp(name, "u") }));
+  await waitFor(() => expect(within(dialog).getByRole("button", { name: "Save" })).toBeVisible());
+}
+
 describe("Chat Markdown skill controls", () => {
+  // #4173: a business user could not tell chat skills from the project lead's Jira templates.
+  it("lists Jira templates in their own section and lets each row put one into the chat", async () => {
+    const template = { ...DOCUMENT, id: "epic-template", name: "Epic template" };
+    vi.mocked(api.fetchMarkdownSkills).mockResolvedValue([DOCUMENT, template]);
+    vi.mocked(api.readMarkdownSkill).mockResolvedValue(template);
+    vi.mocked(jiraTemplates.fetchJiraTemplates).mockResolvedValue([
+      { id: template.id, revision: 1, name: template.name, valid: true, project: "KER" },
+    ]);
+    render(<Harness />);
+    const dialog = await open();
+    const chat = within(dialog).getByRole("region", { name: "Chat skills" });
+    const jira = within(dialog).getByRole("region", { name: "Jira templates" });
+    await waitFor(() =>
+      expect(within(chat).queryByRole("button", { name: /Epic template/u })).toBeNull(),
+    );
+    expect(within(chat).getByRole("button", { name: /Boundary review/u })).toBeInTheDocument();
+    expect(within(jira).getByRole("button", { name: /Epic template/u })).toBeInTheDocument();
+    // Opening a template edits it; it is not put into the chat by opening it.
+    fireEvent.click(within(jira).getByRole("button", { name: /Epic template/u }));
+    await waitFor(() =>
+      expect(within(dialog).getByRole("button", { name: "Save" })).toBeInTheDocument(),
+    );
+    expect(within(dialog).getByText("Jira template")).toBeInTheDocument();
+    expect(api.changeMarkdownSkillSelection).not.toHaveBeenCalled();
+    // Every row carries its own visible switch: the template's selects the template's revision.
+    expect(within(chat).getByRole("button", { name: "Use in this chat" })).toBeVisible();
+    vi.mocked(api.changeMarkdownSkillSelection).mockResolvedValue({
+      ...SELECTED,
+      name: template.name,
+      selection: {
+        revision: 1,
+        skill: { id: template.id, revision: template.revision, digest: template.digest },
+      },
+    });
+    fireEvent.click(within(jira).getByRole("button", { name: "Use in this chat" }));
+    await within(jira).findByRole("button", { name: "Active in this chat" });
+    expect(api.changeMarkdownSkillSelection).toHaveBeenCalledWith(
+      "chat-a",
+      { id: template.id, revision: template.revision, digest: template.digest },
+      0,
+    );
+    expect(within(chat).getByRole("button", { name: "Use in this chat" })).toBeVisible();
+  });
+
   it("keeps the picker unavailable from first paint until the initial library read completes", async () => {
     let initiallyDisabled: boolean | undefined;
     function InitialDialog(): ReactNode {
@@ -106,27 +169,29 @@ describe("Chat Markdown skill controls", () => {
     }
     render(<InitialDialog />);
     expect(initiallyDisabled).toBe(true);
-    await waitFor(() => expect(screen.getByLabelText(/Upload Markdown/)).toBeEnabled());
+    await waitFor(() => expect(screen.getByLabelText("Import")).toBeEnabled());
   });
 
-  it("uploads without activation, previews safely, selects explicitly and removes the chip", async () => {
+  it("imports without activation, opens safely, selects explicitly and removes the chip", async () => {
     render(<Harness />);
     const dialog = await open();
-    expect(within(dialog).getByText(/No skills yet/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/No chat skills yet/)).toBeInTheDocument();
     vi.mocked(api.saveMarkdownSkill).mockResolvedValue(DOCUMENT);
     vi.mocked(api.fetchMarkdownSkills).mockResolvedValue([DOCUMENT]);
-    fireEvent.change(within(dialog).getByLabelText(/Upload Markdown/), {
+    fireEvent.change(within(dialog).getByLabelText("Import"), {
       target: { files: [new File([DOCUMENT.body], "method.md")] },
     });
-    await screen.findByRole("heading", { name: "Boundary review · v1" });
-    const content = within(dialog).getByRole("region", { name: "Boundary review · v1" });
-    content.focus();
-    expect(content).toHaveFocus();
+    // The imported file opens in the editor; it is not put into the chat by importing it.
+    await within(dialog).findByRole("button", { name: "Save" });
+    await within(dialog).findByRole("button", { name: "Use in this chat" });
+    expect(api.saveMarkdownSkill).toHaveBeenCalledOnce();
     expect(api.changeMarkdownSkillSelection).not.toHaveBeenCalled();
-    expect(dialog.querySelector("img")).toBeNull();
+    // The Markdown image of the file never becomes a remote fetch inside the dialog.
+    expect(dialog.querySelector("img[src]")).toBeNull();
+    expect(dialog.querySelector("[data-markdown-image]")).not.toBeNull();
     vi.mocked(api.changeMarkdownSkillSelection).mockResolvedValue(SELECTED);
-    fireEvent.click(within(dialog).getByRole("button", { name: "Select" }));
-    await screen.findByRole("button", { name: "Active in this chat" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Use in this chat" }));
+    await within(dialog).findByRole("button", { name: "Active in this chat" });
     expect(api.changeMarkdownSkillSelection).toHaveBeenCalledWith(
       "chat-a",
       SELECTED.selection.skill,
@@ -145,7 +210,23 @@ describe("Chat Markdown skill controls", () => {
     expect(api.changeMarkdownSkillSelection).toHaveBeenLastCalledWith("chat-a", null, 1);
   });
 
-  it("keeps keyboard focus on the preview action while its read is pending", async () => {
+  it("opens the chip's skill from the chat and shows the active state in the library", async () => {
+    vi.mocked(api.fetchMarkdownSkills).mockResolvedValue([DOCUMENT]);
+    vi.mocked(api.fetchMarkdownSkillSelection).mockResolvedValue(SELECTED);
+    render(<Harness />);
+    fireEvent.click(await screen.findByRole("button", { name: /Boundary review\s*· v1/ }));
+    const dialog = await screen.findByRole("dialog");
+    const row = (await within(dialog).findByRole("button", { name: /Boundary review/u })).closest(
+      "li",
+    );
+    if (row === null) throw new TypeError("The skill has no list row.");
+    expect(await within(row).findByRole("button", { name: "Active in this chat" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("keeps keyboard focus on the library entry while its read is pending", async () => {
     vi.mocked(api.fetchMarkdownSkills).mockResolvedValue([DOCUMENT]);
     let resolve!: (document: MarkdownSkillDocument) => void;
     vi.mocked(api.readMarkdownSkill).mockReturnValue(
@@ -156,18 +237,16 @@ describe("Chat Markdown skill controls", () => {
     render(<Harness />);
     const dialog = await open();
     await waitFor(() => expect(dialog).toHaveFocus());
-    const preview = within(dialog).getByRole("button", { name: DOCUMENT.name });
-    preview.focus();
+    const entry = await within(dialog).findByRole("button", { name: /Boundary review/u });
+    entry.focus();
     const user = userEvent.setup();
     await user.keyboard("{Enter}");
-    expect(preview).toBeEnabled();
-    expect(preview).toHaveAttribute("aria-disabled", "true");
+    expect(entry).toBeEnabled();
     await user.keyboard("{Enter}");
     expect(api.readMarkdownSkill).toHaveBeenCalledOnce();
     await act(async () => resolve(DOCUMENT));
-    expect(preview).toHaveFocus();
-    await user.tab();
-    expect(within(dialog).getByRole("button", { name: "Select" })).toHaveFocus();
+    expect(entry).toHaveFocus();
+    expect(entry).toHaveAttribute("aria-current", "true");
   });
 
   it("keeps selection keyboard focus through activation so Escape returns to Skills", async () => {
@@ -183,12 +262,13 @@ describe("Chat Markdown skill controls", () => {
     trigger.focus();
     const dialog = await open();
     await waitFor(() => expect(dialog).toHaveFocus());
-    const select = within(dialog).getByRole("button", { name: "Select" });
+    await openSkill(dialog);
+    const select = within(dialog).getByRole("button", { name: "Use in this chat" });
     select.focus();
     const user = userEvent.setup();
     await user.keyboard("{Enter}");
     expect(select).toBeEnabled();
-    expect(select).toHaveAttribute("aria-disabled", "true");
+    expect(select).toHaveFocus();
     await user.keyboard("{Enter}");
     expect(api.changeMarkdownSkillSelection).toHaveBeenCalledOnce();
     await act(async () => resolve(SELECTED));
@@ -203,7 +283,7 @@ describe("Chat Markdown skill controls", () => {
   it("does not upload unsupported or oversized files", async () => {
     render(<Harness />);
     const dialog = await open();
-    const input = within(dialog).getByLabelText(/Upload Markdown/);
+    const input = within(dialog).getByLabelText("Import");
     for (const file of [
       new File(["x"], "method.exe"),
       new File([], "empty.md"),
@@ -223,31 +303,41 @@ describe("Chat Markdown skill controls", () => {
     const dialog = await open();
     await waitFor(() => expect(dialog).toHaveFocus());
     fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
-    expect(
-      within(dialog).getByRole("button", { name: "Create from document or text" }),
-    ).toHaveFocus();
+    // Shift+Tab from the dialog wraps to the last control, the workspace's "Draft with AI".
+    expect(within(dialog).getAllByRole("button", { name: "Draft with AI" }).at(-1)).toHaveFocus();
     expect((await axe(dialog)).violations).toEqual([]);
     fireEvent.keyDown(dialog, { key: "Escape" });
     expect(screen.queryByRole("dialog")).toBeNull();
     await waitFor(() => expect(trigger).toHaveFocus());
   });
 
-  it("replaces a document without changing the selected revision and requires confirmed deletion", async () => {
+  it("saves a new revision without changing the selected revision and requires confirmed deletion", async () => {
     vi.mocked(api.fetchMarkdownSkills).mockResolvedValue([DOCUMENT]);
     vi.mocked(api.fetchMarkdownSkillSelection).mockResolvedValue(SELECTED);
     render(<Harness />);
     const dialog = await open();
-    fireEvent.click(within(dialog).getByRole("button", { name: DOCUMENT.name }));
-    await screen.findByRole("heading", { name: "Boundary review · v1" });
-    const revised = { ...DOCUMENT, revision: 2, digest: "b".repeat(64) };
+    await openSkill(dialog);
+    // The server answers with what it stored: exactly the text that was sent.
+    const revised = {
+      ...DOCUMENT,
+      revision: 2,
+      digest: "b".repeat(64),
+      body: `${DOCUMENT.body}\nRevised.`,
+    };
     vi.mocked(api.saveMarkdownSkill).mockResolvedValue(revised);
     vi.mocked(api.fetchMarkdownSkills).mockResolvedValue([revised]);
-    fireEvent.change(within(dialog).getByLabelText("Replace with Markdown"), {
-      target: { files: [new File([DOCUMENT.body], "replacement.md")] },
+    fireEvent.click(within(dialog).getByRole("button", { name: "Markdown" }));
+    fireEvent.change(within(dialog).getByRole("textbox", { name: /· Markdown$/u }), {
+      target: { value: `${DOCUMENT.body}\nRevised.` },
     });
-    await screen.findByRole("heading", { name: "Boundary review · v2" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(api.saveMarkdownSkill).toHaveBeenCalledOnce());
     expect(api.saveMarkdownSkill).toHaveBeenCalledWith(expect.any(Object), DOCUMENT);
+    await waitFor(() =>
+      expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled(),
+    );
     expect(api.changeMarkdownSkillSelection).not.toHaveBeenCalled();
+    // The chat keeps the revision it selected; the chip does not follow the new one.
     expect(screen.getByRole("button", { name: /Boundary review\s*· v1/ })).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
@@ -259,15 +349,15 @@ describe("Chat Markdown skill controls", () => {
       selection: SELECTED.selection,
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete skill" }));
-    await screen.findByText(/No skills yet/);
+    await screen.findByText(/No chat skills yet/);
     expect(api.deleteMarkdownSkill).toHaveBeenCalledWith(revised);
-    expect(screen.queryByRole("heading", { name: "Boundary review · v2" })).toBeNull();
+    await waitFor(() => expect(within(dialog).queryByRole("button", { name: "Save" })).toBeNull());
     expect(
       screen.getByRole("button", { name: /Selected skill unavailable/, hidden: true }),
     ).toBeInTheDocument();
   });
 
-  it("exports only the explicitly previewed revision as a local Markdown download", async () => {
+  it("exports only the explicitly opened revision as a local Markdown download", async () => {
     const create = vi.fn().mockReturnValue("blob:synthetic-download");
     const revoke = vi.fn();
     vi.stubGlobal(
@@ -287,7 +377,7 @@ describe("Chat Markdown skill controls", () => {
     });
     render(<Harness />);
     const dialog = await open();
-    fireEvent.click(within(dialog).getByRole("button", { name: DOCUMENT.name }));
+    await openSkill(dialog);
     fireEvent.click(await within(dialog).findByRole("button", { name: "Download Markdown" }));
     await waitFor(() => expect(revoke).toHaveBeenCalledWith("blob:synthetic-download"));
     expect(api.exportMarkdownSkill).toHaveBeenCalledWith(DOCUMENT);
@@ -308,7 +398,7 @@ describe("Chat Markdown skill controls", () => {
     expect(within(dialog).getByRole("alert")).toHaveTextContent("Skills could not be updated");
     vi.mocked(api.fetchMarkdownSkills).mockResolvedValue([DOCUMENT]);
     fireEvent.click(within(dialog).getByRole("button", { name: "Reload" }));
-    await within(dialog).findByRole("button", { name: DOCUMENT.name });
+    await within(dialog).findByRole("button", { name: /Boundary review/u });
     expect(within(dialog).queryByRole("alert")).toBeNull();
   });
 
@@ -319,14 +409,14 @@ describe("Chat Markdown skill controls", () => {
     render(<Harness />);
     const dialog = await open();
     await within(dialog).findByText(/Open Keiko from its launcher/);
-    expect(within(dialog).getByLabelText(/Upload Markdown/)).toBeDisabled();
+    expect(within(dialog).getByLabelText("Import")).toBeDisabled();
     expect(within(dialog).getByRole("button", { name: "Reload" })).toBeEnabled();
     vi.mocked(api.fetchMarkdownSkills).mockResolvedValue([DOCUMENT]);
     vi.mocked(api.fetchMarkdownSkillSelection).mockResolvedValue(EMPTY);
     act(() => notifyCodingAppSessionChanged());
-    await within(dialog).findByRole("button", { name: DOCUMENT.name });
+    await within(dialog).findByRole("button", { name: /Boundary review/u });
     await waitFor(() => expect(within(dialog).queryByRole("alert")).toBeNull());
-    expect(within(dialog).getByLabelText(/Upload Markdown/)).toBeEnabled();
+    expect(within(dialog).getByLabelText("Import")).toBeEnabled();
     expect(api.saveMarkdownSkill).not.toHaveBeenCalled();
   });
 

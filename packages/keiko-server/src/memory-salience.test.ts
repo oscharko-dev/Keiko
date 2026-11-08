@@ -31,28 +31,22 @@ import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 
 const ATLAS_FACTS = JSON.stringify([
   {
-    source: "user",
+    about: "self",
     body: "I'm building a fintech app called Atlas.",
+    evidence: "I'm building a fintech app called Atlas.",
     type: "fact",
-    confidence: 0.7,
-    scope: "project",
-    tags: ["atlas"],
   },
   {
-    source: "user",
-    body: "Atlas is written in Rust.",
+    about: "self",
+    body: "I write Atlas in Rust.",
+    evidence: "I write Atlas in Rust.",
     type: "fact",
-    confidence: 0.8,
-    scope: "project",
-    tags: ["rust"],
   },
   {
-    source: "user",
-    body: "My team is in Berlin.",
+    about: "self",
+    body: "I live in Berlin.",
+    evidence: "I live in Berlin.",
     type: "fact",
-    confidence: 0.6,
-    scope: "user",
-    tags: ["berlin"],
   },
 ]);
 
@@ -179,7 +173,7 @@ function context(): ConversationMemoryRuntimeContext {
 }
 
 const USER_TEXT =
-  "I'm building a fintech app called Atlas. Atlas is written in Rust. My team is in Berlin.";
+  "I'm building a fintech app called Atlas. I write Atlas in Rust. I live in Berlin.";
 
 function salienceConfig(
   modelId: string,
@@ -284,6 +278,114 @@ function readMemories(
 }
 
 describe("captureSalientFromTurn", () => {
+  // #4212 review: the person can forget the turn while its embedding is computed. A forget that
+  // arrives during that wait, with the embedding failing, must still keep the fact out.
+  it("does not learn a fact the person forgot while its embedding was computed", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const statement = "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.";
+    const config = salienceConfig("gpt-test", false);
+    let embeddingCalls = 0;
+    const deps = makeDeps({
+      memoryVault: vault,
+      configPresent: true,
+      config: {
+        ...config,
+        providers: [
+          ...config.providers,
+          { ...config.providers[0], modelId: "text-embedding-3-large" } as never,
+        ],
+      },
+      modelPortFactory: () =>
+        fakeModel(
+          JSON.stringify([
+            {
+              about: "self",
+              body: "Ich bevorzuge Tabellen",
+              evidence: "Ich bevorzuge Tabellen",
+              type: "fact",
+            },
+          ]),
+        ),
+      localKnowledgeEmbeddingRequest: () => {
+        embeddingCalls += 1;
+        vault.recordForgottenStatements(
+          conversationMemoryScopes(ctx).map((scope) => ({
+            scope,
+            body: statement,
+            forgetterSurface: "chat-statement",
+            reviewerId: "local-operator",
+            reason: "explicit-user-request",
+            nowMs: Date.now(),
+          })) as never,
+        );
+        return Promise.resolve({ ok: false as const, kind: "rate-limited" as const });
+      },
+    });
+    await captureSalientFromTurn(
+      deps,
+      { content: statement, memory: { enabled: true, mode: "autonomous-delivery" } },
+      ctx,
+      "gpt-test",
+      "Gern.",
+    );
+    expect(embeddingCalls).toBeGreaterThan(0);
+    expect(readMemories(vault, ctx).filter((record) => record.status !== "rejected")).toEqual([]);
+  });
+
+  // #4212 review: a paraphrased repeat that names an end date reached only the semantic gate, which
+  // confirmed the fact and dropped the date.
+  it("ends a known fact when a paraphrased repeat names an end date", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const config = salienceConfig("gpt-test", false);
+    const vector = Float32Array.from({ length: 3072 }, (_, i) => ((i + 1) % 7) / 7);
+    let answer = "";
+    const deps = makeDeps({
+      memoryVault: vault,
+      configPresent: true,
+      codingRuntimeDeploymentCeiling: "autonomous-delivery",
+      config: {
+        ...config,
+        providers: [
+          ...config.providers,
+          { ...config.providers[0], modelId: "text-embedding-3-large" } as never,
+        ],
+      },
+      modelPortFactory: () => fakeModel(answer),
+      localKnowledgeEmbeddingRequest: () =>
+        Promise.resolve({
+          ok: true as const,
+          value: { vector, modelId: "text-embedding-3-large" },
+        }),
+    });
+    const say = async (content: string, item: Record<string, unknown>): Promise<void> => {
+      answer = JSON.stringify([{ about: "self", type: "fact", ...item }]);
+      await captureSalientFromTurn(
+        deps,
+        { content, memory: { enabled: true, mode: "autonomous-delivery" } },
+        ctx,
+        "gpt-test",
+        "Gern.",
+      );
+    };
+    await say("Ich arbeite bei Acme.", {
+      body: "Ich arbeite bei Acme",
+      evidence: "Ich arbeite bei Acme",
+    });
+    const paraphrase = "Ich arbeite in der Firma Acme";
+    await say(`${paraphrase} bis Dezember 2027.`, {
+      body: paraphrase,
+      evidence: paraphrase,
+      relation: "same",
+      related: 1,
+    });
+
+    const live = readMemories(vault, ctx).filter((record) => record.status === "accepted");
+    expect(live.map((record) => record.body)).toEqual([paraphrase]);
+    expect(new Date(live[0]?.validity.validUntil ?? 0).getUTCFullYear()).toBe(2027);
+  });
+
   it("keeps the shared desktop and voice scheduler off-path, bounded, and reusable", async () => {
     const vault = makeVault();
     const model = deferredModel();
@@ -517,12 +619,10 @@ describe("captureSalientFromTurn", () => {
         fakeModel(
           JSON.stringify([
             {
-              source: "user",
-              body: "Hallo Keiko, ich bin Oliver.",
+              about: "self",
+              body: "Ich bin Oliver.",
+              evidence: "ich bin Oliver",
               type: "identity",
-              confidence: 0.9,
-              scope: "user",
-              tags: ["identity"],
             },
           ]),
         ),
@@ -537,7 +637,7 @@ describe("captureSalientFromTurn", () => {
     );
     expect(actions).toHaveLength(1);
     const records = readMemories(vault, ctx);
-    expect(records[0]?.body).toBe("Hallo Keiko, ich bin Oliver.");
+    expect(records[0]?.body).toBe("Ich bin Oliver");
   });
 
   it("uses json_schema responseFormat only when the configured model supports it", async () => {
@@ -760,7 +860,7 @@ describe("captureSalientFromTurn", () => {
     expect(assistantMessage?.content).toContain("assistant-context-marker");
   });
 
-  it("persists records that carry tags and the salience captureRationale through validation", async () => {
+  it("persists learned records with the salience captureRationale through validation", async () => {
     // The vault runs gateMemoryRecord on insert, so reading the records back proves the full
     // round-trip (tags + provenance.captureRationale) survives contract validation.
     const vault = makeVault();
@@ -782,8 +882,6 @@ describe("captureSalientFromTurn", () => {
       expect(record.provenance.sourceKind).toBe("system-default");
       expect(record.status).toBe("proposed");
     }
-    const atlasRecord = records.find((r) => r.body.includes("Atlas"));
-    expect(atlasRecord?.tags).toContain("atlas");
   });
 
   it("captures nothing when memory is disabled", async () => {
@@ -976,12 +1074,10 @@ describe("captureSalientFromTurn", () => {
         fakeModel(
           JSON.stringify([
             {
-              source: "user",
+              about: "self",
               body: "My private support email is developer@example.com.",
+              evidence: "My private support email is developer@example.com.",
               type: "fact",
-              confidence: 0.8,
-              scope: "user",
-              tags: ["support"],
             },
           ]),
         ),
@@ -1018,20 +1114,16 @@ describe("captureSalientFromTurn", () => {
         fakeModel(
           JSON.stringify([
             {
-              source: "user",
+              about: "self",
               body: "My contact email is private@example.com.",
+              evidence: "My contact email is private@example.com.",
               type: "fact",
-              confidence: 0.7,
-              scope: "user",
-              tags: ["contact"],
             },
             {
-              source: "user",
+              about: "self",
               body: "I work in the payments domain.",
+              evidence: "I work in the payments domain.",
               type: "fact",
-              confidence: 0.7,
-              scope: "user",
-              tags: ["payments"],
             },
           ]),
         ),
@@ -1071,20 +1163,16 @@ describe("captureSalientFromTurn", () => {
         fakeModel(
           JSON.stringify([
             {
-              source: "user",
-              body: "Meine Telefonnummer ist +49 30 1234567.",
+              about: "self",
+              body: "Meine E-Mail ist paul@example.com.",
+              evidence: "Meine E-Mail ist paul@example.com.",
               type: "fact",
-              confidence: 0.7,
-              scope: "user",
-              tags: ["contact"],
             },
             {
-              source: "user",
+              about: "self",
               body: "Ich bevorzuge Vitest.",
+              evidence: "Ich bevorzuge Vitest.",
               type: "preference",
-              confidence: 0.8,
-              scope: "user",
-              tags: ["testing"],
             },
           ]),
         ),
@@ -1093,7 +1181,7 @@ describe("captureSalientFromTurn", () => {
     const actions = await captureSalientFromTurn(
       deps,
       {
-        content: "Meine Telefonnummer ist +49 30 1234567. Ich bevorzuge Vitest.",
+        content: "Meine E-Mail ist paul@example.com. Ich bevorzuge Vitest.",
         memory: { enabled: true },
       },
       ctx,
@@ -1161,12 +1249,10 @@ describe("captureSalientFromTurn", () => {
         fakeModel(
           JSON.stringify([
             {
-              source: "user",
+              about: "self",
               body: "CustomerOmega requires SSO for releases.",
+              evidence: "CustomerOmega requires SSO for releases.",
               type: "fact",
-              confidence: 0.8,
-              scope: "project",
-              tags: ["customer"],
             },
           ]),
         ),

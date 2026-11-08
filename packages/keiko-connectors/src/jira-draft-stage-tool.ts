@@ -4,6 +4,7 @@ import {
   JIRA_DRAFT_PAGE_ITEMS_MAX,
   type JiraTemplateViolation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { withJiraDraftReadMemo, type JiraDraftReadCounts } from "./jira-draft-read-memo.js";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
   ManagedMcpInvocationContext,
@@ -58,6 +59,9 @@ export interface JiraDraftActivity {
   /** A run only: items created, reconciled or deselected so far, and items not yet started. */
   readonly settledCount?: number;
   readonly pendingCount?: number;
+  /** A staging call or a create run: Jira reads it sent, and reads answered from the invocation's own memo. */
+  readonly readCount?: number;
+  readonly readReusedCount?: number;
 }
 
 export interface JiraDraftToolDeps<Context extends ManagedMcpInvocationContext> {
@@ -71,6 +75,13 @@ export interface JiraDraftToolDeps<Context extends ManagedMcpInvocationContext> 
         items: readonly StagedJiraDraftItem[],
         context: Context,
       ) => { readonly data: CatalogJsonObject; readonly violationCount: number } | undefined)
+    | undefined;
+  /**
+   * Rewrites a well-formed page before anything reads it: the checks, the store and the draft digest
+   * all see the projected items, so preview, approval, replay and Jira hold the same text.
+   */
+  readonly projectItems?:
+    | ((items: readonly StagedJiraDraftItem[], context: Context) => readonly StagedJiraDraftItem[])
     | undefined;
   readonly now?: (() => number) | undefined;
 }
@@ -222,6 +233,7 @@ interface StageRun<Context extends ManagedMcpInvocationContext> {
   readonly context: Context;
   readonly args: StageArgs | undefined;
   readonly startedAt: number;
+  readonly reads: JiraDraftReadCounts;
 }
 function refuseStage<Context extends ManagedMcpInvocationContext>(
   run: StageRun<Context>,
@@ -239,12 +251,17 @@ function refuseStage<Context extends ManagedMcpInvocationContext>(
         durationMs: (deps.now ?? Date.now)() - startedAt,
       },
       undefined,
-      { refusal, ...extra },
+      { refusal, ...readActivity(run.reads), ...extra },
     ),
     context,
   );
   const failure = jiraReadFailure(refusal);
   return { ...failure, data: { ...failure.data, ...guidanceOf(refusal) } };
+}
+function readActivity(
+  reads: JiraDraftReadCounts,
+): Pick<JiraDraftActivity, "readCount" | "readReusedCount"> {
+  return { readCount: reads.made, readReusedCount: reads.reused };
 }
 function templateRefusalResult(refusal: JiraDraftTemplateRefusal): ManagedMcpToolResult {
   const guidance = jiraTemplateViolationGuidance(refusal.violations);
@@ -316,9 +333,20 @@ function stagedActivity<Context extends ManagedMcpInvocationContext>(
         durationMs: now() - run.startedAt,
       },
       draft,
+      readActivity(run.reads),
     ),
     run.context,
   );
+}
+
+/** The page after the composing server's projection; later checks see only the projected items. */
+function projectedStageArgs<Context extends ManagedMcpInvocationContext>(
+  parsed: StageArgs | undefined,
+  deps: JiraDraftToolDeps<Context>,
+  context: Context,
+): StageArgs | undefined {
+  if (parsed === undefined || deps.projectItems === undefined) return parsed;
+  return { ...parsed, items: deps.projectItems(parsed.items, context) };
 }
 
 /** `jira.draft-stage`: append a page of validated items to a draft; it changes nothing in Jira. */
@@ -330,8 +358,9 @@ export async function executeJiraDraftStageTool<Context extends ManagedMcpInvoca
 ): Promise<ManagedMcpToolResult> {
   const now = deps.now ?? Date.now;
   const startedAt = now();
-  const args = parseStageArgs(rawArgs);
-  const run: StageRun<Context> = { deps, context, args, startedAt };
+  const parsed = parseStageArgs(rawArgs);
+  const args = projectedStageArgs(parsed, deps, context);
+  const run: StageRun<Context> = { deps, context, args, startedAt, reads: { made: 0, reused: 0 } };
   if (args === undefined) {
     const refused = refuseStage(run, "invalid-input", 0);
     return { ...refused, data: { ...refused.data, guidance: invalidPageGuidance(rawArgs) } };
@@ -339,14 +368,17 @@ export async function executeJiraDraftStageTool<Context extends ManagedMcpInvoca
   if (connection.deployment !== "data-center") return refuseStage(run, "unsupported-deployment", 0);
   const requirements = pageRequirementRefusal(run, args.items);
   if (requirements !== undefined) return requirements;
-  const template = await firstJiraDraftTemplateRefusal(args.items, context, connection);
+  // The checks below read the same Jira metadata for every item of the page, and a batch stages
+  // page after page in one invocation: identical reads are answered from the invocation's memo.
+  const reads = withJiraDraftReadMemo(connection, context, run.reads, now);
+  const template = await firstJiraDraftTemplateRefusal(args.items, context, reads);
   if (template !== undefined) {
     refuseStage(run, "template-violation", args.items.length, {
       violationCount: template.violations.length,
     });
     return templateRefusalResult(template);
   }
-  const fields = await pageFieldRefusals(args.items, context, connection);
+  const fields = await pageFieldRefusals(args.items, context, reads);
   const firstField = fields.refusals[0];
   if (firstField !== undefined) {
     refuseStage(run, "invalid-fields", args.items.length, { violationCount: fields.total });

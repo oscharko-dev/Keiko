@@ -30,6 +30,7 @@ export default defineConfig({
     setupFiles: [
       fileURLToPath(new URL("./tests/support/activity-log-test-writer.ts", import.meta.url)),
       fileURLToPath(new URL("./tests/support/test-state-dirs.ts", import.meta.url)),
+      fileURLToPath(new URL("./tests/support/reset-vault-key-cache.ts", import.meta.url)),
     ],
     // ADR-0013 D2 site 2 — `node:sqlite` requires --experimental-sqlite on Node 22.0–22.11 builds
     // and emits an ExperimentalWarning on every import on the Node.js 24 baseline (where the flag is no longer

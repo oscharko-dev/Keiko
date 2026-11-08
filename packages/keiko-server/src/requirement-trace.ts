@@ -115,6 +115,22 @@ function criterionText(value: string): string {
   return normaliseText(value).replace(/\s+/gu, " ");
 }
 
+/**
+ * The form a criterion takes in a persisted description: Keiko writes it as a Markdown bullet and
+ * the description is serialized to Jira wiki, so the criterion goes through that same pipeline.
+ * The raw collapsed text stays admissible for native wiki descriptions.
+ */
+function criterionForms(text: string): readonly string[] {
+  if (text.length === 0) return [];
+  const projected = projectJiraDescriptionInput({ format: "markdown", text: `- ${text}` });
+  const blocks = readJiraDescriptionBlocks(projected?.text ?? "", "markdown");
+  // No readable block (for example a literal `{code}` macro marker): it has no checkable
+  // representation, so the caller refuses it instead of treating it as present.
+  if (blocks.length === 0) return [];
+  const converted = blocks.map(criterionText).join(" ");
+  return converted === text ? [text] : [text, converted];
+}
+
 function acceptanceCriteriaProblems(
   resolved: readonly ResolvedRequirementReference[],
   description: TraceDescriptionCheck,
@@ -133,10 +149,17 @@ function acceptanceCriteriaProblems(
         criterionText(redact(criterion.text)),
       );
   }
-  const texts = [...criteria.values()];
-  const completeBlock = texts.every((text) => text.length > 0) && blocks.has(texts.join(" "));
-  return [...criteria].flatMap(([reference, text]): TraceProblem[] =>
-    completeBlock || (text.length > 0 && blocks.has(text))
+  const forms = new Map(
+    [...criteria].map(([reference, text]) => [reference, criterionForms(text)]),
+  );
+  const traceable = [...forms.values()].filter((options) => options.length > 0);
+  const completeBlock =
+    traceable.length > 0 &&
+    [0, 1].some((index) =>
+      blocks.has(traceable.map((options) => options[index] ?? options[0] ?? "").join(" ")),
+    );
+  return [...forms].flatMap(([reference, options]): TraceProblem[] =>
+    options.length > 0 && (completeBlock || options.some((form) => blocks.has(form)))
       ? []
       : [{ reference, reason: "acceptance-criteria-missing" }],
   );

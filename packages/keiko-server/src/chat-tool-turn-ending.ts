@@ -8,6 +8,7 @@ import { ERROR_CODES, GatewayError } from "@oscharko-dev/keiko-model-gateway";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import type { ServerLogSink } from "./observability/index.js";
 import { CatalogDispatchFault } from "./tool-catalog/catalogToolErrors.js";
+import { BATCH_DRAFT_SKIP_REASONS, type BatchDraftSkipReason } from "./chat-tool-batch-draft.js";
 import {
   chatToolDraftReceipts,
   chatToolIssueKey,
@@ -256,6 +257,69 @@ export function recordChatToolTurnEnded(
   }
 }
 
+const RESULT_CONDENSED = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "chat.tool-turn.result-condensed",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "chat-tool-turn-ending.recordChatToolTurnResultCondensed",
+  fields: {
+    messageDigest: {
+      type: "string",
+      dataClass: "digest",
+      required: true,
+      maxLength: 64,
+    },
+    rowCount: { type: "integer", dataClass: "count", required: true },
+    keptRowCount: { type: "integer", dataClass: "count", required: true },
+    completeness: {
+      type: "string",
+      dataClass: "completeness-state",
+      required: true,
+    },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["chat-tool-transcript"],
+  proofIds: ["chat.tool-turn.result-condensed.line"],
+  releaseImpact: "minor",
+});
+
+/**
+ * Recorded when the model read a Jira draft result condensed, as key ranges and groups of alike
+ * rows: how many rows the stored result holds and how many entries the model read (#4292).
+ */
+export function recordChatToolTurnResultCondensed(
+  log: ServerLogSink,
+  input: {
+    readonly correlationId: string;
+    readonly messageId: string;
+    readonly rowCount: number;
+    readonly keptRowCount: number;
+  },
+): void {
+  try {
+    log.write(
+      activityLogEvent(
+        RESULT_CONDENSED,
+        { correlationId: input.correlationId, level: "info" },
+        {
+          messageDigest: sha256Hex(input.messageId),
+          rowCount: input.rowCount,
+          keptRowCount: input.keptRowCount,
+          completeness: "complete",
+          loss: "none",
+        },
+      ),
+    );
+  } catch {
+    recordActivityLogLoss("port-sink-failed");
+  }
+}
+
 const CONTEXT_FITTED = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -437,6 +501,70 @@ export function recordChatToolTurnCorrected(
           ...(input.pendingKnowledgePageCount === undefined
             ? {}
             : { pendingKnowledgePageCount: input.pendingKnowledgePageCount }),
+          completeness: "complete",
+          loss: "none",
+        },
+      ),
+    );
+  } catch {
+    recordActivityLogLoss("port-sink-failed");
+  }
+}
+
+const DRAFT_OFFER = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "chat.tool-turn.batch-draft-offer",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "chat-tool-turn-ending.recordChatToolBatchDraftOffer",
+  fields: {
+    messageDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["dispatched", "skipped"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [...BATCH_DRAFT_SKIP_REASONS],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["chat-tool-transcript"],
+  proofIds: ["chat.tool-turn.batch-draft-offer.line"],
+  releaseImpact: "minor",
+});
+
+/**
+ * Recorded once per settled draft batch: Keiko dispatched the `jira.draft` approval itself
+ * (`dispatched`), or left it to the human and the model (`skipped`, with the closed reason). The
+ * line carries no draft id, digest, count or text.
+ */
+export function recordChatToolBatchDraftOffer(
+  log: ServerLogSink,
+  input: {
+    readonly correlationId: string;
+    readonly messageId: string;
+    readonly decision: "dispatched" | BatchDraftSkipReason;
+  },
+): void {
+  try {
+    log.write(
+      activityLogEvent(
+        DRAFT_OFFER,
+        { correlationId: input.correlationId, level: "info" },
+        {
+          messageDigest: sha256Hex(input.messageId),
+          outcome: input.decision === "dispatched" ? "dispatched" : "skipped",
+          ...(input.decision === "dispatched" ? {} : { reason: input.decision }),
           completeness: "complete",
           loss: "none",
         },

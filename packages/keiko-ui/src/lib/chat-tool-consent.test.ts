@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatMessage } from "@oscharko-dev/keiko-contracts/bff-wire";
 import * as api from "./api";
-import { watchChatToolConsent } from "./chat-tool-consent";
+import { CHAT_TOOL_PROGRESS_WINDOW, watchChatToolConsent } from "./chat-tool-consent";
 import * as diagnostics from "./client-diagnostics";
 import { expectDiagnosticWireAccepted } from "@/test-utils/diagnostic-wire";
 const chat = {
@@ -81,6 +81,50 @@ describe("buffered Chat consent observation", () => {
     await expectDiagnosticWireAccepted(
       diagnostic.mock.calls.map(([message, meta]) => ({ message, meta })),
     );
+  });
+  it("reads only the newest messages while the turn row is among them", async () => {
+    vi.useFakeTimers();
+    const fetch = vi.spyOn(api, "fetchChatMessages").mockResolvedValue({ messages: [message] });
+    const publish = vi.fn();
+    const stop = watchChatToolConsent(
+      chat,
+      "/repo",
+      () => Promise.resolve("scoped-digest"),
+      new AbortController().signal,
+      publish,
+    );
+    await vi.advanceTimersByTimeAsync(1500);
+    stop();
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(CHAT_TOOL_PROGRESS_WINDOW).toBe(8);
+    for (const call of fetch.mock.calls) expect(call[3]).toBe(8);
+    expect(publish).toHaveBeenCalledExactlyOnceWith(message);
+  });
+  it("falls back to the whole page when the window misses the turn row", async () => {
+    vi.useFakeTimers();
+    const later = Array.from({ length: CHAT_TOOL_PROGRESS_WINDOW - 1 }, (_, index) => ({
+      ...message,
+      id: `later-${String(index)}`,
+      canonicalTurnRef: `later-${String(index)}`,
+    }));
+    const fetch = vi
+      .spyOn(api, "fetchChatMessages")
+      .mockResolvedValueOnce({ messages: later })
+      .mockResolvedValueOnce({ messages: [message, ...later] });
+    const publish = vi.fn();
+    const stop = watchChatToolConsent(
+      chat,
+      "/repo",
+      () => Promise.resolve("scoped-digest"),
+      new AbortController().signal,
+      publish,
+    );
+    await vi.advanceTimersByTimeAsync(600);
+    stop();
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls[0]?.[3]).toBe(CHAT_TOOL_PROGRESS_WINDOW);
+    expect(fetch.mock.calls[1]?.[3]).toBeUndefined();
+    expect(publish).toHaveBeenCalledExactlyOnceWith(message);
   });
   it("uses the scoped turn digest, deduplicates states and stops with the accepted request", async () => {
     vi.useFakeTimers();
@@ -284,4 +328,59 @@ it("observes changes to either source and rejects a foreign Chat within the gran
   await vi.advanceTimersByTimeAsync(3500);
   stop();
   expect(publish.mock.calls.map(([entry]) => entry)).toEqual([pending, granted]);
+});
+
+it("publishes each counted page of a running draft batch while its call stays unsettled", async () => {
+  vi.useFakeTimers();
+  const call = { id: "call-batch", name: "jira_draft_batch", arguments: {} };
+  const page = (
+    phase: "outlining" | "drafting",
+    draftedCount: number,
+    coveredRequirementCount = draftedCount,
+  ): ChatMessage => ({
+    ...message,
+    toolTranscript: {
+      ...message.toolTranscript,
+      schemaVersion: 1,
+      exchanges: [
+        {
+          call,
+          batchProgress: {
+            phase,
+            draftedCount,
+            plannedCount: phase === "outlining" ? 0 : 10,
+            coveredRequirementCount,
+            requirementCount: 10,
+            failedCount: 0,
+          },
+        },
+      ],
+    },
+  });
+  const outlining = page("outlining", 0);
+  const firstPage = page("drafting", 0);
+  const secondPage = page("drafting", 4);
+  // A grouped issue covers more requirements than it adds issues.
+  const widerPage = page("drafting", 4, 7);
+  vi.spyOn(api, "fetchChatMessages")
+    .mockResolvedValueOnce({ messages: [outlining] })
+    .mockResolvedValueOnce({ messages: [firstPage] })
+    .mockResolvedValueOnce({ messages: [secondPage] })
+    .mockResolvedValue({ messages: [widerPage] });
+  const publish = vi.fn();
+  const stop = watchChatToolConsent(
+    chat,
+    "/repo",
+    () => Promise.resolve("scoped-digest"),
+    new AbortController().signal,
+    publish,
+  );
+  await vi.advanceTimersByTimeAsync(4500);
+  expect(publish.mock.calls.map(([entry]) => entry)).toEqual([
+    outlining,
+    firstPage,
+    secondPage,
+    widerPage,
+  ]);
+  stop();
 });

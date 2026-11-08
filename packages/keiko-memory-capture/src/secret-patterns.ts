@@ -159,6 +159,39 @@ export function looksLikeEuDePii(value: string): boolean {
   return GERMAN_IBAN_RE.test(value) || looksLikeGermanTaxId(value) || GERMAN_PHONE_RE.test(value);
 }
 
+const INTERNATIONAL_IBAN_RE = /\b[A-Z]{2}\d{2}(?:[ -]?[A-Z0-9]{4}){2,7}(?:[ -]?[A-Z0-9]{1,3})?\b/i;
+const INTERNATIONAL_PHONE_RE = /\+\d(?:[ ().-]?\d){6,14}\b/;
+const NORTH_AMERICAN_PHONE_RE = /(?<!\d)\(?\d{3}\)?[ .-]\d{3}[ .-]\d{4}(?!\d)/;
+const CUSTOMER_IDENTIFIER_LABELS = [
+  "kunden[ -]?(?:nummer|nr|kennung|id)",
+  "kundennr",
+  "kontonummer",
+  "vertragsnummer",
+  "mandantennummer",
+  "versicherungsnummer",
+  "customer[ -]?(?:id|number|no)",
+  "client[ -]?(?:id|number)",
+  "account[ -]?(?:id|number|no)",
+  "contract[ -]?number",
+  "policy[ -]?number",
+];
+const CUSTOMER_IDENTIFIER_LABEL_RE = new RegExp(
+  String.raw`\b(?:${CUSTOMER_IDENTIFIER_LABELS.join("|")})\b`,
+  "iu",
+);
+
+// What a fact learned without anyone approving it must never hold, whichever way it was written.
+// A person's own clear "Merke dir" stays their decision and takes the review path instead.
+export function looksLikePersonalIdentifier(value: string): boolean {
+  return (
+    looksLikeEuDePii(value) ||
+    INTERNATIONAL_IBAN_RE.test(value) ||
+    INTERNATIONAL_PHONE_RE.test(value) ||
+    NORTH_AMERICAN_PHONE_RE.test(value) ||
+    CUSTOMER_IDENTIFIER_LABEL_RE.test(value)
+  );
+}
+
 // Returns the typed rejection class if `value` looks like a secret, credential-store path, or
 // customer-identifier match — otherwise `null`. The scan is total: it runs every pattern class
 // in a fixed precedence (credential-shape > credential-path > customer-identifier) so two

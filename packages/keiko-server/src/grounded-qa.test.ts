@@ -4805,11 +4805,13 @@ describe("handleGroundedAsk", () => {
           "derived from that memory as uncited and unverified.",
       });
       expect(JSON.stringify(answer.uncertainty)).not.toContain("Use pnpm for package installs.");
-      expect(
-        memoryVault
-          .getAccessStats(["mem-package-manager" as MemoryId])
-          .get("mem-package-manager" as MemoryId)?.accessCount,
-      ).toBe(1);
+      // The answer's use of the recalled memory is remembered for "Vergiss das" and never
+      // reinforces it (ADR-0146): only the memory recalled from the question carries the use.
+      const stats = memoryVault.getAccessStats(["mem-package-manager" as MemoryId]);
+      expect(stats.get("mem-package-manager" as MemoryId)?.accessCount).toBe(0);
+      const touches = memoryVault.getConversationTouches(chatId);
+      expect(touches.get("mem-package-manager" as MemoryId)?.usedAt).toBeGreaterThan(0);
+      expect(touches.get("mem-production-database" as MemoryId)).toBeUndefined();
     } finally {
       memoryVault.close();
     }

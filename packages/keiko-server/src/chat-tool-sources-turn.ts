@@ -1,3 +1,4 @@
+import { chatKnowledgeScopes } from "./requirement-inventory.js";
 import {
   isKnowledgeChatAuthorityEnvelope,
   prepareAcceptedKnowledgeChatAuthority,
@@ -5,7 +6,7 @@ import {
 } from "./knowledge-chat-authority.js";
 import type { KnowledgeChatTurnOptions } from "./knowledge-chat-turn.js";
 import { reserveChatToolPrompt } from "./chat-tool-approvals.js";
-import { JIRA_TOOL_GUIDANCE } from "./atlassian/jiraToolGuidance.js";
+import { jiraTurnGuidance } from "./atlassian/jiraOpenDraft.js";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { ToolResultEnvelope } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -107,7 +108,16 @@ class ChatSourcesToolTurn extends ChatToolTurn<ChatSourcesContext> {
       managed,
       context: sourceContext(sourceOptions),
       budget: primary.options.authority.envelope.budget,
-      ...(primary.kind === "jira" ? { guidance: JIRA_TOOL_GUIDANCE } : {}),
+      ...(primary.kind === "jira"
+        ? {
+            guidance: jiraTurnGuidance(
+              deps.jiraDraftStore,
+              message.chatId,
+              deps.activityLog,
+              correlationId,
+            ),
+          }
+        : {}),
       bind: (context, budgetPort) =>
         bindChatToolCatalog<ChatSourcesConsumer>({
           deps,
@@ -222,9 +232,11 @@ export async function createChatSourcesToolTurn(
     logConversationAdmission("observation-unavailable", correlation, generation, generation);
     throw new ConversationModelNotReadyError("tool-calling");
   }
-  const jira = await (
-    primaryKind === "knowledge" ? deps.knowledgeChatCatalog : deps.jiraChatCatalog
-  )?.get();
+  const jira = await (primaryKind === "knowledge"
+    ? deps.knowledgeChatCatalog?.get()
+    : deps.jiraChatCatalog?.get({
+        knowledgeScoped: chatKnowledgeScopes(deps.store.findChatById(message.chatId)).length > 0,
+      }));
   requireDispatch(jira !== undefined, "denied", "authority-invalid");
   const {
     primary: { authority },

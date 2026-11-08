@@ -14,6 +14,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import {
+  CODING_JIRA_READS as CODING_READS,
   CODING_JIRA_SERVER_NAME,
   CODING_JIRA_TOOL_RISKS,
   codingJiraServerDefinition,
@@ -39,13 +40,17 @@ describe("the run's Jira server definition", () => {
       Object.entries(CODING_JIRA_TOOL_RISKS)
         .filter(([, risk]) => risk === "read")
         .map(([n]) => n),
-    ).toEqual([...JIRA_MANAGED_READ_TOOLS]);
+    ).toEqual(CODING_READS);
     expect(
       Object.entries(CODING_JIRA_TOOL_RISKS)
         .filter(([, risk]) => risk === "write")
         .map(([n]) => n),
     ).toEqual(CODING_MUTATIONS);
     expect(CODING_JIRA_TOOL_RISKS).not.toHaveProperty(["jira.draft"]);
+    // A draft batch needs the Chat's Knowledge Pods and turn model (#4173); a run has neither.
+    expect(CODING_JIRA_TOOL_RISKS).not.toHaveProperty(["jira.draft-batch"]);
+    expect(CODING_READS).not.toContain("jira.draft-batch");
+    expect(CODING_READS).toHaveLength(JIRA_MANAGED_READ_TOOLS.length - 1);
     expect(CODING_JIRA_TOOL_RISKS).not.toHaveProperty(["jira.attach"]);
   });
 
@@ -158,9 +163,6 @@ describe("the coding-runtime.jira-pod Activity Log operation", () => {
   it("logs exactly the contract's Jira tool names", () => {
     const registry: readonly ActivityLogOperationRegistration[] = ACTIVITY_LOG_OPERATION_REGISTRY;
     const registration = registry.find((entry) => entry.op === "coding-runtime.jira-pod");
-    expect(registration?.fields.tool?.values).toEqual([
-      ...JIRA_MANAGED_READ_TOOLS,
-      ...CODING_MUTATIONS,
-    ]);
+    expect(registration?.fields.tool?.values).toEqual([...CODING_READS, ...CODING_MUTATIONS]);
   });
 });

@@ -872,6 +872,46 @@ describe("memory handlers", () => {
     );
   });
 
+  it("makes a learned memory the person's own statement once they rewrite it", async () => {
+    const vault = makeVault();
+    const learned = makeMemory("memory-edit-learned", "Ich nutze PostgreSQL 14", {
+      provenance: {
+        sourceKind: "explicit-user-instruction",
+        capturedAt: Date.now(),
+        confidence: 0.85,
+        sensitivity: "public",
+        evidenceSpan: "Ich nutze PostgreSQL 14",
+        sourceMessageIds: ["message-1"],
+      },
+    });
+    vault.insertMemory(learned);
+    vault.insertMemory(
+      makeMemory("memory-edit-tagged", "Ich nutze Vim", { provenance: learned.provenance }),
+    );
+
+    const edited = await handleEditMemory(
+      makeCtx(
+        "/api/memory/memory-edit-learned",
+        { body: "Ich nutze PostgreSQL 16" },
+        { id: "memory-edit-learned" },
+      ),
+      makeDeps({ memoryVault: vault }),
+    );
+    const tagged = await handleEditMemory(
+      makeCtx("/api/memory/memory-edit-tagged", { tags: ["db"] }, { id: "memory-edit-tagged" }),
+      makeDeps({ memoryVault: vault }),
+    );
+
+    expect(edited.status).toBe(200);
+    const provenance = vault.getMemory(memoryId("memory-edit-learned"))?.provenance;
+    expect(provenance?.evidenceSpan).toBeUndefined();
+    expect(provenance?.sourceMessageIds).toEqual(["message-1"]);
+    expect(tagged.status).toBe(200);
+    expect(vault.getMemory(memoryId("memory-edit-tagged"))?.provenance.evidenceSpan).toBe(
+      "Ich nutze PostgreSQL 14",
+    );
+  });
+
   it("invalidates a stale embedding when body edit re-embedding fails", async () => {
     const vault = makeVault();
     vault.insertMemory(makeMemory("memory-edit-2", "Old body"));

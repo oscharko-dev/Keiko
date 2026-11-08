@@ -16,6 +16,7 @@
 import { ID_EXACT, collapse } from "./requirementText.js";
 import {
   foldTerm,
+  isForeignColumn,
   tableRoleOf,
   type CompiledVocabulary,
   type TableColumnRole,
@@ -57,9 +58,19 @@ function knownRoles(roles: ColumnRoles): readonly TableColumnRole[] {
   return roles.filter((role) => role !== undefined);
 }
 
-function namesRequirementColumns(roles: ColumnRoles): boolean {
+/**
+ * Whether a header names requirement columns: two roles, or the identifier alone. An identifier next
+ * to a column of other things (`Anforderungs-ID | Testfall | Status`) is a cross-reference, not a
+ * list of requirements: its other columns are no title or statement.
+ */
+function namesRequirementColumns(
+  roles: ColumnRoles,
+  headers: readonly string[],
+  vocabulary: CompiledVocabulary,
+): boolean {
   const known = knownRoles(roles);
-  return known.length >= 2 || known.includes("id");
+  if (known.length >= 2) return true;
+  return known.includes("id") && !headers.some((header) => isForeignColumn(vocabulary, header));
 }
 
 /** A header naming only the identifier says nothing about the rest: those columns go by position. */
@@ -88,7 +99,53 @@ export function parseTableHeader(
   vocabulary: CompiledVocabulary,
 ): ColumnRoles | undefined {
   const roles = namedColumns(cells, vocabulary);
-  return namesRequirementColumns(roles) ? withPositionalColumns(roles) : undefined;
+  return namesRequirementColumns(roles, cells, vocabulary)
+    ? withPositionalColumns(roles)
+    : undefined;
+}
+
+const FLAT_HEADER_WORDS_MAX = 3;
+
+/** The longest header name the words from `from` on spell, as the number of words it takes. */
+function headerWordsAt(
+  words: readonly string[],
+  from: number,
+  vocabulary: CompiledVocabulary,
+): number {
+  for (let size = Math.min(FLAT_HEADER_WORDS_MAX, words.length - from); size > 0; size -= 1) {
+    const name = words.slice(from, from + size).join(" ");
+    if (tableRoleOf(vocabulary, name) !== undefined || isForeignColumn(vocabulary, name))
+      return size;
+  }
+  return 0;
+}
+
+export type FlatHeaderReading = "requirements" | "listing" | "foreign";
+
+/**
+ * A line of flat text (a PDF has no cells) that is nothing but the names of table columns, and what
+ * its table holds: `listing` for `ID Titel Priorität` (one line per requirement, nothing to read behind
+ * it), `requirements` for a header that also names a statement or criteria column, `foreign` for
+ * `Code Bedeutung` or `Anforderungs-ID Testfall Status`. A line with a word that names no column is no
+ * header.
+ */
+export function flatHeaderReading(
+  line: string,
+  vocabulary: CompiledVocabulary,
+): FlatHeaderReading | undefined {
+  const words = collapse(line).split(" ");
+  const names: string[] = [];
+  for (let at = 0; at < words.length;) {
+    const size = headerWordsAt(words, at, vocabulary);
+    if (size === 0) return undefined;
+    names.push(words.slice(at, at + size).join(" "));
+    at += size;
+  }
+  if (names.length < 2) return undefined;
+  const roles = namedColumns(names, vocabulary);
+  if (!namesRequirementColumns(roles, names, vocabulary)) return "foreign";
+  const content = roles.some((role) => role === "statement" || role === "criteria");
+  return content ? "requirements" : "listing";
 }
 
 function identifierIn(cell: string | undefined): string | undefined {
@@ -377,7 +434,9 @@ export function readingOfProjectedTable(
   if (labels.every((label) => NEUTRAL_LABEL.test(label))) return { kind: "positional" };
   const table = rows[0]?.table ?? "";
   const roles = labels.map((label) => projectedRole(vocabulary, table, label));
-  return namesRequirementColumns(roles) ? { kind: "roles", roles } : { kind: "foreign" };
+  return namesRequirementColumns(roles, labels, vocabulary)
+    ? { kind: "roles", roles }
+    : { kind: "foreign" };
 }
 
 /** A line inside a multi-line cell: it completes the last cell, then may open further cells. */

@@ -35,7 +35,7 @@ import {
   unlinkSync,
   writeSync,
 } from "node:fs";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { userInfo } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
@@ -596,15 +596,15 @@ export function resolveLocalVaultKey(options: ResolveLocalVaultKeyOptions): Reso
     emitKeyResolutionFailed(options.sink, error);
     throw error;
   }
-  emitSecurityLogEvent(
-    options.sink,
-    activityLogEvent(
-      SECURITY_VAULT_KEY_RESOLVED_OPERATION,
-      { level: "info" },
-      { source: resolved.source },
-    ),
-  );
+  emitKeyResolved(options.sink, resolved.source);
   return resolved;
+}
+
+function emitKeyResolved(sink: SecurityLogSink | undefined, source: LocalVaultKeySource): void {
+  emitSecurityLogEvent(
+    sink,
+    activityLogEvent(SECURITY_VAULT_KEY_RESOLVED_OPERATION, { level: "info" }, { source }),
+  );
 }
 
 function computeLocalVaultKey(options: ResolveLocalVaultKeyOptions): ResolvedLocalVaultKey {
@@ -1313,4 +1313,114 @@ export function createLocalSecretVault(deps: LocalSecretVaultDeps): LocalSecretV
     has: (reference): boolean => reference in readStore(resolvedStorePath),
     list: (): readonly string[] => Object.keys(readStore(resolvedStorePath)),
   };
+}
+
+interface RememberedKey {
+  readonly key: Buffer;
+  readonly source: LocalVaultKeySource;
+  /** Sinks that already received this key's `security.vault.key-resolved` line. */
+  readonly announcedTo: WeakSet<object>;
+}
+
+const resolvedKeyCache = new Map<string, RememberedKey>();
+const keychainAccessIds = new WeakMap<LocalVaultKeychainAccess, number>();
+let nextKeychainAccessId = 1;
+
+function keychainAccessCacheId(access: LocalVaultKeychainAccess | undefined): string {
+  if (access === undefined) return "default";
+  let id = keychainAccessIds.get(access);
+  if (id === undefined) {
+    id = nextKeychainAccessId;
+    nextKeychainAccessId += 1;
+    keychainAccessIds.set(access, id);
+  }
+  return String(id);
+}
+
+function resolvedKeyCacheKey(options: ResolveLocalVaultKeyOptions): string {
+  // The operator override value only enters as a digest, so no key material is held as a map key.
+  const envDigest = createHash("sha256")
+    .update(options.env[options.envVarName] ?? "")
+    .digest("hex");
+  return JSON.stringify([
+    resolve(options.vaultDir),
+    options.envVarName,
+    options.keychainService,
+    options.keyfileName,
+    keychainAccessCacheId(options.keychainAccess),
+    // Whether the real keychain is reachable at all changes which tier answers.
+    keychainWithheldReason(options.env) ?? "",
+    envDigest,
+  ]);
+}
+
+/**
+ * A keyfile answer is provisional when the real keychain was asked and gave none: a locked or slow
+ * keychain may answer next time, and the key must then return to it. A withheld keychain, another
+ * platform or an injected seam answers the same way every time and is remembered.
+ */
+export function resolvedKeyIsFinal(
+  options: ResolveLocalVaultKeyOptions,
+  resolved: ResolvedLocalVaultKey,
+): boolean {
+  if (resolved.source !== "keyfile") return true;
+  return (
+    options.keychainAccess !== undefined ||
+    process.platform !== "darwin" ||
+    keychainWithheldReason(options.env) !== undefined
+  );
+}
+
+function rememberedKeyIsCurrent(
+  options: ResolveLocalVaultKeyOptions,
+  remembered: RememberedKey,
+): boolean {
+  // A wiped state directory must not leave a key in use that no file holds any more.
+  return (
+    remembered.source !== "keyfile" || existsSync(resolve(options.vaultDir, options.keyfileName))
+  );
+}
+
+function announceOnce(remembered: RememberedKey, sink: SecurityLogSink | undefined): void {
+  if (sink === undefined || remembered.announcedTo.has(sink)) return;
+  remembered.announcedTo.add(sink);
+  emitKeyResolved(sink, remembered.source);
+}
+
+/**
+ * Resolves a vault key once per process, vault directory and key namespace, and reuses it on every
+ * later call. A key does not change while the process runs, and each uncached resolution can run a
+ * synchronous `security` child process on the event loop, which a per-request caller must not pay
+ * on every request. `security.vault.key-resolved` is written once per key and sink, so the winning
+ * tier stays visible once. A failed resolution is not cached and is retried by the next call, and
+ * so is a keyfile answer given while the real keychain was reachable but silent.
+ */
+export function resolveLocalVaultKeyOnce(
+  options: ResolveLocalVaultKeyOptions,
+): ResolvedLocalVaultKey {
+  const cacheKey = resolvedKeyCacheKey(options);
+  const remembered = resolvedKeyCache.get(cacheKey);
+  if (remembered !== undefined) {
+    if (rememberedKeyIsCurrent(options, remembered)) {
+      announceOnce(remembered, options.sink);
+      return { key: Buffer.from(remembered.key), source: remembered.source };
+    }
+    resolvedKeyCache.delete(cacheKey);
+  }
+  const resolved = resolveLocalVaultKey(options);
+  if (resolvedKeyIsFinal(options, resolved)) {
+    const entry: RememberedKey = {
+      key: Buffer.from(resolved.key),
+      source: resolved.source,
+      announcedTo: new WeakSet(),
+    };
+    if (options.sink !== undefined) entry.announcedTo.add(options.sink);
+    resolvedKeyCache.set(cacheKey, entry);
+  }
+  return resolved;
+}
+
+/** Test seam: forgets every remembered key so a test starts from a cold process. */
+export function resetResolvedLocalVaultKeysForTest(): void {
+  resolvedKeyCache.clear();
 }

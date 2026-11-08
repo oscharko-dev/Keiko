@@ -16,6 +16,20 @@ import { jiraReadFailure } from "./jira-managed-metadata.js";
 const TEMPLATES_MAX = 8;
 const TEMPLATE_BYTES_MAX = 16_384;
 
+/** What a template demands of a create, without its library provenance. */
+function templateFacts(template: JiraIssueTemplate): CatalogJsonObject {
+  return {
+    project: template.project,
+    issueType: template.issueType,
+    operation: "create",
+    summary: { ...template.summary },
+    requiredFields: [...template.requiredFields],
+    requiredSections: [...template.requiredSections],
+    labels: { ...template.labels, required: [...template.labels.required] },
+    parent: { ...template.parent },
+  };
+}
+
 function ruleFacts(
   template: JiraIssueTemplate,
   set: JiraIssueTemplateSet,
@@ -23,15 +37,8 @@ function ruleFacts(
   const source = set.references?.find((reference) => reference.template === template);
   if (source === undefined) return undefined;
   return {
-    project: template.project,
-    issueType: template.issueType,
-    operation: "create",
+    ...templateFacts(template),
     source: { id: source.id, revision: source.revision, digest: source.digest },
-    summary: { ...template.summary },
-    requiredFields: [...template.requiredFields],
-    requiredSections: [...template.requiredSections],
-    labels: { ...template.labels, required: [...template.labels.required] },
-    parent: { ...template.parent },
   };
 }
 
@@ -157,4 +164,79 @@ export async function withCreateTemplateMetadata(
   const enriched = matchedRulesResult(result, matching, set, connection);
   if (!admitted(context)) return jiraReadFailure("permission-denied");
   return enriched;
+}
+
+/** The create rules of one project and issue type, as a draft batch needs them (#4173). */
+export interface JiraCreateTemplateRules {
+  /** Compact facts of every matching template, for the model's instructions. */
+  readonly facts: readonly CatalogJsonObject[];
+  readonly requiredSections: readonly string[];
+  readonly requiredFields: readonly string[];
+  readonly requiredLabels: readonly string[];
+}
+
+export type JiraCreateTemplateRulesResult =
+  | ({ readonly ok: true } & JiraCreateTemplateRules)
+  | { readonly ok: false; readonly reason: string };
+
+const NO_RULES: JiraCreateTemplateRulesResult = {
+  ok: true,
+  facts: [],
+  requiredSections: [],
+  requiredFields: [],
+  requiredLabels: [],
+};
+/** Fields Keiko writes itself in every drafted issue, so a template naming them asks nothing more. */
+const WRITTEN_BY_KEIKO: ReadonlySet<string> = new Set(["summary", "description", "labels"]);
+
+function unique(values: readonly string[]): readonly string[] {
+  return [...new Set(values)];
+}
+
+function rulesOf(matching: readonly JiraIssueTemplate[]): JiraCreateTemplateRulesResult {
+  return {
+    ok: true,
+    facts: matching.map(templateFacts),
+    requiredSections: unique(matching.flatMap((template) => template.requiredSections)),
+    requiredFields: unique(
+      matching
+        .flatMap((template) => template.requiredFields)
+        .filter((field) => !WRITTEN_BY_KEIKO.has(field.trim().toLowerCase())),
+    ),
+    requiredLabels: unique(matching.flatMap((template) => template.labels.required)),
+  };
+}
+
+/**
+ * The stored CREATE rules that govern a project and issue type, read the way the create gate reads
+ * them: the same identity reads, the same matching. A connection without a template source has no
+ * rules; an unreadable library or identity fails closed.
+ */
+export async function readJiraCreateTemplateRules(
+  context: ManagedMcpInvocationContext,
+  connection: JiraManagedConnection,
+  projectId: string,
+  issueTypeId: string,
+): Promise<JiraCreateTemplateRulesResult> {
+  if (connection.issueTemplates === undefined) return NO_RULES;
+  const initial = connection.issueTemplates();
+  if (initial.unreadable > 0) return { ok: false, reason: "template-unreadable" };
+  if (
+    !initial.templates.some((template) =>
+      template.activations.some((activation) => activation.kind === "create"),
+    )
+  )
+    return NO_RULES;
+  const identity = await readJiraCreateTemplateIdentity(
+    requestFor(connection, context),
+    projectId,
+    issueTypeId,
+  );
+  if ("ok" in identity) return { ok: false, reason: identity.reason };
+  if (!admitted(context)) return { ok: false, reason: "permission-denied" };
+  const set = connection.issueTemplates();
+  if (set.unreadable > 0) return { ok: false, reason: "template-unreadable" };
+  return rulesOf(
+    matchingJiraIssueTemplates(set.templates, { ...identity, operation: "create", fields: {} }),
+  );
 }

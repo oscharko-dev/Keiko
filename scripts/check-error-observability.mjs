@@ -145,6 +145,10 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map(
       "A failed metadata or containment probe returns unavailable and admits no fingerprint read. The existing semantic freshness observer records the resulting unavailableFileCount on the connected-context source/selection evidence.",
     "packages/keiko-server/src/grounded-worktree-recency.ts:admittedPath":
       "A failed fresh containment or safe-file metadata probe is the fail-closed false result of this path eligibility predicate; it cannot admit a recency path or source read.",
+    "packages/keiko-server/src/atlassian/jiraDraftBatchPrompt.ts:parsedObject":
+      "Pure parsing of one JSON candidate inside a model answer: a candidate that is not JSON is skipped. An answer without a usable object is a refused page; the batch owner retries it with a correction and records the page outcome and failure on atlassian.jira-draft-batch.",
+    "packages/keiko-ui/src/app/components/desktop/jira-tool-outcome.ts:webLink":
+      "Pure parsing of a stored browse link: a malformed or non-web link maps to no link, and the issue key is still shown unlinked. It performs no navigation or request.",
     "packages/keiko-workflows/src/bug-investigation/failure-parse.ts:sourceFile":
       "Pure pasted file-URL parsing maps malformed, unsupported or hostile locations to no frame; it performs no filesystem operation or source admission.",
     "packages/keiko-workspace/src/structuralAdapterRequestContext.ts:currentCandidateContentSnapshot":

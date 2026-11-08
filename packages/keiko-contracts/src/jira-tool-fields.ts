@@ -34,6 +34,8 @@ export const JIRA_MANAGED_READ_TOOLS = [
   "jira.report",
   /** Appends a page of items to a server-held backlog draft; it changes nothing in Jira. */
   "jira.draft-stage",
+  /** Drafts a backlog from the Chat's Knowledge requirements in Keiko-sized pages; stages only. */
+  "jira.draft-batch",
 ] as const;
 export type JiraManagedReadToolName = (typeof JIRA_MANAGED_READ_TOOLS)[number];
 export type JiraFieldOperation = "set" | "add" | "remove";
