@@ -7,6 +7,7 @@
       "id": "cluster-effects-require-owned-multi-node-fixture",
       "proposedDisposition": "deferred",
       "identities": [
+        "GET /rest/api/2/cluster/nodes",
         "PUT /rest/api/2/cluster/index-snapshot/{nodeId}",
         "DELETE /rest/api/2/cluster/node/{nodeId}",
         "PUT /rest/api/2/cluster/node/{nodeId}/offline",
@@ -15,11 +16,12 @@
         "POST /rest/api/2/cluster/zdu/retryUpgrade",
         "POST /rest/api/2/cluster/zdu/start"
       ],
-      "rationale": "The existing disposable laboratory has exactly one Jira service with CLUSTERED=false. It supplies no second owned node, dead-node lifecycle or rolling-upgrade population. An invented node ID, absent task or validation error would not prove runtime unavailability or successful cluster effects.",
+      "rationale": "The existing disposable laboratory has exactly one Jira service with CLUSTERED=false. The 10.3.26 qualification observed native HTTP405 for GET cluster/nodes. This proves neither missing Jira version/plugin nor successful node enumeration. The fixture supplies no second owned node, dead-node lifecycle or rolling-upgrade population. An invented node ID, absent task or validation error would not prove runtime unavailability or successful cluster effects.",
       "requiredForQualification": "An owner-approved multi-node fixture within the existing laboratory, versioned node snapshots and independent observations of each requested cluster effect.",
       "sourceReferences": [
         "scripts/testing/jira-chat-lab/compose.yaml",
         "scripts/testing/jira-chat-lab/lab-services.mjs",
+        "docs/local-knowledge/jira-api-coverage/evidence/ac7-10.3.26-911041693.json",
         "packages/keiko-server/src/atlassian/jiraMaintenanceMutationDescriptors.ts"
       ]
     },

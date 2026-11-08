@@ -40,8 +40,10 @@ mints its authority from an admitted stored turn, accepts its read disclosure
 through the production owner, dispatches the selected catalog operation and
 settles the stored turn. The ordinary model-backed Chat entry point is unchanged.
 
-Read cases live in `api-qualification-cases.mjs` and
-`api-qualification-observation-cases.mjs`. Each case supplies typed tool
+Read cases live in `api-qualification-cases.mjs`,
+`api-qualification-observation-cases.mjs` and `api-qualification-configuration-cases.mjs`.
+Configuration cases select actual scheme, screen, tab and grant IDs through read-only
+fixture preparation immediately before their governed operation. Each case supplies typed tool
 arguments and an independent readback using `lab-client.mjs`; direct REST calls
 are observations and fixture preparation only. A transport witness observes the
 real selected method/path and forwards responses unchanged. An unexpected or
@@ -66,6 +68,12 @@ explicitly unknown in the complete report. The driver is incomplete while any
 inventory identity lacks native qualification; a source checkpoint does not
 close AC7.
 
+`api-qualification-release-cases.mjs` creates its own named component and version,
+checks ordinary metadata and native issue counts, and exercises version remote-link
+lifecycles with independent complete-set comparisons. Destructive cases require the
+same owned snapshot proof as other administration; they never reuse another session's
+resources. Issue lifecycle property reads compare the production `items` node list.
+
 Before destructive administration, run
 `api-qualification-snapshot.mjs <private-session>` within the exclusive lab
 window. It reuses `verification.mjs` service/image ownership checks, stops this
@@ -74,6 +82,8 @@ tar with SHA-256 evidence. It leaves the services stopped and never restores a
 backup automatically. Only after the exclusive window is available, restart the
 same session normally. Supply the returned snapshot ID as the qualifier's third
 argument; destructive cases refuse absent, foreign or changed backup bytes.
+Use `api-qualification.mjs <private-session> '*' <owned-snapshot-id>` to select all
+authored cases with a snapshot, or supply an explicit comma-separated tool list.
 
 Private run directories retain the product database, body-free operation evidence
 and an exclusive per-case pending intent. Reconcile an interrupted or uncertain

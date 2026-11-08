@@ -9,6 +9,7 @@ import { DEFAULT_LAB_CONNECTION } from "../testing/jira-chat-lab/lab-client.mjs"
 import { API_QUALIFICATION_CONFIGURATION_CASES } from "../testing/jira-chat-lab/api-qualification-configuration-cases.mjs";
 import { API_QUALIFICATION_ISSUE_CASES } from "../testing/jira-chat-lab/api-qualification-issue-cases.mjs";
 import { API_QUALIFICATION_PROPERTY_CASES } from "../testing/jira-chat-lab/api-qualification-property-cases.mjs";
+import { API_QUALIFICATION_RELEASE_CASES } from "../testing/jira-chat-lab/api-qualification-release-cases.mjs";
 
 it("binds issue and property lifecycle arguments to the real operation contracts", () => {
   const fixture = {
@@ -20,10 +21,32 @@ it("binds issue and property lifecycle arguments to the real operation contracts
     worklogId: "41",
     transitionId: "11",
     runId: "synthetic-run",
+    componentId: "71",
+    versionId: "81",
+    releaseActorKey: "synthetic-admin",
+    versionSnapshot: {
+      name: "Synthetic version",
+      description: "",
+      startDate: null,
+      releaseDate: null,
+      released: false,
+      archived: false,
+    },
+    componentSnapshot: {
+      name: "Synthetic component",
+      description: "",
+      leadUserName: null,
+      assigneeType: "PROJECT_DEFAULT",
+      archived: false,
+      deleted: false,
+    },
+    linkSuffixes: [],
+    linkSnapshots: [],
   };
   for (const specification of [
     ...API_QUALIFICATION_ISSUE_CASES,
     ...API_QUALIFICATION_PROPERTY_CASES,
+    ...API_QUALIFICATION_RELEASE_CASES,
   ]) {
     const operation = jiraOperationForTool(specification.tool);
     expect(operation, specification.tool).toBeDefined();
@@ -134,6 +157,43 @@ it("compares permission holders independently without treating expanded metadata
     await expect(
       specification.readback(context, { items }, { permissionSchemeId: "0" }),
     ).rejects.toThrow("independent native read");
+  } finally {
+    native.mockRestore();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+it("compares version-link values using the native JSON member order", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "keiko-ac7-version-link-"));
+  mkdirSync(join(directory, "secrets"));
+  writeFileSync(join(directory, "secrets/admin-password"), "synthetic-admin", { mode: 0o600 });
+  const globalId = "keiko-ac7-synthetic-run-a";
+  const native = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValue(
+      new globalThis.Response(JSON.stringify({ link: JSON.stringify({ flag: true, globalId }) }), {
+        status: 200,
+      }),
+    );
+  const specification = API_QUALIFICATION_RELEASE_CASES.find(
+    ({ tool }) => tool === "jira.version-remote-link",
+  );
+  const nodes = [
+    { path: "", kind: "object", childCount: 2 },
+    { path: "/flag", kind: "boolean", booleanValue: true },
+    { path: "/globalId", kind: "string", textValue: globalId },
+  ];
+  const fixture = { versionId: "81", runId: "synthetic-run", linkSuffixes: ["a"] };
+  const context = { actor: "admin", session: { ...DEFAULT_LAB_CONNECTION, directory } };
+  try {
+    await expect(
+      specification.readback(context, { items: [{ globalId, valueNodes: nodes }] }, fixture),
+    ).resolves.toMatchObject({ matched: true });
+    const altered = structuredClone(nodes);
+    altered[1].booleanValue = false;
+    await expect(
+      specification.readback(context, { items: [{ globalId, valueNodes: altered }] }, fixture),
+    ).rejects.toThrow();
   } finally {
     native.mockRestore();
     rmSync(directory, { recursive: true, force: true });

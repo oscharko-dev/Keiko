@@ -24,6 +24,7 @@ import { API_QUALIFICATION_ISSUE_CASES } from "./api-qualification-issue-cases.m
 import { API_QUALIFICATION_OBSERVATION_CASES } from "./api-qualification-observation-cases.mjs";
 import { API_QUALIFICATION_PROPERTY_CASES } from "./api-qualification-property-cases.mjs";
 import { API_QUALIFICATION_CONFIGURATION_CASES } from "./api-qualification-configuration-cases.mjs";
+import { API_QUALIFICATION_RELEASE_CASES } from "./api-qualification-release-cases.mjs";
 import { requireQualificationSnapshot } from "./api-qualification-snapshot.mjs";
 import {
   classifyQualification,
@@ -33,6 +34,7 @@ import {
 
 const repository = resolve(import.meta.dirname, "..", "..", "..");
 const ledgerPath = join(repository, "docs/local-knowledge/jira-api-coverage/operations.json");
+const proposalPath = "docs/local-knowledge/jira-api-coverage/qualification-proposals.json";
 const stage = (value) =>
   console.log(JSON.stringify({ operation: "jira-api-qualification", ...value }));
 
@@ -188,6 +190,11 @@ async function executeCases(context, specifications, report, directory, witness,
 }
 
 function createReport(session, ledger, revision, runId) {
+  const proposals = JSON.parse(readFileSync(join(repository, proposalPath), "utf8"));
+  assert.equal(proposals.status, "awaiting-owner-decision");
+  const identities = new Set(ledger.operations.map((row) => row.identity));
+  for (const proposal of proposals.proposals)
+    assert.ok(proposal.identities.every((identity) => identities.has(identity)));
   return {
     schemaVersion: 1,
     runId,
@@ -197,7 +204,13 @@ function createReport(session, ledger, revision, runId) {
     inventoryDigest: qualificationDigest(ledger.operations.map((row) => row.identity)),
     file: `qualification-${session.jiraVersion}-${runId}.json`,
     modelCalls: 0,
-    proposals: [],
+    proposals: proposals.proposals.map((proposal) => ({
+      id: proposal.id,
+      status: proposals.status,
+      proposedDisposition: proposal.proposedDisposition,
+      identities: proposal.identities,
+      reference: `${proposalPath}#${proposal.id}`,
+    })),
     operations: ledger.operations.map((row) => ({
       identity: row.identity,
       runtimeAvailability: "unknown",
@@ -251,6 +264,7 @@ export async function qualifyApi(directory, only, snapshotId) {
     ...API_QUALIFICATION_CONFIGURATION_CASES,
     ...API_QUALIFICATION_ISSUE_CASES,
     ...API_QUALIFICATION_PROPERTY_CASES,
+    ...API_QUALIFICATION_RELEASE_CASES,
   ]).filter((entry) => only === undefined || only.includes(entry.tool));
   assert.ok(selected.length > 0);
   await observeRelease(session);
@@ -291,7 +305,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       throw new TypeError(
         "Usage: api-qualification.mjs <private-session> [comma-separated-tools] [owned-snapshot-id]",
       );
-    const { counts } = await qualifyApi(directory, only?.split(","), snapshotId);
+    const { counts } = await qualifyApi(
+      directory,
+      only === "*" ? undefined : only?.split(","),
+      snapshotId,
+    );
     if (counts.unknown > 0) process.exitCode = 1;
   } catch (error) {
     stage({
