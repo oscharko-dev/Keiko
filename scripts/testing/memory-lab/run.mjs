@@ -29,6 +29,7 @@ import { openProgress } from "./progress.mjs";
 import { ARMS, runScenario } from "./driver.mjs";
 import { SCAN_FILE, scanEvidence, secretsOfConfig } from "./evidence-scan.mjs";
 import { CEILINGS, pendingGatewayCalls, startLabInstance } from "./instance.mjs";
+import { readActivityEvents } from "../coding-workbench-lab/activity-log-events.mjs";
 import { digestFiles, instrumentDigest, productDistDigest } from "./instrument.mjs";
 import { conversationTextInLog } from "./log-text.mjs";
 import {
@@ -284,6 +285,15 @@ function runContext(options, arm, fixture, instance) {
       // queued scripted replies are an expectation bounded by the grace period.
       openCalls: () => pendingGatewayCalls(instance),
       ...(fixture === undefined ? {} : { pendingLearner: () => fixture.pendingLearner() }),
+      // A subject that learns in background passes is done only once its passes settled.
+      ...(instance.learningIdleMs === undefined
+        ? {}
+        : {
+            passes: {
+              idleMs: instance.learningIdleMs,
+              events: () => readActivityEvents(instance.logDirectory),
+            },
+          }),
     },
     ...(fixture === undefined ? {} : { fixture }),
     ...(options.brokenLearner === undefined

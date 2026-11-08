@@ -100,7 +100,8 @@ first page.
 
 Offline, both model ids point at the scripted model (`scripted-model.mjs`), an OpenAI-compatible
 loopback server. The answerer replies `OK.` during learning turns and, during probes, echoes exactly
-the memory bodies the product placed inside its untrusted fence, so an offline answer measures
+the memory bodies the product placed inside its untrusted fences: the standing profile (#4228), which
+travels with the system prompt, then the memories retrieved for the turn. An offline answer measures
 retrieval and injection and nothing else. The learner replies with whatever the scenario queued for
 the next extraction call: a correct learner returns the verbatim sentences the scenario names, a
 broken one returns the whole message, a credential or an invented fact.
@@ -161,7 +162,17 @@ An `answer` probe passes when its terms are present and no forbidden term counts
 `expect.forbidden`, and the scenario's forgotten and forbidden facts, under the rules above). An
 `abstain` probe passes when the answer abstains and no true, superseded, forgotten or forbidden fact
 of the scenario leaks; a probe may `allow` true facts by key, so the person's own preference, supplied
-when a colleague's is asked for, is no leak. A `no-memory` probe passes when nothing was supplied.
+when a colleague's is asked for, is no leak. A `no-memory` probe passes when nothing was retrieved
+for it and nothing leaked.
+
+What reached the model is the standing profile together with the retrieved memories; the lab reads
+both from the turn's response (`memory.context.profile` and `memory.context.memories`). The profile
+carries the person's own standing facts to every answer by the owner's decision of #4228, so through
+it only a superseded, forgotten or forbidden fact leaks, and its presence on an unrelated question is
+no over-application; a memory retrieved for that question is. Recall of an answer probe
+(`relevantSupplied`) counts the profile as well. A subject without a standing profile supplies none,
+and its scoring is unchanged. Each probe row records `retrievedCount` and `profileCount` beside
+`suppliedCount`.
 
 An `answer` probe may name a form (`expect.format`, `table` or `list`): a preference for a form shows in
 the form of the answer, so a Markdown table counts for a preference for tables even when the answer
@@ -289,8 +300,18 @@ only after its learner call completed, so a wait that merely saw the call end wo
 the gap before the capture lands. Live, a call that was seen to start and end ends the wait after that
 quiet period; when no call was seen at all, the grace period (`--learner-grace-ms`) is waited through,
 because the learner's call may start a moment after the answer and a quiet ledger alone would miss it.
-Offline, the scripted learner's queue is the signal, bounded by the same grace period. The same wait
-runs after the probes, before the store and the ledger are read, so `probeCaptures` does not depend on
+Offline, the scripted learner's queue is the signal, bounded by the same grace period.
+
+A subject that learns in background passes (#4213; recognized by its own operation catalog
+registering `memory.learn.pass.settled`) learns only after the person paused, seconds after the
+answer. For it the wait additionally requires its passes to have settled, read from the same Activity
+Log: no pass is open, and either a pass settled since the wait began without leaving a Chat for a
+continuation (`pendingChatCount` 0), or none started within the pause plus a slack of three seconds
+(the turn left nothing to learn). A pass that settled as `unavailable` or `failed` is retried by the
+product only after minutes; the lab records the learning it got instead of waiting for the retry. The
+lab's person pauses for two seconds (`KEIKO_MEMORY_LEARNING_IDLE_MS=2000`); a pass learns the same
+turns whatever pause preceded it. Without this, the wait ended before the pass ran and the probes read
+a vault nothing had been learned into. The same wait runs after the probes, before the store and the ledger are read, so `probeCaptures` does not depend on
 timing.
 
 Five hard counters must read zero and are never averaged away: credentials stored, customer or
