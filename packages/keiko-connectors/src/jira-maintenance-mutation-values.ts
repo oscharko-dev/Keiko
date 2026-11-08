@@ -18,6 +18,7 @@ import {
   jiraMaintenanceUpgradeResult,
   type JiraMaintenanceProjection,
 } from "./jira-maintenance-values.js";
+import { jiraMessageRefusal } from "./jira-mutation-failure.js";
 import { jiraNativeId } from "./jira-native-values.js";
 import { savedExactKeys, savedText } from "./jira-saved-configuration-values.js";
 
@@ -37,12 +38,7 @@ export function maintenanceRefusal(
   reason: "field-validation" | "conflict" | "unavailable" = "field-validation",
   receipt?: MaintenanceReceipt,
 ): MaintenanceFailure {
-  return {
-    ok: false,
-    reason,
-    detail: { messages: [message] },
-    ...(receipt === undefined ? {} : { receipt }),
-  };
+  return jiraMessageRefusal(message, reason, receipt);
 }
 export interface MaintenanceIssue {
   readonly issueId: string;

@@ -1,5 +1,6 @@
 import { isSafeAtlassianIdentifier, type JiraMutationAttempt, type JiraMutationReceipt } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { dispatchFailure, jiraFieldValidationFailure } from "./jira-mutation-failure.js";
 import { readJiraMutationIssue } from "./jira-mutation-confirmation.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { jiraNativeId } from "./jira-native-values.js";
@@ -35,4 +36,45 @@ export async function bindLinkActor(request: JiraMutationRequest, expectedActorK
 }
 export function sameLinkParent(left: LinkIssue, right: LinkIssue): boolean {
   return left.id === right.id && left.key === right.key;
+}
+type LinkResponse = Awaited<ReturnType<JiraMutationRequest>>;
+/** Either the refusal for a failed or non-2xx dispatched link write, or the acknowledged response. */
+export function linkDispatchOutcome(
+  response: LinkResponse,
+  receipt: JiraLinkMutationReceipt,
+):
+  | { readonly refusal: JiraLinkMutationAttempt; readonly accepted?: undefined }
+  | { readonly refusal?: undefined; readonly accepted: Extract<LinkResponse, { ok: true }> } {
+  if (!response.ok) return { refusal: { ...dispatchFailure(response), receipt } };
+  if (response.status < 200 || response.status >= 300)
+    return { refusal: { ...LINK_MALFORMED, receipt } };
+  return { accepted: response };
+}
+/** The shared select, admit, check, dispatch, acknowledge sequence of one native link write. */
+export interface LinkMutationSteps<Input, State> {
+  readonly selected: Input | undefined;
+  readonly invalid: string;
+  readonly admit: (selected: Input) => Promise<LinkObservation<State>>;
+  readonly receiptFor: (selected: Input, state: State) => JiraLinkMutationReceipt;
+  readonly dispatch: (selected: Input, state: State) => Promise<LinkResponse>;
+  readonly settle: (
+    selected: Input,
+    state: State,
+    receipt: JiraLinkMutationReceipt,
+    accepted: Extract<LinkResponse, { ok: true }>,
+  ) => Promise<JiraLinkMutationAttempt>;
+}
+export async function runLinkMutation<Input, State>(
+  steps: LinkMutationSteps<Input, State>,
+  check: boolean,
+): Promise<JiraLinkMutationAttempt> {
+  const { selected } = steps;
+  if (selected === undefined) return jiraFieldValidationFailure(steps.invalid);
+  const prior = await steps.admit(selected);
+  if (!prior.ok) return prior;
+  if (check) return { ok: true, receipt: {} };
+  const receipt = steps.receiptFor(selected, prior.value);
+  const outcome = linkDispatchOutcome(await steps.dispatch(selected, prior.value), receipt);
+  if (outcome.refusal !== undefined) return outcome.refusal;
+  return steps.settle(selected, prior.value, receipt, outcome.accepted);
 }

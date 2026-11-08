@@ -13,25 +13,20 @@ import { jiraReadFailure, localJiraPage, projectJiraCollection } from "./jira-ma
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import {
   executeJiraSelectedRead,
-  selectJiraReadPage,
+  selectJiraListOrIdPage,
   type JiraReadResponse,
+  type JiraReadSelection,
 } from "./jira-managed-read-request.js";
 import { jiraNativeId, jiraNativeNumericId, jiraNativeText } from "./jira-native-values.js";
 
 export const JIRA_FIELD_DIRECTORY_READS = JIRA_READ_TOOL_FAMILIES.fieldDirectory;
 type FieldRead = (typeof JIRA_FIELD_DIRECTORY_READS)[number];
 const READS: ReadonlySet<string> = new Set(JIRA_FIELD_DIRECTORY_READS);
-interface Selection {
-  readonly path: string;
-  readonly startAt: number;
-  readonly maxResults: number;
+interface Selection extends JiraReadSelection {
   readonly optionId?: string;
 }
 function selection(name: FieldRead, args: CatalogJsonObject): Selection | undefined {
-  const page = selectJiraReadPage(
-    args,
-    new Set(name === "jira.fields" ? ["startAt", "maxResults"] : ["optionId"]),
-  );
+  const page = selectJiraListOrIdPage(args, name === "jira.fields", "optionId");
   if (page === undefined) return undefined;
   if (name === "jira.fields") {
     return { ...page, path: "field" };

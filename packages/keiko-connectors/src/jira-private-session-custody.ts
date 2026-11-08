@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AtlassianCredentialMetadata } from "@oscharko-dev/keiko-contracts";
+import { boundLivePod, type JiraLivePod } from "./jira-live-pod-binding.js";
 import type { AtlassianCredentialVaultPort } from "./atlassian-credential-custody.js";
 import { parseJsonRecord } from "./atlassian-sync-classify.js";
 import { savedExactKeys } from "./jira-saved-configuration-values.js";
@@ -117,26 +118,8 @@ function finishRecord(
     ? record
     : undefined;
 }
-type LivePod = NonNullable<
-  Extract<AtlassianCredentialMetadata, { deployment: "data-center" }>["livePod"]
->;
-function selectedPod(deps: Dependencies, binding: JiraPrivateSessionBinding): LivePod {
-  const metadata = deps.metadata(binding.authRef);
-  if (
-    metadata?.deployment !== "data-center" ||
-    metadata.generation !== binding.authenticationGeneration
-  )
-    return fail("binding-changed");
-  const pod = metadata.livePod;
-  if (
-    pod?.verificationRevision !== binding.verificationRevision ||
-    pod.ownerDigest !== binding.principalDigest ||
-    pod.verificationStatus !== "ok" ||
-    pod.verificationInProgress ||
-    pod.credentialOperation !== undefined
-  )
-    return fail("binding-changed");
-  return pod;
+function selectedPod(deps: Dependencies, binding: JiraPrivateSessionBinding): JiraLivePod {
+  return boundLivePod(deps.metadata, binding) ?? fail("binding-changed");
 }
 function selected(deps: Dependencies, raw: JiraPrivateSessionBinding): JiraPrivateSessionBinding {
   const binding = copyJiraSessionBinding(raw);

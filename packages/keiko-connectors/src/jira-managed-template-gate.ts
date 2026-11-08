@@ -348,19 +348,23 @@ function bulkReferenceRules(
       ].map((reference) => ({ template, reference })),
     );
 }
-/** A known non-version custom field stays outside version impact. Opaque/plugin or malformed
- * metadata cannot establish that boundary, so it stays potentially affected. The existing metadata
- * parser classifies shapes only; these synthetic neutral flags grant no editing permission. */
-function mayHoldVersion(id: string, values: readonly unknown[]): boolean {
+/** The classified kind of the one matching field; unresolved or malformed metadata is `opaque`. */
+function fieldKindOrOpaque(id: string, values: readonly unknown[]): string {
   const matches = values.map(asRecord).filter((value) => value?.id === id);
-  if (matches.length !== 1) return true;
+  if (matches.length !== 1) return "opaque";
   const raw = matches[0];
   const parsed = parseJiraFieldMetadata([
     { fieldId: id, name: raw?.name, schema: raw?.schema, required: false, operations: [] },
   ]);
-  if (!parsed.ok) return true;
-  const kind = parsed.fields[0]?.kind;
-  return kind === undefined || kind === "opaque" || kind === "unsupported";
+  if (!parsed.ok) return "opaque";
+  return parsed.fields[0]?.kind ?? "opaque";
+}
+/** A known non-version custom field stays outside version impact. Opaque/plugin or malformed
+ * metadata cannot establish that boundary, so it stays potentially affected. The existing metadata
+ * parser classifies shapes only; these synthetic neutral flags grant no editing permission. */
+function mayHoldVersion(id: string, values: readonly unknown[]): boolean {
+  const kind = fieldKindOrOpaque(id, values);
+  return kind === "opaque" || kind === "unsupported";
 }
 function mayHoldSprint(id: string, values: readonly unknown[]): boolean {
   const matches = values.map(asRecord).filter((value) => value?.id === id);
@@ -475,21 +479,8 @@ function linkSchemaRuleAffected(template: JiraIssueTemplate, names: readonly str
 function mayReferenceDeletedIssue(id: string, values: readonly unknown[]): boolean {
   if (id === "parent" || id === "issuelinks" || id === "subtasks") return true;
   if (JIRA_TEMPLATE_SYSTEM_FIELDS.some((field) => field.id === id)) return false;
-  const matches = values.map(asRecord).filter((value) => value?.id === id);
-  if (matches.length !== 1) return true;
-  const raw = matches[0];
-  const parsed = parseJiraFieldMetadata([
-    { fieldId: id, name: raw?.name, schema: raw?.schema, required: false, operations: [] },
-  ]);
-  if (!parsed.ok) return true;
-  const kind = parsed.fields[0]?.kind;
-  return (
-    kind === undefined ||
-    kind === "issue" ||
-    kind === "links" ||
-    kind === "opaque" ||
-    kind === "unsupported"
-  );
+  const kind = fieldKindOrOpaque(id, values);
+  return kind === "issue" || kind === "links" || kind === "opaque" || kind === "unsupported";
 }
 function deletionRuleAffected(template: JiraIssueTemplate, values: readonly unknown[]): boolean {
   if (template.parent.link !== undefined) return true;

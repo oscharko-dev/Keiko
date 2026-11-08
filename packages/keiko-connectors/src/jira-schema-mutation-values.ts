@@ -13,6 +13,7 @@ import {
 import { jiraTerminologyProjection } from "./jira-configuration-values.js";
 import { jiraFieldDirectoryProjection } from "./jira-managed-field-directory.js";
 import { jiraIssueLinkTypeProjection } from "./jira-managed-issue-details.js";
+import { jiraMessageRefusal } from "./jira-mutation-failure.js";
 import { jiraNativeId } from "./jira-native-values.js";
 import { savedExactKeys, savedName, savedText } from "./jira-saved-configuration-values.js";
 
@@ -30,12 +31,7 @@ export function schemaRefusal(
   reason: "field-validation" | "conflict" | "unavailable" = "field-validation",
   receipt?: JiraSchemaMutationReceipt,
 ): SchemaFailure {
-  return {
-    ok: false,
-    reason,
-    detail: { messages: [message] },
-    ...(receipt === undefined ? {} : { receipt }),
-  };
+  return jiraMessageRefusal(message, reason, receipt);
 }
 export function schemaUnconfirmed(receipt: JiraSchemaMutationReceipt): SchemaFailure {
   return schemaRefusal(

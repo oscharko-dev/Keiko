@@ -42,6 +42,20 @@ export function jiraConflictFailure(
   };
 }
 
+/** A refusal carrying one message and, when the write was acknowledged, its receipt. */
+export function jiraMessageRefusal(
+  message: string,
+  reason: "field-validation" | "conflict" | "unavailable" = "field-validation",
+  receipt?: JiraMutationReceipt,
+): JiraMutationFailure {
+  return {
+    ok: false,
+    reason,
+    detail: { messages: [message] },
+    ...(receipt === undefined ? {} : { receipt }),
+  };
+}
+
 export function jiraUnchangedFailure<Receipt extends JiraMutationReceipt>(
   message: string,
   receipt: Receipt,

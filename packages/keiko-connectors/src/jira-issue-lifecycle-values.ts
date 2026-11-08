@@ -2,7 +2,7 @@ import { isSafeAtlassianIdentifier, type JiraIssueLifecycleMutation, type JiraMu
 import { TOOL_CATALOG_LIMITS, type CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { asRecord } from "./atlassian-sync-classify.js";
 import { jiraNativeId } from "./jira-native-values.js";
-import { savedExactKeys, savedText } from "./jira-saved-configuration-values.js";
+import { savedDistinctList, savedExactKeys, savedText } from "./jira-saved-configuration-values.js";
 
 export { JIRA_ISSUE_LIFECYCLE_MUTATIONS, type JiraIssueLifecycleMutation } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 export interface IssueLifecycleReceipt extends JiraMutationReceipt {
@@ -54,14 +54,8 @@ export function issueLifecycleSubtask(value: unknown): IssueLifecycleSubtask | u
     ? { id: raw.id, key: raw.key } : undefined;
 }
 function selectedList<T extends IssueLifecycleSubtask>(value: unknown, project: (raw: unknown) => T | undefined, maximum: number, minimum: number): readonly T[] | undefined {
-  if (!Array.isArray(value) || value.length < minimum || value.length > maximum) return undefined;
-  const output: T[] = []; const ids = new Set<string>(); const keys = new Set<string>();
-  for (const raw of value) {
-    const item = project(raw);
-    if (item === undefined || ids.has(item.id) || keys.has(item.key.toUpperCase())) return undefined;
-    ids.add(item.id); keys.add(item.key.toUpperCase()); output.push(item);
-  }
-  return Object.freeze(output);
+  const output = savedDistinctList(value, project, (item) => [item.id, item.key.toUpperCase()], { minimum, maximum });
+  return output === undefined ? undefined : Object.freeze(output);
 }
 const COMMON = ["expectedActorKey", "confirmUnverifiedEffect"];
 const INPUT_KEYS: Readonly<Record<JiraIssueLifecycleMutation, ReadonlySet<string>>> = {

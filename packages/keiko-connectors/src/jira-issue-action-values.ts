@@ -11,7 +11,7 @@ import {
 import { asRecord } from "./atlassian-sync-classify.js";
 import { jiraCommentVisibility, type JiraCommentVisibility } from "./jira-comment-visibility.js";
 import { jiraNativeId } from "./jira-native-values.js";
-import { savedExactKeys, savedText } from "./jira-saved-configuration-values.js";
+import { savedDistinctList, savedExactKeys, savedText } from "./jira-saved-configuration-values.js";
 
 export {
   JIRA_ISSUE_ACTION_MUTATIONS,
@@ -96,19 +96,13 @@ function recipient(value: unknown): NotifyIssueInput["users"][number] | undefine
     : undefined;
 }
 function users(value: unknown): NotifyIssueInput["users"] | undefined {
-  if (!Array.isArray(value) || value.length === 0 || value.length > 50) return undefined;
-  const result: { key: string; name: string }[] = [];
-  const keys = new Set<string>();
-  const names = new Set<string>();
-  for (const entry of value) {
-    const user = recipient(entry);
-    if (user === undefined || keys.has(user.key) || names.has(user.name.toLowerCase()))
-      return undefined;
-    keys.add(user.key);
-    names.add(user.name.toLowerCase());
-    result.push(user);
-  }
-  return Object.freeze(result);
+  const result = savedDistinctList(
+    value,
+    recipient,
+    (user) => [user.key, user.name.toLowerCase()],
+    { minimum: 1, maximum: 50 },
+  );
+  return result === undefined ? undefined : Object.freeze(result);
 }
 function pin(args: CatalogJsonObject, common: Common): PinCommentInput | undefined {
   const expectedVisibility = jiraCommentVisibility(args.expectedVisibility);

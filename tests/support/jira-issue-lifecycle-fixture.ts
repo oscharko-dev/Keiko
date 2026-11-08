@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { actorReadback, readbackFault, reviewedWriteRefusal } from "./jira-fixture-readback.js";
 import type { AtlassianWriteHttpOutcome } from "../../packages/keiko-connectors/src/atlassian-write-http.js";
 import type { JiraMutationRequest } from "../../packages/keiko-connectors/src/jira-managed-mutation-metadata.js";
 import type { JiraIssueLifecyclePorts } from "../../packages/keiko-connectors/src/jira-managed-issue-lifecycle.js";
@@ -31,7 +32,7 @@ export function issueLifecycleFixture(selected: LifecycleCase) {
   function read(path: string): AtlassianWriteHttpOutcome {
     if (path === "myself") {
       const count = calls.filter((call) => call.path === "myself").length;
-      return ok({ ...actor, key: (effects > 0 && controls.actorChangesAfter) || (count > 1 && controls.actorChangesBefore) ? "different-actor" : actor.key });
+      return actorReadback(actor, "different-actor", (effects > 0 && controls.actorChangesAfter) || (count > 1 && controls.actorChangesBefore));
     }
     if (path === "issue/10001/subtask") return { ok: true, status: 200, body: undefined, items: structuredClone(subtasks) };
     if (path === "issue/10001/subtask/move") return { ok: true, status: 200, body: undefined, scalar: controls.canMove };
@@ -43,12 +44,11 @@ export function issueLifecycleFixture(selected: LifecycleCase) {
   }
   const request: JiraMutationRequest = async (path, method = "GET", body, expect) => {
     calls.push({ path, method, body: structuredClone(body), expect });
-    if (effects > 0 && controls.throwReadback) throw new Error("Synthetic lifecycle readback fault");
-    if (effects > 0 && controls.denyReadback) return { ok: false, reason: "permission-denied", httpStatus: 403 };
-    if (effects > 0 && controls.missingReadback && path !== "myself") return { ok: false, reason: "not-found", httpStatus: 404 };
+    const fault = readbackFault(controls, effects, path, "Synthetic lifecycle readback fault");
+    if (fault !== undefined) return fault;
     if (method === "GET") return read(path);
-    assert.equal(path, selected.path); assert.equal(method, selected.method); assert.deepEqual(body, selected.body); assert.equal(expect, "none");
-    if (controls.reject) return { ok: false, reason: "field-validation", httpStatus: 400 };
+    const refusal = reviewedWriteRefusal(selected, controls, { path, method, body, expect });
+    if (refusal !== undefined) return refusal;
     assert.equal(++effects, 1);
     if (controls.lostAck) return { ok: false, reason: "timeout" };
     return { ok: true, status: selected.name === "jira.archive-issues" ? 200 : 204, body: undefined };

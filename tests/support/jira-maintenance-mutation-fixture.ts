@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { actorReadback } from "./jira-fixture-readback.js";
 import type { AtlassianWriteHttpOutcome } from "../../packages/keiko-connectors/src/atlassian-write-http.js";
 import { asRecord } from "../../packages/keiko-connectors/src/atlassian-sync-classify.js";
 import type { JiraMutationRequest } from "../../packages/keiko-connectors/src/jira-managed-mutation-metadata.js";
@@ -55,7 +56,7 @@ export function maintenanceMutationFixture(selected: MaintenanceCase) {
   function read(path: string): AtlassianWriteHttpOutcome {
     if (path === "myself") {
       const count = calls.filter((call) => call.path === "myself").length;
-      return ok({ ...actor, key: (effects > 0 && controls.actorChangesAfter) || (count > 1 && controls.actorChangesBefore) ? "other-actor" : actor.key });
+      return actorReadback(actor, "other-actor", (effects > 0 && controls.actorChangesAfter) || (count > 1 && controls.actorChangesBefore));
     }
     if (path === "cluster/nodes") return { ok: true, status: 200, body: undefined, items: structuredClone(nodes) };
     if (path === "cluster/zdu/state") return ok(record(cluster));

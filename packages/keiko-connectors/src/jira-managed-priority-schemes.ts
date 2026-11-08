@@ -8,20 +8,17 @@ import { boundJiraReadResult } from "./jira-managed-issue-reads.js";
 import { jiraReadFailure, projectJiraCollection, remoteJiraPage } from "./jira-managed-metadata.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { jiraPrioritySchemeProjection } from "./jira-managed-project-associations.js";
-import { executeJiraSelectedRead, selectJiraReadPage, type JiraReadResponse } from "./jira-managed-read-request.js";
+import { executeJiraSelectedRead, selectJiraListOrIdPage, type JiraReadResponse, type JiraReadSelection } from "./jira-managed-read-request.js";
 import { jiraNativeId } from "./jira-native-values.js";
 
 export const JIRA_PRIORITY_SCHEME_READS = JIRA_READ_TOOL_FAMILIES.prioritySchemes;
 type PriorityRead = (typeof JIRA_PRIORITY_SCHEME_READS)[number];
 const READS: ReadonlySet<string> = new Set(JIRA_PRIORITY_SCHEME_READS);
-interface Selection {
-  readonly path: string;
-  readonly startAt: number;
-  readonly maxResults: number;
+interface Selection extends JiraReadSelection {
   readonly schemeId?: string;
 }
 function selection(name: PriorityRead, args: CatalogJsonObject): Selection | undefined {
-  const page = selectJiraReadPage(args, new Set(name === "jira.priority-schemes" ? ["startAt", "maxResults"] : ["schemeId"]));
+  const page = selectJiraListOrIdPage(args, name === "jira.priority-schemes", "schemeId");
   if (page === undefined) return undefined;
   if (name === "jira.priority-schemes") return { ...page,
     path: `priorityschemes?${new URLSearchParams({ startAt: String(page.startAt), maxResults: String(page.maxResults) }).toString()}` };

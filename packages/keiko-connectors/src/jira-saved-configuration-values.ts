@@ -64,6 +64,29 @@ export function savedExactKeys(
 export function savedText(value: unknown, max: number, empty = false): value is string {
   return jiraNativeText(value, max, empty) && !/\p{Surrogate}/u.test(value);
 }
+/** Projects a bounded array whose items are pairwise distinct by both identity strings. */
+export function savedDistinctList<T>(
+  value: unknown,
+  project: (raw: unknown) => T | undefined,
+  identities: (item: T) => readonly [string, string],
+  bounds: { readonly minimum: number; readonly maximum: number },
+): T[] | undefined {
+  if (!Array.isArray(value) || value.length < bounds.minimum || value.length > bounds.maximum)
+    return undefined;
+  const output: T[] = [];
+  const firsts = new Set<string>();
+  const seconds = new Set<string>();
+  for (const raw of value) {
+    const item = project(raw);
+    if (item === undefined) return undefined;
+    const [first, second] = identities(item);
+    if (firsts.has(first) || seconds.has(second)) return undefined;
+    firsts.add(first);
+    seconds.add(second);
+    output.push(item);
+  }
+  return output;
+}
 export function savedName(value: unknown): value is string {
   return jiraNativeName(value, 255) && !/\p{Surrogate}/u.test(value);
 }

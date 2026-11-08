@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { readbackFault, reviewedWriteRefusal } from "./jira-fixture-readback.js";
 import type { JiraMutationRequest } from "../../packages/keiko-connectors/src/jira-managed-mutation-metadata.js";
 import type { JiraProjectLifecyclePorts } from "../../packages/keiko-connectors/src/jira-project-lifecycle-ports.js";
 import type { JiraProjectLifecycleMutation, ProjectLifecycleReceipt } from "../../packages/keiko-connectors/src/jira-project-lifecycle-values.js";
@@ -46,12 +47,11 @@ export function projectLifecycleFixture(selected: ProjectCase) {
   }
   const request: JiraMutationRequest = async (path, method = "GET", body, expect) => {
     calls.push({ path, method, body: structuredClone(body), expect });
-    if (effects > 0 && controls.throwReadback) throw new Error("Synthetic project readback failure");
-    if (effects > 0 && controls.denyReadback) return { ok: false, reason: "permission-denied", httpStatus: 403 };
-    if (effects > 0 && controls.missingReadback && path !== "myself") return { ok: false, reason: "not-found", httpStatus: 404 };
+    const fault = readbackFault(controls, effects, path, "Synthetic project readback failure");
+    if (fault !== undefined) return fault;
     if (method === "GET") return read(path);
-    assert.equal(path, selected.path); assert.equal(method, selected.method); assert.deepEqual(body, selected.body); assert.equal(expect, "none");
-    if (controls.reject) return { ok: false, reason: "field-validation", httpStatus: 400 };
+    const refusal = reviewedWriteRefusal(selected, controls, { path, method, body, expect });
+    if (refusal !== undefined) return refusal;
     assert.equal(++effects, 1);
     if (selected.name === "jira.archive-project") project.archived = true;
     if (selected.name === "jira.restore-project") project.archived = false;

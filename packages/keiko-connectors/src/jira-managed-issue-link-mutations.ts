@@ -5,13 +5,14 @@ import {
   gateJiraMutationByTemplates,
   type JiraIssueTemplateSource,
 } from "./jira-managed-template-gate.js";
-import { dispatchFailure, JiraAcknowledgedMutationError } from "./jira-mutation-failure.js";
+import { JiraAcknowledgedMutationError } from "./jira-mutation-failure.js";
 import { jiraNativeId } from "./jira-native-values.js";
 import { asRecord } from "./atlassian-sync-classify.js";
 import {
   bindLinkActor,
   linkActorInput,
   linkConflict,
+  runLinkMutation,
   linkInvalid,
   linkUnchanged,
   LINK_MALFORMED,
@@ -351,17 +352,16 @@ export async function executeJiraIssueLinkMutation(
   check = false,
   templates?: JiraIssueTemplateSource,
 ): Promise<JiraLinkMutationAttempt> {
-  const selected = input(operation, args);
-  if (selected === undefined)
-    return linkInvalid(
-      "Review both issues, the connected actor key and exact link type ID/name/inward/outward labels. Delete also requires the native link ID; optional comment side effects are unavailable.",
-    );
-  const prior = await admitIssueLink(request, selected, templates);
-  if (!prior.ok) return prior;
-  if (check) return { ok: true, receipt: {} };
-  const receipt = receiptFor(selected, prior.value);
-  const response = await dispatchIssueLink(request, selected, prior.value);
-  if (!response.ok) return { ...dispatchFailure(response), receipt };
-  if (response.status < 200 || response.status >= 300) return { ...LINK_MALFORMED, receipt };
-  return confirm(request, selected, prior.value, receipt);
+  return runLinkMutation(
+    {
+      selected: input(operation, args),
+      invalid:
+        "Review both issues, the connected actor key and exact link type ID/name/inward/outward labels. Delete also requires the native link ID; optional comment side effects are unavailable.",
+      admit: (selected) => admitIssueLink(request, selected, templates),
+      receiptFor,
+      dispatch: (selected, state) => dispatchIssueLink(request, selected, state),
+      settle: (selected, state, receipt) => confirm(request, selected, state, receipt),
+    },
+    check,
+  );
 }

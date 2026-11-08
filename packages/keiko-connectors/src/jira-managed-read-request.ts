@@ -22,6 +22,19 @@ export function selectJiraReadPage(
   return startAt === undefined || maxResults === undefined ? undefined : { startAt, maxResults };
 }
 
+/** A selected native GET: the closed path plus the validated page limits. */
+export interface JiraReadSelection extends JiraReadPageSelection {
+  readonly path: string;
+}
+/** A list read allows the page arguments; a by-id read allows only its one identity argument. */
+export function selectJiraListOrIdPage(
+  args: CatalogJsonObject,
+  list: boolean,
+  idArgument: string,
+): JiraReadPageSelection | undefined {
+  return selectJiraReadPage(args, new Set(list ? ["startAt", "maxResults"] : [idArgument]));
+}
+
 /** Share transport refusal handling after each owner has selected its closed native GET. */
 export async function executeJiraSelectedRead<S extends { readonly path: string }>(
   selected: S | undefined,

@@ -14,7 +14,7 @@ import {
   bindLinkIssue,
   linkActorInput,
   linkConflict,
-  linkInvalid,
+  runLinkMutation,
   linkUnchanged,
   LINK_MALFORMED,
   sameLinkParent,
@@ -359,24 +359,25 @@ export async function executeJiraRemoteLinkMutation(
   check = false,
   templates?: JiraIssueTemplateSource,
 ): Promise<JiraLinkMutationAttempt> {
-  const selected = input(operation, args);
-  if (selected === undefined)
-    return linkInvalid(
-      "Review the exact native issue, connected actor and complete remote link value. POST requires globalId and either expectAbsent:true or the complete expected snapshot; update/delete require the exact existing snapshot. Every nullable replacement field must be explicit.",
-    );
-  const prior = await admitRemoteLink(request, selected, templates);
-  if (!prior.ok) return prior;
-  if (check) return { ok: true, receipt: {} };
-  const receipt = receiptFor(selected, prior.value);
-  const response = await dispatchRemoteLink(request, operation, selected, prior.value);
-  if (!response.ok) return { ...dispatchFailure(response), receipt };
-  if (response.status < 200 || response.status >= 300) return { ...LINK_MALFORMED, receipt };
-  const acknowledged = remoteAcknowledgement(
-    operation,
-    selected,
-    prior.value,
-    receipt,
-    response.body,
+  return runLinkMutation(
+    {
+      selected: input(operation, args),
+      invalid:
+        "Review the exact native issue, connected actor and complete remote link value. POST requires globalId and either expectAbsent:true or the complete expected snapshot; update/delete require the exact existing snapshot. Every nullable replacement field must be explicit.",
+      admit: (selected) => admitRemoteLink(request, selected, templates),
+      receiptFor,
+      dispatch: (selected, state) => dispatchRemoteLink(request, operation, selected, state),
+      settle: (selected, state, receipt, accepted) => {
+        const acknowledged = remoteAcknowledgement(
+          operation,
+          selected,
+          state,
+          receipt,
+          accepted.body,
+        );
+        return confirm(request, selected, state, acknowledged.receipt, acknowledged.mismatched);
+      },
+    },
+    check,
   );
-  return confirm(request, selected, prior.value, acknowledged.receipt, acknowledged.mismatched);
 }

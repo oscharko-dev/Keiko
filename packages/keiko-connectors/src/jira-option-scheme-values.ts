@@ -15,7 +15,12 @@ import {
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { asRecord } from "./atlassian-sync-classify.js";
 import { jiraNativeId } from "./jira-native-values.js";
-import { savedExactKeys, savedName, savedText } from "./jira-saved-configuration-values.js";
+import {
+  savedDistinctList,
+  savedExactKeys,
+  savedName,
+  savedText,
+} from "./jira-saved-configuration-values.js";
 
 export { JIRA_OPTION_SCHEME_MUTATIONS };
 export type { JiraOptionSchemeMutation };
@@ -134,19 +139,15 @@ function schemeProject(value: unknown): SchemeProject | undefined {
     : { id: raw.id, key: raw.key, name: raw.name };
 }
 export function schemeProjects(value: unknown): readonly SchemeProject[] | undefined {
-  if (!Array.isArray(value) || value.length > JIRA_SCHEME_PROJECTS_MAX) return undefined;
-  const result: SchemeProject[] = [];
-  const ids = new Set<string>();
-  const names = new Set<string>();
-  for (const item of value) {
-    const project = schemeProject(item);
-    if (project === undefined || ids.has(project.id) || names.has(project.key.toUpperCase()))
-      return undefined;
-    ids.add(project.id);
-    names.add(project.key.toUpperCase());
-    result.push(project);
-  }
-  return result;
+  return savedDistinctList(
+    value,
+    schemeProject,
+    (project) => [project.id, project.key.toUpperCase()],
+    {
+      minimum: 0,
+      maximum: JIRA_SCHEME_PROJECTS_MAX,
+    },
+  );
 }
 function associationChange(operation: JiraOptionSchemeMutation): SchemeSelection["change"] {
   switch (operation) {

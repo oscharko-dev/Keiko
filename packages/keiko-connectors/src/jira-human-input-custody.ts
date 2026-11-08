@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { JiraHumanInputView } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { AtlassianCredentialMetadata } from "@oscharko-dev/keiko-contracts";
+import { boundLivePod, type JiraLivePod } from "./jira-live-pod-binding.js";
 import type { AtlassianCredentialVaultPort } from "./atlassian-credential-custody.js";
 import {
   sweepExpiredJiraPrivateRecords,
@@ -90,26 +91,8 @@ function fail(code: JiraHumanInputRefusal): never {
 function now(owner: Owner): number {
   return (owner.now ?? Date.now)();
 }
-type LivePod = NonNullable<
-  Extract<AtlassianCredentialMetadata, { deployment: "data-center" }>["livePod"]
->;
-function selectedPod(owner: Owner, binding: JiraHumanInputBinding): LivePod {
-  const metadata = owner.metadata(binding.authRef);
-  if (
-    metadata?.deployment !== "data-center" ||
-    metadata.generation !== binding.authenticationGeneration
-  )
-    return fail("binding-changed");
-  const pod = metadata.livePod;
-  if (
-    pod?.verificationRevision !== binding.verificationRevision ||
-    pod.ownerDigest !== binding.principalDigest ||
-    pod.verificationStatus !== "ok" ||
-    pod.verificationInProgress ||
-    pod.credentialOperation !== undefined
-  )
-    return fail("binding-changed");
-  return pod;
+function selectedPod(owner: Owner, binding: JiraHumanInputBinding): JiraLivePod {
+  return boundLivePod(owner.metadata, binding) ?? fail("binding-changed");
 }
 function selected(owner: Owner, candidate: JiraHumanInputBinding): JiraHumanInputBinding {
   const binding = copyHumanInputBinding(candidate);
