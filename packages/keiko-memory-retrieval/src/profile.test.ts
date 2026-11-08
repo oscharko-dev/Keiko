@@ -38,11 +38,20 @@ describe("selectStandingProfile", () => {
     expect(ids([...candidates].reverse())).toEqual(ids(candidates));
   });
 
+  it("keeps a stated preference ahead of any number of newer learned facts", () => {
+    const facts = Array.from({ length: 10_000 }, (_, index) =>
+      candidate({ id: `f${String(index)}`, type: "semantic-fact", createdAt: 5_000 + index }, 3),
+    );
+    const tables = candidate({ id: "tables", body: "Bevorzugt Tabellen.", createdAt: 1 });
+    expect(ids([...facts, tables])[0]).toBe("tables");
+  });
+
   it("takes only the person's own accepted, unsuppressed facts of the standing types", () => {
     const profile = selectStandingProfile(
       [
         candidate({ id: "keep", type: "procedural" }),
         candidate({ id: "fact", type: "semantic-fact" }),
+        candidate({ id: "pinned-fact", type: "semantic-fact", pinned: true }),
         candidate({ id: "project", scope: projectScope() }),
         candidate({ id: "episode", type: "episodic" }),
         candidate({ id: "proposed", status: "proposed" }),
@@ -52,10 +61,10 @@ describe("selectStandingProfile", () => {
       ],
       NOW,
     );
-    expect(profile.entries.map((entry) => entry.id)).toEqual(["fact", "keep"]);
+    expect(profile.entries.map((entry) => entry.id)).toEqual(["pinned-fact", "keep"]);
     expect(profile.dropped).toEqual({
       "not-private": 1,
-      "not-standing-type": 1,
+      "not-standing-type": 2,
       "not-accepted": 2,
       suppressed: 1,
       excluded: 1,
@@ -114,7 +123,11 @@ describe("selectStandingProfile", () => {
   });
 
   it("counts a repeated candidate once", () => {
-    const record: MemoryRecord = buildRecord({ id: "same", status: "accepted" });
+    const record: MemoryRecord = buildRecord({
+      id: "same",
+      status: "accepted",
+      type: "preference",
+    });
     expect(
       selectStandingProfile(
         [

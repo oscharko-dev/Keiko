@@ -569,7 +569,9 @@ function insertAcceptedMemory(
     id: makeMemoryId(`mem-${String(now)}`),
     schemaVersion: "1",
     scope,
-    type: "preference",
+    // A fact, not a preference: preferences reach every answer through the standing profile
+    // (#4228), and this fixture proves retrieval by the question.
+    type: "semantic-fact",
     body,
     provenance: {
       sourceKind: "explicit-user-instruction",

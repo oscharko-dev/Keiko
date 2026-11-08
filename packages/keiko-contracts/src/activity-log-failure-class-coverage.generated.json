@@ -4330,6 +4330,12 @@
           "analyzerProjection": "timeline",
           "safeContextFields": [
             {
+              "name": "belowFloorMemoryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "compactedHistoryMessages",
               "type": "integer",
               "dataClass": "count",
@@ -4366,6 +4372,18 @@
               "required": true
             },
             {
+              "name": "profileEntryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "profileTokens",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "promptTokens",
               "type": "integer",
               "dataClass": "count",
@@ -4376,6 +4394,12 @@
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "retrievedMemoryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             },
             {
               "name": "skillDigest",

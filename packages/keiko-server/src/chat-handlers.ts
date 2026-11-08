@@ -1,4 +1,9 @@
 import { browserChatMessages } from "./chat-message-projection.js";
+import {
+  EMPTY_STANDING_PROFILE,
+  standingProfileForUser,
+  standingProfileWire,
+} from "./memory-profile.js";
 import { parseDocumentContext } from "./chat-document-context.js";
 import {
   createChatToolTurn,
@@ -25,7 +30,7 @@ import {
   markdownSkillSelectionRefusal,
 } from "./markdown-skill-selection-admission.js";
 import { markdownSkillCompactionReserve } from "./markdown-skill-prompt.js";
-import { conversationSystemPrompt } from "./conversation-prompt.js";
+import { conversationSystemPrompt, renderStandingProfileBlock } from "./conversation-prompt.js";
 import { withMarkdownSkillAdmission } from "./markdown-skill-admission.js";
 import { CancelledError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { hasGroundingScope, hasMixedJiraGroundingScope } from "./chat-grounding.js";
@@ -95,7 +100,7 @@ import type {
   MemoryRecord,
   MemoryScope,
 } from "@oscharko-dev/keiko-contracts/memory";
-import { retrieveMemoryContext } from "@oscharko-dev/keiko-memory-retrieval";
+import { retrieveMemoryContext, type StandingProfile } from "@oscharko-dev/keiko-memory-retrieval";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import {
   isMaintenanceDue,
@@ -1327,9 +1332,13 @@ function recordConversationMemoryRetrieval(
 
 function toMemoryResult(
   retrieval: ReturnType<typeof retrieveMemoryContext>,
+  profile: StandingProfile = EMPTY_STANDING_PROFILE,
 ): ConversationMemoryResultWire {
   return {
     context: {
+      ...(profile.entries.length > 0 ? { profile: standingProfileWire(profile) } : {}),
+      belowFloorCount: retrieval.omitted.filter((entry) => entry.reason === "below-threshold")
+        .length,
       enabled: true,
       text: retrieval.contextBlock.text,
       memories: retrieval.contextBlock.memories.map((item) => ({
@@ -1415,6 +1424,11 @@ export function maybeRunChatAutoMaintenance(
 // BFF route also uses (#204, O-F2/O-F3/O-F4/O-P1). semanticById is gated on the secondary-model
 // egress check; all signals are passed only when present so a fresh vault ranks byte-identically, and
 // conversation recall defaults to RRF unless KEIKO_MEMORY_FUSION=weighted-sum is set.
+// Provisional: fewer retrieved memories than the shared default of 12, because the standing profile
+// now carries the facts that apply to every answer. Lab measurement of answer accuracy against
+// over-application sets the final value (#4228).
+export const CHAT_MAX_RETRIEVED_MEMORIES = 6;
+
 async function retrieveChatMemory(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
@@ -1422,6 +1436,7 @@ async function retrieveChatMemory(
   content: string,
   budgetTokens: number | undefined,
   nowMs: number,
+  profile: StandingProfile = EMPTY_STANDING_PROFILE,
 ): Promise<ReturnType<typeof retrieveMemoryContext>> {
   const semanticGate = semanticRetrievalGateForText(
     deps,
@@ -1446,6 +1461,12 @@ async function retrieveChatMemory(
       ...(signals.embeddingById.size > 0 ? { embeddingById: signals.embeddingById } : {}),
       ...(signals.mmrLambda !== undefined ? { mmrLambda: signals.mmrLambda } : {}),
       fusion: conversationFusionMode(deps),
+      // #4228: only memories the question is about, never a profile fact a second time.
+      strictRelevanceFloor: true,
+      maxIncluded: CHAT_MAX_RETRIEVED_MEMORIES,
+      ...(profile.entries.length > 0
+        ? { excludeMemoryIds: new Set(profile.entries.map((entry) => entry.id)) }
+        : {}),
       nowMs,
     },
     vaultAsQueryPort(vault),
@@ -1471,19 +1492,22 @@ export async function buildMemoryResult(
     return emptyMemoryResult(true);
   }
   const nowMs = Date.now();
+  // The profile is part of the person's memory budget; retrieval gets what it leaves.
+  const profile = standingProfileForUser(vault, context.userId, nowMs);
   const retrieval = await retrieveChatMemory(
     deps,
     vault,
     scopes,
     request.content,
-    budgetTokens,
+    budgetTokens === undefined ? undefined : Math.max(0, budgetTokens - profile.tokens),
     nowMs,
+    profile,
   );
   // Autonomous maintenance (#204, O-V4): now that memory is actively in use, opportunistically run
   // ONE bounded, rate-limited maintenance pass so the decay/forget curve advances without a
   // free-running background loop.
   maybeRunChatAutoMaintenance(deps, vault);
-  const result = toMemoryResult(retrieval);
+  const result = toMemoryResult(retrieval, profile);
   recordConversationMemoryRetrieval(deps, context, result.context.memories);
   return result;
 }
@@ -1971,6 +1995,7 @@ function finalizeGatewayAssembly(
   deps: UiHandlerDeps,
   modelId: string | undefined,
   historyDocumentCandidates: number,
+  memory: ConversationMemoryResultWire,
 ): GatewayPromptAssembly {
   if (selected === undefined) {
     throw new ContextOverflowError(
@@ -1982,6 +2007,7 @@ function finalizeGatewayAssembly(
     selected,
     request.attachments.filter((attachment) => attachment.kind === "image").length,
     historyDocumentCandidates,
+    memory,
   );
   if (selected.compaction !== undefined)
     persistRequiredChatContinuityCheckpoint(deps, {
@@ -1991,6 +2017,21 @@ function finalizeGatewayAssembly(
       correlationId,
     });
   return selected;
+}
+
+// The standing profile rides with the system prompt, ahead of a rehydrated continuity context, so
+// the existing scaffold reserve and token accounting cover it (#4228).
+function joinSystemContext(...parts: readonly (string | undefined)[]): string | undefined {
+  const present = parts.filter((part): part is string => part !== undefined && part.length > 0);
+  return present.length === 0 ? undefined : present.join("\n\n");
+}
+
+function systemContextForTurn(
+  memory: ConversationMemoryResultWire,
+  snapshot: GatewayTurnSnapshot,
+): string | undefined {
+  const profileFacts = memory.context.profile?.entries.map((entry) => entry.text) ?? [];
+  return joinSystemContext(renderStandingProfileBlock(profileFacts), snapshot.rehydratedContext);
 }
 
 export function buildGatewayAssembly(
@@ -2027,7 +2068,7 @@ export function buildGatewayAssembly(
       snapshot.historyRevision,
       correlationId,
     ),
-    continuityContextText: snapshot.rehydratedContext,
+    continuityContextText: systemContextForTurn(memory, snapshot),
     earlierCompaction: snapshot.earlierCompaction,
     documentContext: request.documentContext,
     redactionSecrets: currentRedactionSecrets(deps),
@@ -2040,6 +2081,7 @@ export function buildGatewayAssembly(
     deps,
     modelId,
     historyPrefix.reduce((count, message) => count + (message.documentContext?.length ?? 0), 0),
+    memory,
   );
 }
 
@@ -3145,13 +3187,11 @@ export async function persistGitChangeDescriptionTurn(
     surface: "git-description",
   });
   try {
-    const memory = await resolveBufferedMemory(
-      deps,
-      prepared,
-      admission,
-      abortSignal,
-      ctx.correlationId,
-    );
+    // A change description is written from the diff alone and never sends memory, so it does
+    // not retrieve any either (#4228 R10); cancellation still settles before the provider call.
+    const memory =
+      bufferedTurnCancellationResult(deps, prepared, abortSignal, admission) ??
+      emptyMemoryResult(false);
     if (isRouteResult(memory)) return memory;
     return await completeGitChangeDescriptionTurn(
       ctx,

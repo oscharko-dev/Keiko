@@ -264,7 +264,10 @@ import {
   resolveConversationMemoryContext,
   type ConversationMemoryRuntimeContext,
 } from "./memory-conversation-context.js";
-import { renderConversationMemoryContextBlock } from "./conversation-prompt.js";
+import {
+  renderConversationMemoryContextBlock,
+  renderStandingProfileBlock,
+} from "./conversation-prompt.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { correlationIdOrUnknown } from "./correlation.js";
 import { evidenceRetentionObserver } from "./evidence-retention-log.js";
@@ -3261,12 +3264,20 @@ function persistGroundedContinuity(
   });
 }
 
+// The grounded answer carries the standing profile ahead of the retrieved memories (#4228). Both
+// stay untrusted data; the sent evidence alone decides what a source says.
 function groundedAnswerContent(content: string, memory: ConversationMemoryResultWire): string {
+  if (!memory.context.enabled) return content;
   const memoryText = memory.context.text.trim();
-  if (!memory.context.enabled || memoryText.length === 0) return content;
-  return ["User question:", content, "", renderConversationMemoryContextBlock(memoryText)].join(
-    "\n",
+  const profile = renderStandingProfileBlock(
+    memory.context.profile?.entries.map((entry) => entry.text) ?? [],
   );
+  const blocks = [
+    ...(profile === undefined ? [] : [profile]),
+    ...(memoryText.length === 0 ? [] : [renderConversationMemoryContextBlock(memoryText)]),
+  ];
+  if (blocks.length === 0) return content;
+  return ["User question:", content, "", blocks.join("\n\n")].join("\n");
 }
 
 function groundedMemoryPreparationFailure(

@@ -40,7 +40,9 @@ function seedMemory(vault: MemoryVaultStore): void {
     id: "memory-source-preference" as MemoryId,
     schemaVersion: "1",
     scope: { kind: "user", userId: "local-operator" as MemoryUserId },
-    type: "preference",
+    // A fact, not a preference: preferences reach every answer through the standing profile
+    // (#4228), and this fixture proves retrieval by the question.
+    type: "semantic-fact",
     body: MEMORY,
     provenance: {
       sourceKind: "explicit-user-instruction",

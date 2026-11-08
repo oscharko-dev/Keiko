@@ -2,7 +2,7 @@
 //
 // A small, bounded set of the person's standing facts is supplied with every Chat answer,
 // independently of the question. Retrieval by relevance decides everything else. Membership is
-// deterministic and needs no model: the person's own private facts of the standing types, ordered
+// deterministic and needs no model: the person's own private preferences and procedures, ordered
 // by how often the person confirmed them and then by how recently they were stated (a supersession
 // inserts a new record, so its creation time is the statement's recency). A pinned fact always
 // competes for a place; a fact the person removed from the profile carries PROFILE_EXCLUDED_TAG and
@@ -20,11 +20,13 @@ import { DEFAULT_STALE_CONFIDENCE_THRESHOLD } from "./types.js";
 /** Tag that keeps a fact out of the standing profile until the person pins it again. */
 export const PROFILE_EXCLUDED_TAG = "profile:excluded";
 
-/** Record types that describe how the person works: role, language, format, constraints. */
+// Record types that describe how the person works: language, format, way of working, standing
+// constraints. Other facts about the person enter only when pinned: the learner does not mark which
+// facts are identity-like, and taking every fact would supply a small vault whole to every answer,
+// which is what retrieval by relevance is for.
 export const STANDING_PROFILE_TYPES: readonly MemoryType[] = Object.freeze([
   "preference",
   "procedural",
-  "semantic-fact",
 ]);
 
 export interface StandingProfileCaps {

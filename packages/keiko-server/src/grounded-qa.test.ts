@@ -1003,7 +1003,9 @@ function insertGroundedTestMemory(vault: MemoryVaultStore, id: string, body: str
     id: id as MemoryId,
     schemaVersion: "1",
     scope: { kind: "user", userId: "local-operator" as MemoryUserId },
-    type: "preference",
+    // A fact, not a preference: preferences reach every answer through the standing profile
+    // (#4228), and this fixture proves retrieval by the question.
+    type: "semantic-fact",
     body,
     provenance: {
       sourceKind: "explicit-user-instruction",

@@ -34,6 +34,7 @@ import {
 } from "../../../tests/support/activity-log-proof.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import type { ConversationMemoryResultWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   buildMemoryResult,
   collectMemoryActions,
@@ -134,6 +135,13 @@ function scriptedModel(items: readonly ScriptedItem[]): ModelPort {
   };
 }
 
+// What an answer receives from memory: the memories retrieved for the question and the standing
+// profile, which carries the person's preferences to every answer (#4228).
+function suppliedMemoryText(result: ConversationMemoryResultWire): string {
+  const profile = result.context.profile?.entries.map((entry) => entry.text) ?? [];
+  return [result.context.text, ...profile].join("\n");
+}
+
 function makeDeps(
   vault: MemoryVaultStore,
   items: readonly ScriptedItem[],
@@ -224,8 +232,8 @@ describe("a changed fact replaces the older one", () => {
       memory: { enabled: true, budgetTokens: 900, context: {} },
     } as unknown as SendDesktopChatRequest;
     const retrieved = await buildMemoryResult(request, makeDeps(vault, []), ctx);
-    expect(retrieved.context.text).toContain(newer);
-    expect(retrieved.context.text).not.toContain(older);
+    expect(suppliedMemoryText(retrieved)).toContain(newer);
+    expect(suppliedMemoryText(retrieved)).not.toContain(older);
   });
 
   it.each([
@@ -581,7 +589,7 @@ describe("what a fact keeps from the person's words", () => {
         memory: { enabled: true, budgetTokens: 900, context: {} },
       } as unknown as SendDesktopChatRequest;
       const retrieved = await buildMemoryResult(request, makeDeps(vault, []), ctx);
-      expect(retrieved.context.text).toContain(evidence);
+      expect(suppliedMemoryText(retrieved)).toContain(evidence);
     },
   );
 

@@ -2032,6 +2032,26 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      profileEntryCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      profileTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      retrievedMemoryCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      belowFloorMemoryCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       tokensBefore: {
         type: "integer",
         dataClass: "count",

@@ -1077,14 +1077,30 @@ export interface ConversationMemoryContextEntryWire {
   readonly capturedAt: number;
 }
 
+/** One fact of the standing profile (#4228): supplied with every answer, not marked per answer. */
+export interface ConversationStandingProfileEntryWire {
+  readonly memoryId: string;
+  readonly text: string;
+}
+
+export interface ConversationStandingProfileWire {
+  readonly entries: readonly ConversationStandingProfileEntryWire[];
+  readonly tokens: number;
+}
+
 export interface ConversationMemoryContextWire {
   readonly enabled: boolean;
   readonly text: string;
+  /** Memories retrieved for this question; the answer marker shows exactly these. */
   readonly memories: readonly ConversationMemoryContextEntryWire[];
   readonly budget: {
     readonly tokens: number;
     readonly used: number;
   };
+  /** The person's standing profile, supplied with the system prompt of every answer. */
+  readonly profile?: ConversationStandingProfileWire;
+  /** How many candidate memories the relevance floor held back for this question. */
+  readonly belowFloorCount?: number;
 }
 
 export type ConversationMemoryActionWire =
