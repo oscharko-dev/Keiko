@@ -145,7 +145,10 @@ async function describe(
 ): Promise<ManagedMcpToolResult> {
   context.signal.throwIfAborted();
   requireDispatch(context.beforeEffect(), "denied", "effect-denied");
-  const invalid: ManagedMcpToolResult = { data: { ...INVALID_DESCRIPTION, items: [] } };
+  const invalid: ManagedMcpToolResult = {
+    isError: true,
+    data: { ...INVALID_DESCRIPTION, items: [] },
+  };
   const identities = args.identities;
   if (!Array.isArray(identities) || !identities.every((identity) => typeof identity === "string"))
     return invalid;
@@ -207,7 +210,7 @@ function tool(
       toolRef: createToolRef(`keiko.${name}`, 2),
       description: discovery
         ? "List implemented Jira Data Center operations by stable identity. This reads local catalog metadata, not Jira data. Page until the required operation is found, then use jira.describe to load its typed tool."
-        : "Select Jira operation identities returned by jira.discover. Replaces the selected Jira tool set for the next model round; typed argument schemas are offered there subject to current authority and budgets. Include all operations needed together. An empty list clears the selection. Unknown identities or a subset exceeding the model or authority budget are refused without truncation.",
+        : "Select additional native Jira operation identities returned by jira.discover. Curated Jira tools stay available. Replaces the additional selected tool set for the next model round; typed argument schemas are offered there subject to current authority and budgets. Include all additional operations needed together. An empty list clears the additional selection. Unknown identities or a subset exceeding the model or authority budget are refused without truncation.",
       inputSchema: discovery
         ? object({
             startAt: { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER },

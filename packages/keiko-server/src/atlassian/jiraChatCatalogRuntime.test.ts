@@ -9,6 +9,7 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
+import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import * as managedProvider from "../tool-catalog/managedProviderCatalog.js";
 import { createJiraChatCatalogRuntime, untracedAdvisory } from "./jiraChatCatalogRuntime.js";
 import { KNOWLEDGE_CHAT_TOOLS } from "../requirementsToolName.js";
@@ -174,6 +175,40 @@ describe("application-owned Jira catalog initialization", () => {
     }
   });
 
+  it.each([{ knowledgeScoped: true }, { knowledgeScoped: false }])(
+    "keeps the full base with selected board configuration within 262144 bytes (knowledgeScoped=$knowledgeScoped)",
+    async (scope) => {
+      const f = fixture();
+      try {
+        expect(TOOL_CATALOG_LIMITS.maxArgumentBytes).toBe(262_144);
+        const advertised = f.runtime.toolDefinitions(scope).map((tool) => tool.name);
+        const initial = await f.runtime.get(scope);
+        const initialAliases = initial.projection.tools.map((tool) => tool.alias);
+        expect(initialAliases.sort()).toEqual([...advertised].sort());
+        expect(initialAliases).not.toContain("jira_board_configuration");
+
+        const selected = await f.runtime.select(
+          ["GET /rest/agile/1.0/board/{boardId}/configuration"],
+          scope,
+        );
+        const aliases = selected.projection.tools.map((tool) => tool.alias);
+        expect([...aliases].sort()).toEqual([...advertised, "jira_board_configuration"].sort());
+        expect(new Set(aliases).size).toBe(aliases.length);
+        expect(Buffer.byteLength(JSON.stringify(selected.catalog), "utf8")).toBeLessThanOrEqual(
+          262_144,
+        );
+        for (const alias of ["jira_draft", "jira_draft_batch"])
+          expect(aliases.includes(alias)).toBe(scope.knowledgeScoped);
+        expect(f.runtime.toolDefinitions(scope).map((tool) => tool.name)).toEqual(advertised);
+        expect((await f.runtime.get(scope)).projection.tools.map((tool) => tool.alias)).toEqual(
+          initial.projection.tools.map((tool) => tool.alias),
+        );
+      } finally {
+        await f.runtime.close();
+      }
+    },
+  );
+
   it("omits the batch companion from an unrelated selection without Knowledge scopes", async () => {
     const f = fixture();
     try {
@@ -223,20 +258,34 @@ describe("application-owned Jira catalog initialization", () => {
 
   it("keeps concurrent selected schema sets isolated and the initial advertisement unchanged", async () => {
     const f = fixture();
-    const [projects, issue] = await Promise.all([
-      f.runtime.select(["GET /rest/api/2/project"]),
-      f.runtime.select(["GET /rest/api/2/issue/{issueIdOrKey}"]),
-    ]);
-    expect(projects.projection.tools.map((tool) => tool.alias)).toContain("jira_projects");
-    expect(projects.projection.tools.map((tool) => tool.alias)).not.toContain("jira_issue");
-    expect(issue.projection.tools.map((tool) => tool.alias)).toContain("jira_issue");
-    expect(issue.projection.tools.map((tool) => tool.alias)).not.toContain("jira_projects");
-    expect(f.runtime.toolDefinitions().map((tool) => tool.name)).toContain("jira_projects");
-    await projects.close();
-    expect(issue.handlerBindings.every((binding) => binding.readiness() === "ready")).toBe(true);
-    await f.runtime.close();
-    expect(issue.handlerBindings[0]?.readiness()).toBe("unavailable");
-    await expect(f.runtime.select([])).rejects.toMatchObject({ reason: "handler-unavailable" });
+    try {
+      expect(TOOL_CATALOG_LIMITS.maxArgumentBytes).toBe(262_144);
+      const advertised = f.runtime.toolDefinitions().map((tool) => tool.name);
+      expect(advertised).not.toContain("jira_board_configuration");
+      expect(advertised).not.toContain("jira_server_info");
+      const [board, server] = await Promise.all([
+        f.runtime.select(["GET /rest/agile/1.0/board/{boardId}/configuration"]),
+        f.runtime.select(["GET /rest/api/2/serverInfo"]),
+      ]);
+      const boardAliases = board.projection.tools.map((tool) => tool.alias);
+      const serverAliases = server.projection.tools.map((tool) => tool.alias);
+      expect([...boardAliases].sort()).toEqual([...advertised, "jira_board_configuration"].sort());
+      expect([...serverAliases].sort()).toEqual([...advertised, "jira_server_info"].sort());
+      expect(boardAliases).not.toContain("jira_server_info");
+      expect(serverAliases).not.toContain("jira_board_configuration");
+      for (const selected of [board, server])
+        expect(Buffer.byteLength(JSON.stringify(selected.catalog), "utf8")).toBeLessThanOrEqual(
+          262_144,
+        );
+      expect(f.runtime.toolDefinitions().map((tool) => tool.name)).toEqual(advertised);
+      await board.close();
+      expect(server.handlerBindings.every((binding) => binding.readiness() === "ready")).toBe(true);
+      await f.runtime.close();
+      expect(server.handlerBindings[0]?.readiness()).toBe("unavailable");
+      await expect(f.runtime.select([])).rejects.toMatchObject({ reason: "handler-unavailable" });
+    } finally {
+      await f.runtime.close();
+    }
   });
 
   it("refuses unknown or duplicate identities before admitting a selected host", async () => {

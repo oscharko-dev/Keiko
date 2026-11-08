@@ -307,10 +307,11 @@ function preselectKnownFixtureTools(
 ): void {
   if (catalog === undefined) throw new TypeError("Missing Jira catalog");
   if (tool === undefined && additionalTools.length === 0) return;
-  vi.spyOn(catalog, "get").mockImplementation((scope) => {
+  vi.spyOn(catalog, "get").mockImplementation(async (scope) => {
     const base = new Set(catalog.toolDefinitions(scope).map((entry) => entry.name));
-    return catalog.select(
-      jiraOperationContracts()
+    const operations = jiraOperationContracts();
+    const selected = await catalog.select(
+      operations
         .filter((entry) =>
           tool === undefined
             ? base.has(entry.declaration.name.replace(/[.-]/gu, "_")) ||
@@ -320,6 +321,21 @@ function preselectKnownFixtureTools(
         .map((entry) => entry.binding.identity),
       scope,
     );
+    if (tool === undefined) return selected;
+    if (selected.omitting === undefined) throw new TypeError("Missing fixture catalog projection");
+    const retained = new Set([tool]);
+    if (scope?.knowledgeScoped ?? true) {
+      retained.add("jira.draft-batch");
+      retained.add("jira.draft");
+    }
+    return {
+      ...selected.omitting(
+        operations
+          .filter((entry) => !retained.has(entry.declaration.name))
+          .map((entry) => entry.declaration.name),
+      ),
+      close: selected.close,
+    };
   });
 }
 
@@ -879,7 +895,8 @@ function isToolStep(body: string, step: ProviderStep): boolean {
   );
 }
 function toolArguments(step: ProviderStep, commentBody: string): string {
-  if (step === "describe") return JSON.stringify({ identities: ["GET /rest/api/2/project"] });
+  if (step === "describe")
+    return JSON.stringify({ identities: ["GET /rest/agile/1.0/board/{boardId}/configuration"] });
   if (step === "repair-write")
     return JSON.stringify({ issueKey: "KEIKO-1", body: "Changed citation repair comment" });
   if (step === "write") return JSON.stringify({ issueKey: "KEIKO-1", body: commentBody });
@@ -1047,8 +1064,10 @@ it("discovers a Jira schema on demand while retaining mixed grounding and its re
       ).tools?.map((tool) => tool.function.name) ?? [],
   );
   expect(offered[0]).toContain("jira_describe");
-  expect(offered[0]).not.toContain("jira_projects");
+  expect(offered[0]).toContain("jira_projects");
   expect(offered[1]).toContain("jira_projects");
+  expect(offered[0]).not.toContain("jira_board_configuration");
+  expect(offered[1]).toContain("jira_board_configuration");
   expect(f.jiraRequests).toEqual(["GET"]);
   expect(f.acceptedReadGrants).toHaveLength(1);
   expect(
