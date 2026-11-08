@@ -12,7 +12,6 @@ import {
 import type { ChatToolBatchProgress } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   parseJiraIssueTemplate,
-  projectJiraDescriptionInput,
   type JiraIssueTemplate,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -27,7 +26,12 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
-import { field, LINKS_FIELD, response } from "../../../../tests/support/jira-managed-remote.js";
+import {
+  field,
+  LABEL_FIELD,
+  LINKS_FIELD,
+  response,
+} from "../../../../tests/support/jira-managed-remote.js";
 import { podFixture, specification, type PodFixture } from "../_requirementSupport.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { resetRequirementTurnCache } from "../requirement-inventory.js";
@@ -56,6 +60,7 @@ const CREATE_FIELDS = [
     name: "Description",
     schema: { type: "string", system: "description" },
   },
+  LABEL_FIELD,
   LINKS_FIELD,
 ];
 
@@ -81,7 +86,10 @@ function templateFor(section: string, ...frontMatter: readonly string[]): JiraIs
   return result.template;
 }
 
-function connection(templates: JiraIssueTemplateSet | undefined): JiraManagedConnection {
+function connection(
+  templates: JiraIssueTemplateSet | undefined,
+  createFields: readonly Record<string, unknown>[],
+): JiraManagedConnection {
   const http: AtlassianHttpBodyPort = (request) => {
     const path = new URL(request.url).pathname;
     if (path.endsWith("/project/DENIED")) return Promise.resolve(response({}, 401));
@@ -111,11 +119,11 @@ function connection(templates: JiraIssueTemplateSet | undefined): JiraManagedCon
     if (path.includes("createmeta"))
       return Promise.resolve(
         response({
-          values: CREATE_FIELDS,
+          values: createFields,
           start: 0,
           size: 100,
           last: true,
-          total: CREATE_FIELDS.length,
+          total: createFields.length,
         }),
       );
     return Promise.resolve(response({}, 404));
@@ -180,6 +188,7 @@ interface Harness {
     args: Record<string, unknown>,
     options?: {
       readonly templates?: JiraIssueTemplateSet | undefined;
+      readonly createFields?: readonly Record<string, unknown>[];
       readonly model?: boolean;
       readonly beforeEffect?: () => boolean;
       readonly signal?: AbortSignal;
@@ -256,7 +265,10 @@ async function harness(
       return executor(
         args as CatalogJsonObject,
         context,
-        connection("templates" in runOptions ? runOptions.templates : WITH_TEMPLATE),
+        connection(
+          "templates" in runOptions ? runOptions.templates : WITH_TEMPLATE,
+          runOptions.createFields ?? CREATE_FIELDS,
+        ),
       );
     },
   };
@@ -318,8 +330,16 @@ async function pausingHarness(spec: number, storeNow?: () => number): Promise<Pa
 }
 
 function descriptionOf(item: CatalogJsonObject | undefined): string {
-  const fields = item?.fields as { readonly description?: { readonly text?: string } } | undefined;
-  return fields?.description?.text ?? "";
+  const fields: unknown = item?.fields;
+  if (
+    fields === null ||
+    typeof fields !== "object" ||
+    Array.isArray(fields) ||
+    !("description" in fields) ||
+    typeof fields.description !== "string"
+  )
+    throw new TypeError("Expected a staged native Jira wiki description string");
+  return fields.description;
 }
 
 function firstRequest(h: Harness): GatewayCallRequest {
@@ -375,11 +395,39 @@ describe("jira.draft-batch (#4173)", () => {
     expect(references).toHaveLength(spec.ids.length);
     expect(references).not.toContain("model:invented");
     // The source criteria are written by Keiko verbatim, so the source trace accepts every issue.
-    const fields = items[0]?.fields as { readonly description: { readonly text: string } };
-    expect(fields.description.text).toContain("Thema 1 ist verfügbar.");
+    expect(descriptionOf(items[0])).toContain("* Thema 1 ist verfügbar.");
     expect(items.every((item) => item.projectId === "10000")).toBe(true);
     // The model confirmed each page it used, so tens of pages cannot exhaust the synthesis grant.
     expect(h.confirmed).toHaveLength(h.requests.length);
+  });
+
+  it("refuses trace labels absent from create metadata without another model call or a draft", async () => {
+    const h = await harness(
+      (request) => page(keysOf(request)),
+      [{ capsuleId: "cap-a", text: specification(1).text }],
+    );
+
+    const result = await h.run(ARGS, {
+      createFields: CREATE_FIELDS.filter((candidate) => candidate !== LABEL_FIELD),
+    });
+
+    expect(h.requests).toHaveLength(1);
+    const reference = /^- ([^\s]+:LH-001):/mu.exec(promptOf(firstRequest(h)))?.[1];
+    if (reference === undefined) throw new TypeError("Expected the selected requirement reference");
+    expect(result.isError).toBe(true);
+    expect(result.data).toMatchObject({
+      outcome: "failed",
+      reason: "nothing-drafted",
+      itemCount: 0,
+      draftedCount: 0,
+      failedCount: 1,
+      coveredRequirementCount: 0,
+      failedRequirementRefs: [reference],
+    });
+    expect(h.store.peek(DRAFT_ID, h.chatId)).toBeUndefined();
+    expect(proofLines(h)).toContainEqual(
+      expect.objectContaining({ phase: "page", outcome: "refused", pageItemCount: 1 }),
+    );
   });
 
   it("asks every page and outline call for no reasoning", async () => {
@@ -485,10 +533,12 @@ describe("jira.draft-batch (#4173)", () => {
     expect(promptOf(firstRequest(h))).toContain("Required sections: []");
     const description = descriptionOf(stagedItems(h)[0]);
     expect(description).toContain(
-      "## Acceptance criteria\n\n- Thema 1 ist verfügbar.\n- Fehler zu Thema 1 werden gemeldet.",
+      "h2. Acceptance criteria\n\n* Thema 1 ist verfügbar.\n* Fehler zu Thema 1 werden gemeldet.",
     );
     expect(description).not.toContain("Criteria ");
+    expect(description).not.toMatch(/^## |^- /mu);
     expect(description.match(/Thema 1 ist verfügbar/gu)).toHaveLength(1);
+    expect(description.match(/Fehler zu Thema 1 werden gemeldet/gu)).toHaveLength(1);
   });
 
   it("keeps the criteria out of the page prompt so a description lists each one once", async () => {
@@ -513,7 +563,10 @@ describe("jira.draft-batch (#4173)", () => {
     const prompt = promptOf(firstRequest(h));
     expect(prompt).toContain("Keiko appends each requirement's acceptance criteria verbatim");
     expect(prompt).not.toContain("ist verfügbar");
-    expect(descriptionOf(stagedItems(h)[0]).match(/Thema 1 ist verfügbar/gu)).toHaveLength(1);
+    const description = descriptionOf(stagedItems(h)[0]);
+    expect(description).toContain("h2. Akzeptanzkriterien\n\n* Thema 1 ist verfügbar.");
+    expect(description.match(/Thema 1 ist verfügbar/gu)).toHaveLength(1);
+    expect(description.match(/Fehler zu Thema 1 werden gemeldet/gu)).toHaveLength(1);
   });
 
   it("accepts a German acceptance-criteria section from a model that wrote no sections", async () => {
@@ -531,7 +584,9 @@ describe("jira.draft-batch (#4173)", () => {
 
     expect(result.data).toMatchObject({ outcome: "succeeded", draftedCount: 2 });
     expect(h.requests).toHaveLength(1);
-    expect(descriptionOf(stagedItems(h)[0])).toContain("## Akzeptanzkriterien\n\n- Thema 1");
+    expect(descriptionOf(stagedItems(h)[0])).toContain(
+      "h2. Akzeptanzkriterien\n\n* Thema 1 ist verfügbar.\n* Fehler zu Thema 1 werden gemeldet.",
+    );
   });
 
   it("asks for the criteria section only for an issue whose requirements carry none", async () => {
@@ -551,8 +606,8 @@ describe("jira.draft-batch (#4173)", () => {
     });
     expect(promptOf(firstRequest(h))).toContain('Also write the sections ["Acceptance criteria"]');
     const [first, second] = stagedItems(h);
-    expect(descriptionOf(first)).toContain("- Thema 8 ist verfügbar.");
-    expect(descriptionOf(second)).toContain("Criteria ");
+    expect(descriptionOf(first)).toContain("* Thema 8 ist verfügbar.");
+    expect(descriptionOf(second)).toContain("h2. Acceptance criteria\n\nCriteria ");
   });
 
   it("appends a list in the document's language when the template has no criteria section", async () => {
@@ -565,13 +620,13 @@ describe("jira.draft-batch (#4173)", () => {
 
     expect(result.data).toMatchObject({ outcome: "succeeded", draftedCount: 2 });
     const description = descriptionOf(stagedItems(h)[0]);
-    expect(description).toContain("## Context\n\nCriteria ");
-    expect(description).toContain("## Akzeptanzkriterien\n\n- Thema 1 ist verfügbar.");
-    // Jira receives it as headings and a bullet list.
-    const wiki = projectJiraDescriptionInput({ format: "markdown", text: description })?.text ?? "";
-    expect(wiki).toContain(
-      "h2. Akzeptanzkriterien\n\n* Thema 1 ist verfügbar.\n* Fehler zu Thema 1",
+    expect(description).toContain("h2. Context\n\nCriteria ");
+    expect(description).toContain(
+      "h2. Akzeptanzkriterien\n\n* Thema 1 ist verfügbar.\n* Fehler zu Thema 1 werden gemeldet.",
     );
+    expect(description).not.toMatch(/^## |^- /mu);
+    expect(description.match(/Thema 1 ist verfügbar/gu)).toHaveLength(1);
+    expect(description.match(/Fehler zu Thema 1 werden gemeldet/gu)).toHaveLength(1);
   });
 
   it("groups requirements into one issue that names all of them", async () => {
@@ -774,7 +829,8 @@ describe("jira.draft-batch (#4173)", () => {
 
       expect(noMap.data).toMatchObject({ outcome: "succeeded", draftedCount: 1 });
       expect(withMap.data).toMatchObject({ outcome: "succeeded", draftedCount: 1, failedCount: 0 });
-      expect(descriptionOf(stagedItems(grounded)[0])).toContain("Thema 1 ist verfügbar [1].");
+      expect(descriptionOf(stagedItems(grounded)[0])).toContain("* Thema 1 ist verfügbar \\[1\\].");
+      expect(descriptionOf(stagedItems(grounded)[0])).toBe(descriptionOf(stagedItems(control)[0]));
       expect(descriptionOf(stagedItems(grounded)[0])).not.toContain("Unrelated design memo");
     });
 

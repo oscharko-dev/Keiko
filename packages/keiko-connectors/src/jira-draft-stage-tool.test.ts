@@ -137,6 +137,45 @@ function text(value: unknown): string {
 }
 
 describe("jira.draft-stage (#4178)", () => {
+  it("refuses unsupported source labels before storing a draft or dispatching a write", async () => {
+    const h = harness();
+    const target = connection();
+    const append = vi.spyOn(h.deps.store, "append");
+    const result = await executeJiraDraftStageTool(
+      {
+        items: [
+          {
+            ref: "source",
+            projectId: "10000",
+            issueTypeId: "10001",
+            fields: { summary: "Source", labels: ["keiko-source-revision"] },
+          },
+        ],
+      },
+      CONTEXT,
+      target,
+      h.deps,
+    );
+
+    expect(result).toMatchObject({
+      isError: true,
+      data: {
+        outcome: "rejected",
+        reason: "field-validation",
+        ref: "source",
+        fieldId: "labels",
+        validation: "invalid-field",
+      },
+    });
+    expect(append).not.toHaveBeenCalled();
+    expect(vi.mocked(target.http).mock.calls.every(([request]) => request.method === "GET")).toBe(
+      true,
+    );
+    expect(h.activity).toMatchObject([
+      { phase: "refused", refusal: "invalid-fields", violationCount: 1 },
+    ]);
+  });
+
   it("refuses source-criterion failure before Jira metadata reads or a staged digest", async () => {
     const h = harness();
     const target = connection();

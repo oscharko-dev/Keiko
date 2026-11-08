@@ -7,7 +7,7 @@ export const REQUIRED_CUSTOM = {
   ...field("customfield_10000", "string", true),
   schema: { type: "string", custom: "com.atlassian.jira.plugin.system.customfieldtypes:textfield" },
 };
-const LABEL_FIELD = {
+export const LABEL_FIELD = {
   ...field("labels", "array"),
   operations: ["set", "add", "remove"],
   schema: { type: "array", items: "string", system: "labels" },
