@@ -1,4 +1,5 @@
 import {
+  historicalResultDescriptor,
   isJiraOperationBinding,
   jiraOperationActionDigest,
   type JiraOperationBinding,
@@ -378,6 +379,23 @@ function validResultBinding(value: Record<string, unknown>): boolean {
     (object(value.resultBinding) && exact(value.resultBinding, ["descriptor", "projectionDigest"]))
   );
 }
+/** A result without the operation binding predates it; qualify it against the unbound descriptor. */
+function resultBindingFor(
+  result: unknown,
+  binding: ToolResultValidationBinding | undefined,
+): ToolResultValidationBinding | undefined {
+  if (
+    binding === undefined ||
+    !object(result) ||
+    !object(result.data) ||
+    Object.hasOwn(result.data, "operationBinding")
+  )
+    return binding;
+  return {
+    ...binding,
+    descriptor: historicalResultDescriptor(verifyToolDescriptor(binding.descriptor)),
+  };
+}
 function validExchange(
   value: unknown,
   identity: TranscriptIdentity | undefined,
@@ -407,7 +425,10 @@ function validExchange(
   if (value.result !== undefined)
     validateToolResultEnvelope(
       value.result,
-      value.resultBinding as ToolResultValidationBinding | undefined,
+      resultBindingFor(
+        value.result,
+        value.resultBinding as ToolResultValidationBinding | undefined,
+      ),
     );
   else if (value.resultBinding !== undefined) return false;
   if (value.draftProgress !== undefined) validateDraftProgress(value as unknown as StoredExchange);
@@ -870,13 +891,14 @@ function redactResult(
   update: Extract<ChatToolTranscriptUpdate, { kind: "settled" | "captured" }>,
   redact: (value: string) => string,
 ): ToolResultEnvelope {
-  const verified = validateToolResultEnvelope(update.result, update.binding);
+  const binding = resultBindingFor(update.result, update.binding);
+  const verified = validateToolResultEnvelope(update.result, binding);
   const data = deepRedactStrings(verified.data, redact);
   const metrics = {
     ...verified.metrics,
     outputBytes: data === null ? 0 : Buffer.byteLength(JSON.stringify(data)),
   };
-  return validateToolResultEnvelope({ ...verified, data, metrics }, update.binding);
+  return validateToolResultEnvelope({ ...verified, data, metrics }, binding);
 }
 function redactDraftProgress(
   update: Extract<ChatToolTranscriptUpdate, { kind: "settled" }>,

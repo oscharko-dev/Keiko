@@ -2,7 +2,10 @@ import { expect, it } from "vitest";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
 import { jiraOperationForTool } from "./jiraManagedProvider.js";
-import { createJiraOperationContract } from "./jiraOperationRegistry.js";
+import {
+  createJiraOperationContract,
+  historicalResultDescriptor,
+} from "./jiraOperationRegistry.js";
 
 function resultUnionContract(
   schema: CatalogJsonObject,
@@ -40,5 +43,21 @@ it.each(["array", "boolean", "integer", "null", "number", "string"])(
     expect(() => resultUnionContract({ type, anyOf: [CLOSED_RESULT_BRANCH] })).toThrow(
       "invalid-schema",
     );
+  },
+);
+it.each(["anyOf", "oneOf"])(
+  "qualifies a result stored before the binding against the unbound %s descriptor only",
+  (keyword) => {
+    const contract = resultUnionContract({ type: "object", [keyword]: [CLOSED_RESULT_BRANCH] });
+    const bound = contract.declaration.descriptor;
+    const historical = historicalResultDescriptor(bound);
+    const value = { outcome: "succeeded" };
+    expect(describeCatalogSchemaMismatch(bound.resultSchema, value)).toBeDefined();
+    expect(describeCatalogSchemaMismatch(historical.resultSchema, value)).toBeUndefined();
+    expect(
+      describeCatalogSchemaMismatch(historical.resultSchema, { ...value, extra: true }),
+    ).toBeDefined();
+    expect(historical.toolRef).toEqual(bound.toolRef);
+    expect(historicalResultDescriptor(historical)).toBe(historical);
   },
 );
