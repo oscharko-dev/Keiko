@@ -8,6 +8,10 @@ import {
 import type { AtlassianWriteHttpOutcome } from "./atlassian-write-http.js";
 
 export type JiraMutationFailure = Extract<JiraMutationAttempt, { ok: false }>;
+/** Read-only observations and pre-dispatch refusals cannot acknowledge a mutation. */
+export type JiraObservationFailure = Omit<JiraMutationFailure, "receipt"> & {
+  readonly receipt?: never;
+};
 export type JiraHttpFailure = Extract<AtlassianWriteHttpOutcome, { ok: false }>;
 
 /** Private executor failure after acknowledgement; composing owners log the original cause. */
@@ -47,7 +51,7 @@ export function nameJiraFieldErrors(
 export function dispatchFailure(
   response: JiraHttpFailure,
   metadata: readonly JiraFieldMetadata[] = [],
-): Omit<JiraMutationFailure, "receipt"> & { readonly receipt?: never } {
+): JiraObservationFailure {
   const detail = nameJiraFieldErrors(response.remote, metadata);
   return {
     ok: false,

@@ -4,7 +4,7 @@ import { asRecord } from "./atlassian-sync-classify.js";
 import { jiraDirectoryUser } from "./jira-directory-values.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { projectJiraFilterPermissions } from "./jira-managed-saved-views.js";
-import { dispatchFailure } from "./jira-mutation-failure.js";
+import { dispatchFailure, type JiraObservationFailure } from "./jira-mutation-failure.js";
 import { jiraNativeId, jiraNativeName, jiraNativeText } from "./jira-native-values.js";
 
 export interface JiraSavedConfigurationReceipt extends JiraMutationReceipt {
@@ -19,7 +19,7 @@ export type SavedFailure = Omit<Extract<JiraMutationAttempt, { readonly ok: fals
   readonly receipt?: JiraSavedConfigurationReceipt;
 };
 export type JiraSavedConfigurationAttempt = SavedFailure | { readonly ok: true; readonly receipt: JiraSavedConfigurationReceipt };
-export type SavedObservation<T> = SavedFailure | { readonly ok: true; readonly value: T };
+export type SavedObservation<T> = JiraObservationFailure | { readonly ok: true; readonly value: T };
 export interface SavedActor { readonly key: string; readonly name: string }
 export interface SavedFilter {
   readonly id: string;
@@ -28,10 +28,12 @@ export interface SavedFilter {
   readonly jql: string;
   readonly description: string | null;
 }
-export const SAVED_MALFORMED: SavedFailure = { ok: false, reason: "malformed-payload" };
-export function savedInvalid(message: string): SavedFailure {
+export const SAVED_MALFORMED: JiraObservationFailure = { ok: false, reason: "malformed-payload" };
+export function savedInvalid(message: string): JiraObservationFailure {
   return { ok: false, reason: "field-validation", detail: { validation: "invalid-field", messages: [message] } };
 }
+export function savedConflict(message: string): JiraObservationFailure;
+export function savedConflict(message: string, receipt: JiraSavedConfigurationReceipt | undefined): SavedFailure;
 export function savedConflict(message: string, receipt?: JiraSavedConfigurationReceipt): SavedFailure {
   return { ok: false, reason: "conflict", detail: { messages: [message] }, ...(receipt === undefined ? {} : { receipt }) };
 }

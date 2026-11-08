@@ -12,7 +12,7 @@ type Actor = { readonly key: string; readonly name: string };
 function selfAccessRefusal(): DirectoryAccessFailure {
   return directoryAccessRefusal("This role change removes a group of the connected actor and could revoke this connection's own application or administration access. Use a different authorized Jira administrator connection that is independent of the removed groups. No write was sent.", "conflict");
 }
-function completeActorGroups(body: CatalogJsonObject | undefined, actor: Actor): readonly CatalogJsonObject[] | undefined {
+function completeActorGroups(body: Readonly<Record<string, unknown>> | undefined, actor: Actor): readonly CatalogJsonObject[] | undefined {
   if (body?.key !== actor.key || body.name !== actor.name) return undefined;
   const expansion = asRecord(body.groups);
   const items = asArray(expansion?.items);

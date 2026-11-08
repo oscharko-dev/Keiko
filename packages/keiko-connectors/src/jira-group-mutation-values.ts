@@ -1,6 +1,7 @@
 import { JIRA_GROUP_MUTATIONS, type JiraGroupMutation, type JiraMutationAttempt, type JiraMutationReceipt } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { TOOL_CATALOG_LIMITS, type CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { asRecord } from "./atlassian-sync-classify.js";
+import type { JiraObservationFailure } from "./jira-mutation-failure.js";
 import { savedExactKeys, savedText } from "./jira-saved-configuration-values.js";
 
 /** Fixed GroupResource calls, separate from project-role defaults and application access. */
@@ -14,7 +15,7 @@ export interface JiraGroupMutationReceipt extends JiraMutationReceipt {
 }
 export type GroupMutationFailure = Omit<Extract<JiraMutationAttempt, { ok: false }>, "receipt"> & { readonly receipt?: JiraGroupMutationReceipt };
 export type GroupMutationAttempt = GroupMutationFailure | { readonly ok: true; readonly receipt: JiraGroupMutationReceipt };
-export type GroupObservation<T> = GroupMutationFailure | { readonly ok: true; readonly value: T };
+export type GroupObservation<T> = JiraObservationFailure | { readonly ok: true; readonly value: T };
 export type GroupMutationInput = { readonly actor: string; readonly name: string } & (
   | { readonly kind: "create" }
   | { readonly kind: "delete"; readonly swap?: string }
@@ -26,7 +27,7 @@ const FIELDS: Readonly<Record<JiraGroupMutation, ReadonlySet<string>>> = {
   "jira.add-group-user": new Set(["expectedActorKey", "groupName", "user", "expectedObservedMembership", "acceptGlobalPermissionChange"]),
   "jira.remove-group-user": new Set(["expectedActorKey", "groupName", "user", "expectedObservedMembership", "acceptGlobalPermissionChange"]),
 };
-export const GROUP_MUTATION_MALFORMED: GroupMutationFailure = { ok: false, reason: "malformed-payload" };
+export const GROUP_MUTATION_MALFORMED: JiraObservationFailure = { ok: false, reason: "malformed-payload" };
 export function isJiraGroupMutation(name: string): name is JiraGroupMutation { return Object.hasOwn(FIELDS, name); }
 export function groupMutationRefusal(message: string, reason: "field-validation" | "conflict" | "unavailable" = "field-validation", receipt?: JiraGroupMutationReceipt): GroupMutationFailure {
   return { ok: false, reason, detail: { messages: [message] }, ...(receipt === undefined ? {} : { receipt }) };

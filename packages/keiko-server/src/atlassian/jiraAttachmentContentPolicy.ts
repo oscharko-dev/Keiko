@@ -44,9 +44,9 @@ export type AttachmentContentVerdict =
   | { readonly ok: true }
   | { readonly ok: false; readonly refusal: "unscannable" | "contains-credential" };
 
-const ALLOWED: AttachmentContentVerdict = { ok: true };
-const UNSCANNABLE: AttachmentContentVerdict = { ok: false, refusal: "unscannable" };
-const CREDENTIAL: AttachmentContentVerdict = { ok: false, refusal: "contains-credential" };
+const ALLOWED = { ok: true } as const satisfies AttachmentContentVerdict;
+const UNSCANNABLE = { ok: false, refusal: "unscannable" } as const satisfies AttachmentContentVerdict;
+const CREDENTIAL = { ok: false, refusal: "contains-credential" } as const satisfies AttachmentContentVerdict;
 
 // A literal shorter than this is an ordinary word, not a secret the redaction layer would mask.
 const MIN_SECRET_LITERAL_BYTES = 8;
@@ -535,5 +535,6 @@ export async function admitJiraAvatarImage(
   const mimeType = startsWith(input.bytes, PNG) ? "image/png" : startsWith(input.bytes, JPEG) ? "image/jpeg" : undefined;
   if (mimeType === undefined) return UNSCANNABLE;
   const admitted = await admitAttachmentContent(input);
-  return admitted.ok ? { ok: true, mimeType } : admitted;
+  if (!admitted.ok) return admitted;
+  return { ok: true, mimeType };
 }
