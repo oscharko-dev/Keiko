@@ -109,9 +109,6 @@ export function issueIdentity(issue, selected, project) {
   requireRoleFact(nativeId(issue.id) === nativeId(selected.id) && issue.key === selected.key);
   requireRoleFact(issue.fields?.project?.key === project.key);
 }
-export function issueField(issue, field, expected) {
-  requireRoleFact(Object.hasOwn(issue.fields ?? {}, field) && same(issue.fields[field], expected));
-}
 export function sprintProjection(value) {
   return Object.fromEntries(
     ["id", "originBoardId", "name", "goal", "state", "startDate", "endDate"].map((key) => [
@@ -140,15 +137,15 @@ export function editBody(body, fields) {
 export function effectProof(turn, operations, facts = {}, denied = false) {
   return { ...stepOutcome(turn, { operations, denied }), ...facts };
 }
-export const keyDigest = (keys) =>
+const keyDigest = (keys) =>
   createHash("sha256")
     .update([...keys].sort().join("\n"))
     .digest("hex");
-export function answerKeys(answer) {
+function answerKeys(answer) {
   const visible = answer.replaceAll(/\[([^\]]+)\]\([^)]*\)/gu, "$1");
   return [...new Set(visible.match(/\b[A-Z][A-Z0-9_]*-[1-9][0-9]*\b/gu) ?? [])].sort();
 }
-export function exactAnswer(turn, keys, numbers) {
+function exactAnswer(turn, keys, numbers) {
   requireRoleFact(
     typeof turn.answer === "string" && turn.answer.trim().length > 0,
     "answer-missing",

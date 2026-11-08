@@ -109,7 +109,7 @@ function wireText(signatures) {
   return signatures.map(({ method, path }) => `${method} ${path}`).join("; ");
 }
 
-export function roleScorecardMarkdown(report) {
+function roleScorecardMarkdown(report) {
   const lines = [
     `# Jira-Rollen-Journey: ${ROLE_LABELS[report.role]}`,
     "",

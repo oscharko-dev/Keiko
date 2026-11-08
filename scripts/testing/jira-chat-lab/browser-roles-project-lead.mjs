@@ -26,11 +26,11 @@ import {
   stateEntity,
 } from "./browser-roles-oracles.mjs";
 
-export const SPRINT_GOALS = [
+const SPRINT_GOALS = [
   "Deliver the first customer increment.",
   "Finish the scoped stories and verify integration.",
 ];
-export function sprintFields(environment, number) {
+function sprintFields(environment, number) {
   const offset = (number - 1) * 14 * 86400000;
   const date = (value) => new Date(Date.parse(value) + offset).toISOString();
   const { fixture } = environment;
