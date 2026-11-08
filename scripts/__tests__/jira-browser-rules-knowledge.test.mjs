@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { URL } from "node:url";
+import ts from "typescript";
 import {
   gradeRuleRefusal,
   gradeCorrectedCreate,
@@ -388,7 +389,31 @@ describe("live UI journey wiring", () => {
     expect(journey).toContain("taskParentTypeRuleSupported: true");
     const cli = read("browser-rules-knowledge.mjs");
     expect(cli).toContain("withWorkProjectLock");
-    expect(cli).toContain('phase: "reserved" }, true)');
+    const source = ts.createSourceFile("journey.mjs", cli, ts.ScriptTarget.Latest, true);
+    const reservations = [];
+    const visit = (node) => {
+      if (
+        ts.isCallExpression(node) &&
+        node.expression.getText(source) === "privateJson" &&
+        node.arguments.length === 3
+      )
+        reservations.push(node);
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    expect(reservations).toHaveLength(1);
+    const [path, state, exclusive] = reservations[0].arguments;
+    expect(path.getText(source)).toBe("intentPath");
+    expect(ts.isObjectLiteralExpression(state)).toBe(true);
+    expect(
+      Object.fromEntries(
+        state.properties.map((property) => [
+          property.name.getText(source),
+          property.initializer.getText(source),
+        ]),
+      ),
+    ).toEqual({ schemaVersion: "1", scenario: '"rules-knowledge"', phase: '"reserved"' });
+    expect(exclusive.kind).toBe(ts.SyntaxKind.TrueKeyword);
     expect(cli).toContain("embeddingModelId: options.embeddingModelId");
     expect(cli).not.toContain("clearWorkProject");
   });

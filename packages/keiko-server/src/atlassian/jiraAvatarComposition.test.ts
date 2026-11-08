@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -94,9 +95,13 @@ it("allows readonly preview before a required approval, but never its send", asy
 it("server-mints exact image integrity in allowed mode without adding approval", async () => {
   const review = vi.fn((): JiraChatAttachmentReview => ({ required: false }));
   const f = fixture(review);
-  expect(await f.source(false)(REQUEST)).toMatchObject({
+  expect(await f.source(false)(REQUEST)).toEqual({
     ok: true,
-    content: { name: "avatar.png", bytes: IMAGE },
+    content: {
+      name: "avatar.png",
+      bytes: Uint8Array.from(IMAGE),
+      sha256: createHash("sha256").update(IMAGE).digest("hex"),
+    },
   });
   expect(
     review.mock.results.every((result) => result.type === "return" && !result.value.required),
@@ -104,8 +109,11 @@ it("server-mints exact image integrity in allowed mode without adding approval",
   expect(
     f.logs.events
       .filter((event) => event.op === "jira.attachment.source")
-      .map((event) => event.extra?.stage),
-  ).toEqual(["review", "send"]);
+      .map((event) => ({ stage: event.extra?.stage, sizeBytes: event.extra?.sizeBytes })),
+  ).toEqual([
+    { stage: "review", sizeBytes: IMAGE.length },
+    { stage: "send", sizeBytes: IMAGE.length },
+  ]);
 });
 it("uses the approved image snapshot and refuses changed actual bytes", async () => {
   let review: JiraChatAttachmentReview = { required: true, reviewed: undefined };

@@ -189,6 +189,8 @@ describe("V63 journals the closed component and version operations", () => {
     expect(() => {
       insertMutation(db, operation, "after");
     }).not.toThrow();
+    const historical = priorDatabase(63);
+    expect(historical.prepare("PRAGMA user_version").get()).toEqual({ user_version: 63 });
     for (const invalid of [
       "jira.delete-version",
       "jira.delete-component",
@@ -200,6 +202,13 @@ describe("V63 journals the closed component and version operations", () => {
         insertMutation(historical, invalid, invalid);
       }).toThrow(/CHECK/u);
     }
+    for (const invalid of ["jira.delete-version", "jira.draft", "jira.unknown"])
+      expect(() => {
+        insertMutation(db, invalid, invalid);
+      }).toThrow(/CHECK/u);
+    expect(() => {
+      insertMutation(db, "jira.delete-component", "current-delete-component");
+    }).not.toThrow();
   });
 });
 
