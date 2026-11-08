@@ -4,11 +4,12 @@ import {
   sameFactWord,
   type CaptureMemoryResolver,
 } from "@oscharko-dev/keiko-memory-capture";
-import type {
-  ConversationId,
-  MemoryRecord,
-  MemoryScope,
-  MemoryStatus,
+import {
+  personMemoryTags,
+  type ConversationId,
+  type MemoryRecord,
+  type MemoryScope,
+  type MemoryStatus,
 } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryConversationTouch, MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 
@@ -77,7 +78,7 @@ function tokensMatch(targetTokens: readonly string[], bodyTokens: readonly strin
 }
 
 function matchesTarget(target: string, record: MemoryRecord): boolean {
-  const haystack = `${record.body} ${record.tags.join(" ")}`;
+  const haystack = `${record.body} ${personMemoryTags(record.tags).join(" ")}`;
   const normalizedTarget = normalizePhrase(target);
   const normalizedHaystack = normalizePhrase(haystack);
   if (
@@ -163,7 +164,7 @@ function leftByLastTurn(
 }
 
 function namesRecord(target: string, record: MemoryRecord): boolean {
-  const body = tokenize(`${record.body} ${record.tags.join(" ")}`);
+  const body = tokenize(`${record.body} ${personMemoryTags(record.tags).join(" ")}`);
   const words = tokenize(target);
   return (
     words.length > 0 &&

@@ -381,6 +381,10 @@ message time; a forget the pass reaches is applied again to facts the same pass 
 Chat's earlier, still pending messages. `memory.learn.pass.started` and `memory.learn.pass.settled`
 record each pass body-free. Triggers, bounds and the measurement:
 [MemoriaViva learning passes](../memory/memoria-viva-learning-passes.md).
+A private fact the learner labels `identity` or `constraint` carries the retention hint
+`policyKey: "standing"`, which places it in the standing profile every Chat answer receives (#4228);
+membership, order and caps:
+[MemoriaViva standing profile](../memory/memoria-viva-standing-profile.md).
 
 ### D5 — Capture stays failure-contained and diagnostics stay content-free
 

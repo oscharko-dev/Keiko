@@ -5,6 +5,7 @@
 // fully-deterministic choice and the cheapest to reason about for explainability.
 
 import {
+  personMemoryTags,
   sameMemoryWord,
   tokenizeMemoryText,
   type MemoryRecord,
@@ -15,7 +16,8 @@ export const tokenize = tokenizeMemoryText;
 function recordTokens(record: MemoryRecord): ReadonlySet<string> {
   const tokens = new Set<string>();
   for (const t of tokenize(record.body)) tokens.add(t);
-  for (const tag of record.tags) {
+  // Keiko's own tags are not the person's words about the fact.
+  for (const tag of personMemoryTags(record.tags)) {
     for (const t of tokenize(tag)) tokens.add(t);
   }
   return tokens;

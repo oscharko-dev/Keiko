@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import type {
-  MemoryId,
-  MemoryProposalId,
-  ProjectId,
-  UserId,
+import {
+  STANDING_FACT_RETENTION_POLICY_KEY,
+  type MemoryId,
+  type MemoryProposalId,
+  type ProjectId,
+  type UserId,
 } from "@oscharko-dev/keiko-contracts/memory";
 import { REDACTION_PLACEHOLDER, redact } from "@oscharko-dev/keiko-security";
 
@@ -127,6 +128,25 @@ describe("extractSalientMemories", () => {
     expect(learned?.proposal.body).not.toContain("Quartal");
     expect(learned?.proposal.scope.kind).toBe("user");
     expect(learned?.proposal.initialStatus).toBe("proposed");
+  });
+
+  it("marks a fact about who the person is or what always holds for them as standing (#4228)", async () => {
+    const text = "Ich bin Backend-Entwicklerin. Ich darf keine Kundendaten in Tickets schreiben.";
+    const outcomes = await learn(text, [
+      fact("Ist Backend-Entwicklerin", "Ich bin Backend-Entwicklerin", { type: "identity" }),
+      fact("Keine Kundendaten in Tickets", "Ich darf keine Kundendaten in Tickets schreiben", {
+        type: "constraint",
+      }),
+    ]);
+    const learned = candidates(outcomes).map((outcome) => outcome.proposal);
+    expect(learned.map((proposal) => [proposal.type, proposal.retentionHint])).toEqual([
+      ["semantic-fact", { policyKey: STANDING_FACT_RETENTION_POLICY_KEY }],
+      ["semantic-fact", { policyKey: STANDING_FACT_RETENTION_POLICY_KEY }],
+    ]);
+    const other = await learn("Ich wohne in Hamburg.", [
+      fact("Wohnt in Hamburg", "Ich wohne in Hamburg", { type: "fact" }),
+    ]);
+    expect(candidates(other)[0]?.proposal.retentionHint).toBeUndefined();
   });
 
   it.each([

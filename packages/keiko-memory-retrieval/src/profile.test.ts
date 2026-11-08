@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import type { MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
+import {
+  PROFILE_EXCLUDED_MEMORY_TAG,
+  STANDING_FACT_RETENTION_POLICY_KEY,
+  type MemoryRecord,
+} from "@oscharko-dev/keiko-contracts/memory";
 
 import { estimateTokens } from "./context.js";
 import {
   DEFAULT_STANDING_PROFILE_CAPS,
-  PROFILE_EXCLUDED_TAG,
   selectStandingProfile,
+  standingProfileSuccession,
   type StandingProfileCandidate,
 } from "./profile.js";
 import { buildRecord, projectScope, type BuildRecordOptions } from "./_support.js";
@@ -57,7 +61,7 @@ describe("selectStandingProfile", () => {
         candidate({ id: "proposed", status: "proposed" }),
         candidate({ id: "superseded", status: "superseded" }),
         candidate({ id: "expired", validFrom: 0, validUntil: NOW }),
-        candidate({ id: "excluded", tags: [PROFILE_EXCLUDED_TAG] }),
+        candidate({ id: "excluded", tags: [PROFILE_EXCLUDED_MEMORY_TAG] }),
       ],
       NOW,
     );
@@ -69,6 +73,42 @@ describe("selectStandingProfile", () => {
       suppressed: 1,
       excluded: 1,
     });
+  });
+
+  it("takes a fact capture marked standing, and no other retention hint", () => {
+    const marked = (id: string, policyKey: string): StandingProfileCandidate => ({
+      record: {
+        ...buildRecord({ id, status: "accepted", type: "semantic-fact" }),
+        retentionHint: { policyKey },
+      },
+      confirmations: 0,
+    });
+    expect(
+      ids([marked("role", STANDING_FACT_RETENTION_POLICY_KEY), marked("kept", "legal-hold")]),
+    ).toEqual(["role"]);
+  });
+
+  it("passes a fact's place in the profile, or its removal, to the fact that supersedes it", () => {
+    const record = (options: BuildRecordOptions): MemoryRecord =>
+      buildRecord({ status: "accepted", ...options });
+    const successor = record({ type: "semantic-fact", tags: ["db"] });
+    const standingMark = { retentionHint: { policyKey: STANDING_FACT_RETENTION_POLICY_KEY } };
+    expect(standingProfileSuccession(record({ type: "preference" }), successor)).toEqual(
+      standingMark,
+    );
+    expect(
+      standingProfileSuccession(record({ type: "episodic", pinned: true }), successor),
+    ).toEqual(standingMark);
+    expect(standingProfileSuccession(record({ type: "episodic" }), successor)).toEqual({});
+    expect(
+      standingProfileSuccession(
+        record({ type: "preference", tags: [PROFILE_EXCLUDED_MEMORY_TAG] }),
+        successor,
+      ),
+    ).toEqual({ ...standingMark, tags: ["db", PROFILE_EXCLUDED_MEMORY_TAG] });
+    // A successor that already carries a hint keeps it.
+    const hinted = { ...successor, retentionHint: { policyKey: "legal-hold" } };
+    expect(standingProfileSuccession(record({ type: "preference" }), hinted)).toEqual({});
   });
 
   it("keeps confidential and restricted facts out, pinned or not", () => {
@@ -103,8 +143,8 @@ describe("selectStandingProfile", () => {
     expect(ids([fact(false, [])])).toEqual([]);
     const standing = (pinned: boolean, tags: readonly string[]): StandingProfileCandidate =>
       candidate({ id: "tables", pinned, tags });
-    expect(ids([standing(false, [PROFILE_EXCLUDED_TAG])])).toEqual([]);
-    expect(ids([standing(true, [PROFILE_EXCLUDED_TAG])])).toEqual(["tables"]);
+    expect(ids([standing(false, [PROFILE_EXCLUDED_MEMORY_TAG])])).toEqual([]);
+    expect(ids([standing(true, [PROFILE_EXCLUDED_MEMORY_TAG])])).toEqual(["tables"]);
   });
 
   it("stays within its caps at every vault size", () => {

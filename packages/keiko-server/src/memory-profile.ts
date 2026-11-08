@@ -1,12 +1,17 @@
 // The person's standing profile for a Chat answer (MemoriaViva 1.5, #4228).
 //
-// The vault is asked for the metadata of the person's private standing facts and pinned facts,
-// which needs no body reads and is not limited by the retrieval layer's newest-500 window, so the
-// profile holds at any vault size. The metadata is ordered exactly as the profile orders facts, and
+// The vault is asked for the metadata of the person's private standing facts and pinned facts, which
+// needs no body reads and is not limited by the retrieval layer's newest-500 window, so the profile
+// holds at any vault size. The metadata is ordered exactly as the profile orders facts, and
 // bodies are read in that order only until the profile is full. The selection itself is the pure
 // selectStandingProfile; this module only feeds it.
 
-import type { MemoryId, MemoryRecord, UserId } from "@oscharko-dev/keiko-contracts/memory";
+import {
+  STANDING_FACT_RETENTION_POLICY_KEY,
+  type MemoryId,
+  type MemoryRecord,
+  type UserId,
+} from "@oscharko-dev/keiko-contracts/memory";
 import type { ConversationStandingProfileWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   DEFAULT_STANDING_PROFILE_CAPS,
@@ -30,24 +35,26 @@ export const EMPTY_STANDING_PROFILE: StandingProfile = Object.freeze({
   dropped: {},
 });
 
+// The person's accepted facts that are standing in their own right: standing types, facts capture
+// marked standing (a correction carries the mark of the fact it superseded) and pinned facts.
 function profileMetadata(
   vault: MemoryVaultStore,
   userId: UserId,
   nowMs: number,
 ): readonly MemoryMetadata[] {
   const scope = { kind: "user", userId } as const;
-  const standing = vault.listMemoryMetadataByScope(scope, {
-    type: STANDING_PROFILE_TYPES,
-    status: ["accepted"],
-    nowMs,
-  });
-  const pinned = vault.listMemoryMetadataByScope(scope, {
-    pinned: true,
-    status: ["accepted"],
-    nowMs,
-  });
+  const options = { status: ["accepted"], nowMs } as const;
   const byId = new Map<MemoryId, MemoryMetadata>();
-  for (const meta of [...standing, ...pinned]) byId.set(meta.id, meta);
+  for (const meta of [
+    ...vault.listMemoryMetadataByScope(scope, { ...options, type: STANDING_PROFILE_TYPES }),
+    ...vault.listMemoryMetadataByScope(scope, {
+      ...options,
+      retentionPolicyKey: STANDING_FACT_RETENTION_POLICY_KEY,
+    }),
+    ...vault.listMemoryMetadataByScope(scope, { ...options, pinned: true }),
+  ]) {
+    byId.set(meta.id, meta);
+  }
   return [...byId.values()];
 }
 

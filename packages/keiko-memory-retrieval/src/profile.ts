@@ -2,17 +2,18 @@
 //
 // A small, bounded set of the person's standing facts is supplied with every Chat answer,
 // independently of the question. Retrieval by relevance decides everything else. Membership is
-// deterministic and needs no model: the person's own private preferences and procedures, ordered
-// by how often the person confirmed them and then by how recently they were stated (a supersession
-// inserts a new record, so its creation time is the statement's recency). A pinned fact always
-// competes for a place; a fact the person removed from the profile carries PROFILE_EXCLUDED_TAG and
-// stays out until pinned again. The profile does not decay: it changes only through supersession,
+// deterministic and needs no model: the person's own private preferences and procedures, the facts
+// capture marked as standing (role, language, a standing constraint), ordered by how often the person confirmed them and then by how recently they were stated (a
+// supersession inserts a new record, so its creation time is the statement's recency). A pinned
+// fact always competes for a place; a fact the person removed from the profile carries
+// PROFILE_EXCLUDED_MEMORY_TAG and stays out until pinned again. The profile does not decay: it changes only through supersession,
 // forgetting, pinning and unpinning.
 //
 // Pure: no IO and no clock. The caller supplies the candidates, their confirmation counts and nowMs.
 
 import {
   PROFILE_EXCLUDED_MEMORY_TAG,
+  STANDING_FACT_RETENTION_POLICY_KEY,
   type MemoryId,
   type MemoryRecord,
   type MemoryType,
@@ -22,13 +23,9 @@ import { clipToTokenBudget, estimateTokens } from "./context.js";
 import { isMemorySuppressed } from "./suppression.js";
 import { DEFAULT_STALE_CONFIDENCE_THRESHOLD } from "./types.js";
 
-/** Tag that keeps a fact out of the standing profile until the person pins it again. */
-export const PROFILE_EXCLUDED_TAG = PROFILE_EXCLUDED_MEMORY_TAG;
-
-// Record types that describe how the person works: language, format, way of working, standing
-// constraints. Other facts about the person enter only when pinned: the learner does not mark which
-// facts are identity-like, and taking every fact would supply a small vault whole to every answer,
-// which is what retrieval by relevance is for.
+// Record types that describe how the person works: format and way of working. Other facts about
+// the person enter when capture marked them standing or the person pinned them: taking every fact
+// would supply a small vault whole to every answer, which is what retrieval by relevance is for.
 export const STANDING_PROFILE_TYPES: readonly MemoryType[] = Object.freeze([
   "preference",
   "procedural",
@@ -84,19 +81,48 @@ export interface StandingProfile {
   readonly dropped: Readonly<Partial<Record<StandingProfileDropReason, number>>>;
 }
 
+/** A fact of a standing type, or one capture marked standing. Pinning is checked separately. */
+export function isStandingFact(record: MemoryRecord): boolean {
+  return (
+    STANDING_PROFILE_TYPES.includes(record.type) ||
+    record.retentionHint?.policyKey === STANDING_FACT_RETENTION_POLICY_KEY
+  );
+}
+
+/**
+ * What a fact that supersedes another takes over from it, so a correction keeps the corrected
+ * fact's place in the standing profile (or its removal from it). A pinned or standing origin marks
+ * the successor standing; an origin the person removed from the profile passes the removal on.
+ */
+export function standingProfileSuccession(
+  origin: MemoryRecord,
+  successor: Pick<MemoryRecord, "tags" | "retentionHint">,
+): Pick<Partial<MemoryRecord>, "tags" | "retentionHint"> {
+  const standing = origin.pinned || isStandingFact(origin);
+  const markStanding = standing && successor.retentionHint === undefined;
+  const removed =
+    origin.tags.includes(PROFILE_EXCLUDED_MEMORY_TAG) &&
+    !successor.tags.includes(PROFILE_EXCLUDED_MEMORY_TAG);
+  return {
+    ...(markStanding ? { retentionHint: { policyKey: STANDING_FACT_RETENTION_POLICY_KEY } } : {}),
+    ...(removed ? { tags: [...successor.tags, PROFILE_EXCLUDED_MEMORY_TAG] } : {}),
+  };
+}
+
 function ineligibility(
-  record: MemoryRecord,
+  candidate: StandingProfileCandidate,
   nowMs: number,
   staleConfidenceThreshold: number,
 ): StandingProfileDropReason | undefined {
+  const { record } = candidate;
   if (record.scope.kind !== "user") return "not-private";
   if (record.status !== "accepted") return "not-accepted";
   // A confidential or restricted fact never rides along with every answer, pinned or not.
   if (record.provenance.sensitivity !== "public") return "not-public";
   if (isMemorySuppressed(record, nowMs, staleConfidenceThreshold).suppressed) return "suppressed";
   if (record.pinned) return undefined;
-  if (!STANDING_PROFILE_TYPES.includes(record.type)) return "not-standing-type";
-  if (record.tags.includes(PROFILE_EXCLUDED_TAG)) return "excluded";
+  if (!isStandingFact(record)) return "not-standing-type";
+  if (record.tags.includes(PROFILE_EXCLUDED_MEMORY_TAG)) return "excluded";
   return undefined;
 }
 
@@ -151,7 +177,7 @@ function eligibleCandidates(
   for (const candidate of candidates) {
     if (seen.has(candidate.record.id)) continue;
     seen.add(candidate.record.id);
-    const reason = ineligibility(candidate.record, nowMs, staleConfidenceThreshold);
+    const reason = ineligibility(candidate, nowMs, staleConfidenceThreshold);
     if (reason === undefined) eligible.push(candidate);
     else drop(reason);
   }

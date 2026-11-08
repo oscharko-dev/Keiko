@@ -228,6 +228,11 @@ function buildExpiryClause(
   return { clauses: ["(valid_until IS NULL OR valid_until > ?)"], params: [nowMs] };
 }
 
+function buildRetentionPolicyClause(policyKey: string | undefined): ListClauseBuild | undefined {
+  if (policyKey === undefined) return undefined;
+  return { clauses: ["retention_policy_key = ?"], params: [policyKey] };
+}
+
 function buildPinnedClause(pinned: boolean | undefined): ListClauseBuild | undefined {
   if (pinned === undefined) return undefined;
   return { clauses: ["pinned = ?"], params: [pinned ? 1 : 0] };
@@ -379,6 +384,7 @@ export function listMemoriesAcrossScopeRows(
     buildEnumClause("type", options.type),
     buildEnumClause("status", options.status),
     buildPinnedClause(options.pinned),
+    buildRetentionPolicyClause(options.retentionPolicyKey),
     buildExpiryClause(options.includeExpired, nowMs),
   ]) {
     if (built === undefined) continue;
@@ -407,6 +413,7 @@ export function listMemoriesByScopeRows(
     buildEnumClause("type", options.type),
     buildEnumClause("status", options.status),
     buildPinnedClause(options.pinned),
+    buildRetentionPolicyClause(options.retentionPolicyKey),
     buildExpiryClause(options.includeExpired, nowMs),
   ]) {
     if (built === undefined) continue;
@@ -434,6 +441,7 @@ export function listMemoryMetadataByScopeRows(
     buildEnumClause("type", options.type),
     buildEnumClause("status", options.status),
     buildPinnedClause(options.pinned),
+    buildRetentionPolicyClause(options.retentionPolicyKey),
     buildExpiryClause(options.includeExpired, nowMs),
   ]) {
     if (built === undefined) continue;

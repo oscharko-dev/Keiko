@@ -97,6 +97,11 @@ export interface MemoryRetentionHint {
   readonly notes?: string;
 }
 
+// A standing fact about the person (role, language, a standing constraint): it does not decay by
+// recency and changes only through supersession, forgetting, pinning and unpinning. Capture sets
+// it; the standing profile reads it (#4228).
+export const STANDING_FACT_RETENTION_POLICY_KEY = "standing";
+
 // ─── Memory record ────────────────────────────────────────────────────────────
 // The central durable contract. Distinguished from chat history (transient, no
 // provenance), connected-context KnowledgeCapsules (document-derived, no

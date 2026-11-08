@@ -12,12 +12,16 @@ import type {
   UserId,
   WorkspaceId,
 } from "@oscharko-dev/keiko-contracts/memory";
-import { PROFILE_EXCLUDED_TAG } from "@oscharko-dev/keiko-memory-retrieval";
+import {
+  PROFILE_EXCLUDED_MEMORY_TAG,
+  STANDING_FACT_RETENTION_POLICY_KEY,
+} from "@oscharko-dev/keiko-contracts/runtime/memory";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 
 import { buildMemoryResult, type SendDesktopChatRequest } from "./chat-handlers.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import type { ConversationMemoryRuntimeContext } from "./memory-conversation-context.js";
+import { applyLearnedSupersession } from "./memory-learned-facts.js";
 import { standingProfileForUser, standingProfileWire } from "./memory-profile.js";
 import { createInMemoryUiStore } from "./store/index.js";
 
@@ -46,6 +50,8 @@ interface Seed {
   readonly pinned?: boolean;
   readonly tags?: readonly string[];
   readonly project?: boolean;
+  readonly status?: MemoryRecord["status"];
+  readonly standing?: boolean;
 }
 
 function seed(store: MemoryVaultStore, entry: Seed): void {
@@ -65,11 +71,14 @@ function seed(store: MemoryVaultStore, entry: Seed): void {
       sensitivity: "public",
     },
     validity: { validFrom: createdAt },
-    status: "accepted",
+    status: entry.status ?? "accepted",
     pinned: entry.pinned ?? false,
     tags: [...(entry.tags ?? [])],
     createdAt,
     updatedAt: createdAt,
+    ...(entry.standing === true
+      ? { retentionHint: { policyKey: STANDING_FACT_RETENTION_POLICY_KEY } }
+      : {}),
   };
   store.insertMemory(record);
 }
@@ -102,9 +111,68 @@ describe("standingProfileForUser (#4228)", () => {
       type: "episodic",
       pinned: true,
     });
-    seed(store, { id: "excluded", body: "Mag lange Antworten.", tags: [PROFILE_EXCLUDED_TAG] });
+    seed(store, {
+      id: "excluded",
+      body: "Mag lange Antworten.",
+      tags: [PROFILE_EXCLUDED_MEMORY_TAG],
+    });
     seed(store, { id: "project", body: "Das Team nutzt Jira.", project: true, pinned: true });
     expect(profileIds(store)).toEqual(["pinned-episode"]);
+  });
+
+  it("keeps a fact capture marked standing beyond the newest-500 retrieval window", () => {
+    const store = vault();
+    seed(store, {
+      id: "role",
+      body: "Ist Backend-Entwicklerin.",
+      type: "semantic-fact",
+      standing: true,
+      createdAt: NOW - 10_000_000,
+    });
+    for (let index = 0; index < 600; index += 1) {
+      seed(store, {
+        id: `fact-${String(index).padStart(4, "0")}`,
+        body: `Projekt ${String(index)} läuft auf Kafka.`,
+        type: "semantic-fact",
+        createdAt: NOW - 5_000 + index,
+      });
+    }
+    expect(profileIds(store)).toEqual(["role"]);
+  });
+
+  it("keeps a learned role in the profile when the learner replaces it", () => {
+    const store = vault();
+    seed(store, {
+      id: "role",
+      body: "Ist Analystin.",
+      type: "semantic-fact",
+      standing: true,
+      createdAt: NOW - 9,
+    });
+    const before = store.getMemory("role" as MemoryId);
+    if (before === undefined) throw new Error("seed missing");
+    // A learned fact carries its evidence; only such a fact gives way to the learner.
+    store.updateMemory(
+      "role" as MemoryId,
+      { provenance: { ...before.provenance, evidenceSpan: "Ich bin Analystin" } },
+      NOW - 8,
+    );
+    const learned = store.getMemory("role" as MemoryId);
+    if (learned === undefined) throw new Error("seed missing");
+    const replacement: MemoryRecord = {
+      ...learned,
+      id: "lead" as MemoryId,
+      body: "Ist jetzt Teamleiterin.",
+      createdAt: NOW - 5,
+      updatedAt: NOW - 5,
+    };
+    const { retentionHint: _dropped, ...unmarked } = replacement;
+    applyLearnedSupersession(store, unmarked, learned.id, {
+      status: learned.status,
+      updatedAt: learned.updatedAt,
+    });
+    expect(store.getMemory("role" as MemoryId)?.status).toBe("superseded");
+    expect(profileIds(store)).toEqual(["lead"]);
   });
 
   it("reads only as many bodies as the profile needs", () => {

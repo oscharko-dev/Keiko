@@ -36,10 +36,12 @@ import type {
   SalienceModelMessage,
   SalienceOutcome,
 } from "./types.js";
-import type {
-  MemoryId,
-  MemoryStructuredPayload,
-  MemoryType,
+import {
+  STANDING_FACT_RETENTION_POLICY_KEY,
+  type MemoryId,
+  type MemoryProposal,
+  type MemoryStructuredPayload,
+  type MemoryType,
 } from "@oscharko-dev/keiko-contracts/memory";
 
 // Few durable facts per message: the bar is high by owner decision.
@@ -298,6 +300,16 @@ function mapType(loose: string): MemoryType | null {
   return TYPE_MAP[loose.trim().toLowerCase()] ?? null;
 }
 
+// Labels of a standing fact about the person: who they are and what always holds for them. Such a
+// fact is stored as a semantic fact but belongs to the standing profile (#4228).
+const STANDING_LABELS: ReadonlySet<string> = new Set(["identity", "constraint"]);
+
+function standingRetentionHint(fact: AdmittedFact): MemoryProposal["retentionHint"] {
+  return fact.subject === "self" && STANDING_LABELS.has(fact.item.type.trim().toLowerCase())
+    ? { policyKey: STANDING_FACT_RETENTION_POLICY_KEY }
+    : undefined;
+}
+
 // ─── Candidate construction ──────────────────────────────────────────────────
 // Effective context overlays deps-supplied clock/id factories onto the caller context so the
 // scripted test (and the audit ledger) deterministically controls time and ids (decision 3).
@@ -464,9 +476,14 @@ function learnedCandidate(
     },
     fact.confidence,
   );
+  const retentionHint = standingRetentionHint(fact);
   return {
     kind: "candidate",
-    proposal: payload === undefined ? proposal : { ...proposal, payload },
+    proposal: {
+      ...proposal,
+      ...(payload === undefined ? {} : { payload }),
+      ...(retentionHint === undefined ? {} : { retentionHint }),
+    },
     requiresApproval: decision.requiresApproval,
     relation,
     relationLabel: fact.item.relation,

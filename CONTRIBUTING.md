@@ -582,7 +582,11 @@ streaming and regenerated turns. Its request correlation joins the compacted/ret
 counts, estimated removed-prefix and summary costs, savings, final estimated prompt cost,
 effective input budget and image reserve. This evidence survives generation timeout or
 cancellation; the successful-turn compaction manifest remains separate. These are local estimates,
-not provider-measured usage, and no conversation or image content is recorded.
+not provider-measured usage, and no conversation or image content is recorded. With memory on it and
+the grounded `chat.response.message` also count the standing profile and recall (#4228):
+`profileEntryCount`, `profileTokens`, `profileDroppedCount`, `retrievedMemoryCount` and
+`belowFloorMemoryCount`, never a fact
+([MemoriaViva standing profile](docs/memory/memoria-viva-standing-profile.md)).
 
 Gateway admission additionally records `imageCount`, optional `documentCount`, the selected
 `imageAccounting` rule, `imageReserveTokens`, `localPromptTokens`, `fallbackPromptTokens`, and,

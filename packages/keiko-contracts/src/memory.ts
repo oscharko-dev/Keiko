@@ -60,6 +60,7 @@ export type {
 export {
   MEMORY_STRUCTURED_PAYLOAD_KINDS,
   PROFILE_EXCLUDED_MEMORY_TAG,
+  STANDING_FACT_RETENTION_POLICY_KEY,
   personMemoryTags,
 } from "./memory-records.js";
 

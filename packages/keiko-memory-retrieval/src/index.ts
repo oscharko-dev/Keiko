@@ -79,9 +79,10 @@ export { retrieveMemoryContext } from "./retrieve.js";
 // ─── Standing profile (#4228) ────────────────────────────────────────────────
 export {
   DEFAULT_STANDING_PROFILE_CAPS,
-  PROFILE_EXCLUDED_TAG,
   STANDING_PROFILE_TYPES,
   compareStandingProfileOrder,
+  isStandingFact,
+  standingProfileSuccession,
   selectStandingProfile,
   type StandingProfile,
   type StandingProfileCandidate,
