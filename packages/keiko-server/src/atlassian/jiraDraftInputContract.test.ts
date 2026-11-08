@@ -144,8 +144,11 @@ function parameters(alias: string): CatalogJsonObject {
 }
 
 beforeAll(async () => {
+  const original: ReadonlySet<string> = new Set(ORIGINAL_TOOL_ALIASES);
   const selected = await runtime.select(
-    jiraOperationContracts().map((entry) => entry.binding.identity),
+    jiraOperationContracts()
+      .filter((entry) => original.has(entry.definition.tool.replaceAll(/[.-]/gu, "_")))
+      .map((entry) => entry.binding.identity),
   );
   selectedDefinitions = gatewayToolDefinitions(selected.catalog, selected.projection.profile);
 });
