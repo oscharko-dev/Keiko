@@ -6,7 +6,8 @@ import { JIRA_SYSTEM_ACTION_TOOLS, JIRA_ISSUE_ACTION_TOOLS } from "./jira-system
 
 const sys = <const Suffix extends string>(suffix: Suffix): `chat.jira.systemAction.${Suffix}` =>
   `chat.jira.systemAction.${suffix}`;
-const LABEL_GROUP_1: Readonly<Record<string, WidgetMessageKey>> = {
+type Table = Readonly<Record<string, WidgetMessageKey>>;
+const ACCESS_LABELS: Table = {
   expectedActorKey: "chat.jira.savedConfiguration.reviewedActor",
   groupName: "chat.jira.accessWrite.groupName",
   swapGroupName: sys("swapGroup"),
@@ -15,9 +16,12 @@ const LABEL_GROUP_1: Readonly<Record<string, WidgetMessageKey>> = {
   user: sys("reviewedUser"),
   users: sys("explicitRecipients"),
   expectedObservedMembership: sys("observedInheritedMembership"),
-  issueId: "chat.jira.properties.issueId",
+  role: sys("roleReplacement"),
+  roles: sys("roleReplacements"),
+  expectedApplicationRole: sys("reviewedApplicationRole"),
 };
-const LABEL_GROUP_2: Readonly<Record<string, WidgetMessageKey>> = {
+const COMMENT_AND_NOTIFICATION_LABELS: Table = {
+  issueId: "chat.jira.properties.issueId",
   issueKey: "chat.jira.fact.issueKeys",
   commentId: "chat.jira.fact.commentId",
   expectedBody: sys("reviewedComment"),
@@ -25,55 +29,47 @@ const LABEL_GROUP_2: Readonly<Record<string, WidgetMessageKey>> = {
   subject: sys("subject"),
   textBody: sys("plainBody"),
   confirmEmailSend: sys("acceptNotification"),
+};
+const MAINTENANCE_LABELS: Table = {
   expectedNode: sys("reviewedNode"),
   expectedClusterState: sys("reviewedCluster"),
   expectedRunning: sys("reviewedRunning"),
   expectedReindex: sys("reviewedReindex"),
   expectedUpgrade: sys("reviewedUpgrade"),
   expectedIssues: sys("reviewedIssues"),
-};
-const LABEL_GROUP_3: Readonly<Record<string, WidgetMessageKey>> = {
   confirmUnverifiedEffect: sys("acceptMaintenance"),
-  type: sys("nativeKind"),
   indexComments: sys("indexComments"),
   indexChangeHistory: sys("indexHistory"),
   indexWorklogs: sys("indexWorklogs"),
-  role: sys("roleReplacement"),
-  roles: sys("roleReplacements"),
 };
-const LABEL_GROUP_4: Readonly<Record<string, WidgetMessageKey>> = {
-  expectedApplicationRole: sys("reviewedApplicationRole"),
+const FIELD_AND_SEARCHER_LABELS: Table = {
   expectedColumns: "chat.jira.instanceWrite.reviewedColumns",
   columns: "chat.jira.instanceWrite.requestedColumns",
   expectedIssueType: sys("reviewedIssueType"),
   expectedAlternative: sys("reviewedAlternative"),
   expectedFields: sys("reviewedFields"),
-  expectedLinkType: sys("reviewedLinkType"),
-  expectedLinkTypes: sys("reviewedLinkOrder"),
-  expectedEntries: sys("reviewedTerms"),
-  entries: sys("requestedTerms"),
-  confirmUnverifiedMigration: sys("acceptMigration"),
-};
-const LABEL_GROUP_5: Readonly<Record<string, WidgetMessageKey>> = {
   name: "chat.jira.structural.nativeName",
   description: "chat.jira.structural.nativeDescription",
   searcherKey: sys("searcherKey"),
   projectIds: sys("explicitProjectIds"),
   issueTypeIds: "chat.jira.schemeWrite.issueTypeOrder",
+  type: sys("nativeKind"),
+};
+const LINK_TYPE_LABELS: Table = {
+  expectedLinkType: sys("reviewedLinkType"),
+  expectedLinkTypes: sys("reviewedLinkOrder"),
   inward: sys("inward"),
   outward: sys("outward"),
   direction: sys("orderDirection"),
   linkTypeId: "chat.jira.fact.linkTypeId",
   newPosition: sys("newPosition"),
 };
-const LABELS: Readonly<Record<string, WidgetMessageKey>> = {
-  ...LABEL_GROUP_1,
-  ...LABEL_GROUP_2,
-  ...LABEL_GROUP_3,
-  ...LABEL_GROUP_4,
-  ...LABEL_GROUP_5,
+const TERM_AND_MIGRATION_LABELS: Table = {
+  expectedEntries: sys("reviewedTerms"),
+  entries: sys("requestedTerms"),
+  confirmUnverifiedMigration: sys("acceptMigration"),
 };
-const MEMBER_GROUP_1: Readonly<Record<string, WidgetMessageKey>> = {
+const PRINCIPAL_AND_GROUP_MEMBERS: Table = {
   key: sys("nativePrincipalKey"),
   id: "chat.jira.planning.nativeId",
   expected: sys("reviewedRole"),
@@ -83,24 +79,26 @@ const MEMBER_GROUP_1: Readonly<Record<string, WidgetMessageKey>> = {
   subtask: sys("subtask"),
   avatarId: "chat.jira.fact.avatarId",
   custom: sys("customField"),
+};
+const TERM_MEMBERS: Table = {
   originalName: sys("originalTerm"),
   originalNamePlural: sys("originalPlural"),
   newName: sys("newTerm"),
-};
-const MEMBER_GROUP_2: Readonly<Record<string, WidgetMessageKey>> = {
   newNamePlural: sys("newPlural"),
   isDefault: sys("defaultTerm"),
+};
+const NODE_AND_BUILD_MEMBERS: Table = {
   nodeId: "chat.jira.maintenance.nodeId",
   state: sys("nativeState"),
   alive: sys("observedAlive"),
   nodeBuildNumber: sys("buildNumber"),
   nodeVersion: sys("version"),
   lastStateChangeTimestamp: sys("stateTimestamp"),
-};
-const MEMBER_GROUP_3: Readonly<Record<string, WidgetMessageKey>> = {
   build: sys("reviewedBuild"),
   buildNumber: sys("buildNumber"),
   version: sys("version"),
+};
+const TASK_AND_UPGRADE_MEMBERS: Table = {
   taskState: sys("taskObservation"),
   currentProgress: sys("nativeProgress"),
   success: sys("nativeSuccess"),
@@ -113,11 +111,20 @@ const MEMBER_GROUP_3: Readonly<Record<string, WidgetMessageKey>> = {
   duration: sys("duration"),
   message: sys("nativeMessage"),
 };
-const MEMBERS: Readonly<Record<string, WidgetMessageKey>> = {
+const LABELS: Table = {
+  ...ACCESS_LABELS,
+  ...COMMENT_AND_NOTIFICATION_LABELS,
+  ...MAINTENANCE_LABELS,
+  ...FIELD_AND_SEARCHER_LABELS,
+  ...LINK_TYPE_LABELS,
+  ...TERM_AND_MIGRATION_LABELS,
+};
+const MEMBERS: Table = {
   ...LABELS,
-  ...MEMBER_GROUP_1,
-  ...MEMBER_GROUP_2,
-  ...MEMBER_GROUP_3,
+  ...PRINCIPAL_AND_GROUP_MEMBERS,
+  ...TERM_MEMBERS,
+  ...NODE_AND_BUILD_MEMBERS,
+  ...TASK_AND_UPGRADE_MEMBERS,
 };
 function selected(operation: string | undefined): string | undefined {
   const tool = operation?.replace(/[.-]/gu, "_");
