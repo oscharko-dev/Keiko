@@ -5,6 +5,7 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
+import { sha256Hex } from "@oscharko-dev/keiko-security";
 // Issue #2244 — route-level governance tests for the Confluence/Jira write actions. Hermetic: no
 // network (the transport port is a counting fixture), no wall-clock races (envelopes register
 // far-future or with pinned past instants), singleton registries reset around every test.
@@ -1317,7 +1318,8 @@ it("records one failed write attempt without resending a possibly committed PUT 
     outcome: "failed",
     failureReason: "unavailable",
     deploymentCeiling: "autonomous-delivery",
-    actionType: "update-issue-fields",
+    actionType: "jira-write",
+    actionTypeDigest: sha256Hex("update-issue-fields"),
     provider: "jira",
   });
   const timeline = analyzeLogText(line).timelines.find(
@@ -1325,6 +1327,7 @@ it("records one failed write attempt without resending a possibly committed PUT 
   );
   expect(timeline?.lines.some((item) => item.op === "atlassian.action.outcome")).toBe(true);
   expect(line).not.toContain(JIRA_AUTH_REF);
+  expect(line).not.toContain("update-issue-fields");
   expect(line).not.toContain("Sharper");
   expect(line).not.toContain("example.atlassian.net");
 });
@@ -1365,9 +1368,12 @@ it.each(["{", "[]"])(
     expect(expectActivityLogProof("atlassian.action.outcome.line", line)).toMatchObject({
       outcome: "failed",
       failureReason: "malformed-payload",
-      actionType: "transition-issue",
+      actionType: "jira-write",
+      actionTypeDigest: sha256Hex("transition-issue"),
+      provider: "jira",
     });
     expect(analyzeLogText(line).timelines).toHaveLength(1);
     expect(line).not.toContain(JIRA_AUTH_REF);
+    expect(line).not.toContain("transition-issue");
   },
 );

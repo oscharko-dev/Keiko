@@ -6,25 +6,135 @@ import { afterEach, expect, it, vi, type Mock } from "vitest";
 import type {
   JiraMutationAttempt,
   JiraMutationOperation,
+  JiraMutationOutcome,
+  JiraMutationReceipt,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import { JiraAcknowledgedMutationError } from "@oscharko-dev/keiko-connectors";
+import type {
+  CatalogJsonObject,
+  ToolResultEnvelope,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
+import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
+import { catalogJsonBytes, validateToolResultEnvelope } from "@oscharko-dev/keiko-tool-catalog";
+import {
+  JiraAcknowledgedMutationError,
+  type AtlassianHttpBodyPort,
+} from "@oscharko-dev/keiko-connectors";
 import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
-import { buildUiStoreOverDatabase, createNodeUiStore } from "../store/index.js";
+import { buildUiStoreOverDatabase, createNodeUiStore, type UiStore } from "../store/index.js";
 import { runMigrations } from "../store/schema.js";
 import { createChatToolMutationStore } from "../store/chatToolMutations.js";
 import type { JiraChatToolMutationIntent as ChatToolMutationIntent } from "../store/chatToolMutationTypes.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import { executeJiraChatMutation, type JiraChatMutationExecution } from "./jiraChatMutation.js";
 import { createGatewayAtlassianHttpBodyPort } from "./httpPort.js";
-import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
+import { createJiraProviderForCatalog, jiraOperationForTool } from "./jiraManagedProvider.js";
+import { jiraChatWriteAction } from "./jiraChatCatalogWrite.js";
+import { jiraMutationToolResult } from "./jiraMutationResult.js";
+import { managedCatalogProjection } from "../tool-catalog/managedProviderCatalog.js";
 
 const cleanup: (() => void)[] = [];
 afterEach(() => {
   for (const close of cleanup.splice(0)) close();
 });
+
+it("keeps recovered settled replay bound to its original message and current effect authority", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "keiko-recovered-replay-"));
+  const path = join(directory, "ui.sqlite");
+  try {
+    const f = fixture(path);
+    expect(await executeJiraChatMutation(f.input)).toMatchObject({
+      data: { outcome: "succeeded", issueKey: "SYN-1" },
+    });
+    f.close();
+    const reopened = createNodeUiStore(path);
+    try {
+      const execute = vi.fn(f.input.execute);
+      const input = { ...f.input, journal: reopened.chatToolMutations, execute };
+      expect(reopened.findMessageById(input.intent.userMessageId)?.turnState).toBe("failed");
+      expect(await executeJiraChatMutation(input)).toMatchObject({
+        data: { outcome: "pending", reason: "unavailable" },
+      });
+      expect(execute).not.toHaveBeenCalled();
+      expect(f.effects).toHaveBeenCalledOnce();
+      f.readmit(reopened);
+      expect(await executeJiraChatMutation({ ...input, beforeEffect: () => false })).toMatchObject({
+        data: { outcome: "pending", reason: "permission-denied" },
+      });
+      for (const changed of [
+        { userMessageId: "another-user-message" },
+        { actorId: "another-actor" },
+        { bindingGeneration: 2 },
+        { credentialGeneration: 2 },
+        { authorityDigest: "c".repeat(64) },
+      ])
+        expect(
+          await executeJiraChatMutation({ ...input, intent: { ...input.intent, ...changed } }),
+        ).toMatchObject({ data: { outcome: "pending", reason: "unavailable" } });
+      const replay = await executeJiraChatMutation(input);
+      expect(replay).toMatchObject({ data: { outcome: "succeeded", replayed: true } });
+      expect(replay.data).not.toHaveProperty("issueKey");
+      expect(replay.data).not.toHaveProperty("issueId");
+      expect(reopened.findMessageById(input.intent.userMessageId)?.turnState).toBe("pending");
+      expect(execute).not.toHaveBeenCalled();
+      expect(f.effects).toHaveBeenCalledOnce();
+      expect(reopened.chatToolMutations?.find(input.intent.invocationId)).toMatchObject({
+        phase: "settled",
+        outcome: "succeeded",
+        httpStatus: 201,
+      });
+    } finally {
+      reopened.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+it.each(["prepared", "dispatched", "acknowledged"] as const)(
+  "does not resume a recovered %s mutation from a terminal turn",
+  async (phase) => {
+    const directory = mkdtempSync(join(tmpdir(), "keiko-recovered-dispatch-"));
+    const path = join(directory, "ui.sqlite");
+    try {
+      const f = fixture(path);
+      const journal = f.input.journal;
+      if (journal === undefined) throw new TypeError("Missing mutation journal");
+      expect(journal.prepare(f.input.intent).kind).toBe("prepared");
+      if (phase !== "prepared")
+        expect(journal.beginDispatch(f.input.intent.invocationId, () => true)).toBe(true);
+      if (phase === "acknowledged") journal.acknowledge(f.input.intent.invocationId, 201);
+      f.close();
+      const reopened = createNodeUiStore(path);
+      try {
+        const execute = vi.fn(f.input.execute);
+        expect(
+          await executeJiraChatMutation({
+            ...f.input,
+            journal: reopened.chatToolMutations,
+            execute,
+          }),
+        ).toMatchObject({
+          data: { outcome: "pending", reason: "unavailable" },
+        });
+        expect(execute).not.toHaveBeenCalled();
+        expect(f.effects).not.toHaveBeenCalled();
+        expect(reopened.chatToolMutations?.find(f.input.intent.invocationId)?.phase).toBe(phase);
+        expect(reopened.findMessageById(f.input.intent.userMessageId)?.turnState).toBe("failed");
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+);
+
 function fixture(path = ":memory:"): {
   input: JiraChatMutationExecution;
+  store: UiStore;
+  readmit: (store: UiStore) => void;
   close: () => void;
   effects: Mock<typeof fetch>;
   logs: ReturnType<typeof createBufferedServerLogSink>;
@@ -40,9 +150,9 @@ function fixture(path = ":memory:"): {
   };
   cleanup.push(close);
   const chat = store.createChat(store.createProject(process.cwd()).path, "Synthetic", "model");
-  const turn = store.admitChatTurn("synthetic-turn", {
+  const request = {
     chatId: chat.id,
-    role: "user",
+    role: "user" as const,
     content: "synthetic",
     timestamp: 1000,
     runId: undefined,
@@ -50,7 +160,8 @@ function fixture(path = ":memory:"): {
     workflowStatus: undefined,
     shortResult: undefined,
     taskType: undefined,
-  });
+  };
+  const turn = store.admitChatTurn("synthetic-turn", request);
   if (turn.kind !== "admitted" || turn.userMessage.canonicalTurnRef === undefined)
     throw new Error("Expected turn");
   const logs = createBufferedServerLogSink();
@@ -68,6 +179,12 @@ function fixture(path = ":memory:"): {
     actionDigest: "b".repeat(64),
     operation: "jira.create",
     correlationId: "mutation-one",
+  };
+  const readmit = (reopened: UiStore): void => {
+    expect(reopened.admitChatTurn("synthetic-turn", request)).toMatchObject({
+      kind: "admitted",
+      userMessage: { id: intent.userMessageId, canonicalTurnRef: intent.turnRef },
+    });
   };
   const effects = vi.fn<typeof fetch>(() => {
     expect(journal.find(intent.invocationId)?.phase).toBe("dispatched");
@@ -103,7 +220,7 @@ function fixture(path = ":memory:"): {
       return { ok: true, receipt: { issueKey: parsed.key, issueId: parsed.id } };
     },
   };
-  return { input, effects, logs, close };
+  return { input, store, readmit, effects, logs, close };
 }
 it("commits before sending, records acknowledgement, and never repeats a completed invocation", async () => {
   const f = fixture();
@@ -331,26 +448,23 @@ function propertyJournalFixture(
   scenario: PropertyJournalCase,
   observation: PropertyObservation,
   path = ":memory:",
-) {
+): ReturnType<typeof fixture> & {
+  readonly receipt: JiraMutationReceipt;
+  readonly consume: () => Promise<ManagedMcpToolResult>;
+  readonly expectRetained: (outcome: JiraMutationOutcome, store?: UiStore) => void;
+} {
   const f = fixture(path);
   const parent = `${scenario.root}/${scenario.entity}/${scenario.id}`;
   const resource = `${parent}/properties`;
   let dispatched = false;
-  f.effects.mockImplementation((input, init) => {
-    const url = new URL(input instanceof Request ? input.url : String(input));
-    const selectedPath = decodeURIComponent(url.pathname);
-    const json = (body: unknown, status = 200) =>
-      Promise.resolve(new Response(JSON.stringify(body), { status }));
-    if (init?.method !== "GET") {
-      expect(f.input.journal?.find(f.input.intent.invocationId)?.phase).toBe("dispatched");
-      expect(selectedPath).toBe(`${resource}/${JOURNAL_PROPERTY_KEY}`);
-      expect(init?.method).toBe(scenario.remove ? "DELETE" : "PUT");
-      expect(init?.body).toBe(scenario.remove ? undefined : JSON.stringify(scenario.after));
-      dispatched = true;
-      if (observation === "lost-ack")
-        return Promise.reject(new Error("Synthetic lost property acknowledgement"));
-      return Promise.resolve(new Response(null, { status: 204 }));
-    }
+  const json = (body: unknown, status = 200): Promise<Response> =>
+    Promise.resolve(new Response(JSON.stringify(body), { status }));
+  const propertyValue = (): null | false => {
+    if (dispatched || observation === "unchanged") return scenario.after;
+    if (observation === "stale") return scenario.before === null ? false : null;
+    return scenario.before;
+  };
+  const read = (selectedPath: string): Promise<Response> => {
     if (dispatched && observation === "denied-readback")
       return json({ errorMessages: ["Readback denied"] }, 403);
     if (selectedPath === parent || selectedPath === `${scenario.root}/issue/syn-1`)
@@ -364,15 +478,25 @@ function propertyJournalFixture(
       return json({ keys: present ? [{ key: JOURNAL_PROPERTY_KEY }] : [] });
     expect(selectedPath).toBe(`${resource}/${JOURNAL_PROPERTY_KEY}`);
     if (!present) return json({ errorMessages: ["Property missing"] }, 404);
-    const value =
-      dispatched || observation === "unchanged"
-        ? scenario.after
-        : observation === "stale"
-          ? scenario.before === null
-            ? false
-            : null
-          : scenario.before;
-    return json({ key: JOURNAL_PROPERTY_KEY, value });
+    return json({ key: JOURNAL_PROPERTY_KEY, value: propertyValue() });
+  };
+  const writeProperty = (
+    selectedPath: string,
+    init: RequestInit | undefined,
+  ): Promise<Response> => {
+    expect(f.input.journal?.find(f.input.intent.invocationId)?.phase).toBe("dispatched");
+    expect(selectedPath).toBe(`${resource}/${JOURNAL_PROPERTY_KEY}`);
+    expect(init?.method).toBe(scenario.remove ? "DELETE" : "PUT");
+    expect(init?.body).toBe(scenario.remove ? undefined : JSON.stringify(scenario.after));
+    dispatched = true;
+    if (observation === "lost-ack")
+      return Promise.reject(new Error("Synthetic lost property acknowledgement"));
+    return Promise.resolve(new Response(null, { status: 204 }));
+  };
+  f.effects.mockImplementation((input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    const selectedPath = decodeURIComponent(url.pathname);
+    return init?.method === "GET" ? read(selectedPath) : writeProperty(selectedPath, init);
   });
   const expected = observation === "unchanged" ? scenario.after : scenario.before;
   const args: CatalogJsonObject = {
@@ -383,23 +507,137 @@ function propertyJournalFixture(
       : { expectedValueNodes: propertyNodes(expected) }),
     ...(scenario.remove ? {} : { valueNodes: propertyNodes(scenario.after) }),
   };
-  const execute = managedAttempt(f, scenario.operation, args);
   const receipt = {
     ...scenario.context,
     propertyKey: JOURNAL_PROPERTY_KEY,
     propertyPresent: !scenario.remove,
   };
-  return {
-    ...f,
-    receipt,
-    input: { ...f.input, intent: { ...f.input.intent, operation: scenario.operation }, execute },
+  const contract = jiraOperationForTool(scenario.operation);
+  if (contract === undefined) throw new TypeError("Missing property operation contract");
+  const call: ChatToolExchange["call"] = {
+    id: f.input.intent.invocationId,
+    name: scenario.operation.replace(/[.-]/gu, "_"),
+    arguments: args,
   };
+  const write = jiraChatWriteAction({
+    tool: scenario.operation,
+    actionId: call.id,
+    idempotencyKey: call.id,
+    argumentsDigest: sha256Hex(canonicalise(args)),
+    operationBinding: contract.binding,
+  });
+  if (write === undefined) throw new TypeError("Missing bound property action");
+  const input: JiraChatMutationExecution = {
+    ...f.input,
+    intent: { ...f.input.intent, operation: scenario.operation, actionDigest: write.actionDigest },
+    execute: managedAttempt(f, scenario.operation, args),
+  };
+  const projection = managedCatalogProjection(
+    [{ name: scenario.operation, alias: call.name }],
+    [contract.declaration],
+    { id: "property-receipt-consumer", version: 1 },
+    1000,
+  );
+  const binding = {
+    descriptor: contract.declaration.descriptor,
+    projectionDigest: projection.projectionDigest,
+  };
+  let original: ToolResultEnvelope | undefined;
+  const consume = async (): Promise<ManagedMcpToolResult> => {
+    f.store.updateChatToolTranscript(
+      input.intent.userMessageId,
+      {
+        kind: "started",
+        call,
+        operationBinding: contract.binding,
+      },
+      input.intent.correlationId,
+    );
+    const provider = createJiraProviderForCatalog(
+      () => ({
+        deployment: "data-center",
+        baseUrl: "https://jira.example.invalid",
+        http: (): ReturnType<AtlassianHttpBodyPort> => {
+          throw new TypeError("Unjournaled property transport must not run");
+        },
+      }),
+      [scenario.operation],
+      async (_operation, _args, _context, executeNative) =>
+        executeJiraChatMutation({
+          ...input,
+          execute: (http) => executeNative(http),
+        }),
+    );
+    const tool = provider.tools()[0];
+    if (tool === undefined) throw new TypeError("Missing bound property producer");
+    const result = await tool.execute(args, {
+      invocationId: input.intent.invocationId,
+      correlationId: input.intent.correlationId,
+      signal: new AbortController().signal,
+      beforeEffect: input.beforeEffect,
+    });
+    const outcome = result.data.outcome;
+    if (outcome !== "succeeded" && outcome !== "succeeded-unconfirmed" && outcome !== "unknown")
+      throw new TypeError("Unexpected property consumer outcome");
+    original = validateToolResultEnvelope(
+      {
+        schemaVersion: 1,
+        invocationId: call.id,
+        toolRef: binding.descriptor.toolRef,
+        projectionDigest: binding.projectionDigest,
+        status: result.isError === true ? "failed" : "completed",
+        reason: result.isError === true ? "provider-reported-error" : "none",
+        effectStarted: f.effects.mock.calls.some(([, init]) => init?.method !== "GET"),
+        data: result.data,
+        page: result.isError === true ? null : { truncated: false, reason: "none", cursor: null },
+        metrics: {
+          inputBytes: catalogJsonBytes(args),
+          outputBytes: catalogJsonBytes(result.data),
+          resultCount: 0,
+          durationMs: 0,
+        },
+      },
+      binding,
+    );
+    f.store.updateChatToolTranscript(
+      input.intent.userMessageId,
+      {
+        kind: "settled",
+        callId: call.id,
+        result: original,
+        binding,
+        mutationOutcome: outcome,
+      },
+      input.intent.correlationId,
+    );
+    return result;
+  };
+  const expectRetained = (outcome: JiraMutationOutcome, store: UiStore = f.store): void => {
+    const message = store.findMessageById(input.intent.userMessageId);
+    if (message?.toolTranscript === undefined)
+      throw new TypeError("Missing original consumer transcript");
+    const exchanges = message.toolTranscript.exchanges;
+    expect(exchanges).toHaveLength(1);
+    const retained = exchanges[0];
+    if (retained?.result === undefined || original === undefined)
+      throw new TypeError("Missing original property receipt");
+    expect(retained.call).toEqual(call);
+    expect(retained.result).toEqual(original);
+    expect(retained.result.toolRef).toEqual(contract.declaration.descriptor.toolRef);
+    expect(retained.result.data).toMatchObject({
+      ...receipt,
+      outcome,
+      operationBinding: contract.binding,
+    });
+    expect(retained.mutationOutcome).toBe(outcome);
+  };
+  return { ...f, receipt, input, consume, expectRetained };
 }
 it.each(PROPERTY_JOURNAL_CASES)(
   "journals one $operation using its fixed root and complete same-parent property readback",
   async (scenario) => {
     const f = propertyJournalFixture(scenario, "confirmed");
-    expect(await executeJiraChatMutation(f.input)).toMatchObject({
+    expect(await f.consume()).toMatchObject({
       data: { outcome: "succeeded", ...f.receipt },
     });
     expect(f.effects.mock.calls.map(([, init]) => init?.method)).toEqual([
@@ -411,9 +649,10 @@ it.each(PROPERTY_JOURNAL_CASES)(
       "GET",
       "GET",
     ]);
-    expect(await executeJiraChatMutation(f.input)).toMatchObject({
-      data: { outcome: "succeeded", replayed: true, ...f.receipt },
-    });
+    expect((await executeJiraChatMutation(f.input)).data).toEqual(
+      jiraMutationToolResult("succeeded", undefined, {}, true).data,
+    );
+    f.expectRetained("succeeded");
     expect(f.effects).toHaveBeenCalledTimes(7);
     expect(f.logs.lines().join()).not.toMatch(
       /display|Synthetic issue|Synthetic board|jira\.example|propertyKey|valueNodes/u,
@@ -424,13 +663,14 @@ it.each(PROPERTY_JOURNAL_CASES)(
   "retains only the requested $operation presence and exact context after denied readback",
   async (scenario) => {
     const f = propertyJournalFixture(scenario, "denied-readback");
-    expect(await executeJiraChatMutation(f.input)).toMatchObject({
+    expect(await f.consume()).toMatchObject({
       data: { outcome: "succeeded-unconfirmed", ...f.receipt },
     });
     const requests = f.effects.mock.calls.length;
-    expect(await executeJiraChatMutation(f.input)).toMatchObject({
-      data: { outcome: "succeeded-unconfirmed", replayed: true, ...f.receipt },
-    });
+    expect((await executeJiraChatMutation(f.input)).data).toEqual(
+      jiraMutationToolResult("succeeded-unconfirmed", undefined, {}, true).data,
+    );
+    f.expectRetained("succeeded-unconfirmed");
     expect(f.effects).toHaveBeenCalledTimes(requests);
     expect(f.effects.mock.calls.filter(([, init]) => init?.method !== "GET")).toHaveLength(1);
   },
@@ -442,20 +682,24 @@ it.each(PROPERTY_JOURNAL_CASES)(
     const path = join(directory, "ui.sqlite");
     try {
       const f = propertyJournalFixture(scenario, "lost-ack", path);
-      expect(await executeJiraChatMutation(f.input)).toMatchObject({
+      expect(await f.consume()).toMatchObject({
         data: { outcome: "unknown", ...f.receipt },
       });
       f.close();
       const reopened = createNodeUiStore(path);
       try {
+        f.readmit(reopened);
         const execute = vi.fn(f.input.execute);
         expect(
-          await executeJiraChatMutation({
-            ...f.input,
-            journal: reopened.chatToolMutations,
-            execute,
-          }),
-        ).toMatchObject({ data: { outcome: "unknown", replayed: true, ...f.receipt } });
+          (
+            await executeJiraChatMutation({
+              ...f.input,
+              journal: reopened.chatToolMutations,
+              execute,
+            })
+          ).data,
+        ).toEqual(jiraMutationToolResult("unknown", undefined, {}, true).data);
+        f.expectRetained("unknown", reopened);
         expect(execute).not.toHaveBeenCalled();
         expect(f.effects.mock.calls.map(([, init]) => init?.method)).toEqual([
           "GET",
@@ -512,12 +756,11 @@ it.each(PROPERTY_JOURNAL_CASES)(
         ? Promise.resolve(new Response('{"errorMessages":["Native refusal"]}', { status: 400 }))
         : original(input, init),
     );
-    expect(await executeJiraChatMutation(f.input)).toMatchObject({
-      data: { outcome: "unknown", ...f.receipt },
-    });
-    expect(await executeJiraChatMutation(f.input)).toMatchObject({
-      data: { outcome: "unknown", replayed: true, ...f.receipt },
-    });
+    expect(await f.consume()).toMatchObject({ data: { outcome: "unknown", ...f.receipt } });
+    expect((await executeJiraChatMutation(f.input)).data).toEqual(
+      jiraMutationToolResult("unknown", undefined, {}, true).data,
+    );
+    f.expectRetained("unknown");
     expect(f.effects.mock.calls.filter(([, init]) => init?.method !== "GET")).toHaveLength(1);
   },
 );
@@ -566,21 +809,11 @@ function monitoringFixture(
   scenario: MonitoringCase,
   observation: MonitoringObservation,
   path = ":memory:",
-) {
+): ReturnType<typeof fixture> {
   const f = fixture(path);
   let dispatched = false;
   const scalar = scenario.read === "monitoring/jmx/areMetricsExposed";
-  f.effects.mockImplementation((input, init) => {
-    const url = new URL(input instanceof Request ? input.url : String(input));
-    if (init?.method === "POST") {
-      expect(f.input.journal?.find(f.input.intent.invocationId)?.phase).toBe("dispatched");
-      expect(url.pathname).toBe(`/rest/api/2/${scenario.path}`);
-      dispatched = true;
-      if (observation === "lost-ack")
-        return Promise.reject(new Error("Synthetic lost monitoring response"));
-      return Promise.resolve(new Response(null, { status: scalar ? 200 : 204 }));
-    }
-    expect(init?.method).toBe("GET");
+  const read = (url: URL): Promise<Response> => {
     expect(url.pathname).toBe(`/rest/api/2/${scenario.read}`);
     if (dispatched && observation === "denied-readback")
       return Promise.resolve(
@@ -593,6 +826,19 @@ function monitoringFixture(
     return Promise.resolve(
       new Response(JSON.stringify(scalar ? enabled : { enabled }), { status: 200 }),
     );
+  };
+  f.effects.mockImplementation((input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (init?.method === "POST") {
+      expect(f.input.journal?.find(f.input.intent.invocationId)?.phase).toBe("dispatched");
+      expect(url.pathname).toBe(`/rest/api/2/${scenario.path}`);
+      dispatched = true;
+      if (observation === "lost-ack")
+        return Promise.reject(new Error("Synthetic lost monitoring response"));
+      return Promise.resolve(new Response(null, { status: scalar ? 200 : 204 }));
+    }
+    expect(init?.method).toBe("GET");
+    return read(url);
   });
   const args: CatalogJsonObject =
     observation === "unchanged"
@@ -647,6 +893,7 @@ it.each(MONITORING_WRITES)(
       f.close();
       const reopened = createNodeUiStore(path);
       try {
+        f.readmit(reopened);
         const execute = vi.fn(f.input.execute);
         expect(
           await executeJiraChatMutation({
@@ -1579,28 +1826,16 @@ function tabFixture(
   operation: TabWrite,
   observation: "confirmed" | "denied-readback" | "lost-ack",
   path = ":memory:",
-) {
+): ReturnType<typeof fixture> {
   const f = fixture(path);
   let changed = false;
   const original = [
     { id: 21, name: "Fields" },
     { id: 22, name: "Other" },
   ];
-  const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
-  f.effects.mockImplementation((input, init) => {
-    const url = new URL(input instanceof Request ? input.url : String(input));
-    const method = init?.method ?? "GET";
-    if (method !== "GET") {
-      expect(f.input.journal?.find(f.input.intent.invocationId)?.phase).toBe("dispatched");
-      changed = true;
-      if (observation === "lost-ack")
-        return Promise.reject(new Error("Synthetic lost screen-tab response"));
-      return Promise.resolve(
-        operation === "jira.delete-screen-tab"
-          ? new Response(null, { status: 204 })
-          : json({ id: operation === "jira.create-screen-tab" ? 23 : 21, name: "Implementation" }),
-      );
-    }
+  const json = (value: unknown, status = 200): Response =>
+    new Response(JSON.stringify(value), { status });
+  const read = (url: URL): Promise<Response> => {
     if (changed && observation === "denied-readback")
       return Promise.resolve(json({ errorMessages: ["Not permitted"] }, 403));
     if (url.pathname.endsWith("/screens"))
@@ -1623,6 +1858,22 @@ function tabFixture(
           ? [{ id: 21, name: "Implementation" }, original[1]]
           : [original[1]];
     return Promise.resolve(json(tabs));
+  };
+  f.effects.mockImplementation((input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    const method = init?.method ?? "GET";
+    if (method !== "GET") {
+      expect(f.input.journal?.find(f.input.intent.invocationId)?.phase).toBe("dispatched");
+      changed = true;
+      if (observation === "lost-ack")
+        return Promise.reject(new Error("Synthetic lost screen-tab response"));
+      return Promise.resolve(
+        operation === "jira.delete-screen-tab"
+          ? new Response(null, { status: 204 })
+          : json({ id: operation === "jira.create-screen-tab" ? 23 : 21, name: "Implementation" }),
+      );
+    }
+    return read(url);
   });
   const execute = managedAttempt(f, operation, tabArguments(operation));
   return { ...f, input: { ...f.input, intent: { ...f.input.intent, operation }, execute } };
@@ -1682,6 +1933,7 @@ it.each(TAB_WRITES)(
       f.close();
       const reopened = createNodeUiStore(path);
       try {
+        f.readmit(reopened);
         const execute = vi.fn(f.input.execute);
         expect(
           await executeJiraChatMutation({
