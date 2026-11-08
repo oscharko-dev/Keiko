@@ -351,3 +351,22 @@ fonts: all nine tests passed in 2.4 minutes, including real BFF stop/restart. Al
 records were regenerated; the progress and reconnect captures changed and were visually inspected.
 No updater behavior, fixture, assertion or numerical ceiling changed. This is updater presentation
 and recovery evidence; it does not qualify native installation or a live Jira instance.
+
+## Jira draft trace-warning refresh — 2026-11-08
+
+The S16 trace-warning translations changed the declared optional catalog digests. The complete
+canonical producer ran with `KEIKO_WRITE_TRACKED_EVIDENCE=1` and `KEIKO_OS_KEYCHAIN=off` in an
+isolated Linux arm64 container limited to 4 CPUs and 4 GiB, using Node 24.18.0 and Chromium 156
+(build 1248). All nine cases passed with one worker, including real BFF stop/restart; the recorded
+command exited 0 after 136.4 seconds. The producer regenerated 14 PNGs and three JSON records,
+and the unchanged source/harness freshness check exited 0. This renderer used DejaVu fallback
+fonts, not the Liberation fonts of earlier Linux captures. No Jira operation or model generation
+was exercised; startup recorded an unavailable gateway readiness check (`EAI_AGAIN`).
+
+Visual inspection of captures 01–10 found the updater text and actions readable in the desktop
+theme and contrast variants. Capture 10, at a 320-CSS-pixel viewport, shows a scrolled portion of
+the manual-update window: its heading and the beginning of the first command are outside the
+capture, while **Check again** remains visible. It therefore does not establish complete visual
+acceptance of the manual path. These records describe this fixture run and its captured source
+digests; they do not identify or qualify the final UI build, change any bundle budget, or establish
+native update or Jira/model behavior.

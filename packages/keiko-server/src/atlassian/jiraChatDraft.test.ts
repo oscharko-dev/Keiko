@@ -1168,7 +1168,7 @@ describe("source traceability of a draft (#4179)", () => {
   });
 
   it("advises before a human is asked only when the Pods hold requirements (S05 of #4173)", () => {
-    const advise = vi.fn(() => true);
+    const advise = vi.fn<(refs: readonly string[]) => void>();
     const open = (units: number) => (): TraceSession => session(vi.fn(), units);
     const refused = jiraDraftUntracedAdvice(BACKLOG, open(1), advise);
     expect(refused).toMatchObject({
@@ -1189,7 +1189,7 @@ describe("source traceability of a draft (#4179)", () => {
   });
 
   it("does not advise when the Pods hold no requirement or an item names one", async () => {
-    const adviseUntraced = vi.fn(() => true);
+    const adviseUntraced = vi.fn<(refs: readonly string[]) => void>();
     const empty = syntheticJira();
     await executeJiraChatDraft({
       ...execution(empty),

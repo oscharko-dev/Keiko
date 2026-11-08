@@ -241,11 +241,11 @@ export function untracedAdvisory(
     readonly userMessageId?: string | undefined;
     readonly correlationId: string;
   },
-): (refs: readonly string[]) => boolean {
-  return (refs): boolean => {
+): (refs: readonly string[]) => void {
+  return (refs): void => {
     const turn = `${context.chatId}\u0000${context.userMessageId ?? context.correlationId}`;
     const key = `${turn}\u0000${JSON.stringify([...refs].sort((a, b) => a.localeCompare(b)))}`;
-    if (advised.has(key)) return true;
+    if (advised.has(key)) return;
     advised.add(key);
     if (advised.size > ADVISED_DRAFTS_MAX) advised.delete(advised.values().next().value ?? key);
     recordJiraDraftActivity(deps.activityLog, context.correlationId, {
@@ -260,7 +260,6 @@ export function untracedAdvisory(
       violationCount: 0,
       durationMs: 0,
     });
-    return true;
   };
 }
 

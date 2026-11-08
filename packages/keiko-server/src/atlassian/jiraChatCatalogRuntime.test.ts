@@ -10,6 +10,7 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import * as managedProvider from "../tool-catalog/managedProviderCatalog.js";
 import {
   createJiraChatCatalogRuntime,
@@ -341,23 +342,30 @@ describe("the advice about a draft that names no requirement (S16 of #4173)", ()
     userMessageId,
     correlationId: "c-1",
   });
-  const deps = { activityLog: undefined } as unknown as Parameters<typeof untracedAdvisory>[0];
-
-  it("keeps repeated untraced drafts refused instead of treating repetition as human confirmation (S16)", () => {
+  it("deduplicates untraced refusal notifications without returning an admission decision (S16)", () => {
+    const activityLog = createBufferedServerLogSink();
+    const deps = { activityLog };
     const advised = new Set<string>();
     const advise = untracedAdvisory(deps, advised, turn("m-1"));
-    expect(advise(["epic", "task-1", "task-2"])).toBe(true);
-    expect(advise(["task-2", "task-1", "epic"])).toBe(true);
-    expect(advise(["task-1", "task-2"])).toBe(true);
-    expect(advise(["task-1", "task-2"])).toBe(true);
+    advise(["epic", "task-1", "task-2"]);
+    advise(["task-2", "task-1", "epic"]);
+    advise(["task-1", "task-2"]);
+    advise(["task-1", "task-2"]);
     // A separate turn asks again; item names cannot run together across a separator.
-    expect(untracedAdvisory(deps, advised, turn("m-2"))(["task-1", "task-2"])).toBe(true);
-    expect(advise(["task-1,task-2"])).toBe(true);
+    untracedAdvisory(deps, advised, turn("m-2"))(["task-1", "task-2"]);
+    advise(["task-1,task-2"]);
+    expect(activityLog.events.map((event) => event.extra?.itemCount)).toEqual([3, 2, 2, 1]);
+    for (const event of activityLog.events) {
+      expect(event).toMatchObject({
+        op: "atlassian.jira-draft",
+        extra: { phase: "refused", refusal: "requirements-untraced" },
+      });
+    }
   });
 
   it("stays bounded however many drafts a long session advises about", () => {
     const advised = new Set<string>();
-    const advise = untracedAdvisory(deps, advised, turn("m-1"));
+    const advise = untracedAdvisory({}, advised, turn("m-1"));
     for (let index = 0; index < 400; index += 1) advise([`item-${String(index)}`]);
     expect(advised.size).toBe(256);
   });
