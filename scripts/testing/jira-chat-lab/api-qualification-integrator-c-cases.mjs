@@ -1,15 +1,26 @@
 // AC7 qualification of the native user lifecycle, anonymization, application access, directory,
-// worklog change feeds and current-session observation. Every effect acts only on throwaway users
-// that the recipe itself creates with deterministic, non-personal names; seeded identities are never
-// targeted. Passwords are never supplied, generated or observed here: the native creation response
-// withholds the password and nothing in the evidence carries a name, address or display name.
+// worklog change feeds, current-session observation, administrator password change, anonymization
+// unlock and the private session and user-avatar operations. Every data effect acts only on
+// throwaway users that the recipe itself creates with deterministic, non-personal names; seeded
+// identities are never a target. The session operations (login, logout, websudo release) act only
+// on the administrator Chat's own private session, which is ended with the case. A protected value
+// reaches Jira only through the product's human-input custody: it is generated at runtime or read
+// from the lab credential file, and never appears in arguments, evidence, logs or repository files.
 import assert from "node:assert/strict";
+import { Buffer } from "node:buffer";
 import { setTimeout as delay } from "node:timers/promises";
+import { projectJiraAnonymizationTaskSnapshot } from "../../../packages/keiko-connectors/dist/jira-managed-anonymization-reads.js";
 import { basicAuth, labRequest } from "./lab-client.mjs";
 import { readCase } from "./api-qualification-cases.mjs";
 import { adminMutationCase, observeAdminActor } from "./api-qualification-admin-cases.mjs";
 import { qualificationDigest } from "./api-qualification-evidence.mjs";
-import { fixtureWrite } from "./api-qualification-fixtures.mjs";
+import {
+  fixtureWrite,
+  generatedSecret,
+  labActorPassword,
+  releaseQualificationFile,
+} from "./api-qualification-fixtures.mjs";
+import { AVATAR_RECIPES as AV } from "./api-qualification-integrator-a-cases.mjs";
 import { proof, read } from "./api-qualification-read.mjs";
 
 const APPLICATION = "jira-software";
@@ -223,6 +234,259 @@ const worklogFeed = (tool, route) =>
     nativeRoot: "values",
     nativeNames: { changedAt: "updatedTime" },
   });
+// ---- protected input and the private session ---------------------------------------------------
+// Secrets live only here, keyed by the run's fixture object; they are never serialized.
+const SECRETS = new WeakMap();
+function rememberSecret(f, label) {
+  const secret = generatedSecret();
+  SECRETS.set(f, { ...SECRETS.get(f), [label]: secret });
+  return secret;
+}
+const secretOf = (f, label) => {
+  const secret = SECRETS.get(f)?.[label];
+  assert.ok(secret, "The generated secret is known only after its protected submission");
+  return secret;
+};
+const userAuth = (name, secret) => `Basic ${Buffer.from(`${name}:${secret}`).toString("base64")}`;
+const adminLoginInput = (c) => ({ password: labActorPassword(c, "admin") });
+
+async function privatePrepare(c, f) {
+  await observeAdminActor(c, f);
+  await ensureUser(c, f, "private");
+  await observedUser(c, f, "private");
+}
+const privateUserArgs = (f) => ({ ...actorArgs(f), user: reference(users(f).private) });
+const updatePasswordCase = {
+  ...adminMutationCase(
+    "jira.update-user-password",
+    privateUserArgs,
+    async (c, data, f) => {
+      const target = users(f).private;
+      assert.equal(data.userKey, target.key);
+      assert.equal(data.username, target.name);
+      // The acknowledgement proves nothing about credentials: the new password must authenticate
+      // exactly this throwaway user natively.
+      const response = await labRequest(
+        c.session,
+        "GET",
+        "/rest/api/2/myself",
+        userAuth(target.name, secretOf(f, "private")),
+      );
+      assert.equal(response.status, 200);
+      assert.equal(response.value.key, target.key);
+      assert.equal(response.value.active, true);
+      return proof(5);
+    },
+    privatePrepare,
+  ),
+  humanInput: (_c, f) => ({ password: rememberSecret(f, "private") }),
+  cleanup: (c, f) => deleteFixture(c, f, "private"),
+};
+
+async function adminSessionReadback(c, data, f, established) {
+  assert.equal(data.actorUserKey, f.adminActorKey);
+  assert.equal(data.userKey, f.adminActorKey);
+  assert.equal(data.username, "keiko-admin");
+  if (established) assert.equal(data.sessionEstablished, true);
+  // The administrator's token credential is independent of the cookie session; it is unaffected.
+  const me = await read(c, "/rest/api/2/myself");
+  assert.equal(me.key, f.adminActorKey);
+  assert.equal(me.active, true);
+  return proof(established ? 5 : 4);
+}
+function loginFixture(c, f) {
+  return fixtureWrite(
+    c,
+    "jira.login",
+    actorArgs(f),
+    (context, data) => adminSessionReadback(context, data, f, true),
+    adminLoginInput,
+  );
+}
+async function sessionPrepare(c, f) {
+  await observeAdminActor(c, f);
+  await loginFixture(c, f);
+}
+const sessionCase = (entry) => ({ ...entry, privateSession: true });
+const loginCase = sessionCase(
+  adminMutationCase(
+    "jira.login",
+    actorArgs,
+    (c, data, f) => adminSessionReadback(c, data, f, true),
+    observeAdminActor,
+  ),
+);
+const sessionActionCase = (tool) =>
+  sessionCase(
+    adminMutationCase(
+      tool,
+      actorArgs,
+      (c, data, f) => adminSessionReadback(c, data, f, false),
+      sessionPrepare,
+    ),
+  );
+
+const taskSnapshot = async (c) => {
+  const response = await nativeStatus(c, PROGRESS);
+  assert.equal(response.status, 200, "An anonymization task must exist to be unlocked");
+  const snapshot = projectJiraAnonymizationTaskSnapshot(response.value);
+  assert.ok(snapshot, "The native task is not the complete reviewable snapshot");
+  return snapshot;
+};
+async function unlockPrepare(c, f) {
+  await observeAdminActor(c, f);
+  if ((await nativeStatus(c, PROGRESS)).status === 404) {
+    await anonymizationPrepare(c, f);
+    await fixtureWrite(
+      c,
+      "jira.schedule-user-anonymization",
+      anonymizationArgs(f),
+      (context, data) => scheduledReadback(context, data, f, false),
+    );
+  }
+  f.ac7Task = await taskSnapshot(c);
+}
+const unlockCase = {
+  ...adminMutationCase(
+    "jira.unlock-user-anonymization",
+    (f) => ({ ...actorArgs(f), expectedTask: f.ac7Task }),
+    async (c, data, f) => {
+      assert.equal(data.userKey, f.ac7Task.userKey);
+      assert.equal(data.executingNode, f.ac7Task.executingNode);
+      assert.equal(data.anonymizationSubmittedTime, f.ac7Task.submittedTime);
+      // The native unlock is global and unconfirmed; the completed task must be unchanged.
+      const after = await taskSnapshot(c);
+      assert.equal(after.userKey, f.ac7Task.userKey);
+      assert.equal(after.status, f.ac7Task.status);
+      return proof(5);
+    },
+    unlockPrepare,
+  ),
+  // A scripted human statement for a single-node lab whose anonymization has long completed.
+  humanInput: () => ({
+    ownerShutdownConfirmation: "Synthetic lab: no anonymization owner process is running.",
+  }),
+};
+
+// ---- user avatars (administrator private session, throwaway target user) -------------------------
+async function userAvatarPrepare(c, f, chat) {
+  await observeAdminActor(c, f);
+  await ensureUser(c, f, "avatar");
+  const user = await observedUser(c, f, "avatar");
+  f.avatarOwner = reference(user);
+  AV.avatarFile(c, f, chat);
+  await loginFixture(c, f);
+  f.avatarBefore = await AV.observeAvatars(c, "user", f.avatarOwner);
+}
+const userSelection = (f, avatarId) => ({
+  ...actorArgs(f),
+  target: AV.OWNERS.user.target(f.avatarOwner),
+  avatarId,
+  expectedAvatars: f.avatarBefore,
+});
+const userAvatarCleanup = async (c, f) => {
+  releaseQualificationFile(c, f, "avatar-a");
+  await deleteFixture(c, f, "avatar");
+};
+const userCreatePrepare = async (c, f, chat) => {
+  await userAvatarPrepare(c, f, chat);
+  f.avatarBefore = await AV.stageTemporary(c, f, "user", f.avatarOwner, chat);
+};
+async function userSelectPrepare(c, f, chat) {
+  await userAvatarPrepare(c, f, chat);
+  f.avatarTarget = f.avatarBefore.find((row) => row.category === "system" && !row.selected);
+  assert.ok(f.avatarTarget, "A selectable system avatar must exist");
+}
+async function userDeletePrepare(c, f, chat) {
+  await userSelectPrepare(c, f, chat);
+  await AV.stageTemporary(c, f, "user", f.avatarOwner, chat);
+  const known = new Set(f.avatarBefore.map((row) => row.id));
+  await fixtureWrite(
+    c,
+    AV.OWNERS.user.create,
+    AV.createArguments(f, "user", f.avatarOwner),
+    async (context) => {
+      const rows = await AV.observeAvatars(context, "user", f.avatarOwner);
+      const created = rows.filter((row) => !known.has(row.id));
+      assert.equal(created.length, 1);
+      f.avatarDelete = created[0];
+      return proof(2);
+    },
+  );
+  f.avatarBefore = await AV.observeAvatars(c, "user", f.avatarOwner);
+  // A created avatar may arrive selected; the deletion recipe needs a custom, unselected one.
+  if (AV.selectedOf(f.avatarBefore)?.id === f.avatarDelete.id) {
+    await fixtureWrite(
+      c,
+      "jira.set-user-avatar",
+      userSelection(f, f.avatarTarget.id),
+      async (context) => {
+        const rows = await AV.observeAvatars(context, "user", f.avatarOwner);
+        assert.equal(AV.selectedOf(rows)?.id, f.avatarTarget.id);
+        return proof(1);
+      },
+    );
+    f.avatarBefore = await AV.observeAvatars(c, "user", f.avatarOwner);
+  }
+}
+const userAvatarCases = [
+  sessionCase(
+    adminMutationCase(
+      AV.OWNERS.user.create,
+      (f) => AV.createArguments(f, "user", f.avatarOwner),
+      AV.creationReadback("user"),
+      userCreatePrepare,
+    ),
+  ),
+  sessionCase({
+    ...adminMutationCase(
+      "jira.set-user-avatar",
+      (f) => userSelection(f, f.avatarTarget.id),
+      async (c, _data, f) => {
+        const after = await AV.observeAvatars(c, "user", f.avatarOwner);
+        assert.deepEqual(
+          after.map((row) => [row.id, row.selected]),
+          f.avatarBefore.map((row) => [row.id, row.id === f.avatarTarget.id]),
+        );
+        assert.deepEqual(AV.identities(after), AV.identities(f.avatarBefore));
+        return proof(3);
+      },
+      userSelectPrepare,
+    ),
+  }),
+  sessionCase(
+    adminMutationCase(
+      AV.OWNERS.user.upload,
+      (f) => AV.uploadArguments(f, "user", f.avatarOwner),
+      async (c, _data, f) => {
+        assert.deepEqual(await AV.observeAvatars(c, "user", f.avatarOwner), f.avatarBefore);
+        return proof(2);
+      },
+      userAvatarPrepare,
+    ),
+  ),
+  sessionCase({
+    ...adminMutationCase(
+      "jira.delete-user-avatar",
+      (f) => userSelection(f, f.avatarDelete.id),
+      async (c, _data, f) => {
+        const after = await AV.observeAvatars(c, "user", f.avatarOwner);
+        assert.equal(
+          after.some((row) => row.id === f.avatarDelete.id),
+          false,
+        );
+        assert.deepEqual(
+          AV.withoutSelection(after),
+          AV.withoutSelection(f.avatarBefore.filter((row) => row.id !== f.avatarDelete.id)),
+        );
+        return proof(3);
+      },
+      userDeletePrepare,
+    ),
+    cleanup: userAvatarCleanup,
+  }),
+];
+
 const flatSession = (value) => [{ name: value.name, ...value.loginInfo }];
 
 export const API_QUALIFICATION_INTEGRATOR_C_CASES = [
@@ -370,4 +634,10 @@ export const API_QUALIFICATION_INTEGRATOR_C_CASES = [
     ),
     cleanup: (c, f) => deleteFixture(c, f, "owner"),
   },
+  updatePasswordCase,
+  unlockCase,
+  loginCase,
+  sessionActionCase("jira.logout"),
+  sessionActionCase("jira.release-websudo"),
+  ...userAvatarCases,
 ];
