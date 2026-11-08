@@ -714,6 +714,8 @@ describe("memory learning passes", () => {
     store = openStore();
     deps = makeDeps({ store, memoryVault: vault });
     // The restart learns the leftover once, without the first fact twice.
+    // A restart waits a fixed five seconds before its first pass, so this test outlives the
+    // default five-second test timeout by design; its own bound is the wait below.
     memoryLearningRuntime(deps).start();
     await vi.waitFor(
       () => {
@@ -727,7 +729,7 @@ describe("memory learning passes", () => {
     );
     expect(learned(deps, chat)).toHaveLength(3);
     store.close();
-  });
+  }, 20_000);
 
   it("learns nothing from a deleted Chat", async () => {
     const learner = fakeLearner();
