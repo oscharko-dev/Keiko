@@ -15,9 +15,10 @@ import { readCase } from "./api-qualification-cases.mjs";
 import { adminMutationCase, observeAdminActor } from "./api-qualification-admin-cases.mjs";
 import { qualificationDigest } from "./api-qualification-evidence.mjs";
 import {
+  adminLoginInput,
   fixtureWrite,
   generatedSecret,
-  labActorPassword,
+  protectedInputPublisher,
   releaseQualificationFile,
 } from "./api-qualification-fixtures.mjs";
 import { AVATAR_RECIPES as AV } from "./api-qualification-integrator-a-cases.mjs";
@@ -248,7 +249,6 @@ const secretOf = (f, label) => {
   return secret;
 };
 const userAuth = (name, secret) => `Basic ${Buffer.from(`${name}:${secret}`).toString("base64")}`;
-const adminLoginInput = (c) => ({ password: labActorPassword(c, "admin") });
 
 async function privatePrepare(c, f) {
   await observeAdminActor(c, f);
@@ -279,7 +279,9 @@ const updatePasswordCase = {
     },
     privatePrepare,
   ),
-  humanInput: (_c, f) => ({ password: rememberSecret(f, "private") }),
+  publishHumanInput: protectedInputPublisher((_c, f) => ({
+    password: rememberSecret(f, "private"),
+  })),
   cleanup: (c, f) => deleteFixture(c, f, "private"),
 };
 
@@ -294,35 +296,44 @@ async function adminSessionReadback(c, data, f, established) {
   assert.equal(me.active, true);
   return proof(established ? 5 : 4);
 }
+const loginInput = protectedInputPublisher(adminLoginInput, "login");
 function loginFixture(c, f) {
   return fixtureWrite(
     c,
     "jira.login",
     actorArgs(f),
     (context, data) => adminSessionReadback(context, data, f, true),
-    adminLoginInput,
+    loginInput,
   );
 }
-async function sessionPrepare(c, f) {
-  await observeAdminActor(c, f);
-  await loginFixture(c, f);
-}
-const sessionCase = (entry) => ({ ...entry, privateSession: true });
-const loginCase = sessionCase(
-  adminMutationCase(
+/**
+ * A case that needs the administrator's private session holds one turn (see `dispatchQualification`)
+ * that logs in first, then runs `held` with the auxiliaries declared in `tools`.
+ */
+const sessionCase = (entry, tools = [], held = async () => undefined) => ({
+  ...entry,
+  prerequisiteTools: ["jira.login", ...tools],
+  prepareInvocation: async (c, f) => {
+    await loginFixture(c, f);
+    await held(c, f, c.qualificationChat);
+  },
+});
+const loginCase = {
+  ...adminMutationCase(
     "jira.login",
     actorArgs,
     (c, data, f) => adminSessionReadback(c, data, f, true),
     observeAdminActor,
   ),
-);
+  publishHumanInput: loginInput,
+};
 const sessionActionCase = (tool) =>
   sessionCase(
     adminMutationCase(
       tool,
       actorArgs,
       (c, data, f) => adminSessionReadback(c, data, f, false),
-      sessionPrepare,
+      observeAdminActor,
     ),
   );
 
@@ -363,9 +374,9 @@ const unlockCase = {
     unlockPrepare,
   ),
   // A scripted human statement for a single-node lab whose anonymization has long completed.
-  humanInput: () => ({
+  publishHumanInput: protectedInputPublisher(() => ({
     ownerShutdownConfirmation: "Synthetic lab: no anonymization owner process is running.",
-  }),
+  })),
 };
 
 // ---- user avatars (administrator private session, throwaway target user) -------------------------
@@ -374,9 +385,7 @@ async function userAvatarPrepare(c, f, chat) {
   await ensureUser(c, f, "avatar");
   const user = await observedUser(c, f, "avatar");
   f.avatarOwner = reference(user);
-  AV.avatarFile(c, f, chat);
-  await loginFixture(c, f);
-  f.avatarBefore = await AV.observeAvatars(c, "user", f.avatarOwner);
+  await AV.avatarFile(c, f, chat);
 }
 const userSelection = (f, avatarId) => ({
   ...actorArgs(f),
@@ -385,20 +394,22 @@ const userSelection = (f, avatarId) => ({
   expectedAvatars: f.avatarBefore,
 });
 const userAvatarCleanup = async (c, f) => {
-  releaseQualificationFile(c, f, "avatar-a");
+  await releaseQualificationFile(c, f, "avatar-a");
   await deleteFixture(c, f, "avatar");
 };
-const userCreatePrepare = async (c, f, chat) => {
-  await userAvatarPrepare(c, f, chat);
-  f.avatarBefore = await AV.stageTemporary(c, f, "user", f.avatarOwner, chat);
+const observeUserAvatars = async (c, f) => {
+  f.avatarBefore = await AV.observeAvatars(c, "user", f.avatarOwner);
 };
-async function userSelectPrepare(c, f, chat) {
-  await userAvatarPrepare(c, f, chat);
+async function userCreateHeld(c, f, chat) {
+  f.avatarBefore = await AV.stageTemporary(c, f, "user", f.avatarOwner, chat);
+}
+async function userSelectHeld(c, f) {
+  await observeUserAvatars(c, f);
   f.avatarTarget = f.avatarBefore.find((row) => row.category === "system" && !row.selected);
   assert.ok(f.avatarTarget, "A selectable system avatar must exist");
 }
-async function userDeletePrepare(c, f, chat) {
-  await userSelectPrepare(c, f, chat);
+async function userDeleteHeld(c, f, chat) {
+  await userSelectHeld(c, f);
   await AV.stageTemporary(c, f, "user", f.avatarOwner, chat);
   const known = new Set(f.avatarBefore.map((row) => row.id));
   await fixtureWrite(
@@ -413,7 +424,7 @@ async function userDeletePrepare(c, f, chat) {
       return proof(2);
     },
   );
-  f.avatarBefore = await AV.observeAvatars(c, "user", f.avatarOwner);
+  await observeUserAvatars(c, f);
   // A created avatar may arrive selected; the deletion recipe needs a custom, unselected one.
   if (AV.selectedOf(f.avatarBefore)?.id === f.avatarDelete.id) {
     await fixtureWrite(
@@ -426,7 +437,7 @@ async function userDeletePrepare(c, f, chat) {
         return proof(1);
       },
     );
-    f.avatarBefore = await AV.observeAvatars(c, "user", f.avatarOwner);
+    await observeUserAvatars(c, f);
   }
 }
 const userAvatarCases = [
@@ -435,11 +446,13 @@ const userAvatarCases = [
       AV.OWNERS.user.create,
       (f) => AV.createArguments(f, "user", f.avatarOwner),
       AV.creationReadback("user"),
-      userCreatePrepare,
+      userAvatarPrepare,
     ),
+    [AV.OWNERS.user.upload],
+    userCreateHeld,
   ),
-  sessionCase({
-    ...adminMutationCase(
+  sessionCase(
+    adminMutationCase(
       "jira.set-user-avatar",
       (f) => userSelection(f, f.avatarTarget.id),
       async (c, _data, f) => {
@@ -451,9 +464,11 @@ const userAvatarCases = [
         assert.deepEqual(AV.identities(after), AV.identities(f.avatarBefore));
         return proof(3);
       },
-      userSelectPrepare,
+      userAvatarPrepare,
     ),
-  }),
+    [],
+    userSelectHeld,
+  ),
   sessionCase(
     adminMutationCase(
       AV.OWNERS.user.upload,
@@ -464,27 +479,33 @@ const userAvatarCases = [
       },
       userAvatarPrepare,
     ),
+    [],
+    observeUserAvatars,
   ),
-  sessionCase({
-    ...adminMutationCase(
-      "jira.delete-user-avatar",
-      (f) => userSelection(f, f.avatarDelete.id),
-      async (c, _data, f) => {
-        const after = await AV.observeAvatars(c, "user", f.avatarOwner);
-        assert.equal(
-          after.some((row) => row.id === f.avatarDelete.id),
-          false,
-        );
-        assert.deepEqual(
-          AV.withoutSelection(after),
-          AV.withoutSelection(f.avatarBefore.filter((row) => row.id !== f.avatarDelete.id)),
-        );
-        return proof(3);
-      },
-      userDeletePrepare,
-    ),
-    cleanup: userAvatarCleanup,
-  }),
+  sessionCase(
+    {
+      ...adminMutationCase(
+        "jira.delete-user-avatar",
+        (f) => userSelection(f, f.avatarDelete.id),
+        async (c, _data, f) => {
+          const after = await AV.observeAvatars(c, "user", f.avatarOwner);
+          assert.equal(
+            after.some((row) => row.id === f.avatarDelete.id),
+            false,
+          );
+          assert.deepEqual(
+            AV.withoutSelection(after),
+            AV.withoutSelection(f.avatarBefore.filter((row) => row.id !== f.avatarDelete.id)),
+          );
+          return proof(3);
+        },
+        userAvatarPrepare,
+      ),
+      cleanup: userAvatarCleanup,
+    },
+    [AV.OWNERS.user.upload, AV.OWNERS.user.create, "jira.set-user-avatar"],
+    userDeleteHeld,
+  ),
 ];
 
 const flatSession = (value) => [{ name: value.name, ...value.loginInfo }];

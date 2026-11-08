@@ -372,7 +372,8 @@ interface JiraTurnPreparation {
   readonly sourcePreparation: JiraChatSourcePreparation;
   readonly consumerPort: ReturnType<typeof createJiraChatCatalogConsumerPort>;
 }
-function prepareJiraTurn(options: JiraChatTurnOptions): JiraTurnPreparation {
+/** Internal composition shared with the model-free native qualifier; authority stays turn-owned. */
+export function prepareJiraTurn(options: JiraChatTurnOptions): JiraTurnPreparation {
   const base = jiraTurnContext(options);
   const humanInput = createJiraChatHumanInput(options, base);
   const privateLifetime = createJiraPrivateLifetime(base.signal, options.correlationId);
@@ -484,6 +485,13 @@ function currentMutationContract(
   return contract;
 }
 
+function mutationOperationForResult(
+  result: ToolResultEnvelope,
+): (typeof JIRA_MUTATION_OPERATIONS)[number] | undefined {
+  const canonicalId: string | undefined = result.toolRef?.canonicalId;
+  return JIRA_MUTATION_OPERATIONS.find((value) => canonicalId === jiraMutationToolId(value));
+}
+
 export function observeJiraChatMutation(
   options: JiraChatTurnOptions,
   call: NormalizedResponse["toolCalls"][number],
@@ -492,9 +500,7 @@ export function observeJiraChatMutation(
   sourceDigest?: string,
   humanInputRevision?: string,
 ): JiraMutationOutcome | undefined {
-  const operation = JIRA_MUTATION_OPERATIONS.find(
-    (value) => result.toolRef?.canonicalId === jiraMutationToolId(value),
-  );
+  const operation = mutationOperationForResult(result);
   if (operation === undefined) return undefined;
   const contract = currentMutationContract(operation, result);
   if (contract === undefined) return undefined;

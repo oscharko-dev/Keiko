@@ -306,7 +306,7 @@ export const API_QUALIFICATION_ADMIN_CASES = [
       grant: { permission: "BROWSE_PROJECTS", holder: { type: "reporter" } },
     }),
     async (c, d, f) => {
-      assert.match(d.permissionId, /^[1-9][0-9]*$/u);
+      assert.match(d.permissionId, /^[1-9]\d*$/u);
       f.adminGrantId = d.permissionId;
       const rows = (await read(c, `${schemePath(f)}/permission`)).permissions;
       assert.equal(rows.length, 1);

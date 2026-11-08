@@ -15,10 +15,12 @@ import {
   bindQualificationFile,
   createQualificationIssue,
   createQualificationProject,
+  adminLoginInput,
   fixtureWrite,
   generatedSecret,
   labActorPassword,
   projectReview,
+  protectedInputPublisher,
   qualificationPng,
   releaseQualificationFile,
 } from "./api-qualification-fixtures.mjs";
@@ -97,8 +99,8 @@ async function securityScheme(c, f) {
 
 // ---- avatar fixtures --------------------------------------------------------------------
 /** The generated PNG is a connected-file source of the dispatching Chat (shared fixture helper). */
-function avatarFile(c, f, chat) {
-  f.avatarFile = bindQualificationFile(c, f, chat, "avatar-a", () =>
+async function avatarFile(c, f, chat) {
+  f.avatarFile = await bindQualificationFile(c, f, chat, "avatar-a", () =>
     qualificationPng(96, Number.parseInt(f.runId.slice(0, 2), 16)),
   );
   return f.avatarFile;
@@ -168,7 +170,7 @@ const uploadArguments = (f, kind, owner) => ({
 });
 /** Uploads through the governed tool; the native temporary slot is consumed by the next effect. */
 async function stageTemporary(c, f, kind, owner, chat) {
-  avatarFile(c, f, chat);
+  await avatarFile(c, f, chat);
   const before = await observeAvatars(c, kind, owner);
   await fixtureWrite(
     c,
@@ -224,7 +226,7 @@ const uploadCase = (tool, kind) =>
     },
     async (c, f, chat) => {
       f.avatarOwner = await avatarOwner(c, f, kind);
-      avatarFile(c, f, chat);
+      await avatarFile(c, f, chat);
       f.avatarBefore = await observeAvatars(c, kind, f.avatarOwner);
     },
   );
@@ -394,7 +396,7 @@ export const API_QUALIFICATION_INTEGRATOR_A_CASES = [
     ...adminRead,
     arguments: actorArgs,
     // Validation only: a runtime-generated text that is no license; nothing is activated.
-    humanInput: () => ({ license: generatedSecret() }),
+    publishHumanInput: protectedInputPublisher(() => ({ license: generatedSecret() })),
     prepare: observeAdminActor,
     readback: validationReadback("native-license-validation-only", async (c, _data, f) => {
       assert.equal((await read(c, "/rest/api/2/myself")).key, f.adminActorKey);
@@ -414,7 +416,7 @@ export const API_QUALIFICATION_INTEGRATOR_A_CASES = [
       },
       myselfPrepare,
     ),
-    humanInput: (c) => ({ password: labActorPassword(c, "admin") }),
+    publishHumanInput: protectedInputPublisher(adminLoginInput),
     cleanup: myselfCleanup,
   },
   {
@@ -434,10 +436,10 @@ export const API_QUALIFICATION_INTEGRATOR_A_CASES = [
     actor: "assignee",
     administration: false,
     destructiveAdministration: false,
-    humanInput: (c) => {
+    publishHumanInput: protectedInputPublisher((c) => {
       const password = labActorPassword(c, "assignee");
       return { currentPassword: password, password };
-    },
+    }),
   },
   {
     tool: "jira.validate-create-user-password",
@@ -452,7 +454,7 @@ export const API_QUALIFICATION_INTEGRATOR_A_CASES = [
       await observeAdminActor(c, f);
       f.policyUsername = `ac7-${f.runId.slice(0, 8)}`;
     },
-    humanInput: () => ({ password: generatedSecret() }),
+    publishHumanInput: protectedInputPublisher(() => ({ password: generatedSecret() })),
     readback: validationReadback("native-password-policy-only", (c, data, f) =>
       passwordPolicyIdentity(c, f, data),
     ),
@@ -462,7 +464,7 @@ export const API_QUALIFICATION_INTEGRATOR_A_CASES = [
     ...adminRead,
     arguments: (f) => ({ ...actorArgs(f), user: f.policyUser }),
     prepare: policyUser,
-    humanInput: () => ({ newPassword: generatedSecret() }),
+    publishHumanInput: protectedInputPublisher(() => ({ newPassword: generatedSecret() })),
     readback: validationReadback("native-password-policy-only", async (c, data, f) => {
       assert.equal(data.userKey, f.policyUser.key);
       assert.equal(data.username, f.policyUser.name);

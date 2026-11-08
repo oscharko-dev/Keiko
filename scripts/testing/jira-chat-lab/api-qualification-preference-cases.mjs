@@ -9,7 +9,7 @@ import { fixtureWrite } from "./api-qualification-fixtures.mjs";
 
 const actor = (f) => ({ expectedActorKey: f.adminActorKey });
 const preferenceKey = () => "user.issues.per.page";
-const preferencePath = (f) => `/rest/api/2/mypreferences?key=${preferenceKey(f)}`;
+const preferencePath = () => `/rest/api/2/mypreferences?key=${preferenceKey()}`;
 const columns = (rows) => {
   assert.ok(Array.isArray(rows) && rows.length > 0);
   return rows.map((row) => {
@@ -170,14 +170,14 @@ export const API_QUALIFICATION_PREFERENCE_CASES = [
       value: f.preferenceTarget,
     }),
     async (c, _data, f) => {
-      assert.equal(await read(c, preferencePath(f)), String(f.preferenceTarget));
+      assert.equal(await read(c, preferencePath()), String(f.preferenceTarget));
       return proof(1);
     },
     async (c, f) => {
       await observeAdminActor(c, f);
-      const raw = await read(c, preferencePath(f));
+      const raw = await read(c, preferencePath());
       assert.equal(typeof raw, "string");
-      assert.match(raw, /^-?(?:0|[1-9][0-9]*)$/u);
+      assert.match(raw, /^-?(?:0|[1-9]\d*)$/u);
       f.preferenceOriginal = Number(raw);
       assert.ok(Number.isSafeInteger(f.preferenceOriginal));
       f.preferenceTarget = f.preferenceOriginal === 50 ? 100 : 50;
@@ -197,13 +197,13 @@ export const API_QUALIFICATION_PREFERENCE_CASES = [
   },
   adminMutationCase(
     "jira.delete-my-preference",
-    (f) => ({ ...actor(f), key: preferenceKey(f), expectedValue: f.preferenceBefore }),
+    (f) => ({ ...actor(f), key: preferenceKey(), expectedValue: f.preferenceBefore }),
     async (c, _data, f) => {
       assert.equal(f.preferenceBefore, f.preferenceTarget);
       const response = await labRequest(
         c.session,
         "GET",
-        preferencePath(f),
+        preferencePath(),
         basicAuth(c.session, c.actor),
       );
       assert.ok(response.status === 200 || response.status === 404);
@@ -212,7 +212,7 @@ export const API_QUALIFICATION_PREFERENCE_CASES = [
     },
     async (c, f) => {
       await observeAdminActor(c, f);
-      f.preferenceBefore = Number(await read(c, preferencePath(f)));
+      f.preferenceBefore = Number(await read(c, preferencePath()));
       assert.equal(f.preferenceBefore, f.preferenceTarget);
     },
   ),

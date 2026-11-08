@@ -76,7 +76,7 @@ export const API_QUALIFICATION_SCREEN_CASES = [
     "jira.create-screen-tab",
     (f) => ({ ...screenArgs(f), name: tabName(f) }),
     async (c, data, f) => {
-      assert.match(data.tabId, /^[1-9][0-9]*$/u);
+      assert.match(data.tabId, /^[1-9]\d*$/u);
       f.qualificationTabId = data.tabId;
       const tabs = normalizeTabs(await read(c, `${root(f)}/tabs`));
       assert.deepEqual(

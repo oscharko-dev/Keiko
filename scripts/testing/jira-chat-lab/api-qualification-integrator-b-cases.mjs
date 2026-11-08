@@ -277,10 +277,12 @@ async function prepareAvatarUpload(c, f, chat) {
   await observeAdminActor(c, f);
   f.avatarProject = projectReview(await createQualificationProject(c, f, "avatar-owner"));
   // The recipe's own file is the connected source of this Chat while the avatar cases run.
-  f.avatarFile = bindQualificationFile(c, f, chat, "avatar-b", () => qualificationPng(48, 0x7f));
+  f.avatarFile = await bindQualificationFile(c, f, chat, "avatar-b", () =>
+    qualificationPng(48, 0x7f),
+  );
 }
 function removeAvatarFixture(c, f) {
-  releaseQualificationFile(c, f, "avatar-b");
+  return releaseQualificationFile(c, f, "avatar-b");
 }
 const uploadOwnedAvatar = adminMutationCase(
   "jira.upload-owned-avatar",

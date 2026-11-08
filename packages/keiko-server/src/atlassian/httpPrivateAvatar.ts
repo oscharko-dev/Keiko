@@ -6,6 +6,7 @@ import {
   type JiraAvatarMutation,
   type JiraAvatarTarget,
   type JiraPrivateSessionAccess,
+  type AtlassianHttpBodyPort,
 } from "@oscharko-dev/keiko-connectors";
 import { isJiraAttachmentPreview } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
@@ -41,17 +42,20 @@ export function privateAvatarSession(
   context: ManagedMcpInvocationContext,
   session: JiraPrivateSessionAccess,
   legacyTemporaryRelease?: "10.3" | "10.4",
+  decorateHttpBodyPort: (port: AtlassianHttpBodyPort) => AtlassianHttpBodyPort = (port) => port,
 ): JiraAvatarSession {
   const base = options.baseUrl.replace(/\/$/u, "");
-  const http = createGatewayAtlassianHttpBodyPort({
-    ...options,
-    privateAuthentication: {
-      kind: "session",
-      scope: "avatar",
-      cookie: session.cookieHeader,
-      ...(legacyTemporaryRelease === undefined ? {} : { legacyTemporaryRelease }),
-    },
-  });
+  const http = decorateHttpBodyPort(
+    createGatewayAtlassianHttpBodyPort({
+      ...options,
+      privateAuthentication: {
+        kind: "session",
+        scope: "avatar",
+        cookie: session.cookieHeader,
+        ...(legacyTemporaryRelease === undefined ? {} : { legacyTemporaryRelease }),
+      },
+    }),
+  );
   return {
     request: createJiraReadRequest({ deployment: "data-center", baseUrl: base, http }, context),
     temporary: session.temporary,
