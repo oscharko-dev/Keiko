@@ -307,8 +307,9 @@ registering `memory.learn.pass.settled`) learns only after the person paused, se
 answer. For it the wait additionally requires its passes to have settled, read from the same Activity
 Log: no pass is open, and either a pass settled since the wait began without leaving a Chat for a
 continuation (`pendingChatCount` 0), or none started within the pause plus a slack of three seconds
-(the turn left nothing to learn). A pass that settled as `unavailable` or `failed` is retried by the
-product only after minutes; the lab records the learning it got instead of waiting for the retry. The
+(the turn left nothing to learn). A pass that settled as `unavailable` or `failed` fails the unit:
+the product retries it only after a minute and learns no later turn until then, so the unit would
+otherwise measure a subject that does not learn. The
 lab's person pauses for two seconds (`KEIKO_MEMORY_LEARNING_IDLE_MS=2000`); a pass learns the same
 turns whatever pause preceded it. Without this, the wait ended before the pass ran and the probes read
 a vault nothing had been learned into. The same wait runs after the probes, before the store and the ledger are read, so `probeCaptures` does not depend on

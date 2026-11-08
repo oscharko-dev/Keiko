@@ -152,7 +152,9 @@ describe("memory lab learning wait after a model call ends", () => {
     expect(Date.now() - started).toBeGreaterThanOrEqual(3000);
   });
 
-  it("does not wait minutes for the retry of a pass that found its model unavailable", async () => {
+  it("fails the unit when a learning pass found its model unavailable", async () => {
+    // The product retries such a pass only after a minute and learns no later turn until then, so a
+    // unit that went on would measure a subject that does not learn.
     const events = [
       passEvent(LEARNING_PASS_STARTED_OP, "pass-1"),
       passEvent(LEARNING_PASS_SETTLED_OP, "pass-1", {
@@ -160,15 +162,15 @@ describe("memory lab learning wait after a model call ends", () => {
         pendingChatCount: 1,
       }),
     ];
-    const started = Date.now();
-    await awaitLearning(quietLedger, {
-      quietMs: 10,
-      graceMs: 5,
-      maxMs: 5000,
-      openCalls: async () => 0,
-      passes: { idleMs: 5000, events: async () => events },
-    });
-    expect(Date.now() - started).toBeLessThan(2000);
+    await expect(
+      awaitLearning(quietLedger, {
+        quietMs: 10,
+        graceMs: 5,
+        maxMs: 5000,
+        openCalls: async () => 0,
+        passes: { idleMs: 5000, events: async () => events },
+      }),
+    ).rejects.toThrow(/learning pass settled as unavailable/u);
   });
 
   it("counts a pass that started before the wait as open until it settles", () => {

@@ -183,6 +183,25 @@ describe("memory lab scoring", () => {
     expect(scoreProbe(fixture, unknown, "Ich weiss es nicht.", stale).leaked).toBe(true);
   });
 
+  it("does not hold the model's own words against a subject only because it has a profile", () => {
+    // The profile reaches every answer; a listed term the model says by itself counts only when a
+    // retrieved memory was supplied or a profile entry carries it.
+    const fixture = scenario();
+    const [related, unknown, unrelated] = fixture.probes;
+    const profile = [{ memoryId: "m", bodyExcerpt: TABLES, via: "profile" }];
+    expect(
+      scoreProbe(fixture, unknown, "Ich weiss es nicht, Listen vielleicht.", profile),
+    ).toMatchObject({ leaked: false });
+    expect(scoreProbe(fixture, unrelated, "Kaffee hilft.", profile).passed).toBe(true);
+    expect(scoreProbe(fixture, related, "Erinnerungen: Tabellen, Kaffee", profile).passed).toBe(
+      true,
+    );
+    const retrieved = [{ memoryId: "r", bodyExcerpt: TABLES }];
+    expect(scoreProbe(fixture, related, "Erinnerungen: Tabellen, Kaffee", retrieved).passed).toBe(
+      false,
+    );
+  });
+
   it("fails an answer probe when a forbidden term appears beside the right one", () => {
     const fixture = scenario({
       probes: [

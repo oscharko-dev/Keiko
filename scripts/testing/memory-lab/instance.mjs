@@ -451,13 +451,16 @@ export function learningPassProgress(events, sinceMs) {
 
 // Background passes are done when none is open and either one settled since the wait began without
 // leaving a Chat for a continuation, or none started even after the pause and its slack had passed.
-// A pass that settled as unavailable or failed is retried only after minutes; the lab records the
-// learning it got instead of waiting for the retry.
+// A pass that settled as unavailable or failed ends the unit as failed: the product retries it only
+// after a minute, and until then no later turn of the unit is learned, so what the unit measured
+// would look like a subject that does not learn.
 function passesDone(progress, startedAt, idleMs) {
   if (progress.open > 0) return false;
   if (progress.settled > 0) {
     const { last } = progress;
-    return UNSETTLED_RETRY_OUTCOMES.has(last.outcome) || last.pendingChatCount === 0;
+    if (UNSETTLED_RETRY_OUTCOMES.has(last.outcome))
+      throw new Error(`a learning pass settled as ${String(last.outcome)}`);
+    return last.pendingChatCount === 0;
   }
   return progress.started === 0 && Date.now() - startedAt >= idleMs + PASS_START_SLACK_MS;
 }
