@@ -900,6 +900,55 @@ describe("handleMemoryCaptureFromConversation", () => {
     expect(outcomes[0]).toEqual({ kind: "rejected", reason: "ambiguous-forget" });
   });
 
+  it("stores the embedding of a captured memory so a paraphrased question can find it", async () => {
+    const vault = makeVault();
+    const embedded: string[] = [];
+    const deps = makeDeps({
+      memoryVault: vault,
+      config: {
+        providers: [
+          {
+            modelId: "text-embedding-3-large",
+            baseUrl: "http://127.0.0.1:11434/v1",
+            apiKey: "test-config-secret-value-1234567890",
+            timeoutMs: 30_000,
+            maxRetries: 0,
+            retryBaseDelayMs: 500,
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+      configPresent: true,
+      localKnowledgeEmbeddingRequest: (request) => {
+        embedded.push(request.input);
+        const vector = new Float32Array(8);
+        vector[0] = 1;
+        return Promise.resolve({
+          ok: true as const,
+          value: { vector, modelId: "text-embedding-3-large" },
+        });
+      },
+    });
+    const chat = registerChat(deps, "capture-embedded");
+
+    const result = await handleMemoryCaptureFromConversation(
+      makeCtx({
+        text: "remember that we release only on Tuesdays",
+        context: { projectPath: chat.projectPath, chatId: chat.chatId },
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    const outcomes = asJson(result).outcomes as readonly {
+      readonly proposal?: { readonly proposalId: string };
+    }[];
+    const id = outcomes[0]?.proposal?.proposalId as unknown as MemoryId;
+    expect(vault.getMemory(id)).toBeDefined();
+    expect(vault.getEmbeddings([id]).has(id)).toBe(true);
+    expect(embedded).toHaveLength(1);
+  });
+
   it("rejects oversize bodies with 413", async () => {
     const vault = makeVault();
     const deps = makeDeps({ memoryVault: vault });
