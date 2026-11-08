@@ -67,7 +67,7 @@ interface RawSalienceItem {
 // ─── Extraction prompt ───────────────────────────────────────────────────────
 export const SALIENCE_SYSTEM_PROMPT = `You extract few durable facts about the person from their chat message.
 
-Return only JSON: {"items":[{"body":string,"evidence":string,"about":"self"|"team"|"other"|"unclear","type":"preference"|"fact"|"decision"|"procedural","relation":"new"|"same"|"update"|"contradiction","related":number|null}]}
+Return only JSON: {"items":[{"body":string,"evidence":string,"about":"self"|"team"|"other"|"unclear","type":"identity"|"preference"|"constraint"|"fact"|"decision"|"procedural","relation":"new"|"same"|"update"|"contradiction","related":number|null}]}
 
 evidence: the person's exact words for this one fact, copied character for character, one clause only.
 body: one short statement of that fact in the person's language, using their words, without filler; name what a leading pronoun stands for.

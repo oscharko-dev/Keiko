@@ -110,6 +110,13 @@ describe("SALIENCE_SYSTEM_PROMPT", () => {
     expect(SALIENCE_SYSTEM_PROMPT).not.toContain("LIBERALLY");
     expect(SALIENCE_SYSTEM_PROMPT.length).toBeLessThan(1000);
   });
+
+  it("offers the labels that mark a fact standing, so the model can emit them (#4228)", () => {
+    // A label the prompt never names is never returned: the role "Ich bin Kreditanalystin" came
+    // back as a plain "fact" in the UI walk and stayed out of the standing profile.
+    expect(SALIENCE_SYSTEM_PROMPT).toContain('"identity"');
+    expect(SALIENCE_SYSTEM_PROMPT).toContain('"constraint"');
+  });
 });
 
 describe("extractSalientMemories", () => {
