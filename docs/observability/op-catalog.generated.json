@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "ad8b405f32f344d251ffb36341e5e781843359127bd5221299247f6f3a45f0da",
+    "catalogDigest": "65def2edacfeea30cc65daee130d6695e0ca5acf4b74b12c0d24f70b24fb158f",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -49629,7 +49629,7 @@
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
           "start": [],
-          "state": ["atlassian.target.admission"],
+          "state": ["atlassian.jira.human-input", "atlassian.target.admission"],
           "end": [
             "atlassian.connection.checked",
             "atlassian.credential.created",
@@ -49644,6 +49644,7 @@
           "atlassian.credential.created",
           "atlassian.credential.listed",
           "atlassian.credential.updated",
+          "atlassian.jira.human-input",
           "atlassian.target.admission"
         ],
         "requiredLossOperations": [],
@@ -49653,6 +49654,7 @@
           "atlassian.credential.listed",
           "atlassian.credential.rejected",
           "atlassian.credential.updated",
+          "atlassian.jira.human-input",
           "atlassian.target.admission"
         ],
         "requiredReplayProofIds": [],
@@ -49661,6 +49663,7 @@
           "atlassian.credential.created",
           "atlassian.credential.listed",
           "atlassian.credential.updated",
+          "atlassian.jira.human-input",
           "atlassian.target.admission"
         ],
         "requiredEvidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
@@ -60075,8 +60078,8 @@
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
       "supportedClassCount": 394,
-      "completeClassCount": 393,
-      "completeness": "incomplete",
+      "completeClassCount": 394,
+      "completeness": "complete",
       "classes": [
         {
           "failureClass": "activity-log-contract",
@@ -63214,13 +63217,8 @@
               "missingObligations": []
             }
           ],
-          "missingObligations": [
-            "causal-edges",
-            "executable-proof",
-            "lifecycle-state",
-            "resource-signals"
-          ],
-          "completeness": "incomplete"
+          "missingObligations": [],
+          "completeness": "complete"
         },
         {
           "failureClass": "browser-handoff",
@@ -112363,38 +112361,7 @@
         }
       ]
     },
-    "violations": [
-      {
-        "code": "failure-class-contract-unsatisfied",
-        "site": "typedRegistry.failureClassContracts.atlassian-credential-custody",
-        "correctiveAction": "Make the typed operation memberships satisfy the explicit canonical failure-class obligation.",
-        "detail": "lifecycle-state"
-      },
-      {
-        "code": "failure-class-contract-unsatisfied",
-        "site": "typedRegistry.failureClassContracts.atlassian-credential-custody",
-        "correctiveAction": "Make the typed operation memberships satisfy the explicit canonical failure-class obligation.",
-        "detail": "causal-edges"
-      },
-      {
-        "code": "failure-class-contract-unsatisfied",
-        "site": "typedRegistry.failureClassContracts.atlassian-credential-custody",
-        "correctiveAction": "Make the typed operation memberships satisfy the explicit canonical failure-class obligation.",
-        "detail": "executable-proof"
-      },
-      {
-        "code": "failure-class-contract-unsatisfied",
-        "site": "typedRegistry.failureClassContracts.atlassian-credential-custody",
-        "correctiveAction": "Make the typed operation memberships satisfy the explicit canonical failure-class obligation.",
-        "detail": "resource-signals"
-      },
-      {
-        "code": "failure-class-incomplete",
-        "site": "typedRegistry.failureClassCoverage.atlassian-credential-custody",
-        "correctiveAction": "Add the missing registered completeness, loss, and executable proof obligations.",
-        "detail": "causal-edges,executable-proof,lifecycle-state,resource-signals"
-      }
-    ]
+    "violations": []
   },
   "legacyDiscovery": {
     "dynamicCount": 96,

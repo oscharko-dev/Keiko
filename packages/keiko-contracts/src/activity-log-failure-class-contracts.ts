@@ -2,10 +2,18 @@ import type { ActivityLogFailureClassContract } from "./observability.js";
 
 // Independent obligations for the typed Jira family facts; these names are not native tools.
 const JIRA_OPERATION_FACTS = [
-  "jira.operation.avatars", "jira.operation.configuration", "jira.operation.core",
-  "jira.operation.identities", "jira.operation.issues", "jira.operation.local",
-  "jira.operation.maintenance", "jira.operation.metadata", "jira.operation.planning",
-  "jira.operation.projects", "jira.operation.properties", "jira.operation.saved-views",
+  "jira.operation.avatars",
+  "jira.operation.configuration",
+  "jira.operation.core",
+  "jira.operation.identities",
+  "jira.operation.issues",
+  "jira.operation.local",
+  "jira.operation.maintenance",
+  "jira.operation.metadata",
+  "jira.operation.planning",
+  "jira.operation.projects",
+  "jira.operation.properties",
+  "jira.operation.saved-views",
   "jira.operation.schemes",
 ] as const;
 
@@ -950,7 +958,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
       start: [],
-      state: ["atlassian.target.admission"],
+      state: ["atlassian.jira.human-input", "atlassian.target.admission"],
       end: [
         "atlassian.connection.checked",
         "atlassian.credential.created",
@@ -965,6 +973,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "atlassian.credential.created",
       "atlassian.credential.listed",
       "atlassian.credential.updated",
+      "atlassian.jira.human-input",
       "atlassian.target.admission",
     ],
     requiredLossOperations: [],
@@ -974,6 +983,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "atlassian.credential.listed",
       "atlassian.credential.rejected",
       "atlassian.credential.updated",
+      "atlassian.jira.human-input",
       "atlassian.target.admission",
     ],
     requiredReplayProofIds: [],
@@ -982,6 +992,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "atlassian.credential.created",
       "atlassian.credential.listed",
       "atlassian.credential.updated",
+      "atlassian.jira.human-input",
       "atlassian.target.admission",
     ],
     requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
