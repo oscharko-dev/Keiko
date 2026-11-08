@@ -72,18 +72,30 @@ function roleDetails(source: Source): JiraAgileDetails {
     labels,
   };
 }
+function triStateLabel(
+  value: unknown,
+  yes: WidgetMessageKey,
+  no: WidgetMessageKey,
+  unknown: WidgetMessageKey,
+): WidgetMessageKey {
+  if (value === true) return yes;
+  if (value === false) return no;
+  return unknown;
+}
 function userLabels(source: Source): WidgetMessageKey[] {
   return [
-    source.active === true
-      ? "chat.jira.outcome.active"
-      : source.active === false
-        ? "chat.jira.outcome.inactive"
-        : "chat.jira.directory.activityUnknown",
-    source.deleted === true
-      ? "chat.jira.directory.userDeleted"
-      : source.deleted === false
-        ? "chat.jira.directory.userNotDeleted"
-        : "chat.jira.directory.deletionUnknown",
+    triStateLabel(
+      source.active,
+      "chat.jira.outcome.active",
+      "chat.jira.outcome.inactive",
+      "chat.jira.directory.activityUnknown",
+    ),
+    triStateLabel(
+      source.deleted,
+      "chat.jira.directory.userDeleted",
+      "chat.jira.directory.userNotDeleted",
+      "chat.jira.directory.deletionUnknown",
+    ),
   ];
 }
 /** Directory observations are readable private facts, never links, email, HTML or effective rights. */
@@ -114,11 +126,12 @@ export function jiraDirectoryNotice(tool: string, source: Source): WidgetMessage
   if (source.outcome !== "succeeded") return undefined;
   if (tool === "jira_users") return "chat.jira.directory.searchWindow";
   if (tool === "jira_user_directory")
-    return source.isLast === true
-      ? "chat.jira.directory.lastPage"
-      : source.isLast === false
-        ? "chat.jira.directory.morePages"
-        : "chat.jira.directory.pageStateUnknown";
+    return triStateLabel(
+      source.isLast,
+      "chat.jira.directory.lastPage",
+      "chat.jira.directory.morePages",
+      "chat.jira.directory.pageStateUnknown",
+    );
   if (!PICKERS.has(tool) || !Array.isArray(source.items)) return undefined;
   if (typeof source.total !== "number") return "chat.jira.directory.pickerTotalUnknown";
   return source.total > source.items.length ? "chat.jira.directory.pickerPartial" : undefined;

@@ -41,7 +41,8 @@ const FLAGS = {
 >;
 function flag(source: Source, field: keyof typeof FLAGS): WidgetMessageKey {
   const value = source[field];
-  return FLAGS[field][value === true ? 0 : value === false ? 1 : 2];
+  if (value === true) return FLAGS[field][0];
+  return FLAGS[field][value === false ? 1 : 2];
 }
 function integer(
   label: WidgetMessageKey,
@@ -116,14 +117,18 @@ function diagnostics(source: Source, field: "errors" | "warnings"): JiraAgileDet
     header,
     ...values.flatMap((value: unknown) => {
       const row = record(value);
-      return row === undefined
-        ? []
-        : diagnosticMessages(
-            row,
-            isError ? "chat.jira.identity.nativeError" : "chat.jira.identity.nativeWarning",
-          );
+      if (row === undefined) return [];
+      return diagnosticMessages(
+        row,
+        isError ? "chat.jira.identity.nativeError" : "chat.jira.identity.nativeWarning",
+      );
     }),
   ];
+}
+function taskSelectionLabel(selection: unknown): WidgetMessageKey {
+  if (selection === "selected-task") return "chat.jira.jobs.selectedTask";
+  if (selection === "active-or-latest") return "chat.jira.jobs.activeOrLatest";
+  return "chat.jira.jobs.taskSelectionUnknown";
 }
 function nameLabels(source: Source, displayField: "displayName" | "fullName"): WidgetMessageKey[] {
   const labels: WidgetMessageKey[] = [];
@@ -168,13 +173,7 @@ function progress(data: Source): readonly JiraAgileDetails[] {
     flag(source, "isRerun"),
     ...nameLabels(source, "fullName"),
   ];
-  labels.push(
-    data.taskSelection === "selected-task"
-      ? "chat.jira.jobs.selectedTask"
-      : data.taskSelection === "active-or-latest"
-        ? "chat.jira.jobs.activeOrLatest"
-        : "chat.jira.jobs.taskSelectionUnknown",
-  );
+  labels.push(taskSelectionLabel(data.taskSelection));
   if (data.taskSelection === "selected-task") labels.push("chat.jira.identity.requestedTaskOnly");
   if (value.length === 0) labels.push("chat.jira.jobs.progressUnknown");
   if (text(source.status) === undefined) labels.push("chat.jira.jobs.statusUnknown");

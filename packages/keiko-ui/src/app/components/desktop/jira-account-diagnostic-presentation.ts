@@ -13,6 +13,21 @@ export const JIRA_ACCOUNT_DIAGNOSTIC_TOOLS: ReadonlySet<string> = new Set([
   "jira_duplicate_users",
   "jira_search_error",
 ]);
+function triStateLabel(
+  value: unknown,
+  yes: WidgetMessageKey,
+  no: WidgetMessageKey,
+  unknown: WidgetMessageKey,
+): WidgetMessageKey {
+  if (value === true) return yes;
+  if (value === false) return no;
+  return unknown;
+}
+function storedErrorLabel(errorPresent: unknown, message: string | undefined): WidgetMessageKey {
+  if (errorPresent === false) return "chat.jira.accounts.noStoredError";
+  if (errorPresent === true && message !== undefined) return "chat.jira.accounts.storedError";
+  return "chat.jira.accounts.searchErrorUnknown";
+}
 function count(label: WidgetMessageKey, value: unknown): JiraOutcomeFact[] {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
     ? [{ label, value: String(value) }]
@@ -26,11 +41,12 @@ function policy(data: Source): readonly JiraAgileDetails[] {
   const header = listHeader(data, "chat.jira.accounts.requirementCount");
   const labels: WidgetMessageKey[] = [
     "chat.jira.accounts.requirementsOnly",
-    data.hasOldPassword === true
-      ? "chat.jira.accounts.withOldPassword"
-      : data.hasOldPassword === false
-        ? "chat.jira.accounts.withoutOldPassword"
-        : "chat.jira.accounts.passwordContextUnknown",
+    triStateLabel(
+      data.hasOldPassword,
+      "chat.jira.accounts.withOldPassword",
+      "chat.jira.accounts.withoutOldPassword",
+      "chat.jira.accounts.passwordContextUnknown",
+    ),
   ];
   const items = Array.isArray(data.items)
     ? data.items.flatMap((value: unknown) => {
@@ -61,11 +77,12 @@ function duplicateUser(value: unknown): readonly JiraAgileDetails[] {
           ...fact("chat.jira.accounts.directoryName", directory.directoryName),
         ],
         labels: [
-          directory.userActive === true
-            ? "chat.jira.accounts.active"
-            : directory.userActive === false
-              ? "chat.jira.accounts.inactive"
-              : "chat.jira.accounts.activityUnknown",
+          triStateLabel(
+            directory.userActive,
+            "chat.jira.accounts.active",
+            "chat.jira.accounts.inactive",
+            "chat.jira.accounts.activityUnknown",
+          ),
         ],
       },
     ];
@@ -94,14 +111,7 @@ function searchError(data: Source): JiraAgileDetails {
   return {
     facts: [],
     ...(data.errorPresent === true && message !== undefined ? { body: message } : {}),
-    labels: [
-      "chat.jira.accounts.searchContext",
-      data.errorPresent === false
-        ? "chat.jira.accounts.noStoredError"
-        : data.errorPresent === true && message !== undefined
-          ? "chat.jira.accounts.storedError"
-          : "chat.jira.accounts.searchErrorUnknown",
-    ],
+    labels: ["chat.jira.accounts.searchContext", storedErrorLabel(data.errorPresent, message)],
   };
 }
 /** Existing result cards render private observations as text without deriving account or password authority. */

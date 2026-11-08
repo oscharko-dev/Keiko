@@ -61,13 +61,24 @@ function avatarDetails(source: Source): JiraAgileDetails {
       source.category === "system"
         ? "chat.jira.asset.systemAvatar"
         : "chat.jira.asset.customAvatar",
-      source.selected === true
-        ? "chat.jira.asset.selected"
-        : source.selected === false
-          ? "chat.jira.asset.notSelected"
-          : "chat.jira.asset.selectionUnknown",
+      triStateLabel(
+        source.selected,
+        "chat.jira.asset.selected",
+        "chat.jira.asset.notSelected",
+        "chat.jira.asset.selectionUnknown",
+      ),
     ],
   };
+}
+function triStateLabel(
+  value: unknown,
+  yes: WidgetMessageKey,
+  no: WidgetMessageKey,
+  unknown: WidgetMessageKey,
+): WidgetMessageKey {
+  if (value === true) return yes;
+  if (value === false) return no;
+  return unknown;
 }
 function archiveLabels(tool: string, source: Source): WidgetMessageKey[] {
   if (tool !== "jira_attachment_archive" || !identity(source.attachmentId)) return [];

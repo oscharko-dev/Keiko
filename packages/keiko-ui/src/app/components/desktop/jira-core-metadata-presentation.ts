@@ -46,12 +46,23 @@ function identityLabel(tool: string): WidgetMessageKey {
     ? "chat.jira.core.statusCategoryId"
     : "chat.jira.core.projectCategoryId";
 }
+function triStateLabel(
+  value: unknown,
+  yes: WidgetMessageKey,
+  no: WidgetMessageKey,
+  unknown: WidgetMessageKey,
+): WidgetMessageKey {
+  if (value === true) return yes;
+  if (value === false) return no;
+  return unknown;
+}
 function subtypeLabel(source: Source): WidgetMessageKey {
-  return source.subtask === true
-    ? "chat.jira.core.subtaskType"
-    : source.subtask === false
-      ? "chat.jira.core.standardType"
-      : "chat.jira.core.typeKindUnknown";
+  return triStateLabel(
+    source.subtask,
+    "chat.jira.core.subtaskType",
+    "chat.jira.core.standardType",
+    "chat.jira.core.typeKindUnknown",
+  );
 }
 function categoryFacts(source: Source): JiraOutcomeFact[] {
   return [
@@ -189,16 +200,18 @@ function projectStatuses(data: Source): readonly JiraAgileDetails[] {
     ...(records(data.items) ?? [data]).flatMap(issueTypeStatuses),
   ];
 }
+function requestContext(tool: string, data: Source): JiraOutcomeFact[] {
+  if (tool === "jira_issue_type_alternatives")
+    return fact("chat.jira.core.sourceIssueTypeId", data.issueTypeId);
+  if (tool === "jira_resolution")
+    return fact("chat.jira.core.requestedResolutionId", data.resolutionId);
+  return [];
+}
 /** Saved native metadata stays readable text; colors, icons and self URLs never become rendering inputs. */
 export function jiraCoreMetadataDetails(tool: string, data: Source): readonly JiraAgileDetails[] {
   if (!JIRA_CORE_METADATA_TOOLS.has(tool)) return [];
   if (tool === "jira_project_statuses") return projectStatuses(data);
-  const context =
-    tool === "jira_issue_type_alternatives"
-      ? fact("chat.jira.core.sourceIssueTypeId", data.issueTypeId)
-      : tool === "jira_resolution"
-        ? fact("chat.jira.core.requestedResolutionId", data.resolutionId)
-        : [];
+  const context = requestContext(tool, data);
   const cards = (records(data.items) ?? [data]).flatMap((source) => {
     const item = PROJECT_TYPES.has(tool) ? projectType(source) : named(tool, source);
     if (item === undefined) return [];

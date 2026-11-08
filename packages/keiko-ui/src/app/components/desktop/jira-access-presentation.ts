@@ -158,15 +158,16 @@ function recipientLabels(source: Source, type: string): WidgetMessageKey[] {
     labels.push(user.active ? "chat.jira.outcome.active" : "chat.jira.outcome.inactive");
   return labels;
 }
+function expandedRecipient(source: Source, type: string): Source | undefined {
+  if (type === "ProjectRole") return recipientDetails(source, "projectRole");
+  if (type === "UserCustomField" || type === "GroupCustomField")
+    return recipientDetails(source, "field");
+  return undefined;
+}
 function recipient(source: Source, eventId: unknown, schemeId: unknown): JiraAgileDetails {
   const type = text(source.notificationType) ?? "";
   const labels = recipientLabels(source, type);
-  const expanded =
-    type === "ProjectRole"
-      ? recipientDetails(source, "projectRole")
-      : type === "UserCustomField" || type === "GroupCustomField"
-        ? recipientDetails(source, "field")
-        : undefined;
+  const expanded = expandedRecipient(source, type);
   const body = text(expanded?.description);
   return {
     ...(body === undefined ? {} : { body }),

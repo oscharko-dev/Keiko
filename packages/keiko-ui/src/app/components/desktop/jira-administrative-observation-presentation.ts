@@ -34,6 +34,16 @@ const EMAIL_FLAGS: Readonly<
     "chat.jira.adminObservation.textUnknown",
   ],
 };
+function triStateLabel(
+  value: unknown,
+  yes: WidgetMessageKey,
+  no: WidgetMessageKey,
+  unknown: WidgetMessageKey,
+): WidgetMessageKey {
+  if (value === true) return yes;
+  if (value === false) return no;
+  return unknown;
+}
 function attribute(data: Source): JiraAgileDetails {
   const labels: WidgetMessageKey[] = ["chat.jira.adminObservation.configurationOnly"];
   const facts: JiraOutcomeFact[] = [
@@ -57,7 +67,7 @@ function emailType(value: unknown): readonly JiraAgileDetails[] {
         ...fact("chat.jira.adminObservation.templateName", item.templateName),
       ],
       labels: Object.entries(EMAIL_FLAGS).map(([key, labels]) =>
-        item[key] === true ? labels[0] : item[key] === false ? labels[1] : labels[2],
+        triStateLabel(item[key], labels[0], labels[1], labels[2]),
       ),
     },
   ];

@@ -82,7 +82,7 @@ function idFacts(source: Source): JiraOutcomeFact[] {
   return Object.entries(ID_LABELS).flatMap(([field, label]) => {
     const value = content(source, field);
     return value !== undefined &&
-      /^[1-9][0-9]{0,15}$/u.test(value) &&
+      /^[1-9]\d{0,15}$/u.test(value) &&
       Number.isSafeInteger(Number(value))
       ? [{ label, value }]
       : [];
@@ -133,11 +133,12 @@ function filterFacts(source: Source): JiraOutcomeFact[] {
 }
 function filterDescriptionLabels(value: unknown): WidgetMessageKey[] {
   if (typeof value !== "string") return ["chat.jira.savedConfiguration.descriptionNotProvided"];
-  return value === ""
-    ? ["chat.jira.savedConfiguration.descriptionEmpty"]
-    : value.trim() === ""
-      ? ["chat.jira.savedConfiguration.descriptionWhitespace"]
-      : [];
+  if (value === "") return ["chat.jira.savedConfiguration.descriptionEmpty"];
+  return value.trim() === "" ? ["chat.jira.savedConfiguration.descriptionWhitespace"] : [];
+}
+function agileBody(source: Source, sprint: boolean, epic: boolean): string | undefined {
+  if (sprint) return content(source, "goal");
+  return epic ? content(source, "summary") : undefined;
 }
 /** Closed native facts from the saved receipt; this projection never invents board/sprint URLs. */
 export function jiraAgileDetails(tool: string, source: Source): JiraAgileDetails {
@@ -146,7 +147,7 @@ export function jiraAgileDetails(tool: string, source: Source): JiraAgileDetails
   const epic = EPICS.has(tool);
   const key = content(source, "epicKey");
   const name = epic ? content(source, "name") : undefined;
-  const body = sprint ? content(source, "goal") : epic ? content(source, "summary") : undefined;
+  const body = agileBody(source, sprint, epic);
   return {
     ...(key === undefined ? {} : { key }),
     ...(name === undefined ? {} : { name }),

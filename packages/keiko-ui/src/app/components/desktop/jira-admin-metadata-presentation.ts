@@ -10,6 +10,27 @@ import {
   type JiraPresentationSource as Source,
 } from "./jira-presentation-values";
 
+function triStateLabel(
+  value: unknown,
+  yes: WidgetMessageKey,
+  no: WidgetMessageKey,
+  unknown: WidgetMessageKey,
+): WidgetMessageKey {
+  if (value === true) return yes;
+  if (value === false) return no;
+  return unknown;
+}
+function optionScopeLabel(scope: unknown): WidgetMessageKey {
+  if (scope === "all-field-contexts") return "chat.jira.adminMetadata.allOptionContexts";
+  if (scope === "native-context-options") return "chat.jira.adminMetadata.nativeOptionContext";
+  return "chat.jira.adminMetadata.optionScopeUnknown";
+}
+function adminItem(tool: string, source: Source): JiraAgileDetails | undefined {
+  if (tool === "jira_custom_fields") return customField(source);
+  if (tool === "jira_custom_field_options") return jiraFieldOptionDetails(source);
+  if (tool === "jira_terminology" || tool === "jira_terminology_entry") return terminology(source);
+  return screenOrWorkflow(tool, source);
+}
 export const JIRA_ADMIN_METADATA_TOOLS: ReadonlySet<string> = new Set([
   "jira_screens",
   "jira_workflows",
@@ -73,7 +94,7 @@ function customField(source: Source): JiraAgileDetails | undefined {
     "chat.jira.lookup.fieldScope",
     "chat.jira.adminMetadata.configurationOnly",
     ...Object.entries(CUSTOM_FLAGS).map(([key, [yes, no, unknown]]) =>
-      source[key] === true ? yes : source[key] === false ? no : unknown,
+      triStateLabel(source[key], yes, no, unknown),
     ),
   ];
   if (projects === undefined) labels.push("chat.jira.adminMetadata.projectIdsUnknown");
@@ -109,11 +130,12 @@ function terminology(source: Source): JiraAgileDetails | undefined {
     ...fact("chat.jira.adminMetadata.newPlural", source.newNamePlural),
   ];
   const labels: WidgetMessageKey[] = [
-    source.isDefault === true
-      ? "chat.jira.adminMetadata.defaultTerminology"
-      : source.isDefault === false
-        ? "chat.jira.adminMetadata.customTerminology"
-        : "chat.jira.adminMetadata.terminologyDefaultUnknown",
+    triStateLabel(
+      source.isDefault,
+      "chat.jira.adminMetadata.defaultTerminology",
+      "chat.jira.adminMetadata.customTerminology",
+      "chat.jira.adminMetadata.terminologyDefaultUnknown",
+    ),
   ];
   if (text(source.newName) === undefined || text(source.newNamePlural) === undefined)
     labels.push("chat.jira.adminMetadata.terminologyUnknown");
@@ -122,11 +144,12 @@ function terminology(source: Source): JiraAgileDetails | undefined {
 function readOnly(data: Source): JiraAgileDetails {
   const labels: WidgetMessageKey[] = [
     "chat.jira.adminMetadata.readOnlyObservation",
-    data.enabled === true
-      ? "chat.jira.adminMetadata.readOnlyEnabled"
-      : data.enabled === false
-        ? "chat.jira.adminMetadata.readOnlyDisabled"
-        : "chat.jira.adminMetadata.readOnlyUnknown",
+    triStateLabel(
+      data.enabled,
+      "chat.jira.adminMetadata.readOnlyEnabled",
+      "chat.jira.adminMetadata.readOnlyDisabled",
+      "chat.jira.adminMetadata.readOnlyUnknown",
+    ),
   ];
   const facts: JiraOutcomeFact[] = [];
   for (const [key, label, blank] of [
@@ -153,14 +176,7 @@ function optionContext(data: Source): JiraAgileDetails {
           ]
         : []),
     ],
-    labels: [
-      data.optionsScope === "all-field-contexts"
-        ? "chat.jira.adminMetadata.allOptionContexts"
-        : data.optionsScope === "native-context-options"
-          ? "chat.jira.adminMetadata.nativeOptionContext"
-          : "chat.jira.adminMetadata.optionScopeUnknown",
-      "chat.jira.adminMetadata.optionScopeOnly",
-    ],
+    labels: [optionScopeLabel(data.optionsScope), "chat.jira.adminMetadata.optionScopeOnly"],
   };
 }
 function workflowDetails(source: Source): JiraAgileDetails {
@@ -170,11 +186,12 @@ function workflowDetails(source: Source): JiraAgileDetails {
     facts.push({ label: "chat.jira.adminMetadata.workflowSteps", value: String(source.steps) });
   else labels.push("chat.jira.adminMetadata.workflowStepsUnknown");
   labels.push(
-    source.isDefault === true
-      ? "chat.jira.adminMetadata.defaultWorkflow"
-      : source.isDefault === false
-        ? "chat.jira.adminMetadata.notDefaultWorkflow"
-        : "chat.jira.adminMetadata.defaultWorkflowUnknown",
+    triStateLabel(
+      source.isDefault,
+      "chat.jira.adminMetadata.defaultWorkflow",
+      "chat.jira.adminMetadata.notDefaultWorkflow",
+      "chat.jira.adminMetadata.defaultWorkflowUnknown",
+    ),
   );
   return { facts, labels };
 }
@@ -189,11 +206,12 @@ function screenOrWorkflow(tool: string, source: Source): JiraAgileDetails | unde
   ];
   if (tool === "jira_screens")
     labels.push(
-      source.deletable === true
-        ? "chat.jira.adminMetadata.deletable"
-        : source.deletable === false
-          ? "chat.jira.adminMetadata.notDeletable"
-          : "chat.jira.adminMetadata.deletableUnknown",
+      triStateLabel(
+        source.deletable,
+        "chat.jira.adminMetadata.deletable",
+        "chat.jira.adminMetadata.notDeletable",
+        "chat.jira.adminMetadata.deletableUnknown",
+      ),
     );
   else {
     const workflow = workflowDetails(source);
@@ -215,14 +233,7 @@ export function jiraAdminMetadataDetails(tool: string, data: Source): readonly J
   const items = sources.flatMap((value: unknown) => {
     const source = record(value);
     if (source === undefined) return [];
-    const item =
-      tool === "jira_custom_fields"
-        ? customField(source)
-        : tool === "jira_custom_field_options"
-          ? jiraFieldOptionDetails(source)
-          : tool === "jira_terminology" || tool === "jira_terminology_entry"
-            ? terminology(source)
-            : screenOrWorkflow(tool, source);
+    const item = adminItem(tool, source);
     return item === undefined ? [] : [item];
   });
   return tool === "jira_custom_field_options" && Array.isArray(data.items)

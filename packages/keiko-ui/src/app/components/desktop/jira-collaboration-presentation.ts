@@ -77,12 +77,14 @@ function effortFacts(tool: string, source: Source): JiraOutcomeFact[] {
     ? [{ label: "chat.jira.fact.timeSpentSeconds", value: String(effort) }]
     : [];
 }
+function collaborationBody(tool: string, source: Source): unknown {
+  if (COMMENTS.has(tool)) return source.body;
+  return WORKLOGS.has(tool) ? source.comment : undefined;
+}
 /** Saved native facts only; missing effort and visibility never imply zero or public access. */
 export function jiraCollaborationDetails(tool: string, source: Source): JiraAgileDetails {
   if (!JIRA_COLLABORATION_TOOLS.has(tool)) return { facts: [], labels: [] };
-  const body = text(
-    COMMENTS.has(tool) ? source.body : WORKLOGS.has(tool) ? source.comment : undefined,
-  );
+  const body = text(collaborationBody(tool, source));
   const name = text(source.authorDisplayName) ?? text(source.authorName);
   const facts = [
     ...identity(tool, source),

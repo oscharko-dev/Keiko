@@ -33,20 +33,34 @@ import {
 } from "./jira-human-input-presentation";
 import styles from "./JiraChatTools.module.css";
 
-const FIELD_KEYS: Readonly<Record<JiraHumanInputField, WidgetMessageKey>> = {
-  password: "chat.jira.humanInput.password",
-  currentPassword: "chat.jira.humanInput.currentPassword",
-  newPassword: "chat.jira.humanInput.newPassword",
-  oldPassword: "chat.jira.humanInput.oldPassword",
-  license: "chat.jira.humanInput.license",
-  ownerShutdownConfirmation: "chat.jira.humanInput.ownerShutdownConfirmation",
-};
-const PASSWORD_LABELS: Readonly<Partial<Record<JiraHumanInputPurpose, WidgetMessageKey>>> = {
-  "update-myself": "chat.jira.humanInput.currentPassword",
-  "update-my-password": "chat.jira.humanInput.newPassword",
-  "update-user-password": "chat.jira.humanInput.newPassword",
-  "validate-create-user-password": "chat.jira.humanInput.newPassword",
-};
+function fieldKey(field: JiraHumanInputField): WidgetMessageKey {
+  switch (field) {
+    case "password":
+      return "chat.jira.humanInput.password";
+    case "currentPassword":
+      return "chat.jira.humanInput.currentPassword";
+    case "newPassword":
+      return "chat.jira.humanInput.newPassword";
+    case "oldPassword":
+      return "chat.jira.humanInput.oldPassword";
+    case "license":
+      return "chat.jira.humanInput.license";
+    case "ownerShutdownConfirmation":
+      return "chat.jira.humanInput.ownerShutdownConfirmation";
+  }
+}
+function passwordLabel(purpose: JiraHumanInputPurpose): WidgetMessageKey | undefined {
+  switch (purpose) {
+    case "update-myself":
+      return "chat.jira.humanInput.currentPassword";
+    case "update-my-password":
+    case "update-user-password":
+    case "validate-create-user-password":
+      return "chat.jira.humanInput.newPassword";
+    default:
+      return undefined;
+  }
+}
 const TERMINAL_STATES: ReadonlySet<JiraHumanInputView["state"]> = new Set([
   "consumed",
   "cancelled",
@@ -75,14 +89,21 @@ function forwardInputState(previous: JiraHumanInputView, next: JiraHumanInputVie
     (next.state === "consumed" || next.state === "cancelled" || next.state === "expired")
   );
 }
-interface PrivateFieldProps {
+interface OwnerConfirmationFieldProps {
   readonly field: JiraHumanInputField;
-  readonly view: JiraHumanInputView;
   readonly value: string;
   readonly node: string | undefined;
   readonly change: (field: JiraHumanInputField, value: string) => void;
 }
-function OwnerConfirmationField({ field, value, node, change }: PrivateFieldProps): ReactNode {
+interface PrivateFieldProps extends OwnerConfirmationFieldProps {
+  readonly view: JiraHumanInputView;
+}
+function OwnerConfirmationField({
+  field,
+  value,
+  node,
+  change,
+}: OwnerConfirmationFieldProps): ReactNode {
   const t = useTranslate();
   return (
     <div className="acx-field">
@@ -106,14 +127,12 @@ function OwnerConfirmationField({ field, value, node, change }: PrivateFieldProp
 function PrivateField({ field, view, value, node, change }: PrivateFieldProps): ReactNode {
   const t = useTranslate();
   if (field === "ownerShutdownConfirmation")
-    return (
-      <OwnerConfirmationField field={field} view={view} value={value} node={node} change={change} />
-    );
+    return <OwnerConfirmationField field={field} value={value} node={node} change={change} />;
   if (field === "license")
     return (
       <div className="acx-field">
         <label className="acx-label" htmlFor={`${view.requestId}-license`}>
-          {t(FIELD_KEYS.license)}
+          {t(fieldKey("license"))}
         </label>
         <textarea
           id={`${view.requestId}-license`}
@@ -133,8 +152,8 @@ function PrivateField({ field, view, value, node, change }: PrivateFieldProps): 
       id={`${view.requestId}-${field}`}
       labelKey={
         field === "password"
-          ? (PASSWORD_LABELS[view.purpose] ?? FIELD_KEYS.password)
-          : FIELD_KEYS[field]
+          ? (passwordLabel(view.purpose) ?? fieldKey("password"))
+          : fieldKey(field)
       }
       type="password"
       value={value}

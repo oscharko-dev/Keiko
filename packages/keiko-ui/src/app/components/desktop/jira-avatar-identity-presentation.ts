@@ -249,8 +249,8 @@ export function jiraAvatarIdentityDetails(
       },
       true,
     ),
+    ...identityLabels(tool, source),
   );
-  labels.push(...identityLabels(tool, source));
   const facts = [
     ...scalarFacts(source, source.outcome === "succeeded" && !unavailable),
     ...acknowledgedCrop(source),

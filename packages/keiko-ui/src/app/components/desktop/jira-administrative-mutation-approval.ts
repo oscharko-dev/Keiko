@@ -78,11 +78,9 @@ function memberLabel(
   t: OptionalWidgetTranslate,
   labels: Readonly<Record<string, WidgetMessageKey>>,
 ): string {
-  const label = Object.hasOwn(labels, key)
-    ? labels[key]
-    : Object.hasOwn(MEMBER_LABELS, key)
-      ? MEMBER_LABELS[key]
-      : undefined;
+  let label: WidgetMessageKey | undefined;
+  if (Object.hasOwn(labels, key)) label = labels[key];
+  else if (Object.hasOwn(MEMBER_LABELS, key)) label = MEMBER_LABELS[key];
   return label === undefined ? key : t(label);
 }
 export function jiraAdministrativeReviewedValue(

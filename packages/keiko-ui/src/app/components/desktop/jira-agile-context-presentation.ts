@@ -56,22 +56,22 @@ function project(source: Source): JiraAgileDetails | undefined {
       ...fact("chat.jira.fact.projectKey", source.key),
     ],
     labels: [
-      source.archived === true
-        ? "chat.jira.metadata.archived"
-        : source.archived === false
-          ? "chat.jira.metadata.notArchived"
-          : "chat.jira.metadata.archiveUnknown",
+      triStateLabel(
+        source.archived,
+        "chat.jira.metadata.archived",
+        "chat.jira.metadata.notArchived",
+        "chat.jira.metadata.archiveUnknown",
+      ),
     ],
   };
 }
+function estimateText(value: unknown): string | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return typeof value === "string" ? value : undefined;
+}
 function estimation(data: Source): JiraAgileDetails | undefined {
   if (text(data.fieldId) === undefined) return undefined;
-  const value =
-    typeof data.value === "number" && Number.isFinite(data.value)
-      ? String(data.value)
-      : typeof data.value === "string"
-        ? data.value
-        : undefined;
+  const value = estimateText(data.value);
   const labels: WidgetMessageKey[] = ["chat.jira.agileContext.estimateUnitUnknown"];
   if (value === undefined) labels.push("chat.jira.agileContext.estimateUnknown");
   else if (value.trim().length === 0) labels.push("chat.jira.agileContext.estimateBlank");
@@ -91,13 +91,27 @@ function refinedVelocity(data: Source): JiraAgileDetails | undefined {
   return {
     facts: fact("chat.jira.fact.boardId", data.boardId),
     labels: [
-      data.value === true
-        ? "chat.jira.agileContext.refinedEnabled"
-        : data.value === false
-          ? "chat.jira.agileContext.refinedDisabled"
-          : "chat.jira.agileContext.refinedUnknown",
+      triStateLabel(
+        data.value,
+        "chat.jira.agileContext.refinedEnabled",
+        "chat.jira.agileContext.refinedDisabled",
+        "chat.jira.agileContext.refinedUnknown",
+      ),
     ],
   };
+}
+function triStateLabel(
+  value: unknown,
+  yes: WidgetMessageKey,
+  no: WidgetMessageKey,
+  unknown: WidgetMessageKey,
+): WidgetMessageKey {
+  if (value === true) return yes;
+  if (value === false) return no;
+  return unknown;
+}
+function boardItem(tool: string, source: Source): JiraAgileDetails | undefined {
+  return tool === "jira_board_projects" ? project(source) : jiraVersionSummaryDetails(source);
 }
 /** Visible native populations and raw estimate values are observations, never board-wide completeness or units. */
 export function jiraAgileContextDetails(tool: string, data: Source): readonly JiraAgileDetails[] {
@@ -111,12 +125,7 @@ export function jiraAgileContextDetails(tool: string, data: Source): readonly Ji
     tool === "jira_board_projects" || tool === "jira_board_versions"
       ? (Array.isArray(data.items) ? data.items : [data]).flatMap((value: unknown) => {
           const source = record(value);
-          const item =
-            source === undefined
-              ? undefined
-              : tool === "jira_board_projects"
-                ? project(source)
-                : jiraVersionSummaryDetails(source);
+          const item = source === undefined ? undefined : boardItem(tool, source);
           return item === undefined ? [] : [item];
         })
       : [];

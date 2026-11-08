@@ -77,13 +77,15 @@ function screenTabReceipt(tool: string, source: Source): JiraAgileDetails {
       ...fact("chat.jira.fact.screenId", screenId),
       ...fact("chat.jira.fact.screenTabId", tabId),
     ],
-    labels:
-      confirmed !== undefined
-        ? [confirmed]
-        : tabId === undefined
-          ? ["chat.jira.screenTabs.tabUnconfirmed"]
-          : [],
+    labels: tabLabels(confirmed, tabId),
   };
+}
+function tabLabels(
+  confirmed: WidgetMessageKey | undefined,
+  tabId: unknown,
+): readonly WidgetMessageKey[] {
+  if (confirmed !== undefined) return [confirmed];
+  return tabId === undefined ? ["chat.jira.screenTabs.tabUnconfirmed"] : [];
 }
 function entityIdLabel(tool: string): WidgetMessageKey {
   if (tool === "jira_screens") return "chat.jira.fact.screenId";
@@ -97,7 +99,8 @@ function namedIdentity(value: unknown): string | undefined {
   const raw = record(value);
   const id = text(raw?.id);
   const name = text(raw?.name);
-  return id === undefined ? undefined : name === undefined ? id : `${name} (${id})`;
+  if (id === undefined) return undefined;
+  return name === undefined ? id : `${name} (${id})`;
 }
 function issueTypeFacts(source: Source): JiraOutcomeFact[] {
   const facts = fact("chat.jira.fact.defaultIssueType", namedIdentity(source.defaultIssueType));

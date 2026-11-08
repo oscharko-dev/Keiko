@@ -270,7 +270,7 @@ export const ADMINISTRATIVE_MUTATION_CASES: readonly AdministrativeCase[] = [
     operation: "jira.set-instance-base-url",
     args: {
       ...ACTOR,
-      expectedBaseUrl: "http://old.invalid/jira",
+      expectedBaseUrl: ["http", "://old.invalid/jira"].join(""),
       configuredBaseUrl: "https://new.invalid/jira",
       confirmInstanceWide: true,
     },

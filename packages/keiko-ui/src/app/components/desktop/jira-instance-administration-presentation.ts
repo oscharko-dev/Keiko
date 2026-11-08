@@ -158,7 +158,7 @@ function archiveEntries(source: Source): readonly Source[] | undefined {
   )
     return undefined;
   const items = source.items.map(entry);
-  if (items.some((row) => row === undefined)) return undefined;
+  if (items.includes(undefined)) return undefined;
   const complete = items.filter((row): row is Source => row !== undefined);
   return new Set(complete.map((row) => row.path)).size === complete.length ? complete : undefined;
 }

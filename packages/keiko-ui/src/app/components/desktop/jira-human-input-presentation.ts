@@ -5,16 +5,26 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { OptionalWidgetTranslate, WidgetMessageKey } from "@/lib/optional-widget-i18n";
 
-const PURPOSE: Readonly<Record<JiraHumanInputPurpose, WidgetMessageKey>> = {
-  "update-myself": "chat.jira.humanInput.review.profile",
-  "update-my-password": "chat.jira.humanInput.review.ownPassword",
-  "update-user-password": "chat.jira.humanInput.review.userPassword",
-  "validate-create-user-password": "chat.jira.humanInput.review.createValidation",
-  "validate-update-user-password": "chat.jira.humanInput.review.updateValidation",
-  "validate-license": "chat.jira.humanInput.review.licenseValidation",
-  login: "chat.jira.humanInput.review.login",
-  "unlock-user-anonymization": "chat.jira.humanInput.review.unlock",
-};
+function purposeKey(purpose: JiraHumanInputPurpose): WidgetMessageKey {
+  switch (purpose) {
+    case "update-myself":
+      return "chat.jira.humanInput.review.profile";
+    case "update-my-password":
+      return "chat.jira.humanInput.review.ownPassword";
+    case "update-user-password":
+      return "chat.jira.humanInput.review.userPassword";
+    case "validate-create-user-password":
+      return "chat.jira.humanInput.review.createValidation";
+    case "validate-update-user-password":
+      return "chat.jira.humanInput.review.updateValidation";
+    case "validate-license":
+      return "chat.jira.humanInput.review.licenseValidation";
+    case "login":
+      return "chat.jira.humanInput.review.login";
+    case "unlock-user-anonymization":
+      return "chat.jira.humanInput.review.unlock";
+  }
+}
 export interface JiraHumanInputFact {
   readonly label: string;
   readonly value: string;
@@ -28,7 +38,7 @@ export function jiraHumanInputReviewFacts(
   if (review === undefined) return undefined;
   const facts: JiraHumanInputFact[] = [
     { label: t("chat.jira.humanInput.review.server"), value: review.jiraBaseUrl },
-    { label: t("chat.jira.humanInput.review.purpose"), value: t(PURPOSE[view.purpose]) },
+    { label: t("chat.jira.humanInput.review.purpose"), value: t(purposeKey(view.purpose)) },
     { label: t("chat.jira.humanInput.review.actorUsername"), value: review.actorUsername },
     { label: t("chat.jira.humanInput.review.actorKey"), value: review.actorUserKey },
   ];
@@ -43,8 +53,8 @@ export function jiraHumanInputReviewFacts(
       value: review.targetUsername,
     });
   else {
-    facts.push({ label: t("chat.jira.humanInput.review.targetKey"), value: review.targetUserKey });
     facts.push(
+      { label: t("chat.jira.humanInput.review.targetKey"), value: review.targetUserKey },
       review.targetKind === "user"
         ? { label: t("chat.jira.humanInput.review.targetUsername"), value: review.targetUsername }
         : { label: t("chat.jira.humanInput.review.executingNode"), value: review.executingNode },

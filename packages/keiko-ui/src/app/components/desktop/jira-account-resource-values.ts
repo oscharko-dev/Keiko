@@ -1,4 +1,4 @@
-import { isSafeAtlassianIdentifier } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+export { isSafeAtlassianIdentifier as accountResourceKey } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   jiraPresentationIdentity,
   jiraPresentationNativeText,
@@ -12,7 +12,6 @@ export const accountResourceId = (value: unknown): boolean =>
   jiraPresentationIdentity(value) !== undefined;
 export const accountResourcePrincipal = (value: unknown): value is string =>
   jiraPresentationNativeText(value, 255, { multiline: true });
-export const accountResourceKey = isSafeAtlassianIdentifier;
 export const accountResourceDigest = (value: unknown): boolean =>
   typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
 export function accountResourceInteger(value: unknown, min = 0, max = 2147483647): value is number {

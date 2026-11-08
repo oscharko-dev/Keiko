@@ -34,6 +34,9 @@ const LABELS: Readonly<Record<string, WidgetMessageKey>> = {
   value: "chat.jira.configuration.requestedVelocity",
   position: "chat.jira.structural.requestedPosition",
 };
+function idLabel(fields: boolean): WidgetMessageKey {
+  return fields ? "chat.jira.configuration.fieldId" : "chat.jira.fact.screenTabId";
+}
 const ROW_LABELS: Readonly<Record<string, WidgetMessageKey>> = {
   name: "chat.jira.structural.nativeName",
   type: "chat.jira.configuration.fieldType",
@@ -57,12 +60,7 @@ function layout(value: unknown, t: OptionalWidgetTranslate, fields: boolean): Ji
         value: {
           kind: "group",
           members: Object.entries(source).map(([key, item]) => {
-            const label =
-              key === "id"
-                ? fields
-                  ? "chat.jira.configuration.fieldId"
-                  : "chat.jira.fact.screenTabId"
-                : ROW_LABELS[key];
+            const label = key === "id" ? idLabel(fields) : ROW_LABELS[key];
             return { name: label === undefined ? key : t(label), value: scalar(item, t) };
           }),
         } satisfies JiraDraftValue,

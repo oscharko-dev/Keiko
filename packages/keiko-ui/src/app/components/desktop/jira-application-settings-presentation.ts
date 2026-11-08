@@ -51,16 +51,16 @@ function setting(value: unknown): JiraAgileDetails {
   const key = text(source?.key);
   if (source === undefined || key === undefined)
     return { facts: [], labels: ["chat.jira.settings.keyUnknown", ...UNKNOWN.labels] };
-  const projected =
-    source.valueState === "withheld"
-      ? { facts: [], labels: ["chat.jira.settings.withheld"] as const }
-      : source.valueState === "observed"
-        ? observedValue(source)
-        : UNKNOWN;
+  const projected = projectedValue(source);
   return {
     ...projected,
     facts: [{ label: "chat.jira.settings.key", value: key }, ...projected.facts],
   };
+}
+function projectedValue(source: Source): JiraAgileDetails {
+  if (source.valueState === "withheld")
+    return { facts: [], labels: ["chat.jira.settings.withheld"] as const };
+  return source.valueState === "observed" ? observedValue(source) : UNKNOWN;
 }
 function header(tool: string, data: Source): JiraAgileDetails {
   const labels: WidgetMessageKey[] = ["chat.jira.settings.observation"];
