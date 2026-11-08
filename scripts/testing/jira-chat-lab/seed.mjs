@@ -4,6 +4,7 @@ import { basicAuth, checked, labRequest, loadSession, requireLicense } from "./l
 
 import { ensureFixtureIdentity } from "./seed-identities.mjs";
 import { ensureFixturePermissions, verifyFixtureRestrictions } from "./seed-permissions.mjs";
+import { ensureFixtureSecurityScheme } from "./seed-security.mjs";
 
 async function ensureProject(session, key) {
   const auth = basicAuth(session, "admin");
@@ -89,8 +90,21 @@ async function main() {
   for (const key of keys)
     await checked(session, "verify-created-issue", "GET", `/rest/api/2/issue/${key}`, auth);
   await requireLicense(session);
+  // Needed only by the issue-security qualification cases; a missing scheme grades those cases
+  // unknown, so its seeding never blocks the rest of the lab.
+  const securityScheme = await ensureFixtureSecurityScheme(session).catch(() => {
+    console.error(
+      "jira-lab-seed: security scheme seeding failed; its qualification cases grade unknown",
+    );
+    return false;
+  });
   console.log(
-    JSON.stringify({ operation: "jira-lab-seed", passed: true, issueCount: keys.length }),
+    JSON.stringify({
+      operation: "jira-lab-seed",
+      passed: true,
+      issueCount: keys.length,
+      securityScheme,
+    }),
   );
 }
 
