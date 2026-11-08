@@ -24,6 +24,8 @@ import {
 } from "../../../../tests/support/jira-operation-transport-contract.js";
 import { propertyTransportFixture, PROPERTY_FIXTURE_KEY, REVIEWED_PROPERTY_NODES, REQUESTED_PROPERTY_NODES } from "../../../../tests/support/jira-property-transport-fixture.js";
 import { POST_AND_IDENTITY_READ_SCENARIOS, POST_AND_IDENTITY_READ_TOOLS, postAndIdentityReadTransport } from "../../../../tests/support/jira-post-and-identity-read-fixture.js";
+import { RELEASE_LIFECYCLE_FIXTURE_CASES, releaseLifecycleTransportFixture } from "../../../../tests/support/jira-release-lifecycle-fixture.js";
+import { LINK_MUTATION_FIXTURE_CASES, linkMutationTransportFixture } from "../../../../tests/support/jira-link-mutation-fixture.js";
 import {
   SAVED_CONFIGURATION_ARGUMENTS,
   SAVED_CONFIGURATION_RECEIPTS,
@@ -43,6 +45,26 @@ const CREATE = {
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
   ...POST_AND_IDENTITY_READ_SCENARIOS,
+  { tool: "jira.delete-component", args: RELEASE_LIFECYCLE_FIXTURE_CASES[0].args, parameters: { id: "71" }, query: { moveIssuesTo: "72" },
+    expectedOutcome: "succeeded-unconfirmed", expectedReceipt: { componentId: "71", replacementComponentId: "72", projectId: "10000", projectKey: "SYN", userKey: "synthetic-actor" } },
+  { tool: "jira.merge-version", args: RELEASE_LIFECYCLE_FIXTURE_CASES[1].args, parameters: { id: "81", moveIssuesTo: "82" },
+    expectedOutcome: "succeeded-unconfirmed", expectedReceipt: { versionId: "81", targetVersionId: "82", projectId: "10000", projectKey: "SYN", userKey: "synthetic-actor" } },
+  { tool: "jira.move-version", args: RELEASE_LIFECYCLE_FIXTURE_CASES[2].args, parameters: { id: "81" },
+    expectedReceipt: { versionId: "81", projectId: "10000", projectKey: "SYN", userKey: "synthetic-actor" } },
+  { tool: "jira.remove-and-swap-version", args: RELEASE_LIFECYCLE_FIXTURE_CASES[3].args, parameters: { id: "81" },
+    expectedOutcome: "succeeded-unconfirmed", expectedReceipt: { versionId: "81", replacementVersionIds: ["82"], projectId: "10000", projectKey: "SYN", userKey: "synthetic-actor" } },
+  { tool: "jira.create-issue-link", args: LINK_MUTATION_FIXTURE_CASES[0].args,
+    expectedReceipt: { issueId: "10001", issueKey: "SYN-1", linkedIssueId: "10002", linkedIssueKey: "SYN-2", linkTypeId: "9", linkId: "71", userKey: "synthetic-actor", linkPresent: true } },
+  { tool: "jira.delete-issue-link", args: LINK_MUTATION_FIXTURE_CASES[1].args, parameters: { linkId: "71" },
+    expectedReceipt: { issueId: "10001", issueKey: "SYN-1", linkedIssueId: "10002", linkedIssueKey: "SYN-2", linkTypeId: "9", linkId: "71", userKey: "synthetic-actor", linkPresent: false } },
+  { tool: "jira.upsert-remote-link", args: LINK_MUTATION_FIXTURE_CASES[2].args, parameters: { issueIdOrKey: "10001" },
+    expectedReceipt: { issueId: "10001", issueKey: "SYN-1", linkId: "72", userKey: "synthetic-actor", linkPresent: true } },
+  { tool: "jira.update-remote-link", args: LINK_MUTATION_FIXTURE_CASES[3].args, parameters: { issueIdOrKey: "10001", linkId: "72" },
+    expectedReceipt: { issueId: "10001", issueKey: "SYN-1", linkId: "72", userKey: "synthetic-actor", linkPresent: true } },
+  { tool: "jira.delete-remote-link", args: LINK_MUTATION_FIXTURE_CASES[4].args, parameters: { issueIdOrKey: "10001", linkId: "72" },
+    expectedReceipt: { issueId: "10001", issueKey: "SYN-1", linkId: "72", userKey: "synthetic-actor", linkPresent: false } },
+  { tool: "jira.delete-remote-link-by-global-id", args: LINK_MUTATION_FIXTURE_CASES[5].args, parameters: { issueIdOrKey: "10001" }, query: { globalId: "synthetic:42&part=1" },
+    expectedReceipt: { issueId: "10001", issueKey: "SYN-1", linkId: "72", userKey: "synthetic-actor", linkPresent: false } },
   { tool: "jira.create-filter", args: SAVED_CONFIGURATION_ARGUMENTS["jira.create-filter"] },
   { tool: "jira.update-filter", args: SAVED_CONFIGURATION_ARGUMENTS["jira.update-filter"], parameters: { id: "37" } },
   { tool: "jira.delete-filter", args: SAVED_CONFIGURATION_ARGUMENTS["jira.delete-filter"], parameters: { id: "37" }, expectedOutcome: "succeeded-unconfirmed", expectedReceipt: SAVED_CONFIGURATION_RECEIPTS["jira.delete-filter"] },
@@ -1331,6 +1353,8 @@ const PROPERTY_WRITE_ROOTS: Readonly<Record<string, string>> = {
   "jira.set-user-property": "user/properties", "jira.delete-user-property": "user/properties",
 };
 function remote(tool?: string, initiallyPresent = true): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> {
+  const lifecycle = lifecycleRemote(tool);
+  if (lifecycle !== undefined) return lifecycle;
   if (POST_AND_IDENTITY_READ_TOOLS.has(tool ?? "")) return vi.fn(postAndIdentityReadTransport);
   if (tool !== undefined && Object.hasOwn(SAVED_CONFIGURATION_ARGUMENTS, tool)) return savedConfigurationRemote(tool);
   const propertyRoot = PROPERTY_WRITE_ROOTS[tool ?? ""];
@@ -1391,6 +1415,22 @@ function remote(tool?: string, initiallyPresent = true): ReturnType<typeof vi.fn
     );
   });
 }
+function lifecycleRemote(tool: string | undefined): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> | undefined {
+  const selectedLink = LINK_MUTATION_FIXTURE_CASES.find((item) => item.tool === tool);
+  const release = RELEASE_LIFECYCLE_FIXTURE_CASES.some((item) => item.tool === tool);
+  const fixture = selectedLink === undefined
+    ? (release ? releaseLifecycleTransportFixture("/context/rest/api/2") : undefined)
+    : linkMutationTransportFixture("/context/rest/api/2", selectedLink);
+  if (fixture === undefined) return undefined;
+  return vi.fn<AtlassianHttpBodyPort>(async (request) => {
+    const url = new URL(request.url);
+    expect(url.origin).toBe("https://jira.example.invalid");
+    expect(url.pathname.startsWith("/context/rest/api/2/")).toBe(true);
+    const result = request.method === "GET" ? fixture.read(request) : fixture.write(request);
+    if (result === undefined) throw new TypeError("Unexpected lifecycle native route");
+    return result;
+  });
+}
 function savedConfigurationRemote(tool: string): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> {
   const state = savedConfigurationRemoteState();
   prepareSavedConfiguration(state, tool);
@@ -1445,7 +1485,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(239);
+    expect(native).toHaveLength(249);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),
@@ -1456,6 +1496,26 @@ describe("native Jira registry and real connector transport agreement", () => {
     assertPrimary(observed, scenario);
     const writes = observed.requests.filter((request) => request.method !== "GET");
     expect(writes).toHaveLength(observed.definition.method === "GET" ? 0 : 1);
+    if (scenario.expectedReceipt !== undefined) expect(observed.result.data).toMatchObject(scenario.expectedReceipt);
+  });
+  it("mints the version-move after URI only from the bound context and confirms the complete native order", async () => {
+    const scenario = SCENARIOS.find(({ tool }) => tool === "jira.move-version");
+    if (scenario === undefined) throw new TypeError("Missing version move fixture");
+    const observed = await observe(scenario);
+    const writes = observed.requests.filter(({ method }) => method !== "GET");
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toMatchObject({ method: "POST", url: "https://jira.example.invalid/context/rest/api/2/version/81/move", bodyJson: '{"after":"https://jira.example.invalid/context/rest/api/2/version/82"}' });
+    expect(observed.requests.at(-1)?.url).toBe("https://jira.example.invalid/context/rest/api/2/project/10000/versions");
+    expect(observed.result.data).toMatchObject({ outcome: "succeeded", versionId: "81" });
+  });
+  it.each(["jira.delete-component", "jira.merge-version", "jira.remove-and-swap-version"] as const)("retains %s as unconfirmed despite same-parent absence because issue references are not fully observed", async (tool) => {
+    const scenario = SCENARIOS.find((candidate) => candidate.tool === tool);
+    if (scenario === undefined) throw new TypeError("Missing aggregate-reference lifecycle fixture");
+    expect(scenario.expectedOutcome).toBe("succeeded-unconfirmed");
+    const observed = await observe(scenario);
+    expect(observed.result).toMatchObject({ isError: true, data: { outcome: "succeeded-unconfirmed", reason: "unavailable", ...scenario.expectedReceipt } });
+    expect(observed.requests.filter(({ method }) => method !== "GET")).toHaveLength(1);
+    expect(observed.requests.at(-1)?.method).toBe("GET");
   });
   it("serializes a typed false preference as a native JSON string, not a JSON boolean", async () => {
     const scenario = SCENARIOS.find(({ tool }) => tool === "jira.set-my-preference");

@@ -8,9 +8,10 @@ import type {
 type Request = AtlassianHttpRequest | AtlassianHttpBodyRequest;
 
 // Retained Jira 11.3 API: these GETs document 401 for missing WebSudo or view permission
-// as well as authentication. The exact tab POST/PUT/DELETE paths below separately document 401
-// for unauthorized administrators. Other resources/methods remain definitive; no write is retried.
+// as well as authentication. The exact tab writes and native issue-link operations below also
+// document permission401. Other resources/methods remain definitive; no write is retried.
 const AMBIGUOUS_PATHS: readonly (readonly string[])[] = [
+  ["issueLink", "id"],
   ["index-snapshot"],
   ["user", "columns"],
   ["cluster", "nodes"],
@@ -43,6 +44,14 @@ function ambiguousTabWrite(method: Request["method"], parts: readonly string[]):
   );
 }
 
+// Retained 11.3 explicitly uses 401 for missing Link Issues permission on these two identities.
+// Remote links have a different authentication contract and do not join this observation.
+function ambiguousIssueLinkWrite(method: Request["method"], parts: readonly string[]): boolean {
+  if (parts[0] !== "issueLink") return false;
+  if (method === "POST") return parts.length === 1;
+  return method === "DELETE" && parts.length === 2 && /^[1-9]\d{0,18}$/u.test(parts[1] ?? "");
+}
+
 export function ambiguousJiraAuthenticationResponse(
   metadata: AtlassianCredentialMetadata,
   request: Request,
@@ -58,7 +67,8 @@ export function ambiguousJiraAuthenticationResponse(
   const prefix = `${base.pathname.replace(/\/$/, "")}/rest/api/2/`;
   if (target.origin !== base.origin || !target.pathname.startsWith(prefix)) return false;
   const parts = target.pathname.slice(prefix.length).split("/");
-  if (request.method !== "GET") return ambiguousTabWrite(request.method, parts);
+  if (request.method !== "GET")
+    return ambiguousTabWrite(request.method, parts) || ambiguousIssueLinkWrite(request.method, parts);
   return AMBIGUOUS_PATHS.some(
     (path) =>
       path.length === parts.length &&

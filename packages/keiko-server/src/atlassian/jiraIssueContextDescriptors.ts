@@ -9,6 +9,7 @@ import {
   jiraAgileReferenceSchema,
 } from "./jiraAgileDescriptors.js";
 import { object, text } from "./jiraManagedSchemas.js";
+import { jiraRemoteLinkSnapshotSchema } from "./jiraRemoteLinkSchemas.js";
 import {
   jiraNativeIdentitySchema as ID,
   jiraNativeProjectSchema as KEY,
@@ -30,6 +31,8 @@ const REMOTE_FIELDS = {
   title: NAME,
   summary: text(32768),
   resolved: BOOL,
+  reviewSnapshotAvailable: BOOL,
+  reviewSnapshot: jiraRemoteLinkSnapshotSchema,
 };
 const REMOTE_LINK = object(REMOTE_FIELDS, ["id"]);
 const PINNED_COMMENT = object({
@@ -101,7 +104,7 @@ export const JIRA_ISSUE_CONTEXT_READ_DEFINITIONS = {
     1,
   ),
   "jira.remote-links": read(
-    "Resolve the issue and read its bounded native remote-link metadata. Without globalId return a local page of the complete collection; with globalId return the single matching native object and do not supply paging arguments. Keep only observed IDs, application wording, relationship, title, summary and resolved state. Remote URLs and icons are neither exposed nor followed, and no remote system is queried or link changed.",
+    "Resolve the issue and read its bounded native remote-link metadata. Without globalId return a local page of the complete collection; with globalId return the single matching native object without paging. A complete supported native bean also yields reviewSnapshot with exact ID and all nullable replacement facts, including validated URL/icon addresses as plain text only. reviewSnapshotAvailable:false means the full value cannot be reviewed; do not guess or replace unknown fields. No remote URL is followed or turned into a browse link and no link is changed.",
     {
       anyOf: [
         object({ ...TARGET, ...PAGING }, ["issueIdOrKey"]),
@@ -111,7 +114,7 @@ export const JIRA_ISSUE_CONTEXT_READ_DEFINITIONS = {
     { ...CONTEXT, ...REMOTE_FIELDS, ...page(REMOTE_LINK) },
   ),
   "jira.remote-link": read(
-    "Resolve the issue and read one exact native remote-link ID under its observed numeric parent. Compare supplied self metadata with that identity without following it; require the returned link ID to match. Return bounded observed remote-link wording and resolved state only, with no remote URLs/icons, remote fetches or link mutation.",
+    "Resolve the issue and read one exact native remote-link ID under its observed numeric parent. Compare supplied self metadata without following it and require the returned ID to match. Preserve bounded wording and resolved state; a complete supported native bean additionally yields reviewSnapshot with all nullable replacement facts. URL and icon addresses in that snapshot are validated plain text, never browse links or fetch targets. An unavailable snapshot stays explicitly unavailable and must not be synthesized.",
     object({ ...TARGET, linkId: ID }, ["issueIdOrKey", "linkId"]),
     { ...CONTEXT, ...REMOTE_FIELDS },
     1,

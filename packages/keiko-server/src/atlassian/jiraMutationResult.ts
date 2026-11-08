@@ -24,6 +24,12 @@ import {
   validJiraSavedConfigurationReceipt,
   canConfirmJiraSavedConfiguration,
 } from "./jiraSavedConfigurationReceipts.js";
+import {
+  JIRA_RELATION_LIFECYCLE_RECEIPTS,
+  isJiraRelationLifecycleOperation,
+  validJiraRelationLifecycleReceipt,
+  canConfirmJiraRelationLifecycle,
+} from "./jiraRelationLifecycleReceipts.js";
 
 /**
  * The shared projection of a Jira mutation attempt onto the managed tool result. Ordinary Chat and
@@ -101,6 +107,7 @@ type CollaborationOperation = keyof typeof COLLABORATION_RECEIPTS;
 const REQUIRED_RECEIPTS: Readonly<
   Record<JiraMutationOperation, readonly (keyof JiraMutationReceipt)[]>
 > = {
+  ...JIRA_RELATION_LIFECYCLE_RECEIPTS,
   ...JIRA_SAVED_CONFIGURATION_RECEIPTS,
   ...PROPERTY_RECEIPTS,
   ...MONITORING_RECEIPTS,
@@ -318,6 +325,7 @@ function validProjectReceipt(receipt: JiraMutationReceipt): boolean {
   });
 }
 function validIdentities(receipt: JiraMutationReceipt, operation: JiraMutationOperation): boolean {
+  if (isJiraRelationLifecycleOperation(operation)) return validJiraRelationLifecycleReceipt(receipt, operation);
   if (isJiraSavedConfigurationOperation(operation)) return validJiraSavedConfigurationReceipt(receipt, operation);
   if (propertyOperation(operation)) return validPropertyReceipt(receipt, operation);
   if (monitoringOperation(operation)) return validMonitoringReceipt(receipt, operation);
@@ -343,6 +351,7 @@ function partialReceipt(
 }
 function partialIdentity(receipt: JiraMutationReceipt, operation: JiraMutationOperation): boolean {
   return (
+    isJiraRelationLifecycleOperation(operation) ||
     isJiraSavedConfigurationOperation(operation) ||
     propertyOperation(operation) ||
     monitoringOperation(operation) ||
@@ -357,11 +366,15 @@ function snapshotReceipt(receipt: JiraMutationReceipt): JiraMutationReceipt {
   const ownIssueKeys = Object.getOwnPropertyDescriptor(receipt, "issueKeys");
   const issueKeys = ownIssueKeys !== undefined && "value" in ownIssueKeys
     ? receipt.issueKeys : undefined;
+  const ownReplacements = Object.getOwnPropertyDescriptor(receipt, "replacementVersionIds");
+  const replacements = ownReplacements !== undefined && "value" in ownReplacements
+    ? receipt.replacementVersionIds : undefined;
   return Object.freeze({
     ...receipt,
     ...(issueKeys === undefined
       ? {}
       : { issueKeys: Object.freeze([...issueKeys]) }),
+    ...(replacements === undefined ? {} : { replacementVersionIds: Object.freeze([...replacements]) }),
   });
 }
 
@@ -429,22 +442,36 @@ function boundedViolations(
   return valid.length === 0 ? undefined : valid;
 }
 
+/** Families with own-data constraints validate the original object before any spread. */
+function validOriginalReceipt(receipt: JiraMutationReceipt, operation: JiraMutationOperation): boolean {
+  if (isJiraSavedConfigurationOperation(operation))
+    return validJiraSavedConfigurationReceipt(receipt, operation);
+  if (isJiraRelationLifecycleOperation(operation))
+    return validJiraRelationLifecycleReceipt(receipt, operation);
+  return true;
+}
+function canConfirmOperation(operation: JiraMutationOperation): boolean {
+  return canConfirmJiraSavedConfiguration(operation) && canConfirmJiraRelationLifecycle(operation);
+}
+
 /** An attempt is a success only with the validated identities its operation must return. */
 export function validJiraMutationAttempt(
   value: JiraMutationAttempt,
   operation: JiraMutationOperation,
 ): JiraMutationAttempt {
   if (!value.ok) return failedAttempt(value, operation);
-  if (isJiraSavedConfigurationOperation(operation) && !validJiraSavedConfigurationReceipt(value.receipt, operation))
+  if (!validOriginalReceipt(value.receipt, operation))
     return { ok: false, reason: "malformed-payload" };
-  if (!canConfirmJiraSavedConfiguration(operation))
+  if (!canConfirmOperation(operation))
     return failedAttempt({ ok: false, reason: "malformed-payload", receipt: value.receipt }, operation);
   const receipt = Object.freeze({ ...value.receipt });
   const valid =
     confirmed(value.ok) &&
     REQUIRED_RECEIPTS[operation].every((key) => receipt[key] !== undefined) &&
     validIdentities(receipt, operation);
-  if (!valid) return { ok: false, reason: "malformed-payload" };
+  if (!valid) return isJiraRelationLifecycleOperation(operation)
+    ? failedAttempt({ ok: false, reason: "malformed-payload", receipt: value.receipt }, operation)
+    : { ok: false, reason: "malformed-payload" };
   const links = sanitizeJiraMutationLinkAccount(value.links);
   return {
     ok: true,

@@ -5,6 +5,10 @@ import { executeJiraFilterMutation, isJiraFilterMutation } from "./jira-managed-
 import { executeJiraFilterPermissionMutation, isJiraFilterPermissionMutation } from "./jira-managed-filter-permission-mutations.js";
 import { executeJiraFilterColumnMutation, isJiraFilterColumnMutation } from "./jira-managed-filter-column-mutations.js";
 import { executeJiraPreferenceMutation, isJiraPreferenceMutation } from "./jira-managed-preference-mutations.js";
+import { executeJiraComponentDelete, isJiraComponentDelete } from "./jira-managed-component-delete.js";
+import { executeJiraVersionLifecycleMutation, isJiraVersionLifecycleMutation } from "./jira-managed-version-lifecycle.js";
+import { executeJiraIssueLinkMutation, isJiraIssueLinkMutation } from "./jira-managed-issue-link-mutations.js";
+import { executeJiraRemoteLinkMutation, isJiraRemoteLinkMutation } from "./jira-managed-remote-link-mutations.js";
 import { jiraFilterBrowseUrl } from "./jira-browse-url.js";
 import { jiraAgileRequest } from "./jira-agile-request.js";
 import {
@@ -1393,6 +1397,22 @@ function configurationMutation(
     return executeJiraScreenTabMutation(operation, args, request, check);
   return savedConfigurationMutation(operation, args, request, check, connection.baseUrl);
 }
+function nativeLifecycleMutation(
+  operation: JiraMutationOperation,
+  args: CatalogJsonObject,
+  request: JiraMutationRequest,
+  connection: JiraManagedConnection,
+  check: boolean,
+): Promise<JiraMutationAttempt> | undefined {
+  if (isJiraIssueLinkMutation(operation))
+    return executeJiraIssueLinkMutation(operation, args, request, check, connection.issueTemplates);
+  if (isJiraRemoteLinkMutation(operation))
+    return executeJiraRemoteLinkMutation(operation, args, request, check, connection.issueTemplates);
+  if (isJiraComponentDelete(operation)) return executeJiraComponentDelete(args, request, check, connection.issueTemplates);
+  if (isJiraVersionLifecycleMutation(operation))
+    return executeJiraVersionLifecycleMutation(operation, args, request, check, connection.issueTemplates, connection.baseUrl);
+  return undefined;
+}
 function dedicatedMutation(
   operation: JiraMutationOperation,
   source: CatalogJsonObject,
@@ -1402,10 +1422,10 @@ function dedicatedMutation(
 ): Promise<JiraMutationAttempt> | undefined {
   const args = structuredClone(source);
   const request = requestFor(connection, context);
-  const configuration = configurationMutation(operation, args, request, context, connection, check);
-  if (configuration !== undefined) return configuration;
-  const deletion = deletionMutation(operation, args, request, connection, check);
-  if (deletion !== undefined) return deletion;
+  const specialized = configurationMutation(operation, args, request, context, connection, check)
+    ?? deletionMutation(operation, args, request, connection, check)
+    ?? nativeLifecycleMutation(operation, args, request, connection, check);
+  if (specialized !== undefined) return specialized;
   if (isJiraParticipationMutation(operation))
     return executeJiraParticipationMutation(operation, args, request, check, connection.baseUrl);
   if (isJiraWorklogMutation(operation))
@@ -1501,8 +1521,13 @@ function isSavedConfigurationMutation(operation: JiraMutationOperation): boolean
   return [isJiraFilterMutation, isJiraFilterPermissionMutation, isJiraFilterColumnMutation, isJiraPreferenceMutation]
     .some((accepts) => accepts(operation));
 }
+function isNativeLifecycleMutation(operation: JiraMutationOperation): boolean {
+  return [isJiraComponentDelete, isJiraVersionLifecycleMutation, isJiraIssueLinkMutation, isJiraRemoteLinkMutation]
+    .some((accepts) => accepts(operation));
+}
 function requiresSuccessfulPreflight(operation: JiraMutationOperation): boolean {
   return (
+    isNativeLifecycleMutation(operation) ||
     isSavedConfigurationMutation(operation) ||
     isJiraEntityPropertyMutation(operation) ||
     isJiraScreenTabMutation(operation) ||

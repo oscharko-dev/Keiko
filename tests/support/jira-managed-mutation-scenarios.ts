@@ -1,6 +1,7 @@
 import type { JiraMutationOperation } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { response, type SyntheticJira } from "./jira-managed-remote.js";
+import { LIFECYCLE_ARGUMENTS, LIFECYCLE_RECEIPTS, LIFECYCLE_REMOTE_STATE } from "./jira-managed-lifecycle-scenarios.js";
 import { SAVED_CONFIGURATION_ARGUMENTS, SAVED_CONFIGURATION_REMOTE_STATE, SAVED_CONFIGURATION_RECEIPTS,
   savedConfigurationRemoteState, nativeSavedConfigurationRead, type SavedConfigurationRemoteState } from "./jira-managed-saved-configuration-scenarios.js";
 import {
@@ -16,6 +17,7 @@ import {
 export type SingleMutation = Exclude<JiraMutationOperation, "jira.draft">;
 export const ATTACHED = new TextEncoder().encode("synthetic attachment body");
 export const ARGUMENTS: Readonly<Record<JiraMutationOperation, CatalogJsonObject>> = {
+  ...LIFECYCLE_ARGUMENTS,
   ...SAVED_CONFIGURATION_ARGUMENTS,
   ...ADMINISTRATION_ARGUMENTS,
   "jira.create": {
@@ -80,6 +82,7 @@ export const ARGUMENTS: Readonly<Record<JiraMutationOperation, CatalogJsonObject
 
 /** Observed remote state after the request, independent of returned receipts and registry metadata. */
 export const REMOTE_STATE: Readonly<Record<SingleMutation, object>> = {
+  ...LIFECYCLE_REMOTE_STATE,
   ...SAVED_CONFIGURATION_REMOTE_STATE,
   ...ADMINISTRATION_REMOTE_STATE,
   "jira.create": {
@@ -141,6 +144,7 @@ const PROJECT_RECEIPT = {
 };
 const COMPONENT_RECEIPT = { componentId: "71", projectId: "10000", projectKey: "SYN" };
 export const SUCCESS_RECEIPTS: Readonly<Record<SingleMutation, CatalogJsonObject>> = {
+  ...LIFECYCLE_RECEIPTS,
   ...SAVED_CONFIGURATION_RECEIPTS,
   ...ADMINISTRATION_SUCCESS_RECEIPTS,
   "jira.create": ISSUE_RECEIPT,
@@ -175,6 +179,7 @@ export const SUCCESS_RECEIPTS: Readonly<Record<SingleMutation, CatalogJsonObject
 };
 
 export interface MutationRemoteState extends SyntheticJira {
+  lifecycle: object | undefined;
   savedConfiguration: SavedConfigurationRemoteState;
   administration: AdministrationRemoteState;
   commentDeleted: boolean;
@@ -193,6 +198,7 @@ export interface MutationRemoteState extends SyntheticJira {
 }
 export function mutationRemoteState(): MutationRemoteState {
   return {
+    lifecycle: undefined,
     savedConfiguration: savedConfigurationRemoteState(),
     administration: administrationRemoteState(),
     fields: {

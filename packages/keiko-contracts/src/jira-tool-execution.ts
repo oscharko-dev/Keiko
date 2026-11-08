@@ -24,8 +24,23 @@ export const JIRA_SAVED_CONFIGURATION_MUTATIONS = Object.freeze([
 ] as const);
 export type JiraSavedConfigurationMutation = (typeof JIRA_SAVED_CONFIGURATION_MUTATIONS)[number];
 
+/** Exact reviewed native relationships; remote upsert is distinct from unconditional creation. */
+export const JIRA_LINK_MUTATIONS = Object.freeze([
+  "jira.create-issue-link", "jira.delete-issue-link", "jira.upsert-remote-link",
+  "jira.update-remote-link", "jira.delete-remote-link", "jira.delete-remote-link-by-global-id",
+] as const);
+export type JiraLinkMutation = (typeof JIRA_LINK_MUTATIONS)[number];
+
+/** Project-bound version/component lifecycle changes reuse the existing mutation journal. */
+export const JIRA_RELEASE_LIFECYCLE_MUTATIONS = Object.freeze([
+  "jira.delete-component", "jira.merge-version", "jira.move-version", "jira.remove-and-swap-version",
+] as const);
+export type JiraReleaseLifecycleMutation = (typeof JIRA_RELEASE_LIFECYCLE_MUTATIONS)[number];
+
 /** Remote effects remain separate from the enclosing MCP/catalog terminal status. */
 export const JIRA_MUTATION_OPERATIONS = [
+  ...JIRA_LINK_MUTATIONS,
+  ...JIRA_RELEASE_LIFECYCLE_MUTATIONS,
   ...JIRA_SAVED_CONFIGURATION_MUTATIONS,
   ...JIRA_ENTITY_PROPERTY_MUTATIONS,
   "jira.set-app-monitoring",
@@ -184,6 +199,15 @@ export type JiraMutationResultState = (typeof JIRA_MUTATION_RESULT_STATES)[numbe
 /** Validated Jira identities and closed state facts; never remote bodies or headers.
  * Monitoring booleans on unknown/unconfirmed writes are requested targets, not success evidence. */
 export interface JiraMutationReceipt {
+  readonly linkId?: string;
+  readonly linkTypeId?: string;
+  readonly linkedIssueId?: string;
+  readonly linkedIssueKey?: string;
+  /** Requested presence until the complete independently bound relation is confirmed. */
+  readonly linkPresent?: boolean;
+  readonly replacementComponentId?: string;
+  readonly targetVersionId?: string;
+  readonly replacementVersionIds?: readonly string[];
   readonly filterId?: string;
   readonly permissionId?: string;
   readonly preferenceKey?: string;

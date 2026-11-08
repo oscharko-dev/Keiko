@@ -363,6 +363,8 @@ const ADMIN_ACTIONS = [
   "create-filter", "set-filter-share-scope", "add-filter-permission", "delete-filter-permission",
 ] as const satisfies readonly AtlassianConnectorActionType[];
 const HIGH_WRITES = [
+  "delete-issue-link", "delete-remote-link", "delete-remote-link-by-global-id",
+  "delete-component", "merge-version", "move-version", "remove-and-swap-version",
   "delete-filter",
   "create-project", "create-component", "create-version", "update-version",
   "create-board", "create-sprint", "update-sprint", "move-issues-to-sprint",
@@ -374,6 +376,7 @@ const HIGH_WRITES = [
   "set-user-property", "delete-user-property",
 ] as const satisfies readonly AtlassianConnectorActionType[];
 const MEDIUM_WRITES = [
+  "create-issue-link", "upsert-remote-link", "update-remote-link",
   "update-filter", "set-filter-columns", "reset-filter-columns", "set-my-preference", "delete-my-preference",
   "update-project", "update-component", "update-issue-comment", "create-worklog", "update-worklog",
   "watch-issue", "unwatch-issue", "vote-issue", "unvote-issue",

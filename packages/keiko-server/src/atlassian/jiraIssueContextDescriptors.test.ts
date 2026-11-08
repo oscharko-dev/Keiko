@@ -10,6 +10,9 @@ import {
 import { createJiraProviderForCatalog, jiraOperationForTool } from "./jiraManagedProvider.js";
 
 const ISSUE = { issueId: "10001", issueKey: "SYN-1" };
+const REVIEW_SNAPSHOT = { id: "9", globalId: null, applicationType: null, applicationName: null, relationship: null,
+  url: "https://remote.example.invalid/object", title: "Reviewed external reference", summary: null, iconUrl: null, iconTitle: null,
+  resolved: false, statusIconUrl: null, statusIconTitle: null, statusIconLink: null };
 it("compiles all six bounded issue-context schemas through the existing guard", () => {
   expect(Object.keys(JIRA_ISSUE_CONTEXT_READ_DEFINITIONS)).toHaveLength(6);
   for (const [name, definition] of Object.entries(JIRA_ISSUE_CONTEXT_READ_DEFINITIONS)) {
@@ -17,6 +20,18 @@ it("compiles all six bounded issue-context schemas through the existing guard", 
     expect(isBoundedExternalJsonSchema(definition.result), `${name} result`).toBe(true);
     expect(jiraIssueContextDeclarationForTool(name)?.name).toBe(name);
   }
+});
+it.each(["jira.remote-links", "jira.remote-link"] as const)("admits the same complete plain snapshot for %s without widening the schema budget", (name) => {
+  const declaration = jiraIssueContextDeclarationForTool(name);
+  if (declaration === undefined) throw new TypeError("Missing remote-link declaration");
+  const item = { id: "9", reviewSnapshotAvailable: true, reviewSnapshot: REVIEW_SNAPSHOT };
+  const projected = name === "jira.remote-links" ? { items: [item], startAt: 0, total: 1 } : item;
+  expect(describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, { outcome: "succeeded", ...ISSUE, ...projected })).toBeUndefined();
+  expect(describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, { outcome: "succeeded", ...ISSUE, id: "9", reviewSnapshotAvailable: false })).toBeUndefined();
+  expect(describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, { outcome: "succeeded", ...ISSUE, id: "9", reviewSnapshotAvailable: true,
+    reviewSnapshot: { id: "9", title: "Incomplete" } })).toBeDefined();
+  expect(describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, { outcome: "succeeded", ...ISSUE, id: "9", reviewSnapshotAvailable: true,
+    reviewSnapshot: { ...REVIEW_SNAPSHOT, arbitraryJson: {} } })).toBeDefined();
 });
 it.each([
   ["jira.issue-picker", { query: "", currentJQL: "", showSubTasks: false }, {

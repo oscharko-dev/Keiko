@@ -26,7 +26,7 @@ export interface Scenario {
   readonly parameters?: Readonly<Record<string, string>>;
   readonly query?: Readonly<Record<string, string>>;
   readonly primaryMethodIndex?: number;
-  /** Only the two native deletions without an independent absence-proof API opt into this case. */
+  /** Only explicitly documented native absence or aggregate-reference proof limits opt in. */
   readonly expectedOutcome?: "succeeded-unconfirmed";
   readonly expectedReceipt?: CatalogJsonObject;
 }
@@ -35,6 +35,10 @@ export interface Observation {
   readonly result: ManagedMcpToolResult;
   readonly definition: Extract<JiraOperationDefinition, { readonly kind: "native" }>;
 }
+const UNCONFIRMED_NATIVE_OPERATIONS: ReadonlySet<string> = new Set([
+  "jira.delete-filter", "jira.delete-my-preference", "jira.delete-component",
+  "jira.merge-version", "jira.remove-and-swap-version",
+]);
 export async function observeNativeJiraOperation(
   scenario: Scenario,
   supplied: JiraManagedConnection,
@@ -52,9 +56,9 @@ export async function observeNativeJiraOperation(
   ) => {
     const attempt = await execute(http);
     if (scenario.expectedOutcome === "succeeded-unconfirmed") {
-      if (operation !== "jira.delete-filter" && operation !== "jira.delete-my-preference")
+      if (!UNCONFIRMED_NATIVE_OPERATIONS.has(operation))
         throw new TypeError(
-          "Only the declared absence-proof limitations may expect an unconfirmed transport result",
+          "Only the declared native proof limitations may expect an unconfirmed transport result",
         );
       if (scenario.expectedReceipt === undefined)
         throw new TypeError(

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { afterEach, expect, it } from "vitest";
+import { JIRA_LINK_MUTATIONS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { createServerLogger, setServerLogger } from "../observability/index.js";
 import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
@@ -12,6 +13,10 @@ import {
 afterEach(resetServerLogger);
 
 it.each([
+  ...JIRA_LINK_MUTATIONS,
+  "jira.delete-component",
+  "jira.merge-version",
+  "jira.remove-and-swap-version",
   "jira.board-create",
   "jira.sprint-create",
   "jira.sprint-update",

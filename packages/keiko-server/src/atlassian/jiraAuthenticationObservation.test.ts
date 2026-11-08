@@ -16,6 +16,7 @@ import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
 const BASE = "https://jira.example.invalid/context";
 const IDENTITY = { name: "synthetic-user", key: "synthetic-key", active: true };
 const PATHS = [
+  "issueLink/1",
   "workflowscheme/1",
   "workflowscheme/1/default",
   "workflowscheme/1/draft",
@@ -420,6 +421,53 @@ const TAB_REQUESTS = [
   ["PUT", "screens/1/tabs/2"],
   ["DELETE", "screens/1/tabs/2"],
 ] as const;
+const ISSUE_LINK_REQUESTS = [
+  ["POST", "issueLink"], ["DELETE", "issueLink/1"],
+] as const;
+it.each(ISSUE_LINK_REQUESTS)("retains documented %s %s permission401 only after a current positive identity read", async (method, path) => {
+  const methods: string[] = [];
+  const f = fixture((index, init) => {
+    methods.push(init?.method ?? "GET");
+    return index === 0 ? response({ errorMessages: ["Link Issues permission required"] }, 401) : response(IDENTITY);
+  });
+  const statuses: number[] = [];
+  const result = await executeAtlassianWriteRequest({
+    http: f.deps.httpBodyPortFactory(f.metadata, undefined, {
+      onResponse: (_request, status) => { statuses.push(status); return true; },
+    }),
+  }, { method, url: request(path).url, expect: "none",
+    ...(method === "POST" ? { bodyJson: '{"type":{"name":"Blocks"},"inwardIssue":{"key":"SYN-1"},"outwardIssue":{"key":"SYN-2"}}' } : {}),
+  });
+  expect(result).toMatchObject({ ok: false, reason: "permission-denied", httpStatus: 401 });
+  expect(f.urls).toEqual([request(path).url, `${BASE}/rest/api/2/myself`]);
+  expect(methods).toEqual([method, "GET"]);
+  expect(statuses).toEqual([401]);
+  expect(f.current()).toEqual(f.metadata);
+  expect(f.invalidated).toEqual([]);
+  expect(JSON.stringify(f.events)).not.toMatch(/Link Issues|Blocks|SYN-1|SYN-2|synthetic-user|https:/u);
+});
+it.each(ISSUE_LINK_REQUESTS)("keeps expired credentials definitive for %s %s without replay", async (method, path) => {
+  const f = fixture(() => response({}, 401));
+  const result = await f.deps.httpBodyPortFactory(f.metadata)({ ...request(path), method });
+  expect(result).toMatchObject({ status: 401 });
+  expect(result).not.toHaveProperty("authentication");
+  expect(f.urls).toEqual([request(path).url, `${BASE}/rest/api/2/myself`]);
+  expect(f.invalidated).toEqual([2]);
+});
+it.each([
+  { method: "POST", path: "issueLink/1" }, { method: "PUT", path: "issueLink/1" },
+  { method: "DELETE", path: "issueLink" }, { method: "DELETE", path: "issueLink/0" },
+  { method: "DELETE", path: "issueLink/1/unknown" },
+  { method: "POST", path: "issue/SYN-1/remotelink" },
+  { method: "PUT", path: "issue/SYN-1/remotelink/1" },
+  { method: "DELETE", path: "issue/SYN-1/remotelink/1" },
+  { method: "DELETE", path: "issue/SYN-1/remotelink" },
+] as const)("never borrows issue-link permission evidence for $method $path", async ({ method, path }) => {
+  const f = fixture(() => response({}, 401));
+  await f.deps.httpBodyPortFactory(f.metadata)({ ...request(path), method });
+  expect(f.urls).toEqual([request(path).url]);
+  expect(f.invalidated).toEqual([2]);
+});
 function tabRequest(method: "POST" | "PUT" | "DELETE", path: string): AtlassianHttpBodyRequest {
   return { ...request(path), method, ...(method === "DELETE" ? {} : { bodyJson: '{"name":"Reviewed"}' }) };
 }

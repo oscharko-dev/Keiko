@@ -10,6 +10,9 @@ const COMMENT = { id: "20", body: "Native comment", created: "2026-11-07T10:00:0
 const PIN = { comment: COMMENT, pinnedBy: "reader", pinnedDate: "2026-11-07T11:00:00.000+0000" };
 const CHILD = { id: "10002", key: "APP-2", self: "https://untrusted.invalid/child", fields: { summary: "Child", status: { id: "1", name: "Open" }, issuetype: { id: "5", name: "Sub-task" } } };
 const REMOTE = { id: 30, globalId: "system=example&id=30", application: { type: "example", name: "Example" }, relationship: "relates to", object: { title: "External reference", summary: "", url: "https://untrusted.invalid/reference", icon: { url16x16: "https://untrusted.invalid/icon" }, status: { resolved: false } }, self: "https://public.example.invalid/other-context/rest/api/2/issue/10001/remotelink/30" };
+const REMOTE_SNAPSHOT = { id: "30", globalId: REMOTE.globalId, applicationType: "example", applicationName: "Example", relationship: "relates to",
+  url: REMOTE.object.url, title: REMOTE.object.title, summary: "", iconUrl: REMOTE.object.icon.url16x16, iconTitle: null,
+  resolved: false, statusIconUrl: null, statusIconTitle: null, statusIconLink: null };
 function object(body: Record<string, unknown>): AtlassianWriteHttpOutcome {
   return { ok: true, status: 200, body };
 }
@@ -61,11 +64,13 @@ describe("bound native issue context reads", () => {
   it.each([object({ enabled: false }), { ok: true, status: 200, body: undefined, scalar: "false" } as const])("does not coerce a nonboolean capability response", async (response) => {
     expect((await read("jira.subtask-move-availability", { issueIdOrKey: "APP-1" }, fixture(response), BASE)).data.reason).toBe("malformed-payload");
   });
-  it("projects native remote link facts without following or publishing upstream URLs", async () => {
+  it("projects supported native remote-link review facts as text without following URLs", async () => {
     const request = fixture(array([REMOTE]));
     expect((await read("jira.remote-links", { issueIdOrKey: "APP-1" }, request, BASE)).data).toEqual({ outcome: "succeeded", issueId: "10001", issueKey: "APP-1", startAt: 0, total: 1,
-      items: [{ id: "30", globalId: REMOTE.globalId, application: REMOTE.application, relationship: "relates to", title: "External reference", summary: "", resolved: false }] });
+      items: [{ id: "30", globalId: REMOTE.globalId, application: REMOTE.application, relationship: "relates to", title: "External reference", summary: "", resolved: false,
+        reviewSnapshotAvailable: true, reviewSnapshot: REMOTE_SNAPSHOT }] });
     expect(request).toHaveBeenLastCalledWith("issue/10001/remotelink", "GET", undefined, "json-array");
+    expect(request.mock.calls.every(([path]) => !path.startsWith("http"))).toBe(true);
   });
   it("uses the documented single-object response for an exact global ID selector", async () => {
     const request = fixture(object(REMOTE));
@@ -87,8 +92,27 @@ describe("bound native issue context reads", () => {
     expect((await read(name, args, fixture(response), BASE)).data.reason).toBe("malformed-payload");
   });
   it("keeps absent remote-link metadata unknown and explicit empty collections empty", async () => {
-    expect((await read("jira.remote-link", { issueIdOrKey: "APP-1", linkId: "30" }, fixture(object({ id: 30, application: null, object: null })), BASE)).data).toEqual({ outcome: "succeeded", issueId: "10001", issueKey: "APP-1", id: "30" });
+    expect((await read("jira.remote-link", { issueIdOrKey: "APP-1", linkId: "30" }, fixture(object({ id: 30, application: null, object: null })), BASE)).data).toEqual({ outcome: "succeeded", issueId: "10001", issueKey: "APP-1", id: "30", reviewSnapshotAvailable: false });
     expect((await read("jira.remote-links", { issueIdOrKey: "APP-1" }, fixture(array([])), BASE)).data).toMatchObject({ items: [], total: 0 });
+  });
+  it.each([
+    { ...REMOTE, object: { title: "Only title" } },
+    { ...REMOTE, extraNativeField: "Not reviewed" },
+    { ...REMOTE, object: { ...REMOTE.object, url: "javascript:alert(1)" } },
+    { ...REMOTE, object: { ...REMOTE.object, url: "https://secret@remote.example.invalid/value" } },
+    { ...REMOTE, object: { ...REMOTE.object, icon: { url16x16: "https://example.invalid/icon", link: "https://example.invalid/unsupported-field" } } },
+  ])("preserves an explicit unavailable snapshot instead of inventing a complete replacement", async (native) => {
+    const request = fixture(object(native));
+    const result = await read("jira.remote-link", { issueIdOrKey: "APP-1", linkId: "30" }, request, BASE);
+    expect(result.data).toMatchObject({ outcome: "succeeded", id: "30", reviewSnapshotAvailable: false });
+    expect(result.data).not.toHaveProperty("reviewSnapshot");
+    expect(result.data).not.toHaveProperty("browseUrl");
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+  it("preserves explicit native null and false separately in the complete replacement snapshot", async () => {
+    const native = { ...REMOTE, object: { ...REMOTE.object, summary: null, icon: null, status: { resolved: false, icon: null } } };
+    const result = await read("jira.remote-link", { issueIdOrKey: "APP-1", linkId: "30" }, fixture(object(native)), BASE);
+    expect(result.data.reviewSnapshot).toEqual({ ...REMOTE_SNAPSHOT, summary: null, iconUrl: null });
   });
   it("compares supplied comment and link self identities across proxy origins without following them", async () => {
     const pinned = { ...PIN, comment: { ...COMMENT, self: "http://public.example.invalid:8080/proxy/rest/api/2/issue/10001/comment/20" } };

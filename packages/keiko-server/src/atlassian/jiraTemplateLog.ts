@@ -3,6 +3,7 @@ import type {
   JiraManagedConnection,
 } from "@oscharko-dev/keiko-connectors";
 import {
+  JIRA_LINK_MUTATIONS,
   type JiraFieldValidationFailure,
   type JiraMutationAttempt,
   type JiraMutationOperation,
@@ -102,6 +103,15 @@ const TEMPLATE_ADMISSION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: true,
       values: [
+        "jira.create-issue-link",
+        "jira.delete-issue-link",
+        "jira.upsert-remote-link",
+        "jira.update-remote-link",
+        "jira.delete-remote-link",
+        "jira.delete-remote-link-by-global-id",
+        "jira.delete-component",
+        "jira.merge-version",
+        "jira.remove-and-swap-version",
         "jira.create",
         "jira.create-worklog",
         "jira.update-worklog",
@@ -201,6 +211,10 @@ const FIELD_ADMISSION = defineActivityLogOperation({
 });
 
 const TEMPLATE_OPERATIONS = [
+  ...JIRA_LINK_MUTATIONS,
+  "jira.delete-component",
+  "jira.merge-version",
+  "jira.remove-and-swap-version",
   "jira.create",
   "jira.create-worklog",
   "jira.update-worklog",

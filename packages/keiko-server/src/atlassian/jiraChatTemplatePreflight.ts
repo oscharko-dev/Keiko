@@ -13,6 +13,8 @@ import {
 import {
   JIRA_ENTITY_PROPERTY_MUTATIONS,
   JIRA_SAVED_CONFIGURATION_MUTATIONS,
+  JIRA_LINK_MUTATIONS,
+  JIRA_RELEASE_LIFECYCLE_MUTATIONS,
   sanitizeJiraMutationFailureDetail,
   type JiraFieldValidationFailure,
   type JiraMutationOperation,
@@ -40,6 +42,8 @@ import {
 
 /** Field and metadata writes share read-only validation; templates apply only to issue fields. */
 const FIELD_OPERATIONS = [
+  ...JIRA_LINK_MUTATIONS,
+  ...JIRA_RELEASE_LIFECYCLE_MUTATIONS,
   ...JIRA_SAVED_CONFIGURATION_MUTATIONS,
   ...JIRA_ENTITY_PROPERTY_MUTATIONS,
   "jira.set-app-monitoring",

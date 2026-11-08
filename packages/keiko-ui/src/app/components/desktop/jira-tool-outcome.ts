@@ -34,7 +34,7 @@ import {
   JIRA_ADMINISTRATION_TOOLS,
   jiraAdministrationDetails,
 } from "./jira-administration-presentation";
-import { jiraMutationUnchanged } from "./jira-tool-presentation";
+import { jiraLocalReadFailureNotice, jiraMutationUnchanged } from "./jira-tool-presentation";
 import { JIRA_DIRECTORY_TOOLS, jiraDirectoryDetails } from "./jira-directory-presentation";
 import { JIRA_ACCESS_TOOLS, jiraAccessDetails } from "./jira-access-presentation";
 import {
@@ -61,6 +61,8 @@ import { JIRA_WORKLOG_FEED_TOOLS, jiraWorklogFeedDetails } from "./jira-worklog-
 import { JIRA_IDENTITY_OBSERVATION_TOOLS, jiraIdentityObservationDetails } from "./jira-identity-observation-presentation";
 import { JIRA_SELECTED_WORKLOG_TOOLS, jiraSelectedWorklogDetails } from "./jira-selected-worklog-presentation";
 import { JIRA_SAVED_CONFIGURATION_WRITE_TOOLS, jiraSavedConfigurationDetails, jiraSavedConfigurationFilterContextComplete } from "./jira-saved-configuration-presentation";
+import { JIRA_RELEASE_LIFECYCLE_TOOLS, jiraReleaseLifecycleDetails } from "./jira-release-lifecycle-presentation";
+import { JIRA_LINK_MUTATION_TOOLS, jiraLinkMutationDetails } from "./jira-link-mutation-presentation";
 import { JIRA_PROPERTY_TOOLS, jiraPropertyDetails } from "./jira-property-presentation";
 import { JIRA_MONITORING_WRITE_TOOLS, jiraMonitoringDetails } from "./jira-monitoring-presentation";
 import { JIRA_PROPERTY_MUTATION_TOOLS, jiraPropertyMutationDetails } from "./jira-property-mutation-presentation";
@@ -283,6 +285,8 @@ const CONFIGURATION_PRESENTERS: readonly (readonly [ReadonlySet<string>, Configu
   [JIRA_IDENTITY_OBSERVATION_TOOLS, jiraIdentityObservationDetails],
   [JIRA_SELECTED_WORKLOG_TOOLS, jiraSelectedWorklogDetails],
   [JIRA_SAVED_CONFIGURATION_WRITE_TOOLS, jiraSavedConfigurationDetails],
+  [JIRA_RELEASE_LIFECYCLE_TOOLS, jiraReleaseLifecycleDetails],
+  [JIRA_LINK_MUTATION_TOOLS, jiraLinkMutationDetails],
   [JIRA_REMOTE_VERSION_LINK_TOOLS, jiraRemoteVersionLinkDetails],
   [JIRA_WORKLOG_FEED_TOOLS, jiraWorklogFeedDetails],
   [JIRA_ADMINISTRATIVE_OBSERVATION_TOOLS, jiraAdministrativeObservationDetails],
@@ -494,6 +498,8 @@ const FAILURE_MESSAGES: Readonly<Record<string, WidgetMessageKey>> = {
   "bounds-exceeded": "chat.jira.outcome.failure.bounds",
   "malformed-payload": "chat.jira.outcome.failure.response",
   "field-validation": "chat.jira.outcome.failure.fields",
+  "effect-denied": "chat.jira.outcome.failure.localAuthority",
+  cancelled: "chat.jira.outcome.failure.cancelled",
   timeout: "chat.jira.outcome.failure.unavailable",
   unavailable: "chat.jira.outcome.failure.unavailable",
 };
@@ -507,6 +513,8 @@ function failureMessage(
   data: UnknownRecord | undefined,
 ): WidgetMessageKey | undefined {
   if (jiraMutationUnchanged(exchange)) return undefined;
+  const localRead = jiraLocalReadFailureNotice(exchange);
+  if (localRead !== undefined) return localRead;
   const reason = failureReason(data);
   if (reason !== undefined && Object.hasOwn(FAILURE_MESSAGES, reason))
     return FAILURE_MESSAGES[reason];
@@ -539,7 +547,8 @@ function pageCounts(
 export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcomeView {
   const stored = record(exchange.result?.data) ?? {};
   const data =
-    [JIRA_PARTICIPATION_TOOLS, JIRA_MONITORING_WRITE_TOOLS, JIRA_PROPERTY_MUTATION_TOOLS, JIRA_SAVED_CONFIGURATION_WRITE_TOOLS].some((tools) => tools.has(exchange.call.name)) && exchange.mutationOutcome !== undefined
+    [JIRA_PARTICIPATION_TOOLS, JIRA_MONITORING_WRITE_TOOLS, JIRA_PROPERTY_MUTATION_TOOLS, JIRA_SAVED_CONFIGURATION_WRITE_TOOLS,
+      JIRA_RELEASE_LIFECYCLE_TOOLS, JIRA_LINK_MUTATION_TOOLS].some((tools) => tools.has(exchange.call.name)) && exchange.mutationOutcome !== undefined
       ? { ...stored, outcome: exchange.mutationOutcome }
       : stored;
   return {

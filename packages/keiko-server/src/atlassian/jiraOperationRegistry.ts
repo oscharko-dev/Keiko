@@ -19,6 +19,16 @@ type CompositeTool = "jira.report" | "jira.draft-stage" | "jira.draft";
 type NativeTool = Exclude<JiraOperationTool, CompositeTool>;
 type JiraOperationEffect = "remote-read" | "remote-write" | "local-report" | "local-draft";
 type JiraPermissionPolicy =
+  | "issue-link-create-and-readback"
+  | "issue-link-delete-and-absence"
+  | "remote-link-upsert-and-readback"
+  | "remote-link-update-and-readback"
+  | "remote-link-delete-and-absence"
+  | "component-delete-and-reference-uncertainty"
+  | "version-merge-and-reference-uncertainty"
+  | "version-order-and-readback"
+  | "version-delete-swap-and-reference-uncertainty"
+
   | "native-visible-requested-worklogs"
   | "instance-admin-anonymization-observation"
   | "bound-current-session"
@@ -183,6 +193,34 @@ function writes<const K extends NativeTool>(
   return result as NativeGroup<K>;
 }
 const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
+  ...writes("issue-link-create-and-readback", {
+    "jira.create-issue-link": ["POST", "/issueLink"],
+  }),
+  ...writes("issue-link-delete-and-absence", {
+    "jira.delete-issue-link": ["DELETE", "/issueLink/{linkId}"],
+  }),
+  ...writes("remote-link-upsert-and-readback", {
+    "jira.upsert-remote-link": ["POST", "/issue/{issueIdOrKey}/remotelink"],
+  }),
+  ...writes("remote-link-update-and-readback", {
+    "jira.update-remote-link": ["PUT", "/issue/{issueIdOrKey}/remotelink/{linkId}"],
+  }),
+  ...writes("remote-link-delete-and-absence", {
+    "jira.delete-remote-link": ["DELETE", "/issue/{issueIdOrKey}/remotelink/{linkId}"],
+    "jira.delete-remote-link-by-global-id": ["DELETE", "/issue/{issueIdOrKey}/remotelink"],
+  }),
+  ...writes("component-delete-and-reference-uncertainty", {
+    "jira.delete-component": ["DELETE", "/component/{id}"],
+  }),
+  ...writes("version-merge-and-reference-uncertainty", {
+    "jira.merge-version": ["PUT", "/version/{id}/mergeto/{moveIssuesTo}"],
+  }),
+  ...writes("version-order-and-readback", {
+    "jira.move-version": ["POST", "/version/{id}/move"],
+  }),
+  ...writes("version-delete-swap-and-reference-uncertainty", {
+    "jira.remove-and-swap-version": ["POST", "/version/{id}/removeAndSwap"],
+  }),
   "jira.search-post": ["POST", "read", "/search", "visible-issues"],
   "jira.worklogs-by-id": ["POST", "read", "/worklog/list", "native-visible-requested-worklogs"],
   ...reads("instance-admin-anonymization-observation", {

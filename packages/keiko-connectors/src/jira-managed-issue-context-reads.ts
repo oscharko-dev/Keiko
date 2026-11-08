@@ -13,6 +13,7 @@ import { readJiraBoundProject } from "./jira-managed-projects.js";
 import { executeJiraSelectedRead, selectJiraReadPage, type JiraReadPageSelection, type JiraReadResponse } from "./jira-managed-read-request.js";
 import { readJiraMutationIssue } from "./jira-mutation-confirmation.js";
 import { jiraNativeId, jiraNativeText } from "./jira-native-values.js";
+import { projectRemoteLinkSnapshot } from "./jira-remote-link-mutation-values.js";
 
 export const JIRA_ISSUE_CONTEXT_READS = JIRA_READ_TOOL_FAMILIES.issueContext;
 type ContextRead = (typeof JIRA_ISSUE_CONTEXT_READS)[number];
@@ -59,10 +60,17 @@ function selection(name: IssueRead, args: CatalogJsonObject): IssueSelection | u
     mode: name === "jira.subtask-move-availability" ? "availability" : "collection" };
   return remoteSelection(name, args, selected);
 }
-function projection(name: IssueRead, baseUrl: string): (value: unknown) => CatalogJsonObject | undefined {
+function remoteItem(value: unknown, context: BoundSelection["context"]): CatalogJsonObject | undefined {
+  const item = jiraRemoteIssueLinkProjection(value);
+  if (item === undefined) return undefined;
+  const snapshot = projectRemoteLinkSnapshot(value, { id: context.issueId, key: context.issueKey, fields: {} });
+  return snapshot === undefined ? { ...item, reviewSnapshotAvailable: false }
+    : { ...item, reviewSnapshotAvailable: true, reviewSnapshot: { ...snapshot } };
+}
+function projection(name: IssueRead, baseUrl: string, context: BoundSelection["context"]): (value: unknown) => CatalogJsonObject | undefined {
   if (name === "jira.pinned-comments") return jiraPinnedCommentProjection;
   if (name === "jira.subtasks") return (value) => jiraSubtaskProjection(value, baseUrl);
-  return jiraRemoteIssueLinkProjection;
+  return (value) => remoteItem(value, context);
 }
 function membership(name: IssueRead, value: unknown, selected: BoundSelection, baseUrl: string): boolean {
   const binding = { ...selected.context, baseUrl };
@@ -76,7 +84,7 @@ function collection(name: IssueRead, response: JiraReadResponse, selected: Bound
   if (values.length > TOOL_CATALOG_LIMITS.maxArrayItems || values.some(jiraIssueContextBoundsExceeded))
     return jiraReadFailure("bounds-exceeded");
   if (values.some((value) => !membership(name, value, selected, baseUrl))) return jiraReadFailure("conflict");
-  const project = projection(name, baseUrl);
+  const project = projection(name, baseUrl, selected.context);
   const items = projectJiraCollection(values, TOOL_CATALOG_LIMITS.maxArrayItems, project, "id");
   if (items === undefined) return jiraReadFailure("malformed-payload");
   const page = localJiraPage(items, selected.startAt, selected.maxResults);
@@ -85,7 +93,7 @@ function collection(name: IssueRead, response: JiraReadResponse, selected: Bound
 function selectedLink(response: JiraReadResponse, selected: BoundSelection, baseUrl: string): ManagedMcpToolResult {
   if (jiraIssueContextBoundsExceeded(response.body)) return jiraReadFailure("bounds-exceeded");
   if (!jiraRemoteLinkMembership(response.body, { ...selected.context, baseUrl })) return jiraReadFailure("conflict");
-  const item = jiraRemoteIssueLinkProjection(response.body);
+  const item = remoteItem(response.body, selected.context);
   if (item === undefined) return jiraReadFailure("malformed-payload");
   if (selected.linkId !== undefined && item.id !== selected.linkId) return jiraReadFailure("malformed-payload");
   if (selected.globalId !== undefined && item.globalId !== selected.globalId) return jiraReadFailure("malformed-payload");

@@ -1,4 +1,12 @@
 import {
+  jiraReleaseLifecycleDeclarationForTool,
+  type JIRA_RELEASE_LIFECYCLE_WRITE_DEFINITIONS,
+} from "./jiraReleaseLifecycleDescriptors.js";
+import {
+  jiraLinkMutationDeclarationForTool,
+  type JIRA_LINK_WRITE_DEFINITIONS,
+} from "./jiraLinkMutationDescriptors.js";
+import {
   jiraSavedConfigurationMutationDeclarationForTool,
   type JIRA_SAVED_CONFIGURATION_WRITE_DEFINITIONS,
 } from "./jiraSavedConfigurationMutationDescriptors.js";
@@ -405,6 +413,8 @@ type CoreMutationToolName = Exclude<
   JiraMutationOperation,
   Extract<
     JiraMutationOperation,
+    | keyof typeof JIRA_RELEASE_LIFECYCLE_WRITE_DEFINITIONS
+    | keyof typeof JIRA_LINK_WRITE_DEFINITIONS
     | keyof typeof JIRA_SAVED_CONFIGURATION_WRITE_DEFINITIONS
     | keyof typeof JIRA_AGILE_WRITE_DEFINITIONS
     | keyof typeof JIRA_PROJECT_STRUCTURE_WRITE_DEFINITIONS
@@ -583,6 +593,8 @@ function isCoreMutationTool(name: JiraMutationOperation): name is CoreMutationTo
 }
 export function jiraMutationDeclaration(name: JiraMutationOperation): ManagedMcpToolDeclaration {
   for (const producer of [
+    jiraReleaseLifecycleDeclarationForTool,
+    jiraLinkMutationDeclarationForTool,
     jiraSavedConfigurationMutationDeclarationForTool,
     jiraEntityPropertyMutationDeclarationForTool,
     jiraMonitoringDeclarationForTool,

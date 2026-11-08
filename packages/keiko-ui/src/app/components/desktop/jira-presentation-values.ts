@@ -29,3 +29,12 @@ export function jiraPresentationStringList(
   if (!Array.isArray(value) || !value.every((entry: unknown) => typeof entry === "string")) return undefined;
   return [...jiraPresentationFact(label, value.join(", ")), { label: countLabel, value: String(value.length) }];
 }
+
+/** Display-only receipt status; the caller supplies its closed family's identity completeness. */
+export function jiraPresentationMutationLabels(source: JiraPresentationSource, complete: boolean): WidgetMessageKey[] {
+  if (!complete) return ["chat.jira.savedConfiguration.identityUnknown"];
+  if (source.outcome === "succeeded") return ["chat.jira.savedConfiguration.confirmed"];
+  if (source.outcome === "rejected" && source.reason === "conflict" && source.unchanged === true)
+    return ["chat.jira.savedConfiguration.unchanged"];
+  return ["chat.jira.savedConfiguration.unconfirmed"];
+}

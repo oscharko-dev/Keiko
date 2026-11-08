@@ -1,6 +1,7 @@
 import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
 import type { JiraAgileDetails, JiraOutcomeFact } from "./jira-agile-presentation";
 import { jiraCollaborationDetails } from "./jira-collaboration-presentation";
+import { jiraRemoteLinkReviewDetails } from "./jira-link-mutation-presentation";
 import {
   jiraPresentationFact as fact,
   jiraPresentationRecord as record,
@@ -39,7 +40,7 @@ function remoteLinks(source: Source): readonly JiraAgileDetails[] {
   const labels: WidgetMessageKey[] = ["chat.jira.issueContext.linkObservation"];
   const header: JiraAgileDetails = { facts: parentFacts(source), labels };
   if (typeof source.id === "string")
-    return header.facts.length === 0 ? [remoteLink(source)] : [header, remoteLink(source)];
+    return [...(header.facts.length === 0 ? [] : [header]), remoteLink(source), ...jiraRemoteLinkReviewDetails(source)];
   if (!Array.isArray(source.items)) {
     labels.push("chat.jira.issueContext.linksUnknown");
     return [header];
@@ -47,7 +48,7 @@ function remoteLinks(source: Source): readonly JiraAgileDetails[] {
   if (source.items.length === 0) labels.push("chat.jira.issueContext.linksEmpty");
   return [header, ...source.items.flatMap((value: unknown) => {
     const item = record(value);
-    return item === undefined ? [] : [remoteLink(item)];
+    return item === undefined ? [] : [remoteLink(item), ...jiraRemoteLinkReviewDetails(item)];
   })];
 }
 function collectionHeader(tool: string, source: Source): JiraAgileDetails {
@@ -56,7 +57,7 @@ function collectionHeader(tool: string, source: Source): JiraAgileDetails {
   else if (source.items.length === 0) labels.push("chat.jira.issueContext.collectionEmpty");
   return { facts: parentFacts(source), labels };
 }
-/** Remote destinations are metadata only; this projection never exposes their native URLs. */
+/** Remote addresses in complete review snapshots remain plain metadata, never navigation targets. */
 export function jiraIssueContextDetails(tool: string, source: Source): readonly JiraAgileDetails[] {
   if (!JIRA_ISSUE_CONTEXT_TOOLS.has(tool) || source.outcome === "failed") return [];
   if (tool === "jira_subtasks" || tool === "jira_pinned_comments") return [collectionHeader(tool, source)];

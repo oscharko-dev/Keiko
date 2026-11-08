@@ -35,6 +35,8 @@ import { JIRA_ACCOUNT_DIAGNOSTIC_TOOLS } from "./jira-account-diagnostic-present
 import { JIRA_APPLICATION_SETTINGS_TOOLS } from "./jira-application-settings-presentation";
 import { JIRA_REMOTE_VERSION_LINK_TOOLS } from "./jira-remote-version-link-presentation";
 import { JIRA_SAVED_CONFIGURATION_WRITE_TOOLS, jiraSavedConfigurationIdentityComplete, jiraSavedConfigurationDeletionUnconfirmed } from "./jira-saved-configuration-presentation";
+import { JIRA_RELEASE_LIFECYCLE_TOOLS, jiraReleaseLifecycleIdentityComplete, jiraReleaseReferenceEffectsUnconfirmed } from "./jira-release-lifecycle-presentation";
+import { JIRA_LINK_MUTATION_TOOLS, jiraLinkMutationIdentityComplete } from "./jira-link-mutation-presentation";
 const LOCALLY_PAGED_TOOLS = new Set([
   ...JIRA_REMOTE_VERSION_LINK_TOOLS,
   ...JIRA_ACCOUNT_DIAGNOSTIC_TOOLS,
@@ -145,6 +147,18 @@ export function jiraLocalAccessDenialNotice(exchange: ChatToolExchange): WidgetM
     MANAGED_TOOLS.some((name) => name.replace(/[.-]/gu, "_") === exchange.call.name)
     ? "atlassianConnectors.denied.reason.connector-access-denied" : undefined;
 }
+const LOCAL_READ_FAILURE_NOTICES: ReadonlyMap<string, WidgetMessageKey> = new Map([
+  ["denied:effect-denied", "chat.jira.outcome.failure.localAuthority"],
+  ["failed:handler-failed", "chat.jira.outcome.failure.localHandler"],
+  ["timeout:deadline-exceeded", "chat.jira.outcome.failure.readDeadline"],
+  ["cancelled:parent-cancelled", "chat.jira.outcome.failure.cancelled"],
+]);
+/** Technical read outcomes retain their exact closed envelope cause, including after history reload. */
+export function jiraLocalReadFailureNotice(exchange: ChatToolExchange): WidgetMessageKey | undefined {
+  const result = exchange.result;
+  if (result?.data !== null || !JIRA_MANAGED_READ_TOOLS.some((name) => name.replace(/[.-]/gu, "_") === exchange.call.name)) return undefined;
+  return LOCAL_READ_FAILURE_NOTICES.get(`${result.status}:${result.reason}`);
+}
 export function jiraToolRegionLabel(exchange: ChatToolExchange): WidgetMessageKey {
   const knowledge = KNOWLEDGE_TOOLS[exchange.call.name];
   if (knowledge !== undefined) return knowledge.label;
@@ -216,12 +230,17 @@ function isMutation(exchange: ChatToolExchange): boolean {
 function mutationIdentityMissing(exchange: ChatToolExchange): boolean {
   const data = plainRecord(exchange.result?.data) ?? {};
   if (JIRA_PROPERTY_MUTATION_TOOLS.has(exchange.call.name)) return !jiraPropertyMutationIdentityComplete(exchange.call.name, data);
+  if (JIRA_RELEASE_LIFECYCLE_TOOLS.has(exchange.call.name)) return !jiraReleaseLifecycleIdentityComplete(exchange.call.name, data);
+  if (JIRA_LINK_MUTATION_TOOLS.has(exchange.call.name)) return !jiraLinkMutationIdentityComplete(exchange.call.name, data);
   return JIRA_SAVED_CONFIGURATION_WRITE_TOOLS.has(exchange.call.name) && !jiraSavedConfigurationIdentityComplete(exchange.call.name, data);
+}
+function mutationConfirmationUnavailable(tool: string): boolean {
+  return jiraSavedConfigurationDeletionUnconfirmed(tool) || jiraReleaseReferenceEffectsUnconfirmed(tool);
 }
 /** Only an explicit, rejected no-change receipt can soften a conflict; journal state wins. */
 export function jiraMutationUnchanged(exchange: ChatToolExchange): boolean {
   const data = plainRecord(exchange.result?.data);
-  if (mutationIdentityMissing(exchange) || jiraSavedConfigurationDeletionUnconfirmed(exchange.call.name)) return false;
+  if (mutationIdentityMissing(exchange) || mutationConfirmationUnavailable(exchange.call.name)) return false;
   return (
     isMutation(exchange) &&
     mutationOutcome(exchange) === "rejected" &&
@@ -236,7 +255,7 @@ function managedMutationState(
 ): WidgetMessageKey {
   const outcome = mutationOutcome(exchange);
   if (outcome === "succeeded" && mutationIdentityMissing(exchange)) return OUTCOME_KEYS.unknown;
-  if (outcome === "succeeded" && jiraSavedConfigurationDeletionUnconfirmed(exchange.call.name)) return OUTCOME_KEYS["succeeded-unconfirmed"];
+  if (outcome === "succeeded" && mutationConfirmationUnavailable(exchange.call.name)) return OUTCOME_KEYS["succeeded-unconfirmed"];
   if (outcome !== undefined)
     return jiraMutationUnchanged(exchange) ? "chat.jira.write.unchanged" : OUTCOME_KEYS[outcome];
   return exchange.result === undefined && turnState === "pending"

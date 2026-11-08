@@ -738,6 +738,16 @@ worklog lookup are explicit remote reads, despite their HTTP method, and acquire
 approval or journal entry. The fixed auth/1 session GET reads only the bound connection after
 current-user equality; passwords, cookies and login/logout remain separate capabilities.
 
+Native issue-link changes bind both canonical parents and the complete reviewed relations;
+saved templates judge the planned native post-relation before a single effect. Remote-link
+replacement reuses one supported typed snapshot and does not follow its metadata URLs. Native
+project-wide component/version removal and reassignment cannot establish every hidden issue
+post-state from visible entity collections or JQL. The existing formal-rule owner therefore
+refuses affected or unresolved edit-active required-field/parent-field rules before that bulk
+effect, with governed per-issue editing as remediation. Unrelated rules and prose skills do not
+activate enforcement; pure version ordering does not alter issue references. Native removal or
+merge acknowledgement plus entity absence still leaves aggregate reference effects unconfirmed.
+
 The human selects administration explicitly in the existing connector menu, separately from the
 mode. `Chat.jiraAdministrationEnabled` is false when absent, is stored in the existing Chat Jira
 state and can be enabled only for the unchanged currently verified Pod. HTTP updates require the

@@ -18,6 +18,7 @@ import { jiraScreenTabArgumentLabel } from "./jira-administration-presentation";
 import { jiraMonitoringArgumentLabel, jiraMonitoringFixedTarget } from "./jira-monitoring-presentation";
 import { jiraPropertyMutationFacts } from "./jira-property-mutation-presentation";
 import { jiraSavedConfigurationFacts, jiraSavedConfigurationContextFacts } from "./jira-saved-configuration-approval";
+import { jiraStructuralMutationFacts, jiraStructuralMutationContextFacts } from "./jira-structural-mutation-approval";
 
 type Raw = Readonly<Record<string, unknown>>;
 type Fact = JiraDraftField;
@@ -265,6 +266,13 @@ function jiraFacts(key: string, value: unknown, t: OptionalWidgetTranslate): rea
   }
 }
 
+function operationFacts(operation: string | undefined, key: string, value: unknown, t: OptionalWidgetTranslate): readonly Fact[] | undefined {
+  return deletionFacts(operation, key, value, t) ??
+    jiraPropertyMutationFacts(operation, key, value, t) ??
+    jiraSavedConfigurationFacts(operation, key, value, t) ??
+    jiraStructuralMutationFacts(operation, key, value, t) ??
+    screenTabFacts(operation, key, value, t) ?? monitoringFacts(operation, key, value, t);
+}
 /**
  * The facts of a write approval. `managed` is a Jira write whose argument names the page knows;
  * any other write (an MCP tool) shows its argument names as the model sent them.
@@ -283,10 +291,7 @@ export function jiraActionFacts(
   const worklog = operation === "jira.create-worklog" || operation === "jira.update-worklog";
   const facts = Object.entries(raw).flatMap(([key, value]) => {
     if (!managed) return [{ id: key, value: jiraDraftValueOf(value) }];
-    const specificPreview = deletionFacts(operation, key, value, t) ??
-      jiraPropertyMutationFacts(operation, key, value, t) ??
-      jiraSavedConfigurationFacts(operation, key, value, t) ??
-      screenTabFacts(operation, key, value, t) ?? monitoringFacts(operation, key, value, t);
+    const specificPreview = operationFacts(operation, key, value, t);
     if (specificPreview !== undefined) return specificPreview;
     const worklogPreview = worklog
       ? worklogFacts(key, value, t, operation === "jira.update-worklog")
@@ -301,7 +306,7 @@ export function jiraActionFacts(
       : [{ id: t(label), value: jiraDraftValueOf(value) }];
   });
   return managed ? [...facts, ...deletionContextFacts(raw, operation, t), ...monitoringContextFacts(operation, t),
-    ...jiraSavedConfigurationContextFacts(operation, raw, t)] : facts;
+    ...jiraSavedConfigurationContextFacts(operation, raw, t), ...jiraStructuralMutationContextFacts(operation, t)] : facts;
 }
 /** Jira's own names where this turn read them; a field that repeats the target is said once. */
 function managedFacts(

@@ -1,4 +1,5 @@
 import {
+  JIRA_TEMPLATE_VIOLATIONS_MAX,
   jiraIssueTemplateLabel,
   type AtlassianConnectorWriteFailureReason,
   type JiraFieldMetadata,
@@ -17,6 +18,7 @@ import {
 import { planJiraIssueLinks, type JiraIssueLinkRequest } from "./jira-issue-links.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { readJiraMutationIssue } from "./jira-mutation-confirmation.js";
+import { parseJiraFieldMetadata } from "./jira-field-metadata.js";
 
 /**
  * Write admission against customer-defined issue templates (#4177). One gate sits between the
@@ -57,6 +59,8 @@ export interface JiraTemplateGateInput {
    * afterwards never is. The result names the order that puts a required link first.
    */
   readonly links?: readonly JiraIssueLinkRequest[];
+  /** Complete, independently bound relation after one native link effect; never raw model input. */
+  readonly plannedIssueLinks?: readonly unknown[];
   readonly target: {
     readonly projectId?: string;
     readonly issueTypeId?: string;
@@ -221,6 +225,7 @@ function subjectOf(
   primaryLinks: readonly JiraIssueLinkRequest[] = [],
 ): JiraTemplateSubject {
   const fields: Record<string, unknown> = { ...identity.prior, ...input.validated.fields };
+  if (input.plannedIssueLinks !== undefined) fields.issuelinks = input.plannedIssueLinks;
   if (input.operation !== "create" || input.validated.update.labels !== undefined) {
     fields.labels = appliedLabels(fields.labels, input.validated.update);
   }
@@ -231,7 +236,9 @@ function subjectOf(
     ...(input.transition === undefined ? {} : { transition: input.transition }),
     fields,
     linkTypes: [
-      ...(input.operation === "create" ? [] : jiraIssueLinkTypeNames(identity.prior)),
+      ...(input.operation === "create" ? [] : jiraIssueLinkTypeNames(
+        input.plannedIssueLinks === undefined ? identity.prior : fields,
+      )),
       ...primaryLinks.map((link) => link.type),
     ],
   };
@@ -255,15 +262,81 @@ function references(templates: readonly JiraIssueTemplate[]): readonly string[] 
 export async function readJiraFieldCatalog(
   request: JiraMutationRequest,
 ): Promise<readonly JiraFieldCatalogEntry[] | undefined> {
+  const items = await readFieldCatalogValues(request);
+  return items === undefined ? undefined : fieldCatalogValues(items);
+}
+async function readFieldCatalogValues(request: JiraMutationRequest): Promise<readonly unknown[] | undefined> {
   const response = await request("field", "GET", undefined, "json-array");
-  const items = response.ok ? response.items : undefined;
+  const items = response.ok && response.status === 200 ? response.items : undefined;
   if (items === undefined || items.length > CATALOG_MAX) return undefined;
+  return items;
+}
+function fieldCatalogValues(items: readonly unknown[]): readonly JiraFieldCatalogEntry[] {
   return items.flatMap((item): readonly JiraFieldCatalogEntry[] => {
     const record = asRecord(item);
     return typeof record?.id === "string" && typeof record.name === "string"
       ? [{ id: record.id, name: record.name }]
       : [];
   });
+}
+
+interface BulkReferenceRule { readonly template: JiraIssueTemplate; readonly reference: string }
+function bulkReferenceRules(templates: readonly JiraIssueTemplate[], projectKey: string): readonly BulkReferenceRule[] {
+  return templates.filter((template) => template.project.trim().toLowerCase() === projectKey.trim().toLowerCase() &&
+    template.activations.some((activation) => activation.kind === "edit"))
+    .flatMap((template) => [...template.requiredFields, ...(template.parent.field === undefined ? [] : [template.parent.field])]
+      .map((reference) => ({ template, reference })));
+}
+/** A known non-version custom field stays outside version impact. Opaque/plugin or malformed
+ * metadata cannot establish that boundary, so it stays potentially affected. The existing metadata
+ * parser classifies shapes only; these synthetic neutral flags grant no editing permission. */
+function mayHoldVersion(id: string, values: readonly unknown[]): boolean {
+  const matches = values.map(asRecord).filter((value) => value?.id === id);
+  if (matches.length !== 1) return true;
+  const raw = matches[0];
+  const parsed = parseJiraFieldMetadata([{ fieldId: id, name: raw?.name, schema: raw?.schema, required: false, operations: [] }]);
+  if (!parsed.ok) return true;
+  const kind = parsed.fields[0]?.kind;
+  return kind === undefined || kind === "opaque" || kind === "unsupported";
+}
+function bulkFieldAffected(id: string, kind: "component" | "version", values: readonly unknown[]): boolean {
+  if (kind === "component") return id === "components";
+  if (id === "fixVersions" || id === "versions") return true;
+  return id.startsWith("customfield_") && mayHoldVersion(id, values);
+}
+function bulkReferenceViolation(rule: BulkReferenceRule): JiraTemplateViolation {
+  return { ruleId: "template-unreadable", template: jiraIssueTemplateLabel(rule.template), subject: `Bulk issue-field impact: ${rule.reference}`.slice(0, 120) };
+}
+function bulkReferenceViolations(rules: readonly BulkReferenceRule[], kind: "component" | "version", values: readonly unknown[] | undefined): readonly JiraTemplateViolation[] {
+  const catalog = values === undefined ? JIRA_TEMPLATE_SYSTEM_FIELDS : [...JIRA_TEMPLATE_SYSTEM_FIELDS, ...fieldCatalogValues(values)];
+  const violations: JiraTemplateViolation[] = [];
+  for (const rule of rules) {
+    const ids = resolveJiraTemplateFieldIds(rule.reference, catalog);
+    if (ids.length === 0 || ids.some((id) => bulkFieldAffected(id, kind, values ?? [])))
+      violations.push(bulkReferenceViolation(rule));
+  }
+  return violations.slice(0, JIRA_TEMPLATE_VIOLATIONS_MAX);
+}
+/** Native project-wide reference rewrites have no complete, actor-independent affected-issue
+ * collection or atomic per-issue post-state contract. A visible JQL result or entity count cannot
+ * prove that coverage. Reuse the formal template source and field resolver to refuse only impacted
+ * rules before the bulk effect; callers can correct individual issues through governed jira.edit.
+ * This gate never interprets prose skills or treats version ordering as an issue-field mutation. */
+export async function gateJiraBulkReferenceChange(input: {
+  readonly request: JiraMutationRequest;
+  readonly source: JiraIssueTemplateSource | undefined;
+  readonly projectKey: string;
+  readonly kind: "component" | "version";
+}): Promise<JiraTemplateGateResult> {
+  const set = input.source?.();
+  if (set === undefined) return OK;
+  if (set.unreadable > 0) return unreadableRefusal(set.unreadableNames);
+  const rules = bulkReferenceRules(set.templates, input.projectKey);
+  if (rules.length === 0) return OK;
+  const unresolved = rules.some(({ reference }) => resolveJiraTemplateFieldIds(reference, JIRA_TEMPLATE_SYSTEM_FIELDS).length === 0);
+  const values = unresolved ? await readFieldCatalogValues(input.request) : [];
+  const violations = bulkReferenceViolations(rules, input.kind, values);
+  return violations.length === 0 ? OK : { ok: false, reason: "field-validation", violations };
 }
 
 /** Operation metadata first; the instance field list only when a reference stays unresolved. */

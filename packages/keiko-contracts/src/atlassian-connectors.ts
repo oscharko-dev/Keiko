@@ -35,6 +35,10 @@ import {
 import { JIRA_READ_TOOL_FAMILIES } from "./jira-read-tools.js";
 import { JIRA_MANAGED_READ_TOOLS, type JiraManagedReadToolName } from "./jira-tool-fields.js";
 import {
+  JIRA_LINK_MUTATIONS,
+  JIRA_RELEASE_LIFECYCLE_MUTATIONS,
+  type JiraLinkMutation,
+  type JiraReleaseLifecycleMutation,
   JIRA_ENTITY_PROPERTY_MUTATIONS,
   type JiraEntityPropertyMutation,
   type JiraMutationOperation,
@@ -54,6 +58,15 @@ const JIRA_SAVED_WRITE_ACTIONS = Object.freeze([
 ] as const);
 const JIRA_SAVED_ACTIONS = Object.freeze([...JIRA_SAVED_ADMIN_ACTIONS, ...JIRA_SAVED_WRITE_ACTIONS]);
 type JiraSavedConfigurationAction = (typeof JIRA_SAVED_ACTIONS)[number];
+
+type JiraRelationshipOrReleaseMutation = JiraLinkMutation | JiraReleaseLifecycleMutation;
+type JiraRelationshipOrReleaseAction = JiraRelationshipOrReleaseMutation extends `jira.${infer Action}` ? Action : never;
+function relationshipOrReleaseAction(name: JiraRelationshipOrReleaseMutation): JiraRelationshipOrReleaseAction {
+  return name.slice(5) as JiraRelationshipOrReleaseAction;
+}
+const JIRA_RELATIONSHIP_RELEASE_ACTIONS = Object.freeze([
+  ...JIRA_LINK_MUTATIONS, ...JIRA_RELEASE_LIFECYCLE_MUTATIONS,
+].map(relationshipOrReleaseAction));
 
 // ─── Schema version ───────────────────────────────────────────────────────────
 // Pinned to "1". A breaking change introduces a NEW literal rather than mutating "1", the same
@@ -608,6 +621,7 @@ export type AtlassianConnectorActionType =
   | JiraManagedReadToolName
   | JiraEntityPropertyAction
   | JiraSavedConfigurationAction
+  | JiraRelationshipOrReleaseAction
   | "set-app-monitoring"
   | "set-ipd-monitoring"
   | "start-jmx-metrics"
@@ -652,6 +666,7 @@ export type AtlassianConnectorActionType =
 
 export const ATLASSIAN_CONNECTOR_ACTION_TYPES: readonly AtlassianConnectorActionType[] =
   Object.freeze([
+    ...JIRA_RELATIONSHIP_RELEASE_ACTIONS,
     ...JIRA_SAVED_ACTIONS,
     ...JIRA_PROPERTY_ACTIONS,
     "set-app-monitoring",
@@ -705,6 +720,16 @@ export const JIRA_REQUIREMENT_REFERENCE_CHARS_MAX = 120;
 export const JIRA_MANAGED_ACTION_TYPES: Readonly<
   Record<JiraManagedReadToolName | JiraMutationOperation, AtlassianConnectorActionType>
 > = Object.freeze({
+  "jira.create-issue-link": "create-issue-link",
+  "jira.delete-issue-link": "delete-issue-link",
+  "jira.upsert-remote-link": "upsert-remote-link",
+  "jira.update-remote-link": "update-remote-link",
+  "jira.delete-remote-link": "delete-remote-link",
+  "jira.delete-remote-link-by-global-id": "delete-remote-link-by-global-id",
+  "jira.delete-component": "delete-component",
+  "jira.merge-version": "merge-version",
+  "jira.move-version": "move-version",
+  "jira.remove-and-swap-version": "remove-and-swap-version",
   "jira.create-filter": "create-filter",
   "jira.update-filter": "update-filter",
   "jira.delete-filter": "delete-filter",
@@ -791,6 +816,7 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASSES: readonly AtlassianConnectorActi
 export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
   Record<AtlassianConnectorActionType, AtlassianConnectorActionClass>
 > = Object.freeze({
+  ...jiraActionValues(JIRA_RELATIONSHIP_RELEASE_ACTIONS, "connector-write"),
   ...jiraActionValues(JIRA_SAVED_ADMIN_ACTIONS, "connector-admin"),
   ...jiraActionValues(JIRA_SAVED_WRITE_ACTIONS, "connector-write"),
   ...jiraActionValues(JIRA_MANAGED_READ_TOOLS, "connector-access"),
@@ -844,6 +870,7 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
 export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
   Record<AtlassianConnectorActionType, AtlassianConnectorProvider>
 > = Object.freeze({
+  ...jiraActionValues(JIRA_RELATIONSHIP_RELEASE_ACTIONS, "jira"),
   ...jiraActionValues(JIRA_SAVED_ACTIONS, "jira"),
   ...jiraActionValues(JIRA_MANAGED_READ_TOOLS, "jira"),
   ...jiraActionValues(JIRA_PROPERTY_ACTIONS, "jira"),
@@ -893,6 +920,7 @@ export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
 export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchConnectorScope>
 > = Object.freeze({
+  ...jiraActionValues(JIRA_RELATIONSHIP_RELEASE_ACTIONS, "issue-tracker.write"),
   ...jiraActionValues(JIRA_SAVED_ADMIN_ACTIONS, "issue-tracker.admin"),
   ...jiraActionValues(JIRA_SAVED_WRITE_ACTIONS, "issue-tracker.write"),
   ...jiraActionValues(JIRA_MANAGED_READ_TOOLS, "issue-tracker.read"),
@@ -956,8 +984,16 @@ export function jiraRequiredConnectorScope(
 export const ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchApprovalRisk>
 > = Object.freeze({
+  ...jiraActionValues(JIRA_RELATIONSHIP_RELEASE_ACTIONS, "medium"),
   ...jiraActionValues(JIRA_SAVED_ADMIN_ACTIONS, "high"),
   ...jiraActionValues(JIRA_SAVED_WRITE_ACTIONS, "medium"),
+  "delete-issue-link": "high",
+  "delete-remote-link": "high",
+  "delete-remote-link-by-global-id": "high",
+  "delete-component": "high",
+  "merge-version": "high",
+  "move-version": "high",
+  "remove-and-swap-version": "high",
   "delete-filter": "high",
   ...jiraActionValues(JIRA_MANAGED_READ_TOOLS, "low"),
   ...jiraActionValues(JIRA_PROPERTY_ACTIONS, "high"),
@@ -1884,6 +1920,10 @@ export {
   isJiraDraftRef,
   type JiraDraftItemState,
   JIRA_MUTATION_OPERATIONS,
+  JIRA_LINK_MUTATIONS,
+  JIRA_RELEASE_LIFECYCLE_MUTATIONS,
+  type JiraLinkMutation,
+  type JiraReleaseLifecycleMutation,
   JIRA_SAVED_CONFIGURATION_MUTATIONS,
   type JiraSavedConfigurationMutation,
   JIRA_MUTATION_OUTCOMES,
