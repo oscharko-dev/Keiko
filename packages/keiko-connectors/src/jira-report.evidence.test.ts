@@ -266,6 +266,94 @@ describe("an omitted requested field is unreadable evidence, never an empty valu
   );
 });
 
+describe("requirement coverage needs every requested trace source", () => {
+  it.each([
+    ["labels", undefined],
+    ["description", undefined],
+    ["summary", undefined],
+    ["labels", null],
+    ["labels", "REQ-999"],
+    ["labels", ["REQ-999", 42]],
+    ["labels", [null]],
+    ["description", 17],
+    ["summary", null],
+  ] as const)(
+    "keeps the measured prefix incomplete with unreadable %s evidence (%j) on a later page",
+    async (fieldId, value) => {
+      const activity: JiraReportActivity[] = [];
+      const { result } = await run(
+        { issues: syntheticProject(40), pageClamp: 7 },
+        {
+          args: { requirementIds: ["REQ-999"] },
+          deps: { activity: (item) => activity.push(item) },
+          rewrite: (path, body) => {
+            if (path === "search")
+              for (const issue of issuesOf(body)) {
+                if (issue.key !== "REP-15") continue;
+                if (value === undefined) Reflect.deleteProperty(fieldsOf(issue), fieldId);
+                else fieldsOf(issue)[fieldId] = value;
+              }
+            return body;
+          },
+        },
+      );
+      expect(result.data.status).toBe("incomplete");
+      expect(completenessOf(result)).toMatchObject({
+        complete: false,
+        reason: "read-failed",
+        failure: "permission",
+        issuesRead: 14,
+        issuesTotal: 40,
+      });
+      expect(activity.at(-1)).toMatchObject({
+        phase: "read",
+        status: "incomplete",
+        failure: "permission",
+        issuesRead: 14,
+      });
+      expect(activity.at(-1)?.pageCount).toBeGreaterThan(2);
+      expect(JSON.stringify(activity)).not.toMatch(/REP-|REQ-|description|labels|summary/u);
+    },
+  );
+
+  it.each([
+    [[], null],
+    [[""], null],
+    [[], ""],
+    [[""], ""],
+  ] as const)(
+    "keeps observed labels %j and description %j readable across native pages",
+    async (labels, description) => {
+      const { result } = await run(
+        { issues: syntheticProject(23), pageClamp: 5 },
+        {
+          args: { requirementIds: ["REQ-999"] },
+          rewrite: (path, body) => {
+            if (path === "search")
+              for (const issue of issuesOf(body)) {
+                fieldsOf(issue).labels = labels;
+                fieldsOf(issue).description = description;
+              }
+            return body;
+          },
+        },
+      );
+      expect(result.data.status).toBe("complete");
+      expect(completenessOf(result)).toMatchObject({
+        complete: true,
+        issuesRead: 23,
+        issuesTotal: 23,
+      });
+      expect(completenessOf(result).pageCount).toBeGreaterThan(2);
+      expect(record(reportOf(result).coverage).requirements).toMatchObject({
+        declared: 1,
+        covered: 0,
+        uncovered: { total: 1, items: ["REQ-999"] },
+      });
+    },
+  );
+});
+
 describe("create metadata is trusted only with Jira's completion evidence (D2)", () => {
   const issues = syntheticProject(40);
   const early = { startAt: 0, maxResults: 50, total: 4, isLast: false, values: [] };

@@ -71,7 +71,12 @@ function mergePages(
   if (issues === undefined) return first;
   for (const body of rest) {
     const other = asArray(body.issues);
-    if (other?.length !== issues.length || body.total !== first.total) return undefined;
+    if (
+      other?.length !== issues.length ||
+      body.total !== first.total ||
+      body.startAt !== first.startAt
+    )
+      return undefined;
     const merged: unknown[] = issues.map((issue, index) => mergeIssue(issue, other[index]));
     if (merged.includes(undefined)) return undefined;
     issues = merged;

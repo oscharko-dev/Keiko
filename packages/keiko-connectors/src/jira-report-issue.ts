@@ -29,7 +29,7 @@ export interface JiraReportFieldPlan {
    * page takes its proposals back before the report is built.
    */
   readonly parentProposals: Map<string, readonly ParentProposal[]>;
-  /** Requested fields a hit left out; an omission is unreadable evidence, never an empty value. */
+  /** Requested fields omitted or unreadable in a hit; neither proves an empty value. */
   readonly omittedFields: Set<string>;
   readonly estimateFieldId: string;
   readonly requirementIds: ReadonlySet<string>;
@@ -222,11 +222,19 @@ function trimTrailingSeparators(token: string): string {
  * Every label the response carries: the trace a write left on the issue and the requirement ids
  * are read from them, so no count cut may hide one. The memory budget charges each label.
  */
-function labelsOf(fields: Record<string, unknown>): readonly string[] {
-  const labels = asArray(fields.labels)?.filter(
-    (item): item is string => typeof item === "string" && item.length > 0,
-  );
-  return (labels ?? []).map((label) => label.slice(0, LABEL_CHARS_MAX));
+function labelsOf(
+  fields: Record<string, unknown>,
+  plan: JiraReportFieldPlan,
+): readonly string[] {
+  const labels = asArray(fields.labels);
+  if (
+    labels === undefined ||
+    !labels.every((item): item is string => typeof item === "string")
+  ) {
+    plan.omittedFields.add("labels");
+    return [];
+  }
+  return labels.map((label) => label.slice(0, LABEL_CHARS_MAX));
 }
 function referencedRequirements(
   summary: string,
@@ -235,6 +243,9 @@ function referencedRequirements(
   plan: JiraReportFieldPlan,
 ): readonly string[] {
   if (plan.requirementIds.size === 0) return [];
+  if (typeof fields.summary !== "string") plan.omittedFields.add("summary");
+  if (fields.description !== null && typeof fields.description !== "string")
+    plan.omittedFields.add("description");
   const description = typeof fields.description === "string" ? fields.description : "";
   const found = new Set<string>();
   for (const text of [summary, ...labels, description]) {
@@ -308,7 +319,7 @@ export function parseJiraReportIssue(
   const statusCategory = category(status);
   const summary = stringOf(fields.summary, SUMMARY_MAX) ?? "";
   const facts = checkerFacts(key, fields, plan, { typeName, typeId, category: statusCategory });
-  const labels = labelsOf(fields);
+  const labels = labelsOf(fields, plan);
   return {
     key,
     typeName,
