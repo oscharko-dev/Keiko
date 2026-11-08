@@ -160,6 +160,7 @@ import type {
 import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
   isActivityLogReadinessSnapshot,
+  isMemoryReadinessSnapshot,
   classifyInvalidActivityLogReadiness,
   type ClientModuleLoadFailure,
   type HealthDiagnosticsInvalidReason,
@@ -429,9 +430,12 @@ export type HealthSnapshot = Omit<HealthResponse, "diagnostics"> & {
 
 export async function fetchHealth(correlationId?: string): Promise<HealthSnapshot> {
   const response = await fetchJson<
-    Omit<HealthResponse, "diagnostics"> & { readonly diagnostics?: unknown }
+    Omit<HealthResponse, "diagnostics" | "memory"> & {
+      readonly diagnostics?: unknown;
+      readonly memory?: unknown;
+    }
   >("/api/health", undefined, undefined, correlationId);
-  const { diagnostics, ...health } = response;
+  const { diagnostics, memory, ...health } = response;
   let snapshot: HealthSnapshot = health;
   if (isActivityLogReadinessSnapshot(diagnostics)) snapshot = { ...health, diagnostics };
   else if (diagnostics !== undefined)
@@ -440,6 +444,7 @@ export async function fetchHealth(correlationId?: string): Promise<HealthSnapsho
       diagnosticsInvalid: true,
       diagnosticsInvalidReason: classifyInvalidActivityLogReadiness(diagnostics),
     };
+  if (isMemoryReadinessSnapshot(memory)) snapshot = { ...snapshot, memory };
   recordResponseCorrelationId(snapshot, responseCorrelationIdOf(response) ?? null);
   return snapshot;
 }

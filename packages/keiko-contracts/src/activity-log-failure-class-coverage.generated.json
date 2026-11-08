@@ -39939,15 +39939,19 @@
       "failureClass": "memory-vault-open",
       "requirementContract": "memory-vault-open",
       "productSurfaces": ["keiko-memory-vault"],
-      "lifecycleTransitions": ["end"],
+      "lifecycleTransitions": ["end", "failure"],
       "lifecycleOperations": {
         "start": [],
         "state": [],
         "end": ["memory-vault.store.opened"],
-        "failure": [],
+        "failure": ["memory-vault.store.open-failed"],
         "loss": []
       },
       "causalEdges": [
+        {
+          "op": "memory-vault.store.open-failed",
+          "mode": "none"
+        },
         {
           "op": "memory-vault.store.opened",
           "mode": "none"
@@ -39957,6 +39961,36 @@
       "resourceSignals": ["memory-vault.store.opened"],
       "replayReferences": [],
       "operations": [
+        {
+          "op": "memory-vault.store.open-failed",
+          "owner": "keiko-memory-vault",
+          "category": "diagnostic",
+          "lifecycle": "failure",
+          "causal": "none",
+          "analyzerProjection": "failure-cluster",
+          "safeContextFields": [
+            {
+              "name": "phase",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["memory-vault.store.open-failed.migration"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
         {
           "op": "memory-vault.store.opened",
           "owner": "keiko-memory-vault",

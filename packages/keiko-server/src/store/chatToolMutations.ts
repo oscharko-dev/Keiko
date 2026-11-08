@@ -135,12 +135,14 @@ export function readCodingJiraMutationMessage(
 ): readonly ChatToolMutationRecord[] {
   if (invocationIds.length === 0) return [];
   if (invocationIds.length > CHAT_TOOL_TURN_BUDGET.maxToolCalls) throw journalConflict();
-  return db.prepare(
-    `SELECT ${COLUMNS} FROM chat_tool_mutations
+  return db
+    .prepare(
+      `SELECT ${COLUMNS} FROM chat_tool_mutations
      WHERE chat_id = ? AND user_message_id = ? AND consumer_kind = 'coding'
        AND source_kind = 'configured-mcp' AND server_name = 'jira'
        AND invocation_id IN (${invocationIds.map(() => "?").join(",")})`,
-  ).all(chatId, userMessageId, ...invocationIds)
+    )
+    .all(chatId, userMessageId, ...invocationIds)
     .map((row) => rowRecord(row))
     .filter((row): row is ChatToolMutationRecord => row !== undefined);
 }
@@ -320,7 +322,6 @@ class MutationStore implements ChatToolMutationStore {
   prepare(intent: ChatToolMutationIntent): ChatToolMutationPreparation {
     validateMutationIntent(intent);
     const result = durableWrite(this.db, (): ChatToolMutationPreparation => {
-      assertCurrentTurn(this.db, intent);
       const prior = rowRecord(
         this.db
           .prepare(
@@ -328,11 +329,14 @@ class MutationStore implements ChatToolMutationStore {
           )
           .get(intent.chatId, intent.turnRef, intent.actionDigest),
       );
-      if (prior !== undefined && retryableAttachment(prior, intent)) this.retire(prior);
-      else if (prior !== undefined) {
+      if (prior !== undefined && !retryableAttachment(prior, intent)) {
         if (!sameMutationIdentity(prior, intent)) throw journalConflict();
         return { kind: "replayed", record: prior };
       }
+      // Reading this exact durable outcome grants no new effect, including after turn recovery.
+      // Retiring/retrying an attachment and preparing any new write still require a current turn.
+      assertCurrentTurn(this.db, intent);
+      if (prior !== undefined) this.retire(prior);
       const blocked = blockedTurn(this.db, intent);
       if (blocked !== undefined) return blocked;
       const existingInvocation = this.find(intent.invocationId);

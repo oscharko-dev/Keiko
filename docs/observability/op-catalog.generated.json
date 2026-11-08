@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a256a871f0dc6a56ce8964652806bf89084ccb795cb5a202a1416b634d530cee",
+    "catalogDigest": "6a8acccda7af40a8c702f4e02f5b8222e85fe227b0e84ed77d17112e8d0dbfcf",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -889,6 +889,23 @@
             "values": [
               "jira-read",
               "jira-write",
+              "create-issue",
+              "update-issue-fields",
+              "transition-issue",
+              "add-issue-comment",
+              "assign-issue",
+              "jira.projects",
+              "jira.issue-types",
+              "jira.create-fields",
+              "jira.edit-fields",
+              "jira.search",
+              "jira.issue",
+              "jira.comments",
+              "jira.transitions",
+              "jira.assignable-users",
+              "jira.report",
+              "jira.draft-stage",
+              "jira.draft-batch",
               "sync-space",
               "sync-project",
               "search-issues-live",
@@ -955,8 +972,8 @@
         "failureClasses": ["atlassian-action-execution"],
         "proofIds": ["atlassian.action.outcome.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:19",
-        "emitterSites": ["packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:137"]
+        "registrationSite": "packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:23",
+        "emitterSites": ["packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:160"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36195,8 +36212,8 @@
         "failureClasses": ["activity-log-sink"],
         "proofIds": ["memory-vault.log.sink-failed.body-free"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-memory-vault/src/vault-log.ts:165",
-        "emitterSites": ["packages/keiko-memory-vault/src/vault-log.ts:218"]
+        "registrationSite": "packages/keiko-memory-vault/src/vault-log.ts:168",
+        "emitterSites": ["packages/keiko-memory-vault/src/vault-log.ts:221"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36239,8 +36256,8 @@
         "failureClasses": ["memory-vault-encryption-checkpoint"],
         "proofIds": ["memory-vault.store.encryption-checkpoint-degraded.state"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-memory-vault/src/schema.ts:69",
-        "emitterSites": ["packages/keiko-memory-vault/src/schema.ts:450"]
+        "registrationSite": "packages/keiko-memory-vault/src/schema.ts:70",
+        "emitterSites": ["packages/keiko-memory-vault/src/schema.ts:459"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36286,6 +36303,46 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-memory-vault/src/migrate-encrypt.ts:34",
         "emitterSites": ["packages/keiko-memory-vault/src/migrate-encrypt.ts:152"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "memory-vault.store.open-failed",
+        "category": "diagnostic",
+        "owner": "keiko-memory-vault",
+        "emitter": "migration-failure.classifyMemoryVaultOpenFailure",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "phase": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["open", "migration", "newer-schema"]
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["vault-migration-failed"]
+          }
+        },
+        "causal": "none",
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "failureClasses": ["memory-vault-open"],
+        "proofIds": ["memory-vault.store.open-failed.migration"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-memory-vault/src/migration-failure.ts:12",
+        "emitterSites": ["packages/keiko-memory-vault/src/migration-failure.ts:63"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36357,8 +36414,8 @@
         "failureClasses": ["memory-vault-corruption", "memory-vault-reopen"],
         "proofIds": ["memory-vault.store.quarantined.recovery"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-memory-vault/src/db.ts:38",
-        "emitterSites": ["packages/keiko-memory-vault/src/db.ts:155"]
+        "registrationSite": "packages/keiko-memory-vault/src/db.ts:39",
+        "emitterSites": ["packages/keiko-memory-vault/src/db.ts:161"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -57254,12 +57311,12 @@
           "start": [],
           "state": [],
           "end": ["memory-vault.store.opened"],
-          "failure": [],
+          "failure": ["memory-vault.store.open-failed"],
           "loss": []
         },
         "requiredCausalOperations": [],
         "requiredLossOperations": [],
-        "requiredProofOperations": ["memory-vault.store.opened"],
+        "requiredProofOperations": ["memory-vault.store.open-failed", "memory-vault.store.opened"],
         "requiredReplayProofIds": [],
         "requiredResourceOperations": ["memory-vault.store.opened"],
         "requiredEvidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
@@ -100394,15 +100451,19 @@
           "failureClass": "memory-vault-open",
           "requirementContract": "memory-vault-open",
           "productSurfaces": ["keiko-memory-vault"],
-          "lifecycleTransitions": ["end"],
+          "lifecycleTransitions": ["end", "failure"],
           "lifecycleOperations": {
             "start": [],
             "state": [],
             "end": ["memory-vault.store.opened"],
-            "failure": [],
+            "failure": ["memory-vault.store.open-failed"],
             "loss": []
           },
           "causalEdges": [
+            {
+              "op": "memory-vault.store.open-failed",
+              "mode": "none"
+            },
             {
               "op": "memory-vault.store.opened",
               "mode": "none"
@@ -100412,6 +100473,36 @@
           "resourceSignals": ["memory-vault.store.opened"],
           "replayReferences": [],
           "operations": [
+            {
+              "op": "memory-vault.store.open-failed",
+              "owner": "keiko-memory-vault",
+              "category": "diagnostic",
+              "lifecycle": "failure",
+              "causal": "none",
+              "analyzerProjection": "failure-cluster",
+              "safeContextFields": [
+                {
+                  "name": "phase",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "reason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["memory-vault.store.open-failed.migration"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
             {
               "op": "memory-vault.store.opened",
               "owner": "keiko-memory-vault",
@@ -113715,19 +113806,25 @@
     {
       "op": "memory-vault.log.sink-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-memory-vault/src/vault-log.ts:168",
+      "site": "packages/keiko-memory-vault/src/vault-log.ts:171",
       "package": "keiko-memory-vault"
     },
     {
       "op": "memory-vault.store.encryption-checkpoint-degraded",
       "category": "diagnostic",
-      "site": "packages/keiko-memory-vault/src/schema.ts:72",
+      "site": "packages/keiko-memory-vault/src/schema.ts:73",
       "package": "keiko-memory-vault"
     },
     {
       "op": "memory-vault.store.encryption-migrated",
       "category": "diagnostic",
       "site": "packages/keiko-memory-vault/src/migrate-encrypt.ts:37",
+      "package": "keiko-memory-vault"
+    },
+    {
+      "op": "memory-vault.store.open-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-memory-vault/src/migration-failure.ts:15",
       "package": "keiko-memory-vault"
     },
     {
@@ -113739,7 +113836,7 @@
     {
       "op": "memory-vault.store.quarantined",
       "category": "diagnostic",
-      "site": "packages/keiko-memory-vault/src/db.ts:41",
+      "site": "packages/keiko-memory-vault/src/db.ts:42",
       "package": "keiko-memory-vault"
     },
     {
@@ -114846,7 +114943,7 @@
     {
       "op": "atlassian.action.log-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:175",
+      "site": "packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:142",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -114860,7 +114957,7 @@
     {
       "op": "atlassian.action.outcome",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:22",
+      "site": "packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:26",
       "package": "keiko-server"
     },
     {
@@ -116977,7 +117074,7 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:1685",
+      "site": "packages/keiko-server/src/deps.ts:1687",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -117961,7 +118058,7 @@
     {
       "op": "managed-lsp.trust.restrict",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:2455",
+      "site": "packages/keiko-server/src/deps.ts:2457",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -118508,14 +118605,14 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:4763",
+      "site": "packages/keiko-server/src/deps.ts:4788",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "server.diagnostic.failure",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/diagnostics-log.ts:1127",
+      "site": "packages/keiko-server/src/diagnostics-log.ts:1128",
       "package": "keiko-server"
     },
     {
@@ -118674,7 +118771,7 @@
     {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:3341",
+      "site": "packages/keiko-server/src/deps.ts:3360",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -119754,6 +119851,7 @@
     "memory-vault.log.sink-failed",
     "memory-vault.store.encryption-checkpoint-degraded",
     "memory-vault.store.encryption-migrated",
+    "memory-vault.store.open-failed",
     "memory-vault.store.opened",
     "memory-vault.store.quarantined",
     "memory.audit.persist",

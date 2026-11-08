@@ -665,7 +665,12 @@ Each invocation performs at most one mutation. A fresh same-parent read confirms
 tab ID and name, or exact absence with a remaining tab. Creation without an acknowledged new
 tab ID stays unknown; a name match cannot recover identity. A journal replay never calls the
 provider or starts automatic reconciliation, and private receipts remain in the existing
-transcript, not in new journal columns. The native documented 400 refusals, delete-only 412,
+transcript, not in new journal columns. Reading an exactly matching durable journal outcome is
+also permitted after its original turn ended, including after startup recovery. The journal
+checks the complete mutation identity before returning that outcome; a changed identity, a new
+write, attachment retirement or dispatch still requires a current turn. A replay returns the
+stored outcome and replay marker, without reconstructing private resource receipts from journal
+fields. The native documented 400 refusals, delete-only 412,
 and positively classified administrator 401 settle as rejected only with the existing
 structured Jira error-document proof. Other responses retain uncertainty; no general 4xx or
 bulk-operation rule is widened.

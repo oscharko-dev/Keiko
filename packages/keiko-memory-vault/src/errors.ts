@@ -17,6 +17,7 @@ export type MemoryStorageErrorCode =
   | "constraint-violation"
   | "schema-mismatch"
   | "vault-unreadable"
+  | "vault-migration-failed"
   | "internal";
 
 export class MemoryStorageError extends RedactingError {

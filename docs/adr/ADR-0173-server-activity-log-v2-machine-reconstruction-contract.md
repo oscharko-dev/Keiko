@@ -404,6 +404,17 @@ no implicit process sink, so constructing a fixture cannot contaminate the runni
 activity log. `UNKNOWN_CORRELATION_ID` remains available only when a reusable internal operation
 genuinely has neither a request, run, job, nor bootstrap context; it is not a bootstrap default.
 
+Memory startup distinguishes capability readiness from server liveness (#4321). A non-corruption
+open or migration failure emits `memory-vault.store.open-failed` under the existing
+`memory-vault-open` failure class. Its only payload fields are the closed `phase` (`open`,
+`migration`, `newer-schema`) and `reason` (`vault-migration-failed`); SQL and the underlying
+exception message never enter this event or the classified storage error. The existing composition
+diagnostic records that Memory was withheld. `/api/health`, Status and the workspace notice expose
+`memory.readiness: "withheld"` with `vault-migration-failed` or `vault-unreadable` while the server
+remains live and Chat remains usable. The storage proof exercises a broken v12 database, unchanged
+version and rows, a closed handle and no quarantine. The server proof also exercises a successful
+Chat turn after the classified startup failure. Unclassified composition failures still propagate.
+
 Request resolution accepts a client identity only when its bounded header-safe shape also survives
 the existing writer label redaction unchanged. Otherwise it mints one UUID before response-header,
 route, gateway and parent propagation; a potentially secret-shaped value is neither echoed nor

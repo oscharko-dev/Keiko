@@ -1,4 +1,8 @@
-import { handleGetJiraHumanInput, handleSubmitJiraHumanInput, handleCancelJiraHumanInput } from "./atlassian/jiraHumanInputRoutes.js";
+import {
+  handleGetJiraHumanInput,
+  handleSubmitJiraHumanInput,
+  handleCancelJiraHumanInput,
+} from "./atlassian/jiraHumanInputRoutes.js";
 import { CODING_HISTORY_ROUTES } from "./coding-runtime/codingHistoryRoutes.js";
 import {
   handleListMarkdownSkills,
@@ -496,6 +500,7 @@ function health(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
     status: "ok",
     version: SDK_VERSION,
     diagnostics: currentActivityLogReadiness(),
+    ...(deps.memoryReadiness === undefined ? {} : { memory: deps.memoryReadiness }),
     ...(isKeikoUiLaunchId(launchId) ? { launchId } : {}),
   };
   return { status: 200, body };
@@ -1488,9 +1493,21 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "POST", pattern: "/api/docs-browser/navigate", handler: handleDocsBrowserNavigate },
   { method: "POST", pattern: "/api/docs-browser/propose", handler: handleDocsBrowserPropose },
   { method: "POST", pattern: "/api/docs-browser/approve", handler: handleDocsBrowserApprove },
-  { method: "GET", pattern: "/api/atlassian-connectors/human-inputs/:requestId", handler: handleGetJiraHumanInput },
-  { method: "POST", pattern: "/api/atlassian-connectors/human-inputs/:requestId", handler: handleSubmitJiraHumanInput },
-  { method: "DELETE", pattern: "/api/atlassian-connectors/human-inputs/:requestId", handler: handleCancelJiraHumanInput },
+  {
+    method: "GET",
+    pattern: "/api/atlassian-connectors/human-inputs/:requestId",
+    handler: handleGetJiraHumanInput,
+  },
+  {
+    method: "POST",
+    pattern: "/api/atlassian-connectors/human-inputs/:requestId",
+    handler: handleSubmitJiraHumanInput,
+  },
+  {
+    method: "DELETE",
+    pattern: "/api/atlassian-connectors/human-inputs/:requestId",
+    handler: handleCancelJiraHumanInput,
+  },
   // Issue #2241 (Epic #2238, ADR-0128) — Atlassian connector credential custody. Write-only
   // after creation: create answers authRef + metadata (never the secret), list is metadata-only,
   // delete removes ciphertext + metadata and invalidates the authRef, and verify runs one bounded

@@ -25,7 +25,9 @@ A new leaf primitive provides AES-256-GCM authenticated encryption with two enve
 - A fresh random 12-byte nonce per call (GCM-safe size, well clear of the birthday bound for local single-DB write volume).
 - `isSealed(value)` (prefix check `kv1.`) so reads can detect legacy plaintext.
 - Decryption failures (tampered ciphertext, wrong key, malformed envelope) funnel through a typed `SecretboxError` — never silent corruption. "Wrong key" and "tampered" are intentionally indistinguishable (no oracle).
-- A stored vault the resolved key cannot open is classified as `MemoryStorageError` code `vault-unreadable` at open time. This happens when the keychain entry changed or is withheld so a fresh keyfile key was resolved, or when the state directory moved to another device. The database is closed untouched: never re-keyed, overwritten or quarantined, so the original key opens it again. The local server then starts without memory instead of crash-looping. Memory routes answer 503 `MEMORY_UNAVAILABLE`, Chat runs without memory, and one redacted `server.composition` diagnostic (`memory-vault.open`) records the state. Every other open failure still fails composition closed (2026-11-06, #4271).
+- A stored vault the resolved key cannot open is classified as `MemoryStorageError` code `vault-unreadable` at open time. This happens when the keychain entry changed or is withheld so a fresh keyfile key was resolved, or when the state directory moved to another device. The database is closed untouched: never re-keyed, overwritten or quarantined, so the original key opens it again (2026-11-06, #4271).
+- Other non-corruption failures while opening or migrating the database, including a schema newer than the binary supports, are classified as `MemoryStorageError` code `vault-migration-failed`. The error contains a fixed explanation, without SQL, database content or the underlying error message. An unsuccessful migration rolls back through the existing transaction, and the open owner closes the handle. No version reset, replacement database or altered migration is permitted. Corruption retains its existing quarantine and recovery owner; a missing migration column is not corruption (2026-11-08, #4321).
+- Either classified code withholds Memory for the process while the local server and Chat remain available. Memory routes answer 503 `MEMORY_UNAVAILABLE`; `/api/health` keeps server liveness `status: "ok"` and reports `memory.readiness: "withheld"` with the closed error code as its reason. Status and the workspace notice explain the unavailable capability and the need to resolve the cause and restart. They do not suggest a transient retry. One body-free `server.composition` diagnostic (`memory-vault.open`) records withholding; `memory-vault.store.open-failed` records the failed storage phase. An unrelated composition error, such as a foreign `TypeError`, still propagates.
 
 ### Content-vs-metadata split
 
@@ -47,9 +49,9 @@ Crypto is confined to two wrapper functions in `serialize.ts` (and the per-table
 
 The factory accepts optional `cipher?` / `vaultKey?` injection **for tests only**; production callers pass neither and get the tiered resolver.
 
-### Eager migration to `user_version = 2`
+### Eager encryption migration at version 2
 
-`MEMORY_VAULT_SCHEMA_VERSION` is bumped from 1 to 2. On `openMemoryDatabase`, if `user_version < 2`, a transactional sweep re-encrypts every existing plaintext content value across all four tables and sets `user_version = 2`. The sweep is **idempotent**: a value already sealed (kv1.* for strings, `0x01`-prefixed for the embedding BLOB) is skipped, so a fresh DB is a no-op and a re-run (or a run interrupted before COMMIT — `user_version` stays `< 2`) re-sweeps cleanly. After upgrading an EXISTING DB, the migration runs `PRAGMA wal_checkpoint(TRUNCATE)` so superseded plaintext pages are purged from the WAL immediately rather than lingering until the next close. Reads also tolerate legacy plaintext (`openString` returns a non-`kv1.` value unchanged), so a half-migrated DB still reads.
+Version 2 introduced the encryption sweep. On `openMemoryDatabase`, if `user_version < 2`, a transactional sweep re-encrypts every existing plaintext content value across all four tables. It shares the transaction with the pending DDL migrations, and the final `user_version` is the current schema head, not necessarily 2. The sweep is **idempotent**: a value already sealed (kv1.* for strings, `0x01`-prefixed for the embedding BLOB) is skipped, so a fresh DB is a no-op and a re-run (or a run interrupted before COMMIT — `user_version` stays `< 2`) re-sweeps cleanly. After upgrading an EXISTING DB, the migration runs `PRAGMA wal_checkpoint(TRUNCATE)` so superseded plaintext pages are purged from the WAL immediately rather than lingering until the next close. Reads also tolerate legacy plaintext (`openString` returns a non-`kv1.` value unchanged), so a half-migrated DB still reads.
 
 ## Threat model
 
@@ -63,6 +65,6 @@ The factory accepts optional `cipher?` / `vaultKey?` injection **for tests only*
 
 ## Consequences
 
-- **One-way migration.** A `user_version = 2` DB is unreadable by pre-encryption (v1) code. For local single-user state this is acceptable; rollback is "revert the branch," and an already-migrated DB would then need re-creation. This is the documented trade for an atomic, dependency-free upgrade.
+- **One-way format upgrade.** An encrypted database is unreadable by pre-encryption code, and a newer schema is refused by an older binary. Recovery uses a compatible binary and the original key. Refusing to open never authorizes deleting or recreating the saved database.
 - **No new dependencies; no public API change.** `keiko-server` and every downstream package compile and run unchanged.
 - **Negligible runtime cost.** One AES-GCM seal/open per content field per row op (microseconds); the migration is a one-time O(rows) sweep.

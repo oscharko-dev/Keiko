@@ -195,8 +195,9 @@ describe("V63 journals the closed component and version operations", () => {
       "jira.draft",
       "jira.unknown",
     ]) {
+      const historical = priorDatabase(63);
       expect(() => {
-        insertMutation(db, invalid, invalid);
+        insertMutation(historical, invalid, invalid);
       }).toThrow(/CHECK/u);
     }
   });
@@ -281,11 +282,15 @@ it.each(["jira.delete-comment", "jira.delete-attachment", "jira.delete-worklog"]
     insertCodingMutation(db);
     const before = db.prepare("SELECT * FROM chat_tool_mutations ORDER BY invocation_id").all();
     const shape = journalShape(db);
-    expect(() => { insertMutation(db, operation, "before"); }).toThrow(/CHECK/u);
+    expect(() => {
+      insertMutation(db, operation, "before");
+    }).toThrow(/CHECK/u);
     runMigrations(db);
     runMigrations(db);
     expect(SCHEMA_VERSION).toBeGreaterThanOrEqual(66);
-    expect(db.prepare("SELECT * FROM chat_tool_mutations ORDER BY invocation_id").all()).toEqual(before);
+    expect(db.prepare("SELECT * FROM chat_tool_mutations ORDER BY invocation_id").all()).toEqual(
+      before,
+    );
     expect(journalShape(db)).toEqual(shape);
     expect(db.prepare("PRAGMA synchronous").get()).toEqual({ synchronous: 2 });
     expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
@@ -296,9 +301,14 @@ it.each(["jira.delete-comment", "jira.delete-attachment", "jira.delete-worklog"]
       "UPDATE chat_tool_mutations SET protocol_outcome = 'success' WHERE invocation_id = 'after'",
       "UPDATE chat_tool_mutations SET source_kind = 'configured-mcp' WHERE invocation_id = 'after'",
       "UPDATE chat_tool_mutations SET consumer_kind = 'coding' WHERE invocation_id = 'after'",
-    ]) expect(() => { db.exec(sql); }).toThrow(/CHECK/u);
+    ])
+      expect(() => {
+        db.exec(sql);
+      }).toThrow(/CHECK/u);
     for (const invalid of ["jira.draft", "jira.delete-unknown", "jira.unknown"])
-      expect(() => { insertMutation(db, invalid, invalid); }).toThrow(/CHECK/u);
+      expect(() => {
+        insertMutation(db, invalid, invalid);
+      }).toThrow(/CHECK/u);
   },
 );
 

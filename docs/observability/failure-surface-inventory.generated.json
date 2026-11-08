@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a256a871f0dc6a56ce8964652806bf89084ccb795cb5a202a1416b634d530cee"
+    "catalogDigest": "6a8acccda7af40a8c702f4e02f5b8222e85fe227b0e84ed77d17112e8d0dbfcf"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -71,9 +71,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 673,
-    "proofCount": 696,
-    "resolvedProofCount": 696,
+    "operationCount": 674,
+    "proofCount": 697,
+    "resolvedProofCount": 697,
     "failureClassCount": 394,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -595,6 +595,7 @@
         "memory-vault.log.sink-failed",
         "memory-vault.store.encryption-checkpoint-degraded",
         "memory-vault.store.encryption-migrated",
+        "memory-vault.store.open-failed",
         "memory-vault.store.opened",
         "memory-vault.store.quarantined",
         "memory.capture.novelty-gate",
@@ -2750,6 +2751,7 @@
     "memory-vault.store.encryption-migrated.rows": [
       "packages/keiko-memory-vault/src/migrate-encrypt.test.ts"
     ],
+    "memory-vault.store.open-failed.migration": ["packages/keiko-memory-vault/src/db.test.ts"],
     "memory-vault.store.opened.key-source": ["packages/keiko-memory-vault/src/vault.test.ts"],
     "memory-vault.store.quarantined.recovery": ["packages/keiko-memory-vault/src/db.test.ts"],
     "memory.audit.state-cache.seeded.count": ["packages/keiko-server/src/deps-activity.test.ts"],

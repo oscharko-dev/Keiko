@@ -118,7 +118,13 @@ function response(value: unknown = {}, status = 200, headers?: Record<string, st
   });
 }
 function request(path: string = PATHS[0]): AtlassianHttpBodyRequest {
-  return { method: "GET", url: `${BASE}/rest/api/2/${path}`, timeoutMs: 1000, maxBodyBytes: 4096 };
+  const relative = path.startsWith("/") ? path.slice(1) : path;
+  return {
+    method: "GET",
+    url: `${BASE}/rest/api/2/${relative}`,
+    timeoutMs: 1000,
+    maxBodyBytes: 4096,
+  };
 }
 it.each(PATHS)(
   "keeps a verified credential after ambiguous administrator401 on %s",
@@ -181,16 +187,43 @@ it.each([403, 404, 429, 503, "malformed", "inactive", "wrong-shape"] as const)(
     expect(f.invalidated).toEqual([]);
   },
 );
-it.each(["project", "issuetypescheme/1", "workflowscheme/1/unknown", "workflow/unknown", "screens/1/tabs/2", "readonly-mode", "cluster/nodes/1", "cluster/zdu/approve", "index-snapshot/unknown", "reindex", "reindex/progress", "reindex/request/1", "upgrade", "monitoring/app", "index/summary", "user/a11y/personal-settings", "settings/columns", "filter/1/columns", "user/columns/unknown", "myself"])(
-  "keeps ordinary401 invalidation on %s without a probe",
-  async (path) => {
-    const f = fixture(() => response({}, 401));
-    await f.deps.httpBodyPortFactory(f.metadata)(request(path));
-    expect(f.urls).toEqual([request(path).url]);
-    expect(f.invalidated).toEqual([2]);
-  },
-);
-it.each(["workflowscheme/1/unknown", "workflow", "screens", "cluster/nodes", "cluster/zdu/state", "index-snapshot/isRunning", "user/columns", "index-snapshot"])("does not classify a %s write as an ambiguous administrator read", async (path) => {
+it.each([
+  "project",
+  "issuetypescheme/1",
+  "workflowscheme/1/unknown",
+  "workflow/unknown",
+  "screens/1/tabs/2",
+  "readonly-mode",
+  "cluster/nodes/1",
+  "cluster/zdu/approve",
+  "index-snapshot/unknown",
+  "reindex",
+  "reindex/progress",
+  "reindex/request/1",
+  "upgrade",
+  "monitoring/app",
+  "index/summary",
+  "user/a11y/personal-settings",
+  "settings/columns",
+  "filter/1/columns",
+  "user/columns/unknown",
+  "myself",
+])("keeps ordinary401 invalidation on %s without a probe", async (path) => {
+  const f = fixture(() => response({}, 401));
+  await f.deps.httpBodyPortFactory(f.metadata)(request(path));
+  expect(f.urls).toEqual([request(path).url]);
+  expect(f.invalidated).toEqual([2]);
+});
+it.each([
+  "workflowscheme/1/unknown",
+  "workflow",
+  "screens",
+  "cluster/nodes",
+  "cluster/zdu/state",
+  "index-snapshot/isRunning",
+  "user/columns",
+  "index-snapshot",
+])("does not classify a %s write as an ambiguous administrator read", async (path) => {
   const f = fixture(() => response({}, 401));
   await f.deps.httpBodyPortFactory(f.metadata)({ ...request(path), method: "PUT", bodyJson: "{}" });
   expect(f.urls).toHaveLength(1);
@@ -344,15 +377,12 @@ it.each([
     );
     const tool = provider.tools()[0];
     if (tool === undefined) throw new TypeError("Missing Jira read");
-    const result = await tool.execute(
-      args,
-      {
-        invocationId: "admin-read",
-        correlationId: "admin-read",
-        signal: new AbortController().signal,
-        beforeEffect: () => true,
-      },
-    );
+    const result = await tool.execute(args, {
+      invocationId: "admin-read",
+      correlationId: "admin-read",
+      signal: new AbortController().signal,
+      beforeEffect: () => true,
+    });
     expect(result.data).toMatchObject({ outcome: "failed", reason: "permission-denied" });
     expect(f.urls).toHaveLength(2);
     expect(f.current()).toEqual(f.metadata);
@@ -422,79 +452,127 @@ const TAB_REQUESTS = [
   ["DELETE", "screens/1/tabs/2"],
 ] as const;
 const ISSUE_LINK_REQUESTS = [
-  ["POST", "issueLink"], ["DELETE", "issueLink/1"],
+  ["POST", "issueLink"],
+  ["DELETE", "issueLink/1"],
 ] as const;
-it.each(ISSUE_LINK_REQUESTS)("retains documented %s %s permission401 only after a current positive identity read", async (method, path) => {
-  const methods: string[] = [];
-  const f = fixture((index, init) => {
-    methods.push(init?.method ?? "GET");
-    return index === 0 ? response({ errorMessages: ["Link Issues permission required"] }, 401) : response(IDENTITY);
-  });
-  const statuses: number[] = [];
-  const result = await executeAtlassianWriteRequest({
-    http: f.deps.httpBodyPortFactory(f.metadata, undefined, {
-      onResponse: (_request, status) => { statuses.push(status); return true; },
-    }),
-  }, { method, url: request(path).url, expect: "none",
-    ...(method === "POST" ? { bodyJson: '{"type":{"name":"Blocks"},"inwardIssue":{"key":"SYN-1"},"outwardIssue":{"key":"SYN-2"}}' } : {}),
-  });
-  expect(result).toMatchObject({ ok: false, reason: "permission-denied", httpStatus: 401 });
-  expect(f.urls).toEqual([request(path).url, `${BASE}/rest/api/2/myself`]);
-  expect(methods).toEqual([method, "GET"]);
-  expect(statuses).toEqual([401]);
-  expect(f.current()).toEqual(f.metadata);
-  expect(f.invalidated).toEqual([]);
-  expect(JSON.stringify(f.events)).not.toMatch(/Link Issues|Blocks|SYN-1|SYN-2|synthetic-user|https:/u);
-});
-it.each(ISSUE_LINK_REQUESTS)("keeps expired credentials definitive for %s %s without replay", async (method, path) => {
-  const f = fixture(() => response({}, 401));
-  const result = await f.deps.httpBodyPortFactory(f.metadata)({ ...request(path), method });
-  expect(result).toMatchObject({ status: 401 });
-  expect(result).not.toHaveProperty("authentication");
-  expect(f.urls).toEqual([request(path).url, `${BASE}/rest/api/2/myself`]);
-  expect(f.invalidated).toEqual([2]);
-});
+it.each(ISSUE_LINK_REQUESTS)(
+  "retains documented %s %s permission401 only after a current positive identity read",
+  async (method, path) => {
+    const methods: string[] = [];
+    const f = fixture((index, init) => {
+      methods.push(init?.method ?? "GET");
+      return index === 0
+        ? response({ errorMessages: ["Link Issues permission required"] }, 401)
+        : response(IDENTITY);
+    });
+    const statuses: number[] = [];
+    const result = await executeAtlassianWriteRequest(
+      {
+        http: f.deps.httpBodyPortFactory(f.metadata, undefined, {
+          onResponse: (_request, status) => {
+            statuses.push(status);
+            return true;
+          },
+        }),
+      },
+      {
+        method,
+        url: request(path).url,
+        expect: "none",
+        ...(method === "POST"
+          ? {
+              bodyJson:
+                '{"type":{"name":"Blocks"},"inwardIssue":{"key":"SYN-1"},"outwardIssue":{"key":"SYN-2"}}',
+            }
+          : {}),
+      },
+    );
+    expect(result).toMatchObject({ ok: false, reason: "permission-denied", httpStatus: 401 });
+    expect(f.urls).toEqual([request(path).url, `${BASE}/rest/api/2/myself`]);
+    expect(methods).toEqual([method, "GET"]);
+    expect(statuses).toEqual([401]);
+    expect(f.current()).toEqual(f.metadata);
+    expect(f.invalidated).toEqual([]);
+    expect(JSON.stringify(f.events)).not.toMatch(
+      /Link Issues|Blocks|SYN-1|SYN-2|synthetic-user|https:/u,
+    );
+  },
+);
+it.each(ISSUE_LINK_REQUESTS)(
+  "keeps expired credentials definitive for %s %s without replay",
+  async (method, path) => {
+    const f = fixture(() => response({}, 401));
+    const result = await f.deps.httpBodyPortFactory(f.metadata)({ ...request(path), method });
+    expect(result).toMatchObject({ status: 401 });
+    expect(result).not.toHaveProperty("authentication");
+    expect(f.urls).toEqual([request(path).url, `${BASE}/rest/api/2/myself`]);
+    expect(f.invalidated).toEqual([2]);
+  },
+);
 it.each([
-  { method: "POST", path: "issueLink/1" }, { method: "PUT", path: "issueLink/1" },
-  { method: "DELETE", path: "issueLink" }, { method: "DELETE", path: "issueLink/0" },
+  { method: "POST", path: "issueLink/1" },
+  { method: "PUT", path: "issueLink/1" },
+  { method: "DELETE", path: "issueLink" },
+  { method: "DELETE", path: "issueLink/0" },
   { method: "DELETE", path: "issueLink/1/unknown" },
   { method: "POST", path: "issue/SYN-1/remotelink" },
   { method: "PUT", path: "issue/SYN-1/remotelink/1" },
   { method: "DELETE", path: "issue/SYN-1/remotelink/1" },
   { method: "DELETE", path: "issue/SYN-1/remotelink" },
-] as const)("never borrows issue-link permission evidence for $method $path", async ({ method, path }) => {
-  const f = fixture(() => response({}, 401));
-  await f.deps.httpBodyPortFactory(f.metadata)({ ...request(path), method });
-  expect(f.urls).toEqual([request(path).url]);
-  expect(f.invalidated).toEqual([2]);
-});
+] as const)(
+  "never borrows issue-link permission evidence for $method $path",
+  async ({ method, path }) => {
+    const f = fixture(() => response({}, 401));
+    await f.deps.httpBodyPortFactory(f.metadata)({ ...request(path), method });
+    expect(f.urls).toEqual([request(path).url]);
+    expect(f.invalidated).toEqual([2]);
+  },
+);
 function tabRequest(method: "POST" | "PUT" | "DELETE", path: string): AtlassianHttpBodyRequest {
-  return { ...request(path), method, ...(method === "DELETE" ? {} : { bodyJson: '{"name":"Reviewed"}' }) };
-}
-it.each(TAB_REQUESTS)("observes documented %s %s admin401 once and returns permission denial without invalidation", async (method, path) => {
-  const methods: string[] = [];
-  const f = fixture((index, init) => {
-    methods.push(init?.method ?? "GET");
-    return index === 0 ? response({ errorMessages: ["Administrator permission required"] }, 401) : response(IDENTITY);
-  });
-  const statuses: number[] = [];
-  const result = await executeAtlassianWriteRequest({
-    http: f.deps.httpBodyPortFactory(f.metadata, undefined, {
-      onResponse: (_request, status) => { statuses.push(status); return true; },
-    }),
-  }, {
-    method, url: request(path).url,
+  return {
+    ...request(path),
+    method,
     ...(method === "DELETE" ? {} : { bodyJson: '{"name":"Reviewed"}' }),
-    expect: "none",
-  });
-  expect(result).toMatchObject({ ok: false, reason: "permission-denied", httpStatus: 401 });
-  expect(f.urls).toEqual([request(path).url, `${BASE}/rest/api/2/myself`]);
-  expect(methods).toEqual([method, "GET"]);
-  expect(statuses).toEqual([401]);
-  expect(f.current()).toEqual(f.metadata);
-  expect(f.invalidated).toEqual([]);
-  expect(JSON.stringify(f.events)).not.toMatch(/Administrator permission|required|synthetic-user|Reviewed|https:/u);
-});
+  };
+}
+it.each(TAB_REQUESTS)(
+  "observes documented %s %s admin401 once and returns permission denial without invalidation",
+  async (method, path) => {
+    const methods: string[] = [];
+    const f = fixture((index, init) => {
+      methods.push(init?.method ?? "GET");
+      return index === 0
+        ? response({ errorMessages: ["Administrator permission required"] }, 401)
+        : response(IDENTITY);
+    });
+    const statuses: number[] = [];
+    const result = await executeAtlassianWriteRequest(
+      {
+        http: f.deps.httpBodyPortFactory(f.metadata, undefined, {
+          onResponse: (_request, status) => {
+            statuses.push(status);
+            return true;
+          },
+        }),
+      },
+      {
+        method,
+        url: request(path).url,
+        ...(method === "DELETE" ? {} : { bodyJson: '{"name":"Reviewed"}' }),
+        expect: "none",
+      },
+    );
+    expect(result).toMatchObject({ ok: false, reason: "permission-denied", httpStatus: 401 });
+    expect(f.urls).toEqual([request(path).url, `${BASE}/rest/api/2/myself`]);
+    expect(methods).toEqual([method, "GET"]);
+    expect(statuses).toEqual([401]);
+    expect(f.current()).toEqual(f.metadata);
+    expect(f.invalidated).toEqual([]);
+    expect(JSON.stringify(f.events)).not.toMatch(
+      /Administrator permission|required|synthetic-user|Reviewed|https:/u,
+    );
+  },
+);
 it.each([
   ["POST", "screens/1/tabs/2"],
   ["PUT", "screens/1/tabs"],
@@ -514,44 +592,62 @@ it.each([
   expect(f.urls).toHaveLength(1);
   expect(f.invalidated).toEqual([2]);
 });
-it.each(TAB_REQUESTS)("still invalidates expired credentials confirmed after %s %s", async (method, path) => {
-  const f = fixture(() => response({}, 401));
-  const result = await f.deps.httpBodyPortFactory(f.metadata)(tabRequest(method, path));
-  expect(result).toMatchObject({ status: 401 });
-  expect(result).not.toHaveProperty("authentication");
-  expect(f.urls).toHaveLength(2);
-  expect(f.invalidated).toEqual([2]);
-});
-it.each(["expired", "cancelled", "revision", "generation"] as const)("cannot apply positive tab-write auth evidence after %s changes", async (state) => {
-  const controller = new AbortController();
-  let now = 1000;
-  vi.spyOn(Date, "now").mockImplementation(() => now);
-  const f = fixture((index) => {
-    if (index === 0) return response({}, 401);
-    if (state === "expired") now += 2000;
-    if (state === "cancelled") controller.abort();
-    if (state === "generation") f.deps.custody.updateLivePod(f.metadata.authRef, {
-      expectedGeneration: 1, apiToken: ["replacement", "synthetic", "credential"].join("-"),
+it.each(TAB_REQUESTS)(
+  "still invalidates expired credentials confirmed after %s %s",
+  async (method, path) => {
+    const f = fixture(() => response({}, 401));
+    const result = await f.deps.httpBodyPortFactory(f.metadata)(tabRequest(method, path));
+    expect(result).toMatchObject({ status: 401 });
+    expect(result).not.toHaveProperty("authentication");
+    expect(f.urls).toHaveLength(2);
+    expect(f.invalidated).toEqual([2]);
+  },
+);
+it.each(["expired", "cancelled", "revision", "generation"] as const)(
+  "cannot apply positive tab-write auth evidence after %s changes",
+  async (state) => {
+    const controller = new AbortController();
+    let now = 1000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const f = fixture((index) => {
+      if (index === 0) return response({}, 401);
+      if (state === "expired") now += 2000;
+      if (state === "cancelled") controller.abort();
+      if (state === "generation")
+        f.deps.custody.updateLivePod(f.metadata.authRef, {
+          expectedGeneration: 1,
+          apiToken: ["replacement", "synthetic", "credential"].join("-"),
+        });
+      if (state === "revision") {
+        const ticket = f.deps.custody.beginVerification(f.metadata.authRef);
+        if (ticket === undefined) throw new TypeError("Missing verification ticket");
+        f.deps.custody.finishVerification(f.metadata.authRef, 1, ticket.revision, "ok");
+      }
+      return response(IDENTITY);
     });
-    if (state === "revision") {
-      const ticket = f.deps.custody.beginVerification(f.metadata.authRef);
-      if (ticket === undefined) throw new TypeError("Missing verification ticket");
-      f.deps.custody.finishVerification(f.metadata.authRef, 1, ticket.revision, "ok");
-    }
-    return response(IDENTITY);
-  });
-  const result = await f.deps.httpBodyPortFactory(f.metadata)({ ...tabRequest("PUT", "screens/1/tabs/2"), signal: controller.signal });
-  expect(result).toMatchObject({ status: 401 });
-  expect(result).not.toHaveProperty("authentication");
-  expect(f.urls).toHaveLength(2);
-  expect(f.current().livePod?.verificationStatus).toBe(state === "generation" ? "unverified" : "ok");
-});
+    const result = await f.deps.httpBodyPortFactory(f.metadata)({
+      ...tabRequest("PUT", "screens/1/tabs/2"),
+      signal: controller.signal,
+    });
+    expect(result).toMatchObject({ status: 401 });
+    expect(result).not.toHaveProperty("authentication");
+    expect(f.urls).toHaveLength(2);
+    expect(f.current().livePod?.verificationStatus).toBe(
+      state === "generation" ? "unverified" : "ok",
+    );
+  },
+);
 it("stops a tab-write auth probe when original authority is revoked and never repeats DELETE", async () => {
   let allowed = true;
-  const f = fixture(() => { allowed = false; return response({}, 401); });
-  await expect(f.deps.httpBodyPortFactory(f.metadata, undefined, {
-    beforeDispatch: () => allowed,
-  })(tabRequest("DELETE", "screens/1/tabs/2"))).rejects.toMatchObject({ code: "invalid-input" });
+  const f = fixture(() => {
+    allowed = false;
+    return response({}, 401);
+  });
+  await expect(
+    f.deps.httpBodyPortFactory(f.metadata, undefined, {
+      beforeDispatch: () => allowed,
+    })(tabRequest("DELETE", "screens/1/tabs/2")),
+  ).rejects.toMatchObject({ code: "invalid-input" });
   expect(f.urls).toHaveLength(1);
   expect(f.current()).toEqual(f.metadata);
 });
@@ -560,13 +656,24 @@ it("spends only the tab-write's subsecond remaining deadline on identity IO", as
   vi.setSystemTime(1000);
   let probeSignal: AbortSignal | null | undefined;
   let entered: (() => void) | undefined;
-  const ready = new Promise<void>((resolve) => { entered = resolve; });
+  const ready = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
   const f = fixture((index, init) => {
-    if (index === 0) { vi.setSystemTime(1990); return response({}, 401); }
+    if (index === 0) {
+      vi.setSystemTime(1990);
+      return response({}, 401);
+    }
     probeSignal = init?.signal;
     entered?.();
     return new Promise<Response>((_resolve, reject) => {
-      init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+      init?.signal?.addEventListener(
+        "abort",
+        () => {
+          reject(new Error("Synthetic identity probe aborted"));
+        },
+        { once: true },
+      );
     });
   });
   const pending = f.deps.httpBodyPortFactory(f.metadata)(tabRequest("POST", "screens/1/tabs"));
@@ -578,7 +685,6 @@ it("spends only the tab-write's subsecond remaining deadline on identity IO", as
   expect(f.urls).toHaveLength(2);
   expect(f.current()).toEqual(f.metadata);
 });
-
 
 const DOCUMENTED_NATIVE_WRITE_401 = [
   { method: "PUT", path: "applicationrole" },
@@ -622,28 +728,50 @@ const DOCUMENTED_NATIVE_WRITE_401 = [
   { method: "PUT", path: "/screens/1/tabs/2/fields/1/updateShowWhenEmptyIndicator/false" },
   { method: "POST", path: "/screens/1/tabs/2/move/0" },
 ] as const;
-it.each(DOCUMENTED_NATIVE_WRITE_401)("keeps the actual $method $path permission refusal without credential loss or write replay", async ({ method, path }) => {
-  const methods: string[] = [];
-  const f = fixture((index, init) => {
-    methods.push(init?.method ?? "GET");
-    return index === 0 ? response({ errorMessages: ["Native permission or WebSudo required"] }, 401) : response(IDENTITY);
-  });
-  const result = await executeAtlassianWriteRequest({ http: f.deps.httpBodyPortFactory(f.metadata) }, {
-    method, url: request(path).url, expect: "none", ...(method === "DELETE" ? {} : { bodyJson: "{}" }),
-  });
-  expect(result).toMatchObject({ ok: false, reason: "permission-denied", httpStatus: 401 });
-  expect(methods).toEqual([method, "GET"]);
-  expect(f.urls).toEqual([request(path).url, `${BASE}/rest/api/2/myself`]);
-  expect(f.current()).toEqual(f.metadata); expect(f.invalidated).toEqual([]);
-  expect(JSON.stringify(f.events)).not.toMatch(/Native permission|WebSudo|synthetic-user|https:/u);
-});
-it.each(DOCUMENTED_NATIVE_WRITE_401)("keeps expired credentials definitive after $method $path", async ({ method, path }) => {
-  const f = fixture(() => response({}, 401));
-  const result = await f.deps.httpBodyPortFactory(f.metadata)({ ...request(path), method, ...(method === "DELETE" ? {} : { bodyJson: "{}" }) });
-  expect(result).toMatchObject({ status: 401 }); expect(result).not.toHaveProperty("authentication");
-  expect(f.urls).toEqual([request(path).url, `${BASE}/rest/api/2/myself`]);
-  expect(f.invalidated).toEqual([2]);
-});
+it.each(DOCUMENTED_NATIVE_WRITE_401)(
+  "keeps the actual $method $path permission refusal without credential loss or write replay",
+  async ({ method, path }) => {
+    const methods: string[] = [];
+    const f = fixture((index, init) => {
+      methods.push(init?.method ?? "GET");
+      return index === 0
+        ? response({ errorMessages: ["Native permission or WebSudo required"] }, 401)
+        : response(IDENTITY);
+    });
+    const result = await executeAtlassianWriteRequest(
+      { http: f.deps.httpBodyPortFactory(f.metadata) },
+      {
+        method,
+        url: request(path).url,
+        expect: "none",
+        ...(method === "DELETE" ? {} : { bodyJson: "{}" }),
+      },
+    );
+    expect(result).toMatchObject({ ok: false, reason: "permission-denied", httpStatus: 401 });
+    expect(methods).toEqual([method, "GET"]);
+    expect(f.urls).toEqual([request(path).url, `${BASE}/rest/api/2/myself`]);
+    expect(f.current()).toEqual(f.metadata);
+    expect(f.invalidated).toEqual([]);
+    expect(JSON.stringify(f.events)).not.toMatch(
+      /Native permission|WebSudo|synthetic-user|https:/u,
+    );
+  },
+);
+it.each(DOCUMENTED_NATIVE_WRITE_401)(
+  "keeps expired credentials definitive after $method $path",
+  async ({ method, path }) => {
+    const f = fixture(() => response({}, 401));
+    const result = await f.deps.httpBodyPortFactory(f.metadata)({
+      ...request(path),
+      method,
+      ...(method === "DELETE" ? {} : { bodyJson: "{}" }),
+    });
+    expect(result).toMatchObject({ status: 401 });
+    expect(result).not.toHaveProperty("authentication");
+    expect(f.urls).toEqual([request(path).url, `${BASE}/rest/api/2/myself`]);
+    expect(f.invalidated).toEqual([2]);
+  },
+);
 it.each([
   { method: "POST", path: "workflowscheme/1/draft" },
   { method: "PUT", path: "workflowscheme/1/createdraft" },
@@ -653,12 +781,33 @@ it.each([
   { method: "POST", path: "screens/1/tabs/2/fields/3/move/unknown" },
   { method: "PUT", path: "screens/1/tabs/2/fields/3/updateShowWhenEmptyIndicator/0" },
   { method: "POST", path: "screens/1/tabs/2/move/2147483648" },
-  { method: "POST", path: "screens/addToDefault/unsafe%2Ffield" },
   { method: "POST", path: "issue/SYN-1/assignee" },
   { method: "PUT", path: "issue/SYN-1/watchers" },
   { method: "POST", path: "issue/SYN-1/notify" },
-] as const)("never widens documented native auth facts to $method $path", async ({ method, path }) => {
+] as const)(
+  "never widens documented native auth facts to $method $path",
+  async ({ method, path }) => {
+    const f = fixture(() => response({}, 401));
+    await f.deps.httpBodyPortFactory(f.metadata)({
+      ...request(path),
+      method,
+      ...(method === "DELETE" ? {} : { bodyJson: "{}" }),
+    });
+    expect(f.urls).toEqual([request(path).url]);
+    expect(f.invalidated).toEqual([2]);
+  },
+);
+
+it("refuses an encoded slash before dispatch, authentication probing or credential revocation", async () => {
   const f = fixture(() => response({}, 401));
-  await f.deps.httpBodyPortFactory(f.metadata)({ ...request(path), method, ...(method === "DELETE" ? {} : { bodyJson: "{}" }) });
-  expect(f.urls).toEqual([request(path).url]); expect(f.invalidated).toEqual([2]);
+  await expect(
+    f.deps.httpBodyPortFactory(f.metadata)({
+      ...request("screens/addToDefault/unsafe%2Ffield"),
+      method: "POST",
+      bodyJson: "{}",
+    }),
+  ).rejects.toMatchObject({ code: "invalid-input" });
+  expect(f.urls).toEqual([]);
+  expect(f.invalidated).toEqual([]);
+  expect(f.current()).toEqual(f.metadata);
 });

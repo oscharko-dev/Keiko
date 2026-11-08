@@ -2691,11 +2691,30 @@ export interface ActivityLogReadinessSnapshot {
   readonly diagnosticCapacity?: number | undefined;
 }
 
-/** The `GET /api/health` body. `diagnostics` is additive; `status`/`version` keep their meaning. */
+export type MemoryReadinessSnapshot =
+  | { readonly readiness: "ready"; readonly reason: "none" }
+  | {
+      readonly readiness: "withheld";
+      readonly reason: "vault-unreadable" | "vault-migration-failed";
+    };
+
+export function isMemoryReadinessSnapshot(value: unknown): value is MemoryReadinessSnapshot {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const snapshot = value as Record<string, unknown>;
+  if (Object.keys(snapshot).length !== 2) return false;
+  if (snapshot.readiness === "ready") return snapshot.reason === "none";
+  return (
+    snapshot.readiness === "withheld" &&
+    (snapshot.reason === "vault-unreadable" || snapshot.reason === "vault-migration-failed")
+  );
+}
+
+/** The `GET /api/health` body. Readiness projections are additive; `status` stays server liveness. */
 export interface HealthResponse {
   readonly status: "ok";
   readonly version: string;
   readonly diagnostics: ActivityLogReadinessSnapshot;
+  readonly memory?: MemoryReadinessSnapshot;
   /** The server-owned instance identity, when this process was started by a modern launcher. */
   readonly launchId?: string;
 }

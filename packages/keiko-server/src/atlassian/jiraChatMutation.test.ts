@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi, type Mock } from "vitest";
-import type { JiraMutationAttempt, JiraMutationOperation } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type {
+  JiraMutationAttempt,
+  JiraMutationOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { JiraAcknowledgedMutationError } from "@oscharko-dev/keiko-connectors";
 import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
@@ -270,25 +273,119 @@ it("uses the injected custody transport factory with journal-owned lifecycle hoo
 });
 
 const PROPERTY_JOURNAL_CASES = [
-  { operation: "jira.set-issue-property", root: "/rest/api/2", entity: "issue", id: "10001",
-    args: { issueIdOrKey: "syn-1" }, context: { issueId: "10001", issueKey: "SYN-1" },
-    before: false, after: null, remove: false },
-  { operation: "jira.delete-issue-property", root: "/rest/api/2", entity: "issue", id: "10001",
-    args: { issueIdOrKey: "syn-1" }, context: { issueId: "10001", issueKey: "SYN-1" },
-    before: null, after: null, remove: true },
-  { operation: "jira.set-board-property", root: "/rest/agile/1.0", entity: "board", id: "7",
-    args: { boardId: "7" }, context: { boardId: "7" }, before: null, after: false, remove: false },
-  { operation: "jira.delete-board-property", root: "/rest/agile/1.0", entity: "board", id: "7",
-    args: { boardId: "7" }, context: { boardId: "7" }, before: false, after: null, remove: true },
+  {
+    operation: "jira.set-issue-property",
+    root: "/rest/api/2",
+    entity: "issue",
+    id: "10001",
+    args: { issueIdOrKey: "syn-1" },
+    context: { issueId: "10001", issueKey: "SYN-1" },
+    before: false,
+    after: null,
+    remove: false,
+  },
+  {
+    operation: "jira.delete-issue-property",
+    root: "/rest/api/2",
+    entity: "issue",
+    id: "10001",
+    args: { issueIdOrKey: "syn-1" },
+    context: { issueId: "10001", issueKey: "SYN-1" },
+    before: null,
+    after: null,
+    remove: true,
+  },
+  {
+    operation: "jira.set-board-property",
+    root: "/rest/agile/1.0",
+    entity: "board",
+    id: "7",
+    args: { boardId: "7" },
+    context: { boardId: "7" },
+    before: null,
+    after: false,
+    remove: false,
+  },
+  {
+    operation: "jira.delete-board-property",
+    root: "/rest/agile/1.0",
+    entity: "board",
+    id: "7",
+    args: { boardId: "7" },
+    context: { boardId: "7" },
+    before: false,
+    after: null,
+    remove: true,
+  },
 ] as const;
 type PropertyJournalCase = (typeof PROPERTY_JOURNAL_CASES)[number];
-type PropertyObservation = "confirmed" | "lost-ack" | "denied-readback" | "stale" | "unchanged" | "absent-review";
+type PropertyObservation =
+  "confirmed" | "lost-ack" | "denied-readback" | "stale" | "unchanged" | "absent-review";
 const JOURNAL_PROPERTY_KEY = "display ~key";
 function propertyNodes(value: null | false): readonly CatalogJsonObject[] {
-  return value === null ? [{ path: "", kind: "null" }]
+  return value === null
+    ? [{ path: "", kind: "null" }]
     : [{ path: "", kind: "boolean", booleanValue: false }];
 }
-function propertyJournalFixture(scenario: PropertyJournalCase, observation: PropertyObservation, path = ":memory:") {
+function fixtureJson(body: unknown, status = 200): Promise<Response> {
+  return Promise.resolve(new Response(JSON.stringify(body), { status }));
+}
+function propertyWriteResponse(
+  f: ReturnType<typeof fixture>,
+  scenario: PropertyJournalCase,
+  observation: PropertyObservation,
+  selectedPath: string,
+  resource: string,
+  init: RequestInit | undefined,
+): Promise<Response> {
+  expect(f.input.journal?.find(f.input.intent.invocationId)?.phase).toBe("dispatched");
+  expect(selectedPath).toBe(`${resource}/${JOURNAL_PROPERTY_KEY}`);
+  expect(init?.method).toBe(scenario.remove ? "DELETE" : "PUT");
+  expect(init?.body).toBe(scenario.remove ? undefined : JSON.stringify(scenario.after));
+  if (observation === "lost-ack")
+    return Promise.reject(new Error("Synthetic lost property acknowledgement"));
+  return Promise.resolve(new Response(null, { status: 204 }));
+}
+function observedPropertyValue(
+  scenario: PropertyJournalCase,
+  observation: PropertyObservation,
+  dispatched: boolean,
+): null | false {
+  if (dispatched || observation === "unchanged") return scenario.after;
+  if (observation === "stale") return scenario.before === null ? false : null;
+  return scenario.before;
+}
+function propertyReadResponse(
+  scenario: PropertyJournalCase,
+  observation: PropertyObservation,
+  dispatched: boolean,
+  selectedPath: string,
+  parent: string,
+  resource: string,
+): Promise<Response> {
+  if (dispatched && observation === "denied-readback")
+    return fixtureJson({ errorMessages: ["Readback denied"] }, 403);
+  if (selectedPath === parent || selectedPath === `${scenario.root}/issue/syn-1`)
+    return fixtureJson(
+      scenario.entity === "issue"
+        ? { id: scenario.id, key: "SYN-1", fields: { summary: "Synthetic issue" } }
+        : { id: Number(scenario.id), name: "Synthetic board" },
+    );
+  const present = !dispatched || !scenario.remove;
+  if (selectedPath === resource)
+    return fixtureJson({ keys: present ? [{ key: JOURNAL_PROPERTY_KEY }] : [] });
+  expect(selectedPath).toBe(`${resource}/${JOURNAL_PROPERTY_KEY}`);
+  if (!present) return fixtureJson({ errorMessages: ["Property missing"] }, 404);
+  return fixtureJson({
+    key: JOURNAL_PROPERTY_KEY,
+    value: observedPropertyValue(scenario, observation, dispatched),
+  });
+}
+function propertyJournalFixture(
+  scenario: PropertyJournalCase,
+  observation: PropertyObservation,
+  path = ":memory:",
+): ReturnType<typeof fixture> & { readonly receipt: CatalogJsonObject } {
   const f = fixture(path);
   const parent = `${scenario.root}/${scenario.entity}/${scenario.id}`;
   const resource = `${parent}/properties`;
@@ -296,205 +393,366 @@ function propertyJournalFixture(scenario: PropertyJournalCase, observation: Prop
   f.effects.mockImplementation((input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     const selectedPath = decodeURIComponent(url.pathname);
-    const json = (body: unknown, status = 200) => Promise.resolve(new Response(JSON.stringify(body), { status }));
     if (init?.method !== "GET") {
-      expect(f.input.journal?.find(f.input.intent.invocationId)?.phase).toBe("dispatched");
-      expect(selectedPath).toBe(`${resource}/${JOURNAL_PROPERTY_KEY}`);
-      expect(init?.method).toBe(scenario.remove ? "DELETE" : "PUT");
-      expect(init?.body).toBe(scenario.remove ? undefined : JSON.stringify(scenario.after));
       dispatched = true;
-      if (observation === "lost-ack") return Promise.reject(new Error("Synthetic lost property acknowledgement"));
-      return Promise.resolve(new Response(null, { status: 204 }));
+      return propertyWriteResponse(f, scenario, observation, selectedPath, resource, init);
     }
-    if (dispatched && observation === "denied-readback")
-      return json({ errorMessages: ["Readback denied"] }, 403);
-    if (selectedPath === parent || selectedPath === `${scenario.root}/issue/syn-1`)
-      return json(scenario.entity === "issue"
-        ? { id: scenario.id, key: "SYN-1", fields: { summary: "Synthetic issue" } }
-        : { id: Number(scenario.id), name: "Synthetic board" });
-    const present = !dispatched || !scenario.remove;
-    if (selectedPath === resource) return json({ keys: present ? [{ key: JOURNAL_PROPERTY_KEY }] : [] });
-    expect(selectedPath).toBe(`${resource}/${JOURNAL_PROPERTY_KEY}`);
-    if (!present) return json({ errorMessages: ["Property missing"] }, 404);
-    const value = dispatched || observation === "unchanged" ? scenario.after
-      : observation === "stale" ? (scenario.before === null ? false : null) : scenario.before;
-    return json({ key: JOURNAL_PROPERTY_KEY, value });
+    return propertyReadResponse(scenario, observation, dispatched, selectedPath, parent, resource);
   });
   const expected = observation === "unchanged" ? scenario.after : scenario.before;
   const args: CatalogJsonObject = {
-    ...scenario.args, propertyKey: JOURNAL_PROPERTY_KEY,
-    ...(observation === "absent-review" ? { expectAbsent: true } : { expectedValueNodes: propertyNodes(expected) }),
+    ...scenario.args,
+    propertyKey: JOURNAL_PROPERTY_KEY,
+    ...(observation === "absent-review"
+      ? { expectAbsent: true }
+      : { expectedValueNodes: propertyNodes(expected) }),
     ...(scenario.remove ? {} : { valueNodes: propertyNodes(scenario.after) }),
   };
   const execute = managedAttempt(f, scenario.operation, args);
-  const receipt = { ...scenario.context, propertyKey: JOURNAL_PROPERTY_KEY, propertyPresent: !scenario.remove };
-  return { ...f, receipt, input: { ...f.input, intent: { ...f.input.intent, operation: scenario.operation }, execute } };
+  const receipt = {
+    ...scenario.context,
+    propertyKey: JOURNAL_PROPERTY_KEY,
+    propertyPresent: !scenario.remove,
+  };
+  return {
+    ...f,
+    receipt,
+    input: { ...f.input, intent: { ...f.input.intent, operation: scenario.operation }, execute },
+  };
 }
-it.each(PROPERTY_JOURNAL_CASES)("journals one $operation using its fixed root and complete same-parent property readback", async (scenario) => {
-  const f = propertyJournalFixture(scenario, "confirmed");
-  expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: { outcome: "succeeded", ...f.receipt } });
-  expect(f.effects.mock.calls.map(([, init]) => init?.method)).toEqual([
-    "GET", "GET", "GET", scenario.remove ? "DELETE" : "PUT", "GET", "GET", "GET",
-  ]);
-  expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: { outcome: "succeeded", replayed: true, ...f.receipt } });
-  expect(f.effects).toHaveBeenCalledTimes(7);
-  expect(f.logs.lines().join()).not.toMatch(/display|Synthetic issue|Synthetic board|jira\.example|propertyKey|valueNodes/u);
-});
-it.each(PROPERTY_JOURNAL_CASES)("retains only the requested $operation presence and exact context after denied readback", async (scenario) => {
-  const f = propertyJournalFixture(scenario, "denied-readback");
-  expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: { outcome: "succeeded-unconfirmed", ...f.receipt } });
-  const requests = f.effects.mock.calls.length;
-  expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: { outcome: "succeeded-unconfirmed", replayed: true, ...f.receipt } });
-  expect(f.effects).toHaveBeenCalledTimes(requests);
-  expect(f.effects.mock.calls.filter(([, init]) => init?.method !== "GET")).toHaveLength(1);
-});
-it.each(PROPERTY_JOURNAL_CASES)("reloads uncertain $operation without a second provider or native mutation call", async (scenario) => {
-  const directory = mkdtempSync(join(tmpdir(), "keiko-property-replay-"));
-  const path = join(directory, "ui.sqlite");
-  try {
-    const f = propertyJournalFixture(scenario, "lost-ack", path);
-    expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: { outcome: "unknown", ...f.receipt } });
-    f.close();
-    const reopened = createNodeUiStore(path);
+/** The private transcript keeps receipts; the durable journal proves only its outcome. */
+function expectJournalReplay(
+  result: Awaited<ReturnType<typeof executeJiraChatMutation>>,
+  outcome: "succeeded" | "succeeded-unconfirmed" | "unknown",
+): void {
+  expect(result).toMatchObject({ data: { outcome, replayed: true } });
+  for (const field of ["issueId", "issueKey", "boardId", "propertyKey", "propertyPresent"])
+    expect(result.data).not.toHaveProperty(field);
+}
+it.each(PROPERTY_JOURNAL_CASES)(
+  "journals one $operation using its fixed root and complete same-parent property readback",
+  async (scenario) => {
+    const f = propertyJournalFixture(scenario, "confirmed");
+    expect(await executeJiraChatMutation(f.input)).toMatchObject({
+      data: { outcome: "succeeded", ...f.receipt },
+    });
+    expect(f.effects.mock.calls.map(([, init]) => init?.method)).toEqual([
+      "GET",
+      "GET",
+      "GET",
+      scenario.remove ? "DELETE" : "PUT",
+      "GET",
+      "GET",
+      "GET",
+    ]);
+    expectJournalReplay(await executeJiraChatMutation(f.input), "succeeded");
+    expect(f.effects).toHaveBeenCalledTimes(7);
+    expect(f.logs.lines().join()).not.toMatch(
+      /display|Synthetic issue|Synthetic board|jira\.example|propertyKey|valueNodes/u,
+    );
+  },
+);
+it.each(PROPERTY_JOURNAL_CASES)(
+  "retains only the requested $operation presence and exact context after denied readback",
+  async (scenario) => {
+    const f = propertyJournalFixture(scenario, "denied-readback");
+    expect(await executeJiraChatMutation(f.input)).toMatchObject({
+      data: { outcome: "succeeded-unconfirmed", ...f.receipt },
+    });
+    const requests = f.effects.mock.calls.length;
+    expectJournalReplay(await executeJiraChatMutation(f.input), "succeeded-unconfirmed");
+    expect(f.effects).toHaveBeenCalledTimes(requests);
+    expect(f.effects.mock.calls.filter(([, init]) => init?.method !== "GET")).toHaveLength(1);
+  },
+);
+it.each(PROPERTY_JOURNAL_CASES)(
+  "reloads uncertain $operation without a second provider or native mutation call",
+  async (scenario) => {
+    const directory = mkdtempSync(join(tmpdir(), "keiko-property-replay-"));
+    const path = join(directory, "ui.sqlite");
     try {
-      const execute = vi.fn(f.input.execute);
-      expect(await executeJiraChatMutation({ ...f.input, journal: reopened.chatToolMutations, execute }))
-        .toMatchObject({ data: { outcome: "unknown", replayed: true, ...f.receipt } });
-      expect(execute).not.toHaveBeenCalled();
-      expect(f.effects.mock.calls.map(([, init]) => init?.method)).toEqual(["GET", "GET", "GET", scenario.remove ? "DELETE" : "PUT"]);
+      const f = propertyJournalFixture(scenario, "lost-ack", path);
+      expect(await executeJiraChatMutation(f.input)).toMatchObject({
+        data: { outcome: "unknown", ...f.receipt },
+      });
+      f.close();
+      const reopened = createNodeUiStore(path);
+      try {
+        const execute = vi.fn(f.input.execute);
+        expectJournalReplay(
+          await executeJiraChatMutation({
+            ...f.input,
+            journal: reopened.chatToolMutations,
+            execute,
+          }),
+          "unknown",
+        );
+        expect(execute).not.toHaveBeenCalled();
+        expect(f.effects.mock.calls.map(([, init]) => init?.method)).toEqual([
+          "GET",
+          "GET",
+          "GET",
+          scenario.remove ? "DELETE" : "PUT",
+        ]);
+      } finally {
+        reopened.close();
+      }
     } finally {
-      reopened.close();
+      rmSync(directory, { recursive: true, force: true });
     }
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
-it.each(PROPERTY_JOURNAL_CASES)("refuses a changed reviewed $operation value before its first effect", async (scenario) => {
-  const f = propertyJournalFixture(scenario, "stale");
-  expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: { outcome: "rejected", reason: "conflict" } });
-  expect(f.effects.mock.calls.map(([, init]) => init?.method)).toEqual(["GET", "GET", "GET"]);
-});
-it.each(PROPERTY_JOURNAL_CASES.filter((scenario) => !scenario.remove))("preserves observed null/false for $operation and refuses an absent review", async (scenario) => {
-  const f = propertyJournalFixture(scenario, "absent-review");
-  expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: { outcome: "rejected", reason: "conflict" } });
-  expect(f.effects.mock.calls.map(([, init]) => init?.method)).toEqual(["GET", "GET", "GET"]);
-});
-it.each(PROPERTY_JOURNAL_CASES.filter((scenario) => !scenario.remove))("returns an observed unchanged $operation without a native write", async (scenario) => {
-  const f = propertyJournalFixture(scenario, "unchanged");
-  expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: { outcome: "rejected", reason: "conflict", unchanged: true, ...f.receipt } });
-  expect(f.effects.mock.calls.map(([, init]) => init?.method)).toEqual(["GET", "GET", "GET"]);
-});
-it.each(PROPERTY_JOURNAL_CASES)("does not infer an atomic $operation rejection from a generic structured HTTP400", async (scenario) => {
-  const f = propertyJournalFixture(scenario, "confirmed");
-  const original = f.effects.getMockImplementation();
-  if (original === undefined) throw new TypeError("Missing native property fixture");
-  f.effects.mockImplementation((input, init) => init?.method !== "GET"
-    ? Promise.resolve(new Response('{"errorMessages":["Native refusal"]}', { status: 400 }))
-    : original(input, init));
-  expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: { outcome: "unknown", ...f.receipt } });
-  expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: { outcome: "unknown", replayed: true, ...f.receipt } });
-  expect(f.effects.mock.calls.filter(([, init]) => init?.method !== "GET")).toHaveLength(1);
-});
+  },
+);
+it.each(PROPERTY_JOURNAL_CASES)(
+  "refuses a changed reviewed $operation value before its first effect",
+  async (scenario) => {
+    const f = propertyJournalFixture(scenario, "stale");
+    expect(await executeJiraChatMutation(f.input)).toMatchObject({
+      data: { outcome: "rejected", reason: "conflict" },
+    });
+    expect(f.effects.mock.calls.map(([, init]) => init?.method)).toEqual(["GET", "GET", "GET"]);
+  },
+);
+it.each(PROPERTY_JOURNAL_CASES.filter((scenario) => !scenario.remove))(
+  "preserves observed null/false for $operation and refuses an absent review",
+  async (scenario) => {
+    const f = propertyJournalFixture(scenario, "absent-review");
+    expect(await executeJiraChatMutation(f.input)).toMatchObject({
+      data: { outcome: "rejected", reason: "conflict" },
+    });
+    expect(f.effects.mock.calls.map(([, init]) => init?.method)).toEqual(["GET", "GET", "GET"]);
+  },
+);
+it.each(PROPERTY_JOURNAL_CASES.filter((scenario) => !scenario.remove))(
+  "returns an observed unchanged $operation without a native write",
+  async (scenario) => {
+    const f = propertyJournalFixture(scenario, "unchanged");
+    expect(await executeJiraChatMutation(f.input)).toMatchObject({
+      data: { outcome: "rejected", reason: "conflict", unchanged: true, ...f.receipt },
+    });
+    expect(f.effects.mock.calls.map(([, init]) => init?.method)).toEqual(["GET", "GET", "GET"]);
+  },
+);
+it.each(PROPERTY_JOURNAL_CASES)(
+  "does not infer an atomic $operation rejection from a generic structured HTTP400",
+  async (scenario) => {
+    const f = propertyJournalFixture(scenario, "confirmed");
+    const original = f.effects.getMockImplementation();
+    if (original === undefined) throw new TypeError("Missing native property fixture");
+    f.effects.mockImplementation((input, init) =>
+      init?.method !== "GET"
+        ? Promise.resolve(new Response('{"errorMessages":["Native refusal"]}', { status: 400 }))
+        : original(input, init),
+    );
+    expect(await executeJiraChatMutation(f.input)).toMatchObject({
+      data: { outcome: "unknown", ...f.receipt },
+    });
+    expectJournalReplay(await executeJiraChatMutation(f.input), "unknown");
+    expect(f.effects.mock.calls.filter(([, init]) => init?.method !== "GET")).toHaveLength(1);
+  },
+);
 
 const MONITORING_WRITES = [
-  { operation: "jira.set-app-monitoring", path: "monitoring/app", read: "monitoring/app",
-    before: false, target: true, args: { expectedEnabled: false, enabled: true }, receipt: { monitoringEnabled: true } },
-  { operation: "jira.set-ipd-monitoring", path: "monitoring/ipd", read: "monitoring/ipd",
-    before: true, target: false, args: { expectedEnabled: true, enabled: false }, receipt: { monitoringEnabled: false } },
-  { operation: "jira.start-jmx-metrics", path: "monitoring/jmx/startExposing", read: "monitoring/jmx/areMetricsExposed",
-    before: false, target: true, args: { expectedEnabled: false }, receipt: { jmxMetricsExposed: true } },
-  { operation: "jira.stop-jmx-metrics", path: "monitoring/jmx/stopExposing", read: "monitoring/jmx/areMetricsExposed",
-    before: true, target: false, args: { expectedEnabled: true }, receipt: { jmxMetricsExposed: false } },
+  {
+    operation: "jira.set-app-monitoring",
+    path: "monitoring/app",
+    read: "monitoring/app",
+    before: false,
+    target: true,
+    args: { expectedEnabled: false, enabled: true },
+    receipt: { monitoringEnabled: true },
+  },
+  {
+    operation: "jira.set-ipd-monitoring",
+    path: "monitoring/ipd",
+    read: "monitoring/ipd",
+    before: true,
+    target: false,
+    args: { expectedEnabled: true, enabled: false },
+    receipt: { monitoringEnabled: false },
+  },
+  {
+    operation: "jira.start-jmx-metrics",
+    path: "monitoring/jmx/startExposing",
+    read: "monitoring/jmx/areMetricsExposed",
+    before: false,
+    target: true,
+    args: { expectedEnabled: false },
+    receipt: { jmxMetricsExposed: true },
+  },
+  {
+    operation: "jira.stop-jmx-metrics",
+    path: "monitoring/jmx/stopExposing",
+    read: "monitoring/jmx/areMetricsExposed",
+    before: true,
+    target: false,
+    args: { expectedEnabled: true },
+    receipt: { jmxMetricsExposed: false },
+  },
 ] as const;
 type MonitoringCase = (typeof MONITORING_WRITES)[number];
 type MonitoringObservation = "confirmed" | "lost-ack" | "denied-readback" | "unchanged" | "stale";
-function monitoringFixture(scenario: MonitoringCase, observation: MonitoringObservation, path = ":memory:") {
+function monitoringWriteResponse(
+  f: ReturnType<typeof fixture>,
+  scenario: MonitoringCase,
+  observation: MonitoringObservation,
+  url: URL,
+  scalar: boolean,
+): Promise<Response> {
+  expect(f.input.journal?.find(f.input.intent.invocationId)?.phase).toBe("dispatched");
+  expect(url.pathname).toBe(`/rest/api/2/${scenario.path}`);
+  if (observation === "lost-ack")
+    return Promise.reject(new Error("Synthetic lost monitoring response"));
+  return Promise.resolve(new Response(null, { status: scalar ? 200 : 204 }));
+}
+function monitoringReadResponse(
+  scenario: MonitoringCase,
+  observation: MonitoringObservation,
+  dispatched: boolean,
+  scalar: boolean,
+): Promise<Response> {
+  if (dispatched && observation === "denied-readback")
+    return fixtureJson({ errorMessages: ["Readback denied"] }, 403);
+  const enabled =
+    dispatched || observation === "unchanged" || observation === "stale"
+      ? scenario.target
+      : scenario.before;
+  return fixtureJson(scalar ? enabled : { enabled });
+}
+function monitoringFixture(
+  scenario: MonitoringCase,
+  observation: MonitoringObservation,
+  path = ":memory:",
+): ReturnType<typeof fixture> {
   const f = fixture(path);
   let dispatched = false;
   const scalar = scenario.read === "monitoring/jmx/areMetricsExposed";
   f.effects.mockImplementation((input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     if (init?.method === "POST") {
-      expect(f.input.journal?.find(f.input.intent.invocationId)?.phase).toBe("dispatched");
-      expect(url.pathname).toBe(`/rest/api/2/${scenario.path}`);
       dispatched = true;
-      if (observation === "lost-ack") return Promise.reject(new Error("Synthetic lost monitoring response"));
-      return Promise.resolve(new Response(null, { status: scalar ? 200 : 204 }));
+      return monitoringWriteResponse(f, scenario, observation, url, scalar);
     }
     expect(init?.method).toBe("GET");
     expect(url.pathname).toBe(`/rest/api/2/${scenario.read}`);
-    if (dispatched && observation === "denied-readback")
-      return Promise.resolve(new Response('{"errorMessages":["Readback denied"]}', { status: 403 }));
-    const enabled = dispatched || observation === "unchanged" || observation === "stale"
-      ? scenario.target : scenario.before;
-    return Promise.resolve(new Response(JSON.stringify(scalar ? enabled : { enabled }), { status: 200 }));
+    return monitoringReadResponse(scenario, observation, dispatched, scalar);
   });
-  const args: CatalogJsonObject = observation === "unchanged"
-    ? { ...scenario.args, expectedEnabled: scenario.target } : scenario.args;
+  const args: CatalogJsonObject =
+    observation === "unchanged"
+      ? { ...scenario.args, expectedEnabled: scenario.target }
+      : scenario.args;
   const execute = managedAttempt(f, scenario.operation, args);
-  return { ...f, input: { ...f.input, intent: { ...f.input.intent, operation: scenario.operation }, execute } };
+  return {
+    ...f,
+    input: { ...f.input, intent: { ...f.input.intent, operation: scenario.operation }, execute },
+  };
 }
-it.each(MONITORING_WRITES)("confirms $operation only after one effect and independent boolean readback", async (scenario) => {
-  const f = monitoringFixture(scenario, "confirmed");
-  expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: { outcome: "succeeded", ...scenario.receipt } });
-  expect(f.effects.mock.calls.map(([, init]) => init?.method)).toEqual(["GET", "POST", "GET"]);
-  expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: { outcome: "succeeded", replayed: true } });
-  expect(f.effects).toHaveBeenCalledTimes(3);
-  expect(f.logs.lines().join()).not.toMatch(/jira\.example|monitoring\/|expectedEnabled|synthetic-test-pat/u);
-});
-it.each(MONITORING_WRITES)("keeps $operation target boolean unconfirmed after denied readback without replay", async (scenario) => {
-  const f = monitoringFixture(scenario, "denied-readback");
-  expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: { outcome: "succeeded-unconfirmed", ...scenario.receipt } });
-  expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: { outcome: "succeeded-unconfirmed", replayed: true } });
-  expect(f.effects.mock.calls.map(([, init]) => init?.method)).toEqual(["GET", "POST", "GET"]);
-});
-it.each(MONITORING_WRITES)("keeps a lost $operation response unknown across store reload without another provider call", async (scenario) => {
-  const directory = mkdtempSync(join(tmpdir(), "keiko-monitoring-replay-"));
-  const path = join(directory, "ui.sqlite");
-  try {
-    const f = monitoringFixture(scenario, "lost-ack", path);
-    expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: { outcome: "unknown", ...scenario.receipt } });
-    f.close();
-    const reopened = createNodeUiStore(path);
+it.each(MONITORING_WRITES)(
+  "confirms $operation only after one effect and independent boolean readback",
+  async (scenario) => {
+    const f = monitoringFixture(scenario, "confirmed");
+    expect(await executeJiraChatMutation(f.input)).toMatchObject({
+      data: { outcome: "succeeded", ...scenario.receipt },
+    });
+    expect(f.effects.mock.calls.map(([, init]) => init?.method)).toEqual(["GET", "POST", "GET"]);
+    expect(await executeJiraChatMutation(f.input)).toMatchObject({
+      data: { outcome: "succeeded", replayed: true },
+    });
+    expect(f.effects).toHaveBeenCalledTimes(3);
+    expect(f.logs.lines().join()).not.toMatch(
+      /jira\.example|monitoring\/|expectedEnabled|synthetic-test-pat/u,
+    );
+  },
+);
+it.each(MONITORING_WRITES)(
+  "keeps $operation target boolean unconfirmed after denied readback without replay",
+  async (scenario) => {
+    const f = monitoringFixture(scenario, "denied-readback");
+    expect(await executeJiraChatMutation(f.input)).toMatchObject({
+      data: { outcome: "succeeded-unconfirmed", ...scenario.receipt },
+    });
+    expect(await executeJiraChatMutation(f.input)).toMatchObject({
+      data: { outcome: "succeeded-unconfirmed", replayed: true },
+    });
+    expect(f.effects.mock.calls.map(([, init]) => init?.method)).toEqual(["GET", "POST", "GET"]);
+  },
+);
+it.each(MONITORING_WRITES)(
+  "keeps a lost $operation response unknown across store reload without another provider call",
+  async (scenario) => {
+    const directory = mkdtempSync(join(tmpdir(), "keiko-monitoring-replay-"));
+    const path = join(directory, "ui.sqlite");
     try {
-      const execute = vi.fn(f.input.execute);
-      expect(await executeJiraChatMutation({ ...f.input, journal: reopened.chatToolMutations, execute }))
-        .toMatchObject({ data: { outcome: "unknown", replayed: true } });
-      expect(execute).not.toHaveBeenCalled();
-      expect(f.effects.mock.calls.map(([, init]) => init?.method)).toEqual(["GET", "POST"]);
+      const f = monitoringFixture(scenario, "lost-ack", path);
+      expect(await executeJiraChatMutation(f.input)).toMatchObject({
+        data: { outcome: "unknown", ...scenario.receipt },
+      });
+      f.close();
+      const reopened = createNodeUiStore(path);
+      try {
+        const execute = vi.fn(f.input.execute);
+        expect(
+          await executeJiraChatMutation({
+            ...f.input,
+            journal: reopened.chatToolMutations,
+            execute,
+          }),
+        ).toMatchObject({ data: { outcome: "unknown", replayed: true } });
+        expect(execute).not.toHaveBeenCalled();
+        expect(f.effects.mock.calls.map(([, init]) => init?.method)).toEqual(["GET", "POST"]);
+      } finally {
+        reopened.close();
+      }
     } finally {
-      reopened.close();
+      rmSync(directory, { recursive: true, force: true });
     }
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
-it.each(MONITORING_WRITES)("settles an observed unchanged $operation without a POST", async (scenario) => {
-  const f = monitoringFixture(scenario, "unchanged");
-  expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: {
-    outcome: "rejected", reason: "conflict", unchanged: true, ...scenario.receipt,
-  } });
-  expect(f.effects.mock.calls.map(([, init]) => init?.method)).toEqual(["GET"]);
-});
-it.each(MONITORING_WRITES)("refuses stale reviewed $operation state before dispatch", async (scenario) => {
-  const f = monitoringFixture(scenario, "stale");
-  const result = await executeJiraChatMutation(f.input);
-  expect(result).toMatchObject({ data: { outcome: "rejected", reason: "conflict" } });
-  expect(result.data).not.toHaveProperty("monitoringEnabled");
-  expect(result.data).not.toHaveProperty("jmxMetricsExposed");
-  expect(f.effects.mock.calls.map(([, init]) => init?.method)).toEqual(["GET"]);
-});
-it.each(MONITORING_WRITES)("does not infer an atomic no-effect rejection for $operation from a structured HTTP400", async (scenario) => {
-  const f = monitoringFixture(scenario, "confirmed");
-  const original = f.effects.getMockImplementation();
-  if (original === undefined) throw new TypeError("Missing native monitoring fixture");
-  f.effects.mockImplementation((input, init) => init?.method === "POST"
-    ? Promise.resolve(new Response('{"errorMessages":["Native refusal"]}', { status: 400 }))
-    : original(input, init));
-  expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: { outcome: "unknown", ...scenario.receipt } });
-  expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: { outcome: "unknown", replayed: true } });
-  expect(f.effects.mock.calls.map(([, init]) => init?.method)).toEqual(["GET", "POST"]);
-});
+  },
+);
+it.each(MONITORING_WRITES)(
+  "settles an observed unchanged $operation without a POST",
+  async (scenario) => {
+    const f = monitoringFixture(scenario, "unchanged");
+    expect(await executeJiraChatMutation(f.input)).toMatchObject({
+      data: {
+        outcome: "rejected",
+        reason: "conflict",
+        unchanged: true,
+        ...scenario.receipt,
+      },
+    });
+    expect(f.effects.mock.calls.map(([, init]) => init?.method)).toEqual(["GET"]);
+  },
+);
+it.each(MONITORING_WRITES)(
+  "refuses stale reviewed $operation state before dispatch",
+  async (scenario) => {
+    const f = monitoringFixture(scenario, "stale");
+    const result = await executeJiraChatMutation(f.input);
+    expect(result).toMatchObject({ data: { outcome: "rejected", reason: "conflict" } });
+    expect(result.data).not.toHaveProperty("monitoringEnabled");
+    expect(result.data).not.toHaveProperty("jmxMetricsExposed");
+    expect(f.effects.mock.calls.map(([, init]) => init?.method)).toEqual(["GET"]);
+  },
+);
+it.each(MONITORING_WRITES)(
+  "does not infer an atomic no-effect rejection for $operation from a structured HTTP400",
+  async (scenario) => {
+    const f = monitoringFixture(scenario, "confirmed");
+    const original = f.effects.getMockImplementation();
+    if (original === undefined) throw new TypeError("Missing native monitoring fixture");
+    f.effects.mockImplementation((input, init) =>
+      init?.method === "POST"
+        ? Promise.resolve(new Response('{"errorMessages":["Native refusal"]}', { status: 400 }))
+        : original(input, init),
+    );
+    expect(await executeJiraChatMutation(f.input)).toMatchObject({
+      data: { outcome: "unknown", ...scenario.receipt },
+    });
+    expect(await executeJiraChatMutation(f.input)).toMatchObject({
+      data: { outcome: "unknown", replayed: true },
+    });
+    expect(f.effects.mock.calls.map(([, init]) => init?.method)).toEqual(["GET", "POST"]);
+  },
+);
 
 it("records a body-only Markdown projection only in the settled body-free audit event", async () => {
   const f = fixture();
@@ -1260,7 +1518,10 @@ it("keeps a replay pending until the owner settles a pre-dispatch cancellation",
     execute: async (http, lifecycle) => {
       entered?.();
       await held;
-      return f.input.execute((request) => http({ ...request, signal: controller.signal }), lifecycle);
+      return f.input.execute(
+        (request) => http({ ...request, signal: controller.signal }),
+        lifecycle,
+      );
     },
   };
   const owner = executeJiraChatMutation(input);
@@ -1316,13 +1577,18 @@ it("does not turn revoked admission into a no-effect claim while an HTTP attempt
   }
 });
 
-const TAB_WRITES = ["jira.create-screen-tab", "jira.rename-screen-tab", "jira.delete-screen-tab"] as const;
+const TAB_WRITES = [
+  "jira.create-screen-tab",
+  "jira.rename-screen-tab",
+  "jira.delete-screen-tab",
+] as const;
 type TabWrite = (typeof TAB_WRITES)[number];
 function tabArguments(operation: TabWrite): CatalogJsonObject {
   const screen = { screenId: "11", expectedScreenName: "Review screen" };
   if (operation === "jira.create-screen-tab") return { ...screen, name: "Implementation" };
   const tab = { ...screen, tabId: "21", expectedName: "Fields" };
-  return operation === "jira.rename-screen-tab" ? { ...tab, name: "Implementation" }
+  return operation === "jira.rename-screen-tab"
+    ? { ...tab, name: "Implementation" }
     : { ...tab, expectedFieldIds: ["summary"] };
 }
 function managedAttempt(
@@ -1351,78 +1617,153 @@ function managedAttempt(
     return attempted;
   };
 }
-function tabFixture(operation: TabWrite, observation: "confirmed" | "denied-readback" | "lost-ack", path = ":memory:") {
+type TabFixtureObservation = "confirmed" | "denied-readback" | "lost-ack";
+interface FixtureTab {
+  readonly id: number;
+  readonly name: string;
+}
+function tabWriteResponse(
+  f: ReturnType<typeof fixture>,
+  operation: TabWrite,
+  observation: TabFixtureObservation,
+): Promise<Response> {
+  expect(f.input.journal?.find(f.input.intent.invocationId)?.phase).toBe("dispatched");
+  if (observation === "lost-ack")
+    return Promise.reject(new Error("Synthetic lost screen-tab response"));
+  if (operation === "jira.delete-screen-tab")
+    return Promise.resolve(new Response(null, { status: 204 }));
+  return fixtureJson({
+    id: operation === "jira.create-screen-tab" ? 23 : 21,
+    name: "Implementation",
+  });
+}
+function observedTabs(
+  operation: TabWrite,
+  original: readonly FixtureTab[],
+  changed: boolean,
+): readonly (FixtureTab | undefined)[] {
+  if (!changed) return original;
+  if (operation === "jira.create-screen-tab")
+    return [...original, { id: 23, name: "Implementation" }];
+  if (operation === "jira.rename-screen-tab")
+    return [{ id: 21, name: "Implementation" }, original[1]];
+  return [original[1]];
+}
+function tabReadResponse(
+  url: URL,
+  operation: TabWrite,
+  original: readonly FixtureTab[],
+  changed: boolean,
+): Promise<Response> {
+  if (url.pathname.endsWith("/screens"))
+    return fixtureJson({
+      startAt: 0,
+      maxResults: 100,
+      total: 1,
+      isLast: true,
+      screens: [{ id: 11, name: "Review screen" }],
+    });
+  if (url.pathname.endsWith("/fields")) return fixtureJson([{ id: "summary", name: "Summary" }]);
+  return fixtureJson(observedTabs(operation, original, changed));
+}
+function tabFixture(
+  operation: TabWrite,
+  observation: TabFixtureObservation,
+  path = ":memory:",
+): ReturnType<typeof fixture> {
   const f = fixture(path);
   let changed = false;
-  const original = [{ id: 21, name: "Fields" }, { id: 22, name: "Other" }];
-  const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
+  const original = [
+    { id: 21, name: "Fields" },
+    { id: 22, name: "Other" },
+  ];
   f.effects.mockImplementation((input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     const method = init?.method ?? "GET";
     if (method !== "GET") {
-      expect(f.input.journal?.find(f.input.intent.invocationId)?.phase).toBe("dispatched");
       changed = true;
-      if (observation === "lost-ack") return Promise.reject(new Error("Synthetic lost screen-tab response"));
-      return Promise.resolve(operation === "jira.delete-screen-tab" ? new Response(null, { status: 204 })
-        : json({ id: operation === "jira.create-screen-tab" ? 23 : 21, name: "Implementation" }));
+      return tabWriteResponse(f, operation, observation);
     }
-    if (changed && observation === "denied-readback") return Promise.resolve(json({ errorMessages: ["Not permitted"] }, 403));
-    if (url.pathname.endsWith("/screens")) return Promise.resolve(json({
-      startAt: 0, maxResults: 100, total: 1, isLast: true, screens: [{ id: 11, name: "Review screen" }],
-    }));
-    if (url.pathname.endsWith("/fields")) return Promise.resolve(json([{ id: "summary", name: "Summary" }]));
-    const tabs = !changed ? original : operation === "jira.create-screen-tab"
-      ? [...original, { id: 23, name: "Implementation" }]
-      : operation === "jira.rename-screen-tab" ? [{ id: 21, name: "Implementation" }, original[1]] : [original[1]];
-    return Promise.resolve(json(tabs));
+    if (changed && observation === "denied-readback")
+      return fixtureJson({ errorMessages: ["Not permitted"] }, 403);
+    return tabReadResponse(url, operation, original, changed);
   });
   const execute = managedAttempt(f, operation, tabArguments(operation));
   return { ...f, input: { ...f.input, intent: { ...f.input.intent, operation }, execute } };
 }
-it.each(TAB_WRITES)("journals one real %s effect and its independent same-parent readback", async (operation) => {
-  const f = tabFixture(operation, "confirmed");
-  expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: {
-    outcome: "succeeded", screenId: "11", tabId: operation === "jira.create-screen-tab" ? "23" : "21",
-  } });
-  expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: { outcome: "succeeded", replayed: true } });
-  expect(f.effects.mock.calls.filter(([, init]) => init?.method !== "GET")).toHaveLength(1);
-  expect(f.input.journal?.find(f.input.intent.invocationId)).toMatchObject({ phase: "settled", outcome: "succeeded" });
-  expect(f.logs.lines().join()).not.toMatch(/Review screen|Implementation|jira\.example/u);
-});
-it.each(TAB_WRITES)("retains exact %s acknowledgement IDs when readback is denied without replay", async (operation) => {
-  const f = tabFixture(operation, "denied-readback");
-  expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: {
-    outcome: "succeeded-unconfirmed", screenId: "11", tabId: operation === "jira.create-screen-tab" ? "23" : "21",
-  } });
-  const observedRequests = f.effects.mock.calls.length;
-  expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: { outcome: "succeeded-unconfirmed", replayed: true } });
-  expect(f.effects).toHaveBeenCalledTimes(observedRequests);
-  expect(f.effects.mock.calls.filter(([, init]) => init?.method !== "GET")).toHaveLength(1);
-});
-it.each(TAB_WRITES)("keeps %s lost acknowledgement unknown with no provider call after store reload", async (operation) => {
-  const directory = mkdtempSync(join(tmpdir(), "keiko-tab-replay-"));
-  const path = join(directory, "ui.sqlite");
-  try {
-    const f = tabFixture(operation, "lost-ack", path);
-    const observed = await executeJiraChatMutation(f.input);
-    expect(observed).toMatchObject({ data: { outcome: "unknown", screenId: "11" } });
-    if (operation === "jira.create-screen-tab") expect(observed.data).not.toHaveProperty("tabId");
-    else expect(observed.data.tabId).toBe("21");
-    f.close();
-    const reopened = createNodeUiStore(path);
+it.each(TAB_WRITES)(
+  "journals one real %s effect and its independent same-parent readback",
+  async (operation) => {
+    const f = tabFixture(operation, "confirmed");
+    expect(await executeJiraChatMutation(f.input)).toMatchObject({
+      data: {
+        outcome: "succeeded",
+        screenId: "11",
+        tabId: operation === "jira.create-screen-tab" ? "23" : "21",
+      },
+    });
+    expect(await executeJiraChatMutation(f.input)).toMatchObject({
+      data: { outcome: "succeeded", replayed: true },
+    });
+    expect(f.effects.mock.calls.filter(([, init]) => init?.method !== "GET")).toHaveLength(1);
+    expect(f.input.journal?.find(f.input.intent.invocationId)).toMatchObject({
+      phase: "settled",
+      outcome: "succeeded",
+    });
+    expect(f.logs.lines().join()).not.toMatch(/Review screen|Implementation|jira\.example/u);
+  },
+);
+it.each(TAB_WRITES)(
+  "retains exact %s acknowledgement IDs when readback is denied without replay",
+  async (operation) => {
+    const f = tabFixture(operation, "denied-readback");
+    expect(await executeJiraChatMutation(f.input)).toMatchObject({
+      data: {
+        outcome: "succeeded-unconfirmed",
+        screenId: "11",
+        tabId: operation === "jira.create-screen-tab" ? "23" : "21",
+      },
+    });
+    const observedRequests = f.effects.mock.calls.length;
+    expect(await executeJiraChatMutation(f.input)).toMatchObject({
+      data: { outcome: "succeeded-unconfirmed", replayed: true },
+    });
+    expect(f.effects).toHaveBeenCalledTimes(observedRequests);
+    expect(f.effects.mock.calls.filter(([, init]) => init?.method !== "GET")).toHaveLength(1);
+  },
+);
+it.each(TAB_WRITES)(
+  "keeps %s lost acknowledgement unknown with no provider call after store reload",
+  async (operation) => {
+    const directory = mkdtempSync(join(tmpdir(), "keiko-tab-replay-"));
+    const path = join(directory, "ui.sqlite");
     try {
-      const execute = vi.fn(f.input.execute);
-      expect(await executeJiraChatMutation({ ...f.input, journal: reopened.chatToolMutations, execute }))
-        .toMatchObject({ data: { outcome: "unknown", replayed: true } });
-      expect(execute).not.toHaveBeenCalled();
-      expect(f.effects.mock.calls.filter(([, init]) => init?.method !== "GET")).toHaveLength(1);
+      const f = tabFixture(operation, "lost-ack", path);
+      const observed = await executeJiraChatMutation(f.input);
+      expect(observed).toMatchObject({ data: { outcome: "unknown", screenId: "11" } });
+      if (operation === "jira.create-screen-tab") expect(observed.data).not.toHaveProperty("tabId");
+      else expect(observed.data.tabId).toBe("21");
+      f.close();
+      const reopened = createNodeUiStore(path);
+      try {
+        const execute = vi.fn(f.input.execute);
+        expect(
+          await executeJiraChatMutation({
+            ...f.input,
+            journal: reopened.chatToolMutations,
+            execute,
+          }),
+        ).toMatchObject({ data: { outcome: "unknown", replayed: true } });
+        expect(execute).not.toHaveBeenCalled();
+        expect(f.effects.mock.calls.filter(([, init]) => init?.method !== "GET")).toHaveLength(1);
+      } finally {
+        reopened.close();
+      }
     } finally {
-      reopened.close();
+      rmSync(directory, { recursive: true, force: true });
     }
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
+  },
+);
 it.each([
   ["jira.create-screen-tab", 400, "field-validation", true, "rejected"],
   ["jira.rename-screen-tab", 400, "field-validation", true, "rejected"],
@@ -1439,20 +1780,44 @@ it.each([
   ["jira.delete-screen-tab", 409, "field-validation", true, "unknown"],
   ["jira.create-screen-tab", 403, "permission-denied", true, "unknown"],
   ["jira.rename-screen-tab", 503, "unavailable", true, "unknown"],
-] as const)("settles only documented %s status%s with the required proof (%s,%s)", async (operation, status, reason, document, outcome) => {
-  const f = fixture();
-  f.effects.mockImplementation(() => Promise.resolve(new Response(document ? '{"errorMessages":["Native refusal"]}' : "", { status })));
-  const method = operation === "jira.create-screen-tab" ? "POST" : operation === "jira.rename-screen-tab" ? "PUT" : "DELETE";
-  const path = operation === "jira.create-screen-tab" ? "screens/11/tabs" : "screens/11/tabs/21";
-  const input: JiraChatMutationExecution = {
-    ...f.input, intent: { ...f.input.intent, operation },
-    execute: async (http) => {
-      await http({ method, url: `https://jira.example.invalid/rest/api/2/${path}`,
-        ...(method === "DELETE" ? {} : { bodyJson: "{}" }), maxBodyBytes: 1000, timeoutMs: 1000 });
-      return { ok: false, reason, ...(document ? { detail: { messages: ["Native refusal"] } } : {}) };
-    },
-  };
-  expect(await executeJiraChatMutation(input)).toMatchObject({ data: { outcome } });
-  expect(await executeJiraChatMutation(input)).toMatchObject({ data: { outcome, replayed: true } });
-  expect(f.effects).toHaveBeenCalledOnce();
-});
+] as const)(
+  "settles only documented %s status%s with the required proof (%s,%s)",
+  async (operation, status, reason, document, outcome) => {
+    const f = fixture();
+    f.effects.mockImplementation(() =>
+      Promise.resolve(
+        new Response(document ? '{"errorMessages":["Native refusal"]}' : "", { status }),
+      ),
+    );
+    const method =
+      operation === "jira.create-screen-tab"
+        ? "POST"
+        : operation === "jira.rename-screen-tab"
+          ? "PUT"
+          : "DELETE";
+    const path = operation === "jira.create-screen-tab" ? "screens/11/tabs" : "screens/11/tabs/21";
+    const input: JiraChatMutationExecution = {
+      ...f.input,
+      intent: { ...f.input.intent, operation },
+      execute: async (http) => {
+        await http({
+          method,
+          url: `https://jira.example.invalid/rest/api/2/${path}`,
+          ...(method === "DELETE" ? {} : { bodyJson: "{}" }),
+          maxBodyBytes: 1000,
+          timeoutMs: 1000,
+        });
+        return {
+          ok: false,
+          reason,
+          ...(document ? { detail: { messages: ["Native refusal"] } } : {}),
+        };
+      },
+    };
+    expect(await executeJiraChatMutation(input)).toMatchObject({ data: { outcome } });
+    expect(await executeJiraChatMutation(input)).toMatchObject({
+      data: { outcome, replayed: true },
+    });
+    expect(f.effects).toHaveBeenCalledOnce();
+  },
+);

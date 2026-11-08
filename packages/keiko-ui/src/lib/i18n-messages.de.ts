@@ -86,6 +86,11 @@ export const DE_MESSAGES = {
   "editor.empty.opening": "Wird geöffnet…",
   "supportReport.globalFailure": "Keiko hat einen Fehler festgestellt.",
   "supportReport.readinessUnavailable": "Fehlerberichte können derzeit unvollständig sein.",
+  "memory.readiness.withheld": "Memory zurückgehalten",
+  "memory.readiness.migrationFailed":
+    "Memory bleibt bis zur Reparatur des lokalen Tresors zurückgehalten. Chat ist weiter verfügbar. Behebe die Ursache und starte Keiko neu.",
+  "memory.readiness.unreadable":
+    "Der gespeicherte Memory-Tresor konnte nicht geöffnet werden. Prüfe den verfügbaren Schlüssel und starte Keiko neu. Chat ist weiter verfügbar.",
   "supportReport.create": "Fehlerbericht erstellen",
   "supportReport.creating": "Bericht wird erstellt…",
   "supportReport.download": "Bericht herunterladen",
