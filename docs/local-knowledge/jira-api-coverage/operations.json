@@ -9569,7 +9569,7 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "5239bdc60fe120375ff6883f435257691e221121dd79c0b88a81f4ed0803d840",
+    "sha256": "77e165500e34a3cfc7c9b3f9bda22ce4ec0ff5a51074f3106c158ac8b7c679de",
     "nativeOperationCount": 439
   },
   "operations": [
