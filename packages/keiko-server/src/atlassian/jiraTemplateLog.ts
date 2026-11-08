@@ -17,6 +17,7 @@ import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { jiraToolLogFields } from "./jiraOperationLogFields.js";
+import { recordJiraOperationActivity } from "./jiraOperationActivity.js";
 
 /**
  * Customer-defined issue templates (#4177): where the active templates come from and how a
@@ -305,7 +306,8 @@ export function recordJiraFieldRefusal(
 ): void {
   const operation = jiraToolLogFields(input.operation);
   if (operation.toolClass !== "jira-write") throw new TypeError("Field refusal requires a Jira mutation");
-  processServerLogSink().write(
+  const sink = processServerLogSink();
+  sink.write(
     activityLogEvent(
       FIELD_ADMISSION,
       { correlationId: correlationId ?? UNKNOWN_CORRELATION_ID, level: "info" },
@@ -319,6 +321,9 @@ export function recordJiraFieldRefusal(
       },
     ),
   );
+  recordJiraOperationActivity(sink, { correlationId: correlationId ?? UNKNOWN_CORRELATION_ID, level: "info" }, input.operation, {
+    stage: "field-admission", outcome: "refused", reason: "field-validation",
+  });
 }
 
 /** Record a dispatch-stage refusal carried by a mutation attempt; other failures are not ours. */

@@ -1,5 +1,14 @@
 import type { ActivityLogFailureClassContract } from "./observability.js";
 
+// Independent obligations for the typed Jira family facts; these names are not native tools.
+const JIRA_OPERATION_FACTS = [
+  "jira.operation.avatars", "jira.operation.configuration", "jira.operation.core",
+  "jira.operation.identities", "jira.operation.issues", "jira.operation.local",
+  "jira.operation.maintenance", "jira.operation.metadata", "jira.operation.planning",
+  "jira.operation.projects", "jira.operation.properties", "jira.operation.saved-views",
+  "jira.operation.schemes",
+] as const;
+
 // Kept as a literal rather than derived at runtime: changing a typed operation must deliberately
 // update its independent failure-class obligations before the authoritative registry can rebuild.
 export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
@@ -143,6 +152,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
         "atlassian.jira-report",
         "jira.attachment.source",
         "jira.field.admission",
+        ...JIRA_OPERATION_FACTS,
       ],
       end: ["atlassian.action.outcome"],
       failure: [],
@@ -154,6 +164,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "atlassian.jira-report",
       "jira.attachment.source",
       "jira.field.admission",
+      ...JIRA_OPERATION_FACTS,
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
@@ -162,6 +173,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "atlassian.jira-report",
       "jira.attachment.source",
       "jira.field.admission",
+      ...JIRA_OPERATION_FACTS,
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
@@ -170,6 +182,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "atlassian.jira-report",
       "jira.attachment.source",
       "jira.field.admission",
+      ...JIRA_OPERATION_FACTS,
     ],
     requiredEvidenceClasses: [
       "closed-enum",

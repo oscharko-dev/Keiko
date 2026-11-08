@@ -668,6 +668,25 @@ describe("serving the bound Pod through the relay", () => {
     expect(proofLines(h)).toEqual([
       expect.objectContaining({ outcome: "failed", reason: "tool-failed", level: "warn" }),
     ]);
+    const fact = h.records.find(({ op }) => op === "jira.operation.issues");
+    expect(expectActivityLogProof("jira.operation.issues.line", formatActivityLogProofLine(fact ?? {})))
+      .toMatchObject({ operation: "jira.issue", stage: "coding-call", outcome: "failed", reason: "tool-failed" });
+  });
+
+  it("keeps an exact typed write fact when native prerequisite permission denies the effect", async () => {
+    const h = retainingHarness(harness());
+    h.http.mockResolvedValue(response({ errorMessages: ["Synthetic denied prerequisite"], errors: {} }, 403));
+    const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
+    const result = await client.call("jira.comment", { issueKey: "SYN-1", body: "Synthetic private comment" });
+    expect(result).toMatchObject({ isError: true, structuredContent: { reason: "permission-denied" } });
+    expect(h.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
+    expect(h.dispatched).not.toHaveBeenCalled();
+    expect(h.recover).not.toHaveBeenCalled();
+    const fact = h.records.find(({ op }) => op === "jira.operation.core");
+    const line = formatActivityLogProofLine(fact ?? {});
+    expect(expectActivityLogProof("jira.operation.core.line", line))
+      .toMatchObject({ operation: "jira.comment", stage: "coding-call", outcome: "failed", reason: "tool-failed" });
+    expect(line).not.toMatch(/SYN-1|Synthetic|commentBody|jira\.example|synthetic-pod-token/u);
   });
 
   it("retains validated issue reads without acquiring an effect permit", async () => {

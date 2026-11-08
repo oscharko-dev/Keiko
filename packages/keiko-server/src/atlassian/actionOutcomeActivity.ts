@@ -1,4 +1,5 @@
-import { jiraActionLogFields } from "./jiraOperationLogFields.js";
+import { jiraActionLogFields, jiraToolForAction } from "./jiraOperationLogFields.js";
+import { recordJiraOperationActivity } from "./jiraOperationActivity.js";
 import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
   activityLogEvent,
@@ -131,7 +132,8 @@ export function recordAtlassianActionOutcome(
 ): void {
   try {
     const outcome = record.syncSummary?.outcome ?? record.outcome;
-    (deps.activityLog ?? processServerLogSink()).write(
+    const sink = deps.activityLog ?? processServerLogSink();
+    sink.write(
       activityLogEvent(
         ACTION_OUTCOME,
         {
@@ -151,6 +153,12 @@ export function recordAtlassianActionOutcome(
         },
       ),
     );
+    const tool = jiraToolForAction(record.actionType);
+    if (record.provider === "jira" && tool !== undefined) {
+      recordJiraOperationActivity(sink, { correlationId: record.correlationId, level: OUTCOME_LEVEL[outcome] }, tool, {
+        stage: "action-outcome", outcome, reason: failureReason(record, outcome),
+      });
+    }
   } catch (error) {
     recordActivityLogLoss("port-sink-failed");
     emitServerDiagnostic(

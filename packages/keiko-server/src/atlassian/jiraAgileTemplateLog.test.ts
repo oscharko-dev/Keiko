@@ -50,7 +50,7 @@ it.each([
       validations: ["invalid-field"],
     });
     expect(
-      sink.events.map(({ op, correlationId, extra }) => ({ op, correlationId, extra })),
+      sink.events.filter(({ op }) => !op.startsWith("jira.operation.")).map(({ op, correlationId, extra }) => ({ op, correlationId, extra })),
     ).toEqual([
       {
         op: "jira.template.admission",
@@ -77,6 +77,10 @@ it.each([
         },
       },
     ]);
+    expect(sink.events.filter(({ op }) => op.startsWith("jira.operation.")).map(({ extra }) => extra)).toEqual([{
+      operation, stage: "field-admission", outcome: "refused", reason: "field-validation",
+      completeness: "complete", loss: "none",
+    }]);
   },
 );
 

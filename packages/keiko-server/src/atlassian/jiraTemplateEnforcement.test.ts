@@ -211,24 +211,26 @@ describe("the model-facing refusal", () => {
       refusedCount: JIRA_FIELD_VALIDATION_FAILURES.length,
       validations: JIRA_FIELD_VALIDATION_FAILURES,
     });
-    expect(sink.events).toHaveLength(1);
+    expect(sink.events).toHaveLength(2);
     expect(sink.events[0]?.extra?.validations).toEqual([...JIRA_FIELD_VALIDATION_FAILURES]);
   });
   it("projects every closed mutation onto one body-free field-admission class and its exact tool digest", () => {
     const sink = logs();
     for (const operation of JIRA_MUTATION_OPERATIONS)
       recordJiraFieldRefusal("field-digest", { operation, refusedCount: 1, validations: ["invalid-field"] });
-    expect(sink.events.map((event) => event.extra)).toEqual(JIRA_MUTATION_OPERATIONS.map((operation) => ({
+    expect(sink.events.filter(({ op }) => op === "jira.field.admission").map((event) => event.extra)).toEqual(JIRA_MUTATION_OPERATIONS.map((operation) => ({
       operation: "jira-write", operationDigest: createHash("sha256").update(operation).digest("hex"),
       refusedCount: 1, validations: ["invalid-field"], completeness: "complete", loss: "none",
     })));
-    expect(sink.lines().join()).not.toMatch(/jira\.set-|jira\.delete-|propertyKey|valueNodes|expectedValueNodes/u);
+    expect(sink.events.filter(({ op }) => op.startsWith("jira.operation.")).map(({ extra }) => extra?.operation))
+      .toEqual(JIRA_MUTATION_OPERATIONS);
+    expect(sink.lines().join()).not.toMatch(/propertyKey|valueNodes|expectedValueNodes/u);
   });
   it("logs administrative role and permission refusals without principal, scheme or attribute facts", () => {
     const sink = logs();
     const operations = [...ROLE_MUTATION_FIXTURE_CASES.map(({ name }) => name), ...PERMISSION_SCHEME_MUTATION_CASES.map(({ tool }) => tool)];
     for (const operation of operations) recordJiraFieldRefusal("admin-refusal", { operation, refusedCount: 1, validations: ["invalid-field"] });
-    expect(sink.events.map((event) => event.extra)).toEqual(operations.map((operation) => ({
+    expect(sink.events.filter(({ op }) => op === "jira.field.admission").map((event) => event.extra)).toEqual(operations.map((operation) => ({
       operation: "jira-write", operationDigest: createHash("sha256").update(operation).digest("hex"),
       refusedCount: 1, validations: ["invalid-field"], completeness: "complete", loss: "none",
     })));
@@ -238,7 +240,7 @@ describe("the model-facing refusal", () => {
     const sink = logs();
     const operations = [...JIRA_OPTION_SCHEME_MUTATIONS, ...JIRA_WORKFLOW_SCHEME_MUTATIONS, ...JIRA_INSTANCE_SETTING_MUTATIONS, ...JIRA_EMAIL_TEMPLATE_MUTATIONS];
     for (const operation of operations) recordJiraFieldRefusal("configuration-refusal", { operation, refusedCount: 1, validations: ["invalid-field"] });
-    expect(sink.events.map((event) => event.extra)).toEqual(operations.map((operation) => ({
+    expect(sink.events.filter(({ op }) => op === "jira.field.admission").map((event) => event.extra)).toEqual(operations.map((operation) => ({
       operation: "jira-write", operationDigest: createHash("sha256").update(operation).digest("hex"),
       refusedCount: 1, validations: ["invalid-field"], completeness: "complete", loss: "none",
     })));
@@ -248,7 +250,7 @@ describe("the model-facing refusal", () => {
     const sink = logs();
     const operations = [...JIRA_GROUP_MUTATIONS, ...JIRA_ISSUE_ACTION_MUTATIONS, ...JIRA_MAINTENANCE_MUTATIONS, ...JIRA_SCHEMA_MUTATIONS, ...JIRA_DIRECTORY_ACCESS_MUTATIONS];
     for (const operation of operations) recordJiraFieldRefusal("system-refusal", { operation, refusedCount: 1, validations: ["invalid-field"] });
-    expect(sink.events.map((event) => event.extra)).toEqual(operations.map((operation) => ({
+    expect(sink.events.filter(({ op }) => op === "jira.field.admission").map((event) => event.extra)).toEqual(operations.map((operation) => ({
       operation: "jira-write", operationDigest: createHash("sha256").update(operation).digest("hex"),
       refusedCount: 1, validations: ["invalid-field"], completeness: "complete", loss: "none",
     })));
@@ -263,17 +265,17 @@ describe("the model-facing refusal", () => {
     expect(sink.events.map((event) => event.extra?.ruleIds)).toEqual(operations.map(() => [VIOLATION.ruleId]));
     expect(sink.lines().join()).not.toMatch(/fieldIds|issueTypeId|replacementIssueTypeId|linkTypeId|Acceptance criteria|SYN\/Story/u);
   });
-  it("logs all resource/account/avatar refusals as closed class and operation digest only", () => {
+  it("retains body-free resource/account/avatar refusal details alongside exact operation facts", () => {
     const sink = logs();
     const operations = [...JIRA_AVATAR_MUTATIONS, ...JIRA_IDENTITY_MUTATIONS, ...JIRA_PRIVATE_ACCOUNT_MUTATIONS,
       ...JIRA_ISSUE_LIFECYCLE_MUTATIONS, ...JIRA_PROJECT_LIFECYCLE_MUTATIONS,
       "jira.create-issues", "jira.create-reciprocal-remote-link"] as const;
     for (const operation of operations) recordJiraFieldRefusal("resource-account-refusal", { operation, refusedCount: 1, validations: ["invalid-field"] });
-    expect(sink.events.map((event) => event.extra)).toEqual(operations.map((operation) => ({
+    expect(sink.events.filter(({ op }) => op === "jira.field.admission").map((event) => event.extra)).toEqual(operations.map((operation) => ({
       operation: "jira-write", operationDigest: createHash("sha256").update(operation).digest("hex"),
       refusedCount: 1, validations: ["invalid-field"], completeness: "complete", loss: "none",
     })));
-    expect(sink.lines().join()).not.toMatch(/username|actorUserKey|password|cookie|sessionEstablished|applicationLinkId|temporaryCrop|projectId|issueKey/u);
+    expect(sink.lines().join()).not.toMatch(/username|actorUserKey|"password"\s*:|cookie|sessionEstablished|applicationLinkId|temporaryCrop|projectId|issueKey/u);
   });
 });
 
@@ -1061,10 +1063,13 @@ describe("the dry run before approval", () => {
     expect(f.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
     const events = sink.events.filter((event) => event.op === "jira.field.admission");
     expect(events[0]?.extra).toMatchObject({
-      operation: "jira.create",
+      operation: "jira-write", operationDigest: createHash("sha256").update("jira.create").digest("hex"),
       refusedCount: 1,
       validations: ["required-field"],
     });
+    const fact = sink.events.find(({ op }) => op === "jira.operation.core");
+    expect(expectActivityLogProof("jira.operation.core.line", formatActivityLogProofLine(fact ?? {})))
+      .toMatchObject({ operation: "jira.create", stage: "field-admission", outcome: "refused", reason: "field-validation" });
   });
 });
 

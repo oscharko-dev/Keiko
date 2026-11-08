@@ -216,6 +216,11 @@ it.each([
           loss: "none",
         },
       },
+      {
+        op: "jira.operation.core", correlationId: "structure-refusal",
+        extra: { operation, stage: "field-admission", outcome: "refused", reason: "field-validation",
+          completeness: "complete", loss: "none" },
+      },
     ]);
   },
 );

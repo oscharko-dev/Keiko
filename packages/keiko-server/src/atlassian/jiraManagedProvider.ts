@@ -119,7 +119,9 @@ import type {
   ManagedMcpInvocationContext,
   ManagedMcpProvider,
   ManagedMcpToolDeclaration,
+  ManagedMcpToolResult,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
+import { recordJiraProviderCall } from "./jiraOperationActivity.js";
 import { compileExternalCatalogSchema, createToolDescriptor, createToolRef } from "@oscharko-dev/keiko-tool-catalog";
 
 import { text, object } from "./jiraManagedSchemas.js";
@@ -623,12 +625,21 @@ export function createJiraProviderForCatalog<Context extends ManagedMcpInvocatio
   });
   const boundTools = Object.freeze(
     provider.tools().map((tool) => {
+      const operation = tools.find((name) => name === tool.name);
+      if (operation === undefined) throw new TypeError("Unselected Jira operation");
       const binding = jiraOperationBindingForTool(tool.name);
       if (binding === undefined) throw new TypeError("Unknown Jira operation");
       return Object.freeze({
         ...tool,
         execute: async (...args: Parameters<typeof tool.execute>) => {
-          const result = await tool.execute(...args);
+          let result: ManagedMcpToolResult;
+          try {
+            result = await tool.execute(...args);
+          } catch (error) {
+            recordJiraProviderCall(args[1].correlationId, operation, "failed");
+            throw error;
+          }
+          recordJiraProviderCall(args[1].correlationId, operation, result.isError === true ? "failed" : "completed");
           // Provider response content never chooses the operation or its contract authority.
           return { ...result, data: { ...result.data, operationBinding: binding } };
         },

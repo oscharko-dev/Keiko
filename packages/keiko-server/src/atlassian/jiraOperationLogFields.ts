@@ -11,6 +11,7 @@ import { sha256Hex } from "@oscharko-dev/keiko-security";
 const READS: ReadonlySet<string> = new Set(JIRA_MANAGED_READ_TOOLS);
 const WRITES: ReadonlySet<string> = new Set(JIRA_MUTATION_OPERATIONS);
 const ACTIONS: ReadonlySet<string> = new Set(Object.values(JIRA_MANAGED_ACTION_TYPES));
+const TOOLS = [...JIRA_MANAGED_READ_TOOLS, ...JIRA_MUTATION_OPERATIONS];
 const OTHER_ACTIONS = [
   "sync-space",
   "sync-project",
@@ -20,6 +21,13 @@ const OTHER_ACTIONS = [
   "add-page-comment",
 ] as const;
 type ActionClass = "jira-read" | "jira-write" | (typeof OTHER_ACTIONS)[number];
+
+/** A legacy action cannot identify a tool when multiple canonical tools share its policy row. */
+export function jiraToolForAction(actionType: AtlassianConnectorActionType):
+  JiraManagedReadToolName | JiraMutationOperation | undefined {
+  const matches = TOOLS.filter((tool) => JIRA_MANAGED_ACTION_TYPES[tool] === actionType);
+  return matches.length === 1 ? matches[0] : undefined;
+}
 
 /** A bounded log taxonomy only; the policy and executor retain the original action identity. */
 export function jiraActionLogFields(actionType: AtlassianConnectorActionType): {

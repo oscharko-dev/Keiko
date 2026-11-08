@@ -1,4 +1,5 @@
 import { jiraToolLogFields } from "../atlassian/jiraOperationLogFields.js";
+import { recordJiraOperationActivity } from "../atlassian/jiraOperationActivity.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
   JIRA_MANAGED_READ_TOOLS,
@@ -325,4 +326,12 @@ export function recordCodingJiraPod(
       },
     ),
   );
+  if (line.tool !== undefined) {
+    const stage = {
+      bind: "coding-binding", call: "coding-call", "serialize-description": "description-projection",
+    } as const;
+    recordJiraOperationActivity(activityLog, { correlationId, ...activityStateLevel(line.outcome) }, line.tool, {
+      stage: stage[line.action], outcome: line.outcome, reason: line.reason ?? "none",
+    });
+  }
 }
