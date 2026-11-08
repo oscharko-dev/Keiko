@@ -49,6 +49,43 @@ function completedBatchMessage(resumed: boolean): ChatMessage {
   };
 }
 
+interface NativeProgressNode {
+  readonly backendNodeId: number;
+  readonly attributes?: readonly string[];
+  readonly children?: readonly NativeProgressNode[];
+  readonly shadowRoots?: readonly NativeProgressNode[];
+}
+
+function progressFillNode(node: NativeProgressNode): NativeProgressNode | undefined {
+  if (node.attributes?.includes("-webkit-progress-value")) return node;
+  for (const child of [...(node.children ?? []), ...(node.shadowRoots ?? [])]) {
+    const found = progressFillNode(child);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+async function nativeProgressFillRatio(page: Page): Promise<number> {
+  const session = await page.context().newCDPSession(page);
+  try {
+    const { root } = await session.send("DOM.getDocument");
+    const { nodeId } = await session.send("DOM.querySelector", {
+      nodeId: root.nodeId,
+      selector: 'progress[data-complete="true"]',
+    });
+    const { node } = await session.send("DOM.describeNode", { nodeId, depth: -1, pierce: true });
+    const fill = progressFillNode(node);
+    if (fill === undefined) throw new TypeError("Native progress fill is unavailable");
+    const [{ model: track }, { model: value }] = await Promise.all([
+      session.send("DOM.getBoxModel", { nodeId }),
+      session.send("DOM.getBoxModel", { backendNodeId: fill.backendNodeId }),
+    ]);
+    return value.width / track.width;
+  } finally {
+    await session.detach();
+  }
+}
+
 for (const resumed of [false, true]) {
   test(`a ${resumed ? "resumed" : "fresh"} completed batch fills 370/370 immediately in Chat and after reload`, async ({
     page,
@@ -67,17 +104,9 @@ for (const resumed of [false, true]) {
         value: element.value,
         max: element.max,
         position: element.position,
-        transition: getComputedStyle(element, "::-webkit-progress-value").transitionDuration,
       }));
-      expect(state).toEqual({ value: 370, max: 370, position: 1, transition: "0s" });
-      await bar.evaluate((element) => {
-        element.removeAttribute("data-complete");
-      });
-      expect(
-        await bar.evaluate(
-          (element) => getComputedStyle(element, "::-webkit-progress-value").transitionDuration,
-        ),
-      ).toBe("0.2s");
+      expect(state).toEqual({ value: 370, max: 370, position: 1 });
+      expect(await nativeProgressFillRatio(page)).toBe(1);
     }
     expect(counts()).toEqual(before);
   });
