@@ -128,5 +128,7 @@ export const JIRA_READ_TOOL_FAMILIES = deepFreeze({
   avatars: ["jira.system-avatars", "jira.project-avatars", "jira.user-avatars", "jira.avatars"],
   issueWorkflow: ["jira.transitions", "jira.assignable-users"],
   // Staging changes only the existing server-held draft; it performs no Jira mutation.
-  localCompositions: ["jira.report", "jira.draft-stage"],
+  // jira.draft-batch drafts a backlog from the Chat's Knowledge requirements in Keiko-sized pages
+  // and only stages, like jira.draft-stage.
+  localCompositions: ["jira.report", "jira.draft-stage", "jira.draft-batch"],
 } as const);

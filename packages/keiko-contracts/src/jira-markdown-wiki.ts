@@ -84,6 +84,8 @@ function proseInline(text: string): string {
       .replaceAll(STRONG_OPEN, "*")
       .replaceAll(STRONG_CLOSE, "*")
       .replaceAll(/[{}[\]]/gu, (character) => "\\" + character)
+      // A lone underscore inside a word (`a_b`) is literal; `__init__.py` keeps its pairs as written.
+      .replaceAll(/(?<=[^\W_])_(?=[^\W_])/gu, "\\_")
       .replaceAll(PROTECTED, (_match, index: string) => kept[Number(index)] ?? "")
   );
 }
@@ -106,8 +108,8 @@ export function markdownInlineToJiraWiki(line: string, tableCell = false): strin
     .join("");
 }
 
-/** Jira wiki lists nest six levels deep. */
-const LIST_DEPTH_MAX = 6;
+/** Finite hard bound on marker length so hostile indentation cannot grow a line without limit. */
+const LIST_DEPTH_MAX = 16;
 
 /** One open list item: where its marker starts and the wiki character of its list. */
 interface ListLevel {
@@ -204,6 +206,8 @@ interface Converter {
   fence: Fence | undefined;
   macro: string | undefined;
   header: boolean;
+  /** Whether the previous line was a blank line outside code. */
+  blank: boolean;
 }
 
 /** An opening fence: up to three spaces, three or more backticks or tildes, an info string. */
@@ -290,6 +294,32 @@ function codeOrTableLine(state: Converter, line: string, next: string | undefine
   return fenceLine(state, line) || macroLine(state, line) || tableLine(state, line, next);
 }
 
+/** For each line, the nearest following non-blank line: one backward pass, linear. */
+function nextContentLines(lines: readonly string[]): readonly (string | undefined)[] {
+  const next: (string | undefined)[] = new Array<string | undefined>(lines.length);
+  let following: string | undefined;
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    next[index] = following;
+    if ((lines[index] ?? "").trim() !== "") following = lines[index];
+  }
+  return next;
+}
+
+/** Whether the open list continues with a list item (same level, shallower or deeper). */
+function continuesList(list: readonly ListLevel[], next: string | undefined): boolean {
+  return list.length > 0 && next !== undefined && (BULLET.test(next) || ORDERED.test(next));
+}
+
+/**
+ * A blank line outside code is dropped when it repeats the blank above it, and when it sits
+ * between two items of one list, nested or not: wiki ends a list at a blank line, so keeping it
+ * would split a loose Markdown list into several.
+ */
+function dropsBlank(state: Converter, line: string, next: string | undefined): boolean {
+  if (state.fence !== undefined || state.macro !== undefined || line.trim() !== "") return false;
+  return state.blank || continuesList(state.list, next);
+}
+
 /**
  * Converts Markdown to Data Center wiki markup, line ending by line ending. The input is expected
  * to have its headings serialized already (`hN. Title`). Returns undefined when a fence is left
@@ -304,9 +334,13 @@ export function markdownBlocksToJiraWiki(text: string): string | undefined {
     fence: undefined,
     macro: undefined,
     header: false,
+    blank: false,
   };
+  const nextContent = nextContentLines(lines);
   for (const [index, line] of lines.entries()) {
     const before = state.out.length;
+    if (dropsBlank(state, line, nextContent[index])) continue;
+    state.blank = state.fence === undefined && state.macro === undefined && line.trim() === "";
     if (!codeOrTableLine(state, line, lines[index + 1])) {
       state.header = false;
       state.out.push(blockLine(state.list, line, lines[index + 1]));

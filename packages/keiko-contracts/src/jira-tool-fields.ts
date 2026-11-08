@@ -78,8 +78,6 @@ export const JIRA_MANAGED_READ_TOOLS = deepFreeze([
   ...READS.avatars,
   ...READS.issueWorkflow,
   ...READS.localCompositions,
-  /** Drafts a backlog from the Chat's Knowledge requirements in Keiko-sized pages; stages only. */
-  "jira.draft-batch",
 ] as const);
 export type JiraManagedReadToolName = (typeof JIRA_MANAGED_READ_TOOLS)[number];
 export type JiraFieldOperation = "set" | "add" | "remove";

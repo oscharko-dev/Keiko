@@ -237,7 +237,8 @@ describe("nested lists keep the ancestor marker path (F6)", () => {
 
   it("keeps the list open across a wrapped continuation line", () => {
     expect(markdownBlocksToJiraWiki("- a\n  wrapped\n  - b")).toBe("* a\n  wrapped\n** b");
-    expect(markdownBlocksToJiraWiki("- a\n\n  - b")).toBe("* a\n\n** b");
+    // A blank line ends a Jira wiki list, so a loose nested item stays in the same list.
+    expect(markdownBlocksToJiraWiki("- a\n\n  - b")).toBe("* a\n** b");
   });
 
   it.each([
@@ -377,5 +378,56 @@ describe("explicit Markdown stays inert where wiki would activate it (#4291)", (
 
   it("keeps blank lines between top-level blocks", () => {
     expect(project("- a\n- b\n\npara")).toBe("* a\n* b\n\npara");
+  });
+});
+
+describe("lists and gaps ported from the parallel converter (#4288)", () => {
+  it.each([
+    ["Before\n\n\n- a\n\n\nAfter", "Before\n\n* a\n\nAfter"],
+    ["- a\n\n- b", "* a\n* b"],
+    ["- a\n\n\n1. b\n\n- c", "* a\n# b\n* c"],
+    ["- a\n  - b\n\n- d", "* a\n** b\n* d"],
+  ])("collapses block gaps and keeps a loose list in one Jira list: %j", (text, expected) => {
+    expect(project(text)).toBe(expected);
+  });
+
+  it("keeps a heading directly followed by its body without an inserted blank line", () => {
+    expect(project("## Heading\nParagraph\n\n- a")).toBe("h2. Heading\nParagraph\n\n* a");
+  });
+
+  it("keeps blank lines inside code fences exactly as written", () => {
+    expect(project("```\na\n\n\nb\n```")).toBe("{code}\na\n\n\nb\n{code}");
+  });
+
+  it("reads more than six nesting levels from the indentation", () => {
+    const source = Array.from(
+      { length: 8 },
+      (_, depth) => `${"  ".repeat(depth)}- Level ${String(depth)}`,
+    ).join("\n");
+    const expected = Array.from(
+      { length: 8 },
+      (_, depth) => `${"*".repeat(depth + 1)} Level ${String(depth)}`,
+    ).join("\n");
+    expect(project(source)).toBe(expected);
+  });
+
+  it("reads four-space nesting and every bullet and number marker", () => {
+    expect(project("- a\n    * b\n        + c\n1. d\n    1) e")).toBe(
+      "* a\n** b\n*** c\n# d\n## e",
+    );
+  });
+
+  it("keeps a finite nesting bound for hostile depth", () => {
+    const source = Array.from({ length: 500 }, (_, depth) => `${" ".repeat(depth * 2)}- x`).join(
+      "\n",
+    );
+    const longest = Math.max(...(project(source) ?? "").split("\n").map((line) => line.length));
+    expect(longest).toBeLessThanOrEqual(18);
+  });
+
+  it("escapes literal wiki control characters in prose", () => {
+    expect(project("Literal {panel}, [42], a_b and \\*star\\*.")).toBe(
+      "Literal \\{panel\\}, \\[42\\], a\\_b and \\*star\\*.",
+    );
   });
 });
