@@ -634,7 +634,7 @@ describe("jira.draft-stage read reuse", () => {
       target,
       h.deps,
     );
-    expect(vi.mocked(target.http).mock.calls.length).toBe(afterFirst);
+    expect(vi.mocked(target.http).mock.calls).toHaveLength(afterFirst);
   });
 
   it("never serves a read to another invocation", async () => {
@@ -643,7 +643,7 @@ describe("jira.draft-stage read reuse", () => {
     await executeJiraDraftStageTool(pageOf("a"), { ...CONTEXT }, target, h.deps);
     const afterFirst = vi.mocked(target.http).mock.calls.length;
     await executeJiraDraftStageTool(pageOf("b"), { ...CONTEXT }, target, h.deps);
-    expect(vi.mocked(target.http).mock.calls.length).toBe(afterFirst * 2);
+    expect(vi.mocked(target.http).mock.calls).toHaveLength(afterFirst * 2);
   });
 
   it("reports the reads it sent and reused on the staged and refused activity", async () => {

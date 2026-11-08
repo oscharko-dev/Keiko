@@ -620,10 +620,10 @@ function obligationPatterns(
       "giu",
     ),
     priorityListing: new RegExp(
-      String.raw`${LETTER_BEFORE}(?:${values})${LETTER_AFTER}(?:${joint}(?:${values})${LETTER_AFTER}){2,}`,
+      `${LETTER_BEFORE}(?:${values})${LETTER_AFTER}(?:${joint}(?:${values})${LETTER_AFTER}){2,}`,
       "giu",
     ),
-    priorityJoint: new RegExp(String.raw`^${joint}$`, "iu"),
+    priorityJoint: new RegExp(`^${joint}$`, "iu"),
     priorityCue: new RegExp(String.raw`(?:${LETTER_BEFORE}(?:${cues})\s*[:=]?\s*|[:=]\s*)$`, "iu"),
   };
 }

@@ -7,12 +7,12 @@ import { requestFor } from "./jira-managed-mutations.js";
 /** Issue type names a refusal offers the model for a retry. */
 export const JIRA_PLACEMENT_TYPE_NAMES_MAX = 20;
 
-const NUMERIC_ID = /^[0-9]{1,32}$/u;
+const NUMERIC_ID = /^\d{1,32}$/u;
 /**
  * One rule for the tool schema and the parser. A key Jira does not know ("1AB", "_AB") is then
  * answered as an unknown project, with the retry hint, instead of as malformed input.
  */
-export const JIRA_PROJECT_REFERENCE_PATTERN = "^[A-Za-z0-9_]{1,32}$";
+export const JIRA_PROJECT_REFERENCE_PATTERN = "^\\w{1,32}$";
 const PROJECT_REFERENCE = new RegExp(JIRA_PROJECT_REFERENCE_PATTERN, "u");
 const TYPE_NAME_CHARS_MAX = 120;
 const TYPES_SCANNED_MAX = 200;

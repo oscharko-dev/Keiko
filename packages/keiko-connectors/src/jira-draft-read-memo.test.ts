@@ -132,9 +132,9 @@ describe("withJiraDraftReadMemo", () => {
       await memoized.http(get(`https://jira/${String(i)}`));
     const sent = http.mock.calls.length;
     await memoized.http(get(`https://jira/${String(JIRA_DRAFT_READ_MEMO_ENTRIES_MAX + 9)}`));
-    expect(http.mock.calls.length).toBe(sent);
+    expect(http.mock.calls).toHaveLength(sent);
     await memoized.http(get("https://jira/0"));
-    expect(http.mock.calls.length).toBe(sent + 1);
+    expect(http.mock.calls).toHaveLength(sent + 1);
   });
 
   it("is bounded by total bytes and never holds an answer larger than the bound", async () => {
@@ -169,7 +169,7 @@ describe("withJiraDraftReadMemo", () => {
     const sent = http.mock.calls.length;
     await memoized.http(get("https://jira/fresh1"));
     await memoized.http(get("https://jira/fresh2"));
-    expect(http.mock.calls.length).toBe(sent);
+    expect(http.mock.calls).toHaveLength(sent);
   });
 });
 

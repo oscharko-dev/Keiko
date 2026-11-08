@@ -15,7 +15,7 @@ const FENCE_LANGUAGE = /^[ \t]*([\w+#.-]*)/u;
 const MACRO_FENCE = /^\s*\{(code|noformat)(?::[^}]*)?\}\s*$/u;
 const BULLET = /^([ \t]*)[-*+][ \t]+([^ \t].*)?$/u;
 const ORDERED = /^([ \t]*)\d{1,9}[.)][ \t]+([^ \t].*)?$/u;
-const RULE = /^ {0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$/u;
+const RULE = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/u;
 const TABLE_ROW = /^\s*\|.*\|\s*$/u;
 const TABLE_RULE_CELL = /^:?-{3,}:?$/u;
 const WIKI_HEADING = /^h[1-6]\.\s/u;
@@ -33,8 +33,10 @@ function inlineParts(line: string): readonly { readonly code: boolean; readonly 
   const pattern = /`([^`\n]+)`/gu;
   let last = 0;
   for (const match of line.matchAll(pattern)) {
-    parts.push({ code: false, text: line.slice(last, match.index) });
-    parts.push({ code: true, text: match[1] ?? "" });
+    parts.push(
+      { code: false, text: line.slice(last, match.index) },
+      { code: true, text: match[1] ?? "" },
+    );
     last = match.index + match[0].length;
   }
   parts.push({ code: false, text: line.slice(last) });
@@ -73,7 +75,8 @@ function proseInline(text: string): string {
 
 /** Inline code as a wiki monospace span; its braces are escaped so they cannot close the span. */
 function monospace(code: string): string {
-  return `{{${code.replaceAll(/[{}]/gu, (brace) => `\\${brace}`)}}}`;
+  const escaped = code.replaceAll(/[{}]/gu, (brace) => "\\" + brace);
+  return `{{${escaped}}}`;
 }
 
 /** Emphasis, strike, links and images in prose; inline code becomes a `{{monospace}}` span. */
@@ -310,7 +313,7 @@ export function readsAsMarkdownOnly(text: string): boolean {
   const wiki =
     /^h[1-6]\.\s/mu.test(text) ||
     /\{(?:code|noformat|panel|quote|color)[:}]/u.test(text) ||
-    /^\s*\|\|/mu.test(text) ||
+    /^[^\S\r\n]*\|\|/mu.test(text) ||
     /\[[^[\]|\n]+\|[^[\]\n]+\]/u.test(text) ||
     // Consecutive `# ` lines are a wiki numbered list; Markdown has one title per text.
     /^#[ \t].*\r?\n#[ \t]/mu.test(text);
