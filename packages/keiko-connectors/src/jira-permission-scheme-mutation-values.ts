@@ -14,7 +14,7 @@ import {
   jiraPermissionGrantProjection,
   jiraPermissionSchemeProjection,
 } from "./jira-managed-access-schemes.js";
-import { jiraNativeId } from "./jira-native-values.js";
+import { jiraNativeId, jiraNativePermissionSchemeId } from "./jira-native-values.js";
 import { savedExactKeys, savedName, savedText } from "./jira-saved-configuration-values.js";
 
 export { JIRA_PERMISSION_SCHEME_MUTATIONS, type JiraPermissionSchemeMutation };
@@ -210,7 +210,7 @@ export function jiraPermissionSchemeInputSnapshot(
   if (
     raw === undefined ||
     !savedExactKeys(raw, SNAPSHOT_FIELDS) ||
-    !jiraNativeId(raw.id) ||
+    !jiraNativePermissionSchemeId(raw.id) ||
     !savedName(raw.name) ||
     !savedText(raw.description, 32768, true)
   )
@@ -224,7 +224,7 @@ export function jiraPermissionSchemeInputSnapshot(
 export function permissionSchemeMetadata(value: unknown): PermissionSchemeMetadata | undefined {
   const projected = jiraPermissionSchemeProjection(value);
   return projected !== undefined &&
-    jiraNativeId(projected.id) &&
+    jiraNativePermissionSchemeId(projected.id) &&
     savedName(projected.name) &&
     savedText(projected.description, 32768, true)
     ? { id: projected.id, name: projected.name, description: projected.description }
@@ -312,7 +312,7 @@ const SELECT_INPUT: Readonly<
   "jira.create-permission-scheme": schemeTargetInput,
   "jira.update-permission-scheme": schemeTargetInput,
   "jira.delete-permission-scheme": (base, args) =>
-    args.confirmUnverifiedDeletion === true ? base : undefined,
+    args.confirmUnverifiedDeletion === true && jiraNativeId(base.expected?.id) ? base : undefined,
   "jira.add-permission-grant": grantInput,
   "jira.delete-permission-grant": (base, args) =>
     jiraNativeId(args.permissionId) &&

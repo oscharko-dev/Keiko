@@ -51,6 +51,33 @@ afterEach(() => {
 });
 
 describe("current Jira implementation accounting", () => {
+  it.each([
+    [
+      "jira.validate-create-user-password",
+      "/password/policy/createUser",
+      "bound-protected-password-policy",
+    ],
+    [
+      "jira.validate-update-user-password",
+      "/password/policy/updateUser",
+      "bound-protected-password-policy",
+    ],
+    ["jira.validate-license", "/licenseValidator", "instance-admin-protected-license-validation"],
+  ])("accounts for the fixed protected validation POST %s as a read", (tool, path, policy) => {
+    const f = fixture();
+    writeFileSync(
+      f.registryFile,
+      `const NATIVE = { "${tool}": ["POST", "read", "${path}", "${policy}", "/rest/api/2"] };`,
+    );
+    expect(readJiraNativeRegistry(f.registryFile).entries).toEqual([
+      { tool, identity: `POST /rest/api/2${path}`, effect: "read", permissionPolicy: policy },
+    ]);
+    writeFileSync(
+      f.registryFile,
+      `const NATIVE = { "${tool}": ["POST", "read", "${path}", "other-policy", "/rest/api/2"] };`,
+    );
+    expect(() => readJiraNativeRegistry(f.registryFile)).toThrow(/registry-native-effect/u);
+  });
   it("keeps exact native tool keys through grouped helper spreads at the type boundary", () => {
     const f = fixture();
     const source = ts.createSourceFile(

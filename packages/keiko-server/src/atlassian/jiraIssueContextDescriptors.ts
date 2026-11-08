@@ -4,10 +4,7 @@ import {
   type CatalogJsonObject,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import {
-  jiraAgileIssueResultSchema,
-  jiraAgileReferenceSchema,
-} from "./jiraAgileDescriptors.js";
+import { jiraAgileIssueResultSchema, jiraAgileReferenceSchema } from "./jiraAgileDescriptors.js";
 import { object, text } from "./jiraManagedSchemas.js";
 import { jiraRemoteLinkSnapshotSchema } from "./jiraRemoteLinkSchemas.js";
 import {
@@ -35,19 +32,25 @@ const REMOTE_FIELDS = {
   reviewSnapshot: jiraRemoteLinkSnapshotSchema,
 };
 const REMOTE_LINK = object(REMOTE_FIELDS, ["id"]);
-const PINNED_COMMENT = object({
-  id: ID,
-  body: text(TOOL_CATALOG_LIMITS.maxStringBytes),
-  created: text(64),
-  author: jiraAgileReferenceSchema,
-  pinnedBy: NAME,
-  pinnedDate: { ...text(64), minLength: 1 },
-}, ["id", "body", "created"]);
-const SUGGESTION = object({
-  key: KEY,
-  browseUrl: text(4096),
-  summary: text(255),
-}, ["key", "browseUrl"]);
+const PINNED_COMMENT = object(
+  {
+    id: ID,
+    body: text(TOOL_CATALOG_LIMITS.maxStringBytes),
+    created: text(64),
+    author: jiraAgileReferenceSchema,
+    pinnedBy: NAME,
+    pinnedDate: { ...text(64), minLength: 1 },
+  },
+  ["id", "body", "created"],
+);
+const SUGGESTION = object(
+  {
+    key: KEY,
+    browseUrl: text(4096),
+    summary: text(255),
+  },
+  ["key", "browseUrl"],
+);
 const SECTION = object({
   id: NAME,
   label: NAME,
@@ -106,10 +109,10 @@ export const JIRA_ISSUE_CONTEXT_READ_DEFINITIONS = {
   "jira.remote-links": read(
     "Resolve the issue and read its bounded native remote-link metadata. Without globalId return a local page of the complete collection; with globalId return the single matching native object without paging. A complete supported native bean also yields reviewSnapshot with exact ID and all nullable replacement facts, including validated URL/icon addresses as plain text only. reviewSnapshotAvailable:false means the full value cannot be reviewed; do not guess or replace unknown fields. No remote URL is followed or turned into a browse link and no link is changed.",
     {
-      anyOf: [
-        object({ ...TARGET, ...PAGING }, ["issueIdOrKey"]),
-        object({ ...TARGET, globalId: REMOTE_FIELDS.globalId }, ["issueIdOrKey", "globalId"]),
-      ],
+      ...object({ ...TARGET, ...PAGING, globalId: REMOTE_FIELDS.globalId }, ["issueIdOrKey"]),
+      not: {
+        anyOf: [{ required: ["globalId", "startAt"] }, { required: ["globalId", "maxResults"] }],
+      },
     },
     { ...CONTEXT, ...REMOTE_FIELDS, ...page(REMOTE_LINK) },
   ),
@@ -121,8 +124,11 @@ export const JIRA_ISSUE_CONTEXT_READ_DEFINITIONS = {
   ),
 } as const satisfies Readonly<Record<string, JiraNativeDefinition>>;
 
-export function jiraIssueContextDeclarationForTool(name: string): ManagedMcpToolDeclaration | undefined {
-  const definitions: Readonly<Record<string, JiraNativeDefinition>> = JIRA_ISSUE_CONTEXT_READ_DEFINITIONS;
+export function jiraIssueContextDeclarationForTool(
+  name: string,
+): ManagedMcpToolDeclaration | undefined {
+  const definitions: Readonly<Record<string, JiraNativeDefinition>> =
+    JIRA_ISSUE_CONTEXT_READ_DEFINITIONS;
   const selected = Object.hasOwn(definitions, name) ? definitions[name] : undefined;
   return selected === undefined ? undefined : jiraNativeDeclaration(name, selected);
 }
