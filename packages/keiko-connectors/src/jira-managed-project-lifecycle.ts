@@ -65,6 +65,16 @@ function admittedNoop(
       }
     : undefined;
 }
+function assignPermissionScheme(
+  request: JiraMutationRequest,
+  path: string,
+  input: Extract<ProjectLifecycleInput, { kind: "permission" }>,
+): Promise<AtlassianWriteHttpOutcome> {
+  const id = safeSchemeBodyId(input.target.id, true);
+  return id === undefined
+    ? Promise.resolve({ ok: false, reason: "field-validation" })
+    : request(`${path}/permissionscheme`, "PUT", { id }, "none");
+}
 async function effect(
   request: JiraMutationRequest,
   ports: JiraProjectLifecyclePorts | undefined,
@@ -79,12 +89,8 @@ async function effect(
       return request(`${path}/${input.kind}`, "PUT", undefined, "none");
     case "type":
       return request(`${path}/type/${encodeURIComponent(input.type)}`, "PUT", undefined, "none");
-    case "permission": {
-      const id = safeSchemeBodyId(input.target.id);
-      return id === undefined
-        ? { ok: false, reason: "field-validation" }
-        : request(`${path}/permissionscheme`, "PUT", { id }, "none");
-    }
+    case "permission":
+      return assignPermissionScheme(request, path, input);
     case "priority":
       return ports === undefined
         ? { ok: false, reason: "unavailable" }

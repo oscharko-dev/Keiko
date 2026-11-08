@@ -11,6 +11,88 @@ Prerequisites: Docker Compose, the repository’s supported Node version, OpenSS
 and built workspace packages. State, passwords, PATs, license material and private
 keys stay outside the repository in a private session directory.
 
+## Model-free API qualification (AC7)
+
+Run `api-qualification-prepare.mjs <private-session>` after normal first-run setup
+in the exclusive lab window. It reuses `seed.mjs` and its one-use PAT creation,
+then verifies the disposable administrator's identity and native administration
+permission. It never starts Jira or configures a model.
+
+`api-qualification.mjs <private-session> [comma-separated-tools] [owned-snapshot-id]` uses this lab's
+paired production server, credential vault, verified TLS connection, accepted Chat
+turn, operation-selected managed provider, catalog authority, budget and durable
+mutation journal. It does not configure or call a model or LiteLLM. Commit the
+complete sources first: reports bind one clean source revision, native release,
+image digest and the complete 439-identity inventory. A focused run still accounts
+for every untested identity as unknown and exits nonzero; it cannot update the
+ledger or supply final acceptance.
+
+The driver runs at most 32 accepted turns in each sequential paired-product
+lifecycle against the same owned Jira. This preserves the production registry's
+64 retained-authority bound without clearing, increasing or expiring that bound.
+Each lifecycle retains its own product database in `productStateFiles`; fixture
+identities carry forward across batches and uncertain effects stop the whole run.
+
+Private qualification Chats are created through the existing store, with a
+descriptive model-free label and no gateway configuration. Credential creation,
+verification and binding retain their authenticated production routes. Each call
+mints its authority from an admitted stored turn, accepts its read disclosure
+through the production owner, dispatches the selected catalog operation and
+settles the stored turn. The ordinary model-backed Chat entry point is unchanged.
+
+Read cases live in `api-qualification-cases.mjs`,
+`api-qualification-observation-cases.mjs` and `api-qualification-configuration-cases.mjs`.
+Configuration cases select actual scheme, screen, tab and grant IDs through read-only
+fixture preparation immediately before their governed operation. Each case supplies typed tool
+arguments and an independent readback using `lab-client.mjs`; direct REST calls
+are observations and fixture preparation only. A transport witness observes the
+real selected method/path and forwards responses unchanged. An unexpected or
+repeated mutation is refused before transport. A local refusal, missing fixture,
+timeout, resource 404 or mismatching readback remains unknown. Native denials and
+missing capabilities require their own independent evidence. No policy deferral
+is decided by this driver.
+
+`docs/local-knowledge/jira-api-coverage/qualification-proposals.json` collects
+owner-pending fixture/policy proposals for Claude's combined review. They do not
+change runtime availability, authorize a different lab topology or count as
+native execution evidence. Only the owner decides their disposition.
+
+The issue lifecycle cases in `api-qualification-issue-cases.mjs` use their own
+newly created issue and native acknowledgement IDs. Property lifecycle cases in
+`api-qualification-property-cases.mjs` create an absent synthetic key, compare
+its exact native value, then independently confirm its removal while the parent
+remains readable. Writes retain the normal persisted tool preview and its
+canonical action digest, source preparation, mutation outcome and settled
+transcript through the production owners. Cases not yet authored remain
+explicitly unknown in the complete report. The driver is incomplete while any
+inventory identity lacks native qualification; a source checkpoint does not
+close AC7.
+
+`api-qualification-release-cases.mjs` creates its own named component and version,
+checks ordinary metadata and native issue counts, and exercises version remote-link
+lifecycles with independent complete-set comparisons. Destructive cases require the
+same owned snapshot proof as other administration; they never reuse another session's
+resources. Issue lifecycle property reads compare the production `items` node list.
+
+Before destructive administration, run
+`api-qualification-snapshot.mjs <private-session>` within the exclusive lab
+window. It reuses `verification.mjs` service/image ownership checks, stops this
+session's Jira and TLS writer, and writes a private PostgreSQL dump and Jira-home
+tar with SHA-256 evidence. It leaves the services stopped and never restores a
+backup automatically. Only after the exclusive window is available, restart the
+same session normally. Supply the returned snapshot ID as the qualifier's third
+argument; destructive cases refuse absent, foreign or changed backup bytes.
+Use `api-qualification.mjs <private-session> '*' <owned-snapshot-id>` to select all
+authored cases with a snapshot, or supply an explicit comma-separated tool list.
+
+Private run directories retain the product database, body-free operation evidence
+and an exclusive per-case pending intent. Reconcile an interrupted or uncertain
+effect before another attempt; never remove a pending intent to replay a write.
+Only complete reports can pass `applyQualificationReport`, and each non-unknown
+ledger state must have verification references. Run the governor's headroom check
+before heavy setup, builds, tests and qualification. Use separate session
+directories and release-bound images; never reuse another operator's lab.
+
 ## Connect the existing local lab
 
 For ordinary local development, the lab needs a running, licensed Jira, the basic seed
@@ -173,6 +255,11 @@ binding. Old manifests retain the original defaults without being rewritten;
 partial or malformed pins are refused. Start, stop and status use the saved
 manifest and accept no port/image overrides.
 
+Start and runtime service inspection refuse a foreign running Compose Jira
+service before proceeding. Docker inspection failures also refuse the start.
+Stopping the owned session remains available. This check supplements the
+coordinated exclusive window; it never stops another operator's containers.
+
 Use a new private directory, separate Compose project/volumes and unused distinct
 HTTP/HTTPS ports for each release. Never reuse an existing Jira data volume for
 another release or stop another session to free its port. The TLS listener and its
@@ -189,10 +276,10 @@ starting containers. The following `linux/arm64` child-manifest bytes matched th
 immutable digest, preserving the default laboratory's platform. These are prepared
 image selections, not evidence that Jira or any operation ran successfully:
 
-| Exact release / official manifest | ARM64 SHA-256 (without prefix for `init`) |
-| --- | --- |
-| [10.4.0](https://registry-1.docker.io/v2/atlassian/jira-software/manifests/sha256:56e6ea7ef5915b8c1f01e8161b17409fc0a32267e4425543ace0c888d49ff6a2) | `56e6ea7ef5915b8c1f01e8161b17409fc0a32267e4425543ace0c888d49ff6a2` |
-| [11.2.1](https://registry-1.docker.io/v2/atlassian/jira-software/manifests/sha256:8c61da4dbb35444793a080b63c75639886688c2fb253c3ba88f7d77826f32d83) | `8c61da4dbb35444793a080b63c75639886688c2fb253c3ba88f7d77826f32d83` |
+| Exact release / official manifest                                                                                                                    | ARM64 SHA-256 (without prefix for `init`)                          |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| [10.4.0](https://registry-1.docker.io/v2/atlassian/jira-software/manifests/sha256:56e6ea7ef5915b8c1f01e8161b17409fc0a32267e4425543ace0c888d49ff6a2)  | `56e6ea7ef5915b8c1f01e8161b17409fc0a32267e4425543ace0c888d49ff6a2` |
+| [11.2.1](https://registry-1.docker.io/v2/atlassian/jira-software/manifests/sha256:8c61da4dbb35444793a080b63c75639886688c2fb253c3ba88f7d77826f32d83)  | `8c61da4dbb35444793a080b63c75639886688c2fb253c3ba88f7d77826f32d83` |
 | [11.3.13](https://registry-1.docker.io/v2/atlassian/jira-software/manifests/sha256:68d5536e2e1278d3fd94060dd9dcecfaf776c17ab6b78919afc7ea516e187ad3) | `68d5536e2e1278d3fd94060dd9dcecfaf776c17ab6b78919afc7ea516e187ad3` |
 
 The existing 10.3.26 digest remains available and unchanged. Its current tag points

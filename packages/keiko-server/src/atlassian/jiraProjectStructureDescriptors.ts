@@ -4,7 +4,10 @@ import {
   JIRA_MUTATION_DETAIL_LIMITS,
   JIRA_MUTATION_RESULT_STATES,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import { TOOL_CATALOG_LIMITS, type CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  TOOL_CATALOG_LIMITS,
+  type CatalogJsonObject,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import {
   compileExternalCatalogSchema,
@@ -18,6 +21,13 @@ const ID = {
   ...text(19),
   allOf: [{ pattern: "^[1-9]" }, { pattern: "^[0-9]{1,19}$" }],
   description: "Canonical positive decimal identity, no greater than 9223372036854775807.",
+};
+const PERMISSION_SCHEME_ID = {
+  ...text(19),
+  pattern: "^[0-9]{1,19}$",
+  not: { pattern: "^0[0-9]" },
+  description:
+    "Canonical nonnegative decimal permission-scheme identity, including Jira's built-in default 0; no greater than 9223372036854775807.",
 };
 const PROJECT = {
   ...text(128),
@@ -41,11 +51,11 @@ const COMPONENT_FIELDS = {
   },
 };
 const COMPONENT_FIELDS_WITH_IDENTITY = {
-    ...COMPONENT_FIELDS,
-    id: ID,
-    project: PROJECT,
-    archived: { type: "boolean" },
-    deleted: { type: "boolean" },
+  ...COMPONENT_FIELDS,
+  id: ID,
+  project: PROJECT,
+  archived: { type: "boolean" },
+  deleted: { type: "boolean" },
 };
 const COMPONENT = object(COMPONENT_FIELDS_WITH_IDENTITY, ["id", "name", "project"]);
 const VERSION_FIELDS = {
@@ -120,7 +130,7 @@ function writeResult(receipt: CatalogJsonObject): CatalogJsonObject {
       unchanged: { type: "boolean" },
       guidance: text(512),
       browseUrl: text(4096),
-      fieldId: text(64),
+      fieldId: receipt.fieldId ?? text(64),
       validation: { type: "string", enum: JIRA_FIELD_VALIDATION_FAILURES },
     },
     ["outcome"],
@@ -133,7 +143,12 @@ interface Definition {
   readonly risk: "read" | "write";
   readonly maxResultCount: number;
 }
-function readDefinition(description: string, input: CatalogJsonObject, fields: CatalogJsonObject, maxResultCount = 1): Definition {
+function readDefinition(
+  description: string,
+  input: CatalogJsonObject,
+  fields: CatalogJsonObject,
+  maxResultCount = 1,
+): Definition {
   return { description, input, result: readResult(fields), risk: "read", maxResultCount };
 }
 export const JIRA_PROJECT_STRUCTURE_READ_DEFINITIONS = {
@@ -248,6 +263,7 @@ function declaration(name: string, definition: Definition): ManagedMcpToolDeclar
 // The following native families use the same schema compiler and declaration bounds.
 export {
   ID as jiraNativeIdentitySchema,
+  PERMISSION_SCHEME_ID as jiraNativePermissionSchemeIdentitySchema,
   PROJECT as jiraNativeProjectSchema,
   PAGING as jiraNativePagingSchema,
   VERSION_FIELDS as jiraNativeVersionFields,

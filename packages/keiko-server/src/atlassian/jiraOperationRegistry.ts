@@ -1143,8 +1143,9 @@ function boundResultSchema(schema: CatalogJsonObject): CatalogJsonObject {
   // against the new field; lifting properties would erase the branch-specific requirements.
   const keyword = schema.anyOf === undefined ? "oneOf" : "anyOf";
   const alternatives = schema[keyword];
-  const allowed = new Set(["$schema", "description", keyword]);
+  const allowed = new Set(["$schema", "description", "type", keyword]);
   if (
+    (schema.type !== undefined && schema.type !== "object") ||
     !Array.isArray(alternatives) ||
     alternatives.length === 0 ||
     !Object.keys(schema).every((key) => allowed.has(key))
@@ -1152,6 +1153,7 @@ function boundResultSchema(schema: CatalogJsonObject): CatalogJsonObject {
     throw new ToolCatalogError("invalid-schema");
   return {
     ...schema,
+    type: "object",
     [keyword]: alternatives.map((alternative: CatalogJsonValue) => {
       if (!schemaObject(alternative)) throw new ToolCatalogError("invalid-schema");
       return boundResultSchema(alternative);

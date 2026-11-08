@@ -99,6 +99,20 @@ describe("Jira API inventory provenance and completeness", () => {
       "missing-verification",
     ],
     [
+      "native denial without evidence",
+      (ledger) => {
+        ledger.operations[0].runtimeAvailability = "denied";
+      },
+      "missing-verification",
+    ],
+    [
+      "missing capability without evidence",
+      (ledger) => {
+        ledger.operations[0].runtimeAvailability = "unavailable";
+      },
+      "missing-verification",
+    ],
+    [
       "unapproved exclusion",
       (ledger) => {
         ledger.operations[0].implementationState = "excluded-by-policy";

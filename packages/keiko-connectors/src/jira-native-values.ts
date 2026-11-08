@@ -29,6 +29,15 @@ export function jiraNativeNumericId(value: unknown): string | undefined {
   return jiraNativeId(exact) ? exact : undefined;
 }
 
+/** Jira's built-in default permission scheme has the real native identity 0. */
+export function jiraNativePermissionSchemeId(value: unknown): value is string {
+  return value === "0" || jiraNativeId(value);
+}
+
+export function jiraNativePermissionSchemeNumericId(value: unknown): string | undefined {
+  return value === 0 || value === "0" ? "0" : jiraNativeNumericId(value);
+}
+
 /** Names are sent exactly as reviewed; refuse input Jira would trim rather than guessing readback. */
 export function jiraNativeName(value: unknown, max: number): value is string {
   return jiraNativeText(value, max) && value === value.trim();

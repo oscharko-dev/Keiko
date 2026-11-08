@@ -15,7 +15,11 @@ import {
 } from "./jira-managed-metadata.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { selectJiraReadPage } from "./jira-managed-read-request.js";
-import { jiraNativeId, jiraNativeNumericId, jiraNativeText } from "./jira-native-values.js";
+import {
+  jiraNativePermissionSchemeId,
+  jiraNativeNumericId,
+  jiraNativeText,
+} from "./jira-native-values.js";
 
 export const JIRA_ADMINISTRATIVE_OBSERVATION_READS =
   JIRA_READ_TOOL_FAMILIES.administrativeObservations;
@@ -27,7 +31,7 @@ interface AttributeSelection {
 function attributeSelection(args: CatalogJsonObject): AttributeSelection | undefined {
   if (Object.keys(args).some((key) => key !== "schemeId" && key !== "attributeKey"))
     return undefined;
-  return jiraNativeId(args.schemeId) && jiraPropertyPathKey(args.attributeKey)
+  return jiraNativePermissionSchemeId(args.schemeId) && jiraPropertyPathKey(args.attributeKey)
     ? { schemeId: args.schemeId, attributeKey: args.attributeKey }
     : undefined;
 }
