@@ -44,8 +44,11 @@ import {
   reportJiraHumanInputCleanupFailure,
 } from "./credentialActivity.js";
 
-const ALIASES = new Map(
-  JIRA_HUMAN_INPUT_PURPOSES.map((purpose) => [`jira_${purpose.replaceAll("-", "_")}`, purpose]),
+const ALIASES: ReadonlyMap<string, JiraHumanInputPurpose> = new Map(
+  JIRA_HUMAN_INPUT_PURPOSES.map((purpose): [string, JiraHumanInputPurpose] => [
+    `jira_${purpose.replaceAll("-", "_")}`,
+    purpose,
+  ]),
 );
 interface Prepared {
   readonly operation: string;
@@ -84,7 +87,7 @@ interface BindingContext {
   readonly principalDigest: string;
 }
 function selectInput(call: ChatToolExchange["call"]): SelectedInput | undefined {
-  const purpose = ALIASES.get(call.name);
+  const purpose: JiraHumanInputPurpose | undefined = ALIASES.get(call.name);
   if (purpose === undefined) return undefined;
   const contract = jiraOperationForTool(`jira.${purpose}`);
   // The catalog owns the final typed refusal. Do not ask for private values for invalid args.
