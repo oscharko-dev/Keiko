@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { URL } from "node:url";
 import { labSessionConnection } from "./lab-client.mjs";
@@ -6,6 +7,9 @@ import { expect } from "@playwright/test";
 import { openWorkflowBrowser, sendBrowserTurn } from "./browser-workflow-turn.mjs";
 import { selectAccessMode } from "./browser-connections.mjs";
 import { privateJson } from "./private-json.mjs";
+import { resolveLimitBrowser } from "./limit-run-browser.mjs";
+import { openLimitStep } from "./limit-run-step.mjs";
+import { withEnglishLimitUi } from "./limit-run-language.mjs";
 import { nativePages, projectAgileRead } from "./project-agile-oracles.mjs";
 import { buildCorpus, STRUCTURE_RULES } from "./requirements/corpus.mjs";
 import { epicTemplateMarkdown, templateMarkdown } from "./requirements/templates.mjs";
@@ -29,12 +33,179 @@ const WRITE_TOOLS = ["jira.create"];
 const PROSE_LABEL = "prose-only-required";
 const ISSUE_FIELDS = "summary,description,labels,issuetype,priority,parent";
 
-async function issues(context) {
+async function issues(context, fields = `${ISSUE_FIELDS},${context.epicLinkFieldId}`) {
   return nativePages(
     (path) => projectAgileRead(context.session, path),
-    `/rest/api/2/search?jql=${encodeURIComponent("project = REQ ORDER BY id ASC")}&fields=${ISSUE_FIELDS},${context.epicLinkFieldId}`,
+    `/rest/api/2/search?jql=${encodeURIComponent(`project = ${context.projectKey} ORDER BY id ASC`)}&fields=${fields}`,
     "issues",
   );
+}
+
+const RULE_PROBE_MODES = new Set(["governed-assist", "supervised-coding", "autonomous-delivery"]);
+
+function probeDigest(observed) {
+  return createHash("sha256").update(JSON.stringify(observed)).digest("hex");
+}
+
+function probePrompt(projectKey) {
+  return (
+    `Erstelle genau ein Epic im Projekt ${projectKey} mit Zusammenfassung 'Regelprobe ohne Kennung', ` +
+    "Beschreibung 'Absichtlich ohne Abschnitte' und keinen Labels. Keine Elternzuordnung und keine explizite Priorität. " +
+    "Lege es genau mit diesem Inhalt an, ohne Vorabkorrektur. " +
+    "Wenn die formale Vorlage verweigert, melde ihre konkrete Regel und beende den Turn ohne erneuten Schreibversuch."
+  );
+}
+
+function submitProbe(ctx, counts) {
+  return ctx.turn(ctx.chat, probePrompt(ctx.projectKey), {
+    operations: WRITE_TOOLS,
+    timeoutMs: 1800000,
+    beforeDecision: () => {
+      counts.approvals += 1;
+      throw new TypeError("Formal rule probe reached write approval");
+    },
+  });
+}
+
+function probeFailure(before, after, result, projectKey, counts) {
+  if (
+    probeDigest(after) !== probeDigest(before) ||
+    result.exchanges.some(
+      (exchange) =>
+        exchange.effectStarted === true ||
+        (exchange.call.name === "jira_create" && exchange.result?.data?.outcome === "succeeded"),
+    )
+  ) {
+    counts.nativeWrites += 1;
+    return "rule-probe-native-change";
+  }
+  if (
+    result.decisions !== 0 ||
+    result.exchanges.some((exchange) => exchange.approval !== undefined)
+  ) {
+    counts.approvals += result.decisions;
+    return "rule-probe-approval-refused";
+  }
+  if (
+    !gradeRuleRefusal({
+      exchanges: result.exchanges,
+      before,
+      after,
+      template: `${projectKey}/Epic`,
+    })
+  )
+    return "rule-probe-refusal-missing";
+  return undefined;
+}
+
+async function probeMode(ctx, opened, journal, mode, counts) {
+  const before = await issues(ctx, "*all");
+  if (probeDigest(before) !== journal.state.resources.baselineDigest) {
+    counts.nativeWrites += 1;
+    return "rule-probe-native-change";
+  }
+  await selectAccessMode(opened.page, opened.region, mode);
+  const result = await submitProbe(ctx, counts);
+  const after = await issues(ctx, "*all");
+  counts.probedModes += 1;
+  const failure = probeFailure(before, after, result, ctx.projectKey, counts);
+  if (failure !== undefined) return failure;
+  await expect(
+    opened.region.getByRole("list", { name: "Template rules not met", exact: true }).last(),
+  ).toBeVisible();
+  counts.refusals += 1;
+  await journal.checkpoint({
+    resources: { completedModes: [...journal.state.resources.completedModes, mode] },
+    counts,
+  });
+  return undefined;
+}
+
+function completedProbeModes({ resources, counts }, modes) {
+  return (
+    resources.completedModes?.length === modes.length &&
+    modes.every((mode) => resources.completedModes.includes(mode)) &&
+    counts.refusals === modes.length &&
+    counts.probedModes === modes.length &&
+    counts.nativeWrites === 0 &&
+    counts.approvals === 0
+  );
+}
+
+async function reverifyProbes(ctx, journal, modes) {
+  const { resources, counts } = journal.state;
+  if (!completedProbeModes(journal.state, modes))
+    return journal.result("unverified", "rule-probe-readback-unavailable", counts);
+  let opened;
+  try {
+    opened = await resolveLimitBrowser(ctx, ctx.chat);
+  } catch {
+    return journal.result("unverified", "rule-probe-readback-unavailable", counts);
+  }
+  if (opened.chat.id !== resources.chatId)
+    return journal.result("unverified", "rule-probe-readback-unavailable", counts);
+  const matches = probeDigest(await issues(ctx, "*all")) === resources.baselineDigest;
+  return journal.result(
+    matches ? "green" : "red",
+    matches ? "rule-probes-confirmed" : "rule-probe-native-change",
+    counts,
+  );
+}
+
+async function executeRuleProbes(ctx, journal, modes, counts) {
+  const opened = await resolveLimitBrowser(ctx, ctx.chat);
+  return withEnglishLimitUi(ctx, () => executeOpenedProbes(ctx, opened, journal, modes, counts));
+}
+
+async function executeOpenedProbes(ctx, opened, journal, modes, counts) {
+  const baselineDigest = probeDigest(await issues(ctx, "*all"));
+  await journal.checkpoint({
+    phase: "pending",
+    resources: { chatId: opened.chat.id, completedModes: [], baselineDigest },
+    counts,
+  });
+  for (const mode of modes) {
+    ctx.signal.throwIfAborted();
+    const failure = await probeMode(ctx, opened, journal, mode, counts);
+    if (failure !== undefined) return journal.result("red", failure, counts);
+  }
+  await journal.checkpoint({ phase: "completed", counts });
+  return journal.result("green", "rule-probes-confirmed", counts);
+}
+
+function requireRuleProbeContext(ctx) {
+  assert.equal(typeof ctx.turn, "function");
+  assert.ok(ctx.chat?.id && typeof ctx.chat.projectPath === "string");
+}
+
+/** The already-open Chat must refuse formal input in every mode, without an approval or native effect. */
+export async function runRuleProbes(ctx, { modes }) {
+  assert.ok(
+    Array.isArray(modes) &&
+      modes.length === RULE_PROBE_MODES.size &&
+      new Set(modes).size === modes.length &&
+      modes.every((mode) => RULE_PROBE_MODES.has(mode)),
+    "All three distinct autonomy modes are required",
+  );
+  const journal = await openLimitStep(ctx, "w12-rule-probes");
+  const counts = {
+    requestedModes: modes.length,
+    probedModes: 0,
+    refusals: 0,
+    nativeWrites: 0,
+    approvals: 0,
+  };
+  if (journal.state.phase === "pending")
+    return journal.result("unverified", "rule-probes-pending", journal.state.counts);
+  try {
+    requireRuleProbeContext(ctx);
+    if (journal.state.phase === "completed") return await reverifyProbes(ctx, journal, modes);
+    return await executeRuleProbes(ctx, journal, modes, counts);
+  } catch {
+    if (counts.approvals > 0) return journal.result("red", "rule-probe-approval-refused", counts);
+    const detail = ctx.signal.aborted ? "rule-probes-aborted" : "rule-probe-readback-unavailable";
+    return journal.result("unverified", detail, counts);
+  }
 }
 
 function turnRunner(opened, context, intentPath) {
@@ -60,7 +231,7 @@ function turnRunner(opened, context, intentPath) {
 async function rejectedRuleTurn(opened, context, turn, issueType = "Epic", nativeParentKey) {
   const before = await issues(context);
   const refused = await turn(
-    `Erstelle genau ein ${issueType} im Projekt REQ mit Zusammenfassung 'Regelprobe ohne Kennung', ` +
+    `Erstelle genau ein ${issueType} im Projekt ${context.projectKey} mit Zusammenfassung 'Regelprobe ohne Kennung', ` +
       "Beschreibung 'Absichtlich ohne Abschnitte' und keinen Labels. " +
       (issueType === "Bug"
         ? "Setze eine aktuell erlaubte native Priorität. "
@@ -83,7 +254,7 @@ async function rejectedRuleTurn(opened, context, turn, issueType = "Epic", nativ
       exchanges: refused.exchanges,
       before,
       after: await issues(context),
-      template: `REQ/${issueType}`,
+      template: `${context.projectKey}/${issueType}`,
     }),
     true,
     "A real content-rule refusal and independently unchanged Jira set are both required",
@@ -103,13 +274,13 @@ async function correctedEpic(opened, context, turn) {
   await selectAccessMode(opened.page, opened.region, "governed-assist");
   const before = await issues(context);
   const corrected = await turn(
-    "Korrigiere jetzt den Inhalt und erstelle genau ein Epic im Projekt REQ: Zusammenfassung " +
+    `Korrigiere jetzt den Inhalt und erstelle genau ein Epic im Projekt ${context.projectKey}: Zusammenfassung ` +
       "'[LH-901] Korrigierte Browserregel', Label anforderung und die fünf Beschreibungsabschnitte " +
       STRUCTURE_RULES.Epic.sections.join(", ") +
       ". Jeder Abschnitt enthält den Satz 'Synthetische Browserprüfung.' Keine requirementIds: " +
       "LH-901 ist ein synthetischer Regeltest, keine behauptete Dokumentreferenz. Melde den Jira-Schlüssel.",
     WRITE_TOOLS,
-    { reviewText: ["REQ", "LH-901"] },
+    { reviewText: [context.projectKey, "LH-901"] },
   );
   const after = await issues(context);
   assert.equal(
@@ -135,7 +306,7 @@ async function correctedChild(opened, context, turn, issueType, parentKey) {
     : `Epic-Elternzuordnung ${parentKey} über das native Epic-Link-Feld ${context.epicLinkFieldId}. `;
   const before = await issues(context);
   const result = await turn(
-    `Korrigiere jetzt und erstelle genau ein ${issueType} in REQ: Titel '[${requirementId}] Browser ${issueType}', ` +
+    `Korrigiere jetzt und erstelle genau ein ${issueType} in ${context.projectKey}: Titel '[${requirementId}] Browser ${issueType}', ` +
       parent +
       `Beschreibungsabschnitte: ${rule.sections.join(", ")}. ` +
       "Jeder Abschnitt enthält den Satz 'Synthetische Browserprüfung.' " +
@@ -144,7 +315,7 @@ async function correctedChild(opened, context, turn, issueType, parentKey) {
         : "") +
       "Keine requirementIds: synthetischer Regeltest ohne Dokumentbehauptung. Nutze Jira Create und melde den Schlüssel.",
     WRITE_TOOLS,
-    { reviewText: ["REQ", requirementId] },
+    { reviewText: [context.projectKey, requirementId] },
   );
   const after = await issues(context);
   assert.equal(
@@ -163,14 +334,14 @@ async function correctedChild(opened, context, turn, issueType, parentKey) {
   return newNativeIssues(before, after);
 }
 
-async function formalRules(opened, context, turn) {
+async function uploadFormalTypes(opened, context) {
   const skills = [];
   for (const issueType of ["Epic", "Task", "Bug"]) {
     const markdown =
       issueType === "Epic"
-        ? epicTemplateMarkdown("REQ")
+        ? epicTemplateMarkdown(context.projectKey)
         : templateMarkdown({
-            project: "REQ",
+            project: context.projectKey,
             issueType,
             rule: STRUCTURE_RULES[issueType],
             parentField: context.epicLinkFieldId,
@@ -181,16 +352,21 @@ async function formalRules(opened, context, turn) {
         opened.page,
         opened.region,
         markdown,
-        `Browser-REQ-${issueType}.md`,
-        { project: "REQ", issueType },
+        `Browser-${context.projectKey}-${issueType}.md`,
+        { project: context.projectKey, issueType },
       ),
     );
   }
+  return skills;
+}
+
+async function formalRules(opened, context, turn) {
+  const skills = await uploadFormalTypes(opened, context);
   const epics = await correctedEpic(opened, context, turn);
   const tasks = await correctedChild(opened, context, turn, "Task", epics[0].key);
   const bugs = await correctedChild(opened, context, turn, "Bug", epics[0].key);
   const subtaskMarkdown = templateMarkdown({
-    project: "REQ",
+    project: context.projectKey,
     issueType: "Sub-task",
     rule: STRUCTURE_RULES.Task,
     parentField: "parent",
@@ -201,8 +377,8 @@ async function formalRules(opened, context, turn) {
       opened.page,
       opened.region,
       subtaskMarkdown,
-      "Browser-REQ-Sub-task.md",
-      { project: "REQ", issueType: "Sub-task", parentIssueTypes: ["Task"] },
+      `Browser-${context.projectKey}-Sub-task.md`,
+      { project: context.projectKey, issueType: "Sub-task", parentIssueTypes: ["Task"] },
     ),
   );
   await rejectedParentType(opened, context, turn, epics[0].key);
@@ -221,7 +397,7 @@ async function formalRules(opened, context, turn) {
 async function rejectedParentType(opened, context, turn, epicKey) {
   const before = await issues(context);
   const refused = await turn(
-    `Erstelle genau einen Sub-task in REQ mit Titel '[LH-904] Elternregelprobe' und nativem parent ${epicKey}. ` +
+    `Erstelle genau einen Sub-task in ${context.projectKey} mit Titel '[LH-904] Elternregelprobe' und nativem parent ${epicKey}. ` +
       `Vollständige Beschreibungsabschnitte: ${STRUCTURE_RULES.Task.sections.join(", ")}. ` +
       "Jeder Abschnitt enthält 'Synthetische Browserprüfung.' Keine requirementIds. " +
       "Nutze genau diesen Create-Aufruf; ändere den Parent nicht vorab. Wenn die gespeicherte formale " +
@@ -238,7 +414,7 @@ async function rejectedParentType(opened, context, turn, epicKey) {
       exchanges: refused.exchanges,
       before,
       after: await issues(context),
-      template: "REQ/Sub-task",
+      template: `${context.projectKey}/Sub-task`,
       ruleId: "parent-type-mismatch",
     }),
     true,
@@ -254,17 +430,17 @@ async function proseSkill(opened, context, turn) {
     opened.region,
     `# Browser prose convention\n\nEpics should carry the label ${PROSE_LABEL}.\n` +
       "This is prose guidance, without formal Jira template front matter.\n",
-    "Browser-Prose.md",
+    `Browser-${context.projectKey}-Prose.md`,
     false,
   );
   const before = await issues(context);
   const result = await turn(
     "Für diese ausdrücklich gewünschte Ausnahme zur ausgewählten Prosa-Konvention: Erstelle genau " +
-      "ein Epic im Projekt REQ mit Titel 'Browser prose exception', Beschreibung 'Bewusste Ausnahme " +
+      `ein Epic im Projekt ${context.projectKey} mit Titel 'Browser prose exception', Beschreibung 'Bewusste Ausnahme ` +
       "von einem bloßen Prosa-Skill' und ohne Labels. Keine requirementIds, keine formalen Templates " +
       "anlegen. Melde den Schlüssel.",
     WRITE_TOOLS,
-    { reviewText: ["REQ", "Browser prose exception"] },
+    { reviewText: [context.projectKey, "Browser prose exception"] },
   );
   const after = await issues(context);
   assert.equal(
@@ -281,9 +457,9 @@ async function derivedEpics(opened, context, turn, documents) {
   await uploadBrowserSkill(
     opened.page,
     opened.region,
-    epicTemplateMarkdown("REQ"),
-    "Browser-Knowledge-Epic.md",
-    { project: "REQ", issueType: "Epic" },
+    epicTemplateMarkdown(context.projectKey),
+    `Browser-${context.projectKey}-Knowledge-Epic.md`,
+    { project: context.projectKey, issueType: "Epic" },
   );
   const inventory = await turn(
     "Lies über das Anforderungswerkzeug das vollständige Inventar des verbundenen Wissens-Pods " +
@@ -299,14 +475,14 @@ async function derivedEpics(opened, context, turn, documents) {
   const truth = buildCorpus(1).truth.filter((item) => new Set(["LH-001", "LH-002"]).has(item.id));
   const before = await issues(context);
   const created = await turn(
-    "Leite jetzt genau zwei Epics im Jira-Projekt REQ ab, je eines für LH-001 und LH-002 aus dem " +
+    `Leite jetzt genau zwei Epics im Jira-Projekt ${context.projectKey} ab, je eines für LH-001 und LH-002 aus dem ` +
       "gerade gelesenen Lastenheft. Mehrere Dateiformate beschreiben dieselben Anforderungen, " +
       "also keine Duplikate. Nutze die gültige Epic-Vorlage, übernimm alle Abnahmekriterien wörtlich " +
       "als lesbare Beschreibung und übergib je Epic eine passende dokumentgebundene requirementIds-Referenz " +
       "aus dem tatsächlichen Werkzeugergebnis. Benenne Dokument und Quellabschnitt lesbar; keine " +
       "erfundene Referenz. Nutze einzelne Jira-Create-Aufrufe und melde beide Schlüssel.",
     WRITE_TOOLS,
-    { reviewText: ["REQ"] },
+    { reviewText: [context.projectKey] },
   );
   const after = await issues(context);
   assert.equal(
@@ -353,7 +529,8 @@ async function retainedIssueLinks(opened, created, session) {
   }
 }
 
-export async function runBrowserRulesKnowledge(live, { boardId, intentPath }) {
+export async function runBrowserRulesKnowledge(live, { boardId, intentPath, projectKey }) {
+  assert.match(projectKey, /^[A-Z][A-Z0-9_]*$/u, "A runtime Jira project key is required");
   const fields = await projectAgileRead(live.session, "/rest/api/2/field");
   assert.ok(Array.isArray(fields));
   const epicLinks = fields.filter(
@@ -365,7 +542,7 @@ export async function runBrowserRulesKnowledge(live, { boardId, intentPath }) {
     "The laboratory needs one independently observed native Epic Link field",
   );
   assert.match(epicLinks[0].id, /^customfield_[1-9][0-9]*$/u);
-  const context = { ...live, epicLinkFieldId: epicLinks[0].id };
+  const context = { ...live, projectKey, epicLinkFieldId: epicLinks[0].id };
   const opened = await openWorkflowBrowser(context);
   const turn = turnRunner(opened, context, intentPath);
   try {

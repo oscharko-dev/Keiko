@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+export { runProjectSetup } from "./browser-project-setup.mjs";
+export { runSprintBulk } from "./browser-sprint-bulk.mjs";
 import { join } from "node:path";
 import { labSessionConnection } from "./lab-client.mjs";
 import { openWorkflowBrowser, sendBrowserTurn, workflowHistory } from "./browser-workflow-turn.mjs";
