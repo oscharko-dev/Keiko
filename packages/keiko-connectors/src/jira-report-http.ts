@@ -1,7 +1,7 @@
 import type { AtlassianConnectorWriteFailureReason } from "@oscharko-dev/keiko-contracts";
 import { atlassianApiEndpointsFor, atlassianApiUrl } from "./atlassian-sync-classify.js";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
-import { executeAtlassianWriteRequest } from "./atlassian-write-http.js";
+import { executeAdmittedJiraRequest } from "./jira-request-admission.js";
 
 interface JiraReportFailure {
   readonly ok: false;
@@ -29,31 +29,23 @@ export interface JiraReportHttpDeps {
 
 export function createJiraReportHttp(deps: JiraReportHttpDeps): JiraReportHttp {
   const endpoints = atlassianApiEndpointsFor(deps.baseUrl, "/rest/api/2/");
-  const transport = {
-    signal: deps.signal,
-    ...(deps.sleep === undefined ? {} : { sleep: deps.sleep }),
-    http: (request: Parameters<AtlassianHttpBodyPort>[0]): ReturnType<AtlassianHttpBodyPort> =>
-      deps.signal.aborted || !deps.beforeEffect()
-        ? Promise.resolve({ kind: "network-error" })
-        : deps.http(request),
-  };
   return {
     getRecord: async (path): Promise<JiraReportRecordRead> => {
-      const outcome = await executeAtlassianWriteRequest(transport, {
+      const outcome = await executeAdmittedJiraRequest(deps, deps, deps.signal, {
         method: "GET",
         url: atlassianApiUrl(endpoints, path),
         expect: "json",
-      });
+      }, { sleep: deps.sleep });
       return outcome.ok && outcome.body !== undefined
         ? { ok: true, body: outcome.body }
         : { ok: false, reason: outcome.ok ? "malformed-payload" : outcome.reason };
     },
     getArray: async (path): Promise<JiraReportArrayRead> => {
-      const outcome = await executeAtlassianWriteRequest(transport, {
+      const outcome = await executeAdmittedJiraRequest(deps, deps, deps.signal, {
         method: "GET",
         url: atlassianApiUrl(endpoints, path),
         expect: "json-array",
-      });
+      }, { sleep: deps.sleep });
       return outcome.ok && outcome.items !== undefined
         ? { ok: true, items: outcome.items }
         : { ok: false, reason: outcome.ok ? "malformed-payload" : outcome.reason };

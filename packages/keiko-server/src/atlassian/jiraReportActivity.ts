@@ -65,6 +65,8 @@ const JIRA_REPORT_OPERATION = defineActivityLogOperation({
         "invalid-jql",
         "auth",
         "permission",
+        "effect-denied",
+        "cancelled",
         "not-found",
         "rate-limited",
         "timeout",

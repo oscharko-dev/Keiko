@@ -1,7 +1,9 @@
 import {
   JIRA_REPORT_INCOMPLETE_REASONS,
+  JIRA_REPORT_FAILURE_REASONS,
   JIRA_REPORT_STATUSES,
   type JiraReportIncompleteReason,
+  type JiraReportFailureReason,
   type JiraReportStatus,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 
@@ -12,6 +14,7 @@ export interface JiraReportView {
   readonly issuesRead: number;
   readonly issuesTotal: number | undefined;
   readonly reason: JiraReportIncompleteReason | undefined;
+  readonly failure?: JiraReportFailureReason;
   readonly figures:
     | {
         readonly total: number;
@@ -98,12 +101,14 @@ export function jiraReportView(data: unknown): JiraReportView | undefined {
   const reason = JIRA_REPORT_INCOMPLETE_REASONS.find(
     (item) => item === record(report?.completeness)?.reason,
   );
+  const failure = JIRA_REPORT_FAILURE_REASONS.find((item) => item === record(report?.completeness)?.failure);
   return {
     reportId: result.reportId,
     status,
     issuesRead: read,
     issuesTotal: count(progress?.issuesTotal),
     reason,
+    ...(failure === undefined ? {} : { failure }),
     figures: report === undefined ? undefined : figuresOf(report),
   };
 }

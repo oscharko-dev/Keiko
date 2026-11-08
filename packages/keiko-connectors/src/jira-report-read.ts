@@ -51,6 +51,8 @@ export function jiraReportFailure(
     case "permission-denied":
       return "permission";
     case "not-found":
+    case "effect-denied":
+    case "cancelled":
     case "rate-limited":
     case "timeout":
     case "malformed-payload":

@@ -678,15 +678,13 @@ it.each([
 it("rechecks admission between fresh metadata and mutation dispatch", async () => {
   const f = fixture();
   f.beforeEffect.mockReturnValueOnce(true).mockReturnValue(false);
-  expect(
-    (await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "Approved" } })).ok,
-  ).toBe(false);
+  expect(await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "Approved" } })).toMatchObject({ ok: false, reason: "effect-denied" });
   expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);
 });
 it("does not access Jira after cancellation", async () => {
   const f = fixture();
   f.controller.abort();
-  expect((await f.run("jira.comment", { issueKey: "SYN-1", body: "Synthetic" })).ok).toBe(false);
+  expect(await f.run("jira.comment", { issueKey: "SYN-1", body: "Synthetic" })).toMatchObject({ ok: false, reason: "cancelled" });
   expect(f.http).not.toHaveBeenCalled();
 });
 it("does not route Data Center writes into a Cloud connection", async () => {
@@ -873,9 +871,9 @@ it("does not repeat an acknowledged edit when authority is lost before readback"
     .mockReturnValueOnce(true)
     .mockReturnValueOnce(true)
     .mockReturnValue(false);
-  expect((await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "Changed" } })).ok).toBe(
-    false,
-  );
+  expect(await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "Changed" } })).toMatchObject({
+    ok: false, reason: "effect-denied",
+  });
   expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET", "GET", "PUT"]);
 });
 it("refuses an edit before PUT when its prior issue state cannot be read", async () => {

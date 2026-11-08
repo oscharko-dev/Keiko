@@ -52,9 +52,9 @@ import {
 } from "./atlassian-sync-classify.js";
 import {
   ATLASSIAN_WRITE_ACTION_TOTAL_TIMEOUT_MS,
-  executeAtlassianWriteRequest,
   type AtlassianWriteHttpOutcome,
 } from "./atlassian-write-http.js";
+import { executeAdmittedJiraRequest } from "./jira-request-admission.js";
 import {
   validateJiraFieldChanges,
   prepareJiraDescriptionFields,
@@ -263,22 +263,15 @@ export function requestFor(
   connection: JiraManagedConnection,
   context: ManagedMcpInvocationContext,
 ): JiraMutationRequest {
-  const { http, baseUrl } = connection;
-  const beforeEffect: () => unknown = context.beforeEffect;
+  const { baseUrl } = connection;
   const signal = AbortSignal.any([
     context.signal,
     AbortSignal.timeout(ATLASSIAN_WRITE_ACTION_TOTAL_TIMEOUT_MS),
   ]);
   const endpoints = atlassianApiEndpointsFor(baseUrl, "/rest/api/2/");
   return (path, method, body, expect, upload) =>
-    executeAtlassianWriteRequest(
-      {
-        signal,
-        http: (request) =>
-          signal.aborted || beforeEffect() !== true
-            ? Promise.resolve({ kind: "network-error" })
-            : http(request),
-      },
+    executeAdmittedJiraRequest(
+      connection, context, signal,
       {
         method: method ?? "GET",
         url: atlassianApiUrl(endpoints, path),

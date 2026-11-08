@@ -556,6 +556,13 @@ export const JIRA_ALREADY_REFUSED_GUIDANCE =
 export const JIRA_UNCERTAIN_GUIDANCE =
   "Whether this change reached Jira is uncertain. Do not repeat it and make no further change in this turn. Tell the user in plain language that the change may or may not have been applied and ask them to check its outcome in Jira before deciding whether to try again.";
 
+function localRefusalGuidance(outcome: JiraMutationResultState, reason: AtlassianConnectorWriteFailureReason | undefined): string | undefined {
+  if (outcome !== "rejected" && outcome !== "not-dispatched") return undefined;
+  if (reason === "effect-denied") return "Local authority no longer permits this Jira request. Stop and tell the user to review the selected Pod and allowed connector scopes together with the recorded outcome before deciding on another request. Do not retry automatically.";
+  if (reason === "cancelled") return "This Jira request was cancelled. Stop and tell the user to review the recorded outcome before deciding on another request. Cancellation does not undo a change already acknowledged by Jira. Do not retry automatically.";
+  return undefined;
+}
+
 /** The instruction a result carries, or undefined when the outcome needs none. */
 export function jiraResultGuidance(
   outcome: JiraMutationResultState,
@@ -563,6 +570,8 @@ export function jiraResultGuidance(
   detail: JiraMutationFailureDetail | undefined,
 ): string | undefined {
   if (uncertainOutcome(outcome, reason)) return JIRA_UNCERTAIN_GUIDANCE;
+  const local = localRefusalGuidance(outcome, reason);
+  if (local !== undefined) return local;
   // An adapter independently observed the requested state before attempting any effect.
   if (outcome === "rejected" && reason === "conflict" && detail?.unchanged === true)
     return JIRA_EXISTING_GUIDANCE;

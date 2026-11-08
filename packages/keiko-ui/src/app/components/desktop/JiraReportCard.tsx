@@ -3,6 +3,7 @@ import { useState, type ReactNode } from "react";
 import type {
   JiraReportExportFormat,
   JiraReportIncompleteReason,
+  JiraReportFailureReason,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   useOptionalWidgetTranslate as useTranslate,
@@ -21,6 +22,10 @@ const REASON_KEYS: Readonly<Record<JiraReportIncompleteReason, WidgetMessageKey>
   "memory-budget": "chat.jira.report.reason.memory-budget",
   "issue-too-large": "chat.jira.report.reason.issue-too-large",
   "template-unreadable": "chat.jira.report.reason.template-unreadable",
+};
+const LOCAL_FAILURE_KEYS: Partial<Readonly<Record<JiraReportFailureReason, WidgetMessageKey>>> = {
+  "effect-denied": "chat.jira.outcome.failure.localAuthority",
+  cancelled: "chat.jira.outcome.failure.cancelled",
 };
 const EXPORTS: readonly {
   readonly format: JiraReportExportFormat;
@@ -45,14 +50,14 @@ function ReportStatus({ view }: { readonly view: JiraReportView }): ReactNode {
     return <output>{t("chat.jira.report.complete", { read: view.issuesRead })}</output>;
   return (
     <output>
-      {t("chat.jira.report.incomplete", {
+      {t(total === undefined ? "chat.jira.report.incompleteUnknown" : "chat.jira.report.incomplete", {
         reason: t(
           view.reason === undefined
             ? "chat.jira.report.reason.read-failed"
             : REASON_KEYS[view.reason],
         ),
         read: view.issuesRead,
-        total: total ?? view.issuesRead,
+        ...(total === undefined ? {} : { total }),
       })}
     </output>
   );
@@ -157,9 +162,11 @@ export function JiraReportCard({
   readonly chatId: string | undefined;
 }): ReactNode {
   const t = useTranslate();
+  const localFailure = view.failure === undefined ? undefined : LOCAL_FAILURE_KEYS[view.failure];
   return (
     <>
       <ReportStatus view={view} />
+      {localFailure === undefined || view.status !== "incomplete" ? null : <p>{t(localFailure)}</p>}
       {view.figures === undefined ? null : <Figures figures={view.figures} />}
       {view.figures === undefined ? null : <p>{t("chat.jira.report.figures")}</p>}
       {view.status === "reading" || chatId === undefined ? null : (

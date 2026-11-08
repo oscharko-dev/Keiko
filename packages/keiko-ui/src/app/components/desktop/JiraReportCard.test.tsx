@@ -79,6 +79,24 @@ beforeEach(() => {
 });
 
 describe("Jira report card", () => {
+  it.each([
+    ["effect-denied", "Local authority no longer permits this Jira request."],
+    ["cancelled", "This Jira request was cancelled."],
+  ] as const)("retains local %s guidance and an unknown denominator after reload", (failure, guidance) => {
+    const interrupted = data({ status: "incomplete", progress: { issuesRead: 1 }, report: {
+      completeness: { complete: false, reason: "read-failed", failure, issuesRead: 1, pageCount: 1 },
+    } });
+    const saved = JSON.parse(JSON.stringify(transcript(interrupted))) as ChatToolTranscript;
+    const first = render(<JiraChatTools transcript={saved} />);
+    const before = first.container.textContent;
+    first.unmount();
+    const next = render(<JiraChatTools transcript={saved} />);
+    expect(next.container.textContent).toBe(before);
+    expect(next.container.textContent).toContain(guidance);
+    expect(next.container.textContent).toContain("1 issues read; the total is unknown");
+    expect(next.container.textContent).not.toContain("1 of 1 issues");
+    expect(next.container.querySelector("pre, a, button")).toBeNull();
+  });
   it("shows the computed figures and no export while the report is still being read", async () => {
     const reading = data({
       status: "reading",

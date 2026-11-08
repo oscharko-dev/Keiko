@@ -933,6 +933,8 @@ describe("write-action failure and authority reason vocabulary (Issue #2244)", (
     expect(ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS).toEqual([
       "auth-failed",
       "permission-denied",
+      "effect-denied",
+      "cancelled",
       "not-found",
       "rate-limited",
       "timeout",

@@ -93,16 +93,36 @@ it("refuses an already cancelled invocation before sending either GET", async ()
   expect((await read({}, { ...context(), signal: controller.signal }, connection(http))).data).toEqual({ outcome: "failed", reason: "cancelled" });
   expect(http).not.toHaveBeenCalled();
 });
-it("observes caller cancellation during an awaited identity failure", async () => {
+it("observes caller cancellation during an awaited transport interruption", async () => {
   const controller = new AbortController();
   const http = vi.fn<AtlassianHttpBodyPort>(async () => {
     await Promise.resolve();
     controller.abort();
-    throw new TypeError("Synthetic transport interruption");
+    return { kind: "network-error" };
   });
   const result = await read({}, { ...context(), signal: controller.signal }, connection(http));
   expect(result.data).toEqual({ outcome: "failed", reason: "cancelled" });
   expect(http).toHaveBeenCalledTimes(1);
+});
+it("does not reinterpret a programmer defect after abort as ordinary cancellation", async () => {
+  const controller = new AbortController();
+  const defect = new TypeError("Synthetic implementation defect");
+  const http = vi.fn<AtlassianHttpBodyPort>(async () => { controller.abort(); throw defect; });
+  await expect(read({}, { ...context(), signal: controller.signal }, connection(http))).rejects.toBe(defect);
+  expect(http).toHaveBeenCalledTimes(1);
+});
+it.each(["identity", "session"] as const)("retains a native401 from %s after late cancellation", async (phase) => {
+  const controller = new AbortController();
+  const http = vi.fn<AtlassianHttpBodyPort>(async (request) => {
+    if (phase === "session" && request.url.endsWith("/myself")) return response({ key: "U1", name: "Canonical-Name" });
+    controller.abort();
+    return response({ errorMessages: ["Native authentication refusal"] }, 401);
+  });
+  expect((await read({}, { ...context(), signal: controller.signal }, connection(http))).data).toMatchObject({
+    outcome: "failed", reason: "auth-failed", messages: ["Native authentication refusal"],
+  });
+  expect(http).toHaveBeenCalledTimes(phase === "identity" ? 1 : 2);
+  expect(http.mock.calls.every(([request]) => request.method === "GET" && request.bodyJson === undefined && request.upload === undefined)).toBe(true);
 });
 it("labels a refused current permit without inventing a network failure", async () => {
   const http = remote({ name: "Canonical-Name" });

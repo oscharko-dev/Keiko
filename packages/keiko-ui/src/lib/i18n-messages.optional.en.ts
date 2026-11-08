@@ -4449,6 +4449,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.report.complete": "Complete: {read} issues read",
   "chat.jira.report.incomplete":
     "Incomplete ({reason}): {read} of {total} issues read. The figures describe only the issues read.",
+  "chat.jira.report.incompleteUnknown":
+    "Incomplete ({reason}): {read} issues read; the total is unknown. The figures describe only the issues read.",
   "chat.jira.report.reason.read-failed": "Jira could not be read further",
   "chat.jira.report.reason.scope-changed": "the issues changed while reading",
   "chat.jira.report.reason.memory-budget": "memory budget reached",
@@ -4500,6 +4502,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.result.reason.not-found": "The target no longer exists.",
   "atlassianConnectors.result.reason.rate-limited": "Atlassian rate-limited the request.",
   "atlassianConnectors.result.reason.timeout": "The request timed out.",
+  "atlassianConnectors.result.reason.effect-denied": "Local authority no longer permits this request. Review the allowed connector scopes and the recorded outcome before deciding on another request.",
+  "atlassianConnectors.result.reason.cancelled": "The request was cancelled. Check the recorded outcome before deciding on another request; cancellation does not undo an acknowledged change.",
   "atlassianConnectors.result.reason.unavailable": "Atlassian was temporarily unavailable.",
   "atlassianConnectors.result.reason.malformed-payload": "The request could not be processed.",
   "atlassianConnectors.result.reason.bounds-exceeded": "The request exceeded its size limit.",

@@ -190,13 +190,13 @@ describe("Jira report export route", () => {
 });
 
 describe("Jira report activity", () => {
-  it("reconstructs a read from counts and rule ids alone", () => {
+  it.each(["permission", "effect-denied", "cancelled"] as const)("reconstructs %s from counts and closed codes alone", (failure) => {
     const logs = createBufferedServerLogSink();
     recordJiraReportActivity(logs, "correlation-2", {
       phase: "read",
       status: "incomplete",
       reason: "read-failed",
-      failure: "permission",
+      failure,
       scopeKind: "project-jql",
       continued: true,
       issuesRead: 250,
@@ -213,7 +213,7 @@ describe("Jira report activity", () => {
       phase: "read",
       status: "incomplete",
       reason: "read-failed",
-      failure: "permission",
+      failure,
       level: "warn",
       errorKind: "read-failed",
       issuesRead: 250,

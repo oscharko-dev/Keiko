@@ -167,6 +167,8 @@ export function reviewReasonCopyKey(reason: AtlassianConnectorActionReviewReason
 const WRITE_FAILURE_REASON: Readonly<Record<AtlassianConnectorWriteFailureReason, MessageKey>> = {
   "auth-failed": "atlassianConnectors.result.reason.auth-failed",
   "permission-denied": "atlassianConnectors.result.reason.permission-denied",
+  "effect-denied": "atlassianConnectors.result.reason.effect-denied",
+  cancelled: "atlassianConnectors.result.reason.cancelled",
   "not-found": "atlassianConnectors.result.reason.not-found",
   "rate-limited": "atlassianConnectors.result.reason.rate-limited",
   timeout: "atlassianConnectors.result.reason.timeout",

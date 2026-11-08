@@ -76,6 +76,8 @@ export interface AtlassianHttpBodyRequest {
   readonly upload?: AtlassianHttpUpload | undefined;
   /** Server-owned opt-in for the two documented experimental sprint-unmap PUT identities only. */
   readonly jiraExperimental?: true | undefined;
+  /** Closed native text/plain boolean PUT; never a caller-provided content type or header. */
+  readonly jiraPermissionAttribute?: true | undefined;
   // Run-level cancellation (ADR-0128 D5): the adapter composes this with its own timeout so an
   // aborted sync run tears down the in-flight request instead of waiting it out.
   readonly signal?: AbortSignal | undefined;

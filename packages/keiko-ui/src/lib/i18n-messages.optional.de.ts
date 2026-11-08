@@ -4570,6 +4570,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.report.complete": "Vollständig: {read} Vorgänge gelesen",
   "chat.jira.report.incomplete":
     "Unvollständig ({reason}): {read} von {total} Vorgängen gelesen. Die Zahlen beschreiben nur die gelesenen Vorgänge.",
+  "chat.jira.report.incompleteUnknown":
+    "Unvollständig ({reason}): {read} Vorgänge gelesen; die Gesamtzahl ist unbekannt. Die Zahlen beschreiben nur die gelesenen Vorgänge.",
   "chat.jira.report.reason.read-failed": "Jira konnte nicht weiter gelesen werden",
   "chat.jira.report.reason.scope-changed": "die Vorgänge haben sich während des Lesens geändert",
   "chat.jira.report.reason.memory-budget": "Speichergrenze erreicht",
@@ -4623,6 +4625,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.result.reason.not-found": "Das Ziel existiert nicht mehr.",
   "atlassianConnectors.result.reason.rate-limited": "Atlassian hat die Anfrage gedrosselt.",
   "atlassianConnectors.result.reason.timeout": "Zeitüberschreitung der Anfrage.",
+  "atlassianConnectors.result.reason.effect-denied": "Die lokale Autorität erlaubt diese Anfrage nicht mehr. Vor einer weiteren Anfrage die erlaubten Connector-Scopes und den gespeicherten Ausgang prüfen.",
+  "atlassianConnectors.result.reason.cancelled": "Die Anfrage wurde abgebrochen. Vor einer weiteren Anfrage den gespeicherten Ausgang prüfen; ein Abbruch macht eine bestätigte Änderung nicht rückgängig.",
   "atlassianConnectors.result.reason.unavailable": "Atlassian war vorübergehend nicht verfügbar.",
   "atlassianConnectors.result.reason.malformed-payload":
     "Die Anfrage konnte nicht verarbeitet werden.",

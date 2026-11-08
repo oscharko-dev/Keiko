@@ -744,6 +744,15 @@ unmap PUT routes accept the server-owned literal experimental opt-in; the custod
 before dispatch admission and emits a fixed header. Model-supplied headers or arbitrary experimental
 routes have no execution path. Native project/board permissions remain independent of local scope.
 
+The fixed permission-scheme attribute port uses the native resource's `text/plain` Boolean contract
+([PermissionSchemeResource](https://docs.atlassian.com/software/jira/docs/api/11.3.3/com/atlassian/jira/rest/v2/admin/permissionscheme/PermissionSchemeResource.html)).
+Only literal `true` or `false` bytes on the exact PUT attribute route can select this media type.
+The custody owner validates the canonical string-int64 scheme ID, encoded attribute key and static
+opt-in before dispatch admission or credential materialisation. Ordinary serialized requests retain
+their JSON media type. This transport contract remains inside the existing authority, custody,
+timeouts and method-aware retry owner; the operation's local administration and native permissions
+remain independently required.
+
 Three native anonymization validation/progress observations use that same explicit admin scope
 while retaining low read risk and the existing per-Chat read grant. Their GET contracts do not
 schedule anonymization, reruns or unlock. Native task selection is separate from observed job

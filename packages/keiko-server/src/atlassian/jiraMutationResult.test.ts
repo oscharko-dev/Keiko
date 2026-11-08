@@ -710,6 +710,19 @@ describe("Jira's own field errors (#4176)", () => {
 });
 
 describe("what the model is told to do next (#4176)", () => {
+  it.each(["effect-denied", "cancelled"] as const)("preserves local %s guidance without overriding uncertain effects", (reason) => {
+    for (const outcome of ["rejected", "not-dispatched"] as const) {
+      const data = jiraMutationToolResult(outcome, reason).data;
+      expect(data.guidance).toMatch(/Do not retry automatically/u);
+      expect(data.guidance).not.toMatch(/Jira refused|nothing was changed|network/iu);
+    }
+    for (const outcome of ["unknown", "succeeded-unconfirmed"] as const) {
+      const data = jiraMutationToolResult(outcome, reason, { issueKey: "SYN-1" }).data;
+      expect(data.guidance).toBe(JIRA_UNCERTAIN_GUIDANCE);
+      expect(data.issueKey).toBe("SYN-1");
+    }
+    expect(jiraMutationToolResult("succeeded", reason).data).not.toHaveProperty("guidance");
+  });
   it.each([
     ["unknown", undefined],
     ["succeeded-unconfirmed", undefined],

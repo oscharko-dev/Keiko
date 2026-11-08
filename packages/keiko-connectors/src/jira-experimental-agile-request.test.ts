@@ -59,7 +59,9 @@ describe("closed experimental sprint request port", () => {
   it.each(["denied", "cancelled"])("keeps the original %s boundary", async (state) => {
     const f = fixture(state !== "denied");
     if (state === "cancelled") f.controller.abort();
-    expect(await f.request("sprint/unmap", "PUT", {}, "none")).toMatchObject({ ok: false });
+    expect(await f.request("sprint/unmap", "PUT", {}, "none")).toEqual({
+      ok: false, reason: state === "denied" ? "effect-denied" : "cancelled",
+    });
     expect(f.http).not.toHaveBeenCalled();
   });
 

@@ -171,6 +171,14 @@ defined in ADR-0128 D4. A Chat scope change advances the existing binding genera
 earlier approvals; neither schema selection nor Full access supplies administration authority.
 
 HTTP acknowledgement is recorded before parsing a response or evaluating late cancellation.
+The fixed Jira request owners share one private admission wrapper over the existing bounded HTTP
+executor. Each actual HTTP attempt, including a GET retry, requires synchronous current admission.
+Local authority refusal, caller cancellation and the separately bounded phase deadline retain
+`effect-denied`, `cancelled` and `timeout`. Actual native acknowledgements and HTTP failures retain
+precedence over late cancellation; unexpected implementation errors propagate to existing diagnostics.
+The durable journal continues to decide effect uncertainty and replay refusal. Model guidance for a
+local refusal follows the recorded outcome, with uncertain effects taking precedence. Report readers
+use the same admission owner and retain unknown totals in both exports and result cards.
 A cancelled or denied catalog result retains its original closed envelope and null data;
 its separately validated, canonical journal observation is retained as `mutationOutcome`
 on the existing Chat exchange. The same projection reaches the live model continuation,

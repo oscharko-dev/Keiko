@@ -52,6 +52,8 @@ it.each([
   { reason: "scope-exceeded", expected: "other" },
   { reason: "mode-approval-required", expected: "none" },
   { reason: "malformed-payload", expected: "malformed-payload" },
+  { reason: "effect-denied", expected: "effect-denied" },
+  { reason: "cancelled", expected: "cancelled" },
 ] as const)("preserves partial-sync classification for $reason", ({ reason, expected }) => {
   const logs = createBufferedServerLogSink();
   recordAtlassianActionOutcome({ activityLog: logs }, partial(reason), "autonomous-delivery");

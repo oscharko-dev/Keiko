@@ -30,6 +30,8 @@ export const JIRA_REPORT_FAILURE_REASONS = [
   "invalid-jql",
   "auth",
   "permission",
+  "effect-denied",
+  "cancelled",
   "not-found",
   "rate-limited",
   "timeout",

@@ -103,7 +103,7 @@ import type {
 import type { JiraManagedConnection } from "./jira-managed-connection.js";
 export type { JiraManagedConnection } from "./jira-managed-connection.js";
 import { asRecord, atlassianApiEndpointsFor, atlassianApiUrl } from "./atlassian-sync-classify.js";
-import { executeAtlassianWriteRequest } from "./atlassian-write-http.js";
+import { executeAdmittedJiraRequest } from "./jira-request-admission.js";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import { executeJiraManagedMutation, requestFor } from "./jira-managed-mutations.js";
 import { createJiraDraftStore } from "./jira-draft-store.js";
@@ -579,17 +579,11 @@ async function readIssueOrMetadata<Context extends ManagedMcpInvocationContext>(
   const selected = selection(name, args);
   if (selected === undefined) return failure("invalid-input");
   const connected = await connection(context);
-  const { deployment, baseUrl, http } = connected;
+  const { deployment, baseUrl } = connected;
   if (deployment !== "data-center") return failure("unsupported-deployment");
   const url = atlassianApiUrl(atlassianApiEndpointsFor(baseUrl, "/rest/api/2/"), selected.path);
-  const outcome = await executeAtlassianWriteRequest(
-    {
-      signal: context.signal,
-      http: (request) =>
-        context.signal.aborted || !context.beforeEffect()
-          ? Promise.resolve({ kind: "network-error" })
-          : http(request),
-    },
+  const outcome = await executeAdmittedJiraRequest(
+    connected, context, context.signal,
     { method: "GET", url, expect: ARRAY_READ_NAMES.has(name) ? "json-array" : "json" },
   );
   if (!outcome.ok) return failure(outcome.reason, outcome.remote);

@@ -1321,10 +1321,13 @@ export function decideAtlassianConnectorAction(
 // cover the provider outcomes the UI must render distinctly: an optimistic-version conflict
 // (Confluence 409), a transition id absent from the issue's available transitions, a missing
 // target, and a provider field-validation rejection. A raw provider error message never enters
-// the contract.
+// the contract. Local admission loss and caller cancellation keep their own codes; neither
+// asserts a Jira permission failure, network outage, or absence of an earlier native effect.
 export type AtlassianConnectorWriteFailureReason =
   | "auth-failed"
   | "permission-denied"
+  | "effect-denied"
+  | "cancelled"
   | "not-found"
   | "rate-limited"
   | "timeout"
@@ -1339,6 +1342,8 @@ export const ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS: readonly AtlassianConnec
   Object.freeze([
     "auth-failed",
     "permission-denied",
+    "effect-denied",
+    "cancelled",
     "not-found",
     "rate-limited",
     "timeout",

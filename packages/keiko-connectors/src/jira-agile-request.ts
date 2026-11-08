@@ -1,9 +1,9 @@
 import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { atlassianApiEndpointsFor, atlassianApiUrl } from "./atlassian-sync-classify.js";
 import {
-  executeAtlassianWriteRequest,
   ATLASSIAN_WRITE_ACTION_TOTAL_TIMEOUT_MS,
 } from "./atlassian-write-http.js";
+import { executeAdmittedJiraRequest } from "./jira-request-admission.js";
 import type { JiraManagedConnection } from "./jira-managed-connection.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 
@@ -78,14 +78,8 @@ function fixedRequest(
   return (path, method = "GET", body, expect = "json") =>
     readOnly && method !== "GET"
       ? Promise.resolve({ ok: false, reason: "unavailable" })
-      : executeAtlassianWriteRequest(
-          {
-            signal,
-            http: (request) =>
-              signal.aborted || !context.beforeEffect()
-                ? Promise.resolve({ kind: "network-error" })
-                : connection.http(request),
-          },
+      : executeAdmittedJiraRequest(
+          connection, context, signal,
           {
             method,
             url: atlassianApiUrl(endpoints, path),

@@ -1,6 +1,7 @@
 import {
   AtlassianCredentialCustodyError,
   atlassianAuthorizationHeaderValue,
+  jiraPropertyPathKey,
   type AtlassianCredentialExecutionResolver,
   type AtlassianHttpBodyRequest,
   type AtlassianHttpRequest,
@@ -45,15 +46,49 @@ function reportObservationFailure(correlationId: string, error: unknown): void {
 
 /** A JSON body is declared as such; a governed upload also carries Jira's XSRF opt-out (#4176). */
 function requestBodyHeaders(request: RequestSnapshot): Record<string, string> {
+  const permissionAttribute = permissionAttributeHeaders(
+    "jiraPermissionAttribute" in request ? request.jiraPermissionAttribute : undefined, request,
+  );
+  if (permissionAttribute !== undefined) return permissionAttribute;
   if ("upload" in request && request.upload !== undefined)
     return { "content-type": request.upload.contentType, "x-atlassian-token": "no-check" };
   return "bodyJson" in request && request.bodyJson !== undefined
     ? { "content-type": "application/json" }
     : {};
 }
-function experimentalJiraUrl(url: URL): boolean {
+function closedJiraUrl(url: URL): boolean {
   return url.protocol === "https:" && url.search === "" && url.hash === "" &&
-    url.username === "" && url.password === "" &&
+    url.username === "" && url.password === "";
+}
+function canonicalAttributeKey(encoded: string | undefined): boolean {
+  if (encoded === undefined) return false;
+  try {
+    const key = decodeURIComponent(encoded);
+    return jiraPropertyPathKey(key) && encodeURIComponent(key) === encoded;
+  } catch { return false; }
+}
+function permissionAttributeUrl(url: URL): boolean {
+  if (!closedJiraUrl(url)) return false;
+  const match = /\/rest\/api\/2\/permissionscheme\/([1-9][0-9]{0,18})\/attribute\/([^/]+)$/u.exec(url.pathname);
+  const id = match?.[1];
+  return id !== undefined && BigInt(id) <= 9223372036854775807n && canonicalAttributeKey(match?.[2]);
+}
+function plainBooleanRequest(request: RequestSnapshot): boolean {
+  return request.method === "PUT" && !("upload" in request && request.upload !== undefined) &&
+    "bodyJson" in request && (request.bodyJson === "true" || request.bodyJson === "false");
+}
+/** PermissionSchemeResource consumes text/plain, not a JSON string. The only admitted bytes
+ * are literal booleans at this one native route; ordinary JSON requests stay JSON. */
+function permissionAttributeHeaders(value: unknown, request: RequestSnapshot): Record<string, string> | undefined {
+  if (value === undefined) return undefined;
+  if (value !== true || !plainBooleanRequest(request) || !URL.canParse(request.url))
+    throw new AtlassianCredentialCustodyError("invalid-input", ["Unsupported permission attribute request"]);
+  if (!permissionAttributeUrl(new URL(request.url)))
+    throw new AtlassianCredentialCustodyError("invalid-input", ["Unsupported permission attribute target"]);
+  return { "content-type": "text/plain" };
+}
+function experimentalJiraUrl(url: URL): boolean {
+  return closedJiraUrl(url) &&
     /\/rest\/agile\/1\.0\/sprint\/(?:unmap|unmap-all)$/u.test(url.pathname);
 }
 function experimentalJiraHeaders(value: unknown, request: RequestSnapshot): Record<string, string> {
