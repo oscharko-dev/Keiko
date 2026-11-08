@@ -3956,9 +3956,13 @@ it("shares one lazy Jira catalog per graph and closes it on disposal (#4089)", a
     if (runtime === undefined) throw new Error("Expected graph-owned managed catalog");
     const [first, second] = await Promise.all([runtime.get(), runtime.get()]);
     expect(second).toBe(first);
-    // Every canonical Jira tool, read or write, is one handler beside the local Knowledge tools
-    // declared by the same managed catalog's provider.
-    const toolCount = Object.keys(JIRA_MANAGED_ACTION_TYPES).length + KNOWLEDGE_CHAT_TOOLS.length;
+    // The default catalog offers the curated Jira tools plus the local Knowledge tools declared by
+    // the same managed provider; the rest of the canonical set is selected per turn.
+    const toolCount = first.handlerBindings.length;
+    expect(toolCount).toBeGreaterThanOrEqual(KNOWLEDGE_CHAT_TOOLS.length);
+    expect(toolCount).toBeLessThan(
+      Object.keys(JIRA_MANAGED_ACTION_TYPES).length + KNOWLEDGE_CHAT_TOOLS.length,
+    );
     expect(
       activityLog.events.filter((event) => event.op === "mcp.managed.lifecycle"),
     ).toMatchObject([

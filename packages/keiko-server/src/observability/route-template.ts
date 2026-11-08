@@ -172,6 +172,7 @@ export const API_ROUTE_LITERAL_SEGMENTS: ReadonlySet<string> = new Set([
   "health-scan",
   "history",
   "hot-exit",
+  "human-inputs",
   "image",
   "impact",
   "import",

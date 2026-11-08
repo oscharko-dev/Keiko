@@ -374,8 +374,11 @@ describe("POST /api/atlassian-connectors/credentials", () => {
     const files = await readdir(credentialsDir);
     expect(files).toContain("atlassian-connector-credentials.vault");
     expect(files).toContain("atlassian-connector-credentials.metadata.json");
-    for (const file of files) {
-      const bytes = await readFile(join(credentialsDir, file), "utf8");
+    // Recursive: the vault keeps its write-guard directory beside the sealed files.
+    const entries = await readdir(credentialsDir, { recursive: true, withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      const bytes = await readFile(join(entry.parentPath, entry.name), "utf8");
       expectNoSecretBytes(bytes);
     }
   });

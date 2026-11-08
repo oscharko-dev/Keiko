@@ -9,7 +9,7 @@ describe("canonical UTF-8 URI segment decoding", () => {
     ["caf%C3%A9", "café"],
     ["%E2%82%AC", "€"],
     ["%F0%9F%98%80", "😀"],
-    ["%EF%BF%BD", "�"],
+    ["%EF%BF%BD", "\uFFFD"],
     ["%2F", "/"],
     ["%25", "%"],
     ["%00", "\u0000"],

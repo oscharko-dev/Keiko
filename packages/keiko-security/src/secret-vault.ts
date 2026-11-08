@@ -1258,7 +1258,7 @@ export function createShardedLocalSecretVault(deps: ShardedLocalSecretVaultDeps)
     return filePath === undefined ? undefined : readShardEnvelope(filePath, sink);
   };
 
-  return serializedSecretVault(storeDir, {
+  return serializedSecretVault(storeDir, assertNoSymlinkedPathSegments, (guarded) => ({
     get: (reference): string | undefined => {
       const envelope = envelopeFor(reference);
       return envelope === undefined ? undefined : openString(key, envelope);
@@ -1268,13 +1268,15 @@ export function createShardedLocalSecretVault(deps: ShardedLocalSecretVaultDeps)
     },
     setMany: (next): void => {
       setManyWithLog(sink, next, (entries) => {
-        mergeShardEntries(
-          storeDir,
-          (reference) => requiredShardPath(storeDir, reference),
-          key,
-          entries,
-          sink,
-        );
+        guarded(() => {
+          mergeShardEntries(
+            storeDir,
+            (reference) => requiredShardPath(storeDir, reference),
+            key,
+            entries,
+            sink,
+          );
+        });
       });
     },
     replaceAll: (next): void => {
@@ -1285,19 +1287,21 @@ export function createShardedLocalSecretVault(deps: ShardedLocalSecretVaultDeps)
     },
     deleteMany: (references): void => {
       deleteManyWithLog(sink, references, () => {
-        deleteShardEntries(storeDir, references);
+        guarded(() => {
+          deleteShardEntries(storeDir, references);
+        });
       });
     },
     has: (reference): boolean => envelopeFor(reference) !== undefined,
     list: (): readonly string[] => listShardReferences(storeDir),
-  });
+  }));
 }
 
 export function createLocalSecretVault(deps: LocalSecretVaultDeps): LocalSecretVault {
   const { key, sink } = deps;
   const resolvedStorePath = resolve(deps.storePath);
 
-  return serializedSecretVault(resolvedStorePath, {
+  return serializedSecretVault(resolvedStorePath, assertNoSymlinkedPathSegments, (guarded) => ({
     get: (reference): string | undefined => {
       const envelope = readStore(resolvedStorePath)[reference];
       if (envelope === undefined || !isSealed(envelope)) return undefined;
@@ -1308,7 +1312,9 @@ export function createLocalSecretVault(deps: LocalSecretVaultDeps): LocalSecretV
     },
     setMany: (next): void => {
       setManyWithLog(sink, next, (entries) => {
-        mergeStoreEntries(resolvedStorePath, key, entries, sink);
+        guarded(() => {
+          mergeStoreEntries(resolvedStorePath, key, entries, sink);
+        });
       });
     },
     replaceAll: (next): void => {
@@ -1319,12 +1325,14 @@ export function createLocalSecretVault(deps: LocalSecretVaultDeps): LocalSecretV
     },
     deleteMany: (references): void => {
       deleteManyWithLog(sink, references, () => {
-        deleteStoreEntries(resolvedStorePath, references, sink);
+        guarded(() => {
+          deleteStoreEntries(resolvedStorePath, references, sink);
+        });
       });
     },
     has: (reference): boolean => reference in readStore(resolvedStorePath),
     list: (): readonly string[] => Object.keys(readStore(resolvedStorePath)),
-  });
+  }));
 }
 
 interface RememberedKey {

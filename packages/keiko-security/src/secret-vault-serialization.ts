@@ -30,7 +30,14 @@ function acquire(storePath: string, scope: string): (() => void) | undefined {
     }
   };
 }
-function underWriteGuard<T>(storePath: string, operation: () => T): T {
+function underWriteGuard<T>(
+  storePath: string,
+  assertSafePath: (path: string) => void,
+  operation: () => T,
+): T {
+  // The vault's own symlink refusal precedes the guard's generic SQLite path refusal, so the
+  // specific unsafe-target error (or a raw lstat failure) is what a caller observes. Both fail closed.
+  assertSafePath(storePath);
   const release = acquire(storePath, "store-write");
   if (release === undefined) throw new Error("Secret vault write is already in progress");
   try {
@@ -40,18 +47,27 @@ function underWriteGuard<T>(storePath: string, operation: () => T): T {
   }
 }
 /** One owner for every writer and CAS, including separate BFFs using the same vault path. */
-export function serializedSecretVault(storePath: string, raw: LocalSecretVault): LocalSecretVault {
+export function serializedSecretVault(
+  storePath: string,
+  assertSafePath: (path: string) => void,
+  build: (guarded: <T>(operation: () => T) => T) => LocalSecretVault,
+): LocalSecretVault {
+  const guarded = <T>(operation: () => T): T =>
+    underWriteGuard(storePath, assertSafePath, operation);
+  const raw = build(guarded);
   return {
     get: raw.get,
     has: raw.has,
     list: raw.list,
-    set: (reference, value) => underWriteGuard(storePath, () => raw.set(reference, value)),
-    setMany: (entries) => underWriteGuard(storePath, () => raw.setMany(entries)),
-    replaceAll: (entries) => underWriteGuard(storePath, () => raw.replaceAll(entries)),
-    delete: (reference) => underWriteGuard(storePath, () => raw.delete(reference)),
-    deleteMany: (references) => underWriteGuard(storePath, () => raw.deleteMany(references)),
+    set: (reference, value) => guarded(() => raw.set(reference, value)),
+    // Batch writes take the guard inside their own logging wrapper, so a refusal is still recorded
+    // as the operation's failure event.
+    setMany: raw.setMany,
+    replaceAll: (entries) => guarded(() => raw.replaceAll(entries)),
+    delete: (reference) => guarded(() => raw.delete(reference)),
+    deleteMany: raw.deleteMany,
     compareAndSet: (reference, expected, next) =>
-      underWriteGuard(storePath, () => {
+      guarded(() => {
         if (raw.get(reference) !== expected) return false;
         if (next === undefined) raw.delete(reference);
         else raw.set(reference, next);
