@@ -97,10 +97,11 @@ describe("formal-rule evidence from normal UI turns", () => {
     expect(gradeRuleRefusal({ ...evidence, after: [old, nativeEpic("2")] })).toBe(false);
   });
   it("accepts the create-metadata reads a model makes before the refused create (LIM18)", () => {
-    const reads = ["jira.issue-types", "jira.create-fields"].map((operation) =>
+    const reads = ["jira.discover", "jira.issue-types", "jira.create-fields"].map((operation) =>
       exchange(operation, { items: [] }),
     );
     expect(reads.map((read) => read.result.toolRef.canonicalId)).toEqual([
+      "keiko.jira.discover",
       "keiko.jira.issue.types",
       "keiko.jira.create.fields",
     ]);

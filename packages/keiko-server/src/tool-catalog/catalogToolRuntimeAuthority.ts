@@ -247,7 +247,10 @@ export async function approveCatalogAction<
   handler: CatalogBoundHandler<Consumer>,
 ): Promise<Consumer["action"]> {
   const preview = state.input.authorityPort.preview(context.authority, request);
-  if (preview.ok) return request;
+  if (preview.ok) {
+    await state.input.approvalPort.preflight?.(request, context);
+    return request;
+  }
   requireDispatch(preview.reason === "approval-required", "denied", "hard-denial");
   requireDispatch(
     state.input.approvalPort.available(request, context),

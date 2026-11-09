@@ -402,12 +402,16 @@ function reviewableAction(
   return READ_TOOLS.has(action.tool) || options.reviewableWrite?.(action) === true;
 }
 
-/** The template dry run first: a violating draft is refused before any human is asked. */
-async function requestWriteStage(
+/**
+ * The template and field dry run of a write. A violating write is refused before any effect starts
+ * and before any human is asked, whether or not its mode asks for an approval.
+ */
+async function refuseByPreflight(
   options: JiraChatAdmissionOptions,
   action: JiraChatCatalogAction,
   context: JiraChatCatalogContext,
 ): Promise<void> {
+  if (READ_TOOLS.has(action.tool)) return;
   const refusal =
     options.sourcePreparation?.refusalFor(action.actionId, action.argumentsDigest) ??
     (await options.preflightWrite?.(action, context));
@@ -421,6 +425,15 @@ async function requestWriteStage(
       operationBinding: { ...binding },
     });
   }
+}
+
+/** The dry run first: a violating draft is refused before any human is asked. */
+async function requestWriteStage(
+  options: JiraChatAdmissionOptions,
+  action: JiraChatCatalogAction,
+  context: JiraChatCatalogContext,
+): Promise<void> {
+  await refuseByPreflight(options, action, context);
   await requestCatalogWriteApproval({ ...options, context: () => context }, action);
 }
 
@@ -469,6 +482,7 @@ export function createJiraChatCatalogAdmission(options: JiraChatAdmissionOptions
         options.requestReadConsent !== undefined &&
         (READ_TOOLS.has(action.tool) || options.requestWriteConsent !== undefined),
       request: (action, context) => requestConsent(options, action, context),
+      preflight: (action, context) => refuseByPreflight(options, action, context),
     },
   };
 }

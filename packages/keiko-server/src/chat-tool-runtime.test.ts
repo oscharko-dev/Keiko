@@ -820,9 +820,13 @@ it("keeps an exact profile no-op free of private input in the mixed Chat", async
   expect(f.effects).toEqual(["mcp-read"]);
   expect(f.requests.every((request) => request.method === "GET")).toBe(true);
   expect(privateProfileExchange(f)?.humanInput).toBeUndefined();
+  // Chat's dry run settles the no-op before the effect boundary in every mode (#4321, ADR-0128).
   expect(privateProfileExchange(f)).toMatchObject({
-    mutationOutcome: "rejected",
-    result: { data: { outcome: "rejected", reason: "conflict", unchanged: true } },
+    mutationOutcome: "not-dispatched",
+    result: {
+      effectStarted: false,
+      data: { outcome: "rejected", reason: "conflict", unchanged: true },
+    },
   });
 });
 

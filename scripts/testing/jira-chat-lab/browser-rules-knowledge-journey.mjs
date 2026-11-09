@@ -76,7 +76,9 @@ function probeFailure(before, after, result, projectKey, counts) {
     result.exchanges.some(
       (exchange) =>
         exchange.effectStarted === true ||
-        (exchange.call.name === "jira_create" && exchange.result?.data?.outcome === "succeeded"),
+        (exchange.call.name === "jira_create" &&
+          (exchange.result?.effectStarted !== false ||
+            exchange.result?.data?.outcome === "succeeded")),
     )
   ) {
     counts.nativeWrites += 1;

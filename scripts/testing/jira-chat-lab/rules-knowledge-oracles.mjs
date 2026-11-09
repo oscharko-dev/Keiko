@@ -8,6 +8,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { matchingJiraIssueTemplates } from "@oscharko-dev/keiko-connectors";
 import { KNOWLEDGE_CHAT_TOOLS } from "../../../packages/keiko-server/dist/requirementsToolName.js";
+import { JIRA_CATALOG_DISCOVERY_TOOLS } from "../../../packages/keiko-server/dist/atlassian/jiraCatalogDiscovery.js";
 import { workflowHistory } from "./browser-workflow-turn.mjs";
 import { checkNativeIssueTemplates } from "./requirements/deviation-report.mjs";
 import { readInstalledTemplateScope } from "./requirements/progress-simulation.mjs";
@@ -449,7 +450,9 @@ function nativeTemplateNames(native, issue, projectKey) {
 }
 
 const BULK_READ_IDS = new Set(
-  [...JIRA_MANAGED_READ_TOOLS, ...KNOWLEDGE_CHAT_TOOLS].map(canonicalToolId),
+  [...JIRA_MANAGED_READ_TOOLS, ...JIRA_CATALOG_DISCOVERY_TOOLS, ...KNOWLEDGE_CHAT_TOOLS].map(
+    canonicalToolId,
+  ),
 );
 const BULK_WRITE_IDS = new Set(
   Object.keys(JIRA_MANAGED_ACTION_TYPES)

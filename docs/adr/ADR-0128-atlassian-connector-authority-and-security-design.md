@@ -1509,10 +1509,15 @@ the approval.
   added. Jira takes one `issuelinks` operation per request, so a `parentLink` rule is judged on the
   link that rides on the create or edit itself, never on one written afterwards: the gate puts a link
   of a required type first, and a state that the primary write cannot make conforming is refused
-  before any request. (2) In Ask-for-approval and Supervised modes Chat additionally runs the same pipeline as a
-  dry run (`checkJiraManagedMutationTemplates`) after the read grant and before the write approval
-  is created, so a human is never asked to approve a draft that would be refused. A failed dry run
-  is recorded and falls through to the gate. Every item of a backlog draft is dry-run when it is
+  before any request. (2) In every autonomy mode Chat additionally runs the same pipeline as a
+  dry run (`checkJiraManagedMutationTemplates`) before reservation and the effect boundary: in
+  Ask-for-approval and Supervised modes after the read grant and before the write approval is
+  created, so a human is never asked to approve a draft that would be refused, and in Full access
+  through the catalog binder's approval-free `preflight` hook. A refused write therefore settles with
+  `effectStarted: false` and is not dispatched in every mode; before 2026-11-09 Full access skipped
+  the dry run, so the gate refused only after the effect boundary and the receipt claimed a started
+  effect (#4321). The dry run's refusal is logged as stage `pre-approval` in every mode, including
+  Full access, where no approval follows. A failed dry run is recorded and falls through to the gate. Every item of a backlog draft is dry-run when it is
   staged (`jira.draft-stage`) and again before the draft's approval, staged or inline, with the
   relations the item proposes (a link to another draft item stands in as a placeholder key): a draft
   with a violating item is refused with that item's ref and violations before a human is asked, and

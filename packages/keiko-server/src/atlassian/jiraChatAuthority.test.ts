@@ -27,6 +27,7 @@ import {
   type JiraChatCatalogConsumer,
   type JiraChatCatalogContext,
 } from "./jiraChatCatalogConsumer.js";
+import { jiraOperationBindingForTool } from "./jiraManagedProvider.js";
 import {
   createFileServerLogSink,
   createServerLogger,
@@ -1389,6 +1390,35 @@ describe("ordinary Chat catalog read admission", () => {
     expect(grants.findGrantedChatReadGrant(grantSubject())?.expiresAt).toBe(
       now + ATLASSIAN_ACTION_APPROVAL_TTL_MS,
     );
+  });
+
+  it("refuses a violating write in its approval-free preflight and never dry-runs a read (#4321)", async () => {
+    const current = context();
+    const preflightWrite = vi.fn(() => Promise.resolve({ outcome: "rejected" }));
+    const admission = createJiraChatCatalogAdmission({
+      deps: { ...deps, atlassianActionApprovalRegistry: grants },
+      context: () => current,
+      now: () => now,
+      preflightWrite,
+    });
+    const action = (tool: JiraChatCatalogAction["tool"]): JiraChatCatalogAction => ({
+      actionId: `preflight-${tool}`,
+      idempotencyKey: `preflight-key-${tool}`,
+      tool,
+      argumentsDigest: "a".repeat(64),
+    });
+    const preflight = admission.approvalPort.preflight;
+    if (preflight === undefined) throw new Error("Expected an approval-free preflight");
+    await expect(preflight(action("jira.create"), current)).rejects.toMatchObject({
+      status: "failed",
+      reason: "provider-reported-error",
+      providerResult: {
+        outcome: "rejected",
+        operationBinding: jiraOperationBindingForTool("jira.create"),
+      },
+    });
+    await expect(preflight(action(READ_FIXTURE_TOOLS[0]), current)).resolves.toBeUndefined();
+    expect(preflightWrite).toHaveBeenCalledOnce();
   });
 
   it("leaves a pending grant to expire", () => {

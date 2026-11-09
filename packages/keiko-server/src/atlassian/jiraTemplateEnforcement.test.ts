@@ -1338,9 +1338,10 @@ describe("the dry run before approval", () => {
 });
 
 describe("a violating write never reaches Jira under Full access (#4177)", () => {
-  // Full access (`autonomous-delivery`) asks no human, so the pre-approval dry run never runs and
-  // nothing claims an approval (`beforeMutation` admits): the gate in front of the Jira request is
-  // the only thing between the model's arguments and a POST. The connection is built exactly as the
+  // Full access (`autonomous-delivery`) asks no human and nothing claims an approval
+  // (`beforeMutation` admits). Chat's approval-free preflight dry-runs the write first (#4321), but
+  // the gate in front of the Jira request stays authoritative on its own: this block drives the
+  // provider directly, without that preflight, between the model's arguments and a POST. The connection is built exactly as the
   // Chat catalog builds it, with the issue templates of the markdown skill library.
   const VIOLATING = { projectId: "10000", issueTypeId: "10001", fields: { summary: "Add login" } };
   const CONFORMING = {

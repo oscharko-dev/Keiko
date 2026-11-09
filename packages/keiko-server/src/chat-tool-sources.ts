@@ -358,6 +358,11 @@ export function createChatSourcesAdmission(options: AdmissionOptions): SourcePor
           ? jira.approvalPort.request(action, { ...context.jira, signal: context.signal })
           : mcp.approvalPort.request(action, { ...context.mcp, signal: context.signal });
       },
+      preflight: async (action, context) => {
+        if ("tool" in action)
+          await jira.approvalPort.preflight?.(action, { ...context.jira, signal: context.signal });
+        else await mcp.approvalPort.preflight?.(action, { ...context.mcp, signal: context.signal });
+      },
     },
   };
   return ports;
