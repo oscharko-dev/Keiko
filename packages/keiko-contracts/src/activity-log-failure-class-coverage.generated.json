@@ -2911,7 +2911,11 @@
       "lifecycleTransitions": ["end", "failure", "state"],
       "lifecycleOperations": {
         "start": [],
-        "state": ["atlassian.jira.human-input", "atlassian.target.admission"],
+        "state": [
+          "atlassian.http.credential-reflection",
+          "atlassian.jira.human-input",
+          "atlassian.target.admission"
+        ],
         "end": [
           "atlassian.connection.checked",
           "atlassian.credential.created",
@@ -2943,6 +2947,10 @@
           "mode": "correlation"
         },
         {
+          "op": "atlassian.http.credential-reflection",
+          "mode": "correlation"
+        },
+        {
           "op": "atlassian.jira.human-input",
           "mode": "correlation"
         },
@@ -2957,6 +2965,7 @@
         "atlassian.credential.created",
         "atlassian.credential.listed",
         "atlassian.credential.updated",
+        "atlassian.http.credential-reflection",
         "atlassian.jira.human-input",
         "atlassian.target.admission"
       ],
@@ -3125,6 +3134,36 @@
             "causeChain": false
           },
           "proofIds": ["atlassian.credential.updated.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "atlassian.http.credential-reflection",
+          "owner": "keiko-server",
+          "category": "security",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "reflectionCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["atlassian.http.credential-reflection.line"],
           "replayReferences": [],
           "missingObligations": []
         },

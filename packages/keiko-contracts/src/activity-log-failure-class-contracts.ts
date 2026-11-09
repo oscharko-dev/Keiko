@@ -962,7 +962,11 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
       start: [],
-      state: ["atlassian.jira.human-input", "atlassian.target.admission"],
+      state: [
+        "atlassian.http.credential-reflection",
+        "atlassian.jira.human-input",
+        "atlassian.target.admission",
+      ],
       end: [
         "atlassian.connection.checked",
         "atlassian.credential.created",
@@ -977,6 +981,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "atlassian.credential.created",
       "atlassian.credential.listed",
       "atlassian.credential.updated",
+      "atlassian.http.credential-reflection",
       "atlassian.jira.human-input",
       "atlassian.target.admission",
     ],
@@ -987,6 +992,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "atlassian.credential.listed",
       "atlassian.credential.rejected",
       "atlassian.credential.updated",
+      "atlassian.http.credential-reflection",
       "atlassian.jira.human-input",
       "atlassian.target.admission",
     ],
@@ -996,6 +1002,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "atlassian.credential.created",
       "atlassian.credential.listed",
       "atlassian.credential.updated",
+      "atlassian.http.credential-reflection",
       "atlassian.jira.human-input",
       "atlassian.target.admission",
     ],

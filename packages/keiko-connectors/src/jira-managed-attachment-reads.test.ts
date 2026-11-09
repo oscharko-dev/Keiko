@@ -30,6 +30,19 @@ const ENTRY = {
 };
 
 describe("closed attachment metadata and archive reads", () => {
+  it.each(["../outside.bin", "/tmp/outside.bin", "C:\\outside.bin", "approved/file.bin"])(
+    "refuses download destination %s because attachment reads grant no filesystem write",
+    async (path) => {
+      const port = request(FILE);
+      expect(
+        await executeJiraAttachmentRead("jira.attachment", { attachmentId: "17", path }, port),
+      ).toEqual({
+        data: { outcome: "failed", reason: "invalid-input" },
+        isError: true,
+      });
+      expect(port).not.toHaveBeenCalled();
+    },
+  );
   it("reports the native limit and existing local ceiling without granting upload permission", async () => {
     const port = request({ enabled: true, uploadLimit: JIRA_ATTACHMENT_MAX_BYTES * 2 });
     expect(await executeJiraAttachmentRead("jira.attachment-settings", {}, port)).toEqual({

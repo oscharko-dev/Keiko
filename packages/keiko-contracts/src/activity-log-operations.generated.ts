@@ -1154,6 +1154,48 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "atlassian.http.credential-reflection",
+    category: "security",
+    owner: "keiko-server",
+    emitter: "atlassian.httpPort.recordCredentialReflection",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      reason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: [
+          "reflected-secret",
+          "spelling-overflow",
+          "unsupported-secret",
+          "scan-budget-exhausted",
+        ],
+      },
+      reflectionCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["atlassian-credential-custody"],
+    proofIds: ["atlassian.http.credential-reflection.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "atlassian.jira-draft",
     category: "process",
     owner: "keiko-server",

@@ -1837,6 +1837,49 @@ function assertObservedWrite(f: ReturnType<typeof fixture>): void {
 }
 
 describe("normal Chat write approval and durable outcome", () => {
+  it("shows the exact comment target and text in Ask for approval before the first native write", async () => {
+    const f = fixture(true);
+    const pending = send(f, "claim-exact-preview");
+    void pending.catch(() => undefined);
+    await awaitReadGrantedForWrite(f);
+    const approval = await pendingWriteApproval(f);
+    expect(approval).toMatchObject({ operation: "jira.comment", state: "pending" });
+    expect(firstToolExchange(f).call.arguments).toEqual({
+      issueKey: "KEIKO-1",
+      body: "Synthetic approved comment",
+    });
+    expect(f.writes()).toBe(0);
+    expect(await postWriteDecision(f, approval, "approve")).toBe(200);
+    expect((await pending).status).toBe(200);
+    expect(f.writes()).toBe(1);
+    assertObservedWrite(f);
+  });
+  it("projects a Jira error through the credential floor before the model's next call", async () => {
+    const secret = ["ghp_", "synthetic", "credential", "0".repeat(30)].join("");
+    const f = fixture(true, undefined, true, false, false, {
+      bodies: ["Synthetic approved comment"],
+      refusal: {
+        status: 400,
+        bodyText: JSON.stringify({
+          errorMessages: [`Rejected credential ${secret}`],
+          errors: {},
+          privateBody: "unprojected-raw-error",
+        }),
+      },
+    });
+    const pending = send(f, "claim-error-redaction");
+    void pending.catch(() => undefined);
+    await awaitReadGrantedForWrite(f);
+    await decidePendingWrite(f, "approve");
+    expect((await pending).status).toBe(200);
+    const toolMessages = f.calls.flatMap((call) =>
+      call.messages.filter((message) => message.role === "tool"),
+    );
+    expect(JSON.stringify(toolMessages)).toContain("Rejected credential");
+    expect(JSON.stringify(toolMessages)).not.toContain(secret);
+    expect(JSON.stringify(toolMessages)).not.toContain("unprojected-raw-error");
+    expect(f.writes()).toBe(1);
+  });
   it.each(
     (["governed-assist", "supervised-coding", "autonomous-delivery"] as const).flatMap((mode) => [
       { mode, streamed: false },
