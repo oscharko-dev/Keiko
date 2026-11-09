@@ -12,6 +12,7 @@ import { parseJiraDraft } from "./jira-draft.js";
 import { createJiraDraftStore, type JiraDraftStoreOptions } from "./jira-draft-store.js";
 import {
   executeJiraDraftStageTool,
+  JIRA_DRAFT_READY_GUIDANCE,
   JIRA_DRAFT_TOO_LARGE_GUIDANCE,
   resolveJiraDraftArguments,
   type JiraDraftActivity,
@@ -472,11 +473,25 @@ describe("jira.draft-stage (#4178)", () => {
       items: [item("story", { parent: { fieldId: "parent", ref: "epic" } }) as CatalogJsonObject],
     });
     expect(first.data).toMatchObject({ unresolvedRefCount: 1, unresolvedRefs: ["epic"] });
+    expect(first.data).not.toHaveProperty("guidance");
     const second = await h.stage({
       draftId: text(first.data.draftId),
       items: [item("epic") as CatalogJsonObject],
     });
     expect(second.data).toMatchObject({ unresolvedRefCount: 0, unresolvedRefs: [] });
+  });
+
+  // Live rehearsal (#4287): with the creation already requested and Full access selected, the
+  // model read "reviewable draft" and asked the person to confirm twice before calling jira.draft.
+  it("tells the model that a complete draft goes straight to jira.draft without a second confirmation", async () => {
+    const h = harness();
+    const staged = await h.stage({ items: [item("epic") as CatalogJsonObject] });
+    expect(staged.data).toMatchObject({ outcome: "succeeded", unresolvedRefCount: 0 });
+    expect(staged.data.guidance).toBe(JIRA_DRAFT_READY_GUIDANCE);
+    expect(JIRA_DRAFT_READY_GUIDANCE).toContain(
+      "call jira.draft now with only draftId and draftDigest",
+    );
+    expect(JIRA_DRAFT_READY_GUIDANCE).toContain("do not ask the user to confirm again");
   });
 
   it("has no item-count limit: 1,200 items stage in pages and resolve to exactly those items", async () => {

@@ -231,6 +231,16 @@ export async function firstJiraDraftTemplateRefusal(
   return firstJiraDraftTemplateRefusal(items, context, connection, index + 1);
 }
 
+/**
+ * The next step of a complete draft. A model that read "reviewable" asked the person to confirm a
+ * creation they had already requested, twice in one live rehearsal (#4287); approval belongs to
+ * jira.draft, which applies the Chat's access mode itself.
+ */
+export const JIRA_DRAFT_READY_GUIDANCE =
+  "The draft is complete. If the user asked to create these issues, call jira.draft now with only " +
+  "draftId and draftDigest. Keiko asks for any approval this Chat's access mode requires; do not ask " +
+  "the user to confirm again.";
+
 function stagedView(draft: StagedJiraDraft, newDraft: boolean): ManagedMcpToolResult {
   const unresolved = unresolvedJiraDraftRefs(draft.items);
   return {
@@ -243,6 +253,7 @@ function stagedView(draft: StagedJiraDraft, newDraft: boolean): ManagedMcpToolRe
       pageCount: draft.pageCount,
       unresolvedRefCount: unresolved.length,
       unresolvedRefs: unresolved.slice(0, UNRESOLVED_LISTED_MAX),
+      ...(unresolved.length === 0 ? { guidance: JIRA_DRAFT_READY_GUIDANCE } : {}),
     },
   };
 }
