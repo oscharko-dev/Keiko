@@ -48,8 +48,11 @@ const args = (f, draft) => ({
   ...(draft ? { expectedDraft: f.workflowPrior } : {}),
 });
 const selected = (f) => f.workflowName;
+// Jira has no scheme without a default workflow: removing it reverts the scheme to the built-in one.
+const BUILT_IN_DEFAULT_WORKFLOW = "jira";
 function desiredMapping(before, kind, remove, f) {
-  if (kind === "default") return { ...before, defaultWorkflow: remove ? null : selected(f) };
+  if (kind === "default")
+    return { ...before, defaultWorkflow: remove ? BUILT_IN_DEFAULT_WORKFLOW : selected(f) };
   const retained = before.mappings.filter((row) =>
     kind === "issue-type" ? row.issueTypeId !== f.issueTypeId : row.workflow !== selected(f),
   );
@@ -57,7 +60,7 @@ function desiredMapping(before, kind, remove, f) {
   return {
     ...before,
     ...(kind === "workflow" && before.defaultWorkflow === selected(f)
-      ? { defaultWorkflow: null }
+      ? { defaultWorkflow: BUILT_IN_DEFAULT_WORKFLOW }
       : {}),
     mappings: [...retained, ...added].sort((a, b) => a.issueTypeId.localeCompare(b.issueTypeId)),
   };
