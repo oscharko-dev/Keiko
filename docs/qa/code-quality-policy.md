@@ -172,7 +172,9 @@ longer describes the policy. The four contracts boundary rules (no-runtime-typeo
 no-unknown-parameters, no-unsafe-dictionary-type and no-known-value-widening) stay inactive under
 `pending-boundary-migration` (#4278), and the five retired Effect rules stay retired. A scope that
 consists only of production files is not listed separately when `production` is active. Policy
-validation keeps refusing a shrink, so an activated scope stays active. The engine refuses an active
+validation keeps refusing a shrink, so an activated scope stays active. Later migrations under
+#3914 add a scope once its last finding of a rule is gone: no-chained-type-assertions became active
+for activity-log, cli, quality-intelligence, security, tool-catalog, tools and ui on 2026-11-09. The engine refuses an active
 scope without files on the real repository. A hermetic test fixture writes its policy with only the
 scopes its own files certainly fall in.
 

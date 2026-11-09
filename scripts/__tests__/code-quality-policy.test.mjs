@@ -30,7 +30,8 @@ const ASSERTION_RULES = [
 ];
 
 // Owner decision on #3991: each rule is active in contracts and in every scope where it had zero raw
-// findings when it was activated. These are the exact sets for the five contracts rules.
+// findings when it was activated. These are the exact sets for the five contracts rules. Later
+// migrations add a scope once its last finding of that rule is gone (#3914); a scope never leaves.
 const GENERAL_ZERO_FINDING_SCOPES = [
   "declarations",
   "documentary",
@@ -47,6 +48,8 @@ function zeroFindingScopes(packages) {
 }
 const ZERO_FINDING_SCOPES = {
   "anti-slop/no-chained-type-assertions": zeroFindingScopes([
+    "activity-log",
+    "cli",
     "connectors",
     "git",
     "mcp",
@@ -54,7 +57,12 @@ const ZERO_FINDING_SCOPES = {
     "memory-consolidation",
     "memory-governance",
     "memory-retrieval",
+    "quality-intelligence",
     "sdk",
+    "security",
+    "tool-catalog",
+    "tools",
+    "ui",
     "verification",
     "workflows",
     "workspace",
