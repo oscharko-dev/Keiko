@@ -3,7 +3,11 @@ import assert from "node:assert/strict";
 import { basicAuth, labRequest } from "./lab-client.mjs";
 import { readCase } from "./api-qualification-cases.mjs";
 import { observeAdminActor, adminMutationCase } from "./api-qualification-admin-cases.mjs";
-import { createQualificationIssue, fixtureWrite } from "./api-qualification-fixtures.mjs";
+import {
+  createQualificationIssue,
+  ensureAdminProjectPermission,
+  fixtureWrite,
+} from "./api-qualification-fixtures.mjs";
 import { assertQualificationJson } from "./api-qualification-json.mjs";
 import { proof, read, readRecord } from "./api-qualification-read.mjs";
 import {
@@ -320,7 +324,10 @@ export const API_QUALIFICATION_ASSETS_CASES = [
       f.assetAttachment = undefined;
       return proof(4);
     },
-    ensureAttachment,
+    async (c, f) => {
+      await ensureAdminProjectPermission(c, "DELETE_OWN_ATTACHMENTS");
+      await ensureAttachment(c, f);
+    },
   ),
   adminMutationCase(
     "jira.set-dashboard-item-property",

@@ -373,3 +373,42 @@ export async function privatizeQualificationFilter(context, filterId) {
   const after = await call("GET", base);
   assert.deepEqual(await after.json(), []);
 }
+
+/**
+ * The seeded permission scheme omits the project permissions that destructive qualification needs.
+ * The operator fixture grants one to the acting administrator in the project's own scheme, natively
+ * and idempotently, so the governed case runs and is read back instead of ending in a local 403.
+ */
+export async function ensureAdminProjectPermission(context, permission) {
+  assert.match(permission, /^[A-Z_]+$/u);
+  const have = await read(
+    context,
+    `/rest/api/2/mypermissions?projectKey=KEIKO&permissions=${permission}`,
+  );
+  if (have.permissions[permission]?.havePermission === true) return;
+  const scheme = await read(context, "/rest/api/2/project/KEIKO/permissionscheme");
+  assert.match(String(scheme.id), /^[1-9]\d*$/u);
+  const origin = labSessionConnection(context.session).origin;
+  const response = await globalThis.fetch(
+    new URL(`/rest/api/2/permissionscheme/${scheme.id}/permission`, origin),
+    {
+      method: "POST",
+      redirect: "manual",
+      signal: globalThis.AbortSignal.timeout(30_000),
+      headers: {
+        Authorization: basicAuth(context.session, context.actor),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        holder: { type: "user", parameter: "keiko-admin" },
+        permission,
+      }),
+    },
+  );
+  assert.equal(response.status, 201, "Jira must accept the project permission grant");
+  const after = await read(
+    context,
+    `/rest/api/2/mypermissions?projectKey=KEIKO&permissions=${permission}`,
+  );
+  assert.equal(after.permissions[permission]?.havePermission, true);
+}

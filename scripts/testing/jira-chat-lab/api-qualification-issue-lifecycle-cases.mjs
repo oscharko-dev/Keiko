@@ -4,6 +4,7 @@ import { read, proof } from "./api-qualification-read.mjs";
 import { adminMutationCase, observeAdminActor } from "./api-qualification-admin-cases.mjs";
 import {
   createQualificationIssue,
+  ensureAdminProjectPermission,
   fixtureWrite,
   issueReview,
 } from "./api-qualification-fixtures.mjs";
@@ -173,6 +174,9 @@ export const API_QUALIFICATION_ISSUE_LIFECYCLE_CASES = [
       assert.equal(String(project.id), f.lifecycleIssue.projectId);
       return proof(3);
     },
-    (c, f) => parent(c, f, "delete"),
+    async (c, f) => {
+      await ensureAdminProjectPermission(c, "DELETE_ISSUES");
+      await parent(c, f, "delete");
+    },
   ),
 ];
