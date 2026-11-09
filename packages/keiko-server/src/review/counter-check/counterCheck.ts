@@ -96,6 +96,8 @@ export interface CounterCheckInput {
   readonly signal: AbortSignal;
   /** The review run's correlation id: every session line points at it. */
   readonly runCorrelationId: string;
+  /** The review rules text the Reviewer received; absent when the repository has none. */
+  readonly rulesText?: string | undefined;
 }
 
 export interface CounterCheckOutcome {
@@ -272,7 +274,7 @@ function runSession(
         model,
         reservePromptTokens: reserver(limits, input.budget, meter),
         sessionId: session.correlationId,
-        objective: renderCounterCheckTask(input.candidate.report),
+        objective: renderCounterCheckTask(input.candidate.report, { rulesText: input.rulesText }),
         modelId: input.modelId,
         workspaceRoot: input.worktreeRoot,
         maxToolCalls: limits.maxToolCalls,

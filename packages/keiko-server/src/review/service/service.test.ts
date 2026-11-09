@@ -164,8 +164,25 @@ describe("review run service: complete runs and presentation (AC2)", () => {
     const view = await settled(h, await start(h));
     expect(h.counterInputs.map((input) => input.candidate.report.startLine)).toEqual([3, 4, 7]);
     expect(h.counterInputs.every((input) => input.modelId === "checker-model")).toBe(true);
+    expect(h.counterInputs.every((input) => input.rulesText === undefined)).toBe(true);
     expect(view.presentedFindings).toEqual([]);
     expect(view.settlement).toEqual({ kind: "complete" });
+  });
+
+  it("hands the review rules the Reviewer received to every counter-check (R4130-047)", async () => {
+    const rules = "Every added guard needs a regression test for both branches.";
+    const filing = reviewerFiling([reportAt(3, "high"), reportAt(4, "medium")]);
+    const h = setUp({
+      runtime: async (request, harness) => {
+        const result = await filing(request, harness);
+        if (!result.ok) return result;
+        return { ...result, rules: "loaded", rulesDigest: "a".repeat(64), rulesText: rules };
+      },
+    });
+    const view = await settled(h, await start(h));
+    expect(h.counterInputs).toHaveLength(2);
+    expect(h.counterInputs.every((input) => input.rulesText === rules)).toBe(true);
+    expect(JSON.stringify(view)).not.toContain(rules);
   });
 });
 
