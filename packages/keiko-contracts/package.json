@@ -131,6 +131,10 @@
       "types": "./dist/chat-tool-authority.d.ts",
       "import": "./dist/chat-tool-authority.js"
     },
+    "./runtime/desktop-chat-stream-wire": {
+      "types": "./dist/desktop-chat-stream-wire.d.ts",
+      "import": "./dist/desktop-chat-stream-wire.js"
+    },
     "./runtime/code-task-acceptance": {
       "types": "./dist/code-task-acceptance.d.ts",
       "import": "./dist/code-task-acceptance.js"

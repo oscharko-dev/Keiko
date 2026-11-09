@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   askGrounded,
   updateChatConnectedScopes,
@@ -2958,6 +2958,13 @@ function makeSseResponse(stream: ReadableStream<Uint8Array>): Response {
 // Field report 1.1.13: when the process serving a streamed turn ended, the UI showed "Receiving
 // response" indefinitely. A stream silent for longer than four keep-alive intervals fails closed.
 describe("sendDesktopChatStream — stalled stream watchdog", () => {
+  // The stream validation loads on demand before the request. The watchdog covers the network
+  // phases after it, so these fake-timer cases start from a loaded validator, as every turn after
+  // the first does.
+  beforeAll(async () => {
+    await import("@oscharko-dev/keiko-contracts/runtime/desktop-chat-stream-wire");
+  });
+
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();

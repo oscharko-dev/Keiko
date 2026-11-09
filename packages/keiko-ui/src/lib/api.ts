@@ -185,7 +185,6 @@ import {
 } from "./bff-correlation";
 import {
   DESKTOP_CHAT_STREAM_EVENT_TYPES,
-  isDesktopChatStreamEvent,
   type ChatContextStatusWire,
   type DesktopChatCreateRequestWire,
   type DesktopChatSendRequestWire,
@@ -1589,14 +1588,25 @@ function dispatchToolStreamEvent(
   }
 }
 
+type DesktopChatStreamEventGuard = (value: unknown) => value is DesktopChatStreamEvent;
+
+// The stream validation carries every governed Jira write operation an approval may name. Only a
+// Chat turn needs it, so it loads with the first streamed turn instead of with the first page
+// (`check:editor-bundle-size`). It loads before the request is sent.
+async function loadDesktopChatStreamEventGuard(): Promise<DesktopChatStreamEventGuard> {
+  const wire = await import("@oscharko-dev/keiko-contracts/runtime/desktop-chat-stream-wire");
+  return wire.isDesktopChatStreamEvent;
+}
+
 // Dispatches a parsed SSE (event, data) pair to the appropriate handler.
 function dispatchSseEvent(
   eventName: DesktopChatStreamEventType | undefined,
   parsed: unknown,
   handlers: StreamHandlers,
+  isStreamEvent: DesktopChatStreamEventGuard,
 ): void {
   const candidate = { event: eventName, data: parsed };
-  if (!isDesktopChatStreamEvent(candidate)) throw malformedDesktopChatStreamError();
+  if (!isStreamEvent(candidate)) throw malformedDesktopChatStreamError();
   switch (candidate.event) {
     case "tool-write-approval":
     case "tool-read-consent":
@@ -1630,6 +1640,7 @@ function processSseLines(
   lines: readonly string[],
   pendingEvent: DesktopChatStreamEventType | undefined,
   handlers: StreamHandlers,
+  isStreamEvent: DesktopChatStreamEventGuard,
 ): DesktopChatStreamEventType | undefined {
   let current = pendingEvent;
   for (const rawLine of lines) {
@@ -1644,7 +1655,7 @@ function processSseLines(
       } catch {
         throw malformedDesktopChatStreamError();
       }
-      dispatchSseEvent(current, parsed, handlers);
+      dispatchSseEvent(current, parsed, handlers, isStreamEvent);
       current = undefined;
     } else if (line === "") {
       current = undefined;
@@ -1754,6 +1765,7 @@ async function consumeSseStream(
   signal: AbortSignal,
   streamHandlers: StreamHandlers,
   correlationId: string,
+  isStreamEvent: DesktopChatStreamEventGuard,
 ): Promise<void> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -1775,14 +1787,14 @@ async function consumeSseStream(
       lineBuffer += decoder.decode(read.value, { stream: true });
       const lines = lineBuffer.split("\n");
       lineBuffer = lines.pop() ?? "";
-      pendingEvent = processSseLines(lines, pendingEvent, handlers);
+      pendingEvent = processSseLines(lines, pendingEvent, handlers, isStreamEvent);
     }
     // Flush any residual content left in lineBuffer when the stream ends
     // naturally (EOF). A proxy or buffer that drops the terminal \n\n would
     // otherwise silently lose the final SSE frame. Skipped on abort because
     // the contract is "stop reading without dispatching further events".
     if (reachedEof && lineBuffer !== "") {
-      processSseLines([lineBuffer], pendingEvent, handlers);
+      processSseLines([lineBuffer], pendingEvent, handlers, isStreamEvent);
     }
     if (terminated && !reachedEof) void reader.cancel();
   } finally {
@@ -1806,6 +1818,7 @@ export async function sendDesktopChatStream(
   handlers: StreamHandlers,
   correlationId = newClientCorrelationId(),
 ): Promise<void> {
+  const isStreamEvent = await loadDesktopChatStreamEventGuard();
   const requestInit: RequestInit = {
     method: "POST",
     body: JSON.stringify(input),
@@ -1836,7 +1849,7 @@ export async function sendDesktopChatStream(
   }
 
   handlers.onStarted?.(responseCorrelationId);
-  await consumeSseStream(res.body, signal, handlers, responseCorrelationId);
+  await consumeSseStream(res.body, signal, handlers, responseCorrelationId, isStreamEvent);
 }
 
 // ---------------------------------------------------------------------------

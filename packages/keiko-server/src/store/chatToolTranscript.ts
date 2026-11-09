@@ -13,9 +13,11 @@ import type {
 import {
   CHAT_TOOL_BATCH_TOOL_NAME,
   isChatToolBatchProgress,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
   isChatToolReadGrantView,
   isChatToolWriteApprovalView,
-} from "@oscharko-dev/keiko-contracts/bff-wire";
+} from "@oscharko-dev/keiko-contracts/runtime/desktop-chat-stream-wire";
 import type {
   ChatToolReadGrantView,
   ChatToolWriteApprovalView,

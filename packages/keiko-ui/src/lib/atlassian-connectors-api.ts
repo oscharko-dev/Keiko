@@ -14,7 +14,7 @@
 
 import { bffFetchJson } from "./http";
 import { ApiError } from "./api";
-import { isChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { isChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts/runtime/desktop-chat-stream-wire";
 import type {
   AtlassianConnectionVerificationStatus,
   ChatToolWriteApprovalView,

@@ -33,6 +33,7 @@ export type {
   ChatToolWriteApprovalState,
   ChatToolWriteApprovalDecision,
 } from "./chat-tool-authority.js";
+export type { isDesktopChatStreamEvent } from "./desktop-chat-stream-wire.js";
 export type { KEIKO_UI_LAUNCH_ID_ENV, UI_LAUNCH_ID_FLAG, isKeikoUiLaunchId } from "./ui-launch.js";
 
 // ─── Shared numeric primitive (GEN-DUP-SEMANTIC-003) ────────────────────────────
@@ -2698,7 +2699,6 @@ export type {
   DESKTOP_CHAT_STREAM_EVENT_TYPES,
   DESKTOP_CHAT_STREAM_TERMINAL_EVENT_TYPES,
   DESKTOP_CHAT_SEND_ABORT_CONTRACT,
-  isDesktopChatStreamEvent,
   isDesktopChatStreamTerminalEvent,
   eventIsDesktopChatStreamTerminal,
   resolveGroundingLimits,
