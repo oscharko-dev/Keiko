@@ -1,8 +1,9 @@
 // AC7 recipes 66-78: reindex, search error lookup, security level, project-owned avatars and the
 // upgrade result. Every oracle reads Jira directly with the lab actor; evidence stays body-free.
 import assert from "node:assert/strict";
+import { URL } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
-import { basicAuth, labRequest, labSessionConnection } from "./lab-client.mjs";
+import { basicAuth, labSessionConnection } from "./lab-client.mjs";
 import { readCase } from "./api-qualification-cases.mjs";
 import { proof, read } from "./api-qualification-read.mjs";
 import { adminMutationCase, observeAdminActor } from "./api-qualification-admin-cases.mjs";

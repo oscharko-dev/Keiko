@@ -1,6 +1,7 @@
 // Auxiliary fixtures use the very same governed dispatcher, journal and independent readback.
 // No fixture helper has an HTTP mutation fallback.
 import assert from "node:assert/strict";
+import { URL } from "node:url";
 import { Buffer } from "node:buffer";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
