@@ -77,7 +77,7 @@ function matchesTarget(member: unknown, selection: Membership): boolean {
 }
 const SPRINT_FIELD_SCHEMA = "com.pyxis.greenhopper.jira:gh-sprint";
 /** The Agile issue resource omits an empty sprint, so backlog membership is proven on the core issue
- * through the one Sprint custom field: its key must be present and null or an empty array. */
+ * through the one Sprint custom field: its key must be present and name no sprint but closed ones. */
 async function sprintFieldId(request: JiraMutationRequest): Promise<string | AgileFailure> {
   const response = await request("field", "GET", undefined, "json-array");
   if (!response.ok) return dispatchFailure(response);
@@ -105,6 +105,17 @@ function backlogFieldMissing(
     !Object.hasOwn(fields, fieldId)
   );
 }
+/** A closed sprint stays on an issue's Sprint field as history after a backlog move. Data Center
+ * renders an entry as an object or as `...Sprint@hash[id=1,rapidViewId=1,state=CLOSED,...]`; only an
+ * entry that names exactly one closed state is history, and any other entry keeps the conflict. */
+function closedSprintEntry(entry: unknown): boolean {
+  const record = asRecord(entry);
+  if (record !== undefined)
+    return typeof record.state === "string" && /^closed$/iu.test(record.state);
+  if (typeof entry !== "string") return false;
+  const states = [...entry.matchAll(/[[,]state=([A-Za-z]+)(?=[,\]])/gu)];
+  return states.length === 1 && /^closed$/iu.test(states[0]?.[1] ?? "");
+}
 async function confirmBacklogMember(
   request: JiraMutationRequest,
   key: string,
@@ -114,8 +125,8 @@ async function confirmBacklogMember(
   if (!response.ok) return dispatchFailure(response);
   if (backlogFieldMissing(response, key, fieldId)) return AGILE_MALFORMED;
   const value = asRecord(response.body?.fields)?.[fieldId];
-  const empty = value === null || (Array.isArray(value) && value.length === 0);
-  return empty ? undefined : AGILE_CONFLICT;
+  const backlog = value === null || (Array.isArray(value) && value.every(closedSprintEntry));
+  return backlog ? undefined : AGILE_CONFLICT;
 }
 async function confirmMember(
   request: JiraMutationRequest,

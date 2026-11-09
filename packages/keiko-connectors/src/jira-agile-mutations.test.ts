@@ -311,6 +311,47 @@ describe("native Agile writes and authoritative readback", () => {
       reason: "conflict",
     });
   });
+  it.each([
+    ["an object", [{ id: 9, name: "Sprint 1", state: "CLOSED" }]],
+    [
+      "a legacy string",
+      [
+        "com.atlassian.greenhopper.service.sprint.Sprint@1a2b[id=9,rapidViewId=1,state=CLOSED,name=Sprint 1,goal=]",
+      ],
+    ],
+  ])("keeps a closed sprint as history after a backlog move, rendered as %s", async (_, value) => {
+    const f = fixture([
+      response(204),
+      response(200, SPRINT_CATALOG),
+      response(200, { id: "12", key: "APP-12", fields: { customfield_10020: value } }),
+    ]);
+    expect(await f.run("jira.backlog-move-issues", { issues: ["APP-12"] })).toEqual({
+      ok: true,
+      receipt: { issueKeys: ["APP-12"] },
+    });
+  });
+  it.each([
+    [
+      "an open sprint beside a closed one",
+      [
+        { id: 8, state: "closed" },
+        { id: 9, state: "active" },
+      ],
+    ],
+    ["a future sprint", [{ id: 9, name: "Next", state: "FUTURE" }]],
+    ["a string naming two states", ["Sprint@1[id=9,state=CLOSED,name=x,state=ACTIVE]"]],
+    ["a string without a state", ["Sprint@1[id=9,name=Sprint 1]"]],
+  ])("still reports a conflict after a backlog move for %s", async (_, value) => {
+    const f = fixture([
+      response(204),
+      response(200, SPRINT_CATALOG),
+      response(200, { id: "12", key: "APP-12", fields: { customfield_10020: value } }),
+    ]);
+    expect(await f.run("jira.backlog-move-issues", { issues: ["APP-12"] })).toMatchObject({
+      ok: false,
+      reason: "conflict",
+    });
+  });
   it("confirms epic membership with the resolved epic identity", async () => {
     const f = fixture([
       response(200, EPIC),

@@ -907,6 +907,17 @@ These are constrained source contracts. The existing 439-row coverage ledger kee
 qualification unknown and AC1–AC9 open until actual current-head verification and original journey
 acceptance; neither a descriptor count nor this ADR supplies that evidence.
 
+Native shapes are read as Jira Data Center 10.3 actually returns them, as observed in the AC7
+qualification; each reading stays fail-closed. A version remote link's `link` is a `@JsonRawValue`
+string field, so the wire value already is the stored JSON and is not decoded a second time; an
+omitted member is unavailable and an explicit null is the stored JSON null. An issue remote link's
+`self` may name the bound issue by key or by ID; any other issue is refused. A backlog move is
+proven on the core Sprint field: a closed sprint stays there as history, so only entries that name
+exactly one closed state are ignored, and an open or unreadable entry remains a conflict.
+`mypreferences` and `monitoring/jmx/getAvailableMetrics` answer `text/plain` and are read as bounded
+text scalars that refuse control characters. A workflow-scheme issue-type read omits `workflow` for
+an unmapped type; only that read accepts the omission.
+
 Native issue-link changes bind both canonical parents and the complete reviewed relations;
 saved templates judge the planned native post-relation before a single effect. Remote-link
 replacement reuses one supported typed snapshot and does not follow its metadata URLs. Native
