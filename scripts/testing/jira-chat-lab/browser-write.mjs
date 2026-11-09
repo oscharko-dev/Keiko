@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { URL } from "node:url";
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session-pairing";
 import { mintLauncherPairingAttestation } from "../../../packages/keiko-server/dist/coding-app-session/launcherSessionPairingPort.js";
 import { qualifyBrowserLifecycle } from "./browser-lifecycle.mjs";
+import { isChatSendRequest } from "./browser-workflow-turn.mjs";
 import {
   connectPodFromPanel,
   requestWorkspaceJiraConnection,
@@ -36,13 +36,7 @@ async function connectChat(page, mode, connection = "dropdown") {
 
 async function sendPrompt(page, chat, prompt, onIntent) {
   await chat.getByRole("textbox", { name: "Chat message", exact: true }).fill(prompt);
-  const sent = page.waitForRequest((request) => {
-    const path = new URL(request.url()).pathname;
-    return (
-      request.method() === "POST" &&
-      (path === "/api/desktop/chat" || path === "/api/desktop/chat/stream")
-    );
-  });
+  const sent = page.waitForRequest(isChatSendRequest);
   await chat.getByRole("button", { name: "Send message", exact: true }).click();
   const request = await sent;
   const body = request.postDataJSON();

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  CHAT_SEND_PATHS,
+  isChatSendRequest,
   workflowUser,
   reviewWorkflowExchange,
 } from "../testing/jira-chat-lab/browser-workflow-turn.mjs";
@@ -45,5 +47,33 @@ describe("Shared Jira live-browser turn boundary", () => {
         ["jira.sprint-create"],
       ),
     ).toThrow();
+  });
+});
+
+describe("Chat send route recognition", () => {
+  const request = (method, path) => ({
+    method: () => method,
+    url: () => `http://127.0.0.1:1983${path}`,
+  });
+
+  it("recognizes a Knowledge Pod grounded send as a composer send (LIM21)", () => {
+    expect(isChatSendRequest(request("POST", "/api/chats/messages/grounded"))).toBe(true);
+    expect(isChatSendRequest(request("POST", "/api/desktop/chat/stream"))).toBe(true);
+    expect(isChatSendRequest(request("POST", "/api/desktop/chat"))).toBe(true);
+    expect(isChatSendRequest(request("GET", "/api/chats/messages/grounded"))).toBe(false);
+    expect(isChatSendRequest(request("POST", "/api/chats"))).toBe(false);
+  });
+
+  it("names exactly the product's composer send routes", async () => {
+    const { API_ROUTES } = await import("../../packages/keiko-server/dist/routes.js");
+    const sendHandlers = new Set([
+      "handleGroundedAsk",
+      "handleSendDesktopChat",
+      "handleSendDesktopChatStream",
+    ]);
+    const productPaths = API_ROUTES.filter(
+      (route) => route.method === "POST" && sendHandlers.has(route.handler.name),
+    ).map((route) => route.pattern);
+    expect(new Set(productPaths)).toEqual(CHAT_SEND_PATHS);
   });
 });

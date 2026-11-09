@@ -1,10 +1,10 @@
 // Fault ownership stays with this block; durable state stays with the existing limit-run intent.
 import { URL } from "node:url";
 import { observeFaultCheckpoint, gradeFaultCheckpoint } from "./browser-bulk-fault-oracle.mjs";
+import { CHAT_SEND_PATHS } from "./browser-workflow-turn.mjs";
 
 const SCOPES = new Set(["bulk-epics", "hierarchy", "progress"]);
 const KINDS = new Set(["response-drop", "server-kill"]);
-const SEND_PATHS = new Set(["/api/desktop/chat", "/api/desktop/chat/stream"]);
 const queues = new WeakMap();
 function requireFact(condition) {
   if (!condition) throw new TypeError("Invalid bulk fault contract");
@@ -113,7 +113,7 @@ async function responseDrop(ctx, scope, item) {
   requireFact(new Set(["127.0.0.1", "localhost", "[::1]"]).has(pageUrl.hostname));
   requireFact(pageUrl.username === "" && pageUrl.password === "");
   const origin = pageUrl.origin;
-  const matches = (url) => url.origin === origin && SEND_PATHS.has(url.pathname);
+  const matches = (url) => url.origin === origin && CHAT_SEND_PATHS.has(url.pathname);
   let claimed = false;
   const cleanup = async () => {
     ctx.signal.removeEventListener("abort", onAbort);

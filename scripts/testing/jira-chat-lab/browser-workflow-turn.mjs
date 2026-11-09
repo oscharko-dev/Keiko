@@ -386,6 +386,18 @@ function completedWorkflowTurn(observed, user, previousIds, clientTurnId, decisi
   };
 }
 
+/** Every route a Chat composer send can take: plain, streamed, and Knowledge Pod grounded. */
+export const CHAT_SEND_PATHS = new Set([
+  "/api/desktop/chat",
+  "/api/desktop/chat/stream",
+  "/api/chats/messages/grounded",
+]);
+
+/** A composer send, whichever route the Chat's sources select. */
+export function isChatSendRequest(request) {
+  return request.method() === "POST" && CHAT_SEND_PATHS.has(new URL(request.url()).pathname);
+}
+
 /** A visible composer submission and visible exact approvals; observation alone uses the Chat API. */
 export async function sendBrowserTurn(page, region, context, chatId, prompt, options = {}) {
   const before = await workflowHistory(context, chatId);
@@ -393,13 +405,7 @@ export async function sendBrowserTurn(page, region, context, chatId, prompt, opt
   const decisions = new Set();
   options.persist?.({ phase: "submission-may-have-started" });
   await region.getByRole("textbox", { name: "Chat message", exact: true }).fill(prompt);
-  const outgoing = page.waitForRequest(
-    (request) =>
-      request.method() === "POST" &&
-      new Set(["/api/desktop/chat", "/api/desktop/chat/stream"]).has(
-        new URL(request.url()).pathname,
-      ),
-  );
+  const outgoing = page.waitForRequest(isChatSendRequest);
   await region.getByRole("button", { name: "Send message", exact: true }).click();
   const body = (await outgoing).postDataJSON();
   assert.equal(body.chatId, chatId);
