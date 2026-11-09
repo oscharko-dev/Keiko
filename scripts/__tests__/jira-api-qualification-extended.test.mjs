@@ -250,6 +250,34 @@ it("reads the draft mapping using its native selector and the actual product fie
     entry.readback(ctx, { issueTypeId: "10002", workflow: "jira" }, fixture(entry.tool)),
   ).resolves.toMatchObject({ matched: true });
 });
+it("follows every page of the native screen list before binding the screen oracle", async () => {
+  const entry = API_QUALIFICATION_SCREEN_CASES.find((row) => row.tool === "jira.create-screen-tab");
+  const f = fixture(entry.tool);
+  delete f.qualificationScreenId;
+  const total = 150;
+  const starts = [];
+  const ctx = context((url) => {
+    if (url.pathname === "/rest/api/2/myself") return { key: "admin-key", name: "keiko-admin" };
+    if (url.pathname === "/rest/api/2/screens") {
+      const startAt = Number(url.searchParams.get("startAt"));
+      starts.push(startAt);
+      const count = Math.min(100, total - startAt);
+      return {
+        startAt,
+        maxResults: 100,
+        total,
+        screens: Array.from({ length: count }, (_value, index) => ({
+          id: startAt + index + 1,
+          name: `Screen ${String(startAt + index + 1)}`,
+        })),
+      };
+    }
+    return [{ id: "20", name: "Original" }];
+  });
+  await entry.prepare(ctx, f);
+  expect(starts).toEqual([0, 100]);
+  expect(f.qualificationScreenId).toBe("1");
+});
 it("refuses a layout readback that changes an earlier field while adding the requested field", async () => {
   const entry = API_QUALIFICATION_SCREEN_CASES.find(
     (row) => row.tool === "jira.add-screen-tab-field",
