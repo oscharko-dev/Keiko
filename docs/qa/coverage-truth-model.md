@@ -55,11 +55,11 @@ keiko-ui new code) and was corrected in ADR-0158.
 
 | Suite    | Configuration                                 | Job                            | Evidence handed on                                                    |
 | -------- | --------------------------------------------- | ------------------------------ | --------------------------------------------------------------------- |
-| packages | `vitest.coverage.packages.config.ts`          | `coverage-packages` (3 shards) | vitest blob reports, merged by `coverage-sonar` with `--mergeReports` |
+| packages | `vitest.coverage.packages.config.ts`          | `coverage-packages` (4 shards) | vitest blob reports, merged by `coverage-sonar` with `--mergeReports` |
 | keiko-ui | `packages/keiko-ui/vitest.coverage.config.ts` | `coverage-ui`                  | `lcov.info` + `coverage-summary.json` artifact                        |
-| scripts  | `vitest.coverage.scripts.config.ts`           | `coverage-scripts`             | `lcov.info` + `coverage-summary.json` artifact                        |
+| scripts  | `vitest.coverage.scripts.config.ts`           | `coverage-scripts` (3 shards)  | vitest blob reports, merged by `coverage-sonar` with `--mergeReports` |
 
-`coverage-sonar` downloads all three, reassembles the package summary, and is the only job that
+`coverage-sonar` downloads all three, reassembles the package and script summaries from their blobs, and is the only job that
 evaluates anything. No other job measures coverage — the `ui` job used to run the keiko-ui suite a
 second time and judge its own discarded copy; ADR-0158 D4 removed it.
 
