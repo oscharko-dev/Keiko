@@ -3,16 +3,16 @@ import { createHash } from "node:crypto";
 import { zipTextEntries } from "./zip-fixture.js";
 
 export const EMAIL_TEMPLATE_ACTOR = { key: "synthetic-admin-key", name: "synthetic-admin" };
-export const EMAIL_TEMPLATE_ENTRIES = [
+const EMAIL_TEMPLATE_ENTRIES = [
   { name: "templates/issue.vm", content: "Synthetic issue notification: $issue.summary" },
   { name: "templates/footer.vm", content: "Synthetic footer" },
 ] as const;
-export function emailTemplateHash(bytes: Uint8Array | string): string {
+function emailTemplateHash(bytes: Uint8Array | string): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 // Mapped alias, not an interface: the value is passed as JSON tool arguments and an interface
 // has no implicit index signature.
-export type EmailTemplateExpectedFile = Readonly<{
+type EmailTemplateExpectedFile = Readonly<{
   name: string;
   sizeBytes: number;
   sha256: string;

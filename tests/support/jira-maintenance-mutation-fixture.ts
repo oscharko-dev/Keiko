@@ -30,14 +30,14 @@ export const MAINTENANCE_CLUSTER_REVIEW = {
   state: "READY_TO_UPGRADE",
   build: { buildNumber: 113003, version: "11.3.3" },
 } as const;
-export const MAINTENANCE_REINDEX_REVIEW = {
+const MAINTENANCE_REINDEX_REVIEW = {
   taskState: "observed",
   type: "BACKGROUND",
   currentProgress: 100,
   success: true,
   finishTime: "native-finished",
 } as const;
-export const MAINTENANCE_UPGRADE_REVIEW = {
+const MAINTENANCE_UPGRADE_REVIEW = {
   upgradeState: "result",
   upgradeOutcome: "SUCCESS",
   duration: 0,

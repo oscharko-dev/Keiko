@@ -4,7 +4,7 @@
  * @typedef {{
  *   sessionDir: string,
  *   session: object,
- *   page: import("playwright").Page,
+ *   page: import("@playwright/test").Page,
  *   projectKey: string,
  *   locale: "en" | "de",
  *   modelId: string,

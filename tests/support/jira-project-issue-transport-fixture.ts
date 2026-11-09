@@ -66,7 +66,7 @@ const RECIPROCAL_READS: Readonly<Record<string, Expectation>> = {
 };
 /** Independent literal body: the real bulk executor still calls prepareJiraCreate and reads
  * native metadata for every item before this one HTTP effect can match. */
-export const BULK_CREATE_NATIVE_BODY = {
+const BULK_CREATE_NATIVE_BODY = {
   issueUpdates: [
     {
       fields: { summary: "First reviewed issue", project: { id: "10000" }, issuetype: { id: "3" } },

@@ -39,7 +39,7 @@ const PERMISSION_READS = new Set([
   "permissionscheme/9007199254740993/permission",
   "permissionscheme/7/attribute/ADMINISTER_PROJECTS.extended.enabled",
 ]);
-export function permissionSchemeTransportFixture(
+function permissionSchemeTransportFixture(
   apiRoot: string,
   selected: (typeof PERMISSION_SCHEME_MUTATION_CASES)[number],
   actorKey = "synthetic-actor",
@@ -71,7 +71,7 @@ export function permissionSchemeTransportFixture(
     () => native.snapshot(),
   );
 }
-export function roleTransportFixture(
+function roleTransportFixture(
   apiRoot: string,
   selected: (typeof ROLE_MUTATION_FIXTURE_CASES)[number],
   actorKey = "synthetic-actor",

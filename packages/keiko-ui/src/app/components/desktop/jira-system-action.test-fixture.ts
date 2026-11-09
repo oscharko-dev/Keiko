@@ -52,7 +52,7 @@ const REINDEX = {
   finishTime: "native-time",
 };
 const FLAGS = { indexComments: false, indexChangeHistory: true, indexWorklogs: false };
-export const SYSTEM_REVIEWED_ROLE = {
+const SYSTEM_REVIEWED_ROLE = {
   key: "jira-software",
   groups: ["jira-users"],
   defaultGroups: ["jira-users"],
@@ -97,7 +97,7 @@ const TERMS = [
     isDefault: true,
   },
 ];
-export const SYSTEM_NOTIFICATION_DIGEST = "a".repeat(64);
+const SYSTEM_NOTIFICATION_DIGEST = "a".repeat(64);
 
 /** Literal reviewed inputs and independent receipts; never generated from registry or presentation logic. */
 export const SYSTEM_ACTION_CASES: readonly SystemActionCase[] = [

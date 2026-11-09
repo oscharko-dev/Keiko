@@ -8,7 +8,7 @@ import {
 } from "./api-qualification-admin-cases.mjs";
 import { createQualificationProject } from "./api-qualification-fixtures.mjs";
 
-export function issueTypeReview(value) {
+function issueTypeReview(value) {
   return {
     ...nativeSnapshot(value, ["id", "name", "description", "subtask"]),
     ...(value.avatarId === undefined ? {} : { avatarId: String(value.avatarId) }),

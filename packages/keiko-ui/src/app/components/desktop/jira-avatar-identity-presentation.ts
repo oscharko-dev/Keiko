@@ -24,8 +24,8 @@ import {
   type AccountResourceSource as Source,
 } from "./jira-account-resource-values";
 
-export const JIRA_AVATAR_WRITE_TOOLS = accountResourceAliases(JIRA_AVATAR_MUTATIONS);
-export const JIRA_IDENTITY_WRITE_TOOLS = accountResourceAliases(JIRA_IDENTITY_MUTATIONS);
+const JIRA_AVATAR_WRITE_TOOLS = accountResourceAliases(JIRA_AVATAR_MUTATIONS);
+const JIRA_IDENTITY_WRITE_TOOLS = accountResourceAliases(JIRA_IDENTITY_MUTATIONS);
 export const JIRA_AVATAR_IDENTITY_TOOLS: ReadonlySet<string> = new Set([
   ...JIRA_AVATAR_WRITE_TOOLS,
   ...JIRA_IDENTITY_WRITE_TOOLS,

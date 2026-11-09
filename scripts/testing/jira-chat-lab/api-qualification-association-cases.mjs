@@ -13,7 +13,7 @@ import {
 } from "./api-qualification-fixtures.mjs";
 import { optionSchemeReview, OPTION_SCHEMES } from "./api-qualification-schema-cases.mjs";
 
-export async function permissionSchemeReview(c, id) {
+async function permissionSchemeReview(c, id) {
   const value = await read(c, `/rest/api/2/permissionscheme/${id}`);
   const grants = await read(c, `/rest/api/2/permissionscheme/${id}/permission`);
   assert.ok(Array.isArray(grants.permissions));

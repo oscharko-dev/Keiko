@@ -8,7 +8,7 @@ const root = (f) => `/rest/api/2/screens/${f.qualificationScreenId}`;
 const fieldsPath = (f) => `${root(f)}/tabs/${f.qualificationTabId}/fields`;
 const tabName = (f) => `AC7 ${f.runId}`;
 const normalizeTabs = (rows) => rows.map((row) => ({ id: String(row.id), name: row.name }));
-export const screenFieldReview = (rows) =>
+const screenFieldReview = (rows) =>
   rows.map((row) => ({
     id: row.id,
     name: row.name,

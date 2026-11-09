@@ -7,7 +7,7 @@ import { adminMutationCase, observeAdminActor } from "./api-qualification-admin-
 import { labSessionConnection } from "./lab-client.mjs";
 
 const snapshotPath = "/rest/api/2/index-snapshot";
-export function indexSnapshotReview(rows) {
+function indexSnapshotReview(rows) {
   assert.ok(Array.isArray(rows));
   return rows.map((row) => {
     assert.equal(typeof row.absolutePath, "string");

@@ -18,7 +18,7 @@ import {
 
 const aliases = (names: readonly string[]): ReadonlySet<string> =>
   new Set(names.map((name) => name.replace(/[.-]/gu, "_")));
-export const JIRA_AGILE_PLANNING_TOOLS = aliases(JIRA_AGILE_PLANNING_MUTATIONS);
+const JIRA_AGILE_PLANNING_TOOLS = aliases(JIRA_AGILE_PLANNING_MUTATIONS);
 export const JIRA_VERSION_LINK_WRITE_TOOLS = aliases(JIRA_VERSION_REMOTE_LINK_MUTATIONS);
 export const JIRA_CATEGORY_WRITE_TOOLS = aliases(JIRA_PROJECT_CATEGORY_MUTATIONS);
 export const JIRA_PLANNING_MUTATION_TOOLS: ReadonlySet<string> = new Set([

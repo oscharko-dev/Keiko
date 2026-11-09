@@ -47,7 +47,7 @@ async function privateDockerOutput(args, path) {
   return snapshotFileDigest(path);
 }
 
-export async function snapshotQualificationSession(session) {
+async function snapshotQualificationSession(session) {
   // Reuse the existing image, labels, published-port and peer ownership admission.
   const services = await inspectServices(session);
   const id = randomUUID();

@@ -22,7 +22,7 @@ import {
 export const JIRA_SCREEN_CONFIGURATION_TOOLS: ReadonlySet<string> = new Set(
   JIRA_SCREEN_CONFIGURATION_MUTATIONS.map((name) => name.replace(/[.-]/gu, "_")),
 );
-export const JIRA_BOARD_CONFIGURATION_TOOLS: ReadonlySet<string> = new Set(
+const JIRA_BOARD_CONFIGURATION_TOOLS: ReadonlySet<string> = new Set(
   JIRA_BOARD_CONFIGURATION_MUTATIONS.map((name) => name.replace(/[.-]/gu, "_")),
 );
 export const JIRA_CONFIGURATION_MUTATION_TOOLS: ReadonlySet<string> = new Set([

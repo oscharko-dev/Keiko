@@ -15,7 +15,7 @@ import {
 
 const aliases = (names: readonly string[]): ReadonlySet<string> =>
   new Set(names.map((name) => name.replace(/[.-]/gu, "_")));
-export const JIRA_PERMISSION_SCHEME_WRITE_TOOLS = aliases(JIRA_PERMISSION_SCHEME_MUTATIONS);
+const JIRA_PERMISSION_SCHEME_WRITE_TOOLS = aliases(JIRA_PERMISSION_SCHEME_MUTATIONS);
 export const JIRA_ROLE_WRITE_TOOLS = aliases(JIRA_ROLE_MUTATIONS);
 export const JIRA_ACCESS_CONFIGURATION_TOOLS: ReadonlySet<string> = new Set([
   ...JIRA_PERMISSION_SCHEME_WRITE_TOOLS,

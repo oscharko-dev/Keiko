@@ -203,32 +203,3 @@ export function assertNativeJiraPrimary(observation: Observation, scenario: Scen
     expected.apiRoot,
   ]);
 }
-
-/** Registry agreement is additional consistency evidence, never an independent native oracle. */
-export function assertNativeJiraRegistryAgreement(
-  observation: Observation,
-  scenario: Scenario,
-): void {
-  const { definition, requests } = observation;
-  const primary = requests
-    .filter((request) => request.method === definition.method)
-    .at(scenario.primaryMethodIndex ?? 0);
-  if (primary === undefined) throw new TypeError("No native operation was dispatched");
-  const expectedPath =
-    definition.apiRoot +
-    definition.pathTemplate.replaceAll(/\{([^{}]+)\}/gu, (_match, parameter: string) => {
-      const value = scenario.parameters?.[parameter];
-      if (value === undefined) throw new TypeError(`Missing fixture path parameter ${parameter}`);
-      return encodeURIComponent(value);
-    });
-  const actual = new URL(primary.url);
-  expect([primary.method, actual.origin, actual.pathname]).toEqual([
-    definition.method,
-    "https://jira.example.invalid",
-    `/context${expectedPath}`,
-  ]);
-  expect(Object.fromEntries(actual.searchParams)).toEqual(scenario.query ?? {});
-  expect(definition.identity).toBe(
-    `${primary.method} ${definition.apiRoot}${definition.pathTemplate}`,
-  );
-}

@@ -5,15 +5,15 @@ import type {
   JiraAvatarTarget,
 } from "../../packages/keiko-connectors/src/jira-avatar-mutation-values.js";
 
-export const AVATAR_FIXTURE_ACTOR = "synthetic-actor";
-export const AVATAR_FIXTURE_CROP = { cropperOffsetX: 0, cropperOffsetY: 0, cropperWidth: 32 };
+const AVATAR_FIXTURE_ACTOR = "synthetic-actor";
+const AVATAR_FIXTURE_CROP = { cropperOffsetX: 0, cropperOffsetY: 0, cropperWidth: 32 };
 export const AVATAR_FIXTURE_BYTES = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
 export const AVATAR_FIXTURE_FILE = {
   name: "avatar.png",
   sizeBytes: AVATAR_FIXTURE_BYTES.byteLength,
   sha256: createHash("sha256").update(AVATAR_FIXTURE_BYTES).digest("hex"),
 };
-export const AVATAR_FIXTURE_TEMP = {
+const AVATAR_FIXTURE_TEMP = {
   uploadSha256: AVATAR_FIXTURE_FILE.sha256,
   uploadBytes: AVATAR_FIXTURE_FILE.sizeBytes,
   crop: AVATAR_FIXTURE_CROP,

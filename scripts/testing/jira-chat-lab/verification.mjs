@@ -16,7 +16,7 @@ import {
 } from "./lab-client.mjs";
 import { privateJson } from "./private-json.mjs";
 import { inspectServices, labDocker as docker } from "./lab-services.mjs";
-export { validateServices, validateLabImage, inspectServices } from "./lab-services.mjs";
+export { validateServices, validateLabImage } from "./lab-services.mjs";
 
 const SCRIPT = fileURLToPath(import.meta.url);
 const execute = promisify(execFile);

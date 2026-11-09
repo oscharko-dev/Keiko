@@ -31,7 +31,7 @@ export class QualificationPreparationError extends Error {
 
 const SELECT_TYPE = "com.atlassian.jira.plugin.system.customfieldtypes:select";
 const SELECT_SEARCHER = "com.atlassian.jira.plugin.system.customfieldtypes:multiselectsearcher";
-export const DEFAULT_PERMISSION_ATTRIBUTE_KEY = "ac7.synthetic.attribute";
+const DEFAULT_PERMISSION_ATTRIBUTE = "ac7.synthetic.attribute";
 const numeric = /^[1-9]\d*$/u;
 
 /** Authenticated admin call straight to the lab; a body is JSON unless raw text is requested. */
@@ -169,7 +169,7 @@ async function optionIdFor(io, fieldId, value) {
  * Jira DC 10.3 documents no REST write for select options (the customFields resource only lists
  * them), so the option is added through the supported administration UI of that very field.
  */
-export async function addOptionThroughUi(page, origin, fieldId, value) {
+async function addOptionThroughUi(page, origin, fieldId, value) {
   await page.goto(
     `${origin}/secure/admin/ConfigureCustomField!default.jspa?customFieldId=${fieldId.slice(12)}`,
     { waitUntil: "domcontentloaded" },
@@ -261,7 +261,7 @@ const GADGET_URL =
   "rest/gadgets/1.0/g/com.atlassian.jira.gadgets:assigned-to-me-gadget/gadgets/assigned-to-me-gadget.xml";
 
 /** Create the dashboard in Jira's own UI, then add one gadget with the UI's own authenticated call. */
-export async function createDashboardThroughUi(page, origin, name) {
+async function createDashboardThroughUi(page, origin, name) {
   await page.goto(`${origin}/secure/AddPortalPage!default.jspa`, { waitUntil: "domcontentloaded" });
   await page.locator("input[name=portalPageName]").fill(name);
   await page.getByRole("button", { name: "Add", exact: true }).click();
@@ -321,7 +321,7 @@ export async function prepareEmailDefault(io, fixture, session) {
   };
 }
 
-export function readFixtureManifest(directory) {
+function readFixtureManifest(directory) {
   const path = join(directory, "fixture.json");
   const value = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : undefined;
   if (value === null || typeof value !== "object" || Array.isArray(value))
@@ -333,7 +333,7 @@ export function readFixtureManifest(directory) {
 export async function prepareOperatorFixtures(session, io, options = {}) {
   const { path, value } = readFixtureManifest(session.directory);
   const nonce = options.nonce ?? randomBytes(4).toString("hex");
-  const key = options.permissionAttributeKey ?? DEFAULT_PERMISSION_ATTRIBUTE_KEY;
+  const key = options.permissionAttributeKey ?? DEFAULT_PERMISSION_ATTRIBUTE;
   let manifest = { ...value, ...(await prepareEmailDefault(io, value, session)) };
   const steps = [
     (current) => prepareSyncedSprints(io, current, nonce),

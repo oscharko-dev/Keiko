@@ -253,3 +253,11 @@ paths = ['''^scripts/__tests__/jira-api-qualification-property\.test\.mjs$''']
 targetRules = ["generic-api-key"]
 regexTarget = "line"
 regexes = ['''^\s*const propertyKey = "keiko-ac7-synthetic-run";$''']
+
+[[allowlists]]
+description = "PR #4288: the synthetic AC7 permission-scheme attribute name `ac7.synthetic.attribute` in the history of the Jira API qualification operator fixtures (commit d481038df). The generic-api-key rule reads the `..._ATTRIBUTE_KEY = ...` constant as a key; the value is a public attribute name, not a credential. The constant was renamed afterwards, so the squash-merged tree carries no key-shaped line. Scoped by content, not by commit, so it holds for any history shape: only that exact historical line in that one file and rule is exempt, and every other finding in the file remains enforced."
+condition = "AND"
+paths = ['''^scripts/testing/jira-chat-lab/api-qualification-operator-fixtures\.mjs$''']
+targetRules = ["generic-api-key"]
+regexTarget = "line"
+regexes = ['''^\n?export const DEFAULT_PERMISSION_ATTRIBUTE_KEY = "ac7\.synthetic\.attribute";$''']

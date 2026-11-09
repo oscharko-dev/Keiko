@@ -12,7 +12,7 @@ interface ConfigurationCase {
   readonly args: CatalogJsonObject;
   readonly receipt: CatalogJsonObject;
 }
-export const CONFIGURATION_TABS = [
+const CONFIGURATION_TABS = [
   { id: "11", name: "Overview tab" },
   { id: "12", name: "Detail tab" },
 ];

@@ -170,13 +170,13 @@ import {
 import { jiraPresentationNativeText } from "./jira-presentation-values";
 
 /** One Jira issue a tool call created, changed or read, as a person recognises it. */
-export interface JiraOutcomeIssue {
+interface JiraOutcomeIssue {
   readonly key: string;
   readonly summary?: string;
   readonly href?: string;
 }
 /** One draft item Keiko's own field check refused before Jira saw it. */
-export interface JiraOutcomeItemValidation {
+interface JiraOutcomeItemValidation {
   readonly ref: string;
   readonly validation: JiraFieldValidationFailure;
 }
@@ -241,7 +241,7 @@ export const JIRA_OUTCOME_ITEMS_SHOWN = 5;
 const JIRA_OUTCOME_PROBLEMS_SHOWN = 20;
 const ISSUE_KEY = /^[A-Z][A-Z0-9_]{0,63}-\d{1,12}$/u;
 const PROJECT_KEY = /^[A-Z][A-Z0-9_]{0,63}$/u;
-export const JIRA_PROJECT_TOOLS: ReadonlySet<string> = new Set([
+const JIRA_PROJECT_TOOLS: ReadonlySet<string> = new Set([
   "jira_project",
   "jira_create_project",
   "jira_update_project",

@@ -19,7 +19,7 @@ export const ISSUE_LIFECYCLE_REVIEW = {
   projectId: "10000",
   issueTypeId: "3",
 } as const;
-export const ISSUE_LIFECYCLE_OTHER = {
+const ISSUE_LIFECYCLE_OTHER = {
   id: "9223372036854775807",
   key: "SYN-2",
   summary: "Reviewed second issue",

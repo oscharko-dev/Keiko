@@ -1,7 +1,7 @@
 import type { ChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts";
 import type { JiraMutationReceipt } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-export type PlanningOperation = Extract<
+type PlanningOperation = Extract<
   ChatToolWriteApprovalView,
   { kind: "jira-chat-write" }
 >["operation"];

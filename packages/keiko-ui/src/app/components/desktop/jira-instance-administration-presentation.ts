@@ -32,7 +32,7 @@ const PROPERTY_KEYS = new Set([
   "jira.option.watching",
   "jira.option.timetracking",
 ]);
-export function jiraAdministrativeDigest(value: unknown): value is string {
+function jiraAdministrativeDigest(value: unknown): value is string {
   return typeof value === "string" && /^[0-9a-f]{64}$/u.test(value);
 }
 function columns(value: unknown): value is string[] {

@@ -28,7 +28,7 @@ export const DIRECTORY_ROLE_TARGET = {
   groups: ["jira-users", "R&D team"],
   defaultGroups: ["R&D team"],
 } as const;
-export const DIRECTORY_TARGET_USER = { key: "target-user", name: "Target User" } as const;
+const DIRECTORY_TARGET_USER = { key: "target-user", name: "Target User" } as const;
 const COMMON = { expectedActorKey: "synthetic-actor" } as const;
 const ACCESS = {
   ...COMMON,

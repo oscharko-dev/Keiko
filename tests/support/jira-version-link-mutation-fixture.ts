@@ -7,7 +7,7 @@ import type { AtlassianWriteHttpOutcome } from "../../packages/keiko-connectors/
 import { settleSync } from "./jira-fixture-settle.js";
 import type { JiraMutationRequest } from "../../packages/keiko-connectors/src/jira-managed-mutation-metadata.js";
 
-export const VERSION_LINK_SNAPSHOT = {
+const VERSION_LINK_SNAPSHOT = {
   name: "Reviewed release",
   description: null,
   startDate: null,
@@ -20,7 +20,7 @@ export const VERSION_LINK_OLD_NODES = [
   { path: "/globalId", kind: "string", textValue: "release:link" },
   { path: "/flag", kind: "boolean", booleanValue: false },
 ] as const;
-export const VERSION_LINK_NEW_NODES = [
+const VERSION_LINK_NEW_NODES = [
   { path: "", kind: "object", childCount: 2 },
   { path: "/globalId", kind: "string", textValue: "release:link" },
   { path: "/flag", kind: "boolean", booleanValue: true },

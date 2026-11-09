@@ -9,7 +9,7 @@ import {
   type JiraPresentationSource as Source,
 } from "./jira-presentation-values";
 
-export const JIRA_ISSUE_CONTEXT_TOOLS: ReadonlySet<string> = new Set([
+const JIRA_ISSUE_CONTEXT_TOOLS: ReadonlySet<string> = new Set([
   "jira_issue_picker",
   "jira_pinned_comments",
   "jira_subtasks",

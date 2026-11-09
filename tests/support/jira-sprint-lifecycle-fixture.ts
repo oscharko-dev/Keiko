@@ -18,7 +18,7 @@ export const SPRINT_LIFECYCLE_FIRST = {
   autoStartStop: false,
   incompleteIssuesDestinationId: null,
 } as const;
-export const SPRINT_LIFECYCLE_SECOND = {
+const SPRINT_LIFECYCLE_SECOND = {
   ...SPRINT_LIFECYCLE_FIRST,
   id: "12",
   name: "Synthetic second",

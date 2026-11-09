@@ -21,7 +21,7 @@ import {
 export const JIRA_PRIVATE_ACCOUNT_WRITE_TOOLS = accountResourceAliases(
   JIRA_PRIVATE_ACCOUNT_MUTATIONS,
 );
-export const JIRA_PRIVATE_ACCOUNT_READ_TOOLS = accountResourceAliases(
+const JIRA_PRIVATE_ACCOUNT_READ_TOOLS = accountResourceAliases(
   JIRA_READ_TOOL_FAMILIES.privateAccount,
 );
 export const JIRA_PRIVATE_ACCOUNT_TOOLS: ReadonlySet<string> = new Set([

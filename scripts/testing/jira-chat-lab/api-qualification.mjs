@@ -480,7 +480,7 @@ function qualificationPlan(directory, only) {
   assert.ok(selected.length > 0);
   return { session, ledger, revision, selected };
 }
-export async function qualifyApi(directory, only, snapshotId, { emailDefaultOracle } = {}) {
+async function qualifyApi(directory, only, snapshotId, { emailDefaultOracle } = {}) {
   const { session, ledger, revision, selected } = qualificationPlan(directory, only);
   await observeRelease(session);
   const { report, output, pending } = prepareRun(session, ledger, revision);

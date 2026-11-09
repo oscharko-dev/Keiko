@@ -9,7 +9,7 @@ import { writeCorpusDocuments } from "./requirements/corpus-documents.mjs";
 import { gradeTemplateListing, gradeTemplateValidation } from "./requirements/templates.mjs";
 
 /** The response an action causes; a failed action never leaves the response wait unobserved. */
-export async function responseAfter(page, method, path, action) {
+async function responseAfter(page, method, path, action) {
   const pending = page.waitForResponse(
     (response) =>
       response.request().method() === method && new URL(response.url()).pathname === path,

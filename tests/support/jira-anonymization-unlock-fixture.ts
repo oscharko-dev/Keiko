@@ -4,7 +4,7 @@ import type { JiraPrivateIdentityPorts } from "../../packages/keiko-connectors/s
 import type { AtlassianWriteHttpOutcome } from "../../packages/keiko-connectors/src/atlassian-write-http.js";
 import { settleSync } from "./jira-fixture-settle.js";
 
-export const ANONYMIZATION_UNLOCK_PROGRESS = {
+const ANONYMIZATION_UNLOCK_PROGRESS = {
   executingNode: "native-owner-node",
   userKey: "anonymized-target",
   submittedTime: "2026-11-08T12:00:00.000+0000",

@@ -9,13 +9,13 @@ import type {
   JiraIdentityReceipt,
 } from "../../packages/keiko-connectors/src/jira-identity-mutation-values.js";
 
-export const IDENTITY_USER_REVIEW = {
+const IDENTITY_USER_REVIEW = {
   key: "target-user",
   name: "Target User",
   displayName: "Reviewed user",
   active: true,
 } as const;
-export const IDENTITY_OPERATIONS = ["USER_DISABLE", "USER_KEY_CHANGE", "USER_NAME_CHANGE"] as const;
+const IDENTITY_OPERATIONS = ["USER_DISABLE", "USER_KEY_CHANGE", "USER_NAME_CHANGE"] as const;
 const USER = { key: IDENTITY_USER_REVIEW.key, name: IDENTITY_USER_REVIEW.name };
 const OWNER = { key: "owner-key", name: "Owner User" };
 const ACTOR = "synthetic-actor";

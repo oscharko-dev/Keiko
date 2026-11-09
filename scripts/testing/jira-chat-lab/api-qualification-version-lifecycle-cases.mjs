@@ -3,7 +3,7 @@ import { read, proof } from "./api-qualification-read.mjs";
 import { adminMutationCase, observeAdminActor } from "./api-qualification-admin-cases.mjs";
 import { createQualificationVersion } from "./api-qualification-fixtures.mjs";
 
-export function versionReview(value) {
+function versionReview(value) {
   const snapshot = {};
   for (const key of ["name", "description", "startDate", "releaseDate", "released", "archived"]) {
     assert.ok(Object.hasOwn(value, key));

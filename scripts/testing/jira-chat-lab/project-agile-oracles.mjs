@@ -186,7 +186,7 @@ const FAILURE_CODES = new Set([
 ]);
 
 /** Scorecards carry only closed classifications, never an assertion's native values or cause. */
-export class JourneyStepFailure extends Error {
+class JourneyStepFailure extends Error {
   constructor(code, stage, presentationFindings = 0) {
     super("Browser journey qualification failed");
     if (
@@ -204,7 +204,7 @@ export class JourneyStepFailure extends Error {
   }
 }
 
-export function requireJourneyCondition(condition, code, stage, presentationFindings = 0) {
+function requireJourneyCondition(condition, code, stage, presentationFindings = 0) {
   if (!condition) throw new JourneyStepFailure(code, stage, presentationFindings);
 }
 

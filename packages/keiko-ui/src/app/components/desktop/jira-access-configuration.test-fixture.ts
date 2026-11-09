@@ -19,10 +19,8 @@ export const ACCESS_SCHEME = {
     { id: "22", permission: "EDIT_ISSUES", holder: { type: "user", parameter: "reviewed-user" } },
   ],
 };
-export const ACCESS_ROLE = { id: "7", name: "Reviewed role", description: null };
-export const ACCESS_ACTORS = [
-  { id: "70", type: "atlassian-group-role-actor", name: "current-group" },
-];
+const ACCESS_ROLE = { id: "7", name: "Reviewed role", description: null };
+const ACCESS_ACTORS = [{ id: "70", type: "atlassian-group-role-actor", name: "current-group" }];
 const ACTOR = { expectedActorKey: "actor-key" };
 const SCHEME = { ...ACTOR, expectedScheme: ACCESS_SCHEME };
 const ROLE = { ...ACTOR, expectedRole: ACCESS_ROLE, expectedActors: ACCESS_ACTORS };

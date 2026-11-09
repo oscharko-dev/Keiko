@@ -17,13 +17,13 @@ export const PROJECT_LIFECYCLE_REVIEW = {
   archived: false,
   projectTypeKey: "software",
 } as const;
-export const PROJECT_PERMISSION_REVIEW = {
+const PROJECT_PERMISSION_REVIEW = {
   id: "7",
   name: "Current permission scheme",
   description: "",
   permissions: [],
 } as const;
-export const PROJECT_PERMISSION_TARGET = {
+const PROJECT_PERMISSION_TARGET = {
   id: "8",
   name: "Target permission scheme",
   description: "Reviewed permissions",
@@ -43,7 +43,7 @@ export const PROJECT_PRIORITY_REVIEW = {
   defaultOptionId: "1",
   defaultScheme: false,
 } as const;
-export const PROJECT_PRIORITY_TARGET = {
+const PROJECT_PRIORITY_TARGET = {
   id: "10",
   name: "Target priority scheme",
   description: "",

@@ -5,8 +5,8 @@
 import { basicAuth, labRequest } from "./lab-client.mjs";
 import { withLabAdmin } from "./seed-admin.mjs";
 
-export const FIXTURE_SECURITY_SCHEME = "Keiko synthetic security scheme";
-export const FIXTURE_SECURITY_LEVEL = "Keiko synthetic security level";
+const FIXTURE_SECURITY_SCHEME = "Keiko synthetic security scheme";
+const FIXTURE_SECURITY_LEVEL = "Keiko synthetic security level";
 const PROJECT_KEY = "KEIKO";
 
 async function nativeRead(session, path) {

@@ -10,7 +10,7 @@ import { connectQualificationFile } from "./api-qualification-fixtures.mjs";
 import { createZip } from "./requirements/ooxml-zip.mjs";
 import { writeCorpusDocuments } from "./requirements/corpus-documents.mjs";
 
-export const assetHash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const assetHash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const MAX_BYTES = 20 * 1024 * 1024;
 const MAX_ENTRIES = 1000;
 
