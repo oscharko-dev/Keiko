@@ -54,7 +54,10 @@ services:
       # unless the authentication plugin runs in legacy mode, so no administrator cookie session
       # (and therefore no websudo or session-bound avatar proof) exists. The documented system
       # property restores the pre-2SV login contract of the instance a customer upgrades from.
-      JVM_SUPPORT_RECOMMENDED_ARGS: "-Datlassian.authentication.legacy.mode=true"
+      # The synced-sprints feature flag lets an administrator create the genuinely synced sprints
+      # the sprint unmap qualification needs; Jira answers "cannot create a synced sprint when the
+      # feature is disabled" otherwise. The flag is the `.enabled` dark feature of its definition.
+      JVM_SUPPORT_RECOMMENDED_ARGS: "-Datlassian.authentication.legacy.mode=true -Datlassian.darkfeature.com.atlassian.jira.agile.darkfeature.synced.sprints.enabled=true"
     entrypoint: [/bin/sh, /opt/keiko-jira-entrypoint.sh]
     secrets: [database_password]
     volumes:
