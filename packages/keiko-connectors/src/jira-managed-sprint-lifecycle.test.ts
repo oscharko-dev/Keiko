@@ -3,7 +3,10 @@ import { parseJiraIssueTemplate } from "@oscharko-dev/keiko-contracts/runtime/at
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { executeJiraSprintLifecycleMutation } from "./jira-managed-sprint-lifecycle.js";
 import { JiraAcknowledgedMutationError } from "./jira-mutation-failure.js";
-import { jiraSprintLifecycleSnapshot } from "./jira-sprint-lifecycle-values.js";
+import {
+  jiraSprintLifecycleSnapshot,
+  parseSprintLifecycleInput,
+} from "./jira-sprint-lifecycle-values.js";
 import {
   gateJiraBulkReferenceChange,
   type JiraIssueTemplateSet,
@@ -11,6 +14,7 @@ import {
 import {
   SPRINT_LIFECYCLE_FIXTURE_CASES as CASES,
   SPRINT_LIFECYCLE_FIRST as FIRST,
+  SPRINT_LIFECYCLE_OTHER_BOARD as OTHER_BOARD,
   sprintLifecycleFixture,
 } from "../../../tests/support/jira-sprint-lifecycle-fixture.js";
 
@@ -163,6 +167,76 @@ describe("fixed sprint lifecycle effects", () => {
     expect(closed.calls.every(({ method }) => method === "GET")).toBe(true);
   });
 
+  it("admits an open incomplete-issue destination on another origin board", async () => {
+    // Decision pinned (AC7, #4327): a destination only has to be an open sprint, not one on the
+    // replaced sprint's own board; the board is still bound by its own reviewed read.
+    const f = sprintLifecycleFixture();
+    f.sprints.set("13", { ...OTHER_BOARD });
+    const replacement = {
+      ...CASES[0].args.replacement,
+      incompleteIssuesDestinationId: "13",
+    };
+    const args = { ...CASES[0].args, replacement, expectedDestination: { ...OTHER_BOARD } };
+    expect(await executeJiraSprintLifecycleMutation(CASES[0].name, args, f.ports)).toMatchObject({
+      ok: true,
+      receipt: { sprintId: "11" },
+    });
+    expect(f.calls.find(({ method }) => method === "PUT")?.body).toMatchObject({
+      incompleteIssuesDestinationId: 13,
+    });
+  });
+  it("refuses a sprint that names itself as its incomplete-issue destination at parse time", () => {
+    const args = {
+      ...CASES[0].args,
+      replacement: { ...CASES[0].args.replacement, incompleteIssuesDestinationId: "11" },
+      expectedDestination: { ...FIRST },
+    };
+    expect(parseSprintLifecycleInput(CASES[0].name, args)).toBeUndefined();
+    // Control: a different sprint as destination parses.
+    const other = {
+      ...args,
+      replacement: { ...args.replacement, incompleteIssuesDestinationId: "12" },
+      expectedDestination: { ...FIRST, id: "12" },
+    };
+    expect(parseSprintLifecycleInput(CASES[0].name, other)).toBeDefined();
+  });
+  it.each([
+    ["an active destination", { state: "active" }, "future"],
+    ["a closing replacement with an open destination", {}, "closed"],
+  ] as const)("admits %s", async (_label, destinationPatch, replacementState) => {
+    const f = sprintLifecycleFixture();
+    const current = f.sprints.get("11");
+    const second = f.sprints.get("12");
+    if (current === undefined || second === undefined) throw new Error("Synthetic sprints");
+    if (replacementState === "closed") current.state = "active";
+    Object.assign(second, destinationPatch);
+    const replacement = {
+      ...CASES[0].args.replacement,
+      state: replacementState,
+      incompleteIssuesDestinationId: "12",
+    };
+    const args = {
+      ...CASES[0].args,
+      expectedSprint: { ...current },
+      replacement,
+      expectedDestination: { ...second },
+    };
+    const result = await executeJiraSprintLifecycleMutation(CASES[0].name, args, f.ports);
+    // A closing replacement is admitted and sent, but Jira's implicit issue-membership effects are
+    // not provable from actor-visible lists, so its outcome stays acknowledged-unconfirmed.
+    if (replacementState === "closed")
+      expect(result).toMatchObject({
+        ok: false,
+        reason: "unavailable",
+        receipt: { sprintId: "11" },
+      });
+    else expect(result).toMatchObject({ ok: true });
+    expect(f.calls.filter(({ method }) => method === "PUT")).toHaveLength(1);
+    expect(f.calls.find(({ method }) => method === "PUT")?.body).toMatchObject({
+      state: replacementState,
+      incompleteIssuesDestinationId: 12,
+    });
+  });
   it("writes explicit nulls on PUT and does not interpret absent readback fields as successful clears", async () => {
     const f = sprintLifecycleFixture();
     const result = await executeJiraSprintLifecycleMutation(CASES[0].name, CASES[0].args, f.ports);
