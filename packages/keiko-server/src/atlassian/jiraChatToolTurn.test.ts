@@ -2551,6 +2551,8 @@ describe("bounded Jira approval continuation across a page reload", () => {
 
   it("cancels only the exact admitted turn when the human presses Stop", async () => {
     const f = fixture(true);
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
     const stream = leasedStream(f, "leased-stop");
     try {
       await pendingWriteApproval(f);
@@ -2572,6 +2574,32 @@ describe("bounded Jira approval continuation across a page reload", () => {
       });
       expect(f.writes()).toBe(0);
       expectCancelledConsent(f, "cancelled");
+      // Every Stop leaves its own line: one that matched nothing, and one joined to the turn.
+      const stops = sink.events.filter(
+        (value) =>
+          value.op === "chat.approval-continuation.state" &&
+          String(value.extra?.phase).startsWith("stop-"),
+      );
+      expect(stops.map((value) => [value.extra?.phase, value.extra?.turnDigest])).toEqual([
+        ["stop-unmatched", "f".repeat(64)],
+        ["stop-matched", message?.canonicalTurnRef],
+      ]);
+      expect(stops.every((value) => value.correlationId === "jira-chat-loop-proof")).toBe(true);
+      expect(
+        sink.events.some(
+          (value) =>
+            value.op === "chat.approval-continuation.state" &&
+            value.extra?.phase === "cancelled" &&
+            value.extra.turnDigest === message?.canonicalTurnRef,
+        ),
+      ).toBe(true);
+      const unmatched = stops[0];
+      if (unmatched === undefined) throw new Error("Missing unmatched Stop evidence");
+      expectActivityLogProof(
+        "chat.approval-continuation.state.line",
+        formatActivityLogProofLine(unmatched),
+      );
+      expect(JSON.stringify(stops)).not.toMatch(/Synthetic Jira|jira\.example|sess_/u);
     } finally {
       for (const entry of continuations.get(f.deps.store)?.values() ?? []) entry.controller.abort();
       stream.response.res.destroy();

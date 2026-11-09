@@ -12,13 +12,22 @@ const CONTINUATION = defineActivityLogOperation({
   op: "chat.approval-continuation.state",
   category: "security",
   owner: "keiko-server",
-  emitter: "chat-approval-continuation-state.recordContinuation",
+  emitter: "chat-approval-continuation-state.writeContinuationState",
   fields: {
     phase: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["registered", "detached", "cancelled", "expired", "authority-lost", "released"],
+      values: [
+        "registered",
+        "detached",
+        "cancelled",
+        "expired",
+        "authority-lost",
+        "released",
+        "stop-matched",
+        "stop-unmatched",
+      ],
     },
     turnDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     activeCount: { type: "integer", dataClass: "count", required: true },
@@ -33,6 +42,7 @@ const CONTINUATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 type Phase = "registered" | "detached" | "cancelled" | "expired" | "authority-lost" | "released";
+type StopPhase = "stop-matched" | "stop-unmatched";
 export interface Continuation {
   observedApprovalIds?: Set<string>;
   expiresAt?: number;
@@ -45,32 +55,49 @@ export interface Continuation {
 export const continuations = new WeakMap<UiStore, Map<string, Continuation>>();
 
 export function recordContinuation(entry: Continuation, phase: Phase): void {
+  writeContinuationState(
+    entry.correlationId,
+    phase,
+    entry.message.canonicalTurnRef,
+    phase === "released" || entry.controller.signal.aborted ? 0 : 1,
+  );
+}
+/**
+ * A Stop request is recorded under its own correlation with the requested turn digest, so a Stop
+ * that matched nothing is reconstructable and a matched one joins the turn's `cancelled` line.
+ */
+export function recordStopRequest(
+  correlationId: string,
+  turnDigest: string,
+  matched: boolean,
+): void {
+  writeContinuationState(correlationId, matched ? "stop-matched" : "stop-unmatched", turnDigest, 0);
+}
+function writeContinuationState(
+  correlationId: string,
+  phase: Phase | StopPhase,
+  turnDigest: string | undefined,
+  activeCount: number,
+): void {
   try {
-    const turnDigest = entry.message.canonicalTurnRef;
     if (turnDigest === undefined) throw new TypeError("Missing admitted Chat turn identity");
     processServerLogSink().write(
       activityLogEvent(
         CONTINUATION,
-        { correlationId: entry.correlationId },
-        {
-          phase,
-          turnDigest,
-          activeCount: phase === "released" || entry.controller.signal.aborted ? 0 : 1,
-          completeness: "complete",
-          loss: "none",
-        },
+        { correlationId },
+        { phase, turnDigest, activeCount, completeness: "complete", loss: "none" },
       ),
     );
   } catch (error) {
-    emitServerDiagnostic(undefined, continuationDiagnostic(entry, error));
+    emitServerDiagnostic(undefined, continuationDiagnostic(correlationId, error));
   }
 }
 function continuationDiagnostic(
-  entry: Continuation,
+  correlationId: string,
   error: unknown,
 ): ReturnType<typeof serverDiagnosticFromError> {
   return serverDiagnosticFromError({
-    correlationId: entry.correlationId,
+    correlationId,
     operation: "chat.approval-continuation.state",
     source: "chat-approval-continuation",
     error,
@@ -104,7 +131,7 @@ function validateEntry(entry: Continuation): boolean {
   try {
     live = entry.live();
   } catch (error) {
-    emitServerDiagnostic(undefined, continuationDiagnostic(entry, error));
+    emitServerDiagnostic(undefined, continuationDiagnostic(entry.correlationId, error));
   }
   if (live && !entry.controller.signal.aborted) return true;
   if (!entry.controller.signal.aborted) {

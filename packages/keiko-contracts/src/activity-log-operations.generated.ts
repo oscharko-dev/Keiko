@@ -1753,7 +1753,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     op: "chat.approval-continuation.state",
     category: "security",
     owner: "keiko-server",
-    emitter: "chat-approval-continuation-state.recordContinuation",
+    emitter: "chat-approval-continuation-state.writeContinuationState",
     fields: {
       completeness: {
         type: "string",
@@ -1769,7 +1769,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["registered", "detached", "cancelled", "expired", "authority-lost", "released"],
+        values: [
+          "registered",
+          "detached",
+          "cancelled",
+          "expired",
+          "authority-lost",
+          "released",
+          "stop-matched",
+          "stop-unmatched",
+        ],
       },
       turnDigest: {
         type: "string",

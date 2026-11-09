@@ -137,7 +137,7 @@ it("gives up after a bounded number of polls when the turn never settles", async
   await act(async () => {
     await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
   });
-  expect(vi.mocked(fetchChatMessages).mock.calls.length).toBe(calls);
+  expect(vi.mocked(fetchChatMessages)).toHaveBeenCalledTimes(calls);
   expect(publish).toHaveBeenCalledTimes(1);
   // The give-up is explained to the person exactly once, not only logged.
   expect(onAbandoned).toHaveBeenCalledOnce();
@@ -158,6 +158,6 @@ it("stops observing once the server settles the turn as failed", async () => {
   await act(async () => {
     await vi.advanceTimersByTimeAsync(60_000);
   });
-  expect(vi.mocked(fetchChatMessages).mock.calls.length).toBe(calls);
+  expect(vi.mocked(fetchChatMessages)).toHaveBeenCalledTimes(calls);
   expect(onAbandoned).not.toHaveBeenCalled();
 });

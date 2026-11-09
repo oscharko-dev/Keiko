@@ -11,6 +11,7 @@ import {
   continuations,
   entriesFor,
   recordContinuation,
+  recordStopRequest,
   validateChatApprovalContinuation,
   type Continuation,
 } from "./chat-approval-continuation-state.js";
@@ -221,7 +222,13 @@ export async function handleCancelDesktopChat(
   const session = resolveAppSessionReadAuthority(deps, ctx.req);
   if (session === undefined)
     return { status: 404, body: errorBody("NOT_FOUND", "Chat turn not found.") };
-  return { status: 200, body: { cancelled: cancelOwnedEntry(deps, session.sessionId, identity) } };
+  const cancelled = cancelOwnedEntry(deps, session.sessionId, identity);
+  recordStopRequest(
+    ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+    identity.canonicalTurnRef,
+    cancelled,
+  );
+  return { status: 200, body: { cancelled } };
 }
 function cancelOwnedEntry(
   deps: UiHandlerDeps,

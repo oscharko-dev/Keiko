@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "72a4dce9066e62262c831a3f6b3615e7acb80f0d9629ec51964d5a78e71405c9",
+    "catalogDigest": "8fa6b7696b8296bc0d593155aec19769151c06f52a1b99f3318755bdc4b4b255",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1824,7 +1824,7 @@
         "op": "chat.approval-continuation.state",
         "category": "security",
         "owner": "keiko-server",
-        "emitter": "chat-approval-continuation-state.recordContinuation",
+        "emitter": "chat-approval-continuation-state.writeContinuationState",
         "fields": {
           "completeness": {
             "type": "string",
@@ -1846,7 +1846,9 @@
               "cancelled",
               "expired",
               "authority-lost",
-              "released"
+              "released",
+              "stop-matched",
+              "stop-unmatched"
             ]
           },
           "turnDigest": {
@@ -1868,7 +1870,7 @@
         "proofIds": ["chat.approval-continuation.state.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/chat-approval-continuation-state.ts:9",
-        "emitterSites": ["packages/keiko-server/src/chat-approval-continuation-state.ts:52"]
+        "emitterSites": ["packages/keiko-server/src/chat-approval-continuation-state.ts:85"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -115634,14 +115636,14 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-approval-continuation-state.ts:107",
+      "site": "packages/keiko-server/src/chat-approval-continuation-state.ts:134",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-approval-continuation-state.ts:65",
+      "site": "packages/keiko-server/src/chat-approval-continuation-state.ts:92",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -116284,6 +116286,13 @@
     },
     {
       "op": "chat.approval-continuation.state",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/chat-approval-continuation-state.ts:101",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "chat.approval-continuation.state",
       "category": "security",
       "site": "packages/keiko-server/src/chat-approval-continuation-state.ts:12",
       "package": "keiko-server"
@@ -116291,14 +116300,7 @@
     {
       "op": "chat.approval-continuation.state",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-approval-continuation-state.ts:74",
-      "sourceKind": "diagnostic-operation",
-      "package": "keiko-server"
-    },
-    {
-      "op": "chat.approval-continuation.state",
-      "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-approval-continuation.ts:137",
+      "site": "packages/keiko-server/src/chat-approval-continuation.ts:138",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

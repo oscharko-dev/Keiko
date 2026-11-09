@@ -6320,7 +6320,8 @@ describe("useChatSession canonical Voice FIFO", () => {
         const intent = beginChatScopeTransition("chat-a", "audit-first-source");
         intent.settle(true);
       });
-      await waitFor(() => expect(signalA?.aborted).toBe(true));
+      // The un-reviewed send aborts synchronously; only the server notice is awaited.
+      expect(signalA?.aborted).toBe(true);
       await waitFor(() => expect(cancelDesktopChatTurn).toHaveBeenCalledOnce());
       await act(async () => rendered.result.current.openChat(chatB));
       act(() => {
@@ -6340,7 +6341,7 @@ describe("useChatSession canonical Voice FIFO", () => {
       act(() => beginChatScopeTransition("chat-a", "audit-unrelated-source"));
       expect(signalB?.aborted).toBe(false);
       act(() => beginChatScopeTransition("chat-b", "audit-current-source"));
-      await waitFor(() => expect(signalB?.aborted).toBe(true));
+      expect(signalB?.aborted).toBe(true);
       await waitFor(() => expect(cancelDesktopChatTurn).toHaveBeenCalledTimes(2));
     } finally {
       await act(async () => {
