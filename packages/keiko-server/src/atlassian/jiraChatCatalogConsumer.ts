@@ -70,6 +70,7 @@ import {
 } from "./jiraManagedProvider.js";
 import type { JiraOperationBinding } from "./jiraOperationRegistry.js";
 import { jiraCatalogResult } from "./jiraCatalogResult.js";
+import { chatApprovalContinuationIsLive } from "../chat-approval-continuation-state.js";
 
 /** Private ordinary-Chat scope. Neither a workspace nor a Coding session is required. */
 export interface JiraChatCatalogContext extends ToolConsumerContext {
@@ -323,11 +324,22 @@ const DENIED = { ok: false, reason: "authority-invalid" } as const;
 const REVIEW = { ok: false, reason: "approval-required" } as const;
 const ALLOWED = { ok: true } as const;
 
+function continuationIsLive(
+  options: JiraChatAdmissionOptions,
+  context: JiraChatCatalogContext,
+): boolean {
+  return (
+    context.userMessageId === undefined ||
+    chatApprovalContinuationIsLive(options.deps.store, context.userMessageId)
+  );
+}
+
 function readPermission(
   options: JiraChatAdmissionOptions,
   action: JiraChatCatalogAction,
 ): ToolAuthorityAvailability {
   const context = options.context();
+  if (!continuationIsLive(options, context)) return DENIED;
   const nowIso = new Date(options.now()).toISOString();
   const current = resolveCurrentJiraChatAuthority(
     options.deps,
@@ -345,7 +357,8 @@ function readPermission(
     return DENIED;
   // A Knowledge Pod the human attached to this Chat is read like a grounded answer reads it: the
   // current Chat authority admits it, no Jira consent is involved (#4179).
-  if (isLocalCatalogRead(action.tool)) return ALLOWED;
+  if (isLocalCatalogRead(action.tool))
+    return continuationIsLive(options, context) ? ALLOWED : DENIED;
   const policy = decideAtlassianEnvelopeAction(
     JIRA_MANAGED_ACTION_TYPES[action.tool],
     current.envelope,
@@ -356,7 +369,8 @@ function readPermission(
     context.authorityReference,
     context.correlationId,
   );
-  return grantPermission(options, entry, nowIso);
+  const permission = grantPermission(options, entry, nowIso);
+  return continuationIsLive(options, context) ? permission : DENIED;
 }
 
 function grantPermission(

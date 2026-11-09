@@ -266,6 +266,7 @@ import {
   canonicalChatTurnMemorySemantics,
 } from "./chat-turn-identity.js";
 import { createRequestCancellation } from "./request-cancellation.js";
+import { createChatApprovalRequest } from "./chat-approval-continuation.js";
 import {
   readBoundedRequestBody,
   RequestBodyCancelledError,
@@ -2446,6 +2447,7 @@ async function persistModelChatTurn(
   abortSignal: AbortSignal,
   correlationId: string | undefined,
   httpRequest: IncomingMessage,
+  onAdmitted: (message: ChatMessage) => void,
 ): Promise<RouteResult> {
   const { request } = prepared;
   // ADR-0057 D3: pin the pre-user-message count BEFORE createUserMessage stores the turn, so the
@@ -2461,7 +2463,8 @@ async function persistModelChatTurn(
       messageCountBeforeTurn,
       startedAt,
       correlationId,
-      (): void => {
+      (message): void => {
+        onAdmitted(message);
         releaseSession = beginAppSessionOperation(deps, httpRequest, abortSignal, {
           correlationId,
           surface: "desktop-chat",
@@ -2660,11 +2663,11 @@ async function executeBufferedModelTurn(
   messageCountBeforeTurn: number,
   startedAt: number,
   correlationId: string | undefined,
-  onAdmitted: () => void,
+  onAdmitted: (message: ChatMessage) => void,
 ): Promise<RouteResult> {
   const outcome = admitBufferedModelTurn(deps, prepared, correlationId);
   if (isRouteResult(outcome)) return outcome;
-  onAdmitted();
+  onAdmitted(outcome.admitted.userMessage);
   const { admitted } = outcome;
   const toolTurn = await prepareBufferedToolTurn(
     deps,
@@ -4018,13 +4021,16 @@ export async function handleSendDesktopChat(
   requestDeps: UiHandlerDeps,
 ): Promise<RouteResult> {
   const deps = withMarkdownSkillRequestAuthority(requestDeps, ctx.req);
-  const cancellation = createRequestCancellation(ctx, "desktop chat request cancelled");
+  const cancellation = createChatApprovalRequest(ctx, deps, "desktop chat request cancelled");
   try {
     const parsed = await parseDesktopChatSend(ctx, deps, cancellation.signal);
     if (cancellation.signal.aborted) return requestCancelledResult();
     if (isRouteResult(parsed)) return parsed;
     if (hasMixedJiraGroundingScope(parsed.chat))
-      return await runMixedGroundedChat(parsed, deps, cancellation.signal, ctx.correlationId);
+      return await runMixedGroundedChat(parsed, deps, cancellation.signal, ctx.correlationId, {
+        request: ctx.req,
+        onAdmitted: cancellation.admit,
+      });
     const prepared = validateDesktopChatSend(parsed, deps);
     if (isRouteResult(prepared)) return prepared;
     const gitChangeDenial = admitPreparedGitChangeTurn(deps, prepared, ctx.correlationId);
@@ -4050,9 +4056,7 @@ export async function handleSendDesktopChat(
         // a queued turn may wait long enough for the authority to expire in between.
         const gitChangeDenial = admitPreparedGitChangeTurn(deps, current, ctx.correlationId);
         if (gitChangeDenial !== undefined) return gitChangeDenial;
-        return activeGitChangeScope(current.chat) === undefined
-          ? persistModelChatTurn(deps, current, cancellation.signal, ctx.correlationId, ctx.req)
-          : persistGitChangeDescriptionTurn(ctx, deps, current, cancellation.signal);
+        return persistCurrentDesktopChat(ctx, deps, current, cancellation);
       },
       cancellation.controller,
     );
@@ -4060,6 +4064,24 @@ export async function handleSendDesktopChat(
   } finally {
     cancellation.dispose();
   }
+}
+
+function persistCurrentDesktopChat(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  request: ReturnType<typeof createChatApprovalRequest>,
+): Promise<RouteResult> {
+  return activeGitChangeScope(prepared.chat) === undefined
+    ? persistModelChatTurn(
+        deps,
+        prepared,
+        request.signal,
+        ctx.correlationId,
+        ctx.req,
+        request.admit,
+      )
+    : persistGitChangeDescriptionTurn(ctx, deps, prepared, request.signal);
 }
 
 function interruptedChatResponse(

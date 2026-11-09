@@ -4145,3 +4145,82 @@ it.each([
     expect(clientDiagnosticEvents(sink)).toEqual([]);
   },
 );
+
+it("persists localized Jira field labels as routine counted evidence without content", async () => {
+  const sink = captureServerLog();
+  const jiraFieldPresentation = { fieldCount: 5, localizedCount: 3 };
+  const request = {
+    message: "Jira built-in field labels presented.",
+    clientTs: CLIENT_TS,
+    correlationId: "ui-jira-fields-0001",
+    jiraFieldPresentation,
+  };
+  expect((await handleClientDiagnosticIngest(context(JSON.stringify(request)))).status).toBe(204);
+  expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+  const events = sink.events.filter((event) => event.op === "client.jira-fields.presented");
+  expect(events).toHaveLength(1);
+  expect(events[0]?.level).toBe("info");
+  expect(events[0]?.errorKind).toBeUndefined();
+  const line = formatActivityLogProofLine(events[0] ?? {});
+  const proof = expectActivityLogProof("client.jira-fields.presented.line", line);
+  expect(proof).toMatchObject({
+    ...jiraFieldPresentation,
+    correlationId: request.correlationId,
+    completeness: "complete",
+    loss: "none",
+  });
+  for (const invalid of [
+    { ...jiraFieldPresentation, content: "PRIVATE_JIRA_FIELD_CONTENT" },
+    { fieldCount: -1, localizedCount: 0 },
+    { fieldCount: 1, localizedCount: 2 },
+    { fieldCount: 1001, localizedCount: 1 },
+    { fieldCount: 1.5, localizedCount: 1 },
+    { fieldCount: 1, localizedCount: "1" },
+    { fieldCount: 1, localizedCount: -1 },
+    { fieldCount: 1, localizedCount: Number.MAX_SAFE_INTEGER },
+  ])
+    expect(
+      (
+        await handleClientDiagnosticIngest(
+          context(JSON.stringify({ ...request, jiraFieldPresentation: invalid })),
+        )
+      ).status,
+    ).toBe(400);
+  for (const valid of [
+    { fieldCount: 0, localizedCount: 0 },
+    { fieldCount: 1000, localizedCount: 1000 },
+  ])
+    expect(
+      (
+        await handleClientDiagnosticIngest(
+          context(JSON.stringify({ ...request, jiraFieldPresentation: valid })),
+        )
+      ).status,
+    ).toBe(204);
+  expect(
+    (
+      await handleClientDiagnosticIngest(
+        context(JSON.stringify({ ...request, errorKind: "internal" })),
+      )
+    ).status,
+  ).toBe(400);
+  expect(line).not.toContain("PRIVATE_JIRA_FIELD_CONTENT");
+  expect(JSON.stringify(sink.events)).not.toContain("PRIVATE_JIRA_FIELD_CONTENT");
+});
+
+it("preserves the server failure budget after localized Jira field presentation bursts", async () => {
+  const sink = captureServerLog();
+  const routine = JSON.stringify({
+    message: "Jira built-in field labels presented.",
+    clientTs: CLIENT_TS,
+    jiraFieldPresentation: { fieldCount: 5, localizedCount: 3 },
+  });
+  for (let index = 0; index < 61; index += 1) await handleClientDiagnosticIngest(context(routine));
+  const failure = JSON.stringify({ message: "boundary", clientTs: CLIENT_TS, kind: "boundary" });
+  expect((await handleClientDiagnosticIngest(context(failure))).status).toBe(204);
+  expect(clientDiagnosticEvents(sink).some((event) => event.extra?.clientKind === "boundary")).toBe(
+    true,
+  );
+  const notices = sink.events.filter((event) => event.op === "client.diagnostic.rate-limited");
+  expect(notices.map((event) => event.extra?.budget)).toEqual(["routine"]);
+});

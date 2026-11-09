@@ -125,6 +125,7 @@ import {
   type InlineCompletionRateLimiter,
 } from "./editor/inlineCompletionRateLimiter.js";
 import { logClientJiraResult } from "./client-jira-result-log.js";
+import { logClientJiraFields } from "./client-jira-fields-log.js";
 import { getServerLogger } from "./observability/index.js";
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
 
@@ -2426,6 +2427,10 @@ function logPresentationClientReport(
 ): boolean {
   return (
     logClientUpdateNotice(request, correlationId) ||
+    logClientJiraFields(
+      request.jiraFieldPresentation,
+      clientDiagnosticCorrelation(request, correlationId),
+    ) ||
     logClientJiraResult(
       request.jiraResultPresentation,
       clientDiagnosticCorrelation(request, correlationId),
@@ -3269,6 +3274,10 @@ function isRoutineScopedReport(report: ClientDiagnosticIngestRequest): boolean {
   );
 }
 
+function hasJiraPresentation(report: ClientDiagnosticIngestRequest): boolean {
+  return report.jiraResultPresentation !== undefined || report.jiraFieldPresentation !== undefined;
+}
+
 // The closed report shapes: a select dismissal and a catalog picture are routine, and an answer copy
 // spends the failure budget only when it failed.
 function closedReportBudget(report: ClientDiagnosticIngestRequest): ClientReportBudget | undefined {
@@ -3277,7 +3286,7 @@ function closedReportBudget(report: ClientDiagnosticIngestRequest): ClientReport
   if (
     report.selectDismissal !== undefined ||
     report.knowledgeCatalog !== undefined ||
-    report.jiraResultPresentation !== undefined ||
+    hasJiraPresentation(report) ||
     report.answerSpeech !== undefined ||
     isRoutineScopedReport(report)
   ) {

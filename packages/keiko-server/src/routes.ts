@@ -4,6 +4,7 @@ import {
   handleCancelJiraHumanInput,
 } from "./atlassian/jiraHumanInputRoutes.js";
 import { CODING_HISTORY_ROUTES } from "./coding-runtime/codingHistoryRoutes.js";
+import { handleCancelDesktopChat } from "./chat-approval-continuation.js";
 import {
   handleListMarkdownSkills,
   handleReadMarkdownSkill,
@@ -774,6 +775,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "POST", pattern: "/api/desktop/chat", handler: handleSendDesktopChat },
   { method: "POST", pattern: "/api/desktop/chat/regenerate", handler: handleRegenerateDesktopChat },
   { method: "POST", pattern: "/api/desktop/chat/stream", handler: handleSendDesktopChatStream },
+  { method: "POST", pattern: "/api/desktop/chat/cancel", handler: handleCancelDesktopChat },
   // ADR-0018 — bounded permitted-command execution. PTY routes (shells/sessions/WS upgrade) and
   // the WebSocket upgrade handler in server.ts are removed; commands run via synchronous POST.
   { method: "GET", pattern: "/api/terminal/policy", handler: handleTerminalPolicy },

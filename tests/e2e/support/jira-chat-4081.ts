@@ -15,11 +15,14 @@ export interface JiraBrowserFixture {
     Record<
       | "approval"
       | "revocation"
+      | "pending-stop"
       | "unavailable"
       | "accessibility-en"
       | "accessibility-de"
       | "backlog"
-      | "deadline",
+      | "deadline"
+      | "batch-reload-en"
+      | "batch-reload-de",
       Chat
     >
   >;

@@ -1,4 +1,5 @@
 export const EN_MESSAGES = {
+  "chat.pendingCancellation.unconfirmed": "Cancellation could not be confirmed. Try Stop again.",
   "grounded.uncertainty.memoryKind": "Memory context",
   "grounded.files.capabilityUnattached":
     "This model does not reliably add citations itself. No evidence citations were attached to this answer.",

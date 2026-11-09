@@ -488,6 +488,19 @@ function deferred(): DeferredSend {
   return { promise, resolve: resolveFn, reject: rejectFn, signal: undefined };
 }
 
+function deferredCancellation(): {
+  readonly promise: Promise<{ readonly cancelled: boolean }>;
+  readonly confirm: () => void;
+} {
+  let confirm = (): void => {
+    throw new Error("Cancellation acknowledgement is not initialized");
+  };
+  const promise = new Promise<{ readonly cancelled: boolean }>((resolve) => {
+    confirm = (): void => resolve({ cancelled: true });
+  });
+  return { promise, confirm };
+}
+
 const PROJECT_PATH = "/proj";
 
 function mockBootstrap(): void {
@@ -627,7 +640,11 @@ describe("useChatSession sendStatus lifecycle (Issue #152)", () => {
 
   it("cancelSend aborts the in-flight request and transitions to cancelled (AC#3)", async () => {
     const send = deferred();
-    vi.spyOn(api, "sendDesktopChat").mockImplementation((_input, signal) => {
+    const cancellation = deferredCancellation();
+    const cancel = vi.spyOn(api, "cancelDesktopChatTurn").mockReturnValue(cancellation.promise);
+    let clientTurnId = "";
+    vi.spyOn(api, "sendDesktopChat").mockImplementation((input, signal) => {
+      clientTurnId = input.clientTurnId ?? "";
       send.signal = signal;
       // Wire the abort to reject with a DOMException, matching real fetch.
       signal?.addEventListener("abort", () => {
@@ -647,7 +664,17 @@ describe("useChatSession sendStatus lifecycle (Issue #152)", () => {
     });
 
     act(() => view.result.current.cancelSend());
+    await waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+    expect(send.signal?.aborted).toBe(false);
+    expect(view.result.current.sendStatus).toBe("contacting");
+    expect(view.result.current.sending).toBe(true);
+    await act(async () => cancellation.confirm());
+    await waitFor(() => expect(send.signal?.aborted).toBe(true));
     await sendPromise;
+    expect(cancel).toHaveBeenCalledExactlyOnceWith({
+      chatId: "chat-1",
+      canonicalTurnRef: await canonicalTurnReferenceForClient("chat-1", clientTurnId),
+    });
     expect(view.result.current.sendStatus).toBe("cancelled");
     expect(view.result.current.sending).toBe(false);
 
@@ -709,7 +736,13 @@ describe("useChatSession sendStatus lifecycle (Issue #152)", () => {
     const groundedPromise = new Promise((_res, rej) => {
       rejectGrounded = rej;
     });
-    const askSpy = vi.spyOn(api, "askGrounded").mockImplementation((_req, signal) => {
+    const cancellation = deferredCancellation();
+    const cancel = vi.spyOn(api, "cancelDesktopChatTurn").mockReturnValue(cancellation.promise);
+    let clientTurnId = "";
+    let requestSignal: AbortSignal | undefined;
+    const askSpy = vi.spyOn(api, "askGrounded").mockImplementation((request, signal) => {
+      clientTurnId = request.clientTurnId ?? "";
+      requestSignal = signal;
       signal?.addEventListener("abort", () => {
         rejectGrounded?.(new DOMException("aborted", "AbortError"));
       });
@@ -730,8 +763,17 @@ describe("useChatSession sendStatus lifecycle (Issue #152)", () => {
     expect(askSpy).toHaveBeenCalledOnce();
 
     act(() => view.result.current.cancelSend());
+    await waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+    expect(requestSignal?.aborted).toBe(false);
+    expect(view.result.current.sendStatus).toBe("contacting");
+    expect(view.result.current.sending).toBe(true);
+    await act(async () => cancellation.confirm());
+    await waitFor(() => expect(requestSignal?.aborted).toBe(true));
     await sendPromise;
-
+    expect(cancel).toHaveBeenCalledExactlyOnceWith({
+      chatId: "chat-1",
+      canonicalTurnRef: await canonicalTurnReferenceForClient("chat-1", clientTurnId),
+    });
     expect(view.result.current.sendStatus).toBe("cancelled");
     expect(view.result.current.sending).toBe(false);
     // No grounded answer persisted, and no assistant message landed.

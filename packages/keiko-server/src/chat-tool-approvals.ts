@@ -29,6 +29,7 @@ import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { UiHandlerDeps } from "./deps.js";
 import type { ChatMessage } from "./store/index.js";
 import { requireDispatch } from "./tool-catalog/catalogToolErrors.js";
+import { validateChatApprovalContinuation } from "./chat-approval-continuation-state.js";
 
 export interface ChatToolApprovalContext {
   readonly deps: Pick<UiHandlerDeps, "store" | "atlassianActionApprovalRegistry">;
@@ -113,6 +114,7 @@ export async function waitForChatToolWriteConsent(
   save(approval);
   await input.publish();
   await registry.waitForChatWriteApproval(approval.approvalId, signal);
+  validateChatApprovalContinuation(deps.store, message);
   if (signal.aborted) registry.revokeChatWriteApproval(approval.approvalId, correlationId);
   save(
     registry.getChatWriteApproval(approval.approvalId, correlationId)?.approval ?? {

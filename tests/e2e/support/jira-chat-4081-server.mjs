@@ -99,11 +99,14 @@ const chats = Object.fromEntries(
   [
     "approval",
     "revocation",
+    "pending-stop",
     "unavailable",
     "accessibility-en",
     "accessibility-de",
     "backlog",
     "deadline",
+    "batch-reload-en",
+    "batch-reload-de",
   ].map((name) => [
     name,
     deps.store.createChat(
@@ -113,6 +116,42 @@ const chats = Object.fromEntries(
     ),
   ]),
 );
+// Exercise the production Chat store and reload projection without a model or Jira dispatch.
+for (const locale of ["en", "de"]) {
+  const chat = chats[`batch-reload-${locale}`];
+  const clientTurnId = `persisted-batch-${locale}`;
+  const turn = deps.store.admitChatTurn(clientTurnId, {
+    chatId: chat.id,
+    role: "user",
+    content: "Synthetic persisted requirements batch",
+    timestamp: Date.now(),
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
+  });
+  if (turn.kind !== "admitted") throw new TypeError("Synthetic batch turn was not admitted");
+  const call = { id: `batch-${locale}`, name: "jira_draft_batch", arguments: {} };
+  deps.store.updateChatToolTranscript(turn.userMessage.id, { kind: "started", call }, clientTurnId);
+  deps.store.updateChatToolTranscript(
+    turn.userMessage.id,
+    {
+      kind: "progress",
+      callId: call.id,
+      batchProgress: {
+        phase: "drafting",
+        draftedCount: 2,
+        plannedCount: 4,
+        coveredRequirementCount: 3,
+        requirementCount: 8,
+        failedCount: 0,
+      },
+    },
+    clientTurnId,
+  );
+  deps.store.failChatTurn(chat.id, clientTurnId, "cancelled");
+}
 const backlogPod = await seedBacklogPod(deps);
 saveBacklogTemplates(deps);
 writeFileSync(

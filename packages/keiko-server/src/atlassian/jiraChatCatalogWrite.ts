@@ -19,6 +19,7 @@ import { decideAtlassianEnvelopeAction } from "./actionPolicy.js";
 import { isCurrentJiraOperationBinding } from "./jiraManagedProvider.js";
 import { jiraOperationActionDigest } from "./jiraOperationRegistry.js";
 import { resolveCurrentJiraChatAuthority } from "./jiraChatAuthority.js";
+import { chatApprovalContinuationIsLive } from "../chat-approval-continuation-state.js";
 import {
   isCurrentJiraChatWriteApproval,
   requestJiraChatWriteApproval,
@@ -59,11 +60,21 @@ interface CurrentWrite {
   readonly entry: ChatWriteApprovalEntry | undefined;
   readonly nowIso: string;
 }
+function continuationIsLive(
+  options: JiraChatAdmissionOptions,
+  context: JiraChatCatalogContext,
+): boolean {
+  return (
+    context.userMessageId === undefined ||
+    chatApprovalContinuationIsLive(options.deps.store, context.userMessageId)
+  );
+}
 function currentWrite(
   options: JiraChatAdmissionOptions,
   action: JiraChatCatalogAction,
 ): CurrentWrite | undefined {
   const context = options.context();
+  if (!continuationIsLive(options, context)) return undefined;
   const identity = jiraChatWriteAction(action);
   const nowIso = new Date(options.now()).toISOString();
   const current = resolveCurrentJiraChatAuthority(
@@ -86,6 +97,7 @@ function currentWrite(
     identity.invocationId,
     context.correlationId,
   );
+  if (!continuationIsLive(options, context)) return undefined;
   return { context, identity, current, registry, policy, entry, nowIso };
 }
 
@@ -96,7 +108,13 @@ function currentEntry(
   const entry = facts.entry;
   return entry !== undefined &&
     sameWriteAction(entry.approval, facts.identity) &&
-    isCurrentJiraChatWriteApproval(options.deps, entry, facts.nowIso, facts.context.correlationId)
+    isCurrentJiraChatWriteApproval(
+      options.deps,
+      entry,
+      facts.nowIso,
+      facts.context.correlationId,
+    ) &&
+    continuationIsLive(options, facts.context)
     ? entry
     : undefined;
 }

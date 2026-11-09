@@ -1765,3 +1765,19 @@ it("retains closed scope and inspection reports without spending failure capacit
   expect(bodies.every(isClientDiagnosticIngestRequest)).toBe(true);
   expect(clientDiagnosticPostThrottledCount()).toBe(0);
 });
+
+it("posts localized Jira field counts with the routine budget and no failure evidence", () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
+  const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  const jiraFieldPresentation = { fieldCount: 5, localizedCount: 3 };
+  for (let index = 0; index < 25; index += 1)
+    fanOutClientDiagnostic("Jira built-in field labels presented.", { jiraFieldPresentation });
+  expect(lastPostedBody(fetchMock)).toMatchObject({ jiraFieldPresentation });
+  expect(lastPostedBody(fetchMock)).not.toHaveProperty("errorKind");
+  expect(debug).toHaveBeenCalledTimes(25);
+  expect(warn).not.toHaveBeenCalled();
+  fanOutClientDiagnostic("boundary caught TypeError", { kind: "boundary" });
+  expect(lastPostedBody(fetchMock)).toMatchObject({ message: "boundary caught TypeError" });
+});

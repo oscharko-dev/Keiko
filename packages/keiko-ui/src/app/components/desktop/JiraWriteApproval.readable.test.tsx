@@ -980,8 +980,9 @@ describe("Jira write approvals never show the request as JSON (#4178)", () => {
       fields: { resolution: { name: "Done" } },
       updates: [{ fieldId: "labels", operation: "add", value: "shipped" }],
     });
-    for (const shown of ["Transition", "31", "resolution", "Done", "Add to labels: shipped"])
+    for (const shown of ["Transition", "31", "Resolution", "Done", "Add to labels: shipped"])
       expect(review.text).toContain(shown);
+    expect(screen.queryByText("resolution", { exact: true })).toBeNull();
     expectNoJson(review);
     expect(await axe(review.container)).toHaveNoViolations();
   });

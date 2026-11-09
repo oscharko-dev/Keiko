@@ -137,6 +137,14 @@ pairing port is never itself client attestation: an absent, forged, revoked or e
 mint a new session. The launcher fragment is redeemed only by the existing single-use `/pair`
 endpoint. Valid-cookie reloads remain automatic and do not widen authority.
 
+The active inventory includes the narrow `/api/atlassian-connectors/action-approvals` projection
+for ordinary Chat Jira review observation and decisions (#4288). It carries the same existing
+HttpOnly, SameSite=Strict bearer, and sign-out clears it through the same inventory. A retained
+pending review checks the original live session, exact action and original expiry before a claim
+and before dispatch. An observed review may keep its bounded worker across page reload; explicit
+Stop targets that canonical turn through the authenticated `/api/desktop/chat/cancel` endpoint.
+The restore route supplies the projection to existing valid sessions after an upgrade.
+
 #### Simple local browser connection (owner decision, 2026-11-04)
 
 The normal launcher still opens an authenticated browser automatically. An unpaired desktop offers

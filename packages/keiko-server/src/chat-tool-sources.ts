@@ -44,6 +44,7 @@ import {
   type McpChatCatalogContext,
 } from "./mcp/mcpChatCatalogConsumer.js";
 import { resolveCurrentMcpChatAuthority } from "./mcp/mcpChatAuthority.js";
+import { chatApprovalContinuationIsLive } from "./chat-approval-continuation-state.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { McpChatCatalog } from "./mcp/mcpChatCatalogRuntime.js";
@@ -262,7 +263,9 @@ export function currentChatSources(deps: UiHandlerDeps, context: ChatSourcesCont
       context.mcp.authorityReference,
       now,
       context.correlationId,
-    ).ok
+    ).ok &&
+    (context.jira.userMessageId === undefined ||
+      chatApprovalContinuationIsLive(deps.store, context.jira.userMessageId))
   );
 }
 interface AdmissionOptions {

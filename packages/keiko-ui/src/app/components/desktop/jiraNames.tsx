@@ -1,6 +1,8 @@
 import { createContext, useMemo, type ReactNode } from "react";
 import type { ChatToolTranscript } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { JiraDraftField } from "./jiraDraftTree";
+import type { OptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
+import { jiraStandardFieldLabel } from "./jira-standard-field-label";
 import {
   jiraBoundReads,
   jiraChoiceValue,
@@ -90,9 +92,11 @@ export function ChatJiraNames({
 export function jiraNamed(
   field: JiraDraftField,
   names: JiraNames,
-  target: JiraFieldTarget = {},
+  target: JiraFieldTarget,
+  t: OptionalWidgetTranslate,
 ): JiraDraftField {
-  const label = jiraNameOf(names, "fields", field.id);
+  const label =
+    jiraNameOf(names, "fields", field.id) ?? field.label ?? jiraStandardFieldLabel(field.id, t);
   return {
     ...field,
     ...(label === undefined ? {} : { label }),

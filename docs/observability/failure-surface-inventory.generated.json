@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "430e8d67b5ffb287d45197805128baa5e1dd09a38a00729cb03ebd59c35fdfe4"
+    "catalogDigest": "a528b3b7a9c6c1e756d6b3645628a3b7593c2131a618637c3326967053fb4a32"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -71,10 +71,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 682,
-    "proofCount": 705,
-    "resolvedProofCount": 705,
-    "failureClassCount": 394,
+    "operationCount": 684,
+    "proofCount": 707,
+    "resolvedProofCount": 707,
+    "failureClassCount": 396,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -219,6 +219,7 @@
         "client.files-scope.decision",
         "client.git-operation.attempted",
         "client.git-operation.settled",
+        "client.jira-fields.presented",
         "client.jira-result.presented",
         "client.knowledge-catalog.unavailable",
         "client.markdown.layout",
@@ -359,6 +360,7 @@
       "owners": ["keiko-mcp", "keiko-server"],
       "ports": ["ManagedMcpLogPort", "ServerLogSink"],
       "operations": [
+        "chat.approval-continuation.state",
         "coding-app-session.browser-approval.state",
         "coding-app-session.browser-open",
         "coding-app-session.channel.closed",
@@ -917,6 +919,8 @@
     "client-git-operation": ["client-diagnostics.dependency-failure"],
     "client-answer-copy": ["client-diagnostics.dependency-failure"],
     "client-answer-speech": ["client-diagnostics.dependency-failure"],
+    "chat-approval-continuation": ["tools-workflows.dependency-failure"],
+    "client-jira-fields": ["client-diagnostics.dependency-failure"],
     "client-jira-result": ["client-diagnostics.dependency-failure"],
     "client-knowledge-catalog": ["client-diagnostics.dependency-failure"],
     "client-citation-activation": ["client-diagnostics.dependency-failure"],
@@ -1363,6 +1367,9 @@
     "atlassian.target.admission.line": [
       "packages/keiko-server/src/atlassian/wiring.target-admission.test.ts"
     ],
+    "chat.approval-continuation.state.line": [
+      "packages/keiko-server/src/atlassian/jiraChatToolTurn.test.ts"
+    ],
     "chat.compaction.facts.classified.line": [
       "packages/keiko-server/src/chat-compaction-model-summary.test.ts"
     ],
@@ -1579,6 +1586,9 @@
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
     "client.git-operation.settled.line": [
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
+    ],
+    "client.jira-fields.presented.line": [
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
     "client.jira-result.presented.line": [

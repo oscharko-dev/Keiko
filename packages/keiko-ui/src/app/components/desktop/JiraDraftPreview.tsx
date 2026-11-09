@@ -1,5 +1,5 @@
 "use client";
-import { useContext, useId, useState, type ReactNode } from "react";
+import { useContext, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 import type {
   JiraDraftField,
@@ -8,6 +8,8 @@ import type {
   JiraDraftValue,
 } from "./jiraDraftTree";
 import { JiraNamesContext, jiraNamed, jiraNameOf, restatesTarget } from "./jiraNames";
+import { jiraStandardFieldLabel } from "./jira-standard-field-label";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import styles from "./JiraChatTools.module.css";
 
 // Longer text is collapsed to this many characters until the human expands it in place.
@@ -80,6 +82,19 @@ function DraftValue({ value }: { readonly value: JiraDraftValue }): ReactNode {
 
 /** Named values as a definition list: a field id (or argument name) and what it is set to. */
 export function DraftFields({ fields }: { readonly fields: readonly JiraDraftField[] }): ReactNode {
+  const t = useTranslate();
+  const reported = useRef(false);
+  useEffect(() => {
+    const localizedCount = fields.filter(
+      (field) => field.label !== undefined && field.label === jiraStandardFieldLabel(field.id, t),
+    ).length;
+    if (!reported.current && localizedCount > 0) {
+      reported.current = true;
+      reportClientDiagnostic("Jira built-in field labels presented.", {
+        jiraFieldPresentation: { fieldCount: fields.length, localizedCount },
+      });
+    }
+  }, [fields, t]);
   return fields.length === 0 ? null : (
     <dl className={styles.cmpDraftFields}>
       {fields.map((field) => (
@@ -96,11 +111,12 @@ export function DraftFields({ fields }: { readonly fields: readonly JiraDraftFie
 
 function ItemFields({ item }: { readonly item: JiraDraftTreeItem }): ReactNode {
   const names = useContext(JiraNamesContext);
+  const t = useTranslate();
   return (
     <DraftFields
       fields={item.fields
         .filter((field) => !restatesTarget(field, item.projectId, item.issueTypeId))
-        .map((field) => jiraNamed(field, names, item))}
+        .map((field) => jiraNamed(field, names, item, t))}
     />
   );
 }

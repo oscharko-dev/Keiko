@@ -6,6 +6,7 @@ import {
   applyChatWriteApproval,
 } from "@/lib/chat-tool-events";
 import { watchChatToolConsent } from "@/lib/chat-tool-consent";
+import { restoredPendingToolTurn, useRestoredToolTurn } from "./useRestoredToolTurn";
 import { useChatDraft, useChatDraftUnloadGuard, type ChatDraftPersistence } from "./useChatDraft";
 import type { ChatCreationModelChoice } from "./chatCreationModelChoice";
 import {
@@ -54,6 +55,7 @@ import {
   StreamingUnavailableError,
   askGrounded,
   createDesktopChat,
+  cancelDesktopChatTurn,
   createProject,
   fetchChatMessages,
   fetchChats,
@@ -960,6 +962,7 @@ interface CanonicalChatProjectTarget {
 }
 
 interface UngroundedSendRequest {
+  readonly retainPendingApproval: boolean;
   readonly expectedSkillSelectionRevision?: number | null | undefined;
   readonly chat: Chat;
   readonly project: CanonicalChatProjectTarget;
@@ -1024,6 +1027,7 @@ interface GroundedSendRequest extends Pick<
 > {
   readonly memory: ConversationMemoryRequestWire;
   readonly correlationId: SendAttemptRequest["correlationId"];
+  readonly retainPendingApproval: boolean;
 }
 
 function expectedGroundedScopeIdentity(
@@ -2933,12 +2937,11 @@ function settledSendMessageOutcome(input: {
   return settled.status === "completed" ? settled : { status: "failed" };
 }
 
-export async function canonicalTurnReferenceForClient(
+export function canonicalTurnReferenceForClient(
   chatId: string,
   clientTurnId: string,
 ): Promise<string> {
-  const runtime = await import("./canonical-voice-hasher-runtime");
-  return runtime.sha256Hex(canonicalDesktopChatTurnReferenceSeed(chatId, clientTurnId));
+  return Promise.resolve(sha256Hex(canonicalDesktopChatTurnReferenceSeed(chatId, clientTurnId)));
 }
 
 function isExactCanonicalUserMessage(message: ChatMessage, canonicalTurnRef: string): boolean {
@@ -3179,6 +3182,57 @@ function awaitsToolDecision(message: ChatMessage): boolean {
     ) === true
   );
 }
+function leasedTurnIdentity(
+  chatId: string,
+  clientTurnId: string | undefined,
+  retain = true,
+): {
+  readonly chatId: string;
+  readonly clientTurnId: string;
+} | null {
+  return clientTurnId === undefined || !retain ? null : { chatId, clientTurnId };
+}
+/** Canonical Voice keeps request-owned cancellation, including its grounded route. */
+function pendingLeaseOptOut(retain: boolean): [] | [false] {
+  return retain ? [] : [false];
+}
+interface PendingToolStopAttempt {
+  readonly chatId: string;
+  readonly controller: AbortController | null;
+  readonly canonicalTurnRef?: string;
+  pending: boolean;
+}
+
+interface PendingToolStopOwner {
+  attempt?: PendingToolStopAttempt;
+}
+
+function matchesPendingToolStop(
+  current: PendingToolStopAttempt | undefined,
+  target: Omit<PendingToolStopAttempt, "pending">,
+): boolean {
+  return (
+    current?.pending === true &&
+    current.chatId === target.chatId &&
+    current.canonicalTurnRef === target.canonicalTurnRef
+  );
+}
+
+function launchChatWork(work: Promise<void>): void {
+  work.catch((error: unknown) => {
+    reportClientDiagnostic("Chat background work failed.", {
+      kind: "other",
+      correlationId: correlationIdOf(error),
+      errorKind: bffRequestErrorKind(error),
+      errorEvidence: clientErrorEvidence(error),
+    });
+  });
+}
+function restoredToolTurnStatus(message: ChatMessage): SendStatus {
+  if (message.turnState === "pending")
+    return awaitsToolDecision(message) ? "awaiting-decision" : "contacting";
+  return message.turnState ?? "contacting";
+}
 function applyStreamWriteApproval(
   previous: SessionState,
   event: Parameters<typeof applyChatWriteApproval>[1],
@@ -3266,6 +3320,17 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // cancellation paths (grounded uses the controller as signal; ungrounded
   // adds signal support to sendDesktopChat in this issue).
   const sendControllerRef = useRef<AbortController | null>(null);
+  const stoppedToolTurnRef = useRef<string | undefined>(undefined);
+  const pendingToolStopOwnerRef = useRef<PendingToolStopOwner>({});
+  const unconfirmedStopSignalRef = useRef<AbortSignal | null>(null);
+  const unconfirmedStopTargetRef = useRef<{
+    readonly chatId: string;
+    readonly canonicalTurnRef: string;
+  } | null>(null);
+  const sendCanonicalIdentityRef = useRef<{
+    readonly chatId: string;
+    readonly clientTurnId: string;
+  } | null>(null);
   const sendControllerOwnerRef = useRef<{
     readonly kind: "composer" | "canonical-voice";
     readonly conversationId: string;
@@ -3628,6 +3693,45 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     sendSlotWaitersRef.current.clear();
   }, []);
 
+  const publishRestoredToolTurn = useCallback(
+    (message: ChatMessage, persisted?: readonly ChatMessage[]): void => {
+      if (activeChatIdRef.current !== message.chatId || sendControllerRef.current !== null) return;
+      const owner = restoredPendingToolTurn(sessionStateRef.current.messages, message.chatId);
+      if (owner?.canonicalTurnRef !== message.canonicalTurnRef) return;
+      setState((previous) => ({
+        ...previous,
+        messages:
+          persisted === undefined
+            ? previous.messages.map((entry) => (entry.id === message.id ? message : entry))
+            : replaceCanonicalTurnMessages(
+                previous.messages,
+                [message.id],
+                persisted.filter(
+                  (entry) =>
+                    entry.chatId === message.chatId &&
+                    entry.canonicalTurnRef === message.canonicalTurnRef,
+                ),
+              ),
+      }));
+      if (
+        message.turnState === "pending" &&
+        stoppedToolTurnRef.current === message.canonicalTurnRef
+      )
+        return;
+      updateSendStatus(restoredToolTurnStatus(message));
+    },
+    [updateSendStatus],
+  );
+  useEffect(() => {
+    if (sendControllerRef.current === null) updateSendStatus("idle");
+  }, [state.activeChat?.id, updateSendStatus]);
+  useRestoredToolTurn(
+    state.activeChat,
+    state.messages,
+    sendControllerRef.current !== null,
+    publishRestoredToolTurn,
+  );
+
   const waitForCanonicalVoiceSendSlot = useCallback((signal: AbortSignal): Promise<void> => {
     if (signal.aborted) return Promise.reject(new DOMException("cancelled", "AbortError"));
     if (!isInFlight(sendStatusRef.current)) return Promise.resolve();
@@ -3656,7 +3760,12 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
 
   const updateOwnedSendStatus = useCallback(
     (signal: AbortSignal, next: SendStatus): void => {
-      if (latestSendSignalRef.current === signal) updateSendStatus(next);
+      if (latestSendSignalRef.current === signal)
+        updateSendStatus(
+          unconfirmedStopSignalRef.current === signal && next === "cancelled"
+            ? "awaiting-decision"
+            : next,
+        );
     },
     [updateSendStatus],
   );
@@ -3923,7 +4032,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       // GEN-PERF-CHAT-011 — do not re-arm a poll cycle that already completed without settling.
       if (runSummaryParkedRef.current.has(syncKey)) continue;
       runSummarySyncingRef.current.add(syncKey);
-      void syncRunSummaryMessage(chat, project.path, message, syncKey);
+      launchChatWork(syncRunSummaryMessage(chat, project.path, message, syncKey));
     }
   }, [state.activeChat, state.activeProject, state.messages, syncRunSummaryMessage]);
 
@@ -4501,6 +4610,11 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const sendUngroundedBuffered = useCallback(
     async (request: UngroundedSendRequest): Promise<SendAttemptOutcome> => {
       const { chat, optimisticId, signal } = request;
+      sendCanonicalIdentityRef.current = leasedTurnIdentity(
+        chat.id,
+        request.clientTurnId,
+        request.retainPendingApproval,
+      );
       const stopConsentWatch = watchBufferedConsent(request);
       try {
         updateOwnedSendStatus(signal, "contacting");
@@ -4509,6 +4623,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           desktopChatInputForUngrounded(request),
           signal,
           request.correlationId,
+          ...pendingLeaseOptOut(request.retainPendingApproval),
         );
         if (signal.aborted) return { status: "cancelled" };
         const outcome = completedSendOutcome(result.messages, result.attachmentDeliveries);
@@ -4553,12 +4668,18 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         return sendUngroundedBuffered(request);
       }
       updateOwnedSendStatus(signal, "contacting");
+      sendCanonicalIdentityRef.current = leasedTurnIdentity(
+        request.chat.id,
+        request.clientTurnId,
+        request.retainPendingApproval,
+      );
       try {
         return await streamUngrounded(request);
       } catch (error_) {
         // StreamingUnavailableError before SSE headers — fall back to buffered.
         if (!(error_ instanceof StreamingUnavailableError)) throw error_;
       }
+      sendCanonicalIdentityRef.current = null;
       return sendUngroundedBuffered(request);
     },
     [state.models, sendUngroundedBuffered, streamUngrounded, updateOwnedSendStatus],
@@ -4580,10 +4701,16 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       clientTurnId,
       correlationId,
       expectedSkillSelectionRevision,
+      retainPendingApproval,
     }: GroundedSendRequest): Promise<SendAttemptOutcome> => {
       // Copilot PR #258 finding: clear the previous answer at the START of a new send so a
       // stale citation block doesn't briefly flash next to the new question.
       setLatestGrounded(undefined);
+      sendCanonicalIdentityRef.current = leasedTurnIdentity(
+        chat.id,
+        clientTurnId,
+        retainPendingApproval,
+      );
       const stopConsentWatch = watchBufferedConsent({ chat, clientTurnId, signal, optimisticId });
       try {
         updateOwnedSendStatus(signal, "contacting");
@@ -4599,6 +4726,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           },
           signal,
           correlationId,
+          ...pendingLeaseOptOut(retainPendingApproval),
         );
         if (!isStillActiveChat(chat.id)) {
           return { status: "completed", assistantMessageId: result.assistantMessageId };
@@ -4689,6 +4817,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       if (grounded && staged.length > 0) setError(GROUNDED_ATTACHMENT_DROPPED_NOTICE);
       if (hasGroundedRouteScope(chat)) {
         const terminal = await sendGrounded({
+          retainPendingApproval: canonicalTarget === undefined,
           chat,
           expectedSkillSelectionRevision: request.expectedSkillSelectionRevision,
           content: request.content,
@@ -4702,6 +4831,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         return { terminal, disclosures: documentBundle.disclosures, consumedAttachmentIds };
       }
       const ungroundedRequest: UngroundedSendRequest = {
+        retainPendingApproval: canonicalTarget === undefined,
         chat,
         expectedSkillSelectionRevision: request.expectedSkillSelectionRevision,
         project: request.project,
@@ -4808,21 +4938,147 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
 
   // Issue #152 — unified cancel that aborts any in-flight send (grounded OR
   // ungrounded). Replaces the prior `cancelGrounded`-only surface. When no
-  // request is in flight this is a safe no-op. We flip sendStatus to
-  // "cancelled" immediately so the UI re-renders out of the in-flight state
-  // even before the fetch rejection reaches the awaited site.
+  // request is in flight this is a safe no-op. Unleased requests abort at once.
+  // A leased turn needs an authenticated Stop acknowledgement before the UI
+  // publishes "cancelled"; a detached transport alone does not stop native work.
   const releaseCancelledSendController = useCallback((): void => {
     sendControllerRef.current = null;
     sendControllerOwnerRef.current = null;
+    sendCanonicalIdentityRef.current = null;
     setRegeneratingMessageId(undefined);
     updateSendStatus("cancelled");
   }, [updateSendStatus]);
 
+  const ownsStoppedTurn = useCallback(
+    (owner: PendingToolStopOwner, attempt: PendingToolStopAttempt): boolean =>
+      pendingToolStopOwnerRef.current === owner &&
+      owner.attempt === attempt &&
+      activeChatIdRef.current === attempt.chatId &&
+      sendControllerRef.current === attempt.controller,
+    [],
+  );
+
+  const claimStoppedTurn = useCallback(
+    (
+      owner: PendingToolStopOwner,
+      predecessor: PendingToolStopAttempt | undefined,
+      target: Omit<PendingToolStopAttempt, "pending">,
+    ): PendingToolStopAttempt | undefined => {
+      if (matchesPendingToolStop(owner.attempt, target)) return undefined;
+      if (
+        pendingToolStopOwnerRef.current !== owner ||
+        owner.attempt !== predecessor ||
+        activeChatIdRef.current !== target.chatId ||
+        sendControllerRef.current !== target.controller
+      )
+        return undefined;
+      const attempt = { ...target, pending: true };
+      owner.attempt = attempt;
+      return attempt;
+    },
+    [],
+  );
+
+  const settleStoppedToolTurn = useCallback(
+    (owner: PendingToolStopOwner, attempt: PendingToolStopAttempt, failed: boolean): void => {
+      attempt.pending = false;
+      if (!ownsStoppedTurn(owner, attempt)) return;
+      const controller = attempt.controller;
+      if (failed && controller !== null && latestSendSignalRef.current === controller.signal)
+        unconfirmedStopSignalRef.current = controller.signal;
+      controller?.abort();
+      releaseCancelledSendController();
+      if (failed) updateSendStatus("awaiting-decision");
+    },
+    [releaseCancelledSendController, updateSendStatus, ownsStoppedTurn],
+  );
+
+  const stopPendingToolTurn = useCallback(
+    async (
+      chatId: string,
+      reference: Promise<string>,
+      controller: AbortController | null,
+    ): Promise<void> => {
+      const owner = pendingToolStopOwnerRef.current;
+      const predecessor = owner.attempt;
+      let attempt: PendingToolStopAttempt | undefined;
+      let failed = false;
+      try {
+        const canonicalTurnRef = await reference;
+        attempt = claimStoppedTurn(owner, predecessor, { chatId, controller, canonicalTurnRef });
+        if (attempt === undefined) return;
+        stoppedToolTurnRef.current = canonicalTurnRef;
+        unconfirmedStopTargetRef.current = { chatId, canonicalTurnRef };
+        const outcome = await cancelDesktopChatTurn({ chatId, canonicalTurnRef });
+        if (!outcome.cancelled)
+          throw new ApiError(
+            "CHAT_CANCEL_UNCONFIRMED",
+            "Chat cancellation could not be confirmed.",
+            409,
+          );
+        if (ownsStoppedTurn(owner, attempt)) {
+          unconfirmedStopTargetRef.current = null;
+          setError(undefined);
+        }
+      } catch (error_) {
+        failed = true;
+        attempt ??= claimStoppedTurn(owner, predecessor, { chatId, controller });
+        if (attempt !== undefined && ownsStoppedTurn(owner, attempt))
+          setError(t("chat.pendingCancellation.unconfirmed"));
+        reportClientDiagnostic("Chat pending turn cancellation failed.", {
+          kind: "other",
+          correlationId: correlationIdOf(error_),
+          errorKind: bffRequestErrorKind(error_),
+          errorEvidence: clientErrorEvidence(error_),
+        });
+      } finally {
+        if (attempt !== undefined) settleStoppedToolTurn(owner, attempt, failed);
+      }
+    },
+    [claimStoppedTurn, settleStoppedToolTurn, ownsStoppedTurn, t],
+  );
+
   const cancelSend = useCallback(() => {
     if (!isInFlight(sendStatusRef.current)) return;
+    const saved = restoredPendingToolTurn(
+      sessionStateRef.current.messages,
+      activeChatIdRef.current,
+    );
+    const active = sendCanonicalIdentityRef.current;
+    const uncertain = unconfirmedStopTargetRef.current;
+    if (active !== null) {
+      launchChatWork(
+        stopPendingToolTurn(
+          active.chatId,
+          canonicalTurnReferenceForClient(active.chatId, active.clientTurnId),
+          sendControllerRef.current,
+        ),
+      );
+      return;
+    }
+    if (uncertain !== null && uncertain.chatId === activeChatIdRef.current) {
+      launchChatWork(
+        stopPendingToolTurn(
+          uncertain.chatId,
+          Promise.resolve(uncertain.canonicalTurnRef),
+          sendControllerRef.current,
+        ),
+      );
+      return;
+    }
+    if (sendControllerRef.current === null && saved?.canonicalTurnRef !== undefined) {
+      launchChatWork(
+        stopPendingToolTurn(
+          saved.chatId,
+          Promise.resolve(saved.canonicalTurnRef),
+          sendControllerRef.current,
+        ),
+      );
+      return;
+    }
     sendControllerRef.current?.abort();
     releaseCancelledSendController();
-  }, [releaseCancelledSendController]);
+  }, [releaseCancelledSendController, stopPendingToolTurn]);
 
   // ADR-0154 D4 barge-in. Unlike cancelSend (the visible stop control, which cancels whatever the
   // user can see in flight) this is scoped by send owner exactly like openChat's abort: a typed
@@ -4913,6 +5169,18 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     [setDraft, ownsRefusedDraft],
   );
 
+  const presentSendAdmissionRefusal = useCallback(
+    (
+      admission: Extract<SendMessageAdmission, { readonly kind: "rejected" }>,
+      options: SendMessageOptions | undefined,
+    ): void => {
+      if (selectionUnavailable && options?.canonicalVoiceTarget === undefined)
+        refuseHeldSelection();
+      if (admission.error !== undefined) setError(admission.error);
+    },
+    [selectionUnavailable, refuseHeldSelection],
+  );
+
   const sendMessage = useCallback(
     async (options?: SendMessageOptions): Promise<SendMessageOutcome> => {
       const admission = admitCurrentSource(
@@ -4928,9 +5196,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         }),
       );
       if (admission.kind === "rejected") {
-        if (selectionUnavailable && options?.canonicalVoiceTarget === undefined)
-          refuseHeldSelection();
-        if (admission.error !== undefined) setError(admission.error);
+        presentSendAdmissionRefusal(admission, options);
         return { status: "not-sent" };
       }
       const { canonicalTarget, chat, project, content, modelId } = admission;
@@ -4967,6 +5233,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       // any) was either already settled or already aborted via cancelSend.
       const controller = new AbortController();
       sendControllerRef.current = controller;
+      sendCanonicalIdentityRef.current = null;
+      unconfirmedStopTargetRef.current = null;
+      pendingToolStopOwnerRef.current = {};
       sendControllerOwnerRef.current = {
         kind: canonicalTarget === undefined ? "composer" : "canonical-voice",
         conversationId: chat.id,
@@ -5043,7 +5312,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       draftState,
       markdownSkill,
       selectionUnavailable,
-      refuseHeldSelection,
+      presentSendAdmissionRefusal,
       state.activeChat,
       state.selectedModel,
       state.models,
@@ -5249,7 +5518,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   ]);
 
   drainCanonicalVoiceQueueRef.current = (): void => {
-    void drainCanonicalVoiceQueue();
+    launchChatWork(drainCanonicalVoiceQueue());
   };
 
   useEffect(() => {
@@ -5405,7 +5674,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           ? previous
           : { ...previous, messages: [...previous.messages, optimistic] },
       );
-      if (!canonicalVoicePageOutboxSuspended()) void drainCanonicalVoiceQueue();
+      if (!canonicalVoicePageOutboxSuspended()) launchChatWork(drainCanonicalVoiceQueue());
       return promise;
     },
     [
@@ -5423,7 +5692,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     if (!canonicalVoicePageOutboxSuspended() || canonicalVoiceQueueRef.current.length === 0) return;
     setError(undefined);
     setCanonicalVoicePageOutboxSuspended(undefined);
-    void drainCanonicalVoiceQueue();
+    launchChatWork(drainCanonicalVoiceQueue());
   }, [canonicalVoiceQueueRef, drainCanonicalVoiceQueue]);
 
   const discardPendingCanonicalVoiceTurn = useCallback((): void => {
@@ -5438,7 +5707,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     setError(undefined);
     // A head-of-line wedge in another chat leaves the outbox suspended and this drain returns
     // immediately; otherwise the queue resumes with the remaining turns.
-    void drainCanonicalVoiceQueue();
+    launchChatWork(drainCanonicalVoiceQueue());
   }, [drainCanonicalVoiceQueue, interruptCanonicalVoiceDelivery]);
 
   const canonicalVoiceCaptureMustPause = useCallback((): boolean => {
@@ -5473,6 +5742,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       setLatestMemory(undefined);
       const controller = new AbortController();
       sendControllerRef.current = controller;
+      sendCanonicalIdentityRef.current = null;
+      unconfirmedStopTargetRef.current = null;
+      pendingToolStopOwnerRef.current = {};
       sendControllerOwnerRef.current = { kind: "composer", conversationId: chat.id };
       latestSendSignalRef.current = controller.signal;
       try {

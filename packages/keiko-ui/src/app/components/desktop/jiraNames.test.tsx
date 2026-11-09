@@ -102,14 +102,18 @@ describe("the names on a Jira approval", () => {
     renderInChat(transcript(...READS), transcript(renamed), transcript(draft("10002")));
     expect(screen.getByText("Project Renamed · Issue type Task")).toBeVisible();
   });
-  it("falls back to the exact ids when the Chat did not read the names", () => {
+  it("keeps target and custom ids while localizing built-in fields when the Chat did not read names", () => {
     renderInChat(transcript(draft("10002")));
     expect(screen.getByText("Project 10000 · Issue type 10002")).toBeVisible();
-    expect(screen.getByText("description")).toBeVisible();
+    expect(screen.queryByText("description")).toBeNull();
+    expect(screen.getByText("Description")).toBeVisible();
+    expect(screen.getByText("Synthetic")).toBeVisible();
+    expect(screen.getByText("customfield_1")).toBeVisible();
   });
   it("keeps a field visible that contradicts the item's target", () => {
     renderInChat(transcript(draft("10009")));
-    expect(screen.getByText("issuetype")).toBeVisible();
+    expect(screen.queryByText("issuetype")).toBeNull();
+    expect(screen.getByText("Issue type")).toBeVisible();
     expect(screen.getByText("10009")).toBeVisible();
   });
   it("takes names only from completed reads of the tool that owns them", () => {

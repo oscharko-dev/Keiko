@@ -32,7 +32,12 @@ import { seedCapsuleWithVectors } from "@oscharko-dev/keiko-local-knowledge/test
 import { handleSendDesktopChat } from "./chat-handlers.js";
 import { openKnowledgeStoreForDeps } from "./local-knowledge-store-open.js";
 import { handleSendDesktopChatStream } from "./chat-stream-handlers.js";
-import { handleDecideChatWriteApproval } from "./atlassian/chatWriteApprovalRoutes.js";
+import {
+  handleDecideChatWriteApproval,
+  handleGetChatWriteApproval,
+} from "./atlassian/chatWriteApprovalRoutes.js";
+import * as appSessionAuthority from "./coding-app-session/appSessionReadAuthority.js";
+import { continuations } from "./chat-approval-continuation-state.js";
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -53,6 +58,7 @@ import { buildUiHandlerDeps, currentContextProfileForModel, type UiHandlerDeps }
 import { handleGroundedAsk, modelWindowAwareBudget } from "./grounded-qa.js";
 import { mockRequest, mockResponse } from "./_support.js";
 import type { RouteContext, RouteResult } from "./routes.js";
+import type { ChatMessage } from "./store/index.js";
 import { jiraChatActorDigest } from "./atlassian/jiraPodAccess.js";
 import {
   QUALIFICATION_SPEND_BUDGET_USD_ENV,
@@ -2993,4 +2999,129 @@ describe("Jira text cites the evidence pack of its own turn (F8)", () => {
     expect(result.status, JSON.stringify(result.body)).toBe(200);
     expect(postedComment(f)).toBe(`Feature returns true (${label}).`);
   });
+});
+
+async function pendingGroundedWrite(f: ReturnType<typeof runtime>): Promise<{
+  readonly user: ChatMessage;
+  readonly approval: NonNullable<ChatToolExchange["approval"]>;
+  readonly canonicalTurnRef: string;
+}> {
+  await vi.waitFor(
+    () => {
+      expect(
+        f.deps.store
+          .listMessages(f.chatId)[0]
+          ?.toolTranscript?.exchanges.find((exchange) => exchange.approval !== undefined)?.approval
+          ?.state,
+      ).toBe("pending");
+    },
+    { timeout: 10_000 },
+  );
+  const user = f.deps.store.listMessages(f.chatId)[0];
+  const approval = user?.toolTranscript?.exchanges.find(
+    (exchange) => exchange.approval !== undefined,
+  )?.approval;
+  if (approval === undefined || user?.canonicalTurnRef === undefined)
+    throw new Error("Missing admitted grounded approval");
+  return { user, approval, canonicalTurnRef: user.canonicalTurnRef };
+}
+
+function expectGroundedCancellation(f: ReturnType<typeof runtime>, userId: string): void {
+  const user = f.deps.store.findMessageById(userId);
+  expect(user?.turnState).toBe("cancelled");
+  expect(
+    user?.toolTranscript?.exchanges.find((exchange) => exchange.approval !== undefined)?.approval
+      ?.state,
+  ).toBe("revoked");
+  expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual([]);
+}
+
+describe("grounded Jira approval continuation", () => {
+  it.each([
+    ["grounded", true],
+    ["grounded", false],
+    ["buffered", true],
+    ["buffered", false],
+  ] as const)(
+    "preserves only an observed bounded grounded approval on close: transport=%s leased=%s",
+    async (transport, leased) => {
+      const f = runtime(true);
+      await connectNamedDataPod(f, "Grounded continuation specification", "Feature returns true.");
+      const registry = approvalOwner(f.deps);
+      vi.spyOn(registry, "waitForChatWriteApproval").mockRestore();
+      vi.spyOn(appSessionAuthority, "resolveAppSessionReadAuthority").mockReturnValue({
+        sessionId: "sess_012345678901234567890123",
+        principalLabel: "local",
+        issuedAtMs: 1,
+        lastSeenAtMs: 1,
+        rotationCount: 0,
+      });
+      Object.assign(f.deps, {
+        codingAppSessionChannel: {
+          ...f.deps.codingAppSessionChannel,
+          isSessionLive: (): boolean => true,
+          beginOperation: (): undefined => undefined,
+        },
+      });
+      provider(["write", "answer"], "The comment was added.");
+      const ctx = context({
+        ...(transport === "buffered" ? { projectPath: f.root } : {}),
+        chatId: f.chatId,
+        content: "Add the Jira comment from the connected specification.",
+        modelId: MODEL,
+        clientTurnId: `grounded-continuation-${String(leased)}`,
+      });
+      if (leased) ctx.req.headers["x-keiko-chat-pending-lease"] = "bounded";
+      const outcome =
+        transport === "grounded"
+          ? handleGroundedAsk(ctx, f.deps)
+          : handleSendDesktopChat(ctx, f.deps);
+      try {
+        const { user, approval, canonicalTurnRef } = await pendingGroundedWrite(f);
+        expect(handleGetChatWriteApproval(context({}, approval.approvalId), f.deps)).toMatchObject({
+          status: 200,
+        });
+        ctx.res.destroy();
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        if (!leased) {
+          await outcome;
+          expectGroundedCancellation(f, user.id);
+          return;
+        }
+        expect(
+          continuations.get(f.deps.store)?.get(canonicalTurnRef)?.controller.signal.aborted,
+        ).toBe(false);
+        expect(f.deps.store.findMessageById(user.id)).toMatchObject({
+          turnState: "pending",
+          toolTranscript: user.toolTranscript,
+        });
+        expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual([]);
+        const decision = context(
+          { decision: "approve", actionDigest: approval.actionDigest },
+          approval.approvalId,
+        );
+        expect((await handleDecideChatWriteApproval(decision, f.deps)).status).toBe(200);
+        expect((await outcome).status).toBe(200);
+        expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+        expect(f.deps.store.findMessageById(user.id)).toMatchObject({ turnState: "completed" });
+        expect(
+          (
+            await handleDecideChatWriteApproval(
+              context(
+                { decision: "approve", actionDigest: approval.actionDigest },
+                approval.approvalId,
+              ),
+              f.deps,
+            )
+          ).status,
+        ).toBe(409);
+        expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+      } finally {
+        ctx.res.destroy();
+        for (const entry of continuations.get(f.deps.store)?.values() ?? [])
+          entry.controller.abort();
+        await outcome;
+      }
+    },
+  );
 });

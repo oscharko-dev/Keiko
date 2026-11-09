@@ -6,6 +6,11 @@ export interface RequestCancellation {
   readonly signal: AbortSignal;
   readonly dispose: () => void;
 }
+const detachedResponses = new WeakSet<ServerResponse>();
+
+export function isDetachedRequestResponse(res: ServerResponse): boolean {
+  return detachedResponses.has(res);
+}
 
 // The minimal req/res pair `requestAlreadyClosed` actually reads. A full `RouteContext` satisfies
 // this structurally (its `params`/`url`/`correlationId` just come along for the ride), and so does
@@ -37,13 +42,19 @@ export function requestAlreadyClosed(target: CancellableRequestTarget): boolean 
   return requestAborted || responseClosed;
 }
 
-export function createRequestCancellation(ctx: RouteContext, reason: string): RequestCancellation {
+export function createRequestCancellation(
+  ctx: RouteContext,
+  reason: string,
+  options?: { readonly retainOnClose: () => boolean },
+): RequestCancellation {
   const controller = new AbortController();
   const abort = (): void => {
     if (!controller.signal.aborted) controller.abort(reason);
   };
   const responseClose = (): void => {
-    if (!ctx.res.writableEnded) abort();
+    if (ctx.res.writableEnded) return;
+    if (options?.retainOnClose() === true) detachedResponses.add(ctx.res);
+    else abort();
   };
   ctx.req.once("aborted", abort);
   ctx.res.once("close", responseClose);

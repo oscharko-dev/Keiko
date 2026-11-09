@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   askGrounded,
+  cancelDesktopChatTurn,
   updateChatConnectedScopes,
   updateChatLocalKnowledgeScopes,
   updateChatGitChangeScopes,
@@ -80,6 +81,7 @@ import {
   requestEditorSignatureHelp,
   requestEditorSymbols,
   saveFilesContent,
+  sendDesktopChat,
   sendDesktopChatStream,
   DESKTOP_CHAT_STREAM_IDLE_LIMIT_MS,
   fetchWorkspaceSummary,
@@ -2898,6 +2900,23 @@ describe("askGrounded", () => {
     );
   });
 
+  it.each([undefined, "grounded-client-turn"])(
+    "opts into bounded pending review only for canonical grounded input %s",
+    async (clientTurnId) => {
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse({}));
+      vi.stubGlobal("fetch", fetchMock);
+      await askGrounded({
+        chatId: "chat-1",
+        content: "Synthetic grounded request.",
+        ...(clientTurnId === undefined ? {} : { clientTurnId }),
+      });
+      const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+      expect(new Headers(init.headers).get("x-keiko-chat-pending-lease")).toBe(
+        clientTurnId === undefined ? null : "bounded",
+      );
+    },
+  );
+
   it("rejects with an AbortError when the signal is aborted before the fetch resolves", async () => {
     const controller = new AbortController();
     const fetchMock = vi.fn().mockImplementation(
@@ -3292,6 +3311,7 @@ describe("sendDesktopChatStream — correlation id threading", () => {
     const headers = new Headers(init.headers);
     expect(headers.get(CORRELATION_HEADER)).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
     expect(headers.get("Accept")).toBe("text/event-stream");
+    expect(headers.get("x-keiko-chat-pending-lease")).toBe("bounded");
     expect(headers.get("Content-Type")).toBe("application/json");
     expect(headers.get("X-Keiko-CSRF")).toBe("1");
   });
@@ -5589,4 +5609,74 @@ it("joins only startup observations on the explicit passive metadata read", asyn
     expect.objectContaining({ cache: "no-store", signal: expect.any(AbortSignal) }),
   );
   resetModelRequestCache();
+});
+
+describe("cancelDesktopChatTurn exact Stop protocol", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it.each([true, false])(
+    "posts only the exact canonical turn and validates cancelled=%s",
+    async (cancelled) => {
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ cancelled }));
+      vi.stubGlobal("fetch", fetchMock);
+      const input = { chatId: "chat-1", canonicalTurnRef: "a".repeat(64) };
+      expect(await cancelDesktopChatTurn(input)).toEqual({ cancelled });
+      const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(path).toBe("/api/desktop/chat/cancel");
+      expect(JSON.parse(String(init.body))).toEqual(input);
+      expect(init.method).toBe("POST");
+      expect(new Headers(init.headers).get("X-Keiko-CSRF")).toBe("1");
+      expect(init.signal).toBeInstanceOf(AbortSignal);
+    },
+  );
+  it.each([{}, { cancelled: "true" }, { cancelled: true, content: "PRIVATE_CONTENT" }])(
+    "rejects an ambiguous or content-bearing cancellation response %j",
+    async (body) => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(body)));
+      await expect(
+        cancelDesktopChatTurn({ chatId: "chat-1", canonicalTurnRef: "a".repeat(64) }),
+      ).rejects.toMatchObject({ code: "CONTRACT_VALIDATION_FAILED" });
+    },
+  );
+});
+
+describe("buffered Chat bounded pending review", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it.each([undefined, "buffered-client-turn"])(
+    "opts in only for canonical buffered input %s",
+    async (clientTurnId) => {
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse({}));
+      vi.stubGlobal("fetch", fetchMock);
+      await sendDesktopChat({
+        chatId: "chat-1",
+        projectPath: "/repo",
+        content: "Synthetic buffered request.",
+        ...(clientTurnId === undefined ? {} : { clientTurnId }),
+      });
+      const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+      expect(new Headers(init.headers).get("x-keiko-chat-pending-lease")).toBe(
+        clientTurnId === undefined ? null : "bounded",
+      );
+    },
+  );
+});
+
+describe("canonical Voice transport lease opt-out", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it.each(["buffered", "grounded"] as const)(
+    "keeps %s Voice requests request-owned despite their canonical identity",
+    async (transport) => {
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse({}));
+      vi.stubGlobal("fetch", fetchMock);
+      const input = {
+        chatId: "chat-voice",
+        projectPath: "/repo",
+        content: "Synthetic spoken request.",
+        clientTurnId: "voice-canonical",
+      };
+      if (transport === "buffered") await sendDesktopChat(input, undefined, undefined, false);
+      else await askGrounded(input, undefined, undefined, false);
+      const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+      expect(new Headers(init.headers).get("x-keiko-chat-pending-lease")).toBeNull();
+    },
+  );
 });

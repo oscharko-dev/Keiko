@@ -239,7 +239,9 @@ function captureResWithEvents(): CapturedResWithEvents {
 // A request double: a Readable that streams the JSON body (so readBody resolves) and also serves as
 // the EventEmitter abortOnDisconnect listens on for "aborted"/"close".
 function makeReq(body: Record<string, unknown>): IncomingMessage {
-  const req = Readable.from([Buffer.from(JSON.stringify(body), "utf8")]);
+  const req = Object.assign(Readable.from([Buffer.from(JSON.stringify(body), "utf8")]), {
+    headers: {},
+  });
   return req as unknown as IncomingMessage;
 }
 

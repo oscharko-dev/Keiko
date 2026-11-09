@@ -708,6 +708,7 @@ export interface ClientDiagnosticIngestRequest {
   readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;
   readonly loss?: ClientDiagnosticLossCounts | undefined;
   readonly jiraResultPresentation?: ClientJiraResultPresentation | undefined;
+  readonly jiraFieldPresentation?: ClientJiraFieldPresentation | undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -899,6 +900,7 @@ const CLOSED_CLIENT_REPORT_KEYS = [
   "selectDismissal",
   "knowledgeCatalog",
   "jiraResultPresentation",
+  "jiraFieldPresentation",
   "answerCopy",
   "answerSpeech",
   "citationActivation",
@@ -961,7 +963,8 @@ function hasValidCodingReportContext(value: Record<string, unknown>): boolean {
 function hasValidCountedPresentationContext(value: Record<string, unknown>): boolean {
   return (
     isOptional(value.knowledgeCatalog, isClientDiagnosticKnowledgeCatalog) &&
-    isOptional(value.jiraResultPresentation, isClientJiraResultPresentation)
+    isOptional(value.jiraResultPresentation, isClientJiraResultPresentation) &&
+    isOptional(value.jiraFieldPresentation, isClientJiraFieldPresentation)
   );
 }
 
@@ -2053,6 +2056,24 @@ export function isClientJiraResultPresentation(
     JIRA_RESULT_FAILURE_SET.has(value.failure) &&
     typeof value.restored === "boolean" &&
     (value.shownCount as number) <= (value.itemCount as number)
+  );
+}
+
+/** Routine presentation counts only: labels, ids and field values never cross this boundary. */
+export interface ClientJiraFieldPresentation {
+  readonly fieldCount: number;
+  readonly localizedCount: number;
+}
+export function isClientJiraFieldPresentation(
+  value: unknown,
+): value is ClientJiraFieldPresentation {
+  if (!isRecord(value) || Object.keys(value).length !== 2) return false;
+  return (
+    Object.hasOwn(value, "fieldCount") &&
+    Object.hasOwn(value, "localizedCount") &&
+    isBoundedNonNegativeInteger(value.fieldCount, 1000) &&
+    isBoundedNonNegativeInteger(value.localizedCount, 1000) &&
+    value.localizedCount <= value.fieldCount
   );
 }
 

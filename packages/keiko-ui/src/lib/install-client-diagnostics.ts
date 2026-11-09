@@ -288,6 +288,16 @@ function citationReportFields(
   return { citationActivation: meta.citationActivation, citationHighlight: meta.citationHighlight };
 }
 
+// Closed Jira presentation facts share the existing diagnostic transport.
+function jiraPresentationFields(
+  meta: ClientDiagnosticMeta,
+): Pick<ClientDiagnosticIngestRequest, "jiraResultPresentation" | "jiraFieldPresentation"> {
+  return {
+    jiraResultPresentation: meta.jiraResultPresentation,
+    jiraFieldPresentation: meta.jiraFieldPresentation,
+  };
+}
+
 // Builds the wire body for one already-bounded diagnostic message. `clientTs` is stamped at send
 // time (not at the original `reportClientDiagnostic` call), which is close enough for an operator
 // diagnostic and avoids threading a timestamp through the sink's string-only contract.
@@ -339,7 +349,7 @@ function clientMessagePostBody(
     composerSubmission: meta.composerSubmission,
     composerFocusIndicator: meta.composerFocusIndicator,
     composerCodeStage: meta.composerCodeStage,
-    jiraResultPresentation: meta.jiraResultPresentation,
+    ...jiraPresentationFields(meta),
     loss,
   };
   const readyStateDigit = SSE_DIAGNOSTIC_MESSAGE_PATTERN.exec(message)?.[1];
@@ -448,6 +458,7 @@ function routineClosedReportEvidence(meta: ClientDiagnosticMeta): boolean {
     meta.selectDismissal !== undefined ||
     meta.knowledgeCatalog !== undefined ||
     meta.jiraResultPresentation !== undefined ||
+    meta.jiraFieldPresentation !== undefined ||
     meta.answerSpeech !== undefined ||
     routineSupportReportEvidence(meta)
   );

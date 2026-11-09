@@ -39,6 +39,8 @@ export const APP_SESSION_SKILL_DRAFT_COOKIE_PATH = "/api/prompt-enhancement";
 export const APP_SESSION_CHATS_COOKIE_PATH = "/api/chats";
 /** Central MCP configuration and discovery consume the same paired browser authority. */
 export const APP_SESSION_MCP_COOKIE_PATH = "/api/mcp";
+/** Exact Chat review reads and decisions revalidate the original paired app session. */
+export const APP_SESSION_CHAT_APPROVAL_COOKIE_PATH = "/api/atlassian-connectors/action-approvals";
 
 // Issuance and revocation use one list so a new consuming route cannot retain a stale bearer.
 const APP_SESSION_ACTIVE_COOKIE_PATHS = [
@@ -58,6 +60,7 @@ const APP_SESSION_ACTIVE_COOKIE_PATHS = [
   APP_SESSION_SKILL_DRAFT_COOKIE_PATH,
   APP_SESSION_CHATS_COOKIE_PATH,
   APP_SESSION_MCP_COOKIE_PATH,
+  APP_SESSION_CHAT_APPROVAL_COOKIE_PATH,
 ] as const;
 
 /** Count of live route projections; retired cookies are not successful session repairs. */

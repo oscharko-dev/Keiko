@@ -1459,16 +1459,50 @@ export type SendDesktopChatInput = DesktopChatSendRequestWire;
 // cancel an in-flight ungrounded send. RequestInit.signal is `AbortSignal |
 // null` under exactOptionalPropertyTypes; convert at the boundary so callers
 // pass `AbortSignal | undefined` like every other API helper here.
+function pendingApprovalLeaseHeaders(
+  clientTurnId: string | undefined,
+  retain: boolean,
+): Record<string, string> {
+  return clientTurnId === undefined || !retain ? {} : { "x-keiko-chat-pending-lease": "bounded" };
+}
+
 export async function sendDesktopChat(
   input: SendDesktopChatInput,
   signal?: AbortSignal,
   correlationId?: string,
+  retainPendingApproval = true,
 ): Promise<DesktopChatSendResponse> {
   return fetchJson(
     "/api/desktop/chat",
-    { method: "POST", body: JSON.stringify(input), signal: signal ?? null },
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+      signal: signal ?? null,
+      headers: pendingApprovalLeaseHeaders(input.clientTurnId, retainPendingApproval),
+    },
     undefined,
     correlationId,
+  );
+}
+
+/** Explicit Stop targets exactly one persisted canonical turn; it never cancels another send. */
+export async function cancelDesktopChatTurn(input: {
+  readonly chatId: string;
+  readonly canonicalTurnRef: string;
+}): Promise<{ readonly cancelled: boolean }> {
+  return fetchJson(
+    "/api/desktop/chat/cancel",
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+      signal: AbortSignal.timeout(5000),
+    },
+    (value) =>
+      isRecordValue(value) &&
+      Object.keys(value).length === 1 &&
+      typeof value.cancelled === "boolean"
+        ? { ok: true }
+        : { ok: false, reasons: ["invalid chat cancellation response"] },
   );
 }
 
@@ -1822,7 +1856,7 @@ export async function sendDesktopChatStream(
   const requestInit: RequestInit = {
     method: "POST",
     body: JSON.stringify(input),
-    headers: { Accept: "text/event-stream" },
+    headers: { Accept: "text/event-stream", "x-keiko-chat-pending-lease": "bounded" },
   };
   const res = await fetchWithinIdleLimit(
     "/api/desktop/chat/stream",
@@ -2973,12 +3007,18 @@ export async function askGrounded(
   req: GroundedAskRequest,
   signal?: AbortSignal,
   correlationId?: string,
+  retainPendingApproval = true,
 ): Promise<GroundedAnswer> {
   // RequestInit.signal is `AbortSignal | null`. Under exactOptionalPropertyTypes we cannot
   // pass `undefined`, so convert here.
   return fetchJson(
     "/api/chats/messages/grounded",
-    { method: "POST", body: JSON.stringify(req), signal: signal ?? null },
+    {
+      method: "POST",
+      body: JSON.stringify(req),
+      signal: signal ?? null,
+      headers: pendingApprovalLeaseHeaders(req.clientTurnId, retainPendingApproval),
+    },
     undefined,
     correlationId,
   );

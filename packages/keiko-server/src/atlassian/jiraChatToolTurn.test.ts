@@ -24,7 +24,10 @@ import type { ChatToolBatchProgress } from "@oscharko-dev/keiko-contracts/bff-wi
 import type { ChatReadGrantEntry } from "./chatReadGrantState.js";
 import { findMessageById as readStoredMessage } from "../store/messages.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
-import { handleDecideChatWriteApproval } from "./chatWriteApprovalRoutes.js";
+import {
+  handleDecideChatWriteApproval,
+  handleGetChatWriteApproval,
+} from "./chatWriteApprovalRoutes.js";
 import { readJiraDraftRoute } from "./jiraDraftRoutes.js";
 import { handleSendDesktopChatStream } from "../chat-stream-handlers.js";
 import { handleUpdateChat } from "../store-handlers.js";
@@ -54,6 +57,9 @@ import { buildUiHandlerDeps, type UiHandlerDeps } from "../deps.js";
 import { handleRegenerateDesktopChat, handleSendDesktopChat } from "../chat-handlers.js";
 import { CatalogDispatchFault } from "../tool-catalog/catalogToolErrors.js";
 import { mockRequest, mockResponse } from "../_support.js";
+import * as appSessionAuthority from "../coding-app-session/appSessionReadAuthority.js";
+import { handleCancelDesktopChat } from "../chat-approval-continuation.js";
+import { continuations } from "../chat-approval-continuation-state.js";
 import type { RouteContext, RouteResult } from "../routes.js";
 import {
   executeJiraDraftStageTool,
@@ -2363,6 +2369,234 @@ describe.each([false, true])("write approval cancellation (stream=%s)", (stream)
       }
     },
   );
+});
+
+function leasedStream(
+  f: ReturnType<typeof fixture>,
+  clientTurnId: string,
+  transport: "stream" | "buffered" = "stream",
+): {
+  readonly response: ReturnType<typeof mockResponse>;
+  readonly outcome: ReturnType<typeof handleSendDesktopChatStream>;
+  readonly setSessionLive: (live: boolean) => void;
+} {
+  let live = true;
+  vi.spyOn(appSessionAuthority, "resolveAppSessionReadAuthority").mockReturnValue({
+    sessionId: "sess_012345678901234567890123",
+    principalLabel: "local",
+    issuedAtMs: 1,
+    lastSeenAtMs: 1,
+    rotationCount: 0,
+  });
+  Object.assign(f.deps, {
+    codingAppSessionChannel: {
+      ...f.deps.codingAppSessionChannel,
+      isSessionLive: (): boolean => live,
+      beginOperation: (): undefined => undefined,
+    },
+  });
+  const response = mockResponse({ captureBody: true });
+  const ctx = { ...sendContext(f, clientTurnId), res: response.res };
+  ctx.req.headers["x-keiko-chat-pending-lease"] = "bounded";
+  return {
+    response,
+    outcome:
+      transport === "stream"
+        ? handleSendDesktopChatStream(ctx, f.deps)
+        : handleSendDesktopChat(ctx, f.deps),
+    setSessionLive: (value): void => {
+      live = value;
+    },
+  };
+}
+
+describe("bounded Jira approval continuation across a page reload", () => {
+  it("does not retain a new unobserved approval merely because an earlier action was reviewed", async () => {
+    const f = fixture(true, undefined, true, 2, false, {
+      bodies: ["First reviewed change", "Second unreviewed change"],
+      refusal: {
+        status: 201,
+        bodyText: JSON.stringify({ id: "10001", body: "First reviewed change" }),
+      },
+    });
+    const stream = leasedStream(f, "leased-second-unobserved");
+    try {
+      const first = await pendingWriteApproval(f);
+      expect(
+        handleGetChatWriteApproval(context({}, { approvalId: first.approvalId }), f.deps).status,
+      ).toBe(200);
+      expect(await postWriteDecision(f, first, "approve")).toBe(200);
+      await vi.waitFor(() => {
+        const user = f.deps.store.listMessages(f.chatId)[0];
+        expect(user).toMatchObject({
+          toolTranscript: {
+            exchanges: [
+              { approval: { approvalId: first.approvalId, state: "claimed" } },
+              { approval: { state: "pending" } },
+            ],
+          },
+        });
+      });
+      stream.response.res.destroy();
+      await stream.outcome;
+      await vi.waitFor(() => {
+        expect(f.deps.store.listMessages(f.chatId)[0]).toMatchObject({
+          turnState: "cancelled",
+          toolTranscript: {
+            exchanges: [{ approval: { state: "claimed" } }, { approval: { state: "revoked" } }],
+          },
+        });
+      });
+      expect(f.writes()).toBe(1);
+    } finally {
+      for (const entry of continuations.get(f.deps.store)?.values() ?? []) entry.controller.abort();
+      await stream.outcome;
+    }
+  });
+
+  it("expires a detached approval at its original deadline even if its card is observed again", async () => {
+    vi.useFakeTimers();
+    const f = fixture(true);
+    const stream = leasedStream(f, "leased-expiry");
+    try {
+      const approval = await pendingWriteApproval(f);
+      const originalExpiry = approval.expiresAt;
+      expect(
+        handleGetChatWriteApproval(context({}, { approvalId: approval.approvalId }), f.deps).status,
+      ).toBe(200);
+      stream.response.res.destroy();
+      expect(
+        handleGetChatWriteApproval(context({}, { approvalId: approval.approvalId }), f.deps).status,
+      ).toBe(200);
+      expect(f.deps.store.listMessages(f.chatId)[0]).toMatchObject({
+        toolTranscript: { exchanges: [{ approval: { expiresAt: originalExpiry } }] },
+      });
+      await vi.advanceTimersByTimeAsync(originalExpiry - Date.now());
+      await stream.outcome;
+      await vi.waitFor(() => {
+        expect(f.deps.store.listMessages(f.chatId)[0]).toMatchObject({ turnState: "cancelled" });
+      });
+      expect(f.writes()).toBe(0);
+      expect(consentState(f)).toMatch(/expired|revoked/u);
+      expect(f.deps.store.listMessages(f.chatId)[0]).toMatchObject({ turnState: "cancelled" });
+    } finally {
+      for (const entry of continuations.get(f.deps.store)?.values() ?? []) entry.controller.abort();
+      await stream.outcome;
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["stream", "buffered"] as const)(
+    "keeps the exact persisted pending approval, then executes one human-approved write with no closed writes: %s",
+    async (transport) => {
+      const f = fixture(true);
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      const stream = leasedStream(f, "leased-reload", transport);
+      try {
+        const approval = await pendingWriteApproval(f);
+        const stored = f.deps.store.listMessages(f.chatId)[0];
+        expect(
+          handleGetChatWriteApproval(context({}, { approvalId: approval.approvalId }), f.deps)
+            .status,
+        ).toBe(200);
+        stream.response.res.destroy();
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(f.deps.store.findMessageById(stored?.id ?? "")).toMatchObject({
+          turnState: "pending",
+          toolTranscript: { exchanges: [{ approval }] },
+        });
+        expect(f.writes()).toBe(0);
+        const closedBody = stream.response.body();
+        expect(await postWriteDecision(f, approval, "approve")).toBe(200);
+        await stream.outcome;
+        expect(f.writes()).toBe(1);
+        expect(stream.response.body()).toBe(closedBody);
+        expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("completed");
+        expect(await postWriteDecision(f, approval, "approve")).toBe(409);
+        expect(f.writes()).toBe(1);
+        expect(
+          sink.events
+            .filter((value) => value.op === "chat.approval-continuation.state")
+            .map((value) => [value.extra?.phase, value.extra?.activeCount]),
+        ).toEqual([
+          ["registered", 1],
+          ["detached", 1],
+          ["released", 0],
+        ]);
+        const event = sink.events.find(
+          (value) =>
+            value.op === "chat.approval-continuation.state" && value.extra?.phase === "detached",
+        );
+        if (event === undefined) throw new Error("Missing detached approval evidence");
+        expectActivityLogProof(
+          "chat.approval-continuation.state.line",
+          formatActivityLogProofLine(event),
+        );
+        expect(JSON.stringify(event)).not.toMatch(
+          /Synthetic Jira|jira\.example|sess_|List Jira projects/u,
+        );
+      } finally {
+        for (const entry of continuations.get(f.deps.store)?.values() ?? [])
+          entry.controller.abort();
+        await stream.outcome;
+      }
+    },
+  );
+
+  it("cancels only the exact admitted turn when the human presses Stop", async () => {
+    const f = fixture(true);
+    const stream = leasedStream(f, "leased-stop");
+    try {
+      await pendingWriteApproval(f);
+      const message = f.deps.store.listMessages(f.chatId)[0];
+      const wrong = await handleCancelDesktopChat(
+        context({ chatId: f.chatId, canonicalTurnRef: "f".repeat(64) }),
+        f.deps,
+      );
+      expect(wrong).toMatchObject({ status: 200, body: { cancelled: false } });
+      expect(f.deps.store.findMessageById(message?.id ?? "")?.turnState).toBe("pending");
+      const stopped = await handleCancelDesktopChat(
+        context({ chatId: f.chatId, canonicalTurnRef: message?.canonicalTurnRef }),
+        f.deps,
+      );
+      expect(stopped).toMatchObject({ status: 200, body: { cancelled: true } });
+      await stream.outcome;
+      await vi.waitFor(() => {
+        expect(f.deps.store.findMessageById(message?.id ?? "")?.turnState).toBe("cancelled");
+      });
+      expect(f.writes()).toBe(0);
+      expectCancelledConsent(f, "cancelled");
+    } finally {
+      for (const entry of continuations.get(f.deps.store)?.values() ?? []) entry.controller.abort();
+      stream.response.res.destroy();
+      await stream.outcome;
+    }
+  });
+
+  it("refuses resumption after the original app session was revoked", async () => {
+    const f = fixture(true);
+    const stream = leasedStream(f, "leased-logout");
+    try {
+      const approval = await pendingWriteApproval(f);
+      expect(
+        handleGetChatWriteApproval(context({}, { approvalId: approval.approvalId }), f.deps).status,
+      ).toBe(200);
+      stream.response.res.destroy();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      stream.setSessionLive(false);
+      expect(await postWriteDecision(f, approval, "approve")).toBe(404);
+      await stream.outcome;
+      await vi.waitFor(() => {
+        expect(f.deps.store.listMessages(f.chatId)[0]).toMatchObject({ turnState: "cancelled" });
+      });
+      expect(f.writes()).toBe(0);
+      expectCancelledConsent(f, "cancelled");
+    } finally {
+      for (const entry of continuations.get(f.deps.store)?.values() ?? []) entry.controller.abort();
+      await stream.outcome;
+    }
+  });
 });
 
 it("drains a real buffered HTTP disconnect while the write approval is pending", async () => {
