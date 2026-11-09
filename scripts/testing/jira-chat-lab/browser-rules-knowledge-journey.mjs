@@ -231,10 +231,15 @@ function turnRunner(opened, context, intentPath) {
   };
 }
 
+// Jira Data Center requires an Epic Name on every Epic; field admission would refuse first.
+function epicNameClause(issueType) {
+  return issueType === "Epic" ? "Epic-Name 'Regelprobe' und " : "";
+}
+
 async function rejectedRuleTurn(opened, context, turn, issueType = "Epic", nativeParentKey) {
   const before = await issues(context);
   const refused = await turn(
-    `Erstelle genau ein ${issueType} im Projekt ${context.projectKey} mit Zusammenfassung 'Regelprobe ohne Kennung', ` +
+    `Erstelle genau ein ${issueType} im Projekt ${context.projectKey} mit ${epicNameClause(issueType)}Zusammenfassung 'Regelprobe ohne Kennung', ` +
       "Beschreibung 'Absichtlich ohne Abschnitte' und keinen Labels. " +
       (issueType === "Bug"
         ? "Setze eine aktuell erlaubte native Priorität. "
