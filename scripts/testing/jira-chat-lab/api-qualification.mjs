@@ -196,7 +196,14 @@ function prepareSite(error) {
     (!error.generatedMessage || process.env.KEIKO_AC7_DETAIL === "values");
   return {
     ...(sites.length > 0 ? { sites } : {}),
-    ...(message ? { message: String(error.message).slice(0, 160) } : {}),
+    ...(message
+      ? {
+          message: String(error.message).slice(
+            0,
+            process.env.KEIKO_AC7_DETAIL === "values" ? 700 : 160,
+          ),
+        }
+      : {}),
     errorType: error instanceof Error ? error.name : "unknown",
   };
 }
