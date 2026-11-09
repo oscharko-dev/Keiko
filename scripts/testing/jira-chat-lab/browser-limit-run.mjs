@@ -4,9 +4,11 @@ import { randomUUID } from "node:crypto";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { loadSession, readPrivateFile, requireLicense } from "./lab-client.mjs";
+import { loadSession, readPrivateFile } from "./lab-client.mjs";
+import { createLimitLicenseGuard } from "./limit-run-license.mjs";
 import { privateJson } from "./private-json.mjs";
 import { nativePages, projectAgileRead } from "./project-agile-oracles.mjs";
+import { registerLane } from "./requirements/lab-lanes.mjs";
 import { withExclusiveProcessLock } from "./requirements/work-project-lock.mjs";
 
 const MODES = ["governed-assist", "supervised-coding", "autonomous-delivery"];
@@ -198,7 +200,7 @@ function validateCounts(counts) {
 /** One validated step of a run: license window, durable begin/settle and a green-only continuation. */
 export async function runLimitStep(ctx, results, name, run) {
   ctx.signal.throwIfAborted();
-  await ctx.checkLicense?.();
+  await ctx.checkLicense?.(name);
   ctx.intent.begin(name);
   const result = validateLimitStepResult(ctx, await run());
   ctx.signal.throwIfAborted();
@@ -650,11 +652,11 @@ export async function createLimitRunContext(live, handles, options, intent, sign
   for (const name of ["cookie", "secret", "origin", "root", "projectPath"])
     Object.defineProperty(ctx, name, { enumerable: true, get: () => live[name] });
   ctx.read = (path) => projectAgileRead(ctx.session, path);
-  ctx.checkLicense = async () =>
-    assert.ok(
-      (await requireLicense(ctx.session)) >= 1800,
-      "Thirty minutes of the existing license window are required; no automatic Jira restart",
-    );
+  ctx.checkLicense = createLimitLicenseGuard({
+    session: ctx.session,
+    intent,
+    renew: ports?.renewLicenseWindow,
+  });
   bindLimitTurnOwner(ctx, handles, ui);
   ctx.recovery = limitRecovery(ctx, live, handles, ui);
   ctx.search = (jql, fields = "*all") => {
@@ -687,6 +689,8 @@ async function main(argv) {
       const signal = globalThis.AbortSignal.timeout(14 * 60 * 60 * 1000);
       let outcome;
       let status;
+      // Marks this run as a lane, so a renewal restart never overlaps another lane's active turn.
+      const releaseLane = registerLane(session.directory);
       try {
         await withLiveChat({
           session,
@@ -714,6 +718,8 @@ async function main(argv) {
       } catch (error) {
         intent.failed();
         throw error;
+      } finally {
+        releaseLane();
       }
       if (status === "unverified") process.exitCode = 1;
       console.log(JSON.stringify({ operation: "jira-browser-limit-run", status }));

@@ -1122,6 +1122,23 @@ generic result rows, require zero serious/critical axe findings and compare keys
 links, history and native state across reload without replay. Hermetic tests are
 not live Jira/Keiko/model acceptance; the integrator owns that coordinated run.
 
+### License window of the limit run
+
+The published three-hour test license is shorter than a full limit run. At each step boundary
+(never inside a step or a browser turn) `browser-limit-run.mjs` therefore calls the scorecard's
+`renewLicenseWindow` (`requirements/license-window.mjs`) with the step's minimum
+(`limit-run-license.mjs`): 1800 seconds by default, 7200 for `ac2-epics`, 5400 for `ac4-hierarchy`,
+`ac6-sprint` and `progress-simulation`, and 3600 for `ac3-report`. If less remains, the owned
+session is restarted normally (`session.mjs stop` then `start`, its own compose project only, which
+opens a new window; never clocks, licensing code or data) and the run continues once Jira reports a
+valid license. Keiko and the browser keep running: the Jira Pod sends its stored PAT on every
+request to the unchanged lab origin, and the PAT lives in the retained database. A renewal waits
+for other active lanes of the same session directory, and a failed renewal or a window that is
+still too short stops the run. Each restart is recorded in the run intent as `licenseRenewal`
+(`phase`, `count`, `step`, `remainingBefore`, `remainingAfter`, `downtimeMs`). A side-by-side lab
+of another project is never touched; starting this session beside it needs the exact
+`KEIKO_JIRA_LAB_PARALLEL=allow` for the restart too.
+
 ## Selective follow-up steps: Story and Coding Workbench
 
 `browser-limit-run.mjs` always runs every step and reserves `browser-limit-run.pending.json`
