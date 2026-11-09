@@ -4,7 +4,8 @@ import { adminMutationCase, observeAdminActor } from "./api-qualification-admin-
 import { projectReview, qualificationProjectKey } from "./api-qualification-fixtures.mjs";
 
 const projectPath = (f) => `/rest/api/2/project/${f.lifecycleProjectId}`;
-async function reviewed(c, f, includeType = false) {
+// The case runner passes its Chat as a third argument, so the type flag is an explicit option.
+async function reviewed(c, f, { includeType = false } = {}) {
   await observeAdminActor(c, f);
   const value = await read(c, projectPath(f));
   f.lifecycleProjectReview = projectReview(value);
@@ -80,7 +81,7 @@ export const API_QUALIFICATION_PROJECT_LIFECYCLE_CASES = [
       assert.deepEqual(projectReview(actual), prior);
       return proof(5);
     },
-    (c, f) => reviewed(c, f, true),
+    (c, f) => reviewed(c, f, { includeType: true }),
   ),
   adminMutationCase(
     "jira.delete-project",
