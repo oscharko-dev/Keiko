@@ -5,9 +5,10 @@ import {
   type CompiledToolProjection,
   type ToolRef,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import type {
-  BoundToolInvocation,
-  OfferedToolSet,
+import {
+  TOOL_HANDLER_READINESS,
+  type BoundToolInvocation,
+  type OfferedToolSet,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
 import { deepFreeze, isDeepFrozen } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import { canonicalise } from "@oscharko-dev/keiko-security/hashing";
@@ -85,6 +86,7 @@ function captureOffer(value: unknown, projection: CompiledToolProjection): Offer
     "invalid-identity",
   );
   const refs = offeredRefs(offer, projection);
+  const readiness = TOOL_HANDLER_READINESS.find((entry) => entry === binding.readiness);
   requireCatalog(
     binding.readiness === "ready" ||
       (binding.readiness === "unavailable" && refs.length < projection.tools.length) ||
@@ -94,10 +96,24 @@ function captureOffer(value: unknown, projection: CompiledToolProjection): Offer
         )),
     "invalid-identity",
   );
-  catalogDigest(binding.handlerSetDigest);
-  identifier(offer.offerId);
+  requireCatalog(readiness !== undefined, "invalid-identity");
+  const handlerSetDigest = catalogDigest(binding.handlerSetDigest);
+  const offerId = identifier(offer.offerId);
   instant(offer.expiresAt);
-  return deepFreeze({ ...offer, toolRefs: refs }) as unknown as OfferedToolSet;
+  // The identity check above proved the captured revision, profile and projection digest equal
+  // the compiled projection's, so the offer carries the projection's own typed values.
+  return deepFreeze({
+    binding: {
+      catalogRevision: projection.catalogRevision,
+      profile: projection.profile,
+      projectionDigest: projection.projectionDigest,
+      handlerSetDigest,
+      readiness,
+    },
+    offerId,
+    toolRefs: refs,
+    expiresAt: catalogString(offer.expiresAt),
+  });
 }
 // Catalog and projection objects already captured, keyed by the supplied objects. Only deeply frozen
 // inputs are remembered: the same frozen object cannot have changed, so a later binding over it needs

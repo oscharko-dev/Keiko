@@ -34,15 +34,12 @@ type CurrentRef<T> = { current: T };
 
 // The minimal audio-element surface the engine drives. `HTMLAudioElement` satisfies it structurally,
 // so production passes `new Audio()`; tests inject a controllable fake without a real media element.
-export interface AssistantSpeechAudioElement {
-  src: string;
-  muted: boolean;
-  play: () => Promise<void> | void;
-  pause: () => void;
-  onplaying: (() => void) | null;
-  onended: (() => void) | null;
-  onerror: (() => void) | null;
-}
+// The part of HTMLAudioElement the engine uses. A test double implements the same members, and a
+// zero-argument handler satisfies the DOM handler type.
+export type AssistantSpeechAudioElement = Pick<
+  HTMLAudioElement,
+  "src" | "muted" | "play" | "pause" | "onplaying" | "onended" | "onerror"
+>;
 
 export interface UseAssistantSpeechOptions {
   // The effective voice profile resolved by `useVoiceCapability`. A non-playback profile yields a
@@ -119,10 +116,7 @@ function startSpokenTurn(preparation: ClientDiagnosticAnswerSpeech | undefined):
 }
 
 function defaultCreateAudio(): AssistantSpeechAudioElement {
-  // HTMLAudioElement satisfies this surface at runtime; the only difference is that its event handlers
-  // accept a wider `(event) => ...` signature than the zero-argument handlers the engine assigns, which
-  // is assignment-compatible at runtime. The cast keeps the test seam's handler type simple to call.
-  return new Audio() as unknown as AssistantSpeechAudioElement;
+  return new Audio();
 }
 
 function defaultCreateObjectUrl(blob: Blob): string {

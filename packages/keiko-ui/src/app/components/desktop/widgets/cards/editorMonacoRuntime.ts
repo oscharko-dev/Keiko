@@ -58,7 +58,6 @@ import {
   installMonacoEnvironment,
   probeEditorRuntime,
   type EditorRuntimeStatus,
-  type MonacoGlobalScope,
 } from "@oscharko-dev/keiko-editor";
 
 // Embedded editors reuse this client-only runtime boundary, including the package's theme helpers.
@@ -151,12 +150,7 @@ export function ensureMonacoRuntime(): EditorRuntimeStatus {
     return status;
   }
   if (!runtimeConfigured) {
-    // `self` is the browser global scope; narrow it to the worker-host shape the editor expects
-    // (exactOptionalPropertyTypes makes the DOM `MonacoEnvironment?` slot incompatible otherwise).
-    installMonacoEnvironment(
-      self as unknown as MonacoGlobalScope,
-      createMonacoEnvironment(defaultMonacoWorkerFactories),
-    );
+    installMonacoEnvironment(self, createMonacoEnvironment(defaultMonacoWorkerFactories));
     configureMonacoLoader(loader, monaco);
     registerJsonLanguageId(monaco);
     monaco.editor.onDidCreateEditor((editor) => {

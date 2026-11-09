@@ -139,6 +139,27 @@ function validateOutcome(
   requireCatalog(object.data === null, "result-contract-failed");
 }
 
+// Throws result-contract-failed unless the captured object is one complete result envelope.
+function assertToolResultEnvelope(
+  object: CatalogJsonObject,
+  binding: ToolResultValidationBinding | undefined,
+): asserts object is CatalogJsonObject & ToolResultEnvelope {
+  exactCatalogKeys(object, [
+    "schemaVersion",
+    "invocationId",
+    "toolRef",
+    "projectionDigest",
+    "status",
+    "reason",
+    "effectStarted",
+    "metrics",
+    "page",
+    "data",
+  ]);
+  validateIdentity(object, binding);
+  validateOutcome(object, binding);
+}
+
 /** Pure envelope qualification. Cursor storage, authority, invocation settlement and clocks stay out. */
 export function validateToolResultEnvelope(
   value: unknown,
@@ -152,21 +173,8 @@ export function validateToolResultEnvelope(
     const object = catalogObject(
       copyCatalogJson(value, qualified?.descriptor.bounds.maxResultBytes),
     );
-    exactCatalogKeys(object, [
-      "schemaVersion",
-      "invocationId",
-      "toolRef",
-      "projectionDigest",
-      "status",
-      "reason",
-      "effectStarted",
-      "metrics",
-      "page",
-      "data",
-    ]);
-    validateIdentity(object, qualified);
-    validateOutcome(object, qualified);
-    return deepFreeze(object) as unknown as ToolResultEnvelope;
+    assertToolResultEnvelope(object, qualified);
+    return deepFreeze(object);
   } catch (error) {
     if (error instanceof ToolCatalogError && error.reason === "result-contract-failed") throw error;
     throw new ToolCatalogError("result-contract-failed");
