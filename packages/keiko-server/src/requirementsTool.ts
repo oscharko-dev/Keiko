@@ -13,6 +13,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/knowledge-turn-coverage";
 import type { JiraReportRequirementIds, JiraReportStore } from "@oscharko-dev/keiko-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import type {
   ManagedMcpInvocationContext,
   ManagedMcpProvider,
@@ -240,7 +241,8 @@ function createDeclaration(): ManagedMcpToolDeclaration {
     idempotency: "server-key-required",
     cancellation: "before-effect",
   });
-  return Object.freeze({
+  // Shared by every provider, so frozen in depth: annotations included.
+  return deepFreeze({
     name: KNOWLEDGE_REQUIREMENTS_TOOL,
     risk: "read",
     title: "Knowledge requirements",

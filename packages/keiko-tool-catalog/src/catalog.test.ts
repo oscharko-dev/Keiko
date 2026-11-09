@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  NATIVE_TOOL_CATALOG_RUNTIME,
   TOOL_CATALOG_LIMITS,
   type CatalogVersionRef,
+  type ToolDescriptor,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import {
   CATALOG_DIALECTS,
   compileToolProjection,
@@ -362,5 +365,76 @@ describe("bounded terminal envelopes", () => {
     expect(() => validateToolResultEnvelope({ ...result, effectStarted: true })).toThrow(
       "result-contract-failed",
     );
+  });
+});
+
+// A catalog keeps a descriptor it issued by identity instead of copying it (#4288). These pin that
+// the kept path enforces exactly what the copy path does, and that only issuance earns it.
+describe("issued descriptor retention", () => {
+  function envelope(descriptors: readonly ToolDescriptor[]): object {
+    return {
+      descriptors,
+      profiles: [
+        {
+          profile: { id: "fixture", version: 1 },
+          toolRefs: descriptors.map((descriptor, index) => ({
+            toolRef: descriptor.toolRef,
+            alias: `fixture_read_${String(index)}`,
+          })),
+          nativeExtensions: [],
+          adapterDialect: { id: "gateway-json-schema", version: 1 },
+          adapterRuntime: NATIVE_TOOL_CATALOG_RUNTIME,
+          compatibility: [],
+        },
+      ],
+      compatibility: [],
+    };
+  }
+  function issue(lengths: readonly number[]): ToolDescriptor[] {
+    return lengths.map((length, index) =>
+      createToolDescriptor({
+        ...declaration(),
+        toolRef: createToolRef(`keiko.fixture.read${"abcde"[index] ?? "z"}`, 1),
+        description: "x".repeat(length),
+      }),
+    );
+  }
+  // Five descriptions sized so the whole envelope is the catalog's byte bound plus `extra`.
+  function atBound(extra: number): ToolDescriptor[] {
+    const sizes = [50_000, 50_000, 50_000, 50_000, 50_000];
+    const slack = TOOL_CATALOG_LIMITS.maxArgumentBytes - catalogBytes(envelope(issue(sizes)));
+    return issue([50_000 + slack + extra, ...sizes.slice(1)]);
+  }
+  function compile(value: object): ReturnType<typeof createToolCatalog> {
+    return createToolCatalog(value, { referenceTimeMs: 0 });
+  }
+  function copies(descriptors: readonly ToolDescriptor[]): ToolDescriptor[] {
+    return descriptors.map((descriptor) => structuredClone(descriptor));
+  }
+
+  it("accepts an envelope of exactly the byte bound on the kept and the copied path", () => {
+    const issued = atBound(0);
+    expect(catalogBytes(envelope(issued))).toBe(TOOL_CATALOG_LIMITS.maxArgumentBytes);
+    const kept = compile(envelope(issued));
+    expect(issued.every((descriptor) => kept.descriptors.includes(descriptor))).toBe(true);
+    expect(compile(envelope(copies(issued))).catalogRevision).toBe(kept.catalogRevision);
+  });
+
+  it("refuses one byte over the bound on the kept and the copied path", () => {
+    const issued = atBound(1);
+    expect(catalogBytes(envelope(issued))).toBe(TOOL_CATALOG_LIMITS.maxArgumentBytes + 1);
+    expect(() => compile(envelope(issued))).toThrow("input-bound");
+    expect(() => compile(envelope(copies(issued)))).toThrow("input-bound");
+  });
+
+  it("sends a deeply frozen look-alike it did not issue through the full copy and check", () => {
+    const [issued] = issue([32]);
+    if (issued === undefined) throw new TypeError("Expected an issued descriptor");
+    const foreign = deepFreeze(structuredClone(issued));
+    const catalog = compile(envelope([foreign]));
+    expect(catalog.descriptors[0]).not.toBe(foreign);
+    expect(catalog.descriptors[0]).toEqual(issued);
+    const tampered = deepFreeze({ ...structuredClone(issued), description: "Tampered." });
+    expect(() => compile(envelope([tampered]))).toThrow("invalid-identity");
   });
 });

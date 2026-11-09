@@ -165,6 +165,7 @@ export function createToolDescriptor(value: unknown, previous?: ToolDescriptor):
       requireCatalog(descriptorDigest === prior.descriptorDigest, "incompatible-version");
   }
   const descriptor = deepFreeze({ ...declaration, descriptorDigest });
+  // The declaration came from a bounded, data-only copy, so this measuring walk cannot refuse it.
   issuedDescriptors.set(descriptor, measureCatalogFootprint(descriptor));
   return descriptor;
 }

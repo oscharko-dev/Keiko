@@ -67,7 +67,6 @@ function managedInputSchema(schema: CatalogJsonObject): CatalogJsonObject {
   return schema;
 }
 
-/** The five adapters share the closed core; OpenCode's required-field transform must be lossless. */
 type ProjectionKind = "managed-input" | "compiled";
 
 function compileProjection(schema: CatalogJsonObject, kind: ProjectionKind): CatalogJsonObject {
@@ -80,6 +79,7 @@ function compileProjection(schema: CatalogJsonObject, kind: ProjectionKind): Cat
 // compiling the already compiled schema again: each Jira chat selection composes a new catalog.
 const PROJECTIONS = new WeakMap<object, Partial<Record<ProjectionKind, CatalogJsonObject>>>();
 
+/** The five adapters share the closed core; OpenCode's required-field transform must be lossless. */
 export function projectCatalogSchema(
   schema: CatalogJsonObject,
   dialect: CatalogVersionRef,
