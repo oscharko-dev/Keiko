@@ -78,9 +78,15 @@ function compileValidator(schema: CatalogJsonObject): ValidateFunction {
   const shared = sharedCompiler(schema.$schema);
   try {
     return shared.compile(schema);
-  } catch {
-    // A refusal is only ever decided by a fresh instance, exactly as before sharing.
-    return compiler(schema.$schema).compile(schema);
+  } catch (sharedError) {
+    // A refusal is only ever decided by a fresh instance, exactly as before sharing: its own
+    // compile error propagates and the caller reports the closed `unsupported-schema` refusal.
+    compiler(schema.$schema).compile(schema);
+    // The fresh instance accepted what the shared one refused, so sharing itself is defective.
+    // That is never a valid schema's compilation: it fails closed and keeps its cause.
+    throw new Error("Shared external-schema compiler refused a schema a fresh one accepts", {
+      cause: sharedError,
+    });
   } finally {
     shared.removeSchema(schema);
   }

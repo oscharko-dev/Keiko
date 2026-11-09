@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { Ajv2020 } from "ajv/dist/2020.js";
 import { compileExternalCatalogSchema } from "./external-schema.js";
 import {
   compileCatalogSchema,
@@ -165,5 +166,28 @@ describe("external JSON Schema catalog dialect", () => {
     });
     expect(matchesCatalogSchema(ok, { a: "x" })).toBe(true);
     expect(matchesCatalogSchema(ok, { a: 1 })).toBe(false);
+  });
+
+  it("fails closed when only the shared compiler refuses a schema a fresh one accepts", () => {
+    const marker = "sharedCompilerDefectProbe";
+    // The default dialect's shared instance already exists, so its next compile is the first call.
+    const compile = vi.spyOn(Ajv2020.prototype, "compile").mockImplementationOnce(() => {
+      throw new TypeError("synthetic shared compiler defect");
+    });
+    try {
+      expect(() =>
+        compileExternalCatalogSchema({
+          type: "object",
+          properties: { [marker]: { type: "string" } },
+        }),
+      ).toThrow(expect.objectContaining({ reason: "unsupported-schema" }));
+      // The fresh instance compiled the same schema too, so the refusal came from the defect.
+      const probed = compile.mock.calls.filter(([schema]) =>
+        JSON.stringify(schema).includes(marker),
+      );
+      expect(probed).toHaveLength(2);
+    } finally {
+      compile.mockRestore();
+    }
   });
 });
