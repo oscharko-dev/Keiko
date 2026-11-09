@@ -105,6 +105,11 @@ function assertOptionalFields(actual, native, fields, names) {
     }
   }
 }
+const membership = (rows) =>
+  rows
+    .map((row) => JSON.stringify(row))
+    .sort((left, right) => left.localeCompare(right, "en"))
+    .map((row) => JSON.parse(row));
 export function readCase(
   tool,
   path,
@@ -116,6 +121,7 @@ export function readCase(
     nativeNames,
     optionalFields = [],
     nonEmpty = false,
+    unordered = false,
   } = {},
 ) {
   return {
@@ -135,9 +141,11 @@ export function readCase(
       const projected = projectRows(data, productRoot);
       const actual = rowValues(projected, fields);
       const expected = rowValues(native, fields, nativeNames).slice(0, 100);
+      // An unordered native collection proves membership; the order Keiko pages it in is its own.
+      if (unordered) assert.ok(native.length <= 100, "Membership needs the complete collection");
       assertQualificationJson(
-        actual,
-        expected,
+        unordered ? membership(actual) : actual,
+        unordered ? membership(expected) : expected,
         "Keiko's observation must equal the independent native read",
       );
       assertOptionalFields(projected, native, optionalFields, nativeNames);
@@ -170,7 +178,10 @@ const issueRows = (rows) =>
   rows.map((row) => ({ id: row.id, key: row.key, summary: row.fields.summary }));
 
 export const API_QUALIFICATION_CASES = [
-  collection("jira.projects", "/rest/api/2/project", ["id", "key", "name"]),
+  readCase("jira.projects", "/rest/api/2/project", ["id", "key", "name"], {
+    args: () => ({ maxResults: 100 }),
+    unordered: true,
+  }),
   readCase(
     "jira.server-info",
     "/rest/api/2/serverInfo",
