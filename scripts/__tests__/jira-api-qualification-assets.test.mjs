@@ -44,6 +44,7 @@ function state() {
       source: { kind: "connected-file", path: "ac7-assets/qualification.docx" },
       expectedFile: { name: "qualification.docx", sizeBytes: 3, sha256: sha },
     },
+    assetArchive: { id: "8", filename: "synthetic-ac7.zip", size: 3 },
     assetArchivePack: { entries: [{ path: "one" }, { path: "two" }] },
     assetDashboard: { id: "9", itemId: "11", name: "Synthetic AC7 dashboard" },
     assetEmailPrior: { manifestSha256: sha },
@@ -120,10 +121,16 @@ it("requires the returned attachment ID to belong to its same readable issue and
   const f = state();
   let rows = [{ id: "7" }];
   let size = 3;
+  let self = "7";
+  // Jira 10.3's attachment record carries no `id`; its self link names the attachment.
   native((path) =>
     path.includes("/issue/")
       ? { key: f.assetIssueKey, fields: { attachment: rows } }
-      : { id: "7", filename: "qualification.docx", size },
+      : {
+          self: `https://jira.invalid/rest/api/2/attachment/${self}`,
+          filename: "qualification.docx",
+          size,
+        },
   );
   const recipe = selected("jira.attach");
   await expect(recipe.readback(context, { attachmentId: "7" }, f)).resolves.toEqual({
@@ -134,6 +141,9 @@ it("requires the returned attachment ID to belong to its same readable issue and
   await expect(recipe.readback(context, { attachmentId: "7" }, f)).rejects.toThrow();
   rows = [{ id: "7" }];
   size = 4;
+  await expect(recipe.readback(context, { attachmentId: "7" }, f)).rejects.toThrow();
+  size = 3;
+  self = "70";
   await expect(recipe.readback(context, { attachmentId: "7" }, f)).rejects.toThrow();
 });
 
@@ -160,7 +170,7 @@ it("rejects an empty archive preview and requires the complete known nonempty fi
   native(() => ({ entries, totalEntryCount }));
   const recipe = selected("jira.attachment-archive");
   const data = () => ({
-    attachmentId: "7",
+    attachmentId: "8",
     items: entries,
     totalEntryCount,
     entriesComplete: true,
@@ -175,14 +185,14 @@ it("compares the actual native human archive identity and source entry count", a
   const f = state();
   let totalEntryCount = 2;
   native(() => ({
-    id: 7,
-    name: "qualification.docx",
+    id: 8,
+    name: "synthetic-ac7.zip",
     mediaType: "application/zip",
     totalEntryCount,
   }));
   const data = {
-    attachmentId: "7",
-    name: "qualification.docx",
+    attachmentId: "8",
+    name: "synthetic-ac7.zip",
     mediaType: "application/zip",
     totalEntryCount: 2,
   };

@@ -269,12 +269,19 @@ it("refuses a layout readback that changes an earlier field while adding the req
   changed = true;
   await expect(entry.readback(ctx, {}, f)).rejects.toThrow();
 });
-it("requires an explicit native archive flag instead of a missing-value default", async () => {
-  const entry = API_QUALIFICATION_ISSUE_LIFECYCLE_CASES.find(
+it("requires the native archived-by record instead of a missing-value default", async () => {
+  const archive = API_QUALIFICATION_ISSUE_LIFECYCLE_CASES.find(
     (row) => row.tool === "jira.archive-issue",
   );
-  const f = fixture(entry.tool);
-  let includeFlag = true;
+  const restore = API_QUALIFICATION_ISSUE_LIFECYCLE_CASES.find(
+    (row) => row.tool === "jira.restore-issue",
+  );
+  const f = fixture(archive.tool);
+  // Jira 10.3 has no boolean `archived` field; an archived issue names who archived it and when.
+  let archival = {
+    archivedby: { key: "admin-key", name: "keiko-admin" },
+    archiveddate: "2026-11-09T06:50:00.000+0000",
+  };
   const ctx = context(() => ({
     id: f.lifecycleIssue.id,
     key: f.lifecycleIssue.key,
@@ -282,12 +289,16 @@ it("requires an explicit native archive flag instead of a missing-value default"
       summary: f.lifecycleIssue.summary,
       project: { id: f.projectId },
       issuetype: { id: f.issueTypeId },
-      ...(includeFlag ? { archived: true } : {}),
+      ...archival,
     },
   }));
-  await expect(entry.readback(ctx, {}, f)).resolves.toMatchObject({ matched: true });
-  includeFlag = false;
-  await expect(entry.readback(ctx, {}, f)).rejects.toThrow();
+  await expect(archive.readback(ctx, {}, f)).resolves.toMatchObject({ matched: true });
+  await expect(restore.readback(ctx, {}, f)).rejects.toThrow();
+  archival = {};
+  await expect(archive.readback(ctx, {}, f)).rejects.toThrow();
+  await expect(restore.readback(ctx, {}, f)).resolves.toMatchObject({ matched: true });
+  archival = { archived: true };
+  await expect(archive.readback(ctx, {}, f)).rejects.toThrow();
 });
 it("refuses an auxiliary fixture without the governed dispatcher instead of sending HTTP", async () => {
   const fetch = vi.spyOn(globalThis, "fetch");
