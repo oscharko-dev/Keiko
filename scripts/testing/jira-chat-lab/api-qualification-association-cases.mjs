@@ -104,7 +104,7 @@ async function priority(c, f) {
   assert.equal(defaults.length, 1);
   f.associationPriorityDefaultId = String(defaults[0].id);
   if (!Object.hasOwn(current, "defaultOptionId")) {
-    const baseline = await customPriorityScheme(c, f, "association baseline");
+    const baseline = await customPriorityScheme(c, f, "assoc base");
     await nativeFixture(c, "PUT", `${projectPath(f)}/priorityscheme`, { id: baseline.id });
     selected = await read(c, `${projectPath(f)}/priorityscheme`);
     assert.equal(String(selected.id), String(baseline.id));
@@ -166,7 +166,7 @@ export const API_QUALIFICATION_ASSOCIATION_CASES = [
       );
       await priority(c, f);
       f.associationPriorityOriginal = f.associationPriorityBefore;
-      const target = await customPriorityScheme(c, f, "association target");
+      const target = await customPriorityScheme(c, f, "assoc target");
       f.associationPriorityTarget = optionSchemeReview(
         await read(c, `/rest/api/2/priorityschemes/${target.id}`),
         OPTION_SCHEMES[1],
