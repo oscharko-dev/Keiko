@@ -217,6 +217,15 @@ it("steers a model that is asked about many issues to jira.report, whose input n
   expect(JSON.stringify(report?.descriptor.inputSchema)).toContain("requirementsFromPods");
 });
 
+it("advertises the real paging contract of jira.report: summary first, then sections with startAt", () => {
+  const provider = createJiraProviderForCatalog(vi.fn(), ["jira.report"]);
+  const text = provider.tools().find((tool) => tool.name === "jira.report")?.descriptor.description;
+  expect(text).not.toMatch(/section on the first call/iu);
+  expect(text).toMatch(/without a section[^.]*summary/iu);
+  expect(text).toContain("startAt");
+  expect(text).toMatch(/names a section[^.]*only that page/iu);
+});
+
 it("builds canonical field metadata descriptors that admit the advertised input schema as data", () => {
   const connection = vi.fn();
   const provider = createJiraProviderForCatalog(connection, ["jira.create-fields"]);

@@ -4,7 +4,15 @@ import type { AtlassianHttpBodyPort, AtlassianHttpBodyResult } from "./atlassian
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type { JiraReport } from "./jira-report-types.js";
 import { POINTS, fixtureJira, response, syntheticProject } from "./jira-report.fixture.js";
-import { CONNECTION, CONTEXT, NOW, idOf, record, reportOf } from "./jira-report.harness.js";
+import {
+  CONNECTION,
+  CONTEXT,
+  NOW,
+  harness,
+  idOf,
+  record,
+  reportOf,
+} from "./jira-report.harness.js";
 import { JIRA_STORY_POINTS_SCHEMA_KEY } from "./jira-report-estimate.js";
 import { createJiraReportStore } from "./jira-report-store.js";
 import { executeJiraReportTool, type JiraReportActivity } from "./jira-report-tool.js";
@@ -324,5 +332,53 @@ describe("project estimate discovery (#4321 C4)", () => {
       unestimated: 4,
     });
     expect(h.requests.some((request) => request.includes("/agile/"))).toBe(false);
+  });
+});
+
+describe("estimated and unestimated issues per issue type", () => {
+  function typesOf(h: ReportRun): readonly Record<string, unknown>[] {
+    const byType = record(h.report.progress).byType;
+    if (!Array.isArray(byType)) throw new TypeError("The summary must carry byType");
+    return byType.map((item) => record(item));
+  }
+  const sum = (items: readonly Record<string, unknown>[], key: string): number =>
+    items.reduce((total, item) => total + Number(item[key]), 0);
+
+  it("counts them per type from the same source as the project figure, and the counts add up", async () => {
+    const h = await run();
+    const types = typesOf(h);
+    const estimate = record(record(h.report.progress).project).estimate;
+    expect(types.length).toBeGreaterThan(0);
+    expect(sum(types, "unestimated")).toBe(record(estimate).unestimated);
+    expect(sum(types, "unestimated")).toBe(1);
+    for (const item of types)
+      expect(Number(item.estimated) + Number(item.unestimated)).toBe(item.total);
+    expect(sum(types, "estimated")).toBe(3);
+    expect(
+      h.stored?.progress.byType.map(({ typeName, estimated }) => [typeName, estimated]),
+    ).toEqual(types.map((item) => [item.typeName, item.estimated]));
+  });
+
+  it("reports no per-type estimate where the project has none", async () => {
+    const h = await run({ boards: [], screenFields: [] });
+    const types = typesOf(h);
+    expect(types.length).toBeGreaterThan(0);
+    for (const item of types) {
+      expect(item.estimated).toBeNull();
+      expect(item.unestimated).toBeNull();
+    }
+  });
+
+  it("counts a project whose issues all lack an estimate as unestimated in every type", async () => {
+    const h = harness({
+      issues: syntheticProject(6).map(({ points: _points, seconds: _seconds, ...rest }) => rest),
+    });
+    const result = await h.run({ projectKey: "REP" });
+    const progress = record(record(reportOf(result)).progress);
+    const types = (progress.byType as unknown[]).map((item) => record(item));
+    for (const item of types) {
+      expect(item.unestimated).toBe(item.total);
+      expect(item.estimated).toBe(0);
+    }
   });
 });

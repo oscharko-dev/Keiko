@@ -134,6 +134,10 @@ export interface JiraReportTypeProgress {
   readonly typeName: string;
   readonly total: number;
   readonly done: number;
+  /** Issues of this type with an estimate; `null` when no estimate is available, like the project's. */
+  readonly estimated: number | null;
+  /** Issues of this type without one; per-type counts sum to the project's `estimate.unestimated`. */
+  readonly unestimated: number | null;
 }
 
 export interface JiraReportStatusCount {

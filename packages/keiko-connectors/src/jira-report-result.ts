@@ -15,7 +15,11 @@ import type {
 import { Buffer } from "node:buffer";
 import { jiraReportCommentText } from "./jira-report-export.js";
 import { jiraReportFigures } from "./jira-report-figures.js";
-import type { JiraReport, JiraReportProgress } from "./jira-report-types.js";
+import type {
+  JiraReport,
+  JiraReportProgress,
+  JiraReportTypeProgress,
+} from "./jira-report-types.js";
 import type { JiraReportSession } from "./jira-report-session.js";
 
 /** Entries of each list in the default summary; the sections page through the rest. */
@@ -59,9 +63,7 @@ function capped<Item extends CatalogJsonValue>(
 ): { readonly items: readonly Item[]; readonly total: number } {
   return { items: items.slice(0, JIRA_REPORT_RESULT_LIST_MAX), total: items.length };
 }
-function typeItems(
-  types: readonly { readonly typeName: string; readonly total: number; readonly done: number }[],
-): CatalogJsonObject {
+function typeItems(types: readonly JiraReportTypeProgress[]): CatalogJsonObject {
   const { items, total } = capped(types.map((type) => ({ ...type })));
   return { items, total };
 }

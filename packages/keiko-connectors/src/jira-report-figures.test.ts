@@ -97,4 +97,21 @@ describe("the figures a weaker model quotes instead of computing (#4181)", () =>
     expect(text).toContain("(5 more not shown; page section statuses)");
     expect(text).not.toContain(`S${String(JIRA_REPORT_FIGURES_LINES_MAX)};`);
   });
+
+  it("returns the figures on a call without a section and only the page on one that names a section", async () => {
+    const h = harness({ issues: syntheticProject(30) });
+    const first = await h.run({ projectKey: "REP" });
+    expect(record(reportOf(first)).figures).toEqual(expect.any(String));
+    const named = await h.run({ projectKey: "REP", section: "statuses", maxResults: 1 });
+    // What the tool description promises: a section call is a page, not the summary.
+    expect(record(reportOf(named)).figures).toBeUndefined();
+    expect(record(named.data.section).name).toBe("statuses");
+    const paged = await h.run({
+      reportId: idOf(first),
+      section: "statuses",
+      startAt: 1,
+      maxResults: 1,
+    });
+    expect(record(paged.data.section).items).toHaveLength(1);
+  });
 });

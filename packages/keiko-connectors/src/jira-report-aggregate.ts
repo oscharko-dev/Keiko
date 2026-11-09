@@ -208,17 +208,28 @@ function progressOf(
     estimate: estimatesAvailable ? estimateOf(issues) : null,
   };
 }
-function byTypeOf(issues: readonly JiraReportIssue[]): readonly JiraReportTypeProgress[] {
-  const types = new Map<string, { total: number; done: number }>();
+function byTypeOf(
+  issues: readonly JiraReportIssue[],
+  estimatesAvailable: boolean,
+): readonly JiraReportTypeProgress[] {
+  const types = new Map<string, { total: number; done: number; unestimated: number }>();
   for (const issue of issues) {
-    const entry = types.get(issue.typeName) ?? { total: 0, done: 0 };
+    const entry = types.get(issue.typeName) ?? { total: 0, done: 0, unestimated: 0 };
     entry.total += 1;
     if (issue.category === "done") entry.done += 1;
+    // The same test as the project's estimate, so the per-type counts sum to its figure.
+    if (issue.estimate === undefined) entry.unestimated += 1;
     types.set(issue.typeName, entry);
   }
   return [...types.entries()]
     .sort(([left], [right]) => compareCodePoints(left, right))
-    .map(([typeName, entry]) => ({ typeName, ...entry }));
+    .map(([typeName, { total, done, unestimated }]) => ({
+      typeName,
+      total,
+      done,
+      estimated: estimatesAvailable ? total - unestimated : null,
+      unestimated: estimatesAvailable ? unestimated : null,
+    }));
 }
 
 function byStatusOf(issues: readonly JiraReportIssue[]): readonly JiraReportStatusCount[] {
@@ -264,7 +275,7 @@ function containerOf(graph: Graph, key: string, estimatesAvailable: boolean): Ji
     external: issue === undefined,
     members: progressOf(members, estimatesAvailable),
     linked: progressOf(linked, estimatesAvailable),
-    byType: byTypeOf([...members, ...linked]),
+    byType: byTypeOf([...members, ...linked], estimatesAvailable),
   };
 }
 
@@ -374,6 +385,7 @@ function requirementsOf(
   graph: Graph,
   issues: readonly JiraReportIssue[],
   declared: readonly string[],
+  estimatesAvailable: boolean,
 ): JiraReport["coverage"]["requirements"] {
   if (declared.length === 0) return undefined;
   const ids = [...new Set(declared)].sort((left, right) => compareCodePoints(left, right));
@@ -401,7 +413,7 @@ function requirementsOf(
       coveringDone: covering.filter((issue) => issue.category === "done").length,
       itemCount: traced.length,
       done: traced.filter((issue) => issue.category === "done").length,
-      byType: byTypeOf(traced),
+      byType: byTypeOf(traced, estimatesAvailable),
     });
   }
   return { declared: ids.length, covered: items.length, items, uncovered };
@@ -458,7 +470,7 @@ export function buildJiraReport(input: JiraReportInput): JiraReport {
     hierarchy: input.hierarchy,
     progress: {
       project: progressOf(issues, estimatesAvailable),
-      byType: byTypeOf(issues),
+      byType: byTypeOf(issues, estimatesAvailable),
       byStatus: byStatusOf(issues),
       unassigned: open.filter((issue) => !issue.assigned).length,
       overdue: rows.filter((row) => row.overdue).length,
@@ -474,7 +486,7 @@ export function buildJiraReport(input: JiraReportInput): JiraReport {
         )
         .map((issue) => issue.key),
       orphans: rows.filter((row) => row.classification === "orphan").map((row) => row.issue.key),
-      requirements: requirementsOf(graph, issues, input.declaredRequirements),
+      requirements: requirementsOf(graph, issues, input.declaredRequirements, estimatesAvailable),
     },
     rows,
   });
