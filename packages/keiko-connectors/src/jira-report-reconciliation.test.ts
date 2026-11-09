@@ -52,6 +52,7 @@ describe("AC3 figures reconcile with independent count-only JQL", () => {
       done: doneSeconds,
       remaining: seconds - doneSeconds,
     });
+    await expectReconciledFigures(reportOf(result).figures, count, seconds, doneSeconds);
     const modelProgress = record(reportOf(result).progress);
     expect(modelProgress.project).toEqual(project);
     expect(modelProgress.byType).toEqual(report.progress.byType);
@@ -150,3 +151,34 @@ describe("AC3 figures reconcile with independent count-only JQL", () => {
     expect(jiraReportCommentText(stored)).toContain("Estimate: unavailable");
   });
 });
+
+async function expectReconciledFigures(
+  figures: unknown,
+  count: (jql?: string) => Promise<number>,
+  seconds: number,
+  doneSeconds: number,
+): Promise<void> {
+  if (typeof figures !== "string") throw new TypeError("Missing model-facing figures");
+  const lines = figures.split("\n");
+  expect(lines[0]).toBe(
+    `Issues in the report: ${String(await count())}; done: ${String(await count('statusCategory = "done"'))}`,
+  );
+  expect(lines).toContain(
+    `${String(seconds)};${String(doneSeconds)};${String(seconds - doneSeconds)}`,
+  );
+  expect(lines).toContain(
+    `Issues without an estimate: ${String(await count("originalEstimate IS EMPTY"))}`,
+  );
+  for (const type of ["Bug", "Epic", "Story", "Sub-task"]) {
+    for (const [category, status] of [
+      ["new", "Open"],
+      ["indeterminate", "Working"],
+      ["done", "Closed"],
+    ] as const) {
+      const total = await count(`issuetype = "${type}" AND statusCategory = "${category}"`);
+      const row = `${type};${status};${String(total)}`;
+      if (total === 0) expect(lines).not.toContain(row);
+      else expect(lines).toContain(row);
+    }
+  }
+}
