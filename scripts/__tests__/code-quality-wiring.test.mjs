@@ -24,6 +24,7 @@ import {
   lastPolicyProgress,
 } from "../lib/code-quality-policy.mjs";
 import { assertRepositoryQualification } from "./code-quality-repository-qualification.mjs";
+import { workspacePackages } from "../lint-repository.mjs";
 import { runNativePolicy } from "../lib/code-quality-runner.mjs";
 import { evaluatePolicyPackages } from "../lib/code-quality-packages.mjs";
 import {
@@ -36,6 +37,7 @@ import {
   configureEnforcingPolicyFixture,
   createPolicyFixtureRepository,
   createRuntimePolicyFixture,
+  fixtureContainedScopes,
   fixtureGit,
   fixtureOwnedPolicy,
 } from "./support/code-quality-fixture.mjs";
@@ -59,9 +61,20 @@ function enforcingFixture() {
 
 const read = (path) => readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
 const CONTRACTS_SCOPE = "package:@oscharko-dev/keiko-contracts";
+const WORKSPACE_PACKAGE_COUNT = workspacePackages(
+  fileURLToPath(new URL("../../", import.meta.url)),
+).length;
 const STATIC_POLICY_SMOKE_COMMAND = `node --input-type=module -e 'import os from "node:os"; console.log(JSON.stringify({ arch: os.arch(), logicalCpus: os.cpus().length, availableParallelism: os.availableParallelism(), totalMemoryBytes: os.totalmem() }));'
 /usr/bin/time -v npm run check:code-quality-policy:repository
 `;
+
+// After a contracts fixture's source is restored, the rule has no finding and no violation is left.
+function expectRestoredContractsScan(root, scope, policy, id) {
+  const restored = runNativePolicy(root, scope.files);
+  expect(restored.visited).toBe(scope.files.length);
+  expect(restored.diagnostics.filter((finding) => finding.rule === id)).toEqual([]);
+  expect(assessPolicyDiagnostics(restored.diagnostics, scope.files, policy).violations).toEqual([]);
+}
 
 function contractsAssertionFixture() {
   const root = enforcingFixture();
@@ -74,6 +87,29 @@ function contractsAssertionFixture() {
 }
 
 describe("production code-quality invocation wiring (#3915)", () => {
+  it("drops scopes a hermetic fixture lacks while the engine still refuses an empty active scope", async () => {
+    const root = enforcingFixture();
+    expect([...fixtureContainedScopes(root)].sort()).toEqual([
+      "native-host",
+      "package:alpha",
+      "production",
+    ]);
+    const id = "anti-slop/no-reduce-accumulator-copy";
+    const production = JSON.parse(read("scripts/code-quality-policy.json"));
+    expect(production.rules.find((rule) => rule.id === id).activeScopes).toContain("tests");
+    const path = join(root, "scripts/code-quality-policy.json");
+    const written = JSON.parse(readFileSync(path, "utf8"));
+    expect(written.rules.find((rule) => rule.id === id).activeScopes).toEqual(["production"]);
+    await expect(
+      executeCodeQualityPolicy({ scope: "repository", mode: "census" }, root),
+    ).resolves.toMatchObject({ mode: "census" });
+    written.rules.find((rule) => rule.id === id).activeScopes.push("tests");
+    writeFileSync(path, JSON.stringify(written));
+    await expect(
+      executeCodeQualityPolicy({ scope: "repository", mode: "census" }, root),
+    ).rejects.toThrow("unknown-or-empty-scope");
+  }, 60_000);
+
   it("keeps synthetic fixture scope projection separate from the real contracts policy", () => {
     const production = JSON.parse(read("scripts/code-quality-policy.json"));
     const synthetic = fixtureOwnedPolicy();
@@ -101,14 +137,13 @@ describe("production code-quality invocation wiring (#3915)", () => {
       "anti-slop/no-object-parameters",
       "anti-slop/no-reflect-get",
       "anti-slop/no-unknown-returns",
+      "anti-slop/no-unknown-type-aliases",
       "anti-slop/require-safety-comment-for-type-assertion",
+      "oxc/no-accumulating-spread",
     ]);
   });
 
-  // Skipped under #4145 (ratchet, owner decision 2026-11-03 on #3914): this pin binds
-  // epic-migrated source or the epic's qualification CI chain, absent from the dev snapshot.
-  // #3991 restores it unchanged when full enforcement lands; the ratchet governs dev until then.
-  it.skip.each([
+  it.each([
     [
       "anti-slop/no-chained-type-assertions",
       (source) => source.replace('"u-1" as UserId', '("u-1" as UserId) as UserId'),
@@ -151,10 +186,7 @@ describe("production code-quality invocation wiring (#3915)", () => {
     expect(assess().result.violations).toEqual([]);
   });
 
-  // Skipped under #4145 (ratchet, owner decision 2026-11-03 on #3914): this pin binds
-  // epic-migrated source or the epic's qualification CI chain, absent from the dev snapshot.
-  // #3991 restores it unchanged when full enforcement lands; the ratchet governs dev until then.
-  it.skip("rejects native contracts reflection outside the qualified observation coordinate", async () => {
+  it("rejects native contracts reflection outside the qualified observation coordinate", async () => {
     const root = contractsAssertionFixture();
     const path = "packages/alpha/src/index.ts";
     const original = read("packages/keiko-contracts/src/memory-fixtures.ts");
@@ -186,18 +218,10 @@ describe("production code-quality invocation wiring (#3915)", () => {
     } finally {
       writeFileSync(join(root, path), original);
     }
-    const restored = runNativePolicy(root, scope.files);
-    expect(restored.visited).toBe(scope.files.length);
-    expect(restored.diagnostics.filter((finding) => finding.rule === id)).toEqual([]);
-    expect(assessPolicyDiagnostics(restored.diagnostics, scope.files, policy).violations).toEqual(
-      [],
-    );
+    expectRestoredContractsScan(root, scope, policy, id);
   });
 
-  // Skipped under #4145 (ratchet, owner decision 2026-11-03 on #3914): this pin binds
-  // epic-migrated source or the epic's qualification CI chain, absent from the dev snapshot.
-  // #3991 restores it unchanged when full enforcement lands; the ratchet governs dev until then.
-  it.skip.each([
+  it.each([
     ["anti-slop/no-unknown-returns", "src/index.ts"],
     ["anti-slop/no-unknown-returns", "src/future.generated.ts"],
     ["anti-slop/no-unknown-returns", "vitest.config.ts"],
@@ -240,12 +264,7 @@ describe("production code-quality invocation wiring (#3915)", () => {
     } finally {
       writeFileSync(join(root, path), original);
     }
-    const restored = runNativePolicy(root, scope.files);
-    expect(restored.visited).toBe(scope.files.length);
-    expect(restored.diagnostics.filter((finding) => finding.rule === id)).toEqual([]);
-    expect(assessPolicyDiagnostics(restored.diagnostics, scope.files, policy).violations).toEqual(
-      [],
-    );
+    expectRestoredContractsScan(root, scope, policy, id);
   });
 
   it("retains genuine finite child failures with body-free status", async () => {
@@ -489,10 +508,9 @@ describe("production code-quality invocation wiring (#3915)", () => {
     }
   }, 60_000);
 
-  // Skipped under #4145 (ratchet, owner decision 2026-11-03 on #3914): this pin binds
-  // epic-migrated source or the epic's qualification CI chain, absent from the dev snapshot.
-  // #3991 restores it unchanged when full enforcement lands; the ratchet governs dev until then.
-  it.skip("retains full local lint and requires hosted policy before typed Core lint", () => {
+  // #3991 (owner decision 2026-11-07): the typed tail is the #4182 per-package lint, never one
+  // `eslint .`.
+  it("retains full local lint and requires hosted policy beside typed Core lint", () => {
     const manifest = JSON.parse(read("package.json"));
     expect(manifest.scripts["check:code-quality-policy"]).toBe(
       "node scripts/check-code-quality-policy.mjs",
@@ -518,21 +536,23 @@ describe("production code-quality invocation wiring (#3915)", () => {
     expect(manifest.scripts["check:code-quality-policy:raw-reader"]).toBe(
       "node --test scripts/__tests__/code-quality-raw-reader-smoke.mjs",
     );
-    expect(manifest.scripts["lint:typed"]).toContain("eslint/bin/eslint.js . --max-warnings=0");
+    expect(manifest.scripts["lint:typed"]).toContain("scripts/lint-repository.mjs");
     expect(manifest.scripts["lint:typed"]).toContain(
       "npm --workspace @oscharko-dev/keiko-ui run lint",
     );
     const workflow = parse(read(".github/workflows/ci.yml"));
     const core = Object.values(workflow.jobs).find((job) => job.name === "Core quality");
-    expect(core.needs).toContain("code-quality-policy");
+    // Core quality runs beside the hosted policy legs (owner decision 2026-11-07 on #3991); the
+    // aggregate ci job is what requires both before integration.
+    expect([core.needs].flat()).toEqual(["verified-tree"]);
+    expect(workflow.jobs.ci.needs).toEqual(
+      expect.arrayContaining(["core-quality", "code-quality-policy"]),
+    );
     expect(core.steps.filter((step) => step.run === "npm run lint:typed")).toHaveLength(1);
     expect(core.steps.filter((step) => step.run === "npm run lint")).toHaveLength(0);
   });
 
-  // Skipped under #4145 (ratchet, owner decision 2026-11-03 on #3914): this pin binds
-  // epic-migrated source or the epic's qualification CI chain, absent from the dev snapshot.
-  // #3991 restores it unchanged when full enforcement lands; the ratchet governs dev until then.
-  it.skip("runs bounded CLI integration then complete qualification in both required hosted ARM policy legs", async () => {
+  it("runs bounded CLI integration then complete qualification in both required hosted ARM policy legs", async () => {
     const workflow = parse(read(".github/workflows/ci.yml"));
     const compatibility = workflow.jobs["node-26-compatibility"];
     const runs = compatibility.steps.map((step) => step.run);
@@ -667,6 +687,25 @@ describe("closed opt-in policy phase diagnostics", () => {
       "invalid-arguments",
     );
     expect(() => parsePolicyArguments(["--progress", "yes"], false)).toThrow("invalid-arguments");
+  });
+
+  it("forwards each live progress frame and nothing else of the child's stderr (#3991)", async () => {
+    const entry = new URL("../lib/code-quality-policy.mjs", import.meta.url).href;
+    const completed = { ...progressObservation, state: "completed", elapsedMs: 12 };
+    const source = `const { policyProgressLine } = await import(${JSON.stringify(entry)});
+      process.stderr.write("fixture-private-body\\n");
+      process.stderr.write(policyProgressLine(${JSON.stringify(progressObservation)}).slice(0, 20));
+      await new Promise((settle) => setTimeout(settle, 20));
+      process.stderr.write(policyProgressLine(${JSON.stringify(progressObservation)}).slice(20));
+      process.stderr.write(policyProgressLine(${JSON.stringify(completed)}));`;
+    const frames = [];
+    await executePolicyWithDiagnostics(
+      ["--input-type=module", "-e", source],
+      { encoding: "utf8", timeout: 15_000, killSignal: "SIGKILL" },
+      true,
+      (frame) => frames.push(frame),
+    );
+    expect(frames).toEqual([progressObservation, completed]);
   });
 
   it("projects only the producer's complete four-field canonical frame", () => {
@@ -876,8 +915,8 @@ function qualificationValidatorFixture() {
     subject: "a".repeat(40),
     policySha256: policyDigest(policyBytes),
     inventory: { subject: "a".repeat(40), files: [{ path: "constructed.ts" }] },
-    counts: { expected: 1, visited: 1, packages: 27, violations: 0 },
-    pack: Array.from({ length: 27 }, () => ({})),
+    counts: { expected: 1, visited: 1, packages: WORKSPACE_PACKAGE_COUNT, violations: 0 },
+    pack: Array.from({ length: WORKSPACE_PACKAGE_COUNT }, () => ({})),
     rules: policy.rules,
     scopeRetirements: [
       {
@@ -1104,16 +1143,10 @@ describe("complete production qualification owner", () => {
     expect(owner).toContain("maxBuffer: 32 * 1024 * 1024");
     expect(owner).not.toContain("timeout:");
   });
-  // Skipped under #4145 (ratchet, owner decision 2026-11-03 on #3914): this pin binds
-  // epic-migrated source or the epic's qualification CI chain, absent from the dev snapshot.
-  // #3991 restores it unchanged when full enforcement lands; the ratchet governs dev until then.
-  it.skip("requires serial mandatory fixture full qualification and raw reader", () => {
+  it("requires serial mandatory fixture full qualification and raw reader", () => {
     assertPolicyOperationOrder(parse(read(".github/workflows/ci.yml")).jobs["code-quality-policy"]);
   });
-  // Skipped under #4145 (ratchet, owner decision 2026-11-03 on #3914): this pin binds
-  // epic-migrated source or the epic's qualification CI chain, absent from the dev snapshot.
-  // #3991 restores it unchanged when full enforcement lands; the ratchet governs dev until then.
-  it.skip.each(["missing", "conditional", "continued", "partial"])(
+  it.each(["missing", "conditional", "continued", "partial"])(
     "refuses %s qualification workflow mutation",
     (kind) => {
       const job = parse(read(".github/workflows/ci.yml")).jobs["code-quality-policy"];
@@ -1480,11 +1513,13 @@ describe("diagnostics ingress route responsibility wiring (#3918)", () => {
   });
 });
 
+// The synthetic fixture owns only `alpha`, so it keeps no production package scope.
 function expectedHistoricalFixtureRule(rule) {
   const { retiredScopes, ...active } = rule;
   return {
     ...active,
-    activeScopes: retiredScopes ?? rule.activeScopes.filter((scope) => scope !== CONTRACTS_SCOPE),
+    activeScopes:
+      retiredScopes ?? rule.activeScopes.filter((scope) => !scope.startsWith("package:")),
   };
 }
 

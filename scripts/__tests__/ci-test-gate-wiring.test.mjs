@@ -542,10 +542,13 @@ describe("CI test/gate wiring guard", () => {
     // It uses the same pinned Node 24 setup and toolchain verification before staging the package.
     // The portable secure-read matrix adds one governed Node 24 lane for all four native targets.
     // Firefox's isolated smoke matrix retains its own pinned setup and verification.
+    // The static code-quality policy matrix selects both governed runtimes through `matrix.node`,
+    // so its one setup is neither literal and its toolchain verification is the extra one.
     expect(node24SetupCount).toBe(33);
     expect(node26SetupCount).toBe(1);
     expect(nodeSetupCount).toBe(34);
-    expect(verificationCount).toBe(nodeSetupCount);
+    expect(verificationCount).toBe(nodeSetupCount + 1);
+    expect(ci).toContain("node-version: ${{ matrix.node }}");
     expect(runtimeWorkflows).not.toMatch(/node-version: "22/u);
     expect(ci).toContain("NODE_26_COMPATIBILITY_RESULT");
   });

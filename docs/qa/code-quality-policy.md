@@ -126,7 +126,59 @@ The ledger started empty at `7bbca2e34`; #4145 adds no entry.
 - The ratchet does not run the epic's responsibility qualifications. A green ratchet means "no new
   findings", not "this code is qualified" or "this rule is enforced".
 - The baseline on the `dev` snapshot `7bbca2e34` was 46,618 findings. Epic workstreams prune the
-  register; #3991 removes it at zero and activates full enforcement.
+  register. #3991 activates each rule in the scopes where it has no finding, and the register stays
+  for the remaining findings (owner decision 3, 2026-11-06 on #3991). The other activations follow
+  the deferred migration children and #4278.
+
+## Responsibility qualification
+
+#3991 restores the hosted qualification that #4165 removed. The required `ci` context needs the
+`code-quality-policy` job. Core quality runs beside it, not after it (owner decision 2026-11-07 on
+#3991), because the `ci` context already requires both. The job runs on `ubuntu-24.04-arm` once
+with Node 24.18.0 (and a 12288 MiB heap) and once with Node 26.8.1. Each leg runs these three
+steps in order, with no condition and no `continue-on-error`:
+
+```bash
+npm run check:code-quality-policy:cli-smoke   # bounded default CLI fixture
+npm run check:code-quality-policy:repository  # complete current-subject qualification
+npm run check:code-quality-policy:raw-reader  # the registered raw own-property reader
+```
+
+The repository step runs `check-code-quality-policy.mjs --qualify-responsibilities` over the whole
+repository. It passes only when every registered responsibility record is structurally ready, its
+declared proof assertions pass in one fresh execution, and no active rule keeps a violation after
+those records adapt their findings. The raw-reader step qualifies the `ownField` reader on its own.
+Its producer is `packages/keiko-contracts/src/contract-validation-primitives.ts`, which the public
+`runtime/code-task-acceptance` subpath re-exports.
+
+A `public-parser` record binds its `public-api-proof` consumer in one of two shapes. The first is an
+exported wrapper `const result = validateX(input); return result;` whose return annotation names the
+checked result alias. The second is a local alias of the imported public validator,
+`export { validateX as parseX }` (owner decision 2026-11-07 on #3991). The alias adds no code, so the
+binder reads the producer's own declaration instead. That declaration must have exactly one
+required parameter declared `unknown` and must name the owner's checked result alias as its return
+type. The binder refuses an alias of any other import, a producer with a typed parameter, an inline
+or foreign result type and an `export ... from` another module. The 14 memory parser records use
+the alias shape in `packages/keiko-contracts/src/memory.test.ts`. Splitting wrappers into runs of
+three to stay below the duplication window is still refused (REVIEW-3918-015).
+
+A tree that matches a pull-request head whose full matrix already passed skips this job under the
+same reuse rule as the other gated jobs (ADR-0178).
+
+Rule activation follows the owner's #3991 decision: a rule is active in each scope where it had zero
+raw findings when #3991 activated it, in addition to the scopes it already had. Before that, five
+rules were active only in `package:@oscharko-dev/keiko-contracts`; that contracts-only scope no
+longer describes the policy. The four contracts boundary rules (no-runtime-typeof,
+no-unknown-parameters, no-unsafe-dictionary-type and no-known-value-widening) stay inactive under
+`pending-boundary-migration` (#4278), and the five retired Effect rules stay retired. A scope that
+consists only of production files is not listed separately when `production` is active. Policy
+validation keeps refusing a shrink, so an activated scope stays active. The engine refuses an active
+scope without files on the real repository. A hermetic test fixture writes its policy with only the
+scopes its own files certainly fall in.
+
+Local `npm run lint` builds the packages, runs the same three steps and then `npm run lint:typed`,
+the per-package ESLint run from #4182 plus the keiko-ui lint. Core quality runs only
+`npm run lint:typed`, so it does not repeat the qualification.
 
 ## Engine
 

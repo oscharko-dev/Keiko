@@ -164,11 +164,12 @@ The rules below apply on the epic branch now and on `dev` after the rollout:
   that any rule is qualified or fully enforced. Rule dispositions, thresholds, required contexts,
   review loops and integration authority are unchanged.
 - Baseline on the `dev` snapshot `7bbca2e34`: 7,239 files and 46,618 findings. Epic workstreams
-  prune the register; #3991 removes it at zero and activates full enforcement.
+  prune the register. #3991 activates each rule in the scopes where it has no finding, and the
+  register stays for the remaining findings (owner decision 3, 2026-11-06 on #3991).
 
 Known limitation: counts are per file and rule, so fixing one finding and adding another of the same
-rule in the same file nets out. This is accepted for the bridge period and closes when #3991
-removes the register.
+rule in the same file nets out. This is accepted while the register holds
+remaining findings.
 
 Reviewed increases (owner decision, 2026-11-01). The epic's delivery slices add findings that the
 epic qualifies elsewhere or migrates later: validators adapted by responsibility records, boundary
@@ -221,8 +222,8 @@ inside the sync:
 - The longest deterministic jobs still dominate pull-request latency; the new gates run alongside
   them instead of serially extending the path.
 - Hosted services remain replaceable supplemental producers and are represented honestly as such.
-- Existing anti-slop findings on the epic branch can only decrease until #3991 activates full
-  enforcement (D6). The same holds on `dev` after the owner's rollout.
+- Existing anti-slop findings on the epic branch can only decrease while the register holds them
+  (D6). The same holds on `dev` after the owner's rollout.
 
 ## References
 

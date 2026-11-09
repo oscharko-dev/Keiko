@@ -58,7 +58,8 @@ const ACTIVITY_LOG_REUSE_GUARD =
  * The gate's hosting job header, anchored by its own `name:`. The guard line alone appears on all
  * ten gated jobs, so a bare-line mutation would rewrite the first of those instead of this host.
  */
-const GATE_HOST_HEADER = "    name: Core quality\n    needs: verified-tree\n";
+const GATE_HOST_HEADER =
+  "    name: Core quality\n    # Runs beside the code-quality-policy legs, not after them (owner decision 2026-11-07 on #3991):\n    # the aggregate ci job requires both, so ordering would only lengthen the critical path.\n    needs: verified-tree\n";
 const GATE_HOST_GUARDED = `${GATE_HOST_HEADER}    if: ${ACTIVITY_LOG_REUSE_GUARD}\n`;
 const STEP_COUNT = ACTIVITY_LOG_GATE_STEPS.length;
 const REQUIRED_CONSTITUENTS = [

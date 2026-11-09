@@ -4,6 +4,7 @@ import { fileURLToPath, URL } from "node:url";
 import { policyDigest } from "../lib/code-quality-inventory.mjs";
 import { NATIVE_EFFECT_RULES } from "../lib/code-quality-policy.mjs";
 import { isMainModule } from "../lib/is-main-module.mjs";
+import { workspacePackages } from "../lint-repository.mjs";
 import { executePolicyWithDiagnostics } from "./code-quality-wiring-smoke.mjs";
 
 function assertQualifiedRecord(assessment, record) {
@@ -47,8 +48,10 @@ function assertRepositoryScope(report, policyBytes) {
   assert.equal(report.counts.expected, report.counts.visited);
   assert.equal(report.counts.visited, report.inventory.files.length);
   assert.ok(report.counts.visited > 0);
-  assert.equal(report.counts.packages, 27);
-  assert.equal(report.pack.length, 27);
+  // Every `packages/*` workspace is packed; the count follows the checkout instead of a literal.
+  const packages = workspacePackages(fileURLToPath(new URL("../../", import.meta.url))).length;
+  assert.equal(report.counts.packages, packages);
+  assert.equal(report.pack.length, packages);
   assert.equal(report.rules.length, 22);
   assert.equal(report.counts.violations, 0);
   assert.deepEqual(report.violations, []);
@@ -126,6 +129,9 @@ async function qualifyRepository() {
     [fileURLToPath(entry), "--qualify-responsibilities", "--json", "--progress"],
     { cwd: new URL("../../", import.meta.url), encoding: "utf8", maxBuffer: 32 * 1024 * 1024 },
     true,
+    // One line per phase change, so a job that times out shows how far the qualification got.
+    ({ phase, state, elapsedMs }) =>
+      console.log(`code-quality repository qualification: ${phase} ${state} at ${elapsedMs} ms`),
   );
   assert.equal(readFileSync(policyPath, "utf8"), policyBytes);
   const report = JSON.parse(stdout);

@@ -591,7 +591,7 @@ function ratchetStepDefects(step) {
 
 function ratchetOrderDefects(steps, step) {
   const runs = steps.map((entry) => entry.run);
-  const prerequisites = ["npm run typecheck", "npm run lint"].map((run) => runs.indexOf(run));
+  const prerequisites = ["npm run typecheck", "npm run lint:typed"].map((run) => runs.indexOf(run));
   const position = steps.indexOf(step);
   return prerequisites.every((index) => index >= 0 && index < position) ? [] : ["reordered"];
 }

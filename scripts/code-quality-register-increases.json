@@ -8170,6 +8170,14 @@
       "issue": 3914
     },
     {
+      "path": "packages/keiko-ui/src/app/components/desktop/widgets/WindowChunkFallback.test.tsx",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "proof-fixture",
+      "issue": 3991
+    },
+    {
       "path": "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.test.tsx",
       "rule": "anti-slop/no-module-mocking",
       "from": 19,

@@ -359,8 +359,61 @@ jobs:
           "${RUNNER_TEMP}/gitleaks" git --redact=100 --no-banner --timeout=120 \
             --log-opts="${QUALITY_BASE_SHA}..${squash}" .
 
+  code-quality-policy:
+    name: Static code-quality policy (Node ${{ matrix.node }})
+    needs: verified-tree
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && needs.verified-tree.outputs.tree-verified != 'true' }}
+    runs-on: ubuntu-24.04-arm
+    # Run 42347905776 measured the jobs at 38:41 (Node 26) and 47:03 (Node 24); the repository
+    # qualification step alone took 35:39 and 43:52. The bound is about twice the slowest job.
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["24.18.0", "26.8.1"]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          package-manager-cache: false
+      - name: Verify pull-request merge candidate consistency
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - run: npm ci --ignore-scripts
+      - name: Provision the approved USearch native runtime
+        run: npm run provision:usearch
+      - run: npm run build:packages
+      - name: Check the bounded default CLI integration fixture serially
+        env:
+          NODE_OPTIONS: ${{ matrix.node == '24.18.0' && '--max-old-space-size=12288' || '' }}
+        run: npm run check:code-quality-policy:cli-smoke
+      - name: Qualify the complete current-subject policy serially
+        # Preserve Core's Node24 heap and Node26's existing default heap. Product/native
+        # qualification remains on the existing x64, Windows and macOS lanes.
+        env:
+          NODE_OPTIONS: ${{ matrix.node == '24.18.0' && '--max-old-space-size=12288' || '' }}
+        run: |
+          node --input-type=module -e 'import os from "node:os"; console.log(JSON.stringify({ arch: os.arch(), logicalCpus: os.cpus().length, availableParallelism: os.availableParallelism(), totalMemoryBytes: os.totalmem() }));'
+          /usr/bin/time -v npm run check:code-quality-policy:repository
+      - name: Qualify the actual raw-reader responsibility serially
+        run: npm run check:code-quality-policy:raw-reader
+
   core-quality:
     name: Core quality
+    # Runs beside the code-quality-policy legs, not after them (owner decision 2026-11-07 on #3991):
+    # the aggregate ci job requires both, so ordering would only lengthen the critical path.
     needs: verified-tree
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && needs.verified-tree.outputs.tree-verified != 'true' }}
     runs-on: ubuntu-latest
@@ -435,9 +488,12 @@ jobs:
       - run: npm run check:release-required-workflows
       - run: npm run check:portable-approvals
       - run: npm run check:git-client-evidence
-      - run: npm run lint
+      - run: npm run lint:typed
         env:
           NODE_OPTIONS: --max-old-space-size=12288
+      - name: Linux native compiler version (#3991)
+        run: cc --version
+      - run: npm run check:native:linux
       - name: Anti-slop code-quality ratchet (#4145)
         # Runs after `npm run typecheck` (which builds packages): the engine imports the compiled
         # keiko-server dist. Fails on any per-file, per-rule increase over the committed register
@@ -1185,6 +1241,7 @@ jobs:
       - verified-tree
       - build-scan-sbom-smoke
       - core-quality
+      - code-quality-policy
       - coverage-sonar
       - cross-platform-smoke
       - node-26-compatibility
@@ -1201,6 +1258,7 @@ jobs:
           BUILD_SCAN_SBOM_SMOKE_RESULT: ${{ needs.build-scan-sbom-smoke.result }}
           CHANGE_SCOPE_RESULT: ${{ needs.change-scope.result }}
           CORE_QUALITY_RESULT: ${{ needs.core-quality.result }}
+          CODE_QUALITY_POLICY_RESULT: ${{ needs.code-quality-policy.result }}
           COVERAGE_SONAR_RESULT: ${{ needs.coverage-sonar.result }}
           CROSS_PLATFORM_RESULT: ${{ needs.cross-platform-smoke.result }}
           DOCUMENTATION_ONLY: ${{ needs.change-scope.outputs.documentation-only }}
@@ -1241,6 +1299,7 @@ jobs:
             # else — failure, cancelled, an empty result, an unknown state — fails closed.
             for named in "CHANGE_SCOPE:${CHANGE_SCOPE_RESULT:-}" "PROTECTED_BRANCH:${PROTECTED_BRANCH_RESULT:-}" \
                          "CORE_QUALITY:${CORE_QUALITY_RESULT:-}" "COVERAGE_SONAR:${COVERAGE_SONAR_RESULT:-}" \
+                         "CODE_QUALITY_POLICY:${CODE_QUALITY_POLICY_RESULT:-}" \
                          "SECRET_SCAN:${SECRET_SCAN_RESULT:-}" "SEMANTIC_DUPLICATION:${SEMANTIC_DUPLICATION_RESULT:-}" \
                          "UI:${UI_RESULT:-}" "BUILD_SCAN_SBOM_SMOKE:${BUILD_SCAN_SBOM_SMOKE_RESULT:-}" \
                          "CROSS_PLATFORM:${CROSS_PLATFORM_RESULT:-}" "NODE_26:${NODE_26_COMPATIBILITY_RESULT:-}" \
@@ -1260,7 +1319,7 @@ jobs:
             echo "Trusted push SBOM provenance did not succeed (${SBOM_PROVENANCE_RESULT:-unset})."
             exit 1
           fi
-          for result in "$CHANGE_SCOPE_RESULT" "$PROTECTED_BRANCH_RESULT" "$CORE_QUALITY_RESULT" "$COVERAGE_SONAR_RESULT" "$SECRET_SCAN_RESULT" "$SEMANTIC_DUPLICATION_RESULT" "$UI_RESULT"; do
+          for result in "$CHANGE_SCOPE_RESULT" "$PROTECTED_BRANCH_RESULT" "$CORE_QUALITY_RESULT" "$CODE_QUALITY_POLICY_RESULT" "$COVERAGE_SONAR_RESULT" "$SECRET_SCAN_RESULT" "$SEMANTIC_DUPLICATION_RESULT" "$UI_RESULT"; do
             if [ "$result" != "success" ]; then
               echo "Required CI dependency did not succeed: $result"
               exit 1

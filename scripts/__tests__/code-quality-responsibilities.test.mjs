@@ -41,6 +41,7 @@ import {
   embeddedSemanticOptions,
   createCollectiveSemanticFixture,
 } from "./support/code-quality-responsibility-fixture.mjs";
+import { fixtureScopedPolicy } from "./support/code-quality-fixture.mjs";
 
 function executeCensusChild(root, ci) {
   const entry = new URL("../check-code-quality-policy.mjs", import.meta.url).href;
@@ -1366,7 +1367,7 @@ describe("actual policy entry reports responsibility incompleteness", () => {
   it("keeps v1 report shape and fails v2 enforcement despite existing proof paths and passing runtime controls", async () => {
     const own = await fixture();
     mkdirSync(join(own.root, "scripts"));
-    const v2 = responsibilityPolicy([responsibilityRecord()]);
+    const v2 = fixtureScopedPolicy(responsibilityPolicy([responsibilityRecord()]), own.root);
     const { responsibilities: ignored, ...v1 } = v2;
     expect(ignored).toHaveLength(1);
     v1.version = 1;
@@ -1676,6 +1677,7 @@ describe("closed public parser responsibility (#3918)", () => {
     "reasons",
     "instantiated-reasons",
     "result-alias",
+    "alias-export",
   ])("keeps %s shallow facts structural-ready and semantics pending", async (variant) => {
     const own = createPublicParserFixture(variant);
     roots.push(own.root);
@@ -1731,6 +1733,13 @@ describe("closed public parser responsibility (#3918)", () => {
     "asserted-return",
     "annotated-local",
     "counterfeit-type",
+    "alias-non-producer",
+    "alias-typed-parameter",
+    "alias-inline-result",
+    "alias-reexport",
+    "alias-private-path",
+    "alias-type-export",
+    "alias-type-element",
   ])("never adapts %s forwarding", async (variant) => {
     const own = createPublicParserFixture(variant);
     roots.push(own.root);
@@ -2508,6 +2517,20 @@ describe("exact canonical raw reader body controls (#3918)", () => {
 });
 
 describe("unsupported raw reader public proof flow (#3918)", () => {
+  it("refuses the public-parser alias consumer for a raw reader record (#3991)", async () => {
+    const own = minimalRawReaderFixture();
+    const path = own.record.consumer.consumerPath;
+    const proof = readFileSync(join(own.root, path), "utf8");
+    const wrapper =
+      "export function publicParse(input: unknown): ParseResult { const result = parse(input); return result; }";
+    expect(proof).toContain(wrapper);
+    own.put(path, proof.replace(wrapper, "export { parse as publicParse };"));
+    const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+    expect(report.assessments[0].consumerBinding.readerWitness.bound).toBe(true);
+    expect(report.assessments[0].structural).toBe("incomplete");
+    expect(report.assessments[0].reasons).toEqual(["unsupported-raw-reader-public-proof-binding"]);
+    expect(report.assessments[0].slots).toEqual([]);
+  });
   it("remains incomplete without qualification or RETURN adaptation", async () => {
     const own = minimalRawReaderFixture();
     const path = own.record.consumer.consumerPath;
@@ -3234,9 +3257,7 @@ it${mode === "skip" ? ".skip" : ""}("actual public canonical decoder admission",
 }
 
 describe("raw canonical JSON decoder fresh semantic qualification (#3918)", () => {
-  // Skipped under #4145 (ratchet, owner decision 2026-11-03 on #3914): this qualification binds
-  // epic-migrated contracts source, absent from the dev snapshot. #3991 restores it unchanged.
-  it.skip("grants only the exact return after fresh public admission proofs pass", async () => {
+  it("grants only the exact return after fresh public admission proofs pass", async () => {
     const own = await canonicalDecoderSemanticFixture();
     const pending = await executeCodeQualityPolicy(
       { mode: "enforce", scope: "repository" },
