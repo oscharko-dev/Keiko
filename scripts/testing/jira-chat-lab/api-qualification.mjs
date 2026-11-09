@@ -224,7 +224,8 @@ async function dispatchCase(context, chat, specification, fixture, witness, pend
         specification.arguments(fixture),
       ),
     };
-  } catch {
+  } catch (error) {
+    stage({ identity: specification.identity, dispatchFailure: prepareSite(error) });
     // Before any native effect started, a refusal or local failure proves nothing about Jira.
     if (witness.effectsStarted() > 0) throw new ReconcileRequiredError();
     rmSync(pending);
