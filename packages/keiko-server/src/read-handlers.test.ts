@@ -700,10 +700,14 @@ describe("GET /api/workspace — walk cache (KEIKO-0253)", () => {
     const roots: string[] = [];
     try {
       const extraRoots = 8;
+      // One store registers every root: the subject is the walk cache, and each fresh store
+      // replays the whole migration chain (#4287).
+      const store = createInMemoryUiStore();
+      const deps = depsWith({ store });
       for (let i = 0; i < WORKSPACE_WALK_CACHE_MAX_ENTRIES + extraRoots; i += 1) {
         const root = createWorkspaceFixture();
         roots.push(root);
-        const deps = depsWithRegisteredProject(root);
+        store.createProject(root);
         await handleWorkspace(ctx(`/api/workspace?dir=${encodeURIComponent(root)}`), deps);
         expect(__workspaceWalkCacheSizeForTests()).toBeLessThanOrEqual(
           WORKSPACE_WALK_CACHE_MAX_ENTRIES,
