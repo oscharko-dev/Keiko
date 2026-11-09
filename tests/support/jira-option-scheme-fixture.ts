@@ -326,10 +326,18 @@ function schemeRead(state: OptionSchemeState, path: string): AtlassianWriteHttpO
   const fixed = schemeStaticRead(state, path);
   if (fixed !== undefined) return fixed;
   const { controls } = state;
-  const parts = path.split("/");
+  const [bare = "", query = ""] = path.split("?");
+  const parts = bare.split("/");
   const selected = parts[0] === "issuetypescheme" ? state.issueSchemes : state.prioritySchemes;
-  const item = selected.get(parts[1] ?? "");
-  if (item === undefined) return schemeMissing();
+  const stored = selected.get(parts[1] ?? "");
+  if (stored === undefined) return schemeMissing();
+  // Live Jira 10.3 returns an issue type scheme's member and default types only on request.
+  const expanded = new URLSearchParams(query).get("expand")?.split(",") ?? [];
+  const item = { ...stored };
+  if (parts[0] === "issuetypescheme") {
+    if (!expanded.includes("issueTypes")) delete item.issueTypes;
+    if (!expanded.includes("defaultIssueType")) delete item.defaultIssueType;
+  }
   if (parts[2] === "associations")
     return controls.missingAssociations
       ? schemeOk()

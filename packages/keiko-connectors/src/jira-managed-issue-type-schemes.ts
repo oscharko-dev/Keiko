@@ -54,6 +54,11 @@ function expansion(args: CatalogJsonObject): string | undefined {
 function integer(value: unknown, min: number, max: number): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max;
 }
+/** Jira 10.3 returns a scheme's member and default types only when expanded; the review needs them. */
+function schemeSuffix(name: Read): string {
+  if (name === "jira.issue-type-scheme-projects") return "/associations";
+  return name === "jira.issue-type-scheme" ? "?expand=issueTypes,defaultIssueType" : "";
+}
 function selection(name: Read, args: CatalogJsonObject): Selection | undefined {
   const allowed = new Set(FIELDS[name]);
   if (Object.keys(args).some((key) => !allowed.has(key))) return undefined;
@@ -68,7 +73,7 @@ function selection(name: Read, args: CatalogJsonObject): Selection | undefined {
   }
   if (jiraNativeId(args.schemeId)) {
     return {
-      path: `issuetypescheme/${args.schemeId}${name === "jira.issue-type-scheme-projects" ? "/associations" : ""}`,
+      path: `issuetypescheme/${args.schemeId}${schemeSuffix(name)}`,
       schemeId: args.schemeId,
       startAt,
       maxResults,
