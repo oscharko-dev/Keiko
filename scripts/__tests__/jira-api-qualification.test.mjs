@@ -132,7 +132,7 @@ describe("native Jira qualification evidence", () => {
     ).toBe("unavailable");
   });
 
-  it("accepts a not-found acknowledgement only for a 2xx DELETE with a matched readback", () => {
+  it("accepts a not-found acknowledgement only for a 2xx DELETE of a proven prior object", () => {
     const deleted = "DELETE /rest/api/2/issue/{issueIdOrKey}";
     const o = observation();
     const binding = { identity: deleted, contractDigest: "a".repeat(64) };
@@ -152,8 +152,13 @@ describe("native Jira qualification evidence", () => {
       },
       receipt: { status: "failed", budgetDisposition: "committed", effectStarted: true },
     };
+    // "Not found" is no proof of a deletion unless the recipe proved the object present before.
+    expect(classifyQualification(base)).toBe("unknown");
+    base.readback = { ...base.readback, priorPresence: true };
     expect(classifyQualification(base)).toBe("executable");
-    expect(classifyQualification({ ...base, readback: { matched: false } })).toBe("unknown");
+    expect(
+      classifyQualification({ ...base, readback: { matched: false, priorPresence: true } }),
+    ).toBe("unknown");
     const other = {
       identity: "PUT /rest/api/2/issue/{issueIdOrKey}",
       contractDigest: "a".repeat(64),

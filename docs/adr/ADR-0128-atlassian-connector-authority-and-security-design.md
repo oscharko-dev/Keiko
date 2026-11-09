@@ -918,6 +918,20 @@ exactly one closed state are ignored, and an open or unreadable entry remains a 
 text scalars that refuse control characters. A workflow-scheme issue-type read omits `workflow` for
 an unmapped type; only that read accepts the omission.
 
+The same qualification fixed five transport and reading rules, each scoped to the observed case:
+a bodiless native write (`PUT`, `POST` or `DELETE` without a body) carries
+`X-Atlassian-Token: no-check`, as the attachment upload does, because Jira refuses it with
+"XSRF check failed" otherwise; the header disables only Jira's browser-CSRF check, which a
+server-side client holding explicit credentials does not need, and the raw `application/zip`
+email-template upload keeps its exact closed header set. `PUT /settings/baseUrl` sends the base URL
+as raw text, which is the only form Jira accepts there; every other string body stays JSON. The bulk
+archive request `POST /issue/archive` asks for `text/plain`, the only representation Jira returns
+(`application/json` answers 406). Default (global) role actors are sent by user key: Jira answers
+400 for a username and 200 for the key, while project-role actors stay usernames; the default-actor
+removal uses the same key and is not yet qualified live. After an epic removal Jira reads the
+epicless issue as an explicit `fields: null`, which means no epic; a missing `fields` key or an
+object without the epic key stays malformed.
+
 Native issue-link changes bind both canonical parents and the complete reviewed relations;
 saved templates judge the planned native post-relation before a single effect. Remote-link
 replacement reuses one supported typed snapshot and does not follow its metadata URLs. Native

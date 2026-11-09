@@ -169,6 +169,9 @@ describe("reviewed global role and project actor mutations", () => {
     });
   });
   it("binds key and native username separately before selecting native user keys for default actors", async () => {
+    // A behaviour change, not a restore: the connector first sent usernames for default actors.
+    // Live Jira 10.3.26 (AC7, 2026-11-09) answered POST /role/{id}/actors with a username 400
+    // ("can't find in any accessible user directory") and with the user key 200.
     const f = roleMutationFixture();
     const test = ROLE_MUTATION_FIXTURE_CASES[4];
     await execute(test.name, test.args, f.request);

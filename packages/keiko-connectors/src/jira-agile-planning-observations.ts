@@ -173,14 +173,14 @@ function sameNativeIssue(
   return raw !== undefined && jiraNativeNumericId(raw.id) === issue.id && raw.key === issue.key;
 }
 /**
- * Jira answers `fields: null` for an issue that belongs to no epic and omits the empty epic; the
- * transport may drop the null. An object without the epic key stays malformed.
+ * Jira 10.3 answers an explicit `fields: null` for an issue that belongs to no epic. A missing
+ * `fields` key, or an object without the epic key, stays malformed.
  */
 function epicFieldsOf(
   raw: Readonly<Record<string, unknown>> | undefined,
 ): Readonly<Record<string, unknown>> | null | undefined {
-  if (raw?.fields === null || raw?.fields === undefined) return null;
-  return asRecord(raw.fields);
+  if (raw !== undefined && Object.hasOwn(raw, "fields") && raw.fields === null) return null;
+  return asRecord(raw?.fields);
 }
 export async function readPlanningEpicMembership(
   requests: JiraAgileRequestPhase,

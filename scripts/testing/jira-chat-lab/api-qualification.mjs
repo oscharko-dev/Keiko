@@ -154,8 +154,11 @@ class ReconcileRequiredError extends TypeError {
 }
 const caseId = (specification) =>
   specification.fixtureId ?? qualificationDigest(specification.identity).slice(0, 24);
-/** A case that could not be prepared or dispatched is graded unknown; it never aborts the run. */
-function ungradedEvidence(specification, report, failure, effects) {
+/**
+ * A case that could not be prepared or dispatched is graded unknown; it never aborts the run.
+ * `effects` is the real count of started native writes; `refused` says each one was definitely refused.
+ */
+function ungradedEvidence(specification, report, failure, effects, refused = false) {
   return {
     runId: report.runId,
     sourceRevision: report.sourceRevision,
@@ -168,7 +171,8 @@ function ungradedEvidence(specification, report, failure, effects) {
     mutation: specification.mutation === true,
     failure,
     // An effect that started before the failure needs reconciliation before it is trusted.
-    ...(effects > 0 ? { reconcileRequired: true } : {}),
+    ...(effects > 0 && !refused ? { reconcileRequired: true } : {}),
+    ...(effects > 0 && refused ? { refusedEffects: effects } : {}),
   };
 }
 function recordUngraded(specification, directory, evidence) {
@@ -217,11 +221,16 @@ async function prepareCase(context, chat, specification, fixture) {
     return prepareFailure(error);
   }
 }
+/**
+ * Statuses with which Jira refuses a request without applying it. A timeout (408), early-data
+ * refusal (425) or rate limit (429) says nothing definite about the effect, so it still stops the run.
+ */
+const DEFINITE_REFUSAL_STATUSES = new Set([400, 401, 403, 404, 405, 409, 410, 412, 415, 422]);
 const refusedOnly = (snapshot) =>
   snapshot.blocked === 0 &&
   snapshot.responses.length > 0 &&
-  snapshot.responses.every((response) => response.status >= 400 && response.status < 500);
-/** An ungraded case after a native effect needs reconciliation unless every response was a 4xx. */
+  snapshot.responses.every((response) => DEFINITE_REFUSAL_STATUSES.has(response.status));
+/** An ungraded case after a native effect needs reconciliation unless every response was a refusal. */
 const unknownAfterEffect = (evidence, witness) =>
   evidence.runtimeAvailability === "unknown" &&
   witness.effectsStarted() > 0 &&
@@ -236,7 +245,7 @@ async function dispatchCase(context, chat, specification, fixture, witness, pend
   } catch (error) {
     stage({ identity: specification.identity, dispatchFailure: prepareSite(error) });
     // Before any native effect started, a refusal or local failure proves nothing about Jira.
-    // A native effect whose every observed response is a definite 4xx refusal changed nothing.
+    // A native effect whose every observed response is a definite refusal changed nothing.
     if (witness.effectsStarted() > 0 && !refusedOnly(witness.snapshot()))
       throw new ReconcileRequiredError();
     rmSync(pending);
@@ -281,7 +290,8 @@ function settledRefusal(journal, evidence) {
 /** An unsettled or unknown native write stops the run unless it is such a settled refusal. */
 function needsReconcile(journal, evidence, snapshot) {
   if (journal?.outcome !== "unknown" && journal?.phase !== "dispatched") return false;
-  // A settled write whose every native response was a definite 4xx refusal changed nothing.
+  // A settled write whose every native response was a definite refusal changed nothing. This is an
+  // intentional rule (#4287): the case stays unknown and later cases never build on its effect.
   if (journal.phase === "settled" && refusedOnly(snapshot)) return false;
   return !settledRefusal(journal, evidence);
 }
@@ -347,7 +357,8 @@ export async function runQualificationCase(
         specification,
         report,
         dispatched.failure,
-        refusedOnly(witness.snapshot()) ? 0 : witness.effectsStarted(),
+        witness.effectsStarted(),
+        refusedOnly(witness.snapshot()),
       ),
     );
   return gradeCase(

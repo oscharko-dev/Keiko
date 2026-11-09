@@ -121,6 +121,38 @@ describe("fixed Agile planning effects", () => {
   });
 });
 
+/** Reshapes the post-write epic read on both the phase and the readback phase the product uses. */
+function withEpicRead(
+  f: Fixture,
+  reshaped: { count: number },
+  reshape: (body: Record<string, unknown>) => Record<string, unknown>,
+): Fixture["ports"]["requests"] {
+  const wrap =
+    (agile: Fixture["ports"]["requests"]["agile"]): typeof agile =>
+    async (...call: Parameters<typeof agile>): ReturnType<typeof agile> => {
+      const result = await agile(...call);
+      if (!(
+        writes(f).length > 0 &&
+        call[0].endsWith("?fields=epic&updateHistory=false") &&
+        result.ok
+      ))
+        return result;
+      reshaped.count += 1;
+      return { ...result, body: reshape({ ...result.body }) };
+    };
+  const original = f.ports.requests;
+  return {
+    ...original,
+    agile: wrap(original.agile),
+    readback: (): ReturnType<typeof original.readback> => {
+      const phase = original.readback();
+      return { ...phase, agile: wrap(phase.agile) };
+    },
+  };
+}
+function omitFields(body: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(body).filter(([key]) => key !== "fields"));
+}
 describe("reviewed membership and global rank evidence", () => {
   it("removes only the explicitly reviewed issue, using canonical identities for numeric/lowercase aliases", async () => {
     for (const selector of ["10001", "syn-1"]) {
@@ -168,22 +200,33 @@ describe("reviewed membership and global rank evidence", () => {
   });
   it("confirms removal when native Jira answers fields:null for an epicless issue", async () => {
     const f = agilePlanningFixture();
-    const agile = f.ports.requests.agile;
-    const requests = {
-      ...f.ports.requests,
-      agile: (async (...call: Parameters<typeof agile>): ReturnType<typeof agile> => {
-        const result = await agile(...call);
-        // Native Jira omits the empty epic and answers `fields: null` once the issue has left it.
-        return writes(f).length > 0 &&
-          call[0].endsWith("?fields=epic&updateHistory=false") &&
-          result.ok
-          ? { ...result, body: { ...result.body, fields: null } }
-          : result;
-      }) as typeof agile,
-    };
+    // Native Jira omits the empty epic and answers `fields: null` once the issue has left it.
+    const reshaped = { count: 0 };
+    const requests = withEpicRead(f, reshaped, (body) => ({ ...body, fields: null }));
     expect(
       await executeJiraAgilePlanningMutation(CASES[0].name, CASES[0].args, { requests }),
     ).toEqual({ ok: true, receipt: CASES[0].receipt });
+    expect(reshaped.count).toBeGreaterThan(0);
+    expect(writes(f)).toHaveLength(1);
+  });
+  it.each([
+    [
+      "a missing fields key",
+      (body: Record<string, unknown>): Record<string, unknown> => omitFields(body),
+    ],
+    [
+      "fields without the epic key",
+      (body: Record<string, unknown>): Record<string, unknown> => ({ ...body, fields: {} }),
+    ],
+  ])("refuses removal evidence with %s as malformed", async (_label, reshape) => {
+    const f = agilePlanningFixture();
+    const reshaped = { count: 0 };
+    const requests = withEpicRead(f, reshaped, reshape);
+    const outcome = await executeJiraAgilePlanningMutation(CASES[0].name, CASES[0].args, {
+      requests,
+    });
+    expect(reshaped.count).toBeGreaterThan(0);
+    expect(outcome).toMatchObject({ ok: false, reason: "malformed-payload" });
     expect(writes(f)).toHaveLength(1);
   });
   it("reports explicit no-op removal without POST", async () => {

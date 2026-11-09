@@ -231,8 +231,42 @@ it("grades a settled, independently reproduced 403 write as denied without a rec
     runQualificationCase({}, {}, unproven, {}, witness, directory(), report),
   ).rejects.toThrow("Uncertain native effect");
 });
+it("continues past a settled single 403 the readback could not reproduce, as unknown", async () => {
+  // Intentional rule (#4287): a settled write whose only native response is a definite refusal
+  // changed nothing, so the run continues; the case is not qualified and leaves no pending marker.
+  const output = directory();
+  const unproven = { ...specification({}), readback: async () => ({ matched: false }) };
+  const refused = attempt(primary.identity, true);
+  refused.dispatch.result = {
+    status: "failed",
+    data: { operationBinding: refused.binding, outcome: "unknown", reason: "permission-denied" },
+  };
+  refused.dispatch.receipt.status = "failed";
+  refused.witness.responses = [{ status: 403, truncated: false }];
+  refused.journal = { phase: "settled", outcome: "unknown", httpStatus: 403 };
+  dispatch.mockResolvedValue(refused);
+  const evidence = await runQualificationCase({}, {}, unproven, {}, witness, output, report);
+  expect(evidence.runtimeAvailability).toBe("unknown");
+  expect(readdirSync(output).some((name) => name.endsWith(".pending.json"))).toBe(false);
+  // The same 403 on a write whose journal is not settled still stops the run.
+  refused.journal = { phase: "dispatched", outcome: "unknown", httpStatus: 403 };
+  dispatch.mockResolvedValue(refused);
+  await expect(
+    runQualificationCase({}, {}, unproven, {}, witness, directory(), report),
+  ).rejects.toThrow("Uncertain native effect");
+  // A rate limit or timeout is not a definite refusal and still stops a settled write.
+  for (const status of [408, 425, 429]) {
+    refused.journal = { phase: "settled", outcome: "unknown", httpStatus: status };
+    refused.witness.responses = [{ status, truncated: false }];
+    dispatch.mockResolvedValue(refused);
+    await expect(
+      runQualificationCase({}, {}, unproven, {}, witness, directory(), report),
+    ).rejects.toThrow("Uncertain native effect");
+  }
+});
 it.each([
   [[{ status: 403, truncated: false }], false],
+  [[{ status: 429, truncated: false }], true],
   [
     [
       { status: 403, truncated: false },
@@ -253,6 +287,11 @@ it.each([
     };
     const outcome = runQualificationCase({}, {}, specification({}), {}, refusing, output, report);
     if (stops) await expect(outcome).rejects.toThrow("Uncertain native effect");
-    else await expect(outcome).resolves.toMatchObject({ runtimeAvailability: "unknown" });
+    else {
+      // The started write is counted as refused, never hidden as zero, and needs no reconcile.
+      const evidence = await outcome;
+      expect(evidence).toMatchObject({ runtimeAvailability: "unknown", refusedEffects: 1 });
+      expect(evidence.reconcileRequired).toBeUndefined();
+    }
   },
 );

@@ -77,20 +77,22 @@ function observedReceipt(dispatch) {
 }
 /**
  * The product never reads a post-write 404 as completed absence, so after a native 2xx DELETE its
- * own fresh read of the removed resource answers "not-found" instead of "unavailable". That is the
- * same unconfirmed acknowledgement; it still needs the settled journal, the native 2xx and the
- * independently matched readback of the caller.
+ * own fresh read of the removed resource may answer "not-found" instead of "unavailable". "Not
+ * found" proves a deletion only for an object the recipe itself proved present natively before the
+ * DELETE (`readback.priorPresence`); without that proof the identity stays unknown. The product's
+ * own disposition is never reinterpreted, and every other condition still applies.
  */
-const unconfirmedReason = (identity, reason) =>
-  reason === "unavailable" || (identity.startsWith("DELETE ") && reason === "not-found");
-function settledNativeAcknowledgement(identity, dispatch, statuses, journal, mutation) {
+const unconfirmedReason = (identity, reason, readback) =>
+  reason === "unavailable" ||
+  (identity.startsWith("DELETE ") && reason === "not-found" && readback?.priorPresence === true);
+function settledNativeAcknowledgement(identity, dispatch, statuses, journal, mutation, readback) {
   const data = dispatch.result.data;
   if (data.outcome === "succeeded") return dispatch.result.status === "completed";
   return (
     mutation === true &&
     dispatch.result.status === "failed" &&
     data.outcome === "succeeded-unconfirmed" &&
-    unconfirmedReason(identity, data.reason) &&
+    unconfirmedReason(identity, data.reason, readback) &&
     journal?.phase === "settled" &&
     journal.outcome === "succeeded-unconfirmed" &&
     statuses.every((status) => status === journal.httpStatus)
@@ -98,7 +100,7 @@ function settledNativeAcknowledgement(identity, dispatch, statuses, journal, mut
 }
 function executableObservation(identity, dispatch, statuses, readback, journal, mutation) {
   return (
-    settledNativeAcknowledgement(identity, dispatch, statuses, journal, mutation) &&
+    settledNativeAcknowledgement(identity, dispatch, statuses, journal, mutation, readback) &&
     statuses.every((status) => status >= 200 && status < 300) &&
     new Set(["succeeded", "succeeded-unconfirmed"]).has(dispatch.result.data.outcome) &&
     matchedReadback(readback) &&
