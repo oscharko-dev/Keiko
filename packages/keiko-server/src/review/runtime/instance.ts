@@ -50,7 +50,7 @@ import {
   type ReviewCandidateFinding,
   type ReviewFindingIntake,
 } from "./findingIntake.js";
-import { renderReviewTask } from "./reviewPrompt.js";
+import { renderReviewTask, type ReviewTaskPart } from "./reviewPrompt.js";
 import {
   readReviewRulesFromBase,
   ReviewRulesReadError,
@@ -70,8 +70,10 @@ export interface ReviewRuntimeRunRequest {
   readonly headSha: string;
   /** The Reviewer model, already admitted by the role policy (Issue #4137). */
   readonly modelId: string;
-  /** The reviewer-facing diff package text (Issue #4134). */
+  /** The reviewer-facing text of one diff package part (Issues #4134, #4130). */
   readonly diffPackageText: string;
+  /** Which part this run reviews, when the diff package has more than one (Issue #4130). */
+  readonly diffPart?: ReviewTaskPart | undefined;
   readonly correlationId?: string | undefined;
   readonly signal?: AbortSignal | undefined;
 }
@@ -450,6 +452,7 @@ async function prepareAndRun(
     rules:
       rules.outcome === "loaded" ? { outcome: "loaded", text: rules.text } : { outcome: "absent" },
     diffPackageText: request.diffPackageText,
+    part: request.diffPart,
   });
   if (!task.ok) return { ok: false, reason: "task-too-large", rules: rules.outcome };
   const instance = acquireInstance(context, request);

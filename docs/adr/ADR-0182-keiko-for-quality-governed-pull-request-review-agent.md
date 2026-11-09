@@ -62,7 +62,14 @@ is `keiko-reviewer` (`review` is reserved and an OpenCode command), defined in t
 configuration with Keiko's system prompt (`reviewPrompt.ts`, adapted from PR-Agent v0.49.0) and
 pinned as server-owned configuration. The review task carries the rules (from the base commit) and
 the diff package as nonce-bound, labelled untrusted data within the runtime's 64 KiB first-prompt
-bound; a larger task is refused, never truncated.
+bound; a larger task is refused, never truncated. A diff package larger than one task is split into
+at most `REVIEW_RUN_MAX_DIFF_PARTS` (12) parts, each within that bound (Issue #4130). Every part is
+its own Reviewer run in its own session: the run budgets (`KEIKO_REVIEW_RUN_MAX_*`, by default
+1,500,000 prompt tokens and 20 minutes) bound each part's run, so a review in 12 parts may take up to
+12 times those budgets. The task of a part names it ("Diff package part 3 of 5") and asks for
+findings about the changed code in that part; a single-part task has no such line. The 2026-11-06
+holdout motivated the split: 158 of 226 measured reviews left diff files unprocessed because the
+whole package had to fit one task.
 
 ### D2 — Read-only by construction, independent of the autonomy mode
 
@@ -251,7 +258,7 @@ clean review.
 
 | Settlement   | When                                                                                                   | Reasons                                                                                                                                         |
 | ------------ | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `complete`   | the diff package was fully processed, the Reviewer run ended normally and every candidate has a verdict | none                                                                                                                                            |
+| `complete`   | the diff package was fully processed, every part's Reviewer run ended normally and every candidate has a verdict | none                                                                                                                                            |
 | `incomplete` | review work started and some of it could not finish                                                    | `files-unprocessed`, `budget-exhausted`, `deadline-exceeded`, `model-failed`                                                                    |
 | `abandoned`  | the run stopped before settling normally                                                               | `cancelled`, `interrupted`                                                                                                                      |
 | `skipped`    | nothing was reviewed because preparation failed                                                        | `target-changed`, `worktree-failed`, `diff-too-large`, `no-reviewable-changes`, `rules-file-invalid`, `policy-invalid`, `model-unavailable` |
@@ -300,9 +307,21 @@ activation reason, `host-unavailable`, or `quarantine-limit` (R4130-019). An out
 `KEIKO_REVIEW_RUN_MAX_*` value leaves the review runtime and the review run service uncomposed
 with one `review.runtime.budget` diagnostic; it never fails server start (R4130-018).
 The
-Reviewer's diff budget is sized so the task always fits the 64 KiB first-prompt bound beside the
-largest admitted rules file (the gateway estimator counts at least one token per 3.5 bytes); a
-larger task is refused, never truncated. A record that cannot be written (a full disk) settles the
+Reviewer's diff budget is sized per part so every part's task always fits the 64 KiB first-prompt
+bound beside the largest admitted rules file and the longest part line (the gateway estimator counts
+at least one token per 3.5 bytes); a larger task is refused, never truncated. A review in several
+parts (Issue #4130) runs the parts in order, each in its own Reviewer session, and records one
+`review.run.part` line per part (part number and count, file count, used tokens, the closed
+`outcome` `completed`, `failed`, `cancelled` or `refused` with its reason, the runtime run id that
+joins the part to its `coding-runtime.*` lines, candidate count and the session's tokens and
+duration). The `reviewing` phase line carries the part count. The Reviewer fact of the run combines
+the parts' facts: any cancelled part cancels it, otherwise the most consequential failed part's
+reason fails it, and it completed only when every part completed (`combineReviewerFacts`). A failed
+part leaves the next parts to run. A refusal of the first part settles the run as before; a later
+part's refusal means the runtime became unavailable, which fails the Reviewer as `model-failed`
+and starts no further part. The candidates of every part are merged once per fingerprint and
+counter-checked together, the Reviewer totals add up every part, and an unproven runtime cleanup of
+any part makes the run's `runtimeCleanup` unproven. A record that cannot be written (a full disk) settles the
 run `abandoned/interrupted` with nothing presented. The service then writes a minimal record without
 findings that settles the stored row the same way, so one failed write does not hold the
 repository's active-run slot. When the minimal write fails too, the row stays unsettled, and the
@@ -352,7 +371,15 @@ the enclosing function or class header within ten lines (detected by Keiko for T
 JavaScript, Python, Java, Go, C# and Kotlin, since in-tree attributes are neutralized), files of the
 base commit's dominant languages first and larger changes first, and `clip`, which in Keiko keeps
 whole hunks only. The included content never exceeds the reviewer budget as the gateway's estimator
-counts it. PR-Agent applies its extra lines on top of the provider's three default context lines;
+counts it. Since Issue #4130 the package has up to 12 parts, and the budget (`budgetTokens` of the
+coverage summary) is that of one part: files fill the current part in priority order; a file that
+does not fit what is left of it starts the next part when it would fit a part whole; a file larger
+than one part continues in the next parts with its header repeated, so its hunks stay in order; once
+every part is open, the single-part rules apply to the last one. Each part is verified as a whole,
+and a file keeps only the hunks that follow each other without a gap from its first hunk, so a hunk
+a part's verification drops ends that file. Whatever does not fit the last part is `unprocessed`
+(`budget`) and settles the run `incomplete/files-unprocessed` exactly as before; `usedTokens` is the
+sum of the parts' counts. PR-Agent applies its extra lines on top of the provider's three default context lines;
 Keiko applies the five and one exactly, and child 8 measurement may change these defaults.
 
 ### D7 — Finding decisions and the audit trail

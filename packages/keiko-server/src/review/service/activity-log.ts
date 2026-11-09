@@ -55,6 +55,13 @@ export const REVIEW_RUN_LOG_SETTLEMENT_REASONS = [
   "model-unavailable",
 ] as const;
 export const REVIEW_RUN_LOG_RUNTIME_CLEANUP = ["proven", "unproven"] as const;
+/** How one diff package part's Reviewer session ended (Issue #4130). */
+export const REVIEW_RUN_LOG_PART_OUTCOMES = [
+  "completed",
+  "failed",
+  "cancelled",
+  "refused",
+] as const;
 export const REVIEW_RUN_LOG_REFUSAL_REASONS = [
   "active-review-exists",
   "policy-invalid",
@@ -124,11 +131,50 @@ const REVIEW_RUN_PHASE = defineActivityLogOperation({
     binaryFiles: OPTIONAL_COUNT,
     budgetTokens: OPTIONAL_COUNT,
     usedTokens: OPTIONAL_COUNT,
+    // #4130: the diff package parts, one Reviewer session each; `budgetTokens` is one part's.
+    partCount: OPTIONAL_COUNT,
     candidateCount: OPTIONAL_COUNT,
   },
   lifecycle: "state",
   analyzerProjection: "timeline",
   proofIds: ["review.run.phase.line"],
+});
+
+// #4130: one line per diff package part, when its Reviewer session ended. `runtimeRunId` joins the
+// part to its `coding-runtime.*` lines; `reason` is the incomplete reason of a failed session or
+// the settlement reason of a refused one.
+const REVIEW_RUN_PART = defineActivityLogOperation({
+  ...RUN_OPERATION_BASE,
+  op: "review.run.part",
+  category: "process",
+  emitter: "review/service/activity-log.logReviewRunPart",
+  fields: {
+    runDigest: DIGEST,
+    partNumber: COUNT,
+    partCount: COUNT,
+    fileCount: COUNT,
+    usedTokens: COUNT,
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: REVIEW_RUN_LOG_PART_OUTCOMES,
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: REVIEW_RUN_LOG_SETTLEMENT_REASONS,
+    },
+    runtimeRunId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 64 },
+    candidateCount: COUNT,
+    promptTokens: COUNT,
+    completionTokens: COUNT,
+    durationMs: DURATION,
+  },
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  proofIds: ["review.run.part.line"],
 });
 
 const REVIEW_RUN_SETTLED = defineActivityLogOperation({
@@ -246,6 +292,7 @@ export interface ReviewRunPackageCounts {
   readonly binaryFiles: number;
   readonly budgetTokens: number;
   readonly usedTokens: number;
+  readonly partCount: number;
 }
 
 export function logReviewRunPhase(
@@ -269,6 +316,49 @@ export function logReviewRunPhase(
         elapsedMs: Math.max(0, Math.round(line.elapsedMs)),
         ...line.packageCounts,
         ...(line.candidateCount === undefined ? {} : { candidateCount: line.candidateCount }),
+      },
+    ),
+  );
+}
+
+export interface ReviewRunPartLine {
+  readonly runId: string;
+  /** One-based. */
+  readonly partNumber: number;
+  readonly partCount: number;
+  readonly fileCount: number;
+  readonly usedTokens: number;
+  readonly outcome: (typeof REVIEW_RUN_LOG_PART_OUTCOMES)[number];
+  readonly reason?:
+    Exclude<ReviewRunSettlement, { readonly kind: "complete" }>["reason"] | undefined;
+  readonly runtimeRunId?: string | undefined;
+  readonly candidateCount: number;
+  readonly totals: ReviewRoleTotals;
+}
+
+/** A completed part is info; a failed, cancelled or refused one is a warning. */
+export function logReviewRunPart(
+  log: ServerLogSink,
+  correlationId: string,
+  line: ReviewRunPartLine,
+): void {
+  log.write(
+    activityLogEvent(
+      REVIEW_RUN_PART,
+      { correlationId, level: line.outcome === "completed" ? "info" : "warn" },
+      {
+        runDigest: reviewEvidenceDigest("run", line.runId),
+        partNumber: line.partNumber,
+        partCount: line.partCount,
+        fileCount: line.fileCount,
+        usedTokens: line.usedTokens,
+        outcome: line.outcome,
+        ...(line.reason === undefined ? {} : { reason: line.reason }),
+        ...(line.runtimeRunId === undefined ? {} : { runtimeRunId: line.runtimeRunId }),
+        candidateCount: line.candidateCount,
+        promptTokens: line.totals.promptTokens,
+        completionTokens: line.totals.completionTokens,
+        durationMs: Math.max(0, Math.round(line.totals.durationMs)),
       },
     ),
   );

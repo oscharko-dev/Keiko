@@ -3,7 +3,9 @@
 // The review task must fit OpenCode's first-prompt bound (`REVIEW_TASK_MAX_BYTES`, 64 KiB); a
 // larger task is refused (`task-too-large`), never truncated. The rules file is read from the base
 // commit only after the package is built, so the budget reserves room for the largest admitted
-// rules file and the fixed task framing. The gateway estimator counts at least one token per 3.5
+// rules file and the fixed task framing, including the part line of the longest part count (a
+// diff package has up to `REVIEW_RUN_MAX_DIFF_PARTS` parts, one task each, Issue #4130). The
+// gateway estimator counts at least one token per 3.5
 // UTF-8 bytes plus a structural overhead of two, so a package of at most `B` estimated tokens has
 // at most `3.5 * (B - 2)` bytes: the budget is the largest `B` whose byte ceiling fits the room.
 
@@ -11,6 +13,7 @@ import { countContextTokens } from "@oscharko-dev/keiko-contracts/runtime/contex
 import {
   REVIEW_RULES_FILE_MAX_BYTES,
   REVIEW_RUN_MAX_CANDIDATE_REPORTS,
+  REVIEW_RUN_MAX_DIFF_PARTS,
   type ReviewRunEstimate,
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 
@@ -38,6 +41,7 @@ function reviewTaskOverheadBytes(baseSha: string, headSha: string): number {
     headSha,
     rules: { outcome: "loaded", text: "r".repeat(REVIEW_RULES_FILE_MAX_BYTES) },
     diffPackageText: "",
+    part: { index: REVIEW_RUN_MAX_DIFF_PARTS - 1, count: REVIEW_RUN_MAX_DIFF_PARTS },
     nonce: OVERHEAD_NONCE,
   });
   if (!task.ok) throw new RangeError("review task framing exceeds the first-prompt bound");
@@ -54,24 +58,27 @@ export function reviewDiffBudgetTokens(baseSha: string, headSha: string): number
 }
 
 /**
- * The dry-run estimate from the gateway estimator: the Reviewer's system prompt plus the changed
- * lines as typical diff lines (bounded by the package budget), and the Counter-checker's instruction,
- * a candidate and its reads over a typical number of turns for the most candidates a run may file.
+ * The dry-run estimate from the gateway estimator: the changed lines as typical diff lines (bounded
+ * by `maxParts` part budgets) plus the Reviewer's system prompt once per part, and the
+ * Counter-checker's instruction, a candidate and its reads over a typical number of turns for the
+ * most candidates one Reviewer session may file.
  */
 export function estimateReviewRun(
   changedLines: number,
   diffBudgetTokens: number,
   medianDurationMs: number | null,
+  maxParts = 1,
 ): ReviewRunEstimate {
   const perLine = countContextTokens(ESTIMATE_DIFF_LINE) - ESTIMATOR_STRUCTURAL_TOKENS;
-  const diffTokens = Math.min(diffBudgetTokens, Math.max(0, changedLines) * perLine);
+  const diffTokens = Math.min(diffBudgetTokens * maxParts, Math.max(0, changedLines) * perLine);
+  const parts = Math.max(1, Math.ceil(diffTokens / Math.max(1, diffBudgetTokens)));
   const counterCheckTask = countContextTokens(
     `${COUNTER_CHECK_INSTRUCTION}${"c".repeat(ESTIMATE_CANDIDATE_BYTES)}`,
   );
   return {
     changedLines,
     estimatedInputTokens: {
-      reviewer: countContextTokens(REVIEW_SYSTEM_PROMPT) + diffTokens,
+      reviewer: countContextTokens(REVIEW_SYSTEM_PROMPT) * parts + diffTokens,
       counterChecker:
         REVIEW_RUN_MAX_CANDIDATE_REPORTS * ESTIMATE_COUNTER_CHECK_TURNS * counterCheckTask,
     },

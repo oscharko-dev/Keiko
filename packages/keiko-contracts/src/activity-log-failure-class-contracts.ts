@@ -10957,12 +10957,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
       start: ["review.run.started"],
-      state: ["review.run.phase"],
+      state: ["review.run.part", "review.run.phase"],
       end: ["review.run.settled"],
       failure: ["review.run.refused"],
       loss: [],
     },
     requiredCausalOperations: [
+      "review.run.part",
       "review.run.phase",
       "review.run.refused",
       "review.run.settled",
@@ -10970,13 +10971,19 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
+      "review.run.part",
       "review.run.phase",
       "review.run.refused",
       "review.run.settled",
       "review.run.started",
     ],
     requiredReplayProofIds: [],
-    requiredResourceOperations: ["review.run.phase", "review.run.settled", "review.run.started"],
+    requiredResourceOperations: [
+      "review.run.part",
+      "review.run.phase",
+      "review.run.settled",
+      "review.run.started",
+    ],
     requiredEvidenceClasses: [
       "closed-enum",
       "completeness-state",
@@ -10984,6 +10991,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "digest",
       "duration",
       "loss-state",
+      "opaque-id",
     ],
     requiredFrameOperations: [],
     requiredCauseOperations: [],

@@ -8,6 +8,11 @@
 // is measured once more as a whole (the estimator is not additive in general); while it exceeds the
 // budget, trailing hunks are dropped, exactly like PR-Agent's verified-prefix check. The included
 // content therefore never exceeds the budget as the gateway counts it.
+//
+// `ReviewDiffPartPacker` (Issue #4130) fills up to `maxParts` such packers, one per part: a section
+// that does not fit what is left of a started part starts the next part when it would fit a part
+// whole, and a section larger than one part continues in the next parts, so its hunks stay in order.
+// Once every part is open, the rules above apply to the last one exactly as to a single part.
 
 export interface ReviewPackSection {
   readonly header: string;
@@ -46,6 +51,25 @@ export class ReviewDiffPacker {
     private readonly budget: number,
     private readonly count: ReviewTokenCounter,
   ) {}
+
+  /** Whether nothing has been included yet. */
+  public isEmpty(): boolean {
+    return this.included.length === 0;
+  }
+
+  /** Whether this section fits whole into what is left of the budget. */
+  public fitsWhole(section: ReviewPackSection): boolean {
+    return this.count(sectionText(section, section.hunks.length)) <= this.budget - this.used;
+  }
+
+  /**
+   * Takes an included section out again, once offering has ended and before `finish`: a part never
+   * shows a file's hunks that do not follow, without a gap, the hunks of the parts before it.
+   */
+  public withdraw(index: number): void {
+    const position = this.included.findIndex((entry) => entry.index === index);
+    if (position >= 0) this.included.splice(position, 1);
+  }
 
   /** Whether even the smallest part of this section (its header and one hunk) could still fit. */
   public mightFit(header: string): boolean {
@@ -99,5 +123,118 @@ export class ReviewDiffPacker {
     if (last === undefined) return;
     last.hunkCount -= 1;
     if (last.hunkCount <= 0) this.included.pop();
+  }
+}
+
+/** One finished part: its verified text, the text's token count and the sections it shows. */
+export interface ReviewPackedPart {
+  readonly text: string;
+  readonly usedTokens: number;
+  readonly fileCount: number;
+}
+
+/** One part being filled: its packer, its sections and the first hunk of each section it holds. */
+interface OpenPart {
+  readonly packer: ReviewDiffPacker;
+  readonly sections: Map<number, ReviewPackSection>;
+  readonly starts: Map<number, number>;
+}
+
+export class ReviewDiffPartPacker {
+  private readonly parts: OpenPart[] = [];
+  private part: OpenPart;
+
+  public constructor(
+    private readonly budget: number,
+    private readonly maxParts: number,
+    private readonly count: ReviewTokenCounter,
+  ) {
+    this.part = this.openPart();
+  }
+
+  private openPart(): OpenPart {
+    const part: OpenPart = {
+      packer: new ReviewDiffPacker(this.budget, this.count),
+      sections: new Map(),
+      starts: new Map(),
+    };
+    this.parts.push(part);
+    this.part = part;
+    return part;
+  }
+
+  private canOpenPart(): boolean {
+    return this.parts.length < this.maxParts;
+  }
+
+  /** Whether the smallest part of a section could still find room in this or a later part. */
+  public mightFit(header: string): boolean {
+    return this.canOpenPart() || this.part.packer.mightFit(header);
+  }
+
+  /** A section that does not fit what is left of a started part, but would fit a fresh part whole. */
+  private startsFreshPart(section: ReviewPackSection): boolean {
+    if (this.part.packer.isEmpty() || !this.canOpenPart()) return false;
+    if (this.part.packer.fitsWhole(section)) return false;
+    return this.count(sectionText(section, section.hunks.length)) <= this.budget;
+  }
+
+  /**
+   * Places a section's hunks in order across the parts. Returns how many leading hunks were placed,
+   * or `undefined` when not even its first hunk found room (a hunkless section is all header).
+   */
+  public place(index: number, section: ReviewPackSection): number | undefined {
+    let start = 0;
+    let placedAny = false;
+    for (;;) {
+      const rest = { header: section.header, hunks: section.hunks.slice(start) };
+      if (this.startsFreshPart(rest)) this.openPart();
+      const wasEmpty = this.part.packer.isEmpty();
+      const kept = this.part.packer.offer(index, rest);
+      if (kept !== undefined) {
+        this.part.sections.set(index, rest);
+        this.part.starts.set(index, start);
+        start += kept;
+        placedAny = true;
+      }
+      if (placedAny && start >= section.hunks.length) return start;
+      // Nothing more fits: no part is left, or one remaining hunk is larger than a whole part.
+      if (!this.canOpenPart() || (kept === undefined && wasEmpty)) {
+        return placedAny ? start : undefined;
+      }
+      this.openPart();
+    }
+  }
+
+  /**
+   * Verifies each part as a whole, in order, and returns the parts that kept anything with each
+   * section's final number of leading hunks (a section missing from `covered` kept nothing). A
+   * section keeps the hunks that follow each other without a gap from its first hunk: a part whose
+   * verification dropped some of a section's hunks ends that section, and later parts no longer
+   * show it.
+   */
+  public finish(): {
+    readonly parts: readonly ReviewPackedPart[];
+    readonly covered: ReadonlyMap<number, number>;
+  } {
+    const covered = new Map<number, number>();
+    const parts: ReviewPackedPart[] = [];
+    for (const part of this.parts) {
+      for (const [index, start] of part.starts) {
+        if (start > 0 && covered.get(index) !== start) part.packer.withdraw(index);
+      }
+      const final = part.packer.finish(part.sections);
+      for (const [index, kept] of final.hunkCounts) {
+        covered.set(index, (part.starts.get(index) ?? 0) + kept);
+      }
+      if (final.hunkCounts.size > 0) {
+        parts.push({
+          text: final.text,
+          usedTokens: final.usedTokens,
+          fileCount: final.hunkCounts.size,
+        });
+      }
+    }
+    return { parts, covered };
   }
 }

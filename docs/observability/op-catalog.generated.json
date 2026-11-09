@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "fc76e24bdab75b666a53188f8735bac3476dc179eba0e8d86f7ecda49242f9ca",
+    "catalogDigest": "2ddb4e57b9ac30faae4e9cb62592166ef306bd4fcf67a2a417fed21340f5dfdf",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -35969,6 +35969,113 @@
         "causal": "correlation",
         "releaseImpact": "patch",
         "failureClasses": ["review-run"],
+        "op": "review.run.part",
+        "category": "process",
+        "emitter": "review/service/activity-log.logReviewRunPart",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "runDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          },
+          "partNumber": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "partCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "fileCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "usedTokens": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["completed", "failed", "cancelled", "refused"]
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "none",
+              "files-unprocessed",
+              "budget-exhausted",
+              "deadline-exceeded",
+              "model-failed",
+              "cancelled",
+              "interrupted",
+              "target-changed",
+              "worktree-failed",
+              "diff-too-large",
+              "no-reviewable-changes",
+              "rules-file-invalid",
+              "policy-invalid",
+              "model-unavailable"
+            ]
+          },
+          "runtimeRunId": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": false,
+            "maxLength": 64
+          },
+          "candidateCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "promptTokens": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "completionTokens": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "durationMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": true
+          }
+        },
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "proofIds": ["review.run.part.line"],
+        "registrationSite": "packages/keiko-server/src/review/service/activity-log.ts:146",
+        "emitterSites": ["packages/keiko-server/src/review/service/activity-log.ts:346"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "owner": "keiko-server",
+        "causal": "correlation",
+        "releaseImpact": "patch",
+        "failureClasses": ["review-run"],
         "op": "review.run.phase",
         "category": "process",
         "emitter": "review/service/activity-log.logReviewRunPhase",
@@ -36040,6 +36147,11 @@
             "dataClass": "count",
             "required": false
           },
+          "partCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "candidateCount": {
             "type": "integer",
             "dataClass": "count",
@@ -36049,8 +36161,8 @@
         "lifecycle": "state",
         "analyzerProjection": "timeline",
         "proofIds": ["review.run.phase.line"],
-        "registrationSite": "packages/keiko-server/src/review/service/activity-log.ts:105",
-        "emitterSites": ["packages/keiko-server/src/review/service/activity-log.ts:263"]
+        "registrationSite": "packages/keiko-server/src/review/service/activity-log.ts:112",
+        "emitterSites": ["packages/keiko-server/src/review/service/activity-log.ts:310"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36152,8 +36264,8 @@
         "lifecycle": "failure",
         "analyzerProjection": "failure-cluster",
         "proofIds": ["review.run.refused.line"],
-        "registrationSite": "packages/keiko-server/src/review/service/activity-log.ts:184",
-        "emitterSites": ["packages/keiko-server/src/review/service/activity-log.ts:357"]
+        "registrationSite": "packages/keiko-server/src/review/service/activity-log.ts:230",
+        "emitterSites": ["packages/keiko-server/src/review/service/activity-log.ts:447"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36483,8 +36595,8 @@
         "lifecycle": "end",
         "analyzerProjection": "timeline",
         "proofIds": ["review.run.settled.line"],
-        "registrationSite": "packages/keiko-server/src/review/service/activity-log.ts:134",
-        "emitterSites": ["packages/keiko-server/src/review/service/activity-log.ts:323"]
+        "registrationSite": "packages/keiko-server/src/review/service/activity-log.ts:180",
+        "emitterSites": ["packages/keiko-server/src/review/service/activity-log.ts:413"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36560,8 +36672,8 @@
         "lifecycle": "start",
         "analyzerProjection": "timeline",
         "proofIds": ["review.run.started.line"],
-        "registrationSite": "packages/keiko-server/src/review/service/activity-log.ts:79",
-        "emitterSites": ["packages/keiko-server/src/review/service/activity-log.ts:221"]
+        "registrationSite": "packages/keiko-server/src/review/service/activity-log.ts:86",
+        "emitterSites": ["packages/keiko-server/src/review/service/activity-log.ts:267"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -58038,12 +58150,13 @@
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
           "start": ["review.run.started"],
-          "state": ["review.run.phase"],
+          "state": ["review.run.part", "review.run.phase"],
           "end": ["review.run.settled"],
           "failure": ["review.run.refused"],
           "loss": []
         },
         "requiredCausalOperations": [
+          "review.run.part",
           "review.run.phase",
           "review.run.refused",
           "review.run.settled",
@@ -58051,6 +58164,7 @@
         ],
         "requiredLossOperations": [],
         "requiredProofOperations": [
+          "review.run.part",
           "review.run.phase",
           "review.run.refused",
           "review.run.settled",
@@ -58058,6 +58172,7 @@
         ],
         "requiredReplayProofIds": [],
         "requiredResourceOperations": [
+          "review.run.part",
           "review.run.phase",
           "review.run.settled",
           "review.run.started"
@@ -58068,7 +58183,8 @@
           "count",
           "digest",
           "duration",
-          "loss-state"
+          "loss-state",
+          "opaque-id"
         ],
         "requiredFrameOperations": [],
         "requiredCauseOperations": []
@@ -100011,12 +100127,16 @@
           "lifecycleTransitions": ["end", "failure", "start", "state"],
           "lifecycleOperations": {
             "start": ["review.run.started"],
-            "state": ["review.run.phase"],
+            "state": ["review.run.part", "review.run.phase"],
             "end": ["review.run.settled"],
             "failure": ["review.run.refused"],
             "loss": []
           },
           "causalEdges": [
+            {
+              "op": "review.run.part",
+              "mode": "correlation"
+            },
             {
               "op": "review.run.phase",
               "mode": "correlation"
@@ -100035,9 +100155,112 @@
             }
           ],
           "lossSignals": [],
-          "resourceSignals": ["review.run.phase", "review.run.settled", "review.run.started"],
+          "resourceSignals": [
+            "review.run.part",
+            "review.run.phase",
+            "review.run.settled",
+            "review.run.started"
+          ],
           "replayReferences": [],
           "operations": [
+            {
+              "op": "review.run.part",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "candidateCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "completionTokens",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "durationMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": true
+                },
+                {
+                  "name": "fileCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "outcome",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "partCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "partNumber",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "promptTokens",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "reason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "runDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": true
+                },
+                {
+                  "name": "runtimeRunId",
+                  "type": "string",
+                  "dataClass": "opaque-id",
+                  "required": false
+                },
+                {
+                  "name": "usedTokens",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "digest",
+                "duration",
+                "loss-state",
+                "opaque-id"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["review.run.part.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
             {
               "op": "review.run.phase",
               "owner": "keiko-server",
@@ -100084,6 +100307,12 @@
                 },
                 {
                   "name": "includedFiles",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "partCount",
                   "type": "integer",
                   "dataClass": "count",
                   "required": false
@@ -115290,9 +115519,15 @@
       "package": "keiko-server"
     },
     {
+      "op": "review.run.part",
+      "category": "process",
+      "site": "packages/keiko-server/src/review/service/activity-log.ts:148",
+      "package": "keiko-server"
+    },
+    {
       "op": "review.run.phase",
       "category": "process",
-      "site": "packages/keiko-server/src/review/service/activity-log.ts:107",
+      "site": "packages/keiko-server/src/review/service/activity-log.ts:114",
       "package": "keiko-server"
     },
     {
@@ -115304,7 +115539,7 @@
     {
       "op": "review.run.refused",
       "category": "process",
-      "site": "packages/keiko-server/src/review/service/activity-log.ts:186",
+      "site": "packages/keiko-server/src/review/service/activity-log.ts:232",
       "package": "keiko-server"
     },
     {
@@ -115328,13 +115563,13 @@
     {
       "op": "review.run.settled",
       "category": "process",
-      "site": "packages/keiko-server/src/review/service/activity-log.ts:136",
+      "site": "packages/keiko-server/src/review/service/activity-log.ts:182",
       "package": "keiko-server"
     },
     {
       "op": "review.run.started",
       "category": "process",
-      "site": "packages/keiko-server/src/review/service/activity-log.ts:81",
+      "site": "packages/keiko-server/src/review/service/activity-log.ts:88",
       "package": "keiko-server"
     },
     {
@@ -116863,6 +117098,7 @@
     "review.pair-qualification.started",
     "review.pair-qualification.startup-sweep",
     "review.run.action-refused",
+    "review.run.part",
     "review.run.phase",
     "review.run.profile-refused",
     "review.run.refused",

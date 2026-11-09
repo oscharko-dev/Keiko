@@ -509,6 +509,7 @@
   "review.pair-qualification.failed": "editor-delivery",
   "review.pair-qualification.started": "editor-delivery",
   "review.run.action-refused": "editor-delivery",
+  "review.run.part": "editor-delivery",
   "review.run.phase": "editor-delivery",
   "review.run.profile-refused": "editor-delivery",
   "review.run.refused": "editor-delivery",
