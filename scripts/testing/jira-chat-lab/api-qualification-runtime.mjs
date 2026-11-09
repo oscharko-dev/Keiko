@@ -568,8 +568,10 @@ async function runHeldCase(held, specification, args, auxiliaries) {
   const attempted = await dispatchHeldCall(held, specification, actualArgs);
   let readback;
   if (specification.verifyInvocation !== undefined) {
+    const settled = attempted.dispatch.result?.data;
     assert.ok(
-      new Set(["succeeded", "succeeded-unconfirmed"]).has(attempted.dispatch.result?.data?.outcome),
+      new Set(["succeeded", "succeeded-unconfirmed"]).has(settled?.outcome),
+      `Settled outcome ${String(settled?.outcome)} reason ${String(settled?.reason)}`,
     );
     readback = await specification.verifyInvocation(
       context,
