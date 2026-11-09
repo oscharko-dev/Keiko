@@ -17,6 +17,7 @@
 // validation); `gatewayFetch` itself always issues `redirect: "manual"`, so a 3xx is surfaced,
 // never followed.
 
+import { setImmediate as yieldCredentialScan } from "node:timers/promises";
 import {
   ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES,
   ATLASSIAN_HTTP_UPLOAD_MAX_BYTES,
@@ -33,12 +34,17 @@ import {
   type AtlassianHttpPort,
   type AtlassianHttpRequest,
   type AtlassianHttpResult,
+  type AtlassianResolvedCredential,
 } from "@oscharko-dev/keiko-connectors";
 import {
   createSecretSpellingStreamRedactor,
   SecretSpellingOverflowError,
 } from "@oscharko-dev/keiko-security";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   applicationRoleResponseVersion,
   assertDirectoryAccessTarget,
@@ -67,6 +73,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import {
   atlassianHttpRequestLifecycle,
   type AtlassianHttpLifecycleOptions,
@@ -640,6 +647,161 @@ function privateCookieBody(
   }
 }
 
+const CREDENTIAL_REFLECTION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "atlassian.http.credential-reflection",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "atlassian.httpPort.recordCredentialReflection",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "reflected-secret",
+        "spelling-overflow",
+        "unsupported-secret",
+        "scan-budget-exhausted",
+      ],
+    },
+    reflectionCount: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["atlassian-credential-custody"],
+  proofIds: ["atlassian.http.credential-reflection.line"],
+  releaseImpact: "patch",
+});
+type ReflectionReason =
+  "reflected-secret" | "spelling-overflow" | "unsupported-secret" | "scan-budget-exhausted";
+function recordCredentialReflection(
+  options: CreateAtlassianHttpPortOptions,
+  status: number,
+  reason: ReflectionReason,
+  reflectionCount: number,
+): void {
+  const correlationId = options.correlationId ?? UNKNOWN_CORRELATION_ID;
+  try {
+    (options.activityLog ?? processServerLogSink()).write(
+      activityLogEvent(
+        CREDENTIAL_REFLECTION_OPERATION,
+        { level: "warn", correlationId, status },
+        { reason, reflectionCount, completeness: "complete", loss: "none" },
+      ),
+    );
+  } catch (error) {
+    emitServerDiagnostic(
+      undefined,
+      serverDiagnosticFromError({
+        correlationId,
+        operation: "atlassian.http.credential-reflection",
+        source: "atlassian-http-credential-floor",
+        error,
+        redact: () => "credential-floor-activity-log-failed",
+      }),
+    );
+  }
+}
+/** Keep only credentials actually materialized for this request, including Basic's encoding. */
+function requestCredentialObservation(credentials: AtlassianCredentialExecutionResolver): {
+  readonly credentials: AtlassianCredentialExecutionResolver;
+  readonly values: () => readonly string[];
+} {
+  const values = new Set<string>();
+  const humanInputs = credentials.humanInputs;
+  const sessions = credentials.sessions;
+  return {
+    values: () => [...values],
+    credentials: {
+      ...(humanInputs === undefined ? {} : { humanInputs }),
+      ...(sessions === undefined ? {} : { sessions }),
+      resolveForExecution: (...args): AtlassianResolvedCredential => {
+        const credential = credentials.resolveForExecution(...args);
+        values.add(credential.apiToken);
+        if (credential.scheme === "basic-api-token")
+          values.add(
+            Buffer.from(`${credential.accountEmail}:${credential.apiToken}`, "utf8").toString(
+              "base64",
+            ),
+          );
+        return credential;
+      },
+    },
+  };
+}
+// A legal 1024-character PAT plus a 254-character Basic account fits this bounded plan.
+const CREDENTIAL_SCAN_MAX_SECRET_CHARS = 2048;
+const CREDENTIAL_SCAN_MAX_STEP_WORK = 131_072;
+function credentialScanPlan(
+  values: readonly string[],
+): { readonly longest: number; readonly width: number } | undefined {
+  const longest = Math.max(1, ...values.map((value) => value.length));
+  if (longest > CREDENTIAL_SCAN_MAX_SECRET_CHARS) return undefined;
+  return { longest, width: Math.min(4096, Math.floor(CREDENTIAL_SCAN_MAX_STEP_WORK / longest)) };
+}
+async function credentialReflectionCount(
+  content: string,
+  values: readonly string[],
+  signal: AbortSignal,
+): Promise<number | "scan-budget-exhausted"> {
+  const plan = credentialScanPlan(values);
+  if (plan === undefined) return "scan-budget-exhausted";
+  const floor = createSecretSpellingStreamRedactor(values);
+  let held = 0;
+  let offset = 0;
+  while (offset < content.length) {
+    const capacity = Math.floor(CREDENTIAL_SCAN_MAX_STEP_WORK / plan.longest) - held;
+    if (signal.aborted || capacity < 1) return "scan-budget-exhausted";
+    const chunk = content.slice(offset, offset + Math.min(plan.width, capacity));
+    const published = floor.push(chunk);
+    offset += chunk.length;
+    const count = floor.redactedCount();
+    if (count > 0) return count;
+    held += chunk.length - published.length;
+    // Retained spellings depend on the preceding chunk; yielding lets the existing request budget revoke this scan.
+    if (offset < content.length) await yieldCredentialScan();
+  }
+  if (signal.aborted) return "scan-budget-exhausted";
+  floor.finish();
+  return floor.redactedCount();
+}
+/** Withhold complete text or archive bytes, never rewrite potentially structured native receipts. */
+async function credentialSafeBody(
+  body: BoundedBodyRead,
+  status: number,
+  values: readonly string[],
+  options: CreateAtlassianHttpPortOptions,
+  signal: AbortSignal,
+): Promise<BoundedBodyRead> {
+  if (values.length === 0) return body;
+  const content =
+    body.archiveBytes === undefined
+      ? body.bodyText
+      : new TextDecoder("utf-8").decode(body.archiveBytes);
+  if (content === "") return body;
+  let reason: ReflectionReason = "reflected-secret";
+  let reflectionCount = 0;
+  try {
+    const count = await credentialReflectionCount(content, values, signal);
+    if (count === "scan-budget-exhausted") reason = count;
+    else {
+      reflectionCount = count;
+      if (reflectionCount === 0) return body;
+    }
+  } catch (error) {
+    if (error instanceof SecretSpellingOverflowError) reason = "spelling-overflow";
+    else if (error instanceof TypeError) reason = "unsupported-secret";
+    else throw error;
+  }
+  recordCredentialReflection(options, status, reason, reflectionCount);
+  return { bodyText: "", bodyBytes: body.bodyBytes, truncated: true };
+}
+
 function assertPrivateLogin(
   options: CreateAtlassianHttpPortOptions,
   snapshot: AtlassianHttpBodyRequest,
@@ -691,14 +853,40 @@ function bodyRequestLifecycle(
     request,
   );
 }
+async function credentialSafeRoleVersion(
+  response: Response,
+  request: AtlassianHttpBodyRequest,
+  options: CreateAtlassianHttpPortOptions,
+  values: readonly string[],
+  signal: AbortSignal,
+): Promise<string | undefined> {
+  const version = applicationRoleResponseVersion(request, response);
+  if (version === undefined) return undefined;
+  const checked = await credentialSafeBody(
+    { bodyText: version, bodyBytes: Buffer.byteLength(version, "utf8"), truncated: false },
+    response.status,
+    values,
+    options,
+    signal,
+  );
+  return checked.truncated ? undefined : version;
+}
 async function projectBodyResponse(
   options: CreateAtlassianHttpPortOptions,
   request: AtlassianHttpBodyRequest,
   response: Response,
   privateCookie: ReturnType<typeof observePrivateCookie>,
+  values: readonly string[],
+  signal: AbortSignal,
 ): Promise<AtlassianHttpBodyResult> {
   const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"), Date.now());
-  const observedBody = await readResponseBody(response, request);
+  const observedBody = await credentialSafeBody(
+    await readResponseBody(response, request),
+    response.status,
+    values,
+    options,
+    signal,
+  );
   const body =
     options.privateAuthentication?.kind === "session"
       ? privateCookieBody(observedBody, response.status, privateCookie.value())
@@ -714,7 +902,13 @@ async function projectBodyResponse(
           body.truncated,
           options.onJiraLoginCookie,
         );
-  const applicationRoleVersion = applicationRoleResponseVersion(request, response);
+  const applicationRoleVersion = await credentialSafeRoleVersion(
+    response,
+    request,
+    options,
+    values,
+    signal,
+  );
   return {
     kind: "response",
     status: response.status,
@@ -734,7 +928,12 @@ function bodyRequestPort(
     const { request, target } = admitBodyRequest(base, options, input);
     const signal = composeBodyRequestSignal(request);
     const privateCookie = observePrivateCookie(options.privateAuthentication);
-    const lifecycle = bodyRequestLifecycle(options, request, privateCookie);
+    const credential = requestCredentialObservation(options.credentials);
+    const lifecycle = bodyRequestLifecycle(
+      { ...options, credentials: credential.credentials },
+      request,
+      privateCookie,
+    );
     try {
       const egress = await connectorEgressConfig(options, base, signal);
       if (egress === undefined) return { kind: "network-error" };
@@ -751,7 +950,14 @@ function bodyRequestPort(
       });
       const response = await authenticatedReadResponse(request.method, upstream);
       await lifecycle.observe(response);
-      return await projectBodyResponse(options, request, response, privateCookie);
+      return await projectBodyResponse(
+        options,
+        request,
+        response,
+        privateCookie,
+        credential.values(),
+        signal,
+      );
     } catch (error) {
       lifecycle.rethrowFailure();
       if (

@@ -187,6 +187,16 @@ const READS: readonly {
 ];
 
 describe("source managed Jira read dispatch", () => {
+  it("encodes hostile JQL as one exact query value without injecting URL parameters or fragments", async () => {
+    const f = fixture({ startAt: 0, maxResults: 25, total: 0, issues: [] });
+    const jql = 'summary ~ "A &maxResults=100000#fragment? / 雪"';
+    expect((await f.run("jira.search", { jql })).isError).toBeUndefined();
+    const url = new URL(f.http.mock.calls[0]?.[0].url ?? "");
+    expect(url.searchParams.get("jql")).toBe(jql);
+    expect(url.searchParams.getAll("maxResults")).toEqual(["25"]);
+    expect(url.hash).toBe("");
+    expect(url.pathname).toBe("/context/rest/api/2/search");
+  });
   it.each(READS)(
     "executes $name through the context-bound DC v2 HTTP port",
     async ({ name, args, body, path }) => {

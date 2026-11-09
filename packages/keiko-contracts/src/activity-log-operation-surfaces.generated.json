@@ -16,6 +16,7 @@
   "atlassian.credential.listed": "bff",
   "atlassian.credential.rejected": "bff",
   "atlassian.credential.updated": "bff",
+  "atlassian.http.credential-reflection": "bff",
   "atlassian.jira-draft": "bff",
   "atlassian.jira-draft-batch": "bff",
   "atlassian.jira-report": "bff",
