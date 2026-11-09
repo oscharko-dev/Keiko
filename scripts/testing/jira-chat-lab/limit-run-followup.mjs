@@ -15,13 +15,13 @@ import {
   runLimitStep,
 } from "./browser-limit-run.mjs";
 
-export const FOLLOWUP_OWNERS = Object.freeze({
+const FOLLOWUP_OWNERS = Object.freeze({
   runStoryBulk: "./requirements/story-bulk.mjs",
   runCodingJira: "./requirements/coding-jira.mjs",
 });
 
 /** Selectable follow-up steps in their fixed execution order, with the owner export of each. */
-export const FOLLOWUP_STEPS = Object.freeze({
+const FOLLOWUP_STEPS = Object.freeze({
   story: { name: "ac4-story", owner: "runStoryBulk" },
   "coding-jira": { name: "ac10-coding-jira", owner: "runCodingJira" },
 });

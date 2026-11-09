@@ -13,8 +13,8 @@ import {
 import { normalizeRunSuffix } from "../../coding-workbench-lab/lab-common.mjs";
 import { stepEvidence } from "./step-evidence.mjs";
 
-export const CODING_JIRA_STEP = "ac10-coding-jira";
-export const CODING_JIRA_OPERATION = "coding-runtime.jira-pod";
+const CODING_JIRA_STEP = "ac10-coding-jira";
+const CODING_JIRA_OPERATION = "coding-runtime.jira-pod";
 const KEYS_ASKED = 5;
 const RUN_TIMEOUT_MS = 20 * 60_000;
 const LOG_SETTLE_MS = 30_000;
@@ -185,7 +185,7 @@ async function followRun(page, drivers, runId, startedAtMs) {
 }
 
 /** Starts the Workbench run in its own paired browser, exactly as a person would, and follows it. */
-export async function driveCodingWorkbench(ctx, prompt) {
+async function driveCodingWorkbench(ctx, prompt) {
   const drivers = await loadDrivers();
   const { workbench, common } = drivers;
   const browser = await drivers.chromium.launch({ headless: true });

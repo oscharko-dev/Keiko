@@ -29,7 +29,7 @@ export const EPIC_SUMMARY_PATTERN = String.raw`^\[LH-\d{3}\] \S`;
  * ABN-45.1), so the rule names the ID shape, not one scheme. It is flat because the product refuses
  * a quantified group that holds a quantifier (ADR-0128 D4).
  */
-export const REQUIREMENT_EPIC_SUMMARY_PATTERN = String.raw`^\[[A-Z][A-Z0-9_.-]*[0-9]\] \S`;
+const REQUIREMENT_EPIC_SUMMARY_PATTERN = String.raw`^\[[A-Z][A-Z0-9_.-]*[0-9]\] \S`;
 
 /** The one formal rule the bulk run breaks on purpose: the installed Epic template's summary pattern. */
 export const EPIC_SUMMARY_VIOLATION = Object.freeze({

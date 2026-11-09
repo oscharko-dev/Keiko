@@ -15,8 +15,8 @@ import { draftIdentity, sectionsPresent } from "./oracles.mjs";
 import { STORY_STRUCTURE_RULE } from "./templates.mjs";
 import { stepEvidence } from "./step-evidence.mjs";
 
-export const STORY_STEP = "ac4-story-bulk";
-export const STORY_COUNT = 3;
+const STORY_STEP = "ac4-story-bulk";
+const STORY_COUNT = 3;
 const STORY_MARKER = /^\[([^\]\r\n]+)\] \[ST-([1-9])(-S1)?\](?:\s|$)/u;
 const MIN_CRITERIA = 2;
 const ERROR_DETAIL_CHARS = 160;
@@ -216,14 +216,14 @@ function inspectRows(rows, byReference, requirements, context, counts) {
 }
 
 /** Expected rows through `stage`: the Stories, then the Stories with their Sub-tasks. */
-export function storyRows(plan, stage) {
+function storyRows(plan, stage) {
   return stage === "stories" ? plan.stories : [...plan.stories, ...plan.subtasks];
 }
 
 /** The rows `stage` itself writes: the Stories first, then their Sub-tasks. */
-export const stageRows = (plan, stage) => (stage === "stories" ? plan.stories : plan.subtasks);
+const stageRows = (plan, stage) => (stage === "stories" ? plan.stories : plan.subtasks);
 
-export function inspectStoryBulk({ plan, issues, requirements, stage, ...context }) {
+function inspectStoryBulk({ plan, issues, requirements, stage, ...context }) {
   requireFact(Array.isArray(issues), "story-read-invalid");
   const counts = emptyCounts(plan);
   const rows = storyRows(plan, stage);
