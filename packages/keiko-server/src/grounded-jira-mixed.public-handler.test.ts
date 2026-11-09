@@ -589,6 +589,11 @@ function ownedExchange(f: ReturnType<typeof runtime>, chatId: string): ChatToolE
   if (exchange === undefined) throw new Error("Missing normal Chat exchange");
   return exchange;
 }
+// A turn reaches its model round or approval through several awaited steps; on a loaded CI shard
+// that can take longer than vi.waitFor's 1 s default, so these waits use the bound the file's
+// other barrier wait already uses. The condition itself is unchanged.
+const TURN_PROGRESS_WAIT = { timeout: 5000 } as const;
+
 function startOwnedTurn(f: ReturnType<typeof runtime>, chatId: string): Promise<RouteResult> {
   const pending = handleSendDesktopChat(
     context({
@@ -609,7 +614,7 @@ async function waitPendingWrite(
 ): Promise<NonNullable<ChatToolExchange["approval"]>> {
   await vi.waitFor(() => {
     expect(ownedExchange(f, chatId).approval?.state).toBe("pending");
-  });
+  }, TURN_PROGRESS_WAIT);
   const approval = ownedExchange(f, chatId).approval;
   if (approval === undefined) throw new Error("Missing concrete approval");
   return approval;
@@ -660,7 +665,8 @@ it("rotates real custody during pending normal Chat writes and preserves the oth
     for (const id of f.chats) interruptChatGenerations(f.deps, id);
     await Promise.allSettled(pending);
   }
-});
+  // Four turn-progress waits in sequence: the test's own bound must cover all of them.
+}, 30_000);
 
 function holdOwnedResponse(
   f: ReturnType<typeof runtime>,
@@ -707,7 +713,7 @@ it("discards a delayed normal Chat read after the real disconnect route while an
   try {
     await vi.waitFor(() => {
       expect(barrier.reached()).toBe(true);
-    });
+    }, TURN_PROGRESS_WAIT);
     expect((await startOwnedTurn(f, other)).status).toBe(200);
     await patchOwnedChat(f, f.chatId, null);
     await pending;
@@ -734,7 +740,7 @@ it("retains acknowledged mutation uncertainty after deletion through the real cu
   try {
     await vi.waitFor(() => {
       expect(barrier.reached()).toBe(true);
-    });
+    }, TURN_PROGRESS_WAIT);
     const deleted = await handleDeleteAtlassianConnectorCredential(
       credentialContext(credential.authRef),
       f.deps,
@@ -748,7 +754,7 @@ it("retains acknowledged mutation uncertainty after deletion through the real cu
   }
   await vi.waitFor(() => {
     expect(ownedExchange(f, f.chatId).mutationOutcome).toBe("succeeded-unconfirmed");
-  });
+  }, TURN_PROGRESS_WAIT);
   expect(ownedExchange(f, f.chatId).result?.status).toBe("cancelled");
   expect(f.jiraRequests.filter((method) => method === "POST")).toHaveLength(1);
   expect(realCustodyOwner(f).custody.getMetadata(credential.authRef)).toBeUndefined();
@@ -802,7 +808,7 @@ it("names the writes of a turn that a change of the Chat's mode ended", async ()
   const pending = startOwnedTurn(f, f.chatId);
   await vi.waitFor(() => {
     expect(reached()).toBe(true);
-  });
+  }, TURN_PROGRESS_WAIT);
   await changeOwnedMode(f, f.chatId);
   const result = await pending;
   expect(result.status).toBe(200);
@@ -822,7 +828,7 @@ it("keeps the cancellation of a read-only turn that a change of the Chat's mode 
   const pending = startOwnedTurn(f, f.chatId);
   await vi.waitFor(() => {
     expect(reached()).toBe(true);
-  });
+  }, TURN_PROGRESS_WAIT);
   await changeOwnedMode(f, f.chatId);
   expect((await pending).status).toBe(499);
   expect(f.deps.store.listMessages(f.chatId).some(({ role }) => role === "assistant")).toBe(false);

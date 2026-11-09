@@ -2,10 +2,18 @@
 // The browser, BFF, sidecar, and model gateway are real; only the model endpoint is a local twin.
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { chromium, expect } from "@playwright/test";
 import { encodeCodingAppSessionPairingFragment } from "../../packages/keiko-contracts/dist/coding-app-session.js";
@@ -470,6 +478,8 @@ function forbiddenReportValues(project, stateDir, configPath, twin) {
     "Synthetic partial reply.",
     "Reply briefly to confirm that the Workbench is ready.",
     project,
+    // The temporary directory's alias form (macOS `/var` for `/private/var`) stays forbidden too.
+    join(tmpdir(), basename(project)),
     stateDir,
     configPath,
     twin.baseUrl,
@@ -583,7 +593,11 @@ function reportQualification(start) {
 
 async function main() {
   const start = performance.now();
-  const project = mkdtempSync(join(tmpdir(), "keiko-customer-shape-yarn-"));
+  // Canonical, as Keiko registers a project: macOS's temporary directory is reached through the
+  // `/var` alias of `/private/var`. The saved Workbench window below names this repository the way
+  // the product stores a selection (a registered, canonical path); an alias never matches the
+  // canonical root of the task workspace bound to it (#4271).
+  const project = realpathSync(mkdtempSync(join(tmpdir(), "keiko-customer-shape-yarn-")));
   const stateDir = mkdtempSync(join(homedir(), ".keiko-customer-shape-state-"));
   const twin = await startCustomerShapeLiteLlmTwin();
   let artifact;

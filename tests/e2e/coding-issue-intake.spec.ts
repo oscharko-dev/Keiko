@@ -80,14 +80,10 @@ async function openWorkbench(page: Page): Promise<void> {
   await page.addInitScript(
     ({ argument: { windowId }, storageKeys }) => {
       localStorage.setItem("keiko.theme", "dark");
-      // #3625 review: a seeded `cfg.repositoryPath` no longer pre-selects the repository.
-      // `workspace-persistence.ts`'s `sanitizeCfgForPersistence` now strips any cfg value that
-      // `looksLikeLocalPath` (an absolute path never survives a save/load round trip, a
-      // deliberate hardening against leaking a local filesystem path through synced browser
-      // storage), so a window seeded with one gets read back with an empty `cfg` -- confirmed
-      // against this exact fixture before writing this comment. The repository is chosen through
-      // the combobox instead (`bindPlainWorkspace`), the same real affordance
-      // code-task-authority.spec.ts's `bindFixtureWorkspace` already uses.
+      // The window starts without a repository: it is chosen through the combobox
+      // (`bindPlainWorkspace`), the same real affordance code-task-authority.spec.ts's
+      // `bindFixtureWorkspace` already uses. (A seeded `cfg.repositoryPath` was dropped on load
+      // until #4271 because the persistence whitelist left it out; it now survives a reload.)
       localStorage.setItem(
         storageKeys.workspace,
         JSON.stringify([

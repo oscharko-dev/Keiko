@@ -300,6 +300,28 @@ describe("CodingRuntimeRunEffortLedger", () => {
     expect(ledger.needsVerification("run-a")).toBe(true);
   });
 
+  // #4271 lab (T39): the verifier refused the first package it was pointed at before any target was
+  // selected, and that unrelated refusal stopped every repair continuation, although the
+  // repository's own test command in the shell would still have evidenced the edit.
+  it("keeps a target-scoped refusal from blocking repair while no target is selected", () => {
+    const ledger = new CodingRuntimeRunEffortLedger();
+    ledger.begin("run-a");
+    ledger.edit("run-a");
+    for (const reason of [
+      "NO_RUNNABLE_STEPS",
+      "PROJECT_NOT_FOUND",
+      "WORKSPACE_TRUST_REQUIRED",
+      "VERIFICATION_RUNNER_UNAVAILABLE",
+      "VERIFICATION_NOT_RUN",
+    ] as const)
+      ledger.verificationBlocked("run-a", reason, `target-${reason}`);
+    expect(ledger.verificationBlockedReason("run-a")).toBeUndefined();
+    expect(ledger.needsVerification("run-a")).toBe(true);
+    // A run-wide blocker (no target) still stops repair, as a human denial does.
+    ledger.verificationBlocked("run-a", "verification-command-denied");
+    expect(ledger.verificationBlockedReason("run-a")).toBe("verification-command-denied");
+  });
+
   it("fails closed to zero host counts and reports only the wall time of an unobserved run", () => {
     const ledger = new CodingRuntimeRunEffortLedger();
     ledger.begin("run-a");

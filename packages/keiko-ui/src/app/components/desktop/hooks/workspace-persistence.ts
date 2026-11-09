@@ -123,6 +123,10 @@ const INTERNAL_CFG_KEYS: Readonly<Partial<Record<WindowType, readonly string[]>>
   // The Coding Workbench can explicitly open the user-selected repository rather than an active
   // task worktree. Retain only this closed marker, never an arbitrary binding instruction.
   governedGit: ["rootBinding"],
+  // #4271: the Workbench's own repository, branch and location selection. Without it a reload left
+  // the window to whichever of the shell's project and the active task binding loaded first. A
+  // Coding History pick (`historySelection`) is consumed once and stays out.
+  coding: ["repositoryPath", "targetBranch", "targetBranchRoot", "executionLocation"],
   // Epic #3384 (#3401 "Review description"): the governed pull request window carries the exact
   // server-held retained description proposal it must review. Each key has a closed value shape
   // (owner/repo, positive integer, opaque reference, sha256 digest) so a reload restores the same
@@ -157,6 +161,20 @@ type ClosedConfigValueSanitizer = (value: unknown) => AppWindow["cfg"][string];
 
 function sanitizeCodingRepositoryBinding(value: unknown): AppWindow["cfg"][string] {
   return value === "coding-repository" ? value : undefined;
+}
+
+function sanitizeCodingExecutionLocation(value: unknown): AppWindow["cfg"][string] {
+  return value === "local" || value === "worktree" ? value : undefined;
+}
+
+// A repository path or branch name is the Workbench's own selection: a secret-shaped one is
+// dropped, never replaced by the generic redaction marker, which the window would read as a root.
+function sanitizeCodingSelectionText(value: unknown): AppWindow["cfg"][string] {
+  return typeof value === "string" &&
+    value.length <= MAX_GENERIC_CFG_TEXT_LENGTH &&
+    !isSecretShapedString(value)
+    ? value
+    : undefined;
 }
 
 const SHA256_HEX_DIGEST = /^[a-f0-9]{64}$/u;
@@ -195,6 +213,10 @@ function sanitizeChatCreationRequestId(value: unknown): AppWindow["cfg"][string]
 
 const CLOSED_CONFIG_VALUE_SANITIZERS: Readonly<Record<string, ClosedConfigValueSanitizer>> = {
   "governedGit:rootBinding": sanitizeCodingRepositoryBinding,
+  "coding:repositoryPath": sanitizeCodingSelectionText,
+  "coding:targetBranch": sanitizeCodingSelectionText,
+  "coding:targetBranchRoot": sanitizeCodingSelectionText,
+  "coding:executionLocation": sanitizeCodingExecutionLocation,
   "files:rootBinding": sanitizeCodingRepositoryBinding,
   "editor:rootBinding": sanitizeCodingRepositoryBinding,
   "governedPullRequest:descriptionOwnerAndRepo": sanitizeGitHubOwnerAndRepo,

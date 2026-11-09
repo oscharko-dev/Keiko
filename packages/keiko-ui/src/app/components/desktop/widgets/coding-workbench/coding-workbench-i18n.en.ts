@@ -715,6 +715,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.toolState.waiting-for-trust": "Waiting for approval",
   "codingWorkbench.activity.toolState.no-runnable-steps": "Nothing to run",
   "codingWorkbench.activity.toolState.not-run": "Not run",
+  "codingWorkbench.activity.toolState.not-done": "Not done",
+  "codingWorkbench.activity.toolState.waiting-for-approval": "Waiting for approval",
   "codingWorkbench.activity.toolState.denied": "Denied",
   "codingWorkbench.activity.toolState.cancelled": "Cancelled",
   "codingWorkbench.activity.plan.title": "Current plan",
@@ -1299,9 +1301,24 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.verification.waiting-for-trust":
     "Verification has not run: this workspace's package scripts are not allowed yet. Allow package scripts for verification in the Coding Workbench header, then verify again.",
   "codingWorkbench.activity.verification.no-runnable-steps":
-    "Verification has not run: this repository defines no script the verifier can run, such as test, lint or build. That is not a failing check.",
+    "Verification has not run: the verifier found nothing it can run for this request, for example because the selected package has no test, lint or build script. That is not a failing check.",
   "codingWorkbench.activity.verification.not-run":
     "Verification did not run to completion: a step was skipped, denied or cancelled. That is not a failing check.",
+  "codingWorkbench.activity.git.waiting-for-approval":
+    "Waiting for a decision before this step is carried out.",
+  "codingWorkbench.activity.git.verification-failed":
+    "Not committed: the verification of the staged change failed. Fix the failing check, verify again, then commit.",
+  "codingWorkbench.activity.git.verification-missing":
+    "Not committed: no passing verification covers the staged change yet. Verify the staged change, then commit.",
+  "codingWorkbench.activity.git.not-staged":
+    "Not committed: part of the change is not staged yet. Stage the whole change, verify the staged change, then commit.",
+  "codingWorkbench.activity.git.unsaved-changes":
+    "Not committed: files open in the editor hold unsaved changes. Save them, verify the staged change, then commit.",
+  "codingWorkbench.activity.git.blocked":
+    "Not done: Keiko's policy or authority checks refused this step.",
+  "codingWorkbench.activity.git.changed":
+    "Not done: the change or the repository changed after this step was proposed.",
+  "codingWorkbench.activity.git.not-done": "Not done: the step failed or its result is uncertain.",
   "codingWorkbench.event.detailOutcome": "Outcome: {outcome}.",
   "codingWorkbench.event.detailUntrustedContent":
     "Untrusted content: the fetched page was quarantined as data, not instructions.",

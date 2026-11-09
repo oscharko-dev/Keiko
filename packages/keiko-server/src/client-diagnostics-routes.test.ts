@@ -1662,6 +1662,9 @@ describe("POST /api/diagnostics/client", () => {
     { interaction: "history-repository-switched" },
     { interaction: "event-stream-reconnecting" },
     { interaction: "history-workspace-switched" },
+    // #4271: the starting repository of a window without a stored one, decided once.
+    { interaction: "repository-seeded" },
+    { interaction: "repository-seed-skipped" },
     { interaction: "bridge-registration-refused", refusal: "root-boundary" },
     { interaction: "bridge-registration-refused", refusal: "lease" },
     {

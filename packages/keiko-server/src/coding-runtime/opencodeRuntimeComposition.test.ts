@@ -6748,6 +6748,76 @@ describe("private OpenCode tool bridge", () => {
     });
   });
 
+  // Lab T37 (2026-11-07, #4271): the facade answers a refused commit as a completed call that carries
+  // the refusal, so the card read "Succeeded" although nothing was committed. The bridge settles the
+  // call with the closed Git outcome, and the same word reaches the activity log, body-free.
+  describe("a Git step's closed outcome", () => {
+    const RENDER_OP = "coding-runtime.tool-result-rendered";
+    const commitBody = (callId: string): string =>
+      JSON.stringify({
+        action: "delivery",
+        actionId: `tool:${callId}`,
+        idempotencyKey: `idempotency-${callId}`,
+        intent: "commit",
+        phase: "propose",
+        message: "m",
+      });
+    const commitResult = (status: string, reason: string): CodingToolResult =>
+      ({
+        status: "completed",
+        evidence: [{ kind: "governed-delegate", code: status }],
+        verifiedCommit: { status, reason },
+      }) as unknown as CodingToolResult;
+
+    it.each([
+      ["verification-failed", "verification-failed", "verification-failed"],
+      ["verification-failed", "verification-missing", "verification-missing"],
+      ["succeeded", "completed", "completed"],
+    ] as const)(
+      "settles a commit answered %s/%s with the outcome %s and records it body-free",
+      async (status, reason, gitOutcome) => {
+        const activity = activityRecorder();
+        const log = createBufferedServerLogSink();
+        const facade: CodingToolFacade = {
+          execute: vi.fn(() => Promise.resolve(commitResult(status, reason))),
+        };
+        const fixture = await startBridgeFixture(facade, undefined, {
+          safeActivity: activity.safeActivity,
+          activityLog: log,
+          toolResultCorrelationId: FIXTURE_RUN_ID,
+        });
+        try {
+          await expect(
+            fixture.runtime.toolBridge.handle({
+              method: "POST",
+              headers: new Headers(authorized),
+              body: commitBody("call_commit"),
+            }),
+          ).resolves.toMatchObject({ status: 200 });
+
+          expect(activity.settlements).toEqual([
+            expect.objectContaining({
+              state: "succeeded",
+              presentation: { gitOutcome, bridgeDurationMs: expect.any(Number) as number },
+            }),
+          ]);
+          const rendered = log.events.filter(
+            (event) => event.op === RENDER_OP && event.extra?.gitOutcome !== undefined,
+          );
+          expect(rendered).toHaveLength(1);
+          expect(
+            expectActivityLogProof(
+              "coding-runtime.tool-result-rendered.emitted-line",
+              formatActivityLogProofLine(rendered[0] ?? {}),
+            ),
+          ).toMatchObject({ correlationId: FIXTURE_RUN_ID, resultStatus: "completed", gitOutcome });
+        } finally {
+          await fixture.stop();
+        }
+      },
+    );
+  });
+
   it("degrades an overridden Error.name to a content-free class in the diagnostic", async () => {
     const records: Parameters<ServerDiagnosticSink["record"]>[0][] = [];
     const facade: CodingToolFacade = {

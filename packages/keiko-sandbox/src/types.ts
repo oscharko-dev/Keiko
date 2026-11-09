@@ -87,6 +87,14 @@ export interface RuntimeGatewayFilesystem {
    * it (PR #4064 review, #3900 AC2/AC5). Absent means the scan found none.
    */
   readonly linkedFiles?: readonly string[] | undefined;
+  /**
+   * Native profile only: the exact certificate files the operator names with `SSL_CERT_FILE` or
+   * `NODE_EXTRA_CA_CERTS`, at the location the variable spells and at the real one. Their leaf is
+   * credential-shaped (`*.pem`), so the final credential-name rule would deny the very bundle the
+   * variable points every TLS client at; it leaves these exact files, read-only, to the earlier
+   * rules, which still decide whether their directory is readable at all (#4271). Absent means none.
+   */
+  readonly certificateReadFiles?: readonly string[] | undefined;
 }
 
 // Which enforcing backends a host has available. Produced by the probe, then fed into the PURE

@@ -8142,7 +8142,7 @@ describe("verification truth at task settlement", () => {
   });
 
   it("does not repair an impossible selected verifier", async () => {
-    const { f, finish } = await runningTask();
+    const { f, log, finish } = await runningTask();
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
     const target = "a".repeat(64);
     await verification(f, "failed", undefined, target);
@@ -8152,6 +8152,21 @@ describe("verification truth at task settlement", () => {
       expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
     });
     expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    // The settlement line names the blocker that stopped repair (#4271).
+    const settled = requireLoggedEvent(
+      log.records.find(
+        (event) =>
+          event.op === "coding-runtime.run.verification-continuation" &&
+          event.extra?.state === "not-evidenced",
+      ),
+      "Expected the not-evidenced settlement line",
+    );
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.verification-continuation.emitted-line",
+        formatActivityLogProofLine(settled),
+      ),
+    ).toMatchObject({ state: "not-evidenced", attempt: 0, blockedReason: "NO_RUNNABLE_STEPS" });
   });
 
   it("still repairs a selected failing test when unrelated lint is unavailable", async () => {
@@ -8164,6 +8179,17 @@ describe("verification truth at task settlement", () => {
       expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
     });
     expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  // #4271 lab (T39): a refusal for a target nobody selected is not an impossible selected verifier.
+  it("still repairs when the verifier refused a target before any target was selected", async () => {
+    const { f, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    f.orchestrator.observeVerificationBlocked("run-1", "NO_RUNNABLE_STEPS", "b".repeat(64));
+    finish();
+    await vi.waitFor(() => {
+      expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
+    });
   });
 
   it("records an edit that applied during a script-trust decision wait", async () => {

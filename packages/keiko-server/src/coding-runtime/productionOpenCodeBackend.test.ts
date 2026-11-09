@@ -1789,6 +1789,7 @@ describe("ripgrep on the OpenCode launch", () => {
     readonly externalReadRoots: readonly string[] | undefined;
     readonly composedExternalReadRoots: readonly string[] | undefined;
     readonly linkedFiles: readonly string[] | undefined;
+    readonly certificateReadFiles: readonly string[] | undefined;
     readonly events: readonly ServerLogEvent[];
   }
 
@@ -1834,13 +1835,18 @@ describe("ripgrep on the OpenCode launch", () => {
     composedExternalReadRoots: readonly string[] | undefined,
   ): Pick<
     Launch,
-    "toolchainReadRoots" | "externalReadRoots" | "composedExternalReadRoots" | "linkedFiles"
+    | "toolchainReadRoots"
+    | "externalReadRoots"
+    | "composedExternalReadRoots"
+    | "linkedFiles"
+    | "certificateReadFiles"
   > {
     return {
       toolchainReadRoots: filesystem?.toolchainReadRoots,
       externalReadRoots: filesystem?.externalReadRoots,
       composedExternalReadRoots,
       linkedFiles: filesystem?.linkedFiles,
+      certificateReadFiles: filesystem?.certificateReadFiles,
     };
   }
 
@@ -2092,6 +2098,36 @@ describe("ripgrep on the OpenCode launch", () => {
     }
   });
 
+  // #4271 lab: the run inherits SSL_CERT_FILE, so its TLS clients read that file; the kernel
+  // profile names it exactly, because its `*.pem` name is otherwise denied wherever it sits.
+  it("names the operator's certificate bundle in the kernel profile", () => {
+    const root = tmpRoot();
+    const outside = realpathSync(mkdtempSync(join(tmpdir(), "keiko-certificate-launch-")));
+    vi.stubEnv("PATH", `/usr/bin${delimiter}/bin`);
+    try {
+      stage(join(root, "npm-package", "runtime", "native", "rg"));
+      const bundle = join(outside, "corporate-ca.pem");
+      writeFileSync(bundle, "synthetic\n");
+      const result = launch(root, npmLaneMacRuntime(root), {
+        native: true,
+        processEnv: { ...CONTENT_ENV, SSL_CERT_FILE: bundle },
+        key: "darwin-arm64",
+      });
+      expect(result.certificateReadFiles).toEqual([bundle]);
+      expect(result.allowlist).toContain("SSL_CERT_FILE");
+      expect(
+        result.events.filter((event) => event.op === "coding-runtime.native-certificates.admitted"),
+      ).toMatchObject([
+        { level: "info", extra: { namedCount: 1, admittedCount: 1, fileCount: 1 } },
+      ]);
+      expect(JSON.stringify(result.events)).not.toContain("corporate-ca");
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(root, { force: true, recursive: true });
+      rmSync(outside, { force: true, recursive: true });
+    }
+  });
+
   // The clean npm installation (#4064): no override, no ripgrep on the launcher's PATH. The runtime
   // package installed next to Keiko carries the executable, and the launch finds it normally.
   it("verifies the ripgrep an npm runtime package ships and opens exactly its directory", () => {
@@ -2117,8 +2153,10 @@ describe("ripgrep on the OpenCode launch", () => {
         "coding-runtime.native-external-roots.resolved",
         "coding-runtime.git-metadata.resolved",
         "coding-runtime.linked-files.resolved",
+        "coding-runtime.native-certificates.admitted",
       ]);
       expect(result.linkedFiles).toBeUndefined();
+      expect(result.certificateReadFiles).toBeUndefined();
       expect(result.events[0]).toMatchObject({
         op: "coding-runtime.ripgrep.resolved",
         level: "info",

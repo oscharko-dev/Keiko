@@ -11,6 +11,10 @@ import { describe, expect, it, vi } from "vitest";
 import { render } from "@testing-library/react";
 import type { WorkspaceBinding } from "@oscharko-dev/keiko-contracts";
 import type { WindowCfgRecord, WindowRenderContext } from "../../windows/WindowsRegistry";
+import {
+  ActiveWorkspaceProvider,
+  type ActiveWorkspaceApi,
+} from "../../context/ActiveWorkspaceContext";
 import { CodingWorkbenchWindowHost } from "./CodingWorkbenchWindowHost";
 import type { CodingWorkbenchGitTarget } from "./CodingWorkbenchWindow";
 
@@ -61,6 +65,32 @@ function contextFixture(overrides: Partial<WindowRenderContext> = {}): WindowRen
     openEditorFile: vi.fn(() => ({ kind: "opened", windowId: "editor-1" })),
     ...overrides,
   } as WindowRenderContext;
+}
+
+const BOUND: WorkspaceBinding = {
+  schemaVersion: "1",
+  workspaceId: "ws-bound",
+  taskId: "task-bound",
+  activeRoot: "/repos/bound",
+  boundSurfaces: [],
+  gitDeliveryRoot: "/repos/bound",
+  editorProjectRoot: "/repos/bound",
+};
+
+function workspaceState(
+  state: Partial<Pick<ActiveWorkspaceApi, "loading" | "error" | "activeBinding">>,
+): ActiveWorkspaceApi {
+  const activeBinding = state.activeBinding ?? null;
+  return {
+    instances: [],
+    activeBinding,
+    activeInstance: null,
+    activeRoot: activeBinding?.activeRoot ?? null,
+    loading: state.loading ?? false,
+    switching: false,
+    error: state.error ?? null,
+    inventoryUnavailable: false,
+  } as unknown as ActiveWorkspaceApi;
 }
 
 function renderHost(
@@ -174,6 +204,107 @@ describe("CodingWorkbenchWindowHost", () => {
     );
 
     expect(windowRendered.mock.calls.at(-1)?.[0]?.selectedRoot).toBeUndefined();
+  });
+
+  // #4271: before the task-workspace state has answered, a null binding means "not read yet", not
+  // "unbound". Seeding from the shell's project then bound that folder in place of the active task
+  // workspace whenever the project loaded first.
+  it("waits for the task-workspace read before deciding between the shell and a binding", () => {
+    windowRendered.mockClear();
+    diagnostics.writes = [];
+    const context = contextFixture({ selectedRoot: "/repos/shell", activeBinding: null });
+    const view = render(
+      <ActiveWorkspaceProvider value={workspaceState({ loading: true })}>
+        <CodingWorkbenchWindowHost cfg={{}} context={context} />
+      </ActiveWorkspaceProvider>,
+    );
+    expect(windowRendered.mock.calls.at(-1)?.[0]?.selectedRoot).toBeUndefined();
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={workspaceState({ activeBinding: BOUND })}>
+        <CodingWorkbenchWindowHost cfg={{}} context={{ ...context, activeBinding: BOUND }} />
+      </ActiveWorkspaceProvider>,
+    );
+    view.rerender(
+      <ActiveWorkspaceProvider value={workspaceState({})}>
+        <CodingWorkbenchWindowHost cfg={{}} context={context} />
+      </ActiveWorkspaceProvider>,
+    );
+
+    expect(windowRendered.mock.calls.at(-1)?.[0]?.selectedRoot).toBeUndefined();
+    expect(diagnostics.writes).toEqual([
+      "[keiko] coding workbench interaction: repository-seed-skipped",
+    ]);
+  });
+
+  it("seeds from the shell once the task-workspace read answered without a binding", () => {
+    windowRendered.mockClear();
+    diagnostics.writes = [];
+    const context = contextFixture({ selectedRoot: "/repos/shell", activeBinding: null });
+    const view = render(
+      <ActiveWorkspaceProvider value={workspaceState({ loading: true })}>
+        <CodingWorkbenchWindowHost cfg={{}} context={context} />
+      </ActiveWorkspaceProvider>,
+    );
+    view.rerender(
+      <ActiveWorkspaceProvider value={workspaceState({ error: "unavailable" })}>
+        <CodingWorkbenchWindowHost cfg={{}} context={context} />
+      </ActiveWorkspaceProvider>,
+    );
+    expect(windowRendered.mock.calls.at(-1)?.[0]?.selectedRoot).toBeUndefined();
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={workspaceState({})}>
+        <CodingWorkbenchWindowHost cfg={{}} context={context} />
+      </ActiveWorkspaceProvider>,
+    );
+    view.rerender(
+      <ActiveWorkspaceProvider value={workspaceState({})}>
+        <CodingWorkbenchWindowHost cfg={{}} context={{ ...context, selectedRoot: "/repos/x" }} />
+      </ActiveWorkspaceProvider>,
+    );
+
+    expect(windowRendered.mock.calls.at(-1)?.[0]?.selectedRoot).toBe("/repos/shell");
+    expect(diagnostics.writes).toEqual(["[keiko] coding workbench interaction: repository-seeded"]);
+  });
+
+  it("follows a binding that is present even while a later read is pending or failed", () => {
+    for (const state of [{ loading: true }, { error: "unavailable" }]) {
+      windowRendered.mockClear();
+      diagnostics.writes = [];
+      const context = contextFixture({ selectedRoot: "/repos/shell", activeBinding: BOUND });
+      const view = render(
+        <ActiveWorkspaceProvider value={workspaceState({ ...state, activeBinding: BOUND })}>
+          <CodingWorkbenchWindowHost cfg={{}} context={context} />
+        </ActiveWorkspaceProvider>,
+      );
+      expect(windowRendered.mock.calls.at(-1)?.[0]?.selectedRoot).toBeUndefined();
+      expect(diagnostics.writes).toEqual([
+        "[keiko] coding workbench interaction: repository-seed-skipped",
+      ]);
+      view.unmount();
+    }
+  });
+
+  // The qualification's shape: a restored window with its own repository never waits for, seeds
+  // from, or reports a shell seed, whatever the task-workspace state does.
+  it("keeps a stored repository without a seed decision", () => {
+    windowRendered.mockClear();
+    diagnostics.writes = [];
+    const context = contextFixture({ selectedRoot: "/repos/shell", activeBinding: null });
+    const view = render(
+      <ActiveWorkspaceProvider value={workspaceState({ loading: true })}>
+        <CodingWorkbenchWindowHost cfg={{ repositoryPath: "/repos/cfg" }} context={context} />
+      </ActiveWorkspaceProvider>,
+    );
+    expect(windowRendered.mock.calls.at(-1)?.[0]?.selectedRoot).toBe("/repos/cfg");
+    view.rerender(
+      <ActiveWorkspaceProvider value={workspaceState({})}>
+        <CodingWorkbenchWindowHost cfg={{ repositoryPath: "/repos/cfg" }} context={context} />
+      </ActiveWorkspaceProvider>,
+    );
+    expect(windowRendered.mock.calls.at(-1)?.[0]?.selectedRoot).toBe("/repos/cfg");
+    expect(diagnostics.writes).toEqual([]);
   });
 
   it("persists the bound repository through onSelectRepository without a client diagnostic (#A)", () => {

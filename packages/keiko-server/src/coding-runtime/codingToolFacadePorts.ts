@@ -167,15 +167,17 @@ export type CodingToolEditOutcome =
     };
 
 /** Actual reasons a governed verifier could not execute, never inferred from model prose. */
-export type CodingVerificationBlockedReason =
-  | "verification-command-denied"
-  | "verification-authority-revoked"
-  | "verification-verifier-unsupported"
-  | "PROJECT_NOT_FOUND"
-  | "WORKSPACE_TRUST_REQUIRED"
-  | "NO_RUNNABLE_STEPS"
-  | "VERIFICATION_RUNNER_UNAVAILABLE"
-  | "VERIFICATION_NOT_RUN";
+export const CODING_VERIFICATION_BLOCKED_REASONS = [
+  "verification-command-denied",
+  "verification-authority-revoked",
+  "verification-verifier-unsupported",
+  "PROJECT_NOT_FOUND",
+  "WORKSPACE_TRUST_REQUIRED",
+  "NO_RUNNABLE_STEPS",
+  "VERIFICATION_RUNNER_UNAVAILABLE",
+  "VERIFICATION_NOT_RUN",
+] as const;
+export type CodingVerificationBlockedReason = (typeof CODING_VERIFICATION_BLOCKED_REASONS)[number];
 
 /** Captured at actual admission; called only after an executed check remains authorized. */
 export type CodingVerificationExecutedObserver = (targetDigest: string) => void;

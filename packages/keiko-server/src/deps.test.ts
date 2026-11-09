@@ -3738,6 +3738,9 @@ describe("Local checkout activity projection composition", () => {
       expect(active.binding.activeRoot).toBe(root);
       expect(deps.workspaceLifecycle?.getActive()?.binding).toEqual(active.binding);
       expect(projection.currentContent()).toBeNull();
+      // #4271: the activation route asks the composed lifecycle whether a Local checkout can be
+      // reselected; the activity wrapper must not drop that answer.
+      expect(deps.workspaceLifecycle?.selectable?.(active.instance.workspaceId)).toBe(true);
     } finally {
       await deps.dispose?.();
     }

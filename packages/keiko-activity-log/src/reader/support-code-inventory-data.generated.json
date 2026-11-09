@@ -1684,6 +1684,7 @@
     "keiko-server/coding-runtime/opencodeInbox",
     "keiko-server/coding-runtime/opencodeLaunchProfile",
     "keiko-server/coding-runtime/opencodeNativeAgentModels",
+    "keiko-server/coding-runtime/opencodeNativeCertificates",
     "keiko-server/coding-runtime/opencodeNativeContext",
     "keiko-server/coding-runtime/opencodeNativeDeliveryTools",
     "keiko-server/coding-runtime/opencodeNativeEgress",

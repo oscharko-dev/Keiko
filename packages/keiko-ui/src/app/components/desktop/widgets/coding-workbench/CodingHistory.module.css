@@ -23,6 +23,7 @@
 }
 .cmpHeader {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   gap: var(--space-5);
   align-items: center;
@@ -33,8 +34,10 @@
   justify-content: flex-end;
   gap: 6px;
 }
+/* The title keeps one line; in a narrow window the actions wrap below it instead. */
 .cmpHeader h2 {
   margin: 0;
+  white-space: nowrap;
   font-size: var(--text-heading);
   font-weight: var(--weight-semibold);
 }

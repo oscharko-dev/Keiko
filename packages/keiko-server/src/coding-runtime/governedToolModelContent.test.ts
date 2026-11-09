@@ -8,7 +8,10 @@ import {
   DEFAULT_SUPPORT_QUERY_LIMITS,
   executeLocalSupportQuery,
 } from "@oscharko-dev/keiko-activity-log/reader";
-import { CODING_SAFE_ACTIVITY_VERIFICATION_OUTCOMES } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
+import {
+  CODING_SAFE_ACTIVITY_GIT_OUTCOMES,
+  CODING_SAFE_ACTIVITY_VERIFICATION_OUTCOMES,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import { activityLogOperationSchema } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   expectActivityLogProof,
@@ -180,5 +183,92 @@ describe("the closed verification outcome on the rendering record (#3579)", () =
       "run-waiting-for-trust",
     ]);
     expect(result.truncation.omittedContextEventCount).toBeGreaterThan(0);
+  });
+});
+
+// Lab T37 (2026-11-07, #4271): a Git step the Workbench card shows as not done must read back from the
+// log as that, and the refusals must survive into an incident report although the line is informational.
+describe("the closed Git outcome on the rendering record (#4271)", () => {
+  it.each(CODING_SAFE_ACTIVITY_GIT_OUTCOMES)(
+    "records the outcome %s beside the result status, body-free",
+    (gitOutcome) => {
+      const activityLog = createBufferedServerLogSink();
+
+      recordGovernedToolModelContent(
+        activityLog,
+        "run-git-outcome",
+        { status: "completed" },
+        7,
+        undefined,
+        gitOutcome,
+      );
+
+      const [event] = activityLog.events;
+      if (event === undefined) throw new Error("Expected the rendered-result event");
+      expect(
+        expectActivityLogProof(
+          "coding-runtime.tool-result-rendered.emitted-line",
+          formatActivityLogProofLine(event),
+        ),
+      ).toMatchObject({ correlationId: "run-git-outcome", resultStatus: "completed", gitOutcome });
+      expect(Object.keys(event.extra ?? {})).not.toContain("verificationOutcome");
+    },
+  );
+
+  it("retains every Git step that was not carried out in the incident query, and only those", () => {
+    const stateDir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-git-outcome-"));
+    stateDirectories.push(stateDir);
+    const fromMs = Date.now() - 1;
+    const activityLog = createBufferedServerLogSink();
+    const refused = CODING_SAFE_ACTIVITY_GIT_OUTCOMES.filter(
+      (outcome) => outcome !== "completed" && outcome !== "waiting-for-approval",
+    );
+    const outcomes = [...refused, "waiting-for-approval" as const, "completed" as const];
+    for (const gitOutcome of outcomes) {
+      recordGovernedToolModelContent(
+        activityLog,
+        `run-${gitOutcome}`,
+        { status: "completed" },
+        5,
+        undefined,
+        gitOutcome,
+      );
+    }
+    const sink = createFileServerLogSink(stateDir);
+    for (const event of activityLog.events) sink.write(event);
+    sink.close?.();
+    const schema = activityLogOperationSchema("coding-runtime.tool-result-rendered");
+    expect(schema?.diagnosticWhen).toContainEqual({
+      field: "gitOutcome",
+      values: [
+        "verification-failed",
+        "verification-missing",
+        "not-staged",
+        "unsaved-changes",
+        "blocked",
+        "changed",
+        "not-done",
+      ],
+    });
+
+    const { result } = executeLocalSupportQuery(
+      stateDir,
+      {
+        kind: "closure",
+        queryClass: "incident",
+        roots: [],
+        windows: [{ fromMs, toMs: Date.now() + 1 }],
+        requiredClasses: { kind: "observed-failures" },
+        unresolved: false,
+      },
+      { ...DEFAULT_SUPPORT_QUERY_LIMITS, maxContextEvents: 0 },
+      { trigger: "query" },
+    );
+
+    const retained = result.events
+      .filter((selected) => selected.parsed.view.op === "coding-runtime.tool-result-rendered")
+      .map((selected) => selected.parsed.correlationId)
+      .sort();
+    expect(retained).toEqual(refused.map((outcome) => `run-${outcome}`).sort());
   });
 });

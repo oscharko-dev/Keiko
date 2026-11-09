@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "d95848ad06585ebe16efaadfe101b3204576ec4297e628bf37ba3fa37f15cefa"
+    "catalogDigest": "141a64609a5d8cb4ca742c6ed17c2e7ed4a09be5c6fbf79d5e0169094d17aff5"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -71,9 +71,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 678,
-    "proofCount": 701,
-    "resolvedProofCount": 701,
+    "operationCount": 680,
+    "proofCount": 703,
+    "resolvedProofCount": 703,
     "failureClassCount": 394,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -418,6 +418,7 @@
         "coding-runtime.mcp-relay",
         "coding-runtime.mentions.listed",
         "coding-runtime.native-build-settings.admitted",
+        "coding-runtime.native-certificates.admitted",
         "coding-runtime.native-external-roots.resolved",
         "coding-runtime.native-formatter.bound",
         "coding-runtime.native-narrowing.refused",
@@ -426,6 +427,7 @@
         "coding-runtime.native-question.routed",
         "coding-runtime.native-session-tree.observed",
         "coding-runtime.native-step.changed",
+        "coding-runtime.native-tool.denied",
         "coding-runtime.native-turn.interrupted",
         "coding-runtime.operation.refused",
         "coding-runtime.operator-decision",
@@ -1806,6 +1808,9 @@
     "coding-runtime.native-build-settings.admitted.emitted-line": [
       "packages/keiko-server/src/coding-runtime/nativeBuildSettings.test.ts"
     ],
+    "coding-runtime.native-certificates.admitted.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/opencodeNativeCertificates.test.ts"
+    ],
     "coding-runtime.native-external-roots.resolved.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeNativeExternalRoots.test.ts"
     ],
@@ -1830,6 +1835,9 @@
     ],
     "coding-runtime.native-step.changed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts"
+    ],
+    "coding-runtime.native-tool.denied.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.test.ts"
     ],
     "coding-runtime.native-turn.interrupted.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.test.ts"

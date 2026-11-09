@@ -4947,6 +4947,7 @@ function activityAwareWorkspaceLifecycle(
   return {
     list: lifecycle.list,
     listAll: lifecycle.listAll,
+    selectable: lifecycle.selectable,
     getActive: lifecycle.getActive,
     selectLocal: purgingSelection(lifecycle.selectLocal, purge),
     selectFolder: purgingSelection(lifecycle.selectFolder, purge),

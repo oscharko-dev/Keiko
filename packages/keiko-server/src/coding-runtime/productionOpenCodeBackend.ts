@@ -130,6 +130,7 @@ import {
 } from "./opencodeLaunchProfile.js";
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import type { RipgrepRuntimeManifest } from "./ripgrepRuntime.js";
+import { nativeCertificateReadFilesField } from "./opencodeNativeCertificates.js";
 import { nativeLinkedFilesField } from "./opencodeNativeLinkedFiles.js";
 import {
   recordOpenCodeRipgrepResolution,
@@ -683,6 +684,21 @@ function linkedFilesField(
     input.activityLog ?? processServerLogSink(),
     run.minted.authorityRef.runId,
     [run.context.workspaceRoot, ...nativeExternalReadRoots(input, run)],
+  );
+}
+
+/** The operator-named certificate bundles, readable although their name is credential-shaped. */
+function certificateReadFilesField(
+  input: LaunchInput,
+  run: ProductionRuntimeBackendInput,
+  macos: boolean,
+): { readonly certificateReadFiles?: readonly string[] } {
+  if (!macos) return {};
+  return nativeCertificateReadFilesField(
+    input.activityLog ?? processServerLogSink(),
+    run.minted.authorityRef.runId,
+    input.processEnv ?? process.env,
+    homedir(),
   );
 }
 
@@ -1502,6 +1518,7 @@ function gatewayFilesystem(
             ...nativeGitMetadataRoots(input, run, privateStateRoot),
             ...externalReadRootsField(input, run, macos),
             ...linkedFilesField(input, run, macos),
+            ...certificateReadFilesField(input, run, macos),
             // The plan agent's private notes take no link that could name a workspace file.
             linkFreeWriteRoots: [openCodePlanDirectory(privateStateRoot)],
           }

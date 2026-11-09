@@ -3500,6 +3500,8 @@ export class CodingRuntimeOrchestrator {
       runId,
       this.verificationContinuations.get(runId) ?? 0,
       state,
+      undefined,
+      state === "not-evidenced" ? this.effort.verificationBlockedReason(runId) : undefined,
     );
   }
 

@@ -54,7 +54,7 @@
         "tests/e2e/fixtures/**",
         "packages/keiko-ui/public/**"
       ],
-      "ignoreBinaries": ["openssl"]
+      "ignoreBinaries": ["openssl", "java"]
     },
     "packages/*": {
       "entry": ["src/*.ts!", "src/**/index.ts!"]
