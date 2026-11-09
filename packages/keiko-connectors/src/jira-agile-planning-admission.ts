@@ -122,7 +122,12 @@ async function rankSelection(
     ids.add(issue.value.id);
     issues.push(issue.value);
   }
-  const scope = await readPlanningBoardSubset(requests, input.boardId, [...issues, anchor.value]);
+  // Jira keeps epics out of the board issue list, so an epic's identity is bound by its own
+  // `epic/{id}` read instead; the board still supplies the rank field and is rechecked later.
+  const scope =
+    input.operation === "jira.rank-epic"
+      ? undefined
+      : await readPlanningBoardSubset(requests, input.boardId, [...issues, anchor.value]);
   return (
     scope ?? { ok: true, value: { input, field, issues, anchor: anchor.value, unchanged: false } }
   );
