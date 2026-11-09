@@ -4,6 +4,7 @@ import { readCase } from "./api-qualification-cases.mjs";
 import { adminMutationCase, observeAdminActor } from "./api-qualification-admin-cases.mjs";
 import {
   createQualificationFilter,
+  privatizeQualificationFilter,
   seedQualificationFilterColumns,
 } from "./api-qualification-fixtures.mjs";
 import { labRequest, basicAuth } from "./lab-client.mjs";
