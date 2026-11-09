@@ -470,4 +470,4 @@ describe("layer 4 -- the tool facade and the catalog bridge refuse every non-rea
 
 // The review profile's exact model-visible contract (four tools, their projected schemas). A change
 // to any review tool's schema, or a fifth tool, changes this digest and must be reviewed.
-const REVIEW_CONTRACT_DIGEST = "5a9e88af9dbf1e6a16f17d9e854cbedfdc471cedc72d85970bdfee216466a904";
+const REVIEW_CONTRACT_DIGEST = "6a19d42e35280a75c78c78d75750f5e8de0477f6bea06766f4cc3d3c7dda728c";

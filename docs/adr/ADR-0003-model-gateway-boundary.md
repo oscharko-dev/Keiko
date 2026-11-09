@@ -914,7 +914,12 @@ States:
   rejection so the model can regenerate the call — on the buffered and, since the #3873 review, the
   streamed path alike, while the stream has delivered nothing but reasoning: a streamed tool call is
   delivered only with the terminal answer, so a rejected one was never handed to the caller, and the
-  next attempt carries the schema correction (`gateway.tool-catalog.repair state=scheduled`). A
+  next attempt carries the schema correction (`gateway.tool-catalog.repair state=scheduled`). The
+  correction lists each missing or mismatching property path and describes it from the offered
+  tool's own schema: its declared type, bounds or allowed values, and its description, capped at
+  240 characters. It never quotes the rejected arguments. The repair line counts the described
+  paths as `describedPathCount` (#4130: a local Reviewer repeated the omission of a required
+  property after a correction that named it only). A
   streamed rejection that carries no correction is never replayed as it was, and one that follows
   answer text the caller already received (a sentence of preface, then a malformed call) surfaces at
   once, because a repair would deliver that text a second time; the coding sidecar then ends the turn
