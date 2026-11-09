@@ -80,9 +80,21 @@ function countGuidance(shape: CatalogSchemaMismatch): readonly string[] {
 // stop it. Each listed path is now described from the offered schema's own declaration, so a
 // property's description reaches the model at the moment it got that property wrong.
 const SCHEMA_HINT_DESCRIPTION_MAX_CHARS = 240;
+const SCHEMA_HINT_ENUM_MAX_VALUES = 8;
+const SCHEMA_HINT_ENUM_VALUE_MAX_CHARS = 40;
+
+// R4130-045/046 (#4330 review): only Keiko's own closed-dialect schemas describe a path. An external
+// schema (a managed MCP server's, which always declares its `$schema` dialect) is the server's own
+// text: copying its descriptions or enum values into the gateway's system correction would hand
+// server-authored instructions the gateway's voice. Its mismatch paths can also start inside a
+// `$ref` target, where they do not resolve from the root. Such paths are listed by name only.
+function describableSchema(schema: CatalogJsonObject | undefined): CatalogJsonObject | undefined {
+  return schema?.$schema === undefined ? schema : undefined;
+}
 
 /** Each path on its own line, with what its schema node declares when the path resolves. */
-function describedPaths(schema: CatalogJsonObject | undefined, paths: readonly string[]): string {
+function describedPaths(offered: CatalogJsonObject | undefined, paths: readonly string[]): string {
+  const schema = describableSchema(offered);
   return paths
     .map((path) => {
       const hint = schemaPathHint(schema, path);
@@ -96,7 +108,7 @@ export function describedSchemaPathCount(repair: GatewayToolCallRepair | undefin
   const shape = repair?.shape;
   if (shape === undefined) return 0;
   return [...shape.missingRequired, ...shape.invalidPaths].filter(
-    (path) => schemaPathHint(repair?.schema, path) !== undefined,
+    (path) => schemaPathHint(describableSchema(repair?.schema), path) !== undefined,
   ).length;
 }
 
@@ -149,10 +161,20 @@ function rangeHint(
   return typeof upper === "number" ? `at most ${String(upper)}` : "";
 }
 
+/** The allowed values, bounded in count and length so a schema cannot grow the correction. */
+function enumHint(values: readonly CatalogJsonValue[]): string {
+  const listed = values
+    .slice(0, SCHEMA_HINT_ENUM_MAX_VALUES)
+    .map((value) =>
+      Array.from(JSON.stringify(value)).slice(0, SCHEMA_HINT_ENUM_VALUE_MAX_CHARS).join(""),
+    );
+  const more = values.length - listed.length;
+  const remainder = more > 0 ? " and " + String(more) + " more" : "";
+  return `one of ${listed.join(", ")}${remainder}`;
+}
+
 function schemaShapeHint(node: CatalogJsonObject): string | undefined {
-  if (Array.isArray(node.enum)) {
-    return `one of ${node.enum.map((value) => JSON.stringify(value)).join(", ")}`;
-  }
+  if (Array.isArray(node.enum)) return enumHint(node.enum);
   const type = typeof node.type === "string" ? node.type : undefined;
   if (type === "array") {
     const items = rangeHint(node.minItems, node.maxItems);
