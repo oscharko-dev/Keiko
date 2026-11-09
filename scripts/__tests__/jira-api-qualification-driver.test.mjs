@@ -172,7 +172,7 @@ it("grades a settled 404 write on a release that does not publish it without a r
   expect(evidence.runtimeAvailability).toBe("unavailable");
   expect(readdirSync(output).some((name) => name.endsWith(".pending.json"))).toBe(false);
 });
-it("still stops on an unknown 404 write that carries no release-absence proof", async () => {
+it("keeps going after a settled unknown 404 write because every native response was a refusal", async () => {
   const output = directory();
   const refused = attempt(primary.identity, true);
   refused.dispatch.result = {
@@ -183,8 +183,23 @@ it("still stops on an unknown 404 write that carries no release-absence proof", 
   refused.witness.responses = [{ status: 404, truncated: false }];
   refused.journal = { phase: "settled", outcome: "unknown", httpStatus: 404 };
   dispatch.mockResolvedValue(refused);
+  const evidence = await runQualificationCase(
+    {},
+    {},
+    specification({}),
+    {},
+    witness,
+    output,
+    report,
+  );
+  expect(evidence.runtimeAvailability).toBe("unknown");
+  // A 2xx beside the refusal is not a definite non-effect and still stops the run.
+  refused.witness.responses = [
+    { status: 404, truncated: false },
+    { status: 204, truncated: false },
+  ];
   await expect(
-    runQualificationCase({}, {}, specification({}), {}, witness, output, report),
+    runQualificationCase({}, {}, specification({}), {}, witness, directory(), report),
   ).rejects.toThrow("Uncertain native effect");
 });
 it("grades a settled, independently reproduced 403 write as denied without a reconcile stop", async () => {

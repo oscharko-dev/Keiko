@@ -279,8 +279,10 @@ function settledRefusal(journal, evidence) {
   );
 }
 /** An unsettled or unknown native write stops the run unless it is such a settled refusal. */
-function needsReconcile(journal, evidence) {
+function needsReconcile(journal, evidence, snapshot) {
   if (journal?.outcome !== "unknown" && journal?.phase !== "dispatched") return false;
+  // A settled write whose every native response was a definite 4xx refusal changed nothing.
+  if (journal.phase === "settled" && refusedOnly(snapshot)) return false;
   return !settledRefusal(journal, evidence);
 }
 async function gradeCase(
@@ -303,7 +305,8 @@ async function gradeCase(
   if (detail !== undefined) evidence.detail = detail;
   evidence.auxiliaryReferences = recordAuxiliaries(attempted, directory, report);
   privateJson(join(directory, `${evidence.id}.json`), evidence, true);
-  if (needsReconcile(attempted.journal, evidence)) throw new ReconcileRequiredError();
+  if (needsReconcile(attempted.journal, evidence, evidence.witness))
+    throw new ReconcileRequiredError();
   rmSync(join(directory, `${evidence.id}.pending.json`));
   stage({
     identity: specification.identity,
