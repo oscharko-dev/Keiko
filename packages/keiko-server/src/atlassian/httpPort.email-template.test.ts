@@ -183,7 +183,7 @@ describe("fixed email-template archive HTTP transport", () => {
     });
     expect(result).not.toHaveProperty("archiveBytes");
   });
-  it("copies a raw ZIP upload before awaiting egress and emits no multipart/XSRF header", async () => {
+  it("copies a raw ZIP upload before awaiting egress and sends the closed raw-ZIP header set with the XSRF opt-out and no multipart", async () => {
     const f = fixture(() => new Response(null, { status: 204 }));
     const bytes = new Uint8Array(BYTES);
     const pending = f.port({
@@ -196,8 +196,21 @@ describe("fixed email-template archive HTTP transport", () => {
     const sent = f.fetchImpl.mock.calls[0]?.[1];
     expect(sent?.body).toEqual(BYTES);
     expect(sent?.body).not.toBe(bytes);
-    expect(new Headers(sent?.headers).get("content-type")).toBe("application/zip");
-    expect(new Headers(sent?.headers).has("x-atlassian-token")).toBe(false);
+    // Live Jira 10.3 refuses the raw ZIP POST with a 403 XSRF check failure unless
+    // `X-Atlassian-Token: no-check` is present, and accepts it with that header (AC7 laboratory
+    // evidence, 2026-11-09). The body stays a raw ZIP, never multipart.
+    const headers = new Headers(sent?.headers);
+    expect(headers.get("content-type")).toBe("application/zip");
+    expect(headers.get("x-atlassian-token")).toBe("no-check");
+    expect(headers.get("content-type")).not.toMatch(/multipart/iu);
+    expect(sent?.body).toBeInstanceOf(Uint8Array);
+    const names: string[] = [];
+    headers.forEach((_value, name) => names.push(name));
+    expect(
+      names
+        .filter((name) => !["authorization", "accept", "user-agent"].includes(name))
+        .sort((a, b) => a.localeCompare(b)),
+    ).toEqual(["content-type", "x-atlassian-token"]);
     expect(f.onResponse).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ method: "POST" }),
       204,

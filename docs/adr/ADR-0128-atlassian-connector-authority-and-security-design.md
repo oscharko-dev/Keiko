@@ -926,7 +926,9 @@ a bodiless native write (`PUT`, `POST` or `DELETE` without a body) carries
 `X-Atlassian-Token: no-check`, as the attachment upload does, because Jira refuses it with
 "XSRF check failed" otherwise; the header disables only Jira's browser-CSRF check, which a
 server-side client holding explicit credentials does not need, and the raw `application/zip`
-email-template upload keeps its exact closed header set. `PUT /settings/baseUrl` sends the base URL
+email-template upload (never multipart) carries the exact closed header set `content-type:
+application/zip` and `x-atlassian-token: no-check`, because live Jira 10.3 refuses it with a 403
+XSRF failure otherwise (AC7 laboratory evidence, 2026-11-09). `PUT /settings/baseUrl` sends the base URL
 as raw text, which is the only form Jira accepts there; every other string body stays JSON. The bulk
 archive request `POST /issue/archive` asks for `text/plain`, the only representation Jira returns
 (`application/json` answers 406). Default (global) role actors are sent by user key: Jira answers
