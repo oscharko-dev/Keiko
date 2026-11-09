@@ -100,6 +100,15 @@ changed. No record binds capture bytes, so the existing macOS captures from 2026
 keeps one renderer across the set; the new `generatedAt` describes the three records, not the captures. No updater behavior, baseline or numerical ceiling changed. This remains
 updater fixture evidence.
 
+PR #4288 (#4287) adds the plain "review status unknown" notice to the core message catalogs
+(`i18n-messages.en.ts`, `i18n-messages.de.ts`), which made the freshness gate reject both catalog
+digests. On 2026-11-09 (UTC) the complete original nine-case producer ran in the same Linux gates
+container, with `--init` and Node 24.18.0. All nine cases passed in 1.9 minutes, including the real
+BFF stop and restart. The three records rebind only the two catalog digests. As on 2026-11-07, the
+container renderer drew the captures with fallback fonts, so the existing macOS captures are kept and
+the new `generatedAt` describes the three records only. No updater behavior, baseline or numerical
+ceiling changed. This remains updater fixture evidence.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:
