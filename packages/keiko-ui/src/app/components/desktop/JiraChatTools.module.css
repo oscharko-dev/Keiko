@@ -41,6 +41,12 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
+.cmpCardBody {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
 .cmpCard p {
   margin: 0;
 }

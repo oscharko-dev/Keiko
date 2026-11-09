@@ -330,23 +330,23 @@ function JiraResultProblems({ view }: { readonly view: JiraToolOutcomeView }): R
 }
 /** Read the saved receipt directly; reloading a Chat neither fetches Jira nor repeats a write. */
 function JiraToolOutcome({ exchange }: { readonly exchange: ChatToolExchange }): ReactNode {
+  const t = useTranslate();
   const view = jiraToolOutcomeView(exchange);
   return (
     <>
       <JiraResultCounts view={view} />
-      <JiraResultList view={view} />
+      {exchange.call.name === "jira_draft" && view.items.length > 0 ? (
+        <ul className={styles.cmpResultItems} aria-label={t("chat.jira.outcome.results")}>
+          <li>
+            <JiraResultList view={view} />
+          </li>
+        </ul>
+      ) : (
+        <JiraResultList view={view} />
+      )}
       <JiraResultProblems view={view} />
     </>
   );
-}
-function resultCardSemantics(exchange: ChatToolExchange): {
-  readonly tag: "div" | "section";
-  readonly role: "group" | undefined;
-  readonly label: ReturnType<typeof jiraToolLabel>;
-} {
-  return isKnownJiraToolAlias(exchange.call.name)
-    ? { tag: "div", role: "group", label: jiraToolLabel(exchange) }
-    : { tag: "section", role: undefined, label: jiraToolRegionLabel(exchange) };
 }
 function JiraToolExchange({
   exchange,
@@ -366,16 +366,45 @@ function JiraToolExchange({
     (turnState === "pending" ? undefined : jiraToolOutcomeHelp(state));
   const report = jiraReportOf(exchange);
   const localDenial = jiraLocalAccessDenialNotice(exchange);
-  const { tag: Card, role, label } = resultCardSemantics(exchange);
-  return (
-    <Card className={styles.cmpCard} role={role} aria-label={t(label)}>
+  const known = isKnownJiraToolAlias(exchange.call.name);
+  const body = (
+    <div
+      className={styles.cmpCardBody}
+      role={known ? "group" : undefined}
+      aria-label={known ? t(jiraToolLabel(exchange)) : undefined}
+    >
       <strong>{mcp ? exchange.call.name : t(jiraToolLabel(exchange))}</strong>
       <output>{t(state)}</output>
       {help === undefined ? null : <p>{t(help)}</p>}
       {localDenial === undefined ? null : <p>{t(localDenial)}</p>}
       <BatchProgress exchange={exchange} turnState={turnState} />
       <JiraToolContents exchange={exchange} report={report} chatId={chatId} />
-    </Card>
+    </div>
+  );
+  return <JiraCardFrame exchange={exchange}>{body}</JiraCardFrame>;
+}
+/**
+ * A write receipt keeps the stable "Jira action" region; reads are only grouped, so a message with
+ * several cards never repeats one landmark.
+ */
+function JiraCardFrame({
+  exchange,
+  children,
+}: {
+  readonly exchange: ChatToolExchange;
+  readonly children: ReactNode;
+}): ReactNode {
+  const t = useTranslate();
+  const receipt =
+    !isKnownJiraToolAlias(exchange.call.name) ||
+    exchange.approval !== undefined ||
+    exchange.draftProgress !== undefined;
+  return receipt ? (
+    <section className={styles.cmpCard} aria-label={t(jiraToolRegionLabel(exchange))}>
+      {children}
+    </section>
+  ) : (
+    <div className={styles.cmpCard}>{children}</div>
   );
 }
 function JiraToolContents({
