@@ -76,13 +76,21 @@ function nativeBodyHeaders(request: RequestSnapshot): Record<string, string> | u
   );
   return permissionAttribute;
 }
+/** Jira answers bulk archive as text/plain only and refuses `Accept: application/json` with 406. */
+function archiveAcceptHeaders(request: RequestSnapshot): Record<string, string> {
+  return request.method === "POST" &&
+    URL.canParse(request.url) &&
+    new URL(request.url).pathname.endsWith("/rest/api/2/issue/archive")
+    ? { accept: "text/plain" }
+    : {};
+}
 function requestBodyHeaders(request: RequestSnapshot): Record<string, string> {
   const native = nativeBodyHeaders(request);
   if (native !== undefined) return native;
   if ("upload" in request && request.upload !== undefined)
     return { "content-type": request.upload.contentType, "x-atlassian-token": "no-check" };
   if ("bodyJson" in request && request.bodyJson !== undefined)
-    return { "content-type": "application/json" };
+    return { "content-type": "application/json", ...archiveAcceptHeaders(request) };
   // A bodiless write carries no content type, so Jira's XSRF check refuses it (403 "XSRF check
   // failed") unless it opts out, exactly like a governed upload. Reads never need it.
   return request.method === "GET" ? {} : { "x-atlassian-token": "no-check" };

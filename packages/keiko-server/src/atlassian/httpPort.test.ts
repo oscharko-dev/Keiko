@@ -608,6 +608,16 @@ describe("createGatewayAtlassianHttpBodyPort — governed upload (#4176)", () =>
       expect(seen[1]?.headers.get("x-atlassian-token")).toBeNull();
     },
   );
+  it("asks for text/plain on bulk archive only, which Jira refuses as application/json", async () => {
+    const { fetchImpl, seen } = recordingFetch();
+    const { upload: _upload, ...bodiless } = request;
+    const archive = "https://acme.example/rest/api/2/issue/archive?notifyUsers=true";
+    await bodyPort(fetchImpl, resolver())({ ...bodiless, url: archive, bodyJson: '["PROJ-1"]' });
+    await bodyPort(fetchImpl, resolver())({ ...bodiless, bodyJson: '["PROJ-1"]' });
+    expect(seen[0]?.headers.get("accept")).toBe("text/plain");
+    expect(seen[0]?.headers.get("content-type")).toBe("application/json");
+    expect(seen[1]?.headers.get("accept")).toBe("application/json");
+  });
   it("never adds the opt-out header to an ordinary JSON write", async () => {
     const { fetchImpl, seen } = recordingFetch();
     await bodyPort(fetchImpl, resolver())({ ...request, upload: undefined, bodyJson: "{}" });
