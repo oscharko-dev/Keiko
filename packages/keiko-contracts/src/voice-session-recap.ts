@@ -166,14 +166,19 @@ const AUDIT_COUNT_FIELDS = [
   "durationMs",
 ] as const;
 
-function normalizeLegacyAuditRecord(value: Record<string, unknown>): Record<string, unknown> {
+// A legacy audit record predates candidatesAccepted, so its absent count is valid and reads as zero.
+function hasAuditCount(
+  value: Record<string, unknown>,
+  field: (typeof AUDIT_COUNT_FIELDS)[number],
+): boolean {
+  const count = value[field];
   if (
-    value.schemaVersion === LEGACY_VOICE_SESSION_RECAP_SCHEMA_VERSION &&
-    value.candidatesAccepted === undefined
-  ) {
-    return { ...value, candidatesAccepted: 0 };
-  }
-  return value;
+    field === "candidatesAccepted" &&
+    count === undefined &&
+    value.schemaVersion === LEGACY_VOICE_SESSION_RECAP_SCHEMA_VERSION
+  )
+    return true;
+  return isNonNegativeInteger(count);
 }
 
 export function validateVoiceSessionRecapAuditRecord(
@@ -182,19 +187,18 @@ export function validateVoiceSessionRecapAuditRecord(
   if (!isRecord(value)) {
     return { ok: false, reason: "audit: must be an object" };
   }
-  const normalized = normalizeLegacyAuditRecord(value);
-  if (!isVoiceSessionRecapSchemaVersionSupported(normalized.schemaVersion)) {
+  if (!isVoiceSessionRecapSchemaVersionSupported(value.schemaVersion)) {
     return { ok: false, reason: "schemaVersion: unsupported" };
   }
-  if (!isVoiceProfile(normalized.profile)) {
+  if (!isVoiceProfile(value.profile)) {
     return { ok: false, reason: "profile: unknown voice profile" };
   }
   for (const field of AUDIT_COUNT_FIELDS) {
-    if (!isNonNegativeInteger(normalized[field])) {
+    if (!hasAuditCount(value, field)) {
       return { ok: false, reason: `${field}: must be a non-negative integer` };
     }
   }
-  if (normalized.triggeredByUser !== true) {
+  if (value.triggeredByUser !== true) {
     // The recap is user-triggered by design (ADR-0109 D2); an audit record claiming otherwise is
     // structurally invalid, which makes the "never automatic" invariant machine-checkable.
     return { ok: false, reason: "triggeredByUser: must be true (recap is user-triggered only)" };

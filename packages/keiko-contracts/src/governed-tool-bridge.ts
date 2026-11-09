@@ -1,4 +1,4 @@
-import { isRecord } from "./contract-validation-primitives.js";
+import { isRecord, ownField } from "./contract-validation-primitives.js";
 import {
   CHANGESET_EDIT_ARGUMENT_LIMITS,
   GENERIC_TOOL_ARGUMENT_LIMITS,
@@ -183,7 +183,9 @@ interface CheckedNativeToolDefinition {
 function checkedNativeToolDefinition(value: unknown): CheckedNativeToolDefinition | undefined {
   const record = plainRecord(value);
   if (record === undefined || Object.keys(record).length !== 3) return undefined;
-  const { name, description, parameters } = record;
+  const name = ownField(record, "name");
+  const description = ownField(record, "description");
+  const parameters = ownField(record, "parameters");
   if (typeof name !== "string" || !NATIVE_TOOL_NAME.test(name)) return undefined;
   const schema = plainRecord(parameters);
   if (!boundedDescription(description) || schema === undefined) return undefined;

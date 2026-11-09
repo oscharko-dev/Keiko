@@ -355,6 +355,7 @@
     "keiko-contracts/native-file-dialog",
     "keiko-contracts/native-runtime-wire",
     "keiko-contracts/no-evidence-answer",
+    "keiko-contracts/null-prototype-record",
     "keiko-contracts/numeric",
     "keiko-contracts/observability",
     "keiko-contracts/patch-limits",

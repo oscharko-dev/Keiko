@@ -64,7 +64,12 @@ function headerPath(line: string, marker: string): string {
   return stripPrefix(raw.trim());
 }
 
-function classify(oldPath: string, newPath: string): { kind: PatchChangeKind; path: string } {
+interface PatchFileClassification {
+  readonly kind: PatchChangeKind;
+  readonly path: string;
+}
+
+function classify(oldPath: string, newPath: string): PatchFileClassification {
   if (oldPath === "/dev/null") {
     return { kind: "create", path: newPath };
   }

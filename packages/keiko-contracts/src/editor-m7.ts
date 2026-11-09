@@ -502,7 +502,8 @@ export function parseEditorM7SettingValue(
   id: EditorM7SettingId,
   value: unknown,
 ): EditorM7ParseResult<EditorM7SettingValue> {
-  if (!isSettingId(id)) return { ok: false, reasonCode: "UNKNOWN_SETTING" };
+  if (!SETTING_IDS_ADMISSION_VALUES.includes(id))
+    return { ok: false, reasonCode: "UNKNOWN_SETTING" };
   const definition = definitionFor(id);
   if (definition.type === "integer") return parseInteger(value, definition);
   if (definition.type === "boolean") return parseBoolean(value);

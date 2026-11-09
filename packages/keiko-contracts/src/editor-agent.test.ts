@@ -1,3 +1,4 @@
+import { withPrototypeField } from "./__tests__/support/prototype-field.js";
 import { observeConsumedExtent } from "./__tests__/support/protocol-observation-mechanics.js";
 import { describe, expect, it } from "vitest";
 import {
@@ -2669,5 +2670,18 @@ describe.each([
     const observed = observedRelationExtent(safetySnapshot().panes, 4, 0.5);
     expect(safetyGuard({ ...safetySnapshot(), panes: observed.array })).toBe(false);
     expect(observed.reads()).toBe(4);
+  });
+});
+
+describe("editor agent snapshot own-property bounds (REVIEW-3918-072)", () => {
+  it("ignores an inherited maxBytes bound", () => {
+    const parsed = withPrototypeField("maxBytes", 5, () =>
+      parseEditorAgentSnapshotRequest({
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        textMode: "selection",
+      }),
+    );
+    if (!parsed.ok) throw new Error("snapshot request refused");
+    expect(Object.hasOwn(parsed.value, "maxBytes")).toBe(false);
   });
 });

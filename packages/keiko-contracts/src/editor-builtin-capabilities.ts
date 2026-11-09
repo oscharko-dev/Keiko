@@ -24,6 +24,8 @@
 //  - "none":                   no in-browser document formatter is reachable for this language. The
 //                              server may format some of these, but that is out of this issue's
 //                              explicit-browser-command scope (ADR-0068 D9).
+import { nullPrototypeRecord } from "./null-prototype-record.js";
+
 export type EditorBuiltinFormattingSource = "monaco-builtin" | "keiko-language-service" | "none";
 
 // One source language's browser built-in capabilities. `languageId` is a canonical
@@ -146,9 +148,7 @@ export const EDITOR_BUILTIN_CAPABILITIES: readonly EditorBuiltinCapability[] = O
 // keys like `constructor`, `toString`, or `__proto__` return undefined rather than a prototype
 // method, keeping `editorBuiltinCapability(x)` faithful to its "unknown id → null" contract.
 function nullPrototypeCapabilityIndex(): Record<string, EditorBuiltinCapability> {
-  const record: Record<string, EditorBuiltinCapability> = {};
-  Object.setPrototypeOf(record, null);
-  return record;
+  return nullPrototypeRecord<EditorBuiltinCapability>();
 }
 
 export const EDITOR_BUILTIN_CAPABILITY_BY_LANGUAGE: Readonly<

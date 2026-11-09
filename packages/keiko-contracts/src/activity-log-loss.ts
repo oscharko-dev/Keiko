@@ -75,7 +75,7 @@ export function isActivityLogLossReason(value: unknown): value is ActivityLogLos
  * is ignored rather than thrown: this runs inside failure paths that must never gain a new one.
  */
 export function recordActivityLogLoss(reason: ActivityLogLossReason, count = 1): void {
-  if (!isActivityLogLossReason(reason) || !Number.isSafeInteger(count) || count <= 0) return;
+  if (!LOSS_REASON_SET.has(reason) || !Number.isSafeInteger(count) || count <= 0) return;
   counters[reason] = Math.min(Number.MAX_SAFE_INTEGER, counters[reason] + count);
 }
 

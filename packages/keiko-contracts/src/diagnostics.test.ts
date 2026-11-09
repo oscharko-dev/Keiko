@@ -1,3 +1,4 @@
+import { withPrototypeField } from "./__tests__/support/prototype-field.js";
 import { clientDefectContext, isClientDefectContext } from "./client-defect-signature.js";
 import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "./workspace-contract-primitives.js";
 import { MAX_SUPPORT_REPORT_BYTES } from "./support-report.js";
@@ -2761,5 +2762,15 @@ describe("coding request timeout evidence (#4109)", () => {
     ).toBe(false);
     expect(isClientDiagnosticIngestRequest(report(timeout, { kind: "other" }))).toBe(false);
     expect(isClientDiagnosticIngestRequest(report(timeout, { errorKind: "timeout" }))).toBe(false);
+  });
+});
+
+describe("client diagnostic own-property Git context (REVIEW-3918-072)", () => {
+  it("does not read an inherited Git client operation", () => {
+    expect(
+      withPrototypeField("gitClientOperation", "bogus", () =>
+        isClientDiagnosticIngestRequest(validRequest()),
+      ),
+    ).toBe(true);
   });
 });

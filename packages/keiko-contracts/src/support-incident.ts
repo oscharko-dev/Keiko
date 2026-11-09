@@ -172,7 +172,7 @@ export function parseSupportIncidentSlotClaimFileName(name: string): number | un
  * fingerprint two processes could compute identically from the same failure.
  */
 export function supportIncidentFingerprintClaimFileName(defectFingerprint: string): string {
-  if (!isDefectFingerprint(defectFingerprint)) {
+  if (!DEFECT_FINGERPRINT_PATTERN.test(defectFingerprint)) {
     throw new RangeError("invalid defectFingerprint");
   }
   return `fingerprint-${defectFingerprint}.claim`;
