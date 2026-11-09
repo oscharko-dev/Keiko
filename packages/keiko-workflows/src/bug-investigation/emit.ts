@@ -41,16 +41,16 @@ export function createBugEventEmitter(
   return {
     emit: (body: BugEventBody): void => {
       seq += 1;
-      // The body is a complete discriminated-union member minus the envelope; re-attaching the
-      // envelope yields a valid BugInvestigationEvent. The cast is over the union, not a widening.
-      const event = {
+      // The body is a complete discriminated-union member minus the envelope, so re-attaching the
+      // envelope yields a BugInvestigationEvent that the compiler checks without a cast.
+      const event: BugInvestigationEvent = {
         schemaVersion: "1" as const,
         runId,
         fingerprint,
         seq,
         ts: now(),
         ...body,
-      } as BugInvestigationEvent;
+      };
       sink.emit(event);
     },
   };

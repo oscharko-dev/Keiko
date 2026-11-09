@@ -75,6 +75,7 @@ export function buildProposal(input: ProposalBuildInput, confidence: number): Me
 // generator; the actual reviewer (the human accepting the candidate) attaches their id at the
 // acceptance step. Stamping a synthetic capture-side reviewer here keeps the envelope
 // well-formed for the validator without misrepresenting authorship.
+// SAFETY: MemoryReviewerId is an erased brand on string, and this fixed literal is a valid id.
 const CAPTURE_REVIEWER_ID = "capture:proposed" as MemoryReviewerId;
 
 interface ForgetBuildInput {

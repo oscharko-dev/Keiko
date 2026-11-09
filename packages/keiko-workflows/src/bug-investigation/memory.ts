@@ -48,6 +48,8 @@ function memoryQueryText(report: BugReportInput): string {
 function bugInvestigationMemoryScope(workspaceRoot: string): MemoryScope {
   return {
     kind: "project",
+    // SAFETY: ProjectId is an erased brand on string. The workspace root is this workspace's
+    // project coordinate, the same one the server's memory context uses.
     projectId: workspaceRoot as ProjectId,
   };
 }

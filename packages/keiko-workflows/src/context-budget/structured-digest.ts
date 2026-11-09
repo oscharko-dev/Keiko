@@ -441,7 +441,7 @@ export function mergeHistoryDigests(
         sameQuestionKey(questionKey(question), questionKey(resolution)),
       ),
   );
-  if (Object.keys(merged).some((field) => mergedFieldLostItems(field, older, newer))) {
+  if (digestLostItems(older, newer)) {
     merged.droppedCategories = mergeStrings(merged.droppedCategories, [
       "bounded-structured-signals-require-rehydration",
     ]);
@@ -449,16 +449,25 @@ export function mergeHistoryDigests(
   return merged;
 }
 
-function mergedFieldLostItems(
-  field: string,
-  older: CompactionDigest,
-  newer: CompactionDigest,
-): boolean {
-  const key = field as keyof CompactionDigest;
-  return (
-    new Set([...(older[key] ?? []), ...(newer[key] ?? [])].map((item) => JSON.stringify(item)))
-      .size > 16
-  );
+// True when a merged digest field had more distinct items than the merge keeps, so bounded merging
+// dropped some of them. Every CompactionDigest field is listed, as in mergeHistoryDigests.
+function digestLostItems(older: CompactionDigest, newer: CompactionDigest): boolean {
+  return [
+    fieldLostItems(older.preservedFacts, newer.preservedFacts),
+    fieldLostItems(older.assumptions, newer.assumptions),
+    fieldLostItems(older.userConstraints, newer.userConstraints),
+    fieldLostItems(older.decisions, newer.decisions),
+    fieldLostItems(older.openQuestions, newer.openQuestions),
+    fieldLostItems(older.filesInspected, newer.filesInspected),
+    fieldLostItems(older.filesChanged, newer.filesChanged),
+    fieldLostItems(older.commandOutcomes, newer.commandOutcomes),
+    fieldLostItems(older.failingTests, newer.failingTests),
+    fieldLostItems(older.droppedCategories, newer.droppedCategories),
+  ].some(Boolean);
+}
+
+function fieldLostItems<T>(older: readonly T[] = [], newer: readonly T[] = []): boolean {
+  return new Set([...older, ...newer].map((item) => JSON.stringify(item))).size > 16;
 }
 
 function mergeStrings(older: readonly string[] = [], newer: readonly string[] = []): string[] {

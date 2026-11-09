@@ -4,7 +4,7 @@
 // the returned diagnostics so UI/audit consumers can render zeros without conditionals.
 
 import {
-  CANDIDATE_OMISSION_REASONS,
+  connectedContextOmittedCounts,
   isValidScopePath,
   type CandidateFile,
   type CandidateOmissionReason,
@@ -134,22 +134,12 @@ function buildAnnotated(
   return annotated;
 }
 
-function emptyOmittedCounts(): Record<CandidateOmissionReason, number> {
-  const counts = {} as Record<CandidateOmissionReason, number>;
-  for (const reason of CANDIDATE_OMISSION_REASONS) {
-    counts[reason] = 0;
-  }
-  return counts;
-}
-
 function tallyOmittedCounts(
   omitted: readonly OmittedContextEntry[],
   outsideScopeCount: number,
 ): Record<CandidateOmissionReason, number> {
-  const counts = emptyOmittedCounts();
-  for (const entry of omitted) {
-    counts[entry.reason] += 1;
-  }
+  // The contracts owner counts every omission reason; the copy adds the rejected paths.
+  const counts = { ...connectedContextOmittedCounts({ omitted }) };
   counts["outside-scope"] += outsideScopeCount;
   return counts;
 }

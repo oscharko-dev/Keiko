@@ -41,16 +41,16 @@ export function createEventEmitter(
   return {
     emit: (body: WorkflowEventBody): void => {
       seq += 1;
-      // The body is a complete discriminated-union member minus the envelope; re-attaching the
-      // envelope yields a valid WorkflowEvent. The cast is over the union, not a widening to any.
-      const event = {
+      // The body is a complete discriminated-union member minus the envelope, so re-attaching the
+      // envelope yields a WorkflowEvent that the compiler checks without a cast.
+      const event: WorkflowEvent = {
         schemaVersion: "1" as const,
         runId,
         fingerprint,
         seq,
         ts: now(),
         ...body,
-      } as WorkflowEvent;
+      };
       sink.emit(event);
     },
   };

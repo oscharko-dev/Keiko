@@ -189,7 +189,7 @@ const GATEWAY_REASON_RULES: readonly {
 //   3. recognizable gateway/provider classes -> a fixed category, no message;
 //   4. everything else -> a fixed generic code, no message.
 function safeGatewayReason(error: Error): string | undefined {
-  const code = (error as { readonly code?: unknown }).code;
+  const code = "code" in error ? error.code : undefined;
   const text =
     `${error.name} ${typeof code === "string" ? code : ""} ${error.message}`.toLowerCase();
   const match = GATEWAY_REASON_RULES.find((rule) =>
@@ -207,7 +207,7 @@ export function safeReasonSummary(error: unknown): string {
     return `qi-safe-error: ${error.safe.code}`;
   }
   if (error instanceof Error && SAFE_QI_ERROR_NAMES.has(error.name)) {
-    const code = (error as { readonly code?: unknown }).code;
+    const code = "code" in error ? error.code : undefined;
     if (typeof code === "string" && QI_ERROR_CODE_PATTERN.test(code)) {
       return `qi-error: ${code}`;
     }

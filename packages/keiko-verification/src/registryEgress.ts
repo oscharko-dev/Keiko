@@ -221,6 +221,6 @@ export async function startRegistryEgressProxy(
 
 // A body-free name for a server fault: the system error code when there is one.
 function faultCode(error: unknown): string {
-  const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
+  const code = error instanceof Error && "code" in error ? error.code : undefined;
   return typeof code === "string" && code.length > 0 ? code : "server-error";
 }

@@ -189,10 +189,23 @@ function firstBalancedArray(text: string): string | null {
 }
 
 function isRawSalienceItem(value: unknown): value is RawSalienceItem {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-  const item = value as Record<string, unknown>;
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "body" in value &&
+    "type" in value &&
+    "confidence" in value &&
+    "scope" in value &&
+    "source" in value &&
+    "tags" in value &&
+    hasSalienceValues(value)
+  );
+}
+
+// Every RawSalienceItem field is present; this checks each field's value.
+function hasSalienceValues(
+  item: Readonly<Record<keyof RawSalienceItem, unknown>>,
+): item is RawSalienceItem {
   return (
     typeof item.body === "string" &&
     typeof item.type === "string" &&
@@ -219,11 +232,15 @@ function unwrapWrappedItems(text: string): readonly unknown[] | null {
   } catch {
     return null;
   }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    Array.isArray(parsed) ||
+    !("items" in parsed)
+  ) {
     return null;
   }
-  const items = (parsed as Record<string, unknown>).items;
-  return Array.isArray(items) ? items : null;
+  return Array.isArray(parsed.items) ? parsed.items : null;
 }
 
 // Parse the model output into validated raw items. Accepts the structured-output root object
