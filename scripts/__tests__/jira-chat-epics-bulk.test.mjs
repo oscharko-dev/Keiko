@@ -608,6 +608,12 @@ describe("ordinary browser bulk orchestration", () => {
       expect(new Set(seeded.map((entry) => entry.requirementId)).size).toBe(count);
       expect(seeded.every((entry) => entry.ruleId === "summary-pattern")).toBe(true);
       expect(seeded.every((entry) => entry.prompt.includes("Do not correct"))).toBe(true);
+      // The rule under test is the only refusal: the Epic Name Data Center requires is supplied.
+      expect(
+        seeded.every((entry) =>
+          entry.prompt.includes(`Set the Epic Name Jira requires to ${entry.requirementId}.`),
+        ),
+      ).toBe(true);
     },
   );
   it("records exact batch identities and uncertain-submit state before each visible turn", async () => {
