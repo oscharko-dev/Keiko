@@ -85,9 +85,14 @@ function session() {
 }
 function native(handler) {
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (url, options) => {
-    expect(options.method).toBe("GET");
-    const value = await handler(new URL(url));
+    const seed = options.method === "PUT" && new URL(url).pathname.endsWith("/columns");
+    // The recipe's only native write is the explicit layout seed on its own synthetic filter.
+    if (!seed) expect(options.method).toBe("GET");
+    else expect(options.headers["Content-Type"]).toBe("application/x-www-form-urlencoded");
+    const value = await handler(new URL(url), options);
     expect(value, `Unexpected native read ${new URL(url).pathname}`).not.toBeUndefined();
+    // Jira answers a bare 404 for a filter without its own column layout.
+    if (value.bareNotFound) return new globalThis.Response("{}", { status: 404 });
     return new globalThis.Response(JSON.stringify(value), { status: 200 });
   });
 }
@@ -167,13 +172,43 @@ it.each(cases)("uses the actual $tool argument contract and effect classificatio
   expect(typeof entry.readback).toBe("function");
 });
 
+/** The native column layout of one synthetic filter: system default, or an explicit own layout. */
+function filterLayout() {
+  const state = { columns: ["key", "summary", "assignee"], explicit: false };
+  return {
+    get columns() {
+      return state.columns;
+    },
+    set(columns) {
+      state.columns = columns;
+      state.explicit = true;
+    },
+    reset() {
+      state.columns = ["key", "summary", "assignee"];
+      state.explicit = false;
+    },
+    handle(options, legacy) {
+      if (options.method === "PUT") {
+        // The recipe's explicit layout seed is form-encoded, as Jira reads it.
+        this.set(options.body.split("&").map((pair) => decodeURIComponent(pair.split("=")[1])));
+        return {};
+      }
+      if (!state.explicit) return { bareNotFound: true };
+      return legacy
+        ? state.columns.map((value) => ({ value }))
+        : {
+            columnConfig: "FILTER",
+            columnLayoutItems: state.columns.map((id) => ({ id })),
+          };
+    },
+  };
+}
 it.each([false, true])(
   "qualifies the owned filter lifecycle with native layout provenance %s",
   async (legacy) => {
     const c = { actor: "admin", session: session() };
     const f = fixture();
-    let columns = ["key", "summary", "assignee"];
-    let configuration = "SYSTEM";
+    const layout = filterLayout();
     let permissions = [];
     const filter = {
       id: "43",
@@ -188,14 +223,11 @@ it.each([false, true])(
         matched: true,
       });
     };
-    native((url) => {
+    native((url, options) => {
       const path = url.pathname;
       if (path.endsWith("/myself")) return actor;
       if (path.endsWith("/defaultShareScope")) return { scope: "private" };
-      if (path.endsWith("/columns"))
-        return legacy
-          ? columns.map((value) => ({ value }))
-          : { columnConfig: configuration, columnLayoutItems: columns.map((id) => ({ id })) };
+      if (path.endsWith("/columns")) return layout.handle(options, legacy);
       if (path.endsWith("/permission/47")) return permissions[0];
       if (path.endsWith("/permission")) return permissions;
       if (path.endsWith("/user")) return { groups: { items: [{ name: "synthetic-group" }] } };
@@ -208,15 +240,13 @@ it.each([false, true])(
       let data = {};
       switch (entry.tool) {
         case "jira.filter-columns":
-          data = { items: columns.map((value) => (legacy ? { value } : { id: value })) };
+          data = { items: layout.columns.map((value) => (legacy ? { value } : { id: value })) };
           break;
         case "jira.set-filter-columns":
-          columns = args.columns;
-          configuration = "FILTER";
+          layout.set(args.columns);
           break;
         case "jira.reset-filter-columns":
-          columns = ["key", "summary", "assignee"];
-          configuration = "SYSTEM";
+          layout.reset();
           break;
         case "jira.add-filter-permission":
           permissions = [
@@ -244,7 +274,7 @@ it.each([false, true])(
         matched: true,
       });
     }
-    expect(columns).toEqual(["key", "summary", "assignee"]);
+    expect(layout.columns).toEqual(["key", "summary", "assignee"]);
     expect(permissions).toEqual([]);
   },
 );
