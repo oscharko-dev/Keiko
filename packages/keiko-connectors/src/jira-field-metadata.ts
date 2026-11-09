@@ -649,19 +649,22 @@ function setValue(
  * Name") where Jira wants the id; naming the id lets it correct the call in the same turn. The key
  * is echoed only when it is a safe field id, never an arbitrary string.
  */
+/** A display name that names exactly one field is answered with that field's id. */
+function unknownFieldMessage(named: readonly JiraFieldMetadata[], key: string): string | undefined {
+  const [only] = named;
+  if (only !== undefined && named.length === 1) {
+    return `Fields are keyed by field id, not display name: send "${key}" as ${only.id}.`;
+  }
+  if (isJiraFieldId(key)) return undefined;
+  return "A key in fields is not a field id. Use the field ids jira.create.fields returns.";
+}
 function unknownFieldFailure(
   byId: ReadonlyMap<string, JiraFieldMetadata>,
   key: string,
 ): FieldFailure | undefined {
   if (isJiraFieldId(key) && byId.has(key)) return undefined;
   const named = [...byId.values()].filter((field) => field.name === key);
-  const [only] = named;
-  const message =
-    only !== undefined && named.length === 1
-      ? `Fields are keyed by field id, not display name: send "${key}" as ${only.id}.`
-      : isJiraFieldId(key)
-        ? undefined
-        : "A key in fields is not a field id. Use the field ids jira.create.fields returns.";
+  const message = unknownFieldMessage(named, key);
   return {
     ok: false,
     reason: "invalid-field",
