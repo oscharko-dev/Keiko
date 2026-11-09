@@ -275,6 +275,12 @@ export const API_QUALIFICATION_ADMIN_CASES = [
         c,
         "jira.reset-link-type-order",
         dispatchedStatuses(c),
+        {
+          shadow: {
+            path: "/rest/api/2/issueLinkType/order",
+            message: "Invalid issue link type id 'order' specified.",
+          },
+        },
       );
       if (absent !== undefined) return absent;
       const rows = (await read(c, "/rest/api/2/issueLinkType")).issueLinkTypes;

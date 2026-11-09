@@ -303,3 +303,45 @@ it.each([
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+it("proves the shadowed link-type order route from the wildcard sibling's id refusal", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "keiko-ac7-shadow-"));
+  mkdirSync(join(directory, "secrets"));
+  writeFileSync(join(directory, "secrets/api-user-password"), "synthetic-api", { mode: 0o600 });
+  const refusal = { errorMessages: ["Invalid issue link type id 'order' specified."], errors: {} };
+  let message = refusal;
+  const native = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+    const server = new URL(url).pathname === "/rest/api/2/serverInfo";
+    return new globalThis.Response(
+      JSON.stringify(
+        server
+          ? { version: "10.3.26", versionNumbers: [10, 3, 26], deploymentType: "Data Center" }
+          : message,
+      ),
+      { status: server ? 200 : 400 },
+    );
+  });
+  const context = {
+    actor: "api",
+    session: { ...DEFAULT_LAB_CONNECTION, directory, jiraVersion: "10.3.26" },
+  };
+  const shadow = {
+    path: "/rest/api/2/issueLinkType/order",
+    message: "Invalid issue link type id 'order' specified.",
+  };
+  try {
+    await expect(
+      missingReleaseCapability(context, "jira.reset-link-type-order", [400], { shadow }),
+    ).resolves.toMatchObject({ capabilityAbsent: true, routeShadowed: true, status: 400 });
+    await expect(
+      missingReleaseCapability(context, "jira.reset-link-type-order", [400]),
+    ).resolves.toBeUndefined();
+    message = { errorMessages: ["Some other validation message"], errors: {} };
+    await expect(
+      missingReleaseCapability(context, "jira.reset-link-type-order", [400], { shadow }),
+    ).rejects.toThrow();
+  } finally {
+    native.mockRestore();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

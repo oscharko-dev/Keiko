@@ -40,14 +40,15 @@ function observedResponses(witness) {
     )
   );
 }
+/** A 400 counts only when the readback proved a sibling wildcard route answered for the path. */
+const absentStatuses = (statuses, readback) =>
+  statuses.every((status) => status === 404 || status === 405) ||
+  (readback.routeShadowed === true && statuses.every((status) => status === 400));
 function nativeRefusal(statuses, data, readback) {
   if (statuses.every((status) => status === 403) && data.reason === "permission-denied")
     return readback?.permissionDenied === true ? "denied" : "unknown";
   // A resource 404, transport failure or Keiko codec refusal does not prove missing capability.
-  if (
-    statuses.every((status) => status === 404 || status === 405) &&
-    readback?.capabilityAbsent === true
-  )
+  if (readback?.capabilityAbsent === true && absentStatuses(statuses, readback))
     return "unavailable";
   return undefined;
 }

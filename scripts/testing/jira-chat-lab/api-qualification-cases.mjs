@@ -28,17 +28,28 @@ function inventoryReleases(tool) {
  * again independently, belongs to the inventoried releases that do not publish this identity.
  * A resource-specific refusal never enters this proof.
  */
-export async function missingReleaseCapability(context, tool, statuses) {
-  if (statuses.length === 0 || !statuses.every((status) => status === 404 || status === 405))
+export async function missingReleaseCapability(context, tool, statuses, { shadow } = {}) {
+  const routeLevel = statuses.every((status) => status === 404 || status === 405);
+  if (
+    statuses.length === 0 ||
+    !(routeLevel || (shadow !== undefined && statuses.every((s) => s === 400)))
+  )
     return undefined;
   const family = releaseFamily(context.session.jiraVersion);
   const { published, inventoried } = inventoryReleases(tool);
   if (!published || !inventoried.includes(family) || published.includes(family)) return undefined;
+  if (!routeLevel) {
+    // The literal path segment is captured by a sibling wildcard route, which names it as an id.
+    const probe = await nativeRead(context, shadow.path);
+    assert.equal(probe.status, 400);
+    assert.deepEqual(probe.value?.errorMessages, [shadow.message]);
+  }
   const observed = await nativeRead(context, "/rest/api/2/serverInfo");
   assert.equal(observed.status, 200);
   assertSessionServerInfo(context.session, observed.value);
   return {
     capabilityAbsent: true,
+    ...(routeLevel ? {} : { routeShadowed: true }),
     status: statuses[0],
     release: observed.value.version,
     reason: "absent-in-release-inventory",

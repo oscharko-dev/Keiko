@@ -264,7 +264,7 @@ function needsReconcile(journal, evidence) {
     evidence.runtimeAvailability === "unavailable" &&
     evidence.readback?.capabilityAbsent === true &&
     journal.phase === "settled" &&
-    new Set([404, 405]).has(journal.httpStatus);
+    new Set([400, 404, 405]).has(journal.httpStatus);
   return !absent;
 }
 async function gradeCase(

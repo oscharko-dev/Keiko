@@ -120,6 +120,18 @@ describe("native Jira qualification evidence", () => {
     ).toBe("unknown");
   });
 
+  it("accepts a 400 only with the shadowed-route absence proof", () => {
+    const o = observation();
+    o.dispatch.result.status = "failed";
+    o.dispatch.receipt.status = "failed";
+    o.witness.responses[0].status = 400;
+    expect(classifyQualification({ ...o, readback: { capabilityAbsent: true } })).toBe("unknown");
+    expect(classifyQualification({ ...o, readback: { routeShadowed: true } })).toBe("unknown");
+    expect(
+      classifyQualification({ ...o, readback: { capabilityAbsent: true, routeShadowed: true } }),
+    ).toBe("unavailable");
+  });
+
   it("refuses foreign operation bindings, truncated responses and unobserved calls", () => {
     const o = observation();
     expect(classifyQualification({ ...o, identity: "GET /rest/api/2/project" })).toBe("unknown");
