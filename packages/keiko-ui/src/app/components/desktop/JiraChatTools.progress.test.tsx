@@ -260,6 +260,34 @@ describe.each(["en", "de"] as const)("draft batch progress card in %s", (locale)
     await renderTools(locale, [exchange], "completed");
     expect(screen.getByRole("progressbar", { name: copy.complete })).toBeVisible();
   });
+
+  it.each(["live", "resumed", "restored"] as const)(
+    "finishes a %s 370-issue batch without leaving the fill behind its count",
+    async (mode) => {
+      const progress: ChatToolBatchProgress = {
+        phase: "complete",
+        draftedCount: 370,
+        plannedCount: 370,
+        coveredRequirementCount: 370,
+        requirementCount: 370,
+        failedCount: 0,
+      };
+      const exchange: ChatToolExchange = {
+        call: {
+          id: "batch-complete",
+          name: "jira_draft_batch",
+          arguments: mode === "resumed" ? { create: true } : { requirements: "synthetic" },
+        },
+        ...(mode === "restored" ? {} : { batchProgress: progress }),
+        result: settled({ ...progress, outcome: "succeeded" }),
+      };
+      await renderTools(locale, [exchange], "completed");
+      const bar = screen.getByRole<HTMLProgressElement>("progressbar");
+      expect(bar.value).toBe(370);
+      expect(bar.max).toBe(370);
+      expect(bar.position).toBe(1);
+    },
+  );
 });
 
 function requirementsPage(
