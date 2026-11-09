@@ -182,12 +182,26 @@ function recordUngraded(specification, directory, evidence) {
 }
 const prepareFailure = (error) =>
   error instanceof assert.AssertionError ? "prepare-precondition" : "prepare-failed";
+/** Names the recipe line that refused, never a value: a message only when the recipe wrote it. */
+function prepareSite(error) {
+  const frame = String(error?.stack ?? "")
+    .split("\n")
+    .find((line) => line.includes("jira-chat-lab/api-qualification-"));
+  const site = /(api-qualification-[\w-]+\.mjs:\d+)/.exec(frame ?? "")?.[1];
+  const message = error instanceof assert.AssertionError && !error.generatedMessage;
+  return {
+    ...(site ? { site } : {}),
+    ...(message ? { message: String(error.message).slice(0, 160) } : {}),
+    errorType: error instanceof Error ? error.name : "unknown",
+  };
+}
 async function prepareCase(context, chat, specification, fixture) {
   try {
     await specification.prepare?.(context, fixture, chat);
     return undefined;
   } catch (error) {
     if (error instanceof ReconcileRequiredError) throw error;
+    context.qualificationPrepareDetail = prepareSite(error);
     return prepareFailure(error);
   }
 }
@@ -270,7 +284,10 @@ export async function runQualificationCase(
     return recordUngraded(
       specification,
       directory,
-      ungradedEvidence(specification, report, failure, witness.effectsStarted()),
+      {
+        ...ungradedEvidence(specification, report, failure, witness.effectsStarted()),
+        detail: context.qualificationPrepareDetail,
+      },
     );
   const id = caseId(specification);
   const pending = join(directory, `${id}.pending.json`);
