@@ -71,7 +71,7 @@ async function readPreference(
     `mypreferences?${new URLSearchParams({ key }).toString()}`,
     "GET",
     undefined,
-    "json-scalar",
+    "text-scalar",
   );
   if (!response.ok) return dispatchFailure(response);
   if (response.status !== 200) return SAVED_MALFORMED;

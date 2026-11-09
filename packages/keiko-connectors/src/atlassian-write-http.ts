@@ -20,6 +20,7 @@
 // content.
 
 import type { AtlassianConnectorWriteFailureReason } from "@oscharko-dev/keiko-contracts";
+import { parseAtlassianJsonValue } from "./atlassian-sync-classify.js";
 import {
   JIRA_ATTACHMENT_MAX_BYTES,
   sanitizeJiraMutationFailureDetail,
@@ -88,6 +89,7 @@ export interface AtlassianWriteHttpRequest {
     | "json-array"
     | "json-object-or-array"
     | "json-scalar"
+    | "text-scalar"
     | "none"
     | "jira-email-template-zip";
 }
@@ -187,6 +189,22 @@ function classifyFailure(
   };
 }
 
+/** Jira serves some scalar resources (getAvailableMetrics, mypreferences) as text/plain. A JSON
+ * string is unquoted; anything else is the literal text, bounded and free of control characters
+ * other than line breaks and tabs. */
+function hasForbiddenControl(text: string): boolean {
+  for (const char of text) {
+    const code = char.codePointAt(0) ?? 0;
+    const lineBreakOrTab = code === 0x09 || code === 0x0a || code === 0x0d;
+    if ((code < 0x20 && !lineBreakOrTab) || code === 0x7f) return true;
+  }
+  return false;
+}
+function plainTextScalar(bodyText: string): string | undefined {
+  if (hasForbiddenControl(bodyText)) return undefined;
+  const decoded = parseAtlassianJsonValue(bodyText);
+  return typeof decoded === "string" ? decoded : bodyText;
+}
 type JsonResponsePayload = Pick<
   Extract<AtlassianWriteHttpOutcome, { readonly ok: true }>,
   "body" | "items" | "scalar"
@@ -199,6 +217,10 @@ function jsonResponsePayload(
     case "json-array": {
       const items = parseJsonArray(bodyText);
       return items === undefined ? undefined : { body: undefined, items };
+    }
+    case "text-scalar": {
+      const scalar = plainTextScalar(bodyText);
+      return scalar === undefined ? undefined : { body: undefined, scalar };
     }
     case "json-scalar": {
       const scalar = parseJsonScalar(bodyText);

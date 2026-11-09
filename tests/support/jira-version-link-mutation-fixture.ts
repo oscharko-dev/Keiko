@@ -119,7 +119,7 @@ function versionLinkRows(state: VersionLinkState): (VersionLinkRow | undefined)[
       : {
           self: `https://proxy.invalid/context/rest/api/2/version/81/remotelink/${encodeURIComponent(globalId)}`,
         }),
-    ...(controls.omitValue ? {} : { link: JSON.stringify(value) }),
+    ...(controls.omitValue ? {} : { link: structuredClone(value) }),
   }));
   return controls.duplicate ? [...values, values[0]] : values;
 }

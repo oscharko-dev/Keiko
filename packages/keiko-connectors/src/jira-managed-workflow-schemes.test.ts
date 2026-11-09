@@ -133,6 +133,27 @@ describe("published native workflow-scheme reads", () => {
       expect(isJiraWorkflowSchemeRead(operation)).toBe(true);
     },
   );
+  it("answers an unmapped issue type with only its identity, never an inferred workflow", async () => {
+    const request = requestFor({ issueType: "1" });
+    const result = await executeJiraWorkflowSchemeRead(
+      "jira.workflow-scheme-issue-type",
+      { schemeId: "37", issueTypeId: "1" },
+      request,
+    );
+    expect(result.data).toEqual({ outcome: "succeeded", schemeId: "37", issueTypeId: "1" });
+    expect(
+      (
+        await executeJiraWorkflowSchemeRead(
+          "jira.workflow-scheme-issue-type",
+          { schemeId: "37", issueTypeId: "1" },
+          requestFor({ issueType: "2" }),
+        )
+      ).data.reason,
+    ).toBe("malformed-payload");
+    expect((await read("jira.workflow-scheme-default", {}, { schemeId: "37" })).data.reason).toBe(
+      "malformed-payload",
+    );
+  });
   it("retains scheme/draft identity separately from the requested parent and paginates mapping differences", async () => {
     const result = await read(
       "jira.workflow-scheme-draft",

@@ -126,17 +126,21 @@ function closedNative(
   const raw = asRecord(value);
   return raw !== undefined && Object.keys(raw).every((key) => keys.includes(key)) ? raw : undefined;
 }
+/** Jira names the parent issue by its key or its numeric ID in a remote link's self URL; both name
+ * the same bound issue, and nothing else is accepted. */
+export function remoteLinkSelfMatches(self: unknown, issue: LinkIssue, id: string): boolean {
+  return (
+    jiraResourceSelfMatches(self, `issue/${issue.id}/remotelink/${id}`) ||
+    jiraResourceSelfMatches(self, `issue/${issue.key}/remotelink/${id}`)
+  );
+}
 function remoteLinkIdentity(
   raw: Readonly<Record<string, unknown>>,
   issue: LinkIssue,
 ): string | undefined {
   const id = jiraNativeNumericId(raw.id);
   if (id === undefined) return undefined;
-  if (
-    raw.self !== undefined &&
-    raw.self !== null &&
-    !jiraResourceSelfMatches(raw.self, `issue/${issue.id}/remotelink/${id}`)
-  )
+  if (raw.self !== undefined && raw.self !== null && !remoteLinkSelfMatches(raw.self, issue, id))
     return undefined;
   return id;
 }

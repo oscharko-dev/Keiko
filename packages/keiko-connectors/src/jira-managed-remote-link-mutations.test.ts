@@ -297,6 +297,21 @@ it("accepts comparison-only proxy self metadata without following it", async () 
   expect(await run(request, "jira.update-remote-link", UPDATE)).toMatchObject({ ok: true });
   expect(request.mock.calls.every(([path]) => !path.startsWith("http"))).toBe(true);
 });
+it("accepts a self URL that names the bound issue by key, and still refuses another issue", async () => {
+  const keyed = {
+    ...NATIVE,
+    self: `https://proxy.example.invalid/rest/api/2/issue/${ISSUE.key}/remotelink/${ID}`,
+  };
+  const accepted = fixture({ existing: true, before: [keyed], detail: keyed });
+  expect(await run(accepted, "jira.update-remote-link", UPDATE)).toMatchObject({ ok: true });
+  const foreign = {
+    ...NATIVE,
+    self: `https://proxy.example.invalid/rest/api/2/issue/OTHER-9/remotelink/${ID}`,
+  };
+  const refused = fixture({ existing: true, before: [foreign], detail: foreign });
+  expect(await run(refused, "jira.update-remote-link", UPDATE)).toMatchObject({ ok: false });
+  expect(effects(refused)).toHaveLength(0);
+});
 it.each(["unavailable", "timeout"] as const)(
   "lost %s acknowledgement stays unknown with no replay or later adoption",
   async (reason) => {

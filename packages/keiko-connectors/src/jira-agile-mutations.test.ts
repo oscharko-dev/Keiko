@@ -40,6 +40,23 @@ function response(status: number, body?: unknown): AtlassianHttpBodyResult {
     truncated: false,
   };
 }
+const SPRINT_CATALOG = [
+  { id: "customfield_10020", schema: { custom: "com.pyxis.greenhopper.jira:gh-sprint" } },
+];
+/** Core readback of the Sprint custom field; the Agile issue resource omits an empty sprint. */
+function backlogReadback(
+  value: unknown,
+  extra: Record<string, unknown> = {},
+): (request: { readonly url: string }) => AtlassianHttpBodyResult {
+  return (request) =>
+    request.url.endsWith("/field")
+      ? response(200, SPRINT_CATALOG)
+      : response(200, {
+          id: "12",
+          key: new URL(request.url).pathname.split("/").at(-1),
+          fields: { customfield_10020: value, ...extra },
+        });
+}
 function fixture(replies: readonly AtlassianHttpBodyResult[]): Fixture {
   let index = 0;
   const http = vi.fn<AtlassianHttpBodyPort>(() =>
@@ -257,11 +274,41 @@ describe("native Agile writes and authoritative readback", () => {
     expect(f.http.mock.calls[2]?.[0].url).toContain("/issue/APP-12?fields=sprint");
   });
   it("never calls a missing sprint field proof of removal to the backlog", async () => {
-    const f = fixture([response(204), response(200, { id: "12", key: "APP-12", fields: {} })]);
+    const f = fixture([
+      response(204),
+      response(200, SPRINT_CATALOG),
+      response(200, { id: "12", key: "APP-12", fields: {} }),
+    ]);
     expect(await f.run("jira.backlog-move-issues", { issues: ["APP-12"] })).toEqual({
       ok: false,
       reason: "malformed-payload",
       receipt: { issueKeys: ["APP-12"] },
+    });
+  });
+  it("confirms a backlog move on the core Sprint field, never on the Agile omission", async () => {
+    const f = fixture([
+      response(204),
+      response(200, SPRINT_CATALOG),
+      response(200, { id: "12", key: "APP-12", fields: { customfield_10020: null } }),
+    ]);
+    expect(await f.run("jira.backlog-move-issues", { issues: ["APP-12"] })).toEqual({
+      ok: true,
+      receipt: { issueKeys: ["APP-12"] },
+    });
+    expect(f.http.mock.calls[1]?.[0].url).toMatch(/\/rest\/api\/2\/field$/u);
+    expect(f.http.mock.calls[2]?.[0].url).toContain(
+      "/rest/api/2/issue/APP-12?fields=customfield_10020",
+    );
+  });
+  it("reports a conflict when the core Sprint field still names a sprint after a backlog move", async () => {
+    const f = fixture([
+      response(204),
+      response(200, SPRINT_CATALOG),
+      response(200, { id: "12", key: "APP-12", fields: { customfield_10020: [{ id: 9 }] } }),
+    ]);
+    expect(await f.run("jira.backlog-move-issues", { issues: ["APP-12"] })).toMatchObject({
+      ok: false,
+      reason: "conflict",
     });
   });
   it("confirms epic membership with the resolved epic identity", async () => {
@@ -419,7 +466,7 @@ describe("Agile create prerequisites and confirmed identities", () => {
         phases[0]?.abort();
         return Promise.resolve(response(204));
       }
-      return Promise.resolve(response(200, { id: "12", key: "APP-12", fields: { sprint: null } }));
+      return Promise.resolve(backlogReadback(null)(request));
     });
     expect(await f.run("jira.backlog-move-issues", { issues: ["APP-12"] })).toEqual({
       ok: true,
@@ -456,11 +503,7 @@ it("bounds concurrent membership evidence reads without repeating the native bat
     peak = Math.max(peak, active);
     await Promise.resolve();
     active -= 1;
-    return response(200, {
-      id: "12",
-      key: new URL(request.url).pathname.split("/").at(-1),
-      fields: { sprint: null },
-    });
+    return backlogReadback([])(request);
   });
   expect(await f.run("jira.backlog-move-issues", { issues: keys })).toEqual({
     ok: true,
@@ -469,7 +512,8 @@ it("bounds concurrent membership evidence reads without repeating the native bat
   expect(peak).toBe(4);
   expect(active).toBe(0);
   expect(f.http.mock.calls.filter(([request]) => request.method === "POST")).toHaveLength(1);
+  // One Sprint-field catalog read plus one core issue read per key.
   expect(f.http.mock.calls.filter(([request]) => request.method === "GET")).toHaveLength(
-    keys.length,
+    keys.length + 1,
   );
 });

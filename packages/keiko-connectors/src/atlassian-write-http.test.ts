@@ -492,6 +492,40 @@ it.each(["{}", "[]", "", "undefined", "NaN", "1e309", "<html>Unavailable</html>"
     expect(fixture.requests).toHaveLength(1);
   },
 );
+it.each([
+  ["50", "50"],
+  ['"50"', "50"],
+  ["metric.a\nmetric.b", "metric.a\nmetric.b"],
+  ["", ""],
+  ["true", "true"],
+])("reads the text/plain scalar %j literally in text-scalar mode", async (bodyText, scalar) => {
+  const fixture = scriptedPort([response(200, bodyText)]);
+  expect(
+    await executeAtlassianWriteRequest(
+      { http: fixture.port },
+      { method: "GET", url: URL, expect: "text-scalar" },
+    ),
+  ).toEqual({ ok: true, status: 200, body: undefined, scalar });
+});
+it.each(["a\u0000b", "a\u001bb"])(
+  "refuses control characters and truncation in text-scalar mode: %j",
+  async (bodyText) => {
+    const fixture = scriptedPort([response(200, bodyText)]);
+    expect(
+      await executeAtlassianWriteRequest(
+        { http: fixture.port },
+        { method: "GET", url: URL, expect: "text-scalar" },
+      ),
+    ).toEqual({ ok: false, reason: "malformed-payload", httpStatus: 200 });
+    const cut = scriptedPort([response(200, "ok", { truncated: true })]);
+    expect(
+      await executeAtlassianWriteRequest(
+        { http: cut.port },
+        { method: "GET", url: URL, expect: "text-scalar" },
+      ),
+    ).toEqual({ ok: false, reason: "malformed-payload", httpStatus: 200 });
+  },
+);
 it("refuses truncated scalar JSON even when its retained prefix is valid", async () => {
   const fixture = scriptedPort([response(200, "true", { truncated: true })]);
   expect(

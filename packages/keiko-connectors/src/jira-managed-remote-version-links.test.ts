@@ -20,7 +20,8 @@ function port(
   );
 }
 function link(value: unknown, extra: Record<string, unknown> = {}): Record<string, unknown> {
-  return { name: "Observed link", link: JSON.stringify(value), ...extra };
+  // RemoteEntityLinkJsonBean.link is @JsonRawValue: the wire value is the structured JSON itself.
+  return { name: "Observed link", link: value, ...extra };
 }
 it("binds a version before reading its fixed link resource and preserves typed null/empty/false/zero", async () => {
   const request = port(
@@ -111,24 +112,23 @@ it("locally pages the validated collection without changing the native request",
     },
   ]);
 });
-it("keeps missing link content unknown and actual encoded null observed", async () => {
+it("keeps an omitted link unknown and an explicit null as the stored JSON null", async () => {
   const request = port({
-    links: [{ name: "No content" }, { name: "Null field", link: null }, link(null)],
+    links: [{ name: "No content" }, { name: "Null field", link: null }],
   });
   expect(
     (await read("jira.remote-version-links", { globalId: "selected" }, request)).data.items,
   ).toEqual([
     { name: "No content", reviewIdentityAvailable: false, valueAvailable: false },
-    { name: "Null field", reviewIdentityAvailable: false, valueAvailable: false },
     {
-      name: "Observed link",
+      name: "Null field",
       reviewIdentityAvailable: false,
       valueAvailable: true,
       valueNodes: [{ path: "", kind: "null" }],
     },
   ]);
 });
-it("decodes the documented native JSON string only once", async () => {
+it("keeps a native JSON string as a literal and never decodes it again", async () => {
   const text = '{"nested":"plain text, not another parse"}';
   const result = await read(
     "jira.version-remote-link",
@@ -210,15 +210,17 @@ it.each([".", "..", "a/b", "a\\b", "a%2Fb", "a\n", "\ud800"])(
     expect(request).not.toHaveBeenCalled();
   },
 );
-it.each(["", "{", "undefined", 7, {}])(
-  "refuses malformed native encoded link content: %j",
+it.each(["", "{", "undefined", '{"globalId":"quoted"}'])(
+  "preserves a native JSON string link as a literal, never decoding it again: %j",
   async (value) => {
     const result = await read(
       "jira.remote-version-links",
       { globalId: "selected" },
       port({ links: [{ link: value }] }),
     );
-    expect(result.data.reason).toBe("malformed-payload");
+    expect(result.data.items).toMatchObject([
+      { valueAvailable: true, valueNodes: [{ path: "", kind: "string", textValue: value }] },
+    ]);
   },
 );
 it("rejects oversized link values and native collections without pretending the value is complete", async () => {
@@ -239,7 +241,7 @@ it("validates even a malformed row outside the requested local page", async () =
   const result = await read(
     "jira.remote-version-links",
     { globalId: "selected", maxResults: 1 },
-    port({ links: [link(0), { link: "{" }] }),
+    port({ links: [link(0), "not a row"] }),
   );
   expect(result.data.reason).toBe("malformed-payload");
 });

@@ -197,8 +197,8 @@ function single(response: JiraReadResponse, selected: Selection): ManagedMcpTool
 export function isJiraJobObservationRead(name: string): name is JobRead {
   return Object.hasOwn(DEFINITIONS, name);
 }
-function responseMode(selected: Selection): "json" | "json-array" | "json-scalar" {
-  if (selected.mode === "scalar") return "json-scalar";
+function responseMode(selected: Selection): "json" | "json-array" | "text-scalar" {
+  if (selected.mode === "scalar") return "text-scalar";
   return selected.mode === "single" ? "json" : "json-array";
 }
 function failedResponse(

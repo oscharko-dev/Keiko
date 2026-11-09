@@ -208,9 +208,9 @@ export function executeJiraApplicationSettingsRead(
   request: JiraMutationRequest,
 ): Promise<ManagedMcpToolResult> {
   const selected = selection(name, args);
-  let expect: "json-scalar" | "json-object-or-array" | "json-array";
+  let expect: "text-scalar" | "json-object-or-array" | "json-array";
   if (selected?.mode === "preference") {
-    expect = "json-scalar";
+    expect = "text-scalar";
   } else if (selected?.mode === "one") {
     expect = "json-object-or-array";
   } else {

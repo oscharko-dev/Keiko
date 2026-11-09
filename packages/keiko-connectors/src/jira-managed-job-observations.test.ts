@@ -261,7 +261,7 @@ it("retains the documented native metric description without executing or repars
     "monitoring/jmx/getAvailableMetrics",
     "GET",
     undefined,
-    "json-scalar",
+    "text-scalar",
   );
   expect((await read("jira.jmx-metrics", {}, response({ scalar: "" }))).data.metricsText).toBe("");
   expect((await read("jira.jmx-metrics", {}, response({ scalar: false }))).data.reason).toBe(

@@ -39,7 +39,7 @@ export function selectJiraListOrIdPage(
 export async function executeJiraSelectedRead<S extends { readonly path: string }>(
   selected: S | undefined,
   request: JiraMutationRequest,
-  expect: "json" | "json-array" | "json-object-or-array" | "json-scalar",
+  expect: "json" | "json-array" | "json-object-or-array" | "json-scalar" | "text-scalar",
   project: (response: JiraReadResponse, selection: S) => ManagedMcpToolResult,
 ): Promise<ManagedMcpToolResult> {
   if (selected === undefined) return jiraReadFailure("invalid-input");

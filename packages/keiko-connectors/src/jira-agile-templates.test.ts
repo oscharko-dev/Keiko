@@ -91,7 +91,7 @@ function fixture(
             description: "",
             labels: [],
             issuelinks: [],
-            customfield_10000: ["existing"],
+            customfield_10000: inBacklog ? [] : ["existing"],
           },
         }),
       );

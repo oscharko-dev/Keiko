@@ -7,7 +7,6 @@ import {
 } from "./jira-managed-template-gate.js";
 import { dispatchFailure, JiraAcknowledgedMutationError } from "./jira-mutation-failure.js";
 import { jiraNativeId, jiraNativeNumericId } from "./jira-native-values.js";
-import { jiraResourceSelfMatches } from "./jira-resource-self.js";
 import { savedText } from "./jira-saved-configuration-values.js";
 import {
   bindLinkActor,
@@ -29,6 +28,7 @@ import {
   readCompleteRemoteLinks,
   remoteLinkBody,
   remoteLinkExpected,
+  remoteLinkSelfMatches,
   remoteLinkValue,
   sameRemoteLinks,
   sameRemoteLinkValue,
@@ -320,11 +320,7 @@ function acknowledgedTargetMismatch(
       : selected.linkId !== id;
   if (changed) return true;
   const self = body?.self;
-  return (
-    self !== undefined &&
-    self !== null &&
-    !jiraResourceSelfMatches(self, `issue/${prior.issue.id}/remotelink/${id}`)
-  );
+  return self !== undefined && self !== null && !remoteLinkSelfMatches(self, prior.issue, id);
 }
 function malformedAcknowledgedId(
   body: Readonly<Record<string, unknown>> | undefined,

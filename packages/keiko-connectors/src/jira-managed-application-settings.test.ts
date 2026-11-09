@@ -175,7 +175,7 @@ it.each([
       `mypreferences?key=${key}`,
       "GET",
       undefined,
-      "json-scalar",
+      "text-scalar",
     );
   },
 );

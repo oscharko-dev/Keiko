@@ -4,7 +4,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { JIRA_READ_TOOL_FAMILIES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import { asArray, asRecord, parseAtlassianJsonValue } from "./atlassian-sync-classify.js";
+import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import { jiraPropertyValue, JIRA_PROPERTY_VALUE_MAX_BYTES } from "./jira-entity-property-values.js";
 import { boundJiraReadResult } from "./jira-managed-issue-reads.js";
 import { jiraReadFailure, localJiraPage } from "./jira-managed-metadata.js";
@@ -90,15 +90,15 @@ function membership(self: unknown, selected: Selection): boolean {
     selected.globalId === undefined ? encodedGlobalId : encodeURIComponent(selected.globalId);
   return jiraResourceSelfMatches(self, `version/${versionId}/remotelink/${target}`);
 }
-/** RemoteEntityLinkJsonBean.link is documented JSON-encoded native content. Decode exactly once. */
+/** RemoteEntityLinkJsonBean.link is a String field annotated @JsonRawValue (Jira 10.3.26 jira-rest
+ * plugin bytecode): the stored JSON text is emitted verbatim, so the wire value already IS the
+ * structured JSON content. It is never decoded again; a JSON string is a string literal. An omitted
+ * member is unavailable (never inferred); an explicit null is the stored JSON null. */
 export function projectJiraRemoteVersionLinkValue(value: unknown): Projected {
-  if (value === undefined || value === null) return { item: { valueAvailable: false } };
-  if (typeof value !== "string") return { reason: "malformed-payload" };
-  if (Buffer.byteLength(value, "utf8") > JIRA_PROPERTY_VALUE_MAX_BYTES)
+  if (value === undefined) return { item: { valueAvailable: false } };
+  if (typeof value === "string" && Buffer.byteLength(value, "utf8") > JIRA_PROPERTY_VALUE_MAX_BYTES)
     return { reason: "bounds-exceeded" };
-  const decoded = parseAtlassianJsonValue(value);
-  if (decoded === undefined) return { reason: "malformed-payload" };
-  const nodes = jiraPropertyValue(decoded);
+  const nodes = jiraPropertyValue(value);
   return nodes.ok
     ? { item: { valueAvailable: true, valueNodes: nodes.items } }
     : { reason: nodes.reason };

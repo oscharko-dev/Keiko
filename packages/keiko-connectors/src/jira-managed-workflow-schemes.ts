@@ -229,17 +229,20 @@ function workflowsResult(values: readonly unknown[], selected: Selection): Manag
     },
   });
 }
+/** An issue type without an explicit mapping is answered with only its issueType member (21-byte
+ * native body on 10.3.26); the workflow is then absent, never inferred. The scheme default always
+ * names its workflow. */
 function scalarResult(raw: Record<string, unknown>, selected: Selection): ManagedMcpToolResult {
-  if (
-    !jiraNativeText(raw.workflow, 255) ||
-    (selected.kind === "issue-type" && raw.issueType !== selected.issueTypeId)
-  )
+  const issueType = selected.kind === "issue-type";
+  const workflowValid = jiraNativeText(raw.workflow, 255);
+  const workflowAbsent = issueType && (raw.workflow === undefined || raw.workflow === null);
+  if (!(workflowValid || workflowAbsent) || (issueType && raw.issueType !== selected.issueTypeId))
     return jiraReadFailure("malformed-payload");
   return boundJiraReadResult({
     data: {
       outcome: "succeeded",
       schemeId: selected.schemeId,
-      workflow: raw.workflow,
+      ...(workflowValid && typeof raw.workflow === "string" ? { workflow: raw.workflow } : {}),
       ...(selected.issueTypeId === undefined ? {} : { issueTypeId: selected.issueTypeId }),
     },
   });

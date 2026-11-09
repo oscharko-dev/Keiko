@@ -75,6 +75,48 @@ function matchesTarget(member: unknown, selection: Membership): boolean {
   if (value === undefined || agileId(value.id) !== selection.target.id) return false;
   return selection.field !== "epic" || value.key === selection.target.key;
 }
+const SPRINT_FIELD_SCHEMA = "com.pyxis.greenhopper.jira:gh-sprint";
+/** The Agile issue resource omits an empty sprint, so backlog membership is proven on the core issue
+ * through the one Sprint custom field: its key must be present and null or an empty array. */
+async function sprintFieldId(request: JiraMutationRequest): Promise<string | AgileFailure> {
+  const response = await request("field", "GET", undefined, "json-array");
+  if (!response.ok) return dispatchFailure(response);
+  if (response.status !== 200 || response.items === undefined) return AGILE_MALFORMED;
+  const ids = response.items
+    .map(asRecord)
+    .filter((field) => asRecord(field?.schema)?.custom === SPRINT_FIELD_SCHEMA)
+    .map((field) => field?.id);
+  const [id] = ids;
+  return ids.length === 1 && typeof id === "string" && /^customfield_[1-9]\d*$/u.test(id)
+    ? id
+    : AGILE_MALFORMED;
+}
+function backlogFieldMissing(
+  response: Extract<Awaited<ReturnType<JiraMutationRequest>>, { readonly ok: true }>,
+  key: string,
+  fieldId: string,
+): boolean {
+  const fields = asRecord(response.body?.fields);
+  return (
+    response.status !== 200 ||
+    response.body?.key !== key ||
+    agileId(response.body.id) === undefined ||
+    fields === undefined ||
+    !Object.hasOwn(fields, fieldId)
+  );
+}
+async function confirmBacklogMember(
+  request: JiraMutationRequest,
+  key: string,
+  fieldId: string,
+): Promise<AgileFailure | undefined> {
+  const response = await request(`issue/${encodeURIComponent(key)}?fields=${fieldId}`);
+  if (!response.ok) return dispatchFailure(response);
+  if (backlogFieldMissing(response, key, fieldId)) return AGILE_MALFORMED;
+  const value = asRecord(response.body?.fields)?.[fieldId];
+  const empty = value === null || (Array.isArray(value) && value.length === 0);
+  return empty ? undefined : AGILE_CONFLICT;
+}
 async function confirmMember(
   request: JiraMutationRequest,
   key: string,
@@ -122,10 +164,16 @@ async function confirmMembership(
   const receipt = membership.receipt;
   const readback = requests.readback();
   try {
+    const backlog = input.operation === "jira.backlog-move-issues";
+    const fieldId = backlog ? await sprintFieldId(readback.issue) : undefined;
+    if (typeof fieldId === "object") return { ...fieldId, receipt };
     const failures = await mapWithConcurrency(
       input.issues ?? [],
       DEFAULT_ATLASSIAN_SYNC_BOUNDS.maxConcurrency,
-      (key) => confirmMember(readback.agile, key, membership),
+      (key) =>
+        fieldId === undefined
+          ? confirmMember(readback.agile, key, membership)
+          : confirmBacklogMember(readback.issue, key, fieldId),
       readback.signal,
     );
     const failure = failures.find((value) => value !== undefined);

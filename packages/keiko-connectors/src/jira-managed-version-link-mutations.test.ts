@@ -255,7 +255,7 @@ function linkRows(value: unknown): AtlassianWriteHttpOutcome {
     links: [
       {
         self: "https://proxy.invalid/context/rest/api/2/version/81/remotelink/release%3Alink",
-        link: JSON.stringify(value),
+        link: value,
       },
     ],
   });
@@ -317,7 +317,7 @@ it("allows an opaque URL-like global ID in collection POST data without followin
     links: [
       {
         self: `https://proxy.invalid/context/rest/api/2/version/81/remotelink/${encodeURIComponent(globalId)}`,
-        link: JSON.stringify(value),
+        link: value,
       },
     ],
   });
@@ -376,7 +376,7 @@ it("rejects a contradictory native self instead of following or retargeting it",
       links: [
         {
           self: "https://proxy.invalid/rest/api/2/version/82/remotelink/release%3Alink",
-          link: "true",
+          link: true,
         },
       ],
     }),
