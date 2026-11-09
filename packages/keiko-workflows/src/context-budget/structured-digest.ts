@@ -450,20 +450,22 @@ export function mergeHistoryDigests(
 }
 
 // True when a merged digest field had more distinct items than the merge keeps, so bounded merging
-// dropped some of them. Every CompactionDigest field is listed, as in mergeHistoryDigests.
+// dropped some of them. `satisfies` requires one entry per CompactionDigest field, so a new field is
+// a type error here until its loss is checked too.
 function digestLostItems(older: CompactionDigest, newer: CompactionDigest): boolean {
-  return [
-    fieldLostItems(older.preservedFacts, newer.preservedFacts),
-    fieldLostItems(older.assumptions, newer.assumptions),
-    fieldLostItems(older.userConstraints, newer.userConstraints),
-    fieldLostItems(older.decisions, newer.decisions),
-    fieldLostItems(older.openQuestions, newer.openQuestions),
-    fieldLostItems(older.filesInspected, newer.filesInspected),
-    fieldLostItems(older.filesChanged, newer.filesChanged),
-    fieldLostItems(older.commandOutcomes, newer.commandOutcomes),
-    fieldLostItems(older.failingTests, newer.failingTests),
-    fieldLostItems(older.droppedCategories, newer.droppedCategories),
-  ].some(Boolean);
+  const lost = {
+    preservedFacts: fieldLostItems(older.preservedFacts, newer.preservedFacts),
+    assumptions: fieldLostItems(older.assumptions, newer.assumptions),
+    userConstraints: fieldLostItems(older.userConstraints, newer.userConstraints),
+    decisions: fieldLostItems(older.decisions, newer.decisions),
+    openQuestions: fieldLostItems(older.openQuestions, newer.openQuestions),
+    filesInspected: fieldLostItems(older.filesInspected, newer.filesInspected),
+    filesChanged: fieldLostItems(older.filesChanged, newer.filesChanged),
+    commandOutcomes: fieldLostItems(older.commandOutcomes, newer.commandOutcomes),
+    failingTests: fieldLostItems(older.failingTests, newer.failingTests),
+    droppedCategories: fieldLostItems(older.droppedCategories, newer.droppedCategories),
+  } satisfies { readonly [Field in keyof CompactionDigest]-?: boolean };
+  return Object.values(lost).some(Boolean);
 }
 
 function fieldLostItems<T>(older: readonly T[] = [], newer: readonly T[] = []): boolean {
