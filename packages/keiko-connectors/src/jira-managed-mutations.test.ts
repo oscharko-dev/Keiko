@@ -1800,9 +1800,11 @@ it.each([
   },
 );
 
-it("sends the bare base-URL string as raw text and every other body as JSON", () => {
-  expect(nativeRequestBody("https://jira.example/ctx")).toBe("https://jira.example/ctx");
-  expect(nativeRequestBody({ enabled: true })).toBe('{"enabled":true}');
-  expect(nativeRequestBody(["a"])).toBe('["a"]');
-  expect(nativeRequestBody(true)).toBe("true");
+it("sends only the base-URL string as raw text and every other body, even a string, as JSON", () => {
+  expect(nativeRequestBody("settings/baseUrl", "https://jira.example/ctx")).toBe(
+    "https://jira.example/ctx",
+  );
+  expect(nativeRequestBody("comment/7/properties/k", "text")).toBe('"text"');
+  expect(nativeRequestBody("readonly-mode", { enabled: true })).toBe('{"enabled":true}');
+  expect(nativeRequestBody("x", ["a"])).toBe('["a"]');
 });

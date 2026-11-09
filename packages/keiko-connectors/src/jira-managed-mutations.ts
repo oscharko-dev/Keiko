@@ -386,12 +386,12 @@ function fieldsInput(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 /**
- * Jira reads the one bare-string body it publishes (PUT /settings/baseUrl) as raw text under a JSON
- * content type and refuses a JSON-quoted string as "The specified URL is not valid." Every other
- * body is a JSON value.
+ * Jira reads the body of PUT /settings/baseUrl as raw text under a JSON content type and refuses
+ * the JSON-quoted string as "The specified URL is not valid." Every other body, including a JSON
+ * string property value, is a JSON value.
  */
-export function nativeRequestBody(body: unknown): string {
-  return typeof body === "string" ? body : JSON.stringify(body);
+export function nativeRequestBody(path: string, body: unknown): string {
+  return typeof body === "string" && path === "settings/baseUrl" ? body : JSON.stringify(body);
 }
 /** One bounded Jira request function over the composed transport; also used by read-only tools. */
 export function requestFor(
@@ -409,7 +409,7 @@ export function requestFor(
       method: method ?? "GET",
       url: atlassianApiUrl(endpoints, path),
       expect: expect ?? "json",
-      ...(body === undefined ? {} : { bodyJson: nativeRequestBody(body) }),
+      ...(body === undefined ? {} : { bodyJson: nativeRequestBody(path, body) }),
       ...(upload === undefined ? {} : { upload }),
     });
 }
