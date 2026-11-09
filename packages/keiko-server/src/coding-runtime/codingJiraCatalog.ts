@@ -94,7 +94,6 @@ interface CodingJiraCatalogInput<Context extends ManagedMcpInvocationContext> {
 }
 class JiraCatalogSelection<Context extends ManagedMcpInvocationContext> {
   readonly discovery: ManagedMcpHost<JiraCatalogDiscoveryContext>;
-  readonly ready: Promise<void>;
   private initial: readonly ExternalMcpTool[];
   tools: readonly ExternalMcpTool[];
   selected: ManagedMcpHost<Context> | undefined;
@@ -110,11 +109,13 @@ class JiraCatalogSelection<Context extends ManagedMcpInvocationContext> {
     });
     this.initial = Object.freeze([]);
     this.tools = this.initial;
-    this.ready = this.discovery.admit(input.correlationId).then(() => {
-      if (this.closed) throw new ManagedMcpError("not-admitted");
-      this.initial = advertised(this.discovery);
-      this.tools = this.initial;
-    });
+  }
+  /** Admits the local discovery host; the selection advertises nothing until this settles. */
+  async start(): Promise<void> {
+    await this.discovery.admit(this.input.correlationId);
+    if (this.closed) throw new ManagedMcpError("not-admitted");
+    this.initial = advertised(this.discovery);
+    this.tools = this.initial;
   }
   private requireCurrent(context: ManagedMcpInvocationContext): void {
     requireDispatch(
@@ -199,9 +200,10 @@ export function createCodingJiraCatalog<Context extends ManagedMcpInvocationCont
   input: CodingJiraCatalogInput<Context>,
 ): CodingJiraCatalog<Context> {
   const selection = new JiraCatalogSelection(input);
+  const ready = selection.start();
 
   return {
-    ready: selection.ready,
+    ready,
     get tools(): readonly ExternalMcpTool[] {
       return selection.tools;
     },
