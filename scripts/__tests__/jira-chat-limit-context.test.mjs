@@ -377,7 +377,7 @@ describe("explicit Chat routing and current session evidence", () => {
           persist: foreignPersist,
         },
       );
-      expect(f.handles[slot].focus).toHaveBeenCalledExactlyOnceWith(current);
+      expect(f.handles[slot].focus).toHaveBeenCalledExactlyOnceWith(current, "autonomous-delivery");
     }
     expect(f.observedSends.map(({ page, region, chatId }) => ({ page, region, chatId }))).toEqual([
       { page: current, region: current.regions.document, chatId: "document-chat" },
@@ -439,6 +439,32 @@ describe("explicit Chat routing and current session evidence", () => {
     });
     await expect(f.ctx.turn(f.ctx.reportChat, "Do not submit")).rejects.toThrow();
     expect(f.handles.report.focus).toHaveBeenCalledOnce();
+    expect(f.ports.sendBrowserTurn).not.toHaveBeenCalled();
+  });
+
+  it("checks the access mode a step selected in the UI instead of Full access", async () => {
+    const f = await readyContext();
+    f.handles.report.focus.mockResolvedValue({
+      chat: { ...f.handles.report.chat, toolMode: "governed-assist", effectiveToolMode: undefined },
+      windowId: "report-window",
+      region: f.page.regions.report,
+    });
+    await f.ctx.turn(f.ctx.reportChat, "Probe", { mode: "governed-assist" });
+    expect(f.handles.report.focus).toHaveBeenCalledExactlyOnceWith(f.page, "governed-assist");
+    expect(f.ports.sendBrowserTurn).toHaveBeenCalledOnce();
+    expect(f.ports.sendBrowserTurn.mock.calls[0][5]).not.toHaveProperty("mode");
+    await expect(
+      f.ctx.turn(f.ctx.reportChat, "Do not submit", { mode: "supervised-coding" }),
+    ).rejects.toThrow("explicit access mode");
+    expect(f.ports.sendBrowserTurn).toHaveBeenCalledOnce();
+  });
+
+  it("refuses an unknown access mode before focusing the Chat", async () => {
+    const f = await readyContext();
+    await expect(
+      f.ctx.turn(f.ctx.reportChat, "Do not submit", { mode: "unbounded" }),
+    ).rejects.toThrow("three access modes");
+    expect(f.handles.report.focus).not.toHaveBeenCalled();
     expect(f.ports.sendBrowserTurn).not.toHaveBeenCalled();
   });
 

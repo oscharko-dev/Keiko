@@ -56,8 +56,9 @@ function probePrompt(projectKey) {
   );
 }
 
-function submitProbe(ctx, counts) {
+function submitProbe(ctx, mode, counts) {
   return ctx.turn(ctx.chat, probePrompt(ctx.projectKey), {
+    mode,
     operations: WRITE_TOOLS,
     timeoutMs: 1800000,
     beforeDecision: () => {
@@ -105,7 +106,7 @@ async function probeMode(ctx, opened, journal, mode, counts) {
     return "rule-probe-native-change";
   }
   await selectAccessMode(opened.page, opened.region, mode);
-  const result = await submitProbe(ctx, counts);
+  const result = await submitProbe(ctx, mode, counts);
   const after = await issues(ctx, "*all");
   counts.probedModes += 1;
   const failure = probeFailure(before, after, result, ctx.projectKey, counts);

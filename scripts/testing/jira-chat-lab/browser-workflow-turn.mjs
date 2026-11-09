@@ -246,9 +246,13 @@ function workflowHandle(opened, context, selected, podId, chat, ownsBrowser, opt
     chat,
     podId,
     ownsBrowser,
-    focus: async (page = opened.page) => {
+    // A step that changes the Chat's access mode through the UI names the mode it selected.
+    focus: async (page = opened.page, mode = options.mode) => {
       const focused = await focusWorkflowChat(page, context, chat.id);
-      const current = await configuredWorkflowChat(page, context, chat.id, podId, options);
+      const current = await configuredWorkflowChat(page, context, chat.id, podId, {
+        ...options,
+        mode,
+      });
       return { ...focused, chat: current };
     },
     regionFor: async (page = opened.page) =>

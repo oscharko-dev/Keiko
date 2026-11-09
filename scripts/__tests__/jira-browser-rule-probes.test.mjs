@@ -226,6 +226,8 @@ describe("W12 runtime project and formal refusal probes", () => {
     });
     expect(ports.mode.mock.calls.map((call) => call[2])).toEqual(MODES);
     expect(ports.turn).toHaveBeenCalledTimes(3);
+    // Each probe turn names the mode it selected, so the turn owner checks that mode.
+    expect(ports.turn.mock.calls.map((call) => call[2].mode)).toEqual(MODES);
     expect(ports.native.mock.calls.length).toBeGreaterThanOrEqual(6);
     for (const call of ports.turn.mock.calls) {
       expect(call[0]).toBe(ctx.chat);

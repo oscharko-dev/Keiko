@@ -529,14 +529,16 @@ function limitChatHandle(ctx, handles, chat) {
   return { slot, handle };
 }
 
-async function focusLimitChat(ctx, handles, chat, ui) {
+/** Full access is the run's mode; a step that selected another mode in the UI names it. */
+async function focusLimitChat(ctx, handles, chat, ui, mode = "autonomous-delivery") {
   ctx.signal.throwIfAborted();
+  assert.ok(MODES.includes(mode), "A limit-run turn names one of the three access modes");
   const { slot, handle } = limitChatHandle(ctx, handles, chat);
-  const focused = await handle.focus(ctx.page);
+  const focused = await handle.focus(ctx.page, mode);
   ctx.signal.throwIfAborted();
   assert.equal(focused.chat.id, handle.chat.id);
   ui.assertWorkflowChatConfiguration(focused.chat, ctx, handle.podId, {
-    mode: "autonomous-delivery",
+    mode,
     administration: true,
     jiraOnly: slot !== "document",
   });
@@ -603,8 +605,8 @@ async function recoverLimitBrowser(ctx, live, handles, ui, signal) {
 
 function bindLimitTurnOwner(ctx, handles, ui) {
   ctx.focusChat = (chat) => focusLimitChat(ctx, handles, chat, ui);
-  ctx.turn = async (chat, prompt, extra = {}) => {
-    const focused = await focusLimitChat(ctx, handles, chat, ui);
+  ctx.turn = async (chat, prompt, { mode, ...extra } = {}) => {
+    const focused = await focusLimitChat(ctx, handles, chat, ui, mode);
     return ui.sendBrowserTurn(ctx.page, focused.region, ctx, focused.chat.id, prompt, {
       operations: ["jira.draft", "jira.create"],
       timeoutMs: 1800000,
