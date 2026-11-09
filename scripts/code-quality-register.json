@@ -3812,10 +3812,6 @@
       "anti-slop/no-runtime-typeof": 2,
       "anti-slop/no-unknown-parameters": 2
     },
-    "packages/keiko-evidence/src/workflow-evidence.test.ts": {
-      "anti-slop/no-chained-type-assertions": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 2
-    },
     "packages/keiko-evidence/src/workflow-evidence.ts": {
       "anti-slop/no-chained-type-assertions": 1,
       "anti-slop/no-conditional-empty-object-spread": 4,
