@@ -190,7 +190,10 @@ function prepareSite(error) {
     .map((line) => /(api-qualification-[\w-]+\.mjs:\d+)/u.exec(line)?.[1])
     .filter((site) => site !== undefined)
     .slice(0, 3);
-  const message = error instanceof assert.AssertionError && !error.generatedMessage;
+  // A generated comparison message carries values, so it stays out unless an operator asks locally.
+  const message =
+    error instanceof assert.AssertionError &&
+    (!error.generatedMessage || process.env.KEIKO_AC7_DETAIL === "values");
   return {
     ...(sites.length > 0 ? { sites } : {}),
     ...(message ? { message: String(error.message).slice(0, 160) } : {}),
