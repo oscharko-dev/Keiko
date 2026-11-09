@@ -100,15 +100,6 @@ changed. No record binds capture bytes, so the existing macOS captures from 2026
 keeps one renderer across the set; the new `generatedAt` describes the three records, not the captures. No updater behavior, baseline or numerical ceiling changed. This remains
 updater fixture evidence.
 
-PR #4288 (#4287) adds the plain "review status unknown" notice to the core message catalogs
-(`i18n-messages.en.ts`, `i18n-messages.de.ts`), which made the freshness gate reject both catalog
-digests. On 2026-11-09 (UTC) the complete original nine-case producer ran in the same Linux gates
-container, with `--init` and Node 24.18.0. All nine cases passed in 1.9 minutes, including the real
-BFF stop and restart. The three records rebind only the two catalog digests. As on 2026-11-07, the
-container renderer drew the captures with fallback fonts, so the existing macOS captures are kept and
-the new `generatedAt` describes the three records only. No updater behavior, baseline or numerical
-ceiling changed. This remains updater fixture evidence.
-
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:
@@ -414,3 +405,18 @@ exited server remained a zombie under PID 1. Its Activity Log confirmed complete
 the unchanged suite passed with the documented init process. No fixture, assertion, timeout,
 updater behavior or numerical ceiling was changed. These records qualify the declared updater
 presentation and recovery fixture, not native installation or a live Jira deployment.
+
+## Review status notice — 2026-11-09 (#4288)
+
+The plain "review status unknown" notice added one message to both core catalogs
+(`i18n-messages.en.ts`, `i18n-messages.de.ts`), so the freshness gate rejected their digests. The
+complete original nine-case producer ran on source head `6be223a28` in the Linux arm64 gates
+container (`keiko-ac12ci-gates`, Node 24.18.0, `--init`): **9 passed (1.9m)**, including the real BFF
+stop and restart, and `npm run check:update-ui-evidence` passes. Only the two catalog digests and
+`generatedAt` in the three records were taken from this run.
+
+That container did not have `fonts-liberation` installed, so its captures used the DejaVu Sans
+fallback and were discarded. The 14 committed captures remain the complete Liberation set of the AC9
+run above, all from one producer run in the reference environment. No record binds capture bytes.
+No updater behavior, fixture, assertion or numerical ceiling changed. This remains updater fixture
+evidence.
