@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   readJiraDescriptionSections,
   readJiraDescriptionBlocks,
+  withoutJiraSourceLabels,
   serializeJiraDescriptionHeadings,
   projectJiraDescriptionInput,
   readJiraMarkdownDescription,
@@ -361,5 +362,31 @@ describe("the advertised description contract matches the projection (LIM28)", (
     expect(advertised).toContain("a line starting with # or ## is a numbered list item");
     expect(advertised).toContain('{"format": "markdown", "text": "..."}');
     expect(advertised).not.toContain("Markdown is converted");
+  });
+});
+
+describe("Keiko's own source labels after a criterion (LIM32)", () => {
+  const documents = ["lastenheft.md", "lastenheft.docx"];
+  it("removes one trailing group whose every label names a Chat document", () => {
+    expect(
+      withoutJiraSourceLabels(
+        "Der Vorgang ist wiederholbar. (lastenheft.docx · Kapitel 3 > REQ-1 (Web); lastenheft.md)",
+        documents,
+      ),
+    ).toBe("Der Vorgang ist wiederholbar.");
+  });
+  it.each([
+    "Der Vorgang ist wiederholbar.",
+    "Der Vorgang ist wiederholbar. (nur montags)",
+    "Der Vorgang ist wiederholbar. (fremd.md · Kapitel 3)",
+    "Der Vorgang ist wiederholbar. (lastenheft.md · Kapitel 3; nur montags)",
+    "Der Vorgang ist wiederholbar. (lastenheft.md · Kapitel 3) außer montags",
+    "Der Vorgang ist wiederholbar. (lastenheft.mdx · Kapitel 3)",
+    "(lastenheft.md)",
+  ])("keeps any other block unchanged: %s", (block) => {
+    expect(withoutJiraSourceLabels(block, documents)).toBe(block);
+  });
+  it("never treats an empty document name as a match", () => {
+    expect(withoutJiraSourceLabels("Text. ( · Kapitel 3)", [""])).toBe("Text. ( · Kapitel 3)");
   });
 });

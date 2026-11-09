@@ -11,6 +11,7 @@ import {
   createBufferedServerLogSink,
   type BufferedServerLogSink,
 } from "../../../tests/support/buffered-server-log.js";
+import { resolveJiraCitationMarkers } from "./atlassian/jiraCitationMarkers.js";
 import { podFixture, specification, type PodFixture } from "./_requirementSupport.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { resetRequirementTurnCache } from "./requirement-inventory.js";
@@ -177,6 +178,52 @@ describe("source acceptance criteria before a Jira draft can be staged or approv
       trace.close();
     }
   });
+});
+
+describe("criteria that carry Keiko's own source labels (LIM32)", () => {
+  // A grounded model cites `[n]` after each criterion; before review Keiko itself replaces each
+  // marker with its source label. The criterion check must read that text as the criterion plus
+  // a citation, or Keiko refuses the description it wrote itself.
+  const labels = new Map([
+    [1, "cap-criteria.md · Lastenheft > LH-001 Thema 1"],
+    [2, "cap-criteria.md · Seite 3"],
+  ]);
+  const cited = (body: string): unknown =>
+    resolveJiraCitationMarkers({ description: body }, labels).arguments.description;
+
+  it("accepts each criterion followed by the labels the citation rewrite wrote", async () => {
+    const { open } = await session([{ capsuleId: "cap-criteria", text: specification(1).text }]);
+    const trace = open();
+    try {
+      const description = cited(
+        "h2. Abnahmekriterien\n# Thema 1 ist verfügbar. [1]\n# Fehler zu Thema 1 werden gemeldet. [1][2]",
+      );
+      expect(description).toContain("(cap-criteria.md · Lastenheft > LH-001 Thema 1)");
+      expect(trace.resolve(["LH-001"], { description }).ok).toBe(true);
+    } finally {
+      trace.close();
+    }
+  });
+
+  it.each([
+    "# Thema 1 ist verfügbar. (nur montags)\n# Fehler zu Thema 1 werden gemeldet.",
+    "# Thema 1 ist verfügbar. (fremd.md · Seite 2)\n# Fehler zu Thema 1 werden gemeldet.",
+    "# Thema 1 ist verfügbar. (cap-criteria.md · Seite 3) außer montags\n# Fehler zu Thema 1 werden gemeldet.",
+    "# Thema 1 ist verfügbar. (cap-criteria.md · Seite 3; nur montags)\n# Fehler zu Thema 1 werden gemeldet.",
+  ])(
+    "still refuses trailing text that is not a label of this Chat's documents: %s",
+    async (body) => {
+      const { open } = await session([{ capsuleId: "cap-criteria", text: specification(1).text }]);
+      const trace = open();
+      try {
+        expect(trace.resolve(["LH-001"], { description: `h2. Abnahmekriterien\n${body}` }).ok).toBe(
+          false,
+        );
+      } finally {
+        trace.close();
+      }
+    },
+  );
 });
 
 describe("criterion text is active content, not a substring or quotation", () => {

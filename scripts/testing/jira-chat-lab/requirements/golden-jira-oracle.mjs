@@ -1,6 +1,7 @@
 // Port of the Golden Jira oracle: only native reads establish the result, never model prose.
 import { readFileSync } from "node:fs";
 import { URL, URLSearchParams } from "node:url";
+import { withoutJiraSourceLabels } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { REQUIREMENT_DOCUMENT_SCOPE_PATTERN } from "../../../../packages/keiko-quality-intelligence/dist/domain/requirementInventory.js";
 import { basicAuth, labRequest } from "../lab-client.mjs";
 import { nativePages } from "../project-agile-oracles.mjs";
@@ -333,9 +334,11 @@ function criterionBlocks(body) {
 /** Counts the criteria of `requirement` present, duplicated and unexpected in the acceptance region of `body`. */
 export function gradeCriteria(body, requirement, counts) {
   const expected = new Set(requirement.acceptanceCriteria.map(norm));
-  const blocks = criterionBlocks(acceptanceRegion(body)).filter(
-    (block) => expected.size > 0 || block !== GOLDEN_NO_CRITERIA_TEXT,
-  );
+  // Keiko writes the source label of a model's `[n]` marker after the criterion it cites; the
+  // shared contract removes only labels that name a staged Lastenheft document (LIM32).
+  const blocks = criterionBlocks(acceptanceRegion(body))
+    .map((block) => withoutJiraSourceLabels(block, GOLDEN_LASTENHEFT_FILES))
+    .filter((block) => expected.size > 0 || block !== GOLDEN_NO_CRITERIA_TEXT);
   counts.acUnexpected += blocks.filter((block) => !expected.has(block)).length;
   for (const criterion of expected) {
     const occurrences = blocks.filter((block) => block === criterion).length;

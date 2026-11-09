@@ -321,6 +321,25 @@ function descriptionContentLine(
   state.paragraph.push(bullet ?? text);
 }
 
+/**
+ * A description block without the trailing group of source labels Keiko writes for a model's `[n]`
+ * evidence markers before review: ` (<document> · …; <document> · …)`. Every label must name one
+ * of `documentNames` (alone or followed by ` · `); otherwise the block is returned unchanged, so a
+ * qualifier such as ` (nur montags)` or a label of another document is never removed.
+ */
+export function withoutJiraSourceLabels(block: string, documentNames: readonly string[]): string {
+  if (!block.endsWith(")")) return block;
+  const named = (label: string): boolean =>
+    documentNames.some(
+      (name) => name.length > 0 && (label === name || label.startsWith(`${name} · `)),
+    );
+  for (let open = block.lastIndexOf(" ("); open > 0; open = block.lastIndexOf(" (", open - 1)) {
+    const labels = block.slice(open + 2, -1).split("; ");
+    if (labels.every((label) => named(label))) return block.slice(0, open);
+  }
+  return block;
+}
+
 /** Full active paragraphs/list items only; headings, quotes and code never prove source content. */
 export function readJiraDescriptionBlocks(
   text: string,

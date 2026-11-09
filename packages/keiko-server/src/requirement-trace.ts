@@ -24,6 +24,7 @@ import {
   projectJiraDescriptionInput,
   JIRA_REQUIREMENT_REFERENCE_CHARS_MAX,
   readJiraDescriptionBlocks,
+  withoutJiraSourceLabels,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { KnowledgeStore } from "@oscharko-dev/keiko-local-knowledge";
@@ -133,17 +134,26 @@ function criterionForms(text: string): readonly string[] {
   return converted === text ? [text] : [text, converted];
 }
 
+/** Each description block as checked text, and again without Keiko's own source labels. */
+function descriptionBlocks(description: unknown, documents: readonly string[]): Set<string> {
+  const projected = projectJiraDescriptionInput(description)?.text ?? "";
+  return new Set(
+    readJiraDescriptionBlocks(projected, "jira-wiki").flatMap((block) => {
+      const text = block.replaceAll(/\\([\\*_+^~{}[\]!|#?.>-])/gu, "$1");
+      // Keiko's own source labels for the model's `[n]` markers add no criterion text (LIM32).
+      const bare = withoutJiraSourceLabels(text, documents);
+      return bare === text ? [criterionText(text)] : [criterionText(text), criterionText(bare)];
+    }),
+  );
+}
+
 function acceptanceCriteriaProblems(
   resolved: readonly ResolvedRequirementReference[],
   description: TraceDescriptionCheck,
   redact: (value: string) => string,
+  documents: readonly string[],
 ): readonly TraceProblem[] {
-  const projected = projectJiraDescriptionInput(description.description)?.text ?? "";
-  const blocks = new Set(
-    readJiraDescriptionBlocks(projected, "jira-wiki").map((block) =>
-      criterionText(block.replaceAll(/\\([\\*_+^~{}[\]!|#?.>-])/gu, "$1")),
-    ),
-  );
+  const blocks = descriptionBlocks(description.description, documents);
   const criteria = new Map<string, string>();
   for (const item of resolved) {
     const required =
@@ -179,7 +189,13 @@ function resolveAgainst(
   const resolution = resolveRequirementReferences(references, opened.collection.units);
   if (!resolution.ok) return { ok: false, reason: "references", problems: resolution.problems };
   if (description !== undefined) {
-    const problems = acceptanceCriteriaProblems(resolution.resolved, description, redact);
+    const documents = opened.collection.documents.flatMap(({ name }) => [name, redact(name)]);
+    const problems = acceptanceCriteriaProblems(
+      resolution.resolved,
+      description,
+      redact,
+      documents,
+    );
     if (problems.length > 0) return { ok: false, reason: "references", problems };
   }
   const located = resolution.resolved.map((item) => ({

@@ -2108,6 +2108,7 @@ export {
   JIRA_HEADING_LINE_CHARS_MAX,
   readJiraDescriptionSections,
   readJiraDescriptionBlocks,
+  withoutJiraSourceLabels,
   serializeJiraDescriptionHeadings,
   serializeJiraMarkdownDescription,
   JIRA_DESCRIPTION_INPUT_SCHEMA,

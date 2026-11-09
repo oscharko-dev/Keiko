@@ -458,6 +458,43 @@ describe("Golden manifest exact content and source grading", () => {
   });
 });
 
+describe("criteria followed by Keiko's own source labels (LIM32)", () => {
+  // Keiko replaces a model's `[n]` marker after a criterion with its source label before review;
+  // the grader removes only labels that name a staged Lastenheft document.
+  const requirement = REQUIREMENTS[0];
+  const grade = (lines) => {
+    const counts = { acPresent: 0, acDuplicated: 0, acUnexpected: 0 };
+    goldenOracle.gradeCriteria(
+      ["h2. Akzeptanzkriterien", ...lines].join("\n"),
+      requirement,
+      counts,
+    );
+    return counts;
+  };
+  const source = goldenOracle.GOLDEN_EPIC_SOURCE_DOCUMENT;
+
+  it("counts a criterion with a staged document's label as present and not unexpected", () => {
+    expect(
+      grade([
+        `* Preserve false and zero. (${source} · Lastenheft > 1 Context > REQ-FA-001)`,
+        `* Keep the complete source. (${goldenOracle.GOLDEN_LASTENHEFT_FILES[1]} · Seite 3; ${source})`,
+      ]),
+    ).toEqual({ acPresent: 2, acDuplicated: 0, acUnexpected: 0 });
+  });
+
+  it.each([
+    "* Preserve false and zero. (nur montags)",
+    "* Preserve false and zero. (fremd.md · Seite 3)",
+    `* Preserve false and zero. (${source} · Seite 3) außer montags`,
+  ])("still counts other trailing text as unexpected: %s", (line) => {
+    expect(grade([line, "* Keep the complete source."])).toEqual({
+      acPresent: 1,
+      acDuplicated: 0,
+      acUnexpected: 1,
+    });
+  });
+});
+
 describe("Golden requirement trace reference", () => {
   const reference = "a1b2c3d4:REQ-FA-001";
   const group = [
