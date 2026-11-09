@@ -1760,10 +1760,40 @@
               "required": true
             },
             {
+              "name": "fieldMissingCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "fieldUnavailableCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "itemCount",
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "labelCountCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "labelMissingCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "labelPatternCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             },
             {
               "name": "newDraft",
@@ -1782,6 +1812,18 @@
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "parentMissingCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "parentTypeMismatchCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             },
             {
               "name": "pendingCount",
@@ -1814,7 +1856,43 @@
               "required": false
             },
             {
+              "name": "sectionEmptyCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "sectionMissingCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "settledCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "summaryPatternCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "summaryTooLongCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "summaryTooShortCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "templateUnreadableCount",
               "type": "integer",
               "dataClass": "count",
               "required": false
@@ -1892,6 +1970,18 @@
               "required": false
             },
             {
+              "name": "fieldMissingCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "fieldUnavailableCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "frames",
               "type": "string-array",
               "dataClass": "safe-platform-class",
@@ -1910,7 +2000,31 @@
               "required": false
             },
             {
+              "name": "guidanceDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": false
+            },
+            {
               "name": "itemCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "labelCountCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "labelMissingCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "labelPatternCount",
               "type": "integer",
               "dataClass": "count",
               "required": false
@@ -1923,6 +2037,24 @@
             },
             {
               "name": "pageItemCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "parentMissingCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "parentTypeMismatchCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "parseAttemptCount",
               "type": "integer",
               "dataClass": "count",
               "required": false
@@ -1958,9 +2090,51 @@
               "required": false
             },
             {
+              "name": "sectionEmptyCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "sectionMissingCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "stageAttemptCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "stopReason",
               "type": "string",
               "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "summaryPatternCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "summaryTooLongCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "summaryTooShortCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "templateUnreadableCount",
+              "type": "integer",
+              "dataClass": "count",
               "required": false
             }
           ],
@@ -1968,6 +2142,7 @@
             "closed-enum",
             "completeness-state",
             "count",
+            "digest",
             "duration",
             "error-kind",
             "loss-state",
@@ -38002,6 +38177,18 @@
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "repairLineCountAfter",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "repairLineCountBefore",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             },
             {
               "name": "repairProseAvailable",
