@@ -39,6 +39,7 @@ import {
 import {
   createSecretSpellingStreamRedactor,
   SecretSpellingOverflowError,
+  UnsupportedSecretSpellingError,
 } from "@oscharko-dev/keiko-security";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
@@ -795,8 +796,20 @@ async function credentialSafeBody(
     }
   } catch (error) {
     if (error instanceof SecretSpellingOverflowError) reason = "spelling-overflow";
-    else if (error instanceof TypeError) reason = "unsupported-secret";
-    else throw error;
+    else if (error instanceof UnsupportedSecretSpellingError) reason = "unsupported-secret";
+    else {
+      emitServerDiagnostic(
+        undefined,
+        serverDiagnosticFromError({
+          correlationId: options.correlationId ?? UNKNOWN_CORRELATION_ID,
+          operation: "atlassian.http.credential-reflection",
+          source: "atlassian-http-credential-floor",
+          error,
+          redact: () => "server-operation-failed",
+        }),
+      );
+      throw error;
+    }
   }
   recordCredentialReflection(options, status, reason, reflectionCount);
   return { bodyText: "", bodyBytes: body.bodyBytes, truncated: true };
